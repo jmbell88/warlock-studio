@@ -170,6 +170,13 @@ class Document(
         default_factory=dict, repr=False
     )
     _frame_order: list[int] = field(default_factory=list, repr=False)
+    #: An open layer-move session: the active layer's pixels as they were when
+    #: it opened, and the **uid** of the layer they came off. ``_filter``'s
+    #: shape and for the same reasons -- a preview re-renders from the snapshot
+    #: rather than from the last preview (a drag would compound otherwise), and
+    #: the uid rather than "the active layer" because a session lives across
+    #: frames. See ``_doc_paint.begin_layer_move``.
+    _move: tuple[np.ndarray, int] | None = field(init=False, default=None, repr=False)
     #: Frames that have gone, for whoever is holding a *texture* keyed on one.
     #: Plain ints and a drain, so the document goes on knowing nothing about GL:
     #: see ``panes/inker_textures.release_dropped``.

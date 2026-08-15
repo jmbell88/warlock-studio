@@ -24,10 +24,11 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from functools import lru_cache
+from typing import Any
 
 import numpy as np
 
-from . import composite
+from . import composite, tiling
 from .selection import SelectionMask
 
 MIN_BRUSH = 1
@@ -37,7 +38,11 @@ MAX_BRUSH = 256
 # no scallops at any speed a mouse can produce.
 DEFAULT_SPACING = 0.1
 
-MODES = ("paint", "erase", "blur", "smudge")
+#: ``replace`` is Aseprite's copy-colour ink and it is the fifth rather than a
+#: flag on ``paint`` because it is genuinely a different arithmetic: paint
+#: composites the colour *over* what is there, replace writes it -- alpha
+#: included, so it can paint transparency down as well as up.
+MODES = ("paint", "erase", "blur", "smudge", "replace")
 
 SYMMETRY = ("none", "x", "y", "xy", "radial")
 
@@ -312,6 +317,19 @@ class StrokeState:
     # would show the stroke spilling past the shape for the whole drag and then
     # snap it back, which reads as a bug in the lock rather than as the lock.
     alpha_lock: bool = False
+    #: Which axes this stroke wraps on; see :mod:`.tiling`. A pair rather than
+    #: a bool because tiled mode is per axis, and it is passed in by the canvas
+    #: rather than read off the document: tiling is a property of how the tab
+    #: is being *viewed*, and the engine stays stateless about the UI.
+    wrap_axes: tuple[bool, bool] = (False, False)
+    #: The radius dabs scatter within, for the spray tool. Zero is every stroke
+    #: this class drew before spraying existed -- ``spray`` is a second way to
+    #: *emit* dabs and changes nothing about what a dab does.
+    scatter: float = 0.0
+    #: The scatter's seed. The engine is deterministic given a seed and a call
+    #: sequence; the canvas draws a fresh one at every press, and a test injects
+    #: one instead. There is no other source of randomness in a stroke.
+    seed: int = 0
 
     coverage: np.ndarray = field(init=False)
     dirty: tuple[int, int, int, int] | None = field(init=False, default=None)
@@ -328,6 +346,10 @@ class StrokeState:
     #: the candidate held back to see whether the next one makes it an elbow.
     _prev_pixel: tuple[int, int] | None = field(init=False, default=None)
     _pending_pixel: tuple[int, int] | None = field(init=False, default=None)
+    #: The scatter's generator, built from ``seed`` and never reseeded. Its own
+    #: stream rather than ``np.random``'s global one, so two documents sprayed
+    #: in one session cannot draw from each other's sequence.
+    _rng: Any = field(init=False, default=None, repr=False)
 
     def __post_init__(self) -> None:
         width, height = self.size
@@ -336,6 +358,7 @@ class StrokeState:
         self.stabilise = min(MAX_STABILISE, max(0.0, float(self.stabilise)))
         self.speed_taper = min(1.0, max(0.0, float(self.speed_taper)))
         self._width = float(self.diameter)
+        self._rng = np.random.default_rng(int(self.seed))
 
     # -- the walk ----------------------------------------------------------
 
@@ -486,8 +509,53 @@ class StrokeState:
         for mirrored in _mirror(point, self.size, self.symmetry, self.axis, self.radial):
             self._stamp(mirrored, target, self.diameter if diameter is None else diameter)
 
+    def spray(self, point: tuple[float, float], count: int, target: np.ndarray) -> None:
+        """Emit ``count`` dabs scattered uniformly in a disc of ``scatter``.
+
+        A second way to *emit* dabs, not a second kind of dab: every one goes
+        through :meth:`_dab`, so symmetry, the selection clip, the alpha lock,
+        tiled wrapping and the single-patch undo all apply with no code of their
+        own. That is the whole design -- an airbrush is a distribution over
+        positions and nothing else.
+
+        ``sqrt`` of a uniform sample for the radius, because a uniform *radius*
+        piles the density up at the centre: the area of an annulus grows with
+        r, so the number of dabs landing in it has to as well or the spray reads
+        as a dot with a halo.
+        """
+        whole = int(count)
+        if whole <= 0:
+            return
+        radius = max(0.0, float(self.scatter))
+        # One draw for the whole batch rather than two per dab: the stream is
+        # the same either way only if the shape is fixed, so this is also what
+        # pins determinism to (seed, call sequence) rather than to how the
+        # caller happened to chunk its frames -- see the class docstring.
+        sample = self._rng.random((whole, 2))
+        distance = radius * np.sqrt(sample[:, 0])
+        angle = sample[:, 1] * (2.0 * math.pi)
+        xs = (point[0] + distance * np.cos(angle)).tolist()
+        ys = (point[1] + distance * np.sin(angle)).tolist()
+        for x, y in zip(xs, ys, strict=True):
+            self._dab((x, y), target)
+
+    @property
+    def _axes(self) -> tuple[bool, bool]:
+        """Which axes *this dab* wraps on.
+
+        **Smudge is excluded and that is a decision, not an omission.** Its
+        pickup buffer trails the brush and is shaped by the region it last
+        touched; carrying it across a seam would mean deciding what "the pixels
+        the brush just passed over" are when the brush is in two places at once,
+        and every answer is arbitrary. It falls back to the clamped behaviour,
+        so a smudge near the edge stops at the edge. Blur wraps, but each piece
+        blurs its own destination rectangle -- so the blur kernel does not reach
+        across the seam either, which is a stated limitation rather than a
+        promise this version makes.
+        """
+        return (False, False) if self.mode == "smudge" else self.wrap_axes
+
     def _stamp(self, point: tuple[float, float], target: np.ndarray, diameter: int) -> None:
-        width, height = self.size
         # 1.0 rather than ``self.hardness`` for a pixel nib: neither reads it,
         # and passing it through would key the shared stamp cache on a value
         # that cannot change the answer.
@@ -504,20 +572,27 @@ class StrokeState:
             left = int(math.floor(point[0] - radius + 0.5))
             top = int(math.floor(point[1] - radius + 0.5))
 
-        x0, y0 = max(0, left), max(0, top)
-        x1 = min(width, left + diameter)
-        y1 = min(height, top + diameter)
-        if x1 <= x0 or y1 <= y0:
-            return
-        piece = stamp[y0 - top : y1 - top, x0 - left : x1 - left]
-
-        if self.mode in ("blur", "smudge"):
-            self._filter(piece, (x0, y0, x1, y1), target)
-        else:
-            region = self.coverage[y0:y1, x0:x1]
-            np.maximum(region, piece, out=region)
-            self._resolve((x0, y0, x1, y1), target)
-        self._mark((x0, y0, x1, y1))
+        # The single choke point for tiled painting: every mode, every nib and
+        # every emission reaches the layer through here, so wrapping is one loop
+        # rather than a rule each of them has to remember. With no wrap the
+        # helper returns the one clipped rectangle the body below used to
+        # compute inline, which is what makes tiled-off byte-identical.
+        for rect, (sx, sy) in tiling.pieces(
+            (left, top, left + diameter, top + diameter), self.size, self._axes
+        ):
+            x0, y0, x1, y1 = rect
+            piece = stamp[sy : sy + (y1 - y0), sx : sx + (x1 - x0)]
+            if self.mode in ("blur", "smudge"):
+                self._filter(piece, rect, target)
+            else:
+                region = self.coverage[y0:y1, x0:x1]
+                np.maximum(region, piece, out=region)
+                self._resolve(rect, target)
+            # Per piece, so the union is the dirty box the undo patch covers.
+            # One patch over the union rather than a rect per piece: a tile is a
+            # small canvas, and a multi-rect edit type would need eviction
+            # accounting of its own for a saving measured in kilobytes.
+            self._mark(rect)
 
     def _weights(self, rect: tuple[int, int, int, int], piece: np.ndarray) -> np.ndarray:
         """Stamp coverage after the selection clip. One multiply -- which is
@@ -532,6 +607,22 @@ class StrokeState:
 
         Not "blend onto what is there": that is what makes overlapping dabs
         pile up. Coverage is the whole record of the stroke, applied once.
+
+        ``replace`` is Aseprite's copy-colour ink and it lives here rather than
+        beside the blur/smudge branch on purpose: it is a *coverage* mode, so it
+        gets recompute-from-``before`` -- and therefore no compounding where a
+        stroke crosses itself -- for free, along with the alpha lock, the
+        selection clip and the indexed snap that runs at commit.
+
+        At full coverage it writes the foreground RGBA verbatim, alpha
+        included, so it can paint transparency *down* as well as up -- which is
+        the whole reason a copy ink exists. Under partial coverage it lerps
+        rather than snapping to a hard edge: this repository's doctrine is that
+        feathering means one thing everywhere, so a soft nib, a feathered
+        selection and a low opacity all soften a replace stroke exactly as they
+        soften a paint one. That is a visible divergence from Aseprite, and only
+        on soft nibs -- with a pixel nib the coverage is 0 or 1 and the two
+        agree exactly.
         """
         x0, y0, x1, y1 = rect
         cov = self._weights(rect, self.coverage[y0:y1, x0:x1])
@@ -543,6 +634,9 @@ class StrokeState:
         if self.mode == "erase":
             out = before.copy()
             out[..., 3] = before[..., 3] * (1.0 - alpha[..., 0])
+        elif self.mode == "replace":
+            colour = np.asarray(self.colour, dtype=np.float32)
+            out = before + (colour - before) * alpha
         else:
             out = composite.paint_colour(before, self.colour, alpha[..., 0])
         if self.alpha_lock:

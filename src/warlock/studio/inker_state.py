@@ -49,16 +49,36 @@ TOOLS = (
     ("move", "Move", "V"),
     ("eyedropper", "Pick", "I"),
     ("slice", "Slice", "C"),
+    ("spray", "Spray", "A"),
 )
 
 # Tools whose drag paints into the layer.
-PAINT_TOOLS = frozenset({"brush", "eraser", "blur", "smudge"})
+PAINT_TOOLS = frozenset({"brush", "eraser", "blur", "smudge", "spray"})
 SHAPE_TOOLS = frozenset({"line", "rect", "ellipse"})
 SELECT_TOOLS = frozenset({"select", "select_ellipse", "lasso", "wand"})
 
+#: Tools a **right-click** drives, painting with the background colour instead
+#: of the foreground one. Deliberately short: the selection tools stay inert on
+#: the right button, which reserves it for whatever they may want it to mean,
+#: and an inert button is a promise that can be kept later where a wrong one
+#: cannot be taken back. Spray is not here for the same reason -- one gesture,
+#: one meaning, and it can be added the day somebody asks.
+BG_BUTTON_TOOLS = frozenset({"brush", "eraser", "fill"})
+
 # What each tool asks the brush engine for. Kept here rather than branched at
-# the call site so a new mode is one row.
-BRUSH_MODES = {"brush": "paint", "eraser": "erase", "blur": "blur", "smudge": "smudge"}
+# the call site so a new mode is one row. Spray asks for ``paint``: it is a
+# different way to *emit* dabs, not a different kind of dab.
+BRUSH_MODES = {
+    "brush": "paint", "eraser": "erase", "blur": "blur", "smudge": "smudge",
+    "spray": "paint",
+}
+
+#: How wide a spray's dabs are, as a fraction of the tool's size. ``brush_size``
+#: is the diameter of the *disc the dabs land in* for this one tool -- which is
+#: what the brush cursor already draws and what a "spray width" control means
+#: everywhere else -- so the dab itself has to be some part of it. A spray whose
+#: dabs are as wide as its own disc is a blob; a quarter is a spray.
+SPRAY_DAB_FRACTION = 0.25
 
 # The options a tool remembers *for itself*, and what a tool that has never
 # been touched starts from.
@@ -92,6 +112,14 @@ TOOL_OPTION_DEFAULTS: dict[str, Any] = {
     # fringe of half-alpha nobody asked for.
     "nib": "soft",
     "pixel_perfect": False,
+    # Which ink the brush lays down: ``blend`` composites the colour over what
+    # is there, ``replace`` writes it verbatim including alpha. Per tool like
+    # everything else here, and offered on the brush alone -- this app has brush
+    # modes and layer locks instead of Aseprite's per-tool ink selector.
+    "paint_ink": "blend",
+    # Dabs a second, for the spray tool. A rate rather than a per-frame count,
+    # so a spray lays down the same cloud on a slow machine as on a fast one.
+    "spray_rate": 90,
 }
 
 DEFAULT_SWATCHES: tuple[tuple[int, int, int, int], ...] = (
@@ -359,6 +387,15 @@ class InkerDoc:
     journal_head: int | None = None
     journal_at: float = 0.0
 
+    # Which axes this tab is drawn -- and painted -- wrapped on; one of
+    # ``inker.tiling.TILED_AXES``. **Per tab and never in the file**: whether
+    # you are looking at a texture as a tile is a property of how you are
+    # working on it this afternoon, not of the picture, and a document that
+    # opened tiled because somebody once toggled it would be a surprise with no
+    # undo step to reverse. The engine is told explicitly at every call, so it
+    # stays stateless about the UI.
+    tiled: str = "off"
+
     @property
     def busy(self) -> bool:
         """Whether the document may be edited right now.
@@ -550,12 +587,27 @@ class InkerState:
     palette_usage: tuple[int, list[int]] | None = None
 
     # Drag state, decided on press because several tools start the same way.
-    drag_kind: str = ""  # "" | paint | shape | marquee | lasso | move | gradient | pan
+    drag_kind: str = ""  # "" | paint | spray | shape | marquee | lasso | move |
+    #                       layer_move | gradient | pan
     drag_anchor: tuple[float, float] | None = None
     last_point: tuple[float, float] | None = None
     lasso: list[tuple[float, float]] = field(default_factory=list)
     combine: str = "replace"
     space_held: bool = False
+    # Which mouse button started the drag: 0 paints with the foreground colour,
+    # 1 with the background one. Stored rather than re-read, because a gesture
+    # belongs to the button that began it -- testing "is the left button down"
+    # on the release of a right-drag ends the gesture on the wrong frame.
+    drag_button: int = 0
+    # The whole tile the press landed in, subtracted from every point of the
+    # gesture. Computed once at press and *not* per point: folding each sample
+    # independently makes the brush jump a full tile the moment the cursor
+    # crosses a seam mid-stroke.
+    tile_offset: tuple[float, float] = (0.0, 0.0)
+    # The fractional part of ``spray_rate x delta_time`` carried between frames,
+    # so a rate below one dab per frame still emits rather than rounding to
+    # nothing sixty times a second.
+    spray_carry: float = 0.0
 
     # The open filter session: which filter, the values every filter was last
     # run with, and whether the popup is up. Remembered per filter for the
@@ -597,6 +649,8 @@ class InkerState:
     speed_taper = _tool_option("speed_taper")
     nib = _tool_option("nib")
     pixel_perfect = _tool_option("pixel_perfect")
+    paint_ink = _tool_option("paint_ink")
+    spray_rate = _tool_option("spray_rate")
 
     def options_for(self, tool: str) -> dict[str, Any]:
         """One tool's option dictionary, created at the defaults on first ask.
@@ -687,6 +741,9 @@ class InkerState:
         self.lasso = []
         self.transform_ref = None
         self.slice_drag = None
+        self.drag_button = 0
+        self.tile_offset = (0.0, 0.0)
+        self.spray_carry = 0.0
 
     # -- colours ------------------------------------------------------------
 

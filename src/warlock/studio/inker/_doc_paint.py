@@ -20,7 +20,7 @@ import numpy as np
 
 from . import brush as brush_mod
 from . import composite as cp
-from . import filters
+from . import filters, tiling
 from . import gradient as grad
 from .brush import DEFAULT_SPACING, StrokeState, clamp_brush
 from .layers import Layer
@@ -37,6 +37,48 @@ def normalise_rect(p0: tuple[int, int], p1: tuple[int, int]) -> tuple[int, int, 
     x0, y0 = p0
     x1, y1 = p1
     return (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+
+
+def _translated(pixels: np.ndarray, dx: int, dy: int) -> np.ndarray:
+    """A canvas-sized plane shifted by (dx, dy), cropped, zero-filled behind.
+
+    Not ``np.roll``: a layer is canvas-sized and its edge *is* the canvas edge,
+    so what leaves one side is gone rather than arriving on the other. Rolling
+    would put a sprite's head on the far side of the frame the moment somebody
+    nudged it past the border, which reads as corruption.
+    """
+    out = np.zeros_like(pixels)
+    height, width = pixels.shape[:2]
+    sx0, sx1 = max(0, -dx), min(width, width - dx)
+    sy0, sy1 = max(0, -dy), min(height, height - dy)
+    if sx1 > sx0 and sy1 > sy0:
+        out[sy0 + dy : sy1 + dy, sx0 + dx : sx1 + dx] = pixels[sy0:sy1, sx0:sx1]
+    return out
+
+
+def _content_box(pixels: np.ndarray) -> tuple[int, int, int, int] | None:
+    """The half-open bbox of every pixel that is not all zeros, or None.
+
+    Any channel, not alpha alone -- and that is the difference between an undo
+    that restores the layer and one that nearly does. The eraser cuts alpha and
+    leaves RGB where it was, so an erased region is ``(r, g, b, 0)``: invisible,
+    outside any alpha-only box, and *zeroed* by the translate below. A patch
+    measured on alpha would not record that, and the colours would be gone with
+    no step to bring them back -- silently, because nothing on screen changed.
+    """
+    rows = np.flatnonzero(pixels.any(axis=(1, 2)))
+    cols = np.flatnonzero(pixels.any(axis=(0, 2)))
+    if rows.size == 0:
+        return None
+    return (int(cols[0]), int(rows[0]), int(cols[-1]) + 1, int(rows[-1]) + 1)
+
+
+def _union(
+    a: tuple[int, int, int, int] | None, b: tuple[int, int, int, int] | None
+) -> tuple[int, int, int, int] | None:
+    if a is None or b is None:
+        return a or b
+    return (min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3]))
 
 
 class PaintOps:
@@ -246,6 +288,159 @@ class PaintOps:
         """
         self.cancel_filter()
 
+    # -- moving a layer's pixels --------------------------------------------
+    #
+    # The move tool's third arm: with no floating buffer and no selection, a
+    # drag translates what is *on* the layer. Translate-with-crop rather than
+    # ``np.roll``: a layer is canvas-sized by invariant and its edges are the
+    # canvas's edges, so pixels pushed off one side are gone rather than
+    # arriving on the other. (A tiled-wrap variant of exactly this would be one
+    # ``tiling.pieces`` call, and it is deliberately unwired -- moving a layer
+    # is not a paint stroke, and "the drawing wrapped round while I nudged it"
+    # is not something a user asks for by pressing an arrow key.) A cel-offset
+    # model, where the layer keeps its pixels and grows an origin, was
+    # considered and rejected: it is a second coordinate space through every op
+    # in the package, which is the trade ``layers.py`` already refused.
+    #
+    # The session mirrors the filter session exactly -- begin snapshots, preview
+    # re-renders *from the snapshot* so a drag cannot compound, commit pushes
+    # one patch, cancel puts the pixels back and pushes nothing -- with one
+    # deliberate difference at the abandon door: see :meth:`end_layer_move`.
+
+    def begin_layer_move(self: Document) -> bool:
+        """Open a move session on the active layer. -> whether it opened.
+
+        Refused on a content-locked layer, which is the same door every other
+        write goes through. Read with ``getattr`` because the flag is a layer
+        property landing beside this work rather than under it, and a move that
+        silently ignored a lock is worse than one that reads a default of False
+        until the flag exists.
+        """
+        self.end_layer_move()
+        # The lock is read *before* the float is committed: a refusal must
+        # leave the document exactly as it found it, and committing first would
+        # land a floating buffer as the side effect of a move that never
+        # happened.
+        if getattr(self.stack.active, "content_lock", False):
+            return False
+        self.commit_floating()
+        self._ensure_active_cel()
+        layer = self.stack.active
+        self._move = (layer.pixels.copy(), layer.uid)
+        return True
+
+    def _move_layer(self: Document) -> Layer | None:
+        """The layer an open move session belongs to, or None if it is gone.
+
+        ``_filter_layer``'s rule and for its reasons: a session lives across
+        frames, a cel is addressed by uid on every frame at once, and a uid that
+        now resolves to a placeholder is an autovivified cel undone underneath
+        us -- whose plane is the shared read-only one.
+        """
+        if self._move is None:
+            return None
+        try:
+            layer = self.layer_by_uid(self._move[1])
+        except KeyError:
+            return None
+        if self.anim is not None and self.anim.is_placeholder(layer):
+            return None
+        return layer
+
+    def _abandon_move(self: Document) -> bool:
+        self._move = None
+        self._discard_pending_cel()
+        return False
+
+    def preview_layer_move(self: Document, dx: int, dy: int) -> bool:
+        """Show the layer at a **total** offset from where the session opened.
+
+        Total, not incremental: re-rendering from the snapshot every frame is
+        what stops a slow drag and a fast one producing different results, and
+        it is the same anti-compounding rule ``preview_filter`` follows.
+        """
+        if self._move is None:
+            return False
+        layer = self._move_layer()
+        if layer is None:
+            return self._abandon_move()
+        source, _uid = self._move
+        # In place, so a cel linked across several frames stays *one object*
+        # and the move shows on every frame it appears in. Rebinding
+        # ``layer.pixels`` would silently break every link in the row.
+        layer.pixels[:] = _translated(source, int(dx), int(dy))
+        width, height = self.size
+        self.invalidate((0, 0, width, height), layer_uid=layer.uid)
+        return True
+
+    def commit_layer_move(self: Document) -> bool:
+        """Turn whatever is previewed into exactly one undo step.
+
+        The patch covers the union of where the content *was* and where it
+        *is*, rather than the whole canvas: a 16-pixel nudge of a sprite on a
+        2048 square would otherwise cost 32 MiB of history for a change that
+        touches a few thousand pixels. See :func:`_content_box` for why "the
+        content" is not "the non-transparent pixels".
+        """
+        if self._move is None:
+            return False
+        layer = self._move_layer()
+        if layer is None:
+            return self._abandon_move()
+        source, _uid = self._move
+        self._move = None
+        box = _union(_content_box(source), _content_box(layer.pixels))
+        if box is None:
+            # Both empty: an empty layer was moved, which changed nothing.
+            self._discard_pending_cel()
+            return False
+        x0, y0, x1, y1 = box
+        self._commit_patch(layer, box, source[y0:y1, x0:x1])
+        return True
+
+    def cancel_layer_move(self: Document) -> bool:
+        """Put the pixels back. Nothing was pushed, so nothing is undone.
+
+        The user-initiated half of the pair, and the only one that restores:
+        reachable from Escape and from the canvas, both of which act on a
+        session that is still live. Every *automatic* path -- anything that
+        finds a session somebody else left open -- goes through
+        :meth:`end_layer_move` instead, because restoring from a snapshot of
+        unknown age is how an unrelated edit gets wiped.
+        """
+        if self._move is None:
+            return False
+        layer = self._move_layer()
+        if layer is None:
+            return self._abandon_move()
+        source, _uid = self._move
+        self._move = None
+        layer.pixels[:] = source
+        self._discard_pending_cel()
+        width, height = self.size
+        self.invalidate((0, 0, width, height), layer_uid=layer.uid)
+        return True
+
+    def end_layer_move(self: Document) -> bool:
+        """Close a session left open by a gesture that went away.
+
+        ``end_filter``'s role, with the opposite answer, and the difference is
+        the point. A filter session is a *question* -- a popup with an Apply
+        button the user never pressed -- so abandoning it cancels: an unanswered
+        question is not a yes. A move session is a *drag*: the pixels on screen
+        are where the user put them, and there is no unpressed button.
+
+        So this commits, and committing is also the only safe answer. Cancelling
+        restores ``layer.pixels`` wholesale from the snapshot taken at
+        ``begin_layer_move``, which is correct while the session is live and
+        catastrophic once it is stale -- anything painted in between is
+        overwritten by a snapshot older than it, while those strokes' own
+        ``PatchEdit``s stay in history describing pixels that are no longer
+        there. Committing can never lose a pixel: it records what actually
+        happened as one step and leaves the layer exactly as it looks.
+        """
+        return self.commit_layer_move()
+
     # -- strokes ------------------------------------------------------------
 
     def begin_stroke(
@@ -266,7 +461,19 @@ class PaintOps:
         radial: int = brush_mod.DEFAULT_RADIAL,
         stabilise: float = 0.0,
         speed_taper: float = 0.0,
+        wrap: str | tuple[bool, bool] = "off",
+        scatter: float = 0.0,
+        seed: int = 0,
     ) -> None:
+        """Open a stroke on the active layer.
+
+        ``wrap`` is one of :data:`.tiling.TILED_AXES` and is passed in by the
+        canvas from the tab's own view state -- tiling is never read off the
+        document, because it is a property of how a tab is being looked at and
+        must not travel in a file. ``scatter``/``seed`` are the spray tool's
+        emission; both default to the values that make this the stroke the
+        editor has always opened.
+        """
         self.end_stroke()
         self._ensure_active_cel()
         layer = self.stack.active
@@ -290,6 +497,9 @@ class PaintOps:
             speed_taper=speed_taper,
             clip=self.mask,
             alpha_lock=layer.alpha_lock,
+            wrap_axes=tiling.axes_of(wrap),
+            scatter=scatter,
+            seed=seed,
         )
         self._stroke.begin(point, layer.pixels)
         self._touch_stroke()
@@ -298,6 +508,22 @@ class PaintOps:
         if self._stroke is None:
             return
         self._stroke.to(point, self.stack.by_uid(self._stroke.layer_uid).pixels)
+        self._touch_stroke()
+
+    def spray_at(self: Document, point: tuple[float, float], count: int) -> None:
+        """Scatter ``count`` dabs about a point, inside the open stroke.
+
+        The spray tool's ``stroke_to``: it does *not* walk the spacing, because
+        an airbrush is not a line -- the canvas calls it every frame the button
+        is held, so a stationary cursor keeps emitting, which is the whole
+        behaviour. One press-to-release is still one ``PatchEdit``, since the
+        dabs go through the same stroke buffer everything else does.
+        """
+        if self._stroke is None:
+            return
+        self._stroke.spray(
+            point, count, self.stack.by_uid(self._stroke.layer_uid).pixels
+        )
         self._touch_stroke()
 
     def _touch_stroke(self: Document) -> None:
@@ -341,6 +567,7 @@ class PaintOps:
         *,
         thresh: int = 32,
         contiguous: bool = True,
+        wrap: str | tuple[bool, bool] = "off",
     ) -> bool:
         """Flood fill from a point, on the composite's colours.
 
@@ -348,12 +575,13 @@ class PaintOps:
         has no flat regions, only nearly-flat ones behind an antialiased edge,
         and an exact-match fill stops after a few hundred pixels every time.
         The region comes from the same predicate the magic wand uses, so the
-        two can never disagree about what "similar" means.
+        two can never disagree about what "similar" means -- ``wrap`` included,
+        which is why it is threaded straight through rather than reimplemented.
         """
         if not self.in_bounds(xy):
             return False
         region = magic_wand(
-            self._composite, xy, tolerance=thresh, contiguous=contiguous
+            self._composite, xy, tolerance=thresh, contiguous=contiguous, wrap=wrap
         )
         bounds = region.bounds
         if bounds is None:
@@ -371,34 +599,80 @@ class PaintOps:
         size: int,
         *,
         filled: bool = False,
+        wrap: str | tuple[bool, bool] = "off",
     ) -> bool:
-        """Line, rectangle or ellipse, antialiased through a coverage mask."""
+        """Line, rectangle or ellipse, antialiased through a coverage mask.
+
+        With ``wrap`` on, the coverage is rasterised over a plane big enough to
+        hold the whole gesture *and* the brush width that spills past the canvas
+        edge, and then folded home by :func:`.tiling.fold_coverage`. Rasterising
+        into the canvas and wrapping afterwards is the only order that works:
+        Pillow clips to its image, so anything drawn past the edge would be gone
+        before there was anything to fold.
+
+        With it off the plane *is* the canvas at the origin, so the fold is the
+        identity and the bounding box is the one this method always computed.
+        """
         if kind not in SHAPES:
             raise ValueError(f"unknown shape {kind!r}")
         from PIL import Image, ImageDraw
 
-        width, height = self.size
         size = clamp_brush(size)
-        canvas = Image.new("L", (width, height), 0)
+        axes = tiling.axes_of(wrap)
+        (ox, oy), (pw, ph) = self._shape_plane(p0, p1, size, axes)
+        canvas = Image.new("L", (pw, ph), 0)
         draw = ImageDraw.Draw(canvas)
+        q0 = (p0[0] - ox, p0[1] - oy)
+        q1 = (p1[0] - ox, p1[1] - oy)
         if kind == "line":
-            draw.line([tuple(p0), tuple(p1)], fill=255, width=size, joint="curve")
+            draw.line([q0, q1], fill=255, width=size, joint="curve")
         else:
-            x0, y0, x1, y1 = normalise_rect(p0, p1)
+            x0, y0, x1, y1 = normalise_rect(q0, q1)
             method = draw.rectangle if kind == "rect" else draw.ellipse
             if filled:
                 method((x0, y0, x1, y1), fill=255, outline=255, width=size)
             else:
                 method((x0, y0, x1, y1), fill=None, outline=255, width=size)
 
-        coverage = np.asarray(canvas, dtype=np.uint8)
-        rows = np.flatnonzero(coverage.any(axis=1))
-        cols = np.flatnonzero(coverage.any(axis=0))
-        if rows.size == 0:
+        folded = tiling.fold_coverage(
+            np.asarray(canvas, dtype=np.uint8), (ox, oy), self.size, axes
+        )
+        if folded is None:
             return False
-        rect = (int(cols[0]), int(rows[0]), int(cols[-1]) + 1, int(rows[-1]) + 1)
-        weight = coverage[rect[1] : rect[3], rect[0] : rect[2]].astype(np.float32) / 255.0
-        return self.write_colour(rect, colour, weight)
+        rect, coverage = folded
+        return self.write_colour(rect, colour, coverage.astype(np.float32) / 255.0)
+
+    def _shape_plane(
+        self: Document,
+        p0: tuple[int, int],
+        p1: tuple[int, int],
+        size: int,
+        axes: tuple[bool, bool],
+    ) -> tuple[tuple[int, int], tuple[int, int]]:
+        """The rasterisation plane a shape needs: ``(origin, (w, h))``.
+
+        The canvas exactly, on an unwrapped axis -- so nothing about the
+        untiled path changes. On a wrapped one it grows to hold the gesture and
+        the brush width around it, clamped to the 3x3 neighbourhood the tiled
+        view actually shows: a drag cannot land further out than one tile away,
+        and a clamp is cheaper than trusting a number that arrives from a mouse.
+        """
+        width, height = self.size
+        pad = size + 1
+        origin, extent = [], []
+        for wrapped, lo_p, hi_p, span in (
+            (axes[0], min(p0[0], p1[0]), max(p0[0], p1[0]), width),
+            (axes[1], min(p0[1], p1[1]), max(p0[1], p1[1]), height),
+        ):
+            if not wrapped:
+                origin.append(0)
+                extent.append(span)
+                continue
+            lo = max(-span, min(0, int(lo_p) - pad))
+            hi = min(2 * span, max(span, int(hi_p) + pad + 1))
+            origin.append(lo)
+            extent.append(hi - lo)
+        return (origin[0], origin[1]), (extent[0], extent[1])
 
     def gradient(
         self: Document,
@@ -414,6 +688,12 @@ class PaintOps:
 
         ``stops`` is the general form; ``start``/``end`` is the two-stop
         shorthand every existing caller uses. Both go through one interpolator.
+
+        **A gradient deliberately does not wrap**, and takes no ``wrap``
+        argument to say so. A ramp has two endpoints: wrapping one puts the last
+        stop against the first, which is a hard edge at the seam -- the one
+        thing tiled mode exists to remove. A seamless ramp is a different
+        object (a periodic one), not this one with a flag.
         """
         width, height = self.size
         rect = self.mask.bounds if self.mask is not None else None

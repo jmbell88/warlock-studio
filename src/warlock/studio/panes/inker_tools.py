@@ -41,7 +41,20 @@ TOOL_ICONS = {
     "move": icons.MOVE,
     "eyedropper": icons.PIPETTE,
     "slice": icons.CROP,
+    # Not SPRAY_CAN, which the blur tool already carries: two tools drawn with
+    # one glyph is a toolbox a user has to read the tooltips of.
+    "spray": icons.SPARKLES,
 }
+
+#: The brush's ink, and only the brush's: this app has brush modes and layer
+#: locks where Aseprite has a per-tool ink selector, so offering it on every
+#: tool would be four more controls saying the same thing. The keys are
+#: ``blend`` (the composite every stroke has always done) and ``replace``,
+#: which is a member of ``brush.MODES``.
+INK_LABELS = (
+    ("blend", "Blend"),
+    ("replace", "Replace"),
+)
 
 # One entry per mode ``brush.SYMMETRY`` carries, and that is checked rather
 # than trusted: the table used to stop at ``xy``, so the radial mode the engine
@@ -119,13 +132,17 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
             "a drawing's colour count from growing along every edge."
         )
         if state.nib in inker.PIXEL_NIBS:
-            changed, value = imgui.checkbox("Pixel perfect", state.pixel_perfect)
-            if changed:
-                state.pixel_perfect = value
-            widgets.help_marker(
-                "Drops the doubled corner pixel a freehand diagonal leaves at "
-                "every step, so the line is one pixel wide the whole way."
-            )
+            # Not for the spray: the corner filter is about a *line*, and the
+            # canvas forces it off there -- a ticked box that does nothing is
+            # worse than no box.
+            if tool != "spray":
+                changed, value = imgui.checkbox("Pixel perfect", state.pixel_perfect)
+                if changed:
+                    state.pixel_perfect = value
+                widgets.help_marker(
+                    "Drops the doubled corner pixel a freehand diagonal leaves at "
+                    "every step, so the line is one pixel wide the whole way."
+                )
         else:
             # Hidden rather than disabled: a pixel nib's coverage is 0 or 1 by
             # definition, so there is no falloff for this to shape and a greyed
@@ -133,9 +150,24 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
             changed, value = widgets.labeled_slider_float("Hardness", state.hardness, 0.0, 1.0)
             if changed:
                 state.hardness = value
+        if tool == "brush":
+            _ink(state)
         changed, value = widgets.labeled_slider_float("Opacity", state.opacity, 0.05, 1.0)
         if changed:
             state.opacity = value
+    if tool == "spray":
+        # Spacing, smoothing and the corner filter are all about a *line*, and
+        # a spray does not walk one -- the canvas forces the last two off, so
+        # showing them would be controls that do nothing.
+        changed, rate = widgets.labeled_slider_int("Rate", int(state.spray_rate), 5, 400)
+        if changed:
+            state.spray_rate = int(rate)
+        widgets.help_marker(
+            "Dabs a second while the button is held. Size is the width of the "
+            "cloud rather than of one dab, so a wide spray is thin and a "
+            "narrow one builds up fast."
+        )
+    elif tool in PAINT_TOOLS:
         changed, value = widgets.labeled_slider_float("Spacing", state.spacing, 0.02, 1.0)
         if changed:
             state.spacing = value
@@ -315,6 +347,27 @@ def _slice_options(ctx: Any, state: Any, tab: Any, entry: Any) -> None:
         )
     if imgui.button(f"Delete##slice{entry.uid}", (-1, 0)):
         doc.remove_slice(entry.uid)
+
+
+def _ink(state: Any) -> None:
+    """Blend or replace, as a radio pair rather than a combo.
+
+    Two options that a user switches between constantly want to be two clicks
+    away from each other, not behind a dropdown -- and the pair is small enough
+    to sit on one row, which a combo plus its label is not.
+    """
+    widgets.field_label("ink")
+    for index, (key, label) in enumerate(INK_LABELS):
+        if index:
+            imgui.same_line()
+        if imgui.radio_button(f"{label}##ink{key}", state.paint_ink == key):
+            state.paint_ink = key
+    widgets.help_marker(
+        "Blend composites the colour over what is already there. Replace "
+        "writes it exactly -- alpha included -- so it can paint transparency "
+        "back down as well as up, which is what recolouring flat pixel art "
+        "wants. A soft nib still feathers either way."
+    )
 
 
 def _gradient_stops(state: Any) -> None:

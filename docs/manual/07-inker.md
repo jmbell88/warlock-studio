@@ -43,6 +43,33 @@ writes. These two change nothing at all, which is also why they keep working whi
 flight — an editor that would not let you *look* at your drawing while it writes a file would be a
 strange one.
 
+## Tiled mode
+
+Beside those two is **Tiled**, with four positions: off, X, Y and X+Y. It is the one control on that
+row that changes what a stroke *does*, and that is the point — a canvas showing its neighbours while
+the brush went on stopping at the edge would be a picture of a seamless tile you cannot paint.
+
+With it on, the canvas draws the neighbouring tiles around the one you are working on — three across
+for X, three down for Y, the full nine for X+Y — so all four seams are visible at once and the
+middle one is still the document. Everything that lays down colour wraps with it: the brush and the
+eraser, the spray, the fill (a region that runs off one edge and continues on the other is one
+region, so a tile's background is a single click), the shape tools, and the magic wand.
+
+Three things deliberately do not. **Smudge** falls back to stopping at the edge, because its pickup
+trails the brush and "the pixels it just passed over" has no answer when the brush is in two places
+at once. **Blur** wraps, but each piece blurs its own side of the seam rather than reading across
+it. And a **gradient** never wraps: a ramp has two ends, and wrapping one puts the last colour
+against the first — a hard edge exactly where tiled mode exists to remove one.
+
+Pasting and the floating selection stay on the middle tile: a pasted chunk hanging over the edge is
+cropped there rather than appearing on the far side. What floats is a rectangle you are positioning,
+not colour being laid down, so it lands where the transform box says it will.
+
+Drag across a seam and the stroke carries on in a straight line; it is the *document* that wraps,
+not the cursor. Selections, the grid, the symmetry guides and the marching ants are drawn on the
+middle tile only. Nothing about this is saved: it is how you are looking at the file this afternoon,
+not a property of the picture.
+
 ## Tools
 
 The toolbox is an icon grid; hovering a tool shows its name and its letter. Every tool is listed in
@@ -63,9 +90,10 @@ The toolbox is an icon grid; hovering a tool shows its name and its letter. Ever
 | Ellipse select | `S` | Elliptical selection. |
 | Lasso | `Q` | Freehand selection. |
 | Wand | `W` | Selects a region of similar colour. |
-| Move | `V` | Moves the floating selection. |
+| Move | `V` | Moves the floating selection, or the whole layer if there is none. |
 | Pick | `I` | Samples a colour from the canvas. |
 | Slice | `C` | Names a rectangle on the canvas. |
+| Spray | `A` | An airbrush: scattered dabs for as long as you hold the button. |
 
 Options appear for the selected tool only, rather than as one long form — a brush's hardness means
 nothing while the wand is active.
@@ -81,6 +109,21 @@ a drawing's colour count does not grow along every line. They have no hardness, 
 that is only ever fully on or fully off has no falloff to shape. With a pixel nib you also get
 **Pixel perfect**, which drops the doubled corner pixel a freehand diagonal leaves at every step,
 so the line comes out one pixel wide the whole way.
+
+The brush alone has an **ink**: **Blend** composites the colour over what is already there, which is
+what every stroke this editor drew before the option existed. **Replace** writes the colour exactly
+— alpha included — so it can paint transparency back *down* as well as up, which is what recolouring
+flat pixel art wants and what a normal brush cannot do at all. A soft nib still feathers either way:
+in this app feathering means one thing everywhere, so opacity, a soft rim and a feathered selection
+all soften a replace stroke exactly as they soften a paint one. (Aseprite's copy ink has a hard edge
+instead; with a pixel nib the two agree exactly, because coverage that is only ever 0 or 1 has
+nothing to feather.)
+
+The spray has a **Rate** — dabs a second, for as long as the button is held, whether or not the
+cursor is moving. Its **Size** is the width of the *cloud* rather than of one dab, which is what the
+brush ring shows and what "spray width" means elsewhere; the dabs themselves are a quarter of it, so
+a wide spray builds up slowly and a narrow one quickly. Spacing, smoothing and pixel-perfect are
+hidden for it on purpose: all three are about a line, and a spray does not draw one.
 
 The shape tools have the size slider and, except for the line, a **Filled**
 checkbox. Fill and the wand have **Tolerance** (0 to 255) and **Contiguous** — turning contiguous
@@ -123,6 +166,17 @@ rather than from a corner. Both can be held at once, and both change the preview
 so you can decide halfway through. They belong to the shape tools alone: on the four selection
 tools Shift and Alt already mean add and subtract. **Alt** over a painting tool picks the colour
 under the cursor, which saves a trip to the eyedropper.
+
+**The right button paints with the background colour.** It drives the brush, the eraser and the fill
+— the three where "the other colour" is unambiguous — and Alt with it picks *into* the background,
+so the button means one thing in both directions. On every other tool the right button does nothing
+at all, deliberately: the selection tools may want it later, and a button left free can still be
+given a meaning where a wrong one cannot be taken back. Middle-drag still pans.
+
+**Arrow keys nudge by a pixel**, with Shift for eight. They move the floating selection if there is
+one, and otherwise the whole layer while the Move tool is in your hand — each press is one undo
+step. Nudging is gated on the Move tool rather than global because quietly translating a layer
+because somebody pressed Right with the brush selected is not a trade worth making.
 
 ## Colour
 
@@ -291,6 +345,13 @@ fill it and you have stroked the outline.
 Cutting or copying a selection puts it on the clipboard; pasting brings it back as a **floating
 buffer** which you move with the Move tool and commit by doing anything else. `Esc` cancels a
 floating buffer, and `Delete` clears the selected pixels.
+
+The Move tool has a third answer, and it is the one it used to have nothing for: with no floating
+buffer and nothing selected, dragging moves **the whole active layer**. Pixels pushed past the edge
+are cropped rather than wrapped round — a layer's edge is the canvas edge — and the whole drag is
+one undo step, measured from where you pressed, so a slow drag and a fast one land in the same
+place. On an animated document a *linked* cel moves on every frame it appears in, because a link
+means one drawing shared rather than two copies that happen to match.
 
 Cancelling a lift — where the buffer was cut out of a layer — puts the pixels back and removes that
 step from history entirely, rather than leaving it on the redo stack where `Ctrl+Y` could replay the
