@@ -395,7 +395,7 @@ corner normals agree with its own geometric normal was flat-shaded, and one wher
 smooth.
 
 Two things are refused rather than half-done. A **rigged** GLB, because Clay has no skinning and
-editing it would drop the rig; open it in 3D mode instead. And a mesh past two million triangles,
+editing it would drop the rig; open it in Create instead. And a mesh past two million triangles,
 because the editor holds every mesh twice per undo step. Past two hundred thousand it asks first,
 since every edit rebuilds the whole mesh and you should know that before you press Extrude.
 

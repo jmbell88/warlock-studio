@@ -33,8 +33,8 @@ So the pipeline is deliberately split in two, and the split is visible in the ap
 2. **The mesh stage.** Once you approve a reference, you promote it, and only then does the
    reconstruction run.
 
-A text job never falls through to a mesh by accident: the 2D pane always submits with the output
-set to `reference`. Going straight from a prompt to a mesh would spend two minutes of GPU on an
+A text job never falls through to a mesh by accident: the Reference stage always submits with the
+output set to `reference`. Going straight from a prompt to a mesh would spend two minutes of GPU on an
 image nobody has looked at.
 
 If you already have a picture, you can skip the first stage entirely and upload it — see
@@ -60,12 +60,16 @@ appears only when something is failing its startup check.
 - **Home.** What the app opens on: what changed in this build, what the machine is doing, and a
   single list of everything you were recently working on. Returning here is never destructive.
 
-- **2D reference.** Owns the prompt and every control that composes it: the guidance selects, the
-  negative prompt, the image model and style LoRA, the seed and the candidate count. Covered in
-  [Generating references](03-generating-references.md).
-- **3D asset.** Owns no prompt controls at all. A 3D job starts either from a finished 2D asset or
-  from an uploaded image, and this pane holds only the mesh, rig, pose and sprite-sheet decisions.
-  Covered in [Generating meshes](04-generating-meshes.md).
+- **Create.** One mode for the whole asset pipeline, drawn as five **stages** on a rail above the
+  settings column. **Reference** owns the prompt and every control that composes it — the guidance
+  selects, the negative prompt, the image model and style LoRA, the seed and the candidate count.
+  **Mesh** owns no prompt controls at all: a mesh job starts from a finished reference or from an
+  uploaded image, and the column holds only the reconstruction decisions. **Rig** fits a skeleton,
+  **Pose** edits one, and **Export** is what you can take away. A stage you cannot enter yet is
+  drawn dimmed with the reason on hover rather than hidden. Covered in
+  [Generating references](03-generating-references.md),
+  [Generating meshes](04-generating-meshes.md) and
+  [Rigging and posing](05-rigging-and-posing.md).
 - **Inker.** A layered raster editor, wired into the pipeline in both directions. Covered in
   [Inker](07-inker.md).
 - **Clay.** Modelling from primitives: transforms, a material palette, and two ways out —
@@ -91,14 +95,14 @@ appears only when something is failing its startup check.
 Two things that used to be modes are not, and both moved for the same reason: they are *about* the
 screen you are on rather than places to go. This documentation opens over the window (`F1`, or any
 pane's (?) button) instead of replacing it, so the control you were asking about is still there when
-you have the answer; and the style-profile manager opens as a sheet from the profile picker in the
-2D form — see [Profiles](12-profiles.md).
+you have the answer; and the style-profile manager opens as a sheet from the profile picker at the
+Reference stage — see [Profiles](12-profiles.md).
 
-Each generation control belongs to exactly one mode. The one setting both the 2D and the 3D pane need is
-**platform**, and it is deliberately two separate controls: in the 2D pane it is a hint that goes
-into the prompt ("how much fine detail should be drawn"), and in the 3D pane it is the geometry
-resolution sent to the reconstruction engine. One control cannot be owned by two panes, so there
-are two.
+Each generation control belongs to exactly one stage. The one setting both Reference and Mesh need
+is **platform**, and it is deliberately two separate controls: at the Reference stage it is a hint
+that goes into the prompt ("how much fine detail should be drawn"), and at the Mesh stage it is the
+geometry resolution sent to the reconstruction engine. One control cannot be owned by two stages,
+so there are two.
 
 Switching modes is never destructive. Inker keeps its open documents when you leave it, a queued
 job keeps running whichever mode you are in, and the progress card floats over every mode but Home.
@@ -112,16 +116,19 @@ is the first entry in the rail described above, and returns there at any time.
 Once you are in the workspace, the window is three columns:
 
 - **The left sidebar** is the settings form for the current mode, and nothing else — there is
-  nothing left to split against, so it is one scrolling column with no divider. Its width is not
-  draggable; it is one of three named sizes chosen in Settings.
-- **The middle column** is the viewport: the interactive 3D preview, or the reference image in 2D
-  mode, or the canvas in Inker mode. A small toolbar sits over it with the framing, wireframe and
-  turntable toggles, and — on a finished reference in 2D mode — the **Open in Inker** button.
+  nothing left to split against, so it is one scrolling column with no divider. In Create a **stage
+  rail** sits above it, naming the five steps an asset goes through and switching the column
+  between them. Its width is not draggable; it is one of three named sizes chosen in Settings.
+- **The middle column** is the viewport: the interactive 3D preview, or the reference image at the
+  Reference stage, or the canvas in Inker mode. A small toolbar sits over it with the framing,
+  wireframe and turntable toggles, and — on a finished reference at the Reference stage — the
+  **Open in Inker** button.
 - **The right column** is two stacked panels, not one scrolling column. The upper panel is the
-  inspector: everything about the selected asset. In 3D mode it is three tabs, **Details**, **Rig &
-  Pose** and **Export**; in 2D mode, **Details** and **Export**. The lower panel is the asset
-  library — every job you have ever run, with its filters. The divider between them can be dragged;
-  the sidebar's own width is not draggable, only chosen from the three named sizes in Settings.
+  inspector: everything about the selected asset. In Create it carries no tabs — the stage rail is
+  what switches it, so it shows the evidence for the stage you are on. Everywhere else it is three
+  tabs, **Details**, **Rig & Pose** and **Export**. The lower panel is the asset library — every
+  job you have ever run, with its filters. The divider between them can be dragged; the sidebar's
+  own width is not draggable, only chosen from the three named sizes in Settings.
 
 There is no top bar. The keyboard shortcut list is `Ctrl+/` or **Keyboard shortcuts** in the command
 palette, and it is reproduced in [Keyboard shortcuts](14-shortcuts.md). The **health badge** sits in

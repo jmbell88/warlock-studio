@@ -2,7 +2,7 @@
 
 Everything the app has ever made is a **job**, and the library is where you find one. It has two
 shapes, and they are the same library: a compact list in the lower half of the right sidebar of the
-2D and 3D panes, for picking something while you are looking at something else, and a **full window**
+Create mode, for picking something while you are looking at something else, and a **full window**
 from the rail, for finding something you cannot name. This chapter covers what a job goes through,
 how to find one, how to run one again, how to save a reusable style, and how to keep the disk under
 control.
@@ -66,7 +66,7 @@ reconstruction engine's log and a **Save error.log...** button for the full trac
 
 Clicking anywhere on a card selects it — the whole card is the target, not just its title. The
 selected card gets a raised background and an accent edge down its left side. Selecting a finished
-reference also makes it the 3D pane's promotion source, so switching to 3D mode is enough to act on
+reference also makes it the Mesh stage's promotion source, so stepping to Mesh is enough to act on
 it; selecting anything else leaves that source alone, so browsing your meshes never silently changes
 what **Make 3D** would submit.
 
@@ -108,11 +108,11 @@ compact rows. A compact row is the thumbnail, the name and the status pill — a
 assets per screen — and everything else is one click away in the right-click menu. The full window
 has no such control: a compact card is a shorter row, and a grid has no rows.
 
-**Keyboard and mouse.** In 2D and 3D mode, Up and Down move the selection through the list and scroll
+**Keyboard and mouse.** In Create, Up and Down move the selection through the list and scroll
 it into view; in the full window they move by a row of the grid and Left and Right by one card.
 Right-clicking a card opens the same actions menu the `...` button does, and works on a
 running job, where the button is replaced by the progress bar. A finished reference can also be
-dragged from the library onto the 3D pane's **Source** slot.
+dragged from the library onto the Mesh stage's **Source** slot.
 
 The filters are remembered between sessions, because a workshop tends to be filtered the same way
 every time.

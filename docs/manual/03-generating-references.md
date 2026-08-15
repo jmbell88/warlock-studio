@@ -82,7 +82,7 @@ do not give one — a prop is 0.4 m, a weapon 1 m, a character 1.8 m, a vehicle 
 piece 8 m, a consumable 0.15 m. And **detail brief**, which sits on its own below the groups,
 is a hint about how much fine detail to draw — 2D or 3D, defaulting to 3D. It is a *brief*, not a
 measurement: it goes into the prompt and the sampler may or may not honour it. How much geometry
-the mesh gets is the 3D pane's **Mesh resolution**, which is a different control entirely.
+the mesh gets is the Mesh stage's **Mesh resolution**, which is a different control entirely.
 
 At the top of the pane is **preset**, a picker of four complete shipped recipes
 (hand-painted fantasy prop, PS1 low-poly character, sci-fi hero weapon, modern consumable pickup).
@@ -190,7 +190,7 @@ Seeds are whole numbers from 0 to 2147483647. The seed shown when the app opens 
 startup and is deliberately not remembered between sessions — otherwise every launch would open on
 the same seed and a first Generate would reproduce last week's image.
 
-The mesh stage has its own separate seed, on the 3D pane. See
+The mesh has its own separate seed, at the Mesh stage. See
 [Mesh parameters](04-generating-meshes.md#mesh-parameters).
 
 ## Conditioning on an image
@@ -236,7 +236,7 @@ If the image is nearly right, you can fix it by hand: **Open in Inker** on the v
 opens the reference as a layered document, and saving writes it back in place. See
 [Pipeline bridges](07-inker.md#pipeline-bridges).
 
-When you are happy, press **Make 3D** on the card (or select the reference and switch to 3D mode).
+When you are happy, press **Make 3D** on the card (or select the reference and step to **Mesh**).
 That carries the reference and everything it recorded into the mesh stage, where you can override
 the mesh-side settings before committing. The next chapter,
 [Generating meshes](04-generating-meshes.md), picks up from there.
@@ -308,7 +308,7 @@ ordinary render has no lattice to find and takes the plain path unchanged, which
 already on disk was cut with. The provenance line says which happened. Palette reduction runs on colour only, with
 transparency carried around it, so the cutout survives the quantization exactly.
 
-The 2D pane's art-style select names console eras rather than abstract styles — **NES era**,
+The Reference stage's art-style select names console eras rather than abstract styles — **NES era**,
 **SNES era**, **PS1 era**, **PS2 era**, **PS3/360 era**, **PS5 era** — and the retro end of that
 ladder is what pairs with the pixel exports. NES and SNES deliberately do not put the words "pixel
 art" into the prompt: at 512 or 1024 the image model draws fake chunky pixels that then alias under
@@ -333,7 +333,7 @@ wrapping convolutions, so its left edge continues into its right and its top int
 
 Choosing it changes what the pane offers. The object taxonomy — category, silhouette, rarity and
 the rest — describes a *thing*, and a tile has none, so those selects are hidden. What remains is
-the surface half: material, condition, palette, setting, genre and era style. The 3D pane's platform
+the surface half: material, condition, palette, setting, genre and era style. The Mesh stage's platform
 detail is hidden for the same reason.
 
 A tile cannot be made into a mesh, and the app does not offer to: there is no subject to

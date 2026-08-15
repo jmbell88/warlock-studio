@@ -10,12 +10,12 @@ There are two ways to file a verdict, feeding one pool:
 
 - **In Review**, against a sweep's units or the recent-unreviewed bucket — built for judging many
   meshes quickly, with the keyboard.
-- **In the 3D inspector**, against whatever asset is selected — the grade row under the mesh
+- **In Create's inspector**, against whatever asset is selected — the grade row under the mesh
   quality section. One-off verdicts during ordinary use count exactly as much.
 
 ## The workspace
 
-Review uses the same three-column skeleton as the generate modes:
+Review uses the same three-column skeleton as Create:
 
 - **Left**: the sweep list — a "Recent, unreviewed" bucket first, then every sweep, newest first —
   and below it the form that launches a new sweep.

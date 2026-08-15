@@ -33,14 +33,14 @@ one to `guidance.py` does not silently start dragging it between assets. See
 
 ## Where they are managed
 
-In the **2D pane**, a profile picker sits beside the preset picker. Choosing one fills the fields
+At the **Reference stage**, a profile picker sits beside the preset picker. Choosing one fills the fields
 and makes it active, and the picker shows "Custom" once you edit past it. **Save as...** asks for a
 name and captures the current form's profile fields.
 
 **Manage...**, beside that picker, opens the full manager as a sheet over the pane. It is not a mode
 and not somewhere you travel to: managing your styles is something you do to the form in front of
 you, so it opens from the control it is about and Esc puts it away. (The command palette's **Manage
-style profiles** is the same door from anywhere else; it goes to the 2D pane first.) **New profile**
+style profiles** is the same door from anywhere else; it goes to the Reference stage first.) **New profile**
 starts from whatever the 2D form currently holds. Each saved profile lists its model, its LoRA and
 how many style fields it sets, with up to four actions: **Set active**, **Edit**, **Apply to form**
 and **Delete** — the active profile hides **Set active**.
@@ -78,7 +78,7 @@ and "this look", which is what an anchor is for.
 
 Two consequences worth knowing. An anchor is not a form field, so re-saving a profile after
 changing a select preserves it rather than dropping it. And attaching a conditioning reference to
-one generation in the 2D pane **replaces** the profile's anchor for that asset only; the 2D pane
+one generation at the Reference stage **replaces** the profile's anchor for that asset only; the stage
 says so when the active profile has one.
 
 When ranking is on (`WARLOCK_RANK`, see [Configuration](16-configuration.md)), a finished reference

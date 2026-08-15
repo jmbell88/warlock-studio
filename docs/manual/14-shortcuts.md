@@ -8,7 +8,7 @@ the two whose wording happens to say the word.
 
 One rule explains an apparent overlap between the tables below. Inker, Clay and Review each take
 every key while they are on screen — so in Inker `W` picks the wand rather than toggling wireframe,
-in Clay `W` is the move tool, and in Review `S` skips a unit. The 2D / 3D viewport bindings would
+in Clay `W` is the move tool, and in Review `S` skips a unit. Create's viewport bindings would
 otherwise act on a viewport that is not on screen.
 
 ## Everywhere
@@ -80,12 +80,12 @@ the Library.
 | Keys | Action |
 | --- | --- |
 | Up / Down | Move through the rows / the cards |
-| Enter | Open the highlighted row — a Library asset opens in the mode that shows it |
+| Enter | Open the highlighted row — a Library asset opens at the stage that made it |
 
-In the Library the arrows move through the cards exactly as they do in the 2D and 3D sidebars: the
+In the Library the arrows move through the cards exactly as they do in Create's sidebar: the
 same filtered, sorted list the cards are drawn from, clamped at the ends rather than wrapping.
 
-## 2D and 3D
+## Create
 
 | Keys | Action |
 | --- | --- |

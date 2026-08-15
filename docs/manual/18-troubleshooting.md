@@ -55,7 +55,7 @@ raises the other side.
 stopped, the image model loads, generates and unloads, and the engine restarts. It costs seconds per
 job and buys back roughly 7 GB of headroom. See [VRAM modes](16-configuration.md#vram-modes).
 
-If it still fails, drop the geometry resolution: **Mesh resolution** in the 3D pane, choosing "2D" rather
+If it still fails, drop the geometry resolution: **Mesh resolution** at the Mesh stage, choosing "2D" rather
 than "3D" — see
 [the mapping](04-generating-meshes.md#mesh-parameters).
 
@@ -66,7 +66,7 @@ not be in `warlock.log`. Look in `crash.log` instead — see
 ## Missing weights
 
 **What you see.** The health dot is amber. The diagnostics list has one `x` row per missing
-download, and in the 2D pane the model combo shows an entry as "weights missing".
+download, and at the Reference stage the model combo shows an entry as "weights missing".
 
 **Why.** Every image model, style LoRA, IP-Adapter, ControlNet and metric model is an optional
 one-time manual download. The app never fetches anything at runtime, by design.

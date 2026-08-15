@@ -2,25 +2,25 @@
 
 The mesh stage is where the reconstruction engine runs. It costs roughly two minutes of GPU per
 attempt, so everything in this chapter is arranged around deciding what to spend that on. All of it
-lives in the **3D asset** mode, whose settings pane holds no prompt controls whatsoever.
+lives at Create's **Mesh** stage, whose column holds no prompt controls whatsoever.
 
 ## Starting from a reference
 
 The normal path is promotion: take a finished 2D asset and run the mesh stage from its image.
 
 Select a finished reference in the library — its card offers **Make 3D**, and selecting a
-promotable reference also makes it the 3D pane's source automatically. The **Source** section at the
-top of the 3D pane names what the job will start from, and **Make 3D** at the bottom submits it.
+promotable reference also makes it the Mesh stage's source automatically. The **Source** section at
+the top of that column names what the job will start from, and **Make 3D** at the bottom submits it.
 
 The new job is an ordinary image job whose input image is the reference's, recorded as a child of
 the reference so the library can show them as one lineage rather than two unrelated rows.
 
-Everything the 3D pane holds is an **override**. Omitting one means "keep what the reference
+Everything the Mesh stage holds is an **override**. Omitting one means "keep what the reference
 recorded", which is not the same as sending the reference's value back — so the selects offer
 "keep the reference's" as their first entry and that is where they start.
 
 Two settings are exceptions and are always sent explicitly: the rig checkbox and the
-normalise-the-reference checkbox. Both are the 3D pane's own decisions, and an omission would let
+normalise-the-reference checkbox. Both are the Mesh stage's own decisions, and an omission would let
 the promotion inherit whatever the reference happened to record.
 
 Derived values never carry across. Anything the worker recorded about the *source* run's artifacts
@@ -67,7 +67,7 @@ Each candidate is an ordinary mesh job: same validation, same VRAM admission, sa
 keeps the mesh seed you pinned, so a pinned seed still reproduces; the rest draw fresh ones.
 
 While a group is undecided its members are **hidden from the library** — three near-identical cards
-are not a workshop — and the **Candidates** picker at the top of the 3D inspector is where they live
+are not a workshop — and the **Candidates** picker at the top of the inspector is where they live
 instead. Selecting one shows it in the viewport exactly as selecting any other asset does. Once every
 attempt has finished, **Keep this one** settles the group: the one you kept and the ones you did not
 all become ordinary assets, and only then are you *asked* whether to delete the ones you did not keep.
@@ -109,7 +109,7 @@ The **Mesh** section holds the reconstruction settings.
 | 3D | 1024 |
 
 The question the select is asking is what the asset is *for*: a 2D asset is going to be seen flat
-and small, a 3D one in a scene. This is a different control from the 2D pane's platform, which is a
+and small, a 3D one in a scene. This is a different control from the Reference stage's platform, which is a
 phrase in the prompt. Higher resolutions cost more VRAM and more time, and on a card that cannot
 hold both models at once they may need the exclusive VRAM mode (`WARLOCK_VRAM_EXCLUSIVE=1`), which
 stops the reconstruction engine while the image model runs.

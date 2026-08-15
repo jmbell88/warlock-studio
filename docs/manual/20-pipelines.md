@@ -8,7 +8,7 @@ explains the orderings that look arbitrary from outside and are not.
 
 A reference job composes a prompt, encodes it and denoises an image. The composition happens in
 `guidance.py` and `pipelines/prompt.py`, both of which are pure and torch-free — you can see the
-result before spending any GPU on it, which is what the prompt preview in the 2D pane shows.
+result before spending any GPU on it, which is what the prompt preview at the Reference stage shows.
 
 Three things go into the composed prompt, in this order: any trigger words the chosen style LoRA was
 trained on, then your own text with the guidance fragments appended in a fixed order that reads like

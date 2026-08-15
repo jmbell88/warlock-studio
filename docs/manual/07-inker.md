@@ -928,7 +928,7 @@ what you recovered; declining at startup keeps everything exactly where it was.
 Inker is wired into the pipeline in both directions. The **document** panel on the right states
 which direction you are in: a document is either **linked to a job** or **not part of a job**.
 
-**Into Inker.** With a finished reference selected in 2D mode, **Open in Inker** appears on the
+**Into Inker.** With a finished reference selected at the Reference stage, **Open in Inker** appears on the
 viewport toolbar. It opens that reference as a linked document. If a layered working file already
 exists for the job and is current, you get your layers back; otherwise you get the flat image.
 
@@ -968,7 +968,7 @@ discards the layered file, because it describes an edit that no longer exists.
   the same pixels.
 - **Send to 3D** queues the mesh stage from the flattened image. A linked document promotes the
   reference it already is — and refuses if you have unsaved changes, so the mesh is made from what
-  you can see. An unlinked one becomes an ordinary image job, the same call the 3D pane's upload
+  you can see. An unlinked one becomes an ordinary image job, the same call the Mesh stage's upload
   button makes. Either way, if the quality report is unhappy you get a confirm naming the reasons
   rather than a refusal.
 
