@@ -723,16 +723,47 @@ def test_the_landing_screen_builds_empty_and_with_something_to_resume(
     _frame(imgui_ctx, lambda: landing.draw(app_ctx))
 
 
-def test_library_and_profiles_build_as_their_own_modes(app_ctx, imgui_ctx):
-    """They were sub-views of Home behind an enum; they are single-pane modes
-    now, drawn by the same call Home used to make."""
-    from warlock.studio.panes import library, profiles_panel
+def test_the_library_builds_as_its_own_mode(app_ctx, imgui_ctx):
+    """It was a sub-view of Home behind an enum; it is a single-pane mode now,
+    drawn by the same call Home used to make."""
+    from warlock.studio.panes import library
 
     _seeded(app_ctx)
     app_ctx.state.mode = "library"
     _frame(imgui_ctx, lambda: library.draw(app_ctx))
-    app_ctx.state.mode = "profiles"
-    _frame(imgui_ctx, lambda: profiles_panel.draw(app_ctx))
+
+
+def test_the_profile_sheet_builds_over_a_mode(app_ctx, imgui_ctx):
+    """Profiles stopped being a mode in REDESIGN.md wave 3: it is a window of
+    its own over the 2D pane, so like the Manual overlay it is drawn outside
+    the host and cannot be smoked by the pane pass.
+
+    Both branches, and the editor as well as the list -- the draft is what the
+    close guard is about.
+    """
+    from warlock.studio.panes import profiles_panel
+
+    imgui, renderer = imgui_ctx
+    _seeded(app_ctx)
+
+    def frame() -> None:
+        imgui.new_frame()
+        imgui.set_next_window_size((1200, 900))
+        imgui.begin("##host")
+        imgui.text("behind")
+        imgui.end()
+        profiles_panel.draw_sheet(app_ctx)
+        imgui.render()
+        renderer.render(imgui.get_draw_data())
+
+    app_ctx.state.mode = "2d"
+    frame()
+    profiles_panel.open_sheet(app_ctx)
+    frame()
+    frame()
+    app_ctx.state.profile_draft = {"art_style": "painterly"}
+    app_ctx.state.profile_draft_name = "Painterly"
+    frame()
 
 
 def test_the_manual_builds_embedded(app_ctx, imgui_ctx):

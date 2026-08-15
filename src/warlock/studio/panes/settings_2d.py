@@ -469,6 +469,15 @@ def _profiles(ctx: Any, form: dict[str, Any]) -> None:
             )
         )
     imgui.same_line()
+    # The manager, from the picker it is about (REDESIGN.md wave 3). It was a
+    # top-level mode, which put a shelf of saved settings in the navigation
+    # beside the six creative workspaces and made "manage my styles" somewhere
+    # you travel to rather than something you do to the form in front of you.
+    if widgets.ghost_button("Manage..."):
+        from . import profiles_panel
+
+        profiles_panel.open_sheet(ctx)
+    imgui.same_line()
     if imgui.button("Reset..."):
         ctx.confirms.ask(
             dialogs.Confirm(

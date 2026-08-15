@@ -46,6 +46,7 @@ def _ctx(mode: str = "3d", jobs: list[Any] | None = None, selected: str | None =
             # The real thing rather than a stub: the Manual is an overlay now,
             # so the palette's entry for it reads and writes this state.
             manual=ManualState(),
+            profiles_open=False,
         ),
         cache=SimpleNamespace(jobs=rows, get=by_id.get),
         viewer=None,
@@ -141,13 +142,26 @@ def test_the_manual_is_a_command_rather_than_a_destination():
     assert ctx.state.mode == "3d"
 
 
-def test_library_and_profiles_are_reachable_as_modes():
-    """They were tiles on Home behind a sub-view enum, which is what a
+def test_the_library_is_reachable_as_a_mode():
+    """It was a tile on Home behind a sub-view enum, which is what a
     destination looks like when there is nowhere to put it. The palette derives
     its list from ``modes.MODES``, so this passes for free -- which is the
     property being asserted."""
     keys = {c.key for c in palette.commands(_ctx())}
-    assert {"go:library", "go:profiles"} <= keys
+    assert "go:library" in keys
+
+
+def test_the_profile_manager_is_a_command_and_goes_where_it_belongs():
+    """It stopped being a mode in REDESIGN.md wave 3, so there is no
+    ``go:profiles`` to derive. The manager is *about* the 2D form, so the
+    command opens that pane under it rather than raising a sheet over whatever
+    happened to be on screen."""
+    ctx = _ctx("clay")
+    keys = {c.key for c in palette.commands(ctx)}
+    assert "go:profiles" not in keys
+    next(c for c in palette.commands(ctx) if c.key == "profiles").run(ctx)
+    assert ctx.state.mode == "2d"
+    assert ctx.state.profiles_open
 
 
 @pytest.mark.parametrize("key", ["wireframe", "turntable", "frame"])

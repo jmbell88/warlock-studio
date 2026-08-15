@@ -60,6 +60,45 @@ def test_nothing_open_is_not_dirty_and_proceeds(ctx):
     assert proceeded == ["quit"]
 
 
+def test_closing_the_sheet_with_nothing_typed_just_closes_it(ctx):
+    profiles_panel.open_sheet(ctx)
+    profiles_panel.close_sheet(ctx)
+    assert ctx.state.profiles_open is False
+    assert ctx.confirms.asked == []
+
+
+def test_closing_the_sheet_over_a_draft_asks_first(ctx):
+    """The manager was a *mode*, so the only way to lose a draft was to switch
+    away -- where this guard already stood. A sheet can also be dismissed by
+    Esc and by its own close control, so both of those go through it too."""
+    profiles_panel.open_sheet(ctx)
+    profiles_panel._open_draft(ctx, "", {})
+    ctx.state.profile_draft_name = "Brass"
+
+    profiles_panel.close_sheet(ctx)
+    assert ctx.state.profiles_open is True, "it must not close before the answer"
+    assert ctx.confirms.asked
+    ctx.confirms.asked[0].on_confirm()
+    assert ctx.state.profiles_open is False
+    assert ctx.state.profile_draft is None
+
+
+def test_a_recovered_draft_comes_back_with_the_pane_it_belongs_to(ctx, tmp_path):
+    """The sheet is not a destination, so putting the reader back means
+    restoring both halves: the 2D pane, and the manager over it."""
+    import json
+
+    path = tmp_path / "draft.profile.json"
+    path.write_text(
+        json.dumps({"fields": {"art_style": "painterly"}, "name": "Brass", "origin": ""}),
+        encoding="utf-8",
+    )
+    assert profiles_panel._journal_adopt(ctx, path, {}) is True
+    assert ctx.state.mode == "2d"
+    assert ctx.state.profiles_open is True
+    assert ctx.state.profile_draft_name == "Brass"
+
+
 def test_an_unsaved_draft_asks_before_it_is_lost(ctx):
     profiles_panel._open_draft(ctx, "", {})
     ctx.state.profile_draft_name = "Brass"

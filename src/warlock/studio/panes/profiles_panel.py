@@ -21,6 +21,97 @@ from ..state import set_mode
 from ..tokens import sp
 from . import settings_2d
 
+# How wide the sheet is. Narrow on purpose: the panel is a list of names with
+# a summary line each, and an editor of single-column fields -- a manager
+# stretched across a 1600 px window would be one column of text and a thousand
+# pixels of nothing.
+SHEET_W = 560.0
+SHEET_HEIGHT = 0.7
+
+# Whether the sheet was up last frame, so ``popover_enter`` can be told which
+# frame is its first. Module state for ``manual.render``'s reason: there is one
+# manager and it is drawn from one place.
+_was_open = [False]
+
+
+def open_sheet(ctx: Any) -> None:
+    ctx.state.profiles_open = True
+
+
+def close_sheet(ctx: Any) -> None:
+    """Put the manager away, asking first if a draft would be lost.
+
+    Through :func:`guard` rather than by clearing the flag, which is the whole
+    reason closing is a function: the sheet can be dismissed by Esc or by a
+    close button, and both of those are ways to lose typing that the mode this
+    replaced could only lose by switching away -- where the same guard already
+    stood.
+    """
+
+    def proceed() -> None:
+        _close(ctx)
+        ctx.state.profiles_open = False
+
+    guard(ctx, "close the profile manager", proceed)
+
+
+def draw_sheet(ctx: Any) -> None:
+    """The manager over whatever is on screen. Drawn from ``App._overlays``.
+
+    The Manual overlay's recipe exactly (see ``manual.render.draw_overlay``):
+    a plain frosted window rather than a modal, so it neither takes the one
+    popup slot a frame has -- this panel raises confirms of its own, for Delete
+    and for the dirty-draft guard -- nor dims the pane it is about.
+    """
+    if not ctx.state.profiles_open:
+        _was_open[0] = False
+        return
+    appearing = not _was_open[0]
+    _was_open[0] = True
+
+    viewport = imgui.get_main_viewport()
+    alpha, rise = widgets.popover_enter("profiles", appearing)
+    width = min(viewport.work_size.x - sp(80), sp(SHEET_W))
+    imgui.set_next_window_pos(
+        (
+            viewport.work_pos.x + viewport.work_size.x * 0.5,
+            viewport.work_pos.y + viewport.work_size.y * 0.5 + rise,
+        ),
+        imgui.Cond_.always.value,
+        (0.5, 0.5),
+    )
+    imgui.set_next_window_size((width, viewport.work_size.y * SHEET_HEIGHT))
+    frosted = widgets.frosted()
+    if frosted:
+        imgui.set_next_window_bg_alpha(0.0)
+    imgui.push_style_var(imgui.StyleVar_.alpha.value, alpha)
+    radius = widgets.push_surface_rounding()
+    opened = imgui.begin(
+        "##profiles-sheet",
+        None,
+        imgui.WindowFlags_.no_title_bar.value
+        | imgui.WindowFlags_.no_move.value
+        | imgui.WindowFlags_.no_resize.value
+        | imgui.WindowFlags_.no_collapse.value
+        | imgui.WindowFlags_.no_saved_settings.value,
+    )
+    widgets.pop_surface_rounding()
+    if opened:
+        widgets.window_shadow("overlay", radius=radius)
+        if frosted:
+            widgets.window_backdrop(radius=radius)
+        close_w = imgui.get_frame_height()
+        imgui.set_cursor_pos_x(
+            max(imgui.get_cursor_pos_x() + imgui.get_content_region_avail().x - close_w, 0.0)
+        )
+        if widgets.icon_button(
+            f"{icons.CIRCLE_X}##profiles-close", "Close (Esc)", borderless=True
+        ):
+            close_sheet(ctx)
+        draw(ctx)
+    imgui.end()
+    imgui.pop_style_var()
+
 
 def draw(ctx: Any) -> None:
     # The heading comes first, and that is not cosmetic. ``help_button`` is a
@@ -487,7 +578,11 @@ def _journal_adopt(ctx: Any, path: Path, meta: dict[str, Any]) -> bool:
     ctx.state.profile_draft_name = str(data.get("name") or "")
     ctx.state.profile_draft_origin = str(data.get("origin") or "")
     ctx.state.profile_journal_name = Path(path).name
-    set_mode(ctx.state, "profiles")
+    # The 2D pane with the manager over it, which is where the draft was being
+    # typed: the sheet is not a destination, so "put the reader back" means
+    # putting back both halves.
+    set_mode(ctx.state, "2d")
+    ctx.state.profiles_open = True
     return True
 
 

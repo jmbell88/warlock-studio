@@ -49,7 +49,12 @@ MODES: list[tuple[str, str, str]] = [
     # re-picked, because a screen the user has seen should not change its
     # pictures for a refactor.
     ("library", "Library", icons.FOLDER_OPEN),
-    ("profiles", "Profiles", icons.SLIDERS),
+    # Profiles is not here either, and for the Manual's reason one step over
+    # (REDESIGN.md wave 3): a shelf of saved *settings* was sitting in the
+    # top-level navigation beside the six creative workspaces, which said that
+    # "manage my styles" is a place you travel to rather than something you do
+    # to the form in front of you. It is a sheet over the 2D pane now, opened
+    # from the profile picker it is about -- ``profiles_panel.draw_sheet``.
 ]
 
 # The modes that own a viewport or a form, and so have work in them. Home, the

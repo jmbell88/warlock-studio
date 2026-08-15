@@ -86,10 +86,10 @@ IDLE_FPS = 12
 # categories partition ``modes.KEYS`` exactly, and the partition is the guard
 # on ``_build_ui``'s dispatch.
 #
-# The Manual left this tuple when it stopped being a mode (REDESIGN.md wave 3):
-# it is an overlay drawn from ``_overlays`` now, so there is no dispatch branch
-# for it to be reached by.
-_SINGLE_PANE_MODES = ("home", "settings", "library", "profiles")
+# The Manual and the profile manager both left this tuple when they stopped
+# being modes (REDESIGN.md wave 3): each is drawn from ``_overlays`` now, so
+# neither has a dispatch branch to be reached by.
+_SINGLE_PANE_MODES = ("home", "settings", "library")
 
 
 # What a drop onto the window is allowed to be. The refusal message and every
@@ -1866,6 +1866,19 @@ class App:
 
             manual_render.close(ctx)
             return
+        # Then the profile sheet, for the same reason and in this order: the
+        # Manual can be raised *over* the manager (its (?) does exactly that),
+        # so the topmost surface is the one an Esc is about. This one goes
+        # through the panel's own guard, so a half-typed profile still asks.
+        if (
+            event.type == pygame.KEYDOWN
+            and event.key == pygame.K_ESCAPE
+            and ctx.state.profiles_open
+        ):
+            from .panes import profiles_panel
+
+            profiles_panel.close_sheet(ctx)
+            return
         # Above the landing and Inker returns below: the frame rate is a
         # property of the loop, not of whichever pane happens to be on screen,
         # and the chooser is exactly where a slow startup would show.
@@ -2354,10 +2367,6 @@ class App:
                 from .panes import library as library_pane
 
                 library_pane.draw(ctx)
-            elif mode == "profiles":
-                from .panes import profiles_panel
-
-                profiles_panel.draw(ctx)
             elif mode == "clay":
                 self._clay_workspace()
             elif mode == "poser":
@@ -3586,7 +3595,12 @@ class App:
         # palette on purpose: Ctrl+K is how you leave anywhere, this included,
         # so it has to float above the reference rather than under it.
         from .manual import render as manual_render
+        from .panes import profiles_panel
 
+        # Under the Manual, because the (?) inside the manager opens the
+        # manual *about* it: the reference has to land on top of the sheet it
+        # was asked from, not behind it.
+        profiles_panel.draw_sheet(ctx)
         manual_render.draw_overlay(ctx)
         # Above the confirms it can raise (Delete asks): the palette closes
         # itself in the same frame it runs a command, so the question it asks

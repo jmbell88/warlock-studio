@@ -865,6 +865,14 @@ class AppState:
     # was a coloured dot. The diagnostics popup shows these, which is what makes
     # Dismiss "put it away" rather than "forget it".
     dismissed_errors: list[str] = field(default_factory=list)
+    # Whether the style-profile manager is up (REDESIGN.md wave 3). It was a
+    # mode, which put a shelf of saved settings in the top-level navigation
+    # beside the six creative workspaces -- and made "manage my styles" a place
+    # you travel to rather than something you do to the form in front of you.
+    # It is a sheet over the 2D pane now, opened from the profile picker it is
+    # about. Not persisted, for the reason no mode is: reopening the app into a
+    # manager nobody asked for is a setting nobody chose.
+    profiles_open: bool = False
     profile_draft: dict[str, Any] | None = None
     profile_draft_name: str = ""
     # The name the draft was opened under, so renaming one in the editor moves

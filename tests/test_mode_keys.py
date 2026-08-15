@@ -137,6 +137,27 @@ def test_esc_closes_the_manual_before_the_mode_sees_it(no_mods):
     assert state.mode == "inker"
 
 
+def test_esc_closes_the_profile_sheet_before_the_mode_sees_it(no_mods):
+    app = _app("2d")
+    state = app.app_ctx.state
+    state.profiles_open = True
+    _press(app, pygame.K_ESCAPE)
+    assert not state.profiles_open
+    assert state.mode == "2d"
+
+
+def test_the_manual_closes_before_the_sheet_it_was_raised_over(no_mods):
+    """Both up at once is an ordinary state: the manager's own (?) opens the
+    Manual about it. The topmost surface is the one an Esc is about."""
+    app = _app("2d")
+    state = app.app_ctx.state
+    state.profiles_open = True
+    _press(app, pygame.K_F1)
+    _press(app, pygame.K_ESCAPE)
+    assert not state.manual.open
+    assert state.profiles_open
+
+
 def test_esc_still_leaves_a_mode_once_the_manual_is_closed(no_mods):
     app = _app("settings")
     state = app.app_ctx.state
