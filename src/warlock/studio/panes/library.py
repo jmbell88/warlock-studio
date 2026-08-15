@@ -313,7 +313,32 @@ def append_prefix(text: str, field: str) -> str:
     return f"{head} {field}:" if head else f"{field}:"
 
 
-def _prefix_chips(filters: Any, *, active: bool) -> None:
+#: What ``Filters.status`` and ``Filters.kind`` may be, and what each is called.
+#:
+#: Module constants rather than literals inside ``_filters`` because the
+#: full-window library offers the same two sets as lists of selectables
+#: (REDESIGN.md wave 4.4). Two copies would be two vocabularies: a rail entry
+#: naming a kind the combo does not have is a filter that can be set and not
+#: cleared.
+STATUS_OPTIONS = [
+    ("all", "any status"),
+    ("done", "done"),
+    ("running", "running"),
+    ("error", "failed"),
+]
+
+KIND_OPTIONS = [
+    ("all", "any kind"),
+    ("reference", "references"),
+    ("tile", "tiles"),
+    ("model", "meshes"),
+    ("rig", "rigs"),
+    ("sheet", "sheets"),
+    ("sprite", "sprite sheets"),
+]
+
+
+def prefix_chips(filters: Any, *, active: bool) -> None:
     """The clickable prefixes under the filter box, while it is in use."""
     if active:
         _prefix_open[0] = True
@@ -365,35 +390,12 @@ def _filters(ctx: Any, jobs: list[Any]) -> None:
     filters.text = widgets.input_text(
         "##filter", filters.text, max_length=120, hint="Filter... (tag: status: kind:)"
     )
-    _prefix_chips(filters, active=imgui.is_item_active())
+    prefix_chips(filters, active=imgui.is_item_active())
     spacing = imgui.get_style().item_spacing.x
     half = (imgui.get_content_region_avail().x - spacing) * 0.5
-    filters.status = widgets.combo(
-        "##status",
-        filters.status,
-        [
-            ("all", "any status"),
-            ("done", "done"),
-            ("running", "running"),
-            ("error", "failed"),
-        ],
-        width=half,
-    )
+    filters.status = widgets.combo("##status", filters.status, STATUS_OPTIONS, width=half)
     imgui.same_line()
-    filters.kind = widgets.combo(
-        "##kind",
-        filters.kind,
-        [
-            ("all", "any kind"),
-            ("reference", "references"),
-            ("tile", "tiles"),
-            ("model", "meshes"),
-            ("rig", "rigs"),
-            ("sheet", "sheets"),
-            ("sprite", "sprite sheets"),
-        ],
-        width=half,
-    )
+    filters.kind = widgets.combo("##kind", filters.kind, KIND_OPTIONS, width=half)
     # The three square buttons share the sort row, so what is left for the
     # combo is what they and their gaps do not take. Three, not two: the (?)
     # right-aligns itself onto whatever line is current, so a row that reserved
@@ -921,6 +923,34 @@ def select_relative(ctx: Any, delta: int) -> None:
         index = 0 if delta > 0 else len(ids) - 1
     select(ctx, ids[index])
     ctx.state.library_scroll_to = ids[index]
+
+
+#: Where the full-window grid publishes how many columns it drew, so the
+#: keyboard can move by one *row*. In ``state.preview`` because it is a fact
+#: about this frame's layout and nothing else: it changes when the window is
+#: dragged, and a persisted copy would be a stale number the arrows obeyed.
+COLUMNS_SLOT = "library_columns"
+
+
+def columns(ctx: Any) -> int:
+    """How many cards the grid fitted across, last frame. 1 when unknown.
+
+    One, not zero: the sidebar list is a single column and so is a grid nobody
+    has drawn yet, and a zero here would make Up and Down do nothing at all.
+    """
+    return max(int(ctx.state.preview.get(COLUMNS_SLOT) or 1), 1)
+
+
+def select_grid(ctx: Any, dx: int, dy: int) -> None:
+    """Arrow keys over the grid. Left/right by one, up/down by a row.
+
+    The extension of :func:`select_relative` the full window needs (REDESIGN.md
+    wave 4.4), and deliberately a second entry point rather than a flag on it:
+    the same function is bound to Up/Down in the *sidebar*, where the list is
+    one card wide and a row is one card. Which of the two a key means is a
+    property of the pane it was pressed in, so the pane's dispatcher chooses.
+    """
+    select_relative(ctx, dx + dy * columns(ctx))
 
 
 def open_selected(ctx: Any) -> None:

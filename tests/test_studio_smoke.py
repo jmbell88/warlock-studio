@@ -2662,6 +2662,66 @@ def test_arrow_keys_with_nothing_selected_enter_from_the_near_end(app_ctx):
     assert app_ctx.state.selected == order[-1]
 
 
+def test_the_full_window_library_builds_in_every_column_arrangement(
+    app_ctx, imgui_ctx
+):
+    """REDESIGN.md wave 4.4. Four states, because the middle column's width is
+    a function of whether the inspector is there and the grid is a function of
+    which pile it is drawing."""
+    from warlock.studio.panes import library_full
+
+    # Empty: the grid reuses the library's own empty state.
+    app_ctx.state.select(None)
+    _frame(imgui_ctx, lambda: library_full.draw(app_ctx))
+
+    first = _seeded(app_ctx)
+    _seeded(app_ctx)
+    # A selection resolves, so the inspector column appears and the grid narrows.
+    app_ctx.state.select(first)
+    _frame(imgui_ctx, lambda: library_full.draw(app_ctx))
+    # ...and a selection that the cache cannot resolve does not.
+    app_ctx.state.select("no-such-job")
+    _frame(imgui_ctx, lambda: library_full.draw(app_ctx))
+    # A bulk selection puts the toolbar under the grid.
+    app_ctx.state.select(first)
+    app_ctx.state.checked.add(first)
+    _frame(imgui_ctx, lambda: library_full.draw(app_ctx))
+    app_ctx.state.checked.clear()
+    # The trash is a different pile with a different footer.
+    app_ctx.state.filters.trash = True
+    try:
+        _frame(imgui_ctx, lambda: library_full.draw(app_ctx))
+    finally:
+        app_ctx.state.filters.trash = False
+
+
+def test_the_grid_publishes_its_column_count_for_the_keyboard(app_ctx, imgui_ctx):
+    """Up and Down move by a *row*, which nothing can know until the grid has
+    been laid out -- so the grid says how wide it was and the keyboard reads it
+    back. A pane that has never drawn answers one, not zero: zero would make
+    both keys do nothing at all."""
+    from warlock.studio.panes import library, library_full
+
+    app_ctx.state.preview.pop(library.COLUMNS_SLOT, None)
+    assert library.columns(app_ctx) == 1
+
+    order = [_seeded(app_ctx) for _ in range(5)]
+    app_ctx.state.select(None)
+    _frame(imgui_ctx, lambda: library_full.draw(app_ctx))
+    count = library.columns(app_ctx)
+    assert count >= 1
+
+    shown = [job["id"] for job in app_ctx.cache.visible(app_ctx.state.filters)]
+    assert set(shown) == set(order)
+    app_ctx.state.select(shown[0])
+    library.select_grid(app_ctx, 1, 0)
+    assert app_ctx.state.selected == shown[1]
+    library.select_grid(app_ctx, 0, 1)
+    # One row down, clamped at the end of the list -- the same clamp
+    # ``select_relative`` applies, because it is the one doing the moving.
+    assert app_ctx.state.selected == shown[min(1 + count, len(shown) - 1)]
+
+
 def test_only_a_finished_reference_can_be_dragged(app_ctx):
     """A card that lifts and a slot that refuses it is worse than a card that
     does not lift -- so the predicate is stated once and both use it."""

@@ -1,9 +1,26 @@
 # The library and jobs
 
-Everything the app has ever made is a **job**, and every job is a row in the library — the lower
-half of the right sidebar, under the inspector. This chapter covers what a job goes through, how to
-find one, how to run one again, how to save a reusable style, and how to keep the disk under
+Everything the app has ever made is a **job**, and the library is where you find one. It has two
+shapes, and they are the same library: a compact list in the lower half of the right sidebar of the
+2D and 3D panes, for picking something while you are looking at something else, and a **full window**
+from the rail, for finding something you cannot name. This chapter covers what a job goes through,
+how to find one, how to run one again, how to save a reusable style, and how to keep the disk under
 control.
+
+## The full window
+
+Three columns. On the left, a rail: the search box, then the collections — **Favourites** and
+**Trash**, then every **status** and every **kind** as a list you can read rather than a combo you
+have to open — then the sort, and the disk figure at the foot. In the middle, a grid of thumbnails:
+each asset at a size you can recognise it by, with its status pill drawn on the picture and a star in
+the corner if you favourited it. On the right, the **inspector** — the same one the sidebar shows,
+and only there when something is selected, because an empty column beside a grid is an empty column.
+
+Every control writes the same filters the sidebar's combos write, so switching between the two views
+never loses a filter, and every card offers the same actions and the same right-click menu.
+
+Arrow keys walk the grid: left and right by one, up and down by a row. Enter opens the highlighted
+asset in the pane that made it.
 
 ## The job lifecycle
 
@@ -53,7 +70,8 @@ reference also makes it the 3D pane's promotion source, so switching to 3D mode 
 it; selecting anything else leaves that source alone, so browsing your meshes never silently changes
 what **Make 3D** would submit.
 
-Above the list are four filters and a select-all:
+In the sidebar these are four controls above the list, plus a select-all; in the full window the
+same values are the rail. Either way:
 
 - A free-text box, matched against the job's name, prompt, tags and id. Every word has to match,
   so typing more narrows. It also understands field prefixes: `tag:wood`, `status:error`,
@@ -85,12 +103,14 @@ Under the date sort the list is grouped by **today**, **yesterday**, **this week
 The grouping is only shown under that sort: a "today" heading above a list ordered by size would be a
 claim about what separates the rows below it that is not true.
 
-**Density.** The first button on the third row switches between comfortable and compact rows. A
-compact row is the thumbnail, the name and the status pill — about twice as many assets per screen —
-and everything else is one click away in the right-click menu.
+**Density.** The first button on the third row of the *sidebar* switches between comfortable and
+compact rows. A compact row is the thumbnail, the name and the status pill — about twice as many
+assets per screen — and everything else is one click away in the right-click menu. The full window
+has no such control: a compact card is a shorter row, and a grid has no rows.
 
 **Keyboard and mouse.** In 2D and 3D mode, Up and Down move the selection through the list and scroll
-it into view. Right-clicking a card opens the same actions menu the `...` button does, and works on a
+it into view; in the full window they move by a row of the grid and Left and Right by one card.
+Right-clicking a card opens the same actions menu the `...` button does, and works on a
 running job, where the button is replaced by the progress bar. A finished reference can also be
 dragged from the library onto the 3D pane's **Source** slot.
 
@@ -210,7 +230,8 @@ queue first.
 question is asked — the trash *is* the question, and an undo you can take an hour later is a better
 one than a confirm answered in half a second while looking at something else.
 
-The trash icon on the third row of the filter bar switches the list to it. A trashed asset offers
+The trash icon on the third row of the sidebar's filter bar switches the list to it, and so does
+**Trash** in the full window's collections. A trashed asset offers
 exactly two actions, **Restore** and **Delete permanently...**, and the bulk bar offers the same two
 for a ticked set. Beside them the bar reports what is in there — `12 assets - 4.1 GB` — which is
 the number **Empty trash...** is about, since that button deletes all of it including anything

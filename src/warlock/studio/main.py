@@ -1920,8 +1920,15 @@ class App:
                 # one keyboard whichever mode it is drawn in.
                 from .panes import library
 
+                # A *grid* here, so Up and Down move by a row and Left and
+                # Right by one -- the column count is whatever the grid drew
+                # last frame. The sidebar keeps ``select_relative`` and its
+                # one-card rows; which of the two a key means is a property of
+                # the pane it was pressed in.
                 if event.key in (pygame.K_UP, pygame.K_DOWN):
-                    library.select_relative(ctx, -1 if event.key == pygame.K_UP else 1)
+                    library.select_grid(ctx, 0, -1 if event.key == pygame.K_UP else 1)
+                elif event.key in (pygame.K_LEFT, pygame.K_RIGHT):
+                    library.select_grid(ctx, -1 if event.key == pygame.K_LEFT else 1, 0)
                 elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                     library.open_selected(ctx)
             return
@@ -2394,14 +2401,14 @@ class App:
             elif mode == "settings":
                 app_settings.draw(ctx)
             elif mode == "library":
-                # The library verbatim rather than a second card list: the
-                # filters, the cards and the primary-action ladder are the same
-                # question here as in the sidebar, and two implementations of
-                # it would drift. This is the call Home's "Open Existing" tile
-                # used to make behind a sub-view enum.
-                from .panes import library as library_pane
+                # The full-window composition (REDESIGN.md wave 4.4), not a
+                # second card list: ``library_full`` draws the *same* filters,
+                # the same cards' actions and the same inspector, arranged for
+                # a window rather than for a 300 px sidebar. The library itself
+                # is still one implementation -- this module composes it.
+                from .panes import library_full
 
-                library_pane.draw(ctx)
+                library_full.draw(ctx)
             elif mode == "clay":
                 self._clay_workspace()
             elif mode == "poser":

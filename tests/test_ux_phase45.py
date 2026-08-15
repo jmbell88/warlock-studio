@@ -115,7 +115,7 @@ def test_the_chips_are_the_parsers_own_prefixes():
     turns the query into free text."""
     from warlock.studio.state import QUERY_FIELDS
 
-    assert "QUERY_FIELDS" in inspect.getsource(library._prefix_chips)
+    assert "QUERY_FIELDS" in inspect.getsource(library.prefix_chips)
     for field in QUERY_FIELDS:
         assert library.append_prefix("", field) == f"{field}:"
 
