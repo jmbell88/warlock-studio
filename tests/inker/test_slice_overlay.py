@@ -251,14 +251,41 @@ def test_dragging_on_empty_canvas_adds_one_slice(monkeypatch):
     assert len(tab.doc.history) == 1
 
 
-def test_a_click_with_no_drag_adds_nothing(monkeypatch):
+def test_a_click_on_empty_canvas_adds_nothing_and_deselects(monkeypatch):
+    """A stationary cursor at a fractional position rounds outward to a 1x1
+    rectangle, so without a floor every stray click would put a slice down."""
     tab = _tab(zoom=1.0, pan=(0.0, 0.0))
+    entry = tab.doc.add_slice((20, 8, 30, 14))
     state = _state(tab)
-    _at(monkeypatch, 5.0, 5.0)
-    inker_canvas._press(None, state, tab, (5.0, 5.0), ORIGIN)
-    inker_canvas._release(None, state, tab, (5.0, 5.0))
-    assert tab.doc.slices == []
-    assert tab.doc.history.head == 0
+    state.slice_uid = entry.uid
+    head = tab.doc.history.head
+
+    for where in ((5.0, 5.0), (5.3, 5.7)):
+        state.slice_uid = entry.uid
+        _at(monkeypatch, *where)
+        inker_canvas._press(None, state, tab, where, ORIGIN)
+        inker_canvas._release(None, state, tab, where)
+        assert len(tab.doc.slices) == 1
+        assert tab.doc.history.head == head
+        assert state.slice_uid == 0, "and it deselects, as the marquee does"
+
+
+def test_a_drag_at_a_high_zoom_is_measured_against_the_press(monkeypatch):
+    """Not against the previous frame. The geometry is integer, so a per-frame
+    delta of a third of a pixel truncates to nothing every frame -- a slow drag
+    at 8x would move the rectangle not at all."""
+    tab = _tab(zoom=8.0, pan=(0.0, 0.0))
+    entry = tab.doc.add_slice((2, 2, 26, 10))
+    state = _state(tab)
+    state.slice_uid = entry.uid
+
+    _at(monkeypatch, 112.0, 48.0)  # image (14, 6) at 8x
+    inker_canvas._press(None, state, tab, (14.0, 6.0), ORIGIN)
+    assert state.drag_kind == "slice-move"
+    for step in range(1, 10):
+        inker_canvas._drag(state, tab, (14.0 + step / 3.0, 6.0))
+    inker_canvas._release(None, state, tab, (17.0, 6.0))
+    assert tab.doc.slices[0].bounds == (5, 2, 29, 10)
 
 
 def test_dragging_the_pivot_moves_it_within_the_slice(monkeypatch):
@@ -275,6 +302,33 @@ def test_dragging_the_pivot_moves_it_within_the_slice(monkeypatch):
     assert tab.doc.slices[0].pivot == (8.0, 4.0)
     assert tab.doc.slices[0].bounds == (2, 2, 30, 14)
     assert len(tab.doc.history) == 2
+
+
+def test_dragging_on_a_keyed_frame_moves_the_key_and_not_the_base(monkeypatch):
+    """Whatever the overlay is drawing is what moves. Dragging the base while
+    the canvas draws the key is a gesture that visibly does nothing."""
+    tab = _tab(zoom=1.0, pan=(0.0, 0.0))
+    tab.doc.add_frame()
+    entry = tab.doc.add_slice((2, 2, 26, 10))
+    keyed = tab.doc.anim.frames[1].uid
+    tab.doc.set_slice_key(entry.uid, keyed, key=SliceKey(bounds=(2, 2, 26, 12)))
+    tab.doc.set_current_frame(1)
+    state = _state(tab)
+    state.slice_uid = entry.uid
+
+    _at(monkeypatch, 14.0, 7.0)
+    inker_canvas._press(None, state, tab, (14.0, 7.0), ORIGIN)
+    assert state.drag_kind == "slice-move"
+    inker_canvas._drag(state, tab, (16.0, 8.0))
+    assert _draw(state, tab).rects == [((4.0, 3.0), (28.0, 13.0))], "the overlay follows"
+    inker_canvas._release(None, state, tab, (16.0, 8.0))
+
+    assert tab.doc.slices[0].keys[keyed].bounds == (4, 3, 28, 13)
+    assert tab.doc.slices[0].bounds == (2, 2, 26, 10), "the base is untouched"
+    # add_frame, add_slice, the key, and the drag: one step each.
+    assert len(tab.doc.history) == 4
+    tab.doc.undo()
+    assert tab.doc.slices[0].keys[keyed].bounds == (2, 2, 26, 12)
 
 
 def test_a_press_that_moves_nothing_pushes_nothing(monkeypatch):

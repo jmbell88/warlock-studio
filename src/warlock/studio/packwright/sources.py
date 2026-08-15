@@ -87,11 +87,20 @@ EMPTY_META = SpriteMeta()
 
 
 def _point(value: Any) -> tuple[float, float] | None:
-    return None if value is None else (float(value[0]), float(value[1]))
+    if value is None:
+        return None
+    x, y = value  # a wrong length raises here, which is what the caller catches
+    return (float(x), float(y))
 
 
 def _rect(value: Any) -> tuple[int, int, int, int] | None:
-    return None if value is None else tuple(int(v) for v in value)  # type: ignore[return-value]
+    """``(x, y, w, h)``, or None. The unpack is the length check, and it has to
+    be one: a three-element ``center`` would sail through a comprehension and
+    fail much later, in a sidecar writer that spreads it into four arguments."""
+    if value is None:
+        return None
+    x, y, w, h = value
+    return (int(x), int(y), int(w), int(h))
 
 
 def sprite_meta(raw: Any) -> SpriteMeta:

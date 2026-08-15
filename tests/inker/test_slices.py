@@ -177,6 +177,16 @@ def test_a_key_survives_a_frame_delete_and_its_undo():
     assert doc.slices[0].at(back.uid).bounds == (5, 5, 9, 9)
 
 
+def test_a_key_is_clamped_into_the_canvas_like_the_base_is():
+    """A keyed frame is dragged *through* its key, so a door that only clamped
+    the base would leave the one gesture that can escape the canvas unguarded."""
+    doc = _doc(16, 16)
+    doc.add_frame()
+    entry = doc.add_slice((0, 0, 4, 4))
+    doc.set_slice_key(entry.uid, doc.anim.frames[0].uid, key=SliceKey(bounds=(8, 8, 90, 90)))
+    assert doc.slices[0].keys[doc.anim.frames[0].uid].bounds == (8, 8, 16, 16)
+
+
 def test_clearing_a_key_that_is_not_there_pushes_nothing():
     doc = _doc()
     entry = doc.add_slice((0, 0, 4, 4))

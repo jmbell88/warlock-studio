@@ -259,8 +259,11 @@ def _slices(ctx: Any, state: Any, tab: Any) -> None:
 def _slice_options(ctx: Any, state: Any, tab: Any, entry: Any) -> None:
     doc = tab.doc
     imgui.set_next_item_width(sp(140))
-    changed, name = imgui.input_text(f"Name##slice{entry.uid}", entry.name)
-    if changed and name.strip():
+    # Committed when the field is let go of, not on every keystroke -- the same
+    # rule the layer opacity slider beside it follows, and for the same reason:
+    # typing "hitbox" is one rename, not six undo steps.
+    _changed, name = imgui.input_text(f"Name##slice{entry.uid}", entry.name)
+    if imgui.is_item_deactivated_after_edit() and name.strip():
         doc.set_slice(entry.uid, name=name.strip()[:MAX_SLICE_NAME])
 
     frame_uid = tab.frame_uid

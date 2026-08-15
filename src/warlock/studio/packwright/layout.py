@@ -27,11 +27,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any
 
 from ...pipelines import sheet as sheetlib
 from .maxrects import order, pack
-from .sources import Sprite
+from .sources import SliceSpec, Sprite
 from .trim import trim_rect
 
 MODES = ("grid", "maxrects")
@@ -117,7 +116,7 @@ class Frame:
     #: layout is decided by rectangles alone, so determinism is untouched by
     #: what a sprite happens to be called or where its pivot is.
     pivot: tuple[float, float] | None = None
-    slices: tuple[Any, ...] = ()
+    slices: tuple[SliceSpec, ...] = ()
 
     @property
     def trimmed(self) -> bool:

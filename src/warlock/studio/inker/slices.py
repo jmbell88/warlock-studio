@@ -40,7 +40,7 @@ boundary (see ``sheetout.slices_snapshot``), so a consumer never has to.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Any
 
 from .layers import new_uid
@@ -187,11 +187,6 @@ def slice_props(entry: Slice) -> dict[str, Any]:
         "center": entry.center,
         "keys": dict(entry.keys),
     }
-
-
-def with_props(entry: Slice, props: dict[str, Any]) -> Slice:
-    """``entry`` with some of its five values replaced. Pure; for previews."""
-    return replace(entry, **{k: v for k, v in props.items() if k in SLICE_PROPS})
 
 
 # --- undo steps ---------------------------------------------------------------

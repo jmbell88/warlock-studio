@@ -194,7 +194,18 @@ class SliceOps:
         # downstream assumes the declared types; ``normalise`` is the one place
         # that coercion lives, so it cannot be spelled differently here.
         entry.normalise()
+        # Every rectangle inside the canvas, the keys as much as the base: a
+        # frame with a key of its own is dragged *through* that key, so a door
+        # that only clamped the base would leave the one gesture that can
+        # produce an out-of-bounds rectangle unguarded -- and would let a
+        # crossed-over resize keep its corners the wrong way round.
         entry.bounds = tf.clamp_rect(entry.bounds, self.size)
+        entry.keys = {
+            frame_uid: SliceKey(
+                tf.clamp_rect(key.bounds, self.size), key.pivot, key.center
+            )
+            for frame_uid, key in entry.keys.items()
+        }
         after = slice_props(entry)
         # A ``was`` naming only some of the five leaves the rest *unchanged*,
         # which is what overlaying it on ``after`` says -- rather than "absent,

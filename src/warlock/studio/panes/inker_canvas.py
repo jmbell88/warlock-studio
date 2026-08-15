@@ -24,7 +24,7 @@ import numpy as np
 from imgui_bundle import imgui
 
 from .. import ants, icons, inker_mode, inker_state, theme, widgets
-from ..inker.slices import slice_props
+from ..inker.slices import SliceKey, slice_props
 from ..inker_state import PAINT_TOOLS, SELECT_TOOLS, SHAPE_TOOLS
 from ..tokens import sp
 from . import inker_textures
@@ -702,9 +702,21 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
 # live object so the overlay follows the cursor, and the release pushes exactly
 # one ``set_slice`` -- one gesture, one Ctrl+Z.
 
-#: A slice's corner grab squares and the pivot's ring, in screen pixels.
+#: A slice's corner grab squares and the pivot's ring, in **design** pixels --
+#: everything below runs both through ``sp``, drawing and hit-testing alike, so
+#: the grab radius cannot come out smaller than the handle a user can see on a
+#: scaled display.
 SLICE_HANDLE = 4.0
 SLICE_PIVOT_RADIUS = 5.0
+#: How much bigger the grab radius is than the thing drawn. Generous, because
+#: the alternative to grabbing a corner is starting a new slice on top of the
+#: one you were aiming at.
+SLICE_GRAB = 2.5
+#: The smallest rectangle a drag will make, in **image** pixels. Two rather than
+#: one: a stationary cursor at a fractional position rounds outward to a 1x1
+#: rectangle, so a one-pixel floor would put a slice down on every stray click.
+#: A genuinely one-pixel slice is still reachable by dragging a corner in.
+SLICE_MIN = 2
 #: How long a dash of the nine-slice centre is, in screen pixels. Dashed rather
 #: than solid because the centre sits inside the slice's own outline and two
 #: solid rectangles a few pixels apart read as one thick border.
@@ -751,14 +763,15 @@ def _slice_grab(state: Any, tab: Any, origin, point) -> tuple[str, str]:
         corners = {
             "nw": (x0, y0), "ne": (x1, y0), "sw": (x0, y1), "se": (x1, y1),
         }
+        grab = sp(SLICE_HANDLE) * SLICE_GRAB
         for name, (cx, cy) in corners.items():
-            if _near(inker_state.to_screen(tab.view, origin, cx, cy), at, SLICE_HANDLE * 2.5):
+            if _near(inker_state.to_screen(tab.view, origin, cx, cy), at, grab):
                 return "slice-resize", name
         if key.pivot is not None:
             pivot = inker_state.to_screen(
                 tab.view, origin, x0 + key.pivot[0], y0 + key.pivot[1]
             )
-            if _near(pivot, at, SLICE_PIVOT_RADIUS * 2.0):
+            if _near(pivot, at, sp(SLICE_PIVOT_RADIUS) * SLICE_GRAB):
                 return "slice-pivot", ""
         if key.center is not None:
             cx0, cy0, cx1, cy1 = key.center
@@ -767,9 +780,7 @@ def _slice_grab(state: Any, tab: Any, origin, point) -> tuple[str, str]:
                 "sw": (x0 + cx0, y0 + cy1), "se": (x0 + cx1, y0 + cy1),
             }
             for name, (cx, cy) in inner.items():
-                if _near(
-                    inker_state.to_screen(tab.view, origin, cx, cy), at, SLICE_HANDLE * 2.5
-                ):
+                if _near(inker_state.to_screen(tab.view, origin, cx, cy), at, grab):
                     return "slice-center", name
     # The body of *any* slice, last one first: the list is drawn in order, so
     # the last is the one on top and the one the click visibly landed on.
@@ -798,31 +809,70 @@ def _slice_press(ctx: Any, state: Any, tab: Any, origin, point) -> None:
     )
 
 
+def _nudged(rect, corner: str, dx: float, dy: float):
+    """One corner of a rectangle moved, the other three left alone.
+
+    The corner is allowed to cross the far one, which is what every editor's
+    resize does; the ordering happens once, at release, inside
+    ``clamp_rect``. Ordering *during* the drag would swap which pair of indices
+    the corner's name points at, and the rectangle would stick at the crossing.
+    """
+    out = list(rect)
+    ix, iy = SLICE_CORNERS[corner]
+    out[ix] += dx
+    out[iy] += dy
+    return tuple(out)
+
+
 def _slice_drag(state: Any, tab: Any, point) -> None:
-    """Move the live slice so the overlay follows the cursor. Pushes nothing."""
+    """Move the live slice so the overlay follows the cursor. Pushes nothing.
+
+    Measured against what was true at the **press**, never against the previous
+    frame -- the rule ``_transform_input`` states, and here it is the difference
+    between a drag that works and one that does not: the geometry is integer, so
+    a per-frame delta of a third of a pixel truncates to nothing every frame and
+    a slow drag at a high zoom moves the rectangle not at all.
+
+    **Whatever the overlay is drawing is what moves.** On a frame with a key of
+    its own that is the key, not the slice's own rectangle -- they are the same
+    thing only on an unkeyed frame, and dragging the base while the canvas draws
+    the key is a gesture that visibly does nothing.
+    """
     entry = tab.doc.slice_by_uid(state.slice_uid)
-    if entry is None or state.slice_drag is None:
+    if entry is None or state.slice_drag is None or state.drag_kind == "slice-new":
         return
-    _before, corner = state.slice_drag
-    last = state.last_point or point
-    dx, dy = point[0] - last[0], point[1] - last[1]
-    x0, y0, x1, y1 = entry.bounds
+    before, corner = state.slice_drag
+    if before is None:
+        return
+    anchor = state.drag_anchor or point
+    dx, dy = point[0] - anchor[0], point[1] - anchor[1]
+
+    frame_uid = tab.frame_uid
+    keyed = frame_uid is not None and frame_uid in before["keys"]
+    start = (
+        before["keys"][frame_uid]
+        if keyed
+        else SliceKey(before["bounds"], before["pivot"], before["center"])
+    )
+    bounds, pivot, center = start.bounds, start.pivot, start.center
+
     if state.drag_kind == "slice-move":
-        entry.bounds = (x0 + dx, y0 + dy, x1 + dx, y1 + dy)
+        x0, y0, x1, y1 = bounds
+        bounds = (x0 + dx, y0 + dy, x1 + dx, y1 + dy)
     elif state.drag_kind == "slice-resize":
-        which = list(entry.bounds)
-        ix, iy = SLICE_CORNERS[corner]
-        which[ix] += dx
-        which[iy] += dy
-        entry.bounds = tuple(which)
-    elif state.drag_kind == "slice-pivot" and entry.pivot is not None:
-        entry.pivot = (entry.pivot[0] + dx, entry.pivot[1] + dy)
-    elif state.drag_kind == "slice-center" and entry.center is not None:
-        which = list(entry.center)
-        ix, iy = SLICE_CORNERS[corner]
-        which[ix] += dx
-        which[iy] += dy
-        entry.center = tuple(which)
+        bounds = _nudged(bounds, corner, dx, dy)
+    elif state.drag_kind == "slice-pivot" and pivot is not None:
+        pivot = (pivot[0] + dx, pivot[1] + dy)
+    elif state.drag_kind == "slice-center" and center is not None:
+        center = _nudged(center, corner, dx, dy)
+
+    if keyed:
+        # A fresh frozen key in a fresh dictionary, never a write into the live
+        # one: the step's "before" is holding that dictionary's contents and
+        # must not move with the drag.
+        entry.keys = {**entry.keys, frame_uid: SliceKey(bounds, pivot, center)}
+        return
+    entry.bounds, entry.pivot, entry.center = bounds, pivot, center
     entry.normalise()
 
 
@@ -832,8 +882,14 @@ def _slice_release(ctx: Any, state: Any, tab: Any, point) -> None:
     if state.drag_kind == "slice-new":
         anchor = state.drag_anchor or point
         rect = marquee_rect(anchor, point)
-        if rect[2] - rect[0] >= 1 and rect[3] - rect[1] >= 1:
+        if rect[2] - rect[0] >= SLICE_MIN and rect[3] - rect[1] >= SLICE_MIN:
             state.slice_uid = doc.add_slice(rect).uid
+            return
+        # A click with no drag on empty canvas deselects, which is what the
+        # marquee tool does with the same gesture -- and it is not "make a
+        # one-pixel slice", which is what rounding a stationary cursor outward
+        # would otherwise produce on every stray click.
+        state.slice_uid = 0
         return
     if state.slice_drag is None:
         return
@@ -898,11 +954,10 @@ def _slices(state: Any, tab: Any, draw_list: Any, origin) -> None:
             draw_list.add_line((px, py - radius), (px, py + radius), hot)
         if not selected:
             continue
+        size = sp(SLICE_HANDLE)
         for cx, cy in _corners(tab.view, origin, x0, y0, x1, y1):
             draw_list.add_rect_filled(
-                (cx - SLICE_HANDLE, cy - SLICE_HANDLE),
-                (cx + SLICE_HANDLE, cy + SLICE_HANDLE),
-                hot,
+                (cx - size, cy - size), (cx + size, cy + size), hot
             )
 
 
