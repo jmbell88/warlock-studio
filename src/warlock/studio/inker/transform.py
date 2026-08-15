@@ -286,14 +286,33 @@ def rotsprite(pixels: np.ndarray, degrees: float, *, expand: bool = False) -> np
     )
 
 
-#: How far a shear may be pushed, per axis, in degrees. The limit is not
-#: cosmetic: a shear matrix is ``[[1, tan sx], [tan sy, 1]]`` and its
-#: determinant is ``1 - tan(sx)tan(sy)``, so the pair (45, 45) is singular --
-#: the plane collapses onto a line and there is no inverse to sample through.
-#: 60 degrees is well clear of that on both axes (``tan 60`` squared is 3, so
-#: the determinant is -2) and is already further than anybody italicises a
-#: sprite.
+#: How far a shear may be pushed **per axis**, in degrees. A bound on each
+#: number the panel can send, and nothing more -- 60 degrees is already further
+#: than anybody italicises a sprite, and past it the tangent grows fast enough
+#: that the output plane is mostly empty.
+#:
+#: It is deliberately *not* what keeps the transform invertible. See
+#: :data:`SHEAR_MIN_DET`, which is the guard that actually does, because the
+#: degenerate case is a property of the **pair** and sits well inside this
+#: bound.
 SHEAR_MAX = 60.0
+
+#: The smallest area factor a shear may have. A shear matrix is
+#: ``[[1, tan sx], [tan sy, 1]]``, so its determinant -- which is exactly the
+#: factor the plane's area is multiplied by -- is ``1 - tan(sx)tan(sy)``. Two
+#: *equal-signed* slants therefore fight each other, and the pair (45, 45) is
+#: singular: the plane collapses onto a line and there is no inverse to sample
+#: through. That pair is nowhere near :data:`SHEAR_MAX`, so the per-axis clamp
+#: never came close to preventing it.
+#:
+#: A tenth rather than an epsilon, because "not quite singular" is not a state
+#: worth rendering: at (44, 44) the determinant is 0.067, so a sprite comes back
+#: as a sliver of a fifteenth its area, and every pixel of it is a nearest
+#: sample of a plane that has been squeezed flat. The pair is refused outright
+#: instead -- the plane comes back unslanted -- which is the same answer this
+#: function already gave for a pair of zeros, and it is reached only from the
+#: numeric Slant fields, deliberately, and never from a handle.
+SHEAR_MIN_DET = 0.1
 
 
 def shear(
@@ -315,6 +334,11 @@ def shear(
     It goes through ``_resample`` like every other filtered path here, so it
     premultiplies and unpremultiplies around the interpolation -- a bilinear
     mix with a fully transparent pixel drags that pixel's colour into the edge.
+
+    **A degenerate pair comes back unslanted**, which is a refusal and not an
+    approximation: see :data:`SHEAR_MIN_DET`. Each axis is clamped to
+    :data:`SHEAR_MAX` first, but that clamp is a bound on the numbers and does
+    not reach the pair -- (45, 45) is singular and sits well inside it.
     """
     from PIL import Image
 
@@ -323,7 +347,7 @@ def shear(
     kx, ky = math.tan(math.radians(sx)), math.tan(math.radians(sy))
     det = 1.0 - kx * ky
     height, width = pixels.shape[:2]
-    if abs(det) < 1e-6 or (abs(kx) < 1e-9 and abs(ky) < 1e-9):
+    if abs(det) < SHEAR_MIN_DET or (abs(kx) < 1e-9 and abs(ky) < 1e-9):
         return pixels.copy()
 
     xs = [x + kx * y for x, y in ((0, 0), (width, 0), (0, height), (width, height))]

@@ -1431,10 +1431,14 @@ def _ctrl_key(
         # editor binds. It refuses a mask whose shape the canvas has outgrown.
         doc.reselect() if shift else doc.deselect()
     elif name == "j":
-        # Ctrl+J moves the selection onto a layer of its own -- cutting it out
-        # of the one it came from -- and Ctrl+Shift+J leaves the original
-        # behind. Both are one Ctrl+Z.
-        doc.layer_from_selection(cut=not shift)
+        # Ctrl+J *copies* the selection onto a layer of its own and
+        # Ctrl+Shift+J *cuts* it, which is the way round Photoshop and every
+        # editor that followed it bind the pair: the plain chord is the
+        # non-destructive one. Worth stating, because the obvious reading is
+        # the opposite -- plain does the whole thing, Shift does less -- and
+        # the whole point of a shortcut is that it matches the hand that
+        # already knows it. Both are one Ctrl+Z.
+        doc.layer_from_selection(cut=shift)
     elif name == "c":
         doc.copy()
     elif name == "x":

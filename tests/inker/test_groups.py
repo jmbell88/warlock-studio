@@ -19,6 +19,7 @@ import pytest
 
 from warlock.studio.inker import groups as gp
 from warlock.studio.inker.document import Document
+from warlock.studio.inker.selection import SelectionMask
 
 RED = (255, 0, 0, 255)
 BLUE = (0, 0, 255, 255)
@@ -277,6 +278,51 @@ def test_a_new_layer_joins_the_group_the_active_one_is_in():
     doc.add_layer("New")
     _ok(doc)
     assert doc.group_of[doc.stack[2].uid] == node.uid
+
+
+def test_a_pasted_layer_joins_the_group_the_active_one_is_in():
+    """``_add_layer_edit`` inserts above the active row exactly as
+    ``add_layer`` does, so a paste made while working inside a folder used to
+    land membership-less in the *middle* of that folder's span -- which is the
+    contiguity invariant being false with nothing to say so."""
+    doc = _doc(4)
+    node = doc.group_layers([1, 2], name="Ink")
+    doc.stack.active_index = 1
+    doc.select(SelectionMask.from_rect(doc.size, (0, 0, 4, 4)))
+    assert doc.copy()
+
+    assert doc.paste_as_layer()
+
+    _ok(doc)
+    assert doc.group_of[doc.stack[2].uid] == node.uid
+
+
+def test_a_layer_from_selection_joins_the_group_it_came_from():
+    doc = _doc(4)
+    node = doc.group_layers([1, 2], name="Ink")
+    doc.stack.active_index = 1
+    doc.select(SelectionMask.from_rect(doc.size, (0, 0, 4, 4)))
+
+    assert doc.layer_from_selection(cut=False)
+
+    _ok(doc)
+    assert doc.group_of[doc.stack[2].uid] == node.uid
+
+
+def test_a_cut_layer_from_selection_inside_a_group_is_still_one_step():
+    doc = _doc(4)
+    doc.group_layers([1, 2], name="Ink")
+    doc.stack.active_index = 1
+    doc.select(SelectionMask.from_rect(doc.size, (0, 0, 4, 4)))
+    head = doc.history.head
+
+    assert doc.layer_from_selection(cut=True)
+    _ok(doc)
+
+    assert doc.undo()
+    assert doc.history.head == head
+    assert len(doc.stack) == 4
+    _ok(doc)
 
 
 def test_a_duplicate_joins_its_sources_group():

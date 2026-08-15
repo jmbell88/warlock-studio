@@ -12,6 +12,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
+import pytest
 
 from warlock.studio.inker import transform as tf
 from warlock.studio.inker.document import Document
@@ -77,8 +78,9 @@ def test_a_slant_grows_the_plane_rather_than_clipping_the_corners():
 
 
 def test_a_two_axis_slant_contracts_by_the_determinant():
-    """``det = 1 - tan(sx)tan(sy)`` really is the area factor, which is the
-    same number the clamp is there to keep away from zero."""
+    """``det = 1 - tan(sx)tan(sy)`` really is the area factor -- the same
+    number ``SHEAR_MIN_DET`` puts a floor under, measured here rather than
+    asserted, so the floor is a bound on something real."""
     out = tf.shear(_plane(8, 8), (20.0, 20.0), resample="nearest")
     det = 1.0 - math.tan(math.radians(20.0)) ** 2
     covered = int(np.count_nonzero(out[..., 3]))
@@ -93,13 +95,58 @@ def test_a_mask_shears_too():
     assert out.shape[0] == 8 and out.shape[1] > 8
 
 
-def test_the_slant_is_clamped_short_of_the_singular_pair():
-    """``det = 1 - tan(sx)tan(sy)``, and (45, 45) is singular -- the plane
-    collapses onto a line and there is no inverse to sample through."""
+def test_each_axis_is_clamped_to_the_per_axis_bound():
+    """``SHEAR_MAX`` bounds each number the panel can send, and that is all it
+    does -- it is deliberately *not* what keeps the transform invertible."""
     assert tf.SHEAR_MAX < 90.0
     out = tf.shear(_plane(), (400.0, -400.0), resample="nearest")
     same = tf.shear(_plane(), (tf.SHEAR_MAX, -tf.SHEAR_MAX), resample="nearest")
     assert np.array_equal(out, same)
+
+
+def test_the_singular_pair_is_inside_the_per_axis_bound():
+    """The bug the old docstring hid. ``det = 1 - tan(sx)tan(sy)`` is zero at
+    (45, 45), and 45 is well *under* ``SHEAR_MAX`` -- so the per-axis clamp
+    never came near preventing it, and the pair is reachable straight from the
+    Slant fields."""
+    assert tf.SHEAR_MAX > 45.0
+    assert 1.0 - math.tan(math.radians(45.0)) ** 2 == pytest.approx(0.0, abs=1e-12)
+
+
+def test_a_degenerate_pair_comes_back_unslanted():
+    """A refusal, not an approximation: the plane would collapse onto a line
+    and there is no inverse to sample through."""
+    plane = _plane(8, 8)
+    assert np.array_equal(tf.shear(plane, (45.0, 45.0), resample="nearest"), plane)
+    assert np.array_equal(tf.shear(plane, (-45.0, -45.0), resample="nearest"), plane)
+
+
+def test_a_near_degenerate_pair_is_refused_too():
+    """"Not quite singular" is not a state worth rendering. At (44, 44) the
+    determinant is 0.067, so the sprite would come back as a sliver a fifteenth
+    of its area with every pixel sampled from a plane squeezed flat."""
+    plane = _plane(8, 8)
+    det = 1.0 - math.tan(math.radians(44.0)) ** 2
+    assert 0.0 < det < tf.SHEAR_MIN_DET
+    assert np.array_equal(tf.shear(plane, (44.0, 44.0), resample="nearest"), plane)
+
+
+def test_the_floor_lets_an_ordinary_two_axis_slant_through():
+    """The guard has to be a floor on the *area factor* rather than a ban on
+    two axes: a modest slant on both is an ordinary thing to ask for."""
+    det = 1.0 - math.tan(math.radians(30.0)) ** 2
+    assert det > tf.SHEAR_MIN_DET
+    out = tf.shear(_plane(8, 8), (30.0, 30.0), resample="nearest")
+    assert out.shape[:2] != (8, 8)
+
+
+def test_opposite_signed_slants_never_approach_the_floor():
+    """They multiply to a *negative* tangent product, so the determinant grows
+    past one rather than shrinking towards zero -- which is exactly why the old
+    test at (60, -60) proved nothing whatever about the singularity."""
+    for angle in (30.0, 45.0, tf.SHEAR_MAX):
+        det = 1.0 + math.tan(math.radians(angle)) ** 2
+        assert det > tf.SHEAR_MIN_DET
 
 
 def test_a_filtered_slant_does_not_bleed_transparent_colour_into_the_edge():

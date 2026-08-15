@@ -503,6 +503,10 @@ def _layer_elements(node, tree=None, parent=None) -> list:
     An **empty** ``<stack>`` records no group. Empty groups are disallowed in
     the model, and a foreign file is entitled to contain one -- as is one of
     ours whose layer PNGs went missing.
+
+    ``tree`` of ``None`` flattens without recording anything, which is exactly
+    what this function did before groups existed. :func:`read_ora` passes None
+    for the frame-projection case; see :func:`has_frame_groups`.
     """
     from .groups import GroupNode
 
@@ -512,7 +516,7 @@ def _layer_elements(node, tree=None, parent=None) -> list:
             found.append((child, parent))
         elif child.tag == "stack":
             if tree is None:
-                found.extend(_layer_elements(child))
+                found.extend(_layer_elements(child, None, parent))
                 continue
             groups, group_of = tree
             node_group = GroupNode(
@@ -536,6 +540,38 @@ def _layer_elements(node, tree=None, parent=None) -> list:
                 group_of[node_group.uid] = parent
             found.extend(inner)
     return found
+
+
+#: What ``_stack_xml_animated`` names each frame's ``<stack>``: ``frame:0001``
+#: and up. It is a *projection* marker rather than a folder, so the reader has
+#: to recognise it.
+FRAME_GROUP_PREFIX = "frame:"
+
+
+def has_frame_groups(node) -> bool:
+    """Whether this root stack is one of our animated frame projections.
+
+    It matters only on the **flat fallback** -- when ``animation.json`` is
+    missing or would not parse and the grid could not be rebuilt. The XML still
+    says what it always said: one nested ``<stack>`` per frame. Those are frames,
+    never folders, so reading them as layer groups turned a degraded path into a
+    noisy one, handing back N folders called ``frame:0001`` where the same file
+    previously opened flat.
+
+    Group construction is suppressed for the whole read rather than per element,
+    and that is the point: each frame group carries its *own* copy of the
+    document's real folders, so recognising the frames alone would still give a
+    forty-frame clip forty folders called "Ink". The pixels are all present
+    either way, which is the bargain this whole reader makes.
+
+    A foreign file with a top-level group genuinely called ``frame:0001`` loses
+    its folders here. That is the accepted cost, and it is bounded: the layers,
+    their order and their properties are unaffected.
+    """
+    return any(
+        child.tag == "stack" and (child.get("name") or "").startswith(FRAME_GROUP_PREFIX)
+        for child in node
+    )
 
 
 def _place(pixels: np.ndarray, size: tuple[int, int], offset: tuple[int, int]) -> np.ndarray:
@@ -803,7 +839,11 @@ def read_ora(path: Path, *, budget: int | None = None):
         # outer stack is the document, and reading it as a group would wrap
         # every file this reader opens in one folder called "Group 1".
         outer = root.find("stack")
-        for element, parent in _layer_elements(root if outer is None else outer, tree):
+        top = root if outer is None else outer
+        # Reaching here with frame groups present means the animated read fell
+        # back: no grid, and the nested stacks are frames rather than folders.
+        collect = None if has_frame_groups(top) else tree
+        for element, parent in _layer_elements(top, collect):
             src = element.get("src")
             if not src:
                 continue

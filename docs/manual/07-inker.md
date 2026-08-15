@@ -321,9 +321,10 @@ and Alt still start the add and subtract drags they always did, even when the dr
 the selection.
 
 **Layer from selection** promotes the selection onto a layer of its own, lined up with what it came
-from. `Ctrl+J` moves it — cutting it out of the layer it was on — and `Ctrl+Shift+J` leaves the
-original where it was. Either way it is one undo step, and a feathered selection makes a feathered
-layer rather than a hard-edged crop of one.
+from. `Ctrl+J` copies it and leaves the original where it was; `Ctrl+Shift+J` moves it, cutting it
+out of the layer it was on. Either way it is one undo step, a feathered selection makes a feathered
+layer rather than a hard-edged crop of one, and the new layer joins whatever folder the one it came
+from is in.
 
 **This layer** selects what is painted on the active layer, at the coverage it is painted at — a
 soft brush edge becomes a soft selection rather than a jagged one. It reads the layer's own pixels,
@@ -357,7 +358,9 @@ worse than either.
 The tool options panel adds typed **X**, **Y**, **W**, **H**, **Angle** and **Slant** fields while
 a transform is running. Slant is an italic: two numbers in degrees, horizontal then vertical. It is
 applied after the scale and before the rotation, so the two slant axes are always the page's, and
-in this build it has numeric fields only — there are no slant handles on the box.
+in this build it has numeric fields only — there are no slant handles on the box. Two large slants
+the same way fight each other — at 45° each they would squash the picture onto a line — so a pair
+that extreme comes back unslanted rather than as a sliver.
 
 ## Animation
 

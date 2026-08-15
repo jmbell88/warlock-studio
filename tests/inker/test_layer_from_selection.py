@@ -310,3 +310,37 @@ def test_the_drag_offset_is_measured_against_the_press():
 
     state.drag_kind = "marquee"
     assert inker_canvas._mask_shift(state) == (0, 0)
+
+
+def test_the_chords_are_the_photoshop_way_round():
+    """The plain chord is the *non-destructive* one. The obvious reading is the
+    opposite -- plain does the whole thing, Shift does less -- which is exactly
+    why this is pinned rather than left to the comment: the point of a shortcut
+    is that it matches the hand that already knows it."""
+    from types import SimpleNamespace
+
+    from warlock.studio import inker_mode
+
+    calls: list[bool] = []
+    doc = SimpleNamespace(layer_from_selection=lambda *, cut: calls.append(cut))
+    tab = SimpleNamespace(busy=False)
+    for shift in (False, True):
+        inker_mode._ctrl_key(None, None, tab, doc, "j", None, shift=shift)
+
+    assert calls == [False, True]  # Ctrl+J copies, Ctrl+Shift+J cuts
+    assert "j" in inker_mode._MUTATING_CTRL
+
+
+def test_the_chords_are_refused_while_the_tab_is_busy():
+    """It adds a layer and may cut pixels, so it waits for a save the way every
+    other mutating chord does."""
+    from types import SimpleNamespace
+
+    from warlock.studio import inker_mode
+
+    calls: list[bool] = []
+    doc = SimpleNamespace(layer_from_selection=lambda *, cut: calls.append(cut))
+    inker_mode._ctrl_key(
+        None, None, SimpleNamespace(busy=True), doc, "j", None, shift=False
+    )
+    assert calls == []

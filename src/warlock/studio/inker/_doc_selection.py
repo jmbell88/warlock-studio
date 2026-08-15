@@ -461,6 +461,15 @@ class SelectionOps:
         can fold the same work into a compound with the cut that precedes it.
         Returning the edit rather than pushing it is the whole of the
         refactor: two entry points, one of which is half of a bigger gesture.
+
+        **It does not carry group membership, and both callers must.** This
+        inserts above the active row exactly as ``add_layer`` does, so a row
+        added while the active one is inside a folder lands in the *middle* of
+        that folder's span; leaving it out of the group splits the span and
+        makes the contiguity invariant false with nothing to say so. The
+        callers pair it with ``inherit_group_edits`` -- which has to be a
+        separate call because one of them folds the result into a bigger
+        compound and the other pushes it on its own.
         """
         width, height = self.size
         placed = tf.resize_canvas(pixels, (width, height), offset)
@@ -495,11 +504,20 @@ class SelectionOps:
             pixels, _mask = taken
         self.commit_floating()
         name = f"Pasted {len(self.stack) + 1}"
-        self.history.push(self._add_layer_edit(pixels, name))
+        # Read before the insert, for ``add_layer``'s reason: pasting a layer
+        # while working inside a folder puts it in that folder, and a row that
+        # stayed outside would sit in the middle of the folder's span.
+        parent = self._parent_of_active()
+        edit = self._add_layer_edit(pixels, name)
+        self._push_with_inheritance(edit, parent)
         return True
 
     def layer_from_selection(self: Document, *, cut: bool = False) -> bool:
-        """Lift the selection onto a layer of its own. Ctrl+J, and Ctrl+Shift+J.
+        """Promote the selection onto a layer of its own.
+
+        ``Ctrl+J`` copies (``cut=False``, the default) and ``Ctrl+Shift+J``
+        moves -- Photoshop's way round, with the plain chord the
+        non-destructive one.
 
         One ``CompoundEdit``, because it is one gesture: the cut half (when
         asked for) and the new layer undo together or the user sees a state
@@ -527,6 +545,10 @@ class SelectionOps:
         x0, y0, x1, y1 = box
         crop = self.mask.mask[y0:y1, x0:x1]
         taken = _masked_alpha(self.stack.active.pixels[y0:y1, x0:x1], crop)
+        # Read before the insert, and before the cut moves nothing: the new
+        # layer joins whatever folder the one it came from is in, so promoting
+        # part of a drawing keeps it beside the drawing.
+        parent = self._parent_of_active()
 
         edits: list[Any] = []
         if cut:
@@ -537,6 +559,7 @@ class SelectionOps:
         edits.append(
             self._add_layer_edit(taken, f"Layer {len(self.stack) + 1}", offset=(x0, y0))
         )
+        edits.extend(self.inherit_group_edits(parent))
         self.history.push(edits[0] if len(edits) == 1 else CompoundEdit(edits))
         return True
 

@@ -121,14 +121,14 @@ class LayerOps:
             track = Track(name=name or f"Layer {len(self.anim.tracks) + 1}")
             self._put_track(index, track, {})
             self._push_with_inheritance(
-                TrackAddEdit(index, track, {}, pinned=False), track.uid, parent
+                TrackAddEdit(index, track, {}, pinned=False), parent
             )
             return self.stack[self.stack.active_index]
         width, height = self.size
         layer = Layer.empty(width, height, name or f"Layer {len(self.stack) + 1}")
         index = self.stack.insert(self.stack.active_index + 1, layer)
         self.invalidate_all()
-        self._push_with_inheritance(LayerAddEdit(index, layer), layer.uid, parent)
+        self._push_with_inheritance(LayerAddEdit(index, layer), parent)
         return layer
 
     def _parent_of_active(self: Document) -> int | None:
@@ -138,15 +138,32 @@ class LayerOps:
         index = self.stack.active_index
         return self.group_of.get(order[index]) if 0 <= index < len(order) else None
 
-    def _push_with_inheritance(
-        self: Document, edit: Any, member_uid: int, parent: int | None
-    ) -> None:
-        """Push an add, with the membership the new row inherits folded in."""
+    def inherit_group_edits(self: Document, parent: int | None) -> list[Any]:
+        """Put the row that was *just added* into ``parent``, returning the step.
+
+        Every op that inserts a row above the active one has to do this, and
+        "the row that was just added" is unambiguous because all of them leave
+        it active: ``LayerStack.insert`` sets ``active_index`` and ``_put_track``
+        materialises with ``active=index``. Taking the member uid from
+        ``member_uids()[active_index]`` rather than from a parameter is what
+        makes this callable from ``_add_layer_edit``'s callers too, which is
+        where the inheritance was missing.
+
+        A row inserted into the middle of a group's span that did **not** join
+        it splits that span, and the contiguity invariant would be false with
+        nothing to say so -- which is exactly what a paste inside a folder used
+        to do.
+        """
         if parent is None:
-            self.history.push(edit)
-            return
-        self._set_membership(member_uid, parent)
-        self.history.push(CompoundEdit([edit, MembershipEdit(member_uid, None, parent)]))
+            return []
+        member = self.member_uids()[self.stack.active_index]
+        self._set_membership(member, parent)
+        return [MembershipEdit(member, None, parent)]
+
+    def _push_with_inheritance(self: Document, edit: Any, parent: int | None) -> None:
+        """Push an add, with the membership the new row inherits folded in."""
+        edits = [edit, *self.inherit_group_edits(parent)]
+        self.history.push(edits[0] if len(edits) == 1 else CompoundEdit(edits))
 
     def duplicate_layer(self: Document, index: int | None = None) -> Layer:
         self.commit_floating()
@@ -193,14 +210,12 @@ class LayerOps:
                 cels[frame.uid] = copy
             self._put_track(index + 1, copy_track, cels)
             self._push_with_inheritance(
-                TrackAddEdit(index + 1, copy_track, cels, pinned=True),
-                copy_track.uid,
-                parent,
+                TrackAddEdit(index + 1, copy_track, cels, pinned=True), parent
             )
             return self.stack[self.stack.active_index]
         copy = self.stack.duplicate(index)
         self.invalidate_all()
-        self._push_with_inheritance(LayerAddEdit(index + 1, copy), copy.uid, parent)
+        self._push_with_inheritance(LayerAddEdit(index + 1, copy), parent)
         return copy
 
     def remove_layer(self: Document, index: int | None = None) -> bool:

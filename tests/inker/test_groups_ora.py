@@ -328,3 +328,70 @@ def test_a_groups_key_that_is_not_a_mapping_is_ignored(tmp_path: Path):
     back = inker.Document.load(broken)
     assert back.anim is not None
     assert not back.groups
+
+
+def _without(path: Path, out: Path, member: str) -> None:
+    with zipfile.ZipFile(path) as zf:
+        members = {n: zf.read(n) for n in zf.namelist() if n != member}
+    with zipfile.ZipFile(out, "w") as zf:
+        for name, data in members.items():
+            zf.writestr(name, data)
+
+
+def test_an_animated_file_that_falls_back_flat_records_no_folders(tmp_path: Path):
+    """The degraded path must not get *noisier*. Without ``animation.json`` the
+    grid cannot be rebuilt and the reader falls back to the flat XML -- whose
+    nested stacks are **frames**, not folders. Reading them as groups handed
+    back one folder per frame where the same file previously opened flat."""
+    doc = _animated()
+    doc.group_layers([1, 2], name="Ink")
+    path = tmp_path / "anim.ora"
+    inker.write_ora(doc, path)
+
+    flat = tmp_path / "flat.ora"
+    _without(path, flat, inker_ora.ANIMATION_MEMBER)
+    back = inker.Document.load(flat)
+
+    assert back.anim is None
+    assert not back.groups
+    # And the flattening is unchanged: every cel of every frame is still a
+    # layer, which is the whole reason the fallback exists.
+    assert len(back.stack) == 6
+    _ok(back)
+
+
+def test_an_ungrouped_animated_file_falls_back_flat_with_no_folders(tmp_path: Path):
+    doc = _animated()
+    path = tmp_path / "anim.ora"
+    inker.write_ora(doc, path)
+    flat = tmp_path / "flat.ora"
+    _without(path, flat, inker_ora.ANIMATION_MEMBER)
+
+    back = inker.Document.load(flat)
+    assert back.anim is None
+    assert not back.groups
+
+
+def test_frame_groups_are_recognised_by_name():
+    """The projection marker `_stack_xml_animated` writes. Group construction
+    is suppressed for the *whole* read when one is present, because each frame
+    group carries its own copy of the document's real folders -- recognising
+    the frames alone would still give a forty-frame clip forty folders."""
+    animated = ElementTree.fromstring(
+        '<stack><stack name="frame:0001"><layer name="L"/></stack></stack>'
+    )
+    plain = ElementTree.fromstring(
+        '<stack><stack name="Ink"><layer name="L"/></stack></stack>'
+    )
+    assert inker_ora.has_frame_groups(animated) is True
+    assert inker_ora.has_frame_groups(plain) is False
+
+
+def test_a_still_file_is_unaffected_by_the_frame_group_rule(tmp_path: Path):
+    """The suppression is scoped to files that carry a frame projection; an
+    ordinary grouped document still reads its folders back."""
+    doc = _doc()
+    doc.group_layers([1, 2], name="Ink")
+    path = tmp_path / "still.ora"
+    inker.write_ora(doc, path)
+    assert len(inker.Document.load(path).groups) == 1

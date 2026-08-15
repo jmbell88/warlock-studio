@@ -362,7 +362,9 @@ def _transform_numbers(state: Any, doc: Any) -> None:
         "Slant in degrees, horizontal then vertical -- an italic, or a shadow "
         "cast along the ground. Numbers only for now; there are no slant "
         "handles on the box. Applied after the scale and before the rotation, "
-        "so the two axes stay the page's."
+        "so the two axes stay the page's. Two large slants the same way fight "
+        "each other and would squash the picture to a sliver, so a pair that "
+        "extreme comes back unslanted."
     )
 
 
@@ -388,15 +390,16 @@ def _selection_actions(state: Any, doc: Any) -> None:
         "selection from before a resize or a crop cannot come back -- it "
         "describes a canvas that no longer exists."
     )
-    if widgets.disabled_button("Layer from selection", doc.mask is not None):
-        doc.layer_from_selection(cut=True)
-    imgui.same_line()
     if widgets.disabled_button("Copy to layer", doc.mask is not None):
         doc.layer_from_selection(cut=False)
+    imgui.same_line()
+    if widgets.disabled_button("Move to layer", doc.mask is not None):
+        doc.layer_from_selection(cut=True)
     widgets.help_marker(
-        "Ctrl+J moves the selection onto a layer of its own; Ctrl+Shift+J "
-        "leaves the original where it was. Either way it is one undo step, and "
-        "the new layer lines up with what it came from."
+        "Ctrl+J copies the selection onto a layer of its own and leaves the "
+        "original where it was; Ctrl+Shift+J moves it, cutting it out of the "
+        "layer it came from. Either way it is one undo step, and the new layer "
+        "lines up with what it came from."
     )
     if imgui.button("This layer"):
         doc.select_layer_alpha()
