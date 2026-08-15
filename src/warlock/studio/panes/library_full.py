@@ -282,7 +282,7 @@ def _cell(
                 imgui.same_line()
                 widgets.text_colored(theme.WARN, icons.STAR)
             imgui.set_cursor_screen_pos(after)
-            imgui.text(_fit(name, thumb))
+            imgui.text(widgets.fit_text(name, thumb))
             imgui.unindent(pad.x)
     library.draggable_source(ctx, job)
     if imgui.is_item_hovered():
@@ -305,16 +305,4 @@ def _cell(
     imgui.pop_id()
 
 
-def _fit(text: str, width: float) -> str:
-    """``text``, trimmed with a trailing dash until it fits ``width`` px.
 
-    Measured rather than counted, for the reason ``landing._fit`` gives: a
-    character budget is right at exactly one UI scale, and a card has no
-    scrollbar to absorb being wrong.
-    """
-    if imgui.calc_text_size(text).x <= width:
-        return text
-    trimmed = text
-    while trimmed and imgui.calc_text_size(trimmed + "-").x > width:
-        trimmed = trimmed[:-1]
-    return trimmed + "-"

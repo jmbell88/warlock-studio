@@ -1414,6 +1414,27 @@ def help_marker(text: str) -> None:
         imgui.set_tooltip(text)
 
 
+def fit_text(text: str, width: float) -> str:
+    """``text``, trimmed with a trailing dash until it fits ``width`` px.
+
+    **Measured rather than counted.** A character budget is what the Resume
+    list used, and it is right at exactly one UI scale: 22 characters fit a 136
+    dp cell at 1.0 and run a third of the way past it at 1.5, where the card
+    has no scrollbar to absorb being wrong.
+
+    One implementation, here, because there were two identical private copies
+    (Home's cells and the Library grid's) before a third caller wanted it --
+    and three copies of a fit rule is three places to be wrong about the same
+    scale.
+    """
+    if imgui.calc_text_size(text).x <= width:
+        return text
+    trimmed = text
+    while trimmed and imgui.calc_text_size(trimmed + "-").x > width:
+        trimmed = trimmed[:-1]
+    return trimmed + "-"
+
+
 def hint_text(text: str) -> None:
     """A muted note after a control -- beside it if it fits, under it if not.
 

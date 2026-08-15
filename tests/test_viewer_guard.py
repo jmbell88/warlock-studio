@@ -134,3 +134,42 @@ def test_both_panes_delegate_rather_than_keeping_a_copy():
     ):
         assert "viewer_guard" in source
         assert "dialogs.Confirm" not in source
+
+
+# --- the way across to the Poser (REDESIGN.md wave 5.5) -----------------------
+
+
+def _cross_ctx(*, dirty: bool):
+    """Enough for ``open_in_poser``: a shared viewer that records leaving, a
+    state with a mode, and a service whose rig read fails -- which is the case
+    the trip has to survive, because the Poser has a picker of its own."""
+    from warlock.studio.state import AppState
+
+    viewer = _viewer(dirty=dirty)
+    viewer.exit_pose_mode = lambda: setattr(viewer, "pose_mode", False)
+    ctx = _ctx(viewer=viewer)
+    ctx.state = AppState()
+    ctx.state.mode = "create"
+    ctx.state.create_stage = "pose"
+    ctx.svc = SimpleNamespace(job_dir=lambda _id: (_ for _ in ()).throw(OSError))
+    ctx.rig_default = ""
+    return ctx
+
+
+def test_the_poser_link_asks_before_discarding_a_pose():
+    ctx = _cross_ctx(dirty=True)
+    pose_panel.open_in_poser(ctx, {"id": "a" * 12})
+    assert ctx.state.mode == "create", "it left before the question was answered"
+    assert ctx.confirms.asked
+
+    ctx.confirms.asked[0].on_confirm()
+    assert ctx.state.mode == "poser"
+
+
+def test_the_poser_link_leaves_the_shared_viewer_behind():
+    """The Poser has its own viewer; a shared one left in pose mode keeps
+    ``_sync_viewer`` returning early for the rest of the session."""
+    ctx = _cross_ctx(dirty=False)
+    pose_panel.open_in_poser(ctx, {"id": "a" * 12})
+    assert ctx.state.mode == "poser"
+    assert ctx.viewer.pose_mode is False

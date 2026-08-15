@@ -372,6 +372,41 @@ def _along_lineage(ctx: Any, stage: str) -> str | None:
     return None if best is None else str(best["id"])
 
 
+def parent(ctx: Any, job: Any) -> Any:
+    """The reference ``job`` was promoted from, or None.
+
+    Read off the loaded page rather than the store: this is asked once per
+    frame by a pane, and a job whose parent has scrolled out of the window
+    simply has no link -- which is honest, because the link's whole purpose is
+    to *go* there, and the library cannot select a row it is not holding.
+    """
+    parent_id = (job or {}).get("parent_id")
+    if not parent_id:
+        return None
+    getter = getattr(getattr(ctx, "cache", None), "get", None)
+    return getter(parent_id) if callable(getter) else None
+
+
+def promotions(ctx: Any, job: Any) -> list[Any]:
+    """The meshes made from ``job``, newest first.
+
+    The other direction of :func:`parent`, and the reason both exist: the
+    lineage is already threaded through ``parent_id`` and nothing on screen
+    said so, so a reference and the three meshes made from it were four
+    unrelated cards in a list sorted by date.
+    """
+    job_id = (job or {}).get("id")
+    if not job_id:
+        return []
+    rows = [
+        row
+        for row in getattr(getattr(ctx, "cache", None), "jobs", []) or []
+        if row.get("parent_id") == job_id and row.get("stage") == "model"
+    ]
+    rows.sort(key=lambda row: str(row.get("created_at") or ""), reverse=True)
+    return rows
+
+
 def _current(ctx: Any) -> Any:
     """The selected job, from a ctx that may not have one.
 

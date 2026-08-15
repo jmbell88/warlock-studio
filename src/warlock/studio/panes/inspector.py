@@ -57,9 +57,18 @@ REFERENCE_MAX_THUMBS = 3
 # The tab bar survives in every other host (the Library's full-window
 # inspector), because there is no rail there to drive it.
 _STAGE_SECTIONS: dict[str, tuple[str, ...]] = {
-    "reference": ("_edit_actions", "_settings", "_reference", "_pixel", "sprites", "_seam"),
+    "reference": (
+        "_edit_actions",
+        "_lineage",
+        "_settings",
+        "_reference",
+        "_pixel",
+        "sprites",
+        "_seam",
+    ),
     "mesh": (
         "_edit_actions",
+        "_lineage",
         "_settings",
         "_reference",
         "_pixel",
@@ -86,6 +95,7 @@ def _stage_body(ctx: Any, job: Any) -> None:
 
     named = {
         "_edit_actions": lambda: _edit_actions(ctx, job),
+        "_lineage": lambda: _lineage(ctx, job),
         "_settings": lambda: _settings(ctx, job),
         "_reference": lambda: _reference(ctx, job),
         "_pixel": lambda: _pixel(ctx, job),
@@ -215,6 +225,44 @@ def _edit_actions(ctx: Any, job: Any) -> None:
         if imgui.button(f"{icons.BOX} Open in Clay"):
             clay_mode.edit_asset_in_clay(ctx, job)
         widgets.hint_text("Opens the authored document when there is one, else the mesh.")
+
+
+def _label_of(job: Any) -> str:
+    return str(job.get("name") or job.get("prompt") or job.get("id") or "asset")
+
+
+def _lineage(ctx: Any, job: Any) -> None:
+    """Where this asset came from, and what came of it.
+
+    The lineage has been threaded through ``parent_id`` since promotion existed
+    and nothing on screen said so: a reference and the three meshes made from
+    it were four unrelated cards in a list sorted by date. These are the
+    edges, walkable -- and through ``create_stages.go``, so following one lands
+    at the stage that asset belongs to rather than leaving the rail pointing at
+    a step this row has not reached.
+    """
+    from .. import create_stages, icons
+
+    came_from = create_stages.parent(ctx, job)
+    made = create_stages.promotions(ctx, job)
+    if came_from is None and not made:
+        return
+    widgets.section("Lineage")
+    width = imgui.get_content_region_avail().x
+    if came_from is not None:
+        label = widgets.fit_text(
+            f"{icons.ARROW_LEFT} From {_label_of(came_from)}", width - sp(24)
+        )
+        if widgets.ghost_button(label, (-1, 0), tooltip=_label_of(came_from)):
+            create_stages.go(ctx, "reference", select=came_from["id"])
+    for mesh in made:
+        label = widgets.fit_text(f"{icons.BOX} {_label_of(mesh)}", width - sp(24))
+        if widgets.ghost_button(f"{label}##lineage/{mesh['id']}", (-1, 0), tooltip=_label_of(mesh)):
+            create_stages.go(ctx, "mesh", select=mesh["id"])
+    if made:
+        widgets.hint_text(
+            "One mesh from this reference." if len(made) == 1 else f"{len(made)} meshes from this."
+        )
 
 
 def _details_tab(ctx: Any, job: Any) -> None:

@@ -650,22 +650,6 @@ def _card_margin(pad: Any) -> None:
     imgui.indent(pad.x)
 
 
-def _fit(text: str, width: float) -> str:
-    """``text``, trimmed with a trailing dash until it fits ``width`` px.
-
-    Measured rather than counted. A character budget is what the Resume list
-    used, and it is wrong at every scale but the one it was fitted at: 22
-    characters fit a 136 dp cell at 1.0 and run a third of the way past it at
-    1.5, where the card has no scrollbar and simply cuts them off.
-    """
-    if imgui.calc_text_size(text).x <= width:
-        return text
-    trimmed = text
-    while trimmed and imgui.calc_text_size(trimmed + "-").x > width:
-        trimmed = trimmed[:-1]
-    return trimmed + "-"
-
-
 def _resume_cell(
     ctx: Any,
     row: Row,
@@ -700,7 +684,7 @@ def _resume_cell(
                 # thumbnail, and the same placeholder here says "this is a
                 # drawing" rather than "this is broken".
                 widgets.thumb_placeholder(thumb, row.icon)
-            name = _fit(row.name, thumb)
+            name = widgets.fit_text(row.name, thumb)
             imgui.text(name)
             if name != row.name and imgui.is_item_hovered():
                 imgui.set_tooltip(row.name)

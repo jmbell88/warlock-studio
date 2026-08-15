@@ -68,6 +68,7 @@ def draw(ctx: Any, job: Any, *, hosted: bool = False) -> None:
         if imgui.button("Edit pose", (-1, 0)):
             _enter(ctx, job)
         _saved_list(ctx, job)
+        _poser_link(ctx, job)
         return
     if not _is_bound_job(viewer, job):
         _elsewhere(ctx, viewer)
@@ -79,6 +80,7 @@ def draw(ctx: Any, job: Any, *, hosted: bool = False) -> None:
     else:
         _pose(ctx, job, viewer)
     _saved_list(ctx, job)
+    _poser_link(ctx, job)
 
 
 # --- entering and leaving ---------------------------------------------------
@@ -150,6 +152,59 @@ def _enter(ctx: Any, job: Any) -> None:
     # viewer changes what it shows without the selection changing -- which is
     # what otherwise triggers a refresh.
     ctx.refresh_rig_data()
+
+
+def _poser_link(ctx: Any, job: Any) -> None:
+    """The way across to the Poser, said out loud.
+
+    The two editors are the same gizmo over the same rig and they answer
+    different questions -- this one poses *this asset*, the Poser authors a
+    pose for a *skeleton*, reusable by every mesh fitted to it -- and nothing
+    on either screen said the other existed. A user with six rigged props and
+    one walk cycle to make had to already know.
+
+    A ghost button rather than a filled one: it is available and it is not the
+    point of this pane.
+    """
+    from .. import icons
+
+    if widgets.ghost_button(
+        f"Author poses in Poser  {icons.CHEVRON_RIGHT}",
+        (-1, 0),
+        tooltip="Poses saved there apply to every mesh on this skeleton.",
+    ):
+        open_in_poser(ctx, job)
+
+
+def open_in_poser(ctx: Any, job: Any) -> None:
+    """Leave for the Poser, on this rig's skeleton.
+
+    Behind :func:`guard` because it is an exit from the editor like any other,
+    and through :func:`leave` because the Poser has its *own* viewer -- a
+    shared viewer left in pose mode would keep ``_sync_viewer`` returning
+    early for the rest of the session.
+
+    The template is read from the rig rather than assumed, so the Poser opens
+    on the library that applies to what is on screen; ``set_template``
+    early-returns when it is already the one showing.
+    """
+    from .. import poser_mode
+    from ..state import set_mode
+
+    def proceed() -> None:
+        leave(ctx)
+        rig = None
+        # A missing or unreadable rig.json is not a reason to refuse the trip:
+        # the Poser has a template picker of its own and its default is the
+        # config's, which is the same answer this would have guessed.
+        with contextlib.suppress(Exception):
+            rig = svc_rig.get_rig(ctx.svc, job["id"])
+        template = str((rig or {}).get("template") or "")
+        if template:
+            poser_mode.set_template(ctx, template)
+        set_mode(ctx.state, "poser")
+
+    guard(ctx, "open the Poser", proceed)
 
 
 def guard(ctx: Any, action: str, proceed: Any) -> bool:

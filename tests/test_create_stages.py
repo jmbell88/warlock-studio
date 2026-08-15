@@ -346,6 +346,40 @@ def test_a_ctx_with_no_job_cache_can_still_switch_stage():
     assert state.create_stage == "mesh"
 
 
+# --- the lineage ------------------------------------------------------------
+
+
+def test_a_mesh_names_the_reference_it_was_promoted_from():
+    ref = job(id="aaaaaaaaaaaa", stage="reference", files=["input.png"])
+    mesh = job(id="bbbbbbbbbbbb", parent_id="aaaaaaaaaaaa")
+    ctx = FakeCtx([ref, mesh], selected="bbbbbbbbbbbb")
+    assert create_stages.parent(ctx, mesh)["id"] == "aaaaaaaaaaaa"
+    assert create_stages.parent(ctx, ref) is None
+
+
+def test_a_parent_that_has_scrolled_out_of_the_window_is_no_link():
+    """Honest rather than clever: the link's purpose is to *go* there, and the
+    library cannot select a row the page is not holding."""
+    mesh = job(id="bbbbbbbbbbbb", parent_id="zzzzzzzzzzzz")
+    assert create_stages.parent(FakeCtx([mesh]), mesh) is None
+
+
+def test_a_reference_lists_its_meshes_newest_first():
+    ref = job(id="aaaaaaaaaaaa", stage="reference", files=["input.png"])
+    old = job(id="bbbbbbbbbbbb", parent_id="aaaaaaaaaaaa", created_at="2026-01-01T00:00:00")
+    new = job(id="cccccccccccc", parent_id="aaaaaaaaaaaa", created_at="2026-02-01T00:00:00")
+    ctx = FakeCtx([ref, old, new])
+    assert [row["id"] for row in create_stages.promotions(ctx, ref)] == [
+        "cccccccccccc",
+        "bbbbbbbbbbbb",
+    ]
+
+
+def test_a_reference_with_no_meshes_lists_none():
+    ref = job(id="aaaaaaaaaaaa", stage="reference", files=["input.png"])
+    assert create_stages.promotions(FakeCtx([ref]), ref) == []
+
+
 # --- leaving the pose stage -------------------------------------------------
 
 
