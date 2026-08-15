@@ -166,25 +166,28 @@ left-drag in empty space with `Q` selected sweeps a marquee.
 | Keys | Action |
 | --- | --- |
 | `B` | Brush |
+| `A` | Spray |
 | `E` | Eraser |
 | `G` | Fill |
 | `U` | Gradient |
 | `R` | Blur |
 | `N` | Smudge |
+| `H` | Shading |
 | `P` | Line |
+| `F` | Curve (Enter or a double-click finishes it, Esc abandons it) |
 | `K` | Rect |
 | `J` | Ellipse |
+| `L` | Polyline (finished the same way as the curve) |
+| `O` | Polygon (also closes if you click back on its first point) |
 | `M` | Marquee select |
 | `S` | Ellipse select |
 | `Q` | Lasso |
+| `D` | Poly lasso (Enter or a double-click closes it, Esc abandons it) |
 | `W` | Wand |
 | `V` | Move |
 | `I` | Pick a colour from the canvas |
-| `C` | Slice |
-| `A` | Spray |
-| `D` | Poly lasso (Enter or a double-click closes it, Esc abandons it) |
 | `T` | Text |
-| `H` | Shading |
+| `C` | Slice |
 | `X` | Swap the two colours |
 | `[` / `]` | Brush size (with Shift, hardness) |
 | Arrows | Nudge by a pixel — the floating selection, or the layer under the Move tool (Shift, 8 px) |
@@ -196,9 +199,11 @@ left-drag in empty space with `Q` selected sweeps a marquee.
 | Ctrl+O | Open a file |
 | Ctrl+W | Close the current tab |
 | Ctrl+A / Ctrl+D | Select all / deselect |
+| Ctrl+Shift+D | Reselect what Ctrl+D dismissed |
 | Ctrl+C / Ctrl+X / Ctrl+V | Copy / cut / paste |
 | Ctrl+Shift+V | Paste as a new layer |
 | Ctrl+Shift+I | Invert the selection |
+| Ctrl+J / Ctrl+Shift+J | Layer from selection — copy it up / cut it up |
 | Ctrl+T | Free transform (Enter applies, Esc cancels) |
 | Ctrl+B | Capture the selection as the brush tip |
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab |

@@ -582,7 +582,7 @@ RANGES: dict[str, tuple[float, float]] = {
     "black": (0.0, 255.0),
     "white": (0.0, 255.0),
     "gamma": (0.1, 4.0),
-    # Shared by blur, sharpen and despeckle: one name, one span, because a
+    # Shared by blur and sharpen: one name, one span, because a
     # radius that meant 0..32 in one popup and 0..8 in the next is a slider a
     # user has to relearn per filter.
     "radius": (0.0, 32.0),

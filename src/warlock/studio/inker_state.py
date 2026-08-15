@@ -39,40 +39,56 @@ MAX_SWATCHES = 24
 MAX_PRESETS = 32
 MAX_PRESET_NAME = 40
 
+# The toolbox, in the order the buttons are drawn. **Order is presentation and
+# nothing reads it as data** -- every rule about a tool is a membership test
+# against one of the frozensets below -- so this is arranged for the hand rather
+# than for the parser, in Aseprite's four bands: what lays down colour, then the
+# shapes, then the selections, then the utilities. Within a band the pairs that
+# are reached for together sit together (brush/spray, line/curve, the two
+# lassos), which is what makes a five-wide grid readable without hovering it.
 TOOLS = (
+    # Colour, and the three that decide what they write from what is already
+    # there (blur, smudge, shading) at the end of the band.
     ("brush", "Brush", "B"),
+    ("spray", "Spray", "A"),
     ("eraser", "Eraser", "E"),
     ("fill", "Fill", "G"),
     ("gradient", "Gradient", "U"),
     ("blur", "Blur", "R"),
     ("smudge", "Smudge", "N"),
-    ("line", "Line", "P"),
-    ("rect", "Rect", "K"),
-    ("ellipse", "Ellipse", "J"),
-    ("select", "Marquee", "M"),
-    ("select_ellipse", "Ellipse select", "S"),
-    ("lasso", "Lasso", "Q"),
-    ("wand", "Wand", "W"),
-    ("move", "Move", "V"),
-    ("eyedropper", "Pick", "I"),
-    ("slice", "Slice", "C"),
-    ("spray", "Spray", "A"),
-    ("lasso_poly", "Poly lasso", "D"),
-    ("text", "Text", "T"),
     # ``H`` for shading, because Aseprite has no letter to borrow here -- its
     # shading is an *ink* on the ordinary brush rather than a tool -- and every
     # letter in the word that reads as a mnemonic was taken (S is the ellipse
     # marquee, A the spray, D and T are spoken for elsewhere).
     ("shade", "Shading", "H"),
-    # The clicked shapes (Q-c). Their letters are what was left: of "polygon"
-    # only ``O`` is free (P is the line, G the fill, N the smudge), so the
-    # polygon takes it and the polyline takes ``L`` one word along. Not one
-    # letter of "curve" is free -- C is the slice, U the gradient, R the blur, V
-    # the move, E the eraser -- so the curve takes ``F``, for the *free-form*
-    # curve it draws.
+    # The shapes, dragged ones and clicked ones interleaved by what they draw
+    # rather than by how they are drawn: a user reaching for "a curved line"
+    # wants it beside the straight one.
+    #
+    # The clicked three (Q-c) took the letters that were left. Of "polygon" only
+    # ``O`` is free (P is the line, G the fill, N the smudge), so the polygon
+    # takes it and the polyline takes ``L`` one word along. Not one letter of
+    # "curve" is free -- C is the slice, U the gradient, R the blur, V the move,
+    # E the eraser -- so the curve takes ``F``, for the *free-form* curve it
+    # draws.
+    ("line", "Line", "P"),
+    ("curve", "Curve", "F"),
+    ("rect", "Rect", "K"),
+    ("ellipse", "Ellipse", "J"),
     ("polyline", "Polyline", "L"),
     ("polygon", "Polygon", "O"),
-    ("curve", "Curve", "F"),
+    # The selections, the freehand pair adjacent for the reason above.
+    ("select", "Marquee", "M"),
+    ("select_ellipse", "Ellipse select", "S"),
+    ("lasso", "Lasso", "Q"),
+    ("lasso_poly", "Poly lasso", "D"),
+    ("wand", "Wand", "W"),
+    # The utilities: everything whose gesture is about the drawing rather than
+    # about paint.
+    ("move", "Move", "V"),
+    ("eyedropper", "Pick", "I"),
+    ("text", "Text", "T"),
+    ("slice", "Slice", "C"),
 )
 
 # Tools whose drag paints into the layer.

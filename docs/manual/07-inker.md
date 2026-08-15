@@ -78,28 +78,28 @@ The toolbox is an icon grid; hovering a tool shows its name and its letter. Ever
 | Tool | Key | What it does |
 | --- | --- | --- |
 | Brush | `B` | A soft round brush. |
+| Spray | `A` | An airbrush: scattered dabs for as long as you hold the button. |
 | Eraser | `E` | The same brush, cutting alpha instead of adding colour. |
 | Fill | `G` | Flood-fills from where you click. |
 | Gradient | `U` | Drag to lay a gradient. |
 | Blur | `R` | Softens what you drag over. |
 | Smudge | `N` | Pushes pixels along the drag. |
+| Shading | `H` | Moves what you drag over one swatch along a palette ramp. |
 | Line | `P` | A straight line. |
+| Curve | `F` | A smooth curve through the points you click. |
 | Rect | `K` | A rectangle, outlined or filled. |
 | Ellipse | `J` | An ellipse, outlined or filled. |
+| Polyline | `L` | A chain of straight segments, one click per corner. |
+| Polygon | `O` | The same, closed, and fillable. |
 | Marquee | `M` | Rectangular selection. |
 | Ellipse select | `S` | Elliptical selection. |
 | Lasso | `Q` | Freehand selection. |
+| Poly lasso | `D` | Selection from clicked corners, one click per vertex. |
 | Wand | `W` | Selects a region of similar colour. |
 | Move | `V` | Moves the floating selection, or the whole layer if there is none. |
 | Pick | `I` | Samples a colour from the canvas. |
-| Slice | `C` | Names a rectangle on the canvas. |
-| Spray | `A` | An airbrush: scattered dabs for as long as you hold the button. |
-| Poly lasso | `D` | Selection from clicked corners, one click per vertex. |
 | Text | `T` | Stamps typed text onto the canvas as pixels. |
-| Shading | `H` | Moves what you drag over one swatch along a palette ramp. |
-| Polyline | `L` | A chain of straight segments, one click per corner. |
-| Polygon | `O` | The same, closed, and fillable. |
-| Curve | `F` | A smooth curve through the points you click. |
+| Slice | `C` | Names a rectangle on the canvas. |
 
 Options appear for the selected tool only, rather than as one long form — a brush's hardness means
 nothing while the wand is active.
@@ -732,9 +732,8 @@ however many frames it appears on, an empty cel stays empty rather than becoming
 and the selection on the canvas is honoured as a weight exactly as it is for a single layer — so a
 feathered selection fades the filter in on every frame at once.
 
-Two things are unavailable while a document is animated: **merge down** and **flatten**. Both are
-defined over one layer stack and an animated document has one per frame, so rather than guess which
-frame you meant, the buttons say so.
+**Merge down** and **flatten** are not unavailable here: both run across the whole grid, every frame
+at once, and the links you have survive them — see [Layers](#layers).
 
 **Import sprite sheet** in the document panel goes the other way: pick any image and give it a cell
 size, an offset, the padding between cells and how many frames to take, and it becomes one frame per
