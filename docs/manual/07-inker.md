@@ -340,6 +340,27 @@ through into the frames after it, which is where Aseprite would carry on. A ping
 out-and-back as one play. Repeats are saved with the document and written into a sprite sheet's
 sidecar, and a tag exported on its own as a GIF carries its count into the file.
 
+**Ranges.** Drag across the grid to select a rectangle of cells — press, drag, release; `Shift`+click
+extends the selection from where you last pressed, and `Esc` clears it. The selection is drawn as
+one accent outline and is not part of the document: it pushes no undo step and is not saved.
+Right-clicking any cell opens the **Range** section of the cell menu, which acts on the whole
+selection: copy and paste cels (the clipboard is shared between tabs, and a link inside the copied
+block survives the paste as one drawing again), clear, link, unlink, duplicate the frames copied or
+linked, reverse them, delete them, and set every frame's duration at once. Every one of them is a
+single `Ctrl+Z`, and each is refused rather than half-applied — deleting *every* frame is the one
+range delete that is not allowed, because a timeline keeps at least one frame.
+
+**Cel thumbnails.** The **Thumbs** switch on the second row of the timeline draws each cel's picture
+in its cell and grows the cells to fit. Linked cels share one thumbnail, so a link looks like the
+same drawing standing in several columns.
+
+**Exporting part of a clip.** The Range section ends with **Export range → sheet** and **→ GIF**,
+which write only the selected frames. A tag's own menu has **Export tag → sheet** and **→ GIF**,
+which use that tag's span and its looping — a tag with a repeat count writes a GIF that plays that
+many times. In a partial export the tags are renumbered against the exported frames, tags that fall
+entirely outside it are dropped, and a directional layout is not carried over: half a walk sheet is
+a clip, not a smaller walk sheet.
+
 Two things are unavailable while a document is animated: **merge down** and **flatten**. Both are
 defined over one layer stack and an animated document has one per frame, so rather than guess which
 frame you meant, the buttons say so.

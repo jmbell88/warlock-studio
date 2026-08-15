@@ -517,10 +517,18 @@ class _Export:
     """
 
     tab: InkerDoc
-    kind: str  # "sheet" | "gif"
+    kind: str  # "sheet" | "gif" | "pngs"
     suggested: str
     uids: list[str]
     frames: list[Any] = field(default_factory=list)
+    #: The inclusive frame range being exported, or None for the whole
+    #: timeline. Sliced **at begin**, and ``timing`` is sliced at submit with
+    #: this same pair -- safe because the tab has been locked (``saving``) for
+    #: the whole spread, so the frame count cannot have moved between them.
+    span: tuple[int, int] | None = None
+    #: What a GIF's loop block should say: True forever, False once, or a
+    #: repeat count. See ``gifout.loop_option``.
+    loop: bool | int = True
 
     @property
     def done(self) -> bool:
@@ -531,7 +539,52 @@ class _Export:
         return len(self.uids)
 
 
-def _begin_export(ctx: Any, tab: InkerDoc | None, kind: str) -> None:
+def export_range(
+    ctx: Any,
+    tab: InkerDoc | None,
+    kind: str,
+    span: tuple[int, int],
+    *,
+    loop: bool | int = True,
+) -> None:
+    """Export part of the timeline -- a tag, or a marquee'd range.
+
+    The same three exports over fewer frames, so it is the same entry point
+    with a span rather than a second pipeline: the frames are read by the same
+    stepper, the durations and tags by the same ``timing``, and the sheet is
+    written by the same ``sheet.sidecar``. What a span changes is only which
+    frames go in, that the tags come back renumbered, and that a directional
+    layout is dropped -- all of which ``sheetout`` decides, not this.
+    """
+    _begin_export(ctx, tab, kind, span=span, loop=loop)
+
+
+def export_tag(ctx: Any, tab: InkerDoc | None, kind: str, index: int) -> None:
+    """One tag, as a sheet or a GIF, with its own looping honoured.
+
+    ``tag.repeat or tag.loop`` is the whole of the difference from a range
+    export: a repeat count is the more specific answer to "how many times does
+    this play", and 0 means the flag decides -- exactly the rule playback
+    follows, spelled once here so the file and the editor cannot disagree.
+    """
+    tab = tab or active(ctx)
+    anim = None if tab is None else tab.doc.anim
+    if tab is None or anim is None or not 0 <= index < len(anim.tags):
+        return
+    tag = anim.tags[index]
+    last = len(anim.frames) - 1
+    span = (max(0, min(int(tag.start), last)), max(0, min(int(tag.end), last)))
+    _begin_export(ctx, tab, kind, span=span, loop=tag.repeat or tag.loop)
+
+
+def _begin_export(
+    ctx: Any,
+    tab: InkerDoc | None,
+    kind: str,
+    *,
+    span: tuple[int, int] | None = None,
+    loop: bool | int = True,
+) -> None:
     """Lock the tab and park the stepper. The click-frame half of an export."""
     from .inker import sheetout
 
@@ -543,7 +596,7 @@ def _begin_export(ctx: Any, tab: InkerDoc | None, kind: str) -> None:
         return
     tab.doc.commit_floating()
     try:
-        uids = sheetout.frame_uids(tab.doc)
+        uids = sheetout.frame_uids(tab.doc, span)
     except ValueError as exc:
         ctx.toast(f"Cannot export: {exc}.", "warn")
         return
@@ -553,7 +606,12 @@ def _begin_export(ctx: Any, tab: InkerDoc | None, kind: str) -> None:
     # sheet. ``saving`` is the flag ``busy`` already refuses mutation on.
     tab.saving = True
     state.export = _Export(
-        tab=tab, kind=kind, suggested=tab.path.stem if tab.path else "untitled", uids=uids
+        tab=tab,
+        kind=kind,
+        suggested=tab.path.stem if tab.path else "untitled",
+        uids=uids,
+        span=span,
+        loop=loop,
     )
 
 
@@ -596,7 +654,7 @@ def _submit_export(ctx: Any, export: _Export) -> None:
 
     tab, frames, suggested = export.tab, export.frames, export.suggested
     doc = tab.doc
-    durations, tags, layout = sheetout.timing(doc)
+    durations, tags, layout = sheetout.timing(doc, export.span)
     if export.kind == "sheet" and layout is not None and len(frames) != layout.frame_count:
         # Refused on the frame thread, before the file dialog: the engine raises
         # the same ValueError as a backstop, but by then the user has picked a
@@ -652,7 +710,7 @@ def _submit_export(ctx: Any, export: _Export) -> None:
         if dest.suffix.lower() != ".gif":
             dest = dest.with_suffix(".gif")
         dest.parent.mkdir(parents=True, exist_ok=True)
-        gifout.write_gif(dest, frames, durations, palette=palette)
+        gifout.write_gif(dest, frames, durations, loop=export.loop, palette=palette)
         return {"exported": dest}
 
     # ``start_save`` rather than a bare submit, so a refused key clears the lock

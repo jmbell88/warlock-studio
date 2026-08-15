@@ -607,7 +607,17 @@ def _range_menu(ctx: Any, tab: Any) -> None:
 
 
 def _range_export_items(ctx: Any, tab: Any, f0: int, f1: int) -> None:
-    """Export just this span. Filled in by A4."""
+    """Export just this span, as the same three files the whole clip offers.
+
+    Frames only: the range's track bounds are about *cels*, and every export
+    writes flattened frames -- a sheet of "tracks 2-3 of frames 4-9" is not a
+    thing the sidecar can describe.
+    """
+    imgui.separator()
+    if imgui.menu_item_simple("Export range → sheet"):
+        inker_mode.export_range(ctx, tab, "sheet", (f0, f1))
+    if imgui.menu_item_simple("Export range → GIF"):
+        inker_mode.export_range(ctx, tab, "gif", (f0, f1))
 
 
 def _tag_row(ctx: Any, tab: Any, cell: float, gutter: float) -> None:
@@ -741,6 +751,14 @@ def _tag_menu(ctx: Any, tab: Any, index: int, tag: Any) -> None:
     for key in animation.DIRECTIONS:
         if imgui.menu_item_simple(key.capitalize(), "", tag.direction == key):
             doc.set_tag(index, direction=key)
+    imgui.separator()
+    # The tag's own span, and its own looping: a tag is the one part of the
+    # timeline that already says both which frames it covers and how many times
+    # they play, so exporting one needs nothing typed.
+    if imgui.menu_item_simple("Export tag → sheet"):
+        inker_mode.export_tag(ctx, tab, "sheet", index)
+    if imgui.menu_item_simple("Export tag → GIF"):
+        inker_mode.export_tag(ctx, tab, "gif", index)
     imgui.separator()
     if imgui.menu_item_simple("Delete tag"):
         doc.remove_tag(index)

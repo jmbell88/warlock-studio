@@ -37,9 +37,32 @@ __all__ = [
     "frame_uids",
     "from_document",
     "plan_frames",
+    "rebase_tags",
     "snapshot",
     "timing",
 ]
+
+
+def rebase_tags(tags: Sequence[Any], f0: int, f1: int) -> list[Any]:
+    """The tags of frames ``f0..f1``, renumbered as if that span were the file.
+
+    Pure, and it is three rules rather than one. A tag wholly outside the span
+    is **dropped** -- an export of frames 10-19 that carried "intro, frames
+    0-3" describes cells that are not in the file. A tag that straddles an end
+    is **clamped**, because the part of it that made the cut is genuinely in
+    there and refusing to name it at all would lose more than it protects. And
+    every surviving tag is **shifted** by ``f0``, because the exported sheet's
+    first cell is index 0 whatever the document called it.
+    """
+    from dataclasses import replace
+
+    out = []
+    for tag in tags:
+        start, end = max(int(tag.start), f0), min(int(tag.end), f1)
+        if start > end:
+            continue
+        out.append(replace(tag, start=start - f0, end=end - f0))
+    return out
 
 
 def plan_frames(
@@ -229,7 +252,7 @@ def build(
 
 
 def snapshot(
-    doc: Any,
+    doc: Any, span: tuple[int, int] | None = None
 ) -> tuple[list[np.ndarray], list[int], list[Any], DirectionalLayout | None]:
     """Everything an export needs, read off the document. **Frame thread only.**
 
@@ -257,9 +280,9 @@ def snapshot(
     behind it in the game, so baking white in would put a white square around
     every cell of a sprite opened from a photo.
     """
-    uids = frame_uids(doc)
+    uids = frame_uids(doc, span)
     frames = [flatten_one(doc, uid) for uid in uids]
-    return (frames, *timing(doc))
+    return (frames, *timing(doc, span))
 
 
 # The same read, one frame at a time. **Frame thread only**, for exactly the
@@ -275,17 +298,40 @@ def snapshot(
 # frames*, which is ``viewer/sheet.StripRender``'s answer to the same problem.
 
 
-def frame_uids(doc: Any) -> list[str]:
+def _clamped_span(count: int, span: tuple[int, int] | None) -> tuple[int, int]:
+    """``span`` trimmed onto ``count`` frames, or the whole timeline for None.
+
+    One place, called by both halves, because ``frame_uids`` and ``timing`` are
+    read a spread of frames apart and a span that clamped differently in the
+    two would put one clip's cells under another clip's durations.
+    """
+    if span is None:
+        return (0, count - 1)
+    f0, f1 = (int(span[0]), int(span[1]))
+    if f0 > f1:
+        f0, f1 = f1, f0
+    return (max(0, f0), min(f1, count - 1))
+
+
+def frame_uids(doc: Any, span: tuple[int, int] | None = None) -> list[str]:
     """The frames an export will read, in order. Raises for a still document.
 
     Read up front so the stepper has a fixed work list: the document is locked
     against edits for the duration (``tab.saving``), but reading the list once
     is what makes "frame 3 of 60" a true statement rather than a guess.
+
+    ``span`` is an inclusive index pair -- a tag, or a timeline range -- and
+    None is the whole timeline, which is what every caller before spans meant
+    and what keeps a whole-clip export byte-identical to the one this wrote
+    before the parameter existed.
     """
     anim = getattr(doc, "anim", None)
     if anim is None or not anim.frames:
         raise ValueError("this document is not animated")
-    return [frame.uid for frame in anim.frames]
+    f0, f1 = _clamped_span(len(anim.frames), span)
+    if f0 > f1:
+        raise ValueError("that range holds no frames")
+    return [frame.uid for frame in anim.frames[f0 : f1 + 1]]
 
 
 def flatten_one(doc: Any, uid: str) -> np.ndarray:
@@ -296,21 +342,31 @@ def flatten_one(doc: Any, uid: str) -> np.ndarray:
     return plane
 
 
-def timing(doc: Any) -> tuple[list[int], list[Any], DirectionalLayout | None]:
+def timing(
+    doc: Any, span: tuple[int, int] | None = None
+) -> tuple[list[int], list[Any], DirectionalLayout | None]:
     """Durations, tags and layout: the cheap half, read once at the end.
 
     Pure reads of small structures, unlike ``flatten_one`` -- so there is no
     reason to spread them, and taking them at the end means they describe the
     document as it was when the last frame was flattened rather than as it was
     sixty frames earlier.
+
+    A **partial** span forces the layout to None, and that is a refusal rather
+    than an omission: a directional layout says "these frames are four
+    directions of a walk, in this fixed grid", which is a claim about the whole
+    timeline. Half of it is not a smaller sheet of the same kind -- it is a
+    clip, and the row-wrapped grid is the honest answer for one.
     """
     anim = getattr(doc, "anim", None)
     if anim is None or not anim.frames:
         raise ValueError("this document is not animated")
+    f0, f1 = _clamped_span(len(anim.frames), span)
+    whole = (f0, f1) == (0, len(anim.frames) - 1)
     return (
-        [frame.duration_ms for frame in anim.frames],
-        list(anim.tags),
-        anim.layout,
+        [frame.duration_ms for frame in anim.frames[f0 : f1 + 1]],
+        list(anim.tags) if whole else rebase_tags(anim.tags, f0, f1),
+        anim.layout if whole else None,
     )
 
 
