@@ -102,19 +102,41 @@ def apply(imgui: Any) -> None:
     """Set the global style. Called once, after the context and fonts exist."""
     sp = tokens.sp
     style = imgui.get_style()
-    style.window_rounding = sp(tokens.RADIUS_M)
-    style.child_rounding = sp(tokens.RADIUS_M)
-    style.frame_rounding = sp(tokens.RADIUS_S + 1)
-    style.popup_rounding = sp(tokens.RADIUS_M)
-    style.grab_rounding = sp(tokens.RADIUS_S + 1)
-    style.tab_rounding = sp(tokens.RADIUS_S + 1)
-    style.scrollbar_rounding = sp(tokens.RADIUS_S + 1)
-    # Depth comes from the elevation ramp, not outlines: a field is a lighter
-    # fill on its panel, and the one hairline left is the child border.
+    # Surfaces take the surface radius and controls take the control one, which
+    # is what the two named steps are *for* -- this used to round a window and a
+    # button within a pixel of each other and spell the button's radius
+    # ``RADIUS_S + 1``, an inline sum that is the tell of a scale whose steps
+    # nobody was reading. ``widgets.card`` and ``push_surface_rounding`` already
+    # named ``RADIUS_L`` by hand for exactly this reason; now the global style
+    # agrees with them instead of being overridden by them.
+    style.window_rounding = sp(tokens.RADIUS_L)
+    style.child_rounding = sp(tokens.RADIUS_L)
+    style.frame_rounding = sp(tokens.RADIUS_M)
+    style.popup_rounding = sp(tokens.RADIUS_L)
+    style.grab_rounding = sp(tokens.RADIUS_M)
+    style.tab_rounding = sp(tokens.RADIUS_M)
+    style.scrollbar_rounding = sp(tokens.RADIUS_M)
+    # Depth comes from the elevation ramp, not outlines -- and the child border
+    # was the last place that sentence was not true. Every pane in the app is a
+    # child, so a 1 px EDGE hairline on each one drew the whole layout as a set
+    # of boxes: a screen of five panes was five outlined rectangles before it
+    # was anything else, which is precisely the "bordered boxes everywhere"
+    # register REDESIGN.md is undoing. Panes separate *tonally* instead --
+    # PANEL on BG, which is a step of the same ramp a card lifts by.
+    #
+    # The two borders that stay are the two that are not decoration. A popup
+    # has no elevation step left above it (it already fills ELEV_2), so its
+    # outline is the only thing separating it from the ELEV_2 surface it can
+    # open over; and ``widgets.card`` draws its own EDGE stroke as part of the
+    # squircle, where the border and the fill have to be one shape or they
+    # disagree at the corners.
     style.window_border_size = 0.0
-    style.child_border_size = sp(tokens.BORDER)
+    style.child_border_size = 0.0
     style.frame_border_size = 0.0
     style.popup_border_size = sp(tokens.BORDER)
+    # Named rather than left to imgui's identical default, so the widget layer
+    # has a figure to dim a hand-drawn fill by; see ``tokens.DISABLED_ALPHA``.
+    style.disabled_alpha = tokens.DISABLED_ALPHA
     # Apple-scale gutters (UX.md Phase 2): 12 was the number a dense DAW panel
     # wants, and beside ``layout.PANE_PADDING``'s 5 it was the reason a form
     # read as pressed against the panel holding it. Both are steps of the scale
@@ -150,13 +172,27 @@ def apply(imgui: Any) -> None:
     set_color(c.title_bg_collapsed.value, rgba(tokens.colour("PANEL"), 0.7))
     set_color(c.menu_bar_bg.value, rgba(tokens.colour("PANEL")))
 
+    # **Accent is the press flash, not the hover** (REDESIGN.md wave 1). Every
+    # secondary button in the app used to light up in full indigo under the
+    # pointer, so the one colour that is supposed to mean "this is the thing
+    # that matters" was spent on whatever the mouse happened to be crossing --
+    # and a row of eight toolbar buttons became a row of eight primaries, one
+    # at a time. A hover is a *step of the elevation ramp* now, exactly as a
+    # card's lift is: ELEV_2 -> EDGE is the same one-step move, so the
+    # vocabulary is the same one the rest of the surface story uses. The accent
+    # survives on press at 0.4, where it is a brief acknowledgement of a click
+    # rather than a state a pointer can park in.
     set_color(c.button.value, rgba(tokens.colour("ELEV_2")))
-    set_color(c.button_hovered.value, rgba(tokens.colour("ACCENT"), 0.75))
-    set_color(c.button_active.value, rgba(tokens.colour("ACCENT")))
+    set_color(c.button_hovered.value, rgba(tokens.colour("EDGE")))
+    set_color(c.button_active.value, rgba(tokens.colour("ACCENT"), 0.4))
 
+    # The same rule where imgui spends these: a selectable's or a collapsing
+    # header's hover. ``header`` itself stays accent-free -- it is the
+    # *selected* fill, and selection is said with the accent edge the library
+    # card draws, not by flooding the row.
     set_color(c.header.value, rgba(tokens.colour("ELEV_2"), 0.9))
-    set_color(c.header_hovered.value, rgba(tokens.colour("ACCENT"), 0.5))
-    set_color(c.header_active.value, rgba(tokens.colour("ACCENT"), 0.75))
+    set_color(c.header_hovered.value, rgba(tokens.colour("EDGE")))
+    set_color(c.header_active.value, rgba(tokens.colour("ACCENT"), 0.4))
 
     # The focus ring imgui's own navigation draws (UX-02). ACCENT rather than
     # the near-white default, so it reads as the same "this is the live thing"
@@ -181,7 +217,7 @@ def apply(imgui: Any) -> None:
     set_color(c.scrollbar_grab_active.value, rgba(tokens.colour("ACCENT"), 0.7))
 
     set_color(c.tab.value, rgba(tokens.colour("PANEL")))
-    set_color(c.tab_hovered.value, rgba(tokens.colour("ACCENT"), 0.6))
+    set_color(c.tab_hovered.value, rgba(tokens.colour("EDGE")))
     set_color(c.tab_selected.value, rgba(tokens.colour("ELEV_2")))
 
     set_color(c.plot_histogram.value, rgba(tokens.colour("ACCENT")))

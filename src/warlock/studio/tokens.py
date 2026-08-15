@@ -72,14 +72,29 @@ SP_6 = 24
 # -- radii / strokes ---------------------------------------------------------
 
 RADIUS_S = 4.0
-RADIUS_M = 6.0
+# The *control* radius (REDESIGN.md wave 1). 6 was the number a control gets
+# when the ramp is read as "small, medium, large" rather than as two jobs: at
+# 6 a button, a field and a combo all read as *slightly* softened rects, which
+# is the register a developer tool draws in and not the one this program is
+# aiming at. 8 is where a 28-32 px control reads as deliberately rounded
+# without becoming a pill -- and it is what let ``theme.apply`` stop spelling
+# the frame radius ``RADIUS_S + 1``, an inline arithmetic that existed because
+# neither named step was the right one.
+RADIUS_M = 8.0
 # The *surface* radius (UX.md Phase 2), and the split is what it is for: a
-# control is a small rect and reads as a rounded rectangle at 4-6, while a
+# control is a small rect and reads as a rounded rectangle at 4-8, while a
 # surface -- a card, a modal, the palette window -- is large enough that the
 # same radius reads as square. It arrives here now because its readers do:
 # ``widgets.card``, ``dialogs``' two modals and the palette window. Phase 0
 # deliberately left it out for exactly one frame longer than that.
-RADIUS_L = 10.0
+#
+# 12 rather than 10 for the same reason the control step moved, read at the
+# other end: the gap between the two is what says "this is a surface, that is
+# a thing on it", and 6-against-10 was a difference a reader had to be told
+# about. The pair has to stay ordered -- ``test_the_surface_radius_arrived_
+# with_its_readers`` asserts it -- because a surface rounded *tighter* than
+# the controls inside it inverts the depth story the elevation ramp tells.
+RADIUS_L = 12.0
 BORDER = 1.0
 # There is deliberately still no SP_8. UX.md Phase 0's list named it and Phase
 # 0's own note deferred it to "whatever gap turns out to want 32"; the section
@@ -92,8 +107,23 @@ BORDER = 1.0
 
 # -- type scale --------------------------------------------------------------
 
-TEXT_SMALL = 11.0
-TEXT_BODY = 13.0
+# The quiet end. 11/13 was a dense-tool ramp: 13 px Inter at 100 % is a size
+# somebody reads a *table* in, and 11 is below where secondary copy stays
+# comfortable at all -- which is why the muted-text contrast work (UX-18) was
+# fighting a legibility problem it could not win with colour alone. 12/14 is
+# the register the rest of the program is drawn in (REDESIGN.md wave 1); the
+# atlas is baked at ``TEXT_BODY`` (see :mod:`.fonts`), so this is the size the
+# default face loads at and every unpushed string comes out in.
+#
+# Raising these raises every *measured* height with them -- a row is text plus
+# ``frame_padding`` -- so the fixed heights tuned against a 13 px body moved in
+# the same commit (``library.CARD_HEIGHT``, ``COMPACT_HEIGHT``, the
+# ``_footer_px`` seed). The lever if a block still reads cramped is
+# ``item_spacing``, never a font size: leading is the space *between* lines and
+# shrinking the glyphs to buy it trades the thing being read for the gap around
+# it.
+TEXT_SMALL = 12.0
+TEXT_BODY = 14.0
 TEXT_TITLE = 16.0
 # The loud end. Display type exists so a screen can have exactly one loud
 # thing: with the ramp topping out at 16 the largest type in the app was a
@@ -102,6 +132,18 @@ TEXT_TITLE = 16.0
 # screen -- there is deliberately nothing between them and nothing above.
 TEXT_HEADING = 20.0
 TEXT_DISPLAY = 28.0
+
+# -- state -------------------------------------------------------------------
+
+# How far a disabled thing fades. imgui carries this as a style var and has
+# always defaulted it to 0.6, which is the number ``text_disabled``'s own alpha
+# was chosen against (see :func:`composite` and UX-18) -- so naming it here and
+# setting it explicitly in ``theme.apply`` changes nothing on screen and makes
+# the figure something a *widget* can read. That is the point: a disabled
+# primary button has to dim its own hand-drawn fill by the same amount imgui
+# dims the label on top of it, and before this the only way to agree with
+# imgui's default was to copy the literal 0.6 into the widget layer.
+DISABLED_ALPHA = 0.6
 
 # -- motion ------------------------------------------------------------------
 

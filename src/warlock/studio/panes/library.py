@@ -25,14 +25,21 @@ from ..tokens import sp
 
 log = logging.getLogger(__name__)
 
-CARD_HEIGHT = 92.0
+# Both heights are a *stack of measured rows* held as one constant, which is
+# why they move when the type ramp does: 92/46 were fitted against a 13 px body
+# and the 14 px one (REDESIGN.md wave 1) adds roughly a pixel to every line and
+# to the padding around every control in them. Raised by 4 rather than by the
+# arithmetic exactly, because the slack is what stops a card clipping at the
+# scales the smoke pass runs at -- a card that fits at 1.0 and loses its last
+# row at 1.75 is the failure these constants exist to prevent.
+CARD_HEIGHT = 96.0
 THUMB_SIZE = 72.0
 # The compact row (J89): the same card with the second line of badges and the
 # action row dropped, so twice as many assets fit on a screen. Two constants
 # rather than a scale factor -- a card is a fixed stack of a title, a pill and
 # a button row, and multiplying its height would leave the contents overflowing
 # or floating rather than fitting.
-COMPACT_HEIGHT = 46.0
+COMPACT_HEIGHT = 50.0
 COMPACT_THUMB = 32.0
 
 # The drag-and-drop type a library card offers (I83). imgui's Python binding
@@ -131,8 +138,10 @@ def draw(ctx: Any) -> None:
 # One frame late by construction, and that is fine: the footer's height changes
 # when a tick is added or the view is switched, both of which redraw for many
 # frames afterwards. The seed is the old no-bulk-bar constant, so the very
-# first frame is exactly what it always was.
-_footer_px = [34.0]
+# first frame is exactly what it always was -- carried up by 2 with the type
+# ramp (REDESIGN.md wave 1), since the row it seeds is one line of text plus
+# ``frame_padding`` and both grew.
+_footer_px = [36.0]
 
 
 def _footer_reserve() -> float:
