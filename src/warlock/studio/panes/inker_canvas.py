@@ -618,7 +618,12 @@ def _press(ctx: Any, state: Any, tab: Any, point) -> None:
         return
     if tool == "fill":
         doc.commit_floating()
-        doc.fill(ipoint, state.fg, thresh=state.wand_tolerance)
+        doc.fill(
+            ipoint,
+            state.fg,
+            thresh=state.wand_tolerance,
+            contiguous=state.wand_contiguous,
+        )
         state.drag_kind = ""
         return
     if tool == "wand":

@@ -129,7 +129,7 @@ Two colours, not one: **Foreground** and **Background**. The gradient tool needs
 swaps them — universal muscle memory from every other raster editor. Both carry an alpha bar, so a
 semi-transparent brush is a colour rather than a separate mode.
 
-Both swatches show their hex value inline and open a full picker — wheel, HSV, hex, alpha — when
+Both swatches show their hex value inline and open a full picker — hue bar, HSV, hex, alpha — when
 clicked, so a colour somebody sent you as `#3b4252` can be typed straight in.
 
 Below them is a row of **swatches**. Clicking one makes it the foreground; the row is saved with

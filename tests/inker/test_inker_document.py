@@ -223,6 +223,25 @@ def test_the_fill_and_the_wand_agree_about_what_similar_means():
     assert np.array_equal(changed, region.mask >= 128)
 
 
+def test_a_fill_reaches_a_disconnected_region_only_when_not_contiguous():
+    """Regression: the pane's fill call site used to drop ``contiguous``
+    entirely, so the wand-contiguous option was silently ignored by fill."""
+    doc = _doc((16, 16), WHITE)
+    doc.stack[0].pixels[8, :] = RED
+    doc.invalidate_all()
+    doc.fill((0, 0), BLUE, thresh=0, contiguous=True)
+    assert _at(doc, 0, 0) == BLUE
+    assert _at(doc, 0, 15) == WHITE
+
+    doc = _doc((16, 16), WHITE)
+    doc.stack[0].pixels[8, :] = RED
+    doc.invalidate_all()
+    doc.fill((0, 0), BLUE, thresh=0, contiguous=False)
+    assert _at(doc, 0, 0) == BLUE
+    assert _at(doc, 0, 15) == BLUE
+    assert _at(doc, 0, 8) == RED
+
+
 # --- shapes -----------------------------------------------------------------
 
 
