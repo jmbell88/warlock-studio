@@ -38,6 +38,12 @@ from ..tokens import sp
 #: the window gets the rest (REDESIGN.md wave 4.1).
 CONTENT_W = 640
 
+#: How wide a labelled control in this pane gets. The column is 640 and the
+#: values in it are a scale, a palette name and a width -- all short. A combo
+#: stretched to the column is a dropdown four times wider than the longest thing
+#: it can contain, and it pushes its own ``help_marker`` onto the next line.
+FIELD_W = 260
+
 #: The four things this pane is, and the order they are offered in.
 #:
 #: Appearance first because it is the one most people came for; Advanced last
@@ -81,10 +87,6 @@ def draw(ctx: Any) -> None:
             # in the app that has to say what it is out loud (UX.md Phase 2) --
             # the three-column modes are named by the rail item that is lit.
             widgets.pane_title("Settings")
-            # After the title, never before it: help_button is a same_line, and
-            # same_line returns to the *previous* row unconditionally. Called
-            # first it landed on whatever the shell drew above this pane.
-            manual_render.help_button(ctx, "app-settings")
             _category_body(ctx, _categories(ctx, width))
         imgui.end_child()
     imgui.end_child()
@@ -119,6 +121,11 @@ def _categories(ctx: Any, width: float) -> str:
     )
     if chosen != current:
         ctx.state.preview[CATEGORY_SLOT] = chosen
+    # On the switch's line, not the title's. ``help_button`` is a right-aligned
+    # ``same_line``, and ``pane_title`` ends in a spacer -- so calling it after
+    # the title put the (?) alone on an otherwise empty row, floating between
+    # the heading and the categories with nothing to belong to.
+    manual_render.help_button(ctx, "app-settings")
     imgui.dummy((0, sp(tokens.SP_2)))
     return chosen
 
@@ -139,10 +146,12 @@ def _category_body(ctx: Any, category: str) -> None:
 
 
 def _interface(ctx: Any) -> None:
-    widgets.section("Appearance")
+    # No section heading: the lit segment above already says "Appearance", and a
+    # heading repeating it is a second answer to a question nobody asked. The
+    # categories that hold *more than one* group keep theirs.
     lo, hi = tokens.ui_scale_bounds(_base(ctx))
     stored = _scale_of(ctx)
-    imgui.set_next_item_width(sp(260))
+    imgui.set_next_item_width(sp(FIELD_W))
     changed, value = imgui.slider_float("UI scale", stored, lo, hi, "%.2fx")
     widgets.help_marker(
         "On top of what the monitor already scales by, so 1.00x is the size "
@@ -173,6 +182,7 @@ def _interface(ctx: Any) -> None:
         "Theme",
         tokens.THEME,
         [(name, name) for name in tokens.PALETTES],
+        sp(FIELD_W),
     )
     widgets.help_marker(
         "The whole palette, including the viewport background. It takes effect "
@@ -344,6 +354,7 @@ def _layout(ctx: Any) -> None:
         "Sidebar width",
         getattr(lay, "sidebar", "default"),
         [(key, f"{key} ({int(width)} px)") for key, width in layout_mod.SIDEBAR_WIDTHS.items()],
+        sp(FIELD_W),
     )
     if chosen != getattr(lay, "sidebar", "default"):
         lay.set_sidebar_width(chosen)
@@ -371,7 +382,8 @@ def _storage(ctx: Any) -> None:
     from ..state import format_bytes
     from . import library
 
-    widgets.section("Storage")
+    # No heading: the lit segment says "Storage". Maintenance below keeps
+    # its own, because it is a second group inside this one category.
     if ctx.cache.storage_error:
         # Before the figure rather than after it (E45): a stale total beside a
         # warning reads as current, and this line is the only thing saying the
@@ -429,7 +441,7 @@ _UNGROUPED = "Other"
 
 
 def _models(ctx: Any) -> None:
-    widgets.section("Models")
+    # No heading: the lit segment says "Models". See ``_interface``.
     rows = list(getattr(ctx, "model_rows", None) or [])
     if not rows:
         widgets.muted("No image models registered.")

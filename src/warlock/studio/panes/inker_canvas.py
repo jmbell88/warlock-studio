@@ -160,6 +160,11 @@ def _file_row(ctx: Any, state: Any) -> None:
     if tab is None:
         return
     doc = tab.doc
+    # One priority group, deliberately: these five are all "act on the drawing
+    # in front of you", so they read as one control and they should abbreviate
+    # as one. Split across two groups the row spent most widths showing *Undo*
+    # and *Redo* as words beside two glyphs, which is the thing the tiering
+    # rule exists to prevent -- it just does not enforce it across groups.
     # Undo can rebind the stack mid-write; the saving gate here matches the
     # keyboard path (_MUTATING_CTRL) and the bridge panel's own pair.
     idle = not tab.busy
@@ -188,12 +193,10 @@ def _file_row(ctx: Any, state: Any) -> None:
         # be an editor that refuses to let you *look* at your drawing while it
         # writes a file.
         toolbar.Item(
-            "rotate", "Rotate view", icons.ROTATE_CW, tooltip="Rotate the view (Ctrl+4)",
-            priority=1,
+            "rotate", "Rotate view", icons.ROTATE_CW, tooltip="Rotate the view (Ctrl+4)"
         ),
         toolbar.Item(
-            "flip", "Flip view", icons.FLIP_HORIZONTAL, tooltip="Flip the view (Ctrl+5)",
-            priority=1,
+            "flip", "Flip view", icons.FLIP_HORIZONTAL, tooltip="Flip the view (Ctrl+5)"
         ),
     ]
     if view.rotation or view.flipped:
@@ -209,7 +212,6 @@ def _file_row(ctx: Any, state: Any) -> None:
                 "upright",
                 " + ".join(parts),
                 tooltip="The view only -- click to set it upright",
-                priority=1,
             )
         )
     toolbar.toolbar(

@@ -3445,9 +3445,9 @@ def _canvas_items():
     return [
         toolbar.Item("undo", "Undo", icons.UNDO, pinned=True),
         toolbar.Item("redo", "Redo", icons.REDO, pinned=True),
-        toolbar.Item("rotate", "Rotate view", icons.ROTATE_CW, priority=1),
-        toolbar.Item("flip", "Flip view", icons.FLIP_HORIZONTAL, priority=1),
-        toolbar.Item("upright", "90 deg + flipped", priority=1),
+        toolbar.Item("rotate", "Rotate view", icons.ROTATE_CW),
+        toolbar.Item("flip", "Flip view", icons.FLIP_HORIZONTAL),
+        toolbar.Item("upright", "90 deg + flipped"),
     ]
 
 
