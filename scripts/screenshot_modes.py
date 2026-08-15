@@ -83,10 +83,21 @@ def _seed(app) -> None:
     exactly the frame that shows none of the controls Phase 4 added -- the tool
     grid's options, the properties panel's sections, the timeline. Both entry
     points are the ones the buttons call.
+
+    The canvas is **animated**, which this claimed to cover and did not: the
+    timeline strip is drawn only for a document with an ``anim``, so a plain
+    new canvas left the app's densest row -- the transport, the frame
+    operations, the exports and their controls -- out of every capture this
+    harness has ever taken. That row was rewritten in REDESIGN.md wave 4.2
+    precisely because it was clipping at 150 %, which is the defect class the
+    scale pass exists to find.
     """
     from warlock.studio import clay_mode, inker_mode
 
     inker_mode.new_document(app.app_ctx, 1024, 1024)
+    state = inker_mode.ensure(app.app_ctx)
+    if state.active is not None:
+        inker_mode.animate(app.app_ctx, state.active)
     clay_mode.new_document(app.app_ctx)
 
 

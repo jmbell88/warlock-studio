@@ -161,6 +161,17 @@ _STEPS_AFTER = (
 )
 
 
+#: The frame-duration box, in design pixels.
+#:
+#: Wide because ``input_int`` with a step draws its own -/+ buttons *inside* the
+#: item width: at 1.5 those two take about 110 px, so the 90 this used to be
+#: left roughly a character and a half for the number. The row it is on can
+#: afford it -- ``toolbar`` wraps a trailing block that no longer fits onto its
+#: own line rather than clipping it -- which is the trade: a taller row on a
+#: narrow strip, and a legible figure at every width.
+MS_W = 128.0
+
+
 def _transport(ctx: Any, tab: Any) -> None:
     """Two rows, both laid out by :mod:`~warlock.studio.toolbar`.
 
@@ -294,11 +305,15 @@ def _export_action(ctx: Any, tab: Any, key: str) -> None:
 def _frame_trailing(ctx: Any, tab: Any, index: int) -> tuple[float, Any]:
     """Where you are in the clip, and how long this frame lasts."""
     anim = tab.doc.anim
-    counter = f"{index + 1}/{len(anim.frames)} - {anim.duration_ms()} ms"
+    # The position only. The clip's total used to be here too and it was the
+    # widest thing on the app's tightest row, sitting next to a box that shows
+    # this frame's duration -- two numbers in milliseconds a hand's breadth
+    # apart, one of which is not about the frame you are on.
+    counter = f"{index + 1}/{len(anim.frames)}"
     gap = imgui.get_style().item_spacing.x
     width = (
         imgui.calc_text_size(counter).x
-        + sp(90)
+        + sp(MS_W)
         + imgui.calc_text_size("ms").x
         + gap * 2
     )
@@ -312,7 +327,7 @@ def _frame_trailing(ctx: Any, tab: Any, index: int) -> tuple[float, Any]:
         # second is not something a user can type into, and ``tick_playback``
         # deliberately does not move ``anim.current``, so a write here would
         # land on a frame that is not the one on screen.
-        imgui.set_next_item_width(sp(90))
+        imgui.set_next_item_width(sp(MS_W))
         imgui.begin_disabled(tab.busy)
         changed, value = imgui.input_int("ms", anim.frames[index].duration_ms, 10, 50)
         if changed:

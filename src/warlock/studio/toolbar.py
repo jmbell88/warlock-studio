@@ -255,7 +255,15 @@ def toolbar(
             imgui.end_popup()
     if trailing is not None:
         if drawn or MENU in tiers:
-            imgui.same_line()
+            # ``same_line_or_wrap``, not ``same_line``: :func:`plan` can return
+            # a row that does not fit -- an all-pinned row has nothing left to
+            # give and says so rather than pretending -- and when it does, a
+            # trailing block continued on that line starts past the content
+            # edge and is clipped. Wrapping puts it on the next line instead,
+            # which is a row that got taller rather than a control that
+            # vanished. Found by the timeline's transport at 150 %, where five
+            # pinned steps plus a pinned Delete overrun a 500 px strip.
+            widgets.same_line_or_wrap(trailing[0])
         trailing[1]()
     if clicked is not None and on_click is not None:
         on_click(clicked)
