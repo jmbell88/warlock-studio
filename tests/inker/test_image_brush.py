@@ -31,18 +31,26 @@ import pytest
 from warlock.studio import inker, inker_mode, inker_state
 from warlock.studio.inker import brush
 from warlock.studio.inker.selection import SelectionMask
-from warlock.studio.panes import inker_tools
+from warlock.studio.panes import inker_canvas, inker_tools
 
 SIZE = (48, 48)
 RED = (255, 0, 0, 255)
 
 
-def _tip(width=8, height=8, alpha=255, colour=(255, 0, 0)) -> np.ndarray:
-    """A flat RGBA block, with a marked corner so a turn is visible."""
+def _tip(width=8, height=8, alpha=255, colour=(255, 0, 0), mark=True) -> np.ndarray:
+    """A flat RGBA block, with a marked corner so a turn is visible.
+
+    ``mark=False`` for the overlap tests. Within one stroke the first dab to
+    reach a pixel owns its *colour*, so a tip with a distinguishable corner
+    makes two different walks over the same ground legitimately disagree about
+    which dab painted the marker -- which is ordering, not the accumulation
+    those tests are about.
+    """
     pixels = np.zeros((height, width, 4), dtype=np.uint8)
     pixels[..., :3] = colour
     pixels[..., 3] = alpha
-    pixels[0, 0, :3] = (0, 255, 0)
+    if mark:
+        pixels[0, 0, :3] = (0, 255, 0)
     return pixels
 
 
@@ -64,6 +72,35 @@ def _stamped(stamp, *, doc=None, points=((20.5, 20.5),), **kw):
         doc.stroke_to(point)
     doc.end_stroke()
     return doc
+
+
+def _sweeps(passes, x0=14.0, x1=26.0, y=20.0):
+    """A run of samples that walks the same segment ``passes`` times over."""
+    points = [(x0, y)]
+    for index in range(passes):
+        points.append((x1 if index % 2 == 0 else x0, y))
+    return tuple(points)
+
+
+@pytest.fixture
+def dabs(monkeypatch):
+    """Every image dab this test emits, recorded.
+
+    A guard against the failure mode these tests are most exposed to: with the
+    spacing at a tenth of an eight-pixel tip a dab lands every 0.8 px, so a walk
+    of half a pixel emits **one** dab and an anti-compounding assertion over it
+    is a single dab compared with itself. Counting is the only way a test can
+    say it exercised what it claims to.
+    """
+    recorded: list[tuple[float, float]] = []
+    original = brush.StrokeState._image_dab
+
+    def counting(self, point, target):
+        recorded.append(point)
+        original(self, point, target)
+
+    monkeypatch.setattr(brush.StrokeState, "_image_dab", counting)
+    return recorded
 
 
 # --- capture ----------------------------------------------------------------
@@ -214,14 +251,34 @@ def test_nonsense_is_refused_at_the_door():
 # --- overlap: free ----------------------------------------------------------
 
 
-def test_a_half_transparent_tip_does_not_build_up_on_itself():
-    """The whole overlap decision, in one assertion: coverage accumulates with
-    maximum, so a slow drag over one spot is what one dab leaves."""
-    stamp = brush.Stamp(_tip(alpha=128))
-    once = _stamped(stamp, points=((20.5, 20.5),))
-    over = _stamped(stamp, points=[(20.5 + 0.01 * i, 20.5) for i in range(60)])
-    assert int(once.stack.active.pixels[20, 20, 3]) == 128
-    assert np.array_equal(once.stack.active.pixels, over.stack.active.pixels)
+def test_a_half_transparent_tip_does_not_build_up_where_a_stroke_crosses_itself(dabs):
+    """The whole overlap decision: coverage accumulates with maximum, so a
+    stroke that goes over its own ground six times is what one pass leaves.
+
+    Six passes over a twelve-pixel segment rather than a wobble in one place --
+    a dab lands every 0.8 px here, so a walk shorter than that emits one dab and
+    an assertion over it would be a single dab compared with itself. The counts
+    are asserted for exactly that reason.
+    """
+    stamp = brush.Stamp(_tip(alpha=128, mark=False))
+    once = _stamped(stamp, points=_sweeps(1)).stack.active.pixels
+    single = len(dabs)
+    assert single > 4
+    dabs.clear()
+    many = _stamped(stamp, points=_sweeps(6)).stack.active.pixels
+    assert len(dabs) > 4 * single
+
+    # Nothing anywhere carries more than one dab's worth, at any coverage.
+    painted = many[many[..., 3] > 0]
+    assert {tuple(int(c) for c in v) for v in np.unique(painted, axis=0)} == {
+        (255, 0, 0, 128)
+    }
+    # And byte-identical to the single pass everywhere the single pass reached.
+    # Only the far edge may differ: the spacing carry leaves the last dab of a
+    # longer walk at a different sub-position, which is the walk rather than the
+    # accumulation.
+    reached = once[..., 3] > 0
+    assert np.array_equal(once[reached], many[reached])
 
 
 def test_two_strokes_do_pile_up_where_one_does_not():
@@ -411,18 +468,27 @@ def test_a_mode_that_cannot_use_a_picture_drops_the_tip(mode):
     assert stroke.stamp is None
 
 
-def test_an_image_eraser_cuts_exactly_the_tips_alpha_however_many_passes():
-    stamp = brush.Stamp(_tip(alpha=128))
+def test_an_image_eraser_cuts_exactly_the_tips_alpha_however_many_passes(dabs):
+    """The increment from the other side: alpha multiplies by ``1 - share`` per
+    dab, and that product telescopes to ``1 - max``, so six passes cut exactly
+    what one does."""
+    stamp = brush.Stamp(_tip(alpha=128, mark=False))
     doc = _doc()
     doc.stack.active.pixels[...] = (0, 0, 255, 255)
-    _stamped(stamp, doc=doc, mode="erase", points=[(20.5, 20.5)] * 1)
-    once = int(doc.stack.active.pixels[20, 20, 3])
+    _stamped(stamp, doc=doc, mode="erase", points=_sweeps(1))
+    once = doc.stack.active.pixels.copy()
+    single = len(dabs)
+    assert single > 4
+    dabs.clear()
     doc.undo()
-    _stamped(
-        stamp, doc=doc, mode="erase",
-        points=[(20.5 + 0.01 * i, 20.5) for i in range(60)],
-    )
-    assert int(doc.stack.active.pixels[20, 20, 3]) == once == 127
+    _stamped(stamp, doc=doc, mode="erase", points=_sweeps(6))
+    assert len(dabs) > 4 * single
+
+    # 255 * (1 - 128/255) exactly, and nowhere any deeper however many passes.
+    assert int(doc.stack.active.pixels[20, 20, 3]) == 127
+    assert int(doc.stack.active.pixels[..., 3].min()) == 127
+    cut = once[..., 3] < 255
+    assert np.array_equal(once[cut], doc.stack.active.pixels[cut])
 
 
 def test_a_replace_ink_brush_with_a_tip_loaded_paints_the_ordinary_way():
@@ -482,6 +548,74 @@ def _ctx(block=None) -> SimpleNamespace:
 
 def test_the_alignment_combo_offers_every_mode_the_brush_implements():
     assert tuple(key for key, _label in inker_tools.STAMP_ALIGN_LABELS) == brush.STAMP_ALIGN
+
+
+def test_the_stamping_tools_are_exactly_the_ones_whose_mode_takes_a_tip():
+    """``STAMP_TOOLS`` is a *derivation*, written out because the panel and the
+    press both read it -- so it is pinned against what it is derived from. The
+    two lists drifting apart is the same seam the replace-ink bug came through:
+    a tool the panel offers the controls for and the engine then drops the tip
+    of is a feature that silently does nothing."""
+    derived = {
+        tool
+        for tool, mode in inker_state.BRUSH_MODES.items()
+        if mode in brush.STAMP_MODES
+    }
+    assert derived == inker_state.STAMP_TOOLS
+
+
+def test_the_press_lays_down_whatever_tip_for_advertises():
+    """``tip_for`` is the single source of truth, and the ink may not overrule
+    it. The panel hides the ink radio and the cursor draws the tip's box while a
+    tip is loaded, so a press that quietly took the ``replace`` path instead
+    would stamp nothing, advertise the tip on screen, and leave no control to
+    turn the ink back off.
+
+    Both ways in are covered: setting Replace and *then* capturing (Ctrl+B does
+    not touch the ink), and applying a preset -- ``paint_ink`` is one of the
+    options a preset carries.
+    """
+    state = inker_state.InkerState()
+    state.set_tool("brush")
+    state.paint_ink = "replace"
+    assert inker_canvas._press_mode(state, "brush", state.tip_for("brush")) == "replace"
+
+    state.stamp = brush.Stamp(_tip())
+    state.use_stamp = True
+    assert state.tip_for("brush") is not None
+    assert inker_canvas._press_mode(state, "brush", state.tip_for("brush")) == "paint"
+    # The ink is ignored rather than cleared: forget the tip and the ink the
+    # user chose is still theirs.
+    assert state.paint_ink == "replace"
+    state.use_stamp = False
+    assert inker_canvas._press_mode(state, "brush", state.tip_for("brush")) == "replace"
+
+
+def test_a_preset_carrying_a_replace_ink_cannot_disarm_a_loaded_tip():
+    """A preset stores ``paint_ink`` and ``use_stamp`` side by side, so one can
+    restore both at once -- the second of the two routes into the bug."""
+    state = inker_state.InkerState()
+    state.set_tool("brush")
+    state.paint_ink = "replace"
+    state.use_stamp = True
+    state.save_preset("copy pen")
+
+    fresh = inker_state.InkerState()
+    fresh.presets = dict(state.presets)
+    fresh.stamp = brush.Stamp(_tip())
+    fresh.apply_preset("copy pen")
+    assert fresh.paint_ink == "replace"
+    assert fresh.tip_for("brush") is not None
+    assert inker_canvas._press_mode(fresh, "brush", fresh.tip_for("brush")) == "paint"
+
+
+@pytest.mark.parametrize("tool", sorted(inker_state.PAINT_TOOLS))
+def test_no_other_tool_reads_the_brushs_ink(tool):
+    state = inker_state.InkerState()
+    state.set_tool(tool)
+    state.paint_ink = "replace"
+    expected = "replace" if tool == "brush" else inker_state.BRUSH_MODES[tool]
+    assert inker_canvas._press_mode(state, tool, None) == expected
 
 
 def test_a_tool_that_cannot_stamp_never_reports_a_tip():

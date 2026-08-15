@@ -915,6 +915,9 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
             return
         doc.commit_floating()
         spraying = tool == "spray"
+        # Asked once, and it decides two arguments rather than one; see
+        # ``_press_mode`` for why the ink cannot be read independently of it.
+        tip = state.tip_for(tool)
         doc.begin_stroke(
             point,
             colour,
@@ -922,11 +925,7 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
             hardness=state.hardness,
             opacity=state.opacity,
             spacing=state.spacing,
-            mode=(
-                "replace"
-                if tool == "brush" and state.paint_ink == "replace"
-                else inker_state.BRUSH_MODES[tool]
-            ),
+            mode=_press_mode(state, tool, tip),
             strength=state.strength,
             nib=state.nib,
             # Both forced off for the spray: the corner filter is about a
@@ -952,11 +951,41 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
             # ``tip_for`` rather than read off the two fields here, so the press
             # and the cursor outline drawn a frame earlier cannot disagree about
             # whether the picture is what is about to land.
-            stamp=state.tip_for(tool),
+            stamp=tip,
             stamp_align=state.stamp_align,
         )
         state.spray_carry = 0.0
         state.drag_kind = "spray" if spraying else "paint"
+
+
+def _press_mode(state: Any, tool: str, tip: Any) -> str:
+    """Which brush mode this press opens with. **The tip outranks the ink.**
+
+    One line of policy, in a function of its own because it is the seam a real
+    bug slipped through and because a test has to be able to pin it against
+    ``tip_for`` directly.
+
+    ``paint_ink`` is the brush's copy-colour toggle and it is the *only* thing
+    that can send a mode other than ``BRUSH_MODES[tool]``. But ``replace`` is
+    not a stamp mode -- a captured tip's alpha is both its shape and its
+    transparency, so a copy ink has nothing left to say about one -- and
+    ``StrokeState`` therefore drops a tip handed to it. Reading the ink
+    independently of the tip made that a silent, unrecoverable failure: the
+    panel hides the ink radio while a tip is loaded, the cursor draws the tip's
+    box and the checkbox stays ticked, so the stroke stamped a round replace dab
+    with nothing on screen to say why and no control left to turn the ink off.
+    Two ordinary gestures reached it -- set Replace and then capture (Ctrl+B
+    does not touch the ink), and apply a preset, since ``paint_ink`` is one of
+    the options a preset carries.
+
+    So ``tip_for`` is the single source of truth: whatever it advertises is what
+    the press lays down, and a stale ink is ignored rather than obeyed. It is
+    ignored rather than *cleared* because the tip is the transient thing --
+    forget the tip and the ink the user chose is still theirs.
+    """
+    if tool == "brush" and tip is None and state.paint_ink == "replace":
+        return "replace"
+    return inker_state.BRUSH_MODES[tool]
 
 
 def _dab_size(state: Any, spraying: bool) -> int:
