@@ -126,10 +126,13 @@ class SelectionOps:
 
     def select_wand(
         self: Document, xy: tuple[int, int], *, tolerance: int = 32, op: str = "replace",
-        contiguous: bool = True,
+        contiguous: bool = True, wrap: str | tuple[bool, bool] = "off",
     ) -> None:
         self.select(
-            magic_wand(self._composite, xy, tolerance=tolerance, contiguous=contiguous), op
+            magic_wand(
+                self._composite, xy, tolerance=tolerance, contiguous=contiguous, wrap=wrap
+            ),
+            op,
         )
 
     # -- floating pixels ----------------------------------------------------

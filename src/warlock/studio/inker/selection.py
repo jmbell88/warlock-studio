@@ -23,6 +23,7 @@ from typing import Any
 import numpy as np
 
 from ... import native
+from . import tiling
 
 # Anything at or above this counts as "in" for hit-tests and for the boundary
 # the ants are drawn along. The mask itself stays continuous.
@@ -472,22 +473,41 @@ def magic_wand(
     *,
     tolerance: int = 32,
     contiguous: bool = True,
+    wrap: str | tuple[bool, bool] = "off",
 ) -> SelectionMask:
+    """Everything similar to the seed pixel, optionally on a torus.
+
+    ``wrap`` is one of :data:`.tiling.TILED_AXES` and only affects
+    *contiguity*: similarity is per pixel and has no notion of an edge, so a
+    non-contiguous wand is the same answer tiled or not. With it on, a region
+    that runs off one edge and continues on the other is one region -- which is
+    what makes filling a tile's background a single click rather than four.
+    """
     height, width = pixels.shape[:2]
     x, y = int(seed[0]), int(seed[1])
     if not (0 <= x < width and 0 <= y < height):
         return SelectionMask(np.zeros((height, width), dtype=np.uint8))
     plane = similar(pixels, (x, y), tolerance)
     if contiguous:
-        plane = _contiguous(plane, (x, y))
+        plane = _contiguous(plane, (x, y), tiling.axes_of(wrap))
     return SelectionMask((plane.astype(np.uint8)) * 255)
 
 
-def _contiguous(plane: np.ndarray, seed: tuple[int, int]) -> np.ndarray:
+def _contiguous(
+    plane: np.ndarray, seed: tuple[int, int], axes: tuple[bool, bool] = (False, False)
+) -> np.ndarray:
     """Keep only the region connected to the seed.
 
     Pillow's flood fill does the walk: it is C, and the alternative is either a
     Python BFS over a megapixel or a scipy dependency this app does not have.
+
+    Toroidal contiguity is that same C flood run to a **fixpoint**: fill, ask
+    :func:`.tiling.seam_seeds` which pixels on a wrapped edge the region has
+    just made reachable from the opposite edge, fill from those, repeat. Two
+    floods is the usual answer and the loop is bounded by the number of edge
+    pixels, since every extra pass has to claim at least one new seed. Doing it
+    this way rather than by padding the plane keeps the one predicate -- Pillow
+    decides connectivity, here as before -- and costs no copy of the canvas.
     """
     from PIL import Image, ImageDraw
 
@@ -498,7 +518,15 @@ def _contiguous(plane: np.ndarray, seed: tuple[int, int]) -> np.ndarray:
     # silently, with no exception and an empty selection to show for it.
     canvas = Image.fromarray(plane.astype(np.uint8), "L").copy()
     ImageDraw.floodfill(canvas, seed, 2, thresh=0)
-    return np.asarray(canvas) == 2
+    if not (axes[0] or axes[1]):
+        return np.asarray(canvas) == 2
+    while True:
+        reached = np.asarray(canvas) == 2
+        seeds = tiling.seam_seeds(reached, plane, axes)
+        if not seeds:
+            return reached
+        for point in seeds:
+            ImageDraw.floodfill(canvas, point, 2, thresh=0)
 
 
 # --- floating pixels --------------------------------------------------------
