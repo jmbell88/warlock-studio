@@ -199,6 +199,30 @@ class SelectionMask:
             return SelectionMask(np.minimum(self.mask, other.mask))
         raise ValueError(f"unknown combine op {op!r}")
 
+    def translated(self, dx: int, dy: int) -> SelectionMask:
+        """The same mask slid by whole pixels, with zeros behind it.
+
+        Zero-filled rather than rolled. A selection is a statement about a
+        region of *this* canvas, so what leaves one edge has left -- wrapping it
+        round to the other side would put coverage where the user dragged a
+        selection away from, which is the one thing moving it is meant to
+        avoid. Whole pixels, because a fractional slide would have to resample
+        the mask and a hard-edged marquee would go soft the first time it was
+        nudged.
+        """
+        out = np.zeros_like(self.mask)
+        height, width = self.mask.shape
+        dx, dy = int(dx), int(dy)
+        sx, sy = max(0, -dx), max(0, -dy)
+        tx, ty = max(0, dx), max(0, dy)
+        copy_w = min(width - sx, width - tx)
+        copy_h = min(height - sy, height - ty)
+        if copy_w > 0 and copy_h > 0:
+            out[ty : ty + copy_h, tx : tx + copy_w] = self.mask[
+                sy : sy + copy_h, sx : sx + copy_w
+            ]
+        return SelectionMask(out)
+
     def inverted(self) -> SelectionMask:
         return SelectionMask((255 - self.mask).astype(np.uint8))
 

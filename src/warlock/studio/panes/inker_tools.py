@@ -307,6 +307,27 @@ def _selection_actions(state: Any, doc: Any) -> None:
     imgui.same_line()
     if imgui.button("Invert"):
         doc.invert_selection()
+    imgui.same_line()
+    # Enabled off the *memory* rather than off "there is no selection": the
+    # useful case is exactly re-selecting after something else was selected,
+    # and a mask the canvas has outgrown is refused by the engine.
+    if widgets.disabled_button("Reselect", doc._last_mask is not None):
+        doc.reselect()
+    widgets.help_marker(
+        "Brings back the selection you last dismissed (Ctrl+Shift+D). A "
+        "selection from before a resize or a crop cannot come back -- it "
+        "describes a canvas that no longer exists."
+    )
+    if widgets.disabled_button("Layer from selection", doc.mask is not None):
+        doc.layer_from_selection(cut=True)
+    imgui.same_line()
+    if widgets.disabled_button("Copy to layer", doc.mask is not None):
+        doc.layer_from_selection(cut=False)
+    widgets.help_marker(
+        "Ctrl+J moves the selection onto a layer of its own; Ctrl+Shift+J "
+        "leaves the original where it was. Either way it is one undo step, and "
+        "the new layer lines up with what it came from."
+    )
     if imgui.button("This layer"):
         doc.select_layer_alpha()
     widgets.help_marker(

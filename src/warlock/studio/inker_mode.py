@@ -1362,7 +1362,9 @@ def handle_key(ctx: Any, event: Any) -> bool:
 # ``e`` joins them because plain Ctrl+E now writes the document into the
 # library: it flattens the layer stack, which is the same read a save makes and
 # is just as wrong to take while one is in flight.
-_MUTATING_CTRL = frozenset({"z", "y", "a", "d", "x", "v", "i", "t", "e"})
+# ``j`` joins them for the ordinary reason: layer-from-selection adds a layer
+# (a track, on an animated document) and may cut pixels out of another.
+_MUTATING_CTRL = frozenset({"z", "y", "a", "d", "x", "v", "i", "t", "e", "j"})
 
 
 def _ctrl_key(
@@ -1404,7 +1406,14 @@ def _ctrl_key(
     elif name == "a":
         doc.select_all()
     elif name == "d":
-        doc.deselect()
+        # Ctrl+Shift+D brings back what Ctrl+D took away, the pair every other
+        # editor binds. It refuses a mask whose shape the canvas has outgrown.
+        doc.reselect() if shift else doc.deselect()
+    elif name == "j":
+        # Ctrl+J moves the selection onto a layer of its own -- cutting it out
+        # of the one it came from -- and Ctrl+Shift+J leaves the original
+        # behind. Both are one Ctrl+Z.
+        doc.layer_from_selection(cut=not shift)
     elif name == "c":
         doc.copy()
     elif name == "x":

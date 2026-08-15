@@ -147,6 +147,13 @@ class Document(
         init=False, default=None, repr=False
     )
     _full: bool = field(init=False, default=True, repr=False)
+    #: The mask ``deselect`` took away, for :meth:`reselect`. A plain field and
+    #: deliberately so: it is neither persisted nor replayed nor undoable, in
+    #: the way the playhead and the active layer are not. Reselect is a
+    #: *convenience* -- it re-runs an ordinary ``select`` and pushes an ordinary
+    #: step -- so making the memory itself part of the document's state would
+    #: mean an undo could change what Ctrl+Shift+D is about to give you.
+    _last_mask: np.ndarray | None = field(init=False, default=None, repr=False)
     #: Cels autovivified by writes that have not yet been committed. They ride
     #: along into the same ``CompoundEdit`` as the patch, so drawing on an empty
     #: frame is one Ctrl+Z rather than two. A *list* rather than one slot: the

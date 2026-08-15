@@ -675,6 +675,16 @@ def _press(ctx: Any, state: Any, tab: Any, point) -> None:
         return
     if tool in SELECT_TOOLS:
         doc.commit_floating()
+        # An unmodified drag starting *inside* the selection moves its edges
+        # rather than replacing them -- the marquee's own version of grabbing
+        # what you can see. The modifier check comes first, so Shift and Alt
+        # still start the combine drags they have always started: a user
+        # Shift-dragging to add a second region routinely starts inside the
+        # first one, and reading the modifiers second would have taken that
+        # gesture away.
+        if state.combine == "replace" and doc.mask is not None and doc.mask.contains(ipoint):
+            state.drag_kind = "mask-move"
+            return
         state.drag_kind = "lasso" if tool == "lasso" else "marquee"
         state.lasso = [point]
         return
@@ -789,6 +799,13 @@ def _release(ctx: Any, state: Any, tab: Any, point) -> None:
             # is what every other editor does and what stops a stray click
             # leaving a one-pixel selection nothing can be painted outside.
             doc.deselect()
+    elif kind == "mask-move":
+        # One step for the whole drag: the live offset was drawn by shifting
+        # the ants and touched nothing, so this is the first and only thing the
+        # gesture pushes.
+        dx, dy = _mask_shift(state, point)
+        if (dx or dy) and doc.mask is not None:
+            doc.select(doc.mask.translated(dx, dy))
     elif kind == "lasso":
         if len(state.lasso) >= 3:
             doc.select(SelectionMask.from_polygon(doc.size, state.lasso), state.combine)
@@ -893,7 +910,7 @@ def _paint(ctx: Any, state: Any, tab: Any, origin, *, hovered: bool) -> None:
         _grid(state, draw_list, view, origin, doc.size, top_left, bottom_right)
     if state.symmetry != "none":
         _symmetry(state, draw_list, view, origin, doc.size)
-    _ants(ctx, tab, draw_list, origin)
+    _ants(ctx, tab, draw_list, origin, state)
     if state.transforming:
         _transform_box(state, tab, draw_list, origin)
     _preview(state, tab, draw_list, origin)
@@ -1033,6 +1050,25 @@ def _symmetry(state: Any, draw_list: Any, view: Any, origin, size) -> None:
         )
 
 
+def _mask_shift(state: Any, point: Any = None) -> tuple[int, int]:
+    """Whole pixels a mask-move drag has travelled, or ``(0, 0)``.
+
+    One function for the preview and for the release, so what the ants show
+    while the drag runs and what ``select`` is handed when it ends cannot
+    disagree by a pixel. Measured against the *press* rather than accumulated
+    per frame, which is the rule the transform handles already follow.
+    """
+    if state.drag_kind != "mask-move" or state.drag_anchor is None:
+        return (0, 0)
+    tip = point if point is not None else state.last_point
+    if tip is None:
+        return (0, 0)
+    return (
+        int(round(tip[0] - state.drag_anchor[0])),
+        int(round(tip[1] - state.drag_anchor[1])),
+    )
+
+
 def _contours(ctx: Any, tab: Any):
     """The selection outline, recomputed only when the mask object changes.
 
@@ -1059,15 +1095,21 @@ def _contours(ctx: Any, tab: Any):
     return loops
 
 
-def _ants(ctx: Any, tab: Any, draw_list: Any, origin) -> None:
+def _ants(ctx: Any, tab: Any, draw_list: Any, origin, state: Any = None) -> None:
     loops = _contours(ctx, tab)
     if not loops:
         return
     view = tab.view
+    # A mask-move drag previews by sliding the *drawn* outline and nothing
+    # else: the mask itself is untouched until the release, so the preview
+    # costs no recompute of the contours and pushes no history. Expressed as an
+    # image-space origin rather than a screen delta, so it goes through the
+    # view's turn with everything else.
+    shift = (0, 0) if state is None else _mask_shift(state)
     # Canvas (0, 0) on screen, from the same function every other overlay uses:
     # ``to_screen`` is a uniform scale plus this offset, and a second spelling
     # of it is how the ants end up one pixel off the mask they describe.
-    offset = inker_state.to_screen(view, origin, 0.0, 0.0)
+    offset = inker_state.to_screen(view, origin, float(shift[0]), float(shift[1]))
     phase = (time.monotonic() * ants.ANT_SPEED) % (ants.DASH * 2)
     light, dark = _u32(theme.TEXT), _u32(theme.BG)
     # The visible window, for the two culls below (B23): a whole loop whose
@@ -1086,7 +1128,7 @@ def _ants(ctx: Any, tab: Any, draw_list: Any, origin) -> None:
         # which scaled the box's own coordinates, silently culled every loop the
         # moment the page was turned.
         corners = [
-            inker_state.to_screen(view, origin, x, y)
+            inker_state.to_screen(view, origin, x + shift[0], y + shift[1])
             for x in (box[0], box[2])
             for y in (box[1], box[3])
         ]

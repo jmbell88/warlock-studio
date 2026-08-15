@@ -81,7 +81,34 @@ class SelectionOps:
     def deselect(self: Document) -> None:
         self.commit_floating()
         if self.mask is not None:
+            # Remembered here and nowhere else. Undo's own route back to no
+            # selection (``set_selection_mask``) deliberately does not record
+            # one: a Ctrl+Z is the user putting the selection *back*, so there
+            # is nothing for a reselect to restore and overwriting the memory
+            # would throw away the mask they actually meant.
+            self._last_mask = self.mask.mask.copy()
             self.select(None)
+
+    def reselect(self: Document) -> bool:
+        """Bring back the selection the last :meth:`deselect` took away.
+
+        An ordinary ``select``, so it pushes an ordinary step and is undone by
+        an ordinary Ctrl+Z -- the memory is the only new thing here.
+
+        A mask whose shape no longer matches the canvas is refused rather than
+        placed or rescaled. It is a per-pixel statement about a canvas that no
+        longer exists, and the two honest answers to "reselect after a crop"
+        are "nothing" and "guess"; guessing would put a selection somewhere the
+        user never drew one.
+        """
+        mask = self._last_mask
+        if mask is None:
+            return False
+        width, height = self.size
+        if mask.shape != (height, width):
+            return False
+        self.select(SelectionMask(mask.copy()))
+        return True
 
     def invert_selection(self: Document) -> None:
         width, height = self.size
@@ -265,16 +292,29 @@ class SelectionOps:
         self.rev += 1
         return True
 
-    def delete_selection(self: Document) -> bool:
-        """Cut the selection out of the active layer without floating it."""
-        if self.floating is not None:
-            return self.delete_floating()
-        if self.mask is None or self.write_locked():
-            return False
+    def _cut_selection_patch(self: Document) -> list[Any] | None:
+        """Cut the selection out of the active layer, *returning* the steps.
+
+        Split out of :meth:`delete_selection` because ``layer_from_selection``
+        needs the same write folded into a bigger ``CompoundEdit`` -- the cut
+        and the new layer are one gesture and must be one Ctrl+Z.
+
+        Three answers, and the distinction is what keeps the callers' contracts
+        exact: ``None`` for "there was nothing to cut" (no selection, or one
+        entirely off canvas), ``[]`` for a cut that changed no pixel, and a list
+        of steps otherwise.
+
+        It does not go through ``_commit_patch``, so it does not snap an indexed
+        document -- and does not need to. This write touches alpha alone, the
+        RGB it leaves behind was already snapped when it was written, and
+        ``snap`` never touches alpha in any case.
+        """
+        if self.mask is None:
+            return None
         bounds = self.mask.bounds
         box = self.clip(bounds) if bounds else None
         if box is None:
-            return False
+            return None
         self._ensure_active_cel()
         layer = self.stack.active
         x0, y0, x1, y1 = box
@@ -283,7 +323,25 @@ class SelectionOps:
         layer.pixels[y0:y1, x0:x1, 3] = (before[..., 3].astype(np.float32) * keep).astype(
             np.uint8
         )
-        self._commit_patch(layer, box, before)
+        after = layer.pixels[y0:y1, x0:x1].copy()
+        if np.array_equal(before, after):
+            self._discard_pending_cel()
+            return []
+        pending, self._pending_cels = self._pending_cels, []
+        self.invalidate(box, layer_uid=layer.uid)
+        return [*pending, PatchEdit(layer.uid, box, before, after)]
+
+    def delete_selection(self: Document) -> bool:
+        """Cut the selection out of the active layer without floating it."""
+        if self.floating is not None:
+            return self.delete_floating()
+        if self.write_locked():
+            return False
+        edits = self._cut_selection_patch()
+        if edits is None:
+            return False
+        if edits:
+            self.history.push(edits[0] if len(edits) == 1 else CompoundEdit(edits))
         return True
 
     # -- clipboard ----------------------------------------------------------
@@ -390,12 +448,40 @@ class SelectionOps:
         self.rev += 1
         return True
 
+    def _add_layer_edit(
+        self: Document, pixels: np.ndarray, name: str, *, offset: tuple[int, int] = (0, 0)
+    ) -> Any:
+        """Put ``pixels`` on a new layer above the active one, and *return* the
+        step rather than pushing it.
+
+        The tail of ``paste_as_layer``, extracted so ``layer_from_selection``
+        can fold the same work into a compound with the cut that precedes it.
+        Returning the edit rather than pushing it is the whole of the
+        refactor: two entry points, one of which is half of a bigger gesture.
+        """
+        width, height = self.size
+        placed = tf.resize_canvas(pixels, (width, height), offset)
+        layer = Layer(pixels=placed, name=name)
+        if self.anim is not None:
+            # A track carrying one cel, on the current frame only: the new
+            # pixels are a thing that happens at a moment, not a thing that is
+            # true for the whole clip.
+            index = self.stack.active_index + 1
+            track = Track(name=layer.name)
+            cels = {self.anim.frame.uid: layer}
+            self._put_track(index, track, cels)
+            return TrackAddEdit(index, track, cels, pinned=True)
+        index = self.stack.insert(self.stack.active_index + 1, layer)
+        self.invalidate_all()
+        return LayerAddEdit(index, layer)
+
     def paste_as_layer(self: Document, pixels: np.ndarray | None = None) -> bool:
         """Paste onto a layer of its own, placed at the top-left.
 
         A separate entry point rather than a flag on ``paste``: this one lands
         immediately and is undone by removing the layer, where an ordinary
-        paste floats until it is put down.
+        paste floats until it is put down. It stays legal beside a content-
+        locked layer, because it writes to a layer of its own.
         """
         if pixels is None:
             taken = self.clipboard.take()
@@ -405,22 +491,50 @@ class SelectionOps:
             # mask in alpha, and applying it twice darkens every feathered edge.
             pixels, _mask = taken
         self.commit_floating()
-        width, height = self.size
-        placed = tf.resize_canvas(pixels, (width, height))
-        layer = Layer(pixels=placed, name=f"Pasted {len(self.stack) + 1}")
-        if self.anim is not None:
-            # A track carrying one cel, on the current frame only: the pasted
-            # pixels are a thing that happens at a moment, not a thing that is
-            # true for the whole clip.
-            index = self.stack.active_index + 1
-            track = Track(name=layer.name)
-            cels = {self.anim.frame.uid: layer}
-            self._put_track(index, track, cels)
-            self.history.push(TrackAddEdit(index, track, cels, pinned=True))
-            return True
-        index = self.stack.insert(self.stack.active_index + 1, layer)
-        self.history.push(LayerAddEdit(index, layer))
-        self.invalidate_all()
+        name = f"Pasted {len(self.stack) + 1}"
+        self.history.push(self._add_layer_edit(pixels, name))
+        return True
+
+    def layer_from_selection(self: Document, *, cut: bool = False) -> bool:
+        """Lift the selection onto a layer of its own. Ctrl+J, and Ctrl+Shift+J.
+
+        One ``CompoundEdit``, because it is one gesture: the cut half (when
+        asked for) and the new layer undo together or the user sees a state
+        that never existed -- a hole with nothing above it.
+
+        The pixels carry the mask in their alpha, through the same
+        ``_masked_alpha`` the clipboard and a lift both use, so a feathered
+        selection makes a feathered layer rather than a hard-edged crop of one.
+        They are placed back at the selection's own offset rather than at the
+        top-left, which is what makes this different from a paste: the new
+        layer lines up with what it came from.
+
+        The copy half is legal on a content-locked layer -- it reads. The cut
+        half is not, and refuses the whole operation rather than half of it.
+        """
+        if self.mask is None:
+            return False
+        bounds = self.mask.bounds
+        box = self.clip(bounds) if bounds else None
+        if box is None:
+            return False
+        if cut and self.write_locked():
+            return False
+        self.commit_floating()
+        x0, y0, x1, y1 = box
+        crop = self.mask.mask[y0:y1, x0:x1]
+        taken = _masked_alpha(self.stack.active.pixels[y0:y1, x0:x1], crop)
+
+        edits: list[Any] = []
+        if cut:
+            # Before the add, and it has to be: the cut is against the *active*
+            # layer, and adding first would make the new one active and cut a
+            # hole in the copy that was just made.
+            edits.extend(self._cut_selection_patch() or [])
+        edits.append(
+            self._add_layer_edit(taken, f"Layer {len(self.stack) + 1}", offset=(x0, y0))
+        )
+        self.history.push(edits[0] if len(edits) == 1 else CompoundEdit(edits))
         return True
 
     def put_clipboard(self: Document, pixels: np.ndarray) -> None:
