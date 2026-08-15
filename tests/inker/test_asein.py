@@ -43,10 +43,26 @@ def _chunk(kind: int, payload: bytes) -> bytes:
     return struct.pack("<IH", len(payload) + 6, kind) + payload
 
 
-def _frame(chunks: list[bytes], duration: int = 100) -> bytes:
+def _frame(chunks: list[bytes], duration: int = 100, *, new: bool = False) -> bytes:
+    """One frame header and its chunks.
+
+    ``new`` picks which of the two chunk-count fields carries the number. The
+    format has both -- a legacy WORD and a DWORD added when a frame could hold
+    more than 65535 chunks -- under the rule "0xFFFF in the old one means read
+    the new one, and 0 in the new one means read the old one". A real Aseprite
+    1.3 file writes the DWORD, so a fixture that only ever fills the WORD tests
+    the *fallback* branch alone: a two-byte misread of the modern field would
+    land on the two padding bytes, come back 0, fall through to the legacy
+    count and pass every test in this file. Both shapes are built for exactly
+    that reason.
+    """
     body = b"".join(chunks)
+    old_count = 0xFFFF if new else len(chunks)
+    new_count = len(chunks) if new else 0
     return (
-        struct.pack("<IHHHHI", len(body) + 16, FRAME_MAGIC, len(chunks), duration, 0, 0)
+        struct.pack(
+            "<IHHHHI", len(body) + 16, FRAME_MAGIC, old_count, duration, 0, new_count
+        )
         + body
     )
 
@@ -230,6 +246,38 @@ def test_an_imported_document_owns_no_file():
     assert doc.path is None
     assert doc.file_format == "ora"
     assert doc.history.head == 0
+
+
+def test_a_frame_counts_its_chunks_in_either_field():
+    """The modern DWORD and the legacy WORD, asserted to give one document.
+
+    A real Aseprite 1.3 file fills the DWORD and puts 0xFFFF in the WORD, and
+    every other fixture in this file does the opposite -- so without this one,
+    the modern read is never exercised at all and a two-byte misread of it
+    would fall through to the legacy count and go unnoticed.
+    """
+    art = _rgba(2, 2, (7, 7, 7, 255))
+
+    def build(new):
+        return _file(
+            _header(2, 2, 2),
+            [
+                _frame([_layer("Art"), _cel(0, art, 2, 2)], duration=40, new=new),
+                _frame([_cel(0, _rgba(2, 2, (8, 8, 8, 255)), 2, 2)], new=new),
+            ],
+        )
+
+    legacy = asein.parse(build(False))
+    modern = asein.parse(build(True))
+    assert legacy == modern
+    assert [layer.name for layer in modern.layers] == ["Art"]
+    assert modern.durations == [40, 100]
+    assert len(modern.cels) == 2
+
+    doc, warnings = asein.document_from_aseprite(build(True))
+    assert doc.anim is not None
+    assert len(doc.anim.tracks) == 1
+    assert warnings == []
 
 
 def test_a_compressed_cel_reads_the_same_as_a_raw_one():
@@ -643,7 +691,12 @@ def test_a_layer_kind_this_build_does_not_know_is_refused_by_name():
         asein.document_from_aseprite(data)
 
 
-def test_a_linked_cel_with_no_source_is_refused_by_name():
+def test_a_linked_cel_that_links_to_itself_is_refused_by_name():
+    """Frame 1's cel names frame 1: a chain with nowhere to end. Refused rather
+    than followed, because this is somebody else's file and a cycle walked is a
+    hang. The *dangling* link -- a chain that ends at a slot holding no cel --
+    is the test below, and the two messages are pinned separately so neither
+    can start standing in for the other."""
     data = _file(
         _header(2, 1, 1),
         [
@@ -651,7 +704,7 @@ def test_a_linked_cel_with_no_source_is_refused_by_name():
             _frame([_linked_cel(0, 1)]),
         ],
     )
-    with pytest.raises(ValueError, match="links to itself|has no cel"):
+    with pytest.raises(ValueError, match="links to itself"):
         asein.document_from_aseprite(data)
 
 
@@ -768,6 +821,60 @@ def test_a_cel_reaching_past_the_canvas_is_cropped_with_a_warning():
     doc, warnings = asein.document_from_aseprite(data)
     assert tuple(doc.stack[0].pixels[1, 1]) == (5, 6, 7, 255)
     assert any("past the canvas" in line for line in warnings)
+
+
+def test_a_linked_cel_drawn_at_its_own_offset_is_unlinked_where_it_stands():
+    """Aseprite shares a cel's *position* along with its image, so this is a
+    file no version of it writes -- but sharing the object would draw the
+    pixels in the wrong place, so the link is what gives way rather than the
+    picture."""
+    art = _rgba(2, 2, (4, 5, 6, 255))
+    data = _file(
+        _header(2, 4, 4),
+        [
+            _frame([_layer("Art"), _cel(0, art, 2, 2)]),
+            _frame([_linked_cel(0, 0, x=1, y=1)]),
+        ],
+    )
+    doc, warnings = asein.document_from_aseprite(data)
+    anim = doc.anim
+    track = anim.tracks[0].uid
+    first = anim.cels[(track, anim.frames[0].uid)]
+    second = anim.cels[(track, anim.frames[1].uid)]
+    assert second is not first
+    assert not anim.is_linked(track, anim.frames[1].uid)
+    assert tuple(first.pixels[0, 0]) == (4, 5, 6, 255)
+    assert tuple(second.pixels[0, 0]) == (0, 0, 0, 0)
+    assert tuple(second.pixels[1, 1]) == (4, 5, 6, 255)
+    assert any("unlinked to keep it there" in line for line in warnings)
+    # The move stays inside the canvas, so nothing is cropped and the reader
+    # must not say it was.
+    assert not any("past the canvas" in line for line in warnings)
+
+
+def test_a_cel_on_a_group_layer_is_dropped_with_a_warning():
+    """A group holds no pixels here and none in Aseprite either, so a cel
+    naming one is a file that disagrees with itself. Dropped rather than
+    refused: the drawing's own layers are all still present and correct."""
+    data = _file(
+        _header(1, 1, 1),
+        [
+            _frame(
+                [
+                    _layer("Folder", kind=1),
+                    _cel(0, _rgba(1, 1, (9, 9, 9, 255)), 1, 1),
+                    _layer("Art"),
+                    _cel(1, _rgba(1, 1, (1, 2, 3, 255)), 1, 1),
+                ]
+            )
+        ],
+    )
+    doc, warnings = asein.document_from_aseprite(data)
+    assert [layer.name for layer in doc.stack] == ["Art"]
+    assert tuple(doc.stack[0].pixels[0, 0]) == (1, 2, 3, 255)
+    # The folder held nothing in the end, so it is pruned like any empty group.
+    assert doc.groups == {}
+    assert any("on a group layer was dropped" in line for line in warnings)
 
 
 def test_a_ping_pong_from_the_far_end_warns_and_plays_from_the_near_one():

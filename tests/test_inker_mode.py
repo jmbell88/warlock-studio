@@ -1015,7 +1015,11 @@ def _ase_bytes() -> bytes:
         + bytes((1, 2, 3, 255)),
     )
     body = layer + cel
-    frame = struct.pack("<IHHHHI", len(body) + 16, 0xF1FA, 2, 100, 0, 0) + body
+    # 0xFFFF in the legacy chunk count and the real number in the DWORD behind
+    # it -- the shape a real Aseprite 1.3 file has. The engine's own suite pins
+    # both spellings; this fixture stands in for a file off somebody's disk, so
+    # it is written the way that file would be.
+    frame = struct.pack("<IHHHHI", len(body) + 16, 0xF1FA, 0xFFFF, 100, 0, 2) + body
     head = struct.pack(
         "<IHHHHHIHIIB3sHBBhhHH",
         0, 0xA5E0, 1, 1, 1, 32, 1, 100, 0, 0, 0, b"\0\0\0", 0, 1, 1, 0, 0, 0, 0,
