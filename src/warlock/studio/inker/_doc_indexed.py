@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
+from . import dither
 from . import indexed as ix
 from .undo import CompoundEdit, PaletteEdit
 
@@ -65,18 +66,77 @@ class IndexedOps:
         wanted = None if not colours else [tuple(c) for c in colours]
         if wanted == self.palette:
             return False
-        before, self.palette = self.palette, wanted
         if wanted is None or not snap:
+            self.palette = wanted
             self.rev += 1
             return True
+        return self.convert_to_palette(wanted, "nearest")
+
+    def convert_to_palette(
+        self: Document, colours: Sequence[RGBA], method: str = "nearest"
+    ) -> bool:
+        """Adopt a table and rewrite every pixel onto it by *method*.
+
+        The general form of :meth:`set_palette`, which is now its
+        ``method="nearest"`` case -- one path, so a document converted with a
+        dither and a document simply indexed differ in the arithmetic and in
+        nothing else about how the step is recorded.
+
+        **The conversion is whole-document, and a selection is ignored.** This
+        is a change of *mode*: the table it installs constrains every write
+        afterwards, everywhere, so a version of it that converted only the
+        marquee would leave the pixels outside it off the palette they are now
+        declared to be on -- a state the mode cannot describe and the next
+        stroke anywhere would start silently repairing. Aseprite ignores the
+        selection here for the same reason.
+
+        One undo step across every layer and every frame, because that is what
+        the user did. Links survive it: ``_replay`` snapshots the *grid*, so two
+        frames holding one cel hold one cel again after an undo.
+        """
+        if not colours:
+            raise ValueError("a conversion needs at least one colour")
+        wanted = [tuple(c) for c in colours]
+        if wanted == self.palette and method == "nearest":
+            # Already exactly this table, and nearest is idempotent on a
+            # document that is already snapped onto it -- so there is no step to
+            # push and nothing for it to hold. The dithers are *not* let through
+            # this door: re-running one is a real request (it is how a user
+            # compares two matrices) and it does move pixels.
+            return False
         self.commit_floating()
+        before, self.palette = self.palette, wanted
         self._palette_step(
             before,
             lambda: self._map_planes(
-                lambda plane: ix.snap(plane, wanted), mask_fn=None
+                lambda plane: dither.convert(plane, wanted, method), mask_fn=None
             ),
         )
         return True
+
+    def palette_from_document(
+        self: Document, max_colours: int = 32, method: str = "nearest"
+    ) -> bool:
+        """Build a table out of the document's own pixels and convert onto it.
+
+        The entry point for "make this drawing indexed" when the user has no
+        palette in mind. It is two published operations and no third one:
+        :func:`dither.build_palette` over every distinct cel, then
+        :meth:`convert_to_palette` -- so the resulting document is
+        indistinguishable from one indexed to a hand-authored table.
+        """
+        colours = dither.build_palette(self._palette_planes(), max_colours)
+        return self.convert_to_palette(colours, method)
+
+    def _palette_planes(self: Document) -> list[Any]:
+        """Every distinct pixel plane in the document, once each.
+
+        ``unique_cel_layers`` and not the stack: a background linked across
+        three frames is one plane, and counting it three times would weight the
+        median cut by how many frames a cel happens to appear on.
+        """
+        layers = self.stack if self.anim is None else self.anim.unique_cel_layers()
+        return [layer.pixels for layer in layers]
 
     def add_slot(self: Document, colour: RGBA) -> bool:
         """Append a colour to the palette. Nothing is repainted: a new swatch
