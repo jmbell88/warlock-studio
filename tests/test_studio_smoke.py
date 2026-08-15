@@ -1042,6 +1042,17 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
     assert not np.array_equal(tab.doc.stack.active.pixels, before), "the preview shows"
     assert tab.doc.history.head == head, "and pushes nothing while it is only a preview"
 
+    # Every filter's popup body once. The FX staples brought parameters a slider
+    # cannot hold -- a colour, an on/off, a choice between two numbers -- and
+    # each is a branch of ``_filter_control`` that only a real frame walks.
+    # Selecting one also seeds its values, which is where Invert's popup turns
+    # its three toggles on.
+    from warlock.studio.inker import filters as inker_filters
+
+    for name in inker_filters.FILTERS:
+        state.filter_name = name
+        _frame(imgui_ctx, build)
+
     tab.doc.cancel_filter()
     state.filter_open = False
     assert np.array_equal(tab.doc.stack.active.pixels, before)

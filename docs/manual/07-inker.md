@@ -240,19 +240,32 @@ there was a grid. Shrinking works the same way and crops from the opposite sides
 
 ## Filters
 
-**Filter…** in the document panel opens five whole-layer adjustments: brightness/contrast,
-hue/saturation, levels, blur and sharpen. Every one previews live on the canvas as you drag, and
-the whole session — however many sliders you moved and however many times — records as a single
-undo step when you press Apply. Cancel, or clicking away from the popup, puts the pixels back and
-records nothing at all.
+**Filter…** in the document panel opens nine whole-layer adjustments: brightness/contrast,
+hue/saturation, levels, blur, sharpen, invert, replace colour, outline and despeckle. Every one
+previews live on the canvas as you drag, and the whole session — however many sliders you moved and
+however many times — records as a single undo step when you press Apply. Cancel, or clicking away
+from the popup, puts the pixels back and records nothing at all.
+
+The last four are the pixel-art staples. **Invert** has a checkbox per channel, all three on when
+the popup opens. **Replace colour** takes a From and a To colour — the **use FG** button beside
+each fills in the colour you are painting with — and a tolerance, which is a distance in colour
+space rather than a per-channel slack; at zero it replaces exactly the colour you named, which is
+the same set of pixels that editing a palette slot would recolour. **Outline** draws a ring along
+the edge of whatever is painted: choose its colour and thickness, whether it goes outside or inside
+the shape, whether corners are rounded (4) or square (8), and **wrap** if the drawing is a tile, so
+the outline carries across the seam instead of stopping at the border. **Despeckle** is a median
+filter — it deletes stray pixels outright and leaves hard lines hard, which is what a blur cannot
+do.
 
 Three things about what they do to a layer. They apply to the **selection** if there is one, faded
 by a feathered edge exactly as a brush would be, and to the whole layer if there is not. The colour
-filters never change transparency; blur does, because blurring a layer's edge is most of the reason
-to blur one. And a layer with **Lock alpha** on keeps its transparency under all five.
+filters never change transparency; blur and despeckle do, because softening a layer's edge is most
+of the reason to blur one, and an outline placed *outside* does, because it draws where the drawing
+is not. And a layer with **Lock alpha** on keeps its transparency under all of them.
 
-Every filter opens at settings that change nothing, so the preview is safe to start immediately —
-the picture only moves once you move a slider.
+Every filter opens at settings that change nothing — except Invert, whose three channel boxes open
+ticked, because inverting no channels is not a thing anybody wants. So the preview is safe to start
+immediately, and the picture only moves once you move a slider.
 
 ## Selections and transform
 

@@ -11,7 +11,11 @@ Three rules run through the whole file.
 hue/saturation are about the colour of what is there, and changing coverage as
 a side effect of a tone adjustment is a bug in every editor that has ever done
 it. Blur is the one exception, and it is an exception on purpose: blurring a
-layer's edge is most of why anybody blurs a layer.
+layer's edge is most of why anybody blurs a layer. :func:`outline` *placed
+outside* is the second and last one, for the same kind of reason -- an outline
+drawn outside a shape is by definition drawn where the shape is not, so a
+version of it that could not add coverage would draw nothing. Placed inside it
+touches no alpha at all, and :func:`invert` and :func:`replace_colour` never do.
 
 **Blur and sharpen premultiply first.** A straight-alpha buffer stores an
 arbitrary colour under a transparent pixel -- ``paint_colour`` leaves the paint
@@ -35,8 +39,11 @@ import numpy as np
 
 from . import composite as cp
 
-__all__ = ["FILTERS", "apply_named", "blur", "brightness_contrast", "hue_saturation",
-           "levels", "sharpen"]
+__all__ = ["FILTERS", "apply_named", "blur", "brightness_contrast", "despeckle",
+           "hue_saturation", "invert", "levels", "outline", "popup_values",
+           "replace_colour", "sharpen"]
+
+RGBA = tuple[int, int, int, int]
 
 
 def _rgb(pixels: np.ndarray) -> np.ndarray:
@@ -168,6 +175,82 @@ def _from_hsl(hue_deg: np.ndarray, sat: np.ndarray, light: np.ndarray) -> np.nda
     return np.clip(picked + (light - chroma * 0.5)[..., None], 0.0, 1.0)
 
 
+def invert(
+    pixels: np.ndarray, *, red: float = 0.0, green: float = 0.0, blue: float = 0.0
+) -> np.ndarray:
+    """Invert the channels that are switched on. 255 - c, per channel.
+
+    Three toggles rather than one, because inverting a single channel is how
+    you get a complementary palette out of a drawing and inverting all three is
+    only the most common case of it. They are declared as 0/1 numbers rather
+    than as bools so the registry stays one shape -- a name mapped to a value a
+    slider or a checkbox can hold -- and the panel draws these three as
+    checkboxes because :data:`TOGGLE_PARAMS` says so.
+
+    **The declared defaults are all off**, i.e. the identity, which is the rule
+    every filter in this file obeys and the reason a popup can preview on the
+    frame it opens. What a user means by "invert" is of course all three, so the
+    *popup* seeds them on: see :func:`popup_values`, which is the one place the
+    two differ and is deliberately not the defaults table.
+
+    Alpha is untouched: an inverted transparent pixel is still transparent.
+    """
+    out = pixels.copy()
+    for index, on in enumerate((red, green, blue)):
+        if on:
+            # 255 - c on uint8, computed in uint8: exact, and the operand is the
+            # storage format rather than a rounded trip through float.
+            out[..., index] = 255 - out[..., index]
+    return out
+
+
+def replace_colour(
+    pixels: np.ndarray,
+    *,
+    old: RGBA = (0, 0, 0, 255),
+    new: RGBA = (0, 0, 0, 255),
+    tolerance: float = 0.0,
+) -> np.ndarray:
+    """Rewrite every pixel within *tolerance* of *old* to *new*'s colour.
+
+    The parameters are ``old``/``new`` and not ``from``/``to`` for the dull
+    reason that ``from`` is a keyword, so ``func(**params)`` could never pass
+    one -- and they are the names :func:`indexed.remap` already uses for the
+    same two things.
+
+    Two rules make this the tool people expect rather than a near miss.
+
+    **Alpha is kept, on both sides.** ``new``'s own alpha is ignored: this is a
+    recolour, and a user replacing a shade of green in a drawing has not asked
+    for the antialiased edge of that shade to become opaque. Fully transparent
+    pixels are skipped for the reason ``indexed.snap`` skips them -- a straight
+    buffer keeps invisible colour under a zero alpha, and matching on it would
+    "replace" pixels nobody can see.
+
+    **At tolerance 0 this is exactly** :func:`indexed.remap`, which is what
+    makes the two safe to have in one program: recolouring a palette slot and
+    replacing a colour by hand cannot disagree about which pixels are that
+    colour. Pinned by a parity test rather than by a shared implementation,
+    because remap is on the write path of an indexed document and must stay a
+    plain equality.
+
+    Distance is Euclidean in RGB, so the tolerance is a radius in colour space
+    -- a 0..255 slider reaches most of a cube whose long diagonal is 441.
+    """
+    if pixels.dtype != np.uint8 or pixels.ndim != 3 or pixels.shape[2] != 4:
+        raise ValueError("replace_colour takes (H, W, 4) uint8")
+    out = pixels.copy()
+    if out.size == 0:
+        return out
+    want = np.asarray(tuple(old)[:3], dtype=np.float32)
+    delta = out[..., :3].astype(np.float32) - want
+    distance = np.sqrt((delta * delta).sum(axis=-1))
+    hit = (distance <= float(tolerance)) & (out[..., 3] > 0)
+    if hit.any():
+        out[..., :3][hit] = np.asarray(tuple(new)[:3], dtype=np.uint8)
+    return out
+
+
 # --- spatial ----------------------------------------------------------------
 
 
@@ -269,12 +352,139 @@ def _kernel(radius: float) -> np.ndarray:
     return (weights / weights.sum()).astype(np.float32)
 
 
+def _shift(mask: np.ndarray, dy: int, dx: int, *, wrap: bool) -> np.ndarray:
+    """``mask`` moved by one step, off-canvas filled with False -- or rolled.
+
+    ``wrap`` is the tiling case: a document drawn as a repeating tile has no
+    edge, so an outline that stopped at the border would leave a seam exactly
+    where the tile joins itself. It is ``np.roll`` and nothing else, deliberately
+    -- no import of ``tiling.py``, which is about *previewing* a tiled canvas and
+    owns no wrapping arithmetic this could share.
+    """
+    if wrap:
+        return np.roll(mask, (dy, dx), axis=(0, 1))
+    out = np.zeros_like(mask)
+    height, width = mask.shape
+    out[max(dy, 0):height + min(dy, 0), max(dx, 0):width + min(dx, 0)] = mask[
+        max(-dy, 0):height + min(-dy, 0), max(-dx, 0):width + min(-dx, 0)
+    ]
+    return out
+
+
+_CORNERS_4 = ((-1, 0), (1, 0), (0, -1), (0, 1))
+_CORNERS_8 = _CORNERS_4 + ((-1, -1), (-1, 1), (1, -1), (1, 1))
+
+
+def _grow(mask: np.ndarray, steps: int, corners: int, *, wrap: bool) -> np.ndarray:
+    """Dilate by ``steps`` single-pixel steps.
+
+    Iterated one step at a time rather than done in one pass with a radius: at
+    the sizes an outline is drawn at (1 to 32 px) the loop is cheap, and a
+    single-step dilation repeated is what makes the 4-connected case a diamond
+    and the 8-connected case a square -- which is the whole difference between
+    a rounded outline and a boxy one.
+    """
+    neighbours = _CORNERS_8 if int(corners) >= 8 else _CORNERS_4
+    out = mask
+    for _ in range(steps):
+        grown = out
+        for dy, dx in neighbours:
+            grown = grown | _shift(out, dy, dx, wrap=wrap)
+        out = grown
+    return out
+
+
+def outline(
+    pixels: np.ndarray,
+    *,
+    colour: RGBA = (0, 0, 0, 255),
+    size: float = 0.0,
+    place: str = "outside",
+    corners: int = 8,
+    wrap: float = 0.0,
+) -> np.ndarray:
+    """Draw a ring of *colour* along the edge of whatever is painted.
+
+    The shape is "alpha above zero", dilated (placed outside) or eroded (placed
+    inside) and differenced against itself, which is the definition an outline
+    of an *antialiased* drawing needs: a threshold on coverage would make the
+    outline follow the hard edge of a soft stroke and leave the stroke's own
+    fringe outside it.
+
+    **Placed outside, this adds alpha.** It is the one stated exception to this
+    file's alpha rule and it is not negotiable: the ring is by construction
+    where the drawing is not. Placed inside it recolours pixels that were
+    already there and leaves their alpha exactly as it found it, including a
+    half-covered edge pixel, so an inside outline cannot sharpen an edge.
+
+    Two things it does not do, both because a filter sees only the pixels it is
+    handed. It is **clipped to the session rect** -- the crop
+    ``Document.begin_filter`` took, which is the selection's bounds when there is
+    a selection -- so an outline drawn outside a selected region stops at the
+    selection, exactly as a brush would. And off-crop counts as *inside* the
+    shape for the inside case, so a selection cutting through a filled area does
+    not draw an outline along the cut: what is past the edge is unknown, not
+    empty.
+    """
+    steps = int(round(float(size)))
+    if steps <= 0:
+        return pixels.copy()
+    tiled = bool(wrap)
+    shape = pixels[..., 3] > 0
+    if place == "inside":
+        # Erode by growing the *complement*. Off-canvas is False in the
+        # complement, i.e. shape, which is the "unknown, not empty" rule above.
+        ring = shape & _grow(~shape, steps, corners, wrap=tiled)
+        out = pixels.copy()
+        out[..., :3][ring] = np.asarray(tuple(colour)[:3], dtype=np.uint8)
+        return out
+    ring = _grow(shape, steps, corners, wrap=tiled) & ~shape
+    out = pixels.copy()
+    out[ring] = np.asarray(tuple(colour), dtype=np.uint8)
+    return out
+
+
+def despeckle(pixels: np.ndarray, *, radius: float = 0.0) -> np.ndarray:
+    """Median filter: takes stray pixels out without softening an edge.
+
+    A median is the right tool and a blur is not -- a blur spreads the speck
+    over its neighbourhood, where a median deletes it outright and leaves a
+    hard line hard, which is the whole point on pixel art.
+
+    Premultiplied like the blur and for the same reason: the median of a set of
+    straight-alpha colours can pick a colour that is invisible in the source and
+    paint it into a visible pixel. Pillow rather than a hand-rolled sort because
+    ``ImageFilter.MedianFilter`` is a C loop over a window and numpy's
+    equivalent is one full-image copy per window position; imported lazily, as
+    everything Pillow in this package is, so the engine still imports on a
+    machine without it.
+    """
+    if radius <= 0.0:
+        return pixels.copy()
+    from PIL import Image, ImageFilter
+
+    # Pillow takes an odd *window size*, not a radius: 1 is the identity, 3 is
+    # the 3x3 median every despeckle means by "1".
+    size = int(round(float(radius))) * 2 + 1
+    rgb, alpha = _premultiplied(pixels)
+    flat = np.empty(pixels.shape, dtype=np.uint8)
+    flat[..., :3] = cp.to_uint8_255(rgb)
+    flat[..., 3] = cp.to_uint8_255(alpha * 255.0)
+    with Image.fromarray(flat, "RGBA") as im:
+        got = np.asarray(im.filter(ImageFilter.MedianFilter(size)), dtype=np.uint8)
+    return _straight(
+        got[..., :3].astype(np.float32), got[..., 3].astype(np.float32) / 255.0, pixels
+    )
+
+
 # --- the registry -----------------------------------------------------------
 
 # name -> (defaults, function). The defaults are a complete call and every value
-# is the identity, so opening a filter's popup changes nothing until a slider is
-# moved -- which is what makes the live preview safe to run on every frame.
-FILTERS: dict[str, tuple[dict[str, float], Callable[..., np.ndarray]]] = {
+# is the identity, so a filter run at them changes nothing -- which is what makes
+# the live preview safe to run on every frame, including the first. What the
+# *popup* opens on is one step away from that (:func:`popup_values`) and Invert
+# is the only filter where the two differ.
+FILTERS: dict[str, tuple[dict[str, Any], Callable[..., np.ndarray]]] = {
     "brightness / contrast": ({"brightness": 0.0, "contrast": 0.0}, brightness_contrast),
     "hue / saturation": (
         {"hue": 0.0, "saturation": 0.0, "lightness": 0.0},
@@ -283,11 +493,60 @@ FILTERS: dict[str, tuple[dict[str, float], Callable[..., np.ndarray]]] = {
     "levels": ({"black": 0.0, "white": 255.0, "gamma": 1.0}, levels),
     "blur": ({"radius": 0.0}, blur),
     "sharpen": ({"amount": 0.0, "radius": 1.5}, sharpen),
+    "invert": ({"red": 0.0, "green": 0.0, "blue": 0.0}, invert),
+    "replace colour": (
+        # Identity by being a colour replaced with itself, which is a real
+        # no-op rather than a sentinel the function has to test for.
+        {"old": (0, 0, 0, 255), "new": (0, 0, 0, 255), "tolerance": 0.0},
+        replace_colour,
+    ),
+    "outline": (
+        {
+            "colour": (0, 0, 0, 255),
+            "size": 0.0,
+            "place": "outside",
+            "corners": 8,
+            "wrap": 0.0,
+        },
+        outline,
+    ),
+    "despeckle": ({"radius": 0.0}, despeckle),
 }
+
+# The three parameter kinds the panel draws with something other than a slider.
+# Held here beside the registry for :data:`RANGES`' reason -- a filter is one
+# entry in one file, and a pane that had to know which of "colour" and "size"
+# was a colour would be a second place to keep in step.
+COLOUR_PARAMS: frozenset[str] = frozenset({"old", "new", "colour"})
+TOGGLE_PARAMS: frozenset[str] = frozenset({"red", "green", "blue", "wrap"})
+CHOICE_PARAMS: dict[str, tuple[Any, ...]] = {
+    "place": ("outside", "inside"),
+    # 4-connected is a diamond step and 8-connected is a square one; there is
+    # nothing in between, so this is a pair of buttons and not a slider that
+    # would let a user ask for 6.
+    "corners": (4, 8),
+}
+
+# What the *popup* seeds a filter with the first time it is opened, where that
+# differs from the defaults. Exactly one entry, and the reason it exists is that
+# the two answer different questions: the defaults table answers "what does this
+# filter do when nothing has been chosen", which must be nothing at all so a
+# live preview is safe to run on the frame the popup opens; this answers "what
+# did the user mean by choosing this filter", and nobody has ever opened Invert
+# to invert no channels.
+POPUP_VALUES: dict[str, dict[str, Any]] = {
+    "invert": {"red": 1.0, "green": 1.0, "blue": 1.0},
+}
+
+
+def popup_values(name: str) -> dict[str, Any]:
+    """The values a freshly opened popup starts a filter on."""
+    return {**FILTERS[name][0], **POPUP_VALUES.get(name, {})}
 
 # What each parameter's slider spans. Held beside the registry rather than in
 # the pane so a filter is one entry in one file; a parameter with no range here
-# is drawn as a plain number rather than dropped.
+# is drawn as a plain number rather than dropped. A parameter in one of the
+# three tables above is drawn by that table instead and wants no entry here.
 RANGES: dict[str, tuple[float, float]] = {
     "brightness": (-1.0, 1.0),
     "contrast": (-1.0, 1.0),
@@ -297,8 +556,16 @@ RANGES: dict[str, tuple[float, float]] = {
     "black": (0.0, 255.0),
     "white": (0.0, 255.0),
     "gamma": (0.1, 4.0),
+    # Shared by blur, sharpen and despeckle: one name, one span, because a
+    # radius that meant 0..32 in one popup and 0..8 in the next is a slider a
+    # user has to relearn per filter.
     "radius": (0.0, 32.0),
     "amount": (0.0, 3.0),
+    # A radius in RGB space, whose long diagonal is 441 -- so 255 is not the
+    # maximum possible distance, it is the largest one that is still a colour
+    # match rather than a select-all.
+    "tolerance": (0.0, 255.0),
+    "size": (0.0, 32.0),
 }
 
 

@@ -526,7 +526,9 @@ class InkerState:
     # six layers should not retype it six times -- and ``filter_open`` is what
     # notices imgui closing the popup on a click outside, which is a cancel.
     filter_name: str = ""
-    filter_params: dict[str, dict[str, float]] = field(default_factory=dict)
+    # ``Any`` and not ``float``: the FX staples brought colours (an RGBA tuple)
+    # and a choice (a string) into the same per-filter bag.
+    filter_params: dict[str, dict[str, Any]] = field(default_factory=dict)
     filter_open: bool = False
 
     # Free transform is a *state*, not a tool: it takes over the canvas until

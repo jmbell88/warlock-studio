@@ -182,12 +182,31 @@ def test_every_filter_declares_a_complete_call():
         assert func(_flat((1, 2, 3, 4)), **defaults).shape == (4, 4, 4), name
 
 
-def test_every_parameter_has_a_range_the_panel_can_draw():
+def test_every_parameter_is_drawable_exactly_one_way():
+    """The panel picks a widget per parameter off these four tables, so a
+    parameter in none of them is one nobody can set and a parameter in two is a
+    widget that depends on the order the pane happens to test them in.
+
+    The numeric case keeps its old assertion as well: a default outside its own
+    slider's span is a popup that changes a pixel the moment it opens.
+    """
+    kinds = (filters.COLOUR_PARAMS, filters.TOGGLE_PARAMS, filters.CHOICE_PARAMS)
     for defaults, _func in filters.FILTERS.values():
-        for key in defaults:
+        for key, value in defaults.items():
+            named = [table for table in kinds if key in table]
+            assert len(named) <= 1, key
+            if named:
+                continue
             assert key in filters.RANGES, key
             low, high = filters.RANGES[key]
-            assert low <= defaults[key] <= high, key
+            assert low <= value <= high, key
+
+
+def test_every_choice_parameter_defaults_to_one_of_its_choices():
+    for defaults, _func in filters.FILTERS.values():
+        for key, value in defaults.items():
+            if key in filters.CHOICE_PARAMS:
+                assert value in filters.CHOICE_PARAMS[key], key
 
 
 def test_an_unknown_parameter_is_dropped_rather_than_raising():
