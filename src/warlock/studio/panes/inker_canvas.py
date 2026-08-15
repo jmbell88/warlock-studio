@@ -973,17 +973,26 @@ def _open_text(state: Any, tab: Any) -> None:
     touches the tool must not pay, and ``font_choices`` caches it from the
     first open onwards.
 
-    **Antialiasing defaults off on an indexed document**, and only while the
-    tool has never been adjusted. A palette is a promise that the file holds
-    exactly those colours, and an antialiased edge is a rim of blends that each
-    snap to the nearest slot -- so the default that keeps the promise is the
-    monochrome rasteriser. It is a *default* and not a rule: an indexed
-    document with a soft-edged palette is a real thing, and a user who ticks
-    the box keeps it ticked.
+    **Antialiasing follows the document until the user says otherwise**: off on
+    an indexed one, on everywhere else, decided here on every open. A palette
+    is a promise that the file holds exactly those colours, and an antialiased
+    edge is a rim of blends that each snap to the nearest slot -- so the
+    default that keeps the promise is the monochrome rasteriser.
+
+    It is a *default* and not a rule: an indexed document with a soft-edged
+    palette is a real thing, so ticking the box in the popup sets
+    ``text_aa_touched`` and this stops deciding anything. That flag is the
+    whole fix for what the first version got wrong -- it asked whether the text
+    tool had a stored options *entry*, which ``options_for`` creates on the
+    first read of any of the three, so one popup on an RGB document made every
+    indexed document for the rest of the session open with AA on. The manual
+    says "on an indexed document it starts off", with no session in the
+    sentence, and a promise that holds until you have used the tool once is not
+    the promise.
     """
     inker_mode.font_choices()
-    if tab.doc.palette and "text" not in state.tool_options:
-        state.options_for("text")["aa"] = False
+    if not state.text_aa_touched:
+        state.aa = not tab.doc.palette
     imgui.open_popup(TEXT_POPUP)
 
 
@@ -1017,6 +1026,12 @@ def _text_popup(ctx: Any, state: Any, tab: Any) -> None:
     changed, value = imgui.checkbox("Antialias", bool(state.aa))
     if changed:
         state.aa = bool(value)
+        # The user has an opinion now, so ``_open_text`` stops forming one --
+        # in *both* directions. Ticking it on an indexed document keeps it
+        # ticked there, and unticking it on an RGB one keeps it unticked; a
+        # default that reasserted itself on the next click would be a checkbox
+        # the user cannot operate.
+        state.text_aa_touched = True
     widgets.help_marker(
         "Off renders the glyphs as whole pixels -- no partial coverage "
         "anywhere -- which is what pixel art and an indexed palette want."

@@ -781,6 +781,20 @@ class InkerState:
     # a second stamp of the same word with a bigger size must not start empty.
     text_buffer: str = ""
     text_at: tuple[int, int] = (0, 0)
+    #: Whether the user has set the Antialias box themselves. Until they have,
+    #: the popup decides it from the document on every open -- off on an
+    #: indexed one, on everywhere else -- which is what the manual promises,
+    #: with no session in the sentence.
+    #:
+    #: A flag beside the option rather than a state *of* the option, and that
+    #: is the whole of the bug it fixes: ``options_for`` materialises all of a
+    #: tool's keys from the defaults the first time any one of them is read, so
+    #: "has this ever been set" is a question the stored dictionary cannot
+    #: answer. Asking it that way ("is there an entry for the text tool") made
+    #: the promise last exactly one popup -- after a single stamp on an RGB
+    #: document, every indexed document for the rest of the session opened with
+    #: antialiasing on.
+    text_aa_touched: bool = False
 
     # -- per-tool options ---------------------------------------------------
     #
@@ -823,7 +837,15 @@ class InkerState:
         return got
 
     def reset_tool_options(self, tool: str | None = None) -> None:
-        self.tool_options.pop(tool or self.tool, None)
+        tool = tool or self.tool
+        self.tool_options.pop(tool, None)
+        if tool == "text":
+            # ``text_aa_touched`` is part of the text tool's stored settings --
+            # it is only outside the dictionary because ``options_for`` cannot
+            # represent "unset" -- so a reset that left it standing would put
+            # the option back to its default and keep overriding it, which is a
+            # Reset button that does not reset.
+            self.text_aa_touched = False
 
     # -- documents ---------------------------------------------------------
 

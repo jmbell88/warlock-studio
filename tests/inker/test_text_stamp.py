@@ -311,22 +311,72 @@ def test_a_locked_layer_is_refused_before_the_box_opens(pressed):
     assert pressed.toasts and "locked" in pressed.toasts[0][0]
 
 
+def _indexed(tab) -> None:
+    tab.doc.palette = [(0, 0, 0, 255), (255, 255, 255, 255)]
+
+
 def test_an_indexed_document_starts_with_antialiasing_off(pressed):
     """A palette promises the file holds exactly those colours, and an
     antialiased rim is a row of blends that each snap to the nearest slot."""
-    pressed.tab.doc.palette = [(0, 0, 0, 255), (255, 255, 255, 255)]
+    _indexed(pressed.tab)
     pressed.press((4.0, 4.0))
     assert pressed.state.aa is False
 
 
-def test_a_ticked_box_survives_the_next_click_on_an_indexed_document(pressed):
-    """It is a *default*, not a rule: an indexed document with a soft-edged
-    palette is a real thing, and a checkbox that untick itself every click is a
-    control the user cannot operate."""
-    pressed.tab.doc.palette = [(0, 0, 0, 255)]
-    pressed.state.aa = True
+def test_every_other_document_starts_with_it_on(pressed):
+    """The other half of the same statement -- a default stuck off would pass
+    the test above by accident, and antialiased is what a painted reference
+    wants."""
     pressed.press((4.0, 4.0))
     assert pressed.state.aa is True
+
+
+def test_the_indexed_default_is_not_spent_by_the_first_popup(pressed, monkeypatch):
+    """**The regression this pair exists for.** The rule was once "the text
+    tool has no stored options entry", and ``options_for`` materialises every
+    key of a tool the first time any one of them is read -- so one stamp on an
+    RGB document made every indexed document for the rest of the session open
+    with antialiasing on, while the manual promises it starts off with no
+    session in the sentence.
+    """
+    pressed.press((4.0, 4.0))
+    _driven(monkeypatch, pressed, _Popup())  # a full popup: reads all three
+    assert pressed.state.aa is True
+    _indexed(pressed.tab)
+    pressed.press((4.0, 4.0))
+    assert pressed.state.aa is False
+
+
+def test_setting_the_box_yourself_stops_the_default_deciding(pressed, monkeypatch):
+    """It is a starting point, not a rule: an indexed document with a
+    soft-edged palette is a real thing, and a checkbox that unticks itself on
+    the next click is a control the user cannot operate."""
+    _indexed(pressed.tab)
+    _driven(monkeypatch, pressed, _Popup(tick=True))
+    assert pressed.state.aa is True and pressed.state.text_aa_touched
+    pressed.press((4.0, 4.0))
+    assert pressed.state.aa is True
+
+
+def test_it_stops_deciding_in_both_directions(pressed, monkeypatch):
+    """Unticking on an RGB document is as much an opinion as ticking on an
+    indexed one, and the flag does not know which way round it was set."""
+    _driven(monkeypatch, pressed, _Popup(tick=False))
+    assert pressed.state.aa is False and pressed.state.text_aa_touched
+    pressed.press((4.0, 4.0))
+    assert pressed.state.aa is False
+
+
+def test_resetting_the_tool_hands_the_default_back(pressed, monkeypatch):
+    """``text_aa_touched`` is part of the tool's stored settings and only lives
+    outside the dictionary because ``options_for`` cannot represent "unset", so
+    a Reset that left it standing would not reset."""
+    _driven(monkeypatch, pressed, _Popup(tick=True))
+    _indexed(pressed.tab)
+    pressed.state.reset_tool_options("text")
+    assert pressed.state.text_aa_touched is False
+    pressed.press((4.0, 4.0))
+    assert pressed.state.aa is False
 
 
 # --- OK ---------------------------------------------------------------------
@@ -357,8 +407,10 @@ class _Popup:
     screenshot.
     """
 
-    def __init__(self, *, ok: bool = False, cancel: bool = False) -> None:
-        self.ok, self.cancel = ok, cancel
+    def __init__(
+        self, *, ok: bool = False, cancel: bool = False, tick: bool | None = None
+    ) -> None:
+        self.ok, self.cancel, self.tick = ok, cancel, tick
         self.calls: list[str] = []
 
     # -- imgui
@@ -377,7 +429,10 @@ class _Popup:
         return self.ok if label.startswith("OK") else self.cancel
 
     def checkbox(self, label, value):
-        return False, value
+        """``tick`` is the user setting the box: a *change*, to that value."""
+        if self.tick is None:
+            return False, value
+        return True, self.tick
 
     def color_button(self, label, colour, flags=0, size=None):
         return False
@@ -410,9 +465,13 @@ class _Popup:
 
 
 def _driven(monkeypatch, pressed, popup):
-    monkeypatch.setattr(inker_canvas, "imgui", popup)
-    monkeypatch.setattr(inker_canvas, "widgets", popup)
-    inker_canvas._text_popup(pressed.ctx, pressed.state, pressed.tab)
+    """One frame of the popup body, with the recorder in force for that frame
+    alone -- a test that draws a popup and then presses again needs the
+    fixture's own imgui stub back afterwards."""
+    with monkeypatch.context() as patched:
+        patched.setattr(inker_canvas, "imgui", popup)
+        patched.setattr(inker_canvas, "widgets", popup)
+        inker_canvas._text_popup(pressed.ctx, pressed.state, pressed.tab)
 
 
 def test_the_popup_body_draws_and_closes_its_own_scope(monkeypatch, pressed):

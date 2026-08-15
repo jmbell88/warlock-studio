@@ -206,7 +206,9 @@ after a restart.
 
 **Antialias** off renders whole pixels only, with no partial coverage anywhere — which is what pixel
 art wants, and what stops a stamp adding colours to an indexed drawing. On an indexed document it
-starts off for that reason.
+starts off for that reason, and on every other document it starts on. That is a starting point
+rather than a rule: set the box yourself once and it stays where you put it, on every document you
+open afterwards, until you press **Reset text** in the tools panel.
 
 If there is nothing to render — an empty box, or a font file the system lists but cannot be read —
 the stamp is refused with a message rather than putting an empty buffer on your canvas. A locked
