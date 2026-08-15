@@ -32,6 +32,13 @@ ZOOM_STEP = 1.15
 # handful they keep coming back to.
 MAX_SWATCHES = 24
 
+# Tool presets: how many are kept, and how long a name may be. Both are the
+# swatch row's reasoning -- this is a shelf for the handful of setups a user
+# keeps coming back to, not a library -- and the name cap is there because the
+# name is drawn in a 104px sidebar and stored in a settings file.
+MAX_PRESETS = 32
+MAX_PRESET_NAME = 40
+
 TOOLS = (
     ("brush", "Brush", "B"),
     ("eraser", "Eraser", "E"),
@@ -71,6 +78,22 @@ SELECT_TOOLS = frozenset({"select", "select_ellipse", "lasso", "wand", "lasso_po
 #: cannot be taken back. Spray is not here for the same reason -- one gesture,
 #: one meaning, and it can be added the day somebody asks.
 BG_BUTTON_TOOLS = frozenset({"brush", "eraser", "fill"})
+
+#: Tools that will stamp a captured image instead of a generated disc.
+#:
+#: The three paint tools whose ``BRUSH_MODES`` entry is in
+#: ``brush.STAMP_MODES`` -- the ones that write a colour the caller supplies,
+#: and an image tip is exactly "the colour, per pixel". Blur, smudge and shade
+#: decide what they write from what is already on the layer, so a picture has
+#: nothing to say to them; the engine drops a stamp handed to one rather than
+#: half-applying it, and the panel does not offer the controls.
+#:
+#: **The tip is not a tool of its own**, which is Aseprite's arrangement and
+#: the right one: a captured brush replaces the *tip* of the tool in your hand,
+#: so everything the tool already does -- symmetry, the spray's emission,
+#: tiling, the selection clip -- comes with it and no toolbox slot or shortcut
+#: letter is spent.
+STAMP_TOOLS = frozenset({"brush", "eraser", "spray"})
 
 # What each tool asks the brush engine for. Kept here rather than branched at
 # the call site so a new mode is one row. Spray asks for ``paint``: it is a
@@ -181,6 +204,12 @@ TOOL_OPTION_DEFAULTS: dict[str, Any] = {
     # tool's one setting, and +1 because a palette is conventionally arranged
     # dark to light, which makes the unmodified drag the one that lights.
     "shade_dir": 1,
+    # The image brush's two, per tool like everything else here -- which is
+    # what lets the eraser carry a stamp-shaped tip while the brush keeps its
+    # round one, and what makes "use the captured tip" a thing a preset can
+    # say. ``stamp_align`` is one of ``brush.STAMP_ALIGN``.
+    "use_stamp": False,
+    "stamp_align": "free",
 }
 
 DEFAULT_SWATCHES: tuple[tuple[int, int, int, int], ...] = (
@@ -593,6 +622,20 @@ class InkerState:
     # so a fresh session carries nothing and a tool that has never been adjusted
     # has no entry rather than a copy of the defaults.
     tool_options: dict[str, dict[str, Any]] = field(default_factory=dict)
+    #: The captured image brush -- an ``inker.Stamp`` or None. App-level like
+    #: every other tool setting, so one tip is held across tabs, and typed
+    #: loosely so this module keeps importing nothing from the engine.
+    #:
+    #: **Not persisted, and not part of a preset.** It is pixels rather than a
+    #: setting: the settings block is small JSON rewritten on every swatch
+    #: click, and a quarter of a megabyte of base64 in it would be paid for on
+    #: every one. A preset carries the options -- including which of them says
+    #: "use the captured tip" -- and the tip is recaptured from the drawing,
+    #: which is where it came from and where it still is.
+    stamp: Any = None
+    #: Named bundles of one tool's options; see :meth:`save_preset`. Persisted
+    #: beside the swatches by ``inker_mode.persist``.
+    presets: dict[str, dict[str, Any]] = field(default_factory=dict)
     feather_radius: float = 2.0
     # Grow / shrink / border, in whole pixels. App-level like every other
     # tool setting, and separate from ``feather_radius`` because the two have
@@ -867,6 +910,9 @@ class InkerState:
     #: document, every indexed document for the rest of the session opened with
     #: antialiasing on.
     text_aa_touched: bool = False
+    #: What is typed in the preset panel's name box. Pure view state, like the
+    #: tag rename buffer beside it: not persisted, and it pushes nothing.
+    preset_name: str = ""
 
     # -- per-tool options ---------------------------------------------------
     #
@@ -895,6 +941,8 @@ class InkerState:
     font = _tool_option("font")
     aa = _tool_option("aa")
     shade_dir = _tool_option("shade_dir")
+    use_stamp = _tool_option("use_stamp")
+    stamp_align = _tool_option("stamp_align")
 
     def options_for(self, tool: str) -> dict[str, Any]:
         """One tool's option dictionary, created at the defaults on first ask.
@@ -919,6 +967,85 @@ class InkerState:
             # the option back to its default and keep overriding it, which is a
             # Reset button that does not reset.
             self.text_aa_touched = False
+
+    def tip_for(self, tool: str) -> Any:
+        """The image tip *this tool* would stamp right now, or None.
+
+        One answer with three readers -- the press that opens a stroke, the
+        brush cursor that has to draw the right outline, and the options panel
+        -- because the three disagreeing is exactly how a user comes to believe
+        the feature is broken: a ring drawn round a captured tip that the press
+        then does not use looks like the click missed.
+        """
+        if self.stamp is None or tool not in STAMP_TOOLS:
+            return None
+        return self.stamp if self.options_for(tool)["use_stamp"] else None
+
+    # -- tool presets -------------------------------------------------------
+    #
+    # A preset is a named copy of one tool's options and nothing else. Not a
+    # snapshot of the whole session: the colours, the symmetry, the grid and
+    # the onion skin are app-level *because* they are properties of the canvas
+    # or of the sitting rather than of a tool, and a preset that dragged them
+    # along would turn "my inking pen" into "my inking pen, and also switch the
+    # grid off". Not the captured tip either -- see ``stamp``.
+
+    def save_preset(self, name: str) -> str:
+        """Store the active tool's options under ``name``. -> the name used.
+
+        The *whole* dictionary rather than what differs from the defaults, so a
+        preset keeps meaning what it meant if a default is ever changed under
+        it. Overwrites silently by name, which is what a dictionary of names
+        does and what "save over it" means to a user typing the same one twice.
+
+        Oldest first out at the cap: this is a session convenience persisted in
+        a settings block, not a library, and a list that only ever grows is one
+        the user cannot get out of once it fills their panel.
+        """
+        name = str(name).strip()[:MAX_PRESET_NAME]
+        if not name:
+            return ""
+        self.presets[name] = {
+            "tool": self.tool,
+            "options": dict(self.options_for(self.tool)),
+        }
+        for stale in list(self.presets)[: max(0, len(self.presets) - MAX_PRESETS)]:
+            del self.presets[stale]
+        return name
+
+    def apply_preset(self, name: str) -> bool:
+        """Select the preset's tool and put its options on. -> whether it ran.
+
+        Through :meth:`set_tool`, like every other way of picking one, so a
+        half-drawn multi-click gesture goes with the switch.
+
+        The tool's options are **replaced** rather than updated, over a base of
+        the defaults: a preset saved before an option existed must leave that
+        option at its default rather than at whatever the tool happened to be
+        carrying, or applying the same preset twice in one session gives two
+        different brushes. Keys the table no longer has are dropped, which is
+        what makes a stored block from an older build safe to read.
+        """
+        saved = self.presets.get(str(name))
+        if not isinstance(saved, dict):
+            return False
+        tool = saved.get("tool")
+        if tool not in {key for key, _label, _short in TOOLS}:
+            return False
+        options = saved.get("options")
+        self.set_tool(tool)
+        self.tool_options[tool] = {
+            **TOOL_OPTION_DEFAULTS,
+            **{
+                key: value
+                for key, value in (options or {}).items()
+                if key in TOOL_OPTION_DEFAULTS
+            },
+        }
+        return True
+
+    def delete_preset(self, name: str) -> bool:
+        return self.presets.pop(str(name), None) is not None
 
     # -- documents ---------------------------------------------------------
 

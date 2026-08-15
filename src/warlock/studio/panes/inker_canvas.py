@@ -948,6 +948,12 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
             # along -- and so nothing about the ramp reaches the document.
             ramp=shade_ramp(doc.palette, state.palette_slots) if tool == "shade" else (),
             shade_dir=state.shade_dir,
+            # The captured tip, when this tool is set to use one. Asked through
+            # ``tip_for`` rather than read off the two fields here, so the press
+            # and the cursor outline drawn a frame earlier cannot disagree about
+            # whether the picture is what is about to land.
+            stamp=state.tip_for(tool),
+            stamp_align=state.stamp_align,
         )
         state.spray_carry = 0.0
         state.drag_kind = "spray" if spraying else "paint"
@@ -2030,8 +2036,23 @@ def _cursor(state: Any, draw_list: Any, view: Any) -> None:
     """A circle the size of the brush. The one piece of feedback that makes a
     variable-size brush usable at all."""
     mouse = imgui.get_mouse_pos()
-    radius = max(2.0, state.brush_size * 0.5 * view.zoom)
     colour = _u32(theme.TEXT, 0.7)
+    tip = state.tip_for(state.tool)
+    if tip is not None:
+        # The tip's own box, not the size slider's circle: an image brush is not
+        # round and is not the slider's size, so the ring would be a picture of
+        # a brush that is not the one in hand. Drawn at the *variant's* size, so
+        # a quarter turn of a tall stamp shows a wide box -- which is what will
+        # land.
+        width, height = tip.size
+        half_w, half_h = width * 0.5 * view.zoom, height * 0.5 * view.zoom
+        draw_list.add_rect(
+            (mouse.x - half_w, mouse.y - half_h),
+            (mouse.x + half_w, mouse.y + half_h),
+            colour,
+        )
+        return
+    radius = max(2.0, state.brush_size * 0.5 * view.zoom)
     if state.nib == "square":
         draw_list.add_rect(
             (mouse.x - radius, mouse.y - radius), (mouse.x + radius, mouse.y + radius), colour

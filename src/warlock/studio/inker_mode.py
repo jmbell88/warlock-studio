@@ -89,6 +89,7 @@ def ensure(ctx: Any) -> InkerState:
                 for s in swatches
                 if isinstance(s, list | tuple) and len(s) == 4
             ] or list(inker_state.DEFAULT_SWATCHES)
+        _restore_presets(state, stored.get("presets"))
         ctx.state.inker = state
     return state
 
@@ -117,8 +118,14 @@ def recent_paths(ctx: Any) -> list[str]:
 
 
 def persist(ctx: Any) -> None:
-    """The swatches, and only those: the recent list moved to :mod:`.recents`,
-    which persists itself on every write."""
+    """The swatches and the tool presets: the recent list moved to
+    :mod:`.recents`, which persists itself on every write.
+
+    The presets ride here rather than in a file of their own for the swatches'
+    reason -- a handful of session settings, not a library -- and the block is
+    written whole every time, which is what makes deleting one persist without
+    a second door.
+    """
     state = ctx.state.inker
     if state is None:
         return
@@ -128,7 +135,93 @@ def persist(ctx: Any) -> None:
     stored = ctx.settings.get("inker")
     block = dict(stored) if isinstance(stored, dict) else {}
     block["swatches"] = [list(s) for s in state.swatches]
+    block["presets"] = {
+        name: {"tool": saved["tool"], "options": dict(saved["options"])}
+        for name, saved in state.presets.items()
+    }
     ctx.settings.set("inker", block)
+
+
+def _restore_presets(state: InkerState, stored: Any) -> None:
+    """Load the stored preset block, dropping anything that is not one.
+
+    Validated rather than trusted: this is a JSON file a user may edit by hand
+    and a build may have changed the option table under, so a preset that
+    arrives as a string or names a tool that no longer exists is ignored rather
+    than crashing the first frame the panel draws. ``apply_preset`` filters the
+    option keys again on the way out, so an entry that survives here is still
+    safe if the table moves later.
+    """
+    if not isinstance(stored, dict):
+        return
+    tools = {key for key, _label, _short in inker_state.TOOLS}
+    for name, saved in list(stored.items())[: inker_state.MAX_PRESETS]:
+        if not isinstance(name, str) or not isinstance(saved, dict):
+            continue
+        options = saved.get("options")
+        if saved.get("tool") not in tools or not isinstance(options, dict):
+            continue
+        state.presets[name[: inker_state.MAX_PRESET_NAME]] = {
+            "tool": saved["tool"],
+            "options": {
+                key: value
+                for key, value in options.items()
+                if key in inker_state.TOOL_OPTION_DEFAULTS
+            },
+        }
+
+
+# --- the image brush --------------------------------------------------------
+
+
+def capture_brush(ctx: Any) -> bool:
+    """Make the selection into the brush tip. -> whether one was captured.
+
+    The whole gesture rather than the engine call alone, because the gesture is
+    three things and the middle one is what makes it usable: capture, **pick the
+    brush up**, and turn the image tip on. Capturing into a tool the user then
+    has to go and find is a feature that looks like it did nothing -- and the
+    tool in their hand at that moment is by definition a selection tool, since
+    they have just made a selection.
+
+    The two refusals are told apart and both are said out loud: the engine
+    answers None to either, and a silent no is indistinguishable from a bug.
+    """
+    from . import inker
+
+    state = ensure(ctx)
+    tab = state.active
+    if tab is None:
+        return False
+    if tab.doc.mask is None:
+        ctx.toast("Select something first -- that is what becomes the tip.", "warn")
+        return False
+    stamp = tab.doc.capture_stamp()
+    if stamp is None:
+        ctx.toast(
+            "That selection is too big for a brush tip -- "
+            f"{inker.MAX_STAMP} pixels a side at most.",
+            "warn",
+        )
+        return False
+    state.stamp = stamp
+    # Through ``set_tool``, like every other way of picking one.
+    state.set_tool("brush")
+    state.use_stamp = True
+    return True
+
+
+def clear_brush(ctx: Any) -> None:
+    """Drop the captured tip and go back to a round one everywhere.
+
+    Every stamping tool's flag, not just the one in hand: the tip is app-level
+    and this is the button that says "forget it", so leaving the eraser ticked
+    would make a later capture arrive on a tool the user is not looking at.
+    """
+    state = ensure(ctx)
+    state.stamp = None
+    for tool in inker_state.STAMP_TOOLS:
+        state.options_for(tool)["use_stamp"] = False
 
 
 def active(ctx: Any) -> InkerDoc | None:
@@ -2237,6 +2330,12 @@ def _ctrl_key(
         doc.invert_selection()
     elif name == "t":
         begin_transform(ctx, tab)
+    elif name == "b":
+        # Aseprite's "new brush from selection", on the chord it uses. Not in
+        # ``_MUTATING_CTRL``: it reads pixels and changes app state, which is
+        # the same thing Ctrl+C does while a save is in flight and is safe for
+        # the same reason.
+        capture_brush(ctx)
     elif event.key == pygame.K_TAB:
         state.cycle(-1 if shift else 1)
     elif name == "0":

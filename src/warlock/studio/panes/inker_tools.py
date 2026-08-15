@@ -14,7 +14,7 @@ from imgui_bundle import imgui
 
 from .. import icons, inker, inker_mode, inker_state, theme, widgets
 from ..inker import brush, transform
-from ..inker_state import PAINT_TOOLS, SELECT_TOOLS, SHAPE_TOOLS
+from ..inker_state import PAINT_TOOLS, SELECT_TOOLS, SHAPE_TOOLS, STAMP_TOOLS
 from ..manual import render as manual_render
 from ..tokens import sp
 
@@ -83,6 +83,13 @@ NIB_LABELS = (
     ("soft", "soft (antialiased)"),
     ("pixel", "pixel (round)"),
     ("square", "pixel (square)"),
+)
+
+#: How an image brush places its dabs. One entry per ``brush.STAMP_ALIGN``
+#: member, checked against it the way the nib and symmetry tables are.
+STAMP_ALIGN_LABELS = (
+    ("free", "free"),
+    ("aligned", "aligned to a grid"),
 )
 
 SYMMETRY_LABELS = (
@@ -186,7 +193,15 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
             changed, value = widgets.labeled_slider_float("Hardness", state.hardness, 0.0, 1.0)
             if changed:
                 state.hardness = value
-        if tool == "brush":
+        if tool in STAMP_TOOLS:
+            _image_brush(ctx, state, tab)
+        if tool == "brush" and state.tip_for(tool) is None:
+            # Hidden while an image tip is loaded, for the reason hardness is
+            # hidden on a pixel nib: a captured picture's alpha is both its
+            # shape and its transparency, so a copy ink has nothing left to say
+            # about it -- and a radio pair that changed nothing would read as
+            # the tool ignoring it. (The engine agrees from the other side: a
+            # tip handed to the replace mode is dropped.)
             _ink(state)
         if tool == "shade":
             _shading(state, doc)
@@ -303,6 +318,9 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
 
     if _has_options(tool) and imgui.small_button(f"Reset {tool.replace('_', ' ')}##inkreset"):
         state.reset_tool_options(tool)
+
+    if _has_options(tool):
+        _presets(ctx, state)
 
     # Everything above this line adjusts the *tool*, which a save does not
     # read. Everything below changes the document -- the selection ops each
@@ -527,6 +545,100 @@ def _gradient_stops(state: Any) -> None:
     imgui.same_line()
     if imgui.small_button("Use fg / bg##gradreset"):
         state.gradient_stops = []
+
+
+def _image_brush(ctx: Any, state: Any, tab: Any) -> None:
+    """Capture a tip out of the drawing, and the variants of it.
+
+    A section on the three tools that can stamp one rather than a tool of its
+    own: an image brush replaces the *tip* of the tool in your hand, so
+    everything that tool already does comes with it. The variants are buttons
+    rather than a rotation field because they cycle -- four presses of Rotate is
+    where you started -- and because the useful values are the four quarter
+    turns and the two mirrors, which is six clicks and no numbers.
+    """
+    widgets.section("image brush")
+    if widgets.disabled_button("Capture from selection##inkstamp", tab.doc.mask is not None):
+        inker_mode.capture_brush(ctx)
+    widgets.help_marker(
+        "Turns what you have selected into the brush tip -- the drawing itself "
+        "becomes the dab. It reads the active layer and cuts nothing, and a "
+        "feathered or lasso selection makes a feathered tip rather than its "
+        "bounding box."
+    )
+    stamp = state.stamp
+    if stamp is None:
+        widgets.muted("Nothing captured yet.")
+        return
+
+    changed, value = imgui.checkbox("Use image brush", state.use_stamp)
+    if changed:
+        state.use_stamp = value
+    width, height = stamp.size
+    widgets.muted(f"{width} x {height} px, turned {stamp.rotation}")
+    if imgui.small_button("Rotate##inkstamprot"):
+        state.stamp = stamp.rotated()
+    imgui.same_line()
+    if imgui.small_button("Flip H##inkstampfx"):
+        state.stamp = stamp.flipped("x")
+    imgui.same_line()
+    if imgui.small_button("Flip V##inkstampfy"):
+        state.stamp = stamp.flipped("y")
+    imgui.same_line()
+    if imgui.small_button("Forget##inkstampclear"):
+        inker_mode.clear_brush(ctx)
+        return
+    state.stamp_align = widgets.labeled_combo(
+        "Placing", state.stamp_align, list(STAMP_ALIGN_LABELS)
+    )
+    widgets.help_marker(
+        "Free puts the picture under the cursor, which is what a brush does. "
+        "Aligned snaps every dab to a grid of the tip's own size anchored on "
+        "the canvas, so neighbouring stamps line up into a pattern and going "
+        "over the same square twice changes nothing. Either way a stroke never "
+        "builds up on itself: dragging slowly over one spot leaves exactly what "
+        "one dab leaves."
+    )
+
+
+def _presets(ctx: Any, state: Any) -> None:
+    """Named bundles of the current tool's options.
+
+    One tool's options and nothing else -- not the colours, the symmetry or the
+    grid, which are properties of the canvas or of the sitting rather than of a
+    tool. Clicking one selects its tool as well as its settings, because a
+    preset called "inking pen" that arrived on the eraser would be half applied.
+    """
+    widgets.section("presets")
+    imgui.set_next_item_width(-sp(56))
+    _changed, name = imgui.input_text("##inkpresetname", state.preset_name)
+    state.preset_name = name[: inker_state.MAX_PRESET_NAME]
+    imgui.same_line()
+    if widgets.disabled_button("Save##inkpresetsave", bool(state.preset_name.strip())):
+        state.save_preset(state.preset_name)
+        state.preset_name = ""
+        inker_mode.persist(ctx)
+    widgets.help_marker(
+        "Saves the options of the tool in your hand under a name, and clicking "
+        "the name later picks that tool back up with them. The captured image "
+        "tip is not part of one -- it is pixels rather than a setting."
+    )
+    if not state.presets:
+        widgets.muted("No presets yet.")
+        return
+    remove = ""
+    for saved_name, saved in list(state.presets.items()):
+        imgui.push_id(f"inkpreset{saved_name}")
+        if imgui.small_button("x"):
+            remove = saved_name
+        imgui.same_line()
+        label = saved["tool"].replace("_", " ")
+        if imgui.selectable(f"{saved_name}  ({label})", False)[0]:
+            state.apply_preset(saved_name)
+        imgui.pop_id()
+    if remove:
+        state.delete_preset(remove)
+        inker_mode.persist(ctx)
 
 
 def _has_options(tool: str) -> bool:

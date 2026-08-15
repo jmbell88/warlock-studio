@@ -623,6 +623,8 @@ class PaintOps:
         seed: int = 0,
         ramp: Any = (),
         shade_dir: int = 1,
+        stamp: Any = None,
+        stamp_align: str = "free",
     ) -> bool:
         """Open a stroke on the active layer. False when the layer is locked.
 
@@ -632,6 +634,15 @@ class PaintOps:
         must not travel in a file. ``scatter``/``seed`` are the spray tool's
         emission; both default to the values that make this the stroke the
         editor has always opened.
+
+        ``stamp`` is a :class:`.brush.Stamp` -- an image used as the brush tip
+        instead of a generated disc -- and ``stamp_align`` is one of
+        :data:`.brush.STAMP_ALIGN`. Both arrive per stroke for ``wrap``'s
+        reason: a captured brush is a thing the *app* is holding, and nothing
+        about it belongs in a document or in a file. A stamp handed to a mode
+        that decides its own colours (blur, smudge, shade) is dropped by
+        ``StrokeState`` rather than refused here -- it is a tip that stays
+        loaded while the user tries the smudge tool.
 
         ``ramp``/``shade_dir`` are the shading ink's, and they arrive the same
         way and for the same reason: the ramp is a *selection in the palette
@@ -674,6 +685,8 @@ class PaintOps:
             seed=seed,
             ramp=tuple(tuple(int(c) for c in colour) for colour in ramp),
             shade_dir=shade_dir,
+            stamp=stamp,
+            stamp_align=stamp_align,
         )
         self._stroke.begin(point, layer.pixels)
         self._touch_stroke()
