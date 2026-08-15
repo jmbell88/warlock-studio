@@ -255,7 +255,8 @@ the edge of whatever is painted: choose its colour and thickness, whether it goe
 the shape, whether corners are rounded (4) or square (8), and **wrap** if the drawing is a tile, so
 the outline carries across the seam instead of stopping at the border. **Despeckle** is a median
 filter — it deletes stray pixels outright and leaves hard lines hard, which is what a blur cannot
-do.
+do; its **speck** slider is how big a stray thing it removes, and it stops at 4 because past that a
+median takes out detail rather than specks — and takes long enough doing it to stall the preview.
 
 Three things about what they do to a layer. They apply to the **selection** if there is one, faded
 by a feathered edge exactly as a brush would be, and to the whole layer if there is not. The colour

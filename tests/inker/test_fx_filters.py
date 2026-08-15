@@ -247,7 +247,7 @@ def test_an_inside_outline_does_not_draw_along_the_edge_of_its_crop():
 
 def test_despeckle_at_zero_is_the_identity_and_a_copy():
     pixels = _flat((10, 20, 30, 40))
-    out = filters.despeckle(pixels, radius=0.0)
+    out = filters.despeckle(pixels, speck=0.0)
     assert np.array_equal(out, pixels)
     assert out is not pixels
 
@@ -259,7 +259,7 @@ def test_despeckle_deletes_a_lone_pixel_and_leaves_an_edge_hard():
     pixels[:, 4:] = (220, 220, 220, 255)
     pixels[2, 1] = (255, 0, 0, 255)  # the speck
 
-    out = filters.despeckle(pixels, radius=1.0)
+    out = filters.despeckle(pixels, speck=1.0)
     assert tuple(out[2, 1])[:3] == (20, 20, 20), "the speck is gone"
     assert tuple(out[2, 3])[:3] == (20, 20, 20)
     assert tuple(out[2, 4])[:3] == (220, 220, 220), "and the edge is still a step"
@@ -272,14 +272,36 @@ def test_despeckle_premultiplies_so_invisible_colour_stays_invisible():
     pixels = np.zeros((5, 5, 4), dtype=np.uint8)
     pixels[:, :] = (0, 255, 0, 0)  # invisible green everywhere
     pixels[1:4, 1:4] = (255, 0, 0, 255)  # an opaque red blob on top of it
-    out = filters.despeckle(pixels, radius=1.0)
+    out = filters.despeckle(pixels, speck=1.0)
     assert int(out[2, 2, 1]) < 40, "the invisible green must not reach the visible red"
 
 
 def test_despeckle_leaves_a_flat_region_alone():
     pixels = _flat((80, 120, 200, 255), size=(7, 7))
-    out = filters.despeckle(pixels, radius=2.0)
+    out = filters.despeckle(pixels, speck=2.0)
     assert np.abs(out[..., :3].astype(int) - np.array([80, 120, 200])).max() <= 1
+
+
+def test_despeckle_cannot_be_asked_for_a_window_it_cannot_afford():
+    """Two locks on the same door, because a median is a rank filter -- it sorts
+    every window -- and this runs on the frame thread: ``preview_filter``
+    recomputes on every parameter change, and a dragged slider makes one per
+    frame. A 65x65 window, which the shared ``radius`` span would have reached,
+    is seconds per call on a full-size layer.
+
+    The slider cannot reach past the ceiling, *and* the function clamps, because
+    the slider is not the only caller: ``apply_named`` fills parameters in from
+    the values the panel remembers per filter, so an entry from a build with a
+    different span -- or a script, or this test -- must not be able to ask.
+    """
+    low, high = filters.RANGES["speck"]
+    assert (low, high) == (0.0, (filters.DESPECKLE_MAX - 1) / 2)
+
+    pixels = np.random.default_rng(9).integers(0, 256, (12, 12, 4), dtype=np.uint8)
+    at_ceiling = filters.despeckle(pixels, speck=high)
+    assert np.array_equal(filters.despeckle(pixels, speck=32.0), at_ceiling)
+    # And the ceiling is a real filter rather than a clamp to nothing.
+    assert not np.array_equal(at_ceiling, pixels)
 
 
 # --- through the registry and the session -----------------------------------

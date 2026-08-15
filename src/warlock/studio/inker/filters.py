@@ -10,12 +10,15 @@ Three rules run through the whole file.
 **Colour filters do not touch alpha.** Brightness, contrast, levels and
 hue/saturation are about the colour of what is there, and changing coverage as
 a side effect of a tone adjustment is a bug in every editor that has ever done
-it. Blur is the one exception, and it is an exception on purpose: blurring a
-layer's edge is most of why anybody blurs a layer. :func:`outline` *placed
-outside* is the second and last one, for the same kind of reason -- an outline
-drawn outside a shape is by definition drawn where the shape is not, so a
-version of it that could not add coverage would draw nothing. Placed inside it
-touches no alpha at all, and :func:`invert` and :func:`replace_colour` never do.
+it. The exceptions are the *spatial* filters, and each is an exception on
+purpose. Blur and :func:`despeckle` both filter alpha along with colour --
+blurring a layer's edge is most of why anybody blurs a layer, and a despeckle
+that left a stray pixel's coverage behind would delete its colour and keep its
+hole. :func:`outline` *placed outside* adds coverage that was not there, which
+is the strongest form of the exception and the only one worth restating: the
+ring is by construction drawn where the shape is not, so a version that could
+not add alpha would draw nothing. Placed inside it touches no alpha at all, and
+:func:`invert` and :func:`replace_colour` never do.
 
 **Blur and sharpen premultiply first.** A straight-alpha buffer stores an
 arbitrary colour under a transparent pixel -- ``paint_colour`` leaves the paint
@@ -444,12 +447,35 @@ def outline(
     return out
 
 
-def despeckle(pixels: np.ndarray, *, radius: float = 0.0) -> np.ndarray:
+#: The widest window :func:`despeckle` will build. See it for why it is small.
+DESPECKLE_MAX = 9
+
+
+def despeckle(pixels: np.ndarray, *, speck: float = 0.0) -> np.ndarray:
     """Median filter: takes stray pixels out without softening an edge.
 
-    A median is the right tool and a blur is not -- a blur spreads the speck
-    over its neighbourhood, where a median deletes it outright and leaves a
-    hard line hard, which is the whole point on pixel art.
+    ``speck`` is a radius in pixels -- how big a stray thing this deletes -- and
+    the window it sorts is ``2·speck + 1`` across.
+
+    A median is the right tool and a blur is not: a blur spreads the speck over
+    its neighbourhood, where a median deletes it outright and leaves a hard line
+    hard, which is the whole point on pixel art.
+
+    **Its own parameter name with a small span, rather than the shared
+    ``radius``, and a hard ceiling underneath that.** A median is a rank filter
+    -- it sorts every window -- so it costs O(k^2 log k) per pixel per band where
+    a Gaussian is O(k) and separable. On the 0..32 span ``radius`` carries for
+    blur and sharpen, the top of the slider is a 65x65 window: four thousand
+    samples sorted per pixel, four times over, which is seconds per call on a
+    2048 square. That call is on the **frame thread** -- ``preview_filter``
+    recomputes for every new parameter value and a dragged slider mints one per
+    frame -- so it would read as the app hanging, against the one invariant the
+    frame loop has. :data:`DESPECKLE_MAX` clamps the window as well, so a stale
+    settings entry or a caller passing 32 cannot reach the unaffordable case by
+    going round the slider.
+
+    The ceiling costs nothing real: past a 9x9 window a median stops deleting
+    specks and starts deleting *detail*, which is what blur is for.
 
     Premultiplied like the blur and for the same reason: the median of a set of
     straight-alpha colours can pick a colour that is invisible in the source and
@@ -459,13 +485,13 @@ def despeckle(pixels: np.ndarray, *, radius: float = 0.0) -> np.ndarray:
     everything Pillow in this package is, so the engine still imports on a
     machine without it.
     """
-    if radius <= 0.0:
+    if speck <= 0.0:
         return pixels.copy()
     from PIL import Image, ImageFilter
 
     # Pillow takes an odd *window size*, not a radius: 1 is the identity, 3 is
     # the 3x3 median every despeckle means by "1".
-    size = int(round(float(radius))) * 2 + 1
+    size = min(int(round(float(speck))) * 2 + 1, DESPECKLE_MAX)
     rgb, alpha = _premultiplied(pixels)
     flat = np.empty(pixels.shape, dtype=np.uint8)
     flat[..., :3] = cp.to_uint8_255(rgb)
@@ -510,7 +536,7 @@ FILTERS: dict[str, tuple[dict[str, Any], Callable[..., np.ndarray]]] = {
         },
         outline,
     ),
-    "despeckle": ({"radius": 0.0}, despeckle),
+    "despeckle": ({"speck": 0.0}, despeckle),
 }
 
 # The three parameter kinds the panel draws with something other than a slider.
@@ -566,6 +592,9 @@ RANGES: dict[str, tuple[float, float]] = {
     # match rather than a select-all.
     "tolerance": (0.0, 255.0),
     "size": (0.0, 32.0),
+    # Deliberately *not* the shared ``radius`` span: the top of that one is a
+    # 65x65 sort per pixel on the frame thread. See :func:`despeckle`.
+    "speck": (0.0, (DESPECKLE_MAX - 1) / 2),
 }
 
 

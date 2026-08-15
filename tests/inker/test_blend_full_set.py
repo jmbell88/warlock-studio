@@ -18,7 +18,6 @@ is the half that cannot catch a name Krita spells differently.
 
 from __future__ import annotations
 
-import hashlib
 import io
 import json
 import zipfile
@@ -463,10 +462,26 @@ def test_a_track_blend_we_do_carry_is_kept(tmp_path: Path):
 
 # --- the byte pin -----------------------------------------------------------
 
-# sha256 of ``_pinned_doc()``'s ``.ora``, measured on the tree *before* the
-# seven modes existed. See ``test_a_document_that_uses_no_new_mode_is_byte_for
-# _byte_what_it_was``.
-MODELESS_ORA_SHA256 = "880cdcbb06bddcbc5e69cb7abd2ce1c3bf46574b2cc6e920490b6fa22d0c8f4d"
+# ``_pinned_doc()``'s ``stack.xml``, byte for byte, as the writer produced it on
+# the tree *before* the seven modes existed.
+#
+# The member and not the archive. A digest of the whole ``.ora`` would also
+# cover Pillow's PNG encoder, zlib's deflate streams and the member list -- so
+# it would fail on a Pillow bump, and on any later track that legitimately adds
+# a member (groups, tags and slices all touch this writer). None of those are
+# what this pin is about, and a pin that cries wolf gets deleted. ``stack.xml``
+# is the whole of what a mode table can leak into: it is where the op string is
+# written, where an unconditional new attribute would appear, and where a table
+# serialised in full would land.
+MODELESS_STACK_XML = (
+    b"<?xml version='1.0' encoding='UTF-8'?>\n"
+    b'<image version="0.0.3" w="8" h="8"><stack>'
+    b'<layer name="Ink" src="data/layer0.png" x="0" y="0" opacity="0.500000"'
+    b' visibility="visible" composite-op="svg:multiply" />'
+    b'<layer name="Background" src="data/layer1.png" x="0" y="0" opacity="1.000000"'
+    b' visibility="visible" composite-op="svg:src-over" />'
+    b"</stack></image>"
+)
 
 
 def _pinned_doc():
@@ -479,21 +494,22 @@ def _pinned_doc():
     return doc
 
 
-def test_a_document_that_uses_no_new_mode_is_byte_for_byte_what_it_was():
+def test_a_document_that_uses_no_new_mode_is_written_exactly_as_it_was():
     """Widening a table must not move a file that never touches the new part.
 
     Twelve modes to nineteen is exactly the shape of change that quietly
     rewrites every document -- a new attribute written unconditionally, a
     default that is now spelled differently, a table serialised in full. Any of
     those would make every saved ``.ora`` in a library differ from its backup
-    for no reason a user could see, and the ORA determinism suite would not
-    catch it because it compares two saves *of the same build*.
+    for no reason a user could see, and ``test_inker_ora_determinism`` would not
+    catch it: that suite compares two saves *of the same build*, which is a
+    different question from "does this build write what the last one did".
 
-    The digest was taken on the pre-change tree. If it fails, the question is
-    which change moved the bytes and whether that change was meant to: a
-    deliberate one re-measures the digest here and says so in the commit; an
-    accidental one is the bug this exists to find.
+    The literal was taken from the pre-change tree. If it fails, the question is
+    which change moved these bytes and whether that change was meant to: a
+    deliberate one re-measures the literal here and says so in the commit; an
+    accidental one is the bug this exists to find. A **new member** in the
+    archive is not this test's business and deliberately does not fail it.
     """
-    assert hashlib.sha256(inker.ora_bytes(_pinned_doc())).hexdigest() == (
-        MODELESS_ORA_SHA256
-    )
+    with zipfile.ZipFile(io.BytesIO(inker.ora_bytes(_pinned_doc()))) as zf:
+        assert zf.read("stack.xml") == MODELESS_STACK_XML
