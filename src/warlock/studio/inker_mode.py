@@ -1107,6 +1107,11 @@ def begin_transform(ctx: Any, tab: InkerDoc | None = None) -> None:
     if tab.doc.begin_transform():
         state.transforming = True
         state.clear_drag()
+    elif tab.doc.write_locked():
+        # The one refusal worth saying out loud from here: a transform lifts,
+        # and a lift is a cut. Every other way of reaching a locked layer goes
+        # through the canvas, which raises its own toast on the press.
+        ctx.toast("That layer is locked. Unlock it in the layers panel.", "warn")
 
 
 def end_transform(ctx: Any, *, commit: bool) -> None:

@@ -163,6 +163,13 @@ class Track:
     visible: bool = True
     blend: str = "normal"
     alpha_lock: bool = False
+    #: The sixth track property -- content lock. A track's properties are
+    #: copied down onto whichever ``Layer`` materialises for the current frame,
+    #: so this list and the three places that copy it (``of``, ``placeholder``,
+    #: ``layers_for``, plus ``Document._ensure_cel_for``) have to agree; a
+    #: property left out of one of them is a lock that is on in the panel and
+    #: off at the door.
+    locked: bool = False
     uid: int = field(default_factory=new_uid)
 
     @classmethod
@@ -182,6 +189,7 @@ class Track:
             visible=layer.visible,
             blend=layer.blend,
             alpha_lock=layer.alpha_lock,
+            locked=layer.locked,
             uid=layer.uid,
         )
 
@@ -192,6 +200,7 @@ class Track:
             "visible": self.visible,
             "blend": self.blend,
             "alpha_lock": self.alpha_lock,
+            "locked": self.locked,
         }
 
 
@@ -424,6 +433,7 @@ class Animation:
             visible=track.visible,
             blend=track.blend,
             alpha_lock=track.alpha_lock,
+            locked=track.locked,
             uid=uid,
         )
 
@@ -465,6 +475,7 @@ class Animation:
             layer.visible = track.visible
             layer.blend = track.blend
             layer.alpha_lock = track.alpha_lock
+            layer.locked = track.locked
             out.append(layer)
         return out
 

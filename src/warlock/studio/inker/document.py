@@ -522,14 +522,16 @@ class Document(
             return
         track, frame = anim.tracks[index], anim.frame
         width, height = self.size
-        # Every one of the five track properties, not four: ``alpha_lock`` was
+        # Every one of the six track properties, not four: ``alpha_lock`` was
         # the one left out, and the write that autovivified the cel is normally
         # one line away from reading it back off the layer -- ``begin_stroke``
         # samples ``layer.alpha_lock`` immediately after ``_ensure_active_cel``
         # -- so a missing lock did not merely mislabel the cel, it painted
         # through "preserve transparency" on the first stroke of every fresh
-        # frame. ``placeholder`` and ``layers_for`` both copy all five; this is
-        # the third copy of that list and it has to agree with them.
+        # frame. ``locked`` (the content lock) joined the list for the same
+        # reason and would fail the same way, one door further out.
+        # ``placeholder`` and ``layers_for`` both copy all six; this is the
+        # third copy of that list and it has to agree with them.
         real = Layer(
             pixels=cp.empty(width, height),
             name=track.name,
@@ -537,6 +539,7 @@ class Document(
             visible=track.visible,
             blend=track.blend,
             alpha_lock=track.alpha_lock,
+            locked=track.locked,
             uid=placeholder.uid,
         )
         anim.cels[(track.uid, frame.uid)] = real

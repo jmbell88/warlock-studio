@@ -596,6 +596,32 @@ def _combine_op() -> str:
     return "replace"
 
 
+# The tools that read the document rather than write to it, so a content lock
+# has nothing to say about them: the eyedropper samples, and the four selection
+# tools build a mask that lives on the document rather than in a layer.
+_READ_ONLY_TOOLS = frozenset({"eyedropper"}) | SELECT_TOOLS
+
+
+def _locked_out(ctx: Any, state: Any, tab: Any) -> bool:
+    """One toast per press when the active layer refuses tool-level writes.
+
+    The toast lives here rather than at the engine's doors for the reason the
+    engine refuses silently: ``write_colour`` is asked once per dab and once per
+    preview frame, and this is the only place that knows a press is a press.
+    """
+    doc = tab.doc
+    if state.tool in _READ_ONLY_TOOLS or not doc.write_locked():
+        return False
+    # Nudging a buffer that is already floating writes to no layer -- the hole
+    # it came out of was cut before the lock went on, and ``commit_floating``
+    # is deliberately not refused either.
+    if state.tool == "move" and doc.floating is not None:
+        return False
+    ctx.toast("That layer is locked. Unlock it in the layers panel.", "warn")
+    state.drag_kind = ""
+    return True
+
+
 def _press(ctx: Any, state: Any, tab: Any, point) -> None:
     doc = tab.doc
     tool = state.tool
@@ -615,6 +641,8 @@ def _press(ctx: Any, state: Any, tab: Any, point) -> None:
         if picked is not None:
             state.fg = picked
         state.drag_kind = ""
+        return
+    if _locked_out(ctx, state, tab):
         return
     if tool == "fill":
         doc.commit_floating()

@@ -45,6 +45,12 @@ class Layer:
     # editing aid rather than picture data -- nothing about the composite reads
     # it, and a locked layer flattens exactly as an unlocked one does.
     alpha_lock: bool = False
+    # "Content lock": this layer refuses tool-level writes altogether -- see
+    # ``LayerOps.write_locked`` for the one list of doors that enforce it and
+    # the argument for where the line is drawn. Like ``alpha_lock`` it is an
+    # editing aid rather than picture data: nothing about the composite reads
+    # it, and a locked layer flattens exactly as an unlocked one does.
+    locked: bool = False
     uid: int = field(default_factory=lambda: next(_uids))
 
     def __post_init__(self) -> None:
@@ -77,6 +83,7 @@ class Layer:
             visible=self.visible,
             blend=self.blend,
             alpha_lock=self.alpha_lock,
+            locked=self.locked,
             **({} if uid is None else {"uid": uid}),
         )
 

@@ -150,7 +150,7 @@ def _stack_xml(doc) -> bytes:
                 "opacity": f"{float(layer.opacity):.6f}",
                 "visibility": "visible" if layer.visible else "hidden",
                 "composite-op": cp.ORA_OPS.get(layer.blend, "svg:src-over"),
-                **_lock_attr(layer.alpha_lock),
+                **_lock_attr(layer.alpha_lock, layer.locked),
             },
         )
     return ElementTree.tostring(root, encoding="UTF-8", xml_declaration=True)
@@ -169,9 +169,27 @@ def _stack_xml(doc) -> bytes:
 # entire file, this one included.
 LOCK_ATTR = "warlock-alpha-lock"
 
+#: The content lock, on the same terms and for the same reasons. A separate
+#: attribute rather than a value on the first, because the two locks are
+#: independent -- a layer can preserve transparency, refuse writes, both or
+#: neither -- and because a reader that only knows the older one must go on
+#: reading it correctly.
+CONTENT_LOCK_ATTR = "warlock-content-lock"
 
-def _lock_attr(locked: bool) -> dict[str, str]:
-    return {LOCK_ATTR: "1"} if locked else {}
+
+def _lock_attr(alpha_lock: bool, locked: bool = False) -> dict[str, str]:
+    """The lock attributes, written only where they are set.
+
+    Absent rather than ``"0"``, so a document nobody has locked anything in
+    produces byte-identical XML to the one this build wrote before either
+    attribute existed -- which is what the determinism pin is measuring.
+    """
+    out: dict[str, str] = {}
+    if alpha_lock:
+        out[LOCK_ATTR] = "1"
+    if locked:
+        out[CONTENT_LOCK_ATTR] = "1"
+    return out
 
 
 def _cel_names(anim) -> dict[int, str]:
@@ -223,7 +241,7 @@ def _stack_xml_animated(doc, names: dict[int, str]) -> bytes:
                     # show every frame at once.
                     "visibility": "visible" if track.visible and not hidden else "hidden",
                     "composite-op": cp.ORA_OPS.get(track.blend, "svg:src-over"),
-                    **_lock_attr(track.alpha_lock),
+                    **_lock_attr(track.alpha_lock, track.locked),
                 },
             )
     return ElementTree.tostring(root, encoding="UTF-8", xml_declaration=True)
@@ -408,6 +426,10 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int]) -> Animation | N
                 visible=bool(entry.get("visible", True)),
                 blend=entry.get("blend", "normal"),
                 alpha_lock=bool(entry.get("alpha_lock", False)),
+                # ``.get``-based like every other key here, so a file written
+                # before the content lock existed reads as unlocked rather than
+                # failing the whole grid. That is why the version stays 1.
+                locked=bool(entry.get("locked", False)),
             )
             for i, entry in enumerate(payload["tracks"])
         ]
@@ -434,6 +456,7 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int]) -> Animation | N
                     visible=track.visible,
                     blend=track.blend,
                     alpha_lock=track.alpha_lock,
+                    locked=track.locked,
                 )
                 planes[src] = layer
             cels[(tracks[ti].uid, frames[fi].uid)] = layer
@@ -556,6 +579,10 @@ def read_ora(path: Path, *, budget: int | None = None):
                     visible=element.get("visibility", "visible") != "hidden",
                     blend=cp.OPS_ORA.get(element.get("composite-op", ""), "normal"),
                     alpha_lock=element.get(LOCK_ATTR) == "1",
+                    # A foreign file carries neither attribute, so every layer
+                    # in it opens unlocked -- which is the answer a Krita or
+                    # GIMP document should give, since neither writes ours.
+                    locked=element.get(CONTENT_LOCK_ATTR) == "1",
                 )
             )
 

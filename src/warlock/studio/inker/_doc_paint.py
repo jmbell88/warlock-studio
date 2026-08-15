@@ -79,9 +79,15 @@ class PaintOps:
     def write_colour(
         self: Document, rect: tuple[int, int, int, int], colour: RGBA, weight: np.ndarray
     ) -> bool:
-        """Composite a flat colour into a region of the active layer."""
+        """Composite a flat colour into a region of the active layer.
+
+        The door the fill and the three shapes come through as well, which is
+        why the content lock is checked here rather than three times over.
+        """
         box = self.clip(rect)
         if box is None:
+            return False
+        if self.write_locked():
             return False
         self._ensure_active_cel()
         layer = self.stack.active
@@ -107,11 +113,15 @@ class PaintOps:
         """Open a filter session over the selection, or the whole layer.
 
         Returns the rect it will write, or None when there is nothing to
-        filter. Nothing is pushed and nothing is changed: this only takes the
+        filter -- which includes a content-locked layer, refused here at the
+        top so no preview is ever shown for a filter that cannot be applied.
+        Nothing is pushed and nothing is changed: this only takes the
         copy that :meth:`preview_filter` recomputes from and
         :meth:`cancel_filter` restores.
         """
         self.end_filter()
+        if self.write_locked():
+            return None
         width, height = self.size
         bounds = self.mask.bounds if self.mask is not None else None
         box = self.clip(bounds or (0, 0, width, height))
@@ -266,8 +276,16 @@ class PaintOps:
         radial: int = brush_mod.DEFAULT_RADIAL,
         stabilise: float = 0.0,
         speed_taper: float = 0.0,
-    ) -> None:
+    ) -> bool:
+        """Open a stroke on the active layer. False when the layer is locked.
+
+        The refusal comes *before* ``_ensure_active_cel``, so a brush-down on a
+        locked track of an animated document does not autovivify a cel that
+        nothing may then write to.
+        """
         self.end_stroke()
+        if self.write_locked():
+            return False
         self._ensure_active_cel()
         layer = self.stack.active
         self._stroke = StrokeState(
@@ -293,6 +311,7 @@ class PaintOps:
         )
         self._stroke.begin(point, layer.pixels)
         self._touch_stroke()
+        return True
 
     def stroke_to(self: Document, point: tuple[float, float]) -> None:
         if self._stroke is None:
@@ -415,6 +434,8 @@ class PaintOps:
         ``stops`` is the general form; ``start``/``end`` is the two-stop
         shorthand every existing caller uses. Both go through one interpolator.
         """
+        if self.write_locked():
+            return False
         width, height = self.size
         rect = self.mask.bounds if self.mask is not None else None
         box = self.clip(rect or (0, 0, width, height))
@@ -438,6 +459,15 @@ class PaintOps:
         rgb = before[..., :3].astype(np.float32)
         out[..., :3] = rgb + (crop[..., :3] * 255.0 - rgb) * share[..., None]
         out[..., 3] = out_a * 255.0
+        if layer.alpha_lock:
+            # The same one line ``write_colour`` and ``preview_filter`` already
+            # had, and the one write path that was missing it: a ramp run over
+            # a layer with "preserve transparency" on painted straight through
+            # the edge of the shape it was meant to stay inside, because the
+            # composite above sets ``out_a`` from the ramp's own coverage.
+            # Restoring the channel *is* the definition of the lock rather than
+            # an approximation of it, which is why it goes after the formula.
+            out[..., 3] = before[..., 3]
         layer.pixels[y0:y1, x0:x1] = cp.to_uint8_255(out)
         self._commit_patch(layer, box, before)
         return True

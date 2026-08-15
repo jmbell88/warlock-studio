@@ -135,7 +135,15 @@ class SelectionOps:
     # -- floating pixels ----------------------------------------------------
 
     def lift(self: Document, mask: SelectionMask | None = None) -> bool:
-        """Cut the selection out of the active layer and float it. One step."""
+        """Cut the selection out of the active layer and float it. One step.
+
+        Refused on a content-locked layer: a lift is a *cut*, and the hole it
+        leaves is exactly the write the lock exists to prevent. ``copy`` stays
+        legal beside it -- reading pixels off a locked layer changes nothing --
+        and so does ``paste_as_layer``, which writes to a layer of its own.
+        """
+        if self.write_locked():
+            return False
         self.commit_floating()
         mask = mask or self.mask
         if mask is None:
@@ -190,7 +198,15 @@ class SelectionOps:
             self.rev += 1
 
     def commit_floating(self: Document) -> bool:
-        """Write the floating pixels where they now sit and stop floating."""
+        """Write the floating pixels where they now sit and stop floating.
+
+        **Deliberately not refused by the content lock.** A buffer floats for as
+        long as the user leaves it floating -- across layer switches, frame
+        steps and the panel's lock checkbox -- and every save, every geometry op
+        and every structural op commits it first. So refusing here would not
+        protect the pixels; it would wedge the document, leaving a buffer that
+        can neither land nor be saved. See ``LayerOps.write_locked``.
+        """
         floating, self.floating = self.floating, None
         if floating is None:
             return False
@@ -253,7 +269,7 @@ class SelectionOps:
         """Cut the selection out of the active layer without floating it."""
         if self.floating is not None:
             return self.delete_floating()
-        if self.mask is None:
+        if self.mask is None or self.write_locked():
             return False
         bounds = self.mask.bounds
         box = self.clip(bounds) if bounds else None
@@ -348,7 +364,14 @@ class SelectionOps:
         return self.transform_floating(angle=self.floating.angle + degrees)
 
     def paste(self: Document, at: tuple[int, int] | None = None) -> bool:
-        """Paste as a floating buffer, so it can be positioned before it lands."""
+        """Paste as a floating buffer, so it can be positioned before it lands.
+
+        Refused on a content-locked layer, because the buffer it makes is bound
+        to that layer and would land on it. ``paste_as_layer`` is the way to
+        paste beside a locked layer and stays legal.
+        """
+        if self.write_locked():
+            return False
         taken = self.clipboard.take()
         if taken is None:
             return False

@@ -32,6 +32,50 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 class LayerOps:
     """Layer and track structure, mixed into :class:`~.document.Document`."""
 
+    # -- the content lock ---------------------------------------------------
+    #
+    # This is the one comment that owns where the line is drawn, because the
+    # lock is only worth anything if every door agrees on it.
+    #
+    # **What it guards is tool-level writes**, and the enforcement sits at the
+    # engine ops themselves -- ``begin_stroke``, ``write_colour`` (which is
+    # where fill and the shapes end up), ``gradient``, ``begin_filter``,
+    # ``lift``, ``paste``, ``layer_from_selection``'s cut half and
+    # ``merge_down`` -- each refusing *before* it mutates anything. Below those
+    # doors, undo writes raw pixels through ``PatchEdit``, and deliberately so:
+    # a lock switched on after an edit must not wedge the history that already
+    # holds it, and the alternative (a lock that silently swallows a Ctrl+Z) is
+    # much worse than one that lets a user undo work they locked afterwards.
+    #
+    # **``commit_floating`` is deliberately not refused.** A float outlives lock
+    # toggles -- it survives selecting another layer, another frame and the
+    # panel checkbox -- and every save, every geometry op and every structural
+    # op commits it first, so refusing here would not protect the pixels, it
+    # would wedge the document: the buffer could never land and never be saved.
+    #
+    # **Document-scope ops apply regardless**: geometry (flip, rotate, scale,
+    # crop, canvas resize), ``apply_matte``, the palette rewrites and
+    # ``flatten_layers``. Those are statements about the whole document rather
+    # than about a layer, and a single locked layer vetoing a canvas resize is a
+    # document that cannot be worked on at all. Property edits, rename, hide,
+    # reorder and delete stay legal for the same reason -- the lock is about
+    # what is *painted*, not about whether the layer may be managed.
+    #
+    # The engine's answer is a plain refusal (False / None): it is the panes
+    # that turn one press into one toast, because only they know what a press
+    # is and the engine is asked this sixty times a second while a stroke runs.
+
+    def write_locked(self: Document, layer: Layer | None = None) -> bool:
+        """Whether a tool-level write to this layer must be refused.
+
+        Defaults to the active layer, which is what every door but
+        ``merge_down`` is asking about. On an animated document the property is
+        the *track*'s and ``layers_for`` copies it down onto the materialised
+        cel, so reading it off the layer here is reading the track.
+        """
+        layer = self.stack.active if layer is None else layer
+        return bool(layer.locked)
+
     def add_layer(self: Document, name: str | None = None) -> Layer:
         """A new empty layer, or on an animated document a new empty *track*.
 
@@ -196,6 +240,11 @@ class LayerOps:
             return False
         index = self.stack.active_index if index is None else index
         if index == 0:
+            return False
+        # Either participant: the merge writes into the lower layer and takes
+        # the upper one away, so a lock on either is a refusal for the whole op
+        # rather than a merge of half of it.
+        if self.write_locked(self.stack[index]) or self.write_locked(self.stack[index - 1]):
             return False
         self.commit_floating()
         width, height = self.size

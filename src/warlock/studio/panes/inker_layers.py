@@ -57,6 +57,18 @@ def draw(ctx: Any) -> None:
     imgui.end_disabled()
 
 
+def _can_merge(doc: Any) -> bool:
+    """Whether Merge down would be accepted, so the button says so first.
+
+    The engine refuses a merge when *either* participant is content-locked, and
+    a button that looks live and does nothing is worse than a greyed one.
+    """
+    index = doc.stack.active_index
+    if index <= 0:
+        return False
+    return not (doc.write_locked(doc.stack[index]) or doc.write_locked(doc.stack[index - 1]))
+
+
 def _actions(ctx: Any, doc: Any) -> None:
     if imgui.button("Add"):
         doc.add_layer()
@@ -70,7 +82,7 @@ def _actions(ctx: Any, doc: Any) -> None:
     # one stack and an animated document has one per frame. Disabling says so
     # before the click rather than after it.
     restructure = doc.can_restructure
-    if widgets.disabled_button("Merge down", restructure and doc.stack.active_index > 0):
+    if widgets.disabled_button("Merge down", restructure and _can_merge(doc)):
         doc.merge_down()
     imgui.same_line()
     if widgets.disabled_button("Flatten", restructure and len(doc.stack) > 1):
@@ -112,6 +124,15 @@ def _actions(ctx: Any, doc: Any) -> None:
     )
     if changed:
         doc.set_layer_props(alpha_lock=locked)
+    changed, content = imgui.checkbox("Lock layer", layer.locked)
+    widgets.help_marker(
+        "Refuses every tool: no strokes, fills, gradients, filters, lifts or "
+        "pastes land on it. Renaming, hiding, reordering and deleting still "
+        "work, and so do whole-document changes like a rotate or a crop -- the "
+        "lock is about what gets painted, not about managing the layer."
+    )
+    if changed:
+        doc.set_layer_props(locked=content)
 
 
 def _row(ctx: Any, tab: Any, doc: Any, index: int) -> None:
@@ -137,7 +158,8 @@ def _row(ctx: Any, tab: Any, doc: Any, index: int) -> None:
     imgui.text_colored(
         imgui.ImVec4(*theme.rgba(theme.MUTED)),
         f"{layer.blend}  {layer.opacity * 100:.0f}%"
-        + ("  locked" if layer.alpha_lock else ""),
+        + ("  alpha" if layer.alpha_lock else "")
+        + ("  locked" if layer.locked else ""),
     )
     imgui.end_group()
 
