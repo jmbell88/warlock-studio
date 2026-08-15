@@ -1246,21 +1246,16 @@ def _storage(ctx: Any, jobs: list[Any]) -> None:
         from ..state import format_bytes
 
         widgets.muted(f"{storage['job_dirs']} jobs - {format_bytes(storage['bytes'])}")
-        # Inside the branch: the measurement arrives on a task thread, so
-        # ``storage`` is empty for every frame between launch and the first
-        # reply -- and a ``same_line`` there attached to the *list child* above,
-        # which is full width, putting Prune 82 px past the panel's right edge.
-        # Unclickable exactly while a new install has nothing else on screen.
-        imgui.same_line()
-    if imgui.small_button("Prune..."):
-        _ask_prune(ctx)
-    # Its own row, deliberately not a ``same_line`` after Prune. The comment
-    # above is about exactly this: the storage line is the only thing holding
-    # this row inside the panel, and a second button past it lands off the
-    # right edge and is unclickable -- the failure the 2026-08-07 sweep found
-    # seven times over.
-    if widgets.destructive_button("Clean library...", (0, 0)):
-        _ask_clean(ctx)
+    # **Prune...** and **Clean library...** used to be here, and moved to
+    # Settings > Storage in REDESIGN.md wave 4.1. The figure stays because it
+    # describes the list above it; the two bulk deletes went because a footer
+    # under a scrolling list is where "clean library" reads as an action on
+    # what you can see. That also retires the layout hazard this function
+    # carried three comments about: the storage line was the only item holding
+    # the buttons' ``same_line`` inside the panel, so before the first
+    # measurement landed they attached to the full-width list child above and
+    # were drawn off the right edge -- unclickable exactly while a new install
+    # had nothing else on screen.
 
 
 # The task key the trash measurement runs under, and the ``AppState.preview``
@@ -1373,7 +1368,7 @@ _prune_keep = [20]
 PRUNE_KEEP_DEFAULT = 20
 
 
-def _ask_prune(ctx: Any) -> None:
+def ask_prune(ctx: Any) -> None:
     _prune_keep[0] = PRUNE_KEEP_DEFAULT
 
     def body() -> None:
@@ -1406,7 +1401,7 @@ def _ask_prune(ctx: Any) -> None:
     )
 
 
-def _ask_clean(ctx: Any) -> None:
+def ask_clean(ctx: Any) -> None:
     """The one destructive action that keeps nothing, so it has to say so.
 
     Prune's wording ends "and so is anything you accepted or labelled", which

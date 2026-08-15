@@ -362,7 +362,7 @@ def test_the_size_sort_notices_a_measurement_landing(svc):
 
 
 def test_the_prune_count_is_asked_rather_than_assumed():
-    source = inspect.getsource(library._ask_prune)
+    source = inspect.getsource(library.ask_prune)
     assert "input_int" in source
     assert "body=body" in source
     # Reset every time it is asked: a destructive default somebody set once and
@@ -374,6 +374,6 @@ def test_the_prune_count_is_asked_rather_than_assumed():
 def test_the_prune_message_does_not_promise_a_trash_it_does_not_use():
     """Prune exists to reclaim disk; one that moved two hundred jobs into the
     trash would free nothing while reporting that it had."""
-    source = inspect.getsource(library._ask_prune)
+    source = inspect.getsource(library.ask_prune)
     assert "deleted from disk" in source
     assert "cannot be undone" in source

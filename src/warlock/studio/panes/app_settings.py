@@ -29,6 +29,40 @@ from .. import app_ctx, dialogs, icons, theme, tokens, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 
+#: How wide the settings column is allowed to grow, in design pixels.
+#:
+#: A settings pane is a *form*, and a form on a 5120-wide monitor was one
+#: checkbox on the left and four metres of nothing to its right -- the label and
+#: its control so far apart that reading a row meant tracking across the screen.
+#: Everything here is one column of short rows, so the column gets a measure and
+#: the window gets the rest (REDESIGN.md wave 4.1).
+CONTENT_W = 640
+
+#: The four things this pane is, and the order they are offered in.
+#:
+#: Appearance first because it is the one most people came for; Advanced last
+#: because it is read-only diagnostics. The keys are stable ids -- they are in
+#: the segmented control's imgui ids and in ``state.preview`` -- and the labels
+#: are what changes when the wording does.
+CATEGORIES = [
+    ("appearance", f"{icons.PALETTE} Appearance"),
+    ("models", f"{icons.BOX} Models"),
+    ("storage", f"{icons.FOLDER_OPEN} Storage"),
+    ("advanced", f"{icons.SETTINGS} Advanced"),
+]
+
+#: The all-or-nothing fallback labelling, per ``segmented_control``'s rule: the
+#: glyph alone, with the full label restored as a tooltip. Derived from
+#: ``CATEGORIES`` so a renamed category cannot leave a stale abbreviation.
+CATEGORIES_COMPACT = [(key, label.split(" ", 1)[0]) for key, label in CATEGORIES]
+
+#: Where the chosen category lives. ``state.preview`` and not ``settings``,
+#: deliberately: which tab of a settings pane you last had open is not a
+#: preference, it is where you were -- and a user who opens Settings to change
+#: the theme should not land on a disk-usage figure because they pruned a
+#: library a fortnight ago.
+CATEGORY_SLOT = "settings_category"
+
 
 def draw(ctx: Any) -> None:
     # always_use_window_padding, because a *borderless* child gets zero window
@@ -37,27 +71,75 @@ def draw(ctx: Any) -> None:
     if imgui.begin_child(
         "app-settings", (0, 0), imgui.ChildFlags_.always_use_window_padding.value
     ):
-        # This mode is one pane filling the window, so it is the one surface in
-        # the app that has to say what it is out loud (UX.md Phase 2) -- the
-        # three-column modes are named by the switch segment that is lit.
-        widgets.pane_title("Settings")
-        _interface(ctx)
+        width = _centre(sp(CONTENT_W))
+        # An inner child rather than an indent, so every row inside it measures
+        # its own ``content_region_avail`` against the column and not against
+        # the window -- which is what makes the model rows, the config table and
+        # the sliders bound themselves without being told the number.
+        if imgui.begin_child("app-settings-body", (width, 0)):
+            # This mode is one pane filling the window, so it is the one surface
+            # in the app that has to say what it is out loud (UX.md Phase 2) --
+            # the three-column modes are named by the rail item that is lit.
+            widgets.pane_title("Settings")
+            # After the title, never before it: help_button is a same_line, and
+            # same_line returns to the *previous* row unconditionally. Called
+            # first it landed on whatever the shell drew above this pane.
+            manual_render.help_button(ctx, "app-settings")
+            _category_body(ctx, _categories(ctx, width))
+        imgui.end_child()
+    imgui.end_child()
+
+
+def _centre(width: float) -> float:
+    """Indent the cursor so a ``width``-wide column sits centred. -> its width.
+
+    Returns the width actually available, which is ``width`` only when the
+    window is wide enough to hold it -- a narrow window gets the whole region
+    and no indent, because centring something that already fills its container
+    is a no-op with a rounding error in it.
+    """
+    avail = imgui.get_content_region_avail().x
+    if avail <= width:
+        return avail
+    imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + (avail - width) * 0.5)
+    return width
+
+
+def _categories(ctx: Any, width: float) -> str:
+    """The category switch, and the chosen key."""
+    current = str(ctx.state.preview.get(CATEGORY_SLOT) or CATEGORIES[0][0])
+    if current not in dict(CATEGORIES):
+        current = CATEGORIES[0][0]
+    chosen = widgets.segmented_control(
+        "settings-cat",
+        CATEGORIES,
+        current,
+        compact=CATEGORIES_COMPACT,
+        max_width=width,
+    )
+    if chosen != current:
+        ctx.state.preview[CATEGORY_SLOT] = chosen
+    imgui.dummy((0, sp(tokens.SP_2)))
+    return chosen
+
+
+def _category_body(ctx: Any, category: str) -> None:
+    if category == "models":
+        _models(ctx)
+    elif category == "storage":
+        _storage(ctx)
+    elif category == "advanced":
         _layout(ctx)
         _config(ctx)
-        _models(ctx)
-    imgui.end_child()
+    else:
+        _interface(ctx)
 
 
 # --- interface --------------------------------------------------------------
 
 
 def _interface(ctx: Any) -> None:
-    widgets.section("Interface")
-    # After the section heading, never before begin_child: help_button is a
-    # same_line, and same_line returns to the *previous* row unconditionally.
-    # Called first in draw() it landed on the mode switch, on top of the health
-    # dot -- which every other pane avoids only because a header precedes it.
-    manual_render.help_button(ctx, "app-settings")
+    widgets.section("Appearance")
     lo, hi = tokens.ui_scale_bounds(_base(ctx))
     stored = _scale_of(ctx)
     imgui.set_next_item_width(sp(260))
@@ -265,6 +347,67 @@ def _layout(ctx: Any) -> None:
     )
     if chosen != getattr(lay, "sidebar", "default"):
         lay.set_sidebar_width(chosen)
+
+
+# --- storage ----------------------------------------------------------------
+
+
+def _storage(ctx: Any) -> None:
+    """What the library is holding on disk, and the two ways to hold less.
+
+    Both figures are the library's own -- ``ctx.cache.storage`` for the
+    workshop and ``library.measure_trash`` for the trash -- because a second
+    measurement of the same directories would be a second answer to one
+    question, and the two would disagree for as long as one of them was stale.
+
+    The **buttons** moved here from the library's footer (REDESIGN.md wave
+    4.1). Under a scrolling list of assets, "Clean library..." reads as an
+    action on the assets you can see rather than on all of them; and that
+    footer is the narrowest row in the app's narrowest column, which is how it
+    put Prune past the panel's right edge twice in one file's history. The
+    *confirms* stay in ``library.py`` -- the wording of a destructive question
+    is the feature, and it is asserted where it lives.
+    """
+    from ..state import format_bytes
+    from . import library
+
+    widgets.section("Storage")
+    if ctx.cache.storage_error:
+        # Before the figure rather than after it (E45): a stale total beside a
+        # warning reads as current, and this line is the only thing saying the
+        # number below is the last one that worked.
+        widgets.text_colored(theme.WARN, "Could not measure disk use.")
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(ctx.cache.storage_error)
+    storage = ctx.cache.storage
+    if storage:
+        widgets.muted(f"{storage['job_dirs']} jobs - {format_bytes(int(storage['bytes']))}")
+    else:
+        widgets.muted("Measuring what is on disk...")
+    # An empty page rather than the loaded one: this pane has no list of
+    # trashed jobs to hand over, and the argument is only the stamp that
+    # decides *when* to walk the disk again -- so Settings asks under its own
+    # stamp and the library goes on asking under the page it is showing.
+    summary = library.trash_summary(library.measure_trash(ctx, []))
+    widgets.muted(f"In the trash: {summary}" if summary else "Measuring the trash...")
+
+    widgets.section("Maintenance")
+    if imgui.button("Prune..."):
+        library.ask_prune(ctx)
+    widgets.muted(
+        "Deletes everything but the newest few assets from disk. Running jobs, "
+        "and anything you accepted or labelled, are kept."
+    )
+    imgui.dummy((0, sp(tokens.SP_1)))
+    # Its own row, deliberately not a ``same_line`` after Prune: these two are
+    # not a pair of equals, and a destructive button beside an ordinary one
+    # invites the wrong click of the two.
+    if widgets.destructive_button("Clean library...", (0, 0)):
+        library.ask_clean(ctx)
+    widgets.muted(
+        "Deletes every asset, trashed or not -- including the accepted ones and "
+        "the labelled images the quality judge is measured against."
+    )
 
 
 # --- models -----------------------------------------------------------------

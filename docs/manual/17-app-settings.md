@@ -4,7 +4,15 @@
 job's. They are stored in `studio_settings.json` beside everything else the app remembers, and none
 of them need a variable set before launch.
 
-**Interface.** *UI scale* is a multiplier on top of whatever your monitor's own DPI scaling already
+The pane is one centred column with four categories across the top — **Appearance**, **Models**,
+**Storage** and **Advanced**. The column keeps its width however wide the window is: everything here
+is a short labelled row, and a form stretched across a 5K display leaves the label and the control it
+belongs to at opposite ends of the desk. Which category you last had open is not remembered between
+launches — it is where you were, not something you chose.
+
+## Appearance
+
+*UI scale* is a multiplier on top of whatever your monitor's own DPI scaling already
 is, from 0.5× to 2×. On a display that is already heavily scaled the slider stops short of 2× and
 says so, because the combined scale is capped — the control only offers zooms it can actually
 apply. It takes effect as you drag it, and the font atlas is re-baked when you let go — between
@@ -34,37 +42,9 @@ they were removed rather than left as four settings that only ever meant "preten
 failed". *Reduce motion* above is unaffected: it is an accessibility setting, not a rendering tier,
 and it still turns off spring motion along with everything else that moves.
 
-**If Warlock crashes**, it says so on the way out rather than simply vanishing: a small dialog
-reports that something went wrong, tells you whether there is unsaved work waiting to be offered
-back on the next launch, and asks whether to open the folder your log is in. Answering no costs
-nothing — the log is written either way, and the recovery offer does not depend on it.
+## Models
 
-**Layout.** *Sidebar width* offers narrow, default and wide (260, 300 and 360 px). Three named sizes
-rather than a drag: a form has a width that reads well, and what a free drag bought was a way to make
-the app look broken — but one number cannot suit a 1600-wide window and a 5120 one. *Reset pane
-sizes* puts the split between the inspector and the library — both on the right sidebar — back to its
-default, undoing any dragging of that divider. *Reset collapsed sections* re-opens every section that
-has been collapsed anywhere in the app.
-
-The sidebars narrow on their own when there is not room for the width you picked — at a high UI scale
-in a small window, three columns at their full size want more pixels than the window can be shrunk
-to. They give way in that order: both sidebars narrow first, down to a width a form is still usable
-at, and only then does the centre pane start to shrink. Nothing is pushed off the edge, so the
-inspector stays reachable at any scale the slider offers.
-
-Moving the window to a monitor with different scaling re-reads the new display and rebuilds the
-interface at its size, fonts included — you do not have to restart. Your *UI scale* is applied fresh
-against the new monitor rather than carried across as a number of pixels, so a zoom that had to be
-capped on one display is offered in full again on a display with room for it.
-
-**Configuration.** *Effective configuration* lists every environment variable the app reads and what
-this process resolved it to, with the ones actually set by the environment first and named by their
-variable. It is the same table `warlock doctor` prints and the same one behind the health dot's
-diagnostics popup, and *Copy as text* puts it on the clipboard for a bug report. It is read-only:
-every entry is consumed at import time, so an editable version would have to say "restart to apply"
-under every field.
-
-**Models.** Every model the app knows about — image models, style LoRAs, the conditioning adapters,
+Every model the app knows about — image models, style LoRAs, the conditioning adapters,
 and the matting, pose and measurement models — with a tick beside the ones whose weights are on disk
 and a **Download** button beside the ones that are missing, plus whether rigging is available. It is
 the same information the startup diagnostics report, in a place you can look at without opening the
@@ -99,6 +79,60 @@ directory that looks finished. Free disk is checked against the whole selection 
 selection is refused if it will not fit. Everything is still equally installable by hand — see
 [Model weights](15-installation.md#model-weights) and
 [Adding an image model](21-extending.md#adding-an-image-model).
+
+## Storage
+
+Two figures and two buttons. The figures are how many job directories exist and what they occupy,
+and what is sitting in the [trash](11-library-and-jobs.md#the-trash) waiting to be emptied. Both are
+measured on a background thread and the last answer is drawn until a new one arrives, so neither
+walks the disk while you are looking at something else. They are the same measurements the library
+reports, not a second opinion about the same directories.
+
+**Prune...** deletes everything but the newest N assets from disk, after a confirm that carries the
+count — N is yours to choose and it starts at twenty every time it is asked. Running jobs are never
+touched, and neither is anything you accepted or labelled.
+
+**Clean library...** is the other end of the same scale: every asset, trashed or not, including the
+accepted ones and the labelled images the quality judge and the tier checks are measured against.
+The verdict rows survive; the pixels behind them do not. Your pose library, style profiles, Inker
+autosaves and settings are kept, and it refuses outright while anything is queued or running.
+
+Both used to sit at the foot of the library, under the list of assets, which is the one place where
+"clean library" reads as an action on the assets you can see rather than on all of them.
+[Library and jobs](11-library-and-jobs.md#storage-and-pruning) has the longer account of what
+each one deletes and why prune removes from disk rather than trashing.
+
+## Advanced
+
+**Layout.** *Sidebar width* offers narrow, default and wide (260, 300 and 360 px). Three named sizes
+rather than a drag: a form has a width that reads well, and what a free drag bought was a way to make
+the app look broken — but one number cannot suit a 1600-wide window and a 5120 one. *Reset pane
+sizes* puts the split between the inspector and the library — both on the right sidebar — back to its
+default, undoing any dragging of that divider. *Reset collapsed sections* re-opens every section that
+has been collapsed anywhere in the app.
+
+The sidebars narrow on their own when there is not room for the width you picked — at a high UI scale
+in a small window, three columns at their full size want more pixels than the window can be shrunk
+to. They give way in that order: both sidebars narrow first, down to a width a form is still usable
+at, and only then does the centre pane start to shrink. Nothing is pushed off the edge, so the
+inspector stays reachable at any scale the slider offers.
+
+Moving the window to a monitor with different scaling re-reads the new display and rebuilds the
+interface at its size, fonts included — you do not have to restart. Your *UI scale* is applied fresh
+against the new monitor rather than carried across as a number of pixels, so a zoom that had to be
+capped on one display is offered in full again on a display with room for it.
+
+**Configuration.** *Effective configuration* lists every environment variable the app reads and what
+this process resolved it to, with the ones actually set by the environment first and named by their
+variable. It is the same table `warlock doctor` prints and the same one behind the health dot's
+diagnostics popup, and *Copy as text* puts it on the clipboard for a bug report. It is read-only:
+every entry is consumed at import time, so an editable version would have to say "restart to apply"
+under every field.
+
+**If Warlock crashes**, it says so on the way out rather than simply vanishing: a small dialog
+reports that something went wrong, tells you whether there is unsaved work waiting to be offered
+back on the next launch, and asks whether to open the folder your log is in. Answering no costs
+nothing — the log is written either way, and the recovery offer does not depend on it.
 
 Not everything the app remembers has a control in this pane. `studio_settings.json` also holds your
 saved profiles and settings presets, the sidebar's internal split, and the pixel-art export

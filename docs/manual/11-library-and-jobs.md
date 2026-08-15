@@ -184,13 +184,17 @@ This accumulates. At 5 to 20 MB per GLB, regular use is real disk within weeks �
 foot of the library shows a **storage meter**: how many job directories exist and how many bytes
 they occupy. It is measured on a background thread, so it never stalls the window.
 
-Beside it, **Prune...** deletes everything but the newest N jobs, after a confirm — the confirm
+The two ways to make that number smaller live in
+[Settings → Storage](17-app-settings.md#storage), not here: a button under a scrolling list of assets
+reads as an action on the assets you can see, and neither of these is.
+
+**Prune...** deletes everything but the newest N jobs, after a confirm — the confirm
 carries the count, so N is yours to choose and it starts at twenty every time it is asked. Running
 jobs are never touched. Pruning removes both the database rows and the directories on disk, and it walks
 the whole history rather than only its first page — a history long enough to need pruning is exactly
 the one a single-page prune would fail on.
 
-Under it, **Clean library...** is the other end of the same scale: it deletes *every* asset, trashed
+**Clean library...** is the other end of the same scale: it deletes *every* asset, trashed
 or not, plus any job directory left behind with no row pointing at it. It is the one bulk action
 that keeps nothing — prune and **Empty trash...** both spare anything you accepted or labelled,
 because those files are what the quality judge and the triangle-tier checks are measured against,

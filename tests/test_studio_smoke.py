@@ -934,6 +934,97 @@ def test_the_settings_pane_help_button_stays_inside_the_pane(app_ctx, imgui_ctx,
     assert seen["help_y"] > seen["bar_y"], seen
 
 
+def test_the_settings_pane_draws_one_category_at_a_time(app_ctx, imgui_ctx, monkeypatch):
+    """REDESIGN.md 4.1. Four categories, and exactly one body per frame.
+
+    The pane used to draw all four stacked, which is the shape the segmented
+    control replaced -- so the assertion worth making is not that the switch
+    renders but that the *other three bodies do not run*.
+    """
+    from warlock.studio.panes import app_settings
+
+    drawn: list[str] = []
+    for name in ("_interface", "_models", "_storage", "_layout", "_config"):
+        monkeypatch.setattr(
+            app_settings, name, lambda _ctx, _n=name: drawn.append(_n)
+        )
+
+    for key, expected in [
+        ("appearance", ["_interface"]),
+        ("models", ["_models"]),
+        ("storage", ["_storage"]),
+        ("advanced", ["_layout", "_config"]),
+    ]:
+        drawn.clear()
+        app_ctx.state.preview[app_settings.CATEGORY_SLOT] = key
+        _frame(imgui_ctx, lambda: app_settings.draw(app_ctx))
+        assert drawn == expected, key
+
+    # An unknown key -- a settings file from a build with a category this one
+    # does not have -- falls back rather than drawing an empty pane.
+    drawn.clear()
+    app_ctx.state.preview[app_settings.CATEGORY_SLOT] = "nonsense"
+    _frame(imgui_ctx, lambda: app_settings.draw(app_ctx))
+    assert drawn == ["_interface"]
+
+
+def test_the_settings_column_is_bounded_and_centred(app_ctx, imgui_ctx):
+    """A form stretched across a 5K monitor puts the label and its control at
+    opposite ends of the desk. Narrower than the bound, it takes what it has."""
+    from imgui_bundle import imgui
+
+    from warlock.studio import tokens
+    from warlock.studio.panes import app_settings
+
+    seen: dict[str, tuple[float, float]] = {}
+
+    def build(width: float, tag: str) -> None:
+        imgui.begin_child(f"probe-{tag}", (width, 200))
+        start = imgui.get_cursor_pos_x()
+        got = app_settings._centre(tokens.sp(app_settings.CONTENT_W))
+        seen[tag] = (got, imgui.get_cursor_pos_x() - start)
+        # An item afterwards, or the cursor move is a boundary imgui asserts
+        # about -- and the real caller's ``begin_child`` is exactly that item.
+        imgui.dummy((got, 1))
+        imgui.end_child()
+
+    _frame(imgui_ctx, lambda: (build(1100, "wide"), build(300, "narrow")))
+    wide_w, wide_indent = seen["wide"]
+    assert wide_w == tokens.sp(app_settings.CONTENT_W)
+    assert wide_indent > 0, "a wide window left the column against the left edge"
+    narrow_w, narrow_indent = seen["narrow"]
+    assert narrow_w < tokens.sp(app_settings.CONTENT_W)
+    assert narrow_indent == 0, "a narrow window indented a column that already fills it"
+
+
+def test_the_bulk_deletes_left_the_library_footer_for_settings(app_ctx, imgui_ctx):
+    """REDESIGN.md 4.1: the confirms stay in ``library``, the buttons do not.
+
+    Under a scrolling list of assets, "Clean library..." reads as an action on
+    the assets you can see; and that footer is the narrowest row in the app's
+    narrowest column, which is how Prune landed off the panel's right edge
+    twice in one file's history.
+    """
+    import inspect
+
+    from warlock.studio.panes import app_settings, library
+
+    footer = inspect.getsource(library._storage)
+    assert "ask_prune" not in footer and "ask_clean" not in footer
+    # The figure it *does* still draw describes the list above it.
+    assert "job_dirs" in footer
+
+    storage = inspect.getsource(app_settings._storage)
+    assert "library.ask_prune" in storage
+    assert "library.ask_clean" in storage
+    # One measurement of the trash, not a second opinion about it.
+    assert "library.measure_trash" in storage
+
+    app_ctx.state.preview[app_settings.CATEGORY_SLOT] = "storage"
+    _frame(imgui_ctx, lambda: app_settings.draw(app_ctx))
+    _frame(imgui_ctx, lambda: app_settings.draw(app_ctx))
+
+
 def test_the_profile_manager_builds_listing_and_editing(app_ctx, imgui_ctx):
     from warlock.studio import profiles
     from warlock.studio.panes import profiles_panel
@@ -2668,7 +2759,7 @@ def test_the_prune_confirm_builds_its_keep_count(app_ctx, imgui_ctx):
     """O116: a confirm with a widget in it, which nothing else exercises."""
     from warlock.studio.panes import library
 
-    library._ask_prune(app_ctx)
+    library.ask_prune(app_ctx)
     assert app_ctx.confirms.pending is not None
     _frame(imgui_ctx, lambda: app_ctx.confirms.draw())
     app_ctx.confirms.dismiss()
