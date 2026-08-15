@@ -184,6 +184,7 @@ left-drag in empty space with `Q` selected sweeps a marquee.
 | `A` | Spray |
 | `D` | Poly lasso (Enter or a double-click closes it, Esc abandons it) |
 | `T` | Text |
+| `H` | Shading |
 | `X` | Swap the two colours |
 | `[` / `]` | Brush size (with Shift, hardness) |
 | Arrows | Nudge by a pixel — the floating selection, or the layer under the Move tool (Shift, 8 px) |

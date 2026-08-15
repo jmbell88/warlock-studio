@@ -96,6 +96,7 @@ The toolbox is an icon grid; hovering a tool shows its name and its letter. Ever
 | Spray | `A` | An airbrush: scattered dabs for as long as you hold the button. |
 | Poly lasso | `D` | Selection from clicked corners, one click per vertex. |
 | Text | `T` | Stamps typed text onto the canvas as pixels. |
+| Shading | `H` | Moves what you drag over one swatch along a palette ramp. |
 
 Options appear for the selected tool only, rather than as one long form — a brush's hardness means
 nothing while the wand is active.
@@ -126,6 +127,37 @@ cursor is moving. Its **Size** is the width of the *cloud* rather than of one da
 brush ring shows and what "spray width" means elsewhere; the dabs themselves are a quarter of it, so
 a wide spray builds up slowly and a narrow one quickly. Spacing, smoothing and pixel-perfect are
 hidden for it on purpose: all three are about a line, and a spray does not draw one.
+
+**Shading** does not paint a colour at all. It moves every pixel you drag over **one swatch along a
+ramp**, so what it writes is decided by what is already there — which is how shading is actually
+done in pixel art, and it is the difference between deepening a shadow you already drew and
+covering it over with a colour you picked out of a menu.
+
+The ramp is the **selection in the Colour panel**, walked in palette order: Ctrl+click a few
+swatches or Shift+click a run, and those are the colours the tool steps between. They do not have to
+be next to each other in the table — slots 2, 5 and 9 are three adjacent steps of a three-colour
+ramp — which is what lets you pull one character's ramp out of a palette holding several. With
+fewer than two swatches selected the whole palette is the ramp, which is the right answer for a
+table that *is* one ramp. Nothing about the ramp is saved in the file: the document keeps its
+palette, and which run of it you were shading along is a property of what you were doing.
+
+**Direction** is the tool's one setting. **Forward** moves each pixel toward the end of the ramp,
+**Back** toward its start, and either way a pixel already at the end stays there — the ramp does not
+wrap round, because sending the deepest shadow to the brightest highlight in one dab reads as damage
+rather than as a tool.
+
+Two rules make it controllable. **One step per stroke**: scrubbing back and forth over a shoulder
+moves it one swatch and stops, and you take a second step by lifting the button and dragging again.
+And **only ramp colours move** — a pixel painted in a colour that is not one of the selected
+swatches is left exactly as it is, as is anything transparent, so shading a face does not disturb
+the outline around it. Alpha is never touched, which also means "preserve transparency" on the layer
+changes nothing about what a shade stroke does.
+
+Shading needs an indexed document: with no palette, or with only one colour in it, the tool is
+greyed out in the toolbox and says why. [Indexed colour](#indexed-colour) is how to give a drawing
+one. There is no **Opacity** for it either, for the same reason there is no hardness on a pixel
+nib — a shift lands on the next swatch exactly or it does not happen, and there is no partial
+version of it to scale.
 
 The shape tools have the size slider and, except for the line, a **Filled**
 checkbox. Fill and the wand have **Tolerance** (0 to 255) and **Contiguous** — turning contiguous

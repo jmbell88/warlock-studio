@@ -47,7 +47,10 @@ def _stroke(doc, path, **kw):
 
 
 def test_replace_is_the_fifth_mode_and_the_others_are_untouched():
-    assert brush.MODES == ("paint", "erase", "blur", "smudge", "replace")
+    """The first five in order rather than the whole tuple: modes are appended
+    (``shade`` is the sixth), and what this pins is that adding one neither
+    reorders nor redefines the five that were already there."""
+    assert brush.MODES[:5] == ("paint", "erase", "blur", "smudge", "replace")
 
 
 def test_at_full_coverage_it_writes_the_colour_verbatim():

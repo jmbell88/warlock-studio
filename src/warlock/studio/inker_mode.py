@@ -1641,6 +1641,10 @@ TOOL_KEYS = {
     # Aseprite's letter for its text tool, and free here for the reason "c"
     # was: a plain "t" was bound to nothing.
     "t": "text",
+    # Aseprite has no letter to lend for shading -- there it is an ink on the
+    # ordinary brush rather than a tool -- so this is the first free letter of
+    # the word; see ``inker_state.TOOLS``.
+    "h": "shade",
 }
 
 #: How far a Shift+arrow nudge moves the active layer, in pixels. Eight rather

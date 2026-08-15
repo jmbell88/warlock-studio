@@ -52,10 +52,15 @@ TOOLS = (
     ("spray", "Spray", "A"),
     ("lasso_poly", "Poly lasso", "D"),
     ("text", "Text", "T"),
+    # ``H`` for shading, because Aseprite has no letter to borrow here -- its
+    # shading is an *ink* on the ordinary brush rather than a tool -- and every
+    # letter in the word that reads as a mnemonic was taken (S is the ellipse
+    # marquee, A the spray, D and T are spoken for elsewhere).
+    ("shade", "Shading", "H"),
 )
 
 # Tools whose drag paints into the layer.
-PAINT_TOOLS = frozenset({"brush", "eraser", "blur", "smudge", "spray"})
+PAINT_TOOLS = frozenset({"brush", "eraser", "blur", "smudge", "spray", "shade"})
 SHAPE_TOOLS = frozenset({"line", "rect", "ellipse"})
 SELECT_TOOLS = frozenset({"select", "select_ellipse", "lasso", "wand", "lasso_poly"})
 
@@ -72,8 +77,41 @@ BG_BUTTON_TOOLS = frozenset({"brush", "eraser", "fill"})
 # different way to *emit* dabs, not a different kind of dab.
 BRUSH_MODES = {
     "brush": "paint", "eraser": "erase", "blur": "blur", "smudge": "smudge",
-    "spray": "paint",
+    "spray": "paint", "shade": "shade",
 }
+
+#: Why the shading tool cannot be used on a document, keyed by what is wrong.
+#: Written here rather than in the pane because the *canvas* says the same thing
+#: in a toast when a press is refused, and two spellings of one refusal is how a
+#: user comes to believe there are two different problems.
+SHADE_REASONS = {
+    "none": "Shading needs a palette. Make the document indexed in the Colour panel.",
+    "one": "Shading needs at least two colours in the palette to step between.",
+}
+
+
+def tool_reason(tool: str, doc: Any = None) -> str:
+    """Why *tool* cannot be used on *doc* right now, or ``""``.
+
+    One function rather than a check per call site: the toolbox greys the
+    button and shows this as its tooltip, the options panel prints it under the
+    heading, and the canvas toasts it if a shortcut key got the tool selected
+    anyway. A tool with nothing to say answers the empty string, which is every
+    tool but one.
+
+    ``doc`` is optional and ``None`` disables nothing: with no document open
+    every tool is equally useless, and greying the whole toolbox to say so
+    would be noise rather than information.
+    """
+    if tool != "shade" or doc is None:
+        return ""
+    palette = getattr(doc, "palette", None)
+    if not palette:
+        return SHADE_REASONS["none"]
+    if len(palette) < 2:
+        return SHADE_REASONS["one"]
+    return ""
+
 
 #: How wide a spray's dabs are, as a fraction of the tool's size. ``brush_size``
 #: is the diameter of the *disc the dabs land in* for this one tool -- which is
@@ -138,6 +176,11 @@ TOOL_OPTION_DEFAULTS: dict[str, Any] = {
     "text_size": 24,
     "font": "",
     "aa": True,
+    # Which way the shading ink walks its ramp: +1 toward the end of the
+    # selected run, -1 toward its start. Per tool because it *is* the shading
+    # tool's one setting, and +1 because a palette is conventionally arranged
+    # dark to light, which makes the unmodified drag the one that lights.
+    "shade_dir": 1,
 }
 
 DEFAULT_SWATCHES: tuple[tuple[int, int, int, int], ...] = (
@@ -851,6 +894,7 @@ class InkerState:
     text_size = _tool_option("text_size")
     font = _tool_option("font")
     aa = _tool_option("aa")
+    shade_dir = _tool_option("shade_dir")
 
     def options_for(self, tool: str) -> dict[str, Any]:
         """One tool's option dictionary, created at the defaults on first ask.

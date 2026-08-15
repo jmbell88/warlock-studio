@@ -42,7 +42,22 @@ DEFAULT_SPACING = 0.1
 #: flag on ``paint`` because it is genuinely a different arithmetic: paint
 #: composites the colour *over* what is there, replace writes it -- alpha
 #: included, so it can paint transparency down as well as up.
-MODES = ("paint", "erase", "blur", "smudge", "replace")
+#:
+#: ``shade`` is Aseprite's shading ink and it is the odd one out for a reason
+#: worth stating: it is the only mode that does not paint the stroke's colour at
+#: all. It moves each pixel it covers **one step along a ramp**, so what it
+#: writes is decided by what is already there -- see
+#: :meth:`StrokeState._shade`.
+MODES = ("paint", "erase", "blur", "smudge", "replace", "shade")
+
+#: How much of a pixel a dab must cover for the shading ink to shift it.
+#:
+#: A threshold rather than a blend, because there is nothing to blend: a shift
+#: lands on the next swatch of the ramp exactly or it does not happen, and half
+#: a step is a colour that is on no palette. Half a pixel is the same rule the
+#: rest of this package uses for "is this pixel inside" -- and for a pixel nib,
+#: whose coverage is only ever 0 or 1, it is not a rule at all.
+SHADE_COVERAGE = 0.5
 
 SYMMETRY = ("none", "x", "y", "xy", "radial")
 
@@ -330,6 +345,15 @@ class StrokeState:
     #: sequence; the canvas draws a fresh one at every press, and a test injects
     #: one instead. There is no other source of randomness in a stroke.
     seed: int = 0
+    #: The shading ink's ramp, in the order it is walked; see :meth:`_shade`.
+    #: Passed in rather than read off a document, for ``wrap_axes``' reason: the
+    #: ramp is a *selection* in the palette panel, which is UI state, and the
+    #: engine stays stateless about the UI. Empty is every stroke this class
+    #: drew before shading existed, and makes a ``shade`` stroke a no-op.
+    ramp: tuple[tuple[int, int, int, int], ...] = ()
+    #: Which way along the ramp a shade dab moves: +1 toward its end, -1 toward
+    #: its start. Clamped at both ends rather than wrapping -- see :meth:`_shade`.
+    shade_dir: int = 1
 
     coverage: np.ndarray = field(init=False)
     dirty: tuple[int, int, int, int] | None = field(init=False, default=None)
@@ -350,6 +374,16 @@ class StrokeState:
     #: stream rather than ``np.random``'s global one, so two documents sprayed
     #: in one session cannot draw from each other's sequence.
     _rng: Any = field(init=False, default=None, repr=False)
+    #: Which pixels this stroke has already shaded, ``(H, W)`` bool -- **one
+    #: step per stroke**, which is the whole of what makes the shading ink
+    #: usable. See :meth:`_shade`. Allocated only for a ``shade`` stroke, so
+    #: every other mode pays nothing for it.
+    _shifted: np.ndarray | None = field(init=False, default=None, repr=False)
+    #: The ramp as packed RGB keys, and as an (N, 3) uint8 table. Both are
+    #: derived from ``ramp`` once here rather than per dab: a stroke is hundreds
+    #: of dabs and the ramp cannot change inside one.
+    _ramp_keys: np.ndarray | None = field(init=False, default=None, repr=False)
+    _ramp_rgb: np.ndarray | None = field(init=False, default=None, repr=False)
 
     def __post_init__(self) -> None:
         width, height = self.size
@@ -359,6 +393,16 @@ class StrokeState:
         self.speed_taper = min(1.0, max(0.0, float(self.speed_taper)))
         self._width = float(self.diameter)
         self._rng = np.random.default_rng(int(self.seed))
+        if self.mode == "shade":
+            self.ramp = tuple(tuple(int(c) for c in colour) for colour in self.ramp)  # type: ignore[misc]
+            self._shifted = np.zeros((height, width), dtype=bool)
+            rgb = np.asarray([c[:3] for c in self.ramp], dtype=np.uint8).reshape(-1, 3)
+            self._ramp_rgb = rgb
+            self._ramp_keys = (
+                rgb[:, 0].astype(np.uint32) << 16
+                | rgb[:, 1].astype(np.uint32) << 8
+                | rgb[:, 2].astype(np.uint32)
+            )
 
     # -- the walk ----------------------------------------------------------
 
@@ -584,6 +628,8 @@ class StrokeState:
             piece = stamp[sy : sy + (y1 - y0), sx : sx + (x1 - x0)]
             if self.mode in ("blur", "smudge"):
                 self._filter(piece, rect, target)
+            elif self.mode == "shade":
+                self._shade(piece, rect, target)
             else:
                 region = self.coverage[y0:y1, x0:x1]
                 np.maximum(region, piece, out=region)
@@ -679,6 +725,82 @@ class StrokeState:
         if self.alpha_lock:
             out[..., 3] = crop[..., 3]
         target[y0:y1, x0:x1] = composite.to_uint8_255(out)
+
+    def _shade(
+        self, piece: np.ndarray, rect: tuple[int, int, int, int], target: np.ndarray
+    ) -> None:
+        """Move every covered ramp pixel one step along the ramp.
+
+        Aseprite's shading ink, and the one mode that does not paint the
+        stroke's colour: what it writes is decided by what is already there.
+        Four rules, and each of them is what stops the tool being useless.
+
+        *It reads the live layer, not ``before``.* ``_filter``'s rule, for a
+        stronger version of its reason -- the pixel it has to look at is the one
+        it may have written itself a dab ago, and reading the pre-stroke copy
+        would make every dab decide from a picture that no longer exists.
+
+        *The match is exact packed RGB.* A pixel is on the ramp or it is not:
+        nearest would drag every colour in the drawing onto the nearest swatch,
+        which is a conversion rather than a shade, and it would make the
+        selected slots mean nothing. So a colour that is not on the ramp -- and
+        a fully transparent pixel, which has no colour at all -- is left exactly
+        as it is.
+
+        *One step per stroke.* ``_shifted`` records the pixels this stroke has
+        already moved, so painting back and forth over a shoulder walks it one
+        swatch and stops, rather than running it off the end of the ramp in the
+        time it takes to notice. That is what makes the ink controllable, and it
+        is per *stroke* -- lift the button and drag again to take another step.
+
+        *Clamped, not wrapped.* The ends of a ramp are the darkest and lightest
+        the user chose; wrapping would send the deepest shadow to the brightest
+        highlight in one dab, which reads as corruption.
+
+        Alpha is never touched, which is why there is no alpha-lock branch here
+        -- "preserve transparency" is exactly *the alpha does not change*, and
+        this mode cannot change it. Symmetry, tiled wrapping, the selection clip
+        and the single-patch undo all come free, because this is called under
+        ``_stamp`` like every other kind of dab.
+        """
+        keys, table = self._ramp_keys, self._ramp_rgb
+        if keys is None or table is None or keys.size < 2 or self._shifted is None:
+            # No ramp, or one swatch: there is nowhere to step. A no-op rather
+            # than a refusal, because the tool is reached with an empty ramp
+            # only on a document with no palette, which the UI already gates.
+            return
+        x0, y0, x1, y1 = rect
+        covered = self._weights(rect, piece) >= SHADE_COVERAGE
+        covered &= ~self._shifted[y0:y1, x0:x1]
+        crop = target[y0:y1, x0:x1]
+        covered &= crop[..., 3] > 0
+        if not covered.any():
+            return
+
+        rgb = crop[..., :3]
+        packed = (
+            rgb[..., 0].astype(np.uint32) << 16
+            | rgb[..., 1].astype(np.uint32) << 8
+            | rgb[..., 2].astype(np.uint32)
+        )
+        # Which ramp entry each pixel sits on, -1 for none. Walked backwards so
+        # the *first* entry wins a ramp that names one colour twice, which is
+        # the same "earlier slot owns it" rule the palette panel shows.
+        where = np.full(packed.shape, -1, dtype=np.int32)
+        for index in range(keys.size - 1, -1, -1):
+            where[packed == keys[index]] = index
+        hit = covered & (where >= 0)
+        if not hit.any():
+            return
+
+        step = 1 if int(self.shade_dir) >= 0 else -1
+        moved = np.clip(where + step, 0, keys.size - 1)
+        crop[..., :3][hit] = table[moved[hit]]
+        # Marked even where the clamp made the step a no-op: a pixel already at
+        # the end of the ramp has *had* this stroke's step, and leaving it
+        # unmarked would only matter if a later dab could move it, which the
+        # clamp already forbids.
+        self._shifted[y0:y1, x0:x1][hit] = True
 
     def _mark(self, rect: tuple[int, int, int, int]) -> None:
         if self.dirty is None:
