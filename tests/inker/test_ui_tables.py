@@ -151,10 +151,11 @@ def test_the_palette_sort_combo_offers_every_key_the_engine_implements():
     """Both directions, which is the whole point: a key the pane offers and the
     engine does not fails on the first click, and one the engine has and the
     pane does not is a feature no user can reach."""
-    from warlock.studio.inker import indexed
+    from warlock.studio import inker
     from warlock.studio.panes import inker_colors
 
-    assert tuple(key for key, _label in inker_colors.SORT_LABELS) == indexed.SORT_KEYS
+    keys = tuple(key for key, _label in inker_colors.SORT_LABELS)
+    assert keys == inker.PALETTE_SORT_KEYS
 
 
 def test_every_sort_key_is_labelled_and_no_label_is_repeated():
@@ -169,8 +170,10 @@ def test_the_convert_popup_offers_every_method_the_engine_implements():
     """The dither combo is built from ``dither.METHODS`` at the call site rather
     than written out, so this asserts the tuple is the one thing there is to
     offer -- and that the default is one of them."""
+    from warlock.studio import inker
     from warlock.studio.inker import dither
 
+    assert inker.DITHER_METHODS == dither.METHODS
     assert dither.METHODS[0] == "nearest"
     assert inker_state.InkerState().convert_method in dither.METHODS
 
