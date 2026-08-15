@@ -116,3 +116,43 @@ def test_an_unrecognised_suffix_writes_a_gpl_rather_than_refusing():
     """The export dialog produces whatever the user typed, and a typed name with
     no suffix at all still has to produce a file."""
     assert gpl.dumps_for("", [(1, 2, 3, 255)]).startswith("GIMP Palette")
+
+
+# --- what actually reaches the disk ------------------------------------------
+#
+# Asserted on ``read_bytes`` rather than on the serialiser's string, because
+# between the two sits ``write_text``, whose default ``newline=None`` translates
+# every ``\n`` it is handed into ``os.linesep``. On Windows that turned this
+# format's correct CRLF into ``\r\r\n`` -- and ``parse_jasc`` read the result
+# back perfectly, because ``splitlines`` shrugs at anything. The one reason to
+# write a JASC palette at all is the strict third-party readers that will not.
+
+
+def test_the_exported_pal_is_crlf_on_disk_and_not_double_carriage_returned(tmp_path):
+    from warlock.studio import inker_mode
+
+    dest = tmp_path / "ramp.pal"
+    inker_mode._write_palette(dest, [(0, 0, 0, 255), (255, 128, 64, 255)], "Ramp")
+
+    assert dest.read_bytes() == b"JASC-PAL\r\n0100\r\n2\r\n0 0 0\r\n255 128 64\r\n"
+
+
+def test_the_exported_gpl_keeps_its_own_line_endings_too(tmp_path):
+    """The same write, the other format: ``.gpl`` is LF and must not pick up a
+    carriage return on the way out either."""
+    from warlock.studio import inker_mode
+
+    dest = tmp_path / "ramp.gpl"
+    inker_mode._write_palette(dest, [(1, 2, 3, 255)], "Ramp")
+
+    raw = dest.read_bytes()
+    assert b"\r" not in raw
+    assert raw.startswith(b"GIMP Palette\nName: Ramp\nColumns: 0\n#\n")
+
+
+def test_a_suffixless_name_lands_as_a_gpl_on_disk(tmp_path):
+    from warlock.studio import inker_mode
+
+    inker_mode._write_palette(tmp_path / "swatches", [(1, 2, 3, 255)], "Swatches")
+
+    assert (tmp_path / "swatches.gpl").exists()

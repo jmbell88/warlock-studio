@@ -1089,7 +1089,7 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
     convert_head = tab.doc.history.head
     wants_convert.append(1)
     _frame(imgui_ctx, build)
-    assert state.convert_open and state.convert_table
+    assert state.convert_uid == tab.uid and state.convert_table
     # Two colours, which is what the Colours slider at its floor would build:
     # the canvas here is small enough that a default-sized table is the exact
     # set of colours already in it, and a conversion onto that is the identity.
@@ -1100,11 +1100,57 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
     assert tab.doc.history.head == convert_head
     assert tab.doc.palette is None, "a preview installs no table"
 
-    tab.doc.cancel_convert()
-    state.convert_open = False
+    # A *save* while the popup is up must not write the preview. `_settle` at
+    # the top of every serialising path cancels the session and clears the flag,
+    # so the pixels are the user's own again before anything is encoded.
+    inker_mode._settle(app_ctx, tab)
+    assert state.convert_uid == ""
+    assert tab.doc._convert is None
     assert np.array_equal(tab.doc.stack.active.pixels, convert_before)
     assert tab.doc.history.head == convert_head
     _frame(imgui_ctx, build)
+
+    # And the same session against a *second* tab. The popup is one imgui window
+    # over one shared state object while the session lives on one document, so
+    # switching tabs with it up used to cancel on whichever tab was now in front
+    # -- leaving the previewed one holding pixels nobody would ever answer for.
+    from warlock.studio.inker.document import Document as _Document
+
+    wants_convert.append(1)
+    _frame(imgui_ctx, build)
+    assert state.convert_uid == tab.uid
+    state.convert_table = [(0, 0, 0, 255), (255, 255, 255, 255)]
+    _frame(imgui_ctx, build)
+    assert not np.array_equal(tab.doc.stack.active.pixels, convert_before), "previewing"
+
+    # Opening a tab switches to it -- the tab bar carries ``auto_select_new_tabs``
+    # -- which is the gesture, and it is why this is driven through ``_adopt``
+    # rather than through ``state.activate``: the bar would put the new tab back
+    # in front on the very next frame anyway.
+    other = inker_mode._adopt(
+        app_ctx, state, _Document.blank(8, 8), path=None, title="second"
+    )
+    other_before = other.doc.stack.active.pixels.copy()
+    # imgui registers the new tab this frame and selects it on the next, so the
+    # switch is two frames rather than one -- and how many is imgui's business,
+    # not this test's.
+    for _ in range(4):
+        _frame(imgui_ctx, build)
+        if inker_mode.active(app_ctx) is other:
+            break
+    assert inker_mode.active(app_ctx) is other, "the pane is drawing the new tab"
+    assert state.convert_uid == "", "the stranded session is settled"
+    assert tab.doc._convert is None
+    assert np.array_equal(tab.doc.stack.active.pixels, convert_before), "on its own doc"
+    assert np.array_equal(other.doc.stack.active.pixels, other_before), "not the new one"
+    assert other.doc._convert is None
+
+    state.close(other.uid)
+    for _ in range(4):
+        _frame(imgui_ctx, build)
+        if inker_mode.active(app_ctx) is tab:
+            break
+    assert inker_mode.active(app_ctx) is tab
 
     # A second layer, a selection and a floating buffer: the other textures.
     tab.doc.add_layer()

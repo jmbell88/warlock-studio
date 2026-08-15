@@ -527,19 +527,28 @@ class InkerState:
     palette_sort: str = "luma"
     palette_sort_desc: bool = False
     palette_ramp: int = 3
-    #: The open conversion session: whether the popup is up, which method it is
+    #: The open conversion session: **which tab owns it**, which method it is
     #: previewing, how many colours a built table may have, and the table
     #: itself. View state, none of it persisted -- the *document* keeps the
     #: table a conversion produces, and this is only what is being tried.
     #:
+    #: ``convert_uid`` is a tab uid and not a bool, and that is the whole of the
+    #: difference between this and the filter popup it was cloned from. A
+    #: conversion session lives on one ``Document`` (``Document._convert``) while
+    #: this state is one object shared by every tab, and the pane draws whichever
+    #: tab is *active* -- so a plain "the popup is up" flag meant that switching
+    #: tabs with it open cancelled the conversion on the wrong document and left
+    #: the right one holding a preview nobody would ever answer. Holding the uid
+    #: makes both halves address the same document by name; see
+    #: ``inker_mode.end_convert_session``. Empty means no session.
+    convert_uid: str = ""
+    convert_method: str = "nearest"
+    convert_max: int = 16
     #: ``convert_table`` is held rather than recomputed per frame because
     #: building one is a pass over every plane of the document, and because the
     #: preview moves ``doc.rev`` every frame -- so there is no cache key made of
     #: document state that would not thrash. It is rebuilt when the slider that
     #: decides it moves, and at no other time.
-    convert_open: bool = False
-    convert_method: str = "nearest"
-    convert_max: int = 16
     convert_table: list[tuple[int, int, int, int]] = field(default_factory=list)
 
     # Drag state, decided on press because several tools start the same way.

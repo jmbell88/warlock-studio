@@ -382,21 +382,43 @@ def open_convert(ctx: Any, tab: Any) -> None:
     # After ``begin_convert``, which is what makes the built table read the
     # session's snapshot rather than a preview of itself.
     state.convert_table = _convert_table(state, tab.doc)
-    state.convert_open = True
+    state.convert_uid = tab.uid
     imgui.open_popup(CONVERT_POPUP)
 
 
 def convert_popup(ctx: Any, tab: Any) -> None:
+    """Draw the open session's popup, or settle a session nothing will answer.
+
+    Called unconditionally from ``inker_colors.draw`` -- including with no tab
+    at all -- because this is the only per-frame hook the session has, and every
+    way it can be stranded is a frame where the popup does not get drawn.
+
+    Two of those ways are handled below and neither may act on ``tab``:
+
+    * ``begin_popup`` says no. The user clicked outside, or the pane stopped
+      being submitted (leaving Inker mode), and imgui closed the popup. An
+      unanswered question is not a yes, so the session is cancelled.
+    * the popup is up but this pane is drawing a *different* document. The user
+      switched tabs. The session belongs to the tab it was opened on and nothing
+      about the new one has anything to do with it.
+
+    In both, ``end_convert_session`` resolves the owner by uid. Reaching for
+    ``tab`` here -- which the filter popup this was cloned from does -- is
+    exactly how a tab switch came to restore planes that were never previewed
+    while the previewed document kept a dither nobody approved, with no hook
+    left to take it back.
+    """
     from ..inker import dither
 
     state = inker_mode.ensure(ctx)
+    owner = state.get(state.convert_uid) if state.convert_uid else None
     if not imgui.begin_popup(CONVERT_POPUP):
-        # A click outside closes the popup and answers nothing, so the pixels on
-        # screen are a preview nobody approved. Cancel, never commit -- the
-        # filter popup's rule.
-        if state.convert_open:
-            state.convert_open = False
-            tab.doc.cancel_convert()
+        inker_mode.end_convert_session(ctx)
+        return
+    if owner is None or tab is None or owner.uid != tab.uid:
+        inker_mode.end_convert_session(ctx)
+        imgui.close_current_popup()
+        imgui.end_popup()
         return
 
     state.convert_method = widgets.combo(
@@ -434,7 +456,7 @@ def convert_popup(ctx: Any, tab: Any) -> None:
             state.palette_slots = []
             state.palette_usage = None
             ctx.toast(f"Converted to {len(table)} colour(s).", "success")
-        state.convert_open = False
+        state.convert_uid = ""
         imgui.close_current_popup()
     imgui.end_disabled()
     imgui.same_line()
@@ -442,6 +464,6 @@ def convert_popup(ctx: Any, tab: Any) -> None:
     # the user cannot dismiss.
     if imgui.button("Cancel##convert", (sp(90), 0)):
         tab.doc.cancel_convert()
-        state.convert_open = False
+        state.convert_uid = ""
         imgui.close_current_popup()
     imgui.end_popup()

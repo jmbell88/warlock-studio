@@ -75,6 +75,14 @@ def draw(ctx: Any) -> None:
     _palette_files(ctx, state)
     imgui.dummy((0, 6))
     _indexed(ctx, state)
+    # Unconditionally, and at *this* level rather than inside ``_indexed``: a
+    # popup is matched by an id computed off the id stack that opened it, which
+    # is this one, and a conversion session's only per-frame hook is this call.
+    # ``_indexed`` returns early when there is no active tab -- and "there is no
+    # active tab any more" is one of the ways a session gets stranded, so it has
+    # to be a frame this still runs on. It takes the tab or None and settles the
+    # session against whichever document actually owns it.
+    inker_bridge.convert_popup(ctx, inker_mode.active(ctx))
 
 
 # --- indexed colour ---------------------------------------------------------
@@ -108,10 +116,6 @@ def _indexed(ctx: Any, state: Any) -> None:
     else:
         _slots(ctx, state, tab)
     imgui.end_disabled()
-    # Outside the disabled scope, for the reason ``inker_bridge._canvas_ops``
-    # states: a popup is its own window, and imgui's disabled state is not meant
-    # to span a Begin/End pair. It carries its own ``busy`` gate on Apply.
-    inker_bridge.convert_popup(ctx, tab)
 
 
 def _not_indexed(ctx: Any, state: Any, tab: Any) -> None:
