@@ -163,6 +163,13 @@ class LayerOps:
                 opacity=track.opacity,
                 visible=track.visible,
                 blend=track.blend,
+                # The two locks as well. The still branch below copies every
+                # property (``Layer.copy`` does), and this list stopping at
+                # four made duplicating a layer quietly *unlock* it on an
+                # animated document and nowhere else -- the fifth place the
+                # track-property list has to agree with itself.
+                alpha_lock=track.alpha_lock,
+                locked=track.locked,
             )
             # Copies, not links -- *from* the original: duplicating a layer to
             # paint a variation on it and having every stroke land on the
@@ -532,12 +539,19 @@ class LayerOps:
         cels: dict[tuple[int, int], Layer] = {}
         for indices, uid in zip(partition, uids, strict=True):
             frame = anim.frames[indices[0]]
-            flat = LayerStack(anim.layers_for(frame, size), 0).flatten()
+            # ``frame_stack``, not a bare one: the flatten has to see the group
+            # fold, or a hidden folder's layers reappear in the flattened cel.
+            # Necessarily *before* the tree is cleared below.
+            flat = self.frame_stack(frame).flatten()
             layer = Layer(pixels=flat, name=track.name, uid=uid)
             for i in indices:
                 cels[(track_uid, anim.frames[i].uid)] = layer
         anim.tracks = [track]
         anim.cels = cels
+        # One track is nothing for a group to hold, as in ``_do_flatten``.
+        # Idempotent, which replay requires; ``ReplayEdit`` carries the tree it
+        # replaced and puts it back.
+        self.groups, self.group_of = {}, {}
         # Every frame's flatten really did change, which ``invalidate_all``
         # deliberately does not assume.
         self._stamp_all()
@@ -827,6 +841,8 @@ class LayerOps:
             return False
         self.commit_floating()
 
+        # Where the row has to end up for every span to stay contiguous, worked
+        # out *before* the membership changes, against the stack as it stands.
         to = index
         if group_uid is not None:
             leaves = [
@@ -838,6 +854,22 @@ class LayerOps:
                 # side the layer came from: an index above the span's top is
                 # adjacent to it, and one below it is inside it already.
                 to = max(leaves) if at_top else min(leaves)
+        elif before is not None:
+            # Going to the root, and the harder direction: a row taken out of
+            # the *middle* of a span leaves that span in two halves, so it has
+            # to move out of the way as well. To the top of the outermost group
+            # it is leaving, which -- because removing it closes the gap behind
+            # it -- lands it directly above everything that stays. A row
+            # already at either end of the span is out of the way where it is.
+            chain = gp.ancestry(self.group_of, member)
+            outer = chain[-1] if chain else before
+            span = [
+                order.index(uid)
+                for uid in gp.leaves_of(self.group_of, order, outer)
+                if uid != member
+            ]
+            if span and min(span) < index < max(span):
+                to = max(span)
         edits: list[Any] = [MembershipEdit(member, before, group_uid)]
         self._set_membership(member, group_uid)
         if to != index:

@@ -422,3 +422,88 @@ def test_a_group_may_not_be_moved_into_its_own_subtree():
     # The panel's route: dropping a row of ``outer`` onto ``outer`` is a no-op
     # rather than a cycle, and the guard is what makes a *group* payload safe.
     assert doc.move_into_group(2, outer.uid) is False
+
+
+def test_taking_a_layer_out_of_the_middle_of_a_span_moves_it_clear():
+    """The harder direction. Dropping the membership alone would leave the
+    group's leaves in two halves with a stranger between them."""
+    doc = _doc(5)
+    node = doc.group_layers([1, 2, 3], name="Ink")
+    middle = doc.stack[2].uid
+
+    assert doc.move_into_group(2, None)
+
+    _ok(doc)
+    assert middle not in doc.group_of
+    assert gp.leaves_of(doc.group_of, doc.member_uids(), node.uid) == [
+        doc.stack[1].uid,
+        doc.stack[2].uid,
+    ]
+
+
+def test_taking_a_layer_out_of_the_end_of_a_span_leaves_it_where_it_is():
+    doc = _doc(4)
+    doc.group_layers([1, 2], name="Ink")
+    bottom = doc.stack[1].uid
+    assert doc.move_into_group(1, None)
+    _ok(doc)
+    assert doc.stack[1].uid == bottom
+
+
+def test_taking_a_layer_out_of_a_nested_group_clears_the_outer_span_too():
+    doc = _doc(5)
+    outer = doc.group_layers([1, 2, 3], name="outer")
+    inner = doc.group_layers([2, 3], name="inner")
+    middle = doc.stack[2].uid
+
+    assert doc.move_into_group(2, None)
+
+    _ok(doc)
+    assert middle not in doc.group_of
+    assert outer.uid in doc.groups
+    assert inner.uid in doc.groups
+
+
+def test_moving_from_an_inner_group_to_its_parent():
+    doc = _doc(5)
+    outer = doc.group_layers([1, 2, 3], name="outer")
+    inner = doc.group_layers([2, 3], name="inner")
+    moved = doc.stack[2].uid
+
+    assert doc.move_into_group(2, outer.uid)
+
+    _ok(doc)
+    assert doc.group_of[moved] == outer.uid
+    assert inner.uid in doc.groups
+
+
+def test_a_duplicated_track_keeps_both_locks():
+    """The still branch copies every property (``Layer.copy`` does), and this
+    list stopping at four unlocked the duplicate on an animated document and
+    nowhere else."""
+    doc = _doc(2)
+    doc.add_frame(copy=True)
+    doc.set_layer_props(1, alpha_lock=True, locked=True)
+    doc.duplicate_layer(1)
+    assert doc.anim is not None
+    assert (doc.anim.tracks[2].alpha_lock, doc.anim.tracks[2].locked) == (True, True)
+
+
+def test_flattening_an_animated_grid_honours_a_hidden_group():
+    """The flatten has to see the fold, or a hidden folder's layers reappear in
+    the flattened cel -- and it has to see it *before* the tree is cleared."""
+    doc = _doc(2)
+    doc.stack[1].pixels[:, :] = BLUE
+    doc.add_frame(copy=True)
+    doc.set_current_frame(0)
+    node = doc.group_layers([1], name="Ink")
+    doc.set_group_props(node.uid, visible=False)
+
+    doc.flatten_layers()
+
+    assert not doc.groups
+    anim = doc.anim
+    assert anim is not None
+    for frame in anim.frames:
+        cel = anim.cels[(anim.tracks[0].uid, frame.uid)]
+        assert tuple(cel.pixels[4, 4]) == RED
