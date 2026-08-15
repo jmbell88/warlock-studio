@@ -183,8 +183,8 @@ mode. Above the list are **Add**, **Copy**, **Delete**, **Merge down** and **Fla
 opacity slider previews live but records a single undo step when you let go, rather than one step
 per pixel of drag.
 
-The blend modes are the twelve separable ones, listed in the order every editor groups them —
-darkening, then lightening, then contrast, then comparison:
+There are nineteen blend modes, listed in the order every editor groups them — darkening, then
+lightening, then contrast, then comparison, then the arithmetic and colour ones:
 
 | | |
 |---|---|
@@ -192,12 +192,16 @@ darkening, then lightening, then contrast, then comparison:
 | `darken`, `multiply`, `color-burn` | can only darken the backdrop |
 | `lighten`, `screen`, `color-dodge`, `add` | can only lighten it |
 | `overlay`, `hard-light`, `soft-light` | darken the dark half and lighten the light half |
-| `difference` | the distance between the two colours |
+| `difference`, `exclusion` | the distance between the two colours; exclusion is the softer of them |
+| `subtract`, `divide` | arithmetic, clamped at black and at white rather than wrapping |
+| `hue`, `saturation`, `color`, `luminosity` | take one attribute from the layer and the rest from underneath |
 
 These are the W3C formulas, which is what OpenRaster's composite operators are defined against — so
 a document saved here and reopened in Krita or GIMP composites identically rather than approximately.
-The four *non-separable* modes (hue, saturation, colour, luminosity) are not implemented; a file
-that arrives using one opens with that layer set to `normal` rather than being refused.
+The last four are the *non-separable* ones: `color` paints over a drawing without changing how light
+or dark it is, and `luminosity` is that trade the other way round. `subtract` and `divide` are the
+two the W3C set has no name for, so they go into the file under Krita's names — a mode that arrives
+from another editor and has no equivalent here still opens, with that layer set to `normal`.
 
 **Lock alpha** paints inside what is already on a layer and never past its edge: colours change,
 transparency does not. It is how you recolour lineart or shade a shape without selecting it first —

@@ -128,6 +128,16 @@ def test_every_ora_op_is_the_name_krita_and_gimp_write():
         "hard-light": "svg:hard-light",
         "soft-light": "svg:soft-light",
         "difference": "svg:difference",
+        "exclusion": "svg:exclusion",
+        # The two the SVG set has no name for, so OpenRaster's namespacing rule
+        # applies and the namespace is the application whose definition we
+        # implement. See ``test_blend_full_set``.
+        "subtract": "krita:subtract",
+        "divide": "krita:divide",
+        "hue": "svg:hue",
+        "saturation": "svg:saturation",
+        "color": "svg:color",
+        "luminosity": "svg:luminosity",
     }
     assert set(cp.ORA_OPS) == set(cp.BLEND_MODES)
 
@@ -164,11 +174,20 @@ def test_no_mode_produces_a_warning_or_a_nan_on_ordinary_pixels(mode, recwarn):
     saturated channel, which is most of a white stroke, and colour-dodge would
     divide by it. A RuntimeWarning out of a paint stroke is a bug even when the
     pixel it produces happens to be right.
+
+    The grid carries an **RGB last axis** rather than being a bare (5, 5) plane
+    of pairs: the non-separable four read all three channels to decide one, so
+    they are only defined on the shape ``over`` passes them. Two of the three
+    channels are permutations of the same grid and the third is a constant, so
+    every pair of extremes still meets, and greys (all three equal) are in there
+    too -- which is the case ``_set_sat``'s zero-span branch exists for.
     """
     values = np.array([0.0, 0.25, 0.5, 0.75, 1.0], dtype=np.float32)
-    cb, cs = np.meshgrid(values, values)
+    grid_b, grid_s = np.meshgrid(values, values)
+    cb = np.stack([grid_b, grid_b[::-1], grid_b], axis=-1).astype(np.float32)
+    cs = np.stack([grid_s, grid_s, grid_s[:, ::-1]], axis=-1).astype(np.float32)
     with np.errstate(all="raise"):
-        out = cp.blend(cb.astype(np.float32), cs.astype(np.float32), mode)
+        out = cp.blend(cb, cs, mode)
     assert np.all(np.isfinite(out)), mode
     assert not [w for w in recwarn if issubclass(w.category, RuntimeWarning)]
 

@@ -1,9 +1,12 @@
 """Blend-mode arithmetic and the layer compositor.
 
-The formulas are the W3C separable blend modes -- the same ones OpenRaster's
-``svg:*`` composite-ops are defined against, so a document saved here and
-reopened in Krita composites identically. That is the whole reason not to
-invent something prettier.
+The formulas are the W3C blend modes -- the separable ones and the four
+non-separable ones, the same set OpenRaster's ``svg:*`` composite-ops are
+defined against, so a document saved here and reopened in Krita composites
+identically. That is the whole reason not to invent something prettier. The two
+arithmetic modes the spec has no word for (``subtract``, ``divide``) follow
+Krita's definitions instead, for the same reason and with the same evidence:
+they are what the readers on the other end implement.
 
 Everything in this module speaks *straight* (non-premultiplied) alpha, float32,
 channels last, values in 0..1. Straight alpha is the format at every boundary
@@ -47,6 +50,23 @@ BLEND_MODES: tuple[str, ...] = (
     "hard-light",
     "soft-light",
     "difference",
+    # Appended, never interleaved: the four groups above are the menu a user
+    # already knows, so the seven added later sit after them rather than being
+    # filed into the families they arguably belong to. ``exclusion`` is
+    # comparison like ``difference``; ``subtract`` and ``divide`` are the two
+    # arithmetic ops every pixel editor carries and neither is in the W3C
+    # separable set (their spellings on disk are Krita's, see ``ORA_OPS``); the
+    # last four are the *non-separable* modes, which is a different kind of
+    # formula rather than a different family -- they mix whole colours instead
+    # of channels, so they are the only ones ``blend`` cannot answer for a
+    # single plane.
+    "exclusion",
+    "subtract",
+    "divide",
+    "hue",
+    "saturation",
+    "color",
+    "luminosity",
 )
 
 # The kernel takes a mode as a number, and the enum in native/warlockc.h spells
@@ -57,6 +77,16 @@ BLEND_MODES: tuple[str, ...] = (
 # ``normal`` back for it -- silently, which is the one thing a fallback path
 # must never be. Written-out also means the numbers are free of the list's
 # order, so the menu above could be regrouped without invalidating a DLL.
+#
+# **The seven modes added after ``difference`` are deliberately absent from
+# here** -- exclusion, subtract, divide, hue, saturation, color and luminosity
+# are numpy-only, and the four non-separable ones could not be a per-channel C
+# case at all. The consequence is worth stating because it is bigger than the
+# mode: ``_stack_native`` is all-or-nothing, so *one* layer in one of these
+# modes puts the **whole stack** on the numpy fold, not just that layer. That is
+# the intended trade -- a correct composite at the old speed -- and it is the
+# reason none of the seven may be given a number here without a matching case in
+# ``native/composite.c``.
 _MODE_IDS: dict[str, int] = {
     "normal": 0,
     "multiply": 1,
@@ -90,6 +120,22 @@ ORA_OPS: dict[str, str] = {
     "hard-light": "svg:hard-light",
     "soft-light": "svg:soft-light",
     "difference": "svg:difference",
+    "exclusion": "svg:exclusion",
+    # Not ``svg:*``: subtract and divide are not in the SVG compositing set, so
+    # OpenRaster's own rule applies -- a non-standard operator is namespaced by
+    # the application that defines it, and the definitions everybody else reads
+    # are Krita's (its composite-op ids are literally "subtract" and "divide").
+    # Writing ``svg:subtract`` would invent a name no reader knows; writing the
+    # krita: one means Krita opens the file as what it is and every other reader
+    # falls back to normal through its own unknown-op path. ``OPS_ORA`` is only
+    # a ``.get``, so a fixture that spells these differently costs a mode on
+    # read and never a refusal.
+    "subtract": "krita:subtract",
+    "divide": "krita:divide",
+    "hue": "svg:hue",
+    "saturation": "svg:saturation",
+    "color": "svg:color",
+    "luminosity": "svg:luminosity",
 }
 
 # Read side only, and deliberately lossy: an op we cannot reproduce becomes
@@ -98,7 +144,12 @@ OPS_ORA = {v: k for k, v in ORA_OPS.items()}
 
 
 def blend(backdrop: np.ndarray, source: np.ndarray, mode: str) -> np.ndarray:
-    """B(Cb, Cs) for a separable blend mode. Colour only; alpha is not here."""
+    """B(Cb, Cs) for a blend mode. Colour only; alpha is not here.
+
+    Separable modes take any shape and work per channel. The four in
+    :data:`_NON_SEPARABLE` need an RGB last axis, which is what ``over`` passes
+    and what they say if handed anything else.
+    """
     if mode == "normal":
         return source
     if mode == "multiply":
@@ -120,6 +171,28 @@ def blend(backdrop: np.ndarray, source: np.ndarray, mode: str) -> np.ndarray:
         return np.maximum(backdrop, source)
     if mode == "difference":
         return np.abs(backdrop - source)
+    if mode == "exclusion":
+        return backdrop + source - 2.0 * backdrop * source
+    if mode == "subtract":
+        # Clamped at the bottom rather than wrapped. Wrapping is what an 8-bit
+        # integer does when nobody stops it, and it turns a slightly-too-dark
+        # region into a bright one -- which is a bug in every editor that has
+        # shipped it, not a feature.
+        return np.maximum(backdrop - source, 0.0)
+    if mode == "divide":
+        # **Krita's zero convention**, pinned here and in
+        # ``test_blend_full_set``: dividing by an empty channel gives white
+        # where there is anything to divide and stays black where there is not
+        # (``cfDivide``: ``src == 0 -> dst == 0 ? 0 : 1``). The alternative --
+        # calling it all white -- makes a black backdrop under a black source
+        # flash to white, which is exactly the region a divide layer is usually
+        # aimed at. The divisor is guarded rather than clipped afterwards, for
+        # colour-dodge's reason: a zero channel is most of a flat drawing.
+        divisor = np.where(source > 0.0, source, 1.0)
+        ratio = np.minimum(backdrop / divisor, 1.0)
+        return np.where(source > 0.0, ratio, np.where(backdrop > 0.0, 1.0, 0.0))
+    if mode in _NON_SEPARABLE:
+        return _non_separable(backdrop, source, mode)
     if mode == "hard-light":
         # *Literally* overlay with the operands swapped, rather than the same
         # formula written out with the tests inverted. The two are equal on
@@ -156,6 +229,105 @@ def blend(backdrop: np.ndarray, source: np.ndarray, mode: str) -> np.ndarray:
             backdrop + (2.0 * source - 1.0) * (d - backdrop),
         )
     raise ValueError(f"unknown blend mode {mode!r}")
+
+
+# -- the non-separable four --------------------------------------------------
+#
+# hue / saturation / color / luminosity, straight out of the W3C compositing
+# spec's own pseudo-code (Lum, ClipColor, SetLum, Sat, SetSat) rather than out
+# of anybody's simplification of it. They are the only modes that read all three
+# channels of a pixel to decide one of them, which is why they cannot be a
+# per-channel C case and why they are absent from ``_MODE_IDS``.
+#
+# Every division below is guarded even where the branch that would divide by
+# zero is not taken: ``np.where`` evaluates both arms, and this module is
+# exercised under ``np.errstate(all="raise")`` because a RuntimeWarning out of a
+# paint stroke is a bug even when the pixel it produces is right.
+
+_NON_SEPARABLE = ("hue", "saturation", "color", "luminosity")
+
+# The spec's luminance weights, and not the Rec.709 ones: this is a *blend mode*
+# and its answer has to match the editor on the other end of the file, so the
+# number that matters is the one every implementation of svg:luminosity uses.
+_LUM_WEIGHTS = np.array([0.30, 0.59, 0.11], dtype=np.float32)
+
+
+def _lum(colour: np.ndarray) -> np.ndarray:
+    return (colour * _LUM_WEIGHTS).sum(axis=-1, keepdims=True)
+
+
+def _sat(colour: np.ndarray) -> np.ndarray:
+    return colour.max(axis=-1, keepdims=True) - colour.min(axis=-1, keepdims=True)
+
+
+def _clip_colour(colour: np.ndarray) -> np.ndarray:
+    """The spec's ClipColor: pull an out-of-range colour back towards its own
+    luminance, so that fixing the range cannot change the luminance -- which is
+    the whole property SetLum exists to establish."""
+    lum = _lum(colour)
+    low = colour.min(axis=-1, keepdims=True)
+    high = colour.max(axis=-1, keepdims=True)
+    # ``low``/``high`` are the *original* extremes in both branches, as the
+    # pseudo-code has them: n and x are computed once, before C is touched.
+    under = lum - low
+    out = np.where(
+        low < 0.0,
+        lum + (colour - lum) * lum / np.where(under != 0.0, under, 1.0),
+        colour,
+    )
+    over_ = high - lum
+    return np.where(
+        high > 1.0,
+        lum + (out - lum) * (1.0 - lum) / np.where(over_ != 0.0, over_, 1.0),
+        out,
+    )
+
+
+def _set_lum(colour: np.ndarray, lum: np.ndarray) -> np.ndarray:
+    return _clip_colour(colour + (lum - _lum(colour)))
+
+
+def _set_sat(colour: np.ndarray, sat: np.ndarray) -> np.ndarray:
+    """The spec's SetSat, in argsort form.
+
+    The pseudo-code names Cmin/Cmid/Cmax and assigns back to *those* channels,
+    which per pixel is a three-way branch. ``argsort`` says the same thing once
+    for the whole plane: sort the channels, rewrite the sorted triple (min goes
+    to 0, mid keeps its position in the range, max becomes the target
+    saturation), then scatter it back to where each channel came from.
+
+    Ties are why this is a sort rather than three comparisons. On a grey pixel
+    all three are equal, ``span`` is zero and every channel ends at zero, which
+    is what the spec's else-branch says; on a two-equal pixel argsort's
+    stability picks one of them as the max and the other as the mid, and both
+    orderings give the same numbers out because their inputs are equal.
+    """
+    order = np.argsort(colour, axis=-1)
+    ranked = np.take_along_axis(colour, order, axis=-1)
+    low = ranked[..., 0:1]
+    mid = ranked[..., 1:2]
+    high = ranked[..., 2:3]
+    span = high - low
+    lit = span > 0.0
+    scaled = np.where(lit, (mid - low) * sat / np.where(lit, span, 1.0), 0.0)
+    top = np.where(lit, sat, 0.0)
+    out = np.empty_like(colour)
+    np.put_along_axis(
+        out, order, np.concatenate([np.zeros_like(low), scaled, top], axis=-1), axis=-1
+    )
+    return out
+
+
+def _non_separable(backdrop: np.ndarray, source: np.ndarray, mode: str) -> np.ndarray:
+    if backdrop.shape[-1] != 3 or source.shape[-1] != 3:
+        raise ValueError(f"{mode!r} is non-separable and needs an RGB last axis")
+    if mode == "hue":
+        return _set_lum(_set_sat(source, _sat(backdrop)), _lum(backdrop))
+    if mode == "saturation":
+        return _set_lum(_set_sat(backdrop, _sat(source)), _lum(backdrop))
+    if mode == "color":
+        return _set_lum(source, _lum(backdrop))
+    return _set_lum(backdrop, _lum(source))
 
 
 # -- the native seam ---------------------------------------------------------
