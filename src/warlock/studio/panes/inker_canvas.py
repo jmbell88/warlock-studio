@@ -17,6 +17,7 @@ makes every gesture exactly one Ctrl+Z.
 from __future__ import annotations
 
 import math
+import random
 import time
 from typing import Any
 
@@ -24,9 +25,20 @@ import numpy as np
 from imgui_bundle import imgui
 
 from .. import ants, icons, inker_mode, inker_state, theme, widgets
-from ..inker_state import PAINT_TOOLS, SELECT_TOOLS, SHAPE_TOOLS
+from ..inker.tiling import axes_of, canonical, tile_offset
+from ..inker_state import BG_BUTTON_TOOLS, PAINT_TOOLS, SELECT_TOOLS, SHAPE_TOOLS
 from ..tokens import sp
 from . import inker_textures
+
+#: The four positions of the Tiled control, one per :data:`TILED_AXES` entry.
+#: Prefixed, because in a row of icon buttons a bare "X" says nothing about
+#: what it is an axis of.
+TILED_LABELS = (
+    ("off", "Tiled: off"),
+    ("x", "Tiled: X"),
+    ("y", "Tiled: Y"),
+    ("both", "Tiled: X+Y"),
+)
 
 
 def _u32(colour: int, alpha: float = 1.0) -> int:
@@ -82,8 +94,15 @@ def _blit(draw_list: Any, texture: Any, view: Any, origin, x0, y0, x1, y1, **kwa
 
     ``uv`` overrides the corner coordinates for the one caller that tiles
     (the checkerboard), in the same top-left/top-right/bottom-right/bottom-left
-    order the positions are in.
+    order the positions are in. ``uv0``/``uv1`` is the two-corner spelling of
+    the same thing, for the tiled composite: values outside 0..1 with the
+    sampler set to repeat are what draw the 3x3 neighbourhood in one call
+    rather than as nine images positioned by hand.
     """
+    uv0, uv1 = kwargs.pop("uv0", None), kwargs.pop("uv1", None)
+    if uv0 is not None or uv1 is not None:
+        (u0, v0), (u1, v1) = uv0 or (0.0, 0.0), uv1 or (1.0, 1.0)
+        kwargs.setdefault("uv", ((u0, v0), (u1, v0), (u1, v1), (u0, v1)))
     uv = kwargs.pop("uv", ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)))
     colour = kwargs.pop("colour", None)
     a, b, c, d = _corners(view, origin, x0, y0, x1, y1)
@@ -178,6 +197,16 @@ def _view_row(tab: Any) -> None:
     imgui.same_line()
     if widgets.icon_button(icons.FLIP_HORIZONTAL, "Flip the view (Ctrl+5)"):
         inker_state.flip_view(view)
+    imgui.same_line()
+    # One control driving the view *and* the writes, deliberately: a canvas
+    # that showed its neighbours while the brush went on clamping at the edge
+    # would be a picture of a seamless tile you cannot paint.
+    tab.tiled = widgets.combo("##inkertiled", tab.tiled, list(TILED_LABELS), sp(104))
+    if imgui.is_item_hovered():
+        imgui.set_tooltip(
+            "Draws the eight neighbouring tiles around this one, and wraps "
+            "every stroke, fill and shape across the seams it shows."
+        )
     if view.rotation or view.flipped:
         imgui.same_line()
         # Said out loud, because the two are invisible once you have looked away
@@ -365,7 +394,15 @@ def _canvas(ctx: Any, state: Any, tab: Any) -> None:
             view.pending_zoom = None
         elif not view.fitted:
             inker_state.fit(view, tab.doc.size, region)
-        imgui.invisible_button("##inker-surface", region)
+        # The right button is taken as well as the left: it paints with the
+        # background colour (C12d) and the canvas has no context menu to
+        # conflict with. Without the flag imgui simply never reports the press.
+        imgui.invisible_button(
+            "##inker-surface",
+            region,
+            imgui.ButtonFlags_.mouse_button_left.value
+            | imgui.ButtonFlags_.mouse_button_right.value,
+        )
         active = imgui.is_item_active()
         hovered = imgui.is_item_hovered()
         _input(ctx, state, tab, (origin.x, origin.y), active=active, hovered=hovered)
@@ -383,6 +420,10 @@ def _status_bar(state: Any, tab: Any, origin: Any, hovered: bool) -> None:
     if hovered and origin is not None:
         mouse = imgui.get_mouse_pos()
         px, py = inker_state.to_image(view, (origin.x, origin.y), mouse.x, mouse.y)
+        # Folded onto the canonical tile: over a neighbour in the 3x3 view the
+        # raw number is off the canvas, and a readout saying "300, 40" on a
+        # 256-wide document is a coordinate the user cannot use.
+        px, py = canonical((px, py), tab.doc.size, axes_of(tab.tiled))
         parts.append(f"{int(px)}, {int(py)}")
     tool = next((label for key, label, _ in inker_state.TOOLS if key == state.tool), state.tool)
     parts.append(tool)
@@ -423,12 +464,29 @@ def _input(ctx: Any, state: Any, tab: Any, origin, *, active: bool, hovered: boo
     if state.transforming and tab.doc.floating is not None:
         _transform_input(state, tab, origin, point, active=active)
         return
-    if active and imgui.is_mouse_clicked(0) and not state.space_held:
-        _press(ctx, state, tab, _snapped(state, point))
-    elif state.drag_kind and imgui.is_mouse_down(0):
-        _drag(state, tab, _snapped(state, point))
-    elif state.drag_kind and not imgui.is_mouse_down(0):
-        _release(ctx, state, tab, _snapped(state, point))
+    pressed = 0 if imgui.is_mouse_clicked(0) else 1 if imgui.is_mouse_clicked(1) else -1
+    if active and pressed >= 0 and not state.space_held:
+        state.drag_button = pressed
+        # The tile the press landed in, fixed for the whole gesture. See
+        # ``tiling.tile_offset``: folding per point would jump the brush a full
+        # tile at the seam.
+        state.tile_offset = tile_offset(point, tab.doc.size, axes_of(tab.tiled))
+        _press(ctx, state, tab, _snapped(state, _local(state, point)))
+    elif state.drag_kind and imgui.is_mouse_down(state.drag_button):
+        _drag(state, tab, _snapped(state, _local(state, point)))
+    elif state.drag_kind and not imgui.is_mouse_down(state.drag_button):
+        _release(ctx, state, tab, _snapped(state, _local(state, point)))
+
+
+def _local(state: Any, point: tuple[float, float]) -> tuple[float, float]:
+    """A cursor position in the *pressed* tile's coordinates.
+
+    The whole of what the 3x3 view costs the input path, and it is a
+    subtraction rather than a modulo for the reason above: within one gesture
+    the offset never changes, so a stroke that crosses a seam carries on in a
+    straight line and the engine wraps it.
+    """
+    return (point[0] - state.tile_offset[0], point[1] - state.tile_offset[1])
 
 
 def _snapped(state: Any, point: tuple[float, float]) -> tuple[float, float]:
@@ -613,16 +671,29 @@ def _press(ctx: Any, state: Any, tab: Any, point) -> None:
     if tool == "eyedropper" or (tool in PAINT_TOOLS and imgui.get_io().key_alt):
         picked = doc.eyedrop(ipoint, layer_only=state.sample_layer)
         if picked is not None:
-            state.fg = picked
+            # Alt+right-click picks the *background* colour, which is the other
+            # half of the right button painting with it: the two are one
+            # gesture pair, and picking into fg from a right-click would make
+            # the button mean two different things.
+            if state.drag_button == 1:
+                state.bg = picked
+            else:
+                state.fg = picked
         state.drag_kind = ""
         return
+    if state.drag_button == 1 and tool not in BG_BUTTON_TOOLS:
+        # Inert rather than a second meaning; see ``BG_BUTTON_TOOLS``.
+        state.drag_kind = ""
+        return
+    colour = state.bg if state.drag_button == 1 else state.fg
     if tool == "fill":
         doc.commit_floating()
         doc.fill(
             ipoint,
-            state.fg,
+            colour,
             thresh=state.wand_tolerance,
             contiguous=state.wand_contiguous,
+            wrap=tab.tiled,
         )
         state.drag_kind = ""
         return
@@ -633,6 +704,7 @@ def _press(ctx: Any, state: Any, tab: Any, point) -> None:
             tolerance=state.wand_tolerance,
             op=state.combine,
             contiguous=state.wand_contiguous,
+            wrap=tab.tiled,
         )
         state.drag_kind = ""
         return
@@ -642,6 +714,11 @@ def _press(ctx: Any, state: Any, tab: Any, point) -> None:
         elif doc.mask is not None and doc.mask.contains(ipoint):
             doc.lift()
             state.drag_kind = "move"
+        elif doc.begin_layer_move():
+            # The third arm (C10): no buffer and no selection means "move what
+            # is on this layer", which is what the move tool does everywhere
+            # else and what this one used to answer with nothing at all.
+            state.drag_kind = "layer_move"
         else:
             state.drag_kind = ""
         return
@@ -660,30 +737,74 @@ def _press(ctx: Any, state: Any, tab: Any, point) -> None:
         return
     if tool in PAINT_TOOLS:
         doc.commit_floating()
+        spraying = tool == "spray"
         doc.begin_stroke(
             point,
-            state.fg,
-            size=state.brush_size,
+            colour,
+            size=_dab_size(state, spraying),
             hardness=state.hardness,
             opacity=state.opacity,
             spacing=state.spacing,
-            mode=inker_state.BRUSH_MODES[tool],
+            mode=(
+                "replace"
+                if tool == "brush" and state.paint_ink == "replace"
+                else inker_state.BRUSH_MODES[tool]
+            ),
             strength=state.strength,
             nib=state.nib,
-            pixel_perfect=state.pixel_perfect,
+            # Both forced off for the spray: the corner filter is about a
+            # *line* and there is no line here, and a lag on a stationary
+            # airbrush would move the cloud away from the cursor.
+            pixel_perfect=False if spraying else state.pixel_perfect,
             axis=state.symmetry_axis,
             radial=state.radial_count,
-            stabilise=state.stabilise,
+            stabilise=0.0 if spraying else state.stabilise,
             speed_taper=state.speed_taper,
             symmetry=state.symmetry,
+            wrap=tab.tiled,
+            scatter=state.brush_size / 2.0 if spraying else 0.0,
+            # The determinism seam: the engine is a pure function of the seed
+            # and the call sequence, and this is the one place entropy enters.
+            seed=random.getrandbits(32) if spraying else 0,
         )
-        state.drag_kind = "paint"
+        state.spray_carry = 0.0
+        state.drag_kind = "spray" if spraying else "paint"
+
+
+def _dab_size(state: Any, spraying: bool) -> int:
+    """The brush diameter one dab is stamped at.
+
+    For every tool but the spray that is the size slider. For the spray the
+    slider is the width of the *cloud* -- what the brush cursor draws and what
+    "spray width" means in every other editor -- so the dab is a fraction of it
+    (``inker_state.SPRAY_DAB_FRACTION``); a spray whose dabs are as wide as its
+    own disc is a blob.
+    """
+    if not spraying:
+        return state.brush_size
+    return max(1, round(state.brush_size * inker_state.SPRAY_DAB_FRACTION))
 
 
 def _drag(state: Any, tab: Any, point) -> None:
     doc = tab.doc
     if state.drag_kind == "paint":
         doc.stroke_to(point)
+    elif state.drag_kind == "spray":
+        # Every held frame, moving or not: an airbrush keeps emitting while the
+        # button is down, which is the whole tool. A rate times a delta rather
+        # than a count per frame, so the cloud is the same on a slow machine as
+        # on a fast one -- with the fraction carried, or a rate under one dab a
+        # frame would round to nothing sixty times a second.
+        state.spray_carry += state.spray_rate * imgui.get_io().delta_time
+        emit = int(state.spray_carry)
+        if emit > 0:
+            state.spray_carry -= emit
+            doc.spray_at(point, emit)
+    elif state.drag_kind == "layer_move":
+        # From the anchor, not from the last point: the session re-renders from
+        # its snapshot, so what it wants is the total offset.
+        anchor = state.drag_anchor or point
+        doc.preview_layer_move(round(point[0] - anchor[0]), round(point[1] - anchor[1]))
     elif state.drag_kind == "move" and doc.floating is not None:
         last = state.last_point or point
         doc.move_floating(round(point[0] - last[0]), round(point[1] - last[1]))
@@ -735,17 +856,22 @@ def _release(ctx: Any, state: Any, tab: Any, point) -> None:
     anchor = state.drag_anchor or point
     kind = state.drag_kind
 
-    if kind == "paint":
+    if kind in ("paint", "spray"):
         doc.end_stroke()
+    elif kind == "layer_move":
+        doc.commit_layer_move()
     elif kind == "shape":
         p0, p1 = _shape_drag(state, anchor, point)
         doc.shape(
             state.tool,
             (int(p0[0]), int(p0[1])),
             (int(p1[0]), int(p1[1])),
+            # Never the background colour: a right-press on a shape tool is
+            # inert and never reaches here (see ``BG_BUTTON_TOOLS``).
             state.fg,
             state.brush_size,
             filled=state.shape_filled,
+            wrap=tab.tiled,
         )
     elif kind == "marquee":
         rect = marquee_rect(anchor, point)
@@ -839,8 +965,14 @@ def _paint(ctx: Any, state: Any, tab: Any, origin, *, hovered: bool) -> None:
     # The canvas's screen AABB, which under a quarter turn is still exactly the
     # canvas rather than a box around it -- see ``_box``.
     top_left, bottom_right = _box(view, origin, 0, 0, width, height)
+    # And the neighbourhood the tiled view shows: one tile out along each
+    # wrapped axis, the canvas itself along the others. Every overlay below
+    # stays on the canonical box -- overlays are canonical-only in v1 -- but the
+    # checkerboard is the surface the page sits on, so it extends with it.
+    tiled = _tiled_extent(tab, doc.size)
+    tiled_tl, tiled_br = _box(view, origin, *tiled)
 
-    _checkerboard(ctx, draw_list, top_left, bottom_right)
+    _checkerboard(ctx, draw_list, tiled_tl, tiled_br)
     # Before the composite and before its ``None`` early-out, so the strip is
     # genuinely beneath the live drawing rather than sometimes instead of it.
     if state.onion and not tab.playing:
@@ -857,7 +989,20 @@ def _paint(ctx: Any, state: Any, tab: Any, origin, *, hovered: bool) -> None:
     texture = inker_textures.composite(ctx, tab, nearest=view.zoom >= 1.0)
     if texture is None:
         return
-    _blit(draw_list, texture, view, origin, 0, 0, width, height)
+    axes = axes_of(tab.tiled)
+    # Set on **both** branches, every frame. Turning tiling on used to be a
+    # one-way door in the reference viewer for exactly this reason: the sampler
+    # was switched to GL_REPEAT and never put back, so the single-tile view that
+    # followed sampled a wrapped texture at its own edges -- which is the one
+    # place a seamless tile is not seamless, since LINEAR filtering there blends
+    # the far edge in. moderngl skips the GL call when the value already
+    # matches, so the idempotent write costs nothing.
+    texture.repeat_x, texture.repeat_y = axes[0], axes[1]
+    x0, y0, x1, y1 = tiled
+    _blit(
+        draw_list, texture, view, origin, x0, y0, x1, y1,
+        uv0=(x0 / width, y0 / height), uv1=(x1 / width, y1 / height),
+    )
     _floating(ctx, tab, draw_list, origin)
     draw_list.add_rect(top_left, bottom_right, _u32(theme.EDGE))
 
@@ -871,6 +1016,21 @@ def _paint(ctx: Any, state: Any, tab: Any, origin, *, hovered: bool) -> None:
     _preview(state, tab, draw_list, origin)
     if hovered and state.tool in PAINT_TOOLS:
         _cursor(state, draw_list, view)
+
+
+def _tiled_extent(tab: Any, size) -> tuple[float, float, float, float]:
+    """The image-space rectangle the canvas draws, in canvas coordinates.
+
+    The canvas itself with tiling off, and one tile out along each *wrapped*
+    axis with it on -- so X-only tiling shows a horizontal strip of three
+    rather than a 3x3 block, which is the honest picture of what will actually
+    wrap when you paint on it.
+    """
+    width, height = size
+    wrap_x, wrap_y = axes_of(tab.tiled)
+    x0, x1 = (-width, 2 * width) if wrap_x else (0, width)
+    y0, y1 = (-height, 2 * height) if wrap_y else (0, height)
+    return (x0, y0, x1, y1)
 
 
 def _checkerboard(ctx: Any, draw_list: Any, top_left, bottom_right) -> None:
@@ -1099,7 +1259,13 @@ def _preview(state: Any, tab: Any, draw_list: Any, origin) -> None:
         p0, p1 = _shape_drag(
             state,
             state.drag_anchor,
-            _snapped(state, inker_state.to_image(view, origin, mouse.x, mouse.y)),
+            # Through ``_local`` as well, because the anchor already is: a
+            # preview drawn a tile away from the shape the release will commit
+            # is worse than no preview at all.
+            _snapped(
+                state,
+                _local(state, inker_state.to_image(view, origin, mouse.x, mouse.y)),
+            ),
         )
         anchor = inker_state.to_screen(view, origin, *p0)
         tip = inker_state.to_screen(view, origin, *p1)

@@ -1178,7 +1178,38 @@ TOOL_KEYS = {
     "w": "wand",
     "v": "move",
     "i": "eyedropper",
+    "a": "spray",
 }
+
+#: How far a Shift+arrow nudge moves the active layer, in pixels. Eight rather
+#: than a grid multiple: a nudge is about the *drawing*, not about the grid
+#: overlay, and eight is the step every editor with this shortcut uses.
+NUDGE_STEP = 8
+
+
+def nudge(state: Any, tab: InkerDoc, dx: int, dy: int) -> bool:
+    """Move by a whole pixel from the keyboard. -> whether anything moved.
+
+    A floating buffer first, because that is what the arrow keys visibly point
+    at while one is up; otherwise the move tool's third arm, opened, previewed
+    and committed inline so a press is exactly one undo step rather than a
+    session left half open waiting for a release that never comes.
+
+    Gated on the move tool (or a float) rather than global: the arrows are the
+    only keys left for a document pane to give away, and quietly translating a
+    layer because somebody pressed Right with the brush selected is not a
+    trade worth making.
+    """
+    doc = tab.doc
+    if tab.busy:
+        return False
+    if doc.floating is not None:
+        doc.move_floating(dx, dy)
+        return True
+    if state.tool != "move" or not doc.begin_layer_move():
+        return False
+    doc.preview_layer_move(dx, dy)
+    return doc.commit_layer_move()
 
 
 # --- playback ----------------------------------------------------------------
@@ -1292,6 +1323,15 @@ def handle_key(ctx: Any, event: Any) -> bool:
     ctrl = bool(mods & pygame.KMOD_CTRL)
     shift = bool(mods & pygame.KMOD_SHIFT)
     name = pygame.key.name(event.key)
+    # Built here rather than at module scope: pygame is imported lazily in this
+    # function, so a module-level table would drag it into every import of the
+    # mode. Four entries costs nothing per keypress.
+    arrows = {
+        pygame.K_LEFT: (-1, 0),
+        pygame.K_RIGHT: (1, 0),
+        pygame.K_UP: (0, -1),
+        pygame.K_DOWN: (0, 1),
+    }
 
     if state.transforming:
         # Modal: Enter applies, Escape cancels, and nothing else may change the
@@ -1330,6 +1370,10 @@ def handle_key(ctx: Any, event: Any) -> bool:
         # first and returns -- applying a half-finished transform must not be
         # ambiguous with starting playback.
         toggle_play(ctx, tab)
+    elif event.key in arrows:
+        step = NUDGE_STEP if shift else 1
+        dx, dy = arrows[event.key]
+        nudge(state, tab, dx * step, dy * step)
     elif event.key == pygame.K_DELETE:
         if not tab.busy:
             doc.delete_selection()
