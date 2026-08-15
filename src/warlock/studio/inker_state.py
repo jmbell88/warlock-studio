@@ -50,12 +50,13 @@ TOOLS = (
     ("eyedropper", "Pick", "I"),
     ("slice", "Slice", "C"),
     ("spray", "Spray", "A"),
+    ("lasso_poly", "Poly lasso", "D"),
 )
 
 # Tools whose drag paints into the layer.
 PAINT_TOOLS = frozenset({"brush", "eraser", "blur", "smudge", "spray"})
 SHAPE_TOOLS = frozenset({"line", "rect", "ellipse"})
-SELECT_TOOLS = frozenset({"select", "select_ellipse", "lasso", "wand"})
+SELECT_TOOLS = frozenset({"select", "select_ellipse", "lasso", "wand", "lasso_poly"})
 
 #: Tools a **right-click** drives, painting with the background colour instead
 #: of the foreground one. Deliberately short: the selection tools stay inert on
@@ -755,6 +756,34 @@ class InkerState:
     #: field gets the whole sheet rather than one frame.
     sheet_count: int = 0
 
+    # -- the multi-click gesture (C4) ---------------------------------------
+    #
+    # The second kind of gesture this pane has. A *drag* is a press, a run of
+    # moves and a release, and ``drag_kind`` names it for as long as the button
+    # is down; a multi-click gesture is a run of separate clicks with the button
+    # up in between, so it cannot be held in ``drag_kind`` at all -- the press
+    # dispatcher refuses a press while a gesture "owns the mouse" (see
+    # ``inker_canvas._input``), and a poly-lasso click sequence must pass that
+    # gate rather than be eaten by it. So each click is complete at the press:
+    # ``drag_kind`` stays empty, no drag runs, no release fires, and what
+    # survives between clicks is exactly these two fields.
+    #
+    # Shared infrastructure rather than the poly lasso's private state: the
+    # curve and polygon shape tools are the same gesture with a different
+    # landing, and the alternative is a second copy of the open/extend/close
+    # arithmetic that can disagree with this one about what a click near the
+    # first vertex means.
+    #
+    #: The vertices placed so far, in **image** space and already grid-snapped
+    #: (``inker_canvas._snapped``), empty when no gesture is open.
+    gesture_pts: list[tuple[float, float]] = field(default_factory=list)
+    #: How the finished polygon combines with the live selection, captured at
+    #: the **first** click and not re-read afterwards. A gesture is one act: the
+    #: user decides "this one adds" when they start it, and reading Shift again
+    #: at the closing click would let a modifier let go halfway through turn an
+    #: add into a replace that throws the selection away.
+    gesture_combine: str = "replace"
+
     # -- per-tool options ---------------------------------------------------
     #
     # Written out one per line rather than looped over TOOL_OPTION_DEFAULTS: a
@@ -872,6 +901,35 @@ class InkerState:
         self.tile_offset = (0.0, 0.0)
         self.spray_carry = 0.0
         self.transform_grab = ""
+        # An open multi-click gesture goes with it, which is what makes a tab
+        # switch, a tab close and Escape cancel a half-drawn polygon for free --
+        # all three already come through here. Safe *because* a gesture holds no
+        # ``drag_kind``: the click cycle that builds one never reaches
+        # ``_release``, so this is only ever called from outside the gesture.
+        self.clear_gesture()
+
+    def clear_gesture(self) -> None:
+        """Drop a half-finished multi-click gesture. Writes nothing.
+
+        Separate from :meth:`clear_drag` as well as called by it, because the
+        canvas cancels a gesture in places where a drag is not in flight at all
+        (the tab going busy mid-polygon) and a tool switch must drop the
+        polygon without also resetting the drag button under a live drag.
+        """
+        self.gesture_pts = []
+        self.gesture_combine = "replace"
+
+    def set_tool(self, tool: str) -> None:
+        """Pick a tool, dropping whatever gesture was open.
+
+        The one door, so a tool cannot be changed from the keyboard, the
+        toolbox or a paste without the half-drawn polygon on screen going with
+        it -- a gesture belongs to the tool that started it, and vertices left
+        behind would be committed by the *next* tool's closing click.
+        """
+        if tool != self.tool:
+            self.clear_gesture()
+        self.tool = tool
 
     # -- colours ------------------------------------------------------------
 

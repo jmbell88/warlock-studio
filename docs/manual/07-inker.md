@@ -94,6 +94,7 @@ The toolbox is an icon grid; hovering a tool shows its name and its letter. Ever
 | Pick | `I` | Samples a colour from the canvas. |
 | Slice | `C` | Names a rectangle on the canvas. |
 | Spray | `A` | An airbrush: scattered dabs for as long as you hold the button. |
+| Poly lasso | `D` | Selection from clicked corners, one click per vertex. |
 
 Options appear for the selected tool only, rather than as one long form — a brush's hardness means
 nothing while the wand is active.
@@ -441,9 +442,18 @@ immediately, and the picture only moves once you move a slider.
 
 ## Selections and transform
 
-Four tools make selections: the rectangular marquee, the ellipse, the lasso and the wand. Hold
-**Shift** while dragging to add to the current selection, **Alt** to subtract from it, and both
-together to keep only the overlap.
+Five tools make selections: the rectangular marquee, the ellipse, the lasso, the poly lasso and the
+wand. Hold **Shift** while dragging to add to the current selection, **Alt** to subtract from it,
+and both together to keep only the overlap.
+
+The **poly lasso** (`D`) is clicked rather than dragged: each click drops a corner, a line follows
+the cursor from the last one, and the shape closes when you double-click, press `Enter`, or click
+back on the first corner — the small ring drawn around it is how near you have to land. Three
+corners is the minimum; fewer than that closes nothing and leaves the selection you already had.
+`Esc` abandons the polygon, and so does switching tools or tabs. The modifier is read at the
+**first** click and held for the whole shape, so letting go of Shift halfway through does not turn
+an add into a replace. With **Snap to grid** on, every corner lands on an intersection. However many
+clicks it took, the finished selection is one undo step.
 
 With a selection live, the **selection** section offers **All**, **None**, **Invert**, a
 **Feather** radius slider up to 32 pixels with a **Feather** button, and **Crop to selection**. The

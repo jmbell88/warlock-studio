@@ -483,6 +483,13 @@ def _input(ctx: Any, state: Any, tab: Any, origin, *, active: bool, hovered: boo
         # middle of it would put half a stroke in the file. Playback is the
         # other half of ``busy``: the canvas is showing a cached flatten of some
         # other frame, so a stroke would land invisibly on the frame underneath.
+        #
+        # A half-drawn multi-click gesture is dropped rather than merely
+        # suspended: its next click cannot be delivered while this returns
+        # early, so leaving the vertices up would draw a polygon over a document
+        # that is being encoded or played and finish it whenever the tab came
+        # back -- against whatever the document looked like by then.
+        state.clear_gesture()
         return
     if state.transforming and tab.doc.floating is not None:
         _transform_input(state, tab, origin, point, active=active)
@@ -849,6 +856,12 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
         else:
             state.drag_kind = ""
         return
+    if tool == "lasso_poly":
+        # Before the shared selection branch and returning, because the whole
+        # point of this tool is that it does *not* start a ``drag_kind="lasso"``
+        # drag: its vertices are clicked, not dragged out.
+        _poly_press(ctx, state, tab, point)
+        return
     if tool in SELECT_TOOLS:
         doc.commit_floating()
         # An unmodified drag starting *inside* the selection moves its edges
@@ -920,6 +933,109 @@ def _dab_size(state: Any, spraying: bool) -> int:
     if not spraying:
         return state.brush_size
     return max(1, round(state.brush_size * inker_state.SPRAY_DAB_FRACTION))
+
+
+# --- the polygonal lasso, and the multi-click gesture under it (C4) -----------
+#
+# The pane's second kind of gesture. A drag is press / move / release and
+# ``drag_kind`` names it while the button is down; this one is a run of separate
+# clicks with the button *up* in between, so it cannot be a ``drag_kind`` at all
+# -- and must not be, because ``_input`` refuses a press while a gesture owns the
+# mouse (the C12d guard) and a click sequence would be eaten by its own state.
+# Each click is therefore complete at the press: nothing drags, nothing releases,
+# and ``InkerState.gesture_pts`` is the whole of what survives between clicks.
+#
+# Built as the shared thing rather than the poly lasso's own, because the curve
+# and polygon shape tools are this gesture with a different landing.
+
+#: How near the first vertex a click has to land to close the polygon, in
+#: **screen** pixels before ``sp`` -- the slice handles' rule, for the slice
+#: handles' reason: an image-space radius is a hundredth of a pixel at 100x zoom
+#: and half the canvas at 5%, so the target would be unhittable at one end of the
+#: zoom range and unavoidable at the other.
+POLY_CLOSE = 7.0
+
+
+def closes_gesture(points, point, zoom: float, radius: float) -> bool:
+    """Whether a click at ``point`` closes the polygon on its first vertex.
+
+    Image-space distance times the zoom *is* the screen distance, because the
+    view is a uniform scale after a quarter turn and a turn preserves length
+    (``inker_state.basis`` is orthonormal). So this is quarter-turn and flip
+    invariant without ever building a screen coordinate -- which is what lets it
+    be a pure function of three numbers rather than of the view.
+
+    Below three vertices there is nothing to close: two points are a line, and a
+    click back on the first would otherwise end the gesture with a selection the
+    rasteriser has to refuse anyway.
+    """
+    if len(points) < 3:
+        return False
+    return math.dist(points[0], point) * zoom <= radius
+
+
+def _poly_press(ctx: Any, state: Any, tab: Any, point) -> None:
+    """One click of the polygonal lasso: open, extend, or close the polygon.
+
+    ``drag_kind`` is left empty on every arm, which is the load-bearing part:
+    it keeps the next click out of the C12d guard, keeps ``_drag`` and
+    ``_release`` out of the gesture entirely -- so this tool can never take the
+    freehand ``drag_kind="lasso"`` path -- and keeps ``clear_drag`` free to mean
+    "cancel the gesture" everywhere it is already called from.
+    """
+    doc = tab.doc
+    if not state.gesture_pts:
+        # The float lands on the first click, as it does for every other
+        # selection tool's press: the user has moved on from it.
+        doc.commit_floating()
+        # Captured once, here. ``state.combine`` is re-read at every press, and
+        # letting go of Shift before the closing click would otherwise turn an
+        # add into a replace that throws the selection away.
+        state.gesture_combine = state.combine
+        state.gesture_pts = [point]
+        state.drag_kind = ""
+        return
+    if imgui.is_mouse_double_clicked(state.drag_button) or closes_gesture(
+        state.gesture_pts, point, tab.view.zoom, sp(POLY_CLOSE)
+    ):
+        # The closing click places no vertex of its own: a double-click's second
+        # press lands on top of the first, and a click near vertex 0 *is*
+        # vertex 0. Either would add a degenerate edge to the polygon.
+        inker_mode.commit_gesture(state, tab)
+    else:
+        state.gesture_pts.append(point)
+    state.drag_kind = ""
+
+
+def _gesture_preview(state: Any, tab: Any, draw_list: Any, origin) -> None:
+    """The open polygon, its rubber band, and where the closing click goes.
+
+    Through ``to_screen`` like every other overlay (Ink9), so the polygon is
+    drawn on the turned or mirrored page rather than a quarter turn away from
+    it. The rubber band follows the *snapped* cursor rather than the raw one,
+    which is the rule ``_preview``'s shape branch already states: a band drawn
+    somewhere the next vertex will not go is worse than no band at all.
+    """
+    points = state.gesture_pts
+    if not points:
+        return
+    view = tab.view
+    colour = _u32(theme.ACCENT)
+    screen = [inker_state.to_screen(view, origin, x, y) for x, y in points]
+    for a, b in zip(screen, screen[1:], strict=False):
+        draw_list.add_line(a, b, colour)
+    mouse = imgui.get_mouse_pos()
+    tip = inker_state.to_screen(
+        view,
+        origin,
+        *_snapped(state, _local(state, inker_state.to_image(view, origin, mouse.x, mouse.y))),
+    )
+    draw_list.add_line(screen[-1], tip, colour)
+    if len(screen) >= 3:
+        # The edge a commit would close with, and the target that closes it.
+        # Fainter than the placed edges: it is what *would* happen, not what has.
+        draw_list.add_line(tip, screen[0], _u32(theme.ACCENT, 0.4))
+        draw_list.add_circle(screen[0], sp(POLY_CLOSE), colour)
 
 
 # --- slices -------------------------------------------------------------------
@@ -1313,9 +1429,10 @@ def _release(ctx: Any, state: Any, tab: Any, point) -> None:
         if (dx or dy) and doc.mask is not None:
             doc.select(doc.mask.translated(dx, dy))
     elif kind == "lasso":
-        if len(state.lasso) >= 3:
-            doc.select(SelectionMask.from_polygon(doc.size, state.lasso), state.combine)
-        else:
+        # The same landing the polygonal lasso commits through (C4), so the two
+        # cannot come to disagree about what a run of vertices selects. A drag
+        # too short to be a polygon is the marquee's stray click: deselect.
+        if not inker_mode.polygon_select(doc, state.lasso, state.combine):
             doc.deselect()
     elif kind == "gradient":
         # To transparent means the *foreground* colour at zero alpha, not the
@@ -1445,6 +1562,9 @@ def _paint(ctx: Any, state: Any, tab: Any, origin, *, hovered: bool) -> None:
     if state.transforming:
         _transform_box(state, tab, draw_list, origin)
     _preview(state, tab, draw_list, origin)
+    # Beside the drag preview rather than inside it: a multi-click gesture holds
+    # no ``drag_kind``, which is the first thing ``_preview`` returns on.
+    _gesture_preview(state, tab, draw_list, origin)
     if hovered and state.tool in PAINT_TOOLS:
         _cursor(state, draw_list, view)
 

@@ -1450,6 +1450,58 @@ def paste_from_os(ctx: Any, tab: InkerDoc | None = None) -> bool:
     return True
 
 
+# --- the multi-click gesture (C4) --------------------------------------------
+#
+# The vertices live on the state (``InkerState.gesture_pts``) and the clicks are
+# collected by the canvas; what is here is the landing, because Enter finishes a
+# polygon and a keypress cannot reach into the pane.
+
+
+def polygon_select(doc: Any, points: Any, op: str = "replace") -> bool:
+    """Turn a run of image-space vertices into the document's selection.
+
+    The lasso's landing, extracted so the freehand drag and the polygonal
+    gesture cannot come to disagree about it: they differ in how the vertices
+    are *collected* and in nothing else, and a second copy of "three points, a
+    polygon, one ``select``" is exactly where a rasteriser change lands half
+    applied.
+
+    Three vertices is the floor because two are a line -- the rasteriser would
+    return an empty mask and ``select`` would push a step that selects nothing.
+    -> whether a polygon was committed.
+
+    One ``select`` and therefore exactly one undo step, however many clicks or
+    mouse-moves the vertices cost to draw.
+    """
+    from .inker import SelectionMask
+
+    points = list(points)
+    if len(points) < 3:
+        return False
+    doc.select(SelectionMask.from_polygon(doc.size, points), op)
+    return True
+
+
+def commit_gesture(state: InkerState, tab: InkerDoc) -> bool:
+    """Land the open multi-click gesture and close it. -> whether it selected.
+
+    Three callers, all of which mean "finish it": the canvas's double-click and
+    its click near the first vertex, and Enter. The gesture is closed either
+    way -- a polygon of two vertices has nothing to select, and cancelling is
+    the honest answer where deselecting would throw away a selection the user
+    never asked to lose.
+
+    ``busy`` cancels rather than commits, for the reason the canvas refuses
+    input outright while a save is encoding the live document.
+    """
+    points, op = state.gesture_pts, state.gesture_combine
+    state.clear_gesture()
+    if tab.busy or not points:
+        return False
+    tab.doc.commit_floating()
+    return polygon_select(tab.doc, points, op)
+
+
 # --- keys -------------------------------------------------------------------
 
 # Aseprite's letters where they exist, because that is the muscle memory a user
@@ -1474,6 +1526,10 @@ TOOL_KEYS = {
     # was bound to nothing, and Ctrl+C is copy on a different branch entirely.
     "c": "slice",
     "a": "spray",
+    # Aseprite puts the polygonal lasso on the freehand one's letter and cycles
+    # between them; a letter of its own is one press rather than one-or-two, and
+    # "d" was free (Ctrl+D is deselect, on a different branch).
+    "d": "lasso_poly",
 }
 
 #: How far a Shift+arrow nudge moves the active layer, in pixels. Eight rather
@@ -1730,8 +1786,22 @@ def handle_key(ctx: Any, event: Any) -> bool:
     if ctrl:
         return _ctrl_key(ctx, state, tab, doc, name, event, shift=shift)
 
+    # An open multi-click gesture answers Enter and Escape before anything else
+    # does, and consumes them: Enter would otherwise start playback on an
+    # animated document (the branch below), and Escape would drop the *previous*
+    # selection while leaving the half-drawn polygon on screen. Both are ahead of
+    # the tool letters as well, so neither can be reached with a gesture open.
+    if state.gesture_pts:
+        if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            commit_gesture(state, tab)
+            return True
+        if event.key == pygame.K_ESCAPE:
+            state.clear_gesture()
+            state.clear_drag()
+            return True
+
     if name in TOOL_KEYS and not shift:
-        state.tool = TOOL_KEYS[name]
+        state.set_tool(TOOL_KEYS[name])
     elif name == "x":
         state.swap_colours()
     elif event.key == pygame.K_LEFTBRACKET:
@@ -1861,7 +1931,7 @@ def _ctrl_key(
             doc.paste_as_layer()
         else:
             doc.paste()
-            state.tool = "move"
+            state.set_tool("move")
     elif name == "i" and shift:
         doc.invert_selection()
     elif name == "t":

@@ -44,6 +44,10 @@ TOOL_ICONS = {
     # Not SPRAY_CAN, which the blur tool already carries: two tools drawn with
     # one glyph is a toolbox a user has to read the tooltips of.
     "spray": icons.SPARKLES,
+    # Lucide's plain ``lasso`` beside the freehand tool's ``lasso-select``:
+    # the same family, which is what the pair are, and distinct glyphs, which
+    # the toolbox requires.
+    "lasso_poly": icons.LASSO,
 }
 
 #: The brush's ink, and only the brush's: this app has brush modes and layer
@@ -101,7 +105,9 @@ def _grid(state: Any) -> None:
             )
         icon = TOOL_ICONS.get(key) or label[:1]
         if imgui.button(f"{icon}##tool{key}", (width, sp(30))):
-            state.tool = key
+            # Through ``set_tool``, like every other way of picking one: a
+            # half-drawn multi-click gesture belongs to the tool that started it.
+            state.set_tool(key)
         if selected:
             imgui.pop_style_color()
         if imgui.is_item_hovered():
