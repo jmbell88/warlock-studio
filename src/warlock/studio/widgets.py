@@ -1146,6 +1146,37 @@ def note_hover(key: str, hovered: bool) -> None:
     motion.value(f"hover/{key}", 1.0 if hovered else 0.0, duration=tokens.DUR_FAST)
 
 
+def _button_with_note(
+    label: str,
+    enabled: bool,
+    size: tuple[float, float] = (0, 0),
+    *,
+    reason: str = "",
+    tooltip: str = "",
+) -> tuple[bool, bool]:
+    """:func:`disabled_button`, also answering whether it was hovered.
+
+    The second value exists because of the ordering hazard the body below
+    documents: ``set_tooltip`` renders an item of its own and overwrites
+    ``g.LastItemData``, so a caller that asks ``is_item_hovered()`` *after* this
+    returns is told about the tooltip's text rather than about the button --
+    which reads as "not hovered" and drops the hover animation on precisely the
+    frames a reason is being explained. ``primary_button`` and ``ghost_button``
+    both animate their own fill from last frame's hover, so both need the
+    answer this captured before the tooltip and neither can re-ask for it.
+    """
+    if not enabled:
+        imgui.begin_disabled()
+    clicked = imgui.button(label, size)
+    if not enabled:
+        imgui.end_disabled()
+    note = reason if not enabled else tooltip
+    hovered = bool(imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value))
+    if note and hovered:
+        imgui.set_tooltip(note)
+    return clicked and enabled, hovered
+
+
 def disabled_button(
     label: str,
     enabled: bool,
@@ -1171,26 +1202,20 @@ def disabled_button(
     swallows hover on a disabled item, which is exactly the state whose
     explanation matters, and is why this cannot be a ``set_item_tooltip``
     one-liner. ``_glyph_button`` has always done it this way.
+
+    The hover is read *before* set_tooltip can run, and stored. SetTooltip
+    renders through TextV, which is an item of its own and overwrites
+    g.LastItemData -- so after the call, ``is_item_hovered`` and the item-rect
+    getters answer about the tooltip's text, not about this button. Asking in
+    that order is the bug palette.py had at its own call site: a caller that
+    follows this with a rect query would place whatever it draws next at the
+    tooltip. Cheap and unconditional, so the ~90 call sites that pass no note
+    cannot start depending on the order by accident. ``_glyph_button`` has
+    always captured first, for this reason -- and :func:`_button_with_note`
+    hands that captured answer back to the two wrappers that animate a fill
+    from it.
     """
-    if not enabled:
-        imgui.begin_disabled()
-    clicked = imgui.button(label, size)
-    if not enabled:
-        imgui.end_disabled()
-    note = reason if not enabled else tooltip
-    # The hover is read *before* set_tooltip can run, and stored. SetTooltip
-    # renders through TextV, which is an item of its own and overwrites
-    # g.LastItemData -- so after the call, `is_item_hovered` and the item-rect
-    # getters answer about the tooltip's text, not about this button. Asking in
-    # that order is the bug palette.py had at its own call site: a caller that
-    # follows this with a rect query would place whatever it draws next at the
-    # tooltip. Cheap and unconditional, so the ~90 call sites that pass no note
-    # cannot start depending on the order by accident. ``_glyph_button`` has
-    # always captured first, for this reason.
-    hovered = bool(imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value))
-    if note and hovered:
-        imgui.set_tooltip(note)
-    return clicked and enabled
+    return _button_with_note(label, enabled, size, reason=reason, tooltip=tooltip)[0]
 
 
 def same_line_or_wrap(width: float) -> None:
@@ -1567,7 +1592,13 @@ def toggle(label: str, value: bool, *, tag: str | None = None) -> tuple[bool, bo
 
 
 def _glyph_button(
-    icon: str, side: float, tooltip: str, *, danger: bool = False, enabled: bool = True
+    icon: str,
+    side: float,
+    tooltip: str,
+    *,
+    danger: bool = False,
+    enabled: bool = True,
+    borderless: bool = False,
 ) -> bool:
     """A square button holding one glyph, centred in it.
 
@@ -1595,11 +1626,30 @@ def _glyph_button(
     so ``button`` and ``button_hovered`` are pushed to the *same* interpolated
     colour and the approach is what moves. The state is last frame's, which is
     the only order available: see :func:`_hover_amount`.
+
+    **Where it interpolates to** is REDESIGN.md wave 1's rule, arriving here in
+    wave 2 because this button pushes its own colours and so was not reached by
+    the style edit: a hover is one step of the elevation ramp (ELEV_2 -> EDGE),
+    not a fill of accent. Smoothing the approach fixed the *jump*; the toolbar
+    of eight icons was still eight indigo primaries one at a time. ``danger``
+    keeps its red, because there the colour is the warning rather than a
+    highlight.
+
+    ``borderless`` drops the resting fill entirely and lets the hover bring one
+    in from nothing. That is what a *toolbar* wants -- a row of eight filled
+    squares is eight boxes drawn around eight glyphs, and the glyphs are the
+    content -- while a lone icon beside a text field still wants its frame, so
+    this is a flag rather than a new default. The hit area is unchanged: only
+    the paint goes.
     """
     key = f"glyph/{icon}/{tooltip}"
     t = _hover_amount(key)
-    towards = theme.ERR if danger else theme.ACCENT
-    fill = theme.mix(theme.ELEV_2, towards, t, 1.0 - (0.2 if danger else 0.25) * t)
+    if borderless:
+        wash = theme.ERR if danger else theme.ELEV_2
+        fill = theme.rgba(wash, t * (0.25 if danger else 1.0))
+    else:
+        towards = theme.ERR if danger else theme.EDGE
+        fill = theme.mix(theme.ELEV_2, towards, t, 1.0 - (0.2 if danger else 0.0) * t)
     imgui.push_style_color(imgui.Col_.button.value, imgui.ImVec4(*fill))
     imgui.push_style_color(imgui.Col_.button_hovered.value, imgui.ImVec4(*fill))
     pushed = 2
@@ -1635,7 +1685,12 @@ def _glyph_button(
 
 
 def icon_button(
-    icon: str, tooltip: str, *, danger: bool = False, enabled: bool = True
+    icon: str,
+    tooltip: str,
+    *,
+    danger: bool = False,
+    enabled: bool = True,
+    borderless: bool = False,
 ) -> bool:
     """A square glyph button with its meaning in the tooltip.
 
@@ -1646,11 +1701,16 @@ def icon_button(
     from being the exception.
     """
     return _glyph_button(
-        icon, imgui.get_frame_height(), tooltip, danger=danger, enabled=enabled
+        icon,
+        imgui.get_frame_height(),
+        tooltip,
+        danger=danger,
+        enabled=enabled,
+        borderless=borderless,
     )
 
 
-def small_icon_button(icon: str, tooltip: str) -> bool:
+def small_icon_button(icon: str, tooltip: str, *, borderless: bool = False) -> bool:
     """The same button at ``small_button`` height, for a card's action row.
 
     Its own entry point rather than a flag, but *not* its own drawing code: the
@@ -1661,7 +1721,9 @@ def small_icon_button(icon: str, tooltip: str) -> bool:
     makes its own height (it draws with zero vertical padding), so an icon
     still lines up with the labelled small buttons beside it.
     """
-    return _glyph_button(icon, imgui.get_text_line_height(), tooltip)
+    return _glyph_button(
+        icon, imgui.get_text_line_height(), tooltip, borderless=borderless
+    )
 
 
 def field_label(label: str) -> None:
@@ -1691,31 +1753,155 @@ def labeled_slider_int(label: str, value: int, low: int, high: int) -> tuple[boo
     return imgui.slider_int(f"##{label}", value, low, high)
 
 
-def labeled_slider_float(label: str, value: float, low: float, high: float) -> tuple[bool, float]:
-    """``labeled_slider_int`` for a float. See it for why this exists."""
+def float_format(low: float, high: float, step: float | None = None) -> str:
+    """The printf format a slider over ``low..high`` should draw itself with.
+
+    imgui's default is ``"%.3f"`` for every float slider, which is how the Inker
+    layer pane came to draw an opacity of *one* as ``1.000`` and a brush angle
+    of 45 degrees as ``45.000``. Three decimals is right for a value that varies
+    in thousandths and absurd for one that varies in whole numbers, and which of
+    those a slider is, is already stated by the range it was given.
+
+    Derived from the span rather than declared per call site, which is
+    ``clay_ops.format_for``'s rule read the other way round: that one widens
+    downwards from a step, this one narrows upwards from a range. ``step`` wins
+    when it is given, because a slider that moves in halves over 0..100 needs a
+    decimal the span alone would talk it out of.
+    """
+    span = abs(high - low)
+    if step:
+        return "%.0f" if abs(step) >= 1.0 else ("%.1f" if abs(step) >= 0.1 else "%.2f")
+    if span >= 100.0:
+        return "%.0f"
+    return "%.1f" if span >= 10.0 else "%.2f"
+
+
+def labeled_slider_float(
+    label: str,
+    value: float,
+    low: float,
+    high: float,
+    *,
+    fmt: str | None = None,
+    percent: bool | None = None,
+) -> tuple[bool, float]:
+    """``labeled_slider_int`` for a float. See it for why this exists.
+
+    Two additions, both about the number the user actually reads.
+
+    ``percent`` draws a 0..1 fraction as 0..100 % and hands back the fraction,
+    so the model keeps its natural units and the reader gets the ones they
+    think in. **Inferred by default**, because every 0..1 slider in this app is
+    a percentage -- opacity, hardness, flow, weight, tolerance -- and a rule
+    that has to be remembered at eleven call sites is a rule that will be
+    forgotten at the twelfth. Passing it explicitly is for the exception: a
+    0..1 range that is genuinely a ratio and not a percentage.
+
+    ``fmt`` overrides the format outright, for the units a number carries that
+    a range cannot know about (``"%.2fx"`` for a scale factor). Otherwise
+    :func:`float_format` picks one from the range, which is what stops a
+    degrees-of-rotation slider reading ``45.000``.
+    """
     field_label(label)
     imgui.set_next_item_width(-1)
-    return imgui.slider_float(f"##{label}", value, low, high)
+    if percent is None:
+        percent = low == 0.0 and high == 1.0
+    if percent:
+        changed, shown = imgui.slider_float(
+            f"##{label}", value * 100.0, low * 100.0, high * 100.0, fmt or "%.0f%%"
+        )
+        return changed, shown / 100.0
+    return imgui.slider_float(f"##{label}", value, low, high, fmt or float_format(low, high))
 
 
-def primary_button(label: str, size: tuple[float, float] = (0, 0), *, enabled: bool = True) -> bool:
+def primary_button(
+    label: str,
+    size: tuple[float, float] = (0, 0),
+    *,
+    enabled: bool = True,
+    reason: str = "",
+    tooltip: str = "",
+) -> bool:
     """The accent-filled call to action; one per pane.
 
     Hover lightens by approach rather than by swap (UX.md Phase 1); see
     :func:`_glyph_button` for why ``button`` and ``button_hovered`` are pushed
     to one colour.
+
+    **A disabled primary is not an accent button** (REDESIGN.md wave 2). It used
+    to keep the fill and let ``begin_disabled`` fade it, which draws a faded
+    indigo slab -- still the loudest thing on the pane, still reading as the one
+    thing to press, and now unpressable. Generate is disabled for most of the
+    time anybody spends in the 2D pane, so that was the app's most-seen button.
+    Neutral ELEV_2 instead: the call to action stops calling when it cannot be
+    answered, and it is the *return* of the accent that says the form is ready.
+    The fade itself is still imgui's -- ``begin_disabled`` multiplies the global
+    alpha by ``style.disabled_alpha`` (``tokens.DISABLED_ALPHA``), which reaches
+    a pushed colour exactly as it reaches the label on top of it, so dimming the
+    push by hand as well would fade it twice.
+
+    ``reason``/``tooltip`` forward to :func:`disabled_button`'s contract, which
+    is what lets a primary explain its own refusal. Nothing in the sweep test
+    requires it -- that matcher keys on the name ``disabled_button`` -- so this
+    is the same rule reaching the same button under its other name rather than
+    a test being satisfied.
     """
     key = f"primary/{label}"
-    fill = imgui.ImVec4(*theme.rgba(theme.ACCENT, 1.0 - 0.15 * _hover_amount(key)))
+    if enabled:
+        fill = imgui.ImVec4(*theme.rgba(theme.ACCENT, 1.0 - 0.15 * _hover_amount(key)))
+        pressed = imgui.ImVec4(*theme.rgba(theme.ACCENT, 0.7))
+    else:
+        fill = imgui.ImVec4(*theme.rgba(theme.ELEV_2))
+        pressed = fill
     imgui.push_style_color(imgui.Col_.button.value, fill)
     imgui.push_style_color(imgui.Col_.button_hovered.value, fill)
-    imgui.push_style_color(
-        imgui.Col_.button_active.value, imgui.ImVec4(*theme.rgba(theme.ACCENT, 0.7))
-    )
+    imgui.push_style_color(imgui.Col_.button_active.value, pressed)
     with fonts.label(imgui):
-        clicked = disabled_button(label, enabled, size)
-    note_hover(key, enabled and imgui.is_item_hovered())
+        clicked, hovered = _button_with_note(
+            label, enabled, size, reason=reason, tooltip=tooltip
+        )
+    note_hover(key, enabled and hovered)
     imgui.pop_style_color(3)
+    return clicked
+
+
+def ghost_button(
+    label: str,
+    size: tuple[float, float] = (0, 0),
+    *,
+    enabled: bool = True,
+    reason: str = "",
+    tooltip: str = "",
+) -> bool:
+    """A labelled button with nothing drawn under it until it is pointed at.
+
+    The third register, between :func:`primary_button` (the one thing to press)
+    and a plain ``disabled_button`` (a filled ELEV_2 slab). A pane with six
+    equally-filled buttons has told the reader nothing about which of them
+    matters, and this app's panes routinely have six: Cancel beside Apply,
+    Reset beside Save, "View all" under a list. Those are all *available* and
+    none of them is the point, which is a thing a fill cannot say and an absence
+    can.
+
+    It keeps the standard ``frame_padding``, so :func:`button_width` still
+    measures it and a row that mixes ghosts with filled buttons still lines up
+    -- the paint is the only difference, which is also why the wrapping and
+    overflow arithmetic in :mod:`.toolbar` needs no second measurement path.
+
+    Delegates the reason/tooltip contract rather than restating it: a ghost is
+    the register a "not right now" action is most likely to be drawn in, so it
+    would be the worst of the three to leave unable to explain itself.
+    """
+    key = f"ghost/{label}"
+    fill = imgui.ImVec4(*theme.rgba(theme.ELEV_2, _hover_amount(key)))
+    imgui.push_style_color(imgui.Col_.button.value, fill)
+    imgui.push_style_color(imgui.Col_.button_hovered.value, fill)
+    with fonts.label(imgui):
+        clicked, hovered = _button_with_note(
+            label, enabled, size, reason=reason, tooltip=tooltip
+        )
+    note_hover(key, enabled and hovered)
+    imgui.pop_style_color(2)
     return clicked
 
 
@@ -1823,7 +2009,53 @@ def card(card_id: str, size: tuple[float, float]):
         motion.value(f"card/{card_id}/lift", 1.0 if hovered else 0.0, duration=tokens.DUR_FAST)
 
 
-def empty_state(icon: str, title: str, hint: str = "") -> None:
+# How wide a centred block of prose is allowed to get before it wraps. A hint
+# is one or two sentences and a measure of ~60 characters is where a reader
+# stops having to travel to find the next line; more to the point, an empty
+# state is centred, and centred text that runs the full width of a 1600 px
+# viewport has a *ragged left edge* two hundred pixels from where the eye
+# expects it. In design px, so it is 360 of them at every UI scale.
+PROSE_WIDTH = 360.0
+
+
+def _centre_cursor(width: float) -> None:
+    """Put the cursor where an item of ``width`` starts, to be centred."""
+    imgui.set_cursor_pos_x(
+        max(imgui.get_cursor_pos_x() + (imgui.get_content_region_avail().x - width) * 0.5, 0.0)
+    )
+
+
+def centred_text(text: str, colour: int = theme.MUTED, *, wrap: bool = False) -> None:
+    """One line -- or one wrapped paragraph -- centred in the region.
+
+    ``wrap`` is the whole reason this is not two lines inline at each call site.
+    ``calc_text_size`` measures the *unwrapped* string, so centring on it and
+    then letting imgui wrap put a two-line hint's first line off-centre and its
+    second line anywhere at all: the width the block occupies is not the width
+    the measurement was taken of. Measuring at the wrap width and pushing the
+    same figure as the wrap position is the only way for the two to agree.
+    """
+    if not wrap:
+        _centre_cursor(imgui.calc_text_size(text).x)
+        text_colored(colour, text)
+        return
+    limit = min(imgui.get_content_region_avail().x, sp(PROSE_WIDTH))
+    # ``text_end`` is the second positional in this binding, not the
+    # hide-after-## flag -- passing the wrap width third silently measures the
+    # unwrapped string in a build that accepts it.
+    _centre_cursor(imgui.calc_text_size(text, None, False, limit).x)
+    imgui.push_text_wrap_pos(imgui.get_cursor_pos_x() + limit)
+    text_colored(colour, text)
+    imgui.pop_text_wrap_pos()
+
+
+def empty_state(
+    icon: str,
+    title: str,
+    hint: str = "",
+    *,
+    action: tuple[str, Any] | None = None,
+) -> None:
     """A centred nothing-here: what this region is for, and what to do next.
 
     Three registers rather than one (UX.md Phase 4). It used to be three lines
@@ -1835,24 +2067,93 @@ def empty_state(icon: str, title: str, hint: str = "") -> None:
     body colour at heading size because it is the one loud thing in an
     otherwise empty region, and the hint -- the half that says what to *do* --
     stays small and muted under it.
+
+    ``action`` is that same half as a *button* rather than as a sentence, for
+    the states where there is exactly one thing to do. It is optional because
+    most empty states are the answer to a filter or a selection and have no
+    action to offer -- "nothing matches this search" is not a button -- and it
+    is a single pair rather than a list because an empty region offering three
+    equal choices is a menu, which is :func:`nothing_open`'s job.
     """
     avail = imgui.get_content_region_avail()
     imgui.dummy((0, max(avail.y * 0.5 - sp(40), 0)))
 
-    def centred(text: str, colour: int = theme.MUTED) -> None:
-        width = imgui.calc_text_size(text).x
-        imgui.set_cursor_pos_x(max((imgui.get_content_region_avail().x - width) * 0.5, 0))
-        text_colored(colour, text)
-
     with fonts.display(imgui):
-        centred(icon)
+        centred_text(icon)
     imgui.dummy((0, sp(tokens.SP_2)))
     with fonts.heading(imgui):
-        centred(title, theme.TEXT)
+        centred_text(title, theme.TEXT)
     if hint:
         imgui.dummy((0, sp(tokens.SP_1)))
         with fonts.small(imgui):
-            centred(hint)
+            centred_text(hint, wrap=True)
+    if action is not None:
+        label, on_click = action
+        imgui.dummy((0, sp(tokens.SP_4)))
+        width = max(button_width(label), sp(160))
+        _centre_cursor(width)
+        if primary_button(label, (width, 0)):
+            on_click()
+
+
+# How wide the stacked buttons under a "nothing open" screen are drawn. The
+# four panes that had their own copy of this screen all chose 240 design px
+# independently, which is as close to a considered answer as a copy-paste gets:
+# wide enough for "New custom size..." and narrow enough not to read as a
+# banner. Kept as the shared number rather than re-derived per label, because a
+# stack of buttons at three different widths is a ragged column.
+ACTION_WIDTH = 240.0
+
+
+def nothing_open(
+    hint: str,
+    actions: Any = (),
+    *,
+    recent_paths: Any = (),
+    on_open: Any = None,
+) -> None:
+    """The workspace screen for "there is no document here yet".
+
+    Four panes -- Inker, Clay, Plotter and Packwright -- drew this, and drew it
+    four times: the same ``dummy(40)``, the same bare ``text("Nothing open")``,
+    the same muted sentence, the same 240 px buttons, the same recent list with
+    the same full-path-in-the-id trick. Copies drift, and these had: Clay's was
+    written from Inker's and *dropped the sp() scaling*, so at 150 % it drew
+    240-physical-pixel buttons under 1.5x labels; only Inker's offered recents;
+    none of the four used :func:`empty_state`, so the app's four most-seen empty
+    screens were the four that did not look like the rest of the app's empty
+    screens.
+
+    ``actions`` is ``(label, callback)`` pairs, most important first: the head
+    of the list is the primary and the tail are ghosts. That ordering is the
+    whole hierarchy claim -- "New map" and "Open a file..." are not two equal
+    options, and drawing them as two identical filled buttons said they were.
+
+    ``recent_paths``/``on_open`` are optional together; the path goes in the
+    imgui id rather than only in the label, because two documents sharing a
+    basename is ordinary and one id between them is one row.
+    """
+    from pathlib import Path
+
+    empty_state(icons.SQUARE_DASHED, "Nothing open", hint)
+    width = sp(ACTION_WIDTH)
+    for index, (label, on_click) in enumerate(actions):
+        imgui.dummy((0, sp(tokens.SP_2 if index else tokens.SP_4)))
+        _centre_cursor(width)
+        draw = primary_button if index == 0 else ghost_button
+        if draw(label, (width, 0)):
+            on_click()
+    if not recent_paths or on_open is None:
+        return
+    imgui.dummy((0, sp(tokens.SP_4)))
+    with fonts.small(imgui):
+        centred_text("Recent")
+    for path in list(recent_paths)[:6]:
+        _centre_cursor(width)
+        if imgui.selectable(f"{Path(path).name}##{path}", False, 0, (width, 0))[0]:
+            on_open(path)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(path)
 
 
 # What a toast's ``action`` draws as. A name with no entry here draws nothing,

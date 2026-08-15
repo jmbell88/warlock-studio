@@ -224,7 +224,9 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
             # does not happen, so there is no partial version of it for an
             # opacity to scale, and a slider that changed nothing would read as
             # the tool ignoring it.
-            changed, value = widgets.labeled_slider_float("Opacity", state.opacity, 0.05, 1.0)
+            changed, value = widgets.labeled_slider_float(
+                "Opacity", state.opacity, 0.05, 1.0, percent=True
+            )
             if changed:
                 state.opacity = value
     if tool == "spray":
@@ -240,14 +242,20 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
             "narrow one builds up fast."
         )
     elif tool in PAINT_TOOLS:
-        changed, value = widgets.labeled_slider_float("Spacing", state.spacing, 0.02, 1.0)
+        changed, value = widgets.labeled_slider_float(
+            "Spacing", state.spacing, 0.02, 1.0, percent=True
+        )
         if changed:
             state.spacing = value
         if tool in ("blur", "smudge"):
-            changed, value = widgets.labeled_slider_float("Strength", state.strength, 0.05, 1.0)
+            changed, value = widgets.labeled_slider_float(
+                "Strength", state.strength, 0.05, 1.0, percent=True
+            )
             if changed:
                 state.strength = value
-        changed, value = widgets.labeled_slider_float("Smoothing", state.stabilise, 0.0, 0.95)
+        changed, value = widgets.labeled_slider_float(
+            "Smoothing", state.stabilise, 0.0, 0.95, percent=True
+        )
         if changed:
             state.stabilise = value
         widgets.help_marker(

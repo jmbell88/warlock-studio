@@ -138,11 +138,13 @@ TEXT_DISPLAY = 28.0
 # How far a disabled thing fades. imgui carries this as a style var and has
 # always defaulted it to 0.6, which is the number ``text_disabled``'s own alpha
 # was chosen against (see :func:`composite` and UX-18) -- so naming it here and
-# setting it explicitly in ``theme.apply`` changes nothing on screen and makes
-# the figure something a *widget* can read. That is the point: a disabled
-# primary button has to dim its own hand-drawn fill by the same amount imgui
-# dims the label on top of it, and before this the only way to agree with
-# imgui's default was to copy the literal 0.6 into the widget layer.
+# setting it explicitly in ``theme.apply`` changes nothing on screen. What it
+# buys is that the figure is *stated* rather than inherited: ``begin_disabled``
+# multiplies the global alpha by it, so a colour a widget pushed fades by
+# exactly as much as the label drawn on top of it, and a widget that reasons
+# about its own greyed fill (``widgets.primary_button``) can name the rule
+# instead of copying the literal 0.6 or -- worse -- dimming a second time on
+# top of imgui and landing at 0.36.
 DISABLED_ALPHA = 0.6
 
 # -- motion ------------------------------------------------------------------

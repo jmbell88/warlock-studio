@@ -1392,6 +1392,104 @@ def test_the_widget_kit_builds_every_new_widget(app_ctx, imgui_ctx):
         _frame(imgui_ctx, build)
 
 
+def test_the_quiet_registers_build(app_ctx, imgui_ctx):
+    """REDESIGN.md wave 2's three additions: a button with no resting fill, a
+    borderless glyph, a primary that has stopped being accent-coloured because
+    it cannot be pressed, and the shared "nothing open" screen."""
+    from warlock.studio import icons, widgets
+
+    def build():
+        widgets.ghost_button("View all")
+        widgets.ghost_button("Cancel", enabled=False, reason="Nothing to cancel")
+        widgets.icon_button(icons.UNDO, "Undo", borderless=True)
+        widgets.small_icon_button(icons.COPY, "Copy", borderless=True)
+        widgets.primary_button("Generate", enabled=False, reason="A prompt is required")
+        widgets.empty_state(
+            icons.BOX,
+            "Nothing here",
+            "A hint long enough to need the wrap the centring used to measure "
+            "without, which is what put its first line off centre.",
+            action=("Do the thing", lambda: None),
+        )
+        widgets.nothing_open(
+            "Start a canvas, open an image, or send one here from the library.",
+            [("New canvas", lambda: None), ("Open a file...", lambda: None)],
+            recent_paths=["/tmp/a.ora", "/tmp/b.ora"],
+            on_open=lambda _path: None,
+        )
+
+    for _ in range(2):
+        _frame(imgui_ctx, build)
+
+
+@pytest.mark.parametrize("scale", [1.0, 1.5, 1.75])
+def test_a_toolbar_row_never_draws_past_the_pane_it_is_in(app_ctx, imgui_ctx, scale):
+    """The whole reason ``studio/toolbar.py`` exists.
+
+    ``same_line`` past the content region clips rather than wraps, so a row
+    that outgrows its pane does not get cramped -- its last buttons are simply
+    not there. Every workspace's toolbar was written as a chain of them, and
+    the defect is invisible at scale 1.0 in a wide window, which is the only
+    configuration the rest of this file draws.
+    """
+    from warlock.studio import icons, tokens
+    from warlock.studio import toolbar as toolbar_mod
+    from warlock.studio import widgets as widgets_mod
+
+    imgui, _renderer = imgui_ctx
+    items = [
+        toolbar_mod.Item("new", "New", icons.PLUS, pinned=True),
+        toolbar_mod.Item("open", "Open", icons.FOLDER_OPEN),
+        toolbar_mod.Item("save", "Save", icons.SAVE, priority=1),
+        toolbar_mod.Item("copy", "Duplicate", icons.COPY, priority=1),
+        toolbar_mod.Item("export", "Export PNG", icons.DOWNLOAD, priority=2),
+        toolbar_mod.Item("settings", "Settings", icons.SETTINGS, priority=2),
+    ]
+
+    rects: list[tuple[str, float]] = []
+    edge: list[float] = []
+    real_icon = widgets_mod.icon_button
+    real_ghost = widgets_mod.ghost_button
+
+    def spy(real, name):
+        def wrapper(label, *args, **kwargs):
+            result = real(label, *args, **kwargs)
+            rects.append((f"{name}:{label}", imgui.get_item_rect_max().x))
+            return result
+
+        return wrapper
+
+    def build():
+        imgui.begin_child("bar-host", (tokens.sp(300), tokens.sp(60)))
+        edge.append(
+            imgui.get_cursor_screen_pos().x + imgui.get_content_region_avail().x
+        )
+        toolbar_mod.toolbar("smoke-bar", items)
+        imgui.end_child()
+
+    old_scale = tokens.SCALE
+    tokens.set_scale(scale)
+    widgets_mod.icon_button = spy(real_icon, "icon")
+    widgets_mod.ghost_button = spy(real_ghost, "ghost")
+    try:
+        # Twice: the first frame has no hover history, and the tier chosen on
+        # it is what the second frame is measured at.
+        for _ in range(2):
+            _frame(imgui_ctx, build)
+    finally:
+        widgets_mod.icon_button = real_icon
+        widgets_mod.ghost_button = real_ghost
+        tokens.set_scale(old_scale)
+
+    assert rects, "the row drew nothing at all"
+    right = edge[-1]
+    for name, item_right in rects:
+        assert item_right <= right + 1.0, (
+            f"{name} ends {item_right - right:.0f} px past the pane edge; "
+            "a clipped control is an invisible one"
+        )
+
+
 # --- Clay mode -------------------------------------------------------------
 
 

@@ -162,19 +162,13 @@ def _tabs(ctx: Any, state: Any) -> None:
 
 
 def _empty(ctx: Any) -> None:
-    from imgui_bundle import imgui
-
-    imgui.dummy((0, sp(40)))
-    imgui.text("Nothing open")
-    widgets.muted_wrapped(
-        f"Start a map, open one, or drop a {plotter_state.MAP_SUFFIX_TEXT} on the window."
+    widgets.nothing_open(
+        f"Start a map, open one, or drop a {plotter_state.MAP_SUFFIX_TEXT} on the window.",
+        [
+            ("New map", lambda: plotter_mode.new_document(ctx)),
+            ("Open a file...", lambda: plotter_mode.ask_open(ctx)),
+        ],
     )
-    imgui.dummy((0, sp(16)))
-    if imgui.button("New map", (sp(240), 0)):
-        plotter_mode.new_document(ctx)
-    imgui.dummy((0, sp(8)))
-    if imgui.button("Open a file...", (sp(240), 0)):
-        plotter_mode.ask_open(ctx)
 
 
 def _status(ctx: Any, state: Any, tab: Any) -> None:

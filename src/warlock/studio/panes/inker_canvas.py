@@ -270,11 +270,14 @@ def _transform_row(ctx: Any, state: Any, tab: Any) -> None:
     # Two sliders and a link, rather than the one that used to drive both axes
     # from ``scale[0]``: the engine has taken a per-axis scale all along and
     # the panel was the thing that could not express it.
+    # "%.2fx", not imgui's default "%.3f": a scale factor is a multiplier and
+    # reads as one with the unit attached, where a bare ``1.000`` beside an
+    # angle in degrees is a number with no stated dimension at all.
     imgui.set_next_item_width(sp(110))
-    changed_x, fx = imgui.slider_float("X##inkscalex", buf.scale[0], 0.05, 8.0)
+    changed_x, fx = imgui.slider_float("X##inkscalex", buf.scale[0], 0.05, 8.0, "%.2fx")
     imgui.same_line()
     imgui.set_next_item_width(sp(110))
-    changed_y, fy = imgui.slider_float("Y##inkscaley", buf.scale[1], 0.05, 8.0)
+    changed_y, fy = imgui.slider_float("Y##inkscaley", buf.scale[1], 0.05, 8.0, "%.2fx")
     imgui.same_line()
     linked, value = imgui.checkbox("Link##inkscalelink", state.transform_link)
     if linked:
@@ -359,28 +362,30 @@ def _recent_popup(ctx: Any, state: Any) -> None:
 def _empty(ctx: Any, state: Any) -> None:
     from pathlib import Path
 
-    imgui.dummy((0, sp(40)))
-    imgui.text("Nothing open")
-    widgets.muted("Start a canvas, open an image, or send one here from the library.")
-    imgui.dummy((0, sp(16)))
-    for width, height in inker_mode.NEW_PRESETS:
-        if imgui.button(f"New {width} x {height}", (sp(240), 0)):
-            inker_mode.new_document(ctx, width, height)
-    # The same popup the file row's New button opens, rather than a second set
-    # of fields: it is registered earlier in this window, so opening it by name
-    # from here is enough.
-    if imgui.button("New custom size...", (sp(240), 0)):
-        imgui.open_popup("new-canvas")
-    imgui.dummy((0, sp(8)))
-    if imgui.button("Open a file...", (sp(240), 0)):
-        inker_mode.ask_open(ctx)
-    found = inker_mode.recent_paths(ctx)
-    if found:
-        imgui.dummy((0, sp(16)))
-        widgets.section("recent")
-        for path in found[:6]:
-            if imgui.selectable(f"{Path(path).name}##{path}", False)[0]:
-                inker_mode.open_path(ctx, Path(path))
+    # The presets first, then the two escapes from them. The one *at the top*
+    # is the primary and the rest are ghosts (``widgets.nothing_open``'s rule):
+    # this screen used to draw five identical buttons, which is a menu claiming
+    # every entry matters equally when four of them are variations on one.
+    actions = [
+        (
+            f"New {width} x {height}",
+            lambda w=width, h=height: inker_mode.new_document(ctx, w, h),
+        )
+        for width, height in inker_mode.NEW_PRESETS
+    ]
+    actions += [
+        # The same popup the file row's New button opens, rather than a second
+        # set of fields: it is registered earlier in this window, so opening it
+        # by name from here is enough.
+        ("New custom size...", lambda: imgui.open_popup("new-canvas")),
+        ("Open a file...", lambda: inker_mode.ask_open(ctx)),
+    ]
+    widgets.nothing_open(
+        "Start a canvas, open an image, or send one here from the library.",
+        actions,
+        recent_paths=inker_mode.recent_paths(ctx),
+        on_open=lambda path: inker_mode.open_path(ctx, Path(path)),
+    )
 
 
 # --- tabs -------------------------------------------------------------------

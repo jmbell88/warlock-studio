@@ -57,6 +57,9 @@ def draw(ctx: Any, job: Any) -> None:
         float(form["strength"]),
         models.IMG2IMG_STRENGTH_MIN,
         models.IMG2IMG_STRENGTH_MAX,
+        # A denoising fraction, drawn as the percentage the reader thinks in.
+        # The range does not start at zero, so the inference cannot see it.
+        percent=True,
     )
     widgets.help_marker(
         "How far each rendered view is taken from the mesh's current look. Low "

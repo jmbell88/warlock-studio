@@ -2702,37 +2702,23 @@ class App:
         """
         from pathlib import Path
 
-        from imgui_bundle import imgui
-
         from . import widgets
-        from .tokens import sp
 
-        # Every measurement through ``sp`` (UX-01), which is what makes this
-        # the same panel at 150% that it is at 100%. It was written as a copy
-        # of ``inker_canvas._empty`` and the copy dropped the scaling: at 1.5
-        # the raster editor's empty state grew with the text while Clay's kept
-        # 240-pixel buttons under 1.5x labels, which is where a label stops
-        # fitting its button.
-        imgui.dummy((0, sp(40)))
-        imgui.text("Nothing open")
-        widgets.muted("Start a model, open a document, or drop a .wblk on the window.")
-        imgui.dummy((0, sp(16)))
-        if imgui.button("New model", (sp(240), 0)):
-            clay_mode.new_document(ctx)
-        imgui.dummy((0, sp(8)))
-        if imgui.button("Open a file...", (sp(240), 0)):
-            clay_mode.ask_open(ctx)
-        found = clay_mode.recent_paths(ctx)
-        if found:
-            imgui.dummy((0, sp(16)))
-            widgets.section("recent")
-            for path in found[:6]:
-                # The path is in the id, not just the label: two documents can
-                # share a basename and one imgui id between them is one row.
-                if imgui.selectable(f"{Path(path).name}##{path}", False)[0]:
-                    clay_mode.open_path(ctx, Path(path))
-                if imgui.is_item_hovered():
-                    imgui.set_tooltip(path)
+        # This was written as a copy of ``inker_canvas._empty`` and the copy
+        # dropped the ``sp()`` scaling, so at 150 % the raster editor's empty
+        # state grew with the text while Clay's kept 240-*physical*-pixel
+        # buttons under 1.5x labels -- which is where a label stops fitting its
+        # button. Both are one function now (REDESIGN.md wave 2), which is the
+        # only fix that also holds for the next copy.
+        widgets.nothing_open(
+            "Start a model, open a document, or drop a .wblk on the window.",
+            [
+                ("New model", lambda: clay_mode.new_document(ctx)),
+                ("Open a file...", lambda: clay_mode.ask_open(ctx)),
+            ],
+            recent_paths=clay_mode.recent_paths(ctx),
+            on_open=lambda path: clay_mode.open_path(ctx, Path(path)),
+        )
 
     def _clay_marquee(self, imgui: Any, view: Any, rect: Any) -> None:
         """The selection rectangle, drawn in imgui rather than in GL.
