@@ -21,6 +21,11 @@ would be wrong in a file somebody else reads and invisible in the image.
 
 from __future__ import annotations
 
+import json
+import zipfile
+from io import BytesIO
+
+from warlock.studio.inker import ora
 from warlock.studio.inker import transform as tf
 from warlock.studio.inker.document import Document
 from warlock.studio.inker.slices import Slice, SliceKey
@@ -28,6 +33,14 @@ from warlock.studio.inker.slices import Slice, SliceKey
 
 def _doc(width: int = 32, height: int = 16) -> Document:
     return Document.blank(width, height)
+
+
+def _exported(doc: Document) -> list[dict]:
+    """The slices as they land in the ``.ora``. Asserted rather than inferred:
+    an inverted rectangle is invisible in the model's tuple and unmistakable as
+    a negative ``w`` in the file every other program reads."""
+    with zipfile.ZipFile(BytesIO(ora.ora_bytes(doc))) as zf:
+        return json.loads(zf.read(ora.WARLOCK_MEMBER))["slices"]
 
 
 # --- the model ----------------------------------------------------------------
@@ -175,6 +188,76 @@ def test_a_key_survives_a_frame_delete_and_its_undo():
     back = doc.anim.frames[1]
     assert back.uid == gone.uid
     assert doc.slices[0].at(back.uid).bounds == (5, 5, 9, 9)
+
+
+# --- the nine-slice centre stays inside its slice -----------------------------
+#
+# Both of these were reachable through the ordinary drag gestures and neither
+# was caught: ``set_slice`` clamped the bounds and left the centre alone, so the
+# geometry path held the invariant and the *gesture* path -- the one a user
+# actually reaches -- did not.
+
+
+def test_a_centre_dragged_past_the_opposite_corner_is_ordered_not_inverted():
+    """Dragging the centre's north-west handle beyond the south-east one stored
+    a rectangle with a negative extent, which reached the ORA member, the sheet
+    sidecar, the TexturePacker block and the ``.wpack`` as ``w: -16``."""
+    doc = _doc(64, 64)
+    entry = doc.add_slice((0, 0, 64, 64), name="panel", center=(20, 20, 44, 44))
+
+    # What the drag leaves on the live object before the release commits it.
+    entry.center = (60, 60, 44, 44)
+    assert doc.set_slice(entry.uid, was={"center": (20, 20, 44, 44)}) is True
+
+    assert doc.slices[0].center == (44, 44, 60, 60)
+    written = _exported(doc)[0]["center"]
+    assert written == {"x": 44, "y": 44, "w": 16, "h": 16}
+    assert written["w"] > 0 and written["h"] > 0
+
+
+def test_resizing_a_slice_smaller_pulls_its_centre_in_with_it():
+    """A centre is an inset of its slice, so a resize that leaves it standing
+    outside the rectangle it insets is a panel stretched from nowhere."""
+    doc = _doc(32, 16)
+    entry = doc.add_slice((2, 2, 30, 14), name="panel", center=(4, 4, 20, 8))
+    assert doc.set_slice(entry.uid, bounds=(24, 10, 30, 14)) is True
+
+    x0, y0, x1, y1 = doc.slices[0].bounds
+    cx0, cy0, cx1, cy1 = doc.slices[0].center
+    assert 0 <= cx0 < cx1 <= x1 - x0
+    assert 0 <= cy0 < cy1 <= y1 - y0
+
+    written = _exported(doc)[0]
+    bounds, center = written["bounds"], written["center"]
+    # Absolute, and inside the slice it insets, in the file itself.
+    assert bounds["x"] <= center["x"] + bounds["x"]
+    assert center["x"] + center["w"] <= bounds["w"]
+    assert center["y"] + center["h"] <= bounds["h"]
+    assert center["w"] > 0 and center["h"] > 0
+
+
+def test_a_keys_centre_is_fitted_to_that_keys_own_bounds():
+    """Each key carries its own rectangle, so the centre is clamped against
+    *that* extent rather than against the slice's."""
+    doc = _doc(32, 16)
+    doc.add_frame()
+    frame = doc.anim.frames[0]
+    entry = doc.add_slice((0, 0, 30, 14), center=(2, 2, 28, 12))
+    doc.set_slice_key(
+        entry.uid,
+        frame.uid,
+        key=SliceKey(bounds=(0, 0, 6, 4), center=(30, 30, 2, 2)),
+    )
+    key = doc.slices[0].keys[frame.uid]
+    assert key.bounds == (0, 0, 6, 4)
+    # Ordered by the swap, then held inside the key's own 6x4 extent.
+    assert key.center == (2, 2, 6, 4)
+
+
+def test_a_centre_offered_at_construction_is_fitted_too():
+    doc = _doc(32, 16)
+    entry = doc.add_slice((0, 0, 8, 8), center=(6, 6, 2, 2))
+    assert entry.center == (2, 2, 6, 6)
 
 
 def test_a_key_is_clamped_into_the_canvas_like_the_base_is():
@@ -331,12 +414,21 @@ def test_the_rect_mapper_and_the_plane_agree_about_a_quarter_turn():
     -- ``(6, 2)`` here comes out at ``(2, 3)``, which is the bottom-left of the
     right answer. Mapping the pair and re-ordering is exactly what removes that
     trap, and it is the reason ``rect_from_points`` exists.
+
+    Through ``map_rect`` and a point mapper, which is the composition
+    ``_doc_slices`` genuinely uses -- not a per-operation wrapper that only this
+    test would ever call.
     """
     import numpy as np
 
     plane = np.zeros((5, 9, 4), dtype=np.uint8)
     plane[2, 6] = (1, 2, 3, 4)
     turned = tf.rotate90(plane, 1)
-    rect = tf.rotate90_rect((6, 2, 7, 3), (9, 5), 1)
+    size = (9, 5)
+    rect = tf.map_rect(
+        (6, 2, 7, 3),
+        lambda x, y: tf.rotate90_point((x, y), size, 1),
+        tf.rotate90_size(size, 1),
+    )
     assert rect == (2, 2, 3, 3)
     assert tuple(turned[rect[1], rect[0]]) == (1, 2, 3, 4)

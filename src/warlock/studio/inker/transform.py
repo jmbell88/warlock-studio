@@ -14,6 +14,7 @@ is confined to these few lines.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 
 import numpy as np
 
@@ -209,10 +210,11 @@ def resize_canvas(
 # describing pixels that have moved -- is invisible in the image and only shows
 # up in an export somebody else reads.
 #
-# Every rect mapper is a *point* mapper plus :func:`rect_from_points`, which is
-# the same argument ``panes/inker_canvas._corners`` makes about drawing: mapping
-# the two corners and re-ordering them is right for all eight orientations,
-# where mapping x and y independently is right only at rotation 0.
+# What is here is a *point* mapper per operation plus one :func:`map_rect` that
+# carries a rectangle through any of them, which is the same argument
+# ``panes/inker_canvas._corners`` makes about drawing: mapping the two corners
+# and re-ordering them is right for all eight orientations, where mapping x and
+# y independently is right only at rotation 0.
 #
 # Bounds are ``x0 y0 x1 y1`` with the far edge **exclusive**, as everywhere else
 # in this package. That is what makes mirroring exact rather than off by one:
@@ -318,34 +320,28 @@ def clamp_rect(
     return (x0, y0, x1, y1)
 
 
-def flip_rect(
-    rect: tuple[int, int, int, int], size: tuple[int, int], axis: str
+def map_rect(
+    rect: tuple[int, int, int, int],
+    point: Callable[[float, float], tuple[float, float]],
+    box: tuple[int, int],
 ) -> tuple[int, int, int, int]:
-    a = flip_point((rect[0], rect[1]), size, axis)
-    b = flip_point((rect[2], rect[3]), size, axis)
-    return clamp_rect(rect_from_points(a, b), size)
+    """A rectangle through a point mapper: map both corners, order, round, clamp.
 
+    **One function rather than one per operation.** There were five -- a
+    ``flip_rect`` beside ``scale_rect`` beside ``offset_rect`` -- and each was
+    the same three lines with a different point mapper substituted, which is a
+    composition and not five behaviours. Worse, the caller that actually maps
+    slices takes the point mapper as an argument (it has to: the pivot and the
+    nine-slice centre go through the *same* mapper as the bounds, so a per-op
+    rect function could not have served it) and so spelled the composition
+    inline. That left the five as untested duplicates of the real path, which is
+    exactly the shape two spellings drift from.
 
-def rotate90_rect(
-    rect: tuple[int, int, int, int], size: tuple[int, int], quarters: int = 1
-) -> tuple[int, int, int, int]:
-    a = rotate90_point((rect[0], rect[1]), size, quarters)
-    b = rotate90_point((rect[2], rect[3]), size, quarters)
-    return clamp_rect(rect_from_points(a, b), rotate90_size(size, quarters))
-
-
-def scale_rect(
-    rect: tuple[int, int, int, int], old: tuple[int, int], new: tuple[int, int]
-) -> tuple[int, int, int, int]:
-    a = scale_point((rect[0], rect[1]), old, new)
-    b = scale_point((rect[2], rect[3]), old, new)
-    return clamp_rect(rect_from_points(a, b), new)
-
-
-def offset_rect(
-    rect: tuple[int, int, int, int], offset: tuple[int, int], size: tuple[int, int]
-) -> tuple[int, int, int, int]:
-    """A crop or a canvas resize: translate, then clamp into the new canvas."""
-    a = offset_point((rect[0], rect[1]), offset)
-    b = offset_point((rect[2], rect[3]), offset)
-    return clamp_rect(rect_from_points(a, b), size)
+    ``box`` is what the result is clamped into, and it is a parameter rather
+    than derived because it is not always the canvas: a nine-slice centre is
+    clamped into *its own slice*, which is the same composition against a
+    different box.
+    """
+    a = point(float(rect[0]), float(rect[1]))
+    b = point(float(rect[2]), float(rect[3]))
+    return clamp_rect(rect_from_points(a, b), box)

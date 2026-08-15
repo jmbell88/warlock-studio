@@ -60,6 +60,27 @@ def _remap(entry: Slice, point: Point, canvas: tuple[int, int]) -> None:
     }
 
 
+def _extent(bounds: tuple[int, int, int, int]) -> tuple[int, int]:
+    return (bounds[2] - bounds[0], bounds[3] - bounds[1])
+
+
+def fit_center(
+    center: tuple[int, int, int, int] | None, bounds: tuple[int, int, int, int]
+) -> tuple[int, int, int, int] | None:
+    """A nine-slice centre brought inside the slice it insets.
+
+    Clamped against the slice's own extent and not against the canvas: a centre
+    is an *inset*, and one that escaped the rectangle it insets would stretch a
+    panel from outside itself -- or, having been dragged past the opposite
+    corner, carry a negative width into every file this document is exported to.
+
+    One function because there are two doors and both must apply it: a geometry
+    op moves the slice under a centre that has to follow, and a gesture moves
+    the centre under a slice that has not. Only the first used to.
+    """
+    return None if center is None else tf.clamp_rect(center, _extent(bounds))
+
+
 def _remapped(
     bounds: tuple[int, int, int, int],
     pivot: tuple[float, float] | None,
@@ -70,22 +91,20 @@ def _remapped(
     tuple[int, int, int, int], tuple[float, float] | None, tuple[int, int, int, int] | None
 ]:
     x0, y0, x1, y1 = bounds
-    moved = tf.clamp_rect(
-        tf.rect_from_points(point(x0, y0), point(x1, y1)), canvas
-    )
+    moved = tf.map_rect(bounds, point, canvas)
     nx0, ny0 = moved[0], moved[1]
     if pivot is not None:
         px, py = point(x0 + pivot[0], y0 + pivot[1])
         pivot = (px - nx0, py - ny0)
     if center is not None:
-        cx0, cy0, cx1, cy1 = center
-        a = point(x0 + cx0, y0 + cy0)
-        b = point(x0 + cx1, y0 + cy1)
-        rel = tf.rect_from_points((a[0] - nx0, a[1] - ny0), (b[0] - nx0, b[1] - ny0))
-        # Clamped against the slice's own extent rather than the canvas: a
-        # nine-slice centre is an inset of its slice, and one that escaped the
-        # rectangle it insets would stretch a panel from outside itself.
-        center = tf.clamp_rect(rel, (moved[2] - nx0, moved[3] - ny0))
+        # The same mapper, lifted to absolute and put back against the new
+        # origin -- and through the same ``map_rect``, so the ordering and the
+        # rounding cannot differ between a slice's bounds and its centre.
+        def relative(x: float, y: float) -> tuple[float, float]:
+            mx, my = point(x0 + x, y0 + y)
+            return (mx - nx0, my - ny0)
+
+        center = tf.map_rect(center, relative, _extent(moved))
     return moved, pivot, center
 
 
@@ -134,6 +153,12 @@ class SliceOps:
 
     # -- ops -----------------------------------------------------------------
 
+    def _fitted_key(self: Document, key: SliceKey) -> SliceKey:
+        """One key with its bounds inside the canvas and its centre inside those
+        bounds -- the same pair of rules the base goes through."""
+        bounds = tf.clamp_rect(key.bounds, self.size)
+        return SliceKey(bounds, key.pivot, fit_center(key.center, bounds))
+
     def add_slice(
         self: Document,
         bounds: tuple[int, int, int, int],
@@ -143,11 +168,12 @@ class SliceOps:
         center: tuple[int, int, int, int] | None = None,
     ) -> Slice:
         """A new slice, clamped into the canvas. One undo step."""
+        box = tf.clamp_rect(bounds, self.size)
         entry = Slice(
             name=name or self._next_slice_name(),
-            bounds=tf.clamp_rect(bounds, self.size),
+            bounds=box,
             pivot=pivot,
-            center=center,
+            center=fit_center(center, box),
         )
         index = len(self.slices)
         self._put_slice(index, entry)
@@ -194,17 +220,23 @@ class SliceOps:
         # downstream assumes the declared types; ``normalise`` is the one place
         # that coercion lives, so it cannot be spelled differently here.
         entry.normalise()
-        # Every rectangle inside the canvas, the keys as much as the base: a
-        # frame with a key of its own is dragged *through* that key, so a door
-        # that only clamped the base would leave the one gesture that can
-        # produce an out-of-bounds rectangle unguarded -- and would let a
-        # crossed-over resize keep its corners the wrong way round.
+        # Every rectangle inside the thing that contains it: the bounds inside
+        # the canvas, the centre inside its own bounds, and both again for every
+        # key -- a frame with a key of its own is dragged *through* that key, so
+        # a door that clamped only the base would leave the one gesture that can
+        # escape unguarded.
+        #
+        # The centre needs this as much as the bounds do, and needed it more:
+        # dragging a centre handle past the opposite corner stored an inverted
+        # rectangle, which reached the ORA member, the sheet sidecar, the
+        # TexturePacker block and the ``.wpack`` as a negative width -- and
+        # resizing the bounds smaller left the centre standing outside the slice
+        # it insets. ``clamp_rect`` orders as well as bounds, so one call fixes
+        # both.
         entry.bounds = tf.clamp_rect(entry.bounds, self.size)
+        entry.center = fit_center(entry.center, entry.bounds)
         entry.keys = {
-            frame_uid: SliceKey(
-                tf.clamp_rect(key.bounds, self.size), key.pivot, key.center
-            )
-            for frame_uid, key in entry.keys.items()
+            frame_uid: self._fitted_key(key) for frame_uid, key in entry.keys.items()
         }
         after = slice_props(entry)
         # A ``was`` naming only some of the five leaves the rest *unchanged*,
