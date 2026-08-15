@@ -24,6 +24,7 @@ import numpy as np
 from imgui_bundle import imgui
 
 from .. import ants, icons, inker_mode, inker_state, theme, widgets
+from ..inker.slices import slice_props
 from ..inker_state import PAINT_TOOLS, SELECT_TOOLS, SHAPE_TOOLS
 from ..tokens import sp
 from . import inker_textures
@@ -424,7 +425,7 @@ def _input(ctx: Any, state: Any, tab: Any, origin, *, active: bool, hovered: boo
         _transform_input(state, tab, origin, point, active=active)
         return
     if active and imgui.is_mouse_clicked(0) and not state.space_held:
-        _press(ctx, state, tab, _snapped(state, point))
+        _press(ctx, state, tab, _snapped(state, point), origin)
     elif state.drag_kind and imgui.is_mouse_down(0):
         _drag(state, tab, _snapped(state, point))
     elif state.drag_kind and not imgui.is_mouse_down(0):
@@ -596,13 +597,20 @@ def _combine_op() -> str:
     return "replace"
 
 
-def _press(ctx: Any, state: Any, tab: Any, point) -> None:
+def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
     doc = tab.doc
     tool = state.tool
     state.drag_anchor = point
     state.last_point = point
     state.combine = _combine_op()
     ipoint = (int(math.floor(point[0])), int(math.floor(point[1])))
+
+    # Before every paint branch, and it returns rather than falling through:
+    # the slice tool must never leave a dab behind, which is exactly what a
+    # missing early-out looks like the first time somebody drags on the canvas.
+    if tool == "slice":
+        _slice_press(ctx, state, tab, origin, point)
+        return
 
     # Alt over a paint tool picks the colour under the cursor, which is the one
     # convention a user coming from any other paint program reaches for without
@@ -680,8 +688,230 @@ def _press(ctx: Any, state: Any, tab: Any, point) -> None:
         state.drag_kind = "paint"
 
 
+# --- slices -------------------------------------------------------------------
+#
+# A tool rather than a pane, so there is no new help anchor and no fourth
+# sidebar: the overlay is on the canvas where the rectangles are, and the list,
+# the toggles and the delete button ride the tools panel like every other tool's
+# options do.
+#
+# The whole surface obeys the pane's two existing rules. Every screen position
+# goes through ``_corners``/``_box`` rather than ``origin + x * zoom``, which is
+# what keeps it correct on a turned or mirrored page. And a drag commits
+# nothing: the press records what the slice looked like, the drag mutates the
+# live object so the overlay follows the cursor, and the release pushes exactly
+# one ``set_slice`` -- one gesture, one Ctrl+Z.
+
+#: A slice's corner grab squares and the pivot's ring, in screen pixels.
+SLICE_HANDLE = 4.0
+SLICE_PIVOT_RADIUS = 5.0
+#: How long a dash of the nine-slice centre is, in screen pixels. Dashed rather
+#: than solid because the centre sits inside the slice's own outline and two
+#: solid rectangles a few pixels apart read as one thick border.
+SLICE_DASH = 4.0
+
+#: Which corner of the bounds a resize drag is holding, and the pair of indices
+#: into ``(x0, y0, x1, y1)`` it writes. Named so the press can record one string
+#: and the drag can stay arithmetic.
+SLICE_CORNERS = {"nw": (0, 1), "ne": (2, 1), "sw": (0, 3), "se": (2, 3)}
+
+
+def slices_visible(state: Any) -> bool:
+    """Whether the overlay draws. Derived rather than a second flag to keep in
+    step: the slice tool forces it on, and ``show_slices`` is only ever the
+    answer to "keep showing them while I paint"."""
+    return bool(state.show_slices) or state.tool == "slice"
+
+
+def _near(a, b, radius: float) -> bool:
+    return math.dist(a, b) <= radius
+
+
+def _slice_grab(state: Any, tab: Any, origin, point) -> tuple[str, str]:
+    """What a press at ``point`` is holding: ``(kind, corner)``.
+
+    Handles are hit-tested in **screen** space so a grab square is the same size
+    to the hand at every zoom -- an image-space radius is a hundredth of a pixel
+    at 100x and half the canvas at 5%. The rest (is the cursor inside a slice)
+    is image space, where the rectangle actually is.
+
+    The order is outermost first: the bounds corners, then the pivot, then the
+    centre's corners, then the body, then empty canvas. Two grabs can genuinely
+    coincide -- a pivot parked on a corner -- and resizing is the gesture a user
+    reaches for at a corner, so it wins there.
+    """
+    doc = tab.doc
+    entry = doc.slice_by_uid(state.slice_uid)
+    mouse = imgui.get_mouse_pos()
+    at = (mouse.x, mouse.y)
+    frame_uid = tab.frame_uid
+    if entry is not None:
+        key = entry.at(frame_uid)
+        x0, y0, x1, y1 = key.bounds
+        corners = {
+            "nw": (x0, y0), "ne": (x1, y0), "sw": (x0, y1), "se": (x1, y1),
+        }
+        for name, (cx, cy) in corners.items():
+            if _near(inker_state.to_screen(tab.view, origin, cx, cy), at, SLICE_HANDLE * 2.5):
+                return "slice-resize", name
+        if key.pivot is not None:
+            pivot = inker_state.to_screen(
+                tab.view, origin, x0 + key.pivot[0], y0 + key.pivot[1]
+            )
+            if _near(pivot, at, SLICE_PIVOT_RADIUS * 2.0):
+                return "slice-pivot", ""
+        if key.center is not None:
+            cx0, cy0, cx1, cy1 = key.center
+            inner = {
+                "nw": (x0 + cx0, y0 + cy0), "ne": (x0 + cx1, y0 + cy0),
+                "sw": (x0 + cx0, y0 + cy1), "se": (x0 + cx1, y0 + cy1),
+            }
+            for name, (cx, cy) in inner.items():
+                if _near(
+                    inker_state.to_screen(tab.view, origin, cx, cy), at, SLICE_HANDLE * 2.5
+                ):
+                    return "slice-center", name
+    # The body of *any* slice, last one first: the list is drawn in order, so
+    # the last is the one on top and the one the click visibly landed on.
+    for candidate in reversed(doc.slices):
+        x0, y0, x1, y1 = candidate.at(frame_uid).bounds
+        if x0 <= point[0] < x1 and y0 <= point[1] < y1:
+            state.slice_uid = candidate.uid
+            return "slice-move", ""
+    return "slice-new", ""
+
+
+def _slice_press(ctx: Any, state: Any, tab: Any, origin, point) -> None:
+    """Decide what this gesture is, and record what it started from."""
+    if state.transforming:
+        # A free transform owns the canvas until it is applied or cancelled;
+        # letting a slice drag start underneath it would commit a step against
+        # a document that is mid-operation.
+        state.drag_kind = ""
+        return
+    kind, corner = _slice_grab(state, tab, origin, point)
+    entry = tab.doc.slice_by_uid(state.slice_uid)
+    state.drag_kind = kind
+    state.slice_drag = (
+        None if entry is None or kind == "slice-new" else slice_props(entry),
+        corner,
+    )
+
+
+def _slice_drag(state: Any, tab: Any, point) -> None:
+    """Move the live slice so the overlay follows the cursor. Pushes nothing."""
+    entry = tab.doc.slice_by_uid(state.slice_uid)
+    if entry is None or state.slice_drag is None:
+        return
+    _before, corner = state.slice_drag
+    last = state.last_point or point
+    dx, dy = point[0] - last[0], point[1] - last[1]
+    x0, y0, x1, y1 = entry.bounds
+    if state.drag_kind == "slice-move":
+        entry.bounds = (x0 + dx, y0 + dy, x1 + dx, y1 + dy)
+    elif state.drag_kind == "slice-resize":
+        which = list(entry.bounds)
+        ix, iy = SLICE_CORNERS[corner]
+        which[ix] += dx
+        which[iy] += dy
+        entry.bounds = tuple(which)
+    elif state.drag_kind == "slice-pivot" and entry.pivot is not None:
+        entry.pivot = (entry.pivot[0] + dx, entry.pivot[1] + dy)
+    elif state.drag_kind == "slice-center" and entry.center is not None:
+        which = list(entry.center)
+        ix, iy = SLICE_CORNERS[corner]
+        which[ix] += dx
+        which[iy] += dy
+        entry.center = tuple(which)
+    entry.normalise()
+
+
+def _slice_release(ctx: Any, state: Any, tab: Any, point) -> None:
+    """One step for the whole gesture, or nothing at all."""
+    doc = tab.doc
+    if state.drag_kind == "slice-new":
+        anchor = state.drag_anchor or point
+        rect = marquee_rect(anchor, point)
+        if rect[2] - rect[0] >= 1 and rect[3] - rect[1] >= 1:
+            state.slice_uid = doc.add_slice(rect).uid
+        return
+    if state.slice_drag is None:
+        return
+    before, _corner = state.slice_drag
+    if before is not None:
+        # ``was``, because the live object has already been dragged: reading the
+        # before here would compare the slice against itself and push nothing.
+        doc.set_slice(state.slice_uid, was=before)
+
+
+def _dashed_rect(draw_list: Any, a, b, colour: int) -> None:
+    """A rectangle in dashes, so it reads as *inside* the slice's own outline
+    rather than as a second border a few pixels in from it."""
+    corners = ((a[0], a[1]), (b[0], a[1]), (b[0], b[1]), (a[0], b[1]))
+    for start, end in zip(corners, (*corners[1:], corners[0]), strict=True):
+        length = math.dist(start, end)
+        if length <= 0.0:
+            continue
+        steps = max(1, int(length // (SLICE_DASH * 2)))
+        ux, uy = (end[0] - start[0]) / length, (end[1] - start[1]) / length
+        for step in range(steps):
+            head = step * length / steps
+            tail = min(head + SLICE_DASH, length)
+            draw_list.add_line(
+                (start[0] + ux * head, start[1] + uy * head),
+                (start[0] + ux * tail, start[1] + uy * tail),
+                colour,
+            )
+
+
+def _slices(state: Any, tab: Any, draw_list: Any, origin) -> None:
+    """Every slice, and the handles of the selected one.
+
+    Everything here is placed through ``_box``/``to_screen``, never through
+    ``origin + x * zoom``: a quarter turn maps an axis-aligned image rectangle
+    onto an axis-aligned *screen* rectangle, and that is only true of a position
+    that has been through the view's basis.
+    """
+    frame_uid = tab.frame_uid
+    outline = _u32(theme.ACCENT, 0.75)
+    inner = _u32(theme.ACCENT, 0.45)
+    hot = _u32(theme.ACCENT)
+    for entry in tab.doc.slices:
+        key = entry.at(frame_uid)
+        x0, y0, x1, y1 = key.bounds
+        selected = entry.uid == state.slice_uid
+        a, b = _box(tab.view, origin, x0, y0, x1, y1)
+        draw_list.add_rect(a, b, hot if selected else outline)
+        if key.center is not None:
+            cx0, cy0, cx1, cy1 = key.center
+            ca, cb = _box(
+                tab.view, origin, x0 + cx0, y0 + cy0, x0 + cx1, y0 + cy1
+            )
+            _dashed_rect(draw_list, ca, cb, inner)
+        if key.pivot is not None:
+            px, py = inker_state.to_screen(
+                tab.view, origin, x0 + key.pivot[0], y0 + key.pivot[1]
+            )
+            radius = sp(SLICE_PIVOT_RADIUS)
+            draw_list.add_circle((px, py), radius, hot if selected else outline)
+            draw_list.add_line((px - radius, py), (px + radius, py), hot)
+            draw_list.add_line((px, py - radius), (px, py + radius), hot)
+        if not selected:
+            continue
+        for cx, cy in _corners(tab.view, origin, x0, y0, x1, y1):
+            draw_list.add_rect_filled(
+                (cx - SLICE_HANDLE, cy - SLICE_HANDLE),
+                (cx + SLICE_HANDLE, cy + SLICE_HANDLE),
+                hot,
+            )
+
+
 def _drag(state: Any, tab: Any, point) -> None:
     doc = tab.doc
+    if state.drag_kind.startswith("slice-"):
+        _slice_drag(state, tab, point)
+        state.last_point = point
+        return
     if state.drag_kind == "paint":
         doc.stroke_to(point)
     elif state.drag_kind == "move" and doc.floating is not None:
@@ -735,6 +965,10 @@ def _release(ctx: Any, state: Any, tab: Any, point) -> None:
     anchor = state.drag_anchor or point
     kind = state.drag_kind
 
+    if kind.startswith("slice-"):
+        _slice_release(ctx, state, tab, point)
+        state.clear_drag()
+        return
     if kind == "paint":
         doc.end_stroke()
     elif kind == "shape":
@@ -866,6 +1100,8 @@ def _paint(ctx: Any, state: Any, tab: Any, origin, *, hovered: bool) -> None:
     if state.symmetry != "none":
         _symmetry(state, draw_list, view, origin, doc.size)
     _ants(ctx, tab, draw_list, origin)
+    if slices_visible(state):
+        _slices(state, tab, draw_list, origin)
     if state.transforming:
         _transform_box(state, tab, draw_list, origin)
     _preview(state, tab, draw_list, origin)
@@ -1089,6 +1325,15 @@ def _preview(state: Any, tab: Any, draw_list: Any, origin) -> None:
     tip = (mouse.x, mouse.y)
     colour = _u32(theme.ACCENT)
     kind, tool = state.drag_kind, state.tool
+
+    if kind == "slice-new":
+        # The rectangle a release would add. The other four slice drags need no
+        # preview at all: they move the live slice, so ``_slices`` is already
+        # drawing exactly what the release will keep.
+        draw_list.add_rect(anchor, tip, colour)
+        return
+    if kind.startswith("slice-"):
+        return
 
     if kind == "shape":
         # Through the same function the release goes through, and back to

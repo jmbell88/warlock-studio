@@ -1024,6 +1024,12 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
     assert tab is not None and tab.job_id == job_id
     _frame(imgui_ctx, build)
 
+    # A selected slice with everything on it, so the slice tool's section draws
+    # its whole body rather than the "no slices yet" line -- and so the overlay
+    # draws a rectangle, a pivot and a dashed centre on the canvas.
+    chosen = tab.doc.add_slice((2, 2, 20, 20), pivot=(4.0, 8.0), center=(4, 4, 12, 12))
+    state.slice_uid = chosen.uid
+
     # Every tool once: each has its own options branch.
     for tool, _label, _key in inker_state.TOOLS:
         state.tool = tool

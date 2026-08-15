@@ -1178,6 +1178,9 @@ TOOL_KEYS = {
     "w": "wand",
     "v": "move",
     "i": "eyedropper",
+    # Aseprite's own letter for the slice tool, and it was free here: plain "c"
+    # was bound to nothing, and Ctrl+C is copy on a different branch entirely.
+    "c": "slice",
 }
 
 
