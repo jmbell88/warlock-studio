@@ -52,6 +52,17 @@ class FakeCtx:
 # --- the stage list ---------------------------------------------------------
 
 
+def rigged(**kwargs):
+    return job(files=["model.glb", "input.png", "rig.glb"], **kwargs)
+
+
+class Rigless:
+    """A ctx that says Blender is missing. Nothing else -- the gate reads one
+    attribute, and a fuller double would hide which one."""
+
+    rigging_available = False
+
+
 def test_the_stage_list_only_ever_grows():
     """The order is the pipeline's order and a released prefix of it is a
     promise. Wave 5 ships two segments and then four and then five; a step
@@ -142,6 +153,42 @@ def test_a_finished_reference_does_not_block_the_mesh_stage():
     assert (
         create_stages.available("mesh", job(stage="reference", files=["input.png"])) is None
     )
+
+
+def test_the_rig_stage_needs_a_finished_mesh_and_says_so():
+    reason = create_stages.available("rig", job(stage="reference", files=["input.png"]))
+    assert reason == "job has no finished mesh to rig"
+
+
+def test_the_pose_stage_needs_a_rig_and_says_so():
+    assert create_stages.available("pose", job()) == "job is not rigged"
+    assert create_stages.available("pose", rigged()) is None
+
+
+def test_without_blender_both_are_blocked_rather_than_hidden():
+    """A missing segment is a feature the user concludes does not exist. The
+    reason names Blender, which is the thing they can act on."""
+    for stage in ("rig", "pose"):
+        reason = create_stages.available(stage, rigged(), Rigless())
+        assert reason is not None and "Blender" in reason
+
+
+def test_a_ctx_that_says_nothing_is_not_a_gate():
+    """The pure callers pass no ctx at all, and refusing a stage on the
+    strength of an absent object would be a rule nobody chose."""
+    assert create_stages.available("rig", job()) is None
+
+
+def test_a_rig_is_reached_from_the_row_without_reading_the_sidecar():
+    assert create_stages.reached(rigged()) == "rig"
+    assert create_stages.reached(job(), rig_meta={"template": "humanoid"}) == "rig"
+
+
+def test_the_pose_stage_is_reached_by_a_saved_pose_and_not_by_the_rig():
+    """Ticking Pose off the rig would put a check beside a step nobody has
+    taken -- a rig is the *ability* to pose, not a pose."""
+    assert create_stages.reached(rigged()) == "rig"
+    assert create_stages.reached(rigged(), poses=[{"name": "idle"}]) == "pose"
 
 
 def test_an_unknown_stage_is_a_programming_error():
@@ -274,6 +321,66 @@ def test_a_ctx_with_no_job_cache_can_still_switch_stage():
     create_stages.go(SimpleNamespace(state=state), "mesh")
     assert state.mode == create_stages.MODE
     assert state.create_stage == "mesh"
+
+
+# --- leaving the pose stage -------------------------------------------------
+
+
+class FakeEditor:
+    def __init__(self, unsaved):
+        self.mode = "pose"
+        self._unsaved = unsaved
+
+    def has_unsaved_edits(self):
+        return self._unsaved
+
+
+class FakeViewer:
+    def __init__(self, unsaved):
+        self.pose_mode = True
+        self.editor = FakeEditor(unsaved)
+        self.left = False
+
+    def exit_pose_mode(self):
+        self.left = True
+        self.pose_mode = False
+
+
+def _posing(unsaved):
+    from warlock.studio import dialogs
+
+    ctx = FakeCtx([rigged(id="bbbbbbbbbbbb")], selected="bbbbbbbbbbbb")
+    ctx.state.mode = create_stages.MODE
+    ctx.state.create_stage = "pose"
+    ctx.viewer = FakeViewer(unsaved)
+    ctx.confirms = dialogs.ConfirmQueue()
+    return ctx
+
+
+def test_leaving_the_pose_stage_with_unsaved_work_asks_first():
+    ctx = _posing(True)
+    create_stages.go(ctx, "mesh")
+    assert ctx.state.create_stage == "pose", "the stage moved before the question was answered"
+    assert ctx.confirms.pending is not None
+
+    ctx.confirms.pending.on_confirm()
+    assert ctx.state.create_stage == "mesh"
+
+
+def test_leaving_the_pose_stage_leaves_the_editor_too():
+    """Without this the viewer stays in pose mode and ``_sync_viewer`` returns
+    early while it is -- so the Mesh stage would go on showing rig.glb."""
+    ctx = _posing(False)
+    create_stages.go(ctx, "mesh")
+    assert ctx.state.create_stage == "mesh"
+    assert ctx.viewer.left is True
+
+
+def test_moving_within_the_pose_stage_asks_nothing():
+    ctx = _posing(True)
+    create_stages.go(ctx, "pose")
+    assert ctx.confirms.pending is None
+    assert ctx.viewer.left is False
 
 
 # --- the vocabulary boundary ------------------------------------------------

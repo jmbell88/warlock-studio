@@ -32,11 +32,14 @@ under [Posing](#posing).
 
 There are three ways to rig:
 
+- Select a finished mesh in Create and press **Rig** on the stage rail. The stage's column holds
+  the skeleton picker and **Rig this mesh**; the inspector beside it shows what the rig produced.
 - Press **Rig** on a finished mesh's card in the library.
-- Open the inspector's **Rig & Pose** tab on an unrigged mesh and press **Rig this mesh** in the
-  **Pose** panel.
-- Tick **Rig when the mesh lands** in the 3D pane's **Rig** section before generating, and pick a
-  skeleton. The rig is then queued automatically as soon as the mesh finishes.
+- Tick **Rig when the mesh lands** at the **Mesh** stage before generating, and pick a skeleton.
+  The rig is then queued automatically as soon as the mesh finishes.
+
+All three use the same skeleton — the one the picker is showing — and the same queue slot, so a
+second press while one is running is refused rather than queueing a second rig of the same mesh.
 
 Rigging is a queued job like any other, and it takes minutes of CPU rather than seconds — skinning
 is not cheap. It runs Blender as a separate process, never inside the app: Blender's Python module
@@ -48,7 +51,8 @@ failure and falls back to envelope weights rather than failing your job, and rec
 was used in `rig.json`. Envelope weights are cruder — expect more distortion at joints — so the
 record is worth checking if a pose deforms strangely.
 
-You do not have to open the file for that. The **Rig & Pose** tab names the method at the top —
+You do not have to open the file for that. The inspector at the **Rig** stage names the method at
+the top —
 `weighting: automatic`, `weighting: automatic-welded`, or `weighting: envelope - needs review` in
 warning colour, with the reason on hover. It reads the rig beside the selected mesh, so it answers
 for the asset you have selected rather than for the rig job that produced it.
@@ -95,8 +99,11 @@ Joints you have corrected by hand always win over both. See **Adjust joints** un
 
 ## Posing
 
-Once a mesh is rigged, the inspector's **Pose** panel offers **Edit pose**. Pressing it swaps the
-viewport from the mesh to the rig and enters pose mode.
+Once a mesh is rigged, the **Pose** stage offers **Edit pose**. Pressing it swaps the viewport from
+the mesh to the rig and enters pose mode.
+
+Leaving the stage while a pose is unsaved asks first, and every way out asks — the rail, a library
+card, the palette. A pose lives in the viewer until it is saved.
 
 In pose mode:
 

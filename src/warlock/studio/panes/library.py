@@ -800,13 +800,7 @@ def _overflow(ctx: Any, job: Any) -> None:
         if imgui.menu_item("Compare selected with this", "", False)[0]:
             compare(ctx, job_id)
         if ctx.rigging_available and imgui.menu_item("Rig", "", False)[0]:
-            ctx.submit(
-                f"rig:{job_id}",
-                svc_rig.create_rig,
-                ctx.svc,
-                job_id,
-                template=_skeleton(ctx),
-            )
+            run_action(ctx, job, "rig")
     imgui.separator()
     if imgui.menu_item("Delete", "", False)[0]:
         # No confirm (J91): the trash *is* the confirmation, and it is a better
@@ -994,17 +988,6 @@ def _copy_settings(ctx: Any, job: Any) -> None:
     ctx.toast("Settings copied to the form.")
 
 
-def _skeleton(ctx: Any) -> str | None:
-    """The skeleton the 3D pane's combo is showing.
-
-    Rigging an existing mesh used to pass nothing, so the combo applied only
-    when a rig was requested as part of generating -- picking "quadruped" and
-    then rigging a finished mesh silently used the config default. None means
-    "no explicit choice", which is what the service already resolves.
-    """
-    return (ctx.state.form_3d or {}).get("rig_template") or None
-
-
 def _remeshable(job: Any) -> bool:
     """Whether "keep this image, rebuild the mesh" is offered for this job.
 
@@ -1036,7 +1019,19 @@ def run_action(ctx: Any, job: Any, action: str) -> None:
         # different one.
         create_stages.go(ctx, "mesh", follow=False)
     elif action == "rig":
-        ctx.submit(f"rig:{job_id}", svc_rig.create_rig, ctx.svc, job_id, template=_skeleton(ctx))
+        # The skeleton and the key are the Rig stage's, not a second copy:
+        # picking "quadruped" there and then rigging from a card here has to
+        # use the same template, and two spellings of the submit key would let
+        # both fire at once.
+        from . import stage_rig
+
+        ctx.submit(
+            stage_rig.rig_key(job),
+            svc_rig.create_rig,
+            ctx.svc,
+            job_id,
+            template=stage_rig.skeleton(ctx),
+        )
     elif action == "open":
         from .. import create_stages
 

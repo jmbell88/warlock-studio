@@ -487,6 +487,19 @@ def test_the_stage_decides_which_file_the_viewport_wants(svc):
     assert app.viewer.pending == svc.job_dir(job["id"]) / "model.glb"
 
 
+def test_the_rig_and_pose_stages_frame_the_mesh_the_rig_was_fitted_to(svc):
+    """One answer for the last three stages. A rig and its poses are fitted to
+    that geometry, so a stage that framed something else -- or nothing, which
+    is what the empty placeholder was -- would describe a different object."""
+    from warlock.studio import main
+
+    job = {"id": "a" * 12, "files": ["model.glb", "input.png", "rig.glb"]}
+    for stage in ("mesh", "rig", "pose"):
+        app = _viewer_app(svc, job=job, stage=stage)
+        main.App._sync_viewer(app)
+        assert app.viewer.pending == svc.job_dir(job["id"]) / "model.glb", stage
+
+
 def test_a_stage_change_is_watched_as_a_mode_change_used_to_be():
     """Stepping Reference -> Mesh moves no mode at all since wave 5, and what
     the viewport should be showing changed anyway. Before the stage was

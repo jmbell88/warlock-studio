@@ -1,8 +1,9 @@
 # Sprite sheets
 
 Any finished mesh can be baked into a 2D sprite sheet: a grid of rendered views, plus an
-engine-neutral JSON sidecar describing what each cell contains. The controls are in the inspector's
-**Rig & Pose** tab, under the collapsed **Sprite sheet** header.
+engine-neutral JSON sidecar describing what each cell contains. The controls are in the inspector
+at the **Pose** stage, under the collapsed **Sprite sheet** header — a sheet is made of poses, so it
+sits beside the editor that makes them.
 
 A 2D reference that never became a mesh has its own way in, described under
 [From a single drawing](#from-a-single-drawing) — the same kind of sheet, generated rather than

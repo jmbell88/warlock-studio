@@ -151,7 +151,7 @@ The reconstruction is kept, permanently, as `source.glb`, and nothing ever overw
 changing your mind about triangle count cheap: rebuilding at a different budget is a couple of
 seconds of mesh processing rather than another two minutes of reconstruction.
 
-The control is in the inspector, on the **Rig & Pose** tab, under the collapsed **Triangle budget**
+The control is in the inspector at the **Rig** stage, under the collapsed **Triangle budget**
 header. It appears only on jobs that have a `source.glb` — older jobs and rig jobs do not.
 
 Five tiers exist in the code: Raw (full density), Draft (20k), Standard (50k), Detailed (100k) and
@@ -178,7 +178,7 @@ staged and swapped, so nothing reading the old one sees a truncated file.
 ## Surface texture
 
 A re-texture gives a finished mesh a new skin without touching its geometry. The control is in the
-inspector, on the **Rig & Pose** tab, under the collapsed **Surface texture** header, directly below
+inspector at the **Rig** stage, under the collapsed **Surface texture** header, directly below
 [Triangle budget](#triangle-budget) — both are operations on an asset that already exists.
 
 Describe the surface you want ("rusted iron", "mossy stone", "painted wood"), set how far the

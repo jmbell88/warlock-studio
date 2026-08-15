@@ -47,6 +47,64 @@ THUMB_SIZE = 96
 REFERENCE_MAX_THUMBS = 3
 
 
+# What the inspector shows at each Create stage. **The stage rail is the tab
+# bar now** (REDESIGN.md wave 5): a stage switch and a tab click were two
+# controls doing one thing, sitting a foot apart, and the tab strip could
+# disagree with the rail about which step you were on. So in Create the
+# inspector carries no tabs at all and is *stage-scoped evidence* -- what this
+# step produced, beside the column that produced it.
+#
+# The tab bar survives in every other host (the Library's full-window
+# inspector), because there is no rail there to drive it.
+_STAGE_SECTIONS: dict[str, tuple[str, ...]] = {
+    "reference": ("_edit_actions", "_settings", "_reference", "_pixel", "sprites", "_seam"),
+    "mesh": (
+        "_edit_actions",
+        "_settings",
+        "_reference",
+        "_pixel",
+        "_seam",
+        "_quality",
+        "_verdict",
+    ),
+    # The rig's *products*: how it was weighted, how many joints, and the
+    # deformation sheet. The decision and the button are in the stage's own
+    # column; retarget and retexture join them because both act on the mesh a
+    # rig was fitted to and both are read *after* looking at it.
+    "rig": ("_weighting", "_bones", "_deform_qa", "retarget", "retexture"),
+    # Posing produces poses, and the thing made *of* poses is a sprite sheet.
+    "pose": ("sheet",),
+}
+
+
+def _stage_body(ctx: Any, job: Any) -> None:
+    from . import retarget_panel, sheet_panel, sprite_panel, texture_panel
+
+    named = {
+        "_edit_actions": lambda: _edit_actions(ctx, job),
+        "_settings": lambda: _settings(ctx, job),
+        "_reference": lambda: _reference(ctx, job),
+        "_pixel": lambda: _pixel(ctx, job),
+        "_seam": lambda: _seam(ctx, job),
+        "_quality": lambda: _quality(ctx, job),
+        "_verdict": lambda: _verdict(ctx, job),
+        "_weighting": lambda: _weighting(ctx, job),
+        "_bones": lambda: _bones(ctx, job),
+        "_deform_qa": lambda: _deform_qa(ctx, job),
+        "sprites": lambda: sprite_panel.draw(ctx, job),
+        "retarget": lambda: retarget_panel.draw(ctx, job),
+        "retexture": lambda: texture_panel.draw(ctx, job),
+        "sheet": lambda: sheet_panel.draw(ctx, job),
+    }
+    for name in _STAGE_SECTIONS.get(ctx.state.create_stage, ()):
+        named[name]()
+    # Until the Export stage lands (5.4) the downloads grid has no stage of its
+    # own, and dropping the tab bar without it would take every export off the
+    # screen. Last, so it reads as the end of the column rather than as part of
+    # whichever evidence is above it.
+    _downloads(ctx, job)
+
+
 def draw(ctx: Any) -> None:
     from .. import icons
 
@@ -61,10 +119,11 @@ def draw(ctx: Any) -> None:
         widgets.empty_state(icons.BOX, "Select an asset.", "Its details and exports live here.")
         return
 
-    # Identity stays above the tabs: whatever tab is open, the header answers
-    # "what am I looking at". Everything below it moved from one nine-header
-    # scroll column into three tabs, because reaching the sprite sheet on a
-    # rigged mesh meant scrolling past the whole pose editor.
+    # Identity stays above whatever follows: whichever stage or tab is open,
+    # the header answers "what am I looking at". Everything below it moved from
+    # one nine-header scroll column into three tabs, because reaching the
+    # sprite sheet on a rigged mesh meant scrolling past the whole pose editor;
+    # in Create the stage rail does that job instead.
     _header(ctx, job)
     manual_render.help_button(ctx, "inspector")
     # Said out loud, because the two halves of the screen are not in step yet.
@@ -81,23 +140,20 @@ def draw(ctx: Any) -> None:
     if job.get("status") == "error":
         _error(ctx, job)
 
-    if create_stages.at(ctx.state, "mesh"):
-        widgets.tab_bar(
-            "inspector-tabs",
-            [
-                ("Details", lambda: _details_tab(ctx, job)),
-                ("Rig && Pose", lambda: _rig_tab(ctx, job)),
-                ("Export", lambda: _downloads(ctx, job)),
-            ],
-        )
-    else:
-        widgets.tab_bar(
-            "inspector-tabs",
-            [
-                ("Details", lambda: _details_tab(ctx, job)),
-                ("Export", lambda: _downloads(ctx, job)),
-            ],
-        )
+    if create_stages.in_create(ctx.state):
+        _stage_body(ctx, job)
+        return
+    # Every other host (the Library's full-window inspector) keeps the tabs,
+    # because there is no stage rail there to drive them. Which tabs is a
+    # question about the *asset* rather than about the mode it is being looked
+    # at from -- it used to be "are we in 3D", which offered Rig & Pose for a
+    # reference selected there and withheld it for a mesh selected anywhere
+    # else.
+    tabs: list[tuple[str, Any]] = [("Details", lambda: _details_tab(ctx, job))]
+    if "model.glb" in (job.get("files") or []):
+        tabs.append(("Rig && Pose", lambda: _rig_tab(ctx, job)))
+    tabs.append(("Export", lambda: _downloads(ctx, job)))
+    widgets.tab_bar("inspector-tabs", tabs)
 
 
 def can_edit_in_clay(job: Any) -> bool:

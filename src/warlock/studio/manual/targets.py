@@ -9,6 +9,9 @@ from __future__ import annotations
 HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "settings-2d": ("03-generating-references", None),
     "settings-3d": ("04-generating-meshes", None),
+    # The Rig stage's own column (REDESIGN.md wave 5). Rigging was three
+    # buttons in three places and no pane of its own, so it had no (?) either.
+    "settings-rig": ("05-rigging-and-posing", "rigging-a-mesh"),
     "library": ("11-library-and-jobs", None),
     "inspector": ("04-generating-meshes", "exports"),
     "retarget": ("04-generating-meshes", "triangle-budget"),

@@ -422,6 +422,16 @@ PLACEHOLDERS: dict[str, tuple[str, str, str]] = {
         "No mesh on screen",
         "Pick a finished reference, or open an image.",
     ),
+    "create/rig": (
+        icons.BONE,
+        "No mesh to rig",
+        "Pick a finished mesh; the skeleton is fitted to it.",
+    ),
+    "create/pose": (
+        icons.PERSON_STANDING,
+        "No rig on screen",
+        "Rig the mesh first, then press Edit pose.",
+    ),
     "inker": (icons.PEN_TOOL, "No drawing open", "Ctrl+N starts one, Ctrl+O opens a file."),
     "clay": (icons.RULER, "Empty document", "Add a primitive to start blocking something out."),
     "poser": (

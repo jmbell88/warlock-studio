@@ -235,16 +235,18 @@ def test_rigging_an_existing_mesh_forwards_the_chosen_skeleton():
 
 
 def test_the_skeleton_comes_from_the_3d_form():
-    from warlock.studio.panes import library
+    """The control moved to the Rig stage in wave 5; the *field* did not, so a
+    session that picked a skeleton before generating still has it set."""
+    from warlock.studio.panes import stage_rig
     from warlock.studio.state import AppState
 
     class Ctx:
         state = AppState()
 
     ctx = Ctx()
-    assert library._skeleton(ctx) is None  # unset means "let the service decide"
+    assert stage_rig.skeleton(ctx) is None  # unset means "let the service decide"
     ctx.state.form_3d["rig_template"] = "quadruped"
-    assert library._skeleton(ctx) == "quadruped"
+    assert stage_rig.skeleton(ctx) == "quadruped"
 
 
 def test_a_sheet_can_be_named():

@@ -226,6 +226,38 @@ def _right_column(
     imgui.end_group()
 
 
+def _stage_pane(ctx: Any) -> None:
+    """The settings column's body at the Create stage the user is standing on.
+
+    A module-level function rather than a method for ``_right_column``'s
+    reason: it needs no ``self``, and a test that wants to know every stage
+    draws should call the dispatch the frame calls rather than a hand-copied
+    reimplementation of it -- which is how the fifth stage comes to be missing
+    from one of the two.
+
+    The fall-through is Reference: the front of the pipeline, and the only
+    stage that says something with nothing selected at all.
+    """
+    from . import icons, widgets
+    from .panes import pose_panel, settings_2d, settings_3d, stage_rig
+
+    stage = ctx.state.create_stage
+    if stage == "mesh":
+        settings_3d.draw(ctx)
+    elif stage == "rig":
+        stage_rig.draw(ctx)
+    elif stage == "pose":
+        job = ctx.job()
+        if job is None:
+            widgets.empty_state(
+                icons.PERSON_STANDING, "No mesh selected.", "Pick a rigged mesh to pose it."
+            )
+        else:
+            pose_panel.draw(ctx, job, hosted=True)
+    else:
+        settings_2d.draw(ctx)
+
+
 class App:
     def __init__(self, runtime: Any) -> None:
         self.runtime = runtime
@@ -1464,10 +1496,16 @@ class App:
         job_dir = ctx.job_dir(job["id"])
         files = job.get("files") or []
         wanted = None
-        if create_stages.at(ctx.state, "mesh") and "model.glb" in files:
+        # Reference wants the picture; Mesh, Rig and Pose all want the mesh --
+        # the rig and its poses are fitted to *that* geometry, and a stage that
+        # framed something else would be describing a different object. (The
+        # pose editor swaps in ``rig.glb`` itself once it is entered, which is
+        # why this returns early while ``viewer.pose_mode`` is on.)
+        if create_stages.at(ctx.state, "reference"):
+            if "input.png" in files:
+                wanted = job_dir / "input.png"
+        elif "model.glb" in files:
             wanted = job_dir / "model.glb"
-        elif create_stages.at(ctx.state, "reference") and "input.png" in files:
-            wanted = job_dir / "input.png"
         if wanted is None or self.viewer.path == wanted or self.viewer.pending == wanted:
             return
         if wanted.suffix == ".png":
@@ -2289,15 +2327,13 @@ class App:
     def _build_ui(self) -> None:
         from imgui_bundle import imgui
 
-        from . import create_stages, modes, rail, tokens
         from . import layout as layout_mod
+        from . import modes, rail, tokens
         from .panes import (
             app_settings,
             inspector,
             landing,
             library,
-            settings_2d,
-            settings_3d,
         )
 
         ctx = self.app_ctx
@@ -2457,10 +2493,7 @@ class App:
             # for the column under it, and one drawn at the bottom would be a
             # tab strip that had lost its tabs.
             self._stage_rail(ctx)
-            if create_stages.at(ctx.state, "mesh"):
-                settings_3d.draw(ctx)
-            else:
-                settings_2d.draw(ctx)
+            _stage_pane(ctx)
         imgui.end_child()
 
         imgui.same_line()
@@ -2486,8 +2519,15 @@ class App:
         from imgui_bundle import imgui
 
         from . import create_stages, tokens, widgets
+        from .panes import inspector
 
         job = ctx.job()
+        # The two pieces of evidence no job row carries. ``rig_meta`` is the
+        # inspector's own mtime-cached read of ``rig.json`` -- the same call it
+        # makes for the weighting line, so the rail costs no extra stat --
+        # and ``poses`` is what ``_refresh_rig_side_data`` fetched off-thread.
+        meta = inspector.rig_meta(ctx, job) if job is not None else None
+        poses = ctx.state.preview.get("poses")
         items = [
             (
                 stage,
@@ -2501,7 +2541,7 @@ class App:
             "create-stages",
             items,
             ctx.state.create_stage,
-            done=create_stages.reached(job),
+            done=create_stages.reached(job, meta, poses),
             max_width=imgui.get_content_region_avail().x,
         )
         if picked != ctx.state.create_stage:
@@ -4183,9 +4223,10 @@ class App:
             image_pos = imgui.get_cursor_screen_pos()
             avail = imgui.get_content_region_avail()
             height = max(avail.y, 64)
-            if create_stages.at(ctx.state, "mesh") and self.viewer.has_model:
+            reference_stage = create_stages.at(ctx.state, "reference")
+            if not reference_stage and self.viewer.has_model:
                 self._draw_viewport_image(image_pos, width, height)
-            elif create_stages.at(ctx.state, "reference") and self.viewer.reference is not None:
+            elif reference_stage and self.viewer.reference is not None:
                 self._draw_reference(width, height)
             else:
                 overlay.placeholder(ctx)

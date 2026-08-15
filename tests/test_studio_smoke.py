@@ -3251,27 +3251,38 @@ def test_a_segmented_control_takes_its_compact_labelling_rather_than_clipping(
 
 def test_the_create_pane_builds_at_every_stage(app_ctx, imgui_ctx):
     """The merged mode, through the real dispatch: the rail plus whichever
-    settings panel the stage names. Both stages in one test because the whole
-    claim of wave 5 is that they are one pane with a breadcrumb, and a stage
-    that built alone but not from the rail's own call would be a broken step."""
+    panel the stage names. Every stage in one test because the whole claim of
+    wave 5 is that they are one pane with a breadcrumb -- and through
+    ``main._stage_pane`` rather than a copy of it, so a stage that the rail
+    offers and the dispatch has no branch for fails here."""
     from warlock.studio import create_stages, main
-    from warlock.studio.panes import settings_2d, settings_3d
 
     _seeded(app_ctx)
+    app_ctx.rigging_available = True
     app_ctx.state.mode = create_stages.MODE
     app = SimpleNamespace(app_ctx=app_ctx)
     for stage in create_stages.STAGES:
         app_ctx.state.create_stage = stage
 
-        def build(stage=stage):
+        def build():
             main.App._stage_rail(app, app_ctx)
-            if create_stages.at(app_ctx.state, "mesh"):
-                settings_3d.draw(app_ctx)
-            else:
-                settings_2d.draw(app_ctx)
+            main._stage_pane(app_ctx)
 
         _frame(imgui_ctx, build)
         assert app_ctx.state.create_stage == stage, "the rail moved on its own"
+
+
+def test_the_create_pane_builds_at_every_stage_with_nothing_selected(app_ctx, imgui_ctx):
+    """The empty case, which is the one a first run sees: no selection, and
+    four stages of which three are about an asset that does not exist."""
+    from warlock.studio import create_stages, main
+
+    app_ctx.state.select(None)
+    app_ctx.state.mode = create_stages.MODE
+    app = SimpleNamespace(app_ctx=app_ctx)
+    for stage in create_stages.STAGES:
+        app_ctx.state.create_stage = stage
+        _frame(imgui_ctx, lambda: (main.App._stage_rail(app, app_ctx), main._stage_pane(app_ctx)))
 
 
 def _stage_items(blocked=()):
@@ -3321,11 +3332,13 @@ def _click(imgui_ctx, build, at):
 def test_the_stage_rail_compacts_rather_than_clipping_a_stage(imgui_ctx, scale):
     """``segmented_control``'s rule, asked of the rail that borrowed its idiom.
 
-    The stage rail sits above a settings column that is ~300 dp wide, so the
-    narrow case is the ordinary one rather than the edge -- and a stage drawn
-    off the edge of the column is a step of the pipeline with no way in.
+    The column it sits above is the *narrowest* sidebar the app offers, at the
+    scales the app is looked at, because that is the case the fit has to hold
+    in -- and a stage drawn off the edge of the column is a step of the
+    pipeline with no way in.
     """
     imgui, renderer = imgui_ctx
+    from warlock.studio import layout as layout_mod
     from warlock.studio import tokens
     from warlock.studio import widgets as widgets_mod
 
@@ -3333,7 +3346,7 @@ def test_the_stage_rail_compacts_rather_than_clipping_a_stage(imgui_ctx, scale):
     tokens.set_scale(scale)
     try:
         imgui.new_frame()
-        imgui.set_next_window_size((180, 200))
+        imgui.set_next_window_size((tokens.sp(layout_mod.SIDEBAR_WIDTHS["narrow"]), 200))
         imgui.begin("##narrow")
         available = imgui.get_content_region_avail().x
         widgets_mod.stage_rail(
@@ -3366,7 +3379,10 @@ def _rail_probe(imgui_ctx, rail_id, items, current, done):
     def build():
         out = widgets_mod.stage_rail(rail_id, items, current, done=done)
         lo, hi = imgui.get_item_rect_min(), imgui.get_item_rect_max()
-        seen["x"] = lo.x + (hi.x - lo.x) * 0.75
+        # Just inside the right edge, so the point is in the *last* segment
+        # whatever the widths are -- they follow the labels, and the labels
+        # change as stages are added.
+        seen["x"] = hi.x - 2.0
         seen["y"] = (lo.y + hi.y) * 0.5
         return out
 
@@ -3374,18 +3390,23 @@ def _rail_probe(imgui_ctx, rail_id, items, current, done):
 
 
 def test_a_stage_rail_segment_can_be_picked(imgui_ctx):
+    from warlock.studio import create_stages
+
     build, seen = _rail_probe(imgui_ctx, "rail-pick", _stage_items(), "reference", "mesh")
     _click(imgui_ctx, build, (-100.0, -100.0))
     assert seen, "the rail never drew"
-    assert _click(imgui_ctx, build, (seen["x"], seen["y"])) == "mesh"
+    assert _click(imgui_ctx, build, (seen["x"], seen["y"])) == create_stages.STAGES[-1]
 
 
 def test_a_blocked_stage_cannot_be_picked(imgui_ctx):
     """The reason is a tooltip, not a refusal after the fact. A blocked
     segment is still an item -- it has to be hoverable to carry its sentence --
     so the click is *dropped* rather than the button not being drawn."""
+    from warlock.studio import create_stages
+
+    last = create_stages.STAGES[-1]
     build, seen = _rail_probe(
-        imgui_ctx, "rail-block", _stage_items(blocked={"mesh"}), "reference", "reference"
+        imgui_ctx, "rail-block", _stage_items(blocked={last}), "reference", "reference"
     )
     _click(imgui_ctx, build, (-100.0, -100.0))
     assert seen, "the rail never drew"

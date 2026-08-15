@@ -31,6 +31,7 @@ SP_SWEPT = (
     "inker_bridge.py",
     "settings_2d.py",
     "settings_3d.py",
+    "stage_rig.py",
     "inker_colors.py",
 )
 

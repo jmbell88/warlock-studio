@@ -39,13 +39,15 @@ from . import icons
 # shipping a rail with two segments while the rig and pose panels are still
 # inspector tabs is honest, and shipping five segments of which three are dead
 # is not.
-STAGES: tuple[str, ...] = ("reference", "mesh")
+STAGES: tuple[str, ...] = ("reference", "mesh", "rig", "pose")
 
 # What each segment is called. Sentence case, one word each: the rail is a
 # breadcrumb across the top of a settings column and has room for exactly that.
 LABELS: dict[str, str] = {
     "reference": "Reference",
     "mesh": "Mesh",
+    "rig": "Rig",
+    "pose": "Pose",
 }
 
 # The compact face of each segment, for the rail's all-or-nothing fallback at
@@ -55,6 +57,12 @@ LABELS: dict[str, str] = {
 ICONS: dict[str, str] = {
     "reference": icons.IMAGE,
     "mesh": icons.BOX,
+    "rig": icons.BONE,
+    # The glyph the Poser wears in the shell rail. The stage is not the Poser
+    # -- it is the inspector's editor over the shared viewer -- but a skeleton
+    # in a stance is what both are about, and two pictures for one idea is how
+    # a user comes to believe they are two.
+    "pose": icons.PERSON_STANDING,
 }
 
 # The job-row ``stage`` values the Reference stage is *about*. Not a synonym
@@ -64,15 +72,37 @@ ICONS: dict[str, str] = {
 IMAGE_STAGES = ("reference", "tile")
 
 
-def _reached_reference(job: Any, rig_meta: Any) -> bool:
+def _reached_reference(job: Any, rig_meta: Any, poses: Any) -> bool:
     """Every job has a reference behind it, including a mesh: a model job
     carries its own ``input.png`` (the promotion copies it), which is why the
     Reference stage can show a mesh's source without walking ``parent_id``."""
     return job is not None
 
 
-def _reached_mesh(job: Any, rig_meta: Any) -> bool:
+def _reached_mesh(job: Any, rig_meta: Any, poses: Any) -> bool:
     return _stage_of(job) == "model"
+
+
+def _reached_rig(job: Any, rig_meta: Any, poses: Any) -> bool:
+    """The file, first: ``rig.glb`` is listed on the row, so this costs no
+    read at all on the frame the rail is drawn. ``rig.json`` is the fallback
+    for a rig whose GLB has not been listed yet -- the two land together, but
+    the row is refreshed on a timer and the sidecar is read on demand."""
+    return "rig.glb" in ((job or {}).get("files") or []) or rig_meta is not None
+
+
+def _reached_pose(job: Any, rig_meta: Any, poses: Any) -> bool:
+    """A *saved* pose, not the ability to make one.
+
+    The one predicate that cannot be answered from the row: poses are files
+    under ``<job>/poses/`` and no artifact of theirs is in ``files.LISTED``.
+    So the evidence is passed in -- ``state.preview["poses"]``, which
+    ``_refresh_rig_side_data`` already fills off-thread for the selected job.
+
+    Ticking this off the rig instead would put a check beside Pose the moment
+    a rig landed, which says a step is behind you that has not been taken.
+    """
+    return bool(poses)
 
 
 # One predicate per stage, in ``STAGES`` order. A table rather than a chain of
@@ -82,6 +112,8 @@ def _reached_mesh(job: Any, rig_meta: Any) -> bool:
 _REACHED: dict[str, Any] = {
     "reference": _reached_reference,
     "mesh": _reached_mesh,
+    "rig": _reached_rig,
+    "pose": _reached_pose,
 }
 
 
@@ -89,14 +121,14 @@ def _stage_of(job: Any) -> str | None:
     return job.get("stage") if isinstance(job, dict) else None
 
 
-def reached(job: Any, rig_meta: Any = None) -> str | None:
+def reached(job: Any, rig_meta: Any = None, poses: Any = None) -> str | None:
     """The furthest stage ``job`` has got to, or None. -> a key of :data:`STAGES`.
 
-    ``rig_meta`` is the selected asset's ``rig.json`` as
-    :func:`panes.inspector.rig_meta` returns it (None when there is none). It is
-    threaded through every predicate rather than only the ones that read it
-    today, so 5.3's rig stage is a row in :data:`_REACHED` and not a signature
-    change at four call sites.
+    Three pieces of evidence, and every predicate takes all three whether it
+    reads them or not, so a later stage is a *row* in :data:`_REACHED` rather
+    than a signature change at four call sites. ``rig_meta`` is the asset's
+    ``rig.json`` (:func:`panes.inspector.rig_meta`); ``poses`` is its saved
+    pose list, which is the one fact no artifact on the row carries.
 
     **None with no job**, rather than the first stage. This is the value the
     rail ticks its segments off against, and an empty Create mode had a check
@@ -106,7 +138,7 @@ def reached(job: Any, rig_meta: Any = None) -> str | None:
     """
     out: str | None = None
     for stage in STAGES:
-        if not _REACHED[stage](job, rig_meta):
+        if not _REACHED[stage](job, rig_meta, poses):
             break
         out = stage
     return out
@@ -125,9 +157,11 @@ def shows(stage: str, job: Any) -> bool:
         return False
     if stage == "reference":
         return "input.png" in (job.get("files") or [])
-    if stage == "mesh":
-        return _stage_of(job) == "model"
-    return False
+    # Mesh, Rig and Pose are all *about the model job*: the rig and its poses
+    # are written beside the ``model.glb`` they were fitted to, because the rig
+    # belongs to the mesh. So one answer for the three, and the rail walks the
+    # last three segments without ever moving the selection.
+    return _stage_of(job) == "model"
 
 
 def available(stage: str, job: Any, ctx: Any = None) -> str | None:
@@ -139,10 +173,10 @@ def available(stage: str, job: Any, ctx: Any = None) -> str | None:
     tooltip on the disabled segment and the toast from the refusal it is
     predicting are one sentence and not two paraphrases.
 
-    ``ctx`` is unused by the two stages that exist at this step and is in the
-    signature because 5.3's rig gate reads ``ctx.rigging_available``. An
-    optional parameter rather than a required one so the pure tests can call
-    this with a job and nothing else.
+    ``ctx`` is read only by the two stages that need Blender. Optional rather
+    than required so the pure tests can call this with a job and nothing else --
+    and a missing ctx is treated as "rigging is available", because refusing a
+    stage on the strength of an absent object would be a gate nobody chose.
     """
     if stage not in STAGES:
         raise ValueError(f"stage must be one of {list(STAGES)}")
@@ -164,6 +198,23 @@ def available(stage: str, job: Any, ctx: Any = None) -> str | None:
             return "a tile has no subject to reconstruct"
         if row_stage == "reference" and job.get("status") != "done":
             return not_done_message("That reference", str(job.get("status") or ""))
+        return None
+    if stage in ("rig", "pose"):
+        if ctx is not None and not getattr(ctx, "rigging_available", True):
+            # Hidden would be worse: without Blender the whole feature is
+            # absent, and a user who never sees the segment concludes the app
+            # cannot rig at all. ``pose_panel``'s own sentence.
+            noun = "Rigging" if stage == "rig" else "Posing"
+            return f"{noun} needs Blender, which is not installed."
+        if not _reached_mesh(job, None, None) or "model.glb" not in (
+            (job or {}).get("files") or []
+        ):
+            # ``service.rig.create_rig``'s refusal, verbatim.
+            return "job has no finished mesh to rig"
+        if stage == "pose" and not _reached_rig(job, None, None):
+            # ``service.rig.save_joints``'s refusal, verbatim. The Rig segment
+            # beside it is open, which is where this sends you.
+            return "job is not rigged"
         return None
     return None
 
@@ -222,11 +273,34 @@ def go(ctx: Any, stage: str, *, select: str | None = None, follow: bool = True) 
     source, and jumping the selection onto a mesh this reference already has
     would describe the wrong asset while the form builds another.
     """
-    from . import state as state_mod
-    from .panes import library
+    from .panes import pose_panel
 
     if stage not in STAGES:
         raise ValueError(f"stage must be one of {list(STAGES)}")
+    if at(ctx.state, "pose") and stage != "pose":
+        # **Every** exit from the pose stage, in one place. A pose lives in the
+        # viewer until it is saved, so a click on a breadcrumb is exactly as
+        # destructive as closing the window -- and the guard is asked here
+        # rather than in the rail because the rail is not the only caller (a
+        # library card's Open, Home's Resume and the palette all land through
+        # ``go`` too).
+        pose_panel.guard(ctx, "leave the pose stage", lambda: _switch(ctx, stage, select, follow))
+        return
+    _switch(ctx, stage, select, follow)
+
+
+def _switch(ctx: Any, stage: str, select: str | None, follow: bool) -> None:
+    """:func:`go` past the pose guard. Separate so the guard can defer it into
+    a confirm's ``on_confirm`` without re-asking itself on the way through."""
+    from . import state as state_mod
+    from .panes import library, pose_panel
+
+    if at(ctx.state, "pose") and stage != "pose":
+        # Leaving the editor as well as the stage. Without this the viewer
+        # stays in pose mode, and ``_sync_viewer`` returns early while it is --
+        # so the Mesh stage would go on showing ``rig.glb`` for the rest of the
+        # session.
+        pose_panel.leave(ctx)
     if select is not None:
         library.select(ctx, select)
     elif follow and not shows(stage, _current(ctx)):
@@ -248,18 +322,19 @@ MODE = "create"
 def _along_lineage(ctx: Any, stage: str) -> str | None:
     """The nearest job the target stage *can* show, following the lineage.
 
-    Forward (reference -> mesh) is the promotion edge: the mesh job records the
-    reference as its ``parent_id``, so the child is found by scanning the loaded
-    page for it. The newest child wins -- a reference that has been promoted
-    three times is three meshes, and the last one made is the one the user was
-    just looking at.
+    Forward is the promotion edge: the mesh job records the reference as its
+    ``parent_id``, so the child is found by scanning the loaded page for it.
+    The newest child wins -- a reference that has been promoted three times is
+    three meshes, and the last one made is the one the user was just looking
+    at. One walk for Mesh, Rig and Pose, because the rig and its poses are
+    written beside the ``model.glb``: the model job is what all three need.
 
     Backward needs nothing, because :func:`shows` says Reference can show a
     mesh; the walk is only ever asked for in the forward direction, and returns
     None when there is nothing there rather than inventing a selection.
     """
     job = _current(ctx)
-    if job is None or stage != "mesh":
+    if job is None or stage == "reference":
         return None
     parent = job["id"]
     best: dict[str, Any] | None = None

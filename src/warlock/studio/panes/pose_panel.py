@@ -21,12 +21,23 @@ from ..manual import render as manual_render
 log = logging.getLogger(__name__)
 
 
-def draw(ctx: Any, job: Any) -> None:
+def draw(ctx: Any, job: Any, *, hosted: bool = False) -> None:
+    """The pose editor. ``hosted`` when this pane *is* the column.
+
+    Two hosts since REDESIGN.md wave 5: the Pose stage's settings column, where
+    it is the whole of what is on screen, and the inspector's Rig & Pose tab in
+    every other mode, where it is one collapsing section among six. The
+    collapsing header belongs to the second -- a section that can be folded
+    away when there is nothing else in the column is a pane with a hide button
+    and no reason for one.
+    """
     files = job.get("files") or []
     if "model.glb" not in files:
         return
     rigged = "rig.glb" in files
-    if not widgets.header("Pose"):
+    if hosted:
+        widgets.section("Pose")
+    elif not widgets.header("Pose"):
         return
     manual_render.help_button(ctx, "pose")
     if not rigged:
@@ -149,14 +160,20 @@ def guard(ctx: Any, action: str, proceed: Any) -> bool:
     in ``docmodes``: joints mode is an inspector-only state, and a joint
     correction is a different thing to lose than a pose.
     """
-    viewer = ctx.viewer
+    # ``getattr``, not ``ctx.viewer``: since wave 5 this is also the gate on
+    # every exit from the Pose *stage*, which the palette and a library card
+    # can reach with a ctx that has no viewer at all. ``viewer_guard`` already
+    # proceeds on None -- there is nothing unsaved in a viewer that does not
+    # exist -- so the guard stays one rule rather than growing a second.
+    viewer = getattr(ctx, "viewer", None)
     what = "joint" if viewer is not None and viewer.editor.mode == "joints" else "pose"
     return docmodes.viewer_guard(ctx, viewer, what, action, proceed)
 
 
 def leave(ctx: Any) -> None:
-    if ctx.viewer is not None:
-        ctx.viewer.exit_pose_mode()
+    viewer = getattr(ctx, "viewer", None)
+    if viewer is not None:
+        viewer.exit_pose_mode()
 
 
 # --- pose mode --------------------------------------------------------------
