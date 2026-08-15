@@ -87,7 +87,30 @@ def test_a_save_writes_no_width_key_at_all():
     # stale keys die the first time anything saves rather than lingering.
     settings = _Settings({"sidebar_w": 480.0, "inspector_w": 280.0, "settings_share": 0.4})
     layout_mod.Layout(settings).save()
-    assert settings.store["layout"] == {"settings_share": 0.4, "sidebar": "default"}
+    assert settings.store["layout"] == {
+        "settings_share": 0.4,
+        "sidebar": "default",
+        # The navigation rail's labels-or-icons preference (REDESIGN.md wave 3).
+        # It has to be written here every time for the reason the whole test
+        # exists: the dict is replaced, so a key ``save`` forgets is a
+        # preference that silently resets the next time the other one changes.
+        "rail": "icons",
+    }
+
+
+def test_the_rail_preference_round_trips_and_survives_nonsense():
+    settings = _Settings({"rail": "labels"})
+    assert layout_mod.Layout(settings).rail == "labels"
+    # A name, never a width, so a value written by a build that offered a third
+    # state cannot become a size this one does not have -- and the fallback is
+    # the state the rail is designed around rather than a degraded other one.
+    assert layout_mod.Layout(_Settings({"rail": "enormous"})).rail == "icons"
+    assert layout_mod.Layout(_Settings({})).rail == "icons"
+
+    layout = layout_mod.Layout(settings)
+    layout.set_rail("icons")
+    assert settings.store["layout"]["rail"] == "icons"
+    assert layout_mod.Layout(settings).rail == "icons"
 
 
 def test_a_nonsense_share_falls_back_rather_than_raising():

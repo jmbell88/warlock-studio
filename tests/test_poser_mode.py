@@ -524,6 +524,8 @@ def test_the_mode_is_wired_into_the_switch():
     assert "poser" in modes.KEYS
     assert "poser" in modes.WORK_MODES
     assert "poser" in modes.WORKSPACE_MODES
-    # Inserted inside the contiguous workspace block, so the derived grouping
-    # still collapses to the two real breaks with nothing edited.
-    assert len(modes.GROUP_BREAKS) == 2
+    # And in the rail's workspace group, which is the navigation the app
+    # actually draws (REDESIGN.md wave 3). This used to assert that the derived
+    # ``GROUP_BREAKS`` still collapsed to two; the grouping is written out now,
+    # so what a new mode has to do is *be in a group*.
+    assert "poser" in modes.RAIL_GROUPS[1]

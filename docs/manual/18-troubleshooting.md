@@ -205,12 +205,10 @@ whether the app is slow or the machine is busy.
 above it. Anything lower is the loop failing to keep up — usually a GPU job running alongside the
 window, a very large Inker document, or a mesh being drawn at full reconstruction density.
 
-**Fix.** The strip at the right-hand end of the mode switch always shows the rate, this process's
-memory and the card's VRAM — `58 fps · 1.9/32 GB · VRAM 21.4/32` — refreshed twice a second, with the
-same figures in full if you hover it. A `--` there means that reading is unavailable rather than
-zero; VRAM stays `--` until a job has loaded the GPU stack.
-
-For more than a summary, press **F10** for the frame-rate readout, bottom-left. It shows the rate over the last two
+**Fix.** Press **F10** for the frame-rate readout, bottom-left. A permanent strip along the top of
+the window used to carry the rate, this process's memory and the card's VRAM; it was developer
+chrome on screen in every mode whether or not anybody wanted it, and this is what it was a summary
+of. It shows the rate over the last two
 seconds, the mean frame time and the slowest single frame in that window — the last of those is the
 one that catches a stutter, since one 100 ms stall barely moves an average. Green is at target, amber
 is degraded, red is badly behind. Press F10 again to hide it; the choice is remembered.

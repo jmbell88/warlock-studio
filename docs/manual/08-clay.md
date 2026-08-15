@@ -255,8 +255,9 @@ because reframing would lose the part of the model you were about to line up. Sw
 orthographic keeps the scale at the point you are looking at, so it reads as a change of projection
 rather than a jump cut.
 
-These are Clay's keys, not the app's — which is why the mode switch is on `Alt`+1..8. A global
-binding is checked above Clay and would take the key from it permanently.
+These are Clay's keys, not the app's — which is why switching mode is a click on the rail or a
+command in the palette rather than a digit. A global binding is checked above Clay and would take
+the key from it permanently.
 
 ## Snapping
 

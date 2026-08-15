@@ -416,6 +416,16 @@ def commands(ctx: Any) -> list[Command]:
         state.set_mode(ctx.state, "2d")
         profiles_panel.open_sheet(ctx)
 
+    def diagnostics(ctx: Any) -> None:
+        # The rail's badge is drawn only when a check is failing, so on a
+        # healthy install there is nothing to click -- and "everything is fine"
+        # is exactly the claim somebody occasionally wants the evidence for.
+        # A one-shot for ``shortcuts``' reason: a palette command is not inside
+        # the window the popup is registered in.
+        from . import rail
+
+        rail.request("diagnostics")
+
     def shortcuts(ctx: Any) -> None:
         # A flag rather than a call, because a palette command cannot open an
         # imgui popup: the palette's own window is closing on this frame, and
@@ -560,6 +570,12 @@ def commands(ctx: Any) -> list[Command]:
             group="Application",
             run=shortcuts,
             hint="Ctrl+/",
+        ),
+        Command(
+            key="diagnostics",
+            label="Diagnostics",
+            group="Application",
+            run=diagnostics,
         ),
         Command(
             key="show-trash",

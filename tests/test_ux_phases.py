@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import inspect
 
-from warlock.studio import focus, modes, theme, tokens, widgets
+from warlock.studio import focus, theme, tokens, widgets
 from warlock.studio.panes import settings_2d
 from warlock.studio.state import AppState
 
@@ -421,13 +421,23 @@ def test_the_manual_calls_them_what_the_app_calls_them():
     assert "platform detail" not in body
 
 
-# --- the mode switch --------------------------------------------------------
+# --- the navigation control --------------------------------------------------
 
 
-def test_quit_is_out_of_the_navigation_control():
-    from warlock.studio import main
+def test_the_navigation_control_carries_navigation_and_nothing_else():
+    """Phase 2 took Quit out of the switch and put it in a header strip beside
+    a resource readout and a shortcuts button. REDESIGN.md wave 3 took the whole
+    header: the readout was developer chrome on screen permanently (F10 still
+    raises the meter, which was always the real tool), and a destructive control
+    in the shell was only less bad in the corner than it had been in the switch.
 
-    source = inspect.getsource(main.App._mode_switch)
-    assert "icon_button(modes.QUIT[2]" in source
-    assert "danger=True" in source
-    assert modes.QUIT[0] not in modes.KEYS
+    The rail is the navigation control now, and what it draws is modes, a health
+    badge when something is failing, the manual and its own collapse toggle.
+    """
+    from warlock.studio import main, rail
+
+    source = inspect.getsource(rail.draw)
+    assert "modes.RAIL_GROUPS" in source
+    assert "quit" not in source.lower()
+    assert "status_readout" not in source
+    assert not hasattr(main.App, "_mode_switch")

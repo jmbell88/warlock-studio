@@ -2085,128 +2085,164 @@ def test_the_bulk_bar_says_how_much_of_the_selection_is_off_screen(app_ctx, imgu
     assert library._delete_message(2, 0) == "2 jobs and everything derived from them."
 
 
-@pytest.mark.parametrize("scale", [1.0, 1.75])
-def test_the_mode_switchs_right_hand_strip_stays_inside_the_window(
-    app_ctx, imgui_ctx, scale
-):
-    """The readout, the ? and the health dot are one right-aligned strip, and
-    its width is measured rather than reserved as a constant.
+@pytest.mark.parametrize("scale", [1.0, 1.5, 1.75])
+def test_the_rail_fits_the_resize_floor_at_every_scale(app_ctx, imgui_ctx, scale):
+    """What the header's three tests were about, asked of the control that
+    replaced it (REDESIGN.md wave 3).
 
-    A constant is what was there (``sp(64)``, sized for two controls), and a
-    ``same_line`` past the content region clips rather than wraps -- so a strip
-    that outgrew its reservation would not be squeezed, it would be gone. The
-    text's width is a function of the DPI scale, the font *and* how many digits
-    the readings happen to have, which is why this runs at more than one scale.
-    """
-    imgui, _renderer = imgui_ctx
-    from warlock.studio import main as main_mod
-    from warlock.studio import tokens
-    from warlock.studio import widgets as widgets_mod
-    from warlock.studio.fps import FpsMeter
-    from warlock.studio.panes import overlay
-
-    fake = SimpleNamespace(app_ctx=app_ctx, fps=FpsMeter())
-    fake._shortcuts_popup = lambda: main_mod.App._shortcuts_popup(fake)
-    fake._diagnostics_popup = lambda checks: main_mod.App._diagnostics_popup(fake, checks)
-    fake._request_quit = lambda: None
-    fake.fps.record(1 / 60)
-
-    rects: list[tuple[str, tuple[float, float, float, float]]] = []
-    edge: list[float] = []
-
-    def record(name: str) -> None:
-        lo, hi = imgui.get_item_rect_min(), imgui.get_item_rect_max()
-        rects.append((name, (lo.x, lo.y, hi.x, hi.y)))
-
-    real_icon = widgets_mod.icon_button
-    real_readout = overlay.status_readout
-
-    def icon_spy(label, *args, **kwargs):
-        result = real_icon(label, *args, **kwargs)
-        record(f"icon:{label}")
-        return result
-
-    def readout_spy(text, tooltip):
-        real_readout(text, tooltip)
-        record("readout")
-
-    def build():
-        edge.append(imgui.get_cursor_screen_pos().x + imgui.get_content_region_avail().x)
-        main_mod.App._mode_switch(fake)
-        record("health")
-
-    old_scale = tokens.SCALE
-    tokens.set_scale(scale)
-    widgets_mod.icon_button = icon_spy
-    overlay.status_readout = readout_spy
-    try:
-        _frame(imgui_ctx, build)
-    finally:
-        widgets_mod.icon_button = real_icon
-        overlay.status_readout = real_readout
-        tokens.set_scale(old_scale)
-
-    assert {name for name, _ in rects} >= {"readout", "icon:?", "health"}, rects
-    right = edge[0]
-    for name, rect in rects:
-        assert rect[2] <= right + 1.0, (
-            f"{name} ends {rect[2] - right:.0f} px past the content edge; "
-            "a clipped control is an invisible one"
-        )
-    # And the readout does not run under the buttons it sits beside -- the
-    # overlap guard only covers icon buttons, and text against a button is the
-    # same bug with neither of them an icon.
-    by_name = dict(rects)
-    assert by_name["readout"][2] <= by_name["icon:?"][0] + 1.0
-
-
-@pytest.mark.parametrize("scale", [1.0, 1.75])
-def test_the_strip_stays_inside_the_window_when_the_health_dot_grows_a_label(
-    app_ctx, imgui_ctx, scale
-):
-    """F58 made the health control wider, which is the interesting case.
-
-    A 16 px invisible button with a 9 px circle under it is not a control, so
-    it gained a real hit area and the word *Issues* whenever something is
-    failing -- and the strip's width is *measured*, so the measurement has to
-    have grown with it. If it did not, the health control is drawn past the
-    content edge, which clips rather than wraps: gone, on exactly the hosts
-    where it is the thing worth clicking.
+    Those three pinned a right-aligned strip whose width had to be *measured*
+    rather than reserved, because ``same_line`` past the content region clips
+    rather than wraps -- a control drawn out there is simply gone. A column has
+    no such strip: it is one width for every item, and what can go wrong
+    instead is that it does not fit the window's own floor, or that its items
+    overlap each other down the y axis. Both are asserted here, at the resize
+    floor, at the scales the old tests ran at plus the one in the middle.
     """
     imgui, _renderer = imgui_ctx
     from warlock.doctor import Check
     from warlock.studio import main as main_mod
+    from warlock.studio import modes as modes_mod
+    from warlock.studio import rail as rail_mod
     from warlock.studio import tokens
-    from warlock.studio.fps import FpsMeter
 
+    # Something failing, so the footer draws its badge: the widest the rail
+    # ever is vertically, and the case the old health-label test was about.
     app_ctx.runtime.checks = [
         Check("trellis-server.exe", False, "not found", fatal=True),
         Check("CUDA", False, "torch.cuda.is_available() is False", fatal=False),
     ]
-    fake = SimpleNamespace(app_ctx=app_ctx, fps=FpsMeter())
-    fake._shortcuts_popup = lambda: main_mod.App._shortcuts_popup(fake)
-    fake._diagnostics_popup = lambda checks: main_mod.App._diagnostics_popup(fake, checks)
-    fake._request_quit = lambda: None
-    fake.fps.record(1 / 60)
+    fake = SimpleNamespace(app_ctx=app_ctx, layout=SimpleNamespace(rail="icons"))
+    fake._set_mode = lambda key: None
 
-    seen: list[tuple[float, float]] = []
+    boxes: list[tuple[str, float, float]] = []
+    real_item = rail_mod._item
 
-    def build():
-        right = imgui.get_cursor_screen_pos().x + imgui.get_content_region_avail().x
-        main_mod.App._mode_switch(fake)
-        seen.append((imgui.get_item_rect_max().x, right))
+    def spy(key, label, icon, box, **kwargs):
+        result = real_item(key, label, icon, box, **kwargs)
+        lo, hi = imgui.get_item_rect_min(), imgui.get_item_rect_max()
+        boxes.append((key, lo.y, hi.y))
+        return result
 
     old_scale = tokens.SCALE
     tokens.set_scale(scale)
+    rail_mod._item = spy
     try:
-        _frame(imgui_ctx, build)
+        imgui.new_frame()
+        # The resize floor: what the window cannot be shrunk below, and so the
+        # size every mode has to survive. Undecorated, because the host window
+        # is (``no_decoration`` in ``_build_ui``) and a title bar this test
+        # invented would be ~40 px of height the app does not spend.
+        imgui.set_next_window_size(main_mod.MIN_SIZE)
+        imgui.begin(
+            "##min-window",
+            None,
+            imgui.WindowFlags_.no_decoration.value | imgui.WindowFlags_.no_saved_settings.value,
+        )
+        rail_mod.tick(fake.layout)
+        top = imgui.get_cursor_screen_pos().y
+        bottom = top + imgui.get_content_region_avail().y
+        rail_mod.draw(fake, app_ctx)
+        imgui.end()
+        imgui.render()
     finally:
+        rail_mod._item = real_item
         tokens.set_scale(old_scale)
 
-    end, edge = seen[0]
-    assert end <= edge + 1.0, (
-        f"the health control ends {end - edge:.0f} px past the content edge"
+    keys = [key for key, _lo, _hi in boxes]
+    assert set(keys) >= set(modes_mod.KEYS), (
+        f"missing rail items: {set(modes_mod.KEYS) - set(keys)}"
     )
+    assert "health" in keys, "a failing check must reach the footer"
+    for key, lo, hi in boxes:
+        assert lo >= top - 1.0 and hi <= bottom + 1.0, (
+            f"{key} is drawn from {lo:.0f} to {hi:.0f} outside the rail's "
+            f"{top:.0f}..{bottom:.0f} at UI scale {scale}; an item outside the "
+            "column is an unreachable mode"
+        )
+    ordered = sorted(boxes, key=lambda row: row[1])
+    for (a, _alo, ahi), (b, blo, _bhi) in zip(ordered, ordered[1:], strict=False):
+        assert ahi <= blo + 1.0, f"{a} and {b} overlap in the rail at UI scale {scale}"
+
+
+def test_the_health_badge_is_drawn_only_when_something_is_failing(app_ctx, imgui_ctx):
+    """A permanent "OK" badge is noise: the app said "Everything checks out" in
+    the corner of every frame it ever drew. The diagnostics list stays reachable
+    when it is green through the palette, which is where a thing you
+    occasionally want and never need belongs."""
+    imgui, _renderer = imgui_ctx
+    from warlock.doctor import Check
+    from warlock.studio import rail as rail_mod
+
+    fake = SimpleNamespace(app_ctx=app_ctx, layout=SimpleNamespace(rail="icons"))
+    fake._set_mode = lambda key: None
+    seen: list[str] = []
+    real_item = rail_mod._item
+
+    def spy(key, label, icon, box, **kwargs):
+        seen.append(key)
+        return real_item(key, label, icon, box, **kwargs)
+
+    def run() -> list[str]:
+        seen.clear()
+        rail_mod._item = spy
+        try:
+            _frame(imgui_ctx, lambda: rail_mod.draw(fake, app_ctx))
+        finally:
+            rail_mod._item = real_item
+        return list(seen)
+
+    app_ctx.runtime.checks = [Check("trellis-server.exe", True, "found", fatal=True)]
+    app_ctx.state.errors = []
+    assert "health" not in run()
+
+    app_ctx.runtime.checks = [Check("CUDA", False, "unavailable", fatal=False)]
+    assert "health" in run()
+
+
+def test_the_expanded_rail_gives_way_before_the_columns_do(app_ctx, imgui_ctx):
+    """The preference is untouched by the room: a window dragged narrow draws
+    the collapsed rail and dragging it back restores the labels, because what
+    the user chose and what fits are two different facts.
+
+    Without the rule the inspector is the column that falls off the edge --
+    UX-01's whole story, one column further left.
+    """
+    imgui, _renderer = imgui_ctx
+    from warlock.studio import main as main_mod
+    from warlock.studio import motion, tokens
+    from warlock.studio import rail as rail_mod
+
+    layout = SimpleNamespace(rail="labels")
+    old_scale = tokens.SCALE
+    io = imgui.get_io()
+    old_display = (io.display_size.x, io.display_size.y)
+    seen: dict[str, float] = {}
+    try:
+        for name, size, scale in (
+            ("wide", (2400.0, 1200.0), 1.0),
+            ("floor", (float(main_mod.MIN_SIZE[0]), float(main_mod.MIN_SIZE[1])), 1.5),
+        ):
+            tokens.set_scale(scale)
+            # The *viewport*, not a window: the rail is measured before the
+            # host is begun, so what it asks about is the display it will be
+            # drawn on -- which in the app is the window itself.
+            io.display_size = size
+            imgui.new_frame()
+            imgui.begin(f"##{name}")
+            # Settled rather than eased: the width animates, and what is being
+            # asserted is the target it is heading for.
+            motion.forget(rail_mod._WIDTH_KEY)
+            seen[name] = rail_mod.tick(layout)
+            imgui.end()
+            imgui.render()
+    finally:
+        io.display_size = old_display
+        tokens.set_scale(old_scale)
+        motion.forget(rail_mod._WIDTH_KEY)
+
+    assert seen["wide"] == rail_mod.RAIL_EXPANDED_W
+    assert seen["floor"] == rail_mod.RAIL_W
+    assert layout.rail == "labels", "the preference is not what gave way"
 
 
 def test_no_two_of_a_panes_icon_buttons_are_drawn_on_top_of_each_other(
@@ -2978,43 +3014,51 @@ def test_packwright_builds_empty_and_with_an_atlas(app_ctx, imgui_ctx):
 
 
 @pytest.mark.parametrize("scale", [1.0, 1.5])
-def test_every_mode_segment_fits_inside_the_minimum_window(app_ctx, imgui_ctx, scale):
-    """A clipped segment is an unreachable mode.
+def test_a_segmented_control_takes_its_compact_labelling_rather_than_clipping(
+    imgui_ctx, scale
+):
+    """A clipped segment is an unreachable choice.
 
-    ``segmented_control`` lays its segments out from ``origin`` with no wrap
-    and no scroll, so a switch wider than the host window does not compress --
-    the last segments are simply drawn off the edge, and the only way back to
-    that mode is a keyboard shortcut the user would have to already know. Ten
-    modes plus Quit is where that stopped being hypothetical, which is why this
-    runs at more than one UI scale: the segment widths are text widths, and the
-    font is scaled with everything else.
+    ``segmented_control`` lays its segments out from ``origin`` with no wrap and
+    no scroll, so a control wider than the region it is in does not compress --
+    the last segments are simply drawn off the edge. That is why it has a
+    ``compact`` labelling and takes it all-or-nothing.
+
+    This used to be asked of the *mode switch*, which was thirteen segments and
+    the app's whole navigation; the rail replaced it in REDESIGN.md wave 3 and
+    the rail's own fit is pinned above. What survives is the widget's rule,
+    asked of a control wide enough to need it -- and it survives because the
+    control does: wave 4 gives it the Settings pane's categories.
     """
     imgui, renderer = imgui_ctx
-    from warlock.studio import main as main_mod
-    from warlock.studio import modes, tokens
+    from warlock.studio import icons, tokens
     from warlock.studio import widgets as widgets_mod
 
+    options = [
+        ("appearance", f"{icons.PALETTE} Appearance"),
+        ("models", f"{icons.BOX} Models"),
+        ("storage", f"{icons.FOLDER_OPEN} Storage"),
+        ("advanced", f"{icons.SETTINGS} Advanced"),
+    ]
+    compact = [
+        ("appearance", icons.PALETTE),
+        ("models", icons.BOX),
+        ("storage", icons.FOLDER_OPEN),
+        ("advanced", icons.SETTINGS),
+    ]
     measured: list[tuple[float, float]] = []
 
     old_scale = tokens.SCALE
     tokens.set_scale(scale)
     try:
         imgui.new_frame()
-        # The resize floor: what the window cannot be shrunk below, and so the
-        # width every mode has to survive.
-        imgui.set_next_window_size(main_mod.MIN_SIZE)
-        imgui.begin("##min-window")
+        # Narrow enough that the labelled form cannot fit at any scale, which
+        # is the branch being asserted.
+        imgui.set_next_window_size((240, 200))
+        imgui.begin("##narrow")
         available = imgui.get_content_region_avail().x
         widgets_mod.segmented_control(
-            "mode-seg-fit",
-            [(key, f"{icon} {label}") for key, label, icon in modes.MODES],
-            "home",
-            breaks=modes.GROUP_BREAKS,
-            # The compact form, exactly as ``_mode_switch`` passes it: twelve
-            # labelled segments do not fit the resize floor at 1.5, so what has
-            # to fit is the switch the app would actually draw there.
-            compact=[(key, icon) for key, _label, icon in modes.MODES],
-            max_width=available,
+            "seg-fit", options, "appearance", compact=compact, max_width=available
         )
         lo, hi = imgui.get_item_rect_min(), imgui.get_item_rect_max()
         measured.append((hi.x - lo.x, available))
@@ -3024,10 +3068,10 @@ def test_every_mode_segment_fits_inside_the_minimum_window(app_ctx, imgui_ctx, s
     finally:
         tokens.set_scale(old_scale)
 
-    switch_w, available = measured[-1]
-    assert switch_w <= available, (
-        f"the switch is {switch_w:.0f}px wide in a {available:.0f}px window at UI "
-        f"scale {scale}; a clipped segment is an unreachable mode"
+    drawn, available = measured[-1]
+    assert drawn <= available, (
+        f"the control is {drawn:.0f}px wide in a {available:.0f}px region at UI "
+        f"scale {scale}; a clipped segment is an unreachable choice"
     )
 
 

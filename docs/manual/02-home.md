@@ -4,10 +4,10 @@ Warlock Studio opens on Home every time you launch it, not just the first time. 
 the workspace assumes you already know which of the two pipelines you are in and what you are
 looking at, and neither of those is true a second after a launch.
 
-Home used to be a grid of tiles, and most of those tiles were the mode switch again — the same names
-under the same glyphs, one click either way, on a switch that is drawn along the top of every mode
-anyway. So Home answers the three questions nothing else in the app answered instead: **what
-changed**, **what is the machine doing**, and **what was I working on**.
+Home used to be a grid of tiles, and most of those tiles were the navigation again — the same names
+under the same glyphs, one click either way, beside a control that is drawn in every mode anyway. So
+Home answers the three questions nothing else in the app answered instead: **what changed**, **what
+is the machine doing**, and **what was I working on**.
 
 Nothing about Home is remembered. There is no "last mode" setting, and no way to make the app skip
 it — a stored mode would be a value with no reader, and the app would drift into disagreeing with

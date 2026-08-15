@@ -208,6 +208,17 @@ def main() -> int:
         ),
     )
     ap.add_argument(
+        "--overlays",
+        action="store_true",
+        help=(
+            "also capture the two surfaces that stopped being modes in "
+            "REDESIGN.md wave 3 -- the manual and the profile sheet -- plus the "
+            "expanded navigation rail. The mode pass is derived from "
+            "modes.KEYS, so none of the three is reachable by it: a screen that "
+            "is not a mode is a screen nobody would look at."
+        ),
+    )
+    ap.add_argument(
         "--scale",
         type=float,
         default=None,
@@ -265,6 +276,25 @@ def main() -> int:
                     # over every mode therefore cannot survive to its capture.
                     _stage_review_tag(app)
                 _capture(app, args.out / f"{name}-{mode}.png")
+            if args.overlays:
+                from warlock.studio.manual import render as manual_render
+                from warlock.studio.panes import profiles_panel
+
+                state = app.app_ctx.state
+                state.mode = "3d"
+                manual_render.open_at(app.app_ctx, ("01-overview", None))
+                _capture(app, args.out / f"{name}-manual.png")
+                manual_render.close(app.app_ctx)
+                state.mode = "2d"
+                profiles_panel.open_sheet(app.app_ctx)
+                _capture(app, args.out / f"{name}-profiles.png")
+                state.profiles_open = False
+                # The rail with its labels, which is a preference rather than a
+                # mode -- so the whole mode pass above draws the collapsed one.
+                app.layout.set_rail("labels")
+                state.mode = "home"
+                _capture(app, args.out / f"{name}-rail-expanded.png")
+                app.layout.set_rail("icons")
             if args.floating:
                 # Over 3D rather than over Home: the backdrop is what is being
                 # looked at, and a viewport with a mesh in it is the one screen

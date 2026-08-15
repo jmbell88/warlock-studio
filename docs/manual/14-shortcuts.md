@@ -20,8 +20,8 @@ sees the key, which is the one exception to the rule above.
 | --- | --- |
 | Ctrl+K | Open the command palette — switch mode, or open an asset |
 | Ctrl+/ | Open this list, as a searchable popup |
-| F1 | Switch to the Manual |
-| Esc | Leave Home, the Manual or app Settings, back to the mode you came from |
+| F1 | Open this manual over whatever is on screen, or put it away again |
+| Esc | Close the manual, then the profile sheet, then leave a mode you passed through |
 | F10 | Toggle the frame-rate readout |
 
 **There is no per-mode digit.** There was, while there were ten modes and ten digits: `Alt+N` for
@@ -31,15 +31,18 @@ modes have no key, or something has to say which two, and that something is exac
 the positional scheme existed to avoid. Switching modes is a mouse action and a palette action, and
 the digits go back to the workspace modes that were already reaching for them.
 
-**Esc.** In a mode with something to drop — a comparison, a pose edit, a floating selection — Esc
-drops that and stays put. It only leaves a mode that has nothing of its own to cancel. Home is
+**Esc goes through what is on top first.** The manual can be raised over the profile sheet, and the
+sheet over a mode, so Esc closes the topmost of those before it means anything to the mode
+underneath. Closing the profile sheet over a half-typed profile still asks before discarding it.
+After that: in a mode with something to drop — a comparison, a pose edit, a floating selection —
+Esc drops that and stays put, and only leaves a mode that has nothing of its own to cancel. Home is
 where it stops: the app opens there, so there is usually nothing behind it.
 
 ## Moving around without the mouse
 
 **Tab moves to the next control, Shift+Tab to the previous, Space or Enter operates the one you
-land on.** That works in every pane — forms, the app's Settings, Profiles, the library, the
-inspector, the mode switch. The control you are on is drawn with an accent-coloured ring around it,
+land on.** That works in every pane — forms, the app's Settings, the profile sheet, the library, the
+inspector, the navigation rail. The control you are on is drawn with an accent-coloured ring around it,
 and a button that shows only an icon puts its name in a tooltip as you arrive, so you never have to
 recognise a glyph to know what pressing it would do.
 

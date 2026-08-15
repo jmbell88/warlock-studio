@@ -42,23 +42,23 @@ If you already have a picture, you can skip the first stage entirely and upload 
 
 ## The modes
 
-A switch at the top of the window chooses between thirteen modes, and that switch is the single thing
-that decides what the panes show. It is drawn in every mode, so there is no screen you cannot leave.
-There is no per-mode keyboard shortcut: thirteen modes against ten digits is either three modes with no
-key or a table saying which three, so the command palette (`Ctrl+K`) is the keyboard route — see
-[Keyboard shortcuts](14-shortcuts.md).
+A rail down the left edge of the window chooses between eleven modes, and that rail is the single
+thing that decides what the panes show. It is drawn in every mode, so there is no screen you cannot
+leave. There is no per-mode keyboard shortcut — the command palette (`Ctrl+K`) is the keyboard
+route, see [Keyboard shortcuts](14-shortcuts.md).
 
-The switch is drawn as three groups, and the grouping is derived from what a mode *is* rather than
-written down: the two ways in, then the eight workspaces that own a viewport or a form, then the
-three places that are about the program and its shelves rather than about a piece of work. If the
-window is too narrow for thirteen labels the switch shows the glyphs alone, all of them, with each
-label in a tooltip — abbreviating only the segments that did not fit would be one control saying two
-different kinds of thing, and which two would change as you dragged the window.
+The rail shows glyphs by default and expands to show the labels beside them; the chevron at its foot
+toggles that, and the choice is remembered. In icon-only form every item names itself in a tooltip.
+A window too narrow to hold the labelled rail *and* three usable columns draws the collapsed one
+until there is room again — what you chose and what fits are two different facts, so dragging the
+window wider brings the labels back.
+
+It is drawn in three sections. The first is the asset pipeline, the second is the creative
+workspaces, and the third is the footer: the manual, Settings, the collapse toggle, and a badge that
+appears only when something is failing its startup check.
 
 - **Home.** What the app opens on: what changed in this build, what the machine is doing, and a
   single list of everything you were recently working on. Returning here is never destructive.
-- **Manual.** This documentation, embedded in the window rather than floating over it. `F1` and
-  every pane's (?) button come here.
 
 - **2D reference.** Owns the prompt and every control that composes it: the guidance selects, the
   negative prompt, the image model and style LoRA, the seed and the candidate count. Covered in
@@ -81,12 +81,18 @@ different kinds of thing, and which two would change as you dragged the window.
 - **Packwright.** A sprite-atlas packer: many images in, one atlas out, with a sidecar that says
   where everything landed. Covered in [Packwright](10-packwright.md).
 
+- **Library.** Every asset that has ever been generated, filtered, sorted and searched, with the
+  trash and the prune. Covered in [Library and jobs](11-library-and-jobs.md).
+
 - **Settings.** The app's own preferences — UI scale, the frame-rate readout, layout resets, and the
   list of models it loaded, from which a missing one can be downloaded. See
   [In-app settings](16-configuration.md#in-app-settings).
-- **Library.** Every asset that has ever been generated, filtered, sorted and searched, with the
-  trash and the prune. Covered in [Library and jobs](11-library-and-jobs.md).
-- **Profiles.** Saved style settings for the 2D form. Covered in [Profiles](12-profiles.md).
+
+Two things that used to be modes are not, and both moved for the same reason: they are *about* the
+screen you are on rather than places to go. This documentation opens over the window (`F1`, or any
+pane's (?) button) instead of replacing it, so the control you were asking about is still there when
+you have the answer; and the style-profile manager opens as a sheet from the profile picker in the
+2D form — see [Profiles](12-profiles.md).
 
 Each generation control belongs to exactly one mode. The one setting both the 2D and the 3D pane need is
 **platform**, and it is deliberately two separate controls: in the 2D pane it is a hint that goes
@@ -101,7 +107,7 @@ job keeps running whichever mode you are in, and the progress card floats over e
 
 The app opens on Home, every launch: no mode is remembered between runs, because none of them is
 what you want to be dropped into before you have said what you are doing. **Home**
-is the first entry in the mode switch described above, and returns there at any time.
+is the first entry in the rail described above, and returns there at any time.
 
 Once you are in the workspace, the window is three columns:
 
@@ -117,8 +123,9 @@ Once you are in the workspace, the window is three columns:
   library — every job you have ever run, with its filters. The divider between them can be dragged;
   the sidebar's own width is not draggable, only chosen from the three named sizes in Settings.
 
-At the far right of the top bar are two small controls. The **?** button opens the keyboard
-shortcut list, which is also reproduced in [Keyboard shortcuts](14-shortcuts.md). Beside it is the
-**health dot**: green when every startup check passed, amber when a non-fatal check failed (missing
-optional weights, no gltfpack, no CUDA), and red when something fatal failed or the worker died.
-Clicking it opens the full diagnostics list.
+There is no top bar. The keyboard shortcut list is `Ctrl+/` or **Keyboard shortcuts** in the command
+palette, and it is reproduced in [Keyboard shortcuts](14-shortcuts.md). The **health badge** sits in
+the rail's footer and appears only when a startup check is failing — amber for a non-fatal one
+(missing optional weights, no gltfpack, no CUDA), red when something fatal failed or the worker
+died. Hovering it names the failing checks; clicking it opens the full diagnostics list, which is
+also **Diagnostics** in the palette when everything is passing and there is no badge to click.

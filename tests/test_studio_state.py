@@ -470,65 +470,63 @@ def test_every_mode_has_exactly_one_place_that_draws_it():
     assert modes.WORKSPACE_MODES < modes.WORK_MODES
 
 
-def test_quit_is_never_a_mode_and_is_no_longer_a_segment():
-    """Quitting is an action, not a place -- and as of UX.md Phase 2 it is not
-    drawn in the navigation control either.
+def test_quit_is_never_a_mode_and_has_no_control_in_the_shell():
+    """Quitting is an action, not a place, and as of REDESIGN.md wave 3 it is
+    not a *button* either.
 
-    It must stay out of ``MODES`` for the reasons it always did: it never lands
-    in ``AppState.mode``, it has no pane to draw, and the three categories above
-    have to partition ``KEYS`` exactly. What changed is where it is drawn: a
-    destructive action inside the switch is one click from every mode, and the
-    unconditional confirm in front of it was a mitigation rather than a fix. It
-    lives in the header strip beside the health dot and the ``?`` now, so the
-    switch is ten segments of navigation and nothing else.
+    It stayed out of ``MODES`` for the reasons it always did: it never lands in
+    ``AppState.mode``, it has no pane to draw, and the three categories above
+    have to partition ``KEYS`` exactly. What changed twice is where it was
+    drawn -- the eleventh segment of the switch until UX.md Phase 2, then a
+    power icon in the header's right-hand strip. Both were a destructive
+    action one click from every mode, mitigated by a confirm rather than fixed;
+    the rail has no strip, so the control and the ``modes.QUIT`` tuple that fed
+    it are gone together.
+
+    What is left is the window's own X and the palette's Quit, and both go
+    through the same preflight.
     """
     import inspect
 
     from warlock.studio import main, modes
 
-    assert modes.QUIT[0] == "quit"
+    assert not hasattr(modes, "QUIT")
     assert "quit" not in modes.KEYS
-    assert "quit" not in {k for k, _l, _i in modes.MODES}
     assert "quit" not in modes.WORK_MODES | modes.VIEWPORT_MODES | modes.WORKSPACE_MODES
     assert "quit" not in set(main._SINGLE_PANE_MODES)
+    assert not hasattr(main.App, "_mode_switch")
 
-    source = inspect.getsource(main.App._mode_switch)
-    # Still one spelling of the name and the glyph, read from ``modes``...
-    assert "modes.QUIT" in source
-    # ...but no longer spliced into the list the switch is built from, which is
-    # the whole of what moved.
-    assert "modes.MODES, modes.QUIT" not in source
-    assert "*modes.MODES" not in source
-    # The unsaved-work chain is ``_request_quit``'s, in the order the plumbing
-    # test pins; re-inlining it here would be a second chain to keep in step.
-    # It is reached through ``_ask_quit``, which is the *preflight* -- it asks
-    # the generic question only when there is something for it to be about, so
-    # an idle app with nothing dirty no longer gets a warning about generating
-    # that is not happening (UX-21).
-    assert "self._ask_quit" in source
-    chain = inspect.getsource(main.App._ask_quit)
-    assert "self._request_quit" in chain
+    # The window's X routes through the preflight rather than straight to the
+    # chain. It used to call ``_request_quit``, which asks per unsaved document
+    # and says nothing about a run in flight -- survivable only while the
+    # header's icon existed to carry the summary.
+    events = inspect.getsource(main.App._events)
+    assert "pygame.QUIT" in events
+    assert "self._ask_quit()" in events
+    # And the preflight still hands off to the chain the plumbing test pins.
+    assert "self._request_quit" in inspect.getsource(main.App._ask_quit)
 
 
-def test_the_switch_groups_the_places_apart_from_the_workspaces():
-    """UX.md Phase 2, and derived rather than written out: a hand-picked index
-    would have put the gap in the middle of the workspaces, because Settings
-    sits eighth in ``MODES`` rather than beside Home and the Manual."""
+def test_the_rail_groups_are_the_modes_in_order():
+    """Two spellings of one fact, pinned to each other.
+
+    ``RAIL_GROUPS`` is hand-written (REDESIGN.md wave 3) -- the reversal of the
+    derived ``GROUP_BREAKS`` it replaced, because the first group is a claim no
+    predicate over ``WORK_MODES`` can make: Home, 2D, 3D, Library and Review are
+    the asset pipeline, and three of those five are work modes while two are
+    not. A rule that cannot state the grouping is not a better version of
+    stating it -- but a hand-written list *can* drift from ``MODES``, so the
+    flattening is asserted instead.
+    """
     from warlock.studio import modes
 
-    assert modes.GROUP_BREAKS
-    for index in modes.GROUP_BREAKS:
-        before = modes.MODES[index][0] in modes.WORK_MODES
-        after = modes.MODES[index + 1][0] in modes.WORK_MODES
-        assert before != after
-    # And every transition is marked, not just some of them.
-    transitions = {
-        i
-        for i in range(len(modes.MODES) - 1)
-        if (modes.MODES[i][0] in modes.WORK_MODES)
-        != (modes.MODES[i + 1][0] in modes.WORK_MODES)
-    }
-    assert transitions == modes.GROUP_BREAKS
+    flat = [key for group in modes.RAIL_GROUPS for key in group]
+    assert tuple(flat) == modes.KEYS
+    assert len(set(flat)) == len(flat), "a mode in two groups is drawn twice"
+    assert all(modes.RAIL_GROUPS), "an empty group would draw as a stray gap"
+    # The last group is the footer, and Settings is what belongs there: it is
+    # about the program rather than about a piece of work.
+    assert modes.RAIL_GROUPS[-1] == ("settings",)
 
 
 def test_the_app_opens_on_home_and_only_the_work_modes_take_shortcuts():

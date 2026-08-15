@@ -15,47 +15,60 @@ from __future__ import annotations
 from . import icons
 
 # (key, label, icon). The key is what lands in ``AppState.mode``.
-# **The order is the grouping**, and it is contiguous on purpose: the two ways
-# in (Home, the Manual), then every workspace, then the three places that are
-# about the program and its shelves rather than about a piece of work. It was
-# not contiguous before -- Settings sat eighth, between Review and Plotter,
-# because it was appended when it was added and the positional Alt+digits were
-# already in people's hands, and Plotter and Packwright were then appended after
-# *it* for the same reason. Nothing is typed positionally any more, so the list
-# is free to say what it means, and ``GROUP_BREAKS`` (derived) collapses from
-# four breaks to the two real ones.
+#
+# **The order is the rail's order** (REDESIGN.md wave 3): where you start and
+# what you look at, then the six creative workspaces, then Settings. It used to
+# be the *segmented control's* order, grouped by a predicate over
+# ``WORK_MODES`` -- a rule that rendered correctly and explained nothing, and
+# which put Library and Review on the far side of a break from the panes they
+# are about. The grouping is written out in ``RAIL_GROUPS`` now, and this list
+# is the flattening of it (a test asserts exactly that), so the two cannot
+# drift while remaining two spellings of one fact.
+#
+# Two modes left this list in wave 3 and neither is coming back as one:
+# ``manual`` (help is consulted *about* a screen, so taking that screen away to
+# show it answered the question by removing it -- it is
+# ``manual.render.draw_overlay`` now, raised by F1 and by every
+# ``help_button``) and ``profiles`` (a shelf of saved settings in the top-level
+# navigation beside six creative workspaces said that "manage my styles" is a
+# place you travel to -- it is ``profiles_panel.draw_sheet`` over the 2D pane).
 MODES: list[tuple[str, str, str]] = [
     ("home", "Home", icons.HOUSE),
-    # There is no ``manual`` entry, and its absence is a decision rather than an
-    # omission (REDESIGN.md wave 3). Help is consulted *about the screen you are
-    # on*, and a mode took that screen away to show it -- so the (?) beside a
-    # control answered the question by removing it. It is an overlay now:
-    # ``manual.render.draw_overlay``, raised by F1 and by every ``help_button``,
-    # closed by Esc. ``icons.BOOK_OPEN`` still names it in the rail's footer.
     ("2d", "2D", icons.IMAGE),
     ("3d", "3D", icons.BOX),
-    ("inker", "Inker", icons.PEN_TOOL),
-    ("clay", "Clay", icons.RULER),
-    ("poser", "Poser", icons.PERSON_STANDING),
-    ("review", "Review", icons.CIRCLE_CHECK),
-    ("plotter", "Plotter", icons.GRID),
-    ("packwright", "Packwright", icons.LAYERS),
-    ("settings", "Settings", icons.SETTINGS),
     # Real modes rather than sub-views of Home. They were tiles on the chooser
     # and a ``state.landing_view`` enum behind it, which is what a destination
     # looks like when there is nowhere to put it; Home stopped being a tile
-    # grid, so they went where everything else already was. The two glyphs are
-    # the ones ``landing._SUBVIEW_ICONS`` already assigned them -- moved, not
-    # re-picked, because a screen the user has seen should not change its
-    # pictures for a refactor.
+    # grid, so they went where everything else already was. The glyph is the
+    # one ``landing._SUBVIEW_ICONS`` already assigned -- moved, not re-picked,
+    # because a screen the user has seen should not change its pictures for a
+    # refactor.
     ("library", "Library", icons.FOLDER_OPEN),
-    # Profiles is not here either, and for the Manual's reason one step over
-    # (REDESIGN.md wave 3): a shelf of saved *settings* was sitting in the
-    # top-level navigation beside the six creative workspaces, which said that
-    # "manage my styles" is a place you travel to rather than something you do
-    # to the form in front of you. It is a sheet over the 2D pane now, opened
-    # from the profile picker it is about -- ``profiles_panel.draw_sheet``.
+    ("review", "Review", icons.CIRCLE_CHECK),
+    ("inker", "Inker", icons.PEN_TOOL),
+    ("clay", "Clay", icons.RULER),
+    ("poser", "Poser", icons.PERSON_STANDING),
+    ("plotter", "Plotter", icons.GRID),
+    ("packwright", "Packwright", icons.LAYERS),
+    ("settings", "Settings", icons.SETTINGS),
 ]
+
+# The rail's sections, hand-written. **Not derived**, and that is the reversal
+# of what ``GROUP_BREAKS`` used to be: deriving the gaps from "is this a work
+# mode" was right while the only claim being made was *workspaces are not
+# places*, and it is wrong now, because the first group is a claim the
+# predicate cannot make. Home, 2D, 3D, Library and Review are the *asset*
+# pipeline -- start something, generate a reference, make a mesh, find it
+# again, judge it -- and three of those five are work modes while two are not.
+# A rule that cannot state the grouping is not a better version of stating it.
+#
+# The last group is the rail's *footer*, drawn against the bottom edge beside
+# the health badge and the expand toggle rather than in the column above.
+RAIL_GROUPS: tuple[tuple[str, ...], ...] = (
+    ("home", "2d", "3d", "library", "review"),
+    ("inker", "clay", "poser", "plotter", "packwright"),
+    ("settings",),
+)
 
 # The modes that own a viewport or a form, and so have work in them. Home, the
 # Manual and Settings are places you pass through: they have no form to
@@ -96,25 +109,6 @@ NAV_KEY_MODES = frozenset({"home", "library", "review", "inker", "plotter"})
 
 KEYS = tuple(key for key, _label, _icon in MODES)
 
-# After which segment indices the switch leaves a wider gap (UX.md Phase 2).
-# A flat row of segments said that Manual and Settings were peers of the
-# creative workspaces; a gap says they are not, and says it in the *spacing*,
-# so ``MODES``' order is untouched.
-#
-# **Derived from where the category changes, never written out** -- which is
-# what let the reorder above be a reorder and nothing else. While the places
-# were scattered through the list this rendered as four breaks, because that is
-# the honest picture of "places are not workspaces" against an order that did
-# not group them; now that ``MODES`` is contiguous it renders as the two real
-# ones, with nothing here to edit. A hand-written index would have had to be
-# rewritten, and until somebody did it would have put a gap in the middle of the
-# workspaces and called it a grouping.
-GROUP_BREAKS: frozenset[int] = frozenset(
-    index
-    for index, ((key, _l, _i), (nxt, _l2, _i2)) in enumerate(zip(MODES, MODES[1:], strict=False))
-    if (key in WORK_MODES) != (nxt in WORK_MODES)
-)
-
 # **There is no positional Alt+digit binding, and there deliberately is not.**
 # It existed while there were ten modes and ten digits, on the argument that the
 # binding was the picture on screen rather than a second table. That argument
@@ -126,18 +120,19 @@ GROUP_BREAKS: frozenset[int] = frozenset(
 # already reaching for them.
 
 
-# Deliberately *not* in MODES. Quitting is an action, not a place: it never
-# lands in ``AppState.mode``, it has no pane, and the three categories above
-# have to partition KEYS exactly (``_build_ui``'s dispatch ends in a bare
-# ``else``).
+# **Quit has no control anywhere in the shell, and that is the decision.**
 #
-# It used to be spliced onto the end of the switch as an eleventh segment, and
-# it no longer is (UX.md Phase 2): a destructive action living inside the
-# control you navigate with is one click from every mode, and the
-# unconditional confirm in front of it was a mitigation rather than a fix. It
-# is drawn in the header's right-hand strip now, beside the two other controls
-# that are about the program rather than about the work. The tuple survives
-# because the name and the glyph are still one fact and the strip reads them
-# from here; the ``(key, label, icon)`` shape survives with it, even though
-# nothing splices it any more, because it is what makes that obvious.
-QUIT: tuple[str, str, str] = ("quit", "Quit", icons.POWER)
+# It was never a mode -- it does not land in ``AppState.mode``, it has no pane,
+# and the three categories above partition ``KEYS`` exactly. What it *had* was
+# a place to be drawn: an eleventh segment of the switch until UX.md Phase 2,
+# then a power icon in the header's right-hand strip. Both were a destructive
+# action one click from every mode, mitigated by an unconditional confirm
+# rather than fixed, and the second was only less bad than the first.
+#
+# The rail has no strip for it, so the ``QUIT`` tuple is gone with the header
+# that read it. The ways out are the window's own X -- which routes through
+# ``App._ask_quit`` (REDESIGN.md wave 3; it used to bypass the preflight
+# summary and go straight to ``_request_quit``, which was survivable only while
+# the icon existed to carry it) -- and the palette's Quit command, which calls
+# the same guard. Both ask about unsaved work; neither is a button somebody's
+# pointer can find by accident.

@@ -1,6 +1,6 @@
 # App settings
 
-**Settings** in the mode switch holds the handful of preferences that are the app's rather than a
+**Settings**, in the rail's footer, holds the handful of preferences that are the app's rather than a
 job's. They are stored in `studio_settings.json` beside everything else the app remembers, and none
 of them need a variable set before launch.
 
@@ -21,7 +21,7 @@ into the render-skip key so a theme switch triggers a redraw. It is a known gap,
 open. *Show frame rate* is the same toggle as `F10`.
 
 *Reduce motion* turns off every animation in the app at once — the mode transition, hover, the
-sliding mode switch, a popover's rise. Nothing disappears and nothing behaves differently: things
+rail's sliding selection and its expand, a popover's rise. Nothing disappears and nothing behaves differently: things
 arrive in place instead of travelling there, and the few effects that are a *fade* rather than a
 move (a toast's opacity, the acknowledgement flash when a file is dropped) keep their timing and
 lose their ramp.

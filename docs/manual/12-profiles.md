@@ -37,10 +37,16 @@ In the **2D pane**, a profile picker sits beside the preset picker. Choosing one
 and makes it active, and the picker shows "Custom" once you edit past it. **Save as...** asks for a
 name and captures the current form's profile fields.
 
-The **Profiles** mode in the switch is the full manager. **New profile** starts from
-whatever the 2D form currently holds. Each saved profile lists its model, its LoRA and how many
-style fields it sets, with up to four actions: **Set active**, **Edit**, **Apply to form** and
-**Delete** — the active profile hides **Set active**.
+**Manage...**, beside that picker, opens the full manager as a sheet over the pane. It is not a mode
+and not somewhere you travel to: managing your styles is something you do to the form in front of
+you, so it opens from the control it is about and Esc puts it away. (The command palette's **Manage
+style profiles** is the same door from anywhere else; it goes to the 2D pane first.) **New profile**
+starts from whatever the 2D form currently holds. Each saved profile lists its model, its LoRA and
+how many style fields it sets, with up to four actions: **Set active**, **Edit**, **Apply to form**
+and **Delete** — the active profile hides **Set active**.
+
+Closing the sheet over a draft you have started asks before discarding it, exactly as leaving the
+mode used to.
 
 The editor works on a *draft*, not on the live form, so editing a profile never changes what your
 next Generate would send. Renaming a profile in the editor moves it rather than forking it — a typo

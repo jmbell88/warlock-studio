@@ -1605,7 +1605,14 @@ class App:
         io = imgui.get_io()
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                self._request_quit()
+                # Through the *preflight* (REDESIGN.md wave 3). This went
+                # straight to ``_request_quit``, which walks the per-document
+                # guards and asks nothing about a run in flight -- survivable
+                # only while the header's power icon existed to carry
+                # ``_ask_quit``'s generic summary. The header is gone, so the
+                # window's X is the only interactive way out and it has to be
+                # the one that asks.
+                self._ask_quit()
                 continue
             if event.type == pygame.VIDEORESIZE:
                 # The *clamped* size is persisted, not the requested one: the
@@ -2267,7 +2274,7 @@ class App:
         from imgui_bundle import imgui
 
         from . import layout as layout_mod
-        from . import modes, tokens
+        from . import modes, rail, tokens
         from .panes import (
             app_settings,
             inspector,
@@ -2278,6 +2285,11 @@ class App:
         )
 
         ctx = self.app_ctx
+        # The rail first of all, because the sidebars are fitted against what
+        # is left after it: a rail measured afterwards would leave the columns
+        # disagreeing with the window by exactly its own width for one frame
+        # every time it was toggled.
+        rail.tick(self.layout)
         # Before any pane reads ``layout.SIDEBAR_W``: a width change eases, and
         # a half-eased width read by the left sidebar and the settled one read
         # by the right would be two columns disagreeing about the same frame.
@@ -2346,9 +2358,32 @@ class App:
             | imgui.WindowFlags_.no_saved_settings.value
         )
         imgui.begin("##host", None, flags)
-        # The switch is drawn in every mode, Home included: it is how you
-        # leave wherever you are, so a mode that hides it is a dead end.
-        self._mode_switch()
+        # The rail is drawn in every mode, Home included: it is how you leave
+        # wherever you are, so a mode that hides it is a dead end.
+        rail.draw(self, ctx)
+        # The two popups its footer can raise, opened at *host* scope. imgui
+        # registers a popup in the window that opens it and the rail is a
+        # child, so a footer that called ``open_popup`` itself would be naming
+        # a popup nothing outside the child could find. The same one-shot the
+        # shortcuts button has always used, generalised.
+        if rail.take("diagnostics"):
+            imgui.open_popup("diagnostics")
+        self._diagnostics_popup(list(getattr(ctx.runtime, "checks", []) or []))
+        # Ctrl+/ and the palette's "Keyboard shortcuts" both set this flag,
+        # because neither a key handler nor a palette command is inside the
+        # window the popup is registered in. It was consumed by the header's
+        # ``?`` button; the header is gone, so it is consumed here.
+        if ctx.state.shortcuts_requested:
+            ctx.state.shortcuts_requested = False
+            # Cleared on the way in rather than on the way out: a popup can be
+            # dismissed by clicking anywhere, which is not a moment this has a
+            # hook in, and reopening onto last time's query would look like a
+            # list that had lost most of its rows.
+            self._shortcuts_query = ""
+            imgui.open_popup("shortcuts")
+        self._shortcuts_popup()
+        imgui.same_line()
+        imgui.begin_child("##content", (0, 0))
         from .panes import overlay
 
         overlay.doctor_banner(ctx)
@@ -2379,6 +2414,7 @@ class App:
                 self._packwright_workspace()
             else:
                 self._inker_workspace()
+            imgui.end_child()
             imgui.end()
             self._overlays(viewport)
             return
@@ -2406,6 +2442,7 @@ class App:
             ctx, lay, sidebar_w, inspector_draw=inspector.draw, library_draw=library.draw
         )
 
+        imgui.end_child()
         imgui.end()
         self._overlays(viewport)
 
@@ -3683,159 +3720,6 @@ class App:
             # run list is the thing that knows which directories exist. Landing
             # on the mode is the whole of what the button promises.
             self._set_mode("review")
-
-    def _mode_switch(self) -> None:
-        from imgui_bundle import imgui
-
-        from . import modes, widgets
-
-        ctx = self.app_ctx
-        state = ctx.state
-        # No mode switch is destructive: Inker's documents are still open when
-        # you come back, because it is a mode rather than a takeover. Only
-        # quitting and closing a tab can lose pixels, and both ask.
-        # Thirteen segments do not fit the resize floor at 1.5 UI scale, and a
-        # clipped segment is an unreachable mode. So the switch has a compact
-        # form -- the glyph alone, with the label in a tooltip -- taken when the
-        # full one will not fit the width actually available. Both labellings
-        # come from ``modes.MODES``, so the two can never name different things.
-        selected = widgets.segmented_control(
-            "mode-seg",
-            [(key, f"{icon} {label}") for key, label, icon in modes.MODES],
-            state.mode,
-            breaks=modes.GROUP_BREAKS,
-            compact=[(key, icon) for key, _label, icon in modes.MODES],
-            max_width=imgui.get_content_region_avail().x,
-        )
-        if selected != state.mode:
-            self._set_mode(selected)
-
-        # Right-aligned health dot: green when everything passed, amber when a
-        # non-fatal check failed, red for a fatal one or a dead worker. Click
-        # for the full diagnostics list -- the non-fatal checks (missing
-        # weights, gltfpack, CUDA) used to be visible only in the log file.
-        from . import theme
-        from .tokens import sp
-
-        checks = list(getattr(ctx.runtime, "checks", []) or [])
-        if state.errors or any(c.fatal and not c.ok for c in checks):
-            colour = theme.ERR
-        elif any(not c.ok for c in checks):
-            colour = theme.WARN
-        else:
-            colour = theme.OK
-        from . import widgets
-        from .panes import overlay
-
-        # The right-hand strip: the resource readout, the shortcuts button and
-        # the health dot. Its width is *measured* rather than reserved as a
-        # constant, because ``same_line`` past the content region clips instead
-        # of wrapping -- a control drawn out there is simply gone, which is the
-        # bug that once hid seven of them -- and the text's width is a function
-        # of the DPI scale, the font and how many digits the readings have.
-        # What the health control says and how wide it is (F58). A 16 px
-        # invisible button with a 9 px circle drawn under it is not a control:
-        # it is under the 24 px minimum anything is comfortably clickable at,
-        # it has no label, and on a host where something is actually wrong it
-        # looks exactly like a decoration. So when a check is failing the dot
-        # gains a word and a real button-sized hit area; when everything passes
-        # it stays a dot, because a permanent "OK" badge is noise.
-        failing = [c for c in checks if not c.ok]
-        health_label = "" if not failing else ("Issue" if len(failing) == 1 else "Issues")
-        health_w = sp(24) if not health_label else (
-            sp(22) + imgui.calc_text_size(health_label).x + imgui.get_style().frame_padding.x * 2
-        )
-
-        line, tip = overlay.status_text(ctx, self.fps)
-        spacing = imgui.get_style().item_spacing.x
-        strip = (
-            imgui.calc_text_size(line).x
-            + spacing
-            + imgui.get_frame_height()  # the ? button is square
-            + spacing
-            + health_w
-            + spacing
-            + imgui.get_frame_height()  # and so is Quit
-        )
-        widgets.same_line_or_wrap(strip)
-        avail = imgui.get_content_region_avail().x
-        if avail >= strip:
-            # Right-aligned when there is room for the whole strip, and left
-            # exactly where the switch ended when there is not: never past the
-            # edge, and never on top of the switch either.
-            imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + avail - strip)
-        overlay.status_readout(line, tip)
-        imgui.same_line()
-        # The tooltip carries F1 (I81): the popup lists it, but the popup is
-        # the thing you have to already know about. A "?" that says only
-        # "Keyboard shortcuts" leaves the one binding that opens the
-        # documentation reachable exclusively from the documentation.
-        # The button, Ctrl+/ and the palette's "Keyboard shortcuts" are three
-        # doors onto one popup, and only this one could open it: ``open_popup``
-        # names a popup registered inside the *current* window, so neither a
-        # key handler nor a palette command can call it. Both of those set a
-        # flag instead and this is where it is consumed -- which is also why
-        # the flag is one-shot rather than a boolean the popup owns.
-        requested = ctx.state.shortcuts_requested
-        ctx.state.shortcuts_requested = False
-        asked = widgets.icon_button(
-            "?", "Keyboard shortcuts (Ctrl+/) - F1 opens the Manual"
-        )
-        if asked or requested:
-            # Cleared on the way in rather than on the way out: a popup can be
-            # dismissed by clicking anywhere, which is not a moment this has a
-            # hook in, and reopening onto last time's query would look like a
-            # list that had lost most of its rows.
-            self._shortcuts_query = ""
-            imgui.open_popup("shortcuts")
-        self._shortcuts_popup()
-        imgui.same_line()
-        pos = imgui.get_cursor_screen_pos()
-        centre_y = pos.y + imgui.get_frame_height() * 0.5
-        imgui.get_window_draw_list().add_circle_filled(
-            (pos.x + sp(11), centre_y), sp(4.5), imgui.get_color_u32(theme.rgba(colour)), 16
-        )
-        if imgui.invisible_button("##health", (health_w, imgui.get_frame_height())):
-            imgui.open_popup("diagnostics")
-        hovered = imgui.is_item_hovered()
-        if health_label:
-            # Drawn over the button rather than beside it, so the word is part
-            # of the same hit area instead of a second thing to aim at.
-            imgui.get_window_draw_list().add_text(
-                (pos.x + sp(20), pos.y + imgui.get_style().frame_padding.y),
-                imgui.get_color_u32(theme.rgba(colour)),
-                health_label,
-            )
-        if hovered:
-            # The failing rows by name (N110). "System status - click for
-            # details" made the click mandatory to learn whether the amber dot
-            # meant a missing style LoRA or a held trellis port -- one is worth
-            # ignoring for the rest of the session and the other is not.
-            imgui.set_tooltip(
-                "Everything checks out - click for details"
-                if not failing
-                else "\n".join(
-                    ["Click for details:"]
-                    + [f"  {'!' if c.fatal else '-'} {c.name}" for c in failing[:8]]
-                    + ([f"  ... and {len(failing) - 8} more"] if len(failing) > 8 else [])
-                )
-            )
-        self._diagnostics_popup(checks)
-
-        # Quit, out of the navigation control at last (UX.md Phase 2). It was
-        # the eleventh segment of the mode switch: a destructive action inside
-        # the thing you use to move around, one click from every mode, mitigated
-        # by an unconditional confirm -- which is a mitigation and not a fix.
-        # Here it sits with the other two app-level controls, the ones that are
-        # about the *program* rather than about the work.
-        #
-        # It is still an action rather than a mode, so nothing is ever assigned
-        # to ``state.mode`` and cancelling leaves the switch where it was; and it
-        # still always asks, because the window's own X is the path that carries
-        # the unsaved-work chain instead.
-        imgui.same_line()
-        if widgets.icon_button(modes.QUIT[2], f"{modes.QUIT[1]} Warlock Studio", danger=True):
-            self._ask_quit()
 
     # Every binding the app answers to, in one place the user can find. The
     # tuples are (keys, what), grouped; Inker's letters come from TOOL_KEYS so

@@ -102,6 +102,17 @@ SIDEBAR_MIN = 200.0
 # rather than a fit computed against a viewport of zero.
 SIDEBAR_FIT: float | None = None
 
+# What the navigation rail has taken out of the window this frame, in physical
+# px (REDESIGN.md wave 3). Module state set by ``rail.tick`` immediately before
+# :func:`tick`, for the reason ``SIDEBAR_W`` is: the sidebars are measured from
+# what is left after the rail, and a number threaded through would be the same
+# figure in two places.
+#
+# Zero by default, which is what makes every headless caller -- ``fit`` is pure
+# and the tests drive it directly -- see the window it always saw. A rail that
+# has never been drawn has taken nothing.
+RAIL_RESERVED: float = 0.0
+
 
 def fit(available: float, spacing: float) -> float:
     """How wide each sidebar can be, given the room. Physical px, pure.
@@ -156,6 +167,12 @@ def measure() -> float:
     global SIDEBAR_FIT
     style = imgui.get_style()
     room = imgui.get_main_viewport().work_size[0] - style.window_padding.x * 2
+    if RAIL_RESERVED:
+        # The rail and the gap after it, both taken off before the columns are
+        # fitted. Measured rather than assumed because the rail eases between
+        # two widths: fitting against the settled figure would leave the three
+        # columns wrong for the ~200 ms of every expand.
+        room -= RAIL_RESERVED + style.item_spacing.x
     SIDEBAR_FIT = fit(room, style.item_spacing.x)
     return SIDEBAR_FIT
 
@@ -183,9 +200,19 @@ class Layout:
             share = 0.55
         self.settings_share = min(max(share, SHARE_MIN), SHARE_MAX)
         self.sidebar = set_sidebar(str(stored.get("sidebar", "default")))
+        # Whether the navigation rail shows its labels. A *name* rather than a
+        # width, exactly as ``sidebar`` is, so a stored value can never be a
+        # size this build does not offer -- and anything unrecognised reads as
+        # "icons", which is the state the rail is designed around rather than a
+        # degraded version of the other one.
+        self.rail = "labels" if str(stored.get("rail", "icons")) == "labels" else "icons"
 
     def set_sidebar_width(self, key: str) -> None:
         self.sidebar = set_sidebar(key, animate=True)
+        self.save()
+
+    def set_rail(self, key: str) -> None:
+        self.rail = "labels" if key == "labels" else "icons"
         self.save()
 
     def save(self) -> None:
@@ -193,10 +220,17 @@ class Layout:
         # stale sidebar_w/inspector_w a settings file may still carry are gone
         # the first time anything saves. ``sidebar`` is the *name* of a width,
         # never a number, so a stored value can never be a size this build does
-        # not offer.
+        # not offer -- and ``rail`` follows it for the same reason. Both have to
+        # be written here every time, because the whole dict is replaced: a key
+        # this method forgets is a preference that silently resets the next time
+        # the *other* one changes.
         self._settings.set(
             "layout",
-            {"settings_share": round(self.settings_share, 3), "sidebar": self.sidebar},
+            {
+                "settings_share": round(self.settings_share, 3),
+                "sidebar": self.sidebar,
+                "rail": self.rail,
+            },
         )
 
 
