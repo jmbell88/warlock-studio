@@ -126,6 +126,62 @@ def _seed_tile(app, png: Path) -> None:
     ctx.state.select(job_id)
 
 
+def _seed_asset(app) -> None:
+    """A finished reference and a rigged mesh promoted from it, mesh selected.
+
+    Create's five stages are four columns and an inspector *about an asset*,
+    and with nothing selected four of the five draw an empty state -- so the
+    mode pass had never photographed the Rig column, the Pose column, the
+    export grid, the lineage links, or a rail with any segment ticked. That is
+    the gap ``--seed`` closed for Inker and ``--review`` for the verdict panel,
+    and this is the same hole one wave later.
+
+    The GLB is a **real** one, written by the app's own exporter: a stub would
+    fail to parse on the frame that shows it and put an error toast in every
+    capture.
+
+    Writes into whatever data directory the process was pointed at, so run it
+    against a throwaway ``WARLOCK_DATA_DIR`` rather than a real library.
+    """
+    from PIL import Image
+
+    from warlock.studio.clay import document as bd
+    from warlock.studio.clay import primitives as bp
+    from warlock.studio.viewer import glbwrite
+
+    ctx = app.app_ctx
+    ref_id = ctx.svc.store.create(
+        "text", "a hooded adventurer standing", {"seed": 7}, stage="reference", status="done"
+    )
+    ref_dir = ctx.svc.job_dir(ref_id)
+    ref_dir.mkdir(parents=True, exist_ok=True)
+    Image.new("RGBA", (256, 256), (90, 110, 150, 255)).save(ref_dir / "input.png")
+
+    doc = bd.ClayDoc()
+    doc.objects.append(bd.Obj(uid=bd.new_uid(), name="Box", mesh=bp.box()))
+    glb = glbwrite.write_glb(bd.to_model(doc))
+
+    mesh_id = ctx.svc.store.create(
+        "image",
+        "a hooded adventurer standing",
+        {"seed": 7, "mesh_seed": 11},
+        stage="model",
+        status="done",
+        parent_id=ref_id,
+    )
+    mesh_dir = ctx.svc.job_dir(mesh_id)
+    mesh_dir.mkdir(parents=True, exist_ok=True)
+    (mesh_dir / "model.glb").write_bytes(glb)
+    (mesh_dir / "source.glb").write_bytes(glb)
+    # rig.glb is what the Rig and Pose stages gate on. Its own GLB rather than
+    # a copy of nothing, for the parse reason above.
+    (mesh_dir / "rig.glb").write_bytes(glb)
+    Image.new("RGBA", (256, 256), (90, 110, 150, 255)).save(mesh_dir / "input.png")
+    ctx.cache.invalidate()
+    ctx.cache.tick()
+    ctx.state.select(mesh_id)
+
+
 def _seed_review(app) -> None:
     """A finished mesh in the recent-unreviewed bucket, open in Review.
 
@@ -205,6 +261,13 @@ def main() -> int:
         help="turn the 2D viewport's tiled preview on",
     )
     ap.add_argument(
+        "--asset",
+        action="store_true",
+        help="seed a reference and a rigged mesh made from it, mesh selected, "
+             "so Create's five stages draw an asset rather than four empty "
+             "states",
+    )
+    ap.add_argument(
         "--review",
         action="store_true",
         help="seed a finished mesh and open Review on it, so the verdict panel "
@@ -268,6 +331,8 @@ def main() -> int:
     app.setup_context()
     if args.seed:
         _seed(app)
+    if args.asset:
+        _seed_asset(app)
     if args.tile:
         _seed_tile(app, args.tile)
     if args.review:

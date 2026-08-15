@@ -1596,11 +1596,19 @@ def stage_rail(
       ``create_stages.available``), so the tooltip and the refusal it predicts
       cannot drift into two paraphrases of one rule.
 
-    The compact fallback is ``segmented_control``'s, for its reason and with
-    its all-or-nothing rule: below ``max_width`` every segment drops to its
-    glyph and keeps its label in a tooltip. A rail that abbreviated only the
-    segments that did not fit would change what it was saying as the window
-    was dragged, and a clipped segment is an unreachable stage.
+    Fitting is a **ladder of three**, each rung all-or-nothing in
+    ``segmented_control``'s sense -- a rail that abbreviated only the segments
+    that did not fit would change what it was saying as the window was
+    dragged, and a clipped segment is an unreachable stage.
+
+    1. Labels with their checks.
+    2. Labels alone. The checks go *first*, before the words, because a check
+       costs a glyph and a space on every completed segment and the words are
+       what make the stages findable: five labelled segments and two ticks do
+       not fit a 300 dp column at 150 %, and dropping straight to icons to keep
+       two ticks trades the whole rail for them. Done-ness survives as
+       full-strength text against a not-yet-reached segment's 0.55.
+    3. Icons, each keeping its label in a tooltip.
     """
     draw = imgui.get_window_draw_list()
     pad_x, pad_y = sp(12), sp(6)
@@ -1608,14 +1616,14 @@ def stage_rail(
     order = {key: index for index, key in enumerate(keys)}
     done_index = order.get(done, -1) if done is not None else -1
     with fonts.label(imgui):
-        # What each segment actually reads as, before it is measured: a done
-        # stage carries a check, and the check is part of the width.
-        def faces(compact: bool) -> list[str]:
+        # What each segment actually reads as, before it is measured: a check
+        # is part of the width, which is why it is a rung of the ladder.
+        def faces(compact: bool, ticks: bool) -> list[str]:
             out = []
             for index, (key, label, icon, _reason) in enumerate(items):
                 if compact:
                     out.append(icon)
-                elif index <= done_index and key != current:
+                elif ticks and index <= done_index and key != current:
                     out.append(f"{icons.CHECK} {label}")
                 else:
                     out.append(label)
@@ -1625,11 +1633,14 @@ def stage_rail(
             return [imgui.calc_text_size(text).x + pad_x * 2 for text in labels]
 
         titles: dict[str, str] = {}
-        shown = faces(False)
+        shown = faces(False, True)
         widths = measure(shown)
-        if max_width is not None and sum(widths) > max_width:
-            titles = {key: label for key, label, _icon, _reason in items}
-            shown = faces(True)
+        for compact, ticks in ((False, False), (True, False)):
+            if max_width is None or sum(widths) <= max_width:
+                break
+            if compact:
+                titles = {key: label for key, label, _icon, _reason in items}
+            shown = faces(compact, ticks)
             widths = measure(shown)
         height = imgui.get_text_line_height() + pad_y * 2
         origin = imgui.get_cursor_screen_pos()
