@@ -6,7 +6,7 @@ record of what a version actually changed. The top heading's version must
 match `pyproject.toml` — a test asserts it, so a release bump cannot leave this
 file behind.
 
-## 0.0.22 — 2026-08-14
+## 0.0.22 — 2026-08-15
 
 - **Plotter models most of what Tiled models.** Maps carry Tiled's richer
   property vocabulary — file paths, object references and nested classes
@@ -28,6 +28,160 @@ file behind.
 - **Two importer gaps closed.** A `.tsx`-less `.tsj` tileset named from a
   `.tmx` is refused with the right sentence, and per-tile features hidden in
   an embedded `.tmj` tileset no longer slip past the named refusals.
+
+- **The timeline is edited as a range.** Drag across the grid to select a
+  rectangle of cells — `Shift`+click extends it, `Esc` drops it — and the
+  cell menu's **Range** section then acts on all of it at once: copy and paste
+  cels (the clipboard is shared between tabs, and a link inside the copied
+  block comes back as one drawing rather than as copies), clear, link, unlink,
+  duplicate, reverse, delete, and set every frame's duration in one go. Each is
+  a single `Ctrl+Z` and each is refused rather than half-applied. **Thumbs**
+  draws each cel's picture in its cell, linked cels sharing one thumbnail, so a
+  held background reads as the same drawing standing in several columns.
+- **A preview pane that does not stop when you draw.** It plays the clip in the
+  corner of the right column on a *second* playhead: it never locks the
+  document, never moves the frame under your brush, and updates within a
+  quarter second of each stroke — which is the thing an animator actually
+  does, where the timeline's Play button ("watch this") was the only offer
+  before. A **speed** multiplier from 0.25x to 4x and a **scope** — the whole
+  clip, or the tag the preview is inside, with its direction, looping and
+  repeat count. It always draws upright, ignoring a turned or mirrored canvas
+  view, because those are aids for drawing and this is a check on the result.
+- **Tags repeat a fixed number of times.** Set a tag's **repeat** to 3 and the
+  span plays three times and stops; 0 — the default, and what every document
+  written before this carries — leaves the Loop tick deciding as it always
+  did. Playback stops *inside* the tag rather than falling through into the
+  frames after it, which is a deliberate divergence from Aseprite. Counts are
+  saved, ride into a sprite sheet's sidecar, and a tag exported on its own as a
+  GIF carries its count into the file.
+- **Filters run over a range.** With cells selected the filter popup gains
+  **Apply to range** and runs over every cel in it as one undo step. A linked
+  cel is filtered once however many frames it appears on, an empty cel stays
+  empty rather than becoming a filtered blank, and a feathered selection fades
+  the filter in on every frame at once.
+- **The exports grew the options an engine actually asks for.** A whole-number
+  **scale** box magnifies every export nearest-neighbour, so a 32×32 sprite at
+  8× is the artwork at 256×256 rather than a blurred version of it — and a
+  sheet's sidecar is built on the scaled size, so it describes the file that
+  was written. **Export PNGs** writes one numbered frame per file for an engine
+  with its own importer. **Export range → sheet / → GIF** and **Export tag →
+  sheet / → GIF** write only part of a clip, renumbering the tags against the
+  frames actually exported and dropping a directional layout, because half a
+  walk sheet is a clip rather than a smaller walk sheet. **Import sprite
+  sheet** goes the other way: any image, a cell size, an offset, the padding
+  and a frame count become one frame per cell, with the arithmetic checked as
+  you type instead of a short sheet imported in silence.
+- **Slices, and they travel.** The `C` tool names a rectangle on the canvas —
+  drag it, resize it, give it a name, a draggable **pivot** and a nine-slice
+  centre, and key any of those per frame on an animated document. They carry
+  through a flip, a turn, a scale, a crop and a canvas resize, and they ride
+  into an exported sheet's sidecar, into Packwright's atlas and its
+  TexturePacker JSON (in source-image coordinates, so trimming cannot move
+  them), and into a `.wpack`. **Export slices as PNGs** cuts each one out on
+  its own. They are stored in a member of the `.ora` written only when there
+  are some, so a document with no slices saves byte-for-byte as it always did.
+- **Seamless tiles are painted seamlessly.** **Tiled** has four positions —
+  off, X, Y, X+Y — and draws the neighbouring tiles around the one you are
+  working on, so all four seams are visible at once. Everything that lays down
+  colour wraps with it: the brush, the eraser, the spray, the fill (a region
+  running off one edge and continuing on the other is one region), the shapes
+  and the magic wand. Three deliberately do not — smudge stops at the edge,
+  blur wraps but does not read across the seam, and a gradient never wraps,
+  because a ramp has two ends and joining them puts a hard edge exactly where
+  this mode exists to remove one.
+- **Three new ways to lay down colour.** The brush gains a **replace** ink that
+  writes the colour exactly, alpha included, so it paints transparency *down*
+  as well as up — what recolouring flat pixel art wants and what a normal
+  brush cannot do at all. **Spray** (`A`) emits scattered dabs at a rate for as
+  long as the button is held, its size being the width of the cloud. And
+  **Shading** (`H`) paints no colour at all: it moves every pixel you drag over
+  one swatch along the palette ramp you selected in the Colour panel, one step
+  per stroke, leaving anything not on the ramp alone — which is how shading is
+  actually done in pixel art.
+- **Three clicked shapes and a polygonal lasso.** **Polyline** (`L`),
+  **polygon** (`O`) and **curve** (`F`) drop a point per click, finish on a
+  double-click or `Enter` and land as one undo step; the curve runs *through*
+  every point rather than near it. **Poly lasso** (`D`) is the same gesture for
+  a selection. The right mouse button now paints with the background colour on
+  the brush, the eraser and the fill — the three where "the other colour" is
+  unambiguous — and it stays inert everywhere else. The Move tool has a third
+  answer as well: with nothing selected and nothing floating, dragging moves
+  the whole active layer, one undo step, a linked cel moving on every frame it
+  appears on.
+- **A text tool.** `T`, click, type: a font, a size in pixels and an antialias
+  switch that starts *off* on an indexed document. There are no text objects
+  and no text layers — what you get is pixels, as a floating selection, so
+  every tool and every filter applies with nothing to flatten first, and the
+  other half of that trade is that re-editing text is retyping it (the box
+  remembers what you last typed).
+- **Image brushes and tool presets.** **Capture from selection** makes the tip
+  of the tool in your hand out of part of your drawing — a tip rather than a
+  tool of its own, so symmetry, the spray, tiled mode and the selection clip
+  all come with it. Rotate and flip give the variants without resampling a
+  pixel, **aligned** placing snaps dabs to a lattice so stamps tile, and a
+  stroke never builds up on itself however slowly it is dragged. A **preset**
+  stores one tool's options under a name between sessions — the colours, the
+  grid and the symmetry deliberately not among them.
+- **Layers got folders, a lock and animated merges.** **Group** wraps layers in
+  a folder that folds visibility, opacity and the lock down onto its contents,
+  composites pass-through, refuses to be made around layers that are not
+  adjacent, dissolves when the last one leaves, and round-trips through
+  OpenRaster's own nested stacks — so a folder made here opens as a group in
+  Krita and vice versa. **Lock layer** refuses every tool on that layer while
+  leaving renaming, hiding, reordering and deleting alone, and undo still works
+  underneath it. **Merge down** and **Flatten** now work on an animated
+  document, across every frame at once: a merge is worked out per pair of cels,
+  so frames that shared a drawing go on sharing the merged one instead of each
+  getting a copy.
+- **Selections and transform go deeper.** `Ctrl+Shift+D` brings back the
+  selection you last dismissed; dragging inside a selection moves its *edges*
+  rather than its pixels; `Ctrl+J` and `Ctrl+Shift+J` promote a selection onto
+  a layer of its own, copying or cutting. The transform box gains edge handles
+  for non-uniform scale, a **slant** (an italic, in two degrees), and typed
+  **X/Y/W/H/Angle/Slant** fields — because a drag cannot express "exactly 90
+  degrees". **RotSprite** joins Smooth and Nearest as a resample mode: it turns
+  pixel art on an eight-times lattice and samples back down, so a diagonal
+  keeps its own colours instead of coming out as a staircase.
+- **Seven more blend modes, four more filters.** `exclusion`, `subtract`,
+  `divide`, `hue`, `saturation`, `color` and `luminosity` take the set to
+  nineteen — the W3C formulas OpenRaster is defined against, with the two the
+  W3C has no name for written under Krita's, so a file composites identically
+  in Krita and GIMP rather than approximately. The filter popup gains
+  **invert** (per channel), **replace colour** (a From, a To and a tolerance),
+  **outline** (colour, thickness, inside or outside, rounded or square corners,
+  and wrap for a tile) and **despeckle** (a median, so it deletes strays
+  outright and leaves hard lines hard).
+- **Palettes became a workflow rather than a switch.** **Convert...** builds a
+  table out of a drawing's own colours (2 to 64) and shows you the result
+  before you commit, with the dither picked from nearest, Floyd–Steinberg or
+  an ordered 2×2/4×4/8×8 matrix; **Palette from an image...** takes any image's
+  colours instead. The table itself now has multi-select, **Sort** by hue,
+  saturation, brightness, a channel or usage (selected slots sorting in place,
+  so one ramp straightens without the rest of the table moving), **Insert** for
+  an interpolated run between two slots, **Count usage**, and export to a JASC
+  `.pal` beside the GIMP `.gpl`. The gradient tool gained a **dither** of its
+  own, which throws the blend away and gives every pixel one of the stops —
+  the point being a ramp that lands only on colours you chose.
+- **An Aseprite file opens here.** **Import Aseprite file** reads an
+  `.aseprite`/`.ase` and rebuilds the layers with their opacities, blend modes
+  and locks, the groups with their nesting, the frames with their durations,
+  the tags with their spans, directions and repeat counts, the slices with
+  their pivots and centres, and the shared cels as links. Reading only, and it
+  shows: the import opens as an *unsaved* document, so the first `Ctrl+S` writes
+  an `.ora` — nothing here can write back over the `.aseprite`, because a
+  format read by one program and written by another is how a day's work goes
+  missing. What cannot come across is told apart on purpose: anything that
+  changes what the pixels mean (a tilemap layer, an unreadable colour depth) is
+  a named refusal, and anything cosmetic (colour profiles, user data, per-cel
+  opacity, a cel's z-index) is a message with the file still opening.
+- **Tablet pressure was investigated and declined.** The pen route was priced
+  properly rather than guessed at: pygame's vendored SDL2 exports no pen API at
+  all, and the Windows Ink route is a `WndProc` subclass whose engine-side half
+  is a brush-dynamics decision rather than two defaulted parameters. The
+  velocity-driven taper already produces a pen-like stroke from a signal the app
+  definitely has, so it stands, and nothing in the brush was touched.
+  `docs/measurements/2026-08-15-tablet-pressure-spike.md` is the evidence and
+  the order to revisit it in.
 
 ## 0.0.21 — 2026-08-11
 
