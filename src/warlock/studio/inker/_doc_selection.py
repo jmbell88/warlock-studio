@@ -17,6 +17,7 @@ from . import composite as cp
 from . import transform as tf
 from .anim_edits import TrackAddEdit
 from .animation import Track
+from .brush import MAX_STAMP, Stamp
 from .layers import Layer
 from .selection import FloatingBuffer, SelectionMask, magic_wand
 from .undo import CompoundEdit, LayerAddEdit, PatchEdit, SelectionEdit
@@ -390,6 +391,42 @@ class SelectionOps:
     def cut(self: Document) -> bool:
         return self.copy() and self.delete_selection()
 
+    def capture_stamp(self: Document, mask: SelectionMask | None = None) -> Stamp | None:
+        """The selection, lifted as a brush tip. ``None`` when there is none.
+
+        Aseprite's "new brush from selection", and it is :meth:`copy` rather
+        than :meth:`lift`: capturing a brush *reads* the drawing, so it cuts
+        nothing, pushes no undo step, autovivifies no cel and is legal on a
+        content-locked layer. The pixels come through ``_masked_alpha`` -- the
+        one invariant a lift, the clipboard and a promoted layer all share -- so
+        a feathered or lasso selection captures a feathered tip rather than its
+        bounding box, and the tip's own alpha *is* the dab's coverage with no
+        second mask to carry.
+
+        The **active layer**, not the composite, for the reason
+        ``eyedrop(layer_only=True)`` exists and the reason ``copy`` reads the
+        same plane: "make a brush out of this" is a question about the drawing
+        the user is working on, and a capture that folded in the layers under it
+        would pick up a background nobody selected.
+
+        Two answers are ``None`` and the caller has to tell them apart, which it
+        can: no selection at all, and a selection whose bounds exceed
+        :data:`.brush.MAX_STAMP` a side. Refused rather than cropped or scaled --
+        both would hand back a brush that is not the thing that was selected.
+        """
+        mask = mask or self.mask
+        if mask is None:
+            return None
+        bounds = mask.bounds
+        box = self.clip(bounds) if bounds else None
+        if box is None:
+            return None
+        x0, y0, x1, y1 = box
+        if max(x1 - x0, y1 - y0) > MAX_STAMP:
+            return None
+        crop = mask.mask[y0:y1, x0:x1]
+        return Stamp(_masked_alpha(self.stack.active.pixels[y0:y1, x0:x1], crop))
+
     # -- free transform -----------------------------------------------------
 
     def begin_transform(self: Document) -> bool:
@@ -592,14 +629,20 @@ class SelectionOps:
     def float_pixels(self: Document, pixels: np.ndarray, at: tuple[int, int]) -> bool:
         """Float an array made somewhere else, at ``at``. The paste rule, exactly.
 
-        The delivery route for everything that *generates* pixels rather than
-        lifting them: the text stamp today (C14), image brushes when they
-        arrive. Every one of those wants the same four things -- put it down
-        where I clicked, let me move it, let me commit it, let me take it back
-        -- and a floating buffer is that, already written and already tested. A
-        generator that wrote into the layer directly would have to reinvent
-        placement, the drag, the transform box and the undo step, and would get
-        a different answer for each.
+        The delivery route for everything that *generates* pixels and then
+        wants them **placed**: the text stamp (C14) is the one that does. Such a
+        generator wants the same four things -- put it down where I clicked, let
+        me move it, let me commit it, let me take it back -- and a floating
+        buffer is that, already written and already tested; writing into the
+        layer directly would mean reinventing placement, the drag, the transform
+        box and the undo step, with a different answer for each.
+
+        **Image brushes deliberately do not come through here**, though they
+        were expected to. A captured tip is not one picture being positioned: it
+        is a *dab*, emitted repeatedly along a stroke, and it needs the spacing
+        walk, symmetry, the spray's emission, tiled wrapping and per-dab
+        coverage accumulation -- none of which a floating buffer has and all of
+        which ``StrokeState`` already does. See :meth:`.brush.StrokeState._place`.
 
         It is ``paste`` in every respect that can be observed:
 

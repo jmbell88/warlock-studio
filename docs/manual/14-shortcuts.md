@@ -200,6 +200,7 @@ left-drag in empty space with `Q` selected sweeps a marquee.
 | Ctrl+Shift+V | Paste as a new layer |
 | Ctrl+Shift+I | Invert the selection |
 | Ctrl+T | Free transform (Enter applies, Esc cancels) |
+| Ctrl+B | Capture the selection as the brush tip |
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab |
 | Ctrl+0 / Ctrl+1 | Fit to the pane / 100% |
 | Ctrl+4 / Ctrl+Shift+4 | Turn the view a quarter clockwise / anticlockwise |

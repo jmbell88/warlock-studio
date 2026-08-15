@@ -233,6 +233,56 @@ one, and otherwise the whole layer while the Move tool is in your hand — each 
 step. Nudging is gated on the Move tool rather than global because quietly translating a layer
 because somebody pressed Right with the brush selected is not a trade worth making.
 
+### Image brushes
+
+Select part of your drawing and press **Capture from selection** in the brush's options: what you
+selected becomes the brush tip, and the brush picks it up straight away. It reads the active layer
+and cuts nothing, so what you captured from is untouched, and a lasso or feathered selection makes
+a tip of that shape rather than of its bounding box.
+
+The tip is not a tool of its own — it replaces the *tip* of the tool in your hand, so everything
+that tool already does comes with it: symmetry mirrors where the stamps land, the spray scatters
+them, tiled mode wraps them at the seam, the selection clips them and a layer's transparency lock
+holds against them. It works on the brush, the eraser and the spray; the eraser with a tip loaded
+cuts a hole exactly the shape of the picture.
+
+**Rotate**, **Flip H** and **Flip V** give the variants. They cycle — four presses of Rotate is
+where you started — and each is taken from the capture rather than from the last variant, so a
+rotate and a flip give the same tip whichever order you press them in. Nothing is resampled: a
+variant is the captured pixels reindexed, to the byte. **Forget** drops the tip and puts the round
+brush back everywhere.
+
+**Placing** decides where a dab lands. **Free** puts the picture under the cursor, which is what a
+brush does. **Aligned to a grid** snaps every dab to a lattice of the tip's own size anchored on the
+canvas, so neighbouring stamps line up into a pattern instead of meeting wherever the mouse happened
+to be — and going over the same square twice changes nothing at all. The lattice belongs to the
+canvas rather than to the stroke, so a pattern laid down in two sittings still tiles.
+
+**A stroke never builds up on itself, either way.** Dragging a half-transparent tip slowly over one
+spot leaves exactly what a single dab leaves, and a stroke drawn on a slow machine is the same
+picture as the same stroke on a fast one. Lift the button and stamp again to put one picture over
+another — that is what makes a second pass a second pass. The whole drag is one undo step, however
+many stamps it laid.
+
+Two things a tip does not do. It is not scaled by the **Size** slider and has no **Hardness**:
+those shape a generated falloff, and a captured picture has none, so scaling it per dab would mean
+resampling your own pixels several times a frame. And the brush's **ink** control disappears while
+a tip is loaded, because a captured tip's transparency *is* its shape and there is nothing left for
+a copy ink to write.
+
+### Tool presets
+
+Type a name beside **Save** in the presets section and the options of the tool in your hand are
+stored under it; clicking the name later picks that tool back up with those settings, and the `x`
+beside it removes it. Presets are remembered between sessions.
+
+A preset is one tool's options and nothing else. The colours, the symmetry, the grid and the onion
+skin are not in it — they belong to the canvas or to the sitting rather than to a tool, and a preset
+that dragged them along would turn "my inking pen" into "my inking pen, and also switch the grid
+off". The captured image tip is not in one either: it is pixels rather than a setting, and it is
+captured again from the drawing, which is where it came from. What *is* stored is the tick that says
+to use one.
+
 ## Text
 
 The `T` **Text** tool puts a word on the canvas. Click where you want it and a box opens: type the

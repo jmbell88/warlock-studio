@@ -61,6 +61,42 @@ SHADE_COVERAGE = 0.5
 
 SYMMETRY = ("none", "x", "y", "xy", "radial")
 
+#: The modes an image stamp is honoured for. A stamp handed to any other is
+#: dropped at ``__post_init__`` rather than half-applied -- it is a tip that
+#: stays loaded while the user tries another tool.
+#:
+#: Blur, smudge and shade are out because they decide what they write from what
+#: is already on the layer, so there is nothing for a picture to say to them.
+#:
+#: **``replace`` is out for a subtler reason worth stating.** For a generated
+#: disc, coverage and colour are two independent quantities -- the disc says how
+#: much, the swatch says what -- and a copy ink is what lets the swatch's alpha
+#: be written *down* rather than composited up. A captured picture has only one:
+#: its alpha is both its shape and its transparency (that is the invariant
+#: ``_masked_alpha`` gives a capture, and it is what makes a lasso-captured tip
+#: stamp its shape rather than its bounding box). So "write this alpha verbatim"
+#: and "cover this much" are the same number, and there is nothing left for a
+#: copy ink to express. The brush's ink radio is hidden while a tip is loaded,
+#: so the two settings never contradict each other on screen.
+STAMP_MODES = ("paint", "erase")
+
+#: Where an image stamp's dabs land; see :meth:`StrokeState._image_dab`.
+#:
+#: ``free`` puts the picture under the cursor, which is what a brush does.
+#: ``aligned`` snaps every dab to a lattice of the stamp's own size anchored at
+#: the canvas origin, which is what a *pattern* does -- and which is what makes
+#: dragging back and forth over one cell idempotent to the byte.
+STAMP_ALIGN = ("free", "aligned")
+
+#: The largest image that may become a brush tip, per side.
+#:
+#: Not an engine limit -- numpy is happy with anything -- but a limit on what a
+#: *dab* may cost. A dab is stamped per spacing step and the spacing is a
+#: fraction of the tip, so a 2048-square tip is a 16 MiB read-modify-write
+#: several times a frame for the whole drag. 512 is larger than any brush tip a
+#: user draws and small enough that the worst case is a few milliseconds.
+MAX_STAMP = 512
+
 #: The three nibs, and the split is between *antialiased* and *not*.
 #:
 #: ``soft`` is the disc this brush has always stamped: a smoothstep falloff with
@@ -287,6 +323,124 @@ def is_corner(a: tuple[int, int], b: tuple[int, int], c: tuple[int, int]) -> boo
     return b in ((a[0], c[1]), (c[0], a[1]))
 
 
+def _variant(source: np.ndarray, rotation: int, flip_x: bool, flip_y: bool) -> np.ndarray:
+    """One transform of a stamp's pixels. **Flips first, then the rotation.**
+
+    An order has to be picked because the two do not commute -- a flip then a
+    quarter turn is not a quarter turn then a flip -- and this one is picked so
+    that the two flip toggles keep meaning "mirror the picture I drew" no matter
+    which turn is showing. The alternative (rotate first) makes the horizontal
+    flip button mirror vertically at 90 degrees, which reads as a bug in the
+    button rather than as an order of operations.
+
+    Every step is an exact reindexing of the source bytes -- no resampling, no
+    interpolation, nothing that could tint a pixel -- so a variant of a captured
+    brush is byte-identical to the same variant taken by hand.
+    """
+    out = source
+    if flip_x:
+        out = out[:, ::-1]
+    if flip_y:
+        out = out[::-1, :]
+    turns = (int(rotation) // 90) % 4
+    if turns:
+        # Negative k, because ``rot90`` turns anticlockwise and ``rotation`` is
+        # clockwise -- the direction the canvas's own view rotation uses, and
+        # the direction a "rotate" button is read as everywhere.
+        out = np.rot90(out, -turns)
+    return np.ascontiguousarray(out)
+
+
+@dataclass(frozen=True, eq=False)
+class Stamp:
+    """An image used as a brush tip: the pixels, plus which variant is showing.
+
+    The other half of :func:`make_stamp`, and deliberately the same word: both
+    are "what one dab lays down", one computed from a radius and one captured
+    from the drawing. What makes this a *brush* rather than a paste is that it
+    goes through :meth:`StrokeState._dab` like every other dab, so symmetry, the
+    selection clip, the alpha lock, tiled wrapping, the spray's emission and the
+    single-patch undo all apply to it with no code of its own.
+
+    Immutable, and the pixels are write-locked, for :func:`make_stamp`'s reason:
+    one capture is held by the app for the rest of the session and handed to
+    every stroke drawn with it, so a caller scaling or drawing into one in place
+    would silently change every stroke still to come. The variants are the same
+    object with a different ``rotation``/``flip``, computed once at construction
+    -- a variant is made by a button click and then used for thousands of dabs.
+
+    Equality is identity (``eq=False``): a dataclass ``__eq__`` over an ndarray
+    field returns an array, and the first ``stamp == other`` anywhere would
+    raise about an ambiguous truth value.
+    """
+
+    #: The captured pixels, ``(H, W, 4)`` uint8, in their untransformed
+    #: orientation. Read-only.
+    pixels: np.ndarray
+    #: Clockwise, one of 0/90/180/270. Anything else is snapped to a quarter.
+    rotation: int = 0
+    flip_x: bool = False
+    flip_y: bool = False
+    #: ``pixels`` with the flips and the rotation applied; what a dab reads.
+    image: np.ndarray = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        source = np.ascontiguousarray(np.asarray(self.pixels, dtype=np.uint8))
+        if source.ndim != 3 or source.shape[2] != 4 or min(source.shape[:2]) < 1:
+            raise ValueError("a stamp is a (H, W, 4) uint8 image")
+        if max(source.shape[:2]) > MAX_STAMP:
+            raise ValueError(f"a stamp may not exceed {MAX_STAMP} pixels a side")
+        source.setflags(write=False)
+        image = _variant(source, self.rotation, bool(self.flip_x), bool(self.flip_y))
+        image.setflags(write=False)
+        # ``object.__setattr__`` because the dataclass is frozen; this is the
+        # documented way to fill a derived field on one.
+        object.__setattr__(self, "pixels", source)
+        object.__setattr__(self, "rotation", (int(self.rotation) // 90 % 4) * 90)
+        object.__setattr__(self, "flip_x", bool(self.flip_x))
+        object.__setattr__(self, "flip_y", bool(self.flip_y))
+        object.__setattr__(self, "image", image)
+
+    @property
+    def size(self) -> tuple[int, int]:
+        """``(width, height)`` of the variant that is showing -- so a quarter
+        turn of a tall stamp reports a wide one, which is what places it."""
+        return (int(self.image.shape[1]), int(self.image.shape[0]))
+
+    @property
+    def step(self) -> int:
+        """What ``spacing`` is a fraction of, standing in for a diameter.
+
+        The longer side rather than the shorter or the mean: spacing is "how far
+        apart the dabs are as a share of the dab", and taking the short side of
+        a long thin tip would put a hundred stamps where the user asked for ten.
+        """
+        width, height = self.size
+        return max(width, height)
+
+    def rotated(self, quarters: int = 1) -> Stamp:
+        """The next quarter turn clockwise. The variants *cycle* -- four turns
+        is where you started -- because the control is one button pressed
+        repeatedly rather than a number to be typed."""
+        return Stamp(
+            self.pixels,
+            rotation=self.rotation + 90 * int(quarters),
+            flip_x=self.flip_x,
+            flip_y=self.flip_y,
+        )
+
+    def flipped(self, axis: str) -> Stamp:
+        """Toggle one mirror. ``"x"`` mirrors left-to-right, ``"y"`` top-to-
+        bottom -- the axis the flip is *about*, which is how the transform menu
+        beside it already names the pair."""
+        return Stamp(
+            self.pixels,
+            rotation=self.rotation,
+            flip_x=self.flip_x if axis != "x" else not self.flip_x,
+            flip_y=self.flip_y if axis != "y" else not self.flip_y,
+        )
+
+
 @dataclass
 class StrokeState:
     """One stroke, from press to release, on one layer.
@@ -354,6 +508,13 @@ class StrokeState:
     #: Which way along the ramp a shade dab moves: +1 toward its end, -1 toward
     #: its start. Clamped at both ends rather than wrapping -- see :meth:`_shade`.
     shade_dir: int = 1
+    #: The image this stroke stamps instead of a coverage disc, or None for
+    #: every stroke this class drew before image brushes existed. Dropped in
+    #: ``__post_init__`` for a mode that has no colour of its own to place; see
+    #: :data:`STAMP_MODES`.
+    stamp: Stamp | None = None
+    #: One of :data:`STAMP_ALIGN`. Meaningless without a stamp.
+    stamp_align: str = "free"
 
     coverage: np.ndarray = field(init=False)
     dirty: tuple[int, int, int, int] | None = field(init=False, default=None)
@@ -384,10 +545,20 @@ class StrokeState:
     #: of dabs and the ramp cannot change inside one.
     _ramp_keys: np.ndarray | None = field(init=False, default=None, repr=False)
     _ramp_rgb: np.ndarray | None = field(init=False, default=None, repr=False)
+    #: Which lattice cells an *aligned* image stroke has already stamped. A
+    #: performance guard rather than a semantic one: re-stamping a cell writes
+    #: exactly the same bytes (that is what alignment buys), so skipping it
+    #: cannot change the picture -- it only stops a stationary cursor doing a
+    #: full-tip composite every frame for as long as the button is held.
+    _cells: set[tuple[int, int]] = field(init=False, default_factory=set, repr=False)
 
     def __post_init__(self) -> None:
         width, height = self.size
         self.coverage = np.zeros((height, width), dtype=np.float32)
+        if self.stamp is not None and self.mode not in STAMP_MODES:
+            self.stamp = None
+        if self.stamp_align not in STAMP_ALIGN:
+            self.stamp_align = STAMP_ALIGN[0]
         self.diameter = clamp_brush(self.diameter)
         self.stabilise = min(MAX_STABILISE, max(0.0, float(self.stabilise)))
         self.speed_taper = min(1.0, max(0.0, float(self.speed_taper)))
@@ -408,12 +579,21 @@ class StrokeState:
 
     @property
     def step(self) -> float:
+        if self.stamp is not None:
+            return max(0.5, self.stamp.step * self.spacing)
         return max(0.5, self.diameter * self.spacing)
 
     @property
     def pixel(self) -> bool:
-        """Whether this stroke walks whole pixels rather than the spacing."""
-        return self.nib in PIXEL_NIBS
+        """Whether this stroke walks whole pixels rather than the spacing.
+
+        Never, with an image stamp, whatever the nib says. The pixel walk emits
+        a dab per whole pixel along the line -- which is what a one-pixel pencil
+        wants and is a full-tip composite per pixel of travel for anything else.
+        The nib is not refused, because it is a checkbox that stays ticked while
+        the user tries a captured brush; it is simply not what places a picture.
+        """
+        return self.stamp is None and self.nib in PIXEL_NIBS
 
     def begin(self, point: tuple[float, float], target: np.ndarray) -> None:
         """A click is one dab -- press must mark, not wait for a drag.
@@ -600,6 +780,14 @@ class StrokeState:
         return (False, False) if self.mode == "smudge" else self.wrap_axes
 
     def _stamp(self, point: tuple[float, float], target: np.ndarray, diameter: int) -> None:
+        if self.stamp is not None:
+            # Before the disc is even asked for. Hardness, the nib and the speed
+            # taper all describe a *generated* falloff, and a captured picture
+            # has none of the three: scaling it per dab would mean resampling
+            # the user's own pixels several times a frame, which is a different
+            # tool (a scaled brush) rather than this one honouring a slider.
+            self._image_dab(point, target)
+            return
         # 1.0 rather than ``self.hardness`` for a pixel nib: neither reads it,
         # and passing it through would key the shared stamp cache on a value
         # that cannot change the answer.
@@ -639,6 +827,137 @@ class StrokeState:
             # small canvas, and a multi-rect edit type would need eviction
             # accounting of its own for a saving measured in kilobytes.
             self._mark(rect)
+
+    def _image_dab(self, point: tuple[float, float], target: np.ndarray) -> None:
+        """One dab of an image stamp: where it lands, and its wrapped pieces.
+
+        **Two placements, and the difference between them is the whole of the
+        overlap question.**
+
+        *Free* centres the picture on the cursor, which is what a brush does.
+        Consecutive dabs then overlap by whatever the spacing left over, and the
+        accumulation rule in :meth:`_place` is what stops that compounding.
+
+        *Aligned* snaps the dab to a lattice of the stamp's own size, phased on
+        the canvas origin -- so every position inside one cell produces the
+        **same rectangle of the same pixels**. Dragging back and forth over a
+        cell therefore restamps it identically, and identical is idempotent
+        under the coverage-max rule below: the second visit adds no coverage and
+        writes nothing. That is what makes this mode a *pattern* -- two strokes
+        that cover the same area produce the same picture, and two neighbouring
+        cells line up rather than meeting at a seam wherever the mouse happened
+        to be. The lattice is anchored on the canvas rather than on the press,
+        so it is the same lattice in every stroke, on every layer and on every
+        frame, which is the only anchoring under which a pattern painted in two
+        sittings still tiles.
+        """
+        stamp = self.stamp
+        assert stamp is not None
+        width, height = stamp.size
+        if self.stamp_align == "aligned":
+            left = math.floor(math.floor(point[0]) / width) * width
+            top = math.floor(math.floor(point[1]) / height) * height
+            if (left, top) in self._cells:
+                return
+            self._cells.add((left, top))
+        else:
+            # The same anchoring the pixel nib uses: floor to the pixel the dab
+            # is on, then grow left and up by half the tip. An even tip has no
+            # centre pixel, so it grows down and right -- consistent with the
+            # disc, and a half-pixel choice that a picture with a hard edge
+            # would otherwise make visible as a one-pixel jitter along a stroke.
+            left = int(math.floor(point[0])) - width // 2
+            top = int(math.floor(point[1])) - height // 2
+        for rect, (sx, sy) in tiling.pieces(
+            (left, top, left + width, top + height), self.size, self._axes
+        ):
+            x0, y0, x1, y1 = rect
+            self._place(stamp.image[sy : sy + (y1 - y0), sx : sx + (x1 - x0)], rect, target)
+            self._mark(rect)
+
+    def _place(
+        self, piece: np.ndarray, rect: tuple[int, int, int, int], target: np.ndarray
+    ) -> None:
+        """Composite one image dab onto the **live** layer, coverage-max.
+
+        The ``_filter`` path rather than the ``_resolve`` one, and for a reason
+        of arithmetic rather than of taste: ``_resolve`` recomputes a region
+        from ``before`` and one coverage number, which works because every dab
+        of a paint stroke lays down the *same colour*. An image stamp lays down
+        a different colour per pixel per dab, so "recompute from the pre-stroke
+        pixels" would need the whole stroke's colours kept as well -- a
+        canvas-sized RGBA plane, four times what the coverage buffer costs, to
+        defend against a compounding this does not have.
+
+        **The overlap rule: coverage still accumulates with maximum**, exactly
+        as the class docstring says it does for every other dab, and this is how
+        that survives a live composite. ``self.coverage`` keeps the greatest
+        coverage this stroke has laid at each pixel. A dab writes not its own
+        alpha but the *increment* that takes the pixel from that recorded
+        coverage to its own::
+
+            share = (a - covered) * opacity / (1 - covered * opacity)
+
+        Composite that over what is already there and the stroke's total
+        contribution comes out at exactly ``max(a, covered) * opacity`` -- the
+        identity ``1 - (1 - share)(1 - covered * opacity) = a * opacity``. So a
+        half-transparent tip dragged slowly over itself is half-transparent,
+        not opaque; a stroke drawn at two frames a second and the same stroke
+        drawn at sixty are the same picture; and a spray of image dabs does not
+        darken where the cloud happens to be dense.
+
+        Where a dab covers a pixel *less* than the stroke already has, its share
+        is zero and it writes nothing -- so within one stroke the first dab to
+        reach a pixel at full alpha owns its colour. That is a real divergence
+        from Aseprite, where a later stamp paints over an earlier one, and it is
+        the price of a path that never rewrites a pixel it has already shown.
+        Lift the button and stamp again to put a picture *over* one already
+        placed: coverage is per stroke, so a second stroke starts clear.
+
+        Erasing rides the same increment from the other side: it multiplies
+        alpha by ``1 - share`` per dab, and that product telescopes to
+        ``1 - max(a)`` by the same identity -- so an image-shaped eraser cuts
+        exactly the tip's alpha however many times it passes over.
+        """
+        x0, y0, x1, y1 = rect
+        src = piece.astype(np.float32)
+        alpha = self._weights(rect, src[..., 3] / 255.0)
+        if self.clip is not None:
+            alpha = np.minimum(alpha, 1.0)
+
+        covered = self.coverage[y0:y1, x0:x1]
+        gain = np.clip(alpha - covered, 0.0, None) * self.opacity
+        denominator = 1.0 - covered * self.opacity
+        share = np.divide(
+            gain, denominator, out=np.zeros_like(gain), where=denominator > 0.0
+        )
+        # After the share is computed from it, never before.
+        np.maximum(covered, alpha, out=covered)
+        if not share.any():
+            return
+
+        crop = target[y0:y1, x0:x1].astype(np.float32)
+        if self.mode == "erase":
+            out = crop.copy()
+            out[..., 3] = crop[..., 3] * (1.0 - share)
+        else:
+            # ``composite.paint_colour``'s formula with a per-pixel colour --
+            # which is why it is spelled out here rather than called: that one
+            # takes a single RGBA. Straight alpha throughout, so stamping onto
+            # emptiness gives the tip's colours rather than the tip faded
+            # toward black.
+            dst_a = crop[..., 3] / 255.0
+            out_a = share + dst_a * (1.0 - share)
+            frac = np.divide(share, out_a, out=np.zeros_like(share), where=out_a > 0.0)
+            out = np.empty_like(crop)
+            out[..., :3] = crop[..., :3] + (src[..., :3] - crop[..., :3]) * frac[..., None]
+            out[..., 3] = out_a * 255.0
+        if self.alpha_lock:
+            # Restored from the live crop rather than from ``before``, which is
+            # the same value: the lock is applied on every dab, so this stroke
+            # has never moved the channel.
+            out[..., 3] = crop[..., 3]
+        target[y0:y1, x0:x1] = composite.to_uint8_255(out)
 
     def _weights(self, rect: tuple[int, int, int, int], piece: np.ndarray) -> np.ndarray:
         """Stamp coverage after the selection clip. One multiply -- which is
