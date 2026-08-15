@@ -1107,11 +1107,32 @@ def begin_transform(ctx: Any, tab: InkerDoc | None = None) -> None:
     if tab.doc.begin_transform():
         state.transforming = True
         state.clear_drag()
+        _warn_rotsprite(ctx, state, tab)
     elif tab.doc.write_locked():
         # The one refusal worth saying out loud from here: a transform lifts,
         # and a lift is a cut. Every other way of reaching a locked layer goes
         # through the canvas, which raises its own toast on the press.
         ctx.toast("That layer is locked. Unlock it in the layers panel.", "warn")
+
+
+def _warn_rotsprite(ctx: Any, state: Any, tab: InkerDoc) -> None:
+    """Say once, at the start of the gesture, that RotSprite will not be used.
+
+    Once and here rather than at the engine's fallback, because the fallback is
+    reached on every mouse-move of a rotate drag: a toast per frame would be
+    the loudest bug in the editor. The engine falls back silently for exactly
+    that reason -- see ``transform.ROTSPRITE_MAX_PIXELS``.
+    """
+    from .inker import transform
+
+    buf = tab.doc.floating
+    if state.resample != "rotsprite" or buf is None:
+        return
+    if transform.rotsprite_fits(buf.size):
+        return
+    ctx.toast(
+        "Too big for RotSprite -- rotating with nearest neighbour instead.", "warn"
+    )
 
 
 def end_transform(ctx: Any, *, commit: bool) -> None:

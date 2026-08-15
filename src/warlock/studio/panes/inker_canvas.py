@@ -246,6 +246,14 @@ def _transform_row(ctx: Any, state: Any, tab: Any) -> None:
         if state.transform_link:
             fx = fy = fx if changed_x else fy
         doc.transform_floating(scale=(fx, fy), resample=state.resample)
+    if state.resample == "rotsprite":
+        from ..inker import transform
+
+        if not transform.rotsprite_fits(buf.size):
+            # The standing version of the toast Ctrl+T raised once: a drag
+            # re-renders every frame and cannot say this every time, but the
+            # user is looking at this row the whole while.
+            widgets.muted("Too big for RotSprite -- turning with nearest neighbour.")
     imgui.separator()
 
 

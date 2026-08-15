@@ -147,10 +147,16 @@ def test_the_modifiers_cover_the_engines_whole_vocabulary():
     assert reachable == set(selection.COMBINE_OPS)
 
 
-def test_the_resize_popup_offers_both_resamples():
+def test_the_resize_popup_offers_every_resample():
     """Derived from ``transform.RESAMPLES`` at the call site rather than written
-    out, so this asserts the tuple is the one thing there is to offer."""
-    assert transform.RESAMPLES == ("smooth", "nearest")
+    out, so this asserts the tuple is the one thing there is to offer.
+
+    ``rotsprite`` is in it and is deliberately offered to the resize popup too,
+    even though a *scale* asked for it falls through to nearest: the setting is
+    a statement about the kind of art being made rather than about one
+    operation, and hiding it from one control would make it look like two
+    settings."""
+    assert transform.RESAMPLES == ("smooth", "nearest", "rotsprite")
 
 
 def test_every_transform_handle_has_axes_declared_for_it():
