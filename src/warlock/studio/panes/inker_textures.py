@@ -193,6 +193,89 @@ def layer_thumb(ctx: Any, tab: Any, index: int, size: int = 48) -> Any:
     return texture
 
 
+#: How many cel thumbnails one tab may hold at once. A 36-square RGBA texture
+#: is 5.2 KB, so this is about 2.6 MB per tab -- and a fifty-frame clip with
+#: ten tracks is five hundred cells, which is why the cap is a number rather
+#: than "all of them". Least-recently-drawn goes first, which during a scroll
+#: along the timeline is exactly the column that has left the screen.
+CEL_THUMB_CAP = 512
+
+
+def _cel_lru(ctx: Any, uid: str) -> list[str]:
+    key = f"inker_tex:{uid}:cel-lru"
+    order = ctx.state.preview.get(key)
+    if order is None:
+        order = []
+        ctx.state.preview[key] = order
+    return order
+
+
+def cel_thumb(ctx: Any, tab: Any, layer: Any, size: int = 36) -> Any:
+    """A small preview of one cel, for a timeline cell.
+
+    Keyed on the *layer's* uid, so two slots holding one object share one
+    texture -- which is the link made visible for free, and the reason this is
+    not keyed on the slot. Keyed on the layer's own stamp rather than on
+    ``doc.rev`` or the frame stamp for ``frame_texture``'s reason one level
+    down: those move when any cel in the document (or any track in the column)
+    changes, and every cel on screen would re-shrink on a single dab.
+
+    Rides inside the existing ``inker_tex:{uid}:`` naming so ``release_doc``'s
+    prefix sweep collects a closed tab's cels without knowing they exist, and
+    is bounded by ``CEL_THUMB_CAP`` because that sweep only runs at close and a
+    long session on a big clip would otherwise accumulate one texture per cell
+    that was ever scrolled past.
+    """
+    if ctx.viewer is None or layer is None:
+        return None
+    import numpy as np
+    from PIL import Image
+
+    doc = tab.doc
+    if doc.anim is not None and doc.anim.is_placeholder(layer):
+        return None
+    key = _slot(tab.uid, f"cel{layer.uid}")
+    rev_key = f"{key}:rev"
+    at_key = f"{key}:at"
+    order = _cel_lru(ctx, tab.uid)
+    if key in order:
+        order.remove(key)
+    order.append(key)
+    _evict_cel_thumbs(ctx, order)
+
+    stamp = (doc.layer_stamp(layer.uid), size)
+    texture = ctx.state.preview.get(key)
+    if texture is not None and ctx.state.preview.get(rev_key) == stamp:
+        return texture
+    now = time.monotonic()
+    if texture is not None and now - float(ctx.state.preview.get(at_key) or 0.0) < (
+        THUMB_REFRESH_SECONDS
+    ):
+        # Stale but recent (B24), exactly as ``layer_thumb``: keep showing the
+        # last shrink while a stroke is in flight and catch up within a quarter
+        # second of it ending.
+        return texture
+    small = Image.fromarray(layer.pixels, "RGBA").resize((size, size), Image.BOX)
+    data = np.asarray(small, dtype=np.uint8).tobytes()
+    texture = _cached(ctx, key, (size, size), lambda: data)
+    texture.write(data)
+    texture.filter = (ctx.viewer.ctx.NEAREST, ctx.viewer.ctx.NEAREST)
+    ctx.state.preview[rev_key] = stamp
+    ctx.state.preview[at_key] = now
+    return texture
+
+
+def _evict_cel_thumbs(ctx: Any, order: list[str]) -> None:
+    """Drop the least recently drawn cel thumbnails past the cap."""
+    while len(order) > CEL_THUMB_CAP:
+        oldest = order.pop(0)
+        texture = ctx.state.preview.pop(oldest, None)
+        ctx.state.preview.pop(f"{oldest}:rev", None)
+        ctx.state.preview.pop(f"{oldest}:at", None)
+        if texture is not None:
+            docmodes.forget_texture(texture)
+
+
 def checker(ctx: Any) -> Any:
     """A two-square-by-two-square tile, drawn repeated under the canvas."""
     if ctx.viewer is None:

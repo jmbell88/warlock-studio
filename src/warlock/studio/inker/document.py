@@ -168,6 +168,17 @@ class Document(
     #: Plain ints and a drain, so the document goes on knowing nothing about GL:
     #: see ``panes/inker_textures.release_dropped``.
     _dropped_frames: list[int] = field(default_factory=list, repr=False)
+    #: Per-*layer* change counters, keyed by layer uid, beside the per-frame
+    #: ones above and for a different consumer: a cel thumbnail is a picture of
+    #: one cel, and a frame stamp moves whenever any track on that frame does.
+    #: Keying a thumbnail on the frame stamp would re-shrink every cel in a
+    #: column each time one of them was drawn on -- ten uploads for one dab.
+    #:
+    #: Bumped where a *write* is announced (``_stamp_layer``) and by the
+    #: whole-grid paths, and deliberately **not** by ``invalidate_all``: that
+    #: is the composite's cache and most of what reaches it changes no pixels
+    #: at all, which is the same "stamps no frame" lesson stated there.
+    _layer_stamps: dict[int, int] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
         width, height = self.stack.size
@@ -480,6 +491,7 @@ class Document(
         with nothing, and a caller that has just written to the visible canvas
         must not be told its flatten is unchanged.
         """
+        self._layer_stamps[layer_uid] = self._layer_stamps.get(layer_uid, 0) + 1
         if self.anim is None:
             return
         uids = self.anim.frame_uids_of_layer(layer_uid)
@@ -488,8 +500,19 @@ class Document(
         self._stamp(uids)
 
     def _stamp_all(self) -> None:
-        if self.anim is not None:
-            self._stamp([frame.uid for frame in self.anim.frames])
+        if self.anim is None:
+            return
+        self._stamp([frame.uid for frame in self.anim.frames])
+        # Every distinct cel, not every slot: a whole-grid change (a track
+        # property, a geometry op, a snapshot restore) really does alter what
+        # each cel's thumbnail should show, and walking the slots would bump a
+        # linked cel once per frame it appears on for no gain.
+        for layer in self.anim.unique_cel_layers():
+            self._layer_stamps[layer.uid] = self._layer_stamps.get(layer.uid, 0) + 1
+
+    def layer_stamp(self, layer_uid: int) -> int:
+        """How many writes this layer has been told about. See ``_layer_stamps``."""
+        return self._layer_stamps.get(layer_uid, 0)
 
     # -- autovivify ---------------------------------------------------------
 

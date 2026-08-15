@@ -151,3 +151,55 @@ def test_the_resize_popup_offers_both_resamples():
     """Derived from ``transform.RESAMPLES`` at the call site rather than written
     out, so this asserts the tuple is the one thing there is to offer."""
     assert transform.RESAMPLES == ("smooth", "nearest")
+
+
+# --- the timeline's cell hit test --------------------------------------------
+#
+# Extracted from the pane because the marquee cannot use hover: a pressed imgui
+# button suppresses hover on every neighbour, so a drag has to be measured
+# geometrically -- and the arithmetic that does it is then the one part of the
+# gesture that can be asserted without a window.
+
+GRID = {
+    # Frame 0's cells start at x=100, each 20 wide with a 2px gutter, and the
+    # rows are drawn top-first so track 1 sits *above* track 0.
+    "x0": 100.0,
+    "tops": {1: 50.0, 0: 72.0},
+    "cell": 20.0,
+    "gutter": 2.0,
+    "frames": 4,
+}
+
+
+@pytest.mark.parametrize(
+    ("point", "expected"),
+    [
+        ((100.0, 50.0), (1, 0)),          # the top-left corner of cell (1, 0)
+        ((119.0, 69.0), (1, 0)),          # its bottom-right
+        ((122.0, 55.0), (1, 1)),          # the next column across
+        ((100.0, 80.0), (0, 0)),          # the row below
+        ((180.0, 55.0), (1, 3)),          # the last column
+    ],
+)
+def test_a_point_maps_to_the_cell_it_is_inside(point, expected):
+    assert inker_timeline.cell_index(point, **GRID) == expected
+
+
+@pytest.mark.parametrize(
+    "point",
+    [
+        (99.0, 55.0),    # left of the first column
+        (120.5, 55.0),   # in the gutter between two columns
+        (100.0, 71.0),   # in the gap between two rows
+        (210.0, 55.0),   # past the last column
+        (100.0, 200.0),  # below every row
+    ],
+)
+def test_a_point_between_or_beyond_the_cells_is_nothing(point):
+    """The nearest cell would be the wrong answer: a drag that snapped would
+    select cells the cursor never crossed."""
+    assert inker_timeline.cell_index(point, **GRID) is None
+
+
+def test_an_empty_grid_has_no_cells_to_hit():
+    assert inker_timeline.cell_index((100.0, 50.0), **{**GRID, "frames": 0}) is None
