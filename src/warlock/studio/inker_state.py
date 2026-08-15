@@ -50,6 +50,7 @@ TOOLS = (
     ("eyedropper", "Pick", "I"),
     ("slice", "Slice", "C"),
     ("spray", "Spray", "A"),
+    ("text", "Text", "T"),
 )
 
 # Tools whose drag paints into the layer.
@@ -124,6 +125,18 @@ TOOL_OPTION_DEFAULTS: dict[str, Any] = {
     # here, and defaulted off because a dithered gradient is a pixel-art
     # decision rather than a better gradient -- on a photograph it is noise.
     "gradient_dither": "none",
+    # The text tool's three, per tool like everything else here even though one
+    # tool is the only one that reads them: a table with an exception in it is
+    # a table somebody has to remember the exception to.
+    #
+    # ``font`` is a *path*, and empty means the vendored Inter face -- resolved
+    # where the popup is drawn (``inker_canvas.font_choices``), because a
+    # default that named a file would be a default that can stop existing. The
+    # size is in pixels, which is what the rasteriser takes and what the canvas
+    # shows; a point size would be a number about paper.
+    "text_size": 24,
+    "font": "",
+    "aa": True,
 }
 
 DEFAULT_SWATCHES: tuple[tuple[int, int, int, int], ...] = (
@@ -755,6 +768,20 @@ class InkerState:
     #: field gets the whole sheet rather than one frame.
     sheet_count: int = 0
 
+    # -- the text tool's open popup ----------------------------------------
+    #
+    # What is being typed, and where the click that opened the popup landed.
+    # Pure view state: a stamp is a floating buffer once it is made, so nothing
+    # here survives the OK button and nothing here may push an undo step.
+    #
+    # ``text_at`` is recorded at the *press* rather than read when OK is
+    # clicked, because by then the mouse is over a button in a popup somewhere
+    # else on the screen. The buffer is remembered across popups on purpose:
+    # retyping is how this editor re-edits text (there are no text objects), so
+    # a second stamp of the same word with a bigger size must not start empty.
+    text_buffer: str = ""
+    text_at: tuple[int, int] = (0, 0)
+
     # -- per-tool options ---------------------------------------------------
     #
     # Written out one per line rather than looped over TOOL_OPTION_DEFAULTS: a
@@ -778,6 +805,9 @@ class InkerState:
     paint_ink = _tool_option("paint_ink")
     spray_rate = _tool_option("spray_rate")
     gradient_dither = _tool_option("gradient_dither")
+    text_size = _tool_option("text_size")
+    font = _tool_option("font")
+    aa = _tool_option("aa")
 
     def options_for(self, tool: str) -> dict[str, Any]:
         """One tool's option dictionary, created at the defaults on first ask.

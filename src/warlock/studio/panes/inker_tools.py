@@ -44,6 +44,7 @@ TOOL_ICONS = {
     # Not SPRAY_CAN, which the blur tool already carries: two tools drawn with
     # one glyph is a toolbox a user has to read the tooltips of.
     "spray": icons.SPARKLES,
+    "text": icons.TYPE,
 }
 
 #: The brush's ink, and only the brush's: this app has brush modes and layer
@@ -243,6 +244,20 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
     if tool == "slice":
         _slices(ctx, state, tab)
 
+    if tool == "text":
+        # The controls themselves are on the canvas, in the popup the click
+        # opens: a font, a size and an AA toggle sitting in this panel would be
+        # a form the user fills in *before* choosing where the word goes, and
+        # the whole gesture is "put this here". What is left for the panel is
+        # saying so, and the Reset button ``_has_options`` gives every tool
+        # that remembers something.
+        widgets.section("text")
+        _per_tool_note()
+        widgets.muted_wrapped(
+            "Click on the canvas to type. What lands is pixels rather than a "
+            "text object, so re-editing it is retyping it."
+        )
+
     if _has_options(tool) and imgui.small_button(f"Reset {tool.replace('_', ' ')}##inkreset"):
         state.reset_tool_options(tool)
 
@@ -439,7 +454,15 @@ def _has_options(tool: str) -> bool:
     that clears nothing is a control that says the panel is confused about
     which tool is selected.
     """
-    return tool in PAINT_TOOLS or tool in SHAPE_TOOLS or tool in ("fill", "wand", "eyedropper")
+    return tool in PAINT_TOOLS or tool in SHAPE_TOOLS or tool in (
+        "fill",
+        "wand",
+        "eyedropper",
+        # Its three live in the canvas popup rather than in this panel, but
+        # they are per-tool options like every other row of this table and a
+        # user who has scrolled the size to 300 needs the same way back.
+        "text",
+    )
 
 
 def _per_tool_note() -> None:

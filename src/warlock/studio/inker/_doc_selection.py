@@ -588,3 +588,53 @@ class SelectionOps:
         """
         mask = np.full(pixels.shape[:2], 255, dtype=np.uint8)
         self.clipboard.put(pixels, mask)
+
+    def float_pixels(self: Document, pixels: np.ndarray, at: tuple[int, int]) -> bool:
+        """Float an array made somewhere else, at ``at``. The paste rule, exactly.
+
+        The delivery route for everything that *generates* pixels rather than
+        lifting them: the text stamp today (C14), image brushes when they
+        arrive. Every one of those wants the same four things -- put it down
+        where I clicked, let me move it, let me commit it, let me take it back
+        -- and a floating buffer is that, already written and already tested. A
+        generator that wrote into the layer directly would have to reinvent
+        placement, the drag, the transform box and the undo step, and would get
+        a different answer for each.
+
+        It is ``paste`` in every respect that can be observed:
+
+        * **Refused on a content-locked layer.** The buffer is bound to the
+          active layer and would land on it, which is the write the lock exists
+          to prevent. ``commit_floating`` is deliberately *not* refused -- see
+          its docstring -- so the door has to be here, at the moment the buffer
+          is made.
+        * **Whatever is already floating commits first**, rather than being
+          dropped: a second stamp while the first is still up means "put that
+          one down", not "throw it away".
+        * **``forget_redo``.** A float pushes no step of its own, so without it
+          the redo branch survives and Ctrl+Y after a stamp replays an
+          unrelated edit.
+        * **Canonical-only on a tiled document**, because what it eventually
+          writes goes through ``commit_floating``.
+
+        The mask is solid rather than the pixels' own alpha, which is what
+        ``put_clipboard`` does and for the same reason: the mask is what
+        hit-tests a grab (``FloatingBuffer.contains``), and a mask cut to the
+        glyphs would mean the user has to click *on a letter's stem* to move
+        the word they just placed.
+        """
+        if self.write_locked():
+            return False
+        array = np.array(pixels, dtype=np.uint8, copy=True)
+        if array.ndim != 3 or array.shape[2] != 4 or array.shape[0] < 1 or array.shape[1] < 1:
+            return False
+        self.commit_floating()
+        self.floating = FloatingBuffer(
+            pixels=array,
+            mask=np.full(array.shape[:2], 255, dtype=np.uint8),
+            offset=(int(at[0]), int(at[1])),
+            layer_uid=self.stack.active.uid,
+        )
+        self.history.forget_redo()
+        self.rev += 1
+        return True
