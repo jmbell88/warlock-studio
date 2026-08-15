@@ -13,6 +13,8 @@ The modules, bottom up:
 ``selection``  8-bit masks, the magic wand, floating pixels, the clipboard
 ``brush``      cached coverage stamps and the spacing walk of one stroke
 ``gradient``   linear and radial ramps
+``indexed``    the palette constraint: nearest-swatch snap, exact remap
+``dither``     palette conversion -- nearest, error diffusion, ordered matrices
 ``transform``  flip, rotate, scale, crop, canvas resize
 ``animation``  the frames-by-tracks grid, and the sparse cel map in it
 ``anim_edits`` undo steps for that grid
@@ -54,6 +56,8 @@ from .brush import (
     make_stamp,
 )
 from .composite import BLEND_MODES
+from .dither import METHODS as DITHER_METHODS
+from .dither import ORDERED as DITHER_ORDERED
 from .document import (
     OPAQUE_WHITE,
     RGBA,
@@ -80,6 +84,8 @@ __all__ = [
     "Animation",
     "Clipboard",
     "DEFAULT_SPACING",
+    "DITHER_METHODS",
+    "DITHER_ORDERED",
     "Document",
     "FloatingBuffer",
     "Frame",

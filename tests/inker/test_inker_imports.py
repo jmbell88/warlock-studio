@@ -179,6 +179,7 @@ def test_the_package_imports_with_no_optional_dependency_present():
         animation,
         brush,
         composite,
+        dither,
         document,
         filters,
         gifout,
