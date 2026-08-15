@@ -190,6 +190,7 @@ def test_the_package_imports_with_no_optional_dependency_present():
         selection,
         sheetin,
         sheetout,
+        tiling,
         transform,
         undo,
     )
