@@ -13,7 +13,13 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from . import composite as cp
-from .anim_edits import TrackAddEdit, TrackMoveEdit, TrackPropsEdit, TrackRemoveEdit
+from .anim_edits import (
+    CelSetEdit,
+    TrackAddEdit,
+    TrackMoveEdit,
+    TrackPropsEdit,
+    TrackRemoveEdit,
+)
 from .animation import Track
 from .layers import Layer, LayerStack, new_uid
 from .undo import (
@@ -219,25 +225,8 @@ class LayerOps:
         self.invalidate_all()
         return True
 
-    @property
-    def can_restructure(self: Document) -> bool:
-        """Whether merge-down and flatten are available.
-
-        They are not, on an animated document. Both are defined over *one*
-        stack, and an animated document has one per frame -- so the honest
-        versions are "merge these two tracks across every frame", which has to
-        decide what a merge of a linked cel with an unlinked one even means, and
-        "flatten this frame", which throws away every other frame's cels. Both
-        are real features and neither is v1. Refusing is the answer that cannot
-        silently destroy an animation; the layers panel reads this to disable
-        the buttons rather than letting the user find out by pressing them.
-        """
-        return self.anim is None
-
     def merge_down(self: Document, index: int | None = None) -> bool:
         """Flatten a layer into the one beneath it, honouring its blend mode."""
-        if not self.can_restructure:
-            return False
         index = self.stack.active_index if index is None else index
         if index == 0:
             return False
@@ -247,6 +236,8 @@ class LayerOps:
         if self.write_locked(self.stack[index]) or self.write_locked(self.stack[index - 1]):
             return False
         self.commit_floating()
+        if self.anim is not None:
+            return self._merge_tracks(index)
         width, height = self.size
         upper = self.stack[index]
         lower = self.stack[index - 1]
@@ -288,9 +279,114 @@ class LayerOps:
         self.invalidate_all()
         return True
 
+    def _merge_tracks(self: Document, index: int) -> bool:
+        """Merge-down across every frame at once, as one undo step.
+
+        The question this has to answer -- and the reason it was refused
+        outright for so long -- is what a merge of a linked cel with an unlinked
+        one means. The answer is the one the rest of the grid already gives: a
+        link is two slots holding one object, so the merge is **memoised on the
+        pair of cels it consumes**. Two frames whose lower and upper cels are
+        both the same objects are two frames whose merged result is the same
+        drawing, so they get one ``Layer`` and stay linked; a frame where the
+        upper differs gets its own. Nothing has to be told which slots were
+        linked -- the identity of the inputs decides it.
+
+        Three rules fall out of that and each of them was a bug waiting:
+
+        The lower's cels are **never mutated in place**, as the still branch
+        mutates its layer. A lower cel may be linked across frames where the
+        upper is not, so writing merged pixels into it would push one frame's
+        merge into another frame that never asked for it.
+
+        The merged layers are minted **once, here**, and the ``CelSetEdit``
+        holds them -- ``unlink_cel``'s rule. A redo that merged again would hand
+        back layers with new identities and strand every patch recorded above.
+
+        And a slot with **no upper cel at all** gets no edit: there is nothing
+        to merge into the lower, and minting a copy of it would break its links
+        and cost the grid a full plane per frame for no change.
+        """
+        anim = self.anim
+        assert anim is not None
+        width, height = self.size
+        upper_track, lower_track = anim.tracks[index], anim.tracks[index - 1]
+
+        merged_for: dict[tuple[int, int], Layer] = {}
+        upper_cels: dict[int, Layer] = {}
+        edits: list[Any] = []
+        for frame in anim.frames:
+            upper = anim.cels.get((upper_track.uid, frame.uid))
+            if upper is not None:
+                upper_cels[frame.uid] = upper
+            lower = anim.cels.get((lower_track.uid, frame.uid))
+            if upper is None:
+                continue
+            key = (id(lower), id(upper))
+            layer = merged_for.get(key)
+            fresh = layer is None
+            if layer is None:
+                entries = []
+                if lower is not None:
+                    entries.append((lower.pixels, lower_track.opacity, lower_track.blend))
+                if upper_track.visible:
+                    entries.append((upper.pixels, upper_track.opacity, upper_track.blend))
+                layer = Layer(
+                    pixels=cp.to_uint8(cp.stack_region(entries, (0, 0, width, height))),
+                    name=lower_track.name,
+                )
+                merged_for[key] = layer
+            # Written straight into the grid rather than through ``_set_cel``:
+            # that helper ends in ``_anim_changed``, and a forty-frame clip
+            # would rebuild the whole view and recomposite forty times for one
+            # click. The single ``_anim_changed`` at the end is the same answer.
+            anim.cels[(lower_track.uid, frame.uid)] = layer
+            # Charged only where this edit is the first to introduce the pair.
+            # A repeated pair means both the ``before`` and the ``after`` were
+            # counted by an earlier step, and counting them again would spend
+            # the budget on memory that exists once.
+            pinned: Any = frozenset()
+            if fresh:
+                pinned = frozenset(
+                    [id(layer)] + ([] if lower is None else [id(lower)])
+                )
+            edits.append(
+                CelSetEdit(lower_track.uid, frame.uid, lower, layer, pinned=pinned)
+            )
+
+        if not edits:
+            # Nothing anywhere in the upper row: the merge is the removal, and
+            # the still branch's props bake would be a step that changes nothing.
+            return self.remove_layer(index)
+
+        props_before = {"opacity": lower_track.opacity, "blend": lower_track.blend}
+        after = {"opacity": 1.0, "blend": "normal"}
+        # The same argument the still branch makes: the merged pixels already
+        # carry the lower's opacity, and its blend has nothing left to blend
+        # against. Set on the track directly, for the reason the cels above are.
+        lower_track.opacity, lower_track.blend = 1.0, "normal"
+        edits.append(TrackPropsEdit(lower_track.uid, props_before, after))
+
+        self._drop_track(upper_track)
+        edits.append(
+            TrackRemoveEdit(
+                index,
+                upper_track,
+                upper_cels,
+                pinned=self._released(upper_cels.values()),
+            )
+        )
+        self.history.push(CompoundEdit(edits))
+        self._stamp_all()
+        self._anim_changed(active=index - 1)
+        return True
+
     def flatten_layers(self: Document) -> None:
         """Collapse the stack to one layer. Undoable as a canvas-level op."""
-        if len(self.stack) == 1 or not self.can_restructure:
+        if self.anim is not None:
+            self._flatten_grid()
+            return
+        if len(self.stack) == 1:
             return
         self.commit_floating()
         # Replay must be a pure function of the document, and minting a uid is
@@ -299,6 +395,64 @@ class LayerOps:
         # is drawn once and closed over, so every replay lands on the same one.
         uid = new_uid()
         self._replay(lambda: self._do_flatten(uid))
+
+    def _flatten_grid(self: Document) -> None:
+        """Collapse an animated document to one track, frame by frame.
+
+        Through ``_replay`` rather than a compound of grid edits, for the reason
+        the still branch takes that path: every cel in the document is thrown
+        away and one per frame appears, so a snapshot is not the expensive
+        answer here, it is the only truthful one.
+
+        **The link partition is computed structurally, at op time.** Two frames
+        whose whole stacks are the same objects flatten to the same picture, so
+        they share one ``Layer`` and stay linked -- and the grouping is worked
+        out *once*, here, then closed over, because replay has to be a pure
+        function of the document and the ``id()``s it is computed from will not
+        survive the snapshot restore that precedes a redo. The uids go the same
+        way and for ``flatten_layers``' own reason: one per group plus one for
+        the track, drawn here and reused by every replay.
+
+        Durations, tags and the layout are untouched. Flatten is a statement
+        about the layers, and a timeline that came back at 10 fps because its
+        rows were merged would be a different kind of edit.
+        """
+        anim = self.anim
+        assert anim is not None
+        if len(anim.tracks) <= 1:
+            return
+        self.commit_floating()
+        groups: dict[tuple[int, ...], list[int]] = {}
+        for i, frame in enumerate(anim.frames):
+            key = tuple(
+                id(anim.cels.get((track.uid, frame.uid))) for track in anim.tracks
+            )
+            groups.setdefault(key, []).append(i)
+        partition = list(groups.values())
+        uids = [new_uid() for _ in partition]
+        track_uid = new_uid()
+        self._replay(lambda: self._do_flatten_grid(partition, uids, track_uid))
+
+    def _do_flatten_grid(
+        self: Document, partition: list[list[int]], uids: list[int], track_uid: int
+    ) -> None:
+        anim = self.anim
+        assert anim is not None
+        size = self.size
+        track = Track(name="Flattened", uid=track_uid)
+        cels: dict[tuple[int, int], Layer] = {}
+        for indices, uid in zip(partition, uids, strict=True):
+            frame = anim.frames[indices[0]]
+            flat = LayerStack(anim.layers_for(frame, size), 0).flatten()
+            layer = Layer(pixels=flat, name=track.name, uid=uid)
+            for i in indices:
+                cels[(track_uid, anim.frames[i].uid)] = layer
+        anim.tracks = [track]
+        anim.cels = cels
+        # Every frame's flatten really did change, which ``invalidate_all``
+        # deliberately does not assume.
+        self._stamp_all()
+        self.stack = LayerStack(anim.layers_for(anim.frame, size), 0)
 
     def apply_matte(self: Document, alpha: np.ndarray) -> bool:
         """Fold a cutout into the document's alpha, as one undoable step.

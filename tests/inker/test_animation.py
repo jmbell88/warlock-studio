@@ -674,22 +674,27 @@ def test_unlinking_an_unlinked_cel_does_nothing():
     assert doc.history.head == head
 
 
-# --- restructuring is refused ------------------------------------------------
+# --- restructuring works across the grid -------------------------------------
 
 
-def test_merge_and_flatten_are_refused_on_an_animated_document():
+def test_merge_and_flatten_apply_to_an_animated_document():
+    """They were refused outright while ``can_restructure`` existed, on the
+    argument that both are defined over one stack and an animated document has
+    one per frame. Both now answer that across the whole grid at once -- see
+    ``tests/inker/test_anim_restructure.py`` for the link rules that made it
+    possible; this is the pin that the refusal is gone."""
     doc = _doc()
     doc.add_layer("Ink")
-    assert doc.can_restructure
-
     doc.ensure_animation()
 
-    assert not doc.can_restructure
-    assert not doc.merge_down(1)
+    assert doc.merge_down(1)
+    assert len(doc.stack) == 1
+
+    doc.add_layer("Ink again")
     head = doc.history.head
     doc.flatten_layers()
-    assert doc.history.head == head
-    assert len(doc.stack) == 2
+    assert doc.history.head != head
+    assert len(doc.stack) == 1
 
 
 # --- layer ops become track ops ----------------------------------------------

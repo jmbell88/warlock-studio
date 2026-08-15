@@ -78,17 +78,16 @@ def _actions(ctx: Any, doc: Any) -> None:
     imgui.same_line()
     if widgets.disabled_button("Delete", len(doc.stack) > 1):
         doc.remove_layer()
-    # Both are refused outright on an animated document -- they are defined over
-    # one stack and an animated document has one per frame. Disabling says so
-    # before the click rather than after it.
-    restructure = doc.can_restructure
-    if widgets.disabled_button("Merge down", restructure and _can_merge(doc)):
+    # Both work on an animated document now, across every frame at once: a
+    # merge is memoised on the pair of cels it consumes, so frames that shared
+    # a drawing go on sharing the merged one.
+    if widgets.disabled_button("Merge down", _can_merge(doc)):
         doc.merge_down()
     imgui.same_line()
-    if widgets.disabled_button("Flatten", restructure and len(doc.stack) > 1):
+    if widgets.disabled_button("Flatten", len(doc.stack) > 1):
         doc.flatten_layers()
-    if not restructure:
-        widgets.muted("Merge and flatten are unavailable while animated.")
+    if doc.anim is not None:
+        widgets.muted("Merge and flatten apply to every frame.")
 
     layer = doc.stack.active
     changed, value = widgets.labeled_slider_float("Opacity", layer.opacity, 0.0, 1.0)

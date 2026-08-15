@@ -271,14 +271,20 @@ class CelSetEdit(Edit):
     frame_uid: int
     before: Any
     after: Any
-    pinned: bool = True
+    #: True, False, or a collection of ``id()``s -- the same three readings the
+    #: frame and track edits take, and for the same reason. An animated
+    #: merge-down pushes one of these per affected slot and several of them
+    #: legitimately name *one* merged cel (that is how the link is preserved),
+    #: so charging every one of them would evict real history to make room for
+    #: a number describing pixels that were counted already.
+    pinned: Any = True
 
     def __post_init__(self) -> None:
         # Only the direction that can be *left holding* pixels is charged for.
         # Undoing a set restores ``before``, so what the history pins while the
         # step is on the done stack is ``after``, and vice versa -- but the two
         # stacks together are what ``UndoStack.bytes`` sums, so charge both.
-        self.cost = pixel_bytes([self.before, self.after]) if self.pinned else 0
+        self.cost = charged([self.before, self.after], self.pinned)
 
     def _put(self, doc: Any, layer: Any) -> None:
         doc._set_cel(self.track_uid, self.frame_uid, layer)
