@@ -28,7 +28,7 @@ def draw(ctx: Any) -> None:
 
     state = plotter_mode.ensure(ctx)
     tab = state.active
-    widgets.section("tilesets")
+    widgets.section("Tilesets")
     manual_render.help_button(ctx, "plotter-tileset")
 
     if tab is None:

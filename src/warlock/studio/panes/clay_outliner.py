@@ -42,7 +42,7 @@ _DRAG_OBJECT = "clay-object"
 def draw(ctx: Any) -> None:
     state = clay_mode.ensure(ctx)
     tab = state.active
-    widgets.section("outliner")
+    widgets.section("Outliner")
     manual_render.help_button(ctx, "clay-outliner")
     if tab is None:
         widgets.muted("Nothing open.")

@@ -35,7 +35,7 @@ def draw(ctx: Any) -> None:
 
     state = plotter_mode.ensure(ctx)
     tab = state.active
-    widgets.section("layers")
+    widgets.section("Layers")
     manual_render.help_button(ctx, "plotter-layers")
 
     if tab is None:
@@ -182,7 +182,7 @@ def _object_form(
     from imgui_bundle import imgui
 
     layer, obj = found
-    widgets.section("object")
+    widgets.section("Object")
     if not editable:
         widgets.muted("Saving...")
         return
@@ -218,7 +218,7 @@ def _object_fields(ctx: Any, doc: Any, state: Any, layer: Any, obj: MapObject) -
         doc.set_object(layer.uid, obj.uid, visible=visible)
 
     imgui.dummy((0, 4))
-    widgets.section("properties")
+    widgets.section("Properties")
     _properties(ctx, doc, layer, obj)
 
     imgui.dummy((0, 6))

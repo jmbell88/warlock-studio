@@ -134,13 +134,20 @@ def draw(ctx: Any) -> None:
 def _list(ctx: Any) -> None:
     saved = profiles.list_profiles(ctx.settings)
     active = profiles.get_active(ctx.settings)
+    # *After* the button, not before it. ``help_marker`` is a right-aligned
+    # ``same_line``, so called first in this function it had no control to
+    # attach to and drew a (?) alone on an empty row between the heading and
+    # the button -- the defect ``app_settings._categories`` and
+    # ``stage_rig.draw`` both carry a comment about, found here by the wave 6
+    # screenshot pass. On the button it also reads better: it says what the
+    # thing you are about to make remembers.
+    if imgui.button("New profile"):
+        _open_draft(ctx, "", profiles.capture(ctx.state.form_2d))
     widgets.help_marker(
         "A profile remembers the model, the LoRA, the negative prompt and the "
         "core style choices under a name. The prompt, the seed and the "
         "per-asset guidance are never part of one."
     )
-    if imgui.button("New profile"):
-        _open_draft(ctx, "", profiles.capture(ctx.state.form_2d))
     if not saved:
         # H73: the same sentence, but as the empty state the rest of the app
         # uses -- an icon and a title say "there is nothing here yet" before

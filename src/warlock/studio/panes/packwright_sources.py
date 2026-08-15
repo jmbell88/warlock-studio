@@ -24,7 +24,7 @@ def draw(ctx: Any) -> None:
 
     state = packwright_mode.ensure(ctx)
     tab = state.active
-    widgets.section("sources")
+    widgets.section("Sources")
     manual_render.help_button(ctx, "packwright-sources")
 
     if tab is None:
@@ -65,7 +65,7 @@ def _from_inker(ctx: Any, tab: Any, editable: bool) -> None:
     if inker is None or not inker.docs:
         return
     imgui.dummy((0, 4))
-    widgets.muted("from Inker")
+    widgets.muted("From Inker")
     for doc in inker.docs:
         frames = len(doc.doc.anim.frames) if doc.doc.anim is not None else len(doc.doc.stack)
         what = "frame" if doc.doc.anim is not None else "layer"

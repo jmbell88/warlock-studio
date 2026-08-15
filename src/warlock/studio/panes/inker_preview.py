@@ -58,7 +58,7 @@ SCOPE_LABELS = (("clip", "Whole clip"), ("tag", "Active tag"))
 def draw(ctx: Any) -> None:
     state = ctx.state.inker
     tab = None if state is None else state.active
-    widgets.section("preview")
+    widgets.section("Preview")
     manual_render.help_button(ctx, "inker-preview")
     if tab is None or tab.doc.anim is None:
         return

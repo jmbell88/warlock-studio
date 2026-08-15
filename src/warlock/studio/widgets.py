@@ -170,8 +170,15 @@ def cost_note(text: str) -> None:
     No icon: the atlas is a pinned lucide subset, and a glyph it does not carry
     renders as the missing-glyph box -- the same rule that keeps these strings
     inside imgui's Basic-Latin+Latin-1 range.
+
+    Wrapped, which ``muted`` is not: every one of these is a sentence about a
+    cost, none of them fits a 300 dp settings column on one line, and the Rig
+    stage's was reaching the screen as "Rigging is queued like a generation: it
+    runs Blender in a" with the rest past the pane edge and no scrollbar to it
+    (REDESIGN.md wave 6). That is the exact case ``muted_wrapped`` was written
+    for; ``cost_note`` had simply been pointed at the wrong one of the two.
     """
-    muted(text)
+    muted_wrapped(text)
 
 
 def section(label: str) -> None:
@@ -234,7 +241,7 @@ def recent_files(paths: list[str], on_open: Any) -> None:
     if not paths:
         return
     imgui.dummy((0, 8))
-    section("recent")
+    section("Recent")
     for path in paths[:RECENT_SHOWN]:
         if imgui.selectable(f"{Path(path).name}##{path}", False)[0]:
             on_open(path)
@@ -1369,7 +1376,10 @@ def tag_toggles(id_prefix: str, pending: list[str], enabled: bool) -> str | None
     clicked: str | None = None
     for label, vocabulary, modifier in (("Good", verdicts_mod.GOOD_TAGS, "Ctrl"),
                                         ("Bad", verdicts_mod.BAD_TAGS, "Shift")):
-        field_label(f"{label}:")
+        # No colon. A ``field_label`` is small-caps chrome above the thing it
+        # names, and its punctuation is the layout -- "GOOD:" was the only one
+        # in the app wearing a colon, two rows under "THEME" and "SKELETON".
+        field_label(label)
         width = grid_width(3)
         for index, tag in enumerate(vocabulary):
             if index:

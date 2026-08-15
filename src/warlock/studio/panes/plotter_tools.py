@@ -108,7 +108,7 @@ def _terrain_picker(ctx: Any, state: Any, tab: Any) -> None:
     from imgui_bundle import imgui
 
     entries = terrains_of(tab.doc)
-    widgets.section("terrain")
+    widgets.section("Terrain")
     if not entries:
         widgets.muted_wrapped(
             "This map has no terrain sets. Generate one under Tilesets, or add a "
@@ -148,7 +148,7 @@ def draw(ctx: Any) -> None:
 
     state = plotter_mode.ensure(ctx)
     tab = state.active
-    widgets.section("tools")
+    widgets.section("Tools")
     manual_render.help_button(ctx, "plotter-tools")
     _tool_grid(state)
     imgui.dummy((0, 6))
@@ -169,7 +169,7 @@ def draw(ctx: Any) -> None:
     _, state.minimap = widgets.toggle("Minimap", state.minimap)
 
     imgui.dummy((0, 6))
-    widgets.section("map")
+    widgets.section("Map")
     widgets.muted(f"{doc.width} x {doc.height} tiles, {doc.tile_w} x {doc.tile_h} px")
     widgets.muted(f"{doc.pixel_width} x {doc.pixel_height} px overall")
     widgets.muted(f"{doc.projection} projection")

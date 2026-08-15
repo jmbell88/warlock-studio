@@ -966,7 +966,7 @@ discards the layered file, because it describes an edit that no longer exists.
   then be meshed, promoted and rerun exactly like a generated one. The document becomes linked to
   the new job immediately, so the next `Ctrl+S` saves in place rather than minting a second job from
   the same pixels.
-- **Send to 3D** queues the mesh stage from the flattened image. A linked document promotes the
+- **Make 3D** queues the mesh stage from the flattened image. A linked document promotes the
   reference it already is — and refuses if you have unsaved changes, so the mesh is made from what
   you can see. An unlinked one becomes an ordinary image job, the same call the Mesh stage's upload
   button makes. Either way, if the quality report is unhappy you get a confirm naming the reasons

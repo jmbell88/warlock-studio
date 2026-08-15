@@ -612,7 +612,7 @@ def _resume(ctx: Any) -> None:
     the picture that would have identified it in one glance was sitting in the
     job directory the whole time.
     """
-    widgets.section("resume")
+    widgets.section("Resume")
     drawn = rows(ctx)
     if not drawn:
         widgets.muted("Nothing yet. Start something above.")

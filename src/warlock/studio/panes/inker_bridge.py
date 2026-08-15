@@ -40,12 +40,12 @@ def _busy_why(tab: Any) -> str:
 def draw(ctx: Any) -> None:
     state = inker_mode.ensure(ctx)
     tab = state.active
-    widgets.section("file")
+    widgets.section("File")
     manual_render.help_button(ctx, "inker-bridge")
     _file(ctx, state, tab)
 
     imgui.dummy((0, 8))
-    widgets.section("document")
+    widgets.section("Document")
     # Above the tab check: importing a sheet *makes* a document, so it has to
     # be reachable when there is none open, which is exactly the moment a user
     # is most likely to want it.
@@ -145,7 +145,7 @@ def _animation(ctx: Any, tab: Any) -> None:
     back. Once the document is animated this row goes quiet and the timeline
     strip owns everything else.
     """
-    widgets.section("animation")
+    widgets.section("Animation")
     if tab.doc.anim is None:
         if widgets.disabled_button(
             "Animate", not tab.busy, (-1, 0), reason=_busy_why(tab)
@@ -162,7 +162,7 @@ def _animation(ctx: Any, tab: Any) -> None:
 
 
 def _pipeline(ctx: Any, tab: Any) -> None:
-    widgets.section("pipeline")
+    widgets.section("Pipeline")
     busy = tab.busy
     why = _busy_why(tab)
     if not tab.linked:
@@ -172,7 +172,11 @@ def _pipeline(ctx: Any, tab: Any) -> None:
             "Adds this image to the library as a finished reference, so it can be"
             " meshed, promoted and rerun like a generated one."
         )
-    if widgets.disabled_button("Send to 3D", not busy, (-1, 0), reason=why):
+    # "Make 3D", not "Send to 3D": there is no 3D to send anything *to* since
+    # wave 5 folded 2D and 3D into Create's stages, and this is the same act
+    # the Mesh stage's own button performs on a reference -- so it is the same
+    # words. The function keeps its name; it is not what anybody reads.
+    if widgets.disabled_button("Make 3D", not busy, (-1, 0), reason=why):
         inker_mode.send_to_3d(ctx, tab)
     widgets.help_marker("Queues the mesh stage from the flattened image.")
     if tab.linked and widgets.disabled_button(
@@ -188,7 +192,7 @@ def _pipeline(ctx: Any, tab: Any) -> None:
 
 def _canvas_ops(ctx: Any, tab: Any) -> None:
     doc = tab.doc
-    widgets.section("canvas")
+    widgets.section("Canvas")
     # Every control below either rebinds a layer's pixels (the geometry ops,
     # via _map_planes) or rebinds the stack wholesale (undo, via
     # restore_snapshot). ``write_ora`` flattens, writes stack.xml and then

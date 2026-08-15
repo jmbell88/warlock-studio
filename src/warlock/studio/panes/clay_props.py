@@ -37,7 +37,7 @@ _STEP = {"segments": 1, "rings": 1, "sides": 1}
 def draw(ctx: Any) -> None:
     state = clay_mode.ensure(ctx)
     tab = state.active
-    widgets.section("properties")
+    widgets.section("Properties")
     manual_render.help_button(ctx, "clay-props")
     if tab is None:
         widgets.muted("Nothing open.")

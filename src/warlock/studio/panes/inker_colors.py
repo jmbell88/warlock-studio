@@ -49,7 +49,7 @@ def _vec(colour: tuple[int, int, int, int]) -> Any:
 
 def draw(ctx: Any) -> None:
     state = inker_mode.ensure(ctx)
-    widgets.section("colour")
+    widgets.section("Colour")
     # After the heading, never before it: help_button is a same_line, and
     # same_line returns to the previous row unconditionally -- called first it
     # lands on whatever the pane above drew.
@@ -100,7 +100,7 @@ def _indexed(ctx: Any, state: Any) -> None:
     if tab is None:
         return
     doc = tab.doc
-    widgets.section("palette")
+    widgets.section("Palette")
     widgets.help_marker(
         "Indexed colour constrains every write to this table: a stroke, a fill "
         "or a filter lands on the nearest colour in it. Alpha is untouched, so "

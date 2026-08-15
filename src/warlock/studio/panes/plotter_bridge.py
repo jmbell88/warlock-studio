@@ -24,7 +24,7 @@ def draw(ctx: Any) -> None:
 
     state = plotter_mode.ensure(ctx)
     tab = state.active
-    widgets.section("map file")
+    widgets.section("Map file")
     manual_render.help_button(ctx, "plotter-bridge")
 
     width = widgets.grid_width(2)
@@ -62,7 +62,7 @@ def draw(ctx: Any) -> None:
         widgets.muted("Unsaved changes.")
 
     imgui.dummy((0, 8))
-    widgets.section("tiled")
+    widgets.section("Tiled")
     has_tilesets = bool(tab.doc.tilesets)
     if widgets.disabled_button(
         "Export .tmx (Ctrl+Shift+E)",
@@ -87,7 +87,7 @@ def draw(ctx: Any) -> None:
         )
 
     imgui.dummy((0, 8))
-    widgets.section("library")
+    widgets.section("Library")
     if widgets.disabled_button(
         f"{icons.UPLOAD} Export to the library (Ctrl+E)",
         ready and has_tilesets,

@@ -27,7 +27,7 @@ _opacity_drag: dict[int, float] = {}
 def draw(ctx: Any) -> None:
     state = inker_mode.ensure(ctx)
     tab = state.active
-    widgets.section("layers")
+    widgets.section("Layers")
     manual_render.help_button(ctx, "inker-layers")
     if tab is None:
         widgets.empty_state(

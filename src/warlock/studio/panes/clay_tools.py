@@ -71,7 +71,7 @@ MODE_BUTTONS = (
 def draw(ctx: Any) -> None:
     state = clay_mode.ensure(ctx)
     tab = state.active
-    widgets.section("tools")
+    widgets.section("Tools")
     manual_render.help_button(ctx, "clay-tools")
     _tool_grid(state)
     imgui.dummy((0, 6))

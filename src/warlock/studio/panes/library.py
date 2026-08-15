@@ -179,27 +179,32 @@ def _empty(ctx: Any) -> None:
 # The day boundaries a date grouping uses, as a pure function of two timestamps
 # so the wording is testable without a clock (J89).
 def date_group(created_at: Any, now: float | None = None) -> str:
-    """``today`` / ``yesterday`` / ``this week`` / ``2026-07`` for a row.
+    """``Today`` / ``Yesterday`` / ``This week`` / ``2026-07`` for a row.
 
     Calendar days, not 24-hour windows: something made at 23:50 last night is
     "yesterday" at 00:10, and an elapsed-hours rule would call it "today".
     Older than a week collapses to the month, because a workshop's older half
     is browsed by roughly-when rather than by exactly-when.
+
+    Sentence case because these are ``widgets.section`` headings and nothing
+    else (REDESIGN.md wave 6) -- the month rung already read as a proper label
+    while the four words above it were lowercase, so one column of headings was
+    drawn in two registers.
     """
     import datetime as dt
 
     if not created_at:
-        return "undated"
+        return "Undated"
     now = time.time() if now is None else now
     then_day = dt.date.fromtimestamp(float(created_at))
     today = dt.date.fromtimestamp(now)
     days = (today - then_day).days
     if days <= 0:
-        return "today"
+        return "Today"
     if days == 1:
-        return "yesterday"
+        return "Yesterday"
     if days < 7:
-        return "this week"
+        return "This week"
     return then_day.strftime("%Y-%m")
 
 
@@ -658,8 +663,20 @@ def _card_body(ctx: Any, job: Any, queue_pos: dict[str, int] | None = None) -> N
             imgui.same_line()
             widgets.muted(f"#{position} in queue")
     if job.get("parent_id"):
+        # ``same_line_or_wrap``, not ``same_line``: this is the *fourth* thing
+        # on the badge row, and behind a status pill, a stage badge and a
+        # quality badge there is nothing left of a 300 dp card -- it reached
+        # the screen as "| from a refere", clipped at the card's edge with no
+        # scrollbar to the rest of it (REDESIGN.md wave 6).
+        # And the leading pipe goes with the line: it is a separator from the
+        # badges to its left, so on its own row it would be a stray glyph
+        # against the card's edge.
+        inline = "| from a reference"
         imgui.same_line()
-        widgets.muted("| from a reference")
+        fits = imgui.get_content_region_avail().x >= imgui.calc_text_size(inline).x
+        if not fits:
+            imgui.new_line()
+        widgets.muted(inline if fits else "From a reference")
 
     progress = ctx.runtime.progress(job_id)
     if progress is not None:

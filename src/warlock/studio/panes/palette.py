@@ -156,7 +156,10 @@ def draw(ctx: Any) -> None:
             heading = "Assets" if kind == "asset" else item.group
             if heading != group:
                 group = heading
-                widgets.section(heading.lower())
+                # Not ``.lower()``: ``Command.group`` is already the words a
+                # person reads ("Go to", "Viewport"), and lowercasing it was
+                # the old all-lowercase heading style, swept out in wave 6.
+                widgets.section(heading)
             if _row(ctx, kind, item, index == state.palette_index):
                 chosen = (kind, item)
     imgui.end_child()

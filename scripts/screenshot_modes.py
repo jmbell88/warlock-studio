@@ -92,14 +92,25 @@ def _seed(app) -> None:
     harness has ever taken. That row was rewritten in REDESIGN.md wave 4.2
     precisely because it was clipping at 150 %, which is the defect class the
     scale pass exists to find.
+
+    And a map and an atlas, for the same reason one wave later (REDESIGN.md
+    wave 6). Plotter and Packwright are four panes each, all four of which
+    answer "Open or start a map first" with nothing open -- so the sentence-case
+    sweep over their eleven headings, the tool grids, the layer tree and the
+    packing controls had never appeared in a capture at any scale. Both
+    ``new_document`` calls are synchronous; sprites and tilesets are not,
+    because they land through ``ctx.submit`` on a task thread, and a seeder
+    that races the capture is worse than one that stops short of it.
     """
-    from warlock.studio import clay_mode, inker_mode
+    from warlock.studio import clay_mode, inker_mode, packwright_mode, plotter_mode
 
     inker_mode.new_document(app.app_ctx, 1024, 1024)
     state = inker_mode.ensure(app.app_ctx)
     if state.active is not None:
         inker_mode.animate(app.app_ctx, state.active)
     clay_mode.new_document(app.app_ctx)
+    plotter_mode.new_document(app.app_ctx)
+    packwright_mode.new_document(app.app_ctx)
 
 
 def _seed_tile(app, png: Path) -> None:
@@ -329,6 +340,16 @@ def main() -> int:
         fonts.reload(imgui)
     app.setup_runtime()
     app.setup_context()
+    # A modal drawn over every capture is the harness lying by *commission*
+    # (REDESIGN.md wave 6): the journal lives in the user's home, not under
+    # WARLOCK_DATA_DIR, so a real crashed session on the machine running this
+    # put "Recover unsaved work?" across the middle of all thirty-four
+    # pictures. Never *offered* rather than dismissed after the fact -- the
+    # offer is raised on the first frame that has a Ctx, which is inside the
+    # first capture, so answering it afterwards is a frame too late. Nothing
+    # is deleted either way: declining keeps the files, and this process has
+    # no business adopting somebody's documents to take a photograph.
+    app.app_ctx.state.recovery_offered = True
     if args.seed:
         _seed(app)
     if args.asset:
@@ -382,6 +403,23 @@ def main() -> int:
                 state.mode = "home"
                 _capture(app, args.out / f"{name}-rail-expanded.png")
                 app.layout.set_rail("icons")
+                # The keyboard list, which is a popup rather than a mode and
+                # so was the last drawn surface in the app with no picture of
+                # it. Wave 5 renamed the modes underneath it and left its
+                # "2D / 3D" table naming two that no longer exist; nothing
+                # caught that until wave 6 went looking for what the pass did
+                # not cover. Requested rather than opened directly -- the flag
+                # is what Ctrl+/ and the palette both set, and ``open_popup``
+                # has to happen inside the frame that draws it.
+                state.shortcuts_requested = True
+                _capture(app, args.out / f"{name}-shortcuts.png")
+                state.shortcuts_requested = False
+                # And shut again, or the light pass would draw every mode
+                # under the dark pass's popup. ``close_current_popup`` is only
+                # legal inside the popup's own begin/end, so the close comes
+                # from the internal API instead -- between frames, where the
+                # open-popup stack is nobody's to read.
+                imgui.internal.close_popups_except_modals()
             if args.floating:
                 # Over the Mesh stage rather than over Home: the backdrop is
                 # what is being looked at, and a viewport with a mesh in it is

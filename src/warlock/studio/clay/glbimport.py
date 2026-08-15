@@ -78,7 +78,7 @@ def glb_to_claydoc(data: bytes, name: str = "Imported") -> ClayDoc:
     if model.skins:
         raise OpError(
             "This GLB is rigged, and Clay has no skinning -- editing it here "
-            "would drop the rig. Open it in 3D mode instead."
+            "would drop the rig. Open it in Create instead."
         )
     total = sum(len(p.indices) // 3 for prims in model.meshes for p in prims)
     if total > MAX_TRIANGLES:

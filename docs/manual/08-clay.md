@@ -364,7 +364,7 @@ finished model row from the moment it lands, so it inherits everything the rest 
 mesh: rigging, posing, sprite sheets, the triangle retarget, and the STL, OBJ, FBX, collision and
 texture exports. Use it when the shape you modelled is the shape you meant.
 
-**Send to 3D** renders the document flat, on a plain background, with no grid and no gizmos, and
+**Make 3D** renders the document flat, on a plain background, with no grid and no gizmos, and
 hands that picture to the reconstruction stage. What comes back is *not* your geometry — it is a
 reconstruction that used your geometry as a suggestion, with surface detail and irregularity nobody
 modelled. Use it when the blockout is a silhouette and proportion study rather than a final shape.

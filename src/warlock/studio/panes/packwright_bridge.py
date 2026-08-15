@@ -23,7 +23,7 @@ def draw(ctx: Any) -> None:
 
     state = packwright_mode.ensure(ctx)
     tab = state.active
-    widgets.section("atlas file")
+    widgets.section("Atlas file")
     manual_render.help_button(ctx, "packwright-bridge")
 
     width = widgets.grid_width(2)
@@ -64,7 +64,7 @@ def draw(ctx: Any) -> None:
         widgets.muted("Unsaved changes.")
 
     imgui.dummy((0, 8))
-    widgets.section("export")
+    widgets.section("Export")
     if widgets.disabled_button(
         f"{icons.DOWNLOAD} Atlas + JSON (Ctrl+Shift+E)",
         ready and packed,
@@ -78,7 +78,7 @@ def draw(ctx: Any) -> None:
         widgets.muted_wrapped("TexturePacker's JSON (Array) schema, which most engines read.")
 
     imgui.dummy((0, 8))
-    widgets.section("library")
+    widgets.section("Library")
     if widgets.disabled_button(
         f"{icons.UPLOAD} Export to the library (Ctrl+E)",
         ready and packed,

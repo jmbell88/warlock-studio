@@ -75,7 +75,7 @@ at the bottom of the sweep list takes:
   so the only thing that varies is what you asked to vary.
 - **Axes** — a parameter name and a comma-separated list of values. The sweep plans a baseline unit
   plus one unit per differing value, per seed.
-- **Start from current settings** — captures the 2D and 3D forms as the baseline the axes vary
+- **Start from current settings** — captures the Reference and Mesh stage forms as the baseline the axes vary
   from. A sweep off an unstated baseline is not reproducible.
 
 Because every unit shares the prompt and the seeds, the baseline and each axis unit form
@@ -152,7 +152,7 @@ outranking a solid 19-of-20 — and the average is the mean grade behind it. The
 rather than doing the ranking: over one sample its own spread is zero, which would re-create exactly
 the lucky-5-for-5 problem the floor exists to prevent. A configuration needs five verdicts to
 appear, and carries muted lines of its machine measurements and its tag tallies when it has any.
-"Apply to forms" writes one into the 2D and 3D forms; "Save as preset..." keeps it under a name.
+"Apply to forms" writes one into the Reference and Mesh stage forms; "Save as preset..." keeps it under a name.
 
 The same findings feed the small hints next to controls in the generate panes, so the learning is
 visible where the decisions are made: "usable 6/8 (41%+) · avg +2.6" once a value has enough

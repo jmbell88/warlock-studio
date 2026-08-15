@@ -314,7 +314,7 @@ def test_filtering_reports_only_the_controls_that_hide_rows():
 
 @pytest.mark.parametrize(
     ("age_days", "expected"),
-    [(0, "today"), (1, "yesterday"), (3, "this week"), (30, None)],
+    [(0, "Today"), (1, "Yesterday"), (3, "This week"), (30, None)],
 )
 def test_date_grouping_uses_calendar_days(age_days, expected):
     """Something made at 23:50 last night is "yesterday" at 00:10, and an
@@ -328,7 +328,7 @@ def test_date_grouping_uses_calendar_days(age_days, expected):
 
 
 def test_an_undated_row_says_so_rather_than_landing_in_today():
-    assert library.date_group(None) == "undated"
+    assert library.date_group(None) == "Undated"
 
 
 def test_the_window_can_be_reset(svc):

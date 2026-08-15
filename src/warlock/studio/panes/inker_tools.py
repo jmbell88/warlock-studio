@@ -117,7 +117,7 @@ SYMMETRY_LABELS = (
 def draw(ctx: Any) -> None:
     state = inker_mode.ensure(ctx)
     tab = state.active
-    widgets.section("tools")
+    widgets.section("Tools")
     manual_render.help_button(ctx, "inker-tools")
     _grid(state, None if tab is None else tab.doc)
     imgui.dummy((0, 6))
@@ -172,7 +172,7 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
     doc = tab.doc
 
     if tool in PAINT_TOOLS or tool in SHAPE_TOOLS:
-        widgets.section("brush")
+        widgets.section("Brush")
         _per_tool_note()
         changed, size = widgets.labeled_slider_int(
             "Size", state.brush_size, inker.MIN_BRUSH, inker.MAX_BRUSH
@@ -273,7 +273,7 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
             state.shape_filled = filled
 
     if tool in ("fill", "wand"):
-        widgets.section("tolerance")
+        widgets.section("Tolerance")
         _per_tool_note()
         changed, value = widgets.labeled_slider_int("Tolerance", state.wand_tolerance, 0, 255)
         if changed:
@@ -286,7 +286,7 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
         )
 
     if tool == "eyedropper":
-        widgets.section("sample")
+        widgets.section("Sample")
         changed, value = imgui.checkbox("This layer only", state.sample_layer)
         if changed:
             state.sample_layer = value
@@ -297,7 +297,7 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
         )
 
     if tool == "gradient":
-        widgets.section("gradient")
+        widgets.section("Gradient")
         state.gradient_kind = widgets.combo(
             "Shape",
             state.gradient_kind,
@@ -330,7 +330,7 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
         # the whole gesture is "put this here". What is left for the panel is
         # saying so, and the Reset button ``_has_options`` gives every tool
         # that remembers something.
-        widgets.section("text")
+        widgets.section("Text")
         _per_tool_note()
         widgets.muted_wrapped(
             "Click on the canvas to type. What lands is pixels rather than a "
@@ -376,7 +376,7 @@ def _slices(ctx: Any, state: Any, tab: Any) -> None:
     a file is being written would be an editor arguing with them.
     """
     doc = tab.doc
-    widgets.section("slices")
+    widgets.section("Slices")
     widgets.muted("Drag on the canvas to add one; drag a corner to resize.")
     changed, value = imgui.checkbox("Show with other tools", state.show_slices)
     if changed:
@@ -578,7 +578,7 @@ def _image_brush(ctx: Any, state: Any, tab: Any) -> None:
     where you started -- and because the useful values are the four quarter
     turns and the two mirrors, which is six clicks and no numbers.
     """
-    widgets.section("image brush")
+    widgets.section("Image brush")
     if widgets.disabled_button("Capture from selection##inkstamp", tab.doc.mask is not None):
         inker_mode.capture_brush(ctx)
     widgets.help_marker(
@@ -630,7 +630,7 @@ def _presets(ctx: Any, state: Any) -> None:
     tool. Clicking one selects its tool as well as its settings, because a
     preset called "inking pen" that arrived on the eraser would be half applied.
     """
-    widgets.section("presets")
+    widgets.section("Presets")
     imgui.set_next_item_width(-sp(56))
     _changed, name = imgui.input_text("##inkpresetname", state.preset_name)
     state.preset_name = name[: inker_state.MAX_PRESET_NAME]
@@ -697,7 +697,7 @@ def _per_tool_note() -> None:
 def _transform_entry(ctx: Any, state: Any, doc: Any) -> None:
     """Free transform is a state rather than a tool, so it gets a button rather
     than a slot in the grid -- it takes the canvas over until it is applied."""
-    widgets.section("transform")
+    widgets.section("Transform")
     if state.transforming:
         widgets.text_colored(theme.ACCENT, "Transforming - Enter applies, Esc cancels.")
         _transform_numbers(state, doc)
@@ -779,7 +779,7 @@ def _transform_numbers(state: Any, doc: Any) -> None:
 
 
 def _selection_actions(state: Any, doc: Any) -> None:
-    widgets.section("selection")
+    widgets.section("Selection")
     widgets.muted("Shift adds, Alt subtracts.")
     if imgui.button("All"):
         doc.select_all()
@@ -854,7 +854,7 @@ def _selection_actions(state: Any, doc: Any) -> None:
 
 
 def _canvas_options(state: Any) -> None:
-    widgets.section("canvas")
+    widgets.section("Canvas")
     state.symmetry = widgets.labeled_combo("Symmetry", state.symmetry, list(SYMMETRY_LABELS))
     if state.symmetry == "radial":
         imgui.set_next_item_width(sp(90))

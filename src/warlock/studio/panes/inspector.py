@@ -160,7 +160,10 @@ def draw(ctx: Any) -> None:
     # else.
     tabs: list[tuple[str, Any]] = [("Details", lambda: _details_tab(ctx, job))]
     if "model.glb" in (job.get("files") or []):
-        tabs.append(("Rig && Pose", lambda: _rig_tab(ctx, job)))
+        # One ampersand. Dear ImGui has no mnemonic escape -- the doubling is a
+        # habit from toolkits that do, and it drew "Rig && Pose" on the tab for
+        # as long as nobody looked at the Library's inspector in a screenshot.
+        tabs.append(("Rig & Pose", lambda: _rig_tab(ctx, job)))
     tabs.append(("Export", lambda: downloads(ctx, job)))
     widgets.tab_bar("inspector-tabs", tabs)
 

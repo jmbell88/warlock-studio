@@ -90,7 +90,18 @@ def _rail(ctx: Any, jobs: list[Any]) -> None:
     never loses a filter.
     """
     filters = ctx.state.filters
-    widgets.section("find")
+    # The mode's one loud thing (REDESIGN.md wave 6). ``app_settings`` argues
+    # that a three-column workspace is named by the lit rail item and needs no
+    # title of its own; this is not one of those. Clay, Inker and Review put a
+    # *document* in the middle column, and the window is about the thing you
+    # can see in it -- the library's middle column is a wall of other people's
+    # pictures, and the only thing on screen that could say what the wall is
+    # was the navigation chrome outside the pane. It goes at the top of the
+    # rail rather than across the window: the columns are laid out before this
+    # runs, so a full-width banner would mean a fourth region, and a heading
+    # above the narrowing controls is where the eye starts anyway.
+    widgets.pane_title("Library")
+    widgets.section("Find")
     manual_render.help_button(ctx, "library")
     imgui.set_next_item_width(-1)
     filters.text = widgets.input_text(
@@ -101,7 +112,7 @@ def _rail(ctx: Any, jobs: list[Any]) -> None:
     )
     library.prefix_chips(filters, active=imgui.is_item_active())
 
-    widgets.section("collections")
+    widgets.section("Collections")
     # The two toggles first, because they change which *pile* you are looking
     # at rather than narrowing the one you are in -- the distinction
     # ``library._view_row`` already draws on.
@@ -113,17 +124,17 @@ def _rail(ctx: Any, jobs: list[Any]) -> None:
         # fired in the trash would mean something completely different.
         ctx.state.checked.clear()
 
-    widgets.section("status")
+    widgets.section("Status")
     for key, label in library.STATUS_OPTIONS:
         if _entry(f"status/{key}", label, filters.status == key):
             filters.status = key
 
-    widgets.section("kind")
+    widgets.section("Kind")
     for key, label in library.KIND_OPTIONS:
         if _entry(f"kind/{key}", label, filters.kind == key):
             filters.kind = key
 
-    widgets.section("order")
+    widgets.section("Order")
     spacing = imgui.get_style().item_spacing.x
     filters.sort = widgets.combo(
         "##library-full-sort",

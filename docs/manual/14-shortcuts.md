@@ -89,7 +89,9 @@ same filtered, sorted list the cards are drawn from, clamped at the ends rather 
 
 | Keys | Action |
 | --- | --- |
-| Ctrl+Enter | Generate / Make 3D |
+| Ctrl+Enter | Run the stage: Generate, or Make 3D |
+| Tab / Shift+Tab | Move between the form's controls |
+| Enter | Press the stage's button when it is the one focused |
 | Up / Down | Previous / next asset in the library |
 | Right-click a card | The same actions menu the `...` button opens |
 | F | Frame the model |

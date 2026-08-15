@@ -24,7 +24,7 @@ def draw(ctx: Any) -> None:
 
     state = packwright_mode.ensure(ctx)
     tab = state.active
-    widgets.section("packed")
+    widgets.section("Packed")
     manual_render.help_button(ctx, "packwright-items")
 
     if tab is None:

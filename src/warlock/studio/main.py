@@ -3891,12 +3891,17 @@ class App:
                 ("F10", "Toggle the frame-rate readout"),
             ],
         )
+        # One heading, because there is one mode (REDESIGN.md wave 5). The
+        # rows that used to be split "2D" from "3D" are the same keys either
+        # way -- what changed is which stage of Create you are standing on,
+        # and the stage rail is a click rather than a shortcut, so there is
+        # nothing here to key.
         table(
-            "2D / 3D",
+            "Create",
             [
-                ("Ctrl+Enter", "Generate / Make 3D"),
+                ("Ctrl+Enter", "Run the stage: Generate, or Make 3D"),
                 ("Tab / Shift+Tab", "Move between the form's controls"),
-                ("Enter", "Press Generate / Make 3D when it is the one focused"),
+                ("Enter", "Press the stage's button when it is the one focused"),
                 ("Up / Down", "Previous / next asset in the library"),
                 ("Right-click a card", "Its actions menu"),
                 ("F", "Frame the model"),
@@ -3926,7 +3931,13 @@ class App:
             [
                 (
                     " / ".join(k.upper() for k in CLAY_KEYS),
-                    " / ".join(CLAY_KEYS.values()),
+                    # Capitalised here rather than in ``TOOL_KEYS``: those
+                    # values are the tool *ids* ``state.tool`` is compared
+                    # against and the saved documents carry, and this is the
+                    # one place they are read as English. Joined lowercase
+                    # they were the only row in the popup that did not start
+                    # with a capital, one line above "Vertex / edge / face".
+                    " / ".join(CLAY_KEYS.values()).capitalize(),
                 ),
                 ("1 / 2 / 3 / 4", "Vertex / edge / face / object mode"),
                 ("E", "Extrude (with faces selected)"),

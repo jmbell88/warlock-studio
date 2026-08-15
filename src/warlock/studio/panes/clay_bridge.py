@@ -8,7 +8,7 @@ send.
 **The two output paths are genuinely different things, not two encodings of
 one.** Export puts the *exact* geometry in the library as an ordinary asset,
 which is what a user wants when the shape they modelled is the shape they
-meant. Send to 3D renders the document flat and hands the picture to trellis,
+meant. Make 3D renders the document flat and hands the picture to trellis,
 which reinterprets it -- the blockout becomes a suggestion rather than a
 specification, and what comes back is a reconstruction with surface detail
 nobody modelled. Choosing between them is the whole point of having both, so
@@ -31,7 +31,7 @@ from ..manual import render as manual_render
 def draw(ctx: Any) -> None:
     state = clay_mode.ensure(ctx)
     tab = state.active
-    widgets.section("document")
+    widgets.section("Document")
     manual_render.help_button(ctx, "clay-bridge")
     if tab is None:
         widgets.muted("Nothing open.")
@@ -117,7 +117,9 @@ def _outputs(ctx: Any, tab: Any) -> None:
             "of those are functions of model.glb."
         )
 
-    if widgets.disabled_button(f"{icons.SEND} Send to 3D", ready, reason=why):
+    # "Make 3D", matching the Mesh stage's own button and Inker's -- wave 5
+    # left no "3D" to send anything to.
+    if widgets.disabled_button(f"{icons.SEND} Make 3D", ready, reason=why):
         # The App owns the offscreen render: the picture has to be drawn on
         # the frame thread because it needs the GL context, and the bridge is
         # not where that belongs.
@@ -130,7 +132,7 @@ def _outputs(ctx: Any, tab: Any) -> None:
         )
 
     if tab.job_id:
-        widgets.muted(f"last exported as {tab.job_id}")
+        widgets.muted(f"Last exported as {tab.job_id}")
 
 
 def send_to_3d(ctx: Any, tab: Any) -> None:
@@ -151,6 +153,6 @@ def send_to_3d(ctx: Any, tab: Any) -> None:
     """
     handler = getattr(ctx, "clay_send_to_3d", None)
     if handler is None:
-        ctx.toast("Could not send to 3D: this window has no viewport to render from.", "error")
+        ctx.toast("Could not make a mesh: this window has no viewport to render from.", "error")
         return
     handler(tab)
