@@ -259,6 +259,13 @@ def _animation_json(doc, names: dict[int, str]) -> bytes:
                 "end": int(tag.end),
                 "loop": bool(tag.loop),
                 "direction": str(tag.direction),
+                # ``repeat`` goes one step further than ``direction`` and is
+                # written **only when it is set**, which is ``layout``'s rule
+                # rather than this list's: 0 is the value every tag ever
+                # written already has, so omitting it keeps a repeat-less
+                # document's ``animation.json`` byte-identical to what it was
+                # -- the determinism pin depends on exactly that.
+                **({"repeat": int(tag.repeat)} if tag.repeat else {}),
             }
             for tag in anim.tags
         ],
@@ -449,6 +456,10 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int]) -> Animation | N
                 # than failing the whole grid: a direction is how a tag plays,
                 # not what it contains.
                 direction=str(entry.get("direction", "forward")),
+                # Absent in every file written before repeats existed, and 0
+                # is exactly "the loop flag decides" -- so an old document
+                # reads back playing precisely as it did.
+                repeat=int(entry.get("repeat", 0) or 0),
             )
             for entry in payload.get("tags", [])
         ]

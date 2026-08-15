@@ -168,6 +168,15 @@ def animation_block(
                 # value and its meaning, so a reader that has never heard of
                 # this one is still correct about the file.
                 "direction": str(getattr(tag, "direction", "forward")),
+                # Written only when set, unlike ``direction`` beside it: 0 is
+                # what every tag ever exported already meant, so a repeat-less
+                # sidecar is byte-identical to the one this wrote before the
+                # field existed -- which is what the square-sidecar pin needs.
+                **(
+                    {"repeat": int(tag.repeat)}
+                    if int(getattr(tag, "repeat", 0) or 0)
+                    else {}
+                ),
             }
             for tag in tags
         ],

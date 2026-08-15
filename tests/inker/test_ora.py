@@ -537,6 +537,32 @@ def test_a_file_written_before_directions_existed_reads_as_forward(tmp_path: Pat
     assert [t.direction for t in back.anim.tags] == ["forward"]
 
 
+def test_a_tags_repeat_count_survives_a_round_trip(tmp_path: Path):
+    doc = _animated()
+    doc.add_tag("thrice", 0, 1)
+    doc.set_tag(len(doc.anim.tags) - 1, repeat=3)
+    path = tmp_path / "thrice.ora"
+    inker.write_ora(doc, path)
+
+    back = inker.Document.load(path)
+    assert [t.repeat for t in back.anim.tags] == [0, 3]
+
+
+def test_a_repeatless_document_writes_no_repeat_key_at_all(tmp_path: Path):
+    """Written only when set, unlike ``direction`` beside it: 0 is what every
+    tag ever written already means, so a document that uses no repeats has to
+    produce the same bytes it always did -- which is what the determinism pin
+    on this member is measuring."""
+    doc = _animated()
+    path = tmp_path / "plain.ora"
+    inker.write_ora(doc, path)
+
+    with zipfile.ZipFile(path) as zf:
+        payload = json.loads(zf.read(inker_ora.ANIMATION_MEMBER))
+    assert payload["tags"]
+    assert all("repeat" not in tag for tag in payload["tags"])
+
+
 # --- the directional layout -------------------------------------------------
 
 

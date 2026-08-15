@@ -441,6 +441,7 @@ class AnimOps:
             start=min(start, end),
             end=max(start, end),
             loop=bool(tag.loop),
+            repeat=max(0, int(tag.repeat)),
         )
 
     def _push_tags(self: Document, tags: list[Tag]) -> bool:

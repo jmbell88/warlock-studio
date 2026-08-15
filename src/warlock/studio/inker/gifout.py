@@ -55,6 +55,7 @@ __all__ = [
     "GIF_TICK_MS",
     "MAX_PALETTE",
     "TRANSPARENT_INDEX",
+    "loop_option",
     "map_to_palette",
     "quantise",
     "write_gif",
@@ -163,12 +164,34 @@ def tick_durations(durations_ms: Sequence[int]) -> list[int]:
     ]
 
 
+def loop_option(loop: bool | int) -> dict[str, int]:
+    """The ``loop=`` keyword Pillow wants, or nothing at all.
+
+    **The netscape extension counts *additional* plays, not total ones.** That
+    off-by-one is the whole reason this is a named function with a test rather
+    than an expression at the call site: a tag set to play three times has to
+    be written as ``loop=2``, and the block is emitted at all only when the
+    file should play more than once.
+
+    So: True is forever (``0``); False is play-once, which the format spells by
+    *omitting* the block; a count of 1 is play-once too and omits it for the
+    same reason; and a count of two or more asks for that many minus one.
+
+    ``isinstance`` before any arithmetic, because ``True == 1`` in Python and
+    the two mean opposite things here -- loop forever versus play exactly once.
+    """
+    if isinstance(loop, bool):
+        return {"loop": 0} if loop else {}
+    count = int(loop)
+    return {"loop": count - 1} if count >= 2 else {}
+
+
 def write_gif(
     path: Any,
     frames: Sequence[np.ndarray],
     durations_ms: Sequence[int],
     *,
-    loop: bool = True,
+    loop: bool | int = True,
     palette: Sequence[Any] | None = None,
 ) -> None:
     """Write one animated GIF. Off-thread: takes arrays, not a document.
@@ -176,6 +199,9 @@ def write_gif(
     With *palette*, the document's own colour table is written verbatim; see
     the module docstring. A palette too long for the format falls back to the
     adaptive quantiser rather than dropping swatches.
+
+    ``loop`` takes a tag's repeat count as well as a flag; see
+    :func:`loop_option` for what each spelling writes.
     """
     if not frames:
         raise ValueError("a gif needs at least one frame")
@@ -197,7 +223,7 @@ def write_gif(
             append_images=images[1:],
             duration=tick_durations(durations_ms),
             # 0 means forever; omitting the key entirely means play once.
-            **({"loop": 0} if loop else {}),
+            **loop_option(loop),
             transparency=TRANSPARENT_INDEX,
             # Restore to the background before each frame. Without it a frame
             # whose subject has moved is drawn over the previous one and every

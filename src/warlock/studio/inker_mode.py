@@ -1210,6 +1210,11 @@ def toggle_play(ctx: Any, tab: InkerDoc | None = None) -> None:
     # resumed would otherwise carry on inwards from wherever it was, which reads
     # as the clip playing backwards for no reason anyone watching can see.
     tab.play_forward = True
+    # Every play starts the repeat count over. A tag set to play three times
+    # and stopped halfway must play three times again when it is started, not
+    # remember that it already finished once -- the same argument
+    # ``play_forward`` above makes about a ping-pong's leg.
+    tab.play_cycles = 0
 
 
 def stop_play(tab: InkerDoc) -> None:
@@ -1234,7 +1239,7 @@ def tick_playback(tab: InkerDoc, dt_ms: float) -> None:
     if not tab.playing or anim is None:
         return
     durations = [frame.duration_ms for frame in anim.frames]
-    index, accum, playing, forward = animation.advance(
+    index, accum, playing, forward, cycles = animation.advance(
         durations,
         tab.play_index,
         tab.play_accum_ms,
@@ -1242,8 +1247,11 @@ def tick_playback(tab: InkerDoc, dt_ms: float) -> None:
         anim.loop_range(tab.play_index),
         direction=anim.play_direction(tab.play_index),
         forward=tab.play_forward,
+        repeat=anim.play_repeat(tab.play_index),
+        cycles=tab.play_cycles,
     )
     tab.play_index, tab.play_accum_ms, tab.play_forward = index, accum, forward
+    tab.play_cycles = cycles
     if not playing:
         stop_play(tab)
 

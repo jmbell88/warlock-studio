@@ -331,6 +331,15 @@ worth having — a torch flicker or an idle breath drawn as frames costs the who
 cels, every one of them a duplicate of a drawing already in the file, and every edit to the middle
 of the swing then has to be made twice.
 
+A tag can also **repeat** a fixed number of times. Set **repeat** in the tag's menu to 3 and the
+span plays three times and stops; leave it at 0 — the default, and what every document written
+before this carries — and the Loop tick decides as it always has. While a count is set the Loop
+tick is disabled, because the count is the more specific answer to the same question. When the
+count runs out playback **stops inside the tag**, on the frame the span ends at; it does not fall
+through into the frames after it, which is where Aseprite would carry on. A ping-pong counts one
+out-and-back as one play. Repeats are saved with the document and written into a sprite sheet's
+sidecar, and a tag exported on its own as a GIF carries its count into the file.
+
 Two things are unavailable while a document is animated: **merge down** and **flatten**. Both are
 defined over one layer stack and an animated document has one per frame, so rather than guess which
 frame you meant, the buttons say so.

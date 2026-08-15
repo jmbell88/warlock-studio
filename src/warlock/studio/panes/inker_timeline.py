@@ -378,7 +378,14 @@ DIRECTION_NOTES = {"forward": "", "reverse": "reverse", "pingpong": "ping-pong"}
 
 def _tag_note(tag: Any) -> str:
     """The parenthesised aside after a tag's name, or nothing to say."""
-    parts = [DIRECTION_NOTES.get(tag.direction, ""), "" if tag.loop else "once"]
+    repeat = int(getattr(tag, "repeat", 0) or 0)
+    parts = [
+        DIRECTION_NOTES.get(tag.direction, ""),
+        # A repeat count *replaces* the loop note rather than joining it: it is
+        # the answer to the same question -- how many times does this play --
+        # and printing "once" beside "x3" would be two answers to it.
+        f"x{repeat}" if repeat else ("" if tag.loop else "once"),
+    ]
     said = [part for part in parts if part]
     return f" ({', '.join(said)})" if said else ""
 
@@ -428,8 +435,26 @@ def _tag_menu(ctx: Any, tab: Any, index: int, tag: Any) -> None:
         doc.set_tag(index, start=doc.anim.current)
     if imgui.menu_item_simple(f"End at frame {doc.anim.current + 1}"):
         doc.set_tag(index, end=doc.anim.current)
+    repeat = int(getattr(tag, "repeat", 0) or 0)
+    # Disabled rather than hidden: a count is the more specific answer to "how
+    # many times", so while one is set the flag has nothing left to decide --
+    # and an enabled tick that changed nothing would read as a bug in the flag.
+    imgui.begin_disabled(repeat > 0)
     if imgui.menu_item_simple("Loop", "", tag.loop):
         doc.set_tag(index, loop=not tag.loop)
+    imgui.end_disabled()
+    # Straight onto ``set_tag``, which snapshots the whole tag list into a
+    # ``TagsEdit`` -- so a repeat count is undoable for free and needs no edit
+    # type of its own. 0 hands the question back to the Loop flag above.
+    imgui.set_next_item_width(sp(90))
+    changed, value = imgui.input_int("repeat", repeat, 1, 1)
+    if changed:
+        doc.set_tag(index, repeat=max(0, int(value)))
+    widgets.help_marker(
+        "How many times this tag plays before stopping. 0 leaves it to the Loop"
+        " flag. Playback stays inside the tag when the count runs out -- it does"
+        " not carry on into the frames after it."
+    )
     # Radio items rather than a submenu: three mutually exclusive values that
     # each fit on a line, and the tick is the answer to "which way does this
     # one go" without a hover. Straight off ``animation.DIRECTIONS`` -- a

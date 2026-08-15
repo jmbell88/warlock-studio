@@ -143,3 +143,55 @@ def test_the_reserved_index_is_never_spent_on_a_colour():
         assert int(np.asarray(indexed).max()) < gifout.TRANSPARENT_INDEX
     finally:
         indexed.close()
+
+
+# --- repeat counts (C7) ------------------------------------------------------
+#
+# A GIF says "play this many more times" in a 19-byte netscape application
+# extension, and the count in it is *additional* plays rather than total ones.
+# Every one of the assertions below is about that off-by-one, and none of them
+# is visible in a viewer that happens to loop everything anyway -- so they are
+# pinned as bytes in the file rather than as whatever Pillow reports back.
+
+#: ``21 FF 0B "NETSCAPE2.0" 03 01 <count lo> <count hi> 00``.
+NETSCAPE = b"\x21\xff\x0bNETSCAPE2.0\x03\x01"
+
+
+def _netscape_block(path):
+    """The 19 bytes of the loop extension, or None when the file has none."""
+    data = path.read_bytes()
+    at = data.find(NETSCAPE)
+    return None if at < 0 else data[at : at + 19]
+
+
+def test_the_loop_option_counts_additional_plays_not_total_ones():
+    # True and 1 are the same integer in Python and mean opposite things here,
+    # which is exactly why the function tests the type before the value.
+    assert gifout.loop_option(True) == {"loop": 0}
+    assert gifout.loop_option(False) == {}
+    assert gifout.loop_option(1) == {}
+    assert gifout.loop_option(2) == {"loop": 1}
+    assert gifout.loop_option(3) == {"loop": 2}
+
+
+def test_a_forever_loop_writes_a_zero_count_netscape_block(tmp_path):
+    dest = tmp_path / "forever.gif"
+    plane = _plane((4, 4), (10, 200, 10, 255))
+    gifout.write_gif(dest, [plane] * 2, [100, 100], loop=True)
+    assert _netscape_block(dest) == NETSCAPE + b"\x00\x00\x00"
+
+
+def test_a_repeat_of_one_omits_the_block_entirely(tmp_path):
+    dest = tmp_path / "once.gif"
+    plane = _plane((4, 4), (10, 200, 10, 255))
+    gifout.write_gif(dest, [plane] * 2, [100, 100], loop=1)
+    # Play once is spelled by the block's *absence*; a block saying "0 more
+    # plays" is the format's way of saying forever.
+    assert _netscape_block(dest) is None
+
+
+def test_a_repeat_of_three_asks_for_two_more_plays(tmp_path):
+    dest = tmp_path / "thrice.gif"
+    plane = _plane((4, 4), (10, 200, 10, 255))
+    gifout.write_gif(dest, [plane] * 2, [100, 100], loop=3)
+    assert _netscape_block(dest) == NETSCAPE + b"\x02\x00\x00"
