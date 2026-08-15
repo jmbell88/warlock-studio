@@ -43,11 +43,13 @@ from ._doc_indexed import IndexedOps
 from ._doc_layers import LayerOps
 from ._doc_paint import SHAPES, PaintOps, normalise_rect
 from ._doc_selection import SelectionOps
+from ._doc_slices import SliceOps
 from .anim_edits import CelSetEdit
 from .animation import Animation
 from .brush import StrokeState
 from .layers import Layer, LayerStack
 from .selection import Clipboard, FloatingBuffer, SelectionMask
+from .slices import Slice
 from .undo import (
     UNDO_BYTES,
     CompoundEdit,
@@ -95,7 +97,8 @@ def matte_for(pixels: np.ndarray) -> RGBA | None:
 
 @dataclass
 class Document(
-    AnimOps, PaintOps, HistoryOps, SelectionOps, LayerOps, GeometryOps, IndexedOps
+    AnimOps, PaintOps, HistoryOps, SelectionOps, LayerOps, GeometryOps, IndexedOps,
+    SliceOps,
 ):
     stack: LayerStack
     matte: RGBA | None = None
@@ -114,6 +117,11 @@ class Document(
     #: carry. See :mod:`.indexed` for why this is a constraint on writes rather
     #: than an index plane.
     palette: list[RGBA] | None = None
+    #: Named rectangles on the canvas -- pivots, hitboxes, nine-slice panels.
+    #: On the *document* rather than on the grid because a still drawing has
+    #: them too (a nine-slice button is one PNG), and the per-frame overrides
+    #: live inside each slice. See :mod:`.slices`.
+    slices: list[Slice] = field(default_factory=list)
 
     _composite: np.ndarray = field(init=False, repr=False)
     #: Per-frame change counters, keyed by frame uid, for the flatten cache.
@@ -636,13 +644,18 @@ class Document(
         size = self.size
         active = self.stack.active_index
         mask = None if self.mask is None else self.mask.mask.copy()
+        # Copied *before* the op, and with their uids kept, for the reason the
+        # layer snapshot above gives: the edit holds these for as long as it is
+        # on the stack, so a later drag must not write into them, and every
+        # slice edit already pushed names its slice by the uid it has now.
+        slices = [entry.copy() for entry in self.slices]
         run()
 
         def replay(doc: Any) -> None:
             run()
             doc.invalidate_all()
 
-        self.history.push(ReplayEdit(snapshot, size, active, replay, mask, grid))
+        self.history.push(ReplayEdit(snapshot, size, active, replay, mask, grid, slices))
         self.invalidate_all()
 
     def _grid_snapshot(self) -> dict[str, Any] | None:

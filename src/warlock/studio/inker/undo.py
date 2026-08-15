@@ -255,13 +255,19 @@ class ReplayEdit(Edit):
     #: equal copies where the document had one shared object and silently
     #: break every link in it.
     grid: Any = None
+    #: The document's slices as they stood, or None on a document that has
+    #: none. Trailing and defaulted, so every existing construction site is
+    #: unchanged. They are carried rather than re-derived because a whole-canvas
+    #: op *moves* them -- a crop that clamped a slice to 1x1 cannot be reversed
+    #: by any arithmetic on the result.
+    slices: Any = None
 
     def __post_init__(self) -> None:
         self.selection = _pack(self.selection)
         self.cost = sum(int(layer.pixels.nbytes) for layer in self.snapshot)
 
     def undo(self, doc: Any) -> None:
-        doc.restore_snapshot(self.snapshot, self.size, self.active, self.grid)
+        doc.restore_snapshot(self.snapshot, self.size, self.active, self.grid, self.slices)
         doc.set_selection_mask(_unpack(self.selection))
 
     def redo(self, doc: Any) -> None:
