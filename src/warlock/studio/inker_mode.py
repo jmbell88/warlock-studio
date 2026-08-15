@@ -14,6 +14,7 @@ state (``InkerDoc.saving``) rather than a function call that returns.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -572,6 +573,91 @@ def export_png(ctx: Any, tab: InkerDoc | None = None) -> None:
             dest = dest.with_suffix(".png")
         dest.write_bytes(doc.png_bytes(scale=scale))
         return {"exported": dest}
+
+    _start(ctx, tab, f"inker-export:{tab.uid}", run)
+
+
+#: A filesystem-safe stem: the same character set ``plotter.tmx._stem`` allows,
+#: because both are a slice's or a tileset's *name* headed for a filename and
+#: there is no reason for the two rules to disagree.
+_SLICE_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _slice_filenames(entries: list[Any]) -> list[str]:
+    """Sanitised, collision-free file stems, one per slice, in document order.
+
+    S1 does not pin slice names unique -- two slices called "Hitbox" are a
+    legitimate authoring choice -- so this is where the collision is caught: the
+    first "Hitbox" keeps its name and the second becomes "Hitbox_2", the same
+    shape ``tmx._stem`` uses for two tilesets that share a name, with a trailing
+    counter rather than a leading index because a human picks these files off a
+    folder listing instead of an engine matching them by position.
+    """
+    seen: dict[str, int] = {}
+    out = []
+    for entry in entries:
+        safe = _SLICE_SAFE.sub("-", entry.name).strip("-") or "slice"
+        count = seen.get(safe, 0) + 1
+        seen[safe] = count
+        out.append(safe if count == 1 else f"{safe}_{count}")
+    return out
+
+
+def export_slices(ctx: Any, tab: InkerDoc | None = None) -> None:
+    """Every slice as its own PNG, cropped from the current frame's flatten.
+
+    Each slice resolves ``at(current_frame_uid)`` -- so a keyed slice exports
+    the rectangle the panel beside it is showing right now, on a still document
+    exactly as on an animated one. A per-frame *matrix* of one crop per slice
+    per frame is a different export and stays out of scope here; it is
+    Packwright's job.
+
+    Not spread through the stepper the animated exports use: this reads one
+    flatten, not one per frame, so there is nothing to spend across app frames.
+    The geometry -- names and bounds -- is resolved here, on the frame thread,
+    for ``_submit_export``'s reason about ``slices_snapshot``: the tab is
+    locked (``saving``) for the rest of the call, so "now" and "inside the
+    task" would answer the same question, and every other read in this
+    function already happens here.
+    """
+    tab = tab or active(ctx)
+    if tab is None or tab.busy:
+        return
+    doc = tab.doc
+    if not doc.slices:
+        return
+    _settle(ctx, tab)
+    suggested = tab.path.stem if tab.path else "untitled"
+    state = ctx.state.inker
+    scale = max(1, int(getattr(state, "export_scale", 1) or 1))
+    frame_uid = tab.frame_uid
+    names = _slice_filenames(doc.slices)
+    crops = [
+        (name, entry.at(frame_uid).bounds)
+        for name, entry in zip(names, doc.slices, strict=True)
+    ]
+
+    def run() -> dict[str, Any] | None:
+        from PIL import Image
+
+        from .inker.transform import upscale
+
+        dest = dialogs.save_file("Export slices as PNGs", f"{suggested}.png", PNG_FILTER)
+        if dest is None:
+            return None
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        # Read here, inside the task, for ``_write``'s reason: the encoders only
+        # read, and the frame thread only ever appends to a layer's pixels in
+        # place, so the worst this catches is a stroke that was mid-flight.
+        flat = doc.flatten()
+        first = None
+        for name, (x0, y0, x1, y1) in crops:
+            crop = upscale(flat[y0:y1, x0:x1], scale)
+            out = dest.parent / f"{name}.png"
+            Image.fromarray(crop, "RGBA").save(out, "PNG")
+            if first is None:
+                first = out
+        return {"exported": first}
 
     _start(ctx, tab, f"inker-export:{tab.uid}", run)
 
