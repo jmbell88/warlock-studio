@@ -256,6 +256,7 @@ def test_busy_keys_can_be_asked_about_by_prefix(tasks):
     _wait(tasks, "derive:model.stl")
 
 
+@pytest.mark.perf
 def test_a_bounded_shutdown_returns_while_a_task_is_still_parked():
     """A native save dialog blocks until the user dismisses it, and by shutdown
     the window it belongs to is already destroyed. An unbounded wait there is a

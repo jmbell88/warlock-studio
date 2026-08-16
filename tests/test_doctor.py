@@ -440,28 +440,55 @@ def test_a_checkpoint_that_will_not_load_is_red_once_the_probe_runs(tmp_path):
     assert row.fatal is False  # a missing pose model costs joint placement, not a job
 
 
-def test_the_load_probe_is_keyed_on_the_weights_directory(tmp_path):
+def test_the_load_probe_is_keyed_on_the_weights_directory(tmp_path, monkeypatch):
     """Not on the kind. The bpy answer can be a bare global because it is a
     fact about the interpreter; this is a fact about a path, and
     ``WARLOCK_T2I_ROOT`` moves it -- so a kind-keyed cache would answer the
-    second config with the first one's result."""
-    from warlock.pipelines import pose2d
+    second config with the first one's result.
 
+    The probe itself is stubbed. Letting the real one run spawned a child
+    interpreter and a torch import to reach an answer this test never reads --
+    five seconds to establish a dictionary lookup.
+
+    The cache is warmed by *running the checks* against ``good`` rather than by
+    writing an entry into ``_probes`` by hand, and that is the whole difference
+    between this test and the one it replaces. Seeding the dict directly pins
+    the key's current shape: mutate the production key to ``which`` alone and
+    the hand-written tuple simply stops matching, so the lookup misses, the
+    stub runs, and the old test passed the very mutation it was written to
+    catch. Warming it through the real path means the cache is keyed however
+    the code chooses -- and a kind-keyed one then answers ``bad`` with
+    ``good``'s ``True``, which is exactly what the last assertion refuses.
+    """
     spec = model_registry.POSE_MODELS[model_registry.DEFAULT_POSE_MODEL]
     good, bad = tmp_path / "good", tmp_path / "bad"
     for root in (good, bad):
         (root / spec.dir_name).mkdir(parents=True)
         (root / spec.dir_name / "config.json").write_text("{}", encoding="utf-8")
 
-    doctor._probes[("pose", str(pose2d.model_dir(_config(tmp_path, t2i_model_root=good))))] = (
-        True,
-        "loads",
-    )
-    rows = {
-        c.name: c
-        for c in run_checks(_config(tmp_path, t2i_model_root=bad))
-    }
-    assert rows[f"pose model: {spec.label}"].ok is False
+    # The global survives the test that filled it, so it is restored rather
+    # than left holding this tmp_path's answers for whatever runs next.
+    monkeypatch.setattr(doctor, "_probes", {})
+    probed = []
+
+    def stub(_which, path):
+        probed.append(path)
+        # ``good`` loads and ``bad`` does not: two different answers is what
+        # makes reusing one for the other detectable at all.
+        return (good in path.parents, "stub")
+
+    monkeypatch.setattr(doctor, "_run_load_probe", stub)
+
+    def row(root):
+        checks = {c.name: c for c in run_checks(_config(tmp_path, t2i_model_root=root))}
+        return checks[f"pose model: {spec.label}"]
+
+    assert row(good).ok is True
+    assert len(probed) == 1
+    # Same kind, different directory. A cache keyed on the kind alone would
+    # hand back ``good``'s answer here without asking.
+    assert row(bad).ok is False
+    assert len(probed) == 2
 
 
 # --- N112: the load probe, and why it is a child process --------------------

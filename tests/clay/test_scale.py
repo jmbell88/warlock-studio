@@ -37,6 +37,15 @@ SIDE = 200
 
 BUDGET = 3.0  # seconds; see the module docstring on why this is generous
 
+# Every test below that asserts against BUDGET carries ``@pytest.mark.perf`` and
+# is therefore deselected by the default (parallel) run: a wall-clock budget
+# measured while the other workers saturate the cores is a reading about the
+# scheduler, not about whether the adjacency build is still one sort. They are
+# the point of this file, so they are run -- serially -- by
+# ``uv run pytest -m perf -n 0``. ``test_the_fixture_really_is_at_scale`` is
+# unmarked on purpose: it asserts shape, not time, and guards the others'
+# premise.
+
 
 @pytest.fixture(scope="module")
 def soup() -> bm.Mesh:
@@ -79,11 +88,13 @@ def test_the_fixture_really_is_at_scale(soup: bm.Mesh) -> None:
     assert len(soup.positions) == (SIDE + 1) ** 2
 
 
+@pytest.mark.perf
 def test_building_the_adjacency_is_one_sort_not_a_loop(soup: bm.Mesh) -> None:
     elapsed = _timed(lambda: adj._build(soup))
     assert elapsed < BUDGET, f"adjacency took {elapsed:.2f}s"
 
 
+@pytest.mark.perf
 def test_triangulating_stays_on_the_fan_fast_path(soup: bm.Mesh) -> None:
     """A convex mesh must never reach the per-face ear search.
 
@@ -101,6 +112,7 @@ def test_triangulating_stays_on_the_fan_fast_path(soup: bm.Mesh) -> None:
     assert elapsed < BUDGET, f"triangulate took {elapsed:.2f}s"
 
 
+@pytest.mark.perf
 def test_subdividing_the_whole_mesh_is_vectorised(soup: bm.Mesh) -> None:
     def run() -> None:
         out, _ = sub.subdivide(soup, el.empty())
@@ -109,6 +121,7 @@ def test_subdividing_the_whole_mesh_is_vectorised(soup: bm.Mesh) -> None:
     assert _timed(run) < BUDGET * 2, "subdivide is the heaviest of the four"
 
 
+@pytest.mark.perf
 def test_a_marquee_over_every_vertex_is_two_comparisons(soup: bm.Mesh) -> None:
     eye = m3.vec3(SIDE * 0.5, SIDE * 1.5, SIDE * 0.5)
     view = m3.look_at(eye, m3.vec3(SIDE * 0.5, 0.0, SIDE * 0.5), m3.vec3(0, 0, -1))
@@ -124,6 +137,7 @@ def test_a_marquee_over_every_vertex_is_two_comparisons(soup: bm.Mesh) -> None:
     assert _timed(run) < BUDGET, "a marquee runs while the mouse is moving"
 
 
+@pytest.mark.perf
 def test_element_helpers_do_not_walk_face_by_face(soup: bm.Mesh) -> None:
     """``corner_spans`` and ``region_boundary_corners`` run per interaction."""
     faces = np.arange(0, SIDE * SIDE, 2)

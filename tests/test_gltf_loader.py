@@ -377,6 +377,7 @@ def test_the_real_meshs_transform_is_on_a_child_not_the_root():
 
 
 @needs_real
+@pytest.mark.perf
 def test_loading_the_real_mesh_is_fast_enough_to_do_on_a_click():
     import time
 

@@ -91,6 +91,8 @@ dev = [
     "fonttools>=4.50",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "pytest-timeout>=2.3",
+    "pytest-xdist>=3.6",
     "ruff>=0.6",
 ]
 
@@ -141,7 +143,10 @@ select = ["E", "F", "I", "W", "UP", "B", "SIM"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-markers = ["gpu: requires local GPU + model weights (opt in with '-m gpu')"]
+markers = [
+    "gpu: requires local GPU + model weights (opt in with '-m gpu -n 0')",
+    "perf: asserts a wall-clock budget; run serially with '-m perf -n 0'",
+]
 # The marker was registered and nothing excluded it, so "deselected by default"
 # was true only on a host that could not run them: on an unprovisioned machine
 # the gpu tests skipped at a fixture and looked deselected, while a provisioned
@@ -149,4 +154,38 @@ markers = ["gpu: requires local GPU + model weights (opt in with '-m gpu')"]
 # modules' docstrings claimed the deselection, so the claim is made true here
 # rather than deleted. `-m gpu` on the command line overrides this (pytest takes
 # the last -m it is given), which is the documented way to run the lane.
-addopts = ["-m", "not gpu"]
+#
+# `perf` joins it for the opposite reason: those tests assert a wall-clock
+# budget, and a budget measured while fifteen sibling workers fight for the same
+# cores is a measurement of the scheduler. They are still run, serially, by
+# `uv run pytest -m perf -n 0`.
+#
+# `--dist loadfile` is not a tuning knob, it is what keeps two invariants true.
+# Every test in a file lands on one worker, which preserves (a) "at most one
+# imgui context alive at a time", upheld today by within-file ordering (see
+# tests/test_section_blocks.py's imgui_ctx docstring -- two contexts over the
+# one GL context crash the process), and (b) the module-level `_CACHE.clear()`
+# couplings in test_bench_findings.py, test_changelog_cache.py and
+# test_provenance.py. `--dist load` would scatter both.
+#
+# `--timeout 120` is a hang net rather than a budget: several tests spawn child
+# interpreters, and a wedged one used to hold the whole run open. The slowest
+# surviving test is ~5 s, so this only ever fires on a genuine hang.
+#
+# A single test is quicker without the workers: `uv run pytest path::name -n 0`.
+#
+# Eight workers, measured, not `auto`. The curve on this 24-core machine is
+# 4 -> 71.9 s, 6 -> 59.7 s, 8 -> 54.2 s, 10 -> 54.3 s, 12 -> 55.3 s,
+# 16 -> 59.6 s, 24 (`auto`) -> 64.1 s: it flattens at eight and then gets
+# *worse*, because past that point the run is paying for redundant interpreter
+# startup and imports rather than running tests. `auto` is therefore both the
+# slowest setting above six and the least safe one -- at 24 workers the suite
+# intermittently failed on memory, twice in twelve runs (an 8192x8192xf32 canvas
+# in test_inker_mode.py is 1 GiB by design, and this box idles at 53 of its 69.5
+# GiB commit limit already). Eight is the fast answer and the sober one.
+addopts = [
+    "-m", "not gpu and not perf",
+    "-n", "8",
+    "--dist", "loadfile",
+    "--timeout", "120",
+]

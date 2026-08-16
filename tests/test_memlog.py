@@ -28,7 +28,9 @@ def test_process_memory_reports_a_plausible_private_commit():
 
 
 @windows_only
-def test_system_commit_is_reported_in_gib_not_pages():
+def test_system_commit_is_reported_in_gib_not_pages(real_system_memory):
+    # ``real_system_memory`` undoes the suite-wide roomy pin: this test is about
+    # what the real reader returns, and a pinned one would pass it by fiat.
     sysmem = memlog.system_memory()
     assert sysmem is not None
     assert 0 < sysmem.commit_total < sysmem.commit_limit
@@ -58,7 +60,9 @@ def test_summary_survives_one_half_being_unavailable(monkeypatch):
     assert memlog.summary() == "commit 40.0/80.0 GiB (50%)"
 
 
-def test_readings_are_none_off_windows(monkeypatch):
+def test_readings_are_none_off_windows(monkeypatch, real_system_memory):
+    # The real reader for the same reason as above: the platform guard under
+    # test lives inside it, and the suite-wide pin does not have one.
     monkeypatch.setattr(memlog.sys, "platform", "linux")
     assert memlog.process_memory() is None
     assert memlog.system_memory() is None

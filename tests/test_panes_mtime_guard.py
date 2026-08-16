@@ -80,14 +80,22 @@ class _PaletteCtx:
 def _palette_dir(monkeypatch, svc, tmp_path, *, make=True):
     """Point the config at a throwaway palette directory.
 
-    ``palette_dir`` defaults to PROJECT_ROOT/palettes and the ``svc`` fixture
-    does not relocate it, so a test that wrote a palette without this would drop
-    files into the developer's own directory -- the accident the fixture's own
-    WARLOCK_BENCH_DIR note describes, in a directory nothing would rebuild.
+    The note this replaces said ``palette_dir`` defaults to PROJECT_ROOT/palettes
+    and that ``svc`` does not relocate it. Neither is true any more: the default
+    moved under the app's home, and ``svc`` pins WARLOCK_PALETTE_DIR at
+    ``tmp_path / "palettes"`` -- the very path this returned.
+
+    That made ``make=False`` a no-op, and quietly. ``get_config()._ensure_dirs``
+    creates ``palette_dir``, so the "missing directory" case was handed an
+    *existing empty* one and passed for the wrong reason -- ``_palette_names``
+    answers ``[]`` to both. The absent case therefore names a directory nothing
+    creates, which is the only way to tell the two apart.
     """
-    directory = tmp_path / "palettes"
+    directory = tmp_path / ("palettes" if make else "palettes-that-were-never-made")
     if make:
         directory.mkdir(parents=True, exist_ok=True)
+    else:
+        assert not directory.exists()
     monkeypatch.setattr(svc.config, "palette_dir", directory)
     return directory
 

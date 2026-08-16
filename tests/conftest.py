@@ -8,19 +8,81 @@ from __future__ import annotations
 import asyncio
 import functools
 import os
+import re
 import threading
 import time
 from pathlib import Path
 
 import pytest
 
+from warlock import memlog
 from warlock.db import JobStore
 from warlock.models import DEFAULT_LORA_WEIGHT
 from warlock.pipelines.text2image import JobCancelled
 
+# Captured before anything can patch it, so ``real_system_memory`` can hand the
+# genuine reader back to the one test that is about what it reads.
+_REAL_SYSTEM_MEMORY = memlog.system_memory
+
+# Set by ``pytest_configure`` when the gpu lane is the one selected. That lane is
+# the single exception to the WARLOCK_HOME pin below -- see ``_no_migration``.
+_GPU_LANE = False
+
+
+def _selects_gpu(config) -> bool:
+    """Whether this invocation is asking *for* the gpu tests.
+
+    The negated mention is skipped deliberately: the default expression is
+    ``not gpu and not perf``, so a plain substring test answers yes to every
+    ordinary run.
+    """
+    return bool(re.search(r"(?<!not )\bgpu\b", config.getoption("-m") or ""))
+
+
+def pytest_configure(config):
+    """Refuse ``-m gpu`` under xdist, and only that combination.
+
+    The default run is ``-n auto``, which is right for 8,700 tests that fake
+    every model. It is exactly wrong for the gpu lane: those tests load real
+    7 GB checkpoints onto the one card in this machine, so N workers means N
+    simultaneous loads and an out-of-memory failure that reads like a bug in
+    whatever test happened to lose. Erroring here rather than in a fixture
+    because by fixture time the workers already exist.
+
+    The match deliberately skips a negated mention. The *default* expression is
+    ``not gpu and not perf``, so a plain substring test fires this refusal on
+    every ordinary run -- which it duly did the first time it was written.
+    """
+    global _GPU_LANE
+
+    if not _selects_gpu(config):
+        return
+    _GPU_LANE = True
+    if (config.getoption("numprocesses", None) or 0) not in (0, None):
+        raise pytest.UsageError(
+            "the gpu lane must run serially -- real weights, one card. "
+            "Use: uv run pytest -m gpu -n 0"
+        )
+
 
 @pytest.fixture(scope="session", autouse=True)
-def _no_migration():
+def _no_imgui_ini():
+    """No run may leave an ``imgui.ini`` in the working directory.
+
+    imgui writes one on shutdown unless ``set_ini_filename(None)`` is called,
+    and a stray one is a cross-process hazard rather than clutter: it restores
+    remembered window geometry into the next process, which once failed
+    eighteen untouched tests. All four sites that build a context suppress it
+    today; this is what makes a fifth site fail loudly instead of quietly
+    seeding the next run.
+    """
+    yield
+    stray = Path.cwd() / "imgui.ini"
+    assert not stray.exists(), f"a test left {stray} behind; call set_ini_filename(None)"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_migration(tmp_path_factory):
     """Nothing in the suite may move the developer's real library.
 
     ``config.get_config()`` runs the one-time ``~/.warlock`` migration, and a
@@ -31,14 +93,69 @@ def _no_migration():
     the whole accident, and there is no test in this repo that wants the real
     migration to run (``test_home_migration.py`` clears it explicitly and points
     every path at ``tmp_path``).
+
+    And ``WARLOCK_HOME`` is pinned at a throwaway directory for the second half
+    of the same problem. ``WARLOCK_NO_MIGRATE`` stops the suite *moving* the
+    developer's library; it does nothing about the suite *reading* it, and every
+    root resolves under ``_home()`` (config.py:49) unless its own variable is
+    set. So any test that built a ``Config`` without naming ``t2i_model_root``
+    got the real ``~/.warlock/models`` -- and with birefnet downloaded there,
+    ``matting.mask`` ran a genuine ~12 s CPU inference. Measured on
+    2026-08-16: ``test_sprite_synthesis_worker.py`` alone went 160.8 s -> 4.2 s
+    with this pin, and ``test_doctor.py``'s child load probes stopped finding
+    weights to load.
+
+    Speed is the smaller half. The real defect is that those tests produced a
+    *different matte* on a machine with the weights than on one without, which
+    is precisely the "a test about the fallback must pin the fallback" rule the
+    ``svc`` fixture below states five times over -- stated once here instead,
+    because ``WARLOCK_HOME`` moves every root at once and a per-root pin has to
+    be remembered by every file that builds its own Config. Thirteen did not.
+
+    A test that wants the real home clears the variable, as
+    ``test_home_migration.py`` already does for all seven roots.
+
+    **The gpu lane is exempt, and has to be.** Those tests resolve their
+    checkpoints through ``get_config().t2i_model_root`` and ``pytest.skip`` when
+    the files are not there -- deliberately, because every weight is a manual
+    download. Pinned home, the whole lane would therefore go green as eighteen
+    skips: a run that loaded nothing, tested nothing, and said nothing about it.
+    That is the same silent-pass this pin exists to prevent, so the one lane that
+    genuinely wants the developer's real library keeps it.
     """
-    previous = os.environ.get("WARLOCK_NO_MIGRATE")
+    if _GPU_LANE:
+        # Real home, real weights. WARLOCK_NO_MIGRATE below still applies: the
+        # lane may read the library, never move it.
+        previous = os.environ.get("WARLOCK_NO_MIGRATE")
+        os.environ["WARLOCK_NO_MIGRATE"] = "1"
+        yield
+        if previous is None:
+            os.environ.pop("WARLOCK_NO_MIGRATE", None)
+        else:
+            os.environ["WARLOCK_NO_MIGRATE"] = previous
+        return
+
+    home = tmp_path_factory.mktemp("warlock-home")
+    # The same four directories ``get_config()._ensure_dirs`` makes, because a
+    # real ``~/.warlock`` has them and the pin is only supposed to change what
+    # is *in* the model root -- not whether the roots exist. Left out, tests
+    # that build a bare ``Config`` (bypassing ``_ensure_dirs``) hit
+    # ``doctor._disk_check``'s ``shutil.disk_usage`` on a path that is not
+    # there: three failed that way before this was added, none of them about
+    # disks. Empty, so ``matting.available`` is still False.
+    for name in ("assets", "models", "palettes"):
+        (home / name).mkdir(parents=True, exist_ok=True)
+    previous = {
+        name: os.environ.get(name) for name in ("WARLOCK_NO_MIGRATE", "WARLOCK_HOME")
+    }
     os.environ["WARLOCK_NO_MIGRATE"] = "1"
+    os.environ["WARLOCK_HOME"] = str(home)
     yield
-    if previous is None:
-        os.environ.pop("WARLOCK_NO_MIGRATE", None)
-    else:
-        os.environ["WARLOCK_NO_MIGRATE"] = previous
+    for name, was in previous.items():
+        if was is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = was
 
 
 @pytest.fixture(autouse=True)
@@ -63,6 +180,54 @@ def _no_native_dialogs(monkeypatch):
         instance, "alert_fatal", lambda *a, **k: (shown.append(a), False)[1]
     )
     return shown
+
+
+@pytest.fixture(autouse=True)
+def _roomy_host_memory(monkeypatch):
+    """No test's verdict may depend on how loaded this machine happens to be.
+
+    ``queue._require_commit_headroom`` refuses to dispatch when host commit is
+    at or past ``COMMIT_CEILING``, or when the commit limit has less free than
+    the model about to load needs. Both readings come from the real machine
+    through ``memlog.system_memory``, so on a busy box the queue tests stop
+    testing the queue and start testing the developer's other windows: the
+    2026-08-16 baseline run failed nine tests with "needs about 7.0 GiB ... only
+    8.0 GiB of the commit limit is free", none of them about memory.
+
+    The suite is its own worst offender, which is what makes this load-bearing
+    rather than tidy. A BiRefNet load leaves ~1 GiB resident per the arena note
+    in ``doctor._load_probe``, so the slow tests above were inflating the very
+    reading that then failed the tests after them -- and running the suite under
+    ``-n auto`` multiplies that by the worker count.
+
+    Pinned at ``memlog.system_memory`` rather than at ``queue.commit_fraction``
+    because that is the single reader both branches of the check share; a pin on
+    the fraction alone would leave the ``need_gib`` branch on real memory, which
+    is the branch that actually failed. Roomy rather than realistic: a test that
+    wants a refusal patches this itself (``test_queue.py`` does, twice), and
+    those patches still win -- they are applied after this one.
+
+    Exempt in the gpu lane, for the same reason ``_no_migration`` is: that lane
+    runs against the real card and the real weights, and a real-hardware lane
+    that reads a hand-written memory figure is not measuring the hardware.
+    """
+    if _GPU_LANE:
+        return
+    monkeypatch.setattr(
+        memlog, "system_memory", lambda: memlog.SystemMemory(commit_total=8.0, commit_limit=256.0)
+    )
+
+
+@pytest.fixture
+def real_system_memory(monkeypatch):
+    """The genuine reader, for the tests that are about what it reads.
+
+    ``_roomy_host_memory`` would otherwise quietly answer
+    ``test_memlog.py``'s pages-vs-bytes unit check with a hand-written figure --
+    a fabricated reading passing a test whose entire purpose is to catch a
+    fabricated-looking one.
+    """
+    monkeypatch.setattr(memlog, "system_memory", _REAL_SYSTEM_MEMORY)
 
 
 @pytest.fixture
@@ -267,7 +432,7 @@ class FakeTrellisServer:
         self.stop_threads: list[int] = []
         self.generate_calls: list[dict] = []
         self.slices = 5
-        self.sleep_per_slice = 0.02
+        self.sleep_per_slice = 0.005
         self.should_raise: Exception | None = None
         # When True, stop() no longer stands in for "the subprocess died and
         # unblocked the in-flight request" -- it just records that it was
@@ -352,7 +517,7 @@ class FakeText2Image:
         self.trim_calls = 0
         self.unload_threads: list[int] = []
         self.steps = 3
-        self.sleep_per_step = 0.02
+        self.sleep_per_step = 0.005
         self.prompts: list[str] = []
         self.lora_calls: list[tuple] = []
         self.negatives: list[str | None] = []

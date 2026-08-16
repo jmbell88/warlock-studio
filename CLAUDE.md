@@ -9,7 +9,11 @@ Local AI 3D asset generator: text or image prompt → SDXL 1.0 at full CFG (refe
 ## Commands
 
 - Install: `uv sync --extra studio --extra text2image --extra rig` — dev tooling is a dependency *group*, not an extra, and a bare `uv sync` prunes the extras (breaking ~10 test files at collection). `rig` needs a Python 3.13 venv or it silently installs nothing.
-- Tests: `uv run pytest` (single test: `uv run pytest tests/test_x.py::test_name`). Never edit `src/` while the suite runs — several tests read module source. The `gpu` marker is excluded by default; `uv run pytest -m gpu` is the opt-in lane (real card, real weights) and is what to run before changing model loading, VRAM accounting or conditioning.
+- Tests: `uv run pytest` — parallel by default (`-n 8 --dist loadfile`, ~55 s for 8,692 tests). Never edit `src/` while the suite runs — several tests read module source. Three lanes are excluded from the default run and each is opt-in:
+  - `uv run pytest -m gpu -n 0` — real card, real weights. Run it before changing model loading, VRAM accounting or conditioning. **Serial is enforced**: `-m gpu` under xdist is refused, because N workers means N simultaneous 7 GB loads onto one card. This is also the one lane that sees the real `~/.warlock` (see below).
+  - `uv run pytest -m perf -n 0` — the wall-clock budget assertions. Meaningless under contention, so they are never in the parallel run.
+  - `uv run pytest tests/test_x.py::test_name -n 0` — a single test is quicker without paying for worker startup.
+- `tests/conftest.py` pins `WARLOCK_HOME` at a throwaway directory for the whole session. Every config root resolves under it, so a test that builds a bare `Config` no longer reads the developer's real model library — which is what kept ~150 s of genuine BiRefNet CPU inference in the suite, and made those tests produce a different matte on a machine that had the weights. It also pins `memlog.system_memory`, so no test's verdict depends on how loaded the machine is. The gpu lane is exempt from both, deliberately: pinned, it would go green as skips.
 - Lint: `uv run ruff check .`
 - Optional native kernels: `pwsh native\build.ps1` → `vendor/warlockc/warlockc.dll` (gitignored; not needed to run anything).
 

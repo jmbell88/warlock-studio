@@ -10,7 +10,7 @@ import pytest
 
 from warlock.config import Config
 from warlock.db import JobStore
-from warlock.queue import POLL_INTERVAL, SHUTDOWN_TIMEOUT, Worker
+from warlock.queue import POLL_INTERVAL, Worker
 
 pytestmark = pytest.mark.asyncio
 
@@ -65,29 +65,57 @@ async def test_shutdown_with_job_running_returns_promptly(worker):
     assert time.monotonic() - start < 20.0
 
 
-async def test_shutdown_forces_cancel_after_timeout_when_trellis_ignores_stop(worker):
-    # If shutdown()'s forced task.cancel() fallback (the branch that fires
-    # after asyncio.wait_for(self._task, timeout=SHUTDOWN_TIMEOUT) raises
-    # TimeoutError) were deleted, this test would hang past its own
-    # asyncio.wait_for budget and fail with TimeoutError instead of
-    # completing -- unlike test_shutdown_with_job_running_returns_promptly,
-    # whose fake job always finishes on its own in ~0.1s regardless of
-    # whether cancellation ever reached it.
+async def test_shutdown_forces_cancel_after_timeout_when_trellis_ignores_stop(
+    worker, monkeypatch
+):
+    # shutdown()'s forced task.cancel() fallback -- the branch that fires after
+    # asyncio.wait_for(self._task, timeout=SHUTDOWN_TIMEOUT) raises
+    # TimeoutError -- against a trellis that ignores every stop, so the run can
+    # only end by being cancelled.
+    #
+    # It cost 20 real seconds, the most of any test in the suite, waiting out
+    # the true SHUTDOWN_TIMEOUT. Nothing here can tell one budget from another,
+    # so the timeout is patched down instead. Patched on the module because
+    # ``shutdown`` reads the global at call time; the bound below is written
+    # against the local name because a module-level ``from ... import
+    # SHUTDOWN_TIMEOUT`` would not see the patch.
+    #
+    # What this actually pins, established by mutation on 2026-08-16, is the
+    # *bound* -- not the explicit ``self._task.cancel()`` pair the name says.
+    # Deleting that pair changes nothing observable, because ``asyncio.wait_for``
+    # cancels its awaitable on timeout by itself (3.11+); the mutant passed at
+    # 20 s and at 1 s alike, and ``task.done()`` is true either way. The branch
+    # is belt-and-braces over what wait_for already guarantees.
+    #
+    # Replace the ``wait_for`` with a bare ``await self._task``, though, and this
+    # fails in about six seconds instead of sitting through the fake's ~100 s
+    # reconstruction. That is the regression worth owning, and the assertions
+    # below are written for it: shutdown returns inside the budget, and it does
+    # not leave the dispatch task running behind it.
+    import warlock.queue as queue_mod
+
+    timeout = 1.0
+    monkeypatch.setattr(queue_mod, "SHUTDOWN_TIMEOUT", timeout)
     _make_image_job(worker)
     worker.trellis.ignore_stop = True
     worker.trellis.slices = 100
-    worker.trellis.sleep_per_slice = 1.0  # total >> SHUTDOWN_TIMEOUT
+    worker.trellis.sleep_per_slice = 1.0  # total >> the patched SHUTDOWN_TIMEOUT
     worker.start()
     await _wait_until(lambda: worker.trellis.running)
+    task = worker._task
 
     start = time.monotonic()
-    await asyncio.wait_for(worker.shutdown(), timeout=SHUTDOWN_TIMEOUT + 5.0)
+    await asyncio.wait_for(worker.shutdown(), timeout=timeout + 5.0)
     elapsed = time.monotonic() - start
 
-    # Bounded by the forced-cancel fallback (~SHUTDOWN_TIMEOUT), not by the
-    # fake job's own ~100s runtime.
-    assert elapsed < SHUTDOWN_TIMEOUT + 5.0
+    # Bounded by the forced-cancel fallback (~the patched SHUTDOWN_TIMEOUT),
+    # not by the fake job's own ~100s runtime.
+    assert elapsed < timeout + 5.0
     assert worker.trellis.stop_calls >= 1
+    # And it did not simply walk away from the job: an unbounded wait would
+    # never reach here, but a shutdown that gave up on the task without ending
+    # it would, leaving ~99 s of fake reconstruction running behind it.
+    assert task.done(), "shutdown returned with the dispatch task still running"
 
 
 async def test_cancel_mid_trellis_stops_process_and_leaves_no_glb(worker):
