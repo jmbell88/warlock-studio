@@ -1,0 +1,63 @@
+{
+  "base_model": "sdxl_cfg",
+  "strength": 0.55,
+  "seed": 42,
+  "view_px": 1024,
+  "texture_px": 1024,
+  "views": 6,
+  "occlusion": true,
+  "control": true,
+  "control_scale": null,
+  "subjects": {
+    "model": {
+      "views": 6,
+      "coverage": 0.87451171875,
+      "size": [
+        1024,
+        1024
+      ],
+      "occlusion_tested": true,
+      "coverage_effective": 0.87451171875,
+      "restyle_seconds": 42.0,
+      "delta": {
+        "mean_abs_diff": 2.0579264163970947,
+        "changed_fraction": 0.014708518981933594
+      },
+      "prompt": "rusted iron, oxidised metal plating, heavy corrosion",
+      "had_base": true,
+      "visibility": [
+        {
+          "vis_mean": 0.87451171875,
+          "occluded_fraction": 0.12548828125,
+          "agree_mean": 5.6946631957544014e-05
+        },
+        {
+          "vis_mean": 0.0,
+          "occluded_fraction": 1.0,
+          "agree_mean": null
+        },
+        {
+          "vis_mean": 0.0,
+          "occluded_fraction": 1.0,
+          "agree_mean": null
+        },
+        {
+          "vis_mean": 0.0,
+          "occluded_fraction": 1.0,
+          "agree_mean": null
+        },
+        {
+          "vis_mean": 0.0,
+          "occluded_fraction": 1.0,
+          "agree_mean": null
+        },
+        {
+          "vis_mean": 0.0,
+          "occluded_fraction": 1.0,
+          "agree_mean": null
+        }
+      ],
+      "occluded_rect_contamination": 0.0005035400390625
+    }
+  }
+}

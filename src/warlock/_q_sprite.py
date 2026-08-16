@@ -524,7 +524,7 @@ class SpriteOps:
                 or retexture.TEXTURE_PX
             )
         )
-        strength = float(params.get("strength", models.DEFAULT_IMG2IMG_STRENGTH))
+        strength = float(params.get("strength", models.RETEXTURE_DEFAULT_STRENGTH))
         seed = int(params.get("seed", 42))
         base_key = self._resolve_base_key(params)
         spec = models.BASE_MODELS[base_key]

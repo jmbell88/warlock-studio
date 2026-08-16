@@ -538,6 +538,22 @@ def test_the_texture_panel_carries_the_depth_anchor_when_checked():
     assert kwargs["control_scale"] == 0.5
 
 
+def test_the_texture_panel_defaults_to_the_anchored_run():
+    """Flipped by the 2026-08-15 retexture-visibility measurement: the anchor
+    removed 99.5% -> 0.05% hidden-region smear on the overhang fixture and
+    ~16 pp of false coverage on real meshes, so the un-anchored run is the
+    A/B baseline now, not the default."""
+    from types import SimpleNamespace
+
+    from warlock import models
+    from warlock.studio.panes import texture_panel
+
+    ctx = SimpleNamespace(state=SimpleNamespace(preview={}))
+    form = texture_panel._form(ctx, "abc123")
+    assert form["depth"] is True
+    assert form["strength"] == models.RETEXTURE_DEFAULT_STRENGTH
+
+
 def test_the_texture_panel_warns_about_occlusion_only_when_unanchored():
     """The old warning was unconditional because the limitation was. Now it is
     a property of the run being configured: anchored runs depth-test, so

@@ -90,15 +90,19 @@ IMG2IMG_STRENGTH_MIN = 0.30
 IMG2IMG_STRENGTH_MAX = 0.65
 DEFAULT_IMG2IMG_STRENGTH = 0.45
 
-# The re-texture door's own ceiling, deliberately not a change to the shared
-# bounds above: the pixel sheets run img2img with no geometry anchor and keep
-# 0.65. A re-texture can afford 0.85 -- the 2026-08-08 retexture measurement's
-# positive control showed the projection carries what 0.85 invents faithfully,
-# and with the depth ControlNet anchoring structure, invention is the point.
-# The *default* stays DEFAULT_IMG2IMG_STRENGTH until the retexture-visibility
-# measurement's strength ladder picks a new one.
+# The re-texture door's own bounds and default, deliberately not a change to
+# the shared values above: the pixel sheets run img2img with no geometry
+# anchor and keep 0.45/0.65. A re-texture can afford 0.85 -- the 2026-08-08
+# retexture measurement's positive control showed the projection carries what
+# 0.85 invents faithfully, and with the depth ControlNet anchoring structure,
+# invention is the point. The default is the 2026-08-15 retexture-visibility
+# ladder's pick (docs/measurements/2026-08-15-retexture-visibility.md):
+# monotone and pathology-free to 0.85 under the anchor, 0.65 sits in the
+# pre-registered landing zone and is the old un-anchored ceiling made
+# comfortable.
 RETEXTURE_STRENGTH_MIN = IMG2IMG_STRENGTH_MIN
 RETEXTURE_STRENGTH_MAX = 0.85
+RETEXTURE_DEFAULT_STRENGTH = 0.65
 
 # The style LoRA a pixel sheet restyle is fixed to in v1. Named here rather
 # than in the sheet code so the registry stays the only place a model key is

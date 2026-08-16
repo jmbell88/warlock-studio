@@ -1,0 +1,77 @@
+{
+  "base_model": "sdxl_cfg",
+  "strength": 0.55,
+  "seed": 42,
+  "view_px": 1024,
+  "texture_px": 1024,
+  "views": 6,
+  "occlusion": false,
+  "control": false,
+  "control_scale": null,
+  "subjects": {
+    "1e45c9c5172b": {
+      "views": 6,
+      "coverage": 0.5425214767456055,
+      "size": [
+        1024,
+        1024
+      ],
+      "occlusion_tested": false,
+      "restyle_seconds": 27.0,
+      "delta": {
+        "mean_abs_diff": 14.273445129394531,
+        "changed_fraction": 0.672633171081543
+      },
+      "prompt": "rusted iron, oxidised metal plating, heavy corrosion",
+      "had_base": true
+    },
+    "4a468143c330": {
+      "views": 6,
+      "coverage": 0.5783872604370117,
+      "size": [
+        1024,
+        1024
+      ],
+      "occlusion_tested": false,
+      "restyle_seconds": 14.2,
+      "delta": {
+        "mean_abs_diff": 21.498294830322266,
+        "changed_fraction": 0.7648458480834961
+      },
+      "prompt": "rusted iron, oxidised metal plating, heavy corrosion",
+      "had_base": true
+    },
+    "61265ce477d7": {
+      "views": 6,
+      "coverage": 0.5146217346191406,
+      "size": [
+        1024,
+        1024
+      ],
+      "occlusion_tested": false,
+      "restyle_seconds": 14.2,
+      "delta": {
+        "mean_abs_diff": 37.77296447753906,
+        "changed_fraction": 0.8622541427612305
+      },
+      "prompt": "rusted iron, oxidised metal plating, heavy corrosion",
+      "had_base": true
+    },
+    "950f84d9247d": {
+      "views": 6,
+      "coverage": 0.5401687622070312,
+      "size": [
+        1024,
+        1024
+      ],
+      "occlusion_tested": false,
+      "restyle_seconds": 14.4,
+      "delta": {
+        "mean_abs_diff": 23.642913818359375,
+        "changed_fraction": 0.7992267608642578
+      },
+      "prompt": "rusted iron, oxidised metal plating, heavy corrosion",
+      "had_base": true
+    }
+  }
+}

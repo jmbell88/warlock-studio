@@ -1,0 +1,289 @@
+{
+  "base_model": "sdxl_cfg",
+  "strength": 0.85,
+  "seed": 42,
+  "view_px": 1024,
+  "texture_px": 1024,
+  "views": 10,
+  "occlusion": true,
+  "control": true,
+  "control_scale": null,
+  "subjects": {
+    "1e45c9c5172b": {
+      "views": 10,
+      "coverage": 0.45132923126220703,
+      "size": [
+        1024,
+        1024
+      ],
+      "occlusion_tested": true,
+      "coverage_effective": 0.39664649963378906,
+      "restyle_seconds": 74.3,
+      "delta": {
+        "mean_abs_diff": 10.973443984985352,
+        "changed_fraction": 0.5307426452636719
+      },
+      "prompt": "rusted iron, oxidised metal plating, heavy corrosion",
+      "had_base": true,
+      "visibility": [
+        {
+          "vis_mean": 0.6223599314689636,
+          "occluded_fraction": 0.31073763443181535,
+          "agree_mean": 0.008797809481620789
+        },
+        {
+          "vis_mean": 0.561173141002655,
+          "occluded_fraction": 0.3640065382167448,
+          "agree_mean": 0.009079973213374615
+        },
+        {
+          "vis_mean": 0.425055593252182,
+          "occluded_fraction": 0.5369895855098921,
+          "agree_mean": 0.008620016276836395
+        },
+        {
+          "vis_mean": 0.41384515166282654,
+          "occluded_fraction": 0.5471129990503044,
+          "agree_mean": 0.008770677261054516
+        },
+        {
+          "vis_mean": 0.37523961067199707,
+          "occluded_fraction": 0.6002210977726996,
+          "agree_mean": 0.008189435116946697
+        },
+        {
+          "vis_mean": 0.39723876118659973,
+          "occluded_fraction": 0.5662322762840502,
+          "agree_mean": 0.00700547406449914
+        },
+        {
+          "vis_mean": 0.569403886795044,
+          "occluded_fraction": 0.37517702232438316,
+          "agree_mean": 0.007622750476002693
+        },
+        {
+          "vis_mean": 0.5532227158546448,
+          "occluded_fraction": 0.3893856976048757,
+          "agree_mean": 0.007582363672554493
+        },
+        {
+          "vis_mean": 0.5433820486068726,
+          "occluded_fraction": 0.39954876642593734,
+          "agree_mean": 0.007520216517150402
+        },
+        {
+          "vis_mean": 0.5597041249275208,
+          "occluded_fraction": 0.38400338582789184,
+          "agree_mean": 0.007530909962952137
+        }
+      ]
+    },
+    "4a468143c330": {
+      "views": 10,
+      "coverage": 0.36029815673828125,
+      "size": [
+        1024,
+        1024
+      ],
+      "occlusion_tested": true,
+      "coverage_effective": 0.30474376678466797,
+      "restyle_seconds": 62.5,
+      "delta": {
+        "mean_abs_diff": 12.16342544555664,
+        "changed_fraction": 0.4694337844848633
+      },
+      "prompt": "rusted iron, oxidised metal plating, heavy corrosion",
+      "had_base": true,
+      "visibility": [
+        {
+          "vis_mean": 0.4679538309574127,
+          "occluded_fraction": 0.5036861429934372,
+          "agree_mean": 0.006594101432710886
+        },
+        {
+          "vis_mean": 0.46938320994377136,
+          "occluded_fraction": 0.5022304037918677,
+          "agree_mean": 0.006572721526026726
+        },
+        {
+          "vis_mean": 0.3244887888431549,
+          "occluded_fraction": 0.6568310330362188,
+          "agree_mean": 0.005335363559424877
+        },
+        {
+          "vis_mean": 0.33609113097190857,
+          "occluded_fraction": 0.6404513882862588,
+          "agree_mean": 0.005507346708327532
+        },
+        {
+          "vis_mean": 0.301791787147522,
+          "occluded_fraction": 0.6701099114052567,
+          "agree_mean": 0.005016509909182787
+        },
+        {
+          "vis_mean": 0.3422645330429077,
+          "occluded_fraction": 0.6259238658677386,
+          "agree_mean": 0.005414216313511133
+        },
+        {
+          "vis_mean": 0.37374117970466614,
+          "occluded_fraction": 0.6010114507044636,
+          "agree_mean": 0.003999730572104454
+        },
+        {
+          "vis_mean": 0.37519699335098267,
+          "occluded_fraction": 0.5991603683022133,
+          "agree_mean": 0.004020607098937035
+        },
+        {
+          "vis_mean": 0.3835722506046295,
+          "occluded_fraction": 0.5861457383196513,
+          "agree_mean": 0.004262352362275124
+        },
+        {
+          "vis_mean": 0.3826729655265808,
+          "occluded_fraction": 0.587196550057623,
+          "agree_mean": 0.004240738693624735
+        }
+      ]
+    },
+    "61265ce477d7": {
+      "views": 10,
+      "coverage": 0.40276432037353516,
+      "size": [
+        1024,
+        1024
+      ],
+      "occlusion_tested": true,
+      "coverage_effective": 0.3524961471557617,
+      "restyle_seconds": 62.5,
+      "delta": {
+        "mean_abs_diff": 20.336374282836914,
+        "changed_fraction": 0.6362380981445312
+      },
+      "prompt": "rusted iron, oxidised metal plating, heavy corrosion",
+      "had_base": true,
+      "visibility": [
+        {
+          "vis_mean": 0.509482741355896,
+          "occluded_fraction": 0.4427824196209316,
+          "agree_mean": 0.008639252744615078
+        },
+        {
+          "vis_mean": 0.5049223303794861,
+          "occluded_fraction": 0.44412626959959145,
+          "agree_mean": 0.00866992212831974
+        },
+        {
+          "vis_mean": 0.36763232946395874,
+          "occluded_fraction": 0.5910390307723722,
+          "agree_mean": 0.008839317597448826
+        },
+        {
+          "vis_mean": 0.3662516176700592,
+          "occluded_fraction": 0.5925620740617547,
+          "agree_mean": 0.008266364224255085
+        },
+        {
+          "vis_mean": 0.2781723141670227,
+          "occluded_fraction": 0.6923930305540147,
+          "agree_mean": 0.006647409405559301
+        },
+        {
+          "vis_mean": 0.26602625846862793,
+          "occluded_fraction": 0.6960343937561156,
+          "agree_mean": 0.008264712058007717
+        },
+        {
+          "vis_mean": 0.4140453338623047,
+          "occluded_fraction": 0.5444787671258965,
+          "agree_mean": 0.007300805300474167
+        },
+        {
+          "vis_mean": 0.45713305473327637,
+          "occluded_fraction": 0.49860911379600587,
+          "agree_mean": 0.00703166238963604
+        },
+        {
+          "vis_mean": 0.4410730004310608,
+          "occluded_fraction": 0.5133322216832403,
+          "agree_mean": 0.0068517723120749
+        },
+        {
+          "vis_mean": 0.44045916199684143,
+          "occluded_fraction": 0.5165848804609791,
+          "agree_mean": 0.007203433662652969
+        }
+      ]
+    },
+    "950f84d9247d": {
+      "views": 10,
+      "coverage": 0.4427614212036133,
+      "size": [
+        1024,
+        1024
+      ],
+      "occlusion_tested": true,
+      "coverage_effective": 0.38870811462402344,
+      "restyle_seconds": 62.9,
+      "delta": {
+        "mean_abs_diff": 13.722940444946289,
+        "changed_fraction": 0.5487537384033203
+      },
+      "prompt": "rusted iron, oxidised metal plating, heavy corrosion",
+      "had_base": true,
+      "visibility": [
+        {
+          "vis_mean": 0.5662700533866882,
+          "occluded_fraction": 0.3749760884708532,
+          "agree_mean": 0.00739298528060317
+        },
+        {
+          "vis_mean": 0.5501561164855957,
+          "occluded_fraction": 0.3848157932029345,
+          "agree_mean": 0.007735699415206909
+        },
+        {
+          "vis_mean": 0.4327911138534546,
+          "occluded_fraction": 0.520805296091412,
+          "agree_mean": 0.00626390241086483
+        },
+        {
+          "vis_mean": 0.4331793487071991,
+          "occluded_fraction": 0.5229498995093158,
+          "agree_mean": 0.006391291040927172
+        },
+        {
+          "vis_mean": 0.24671077728271484,
+          "occluded_fraction": 0.7309287096786041,
+          "agree_mean": 0.005887470208108425
+        },
+        {
+          "vis_mean": 0.27770811319351196,
+          "occluded_fraction": 0.7016269116766578,
+          "agree_mean": 0.005839910823851824
+        },
+        {
+          "vis_mean": 0.43235155940055847,
+          "occluded_fraction": 0.5220500167249943,
+          "agree_mean": 0.006384510546922684
+        },
+        {
+          "vis_mean": 0.48486483097076416,
+          "occluded_fraction": 0.4627965498940345,
+          "agree_mean": 0.00650438480079174
+        },
+        {
+          "vis_mean": 0.4488646686077118,
+          "occluded_fraction": 0.5093874140582513,
+          "agree_mean": 0.006310635711997747
+        },
+        {
+          "vis_mean": 0.5106465816497803,
+          "occluded_fraction": 0.4341219133137627,
+          "agree_mean": 0.00681518018245697
+        }
+      ]
+    }
+  }
+}

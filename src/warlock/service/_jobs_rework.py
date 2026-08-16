@@ -187,9 +187,10 @@ def retexture_job(
     if len(text) > MAX_PROMPT:
         raise TooLarge(f"prompt is longer than {MAX_PROMPT} characters", field="prompt")
 
-    value = models.DEFAULT_IMG2IMG_STRENGTH if strength is None else float(strength)
-    # The re-texture's own bounds, not the sheets': with the depth anchor the
-    # ceiling is the 2026-08-08 measurement's positive control (see models.py).
+    value = models.RETEXTURE_DEFAULT_STRENGTH if strength is None else float(strength)
+    # The re-texture's own bounds and default, not the sheets': with the depth
+    # anchor the ceiling is the 2026-08-08 measurement's positive control and
+    # the default is the 2026-08-15 ladder's pick (see models.py).
     if not models.RETEXTURE_STRENGTH_MIN <= value <= models.RETEXTURE_STRENGTH_MAX:
         raise Invalid(
             f"strength must be between {models.RETEXTURE_STRENGTH_MIN} "

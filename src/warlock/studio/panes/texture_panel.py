@@ -117,12 +117,14 @@ def _form(ctx: Any, job_id: str) -> dict[str, Any]:
         form = {
             "job_id": job_id,
             "prompt": "",
-            "strength": models.DEFAULT_IMG2IMG_STRENGTH,
+            "strength": models.RETEXTURE_DEFAULT_STRENGTH,
             "texture_size": "",
-            # Off until the retexture-visibility measurement flips it: the
-            # anchored run is the new path, and a default the corpus has no
-            # numbers for yet is a default on somebody else's evidence.
-            "depth": False,
+            # On by the 2026-08-15 retexture-visibility measurement: the
+            # anchor took the overhang fixture's hidden-region smear from
+            # 99.5% to 0.05%, and ~16 pp of the un-anchored coverage figure
+            # was paint on surfaces no camera saw. Unchecking reproduces the
+            # baseline arm exactly.
+            "depth": True,
             "control_scale": models.CONTROLNETS["depth"].default_scale,
         }
         ctx.state.preview["retexture_form"] = form

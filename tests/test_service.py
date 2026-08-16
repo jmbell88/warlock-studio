@@ -787,6 +787,23 @@ def test_a_retexture_refuses_the_depth_control_without_its_weights(svc):
     assert caught.value.field == "control"
 
 
+def test_a_retexture_defaults_to_the_measured_strength(svc):
+    """The 2026-08-15 retexture-visibility ladder picked the default; the door
+    must hand it out rather than the sheets' 0.45, which was tuned for an
+    un-anchored restyle that no longer describes the default run."""
+    from warlock import models
+
+    job_id, _ = _retexturable(svc)
+    row = svc.store.get(svc_jobs.retexture_job(svc, job_id, "rusted iron")["id"])
+    assert row["params"]["strength"] == models.RETEXTURE_DEFAULT_STRENGTH
+    assert (
+        models.RETEXTURE_STRENGTH_MIN
+        <= models.RETEXTURE_DEFAULT_STRENGTH
+        <= models.RETEXTURE_STRENGTH_MAX
+    )
+    assert models.RETEXTURE_DEFAULT_STRENGTH > models.DEFAULT_IMG2IMG_STRENGTH
+
+
 def test_a_retexture_strength_ceiling_is_its_own_not_the_sheets(svc):
     """0.85 is the measured positive control from 2026-08-08: with a depth
     anchor the restyle can afford to invent, and the bake carries it
