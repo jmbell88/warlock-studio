@@ -253,11 +253,13 @@ def test_dropping_a_copy_already_gone_does_not_raise(tmp_path, kind):
 # --- the offer ----------------------------------------------------------------
 
 
-def test_one_question_covers_every_kind(tmp_path, kind):
-    """4a: one Confirm for the lot. Per-row choosing is a real want and a
-    bigger dialog; what it cannot be is the first version, because the common
-    case is one crash and one or two documents."""
+def test_every_kind_is_offered_and_each_on_its_own_row(tmp_path, kind):
+    """The offer covers all six document kinds and always did; what changed is
+    that it is a row each rather than one Confirm naming three of them and
+    counting the rest. The old shape could not express "reopen this one".
+    """
     ctx = _Ctx(tmp_path)
+    ctx.state.recovery = None
     for i, title in enumerate(("sketch", "level", "atlas")):
         payload = tmp_path / f"{title}-{i}.probe"
         payload.write_bytes(b"x")
@@ -267,11 +269,7 @@ def test_one_question_covers_every_kind(tmp_path, kind):
             ),
             encoding="utf-8",
         )
-    assert journal.offer(ctx) is True
-    assert ctx.confirms.pending is not None
-    message = ctx.confirms.pending.message
-    for title in ("sketch", "level", "atlas"):
-        assert title in message
+    assert sorted(r.title for r in journal.snapshot(ctx)) == ["atlas", "level", "sketch"]
 
 
 def test_the_newest_is_listed_first(tmp_path, kind):
@@ -288,16 +286,19 @@ def test_the_newest_is_listed_first(tmp_path, kind):
     assert [r.title for r in journal.recoverable(ctx)] == ["newer", "older"]
 
 
-def test_declining_keeps_the_files(tmp_path, kind):
-    """"Not now" is not "delete my work"."""
+def test_ignoring_the_offer_keeps_the_files(tmp_path, kind):
+    """"Not now" is not "delete my work", and on a panel "not now" is simply
+    not clicking anything -- so the do-nothing path is the one worth pinning.
+    ``discard`` is now the only thing that deletes, and it is a button.
+    """
     ctx = _Ctx(tmp_path)
+    ctx.state.recovery = None
     payload = tmp_path / "sketch-x.probe"
     payload.write_bytes(b"x")
     journal.meta_path(payload).write_text(
         json.dumps({"version": journal.VERSION, "kind": "probe", "title": "s", "at": 1})
     , encoding="utf-8")
-    journal.offer(ctx)
-    ctx.confirms.dismiss()
+    assert len(journal.snapshot(ctx)) == 1
     assert payload.exists() and journal.meta_path(payload).exists()
 
 
@@ -344,11 +345,13 @@ def test_a_crash_between_the_copy_and_the_next_launch_gives_the_work_back(tmp_pa
     del first  # the crash
 
     second = _Ctx(tmp_path)
-    assert journal.offer(second) is True
-    assert "work in progress" in second.confirms.pending.message
-    second.confirms.accept()
+    second.state.recovery = None
+    offered = journal.snapshot(second)
+    assert [r.title for r in offered] == ["work in progress"]
+    assert journal.take(second, offered[0]) is True
     assert len(adopted) == 1
     assert adopted[0].read_bytes() == b"the pixels"
+    assert journal.snapshot(second) == [], "the row leaves the list once taken"
 
 
 def test_the_status_line_is_computed_rather_than_promised(tmp_path, kind):
@@ -447,3 +450,111 @@ def test_a_map_with_a_layer_tree_journals_and_comes_back():
     recovered = back.layers[0]
     assert (recovered.name, recovered.class_name, recovered.offset_x) == ("G", "Deco", 4.0)
     assert [child.name for child in recovered.children] == ["Ground", "Sky"]
+
+
+# --- the home-screen offer ----------------------------------------------------
+#
+# The offer used to be a modal on the first frame: one question, all-or-nothing,
+# asked before the user had seen the app. It is a section at the top of the home
+# screen now, one row per document, each recovered on its own. What did *not*
+# change is when the directory is read -- see ``snapshot``.
+
+
+def _home_ctx(root: Path) -> _Ctx:
+    ctx = _Ctx(root)
+    ctx.state.recovery = None
+    return ctx
+
+
+def _left_behind(root: Path, title: str, kind: str = "probe") -> Path:
+    payload = root / f"{title}.probe"
+    payload.write_bytes(b"body")
+    journal.meta_path(payload).write_text(
+        json.dumps(
+            {"version": journal.VERSION, "kind": kind, "title": title, "uid": title, "at": 1.0}
+        ),
+        encoding="utf-8",
+    )
+    return payload
+
+
+def test_the_snapshot_is_taken_once_and_never_refreshed(tmp_path, kind):
+    """The load-bearing half of moving the offer out of a modal.
+
+    The autosave directory is *also* where this session writes its own copies,
+    so a home screen that rescanned would start listing the user's open
+    documents back at them as though they had been crashed out of. Reading once,
+    on the first frame, is what made the modal correct and is the one thing the
+    move has to preserve.
+    """
+    ctx = _home_ctx(tmp_path)
+    _left_behind(tmp_path, "before")
+    assert [r.title for r in journal.snapshot(ctx)] == ["before"]
+
+    _left_behind(tmp_path, "written-by-this-session")
+    assert [r.title for r in journal.snapshot(ctx)] == ["before"], "not rescanned"
+
+
+def test_an_empty_directory_still_counts_as_scanned(tmp_path, kind):
+    """Nothing found is an answer, not an absent one -- a falsy-not-None test
+    here would rescan every frame, which is the bug above with extra steps."""
+    ctx = _home_ctx(tmp_path)
+    assert journal.snapshot(ctx) == []
+    _left_behind(tmp_path, "later")
+    assert journal.snapshot(ctx) == []
+
+
+def test_recovering_one_row_leaves_the_others_alone(tmp_path, kind):
+    """Per-row is the whole point of the move. The old modal took all of them
+    or none, so a session that crashed with one document worth keeping and two
+    worth abandoning had no answer that was right."""
+    ctx = _home_ctx(tmp_path)
+    _left_behind(tmp_path, "keep")
+    _left_behind(tmp_path, "other")
+    found = journal.snapshot(ctx)
+    assert len(found) == 2
+
+    wanted = next(r for r in found if r.title == "keep")
+    assert journal.take(ctx, wanted) is True
+    assert [r.title for r in journal.snapshot(ctx)] == ["other"]
+
+
+def test_recovering_a_row_leaves_its_files_for_the_document_to_drop(tmp_path, kind):
+    """``drop`` is the owner of deletion and fires when the recovered document
+    is saved or closed. Deleting here would take the copy away in the window
+    between reopening it and saving it -- which is exactly the window a second
+    crash would land in."""
+    ctx = _home_ctx(tmp_path)
+    payload = _left_behind(tmp_path, "keep")
+    journal.take(ctx, journal.snapshot(ctx)[0])
+    assert payload.exists()
+    assert journal.meta_path(payload).exists()
+
+
+def test_discarding_a_row_removes_the_pair_sidecar_first(tmp_path, kind):
+    """``drop``'s ordering, for ``drop``'s reason: the sidecar is the
+    completion gate, so unlinking it first means a crash between the two leaves
+    an unoffered payload rather than a sidecar naming a file that has gone."""
+    ctx = _home_ctx(tmp_path)
+    payload = _left_behind(tmp_path, "junk")
+    _left_behind(tmp_path, "other")
+
+    journal.discard(ctx, journal.snapshot(ctx)[0])
+    gone = [r for r in journal.snapshot(ctx)]
+    assert len(gone) == 1
+    survivor = gone[0]
+    assert survivor.path.exists()
+    assert not (payload.exists() and journal.meta_path(payload).exists())
+
+
+def test_discarding_never_raises_when_the_files_have_already_gone(tmp_path, kind):
+    """It is cleanup, not an edit -- ``drop``'s rule. A row whose files another
+    process removed must still leave the list."""
+    ctx = _home_ctx(tmp_path)
+    payload = _left_behind(tmp_path, "junk")
+    found = journal.snapshot(ctx)[0]
+    journal.meta_path(payload).unlink()
+    payload.unlink()
+
+    journal.discard(ctx, found)
+    assert journal.snapshot(ctx) == []

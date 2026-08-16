@@ -917,17 +917,25 @@ it does not choose a location, and it does not touch a linked job — all it pro
 costs you minutes rather than an afternoon. Saving or closing a document removes its copy, because
 an autosave that outlived its document is exactly the file that turns up later and confuses you.
 
-If Warlock finds copies left over from a previous session, it offers to reopen them once, at
-startup. Recovered documents open **untitled and unsaved**, deliberately: the file each was copied
-from may still be on disk with its own contents, and adopting that path would arm `Ctrl+S` to
-overwrite something you have not looked at yet. Declining keeps the copies — "not now" is not
-"delete my work" — and they are cleared once you save or close whatever you recover.
+If Warlock finds copies left over from a previous session, they are listed under **Unsaved work**
+at the top of the Home screen — one row per document, each with its own **Recover** button, and
+**Discard all** underneath. Recovering one opens it and takes you to the editor it belongs in;
+the others stay listed until you deal with them. Recovered documents open **untitled and unsaved**,
+deliberately: the file each was copied from may still be on disk with its own contents, and adopting
+that path would arm `Ctrl+S` to overwrite something you have not looked at yet. Ignoring the list
+keeps the copies — "not now" is not "delete my work" — and they are cleared once you save or close
+whatever you recover, or when you press **Discard all**.
+
+The list is read **once, at startup**, and does not refresh while you work. That is deliberate and
+not a limitation: the autosave directory is also where *this* session writes its copies, so a list
+that re-read it would start offering your own open documents back to you.
 
 **This is no longer only Inker's.** The same two minutes now cover a Clay model, a Plotter map, a
 Packwright atlas, a pose you are authoring and a profile draft you have typed into and not saved —
-one offer at startup covers whatever was open, whichever modes they were in. Each copy is written
-in that mode's own format (`.ora`, `.wblk`, `.wmap`, `.wpack`, and small JSON files for a pose and a
-draft), so anything recovered can also just be opened by hand.
+whatever was open, whichever modes they were in, each on its own row. Each copy is written in that
+mode's own format (`.ora`, `.wblk`, `.wmap`, `.wpack`, and small JSON files for a pose and a
+draft), so anything recovered can also just be opened by hand. A document of a kind this build has
+no editor for is listed as **unavailable** rather than hidden, and its files are left alone.
 
 A pose is the one that can decline to come back, and it says so when it does. A pose is a set of
 rotations for a skeleton rather than a document of its own, so putting one back needs that rig
@@ -935,8 +943,9 @@ loaded — if the asset it was authored against is not open, or a different one 
 copy and tells you to open the right one. It would otherwise apply somebody else's rotations to
 whatever bones happened to share a name.
 
-Nothing is ever deleted on age. A copy sits there until you recover it and save, or until you close
-what you recovered; declining at startup keeps everything exactly where it was.
+Nothing is ever deleted on age. A copy sits there until you recover it and save, until you close
+what you recovered, or until you press **Discard all**; leaving the list alone keeps everything
+exactly where it was.
 
 ## Pipeline bridges
 

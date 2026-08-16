@@ -20,7 +20,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from . import motion, theme, tokens
+from . import motion, theme, tokens, widgets
 from .tokens import sp
 
 # The three sidebar widths on offer (M106), in design pixels. Three named
@@ -328,7 +328,15 @@ def pane(
     imgui.pop_style_color()
     imgui.pop_style_var()
     try:
-        yield visible
+        # Every pane drawn through here groups its headings onto tinted blocks.
+        # Here rather than in each pane because it is a property of *being a
+        # pane*, and because the scope has to bracket the child exactly: it
+        # splits this child's own draw list, which is why two panes can never
+        # collide over one splitter. A pane that draws no ``widgets.section``
+        # pays a split and a merge and gets no fills, which is free enough not
+        # to be worth a predicate. See ``widgets.section_blocks``.
+        with widgets.section_blocks():
+            yield visible
     finally:
         imgui.end_child()
         _divider(resolved_edge)

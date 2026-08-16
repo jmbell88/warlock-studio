@@ -220,6 +220,11 @@ def draw_body(ctx: Any) -> None:
     if imgui.begin_child(
         "manual-page", (0, 0), imgui.ChildFlags_.always_use_window_padding.value
     ):
+        # Deliberately *not* inside a ``widgets.section_blocks`` scope. The
+        # blocks group controls in a panel; a heading here names a passage of
+        # prose, and tinting every one of them would turn a chapter into a
+        # stack of cards -- the manual is a document, and a document's headings
+        # are separated by their own typography.
         _draw_chapter(ctx, ms)
     imgui.end_child()
 

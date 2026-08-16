@@ -798,9 +798,12 @@ def _ctrl_key(
     elif name == "j" and doc.element_mode == "object":
         # Object mode only, for the reason Ctrl+D is: a merge is about whole
         # objects, and there is no element-mode reading of it to fall back on.
+        # Shift picks the union rather than the weld -- one predicate gates
+        # both, so the shift never changes whether the key does anything, only
+        # which of the two answers it gives.
         from . import clay_ops
 
-        op = clay_ops.get("join")
+        op = clay_ops.get("union" if shift else "join")
         if op.enabled(doc):
             _fire_op(ctx, doc, op)
     elif name == "d" and doc.element_mode == "object":

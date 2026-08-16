@@ -104,6 +104,15 @@ def test_component_gallery_builds_every_state(
 
     from warlock.studio import imgui_backend
 
+    # Saved and put back below. ``destroy_context()`` leaves *no* current
+    # context, so a test that builds its own over the session-scoped
+    # ``imgui_ctx`` orphans it -- every later test that draws then fails on
+    # "No current context", in files that have nothing to do with this one.
+    # It used to be safe only by collection order, which stopped being true the
+    # moment a second file needed the shared fixture. ``test_poser_panes_smoke``
+    # has always done this; this is the same three lines.
+    prev_ctx = imgui.get_current_context()
+    prev_screen = type(gl).__dict__.get("screen")
     fbo = gl.simple_framebuffer((1600, 1000))
     fbo.use()
     type(gl).screen = property(lambda _self: fbo)
@@ -133,6 +142,10 @@ def test_component_gallery_builds_every_state(
         tokens.set_scale(old_scale)
         renderer.shutdown()
         imgui.destroy_context()
+        if prev_screen is not None:
+            type(gl).screen = prev_screen
+        if prev_ctx is not None:
+            imgui.set_current_context(prev_ctx)
 
 
 def test_major_panes_have_roles_and_no_production_pane_child_calls():

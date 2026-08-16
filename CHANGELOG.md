@@ -105,6 +105,39 @@ file behind.
   fine and are unchanged. The tiles chosen are identical, edges and corners
   included.
 
+- **Panel sections are easier to tell apart.** Every heading in a panel now sits
+  on its own softly tinted block that runs down to the next one, so which
+  controls belong to which group is visible before you read a word. It was
+  hardest to see where it mattered most — the Clay tools, outliner and
+  properties panes, and Plotter's tools pane, where six headings share a 300
+  pixel column. No lines were added; the grouping is the surface. The manual's
+  own headings and the library's date groups are deliberately left as they were.
+- **Plotter's tileset panel leads with the tiles.** The tile picker for the set
+  already loaded is now the first thing in the panel, above **Add from a
+  file...**; the palette you click on every stroke used to sit below two
+  controls you use once per map. **Generate a ground set** has moved to the
+  bottom, as the last resort of the three ways onto a map. On a map with no
+  tileset yet nothing is buried: adding and generating are still the whole panel.
+- **Plotter's view switches have their own heading.** *Grid*, *Show objects* and
+  *Minimap* were three loose toggles that appeared to belong to whichever tool
+  was in hand; they are grouped under **View**, which is what they have always
+  been about.
+- **Clay's Union Objects has a shortcut, and Merge points at it.** `Ctrl+Shift+J`
+  next to `Ctrl+J` for the weld. Union was already there and did the job people
+  wanted — it removes the walls buried inside an overlap, so two shapes pushed
+  into each other come out as the single solid they look like — but it had no
+  key and nothing pointed at it, so *Merge Objects* was the half everybody found
+  and the buried walls stayed. The merge dialog now says which one you want.
+- **Unsaved work is offered on the Home screen, not by a popup at startup.**
+  Anything a crashed session left is listed under **Unsaved work** at the top of
+  Home, one row per document with its own **Recover** button and **Discard all**
+  underneath. Recovering one takes you to it and leaves the rest listed. The old
+  dialog appeared before you had seen the app and took everything or nothing, so
+  a session that crashed with one document worth keeping and two worth throwing
+  away had no right answer. Nothing about what is kept has changed: the list is
+  read once at startup, ignoring it keeps every copy, and a copy is cleared when
+  you save or close what you recovered.
+
 ## 0.0.22 — 2026-08-15
 
 - **Plotter models most of what Tiled models.** Maps carry Tiled's richer

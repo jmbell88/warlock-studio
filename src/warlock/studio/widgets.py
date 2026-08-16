@@ -181,29 +181,179 @@ def cost_note(text: str) -> None:
     muted_wrapped(text)
 
 
-def section(label: str) -> None:
-    """A heading, with space above it instead of a rule under it.
+# --- section blocks -----------------------------------------------------------
+#
+# A section is a *surface*, not a gap. The heading and everything under it up to
+# the next heading sit on one tinted block, and the blocks are what the eye
+# groups a panel by.
+#
+# This reverses half of UX.md Phase 2, deliberately and with its argument
+# answered rather than forgotten. That pass removed the rule under a heading on
+# the grounds that "a rule is a line drawn where the rhythm failed", and put the
+# work on a bigger gap instead. The grounds were right and the remedy was not
+# enough, for a reason the pass did not account for: a sidebar with six headings
+# in it is not a page with six headings on it. At 300 px wide the gap that
+# separates two sections is the same gap that separates a heading from its own
+# first control, so the only cue for which of the two a given gap *is* comes
+# from reading the words -- which is exactly the work a grouping cue exists to
+# save. The rule is still not back. Nothing here draws a line; the block's edge
+# is its fill against the pane behind it.
+#
+# The mechanism deserves a paragraph, because it is not obvious and it is the
+# part that breaks loudly. A block's height is not known until its content has
+# been drawn, and imgui's draw list is append-only -- there is no way to insert
+# a fill *behind* geometry that is already in it. So a scope splits the current
+# window's draw list into two channels, puts everything the pane draws on the
+# upper one and the fills on the lower, and merges them on the way out. Every
+# ``begin_child`` gets its own draw list, which is what makes this safe to hang
+# off ``layout.pane``: two panes can never be splitting one list, and a child
+# opened *inside* a section draws onto its own list above the fill, which is
+# where it belongs anyway.
 
-    Two changes, one argument (UX.md Phase 2). **The separator is gone**: a
-    rule is a line drawn where the rhythm failed, and a section that needs one
-    to be legible is a section too close to what precedes it -- so the gap
-    above went from ``SP_1`` (4 px, less than one line spacing) to ``SP_6``,
-    which is what actually says "a new thing starts here".
 
-    **And the label is sentence-case Medium at body size**, not small-caps
-    muted. Field labels stay small-caps -- they earn it in a dense form, where
-    a column of them has to read as chrome around the values. A *section*
-    heading is the thing they are grouped under, and drawing both registers the
-    same way flattened exactly the hierarchy the headings exist to create: on
-    the 2D pane, "SUBJECT" and "CATEGORY" were the same size, weight and
-    colour, one indent apart.
+class _BlockScope:
+    """One window's worth of section blocks. See :func:`section_blocks`."""
+
+    __slots__ = ("draw", "owner", "start", "blocks")
+
+    def __init__(self, draw: Any, owner: str) -> None:
+        self.draw = draw
+        self.owner = owner
+        self.start: tuple[float, float] | None = None
+        self.blocks: list[tuple[float, float, float, float]] = []
+
+    def open(self) -> None:
+        """Begin a block at the cursor, closing whatever was open."""
+        self.close()
+        pos = imgui.get_cursor_screen_pos()
+        self.start = (pos.x, pos.y)
+
+    def close(self) -> None:
+        """End the open block at the cursor and paint it. Idempotent."""
+        if self.start is None:
+            return
+        x0, y0 = self.start
+        self.start = None
+        pad = sp(tokens.SP_2)
+        bottom = imgui.get_cursor_screen_pos().y
+        width = imgui.get_content_region_avail().x
+        low = (x0 - pad, y0 - pad)
+        high = (x0 + width + pad, bottom + pad - imgui.get_style().item_spacing.y)
+        if high[1] <= low[1]:
+            return
+        self.blocks.append((low[0], low[1], high[0], high[1]))
+        # Channel 0 is *under* everything the pane drew, which is the whole
+        # point of the split; set back to 1 afterwards so the caller's next
+        # widget lands above the next fill rather than beneath it.
+        self.draw.channels_set_current(0)
+        self.draw.add_rect_filled(
+            low, high, imgui.get_color_u32(theme.rgba(theme.ELEV_1)), sp(tokens.RADIUS_M)
+        )
+        self.draw.channels_set_current(1)
+
+
+#: The open scopes, innermost last. A list rather than a single slot because a
+#: pane can host another pane -- and keyed on the draw list's owner so a nested
+#: scope over the *same* list is recognised as the same scope rather than
+#: splitting an already-split list, which is the one way to corrupt it.
+_BLOCK_SCOPES: list[_BlockScope] = []
+
+
+def section_scope_depth() -> int:
+    """How many section-block scopes are open. For tests and for asserts."""
+    return len(_BLOCK_SCOPES)
+
+
+def end_section() -> None:
+    """Close the open block here rather than at the next heading. A no-op if
+    there is no scope, or none open.
+
+    A block runs from its heading to the *next* heading, which is right for a
+    panel that is headings all the way down and wrong for a screen that mixes
+    them with content belonging to nothing -- Home is the case: the release-note
+    card, the New button and the status line have no heading of their own, so
+    without this they were absorbed into whichever section happened to precede
+    them and the block grew to four times the height of the group it names.
+
+    Ending the block rather than giving that content a heading is the right way
+    round. The content genuinely has no heading; inventing "Updates" over the
+    release note would be labelling a thing to fix a rectangle.
     """
-    # ...except at the very top of a pane, where the gutter is already there
-    # and a heading pushed down by both would start a fifth of the way into the
-    # scroller. ``get_cursor_pos`` is window-relative, so "still at the padding"
-    # is the test for "nothing has been drawn above me".
+    if _BLOCK_SCOPES:
+        _BLOCK_SCOPES[-1].close()
+
+
+def section_block_count() -> int:
+    """How many blocks the innermost open scope has painted, or 0 with none."""
+    return len(_BLOCK_SCOPES[-1].blocks) if _BLOCK_SCOPES else 0
+
+
+@contextmanager
+def section_blocks():
+    """Draw every :func:`section` in this window on its own tinted block.
+
+    Yields the scope, whose ``blocks`` is the rectangles painted so far -- which
+    is what makes the geometry assertable without a screenshot.
+
+    Opening a second scope over a draw list that already has one hands back the
+    *existing* scope and splits nothing: imgui gives each list a single splitter,
+    so a nested split would corrupt it, and the corruption surfaces in whichever
+    pane happens to be drawn next rather than in the one that caused it.
+    """
+    draw = imgui.get_window_draw_list()
+    owner = getattr(draw, "_owner_name", "")
+    if _BLOCK_SCOPES and _BLOCK_SCOPES[-1].owner == owner:
+        yield _BLOCK_SCOPES[-1]
+        return
+    scope = _BlockScope(draw, owner)
+    draw.channels_split(2)
+    draw.channels_set_current(1)
+    _BLOCK_SCOPES.append(scope)
+    try:
+        yield scope
+    finally:
+        # In a ``finally`` because an unbalanced splitter is not a cosmetic
+        # failure: the list is left in a state the renderer walks wrongly, and
+        # the frame that looks broken is the one *after* the one that raised.
+        try:
+            scope.close()
+        finally:
+            _BLOCK_SCOPES.pop()
+            draw.channels_merge()
+
+
+def section(label: str) -> None:
+    """A heading, on a tinted block rather than under a rule.
+
+    **The label is sentence-case Medium at body size** (UX.md Phase 2), not
+    small-caps muted. Field labels stay small-caps -- they earn it in a dense
+    form, where a column of them has to read as chrome around the values. A
+    *section* heading is the thing they are grouped under, and drawing both
+    registers the same way flattened exactly the hierarchy the headings exist
+    to create: on the 2D pane, "SUBJECT" and "CATEGORY" were the same size,
+    weight and colour, one indent apart.
+
+    **And it opens a block**, where the caller has asked for one -- see
+    :func:`section_blocks` for what changed and why. Outside a scope this is
+    exactly the heading-and-a-gap it has always been, which is what a heading in
+    a popup, a tooltip or the manual's own body still wants.
+    """
+    scope = _BLOCK_SCOPES[-1] if _BLOCK_SCOPES else None
+    # Closed *before* the gap and opened *after* it, which is the whole of the
+    # ordering: the gap belongs between two blocks and to neither of them. Doing
+    # both after it instead makes the outgoing block swallow the gap and the
+    # incoming one start above its own top edge -- two overlapping fills, read
+    # as one surface with a seam through it.
+    if scope is not None:
+        scope.close()
+    # The gap above, ...except at the very top of a pane, where the gutter is
+    # already there and a heading pushed down by both would start a fifth of the
+    # way into the scroller. ``get_cursor_pos`` is window-relative, so "still at
+    # the padding" is the test for "nothing has been drawn above me".
     if imgui.get_cursor_pos_y() > imgui.get_style().window_padding.y + 1.0:
         imgui.dummy((0, sp(tokens.SP_6)))
+    if scope is not None:
+        scope.open()
     with fonts.label(imgui):
         imgui.text(label)
 

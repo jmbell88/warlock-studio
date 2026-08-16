@@ -1054,3 +1054,42 @@ def test_ctrl_w_closes_the_active_document(svc) -> None:
     clay_mode._ctrl_key(ctx, state, second, second.doc, "w", shift=False)
 
     assert second.uid not in [tab.uid for tab in state.docs]
+
+
+# --- Ctrl+J and Ctrl+Shift+J -------------------------------------------------
+#
+# The two halves of "make these one object", one shift apart. Dispatched through
+# ``_ctrl_key`` rather than through ``handle_key`` because the modifier state
+# comes from ``pygame.key.get_mods()``, which a headless test cannot set --
+# ``_ctrl_key`` takes it as an argument precisely so this is assertable.
+
+
+def _merge_ready(svc):
+    ctx = FakeCtx(svc)
+    tab = _tab(ctx)
+    doc = tab.doc
+    doc.objects.clear()
+    first = doc.add_object(bd.Obj(uid=bd.new_uid(), name="A", mesh=bp.box()))
+    second = doc.add_object(bd.Obj(uid=bd.new_uid(), name="B", mesh=bp.box()))
+    doc.select([first.uid, second.uid])
+    return ctx, clay_mode.ensure(ctx), tab, doc
+
+
+def test_ctrl_j_still_opens_the_merge_dialog(svc) -> None:
+    """Unshifted is unchanged. Merge takes a weld distance, so firing it stages
+    a popup rather than editing -- which is also how this tells the two apart."""
+    ctx, state, tab, doc = _merge_ready(svc)
+    assert clay_mode._ctrl_key(ctx, state, tab, doc, "j", shift=False) is True
+    assert state.pending_op == "join"
+    assert len(doc.objects) == 2, "the dialog has not been answered yet"
+
+
+def test_ctrl_shift_j_unions_instead_of_welding(svc) -> None:
+    """Union takes no parameters, so it acts on the keystroke. Two boxes at the
+    same place become one object with one box's worth of surface -- a weld
+    would have kept both sets of walls."""
+    pytest.importorskip("manifold3d")
+    ctx, state, tab, doc = _merge_ready(svc)
+    assert clay_mode._ctrl_key(ctx, state, tab, doc, "j", shift=True) is True
+    assert not state.pending_op, "union has no dialog to stage"
+    assert len(doc.objects) == 1

@@ -237,7 +237,7 @@ non-zero distance, and the shells you kept apart are welded together. Merge the 
 keep the parts as separate objects until last.
 
 It is a weld and not a solid union. Geometry inside an overlap is kept rather than cut away — for
-that, use **Union Objects...** below.
+that, use **Union Objects...** (`Ctrl+Shift+J`) below — the merge dialog says so too.
 
 A merged object is no longer what a generator would build, so its generator claim is dropped along
 with the merge — the properties panel stops offering the size field that would have rebuilt a
@@ -245,7 +245,8 @@ pristine box over your work. That drop is part of the same undo step.
 
 ## Union objects
 
-**Union Objects...** (object mode, two or more visible objects selected) is the other way of turning
+**Union Objects...** (`Ctrl+Shift+J`, object mode, two or more visible objects selected) is the
+other way of turning
 several shapes into one, and it answers a different question. A merge keeps everything: two
 interpenetrating cubes come out as one object still carrying both sets of interior walls, which
 z-fight, get exported, and mean the result is not a closed solid. A union cuts those walls away, so

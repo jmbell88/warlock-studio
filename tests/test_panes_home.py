@@ -385,3 +385,48 @@ def test_the_stamp_only_moves_when_the_submit_was_accepted():
     ctx.submit = lambda *_a, **_k: pytest.fail("asked again inside the TTL")
     landing.pump(ctx)
     assert ctx.state.home_unreviewed_at == stamp
+
+
+# --- what a crashed session left ----------------------------------------------
+#
+# The pure half of the recovery section: which mode a row opens, and which
+# glyph it wears. The drawing itself is smoke-tested with a real context; what
+# matters here is that the two lookup tables cannot drift from the journal's
+# provider list, which is exactly how a row ends up wearing the "unsupported"
+# glyph for a kind this build supports perfectly well.
+
+
+def test_every_journal_kind_has_a_row_destination():
+    """A kind the journal can write and this table has never heard of draws
+    with the fallback glyph and navigates nowhere -- which is indistinguishable
+    from a build that cannot open it at all."""
+    from warlock.studio import journal
+
+    journal.ensure_providers()
+    for kind in journal._PROVIDERS:
+        assert kind in landing._KIND_MODES, f"{kind} has no row destination"
+
+
+def test_every_row_destination_is_a_real_mode_or_deliberately_empty():
+    """The empty string means "the provider navigates itself" and is the one
+    value allowed not to name a mode. Anything else must be switchable to, or
+    Recover would move the app somewhere that does not exist."""
+    keys = {key for key, _label, _icon in modes.MODES}
+    for kind, mode in landing._KIND_MODES.items():
+        assert mode == "" or mode in keys, f"{kind} -> {mode!r}"
+
+
+def test_the_one_self_navigating_kind_is_the_profile_draft():
+    """Pinned by name rather than by count: a second empty entry added without
+    a provider that navigates would silently make Recover do nothing visible."""
+    empty = [kind for kind, mode in landing._KIND_MODES.items() if not mode]
+    assert empty == ["profile"]
+
+
+def test_the_recovery_section_draws_nothing_with_an_empty_snapshot():
+    """The common case by far, and the one where a heading would be noise --
+    a "Unsaved work" section saying "none" on every launch is a section that
+    trains you to stop reading the top of the screen."""
+    ctx = _ctx()
+    ctx.state.recovery = []
+    landing._recovery(ctx)  # no imgui frame needed: it returns before drawing

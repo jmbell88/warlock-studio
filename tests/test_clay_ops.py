@@ -570,3 +570,60 @@ def test_merge_never_absorbs_a_hidden_object():
 
     assert second in {o.uid for o in doc.objects}, "the hidden object survives untouched"
     assert bm.face_count(doc.by_uid(first).mesh) == faces * 2, "A and C, not A, B and C"
+
+
+# --- Union's binding ----------------------------------------------------------
+#
+# Union Objects did the job the manual describes from the day it landed and
+# almost nobody found it: it sat in the context menu with no key while the weld
+# beside it held Ctrl+J, so the discoverable half of the pair was the half that
+# leaves the interior walls in. The binding is the fix, and these pin it.
+
+
+def test_union_is_bound_beside_merge_rather_than_buried() -> None:
+    """Ctrl+Shift+J to Ctrl+J: the same key, shifted, for the same question
+    answered the other way. A user who knows one is one keystroke from the
+    other, which is the whole of what was missing."""
+    assert clay_ops.get("join").key == "Ctrl+J"
+    assert clay_ops.get("union").key == "Ctrl+Shift+J"
+
+
+def test_no_two_ops_in_one_mode_claim_the_same_key() -> None:
+    """The registry's own promise, asserted rather than assumed -- adding a
+    binding is exactly the change that can break it, and ``by_key`` returns the
+    first match, so a collision fails silently in favour of registration order."""
+    for mode in clay_ops.ALL_MODES:
+        keys = [op.key for op in clay_ops.menu(mode) if op.key]
+        duplicates = {key for key in keys if keys.count(key) > 1}
+        assert not duplicates, f"{mode}: {sorted(duplicates)}"
+
+
+def test_union_and_merge_are_enabled_together() -> None:
+    """One predicate, so the pair is never half-offered: a selection that can
+    be welded can be unioned, and the choice between them is the user's."""
+    doc, _first, _second = _two_boxes()
+    assert clay_ops.get("join").enabled(doc)
+    assert clay_ops.get("union").enabled(doc)
+
+
+def test_merge_points_at_union_from_inside_its_own_dialog() -> None:
+    """The pair is only a choice if you know both halves exist.
+
+    The dialog is where the pointer belongs rather than the menu: it is the one
+    moment the user has committed to "make these one object" and can still pick
+    which meaning of that they wanted, and it is the moment the weld's cost --
+    the walls it is about to bury -- is still undone.
+    """
+    hint = clay_ops.get("join").hint
+    assert "Union" in hint
+    assert clay_ops.get("union").key in hint
+
+
+def test_every_op_hint_names_a_binding_that_exists() -> None:
+    """A hint citing a key is a second place the binding is written down, and
+    the failure mode of those is that they go stale in silence."""
+    bindings = {op.key for op in clay_ops.OPS if op.key}
+    for op in clay_ops.OPS:
+        for token in op.hint.replace(",", " ").replace("(", " ").replace(")", " ").split():
+            if token.startswith("Ctrl+") or token.startswith("Shift+"):
+                assert token in bindings, f"{op.name}: {token} is not bound to anything"

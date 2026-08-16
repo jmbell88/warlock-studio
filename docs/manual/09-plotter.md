@@ -72,7 +72,8 @@ selected, and the cursor on the canvas shows the footprint the brush is about to
 
 ### Generating a ground set
 
-**Generate a ground set** in the tileset pane builds a tileset instead of loading one: flat terrain
+**Generate a ground set**, at the foot of the tileset pane, builds a tileset instead of loading one:
+it is the last of the three routes onto a map and sits below them for that reason. Flat terrain
 colours with a one-pixel darker outline, laid out for **blob autotiling**. Each terrain gets 47
 cells — every combination of neighbours that looks different — so grass meeting dirt has a real
 inner corner rather than a staircase.

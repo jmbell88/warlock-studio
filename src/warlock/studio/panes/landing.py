@@ -437,11 +437,22 @@ def draw(ctx: Any) -> None:
     if imgui.begin_child(
         "landing/body", (0, 0), imgui.ChildFlags_.always_use_window_padding.value
     ):
-        _news(ctx)
-        _start(ctx)
-        _status(ctx, status)
-        _resume(ctx)
-        _news_footer(ctx)
+        # Home draws into ``##content`` rather than through ``layout.pane``, so
+        # it asks for its own section blocks; the bracket is this child, which
+        # is the only thing that knows where it ends.
+        with widgets.section_blocks():
+            # First, above even the release note: it is the only thing on this
+            # screen that is about work the user might otherwise lose, and it is
+            # the only thing here that goes away once dealt with.
+            _recovery(ctx)
+            _news(ctx)
+            _start(ctx)
+            _status(ctx, status)
+            _resume(ctx)
+            # Same reason as ``_recovery``'s: the "All release notes..." link
+            # under this is not part of the Resume group.
+            widgets.end_section()
+            _news_footer(ctx)
     imgui.end_child()
 
 
@@ -472,6 +483,128 @@ def _version() -> str:
 
         _VERSION = installed()
     return _VERSION
+
+
+# --- what a crashed session left ---------------------------------------------
+#
+# This used to be a modal on the first frame: "Recover unsaved work?", Recover /
+# Not now, all of them or none of them, asked before the user had seen the app.
+# Three things were wrong with that and only one of them was the modality.
+#
+# It was **all-or-nothing**, so a session that crashed with one document worth
+# keeping and two worth abandoning had no answer that was right. It was
+# **once**, so "Not now" was indistinguishable from "never" until the next
+# launch. And it was **in front of everything**, which is the wrong weight for a
+# question whose most common answer arrives before the user has any context for
+# it -- a dialog on a screen you have not read yet is a dialog you dismiss.
+#
+# As a section it is per-row, it stays until it is dealt with, and it is exactly
+# as loud as it needs to be. What did *not* move is the scan: see
+# ``journal.snapshot``, which is called on the first frame and never again.
+
+#: Journal kind -> the mode recovering it should switch to.
+#:
+#: Only the *mode* is written down; the glyph comes off ``_MODE_ICONS`` as every
+#: other row's does, for that table's own reason -- a hand-copied glyph is how a
+#: row ends up opening Clay under Plotter's icon.
+#:
+#: Two of the six do not name their own mode, and they differ in why. A pose is
+#: authored in Poser, which is a plain alias. A profile draft is not a mode at
+#: all: it is a sheet over Create, and its provider's ``adopt`` already puts the
+#: app where it needs to be. The empty string means exactly that -- recovering
+#: it navigates itself, and this pane must not second-guess where to.
+_KIND_MODES = {
+    "inker": "inker",
+    "clay": "clay",
+    "plotter": "plotter",
+    "packwright": "packwright",
+    "pose": "poser",
+    "profile": "",
+}
+
+#: How wide a recovery row's button is, in design pixels. Fixed rather than
+#: sized to its label so a column of them shares one right edge -- the titles
+#: beside them are document names and will not.
+RECOVER_BUTTON = 96.0
+
+
+def _recovery(ctx: Any) -> None:
+    """One row per document a previous session left behind.
+
+    Rendered from :func:`journal.snapshot`, which is a snapshot in the strict
+    sense -- see its docstring for why re-reading the directory here would start
+    offering the user their own open documents back.
+    """
+    from .. import journal
+
+    found = list(journal.snapshot(ctx))
+    if not found:
+        return
+    widgets.section("Unsaved work")
+    widgets.muted_wrapped(
+        "Warlock closed with these still open. Recovering gives you the document "
+        "as it was; you still choose where to save it."
+    )
+    imgui.dummy((0, sp(tokens.SP_2)))
+    for entry in found:
+        _recovery_row(ctx, journal, entry)
+    imgui.dummy((0, sp(tokens.SP_2)))
+    # Plural regardless of the count, and last: discarding is the destructive
+    # answer, so it does not sit above the rows it would delete, and it is not
+    # per-row because a per-row bin next to a per-row Recover is two small
+    # targets one pixel apart with opposite meanings.
+    if controls.button(f"{icons.TRASH} Discard all##recovery-discard"):
+        for entry in found:
+            journal.discard(ctx, entry)
+        ctx.toast("The recovered copies were discarded.", "info")
+    # Everything below this on Home -- the release note, the New button, the
+    # status line -- has no heading of its own, so the block has to be closed
+    # here or it grows to cover all of it. See ``widgets.end_section``.
+    widgets.end_section()
+
+
+def _recovery_row(ctx: Any, journal: Any, entry: Any) -> None:
+    """One document: what it is, when it was copied, and the button.
+
+    A row rather than a ``widgets.card``: the Resume grid below is pictures
+    because recognising your own work is a visual act, and there is no picture
+    for a document that was never opened in this session -- only a name. A grid
+    of six identical glyph placeholders would say less than six lines do.
+    """
+    mode = _KIND_MODES.get(entry.kind, "")
+    imgui.push_id(f"recovery-{entry.path.name}")
+    imgui.text(_MODE_ICONS.get(mode, icons.FILE_IMAGE))
+    imgui.same_line()
+    imgui.text(entry.title)
+    imgui.same_line()
+    provider = journal.provider_for(entry.kind)
+    stamp = ago(entry.at)
+    what = provider.label if provider is not None else entry.kind
+    with fonts.small(imgui):
+        widgets.muted(f"{what}, {stamp}" if stamp else what)
+    imgui.same_line()
+    # Right-aligned, so a column of them lines up whatever the titles do.
+    width = sp(RECOVER_BUTTON)
+    imgui.same_line(imgui.get_content_region_avail().x + imgui.get_cursor_pos_x() - width)
+    if entry.adoptable:
+        if controls.button(f"Recover##{entry.path.name}", (width, 0)):
+            if not journal.take(ctx, entry):
+                ctx.toast(f"{entry.title} could not be reopened.", "error")
+            elif mode:
+                # Straight to the editor holding it. The old modal did not
+                # navigate and did not need to -- it fired before the user had
+                # chosen anywhere to be -- but a button on the home screen that
+                # reopens a document somewhere you cannot see has, as far as the
+                # user can tell, done nothing at all. An empty mode is a
+                # provider that navigates itself; see ``_KIND_MODES``.
+                set_mode(ctx.state, mode)
+    else:
+        # A kind this build does not have a provider for. Greyed rather than
+        # hidden, and the files are left alone: the mode may simply not be
+        # compiled into this run, and silently dropping the row would look like
+        # the work was never saved.
+        widgets.muted("unavailable")
+    imgui.pop_id()
 
 
 def _news(ctx: Any) -> None:

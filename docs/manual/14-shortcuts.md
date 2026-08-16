@@ -159,6 +159,7 @@ one loop at a time, so a keypress about a picture can never be filed as a verdic
 | Delete | Delete the selection — faces in an element mode, objects in object mode |
 | Ctrl+D | Duplicate the selection (object mode only) |
 | Ctrl+J | Merge the selected objects into one (object mode only) |
+| Ctrl+Shift+J | Union the selected objects — as a merge, but cutting away what is inside the overlap |
 | Ctrl+A | Select everything, in the current mode's sense |
 | Ctrl+Shift+I | Invert the selection |
 | Ctrl+Z / Ctrl+Y | Undo / redo (Ctrl+Shift+Z also redoes) |

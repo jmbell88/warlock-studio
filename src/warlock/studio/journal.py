@@ -485,50 +485,64 @@ def adopt(ctx: Any, found: list[Recovered]) -> int:
     return taken
 
 
-def summary(found: list[Recovered]) -> str:
-    """The sentence the offer asks with. Names up to three, counts the rest."""
-    names = ", ".join(one.title for one in found[:3])
-    more = "" if len(found) <= 3 else f" and {len(found) - 3} more"
-    return f"{names}{more}"
+def snapshot(ctx: Any) -> list[Recovered]:
+    """What a previous session left, read **once** and remembered on the state.
 
+    This function is where the offer's correctness lives, and it is the one
+    thing that did not change when the offer moved off a startup modal and onto
+    the home screen. The autosave directory is also where *this* session writes
+    its own copies, so anything that re-read it later would begin listing the
+    user's open documents back at them as though they had been crashed out of.
+    The modal avoided that by being one-shot on the first frame; a panel that is
+    on screen for as long as the user is on the home screen cannot be, so the
+    *scan* is one-shot instead and the panel renders a snapshot of it.
 
-def offer(ctx: Any) -> bool:
-    """Ask whether to reopen what a crashed session left. -> whether it asked.
-
-    A question rather than a silent reopen: the files may be from a session the
-    user deliberately abandoned, and opening six documents unasked is its own
-    kind of data loss. Declining **keeps** them -- the answer to "not now" is
-    not "delete my work" -- and they are cleared by saving or closing whatever
-    is recovered, or by the next offer being declined again.
-
-    One question for every kind at once (4a). Per-row choosing is a real want
-    and a bigger dialog; what it cannot be is the *first* version, because the
-    common case is one crash and one or two documents, and a chooser there is a
-    second decision in front of the answer everybody gives.
+    ``None`` and ``[]`` are different answers, deliberately: "not looked yet"
+    and "looked, found nothing". A falsy test here would rescan every frame,
+    which is the bug above with extra steps.
     """
-    from . import dialogs
+    if ctx.state.recovery is None:
+        # Providers before the directory, not after: a copy whose kind nothing
+        # has registered would be listed and then found unadoptable, which
+        # reads as a corrupt journal rather than as an unimported module.
+        ensure_providers()
+        ctx.state.recovery = recoverable(ctx)
+    return ctx.state.recovery
 
-    # Before reading the directory, not after: a copy whose kind nothing has
-    # registered would be listed and then found unadoptable, which reads as a
-    # corrupt journal rather than as an unimported module.
-    ensure_providers()
-    found = recoverable(ctx)
-    if not found:
-        return False
-    ctx.confirms.ask(
-        dialogs.Confirm(
-            title="Recover unsaved work?",
-            message=(
-                f"Warlock closed with unsaved changes in {summary(found)}. "
-                "Reopening gives you the documents as they were; you still "
-                "choose where to save them."
-            ),
-            confirm_label="Recover",
-            cancel_label="Not now",
-            on_confirm=lambda: adopt(ctx, found),
-        )
-    )
-    return True
+
+def _unlist(ctx: Any, found: Recovered) -> None:
+    """Drop one row from the snapshot, by path."""
+    rows = ctx.state.recovery
+    if rows is not None:
+        ctx.state.recovery = [row for row in rows if row.path != found.path]
+
+
+def take(ctx: Any, found: Recovered) -> bool:
+    """Reopen one crash copy and drop its row. -> whether a provider took it.
+
+    The files are **left on disk**. :func:`drop` owns deletion and fires when
+    the recovered document is saved or closed; removing them here would take
+    the copy away for the window between reopening it and saving it, which is
+    precisely the window a second crash would land in.
+    """
+    taken = adopt(ctx, [found]) > 0
+    _unlist(ctx, found)
+    return taken
+
+
+def discard(ctx: Any, found: Recovered) -> None:
+    """Delete one crash copy and drop its row. Never raises -- it is cleanup.
+
+    The unlink order is :func:`drop`'s and so is the reason: the sidecar is the
+    completion gate, so removing it first means a crash between the two leaves
+    an unoffered payload rather than a sidecar naming a file that has gone.
+    """
+    for path in (meta_path(found.path), found.path):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            log.warning("journal: could not remove %s", path, exc_info=True)
+    _unlist(ctx, found)
 
 
 def status_line(ctx: Any) -> str:

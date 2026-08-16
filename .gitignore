@@ -49,3 +49,7 @@ imgui.ini
 # Screenshot-harness output (`scripts/screenshot_modes.py --out`). Per-run,
 # regenerable, and photographed for one review -- never an input to anything.
 /.tmp-ui-audit/
+# Same, from the Plotter review runs (`--out .tmp-plotter-review*`), including
+# the `WARLOCK_DATA_DIR` each one is pointed at. Written by a suite run, so
+# without this a `git add -A` after `uv run pytest` commits them.
+/.tmp-plotter-review*/

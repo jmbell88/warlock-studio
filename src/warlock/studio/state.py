@@ -746,10 +746,15 @@ class AppState:
     # the popup actually lives. Cleared on read, so a request that arrives
     # while the header is not drawn is dropped rather than firing later.
     shortcuts_requested: bool = False
-    # Whether the crash-recovery offer has been made this session. One-shot:
-    # the autosave directory is *also* where this session's own copies land, so
-    # asking again later would offer the user their own open documents back.
-    recovery_offered: bool = False
+    # What a previous session left, scanned once on the first frame and offered
+    # by the home screen. ``None`` means "not looked yet" and is distinct from
+    # an empty list: the autosave directory is *also* where this session's own
+    # copies land, so a rescan would list the user's open documents back at them
+    # as though they had been crashed out of. ``journal.snapshot`` is the only
+    # thing that fills it; ``journal.take``/``discard`` are the only things that
+    # shorten it. Typed loosely because ``state`` is imported by everything and
+    # must not pull the journal in with it.
+    recovery: list[Any] | None = None
     # Set when the UI scale changes, consumed by the frame loop *between*
     # frames (K99): the atlas rebuild invalidates every ImFont handle, and a
     # rebuild inside a frame would leave the rest of it drawing through freed

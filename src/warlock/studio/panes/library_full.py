@@ -232,6 +232,13 @@ def _grid(ctx: Any, jobs: list[Any]) -> None:
                 heading = library.date_group(job.get("created_at"))
                 if heading != group:
                     group = heading
+                    # Deliberately *not* inside a ``widgets.section_blocks``
+                    # scope. A tinted block groups controls against a flat pane;
+                    # what follows this heading is a wall of cards that already
+                    # carry their own surfaces, so a block behind them would be
+                    # a surface behind surfaces. The rail above does take the
+                    # blocks -- it is controls -- and gets them from
+                    # ``layout.pane``.
                     widgets.section(heading)
                     column = 0
             if column:

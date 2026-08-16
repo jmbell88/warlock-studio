@@ -101,6 +101,15 @@ class Op:
     separator_before: bool = False
     params: tuple[Param, ...] = field(default=())
     """The numbers the pane pops a dialog for, or empty for a bare action."""
+    hint: str = ""
+    """One sentence under the dialog's title, about the op rather than a field.
+
+    ``Param.warn`` is about a *number* -- what two levels of Catmull-Clark will
+    do to a mesh -- and belongs under the field it qualifies. This is about the
+    op: what it is for, and when the op next to it is the one you meant. Only
+    the parameterised ops can show it, because only they open a dialog, which
+    is the right restriction: a bare action gives no moment to read anything.
+    """
 
 
 OPS: list[Op] = []
@@ -720,6 +729,16 @@ def _register_defaults() -> None:
             # object the merge then skips is the greyed one's problem again.
             enabled=has_two_visible,
             key="Ctrl+J",
+            # The pointer at its counterpart, here rather than in the menu: this
+            # dialog is the one moment the user has committed to "make these one
+            # object" and can still choose which meaning of it they wanted, and
+            # the moment the weld's cost -- the walls it is about to bury inside
+            # the result -- has not been paid yet.
+            hint=(
+                "Welds the shapes and keeps the surfaces inside the overlap. For "
+                "shapes that interpenetrate, Union Objects... (Ctrl+Shift+J) cuts "
+                "those away instead -- at the cost of the UVs and the n-gons."
+            ),
             params=(
                 Param(
                     "weld",
@@ -738,6 +757,14 @@ def _register_defaults() -> None:
     # the UVs and the n-gons, which is exactly why the weld cannot simply be
     # retired in its favour. Same predicate, because "fewer than two visible" is
     # the identity for both.
+    #
+    # And the same key, shifted. Union spent its first release in the context
+    # menu with no binding at all while the weld beside it held Ctrl+J, so of
+    # the pair the discoverable one was the one that leaves the interior walls
+    # in -- users found *Merge*, got z-fighting inside the overlap, and had no
+    # reason to suspect the other row existed. Shift is the right modifier for
+    # it under the rule Ctrl+Shift+Z and Ctrl+Shift+I already follow here: the
+    # same question, answered the other way.
     register(
         Op(
             name="union",
@@ -745,6 +772,7 @@ def _register_defaults() -> None:
             modes=("object",),
             run=_union,
             enabled=has_two_visible,
+            key="Ctrl+Shift+J",
         )
     )
     for axis, label in enumerate(("X", "Y", "Z")):

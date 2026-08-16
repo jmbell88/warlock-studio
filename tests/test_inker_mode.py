@@ -721,13 +721,14 @@ def test_recovery_is_offered_only_when_something_was_left_behind(tmp_path):
 
     ctx = _AutosaveCtx(tmp_path)
     inker_mode.ensure(ctx)
-    assert journal.offer(ctx) is False
-    assert ctx.confirms.pending is None
+    assert journal.snapshot(ctx) == []
 
+    # A fresh session over the same directory: the scan is one-shot per state,
+    # so finding the new copy needs the next launch, which is the whole point.
+    ctx = _AutosaveCtx(tmp_path)
+    inker_mode.ensure(ctx)
     _leave_behind(tmp_path, "sketch")
-    assert journal.offer(ctx) is True
-    assert ctx.confirms.pending is not None
-    assert "sketch" in ctx.confirms.pending.message
+    assert [r.title for r in journal.snapshot(ctx)] == ["sketch"]
 
 
 def test_a_payload_with_no_sidecar_is_never_offered(tmp_path):
@@ -740,7 +741,7 @@ def test_a_payload_with_no_sidecar_is_never_offered(tmp_path):
     inker_mode.ensure(ctx)
     (tmp_path / "half-pd9.ora").write_bytes(b"interrupted")
     assert journal.recoverable(ctx) == []
-    assert journal.offer(ctx) is False
+    assert journal.snapshot(ctx) == []
 
 
 def test_a_sidecar_naming_a_payload_that_has_gone_is_skipped(tmp_path):
@@ -768,14 +769,14 @@ def test_a_sidecar_from_a_version_nobody_understands_is_skipped(tmp_path):
 
 
 def test_declining_recovery_keeps_the_files(tmp_path):
-    """"Not now" is not "delete my work"."""
+    """"Not now" is not "delete my work" -- and on the home screen "not now" is
+    simply never clicking Recover, so listing must touch nothing on disk."""
     from warlock.studio import inker_mode, journal
 
     ctx = _AutosaveCtx(tmp_path)
     inker_mode.ensure(ctx)
     left = _leave_behind(tmp_path, "sketch")
-    journal.offer(ctx)
-    ctx.confirms.dismiss()
+    assert len(journal.snapshot(ctx)) == 1
     assert left.exists()
     assert journal.meta_path(left).exists()
 

@@ -113,10 +113,14 @@ def draw() -> None:
     )
     widgets.muted("Shared controls in the current theme and UI scale.")
     if imgui.begin_child("gallery/scroll", (0, -sp(42))):
-        _state_samples()
-        _buttons()
-        _fields()
-        _choices()
+        # The gallery exists to show shared controls as a pane draws them, so it
+        # asks for the blocks a pane gets -- a gallery that showed the headings
+        # flat would be showing a look no pane has.
+        with widgets.section_blocks():
+            _state_samples()
+            _buttons()
+            _fields()
+            _choices()
     imgui.end_child()
     if controls.button("Close", role=controls.ButtonRole.GHOST):
         imgui.close_current_popup()

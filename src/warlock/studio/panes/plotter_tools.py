@@ -165,6 +165,13 @@ def draw(ctx: Any) -> None:
     if state.tool == "shape":
         _shape_picker(state)
         imgui.dummy((0, 6))
+    # Headed, where they used to be three loose toggles under whatever the tool
+    # in hand had drawn. They are about what the *canvas* shows rather than what
+    # a click does, and with sections drawn as blocks the difference stopped
+    # being invisible and became wrong: with Terrain in hand, "Grid",
+    # "Show objects" and "Minimap" sat inside the Terrain block, which said they
+    # were terrain settings.
+    widgets.section("View")
     _, state.grid = widgets.toggle("Grid (Ctrl+G)", state.grid)
     _, state.show_objects = widgets.toggle("Show objects", state.show_objects)
     _, state.minimap = widgets.toggle("Minimap", state.minimap)

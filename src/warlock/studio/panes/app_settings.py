@@ -83,14 +83,22 @@ def draw(ctx: Any) -> None:
         # the window -- which is what makes the model rows, the config table and
         # the sliders bound themselves without being told the number.
         if imgui.begin_child("app-settings-body", (width, 0)):
-            # This mode is one pane filling the window, so it is the one surface
-            # in the app that has to say what it is out loud (UX.md Phase 2) --
-            # the three-column modes are named by the rail item that is lit.
-            widgets.pane_header(
-                "Settings", help_text="Application appearance, models, storage, and layout."
-            )
-            with forms.Form("application-settings") as form_ui:
-                _category_body(ctx, _categories(ctx, width), form_ui)
+            # Settings draws into ``##content`` rather than through
+            # ``layout.pane``, so it asks for its own section blocks. Named here
+            # rather than made automatic: a scope splits *this child's* draw
+            # list, and the right bracket is the child, which only the code that
+            # opened it knows.
+            with widgets.section_blocks():
+                # This mode is one pane filling the window, so it is the one
+                # surface in the app that has to say what it is out loud (UX.md
+                # Phase 2) -- the three-column modes are named by the rail item
+                # that is lit.
+                widgets.pane_header(
+                    "Settings",
+                    help_text="Application appearance, models, storage, and layout.",
+                )
+                with forms.Form("application-settings") as form_ui:
+                    _category_body(ctx, _categories(ctx, width), form_ui)
         imgui.end_child()
     imgui.end_child()
 

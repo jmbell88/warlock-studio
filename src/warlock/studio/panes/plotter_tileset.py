@@ -8,6 +8,14 @@ The picker draws the tileset's atlas as one image and the selection as a
 draw-list rectangle over it, rather than a button per tile: a 16x16 tileset is
 256 buttons, and imgui would spend a per-item id, a hover test and a draw call
 on each of them every frame.
+
+**The picker leads the pane, and the three ways of acquiring a tileset follow
+it in order of how often they are reached for.** The pane used to open with
+*Add from a file...* and the generator header, which put two once-per-map
+controls above the one control that is used on every single click. Ordering by
+frequency rather than by lifecycle is the rule: pick a tile, then add a file,
+then repaint in Inker, then -- last -- generate a set from nothing. The empty
+map is the one exception and says why inline.
 """
 
 from __future__ import annotations
@@ -37,20 +45,28 @@ def draw(ctx: Any) -> None:
 
     doc = tab.doc
     disabled = tab.busy
-    if widgets.disabled_button(f"{icons.PLUS} Add from a file...", not disabled, (-1, 0)):
-        plotter_mode.ask_add_tileset(ctx)
-    imgui.dummy((0, 4))
-    _generator(ctx, state, tab)
+
+    def add_button() -> None:
+        if widgets.disabled_button(f"{icons.PLUS} Add from a file...", not disabled, (-1, 0)):
+            plotter_mode.ask_add_tileset(ctx)
+
     if not doc.tilesets:
-        imgui.dummy((0, 8))
+        # The one branch where *acquiring* a tileset is the whole pane. There is
+        # nothing to pick and nothing to polish, so the two ways of getting one
+        # are what the pane is for and they lead it -- burying the generator
+        # under a picker that cannot draw would put a new map's most useful
+        # control at the bottom of an otherwise empty panel.
+        add_button()
+        imgui.dummy((0, 4))
         widgets.muted_wrapped(
             "A map needs a tileset before anything can be painted. Add a PNG and it "
             f"is sliced at {doc.tile_w} x {doc.tile_h}, add a Tiled .tsx, or generate "
-            "a ground set above."
+            "a ground set below."
         )
+        imgui.dummy((0, 8))
+        _generator(ctx, state, tab)
         return
 
-    imgui.dummy((0, 4))
     options = [
         (str(index), f"{ref.tileset.name} ({ref.tileset.tile_count})")
         for index, ref in enumerate(doc.tilesets)
@@ -65,8 +81,17 @@ def draw(ctx: Any) -> None:
     ref = doc.tilesets[index]
     imgui.dummy((0, 4))
     _picker(ctx, state, ref, index, tab.uid)
+
+    # Everything below here is about the pane's *contents* rather than about the
+    # brush, in the order the questions get asked: which tile (above), then how
+    # another tileset gets on, then how this one gets repainted, and last the
+    # one that builds a set from nothing.
+    imgui.dummy((0, 8))
+    add_button()
     imgui.dummy((0, 4))
     _inker_row(ctx, state, tab, index)
+    imgui.dummy((0, 8))
+    _generator(ctx, state, tab)
 
 
 def _picker(ctx: Any, state: Any, ref: Any, index: int, uid: str) -> None:
@@ -186,6 +211,12 @@ def _brush_span(
 # a third route beside a file and a library asset. A new pane would cost an entry
 # in the four-pane skeleton, a ``settings_share`` decision and a help-coverage
 # entry; a header costs none of those and remembers whether it is open.
+#
+# Drawn last on a map that already has a tileset, because it is the last resort
+# of the three routes: a generated ground set is what you reach for when there
+# is no art to point at, and once there is, it is the least likely answer to
+# "where does this tile come from". Collapsed by default, so its cost when it is
+# not wanted is one row.
 
 
 def _generator(ctx: Any, state: Any, tab: Any) -> None:

@@ -23,10 +23,16 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import clay_mode, clay_ops, controls, widgets
+from .. import clay_mode, clay_ops, controls, theme, widgets
+from ..tokens import sp
 
 POPUP = "clay-context"
 PARAM_POPUP = "clay-op-params"
+
+#: How wide an ``Op.hint`` is allowed to get before it wraps, in design pixels.
+#: Chosen so the dialog stays narrower than the properties pane beside it -- a
+#: popup that auto-sizes past its own panel reads as a window, not a prompt.
+HINT_WRAP = 300
 
 
 def draw(ctx: Any, view: Any) -> None:
@@ -105,6 +111,20 @@ def params_popup(ctx: Any, state: Any, tab: Any) -> None:
     values = state.op_params.setdefault(op.name, clay_ops.defaults_for(op))
     imgui.text(op.label.rstrip("."))
     imgui.separator()
+    if op.hint:
+        # Above the fields, not below them: it is about which op you are in
+        # rather than about a number, so a user who is in the wrong one should
+        # read it before they start typing into the right one's dialog.
+        #
+        # Wrapped at an explicit column rather than through ``muted_wrapped``,
+        # which wraps at the content region's right edge. A popup *auto-sizes to
+        # its content*, so in here that edge is whatever the widest item already
+        # is -- there is nothing yet to be wide, so a three-line hint would have
+        # sized the popup to its own single longest line instead of wrapping.
+        imgui.push_text_wrap_pos(imgui.get_cursor_pos_x() + sp(HINT_WRAP))
+        widgets.text_colored(theme.MUTED, op.hint)
+        imgui.pop_text_wrap_pos()
+        imgui.dummy((0, 4))
     for param in op.params:
         label = f"{param.label}##{op.name}-{param.name}"
         if param.integer:

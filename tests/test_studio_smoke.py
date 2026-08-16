@@ -24,6 +24,41 @@ from warlock.studio.settings import Settings
 from warlock.studio.state import AppState, Eta, Filters
 
 
+@pytest.fixture
+def app_ctx(gl, svc, tmp_path, imgui_ctx):
+    from warlock.service import sheets as svc_sheets
+    from warlock.service import system as svc_system
+    from warlock.studio import textures
+    from warlock.studio.runtime import Runtime
+    from warlock.studio.tasks import TaskRunner
+    from warlock.studio.viewer_embed import Viewer
+
+    runtime = Runtime(svc.config)
+    runtime.store = svc.store
+    runtime.tasks = TaskRunner(workers=1)
+    viewer = Viewer(gl)
+    ctx = Ctx(
+        svc=svc,
+        runtime=runtime,
+        state=AppState(),
+        cache=JobsCache(svc),
+        tasks=runtime.tasks,
+        settings=Settings.load(tmp_path),
+        viewer=viewer,
+        textures=textures.ThumbnailCache(gl),
+    )
+    ctx.guidance = svc_system.guidance_catalog(svc)
+    ctx.sheet_options = svc_sheets.sheet_options()
+    ctx.base_models = [("turbo", "SDXL-Turbo")]
+    ctx.style_loras = [("", "none"), ("render3d", "3D render")]
+    ctx.rig_templates = [{"key": "biped", "label": "Biped"}]
+    ctx.rig_default = "biped"
+    yield ctx
+    viewer.release()
+    ctx.textures.release()
+    runtime.tasks.shutdown(wait=False)
+
+
 @pytest.fixture(scope="session")
 def imgui_ctx(gl):
     """An imgui context with a real renderer, over the standalone GL context.
@@ -68,41 +103,6 @@ def imgui_ctx(gl):
     yield imgui, renderer
     renderer.shutdown()
     imgui.destroy_context()
-
-
-@pytest.fixture
-def app_ctx(gl, svc, tmp_path, imgui_ctx):
-    from warlock.service import sheets as svc_sheets
-    from warlock.service import system as svc_system
-    from warlock.studio import textures
-    from warlock.studio.runtime import Runtime
-    from warlock.studio.tasks import TaskRunner
-    from warlock.studio.viewer_embed import Viewer
-
-    runtime = Runtime(svc.config)
-    runtime.store = svc.store
-    runtime.tasks = TaskRunner(workers=1)
-    viewer = Viewer(gl)
-    ctx = Ctx(
-        svc=svc,
-        runtime=runtime,
-        state=AppState(),
-        cache=JobsCache(svc),
-        tasks=runtime.tasks,
-        settings=Settings.load(tmp_path),
-        viewer=viewer,
-        textures=textures.ThumbnailCache(gl),
-    )
-    ctx.guidance = svc_system.guidance_catalog(svc)
-    ctx.sheet_options = svc_sheets.sheet_options()
-    ctx.base_models = [("turbo", "SDXL-Turbo")]
-    ctx.style_loras = [("", "none"), ("render3d", "3D render")]
-    ctx.rig_templates = [{"key": "biped", "label": "Biped"}]
-    ctx.rig_default = "biped"
-    yield ctx
-    viewer.release()
-    ctx.textures.release()
-    runtime.tasks.shutdown(wait=False)
 
 
 def _frame(imgui_ctx, build):
@@ -775,6 +775,41 @@ def test_the_landing_screen_builds_empty_and_with_something_to_resume(
     _frame(imgui_ctx, lambda: landing.draw(app_ctx))
     _seeded(app_ctx)
     _frame(imgui_ctx, lambda: landing.draw(app_ctx))
+
+
+def test_the_landing_screen_builds_with_unsaved_work_to_offer(app_ctx, imgui_ctx):
+    """The third state, and the one no seeded run reaches: a crash copy waiting.
+
+    It used to be a modal in front of this screen and is a section at the top of
+    it now, so it is part of what Home has to be able to draw -- including the
+    unadoptable branch, which is a kind this build has no provider for and must
+    render as a greyed row rather than vanish.
+    """
+    from warlock.studio import journal
+    from warlock.studio.panes import landing
+
+    app_ctx.state.recovery = [
+        journal.Recovered(
+            path=Path("sketch-pd9.ora"), kind="inker", title="sketch", at=1.0
+        ),
+        journal.Recovered(
+            path=Path("draft.profile.json"), kind="profile", title="draft", at=2.0
+        ),
+        journal.Recovered(
+            path=Path("mystery.bin"), kind="from-the-future", title="mystery", at=3.0
+        ),
+    ]
+    journal.ensure_providers()
+    imgui, _renderer = imgui_ctx
+    _frame(imgui_ctx, lambda: landing.draw(app_ctx))
+
+    # Drawn, not merely survived: a section that returned early would pass a
+    # build-it-and-see test silently, which is the whole failure mode here.
+    labels = _drawn_labels(imgui, lambda: landing.draw(app_ctx), "##home-recovery")
+    assert _index_of(labels, "Recover##sketch-pd9.ora") >= 0
+    assert _index_of(labels, "Recover##draft.profile.json") >= 0
+    assert _index_of(labels, "Discard all") >= 0
+    assert _index_of(labels, "Recover##mystery.bin") == -1, "no provider, no button"
 
 
 def test_the_library_builds_as_its_own_mode(app_ctx, imgui_ctx):
@@ -4063,3 +4098,101 @@ def test_no_two_plotter_items_claim_one_imgui_id(app_ctx, imgui_ctx, pane):
         for ident, items in conflicts.items()
     )
     assert not conflicts, f"{pane}: {detail}"
+
+
+def _drawn_labels(imgui, build, title):
+    """Every label the pane submits, in draw order.
+
+    The same wrapping trick ``_claimed_ids`` uses, recording the *sequence*
+    rather than the ids: a pane's reading order is the order it submits its
+    items in, and that is the only thing a headless test can see of a layout.
+    """
+    seen: list[str] = []
+    originals = {name: getattr(imgui, name) for name in _ID_WIDGETS if hasattr(imgui, name)}
+
+    def wrap(fn):
+        def recorded(label, *args, **kwargs):
+            if isinstance(label, str):
+                seen.append(label)
+            return fn(label, *args, **kwargs)
+
+        return recorded
+
+    for name, fn in originals.items():
+        setattr(imgui, name, wrap(fn))
+    try:
+        imgui.new_frame()
+        imgui.set_next_window_size((420, 900))
+        imgui.begin(title)
+        build()
+        imgui.end()
+        imgui.render()
+    finally:
+        for name, fn in originals.items():
+            setattr(imgui, name, fn)
+    return seen
+
+
+def _index_of(labels, needle):
+    for index, label in enumerate(labels):
+        if needle in label:
+            return index
+    return -1
+
+
+def test_plotter_tileset_pane_leads_with_the_picker_and_ends_with_the_generator(
+    app_ctx, imgui_ctx
+):
+    """What a map is painted *with* comes before how a tileset gets onto it.
+
+    The pane used to open with "Add from a file..." and the generator header,
+    which put two ways of *acquiring* a tileset above the picker for the one
+    already loaded -- so the control used on every single click sat below two
+    controls used once per map. Generating a ground set is the last resort of
+    the three and is drawn last.
+    """
+    from warlock.studio import plotter_mode
+    from warlock.studio.panes import plotter_tileset
+
+    imgui, _renderer = imgui_ctx
+    tab = plotter_mode.new_document(app_ctx, (8, 8, 16, 16))
+    tab.doc.add_tileset(_tileset())
+
+    title = "##tileset-order"
+    _drawn_labels(imgui, lambda: plotter_tileset.draw(app_ctx), title)  # settle headers
+    labels = _drawn_labels(imgui, lambda: plotter_tileset.draw(app_ctx), title)
+
+    picker = _index_of(labels, "Tileset")
+    add = _index_of(labels, "Add from a file")
+    generate = _index_of(labels, "Generate a ground set")
+    assert picker >= 0 and add >= 0 and generate >= 0, labels
+    assert picker < add, f"the tileset picker must precede Add from a file: {labels}"
+    assert add < generate, f"the generator must come last: {labels}"
+    assert generate == max(
+        generate, _index_of(labels, "Polish in Inker")
+    ), f"the generator must sit below the Inker row: {labels}"
+
+
+def test_plotter_tileset_pane_still_leads_with_the_generator_when_empty(app_ctx, imgui_ctx):
+    """The one branch where generating is *not* a last resort.
+
+    With no tileset attached there is nothing to pick, so the two ways of
+    getting one are the whole pane -- burying the generator under a picker that
+    cannot draw would leave a new map's most useful control at the bottom of an
+    otherwise empty panel.
+    """
+    from warlock.studio import plotter_mode
+    from warlock.studio.panes import plotter_tileset
+
+    imgui, _renderer = imgui_ctx
+    plotter_mode.new_document(app_ctx, (8, 8, 16, 16))
+
+    title = "##tileset-order-empty"
+    _drawn_labels(imgui, lambda: plotter_tileset.draw(app_ctx), title)
+    labels = _drawn_labels(imgui, lambda: plotter_tileset.draw(app_ctx), title)
+
+    add = _index_of(labels, "Add from a file")
+    generate = _index_of(labels, "Generate a ground set")
+    assert add >= 0 and generate >= 0, labels
+    assert add < generate, labels
+    assert _index_of(labels, "Polish in Inker") == -1, "nothing to polish with no tileset"

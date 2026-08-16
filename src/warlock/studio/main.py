@@ -1385,12 +1385,14 @@ class App:
         # button was clicked, and a user who started one and switched to the
         # library must still get their file.
         inker_mode.pump_export(self.app_ctx)
-        if not ctx.state.recovery_offered:
-            # Once, on the first frame that has a Ctx: the autosave directory
-            # is also where *this* session's copies land, so a second offer
-            # would hand the user their own open documents back.
-            ctx.state.recovery_offered = True
-            journal.offer(ctx)
+        # Scanned here, on the first frame that has a Ctx, and *offered* by the
+        # home screen rather than by a modal in front of it. It has to be here
+        # and not in the pane: the autosave directory is also where this
+        # session's copies land, so a scan taken any later than the first frame
+        # would hand the user their own open documents back. ``snapshot`` is a
+        # no-op after the first call, which is what makes calling it per frame
+        # correct rather than merely cheap.
+        journal.snapshot(ctx)
 
     def _check_worker(self) -> None:
         """Say so, once, when the GPU worker dies.
