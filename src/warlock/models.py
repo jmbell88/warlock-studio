@@ -90,6 +90,16 @@ IMG2IMG_STRENGTH_MIN = 0.30
 IMG2IMG_STRENGTH_MAX = 0.65
 DEFAULT_IMG2IMG_STRENGTH = 0.45
 
+# The re-texture door's own ceiling, deliberately not a change to the shared
+# bounds above: the pixel sheets run img2img with no geometry anchor and keep
+# 0.65. A re-texture can afford 0.85 -- the 2026-08-08 retexture measurement's
+# positive control showed the projection carries what 0.85 invents faithfully,
+# and with the depth ControlNet anchoring structure, invention is the point.
+# The *default* stays DEFAULT_IMG2IMG_STRENGTH until the retexture-visibility
+# measurement's strength ladder picks a new one.
+RETEXTURE_STRENGTH_MIN = IMG2IMG_STRENGTH_MIN
+RETEXTURE_STRENGTH_MAX = 0.85
+
 # The style LoRA a pixel sheet restyle is fixed to in v1. Named here rather
 # than in the sheet code so the registry stays the only place a model key is
 # written down.
@@ -413,10 +423,15 @@ class ControlNet:
     label: str
     dir_name: str
     # Which preprocessor turns the reference into a hint image. Only "canny"
-    # exists today (``pipelines/control.PREPROCESSORS``); a depth hint would
-    # need a torch model and therefore a module of its own, since control.py
-    # must stay torch-free.
-    preprocessor: str
+    # exists today (``pipelines/control.PREPROCESSORS``): a *monocular* depth
+    # hint would need a torch model and therefore a module of its own, since
+    # control.py must stay torch-free. ``None`` means no reference-derived
+    # hint exists at all -- a pipeline renders the hint itself (the re-texture
+    # stage's Blender depth pass) -- and such an entry must never surface on
+    # the text-job path: ``catalog()`` filters it, ``guidance.normalize``
+    # refuses it, and ``_q_generate._conditioning`` drops it, in that order of
+    # defence.
+    preprocessor: str | None
     variant: str | None = "fp16"
     default_scale: float = 0.65
     default_end: float = 0.8
@@ -936,6 +951,27 @@ CONTROLNETS: dict[str, ControlNet] = _table(
             ),
         ),
     ),
+    ControlNet(
+        # Pipeline-fed (preprocessor=None): the re-texture stage renders the
+        # hint itself from the mesh -- ground-truth depth through the exact
+        # bake cameras, which no monocular estimator can match. Same org,
+        # layout, fp16 variant and size class as the canny entry, and trained
+        # on inverted relative depth, which is what `retexture.depth_hint`
+        # produces.
+        "depth",
+        "Surface relief (rendered depth)",
+        "controlnet-depth-sdxl",
+        preprocessor=None,
+        fetch=(
+            Fetch(
+                "diffusers/controlnet-depth-sdxl-1.0",
+                "controlnet-depth-sdxl",
+                revision="17bb97973f29801224cd66f192c5ffacf82648b4",
+                allow_patterns=("*.json", "*fp16.safetensors"),
+                size_gib=2.5,
+            ),
+        ),
+    ),
 )
 
 
@@ -1211,5 +1247,10 @@ def catalog() -> dict[str, Any]:
                 "default_end": c.default_end,
             }
             for c in CONTROLNETS.values()
+            # A pipeline-fed entry has no reference-derived hint, so a select
+            # offering it would submit a job that fails at write_hint with the
+            # checkpoint already in VRAM. Starved at the source: this list is
+            # what feeds the settings combo.
+            if c.preprocessor
         ],
     }

@@ -120,6 +120,17 @@ def test_a_retexture_costs_one_img2img_pass_and_never_trellis():
     assert with_control == pytest.approx(exclusive + vram.CONTROLNET_GIB)
 
 
+def test_a_retexture_charges_the_ip_encoder_when_identity_is_asked_for():
+    """The optional "match the original reference" knob loads CLIP-ViT-H
+    beside the pipe; unpriced it would be admitted for free and OOM exactly
+    when combined with the depth ControlNet."""
+    plain = vram.estimate("retexture", "model", {}, exclusive=True)
+    with_ip = vram.estimate(
+        "retexture", "model", {"ip_adapter": "plus"}, exclusive=True
+    )
+    assert with_ip == pytest.approx(plain + vram.IP_ENCODER_GIB)
+
+
 def test_a_retexture_is_priced_from_the_registry_not_from_sdxl():
     """It is exactly the job somebody points at an offloaded checkpoint, so the
     spec's own figure has to be the one charged."""

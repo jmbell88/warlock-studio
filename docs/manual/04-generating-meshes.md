@@ -183,18 +183,29 @@ inspector at the **Rig** stage, under the collapsed **Surface texture** header, 
 
 Describe the surface you want ("rusted iron", "mossy stone", "painted wood"), set how far the
 restyle is taken, pick an atlas size, and press **Re-texture mesh**. What happens then is four
-stages: the mesh is rendered flat from six directions, each render is restyled by the image model,
-each restyled view is projected back onto the mesh's own UV layout with a weight image saying how
-squarely it faced the camera, and the six are combined into one atlas by a weighted mean.
+stages: the mesh is rendered flat from ten directions (the six axis views plus four upper
+three-quarter diagonals, which see past overhangs and through openings), each render is restyled by
+the image model, each restyled view is projected back onto the mesh's own UV layout with a weight
+image saying how squarely it faced the camera, and the views are combined into one atlas by a
+weighted mean.
 
-Unlike a retarget, this is a queued job rather than a couple of seconds of processing — six image
+Unlike a retarget, this is a queued job rather than a couple of seconds of processing — ten image
 generations is a real amount of GPU — so it takes its turn behind whatever else is running, and it
 is refused outright on a job that is still queued or running.
 
 **Restyle strength** is how far each view is taken from the mesh's current look. Low keeps the
-shapes and recolours them; high reinterprets them, and past about two-thirds the views start
-disagreeing with each other about what the object is, which shows up as a muddled atlas rather than
-as a bolder one.
+shapes and recolours them; high reinterprets them. Un-anchored, past about two-thirds the views
+start disagreeing with each other about what the object is, which shows up as a muddled atlas
+rather than as a bolder one — the top of the range is only worth reaching with the geometry anchor
+on, where the depth hint keeps every view telling the same story.
+
+**Anchor to geometry (depth)** renders the mesh's own depth from every view and uses it twice.
+Each restyle pass is held to it through a depth ControlNet, so the image model can invent surface
+detail without moving edges. And the projection depth-tests every texel — a surface a camera could
+not actually see contributes nothing, so an overhang's front-view colours no longer smear onto what
+hides behind it. It needs the depth ControlNet downloaded (Settings → Models, under Conditioning);
+the button will name the download if it is missing. **Anchor strength** is how firmly each restyle
+is held; the default is the model's own.
 
 **Atlas size** is the resolution the new texture is written at. The reconstruction engine bakes at
 512 px; the views being projected in are larger than that, so 1024 is the default and is not wasted.
@@ -206,15 +217,19 @@ re-texture changes no geometry — so unlike a retarget, none of them is invalid
 *do* carry the skin (OBJ, FBX, the texture zip) are deleted and rebuilt on next request. STL and the
 collision hull are geometry with no material in them and are left alone.
 
-**There is no occlusion test.** A view's contribution is weighted by how squarely each surface faces
-it, not by whether anything is in the way — so on a mesh with an overhang, the front view's colours
-can be smeared onto whatever hides behind it. On a convex prop this never arises. It is a stated
-limitation of the projection approach rather than a bug, and it is why the run reports what it does.
+**The occlusion test is per run, and the panel says which kind you are configuring.** Un-anchored,
+a view's contribution is weighted by how squarely each surface faces it, not by whether anything is
+in the way — so on a mesh with an overhang, the front view's colours can be smeared onto whatever
+hides behind it (on a convex prop this never arises). That is the warning under the form, shown
+exactly when it applies; turning the anchor on replaces the facing-only weight with a real
+depth test and the warning goes away because the limitation does.
 
 **Coverage is reported.** After a run the panel says what fraction of the atlas any view could speak
 about at all. A texel no view could see keeps its old colour rather than being invented — the inside
 of a barrel stays the inside of a barrel — so a low coverage figure means most of the mesh kept its
-previous skin, which is worth knowing before you conclude the prompt did nothing.
+previous skin, which is worth knowing before you conclude the prompt did nothing. An anchored run
+also reports how much was actually repainted after the depth test; the two figures do not mean the
+same thing, and the line names which kind of run produced it.
 
 `source.glb` is never touched. A re-texture is a derivation, exactly as a retarget is, so the
 reconstruction stays the thing both of them rebuild from.

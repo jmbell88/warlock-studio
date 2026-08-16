@@ -526,6 +526,17 @@ def normalize(raw: dict[str, Any], *, bg_default: str | None = None) -> dict[str
             f"pick one of {models.controlnet_bases()}",
             field="base_model",
         )
+    if control is not None and control.preprocessor is None:
+        # Pipeline-fed: the re-texture stage renders this hint itself from the
+        # mesh. An image job has no mesh to render one from, and accepting the
+        # key here would fail at write_hint with the checkpoint already in
+        # VRAM. catalog() already hides it from the combo; this is the door
+        # for params that arrive from anywhere else.
+        raise GuidanceError(
+            f"control {control.key!r} takes a hint rendered by a pipeline, "
+            "not one derived from the reference; it cannot be chosen here",
+            field="control",
+        )
 
     # The selection's own tuned default, so picking an adapter is one click --
     # the same rule lora_weight follows.

@@ -913,6 +913,75 @@ def _view_direction(yaw: float, pitch: float) -> tuple[float, float, float]:
     return (math.sin(y) * math.cos(p), -math.cos(y) * math.cos(p), math.sin(p))
 
 
+def _depth_terms(extent: float, distance: float) -> tuple[float, float]:
+    """The (offset, scale) of the camera-depth encoding: enc = (offset - d) * scale.
+
+    Inverted -- near 1, far 0 -- so a pixel where nothing rendered decodes to
+    the far plane and "no occluder here" needs no special case on the host.
+    Pure arithmetic, importable without bpy, and pinned against
+    ``pipelines.retexture.depth_encode`` by ``tests/test_retexture.py`` -- the
+    ``_view_direction`` treatment, because the host decodes what these two
+    numbers encoded and a drift reads every visibility compare against the
+    wrong plane, which looks like random dropout rather than like a bug.
+    """
+    span = max(2.0 * extent, 1e-9)
+    return (distance + extent, 1.0 / span)
+
+
+def _depth_chain(tree: Any, centre, extent: float, distance: float):
+    """The node chain computing this surface point's encoded camera depth.
+
+    -> (dot_node, value_socket). The caller points ``dot_node.inputs[1]`` at
+    each view's direction; the socket then carries
+    ``depth_encode(distance - dot(P - centre, dir))`` for that view. Shared by
+    the depth *render* material and the depth-pair *bake* material so the two
+    cannot disagree about what a texel's own depth is.
+    """
+    offset, scale = _depth_terms(extent, distance)
+    geo = tree.nodes.new("ShaderNodeNewGeometry")
+    rel = tree.nodes.new("ShaderNodeVectorMath")
+    rel.operation = "SUBTRACT"
+    rel.inputs[1].default_value = tuple(centre)
+    tree.links.new(geo.outputs["Position"], rel.inputs[0])
+    dot = tree.nodes.new("ShaderNodeVectorMath")
+    dot.operation = "DOT_PRODUCT"
+    tree.links.new(rel.outputs["Vector"], dot.inputs[0])
+    # d = distance - dot(P - centre, dir); enc = (offset - d) * scale, clamped.
+    depth = tree.nodes.new("ShaderNodeMath")
+    depth.operation = "SUBTRACT"
+    depth.inputs[0].default_value = distance
+    tree.links.new(dot.outputs["Value"], depth.inputs[1])
+    inverted = tree.nodes.new("ShaderNodeMath")
+    inverted.operation = "SUBTRACT"
+    inverted.inputs[0].default_value = offset
+    tree.links.new(depth.outputs["Value"], inverted.inputs[1])
+    scaled = tree.nodes.new("ShaderNodeMath")
+    scaled.operation = "MULTIPLY"
+    scaled.use_clamp = True
+    scaled.inputs[1].default_value = scale
+    tree.links.new(inverted.outputs["Value"], scaled.inputs[0])
+    return dot, scaled.outputs["Value"]
+
+
+def _depth_material(bpy: Any, centre, extent: float, distance: float):
+    """One emission material rendering the camera-depth encoding. -> (material, dot)
+
+    The dot node is returned so ``op_views`` can retarget the view direction
+    per render instead of rebuilding the material ten times.
+    """
+    material = bpy.data.materials.new("wl_depth")
+    if material.node_tree is None:
+        material.use_nodes = True
+    tree = material.node_tree
+    tree.nodes.clear()
+    out = tree.nodes.new("ShaderNodeOutputMaterial")
+    dot, value = _depth_chain(tree, centre, extent, distance)
+    emit = tree.nodes.new("ShaderNodeEmission")
+    tree.links.new(value, emit.inputs["Color"])
+    tree.links.new(emit.outputs["Emission"], out.inputs["Surface"])
+    return material, dot
+
+
 def _retexture_frame(bpy: Any, source: Path, size: int):
     """Import, measure, and frame the one camera both re-texture ops use.
 
@@ -976,14 +1045,49 @@ def op_views(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
         bpy.ops.render.render(write_still=True)
         progress(0.05 + 0.9 * (i + 1) / max(len(views), 1), f"View {i + 1}/{len(views)}")
 
+    if spec.get("depth"):
+        # A second pass rather than interleaved: it costs the same either way
+        # and leaves the colour loop exactly what it was. Every mesh wears the
+        # one depth material -- the colour pass is over, so nothing needs its
+        # materials back in this process.
+        scene = bpy.context.scene
+        depth_mat, dot = _depth_material(bpy, centre, extent, distance)
+        for obj in scene.objects:
+            if obj.type == "MESH":
+                obj.data.materials.clear()
+                obj.data.materials.append(depth_mat)
+        # Raw, not Standard: the encoding is a linear ramp and Standard's sRGB
+        # curve would bend it before the host's decode. 16-bit because the
+        # depth-pair bake samples this file inside Blender, where the extra
+        # precision is kept even though Pillow reads it back at 8.
+        with contextlib.suppress(TypeError):
+            scene.view_settings.view_transform = "Raw"
+        scene.render.image_settings.color_depth = "16"
+        with contextlib.suppress(AttributeError):
+            # One sample: the occlusion source needs hard edges, and an
+            # emission render has no noise for TAA to average away.
+            scene.eevee.taa_render_samples = 1
+        for i, (yaw, pitch) in enumerate(views):
+            dot.inputs[1].default_value = _view_direction(float(yaw), float(pitch))
+            _aim_camera(cam, centre, float(yaw), float(pitch), distance)
+            scene.render.filepath = str(views_dir / f"depth_{i:02d}.png")
+            bpy.ops.render.render(write_still=True)
+
     progress(1.0, "Views rendered")
     return {"ok": True, "views": len(views), "extent": extent}
 
 
-def _project_material(bpy: Any, colour_png: Path, mask_png: Path, direction):
-    """One material carrying both bakes. -> (material, colour_emit, weight_emit)
+def _project_material(
+    bpy: Any,
+    colour_png: Path,
+    mask_png: Path,
+    direction,
+    depth_png: Path | None = None,
+    frame: tuple[Any, float, float] | None = None,
+):
+    """One material carrying every bake. -> (material, colour_emit, weight_emit, depth_emit)
 
-    Both emissions share one projection and one pair of textures, so switching
+    All emissions share one projection and one set of textures, so switching
     which node feeds the output is the whole difference between the colour bake
     and the weight bake -- they cannot come to disagree about where the view
     landed.
@@ -993,6 +1097,14 @@ def _project_material(bpy: Any, colour_png: Path, mask_png: Path, direction):
     which also makes "outside the camera frustum" free: ``CLIP`` extension
     returns alpha 0 out there, so a texel the camera never saw gets weight 0
     without a frustum test of its own.
+
+    With ``depth_png`` and ``frame`` (= centre, extent, distance) a third
+    emission carries the depth pair: R is the depth render sampled through the
+    same projected UVs -- what the camera actually saw at this texel's pixel
+    -- and G is the texel's own depth from ``_depth_chain``. R is a
+    pass-through sample, so the only encode formula lives in the node graphs
+    fed by ``_depth_terms`` within one process run; ``depth_emit`` is ``None``
+    when not asked for.
     """
     material = bpy.data.materials.new("wl_project")
     if material.node_tree is None:
@@ -1036,8 +1148,29 @@ def _project_material(bpy: Any, colour_png: Path, mask_png: Path, direction):
     weight_emit = tree.nodes.new("ShaderNodeEmission")
     tree.links.new(masked.outputs["Value"], weight_emit.inputs["Color"])
 
+    depth_emit = None
+    if depth_png is not None and frame is not None:
+        centre, extent, distance = frame
+        depth_tex = tree.nodes.new("ShaderNodeTexImage")
+        depth_tex.image = bpy.data.images.load(str(depth_png))
+        # Non-Color or the compare silently rots: the render is a linear
+        # encoding, and the sRGB decode every loaded PNG gets by default
+        # would bend zread against the zsurf computed in nodes.
+        depth_tex.image.colorspace_settings.name = "Non-Color"
+        depth_tex.extension = "CLIP"
+        tree.links.new(uv.outputs["UV"], depth_tex.inputs["Vector"])
+        dot, own_depth = _depth_chain(tree, centre, extent, distance)
+        dot.inputs[1].default_value = direction
+        pair = tree.nodes.new("ShaderNodeCombineColor")
+        # R = what the camera saw at this texel's pixel, G = this texel's own
+        # depth. The host subtracts them; nothing here decides visibility.
+        tree.links.new(depth_tex.outputs["Color"], pair.inputs["Red"])
+        tree.links.new(own_depth, pair.inputs["Green"])
+        depth_emit = tree.nodes.new("ShaderNodeEmission")
+        tree.links.new(pair.outputs["Color"], depth_emit.inputs["Color"])
+
     tree.links.new(colour_emit.outputs["Emission"], out.inputs["Surface"])
-    return material, colour_emit, weight_emit
+    return material, colour_emit, weight_emit, depth_emit
 
 
 def op_project(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
@@ -1085,13 +1218,20 @@ def op_project(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
     cam = _setup_camera(bpy, extent, distance)
 
     original = list(mesh.data.materials)
+    depth_wanted = bool(spec.get("depth"))
     done = []
     for i, (yaw, pitch) in enumerate(views):
         colour_png = views_dir / f"restyled_{i:02d}.png"
         mask_png = views_dir / f"view_{i:02d}.png"
+        depth_png = views_dir / f"depth_{i:02d}.png"
         if not colour_png.exists() or not mask_png.exists():
             # A view whose restyle never arrived contributes nothing rather
             # than failing the bake: five good projections beat none.
+            continue
+        if depth_wanted and not depth_png.exists():
+            # Same rule: without its depth render this view cannot be
+            # occlusion-tested, and the host's all-or-nothing assemble would
+            # refuse a bake that arrived without its pair.
             continue
         _aim_camera(cam, centre, float(yaw), float(pitch), distance)
 
@@ -1107,21 +1247,35 @@ def op_project(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
         bpy.ops.object.modifier_apply(modifier="wl_project")
         mesh.data.uv_layers.active = mesh.data.uv_layers[atlas_uv]
 
-        material, colour_emit, weight_emit = _project_material(
-            bpy, colour_png, mask_png, _view_direction(float(yaw), float(pitch))
+        material, colour_emit, weight_emit, depth_emit = _project_material(
+            bpy,
+            colour_png,
+            mask_png,
+            _view_direction(float(yaw), float(pitch)),
+            depth_png if depth_wanted else None,
+            (centre, extent, distance) if depth_wanted else None,
         )
         mesh.data.materials.clear()
         mesh.data.materials.append(material)
         tree = material.node_tree
         out_node = next(n for n in tree.nodes if n.type == "OUTPUT_MATERIAL")
 
-        for suffix, emit in (("bake", colour_emit), ("weight", weight_emit)):
+        bakes = [("bake", colour_emit), ("weight", weight_emit)]
+        if depth_emit is not None:
+            bakes.append(("depthpair", depth_emit))
+        for suffix, emit in bakes:
             for link in list(out_node.inputs["Surface"].links):
                 tree.links.remove(link)
             tree.links.new(emit.outputs["Emission"], out_node.inputs["Surface"])
             image = bpy.data.images.new(
                 f"wl_{suffix}_{i}", texture_size, texture_size, alpha=False
             )
+            if suffix == "depthpair":
+                # The bake target's colorspace decides how save() encodes the
+                # PNG. Non-Color writes the pair's linear values raw; the
+                # default would sRGB-encode them and the host's subtraction
+                # would compare two bent curves.
+                image.colorspace_settings.name = "Non-Color"
             node = tree.nodes.new("ShaderNodeTexImage")
             node.image = image
             tree.nodes.active = node

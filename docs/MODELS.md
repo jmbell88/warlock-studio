@@ -131,6 +131,14 @@ uvx hf download h94/IP-Adapter --revision 018e402774aeeddd60609b4ecdb7e298259dc7
 uvx hf download diffusers/controlnet-canny-sdxl-1.0 --revision eb115a19a10d14909256db740ed109532ab1483c `
   --include "*.json" --include "*fp16.safetensors" --local-dir $HOME/.warlock/models/controlnet-canny-sdxl
 
+# ControlNet, Depth (~2.5 GB): anchor a re-texture's restyle passes to the
+# mesh's own geometry. The hint is rendered by Blender from the mesh itself
+# (never estimated from a photo), so this one is only ever used by the
+# re-texture stage and does not appear in the reference-stage conditioning
+# pickers.
+uvx hf download diffusers/controlnet-depth-sdxl-1.0 --revision 17bb97973f29801224cd66f192c5ffacf82648b4 `
+  --include "*.json" --include "*fp16.safetensors" --local-dir $HOME/.warlock/models/controlnet-depth-sdxl
+
 # BiRefNet (~1 GB): host-side background matting for 2D exports. Without it the
 # alpha comes from a corner flood fill, with visibly rougher edges. Its own
 # modelling code runs on load and imports einops/kornia/timm/torchvision, so it

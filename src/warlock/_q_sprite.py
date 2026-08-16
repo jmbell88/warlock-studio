@@ -529,6 +529,19 @@ class SpriteOps:
         base_key = self._resolve_base_key(params)
         spec = models.BASE_MODELS[base_key]
         view_px = spec.image_size
+        # One knob, three effects: the depth renders in op_views, the depth
+        # ControlNet on every restyle pass, and the depth-pair bake + occlusion
+        # test in op_project/assemble. They are useful separately to the probe,
+        # which calls the pieces directly; a *job* either anchors to the
+        # geometry or reproduces the un-anchored 2026-08-08 baseline.
+        depth = params.get("control") == "depth"
+        control_spec = models.CONTROLNETS["depth"] if depth else None
+        control_scale = float(
+            params.get(
+                "control_scale",
+                control_spec.default_scale if control_spec else models.DEFAULT_CONTROL_SCALE,
+            )
+        )
 
         job_dir = self.config.job_dir(job_id)
         job_dir.mkdir(parents=True, exist_ok=True)
@@ -546,7 +559,7 @@ class SpriteOps:
         await asyncio.to_thread(
             functools.partial(
                 rigging.run_worker,
-                rigging.views_spec(model_glb, views_dir, views, size=view_px),
+                rigging.views_spec(model_glb, views_dir, views, size=view_px, depth=depth),
                 on_progress=lambda f, label: self.progress.update(
                     job_id, phase="views", label=label, inner=f * 0.2,
                     inner_next=min(f * 0.2 + 0.03, 0.2), nominal=20.0, detail="",
@@ -568,6 +581,34 @@ class SpriteOps:
                 init_path = views_dir / f"view_{index:02d}.png"
                 if not init_path.exists():
                     continue
+                conditioning = Conditioning(init_image=init_path, strength=strength)
+                if depth:
+                    # The hint is the mesh's own depth through this exact
+                    # camera -- ground truth, normalised host-side to the
+                    # inverted relative range the ControlNet was trained on.
+                    # All or nothing, assemble's rule: one view restyled
+                    # without its anchor drifts against nine that kept theirs.
+                    hint_path = views_dir / f"hint_{index:02d}.png"
+                    ok = await asyncio.to_thread(
+                        functools.partial(
+                            retexture.depth_hint,
+                            views_dir / f"depth_{index:02d}.png",
+                            init_path,
+                            hint_path,
+                        )
+                    )
+                    if not ok:
+                        raise RuntimeError(
+                            f"the depth hint for view {index} could not be built"
+                        )
+                    conditioning = Conditioning(
+                        init_image=init_path,
+                        strength=strength,
+                        control="depth",
+                        control_image=hint_path,
+                        control_scale=control_scale,
+                        control_end=control_spec.default_end,
+                    )
                 self.progress.update(
                     job_id, phase="restyle", label="Restyling views",
                     inner=0.2 + 0.55 * index / len(views),
@@ -579,14 +620,12 @@ class SpriteOps:
                         t2i.generate,
                         prompt,
                         views_dir / f"restyled_{index:02d}.png",
-                        # One seed for every view. Six independent seeds is six
+                        # One seed for every view. Ten independent seeds is ten
                         # unrelated interpretations of one prompt, and the
                         # weighted mean of those is mud exactly where two views
                         # overlap -- which is most of the mesh.
                         seed=seed,
-                        conditioning=Conditioning(
-                            init_image=init_path, strength=strength
-                        ),
+                        conditioning=conditioning,
                         on_state=lambda s: self._t2i_state(job_id, s),
                         on_step=lambda i, n: self._t2i_step(job_id, i, n),
                         cancel_event=self._cancel.event if self._cancel else None,
@@ -607,7 +646,7 @@ class SpriteOps:
                 rigging.run_worker,
                 rigging.project_spec(
                     model_glb, views_dir, views_dir, views,
-                    size=view_px, texture_size=texture_size,
+                    size=view_px, texture_size=texture_size, depth=depth,
                 ),
                 on_progress=lambda f, label: self.progress.update(
                     job_id, phase="project", label=label, inner=0.75 + f * 0.2,
@@ -640,6 +679,7 @@ class SpriteOps:
                 base_png if has_base else None,
                 atlas,
                 count=len(views),
+                occlusion=depth,
             )
         )
         if report is None:

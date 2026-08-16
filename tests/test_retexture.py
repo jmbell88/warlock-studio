@@ -135,11 +135,21 @@ def test_yaw_zero_looks_from_in_front_of_the_subject():
     assert (round(x, 6), round(y, 6), round(z, 6)) == (0.0, -1.0, 0.0)
 
 
-def test_the_six_views_are_distinct_directions():
+def test_the_views_are_distinct_directions():
     dirs = [retexture.view_matrix(*v) for v in retexture.VIEWS]
     for i, a in enumerate(dirs):
         for b in dirs[i + 1 :]:
             assert not np.allclose(a, b, atol=1e-3)
+
+
+def test_the_basis_is_six_axes_and_four_upper_diagonals():
+    """Ten views: the axis six a person means by "front, back, sides, top,
+    bottom", plus the four upper 3/4 diagonals -- the directions that look
+    *through* a perforated shell onto the interior walls the axis set either
+    misses or, before the occlusion test, smeared."""
+    assert len(retexture.VIEWS) == 10
+    for diagonal in ((45.0, 35.0), (135.0, 35.0), (225.0, 35.0), (315.0, 35.0)):
+        assert diagonal in retexture.VIEWS
 
 
 def test_every_view_direction_is_a_unit_vector():
@@ -577,6 +587,316 @@ def test_a_swap_that_cannot_read_the_mesh_raises_rather_than_saying_no_albedo(tm
             tmp_path / "missing.glb", tmp_path / "atlas.png", tmp_path / "out.glb"
         )
     assert not (tmp_path / "out.glb").exists()
+
+
+# -- the occlusion test --------------------------------------------------------
+#
+# The 2026-08-08 measurement's verdict was "recolour, not re-texture", and its
+# named cause was coverage: the weight was facing x render alpha, so a surface
+# pointing at a camera got that camera's pixels whether or not anything sat in
+# the way, and everything behind a perforated shell was masked by the shell's
+# own holes. The fix is a per-texel depth compare -- zread is what the camera
+# actually saw at this texel's pixel, zsurf is the texel's own camera depth,
+# both in the inverted near=1/far=0 encoding -- done on the host, where it can
+# be tested without a Blender run.
+
+
+def test_depth_encode_puts_near_at_one_and_far_at_zero():
+    # extent 1, distance 2: the subject spans camera depths 1..3.
+    assert retexture.depth_encode(1.0, 1.0, 2.0) == pytest.approx(1.0)
+    assert retexture.depth_encode(3.0, 1.0, 2.0) == pytest.approx(0.0)
+    assert retexture.depth_encode(2.0, 1.0, 2.0) == pytest.approx(0.5)
+
+
+def test_depth_encode_clamps_outside_the_framed_range():
+    assert retexture.depth_encode(0.0, 1.0, 2.0) == pytest.approx(1.0)
+    assert retexture.depth_encode(9.0, 1.0, 2.0) == pytest.approx(0.0)
+
+
+def test_the_workers_depth_terms_match_this_modules():
+    """`blender_worker` encodes depth in shader nodes as (offset - d) * scale,
+    and this module decodes with `depth_encode`. The two are pinned the way
+    `_view_direction` is: a drift here reads every visibility compare against
+    the wrong plane, which looks like random dropout rather than like a bug."""
+    import ast
+    import pathlib
+
+    from warlock.pipelines import blender_worker
+
+    source = pathlib.Path(blender_worker.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    fn = next(
+        n for n in tree.body
+        if isinstance(n, ast.FunctionDef) and n.name == "_depth_terms"
+    )
+    namespace: dict = {}
+    exec(compile(ast.Module([fn], []), "<worker>", "exec"), namespace)  # noqa: S102
+
+    for extent, distance in ((1.0, 2.0), (3.5, 7.0), (0.25, 0.5)):
+        offset, scale = namespace["_depth_terms"](extent, distance)
+        for d in (distance - extent, distance, distance + extent, 0.0):
+            assert min(max((offset - d) * scale, 0.0), 1.0) == pytest.approx(
+                retexture.depth_encode(d, extent, distance)
+            )
+
+
+def test_a_texel_the_camera_actually_saw_is_fully_visible():
+    z = np.full((2, 2), 0.6, dtype=np.float32)
+    assert np.allclose(retexture.visibility(z, z), 1.0)
+
+
+def test_a_texel_behind_a_nearer_surface_is_invisible():
+    zsurf = np.full((2, 2), 0.4, dtype=np.float32)
+    zread = np.full((2, 2), 0.5, dtype=np.float32)  # something nearer in the way
+    assert np.allclose(retexture.visibility(zread, zsurf), 0.0)
+
+
+def test_background_depth_of_zero_reads_as_visible():
+    """No occluder rendered at this pixel means zread is the encoding's far
+    plane -- which the inverted near=1 encoding makes 0, so "nothing in the
+    way" needs no special case."""
+    zread = np.zeros((2, 2), dtype=np.float32)
+    zsurf = np.full((2, 2), 0.4, dtype=np.float32)
+    assert np.allclose(retexture.visibility(zread, zsurf), 1.0)
+
+
+def test_quantisation_jitter_within_the_bias_stays_visible():
+    """8-bit channels quantise the depth range at 1/255; a texel must not lose
+    its own visibility to that."""
+    zsurf = np.full((2, 2), 0.5, dtype=np.float32)
+    zread = zsurf + 1.0 / 255.0
+    assert np.allclose(retexture.visibility(zread, zsurf), 1.0)
+
+
+def test_visibility_fades_rather_than_stepping_inside_the_bias_band():
+    zsurf = np.zeros((1, 1), dtype=np.float32)
+    inside = retexture.visibility(np.full((1, 1), 4.0 / 255.0, np.float32), zsurf)
+    assert 0.0 < float(inside[0, 0]) < 1.0
+    nearer = retexture.visibility(np.full((1, 1), 3.0 / 255.0, np.float32), zsurf)
+    further = retexture.visibility(np.full((1, 1), 5.0 / 255.0, np.float32), zsurf)
+    assert float(nearer[0, 0]) > float(inside[0, 0]) > float(further[0, 0])
+
+
+def test_combine_drops_an_occluded_view_even_at_full_facing():
+    """The whole point: facing said "this camera sees the texel square on" and
+    the depth compare says "through a wall". The wall wins."""
+    colours = np.ones((1, 2, 2, 3), dtype=np.float32)
+    weights = np.ones((1, 2, 2), dtype=np.float32)
+    vis = np.zeros((1, 2, 2), dtype=np.float32)
+    base = np.full((2, 2, 3), 0.3, dtype=np.float32)
+    out = retexture.combine(colours, weights, base, vis=vis)
+    assert np.allclose(out, 0.3)
+
+
+def test_combine_with_full_visibility_is_exactly_the_legacy_result():
+    rng = np.random.default_rng(7)
+    colours = rng.random((3, 4, 4, 3)).astype(np.float32)
+    weights = rng.random((3, 4, 4)).astype(np.float32)
+    base = rng.random((4, 4, 3)).astype(np.float32)
+    legacy = retexture.combine(colours, weights, base)
+    seen = retexture.combine(
+        colours, weights, base, vis=np.ones((3, 4, 4), np.float32)
+    )
+    assert np.array_equal(legacy, seen)
+
+
+def test_visibility_multiplies_after_the_facing_floor():
+    """A half-visible texel of a well-facing view still speaks at half weight;
+    a sub-floor facing stays dropped no matter how visible it is."""
+    colours = np.stack(
+        [np.ones((2, 2, 3), np.float32), np.zeros((2, 2, 3), np.float32)]
+    )
+    weights = np.stack(
+        [np.full((2, 2), 0.8, np.float32), np.full((2, 2), 0.8, np.float32)]
+    )
+    vis = np.stack(
+        [np.full((2, 2), 0.5, np.float32), np.ones((2, 2), np.float32)]
+    )
+    base = np.zeros((2, 2, 3), dtype=np.float32)
+    out = retexture.combine(colours, weights, base, vis=vis)
+    # 0.4 of white against 0.8 of black.
+    assert np.allclose(out, 0.4 / 1.2, atol=1e-6)
+
+    floored = np.stack(
+        [np.full((2, 2), retexture.MIN_FACING / 2, np.float32),
+         np.full((2, 2), 0.8, np.float32)]
+    )
+    out = retexture.combine(colours, floored, base, vis=vis)
+    assert np.allclose(out, 0.0)
+
+
+# -- the feathered frontier ----------------------------------------------------
+
+
+def test_feather_is_nothing_where_nothing_was_seen_and_whole_where_weight_is_solid():
+    total = np.zeros((6, 6), dtype=np.float32)
+    total[:, :3] = 1.0
+    blend = retexture.feather_blend(total)
+    assert blend[0, 0] == pytest.approx(1.0)
+    assert blend[0, -1] == pytest.approx(0.0)
+
+
+def test_feather_softens_the_frontier_rather_than_stepping():
+    size = 16
+    total = np.zeros((size, size), dtype=np.float32)
+    total[:, : size // 2] = 1.0
+    blend = retexture.feather_blend(total)
+    row = blend[size // 2]
+    assert np.all(np.diff(row) <= 1e-6), "blend must fall monotonically"
+    boundary = row[size // 2 - 1 : size // 2 + 1]
+    assert np.any((boundary > 0.0) & (boundary < 1.0))
+
+
+def test_feather_does_not_wrap():
+    total = np.zeros((8, 8), dtype=np.float32)
+    total[:, 0] = 1.0
+    blend = retexture.feather_blend(total)
+    assert np.allclose(blend[:, -1], 0.0)
+
+
+# -- assemble, with its eyes open ------------------------------------------------
+
+
+def _depth_pairs(tmp_path, n=2, size=8, occluded=False):
+    """R = what the camera saw, G = the texel's own depth. Equal means seen."""
+    for i in range(n):
+        pair = np.zeros((size, size, 3), dtype=np.float32)
+        pair[..., 1] = 0.5
+        pair[..., 0] = 0.75 if occluded else 0.5
+        _write(tmp_path / f"depthpair_{i:02d}.png", pair)
+
+
+def test_assemble_with_occlusion_consumes_the_pairs_and_says_so(tmp_path):
+    n = _bakes(tmp_path)
+    _depth_pairs(tmp_path, n=n)
+    report = retexture.assemble(
+        tmp_path, None, tmp_path / "out.png", count=n, occlusion=True
+    )
+    assert report is not None
+    assert report["occlusion_tested"] is True
+    assert "coverage_effective" in report
+
+
+def test_assemble_with_occlusion_refuses_on_a_missing_pair(tmp_path):
+    """All or nothing, the same rule as the bakes: a view whose depth pair
+    vanished is a view whose smear went back to being invisible."""
+    n = _bakes(tmp_path)
+    _depth_pairs(tmp_path, n=n)
+    (tmp_path / "depthpair_01.png").unlink()
+    assert (
+        retexture.assemble(tmp_path, None, tmp_path / "out.png", count=n, occlusion=True)
+        is None
+    )
+
+
+def test_assemble_without_occlusion_ignores_the_pairs_and_stays_legacy(tmp_path):
+    """The old path must stay byte-identical -- it is the behaviour the
+    2026-08-08 measurement numbers describe, and the A/B in the probe depends
+    on it being reachable."""
+    n = _bakes(tmp_path)
+    plain = retexture.assemble(tmp_path, None, tmp_path / "plain.png", count=n)
+    _depth_pairs(tmp_path, n=n, occluded=True)
+    unaware = retexture.assemble(tmp_path, None, tmp_path / "unaware.png", count=n)
+    assert plain is not None and unaware is not None
+    assert plain["occlusion_tested"] is False
+    assert (tmp_path / "plain.png").read_bytes() == (tmp_path / "unaware.png").read_bytes()
+
+
+def test_an_occluded_region_keeps_its_base_colour_through_assemble(tmp_path):
+    """One view, square-on facing, and a wall in front of the right half: the
+    left half is repainted and the right half keeps the old skin. This is the
+    overhang-smear case from the measurement doc, in miniature."""
+    size = 32
+    colour = np.ones((size, size, 3), dtype=np.float32)
+    weight = np.ones((size, size), dtype=np.float32)
+    _write(tmp_path / "bake_00.png", colour)
+    _write(tmp_path / "weight_00.png", weight, "L")
+    pair = np.zeros((size, size, 3), dtype=np.float32)
+    pair[..., 1] = 0.4
+    pair[..., 0] = 0.4
+    pair[:, size // 2 :, 0] = 0.8  # something nearer, over the right half
+    _write(tmp_path / "depthpair_00.png", pair)
+    base = tmp_path / "base.png"
+    _write(base, np.zeros((size, size, 3), np.float32))
+
+    report = retexture.assemble(
+        tmp_path, base, tmp_path / "out.png", count=1, occlusion=True
+    )
+    assert report is not None
+    with Image.open(tmp_path / "out.png") as im:
+        arr = np.asarray(im.convert("RGB"), dtype=np.float32) / 255.0
+    # Far from the frontier on both sides: repainted white, and kept black --
+    # past the reach of both the feather blur and the dilation.
+    assert np.allclose(arr[:, : size // 2 - 8], 1.0, atol=0.02)
+    assert np.allclose(arr[:, size // 2 + 8 :], 0.0, atol=0.02)
+    assert report["coverage"] == pytest.approx(0.5, abs=0.1)
+
+
+# -- the ControlNet hint ---------------------------------------------------------
+
+
+def test_depth_hint_rescales_the_subject_to_the_full_range(tmp_path):
+    """controlnet-depth-sdxl was trained on inverted relative depth: nearest
+    point white, furthest point black, background black. A hint that only used
+    the middle of the range would whisper where it should speak."""
+    depth = np.zeros((8, 8), dtype=np.float32)
+    depth[:, :4] = 0.3
+    depth[:, 4:] = 0.5
+    _write(tmp_path / "depth.png", depth, "L")
+    view = np.zeros((8, 8, 4), dtype=np.float32)
+    view[..., 3] = 1.0  # everything is subject
+    Image.fromarray((view * 255).astype(np.uint8), "RGBA").save(tmp_path / "view.png")
+
+    assert retexture.depth_hint(
+        tmp_path / "depth.png", tmp_path / "view.png", tmp_path / "hint.png"
+    ) is True
+    with Image.open(tmp_path / "hint.png") as im:
+        assert im.mode == "RGB"
+        arr = np.asarray(im)
+    assert arr[0, 0].tolist() == [0, 0, 0]
+    assert arr[0, -1].tolist() == [255, 255, 255]
+
+
+def test_depth_hint_paints_the_background_black(tmp_path):
+    depth = np.full((8, 8), 0.6, dtype=np.float32)
+    _write(tmp_path / "depth.png", depth, "L")
+    view = np.zeros((8, 8, 4), dtype=np.float32)
+    view[:, :4, 3] = 1.0  # subject on the left, background on the right
+    Image.fromarray((view * 255).astype(np.uint8), "RGBA").save(tmp_path / "view.png")
+
+    assert retexture.depth_hint(
+        tmp_path / "depth.png", tmp_path / "view.png", tmp_path / "hint.png"
+    ) is True
+    with Image.open(tmp_path / "hint.png") as im:
+        arr = np.asarray(im.convert("RGB"))
+    assert np.all(arr[:, 4:] == 0)
+    assert np.all(arr[:, :4] > 0)
+
+
+def test_depth_hint_with_an_unreadable_input_is_a_false(tmp_path):
+    assert retexture.depth_hint(
+        tmp_path / "missing.png", tmp_path / "also_missing.png", tmp_path / "h.png"
+    ) is False
+
+
+# -- the specs carry the depth switch ---------------------------------------------
+
+
+def test_the_specs_default_to_no_depth_and_carry_the_ask():
+    """Off unless asked, so every other caller of the two ops keeps meaning
+    exactly what it meant before the depth pass existed."""
+    from warlock import rigging
+
+    path = Path("m.glb")
+    views = list(retexture.VIEWS)
+    v = rigging.views_spec(path, Path("d"), views, size=512)
+    p = rigging.project_spec(path, Path("d"), Path("o"), views, size=512, texture_size=1024)
+    assert v["depth"] is False and p["depth"] is False
+    v = rigging.views_spec(path, Path("d"), views, size=512, depth=True)
+    p = rigging.project_spec(
+        path, Path("d"), Path("o"), views, size=512, texture_size=1024, depth=True
+    )
+    assert v["depth"] is True and p["depth"] is True
 
 
 def test_a_torn_write_leaves_nothing_behind(tmp_path):

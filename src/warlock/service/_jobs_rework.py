@@ -149,6 +149,8 @@ def retexture_job(
     texture_size: int | None = None,
     seed: int | None = None,
     base_model: str | None = None,
+    control: str | None = None,
+    control_scale: float | None = None,
 ) -> dict[str, Any]:
     """Queue a new surface for a finished mesh, from a prompt.
 
@@ -186,12 +188,39 @@ def retexture_job(
         raise TooLarge(f"prompt is longer than {MAX_PROMPT} characters", field="prompt")
 
     value = models.DEFAULT_IMG2IMG_STRENGTH if strength is None else float(strength)
-    if not models.IMG2IMG_STRENGTH_MIN <= value <= models.IMG2IMG_STRENGTH_MAX:
+    # The re-texture's own bounds, not the sheets': with the depth anchor the
+    # ceiling is the 2026-08-08 measurement's positive control (see models.py).
+    if not models.RETEXTURE_STRENGTH_MIN <= value <= models.RETEXTURE_STRENGTH_MAX:
         raise Invalid(
-            f"strength must be between {models.IMG2IMG_STRENGTH_MIN} "
-            f"and {models.IMG2IMG_STRENGTH_MAX}",
+            f"strength must be between {models.RETEXTURE_STRENGTH_MIN} "
+            f"and {models.RETEXTURE_STRENGTH_MAX}",
             field="strength",
         )
+    # Only the depth control, and only by name: its hint is rendered from the
+    # mesh by the worker's own Blender pass. A canny here would be an edge map
+    # of the very render being restyled -- a ControlNet's VRAM spent locking
+    # the restyle to what it already looks like -- and anything unknown is
+    # unknown. The scale is orphaned without its selection for
+    # guidance.normalize's reason: it would read as a live setting on rerun.
+    if control is not None and control != "depth":
+        raise Invalid(
+            'the only control a re-texture can render a hint for is "depth"',
+            field="control",
+        )
+    if control_scale is not None and control is None:
+        raise Invalid(
+            "control_scale needs control to scale", field="control_scale"
+        )
+    scale = None
+    if control is not None:
+        spec = models.CONTROLNETS[control]
+        scale = spec.default_scale if control_scale is None else float(control_scale)
+        if not models.CONTROL_SCALE_MIN <= scale <= models.CONTROL_SCALE_MAX:
+            raise Invalid(
+                f"control_scale must be between {models.CONTROL_SCALE_MIN} "
+                f"and {models.CONTROL_SCALE_MAX}",
+                field="control_scale",
+            )
     # None means "match the mesh's own atlas", resolved by the worker against
     # the file rather than here: it is a property of the GLB, and reading it at
     # the door would open a 26 MB file to answer a question the run is about to
@@ -222,8 +251,13 @@ def retexture_job(
     }
     if size is not None:
         params["texture_size"] = size
-    # At the door and before the row exists, as everywhere: six img2img passes
-    # through one resident pipe is a real budget question beside a warm trellis.
+    if control is not None:
+        params["control"] = control
+        params["control_scale"] = scale
+    # At the door and before the row exists, as everywhere: the img2img passes
+    # run through one resident pipe and that is a real budget question beside a
+    # warm trellis -- and with "control" in params, check_vram prices the
+    # ControlNet and check_weights refuses it undownloaded, both for free.
     check_vram(svc, "retexture", "model", params)
     check_weights(svc, "text", params)
     new_id = svc.store.create("retexture", text, params, uuid.uuid4().hex[:12])

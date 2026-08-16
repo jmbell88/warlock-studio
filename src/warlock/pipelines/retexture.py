@@ -31,13 +31,17 @@ outside it -- so an atlas that is exactly the islands renders with a dark rim
 around every one of them, at every mip level, worse the further you stand. The
 fix is the standard one and it is not optional.
 
-*There is no occlusion test, and that is a stated limitation rather than an
-oversight.* The weight is a facing ratio, so a surface pointing at a camera
-gets that camera's pixels whether or not anything is in the way. On a convex
-prop this is right; on anything with an overhang the front view's colours are
-smeared onto geometry hidden behind it. It is written down here, reported in
-the job's params, and it is the finding that decides whether Tier 3 is needed
--- so it must not be quietly papered over with a blur.
+*The occlusion test is optional, and the report never lies about it.* Without
+``occlusion`` the weight is a facing ratio alone, so a surface pointing at a
+camera gets that camera's pixels whether or not anything is in the way -- the
+behaviour the 2026-08-08 measurement measured, kept reachable as the probe's
+A/B baseline. With it, each view's weight is multiplied by a per-texel depth
+compare (``visibility``): the worker's third bake records what depth the
+camera actually saw at each texel's pixel next to the texel's own, and a texel
+behind a wall keeps its old skin instead of wearing the wall's colours.
+``occlusion_tested`` in the report is True only when depth pairs were actually
+consumed, because that flag is the finding that decides whether Tier 3 is
+needed -- it must never be papered over.
 """
 
 from __future__ import annotations
@@ -55,11 +59,17 @@ log = logging.getLogger(__name__)
 # imported in spirit rather than in code because that module's yaws are a
 # sprite sheet's row and these are a projection basis.
 #
-# Six, and they are the axis directions rather than an even sphere packing: a
-# UV-atlased reconstruction is overwhelmingly axis-aligned in practice, the six
-# are what a person means by "front, back, both sides, top, bottom", and every
-# additional view costs a full SDXL pass. The set is data so a caller can ask
-# for fewer without this module learning about it.
+# Ten: the six axis directions plus the four upper 3/4 diagonals. The axis six
+# are what a person means by "front, back, both sides, top, bottom" and a
+# UV-atlased reconstruction is overwhelmingly axis-aligned in practice; the
+# diagonals are the directions that look *through* a perforated shell onto the
+# interior walls the axis set either misses or -- before the visibility test --
+# smeared. Every additional view costs a full SDXL pass, which is why the
+# under-side diagonals are not here: the straight-down bottom view measurably
+# added ~0 coverage (docs/measurements/2026-08-08-retexture-bake.md), so
+# their upside-down cousins have to earn a place in the next measurement
+# rather than being presumed. The set is data so a caller can ask for fewer
+# without this module learning about it.
 VIEWS: tuple[tuple[float, float], ...] = (
     (0.0, 0.0),  # front
     (180.0, 0.0),  # back
@@ -67,6 +77,10 @@ VIEWS: tuple[tuple[float, float], ...] = (
     (270.0, 0.0),  # left
     (0.0, 89.0),  # top
     (0.0, -89.0),  # bottom
+    (45.0, 35.0),  # upper 3/4 diagonals
+    (135.0, 35.0),
+    (225.0, 35.0),
+    (315.0, 35.0),
 )
 
 # Below this a view is treated as saying nothing about a texel. A facing ratio
@@ -76,6 +90,27 @@ VIEWS: tuple[tuple[float, float], ...] = (
 # they are exactly the texels no other view covers either -- so a smear would
 # win by default wherever it was the only contributor.
 MIN_FACING = 0.15
+
+# The self-occlusion bias band, in units of the normalised depth encoding. A
+# texel is visible when the depth the camera recorded at its pixel is its own
+# depth; "its own" has slack because the depth pair crosses an 8-bit PNG twice
+# (one step is 1/255 ~ 0.8% of the framed range) and is bilinearly sampled once.
+# Below LO the difference is quantisation and the texel is fully visible; above
+# HI something genuinely nearer was in the way; between them a smoothstep fades
+# so the frontier is a blend rather than a dotted line of acne. Provisional
+# until docs/measurements pins them (the retexture-visibility doc), like every
+# constant the corpus is keyed on.
+DEPTH_EPS_LO = 2.0 / 255.0
+DEPTH_EPS_HI = 6.0 / 255.0
+
+# The feathered frontier between repainted and kept texels. Total effective
+# weight below FEATHER_TOTAL fades the repaint in rather than switching it on,
+# and the blend map is blurred a couple of texels so an occlusion boundary
+# inside a UV island never shows as a hard line. Two passes reach two texels,
+# safely inside DILATE's four -- whatever bleeds lands on texels dilation
+# overwrites anyway.
+FEATHER_TOTAL = 0.5
+FEATHER_BLUR_PASSES = 2
 
 # The atlas a re-texture writes, in texels. Larger than trellis's own 512
 # (`Config.trellis_tex_res`, pinned there to dodge an upstream noise bug) and
@@ -139,11 +174,123 @@ def _read(path: Path, mode: str) -> Any | None:
         return None
 
 
-def combine(colours: Any, weights: Any, base: Any) -> Any:
+def depth_encode(d: float, extent: float, distance: float) -> float:
+    """Camera depth ``d`` in the inverted near=1 / far=0 encoding.
+
+    The worker's shader nodes encode with ``(offset - d) * scale`` from
+    ``blender_worker._depth_terms``; this is the host's copy of the same
+    arithmetic, pinned against it by ``tests/test_retexture.py`` exactly as
+    ``view_matrix`` is pinned against ``_view_direction``. Inverted on
+    purpose: a pixel where nothing rendered decodes to 0, the far plane, so
+    "no occluder here" needs no special case anywhere downstream.
+    """
+    span = max(2.0 * extent, 1e-9)
+    return min(max(((distance + extent) - d) / span, 0.0), 1.0)
+
+
+def visibility(zread: Any, zsurf: Any) -> Any:
+    """How much a view is allowed to say about texels it may not have seen.
+
+    ``zread`` is the depth the camera recorded at this texel's pixel and
+    ``zsurf`` is the texel's own camera depth, both in the ``depth_encode``
+    encoding. Equal means the texel *is* the nearest surface; ``zread``
+    greater means something nearer was in the way, and past the bias band the
+    view's opinion of this texel is a wall's. The band is a smoothstep rather
+    than a threshold so quantisation at the frontier fades instead of
+    stippling.
+    """
+    import numpy as np
+
+    diff = zread.astype(np.float32) - zsurf.astype(np.float32)
+    t = np.clip(
+        (diff - DEPTH_EPS_LO) / (DEPTH_EPS_HI - DEPTH_EPS_LO), 0.0, 1.0
+    )
+    return (1.0 - t * t * (3.0 - 2.0 * t)).astype(np.float32)
+
+
+def feather_blend(total: Any) -> Any:
+    """How much of the repaint each texel receives, from its total weight.
+
+    A smoothstep to ``FEATHER_TOTAL`` and a short non-wrapping blur: the point
+    is that the frontier between "views repainted this" and "this keeps its
+    old skin" -- which the visibility test draws *inside* UV islands, not only
+    at their edges -- arrives as a fade rather than a line.
+    """
+    import numpy as np
+
+    t = np.clip(total.astype(np.float32) / FEATHER_TOTAL, 0.0, 1.0)
+    blend = t * t * (3.0 - 2.0 * t)
+    for _ in range(FEATHER_BLUR_PASSES):
+        acc = blend.copy()
+        count = np.ones(blend.shape, dtype=np.float32)
+        for axis, shift in ((0, 1), (0, -1), (1, 1), (1, -1)):
+            # Shifted with an explicit zero edge, `dilate`'s pattern and for
+            # its reason: a UV atlas is not periodic.
+            src = np.zeros_like(blend)
+            have = np.zeros(blend.shape, dtype=bool)
+            if axis == 0:
+                if shift == 1:
+                    src[1:], have[1:] = blend[:-1], True
+                else:
+                    src[:-1], have[:-1] = blend[1:], True
+            elif shift == 1:
+                src[:, 1:], have[:, 1:] = blend[:, :-1], True
+            else:
+                src[:, :-1], have[:, :-1] = blend[:, 1:], True
+            acc += src
+            count += have
+        blend = acc / count
+    return blend
+
+
+def depth_hint(depth_png: Path, view_png: Path, dest: Path) -> bool:
+    """Turn a rendered depth pass into a ControlNet hint. -> whether it worked.
+
+    What controlnet-depth-sdxl was trained on is inverted *relative* depth:
+    nearest point white, furthest black, background black. The render is
+    already inverted (``depth_encode``), so the work here is stretching the
+    subject's own range to full scale -- a shallow prop must not whisper --
+    and masking the background to zero with the colour render's alpha, which
+    is the same alpha ``op_project`` treats as the subject mask.
+
+    False rather than an exception for every way of not working, this
+    module's rule; the caller decides whether a missing hint fails the job.
+    """
+    import numpy as np
+    from PIL import Image
+
+    depth = _read(depth_png, "L")
+    view = _read(view_png, "RGBA")
+    if depth is None or view is None or depth.shape != view.shape[:2]:
+        return False
+    mask = view[..., 3] > 0.5
+    if mask.any():
+        lo = float(depth[mask].min())
+        hi = float(depth[mask].max())
+        span = hi - lo
+        norm = (depth - lo) / span if span > 1e-6 else np.ones_like(depth)
+    else:
+        norm = np.zeros_like(depth)
+    hint = np.clip(norm, 0.0, 1.0) * mask
+    arr = (hint * 255.0 + 0.5).astype(np.uint8)
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        Image.fromarray(np.stack([arr] * 3, axis=-1), "RGB").save(dest, "PNG")
+    except OSError:
+        log.exception("could not write the depth hint %s", dest)
+        return False
+    return True
+
+
+def combine(colours: Any, weights: Any, base: Any, vis: Any | None = None) -> Any:
     """Weighted mean of N projections, falling back to ``base``.
 
     ``colours`` is (n, h, w, 3), ``weights`` is (n, h, w), ``base`` is
     (h, w, 3) -- the atlas the mesh already has. Everything in 0..1.
+    ``vis``, when given, is (n, h, w) from ``visibility`` and multiplies each
+    view's say *after* the facing floor: an occluded texel of a square-on view
+    is a wall's opinion at any facing, and a sub-floor facing stays dropped no
+    matter how visible.
 
     Weights below ``MIN_FACING`` are dropped rather than scaled down, and a
     texel left with no contributor at all keeps its base colour. Both are the
@@ -153,6 +300,8 @@ def combine(colours: Any, weights: Any, base: Any) -> Any:
     import numpy as np
 
     w = np.where(weights >= MIN_FACING, weights, 0.0).astype(np.float32)
+    if vis is not None:
+        w = w * vis.astype(np.float32)
     total = w.sum(axis=0)
     # The sum is computed everywhere and used only where it means something;
     # dividing under a where() rather than after it keeps the zero-weight
@@ -214,14 +363,24 @@ def assemble(
     dest: Path,
     *,
     count: int,
+    occlusion: bool = False,
 ) -> dict[str, Any] | None:
     """Combine ``count`` baked (colour, weight) pairs into one atlas PNG.
 
     Returns a small report -- how much of the atlas any view actually covered,
     and how much is base texture showing through -- or ``None`` if the inputs
-    cannot be read. The coverage figure is the honest half of the "no occlusion
-    test" limitation: a low number means most of the mesh kept its old skin,
-    which is exactly what a caller should be told rather than left to discover.
+    cannot be read. A low coverage number means most of the mesh kept its old
+    skin, which is exactly what a caller should be told rather than left to
+    discover.
+
+    With ``occlusion`` a ``depthpair_NN.png`` is read beside every bake (R =
+    the depth the camera recorded at this texel's pixel, G = the texel's own
+    depth, both from the worker's third bake) and each view's weight is
+    multiplied by ``visibility`` -- so a square-on surface behind a wall keeps
+    its old skin instead of wearing the wall's colours, and the repaint fades
+    in at the frontier through ``feather_blend``. Without it, the behaviour is
+    byte-identical to what the 2026-08-08 measurement measured: that path is
+    the probe's A/B baseline and must stay reachable.
     """
     import numpy as np
     from PIL import Image
@@ -249,6 +408,19 @@ def assemble(
         # happens to broadcast would hide it in a texture nobody can read back.
         return None
 
+    vis = None
+    if occlusion:
+        pairs = []
+        for index in range(count):
+            pair = _read(view_dir / f"depthpair_{index:02d}.png", "RGB")
+            if pair is None or pair.shape != shape:
+                # The same all-or-nothing rule as the bakes: a view whose
+                # depth pair vanished is a view whose smear went back to
+                # being invisible.
+                return None
+            pairs.append(visibility(pair[..., 0], pair[..., 1]))
+        vis = np.stack(pairs)
+
     base = _read(base_path, "RGB") if base_path is not None else None
     if base is None or base.shape != shape:
         # No previous texture to fall back on, or one of another size. Mid grey
@@ -258,22 +430,33 @@ def assemble(
 
     stack_c = np.stack(colours)
     stack_w = np.stack(weights)
-    mixed = combine(stack_c, stack_w, base)
-    covered = (np.where(stack_w >= MIN_FACING, stack_w, 0.0).sum(axis=0) > 0.0)
+    mixed = combine(stack_c, stack_w, base, vis=vis)
+    floored = np.where(stack_w >= MIN_FACING, stack_w, 0.0)
+    if vis is not None:
+        floored = floored * vis
+    total = floored.sum(axis=0)
+    covered = total > 0.0
+    if occlusion:
+        blend = feather_blend(total)
+        mixed = base + (mixed - base) * blend[..., None]
     out = dilate(mixed, covered)
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(np.clip(out * 255.0 + 0.5, 0, 255).astype(np.uint8), "RGB").save(
         dest, "PNG"
     )
-    return {
+    report = {
         "views": len(colours),
         "coverage": float(covered.mean()),
         "size": [int(shape[1]), int(shape[0])],
         # Said in the record as well as in this module's docstring, because the
-        # record is what a user reading the job's params sees.
-        "occlusion_tested": False,
+        # record is what a user reading the job's params sees -- and truthful:
+        # True only when depth pairs were actually consumed.
+        "occlusion_tested": bool(occlusion),
     }
+    if occlusion:
+        report["coverage_effective"] = float((blend > 0.5).mean())
+    return report
 
 
 # --- putting the atlas back into the GLB -------------------------------------

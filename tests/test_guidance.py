@@ -389,6 +389,16 @@ def test_an_unknown_conditioning_selection_is_rejected():
         guidance.normalize({"control": "nope"})
 
 
+def test_a_pipeline_fed_control_is_refused_at_the_door():
+    """"depth" is registered for the re-texture pipeline, which renders its
+    own hint from the mesh. A text job has no mesh to render one from, and
+    accepting it here would fail at write_hint with the checkpoint already in
+    VRAM. Belt to catalog()'s braces: the combo never offers it, but params
+    arrive from more places than the combo."""
+    with pytest.raises(ValueError, match="control"):
+        guidance.normalize({"control": "depth", "base_model": "sdxl_cfg"})
+
+
 def test_a_conditioning_scale_is_absent_without_its_selection():
     """Same rule as style_lora/lora_weight: a scale with nothing to scale
     reads as a live setting when the params are rerun."""

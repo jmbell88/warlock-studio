@@ -1140,6 +1140,7 @@ def views_spec(
     views: list[tuple[float, float]],
     *,
     size: int,
+    depth: bool = False,
 ) -> dict[str, Any]:
     """The worker spec for rendering one flat view per direction.
 
@@ -1147,6 +1148,11 @@ def views_spec(
     host has restyled these renders, which is why it is two ops rather than
     one: the restyle is an SDXL pass and Blender is a separate interpreter with
     no way to call back into this one.
+
+    ``depth`` adds a second render per view -- the camera-depth encoding the
+    visibility test and the ControlNet hint both decode. Off by default so
+    every other caller keeps meaning exactly what it meant before the depth
+    pass existed.
     """
     return {
         "op": "views",
@@ -1155,6 +1161,7 @@ def views_spec(
         "result_path": str(views_dir / ".views_result.json"),
         "size": size,
         "views": [list(v) for v in views],
+        "depth": bool(depth),
     }
 
 
@@ -1166,12 +1173,18 @@ def project_spec(
     *,
     size: int,
     texture_size: int,
+    depth: bool = False,
 ) -> dict[str, Any]:
     """The worker spec for baking each restyled view into the mesh's atlas.
 
     ``size`` is the render size again rather than a second knob: it is what
     frames the camera, and a camera framed differently from the one that drew
     the views would land every projection somewhere the colours are not.
+
+    ``depth`` adds a third bake per view: the depth the camera recorded at
+    each texel's pixel, next to the texel's own depth, which is everything the
+    host's visibility compare needs. It requires the ``depth`` renders from
+    ``views_spec`` to exist, and it defaults off for ``views_spec``'s reason.
     """
     return {
         "op": "project",
@@ -1182,6 +1195,7 @@ def project_spec(
         "size": size,
         "texture_size": texture_size,
         "views": [list(v) for v in views],
+        "depth": bool(depth),
     }
 
 

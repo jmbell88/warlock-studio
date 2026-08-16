@@ -81,6 +81,16 @@ class GenerateOps:
                 "base model %s cannot run a ControlNet; generating without it", spec.key
             )
             control_key = None
+        if control_key is not None and models.CONTROLNETS[control_key].preprocessor is None:
+            # A pipeline-fed entry (the re-texture depth control) in a text
+            # job's params: guidance.normalize refuses it at the door, so this
+            # is a row that never went through the door. write_hint(kind=None)
+            # would fail the job with the checkpoint already in VRAM.
+            log.warning(
+                "control %s takes a pipeline-rendered hint; generating without it",
+                control_key,
+            )
+            control_key = None
 
         if ip_key is None and control_key is None:
             return None

@@ -731,6 +731,77 @@ def test_a_retexture_refuses_its_out_of_range_inputs_at_the_door(svc, kwargs):
         svc_jobs.retexture_job(svc, job_id, "rusted iron", **kwargs)
 
 
+def test_a_retexture_defaults_to_no_control_and_carries_the_ask(svc):
+    """"control" is an input like strength: absent means the un-anchored
+    restyle the 2026-08-08 measurement measured, present means the depth
+    ControlNet -- and it rides in params so check_weights and check_vram both
+    bite at the door."""
+    job_id, _ = _retexturable(svc)
+    plain = svc.store.get(svc_jobs.retexture_job(svc, job_id, "rusted iron")["id"])
+    assert "control" not in plain["params"]
+    assert "control_scale" not in plain["params"]
+
+    # Settled, or the door's own dependent-conflict refusal fires first.
+    svc.store.set_status(plain["id"], "done")
+    anchored = svc.store.get(
+        svc_jobs.retexture_job(
+            svc, job_id, "rusted iron", control="depth", control_scale=0.5
+        )["id"]
+    )
+    assert anchored["params"]["control"] == "depth"
+    assert anchored["params"]["control_scale"] == 0.5
+
+
+def test_a_retexture_refuses_a_control_it_cannot_render_a_hint_for(svc):
+    """Only "depth" makes sense here: the hint is rendered from the mesh, and
+    a canny of a flat view is an edge map of the thing being repainted --
+    accepting it would just burn a ControlNet's VRAM on noise."""
+    job_id, _ = _retexturable(svc)
+    for wrong in ("canny", "nope"):
+        with pytest.raises(Invalid) as caught:
+            svc_jobs.retexture_job(svc, job_id, "rusted iron", control=wrong)
+        assert caught.value.field == "control"
+
+
+def test_a_retexture_bounds_its_control_scale_and_orphans_none(svc):
+    job_id, _ = _retexturable(svc)
+    with pytest.raises(Invalid) as caught:
+        svc_jobs.retexture_job(
+            svc, job_id, "rusted iron", control="depth", control_scale=9.0
+        )
+    assert caught.value.field == "control_scale"
+    # A scale with nothing to scale would read as a live setting on rerun --
+    # guidance.normalize's rule, enforced as a refusal at this door.
+    with pytest.raises(Invalid) as caught:
+        svc_jobs.retexture_job(svc, job_id, "rusted iron", control_scale=0.5)
+    assert caught.value.field == "control_scale"
+
+
+def test_a_retexture_refuses_the_depth_control_without_its_weights(svc):
+    import shutil
+
+    job_id, _ = _retexturable(svc)
+    shutil.rmtree(svc.config.t2i_model_root / "controlnet-depth-sdxl")
+    with pytest.raises(Invalid) as caught:
+        svc_jobs.retexture_job(svc, job_id, "rusted iron", control="depth")
+    assert caught.value.field == "control"
+
+
+def test_a_retexture_strength_ceiling_is_its_own_not_the_sheets(svc):
+    """0.85 is the measured positive control from 2026-08-08: with a depth
+    anchor the restyle can afford to invent, and the bake carries it
+    faithfully. The shared IMG2IMG bound stays at 0.65 for the pixel sheets,
+    which have no anchor."""
+    job_id, _ = _retexturable(svc)
+    row = svc.store.get(
+        svc_jobs.retexture_job(svc, job_id, "rusted iron", strength=0.85)["id"]
+    )
+    assert row["params"]["strength"] == 0.85
+    svc.store.set_status(row["id"], "done")
+    with pytest.raises(Invalid):
+        svc_jobs.retexture_job(svc, job_id, "rusted iron", strength=0.86)
+
+
 @pytest.mark.parametrize("door", ["retexture", "optimize"])
 def test_reworking_a_mesh_refuses_while_a_job_writes_into_its_directory(svc, door):
     """CON-01: both doors ask about the *target row's* status, which is the

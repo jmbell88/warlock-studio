@@ -510,6 +510,60 @@ def test_the_texture_panel_refuses_an_empty_prompt_before_the_button():
     assert texture_panel.validate({"prompt": "rusted iron"}) == []
 
 
+def test_the_texture_panel_submits_the_default_atlas_size_as_none():
+    """int("") raises, and "" is exactly what the default "Match the mesh"
+    option holds -- so the untouched form's submit crashed in the draw frame
+    before ctx.submit ever ran. The kwargs are built by a pure function now,
+    where this can be pinned."""
+    from warlock.studio.panes import texture_panel
+
+    kwargs = texture_panel.submit_kwargs(
+        {"prompt": " rusted iron ", "strength": 0.45, "texture_size": "",
+         "depth": False, "control_scale": 0.65}
+    )
+    assert kwargs["texture_size"] is None
+    assert kwargs["strength"] == 0.45
+    assert "control" not in kwargs and "control_scale" not in kwargs
+
+
+def test_the_texture_panel_carries_the_depth_anchor_when_checked():
+    from warlock.studio.panes import texture_panel
+
+    kwargs = texture_panel.submit_kwargs(
+        {"prompt": "x", "strength": 0.6, "texture_size": "1024",
+         "depth": True, "control_scale": 0.5}
+    )
+    assert kwargs["texture_size"] == 1024
+    assert kwargs["control"] == "depth"
+    assert kwargs["control_scale"] == 0.5
+
+
+def test_the_texture_panel_warns_about_occlusion_only_when_unanchored():
+    """The old warning was unconditional because the limitation was. Now it is
+    a property of the run being configured: anchored runs depth-test, so
+    warning anyway would teach the user the checkbox does nothing."""
+    from warlock.studio.panes import texture_panel
+
+    assert isinstance(texture_panel.occlusion_note(False), str)
+    assert texture_panel.occlusion_note(True) is None
+
+
+def test_the_texture_panel_reports_what_the_run_actually_measured():
+    from warlock.studio.panes import texture_panel
+
+    line = texture_panel.report_line(
+        {"coverage": 0.62, "views": 10, "coverage_effective": 0.55,
+         "occlusion_tested": True}
+    )
+    assert "62" in line and "10" in line and "55" in line
+    legacy = texture_panel.report_line(
+        {"coverage": 0.372, "views": 6, "occlusion_tested": False}
+    )
+    assert "37" in legacy and "6" in legacy
+    assert texture_panel.report_line({"views": 6}) is None
+    assert texture_panel.report_line("not a dict") is None
+
+
 def test_the_texture_panel_offers_only_atlas_sizes_the_service_accepts():
     """Two spellings of one list is how a combo comes to offer a value the door
     refuses, which reads as the button being broken."""

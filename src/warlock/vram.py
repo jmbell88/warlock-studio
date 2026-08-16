@@ -235,6 +235,12 @@ def estimate_parts(
         pass_gib = image
         if params.get("control"):
             pass_gib += CONTROLNET_GIB
+        if params.get("ip_adapter"):
+            # The optional "match the original reference" knob loads
+            # CLIP-ViT-H beside the pipe, exactly as a conditioned text job
+            # does; unpriced it would be admitted for free and OOM precisely
+            # when combined with the depth ControlNet.
+            pass_gib += IP_ENCODER_GIB
         # Never trellis: the mesh was reconstructed long before, and nothing
         # here goes near it. Under coexist a warm trellis is still holding its
         # memory, which is what the reference stage below accounts for too.

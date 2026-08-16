@@ -130,7 +130,37 @@ def test_controlnet_is_downloadable_and_names_a_real_preprocessor(key):
     spec = models.CONTROLNETS[key]
     assert "hf download" in spec.download
     assert spec.dir_name in spec.download
-    assert spec.preprocessor in control.PREPROCESSORS or spec.preprocessor == "depth"
+    # None means "a pipeline renders the hint itself" -- there is nothing a
+    # user reference could be preprocessed with, and control.py stays out of it.
+    assert spec.preprocessor is None or spec.preprocessor in control.PREPROCESSORS
+
+
+def test_the_depth_controlnet_is_pipeline_fed():
+    """The hint is a Blender depth render with known cameras -- ground truth,
+    where a monocular estimator would be a guess *and* a new torch module.
+    ``preprocessor=None`` is what keeps it off the text-job path, where the
+    hint would have to be derived from the user's reference."""
+    spec = models.CONTROLNETS["depth"]
+    assert spec.preprocessor is None
+    assert spec.fetch, "must be fetchable through the ordinary downloads pane"
+
+
+def test_the_retexture_strength_bounds_widen_only_the_retexture():
+    """One floor, two ceilings: the sheets' img2img has no geometry anchor, so
+    its 0.65 stays; the re-texture with a depth ControlNet can afford 0.85
+    (the 2026-08-08 measurement's positive control)."""
+    assert models.RETEXTURE_STRENGTH_MIN == models.IMG2IMG_STRENGTH_MIN
+    assert models.RETEXTURE_STRENGTH_MAX == 0.85
+    assert models.RETEXTURE_STRENGTH_MAX > models.IMG2IMG_STRENGTH_MAX
+
+
+def test_catalog_hides_controls_no_reference_can_produce():
+    """The 2D settings combo is fed from catalog(); a pipeline-fed entry
+    surfacing there would submit a text job that fails at write_hint with the
+    checkpoint already in VRAM."""
+    keys = {c["key"] for c in models.catalog()["control"]}
+    assert "canny" in keys
+    assert "depth" not in keys
 
 
 def test_encoder_folder_is_posix_even_on_windows():

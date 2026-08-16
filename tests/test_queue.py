@@ -1356,6 +1356,24 @@ async def test_an_unknown_conditioning_key_is_dropped_rather_than_failing(worker
     assert worker._text2image.conditionings[-1] is None
 
 
+async def test_a_pipeline_fed_control_reaching_a_text_job_is_dropped_not_run(worker):
+    """The registry's depth entry is fed by the re-texture pipeline's own
+    Blender render; a text job has nothing to render a hint from, and calling
+    write_hint(kind=None) would fail the job with the checkpoint already in
+    VRAM. guidance.normalize refuses it at the door -- this is the tolerance
+    for a params row that never went through the door."""
+    params = {"seed": 1, "base_model": "sdxl_cfg", "control": "depth"}
+    job_id = worker.store.create("text", "a barrel", params, stage="reference")
+    _ref_png(worker.config.job_dir(job_id) / "ref.png")
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] in ("done", "failed"))
+    await worker.shutdown()
+
+    assert worker.store.get(job_id)["status"] == "done"
+    assert worker._text2image.conditionings[-1] is None
+    assert not (worker.config.job_dir(job_id) / "control.png").exists()
+
+
 async def test_a_control_on_a_distilled_base_is_dropped_not_run(worker):
     params = {"seed": 1, "base_model": "turbo", "control": "canny"}
     job_id = worker.store.create("text", "a barrel", params, stage="reference")
