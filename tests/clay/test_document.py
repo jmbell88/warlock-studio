@@ -944,3 +944,98 @@ def test_show_all_with_nothing_hidden_pushes_nothing() -> None:
     depth = len(doc.history)
     assert doc.show_all() is False
     assert len(doc.history) == depth
+
+
+# --- the drag preview's render plan -------------------------------------------
+
+
+def _moved(mesh: bm.Mesh, delta: float = 0.25) -> np.ndarray:
+    positions = np.array(mesh.positions, dtype="f4")
+    positions[0] += delta
+    return positions
+
+
+def test_a_preview_matches_a_full_rebuild_on_the_moved_mesh() -> None:
+    """``preview_primitives`` exists to skip everything a moved vertex cannot
+    change. What it hands back must therefore be what the ordinary path would
+    have -- the whole point is that nobody can tell by looking at the frame."""
+    from dataclasses import replace
+
+    mesh = bp.uv_sphere(segments=8, rings=4)
+    obj = _obj("sphere", mesh)
+    positions = _moved(mesh)
+    materials = [bd.FALLBACK_MATERIAL]
+
+    want = bd.to_primitives(replace(obj, mesh=replace(mesh, positions=positions)), materials)
+    got = bd.preview_primitives(mesh, positions, materials)
+
+    assert len(got) == len(want)
+    for a, b in zip(want, got, strict=True):
+        assert np.array_equal(a.positions, b.positions)
+        assert np.array_equal(a.normals, b.normals)
+        assert np.array_equal(a.indices, b.indices)
+        assert a.material is b.material
+
+
+def test_a_preview_keeps_one_primitive_per_material_in_palette_order() -> None:
+    """The plan is per material, so the grouping is a thing it could get wrong
+    -- and a draw call carries one material, so getting it wrong swaps colours."""
+    from dataclasses import replace
+
+    mesh = bp.box()
+    mesh = replace(mesh, material=np.array([0, 1, 1, 2, 0, 2], dtype="i4"))
+    materials = [bd.FALLBACK_MATERIAL] * 3
+    obj = _obj("box", mesh)
+    positions = _moved(mesh)
+
+    want = bd.to_primitives(replace(obj, mesh=replace(mesh, positions=positions)), materials)
+    got = bd.preview_primitives(mesh, positions, materials)
+    assert [len(p.indices) for p in got] == [len(p.indices) for p in want]
+    for a, b in zip(want, got, strict=True):
+        assert np.array_equal(a.positions, b.positions)
+        assert np.array_equal(a.normals, b.normals)
+
+
+def test_the_render_plan_is_built_once_per_mesh() -> None:
+    """The whole saving: a drag holds one mesh for its duration, so every frame
+    after the first must find the plan already there."""
+    mesh = bp.box()
+    first = bd.render_plan(mesh)
+    assert bd.render_plan(mesh) is first
+
+    other = bp.box()
+    assert bd.render_plan(other) is not first, "a different mesh is a different plan"
+
+
+def test_a_render_plan_does_not_outlive_its_mesh() -> None:
+    """Weakly keyed, like every other memo against a ``Mesh``: an editor that
+    kept one plan per mesh it had ever seen would hold every undone edit's
+    vertex tables alive."""
+    import gc
+
+    mesh = bp.box()
+    bd.render_plan(mesh)
+    assert len(bd._PLANS) >= 1
+    del mesh
+    gc.collect()
+    assert len(bd._PLANS) == 0
+
+
+def test_a_preview_of_an_empty_mesh_draws_nothing() -> None:
+    empty = bm.Mesh(
+        positions=np.zeros((0, 3), dtype="f4"),
+        loops=np.zeros(0, dtype="i4"),
+        starts=np.zeros(1, dtype="i4"),
+        material=np.zeros(0, dtype="i4"),
+        smooth=np.zeros(0, dtype="?"),
+    )
+    assert bd.preview_primitives(empty, empty.positions, []) == []
+
+
+def test_a_cached_plans_arrays_cannot_be_written_through() -> None:
+    """The plan is handed to a different caller on every frame of a drag, and
+    its index buffer goes straight out in a ``Primitive`` -- the same reason
+    ``cached_triangulation`` freezes what it memoises."""
+    _, layout = bd.render_plan(bp.box())[0]
+    with pytest.raises(ValueError):
+        layout.indices[0] = 0

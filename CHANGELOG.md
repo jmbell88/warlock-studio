@@ -88,6 +88,22 @@ file behind.
   a 2048 x 2048 one about 43 — long enough that changing the method in the
   preview looked like a hang. The same conversion is now 139 ms and 0.5 s. The
   dithering itself is unchanged, pixel for pixel.
+- **Clay: dragging vertices on an imported mesh is 4× faster.** Every frame of an
+  element drag rebuilt the whole object from scratch — including re-triangulating
+  it, which the viewport then ignored, since a drag rewrites vertex positions and
+  keeps the triangles it already has. A 200 000-triangle import went from 368 ms a
+  frame to 92. It is still not smooth at that size; what is left is on the list.
+- **Clay: moving the cursor over an element no longer re-uploads the mesh.** The
+  wireframe you see in vertex, edge and face mode was thrown away and rebuilt
+  every time the cursor crossed onto the next element — several megabytes per
+  mouse move on a large mesh. Only the highlight is rebuilt now: 5.6 ms to 0.07.
+  Hover picking itself is unchanged and is still the slow part on a big import.
+- **Plotter: painting terrain on a large map is up to 41× faster.** Each painted
+  cell re-fitted the entire layer instead of the cell and its neighbours, so the
+  cost followed the size of the map rather than the size of the brush. On a
+  512 x 512 map a painted cell went from 7.9 ms to 0.36; small maps were already
+  fine and are unchanged. The tiles chosen are identical, edges and corners
+  included.
 
 ## 0.0.22 — 2026-08-15
 

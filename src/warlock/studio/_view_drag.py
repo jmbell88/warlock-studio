@@ -575,17 +575,22 @@ class DragOps:
         doc.touch()
 
     def _preview_positions(self: ClayView, doc: Any, uid: int, positions: Any) -> None:
-        """Rewrite one object's vertex buffers in place. No VAO is rebuilt."""
-        from dataclasses import replace
+        """Rewrite one object's vertex buffers in place. No VAO is rebuilt.
 
+        Through ``preview_primitives`` rather than ``to_primitives``: the mesh
+        the drag began on is fixed for the drag's whole duration, so the
+        material grouping, the corner gathers and the index buffer are built
+        once and only the positions and normals are recomputed per frame. A
+        200k-triangle import went 368 ms a frame to 92 -- see
+        ``docs/measurements/2026-08-16-interactive-defects.md``.
+        """
         entry = self._cache.get(uid)
         if entry is None:
             return
         obj = doc.by_uid(uid)
         drag = self._element_drags.get(uid)
         base = obj.mesh if drag is None else drag.before
-        preview = replace(obj, mesh=replace(base, positions=positions))
-        prims = bd.to_primitives(preview, doc.materials)
+        prims = bd.preview_primitives(base, positions, doc.materials)
         for (_node, gpu), primitive in zip(entry.gpu.draws, prims, strict=False):
             try:
                 gpu.update_vertices(primitive)

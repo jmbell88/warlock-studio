@@ -52,21 +52,32 @@ class _SelOverlay:
     index buffer is both the small upload and the reason a *hover* change is
     nearly free: it rebuilds one tiny index buffer and touches nothing else.
 
-    The whole thing is keyed on ``(id(mesh), id(sel), mode, hover)``. Identity
-    on the first two because ``Mesh`` and ``ElementSel`` are both frozen and
-    replaced whole rather than mutated -- which is exactly what makes identity
-    a sound cache key, and is stated as such in both of their docstrings.
+    **That is only true because hover is not in the key.** It used to be, and
+    the promise above was therefore false: moving the cursor to the next face
+    changed the key, so the whole overlay was released and rebuilt -- the
+    position VBO re-uploaded and the guide wireframe's index buffer, which is
+    two indices per *edge* and 2.4 MB on a 200k-triangle import, minted again
+    from scratch, on every mouse move. The hover buffers are held apart
+    (``hover``, ``hover_specs``) and are the only thing a hover change touches.
+
+    The rest is keyed on ``(id(mesh), id(sel), mode)``. Identity on the first
+    two because ``Mesh`` and ``ElementSel`` are both frozen and replaced whole
+    rather than mutated -- which is exactly what makes identity a sound cache
+    key, and is stated as such in both of their docstrings.
 
     ``specs`` is the draw list built from those buffers, cached here because it
     too is a pure function of the key: every index buffer is decided by the
-    mesh, the selection, the mode and the hover, so it is built once per key
-    and replayed each frame. Building it per frame -- which is what calling
-    ``indexed`` per draw per frame amounts to -- minted a fresh IBO and VAO
-    every time and released them only on a key change, a GL-object leak at
-    frame rate for as long as the cursor held still.
+    mesh, the selection and the mode, so it is built once per key and replayed
+    each frame. Building it per frame -- which is what calling ``indexed`` per
+    draw per frame amounts to -- minted a fresh IBO and VAO every time and
+    released them only on a key change, a GL-object leak at frame rate for as
+    long as the cursor held still.
     """
 
-    __slots__ = ("ctx", "key", "pos_vbo", "count", "specs", "_ibos", "_vaos", "_program")
+    __slots__ = (
+        "ctx", "key", "pos_vbo", "count", "specs", "_ibos", "_vaos", "_program",
+        "hover", "hover_specs", "_hover_ibos", "_hover_vaos",
+    )
 
     def __init__(self, ctx: Any, program: Any, key: Any, positions: Any) -> None:
         self.ctx = ctx
@@ -78,6 +89,14 @@ class _SelOverlay:
         self.specs: list[Any] | None = None
         self._ibos: list[Any] = []
         self._vaos: list[Any] = []
+        # -1 rather than None: -1 is what "nothing hovered" *is* everywhere
+        # else here, so a fresh overlay with no hover already matches it and
+        # builds no hover draws. ``None`` would mean "not built yet" and there
+        # is nothing to build.
+        self.hover: int = -1
+        self.hover_specs: list[Any] = []
+        self._hover_ibos: list[Any] = []
+        self._hover_vaos: list[Any] = []
 
     def write_positions(self, positions: Any) -> None:
         """Rewrite the vertices in place, for a live drag. No VAO is rebuilt."""
@@ -85,8 +104,12 @@ class _SelOverlay:
         if len(data) == self.count:
             self.pos_vbo.write(data.tobytes())
 
-    def indexed(self, indices: Any, mode: int) -> Any:
-        """A vertex array over the shared positions and a fresh index buffer."""
+    def indexed(self, indices: Any, mode: int, *, hover: bool = False) -> Any:
+        """A vertex array over the shared positions and a fresh index buffer.
+
+        ``hover`` books the buffers into the set that a hover change releases,
+        so the guides and the selection outlive the cursor moving.
+        """
         flat = np.ascontiguousarray(indices, dtype="u4").reshape(-1)
         if len(flat) == 0:
             return None
@@ -94,12 +117,24 @@ class _SelOverlay:
         vao = self.ctx.vertex_array(
             self._program, [(self.pos_vbo, "3f", "a_position")], ibo
         )
-        self._ibos.append(ibo)
-        self._vaos.append(vao)
+        (self._hover_ibos if hover else self._ibos).append(ibo)
+        (self._hover_vaos if hover else self._vaos).append(vao)
         return vao
+
+    def release_hover(self) -> None:
+        """Drop just the hover draws, keeping the positions and the guides."""
+        for vao in self._hover_vaos:
+            vao.release()
+        for ibo in self._hover_ibos:
+            ibo.release()
+        self._hover_vaos.clear()
+        self._hover_ibos.clear()
+        self.hover_specs = []
 
     def release(self) -> None:
         self.specs = None
+        self.release_hover()
+        self.hover = -1
         for vao in self._vaos:
             vao.release()
         for ibo in self._ibos:
@@ -183,7 +218,8 @@ class OverlayOps:
                     self._empty_sel = doc.element_sel_of(obj.uid)
                 sel = self._empty_sel
             hover_index = hover[1] if hover is not None and hover[0] == obj.uid else -1
-            key = (id(obj.mesh), id(stored), mode, hover_index)
+            # Hover is deliberately *not* in the key -- see ``_SelOverlay``.
+            key = (id(obj.mesh), id(stored), mode)
             overlay = self._overlays.get(obj.uid)
             if overlay is None or overlay.key != key:
                 if overlay is not None:
@@ -202,9 +238,15 @@ class OverlayOps:
         self: ClayView, obj: Any, overlay: Any, world: Any, mode: str, sel: Any, hover: int
     ) -> list[Any]:
         if overlay.specs is None:
-            overlay.specs = self._overlay_specs(obj, overlay, mode, sel, hover)
+            overlay.specs = self._overlay_specs(obj, overlay, mode, sel)
+        if overlay.hover != hover:
+            # One tiny index buffer, not the whole overlay: this runs on every
+            # mouse move that crosses an element boundary.
+            overlay.release_hover()
+            overlay.hover = hover
+            overlay.hover_specs = self._hover_specs(obj, overlay, mode, hover)
         items: list[Any] = []
-        for vao, gl_mode, color, depth, size, biased in overlay.specs:
+        for vao, gl_mode, color, depth, size, biased in [*overlay.specs, *overlay.hover_specs]:
             items.append(
                 DrawItem(
                     vao=vao,
@@ -218,19 +260,8 @@ class OverlayOps:
             )
         return items
 
-    def _overlay_specs(
-        self: ClayView, obj: Any, overlay: Any, mode: str, sel: Any, hover: int
-    ) -> list[Any]:
-        """Build the overlay's draws, once per cache key.
-
-        Only the matrices are per-frame -- the object can move under a drag and
-        the fill's eye-ward bias follows the camera -- which is why a spec
-        records *whether* to bias rather than a matrix, and why ``world`` is
-        composed by the caller each frame.
-        """
-        from .clay.adjacency import adjacency, cached_triangulation
-
-        adj = adjacency(obj.mesh)
+    def _collect(self: ClayView, overlay: Any, *, hover: bool):
+        """``(add, specs)`` -- an ``indexed`` that records what it built."""
         specs: list[Any] = []
 
         def add(
@@ -242,9 +273,27 @@ class OverlayOps:
             size: float = 0.0,
             biased: bool = False,
         ) -> None:
-            vao = overlay.indexed(indices, gl_mode)
+            vao = overlay.indexed(indices, gl_mode, hover=hover)
             if vao is not None:
                 specs.append((vao, gl_mode, color, depth, size, biased))
+
+        return add, specs
+
+    def _overlay_specs(
+        self: ClayView, obj: Any, overlay: Any, mode: str, sel: Any
+    ) -> list[Any]:
+        """Build the overlay's guide and selection draws, once per cache key.
+
+        Only the matrices are per-frame -- the object can move under a drag and
+        the fill's eye-ward bias follows the camera -- which is why a spec
+        records *whether* to bias rather than a matrix, and why ``world`` is
+        composed by the caller each frame. The hover draws are
+        :meth:`_hover_specs`, on their own key.
+        """
+        from .clay.adjacency import adjacency, cached_triangulation
+
+        adj = adjacency(obj.mesh)
+        add, specs = self._collect(overlay, hover=False)
 
         # The dim guides: where the elements are, before any is picked.
         add(adj.edge_verts, moderngl.LINES, GUIDE_COLOR, depth=True)
@@ -252,13 +301,9 @@ class OverlayOps:
             add(np.arange(len(obj.mesh.positions)), moderngl.POINTS, GUIDE_COLOR,
                 depth=True, size=3.0)
             add(sel.verts, moderngl.POINTS, SEL_COLOR, depth=False, size=7.0)
-            if hover >= 0:
-                add([hover], moderngl.POINTS, HOVER_COLOR, depth=False, size=9.0)
         elif mode == "edge":
             ids = adj.edge_ids(sel.edges)
             add(adj.edge_verts[ids[ids >= 0]], moderngl.LINES, SEL_COLOR, depth=False)
-            if hover >= 0:
-                add(adj.edge_verts[hover], moderngl.LINES, HOVER_COLOR, depth=False)
         else:
             tris, tri_face = cached_triangulation(obj.mesh)
             if len(tris):
@@ -269,9 +314,30 @@ class OverlayOps:
                 add(chosen, moderngl.TRIANGLES, FILL_COLOR, depth=True, biased=True)
                 add(_face_outline(obj.mesh, sel.faces), moderngl.LINES, SEL_COLOR,
                     depth=False)
-                if hover >= 0:
-                    add(tris[tri_face == hover], moderngl.TRIANGLES, HOVER_COLOR,
-                        depth=False)
+        return specs
+
+    def _hover_specs(self: ClayView, obj: Any, overlay: Any, mode: str, hover: int) -> list[Any]:
+        """Just the draw for the element under the cursor. One index buffer.
+
+        Separate from :meth:`_overlay_specs` because it is rebuilt on a
+        different -- and far faster -- clock: the guides change when the mesh
+        or the selection does, this changes whenever the cursor crosses an
+        element boundary.
+        """
+        if hover < 0:
+            return []
+        from .clay.adjacency import adjacency, cached_triangulation
+
+        add, specs = self._collect(overlay, hover=True)
+        if mode == "vertex":
+            add([hover], moderngl.POINTS, HOVER_COLOR, depth=False, size=9.0)
+        elif mode == "edge":
+            add(adjacency(obj.mesh).edge_verts[hover], moderngl.LINES, HOVER_COLOR,
+                depth=False)
+        else:
+            tris, tri_face = cached_triangulation(obj.mesh)
+            if len(tris):
+                add(tris[tri_face == hover], moderngl.TRIANGLES, HOVER_COLOR, depth=False)
         return specs
 
     def _release_overlays(self: ClayView) -> None:

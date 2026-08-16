@@ -66,8 +66,9 @@ looked at a different object.
 from __future__ import annotations
 
 import itertools
+import weakref
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Any
 
 import numpy as np
@@ -753,6 +754,74 @@ def to_primitives(obj: Obj, materials: Sequence[gltf.Material]) -> list[gltf.Pri
                 normals=normals,
                 uvs=uvs,
                 material=_material_at(materials, int(index)),
+            )
+        )
+    return prims
+
+
+_PLANS: weakref.WeakKeyDictionary[bm.Mesh, list[tuple[int, bm.RenderLayout]]] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def render_plan(mesh: bm.Mesh) -> list[tuple[int, bm.RenderLayout]]:
+    """``(material index, layout)`` per primitive, memoised against the mesh.
+
+    The same weak-keyed shape :func:`~.adjacency.cached_triangulation` uses, and
+    for the same reason one step further on: a ``Mesh`` is frozen and replaced
+    whole, so everything :func:`to_primitives` computes that a *moved vertex*
+    cannot change -- the material grouping, each submesh's corner gather, the
+    shared/split vertex table and the index buffer -- is a pure function of one
+    mesh object. An element drag holds the mesh it began on for its whole
+    duration, so this is built on the first preview frame and reused by every
+    frame after it.
+    """
+    got = _PLANS.get(mesh)
+    if got is None:
+        got = [
+            (int(index), bm.render_layout(_submesh(mesh, np.flatnonzero(mesh.material == index))))
+            for index in np.unique(mesh.material)
+        ]
+        for _index, layout in got:
+            # Read-only for ``cached_triangulation``'s reason: this is handed
+            # to a different caller on every frame of a drag, and the index
+            # buffer in particular goes straight out in a ``Primitive``.
+            for field in fields(layout):
+                value = getattr(layout, field.name)
+                if isinstance(value, np.ndarray):
+                    value.setflags(write=False)
+        _PLANS[mesh] = got
+    return got
+
+
+def preview_primitives(
+    mesh: bm.Mesh, positions: np.ndarray, materials: Sequence[gltf.Material]
+) -> list[gltf.Primitive]:
+    """:func:`to_primitives` for *mesh* with its vertices moved to *positions*.
+
+    The drag preview's whole reason for existing: ``positions`` is the only
+    thing that changed, so only the arrays that depend on it are recomputed.
+    ``positions`` must be the same length as ``mesh.positions`` -- a topology
+    change is not a drag, and the layout would be answering about the wrong
+    mesh.
+
+    Output is byte-identical to ``to_primitives`` on the moved mesh **except
+    for the index buffer**, which is the layout's -- the triangulation the
+    preview began with. That is what the GPU is drawing during the drag anyway:
+    ``update_vertices`` leaves the IBO alone. See :class:`~.mesh.RenderLayout`.
+    """
+    if bm.face_count(mesh) == 0:
+        return []
+    prims = []
+    for index, layout in render_plan(mesh):
+        emitted, normals, uvs, indices = bm.render_from_layout(layout, positions)
+        prims.append(
+            gltf.Primitive(
+                positions=emitted,
+                indices=indices,
+                normals=normals,
+                uvs=uvs,
+                material=_material_at(materials, index),
             )
         )
     return prims

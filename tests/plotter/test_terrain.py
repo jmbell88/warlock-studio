@@ -176,3 +176,110 @@ def test_a_cell_from_another_tileset_ranks_as_void():
     data = np.zeros((3, 3), dtype=gidlib.DTYPE)
     data[1, 1] = gidlib.DTYPE(ref.last_gid + 500)
     assert terrain.rank_field(data, ref)[1, 1] == terrain.RANK_VOID
+
+
+# --- the retile window --------------------------------------------------------
+#
+# ``_retile_into`` recomputes the blob case of every cell in a box. It used to
+# run each terrain's membership pass over the *whole layer* and then throw all
+# but the box away, which made one painted cell cost the map size -- 7.9 ms on a
+# 512-square map, and a terrain drag paints several cells a frame. It now runs
+# over the box grown by one, which is every cell the answer can depend on. These
+# tests are the equivalence: the window is an optimisation, not a rule change,
+# and the map's own edge is where the two could most easily part company.
+
+
+def _retile_whole_layer(work, ref, box, outside):
+    """``_retile_into`` as it was: every pass over the entire layer."""
+    tileset = ref.tileset
+    if not tileset.is_terrain_set:
+        return
+    x0, y0, x1, y1 = box
+    ranks = terrain.rank_field(work, ref)
+    window = ranks[y0:y1, x0:x1]
+    for rank in range(len(tileset.terrains)):
+        chosen = window == rank
+        if not chosen.any():
+            continue
+        cases = blob.indices_from(ranks >= rank, outside=outside)[y0:y1, x0:x1]
+        base = ref.firstgid + rank * blob.TILE_COUNT
+        work[y0:y1, x0:x1][chosen] = (base + cases[chosen]).astype(gidlib.DTYPE)
+
+
+def _scattered_map(ref, size=24, seed=7):
+    rng = np.random.default_rng(seed)
+    data = gidlib.empty_layer(size, size)
+    ranks = rng.integers(-1, len(ref.tileset.terrains), size=(size, size))
+    for rank in range(len(ref.tileset.terrains)):
+        where = ranks == rank
+        data[where] = terrain.gid_for(ref, rank, blob.FULL)
+    return data
+
+
+def test_the_retile_window_agrees_with_the_whole_layer_pass():
+    """Every box, at every position -- including the four corners, where the
+    grown window runs off the map and the padding has to be the map's own."""
+    ref = _ref()
+    data = _scattered_map(ref)
+    size = data.shape[0]
+    boxes = [
+        (0, 0, 3, 3),  # the corner
+        (size - 3, 0, size, 3),
+        (0, size - 3, 3, size),
+        (size - 3, size - 3, size, size),
+        (0, 0, size, size),  # the whole map
+        (5, 7, 9, 12),  # the interior
+        (0, 5, 1, 6),  # one cell against an edge
+        (11, 11, 12, 12),  # one cell in the middle
+    ]
+    for outside in (True, False):
+        for box in boxes:
+            mine = np.array(data, dtype=gidlib.DTYPE)
+            theirs = np.array(data, dtype=gidlib.DTYPE)
+            terrain._retile_into(mine, ref, box, outside)
+            _retile_whole_layer(theirs, ref, box, outside)
+            assert np.array_equal(mine, theirs), f"{box} outside={outside}"
+
+
+def test_painting_a_cell_against_each_edge_is_unchanged_by_the_window():
+    """The public path, not the private one: a stroke along the border is
+    exactly where a window that got its padding wrong would draw an outline
+    around the map."""
+    ref = _ref()
+    base = _scattered_map(ref, seed=11)
+    size = base.shape[0]
+    for x, y in [(0, 0), (size - 1, 0), (0, size - 1), (size - 1, size - 1),
+                 (0, size // 2), (size // 2, 0), (size // 2, size // 2)]:
+        got = terrain.paint_terrain(base, x, y, 3, ref)
+        want_work = np.array(base, dtype=gidlib.DTYPE)
+        want_box = terrain._box([(x, y)], (size, size), 1)
+        want_work[y, x] = terrain.gid_for(ref, 3, blob.FULL)
+        _retile_whole_layer(want_work, ref, want_box, True)
+        assert got is not None
+        x0, y0, block = got
+        assert np.array_equal(block, want_work[y0 : y0 + block.shape[0], x0 : x0 + block.shape[1]])
+
+
+def test_the_retile_cost_does_not_follow_the_map_size():
+    """The property the window exists for, asserted as a property rather than a
+    stopwatch: what the pass touches is the box and its ring, so the same paint
+    on a map sixteen times the area reads the same number of cells."""
+    ref = _ref()
+    counted = []
+
+    real = blob.indices_from
+
+    def counting(member, *, outside=True):
+        counted.append(int(np.asarray(member).size))
+        return real(member, outside=outside)
+
+    for size in (24, 96):
+        data = _scattered_map(ref, size=size, seed=3)
+        counted.clear()
+        blob.indices_from = counting
+        try:
+            terrain.paint_terrain(data, size // 2, size // 2, 2, ref)
+        finally:
+            blob.indices_from = real
+        assert counted, "a paint retiles"
+        assert max(counted) <= 5 * 5, f"{size}: read {max(counted)} cells for one painted cell"

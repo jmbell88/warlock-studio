@@ -527,3 +527,110 @@ def test_accumulation_of_nothing_is_the_zeroed_table():
     # Float, not the integer table bincount hands back for an empty input:
     # ``_normalize`` divides into this and refuses an int output array.
     assert empty.dtype == np.dtype("f8")
+
+
+# --- the render layout ------------------------------------------------------
+#
+# ``render_arrays`` is a composition of ``render_layout`` (what a moved vertex
+# cannot change) and ``render_from_layout`` (what it can). The split exists so
+# an element drag can hold the first across a whole drag; these assert that it
+# is a *split* and not a rewrite -- byte identity, not closeness, because the
+# outputs go to the GPU where a changed last bit has nothing to announce it.
+
+
+def _layout_cases() -> list[tuple[str, bm.Mesh]]:
+    smooth_box = _from_faces(BOX_POSITIONS, BOX_FACES, smooth=np.ones(6, dtype="?"))
+    mixed = _from_faces(
+        BOX_POSITIONS, BOX_FACES, smooth=np.array([1, 0, 1, 0, 1, 0], dtype="?")
+    )
+    textured = _from_faces(
+        BOX_POSITIONS,
+        BOX_FACES,
+        uv=np.tile(np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]), (6, 1)),
+    )
+    # An L, whose reflex corner sends it down the ear-clipping path.
+    concave = bm.Mesh(
+        positions=np.array(
+            [[0, 0, 0], [2, 0, 0], [2, 0, 1], [1, 0, 1], [1, 0, 2], [0, 0, 2]],
+            dtype="f4",
+        ),
+        loops=np.arange(6, dtype="i4"),
+        starts=np.array([0, 6], dtype="i4"),
+        material=np.zeros(1, dtype="i4"),
+        smooth=np.zeros(1, dtype="?"),
+    )
+    empty = bm.Mesh(
+        positions=np.zeros((0, 3), dtype="f4"),
+        loops=np.zeros(0, dtype="i4"),
+        starts=np.zeros(1, dtype="i4"),
+        material=np.zeros(0, dtype="i4"),
+        smooth=np.zeros(0, dtype="?"),
+    )
+    return [
+        ("flat box", _from_faces(BOX_POSITIONS, BOX_FACES)),
+        ("smooth box", smooth_box),
+        ("mixed box", mixed),
+        ("textured box", textured),
+        ("concave face", concave),
+        ("empty", empty),
+    ]
+
+
+@pytest.mark.parametrize(
+    "name,mesh", _layout_cases(), ids=lambda v: v if isinstance(v, str) else ""
+)
+def test_the_layout_split_reproduces_render_arrays_byte_for_byte(name, mesh) -> None:
+    want = bm.render_arrays(mesh)
+    got = bm.render_from_layout(bm.render_layout(mesh), mesh.positions)
+    for a, b in zip(want, got, strict=True):
+        if a is None or b is None:
+            assert a is None and b is None, name
+            continue
+        assert a.dtype == b.dtype, name
+        assert np.array_equal(a, b), name
+
+
+@pytest.mark.parametrize(
+    "name,mesh", _layout_cases(), ids=lambda v: v if isinstance(v, str) else ""
+)
+def test_a_reused_layout_answers_for_moved_vertices(name, mesh) -> None:
+    """What a drag actually does: build the layout once, move the vertices,
+    and ask again. The positions and normals must be what a full rebuild on the
+    moved mesh would have produced -- the *indices* are deliberately the
+    layout's, which is what the GPU is still drawing during a drag."""
+    from dataclasses import replace
+
+    rng = np.random.default_rng(4242)
+    moved = np.array(mesh.positions, dtype="f4")
+    if len(moved):
+        moved[0] += rng.random(3).astype("f4") * 0.1
+
+    layout = bm.render_layout(mesh)
+    got = bm.render_from_layout(layout, moved)
+    want = bm.render_arrays(replace(mesh, positions=moved))
+    for index, (a, b) in enumerate(zip(want, got, strict=True)):
+        if index == 3:  # indices: the layout's, by design
+            continue
+        if a is None or b is None:
+            assert a is None and b is None, name
+            continue
+        assert np.array_equal(a, b), f"{name}: field {index}"
+
+
+def test_a_layout_is_not_disturbed_by_being_used() -> None:
+    """A drag reuses one layout for every frame, so a frame that wrote into it
+    would make the second frame answer about the first one's positions."""
+    mesh = _from_faces(BOX_POSITIONS, BOX_FACES, smooth=np.ones(6, dtype="?"))
+    layout = bm.render_layout(mesh)
+    first = bm.render_from_layout(layout, mesh.positions)
+
+    moved = np.array(mesh.positions, dtype="f4")
+    moved[0] += 1.0
+    bm.render_from_layout(layout, moved)
+
+    again = bm.render_from_layout(layout, mesh.positions)
+    for a, b in zip(first, again, strict=True):
+        if a is None:
+            assert b is None
+            continue
+        assert np.array_equal(a, b)

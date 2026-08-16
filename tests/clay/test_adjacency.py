@@ -277,3 +277,25 @@ def test_cached_triangulation_matches_the_uncached_one_and_is_frozen() -> None:
     assert np.array_equal(tri_face, want_face)
     with pytest.raises(ValueError):
         tris[0, 0] = 0
+
+
+def test_cached_positions_f8_is_the_conversion_memoised_and_frozen() -> None:
+    """Picking works in f8 and the mesh stores f4, so every ray cast converted
+    the whole vertex array first -- once per object, on every mouse move, for a
+    mesh that is frozen and cannot have changed."""
+    m = prim.uv_sphere(segments=5, rings=3)
+    got = adj.cached_positions_f8(m)
+    assert got.dtype == np.dtype("f8")
+    assert np.array_equal(got, m.positions.astype("f8"))
+    assert adj.cached_positions_f8(m) is got
+    with pytest.raises(ValueError):
+        got[0, 0] = 0.0
+
+
+def test_cached_positions_do_not_outlive_their_mesh() -> None:
+    m = prim.box()
+    adj.cached_positions_f8(m)
+    assert len(adj._F8) >= 1
+    del m
+    gc.collect()
+    assert len(adj._F8) == 0

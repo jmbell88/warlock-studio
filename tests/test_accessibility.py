@@ -143,6 +143,7 @@ class _FakeIO:
     def __init__(self) -> None:
         self.text: list[str] = []
         self.keys: list[tuple[object, bool]] = []
+        self.buttons: list[tuple[int, bool]] = []
         self.want_text_input = False
 
     def add_input_characters_utf8(self, text: str) -> None:
@@ -153,6 +154,14 @@ class _FakeIO:
 
     def add_key_event(self, key: object, down: bool) -> None:
         self.keys.append((key, down))
+
+    def add_mouse_button_event(self, button: int, down: bool) -> None:
+        from imgui_bundle import imgui
+
+        # The real io asserts on this, and a failed assert crashes the frame
+        # loop rather than failing a test, so the fake asserts it too.
+        assert 0 <= int(button) < int(imgui.MouseButton_.count), button
+        self.buttons.append((int(button), down))
 
 
 class _FakeKey:
@@ -271,6 +280,42 @@ def test_the_ime_rect_is_placed_in_window_coordinates(
     fake = _FakePygame()
     module.set_ime_rect((10.6, 20.2), (100.0, 24.0), fake)
     assert fake.key.rect == (10, 20, 100, 24)
+
+
+# -- mouse buttons ------------------------------------------------------------
+
+
+def test_the_three_named_buttons_reach_imgui(backend: tuple[object, _FakeIO]) -> None:
+    import pygame
+    from imgui_bundle import imgui
+
+    module, io = backend
+    for button in (1, 2, 3):
+        assert module.process_event(_event(pygame.MOUSEBUTTONDOWN, button=button))
+    assert io.buttons == [
+        (int(imgui.MouseButton_.left), True),
+        (int(imgui.MouseButton_.middle), True),
+        (int(imgui.MouseButton_.right), True),
+    ]
+
+
+@pytest.mark.parametrize("button", [4, 5, 6, 7, 8, 9])
+def test_a_button_imgui_cannot_name_is_dropped_not_shifted(
+    backend: tuple[object, _FakeIO], button: int
+) -> None:
+    """A thumb click on the side of the mouse used to kill the frame loop.
+
+    pygame numbers more buttons than imgui has -- 4/5 are the legacy wheel
+    notches, 6/7 are SDL's X1/X2 back-and-forward pair -- and the old
+    ``button - 1`` fallback handed imgui an index past ImGuiMouseButton_COUNT,
+    which is an IM_ASSERT and therefore a RuntimeError out of the event pump.
+    """
+    import pygame
+
+    module, io = backend
+    assert module.process_event(_event(pygame.MOUSEBUTTONDOWN, button=button)) is False
+    assert module.process_event(_event(pygame.MOUSEBUTTONUP, button=button)) is False
+    assert io.buttons == []
 
 
 # -- keyboard navigation (UX-02) ----------------------------------------------

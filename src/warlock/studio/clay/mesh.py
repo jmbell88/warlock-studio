@@ -271,8 +271,30 @@ def face_normals(mesh: Mesh) -> np.ndarray:
     """
     if face_count(mesh) == 0:
         return np.zeros((0, 3), dtype="f8")
-    a = mesh.positions[mesh.loops].astype("f8")
-    b = mesh.positions[mesh.loops[_next_corner(mesh)]].astype("f8")
+    return _newell(
+        mesh.positions,
+        mesh.loops,
+        mesh.loops[_next_corner(mesh)],
+        mesh.starts[:-1].astype("i8"),
+    )
+
+
+def _newell(
+    positions: np.ndarray,
+    loops: np.ndarray,
+    loops_next: np.ndarray,
+    starts_head: np.ndarray,
+) -> np.ndarray:
+    """:func:`face_normals` over arrays rather than a :class:`Mesh`.
+
+    Split out for :func:`render_from_layout`, which has the corner permutation
+    already resolved and must not pay for ``_next_corner`` on every frame of a
+    drag. ``loops_next`` is ``loops[_next_corner(mesh)]`` -- the *vertex* after
+    each corner, not the corner -- so the two gathers here are the same two
+    :func:`face_normals` always did, in the same order.
+    """
+    a = positions[loops].astype("f8")
+    b = positions[loops_next].astype("f8")
     contrib = np.stack(
         [
             (a[:, 1] - b[:, 1]) * (a[:, 2] + b[:, 2]),
@@ -281,7 +303,7 @@ def face_normals(mesh: Mesh) -> np.ndarray:
         ],
         axis=1,
     )
-    return np.add.reduceat(contrib, mesh.starts[:-1].astype("i8"), axis=0)
+    return np.add.reduceat(contrib, starts_head, axis=0)
 
 
 # Compat: the tests and INVARIANTS.md name the private form, and it was the
@@ -353,34 +375,109 @@ def render_arrays(
     neighbours), only the buffer is no longer de-duplicated. The extra vertices
     cost upload bandwidth on an imported mesh and nothing at all on an authored
     one, which has no UVs.
+
+    **The split into :func:`render_layout` and :func:`render_from_layout` is
+    what makes an element drag affordable**, and it costs this function
+    nothing: the layout is built from the same mesh and consumed immediately,
+    so every array below is produced by the same operations in the same order
+    it always was. See :class:`RenderLayout` for what a drag reuses and why it
+    is allowed to.
     """
+    return render_from_layout(render_layout(mesh), mesh.positions)
+
+
+@dataclass(frozen=True)
+class RenderLayout:
+    """Everything :func:`render_arrays` decides that moving a vertex cannot change.
+
+    A ``Mesh`` is immutable, so the corner permutation, the shared/split
+    vertex table and the index buffer are all pure functions of one mesh
+    object -- which is what lets a drag build this once and reuse it for every
+    frame, recomputing only the two arrays that a moved vertex actually
+    changes: the positions and the normals.
+
+    **The triangulation is in here even though it is not purely topological.**
+    :func:`~.earclip.corner_triangles` screens faces for a reflex corner, and
+    deforming a concave n-gon far enough could in principle change the answer.
+    Reusing the pre-drag triangulation is nonetheless exactly right for the
+    preview, because the index buffer *on the GPU* is the pre-drag one:
+    ``scene.GpuPrimitive.update_vertices`` rewrites the vertex data and leaves
+    the IBO alone, so recomputing indices per frame produced an array that was
+    thrown away. The drag's commit goes through the ordinary
+    :func:`render_arrays` path and re-triangulates.
+
+    ``uv is not None`` discriminates the two shapes, the same rule
+    :func:`render_arrays` reads: a mesh with UVs emits one vertex per corner
+    and shares nothing, so ``used``/``flat_loops``/``foc_flat`` are unused and
+    ``face_of_corner`` is.
+    """
+
+    n_faces: int
+    n_verts: int
+    loops: np.ndarray
+    loops_next: np.ndarray
+    starts_head: np.ndarray
+    smooth_corner: np.ndarray
+    smooth_loops: np.ndarray
+    foc_smooth: np.ndarray  # face_of_corner[smooth_corner]
+    indices: np.ndarray
+    used: np.ndarray | None = None  # shared path
+    flat_loops: np.ndarray | None = None  # shared path: loops[flat_corners]
+    foc_flat: np.ndarray | None = None  # shared path
+    face_of_corner: np.ndarray | None = None  # per-corner path
+    uv: np.ndarray | None = None  # per-corner path
+
+
+_EMPTY_LAYOUT_FIELDS = dict(
+    n_verts=0,
+    loops=np.zeros(0, dtype="i4"),
+    loops_next=np.zeros(0, dtype="i8"),
+    starts_head=np.zeros(0, dtype="i8"),
+    smooth_corner=np.zeros(0, dtype="?"),
+    smooth_loops=np.zeros(0, dtype="i4"),
+    foc_smooth=np.zeros(0, dtype="i8"),
+    indices=np.zeros(0, dtype="u4"),
+)
+
+
+def render_layout(mesh: Mesh) -> RenderLayout:
+    """The topology half of :func:`render_arrays`, for reuse across a drag."""
     n_faces = face_count(mesh)
     if n_faces == 0:
         empty_uv = None if mesh.uv is None else np.zeros((0, 2), dtype="f4")
-        return (
-            np.zeros((0, 3), dtype="f4"),
-            np.zeros((0, 3), dtype="f4"),
-            empty_uv,
-            np.zeros(0, dtype="u4"),
-        )
+        return RenderLayout(n_faces=0, uv=empty_uv, **_EMPTY_LAYOUT_FIELDS)
 
     raw = face_normals(mesh)
-    unit = _normalize(raw)
     counts = np.diff(mesh.starts).astype("i8")
     face_of_corner = np.repeat(np.arange(n_faces, dtype="i8"), counts)
     smooth_corner = mesh.smooth[face_of_corner]
+    smooth_loops = mesh.loops[smooth_corner]
+    corners, _ = corner_triangles(mesh.positions, mesh.loops, mesh.starts, raw)
+    common = dict(
+        n_faces=n_faces,
+        n_verts=len(mesh.positions),
+        loops=mesh.loops,
+        loops_next=mesh.loops[_next_corner(mesh)],
+        starts_head=mesh.starts[:-1].astype("i8"),
+        smooth_corner=smooth_corner,
+        smooth_loops=smooth_loops,
+        foc_smooth=face_of_corner[smooth_corner],
+    )
 
     if mesh.uv is not None:
-        return _render_arrays_per_corner(mesh, raw, unit, face_of_corner, smooth_corner)
+        return RenderLayout(
+            indices=corners.reshape(-1).astype("u4"),
+            face_of_corner=face_of_corner,
+            uv=mesh.uv,
+            **common,
+        )
 
     # Shared half: only vertices that a smooth face touches get an entry, and
     # each accumulates the area-weighted normals of its smooth faces alone.
     n_verts = len(mesh.positions)
     used = np.zeros(n_verts, dtype=bool)
-    smooth_loops = mesh.loops[smooth_corner]
     used[smooth_loops] = True
     n_shared = int(used.sum())
-    accum = _accumulate(smooth_loops, raw[face_of_corner[smooth_corner]], n_verts)
     remap = np.zeros(n_verts, dtype="i8")
     remap[used] = np.arange(n_shared, dtype="i8")
 
@@ -389,52 +486,61 @@ def render_arrays(
     flat_corners = np.flatnonzero(~smooth_corner)
     n_flat = len(flat_corners)
 
-    positions = np.concatenate(
-        [mesh.positions[used], mesh.positions[mesh.loops[flat_corners]]]
-    ).astype("f4")
-    normals = np.concatenate([_normalize(accum[used]), unit[face_of_corner[flat_corners]]]).astype(
-        "f4"
-    )
-
     corner_vertex = np.zeros(len(mesh.loops), dtype="i8")
     corner_vertex[smooth_corner] = remap[smooth_loops]
     corner_vertex[flat_corners] = n_shared + np.arange(n_flat, dtype="i8")
 
-    corners, _ = corner_triangles(mesh.positions, mesh.loops, mesh.starts, raw)
-    indices = corner_vertex[corners].reshape(-1).astype("u4")
-    return positions, normals, None, indices
+    return RenderLayout(
+        indices=corner_vertex[corners].reshape(-1).astype("u4"),
+        used=used,
+        flat_loops=mesh.loops[flat_corners],
+        foc_flat=face_of_corner[flat_corners],
+        **common,
+    )
 
 
-def _render_arrays_per_corner(
-    mesh: Mesh,
-    raw: np.ndarray,
-    unit: np.ndarray,
-    face_of_corner: np.ndarray,
-    smooth_corner: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """:func:`render_arrays` for a mesh that has UVs: one vertex per corner.
+def render_from_layout(
+    layout: RenderLayout, positions: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray]:
+    """:func:`render_arrays`' vertex half, over *positions* and a cached layout.
 
-    The normal is the same value the shared path would have produced -- a
-    smooth corner still gets the area-weighted sum over the smooth faces at its
-    *vertex*, not just its own face's -- so a textured smooth sphere shades
-    identically to an untextured one. Only the de-duplication is gone.
+    ``positions`` must be the ``(V, 3)`` array of the mesh the layout was built
+    from, with the same length -- moved, not re-indexed.
     """
-    assert mesh.uv is not None
-    smooth_loops = mesh.loops[smooth_corner]
-    accum = _accumulate(
-        smooth_loops, raw[face_of_corner[smooth_corner]], len(mesh.positions)
-    )
+    if layout.n_faces == 0:
+        return (
+            np.zeros((0, 3), dtype="f4"),
+            np.zeros((0, 3), dtype="f4"),
+            layout.uv,
+            np.zeros(0, dtype="u4"),
+        )
 
-    normals = unit[face_of_corner]
-    normals[smooth_corner] = _normalize(accum[smooth_loops])
+    raw = _newell(positions, layout.loops, layout.loops_next, layout.starts_head)
+    unit = _normalize(raw)
+    accum = _accumulate(layout.smooth_loops, raw[layout.foc_smooth], layout.n_verts)
 
-    corners, _ = corner_triangles(mesh.positions, mesh.loops, mesh.starts, raw)
-    return (
-        mesh.positions[mesh.loops].astype("f4"),
-        normals.astype("f4"),
-        np.array(mesh.uv, dtype="f4", copy=True),
-        corners.reshape(-1).astype("u4"),
-    )
+    if layout.uv is not None:
+        # One vertex per corner: the normal is still the shared value at the
+        # vertex for a smooth corner, only the buffer is not de-duplicated.
+        assert layout.face_of_corner is not None
+        normals = unit[layout.face_of_corner]
+        normals[layout.smooth_corner] = _normalize(accum[layout.smooth_loops])
+        return (
+            positions[layout.loops].astype("f4"),
+            normals.astype("f4"),
+            np.array(layout.uv, dtype="f4", copy=True),
+            layout.indices,
+        )
+
+    assert layout.used is not None and layout.flat_loops is not None
+    assert layout.foc_flat is not None
+    out_positions = np.concatenate(
+        [positions[layout.used], positions[layout.flat_loops]]
+    ).astype("f4")
+    out_normals = np.concatenate(
+        [_normalize(accum[layout.used]), unit[layout.foc_flat]]
+    ).astype("f4")
+    return out_positions, out_normals, None, layout.indices
 
 
 # --- transforms and measurement ---------------------------------------------

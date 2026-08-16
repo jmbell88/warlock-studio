@@ -222,6 +222,25 @@ def adjacency(mesh: Mesh) -> Adjacency:
     return got
 
 
+_F8: weakref.WeakKeyDictionary[Mesh, np.ndarray] = weakref.WeakKeyDictionary()
+
+
+def cached_positions_f8(mesh: Mesh) -> np.ndarray:
+    """``mesh.positions`` as f8, memoised against the mesh, read-only.
+
+    The ray tests work in f8 and the mesh stores f4, so every pick converted
+    the whole vertex array first -- once per object, on every mouse move, for a
+    mesh that is frozen and cannot have changed. Cheap next to the ray cast
+    itself, but it is a full copy of an array the cast then only reads.
+    """
+    got = _F8.get(mesh)
+    if got is None:
+        got = mesh.positions.astype("f8")
+        _freeze(got)
+        _F8[mesh] = got
+    return got
+
+
 _TRIS: weakref.WeakKeyDictionary[Mesh, tuple[np.ndarray, np.ndarray]] = weakref.WeakKeyDictionary()
 
 

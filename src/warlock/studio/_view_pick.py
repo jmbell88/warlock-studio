@@ -51,7 +51,7 @@ class PickOps:
         ``tri_face`` earn its place: it maps the triangle the ray hit back to
         the n-gon the user thinks they clicked.
         """
-        from .clay.adjacency import cached_triangulation
+        from .clay.adjacency import cached_positions_f8, cached_triangulation
 
         origin, direction = self._ray(local)
         best: Hit | None = None
@@ -63,7 +63,7 @@ class PickOps:
                 origin,
                 direction,
                 self._world(obj),
-                obj.mesh.positions.astype("f8"),
+                cached_positions_f8(obj.mesh),
                 tris,
             )
             if hit is not None and (best is None or hit[0] < best.t):

@@ -318,7 +318,18 @@ _MODIFIER_MAP = {
     pygame.K_RALT: imgui.Key.mod_alt,
 }
 
-_MOUSE_MAP = {2: imgui.MouseButton_.middle, 3: imgui.MouseButton_.right}
+# pygame's button numbers, and *only* the three imgui names. It is a complete
+# whitelist rather than a two-entry patch over ``button - 1`` because pygame
+# numbers more buttons than imgui has: 4 and 5 are the legacy wheel notches and
+# 6/7 are a mouse's side buttons (SDL's X1/X2, the back/forward pair on most
+# gaming mice). ``button - 1`` sent those in as 5 and 6, and imgui asserts on
+# anything past ImGuiMouseButton_COUNT (5) -- a stray thumb click on the side
+# of the mouse took the whole frame loop down with a RuntimeError.
+_MOUSE_MAP = {
+    1: imgui.MouseButton_.left,
+    2: imgui.MouseButton_.middle,
+    3: imgui.MouseButton_.right,
+}
 
 # What a physical wheel notch becomes in ``io.mouse_wheel``. Halved because one
 # SDL notch scrolled a list two rows at a time, and it is applied here so that
@@ -391,8 +402,13 @@ def process_event(event: Any) -> bool:
         io.add_mouse_pos_event(event.pos[0], event.pos[1])
         return True
     if event.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP):
-        down = event.type == pygame.MOUSEBUTTONDOWN
-        io.add_mouse_button_event(_MOUSE_MAP.get(event.button, event.button - 1), down)
+        button = _MOUSE_MAP.get(event.button)
+        if button is None:
+            # A button imgui has no name for. Dropped rather than clamped: the
+            # app's own handlers still see the event below, and folding a side
+            # button onto left would make it click whatever is under the cursor.
+            return False
+        io.add_mouse_button_event(button, event.type == pygame.MOUSEBUTTONDOWN)
         return True
     if event.type == pygame.MOUSEWHEEL:
         io.add_mouse_wheel_event(event.x * WHEEL_SCALE, event.y * WHEEL_SCALE)

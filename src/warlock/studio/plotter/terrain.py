@@ -137,24 +137,38 @@ def _retile_into(
 
     One pass per terrain rather than per cell: ``ranks >= r`` is the whole
     membership field for rank ``r``, and :func:`blob.indices_from` turns it into
-    every cell's case in eight array ORs. Five terrains is five passes over the
-    layer, which is cheaper than one Python loop over the box.
+    every cell's case in eight array ORs. Five terrains is five passes, which is
+    cheaper than one Python loop over the box.
 
-    The masks are computed over the *whole* layer, not the box, because a cell
-    on the box's edge needs its neighbours -- which is also why every caller
-    grows the box by one before writing it.
+    **Those passes run over the box grown by one, not over the layer.** A cell
+    on the box's edge needs its eight neighbours -- which is why every caller
+    grows the box by one before writing it, and why one more ring is read here
+    -- but a cell any further away cannot affect the answer, so computing the
+    whole layer per painted cell made a terrain drag cost the *map size* rather
+    than the brush size. That is exact rather than approximate: the ring's own
+    cases are discarded, and where the grown window runs into the map edge the
+    padding :func:`blob.masks_from` applies there is the same ``outside`` the
+    whole-layer pass would have applied, because it *is* the map edge.
     """
     tileset = ref.tileset
     if not tileset.is_terrain_set:
         return
     x0, y0, x1, y1 = box
-    ranks = rank_field(work, ref)
-    window = ranks[y0:y1, x0:x1]
+    height, width = work.shape
+    gx0, gy0 = max(0, x0 - 1), max(0, y0 - 1)
+    gx1, gy1 = min(width, x1 + 1), min(height, y1 + 1)
+    # Where the box sits inside the grown window.
+    ix0, iy0 = x0 - gx0, y0 - gy0
+    ix1, iy1 = ix0 + (x1 - x0), iy0 + (y1 - y0)
+
+    grown = work[gy0:gy1, gx0:gx1]
+    ranks = rank_field(grown, ref)
+    window = ranks[iy0:iy1, ix0:ix1]
     for rank in range(len(tileset.terrains)):
         chosen = window == rank
         if not chosen.any():
             continue
-        cases = blob.indices_from(ranks >= rank, outside=outside)[y0:y1, x0:x1]
+        cases = blob.indices_from(ranks >= rank, outside=outside)[iy0:iy1, ix0:ix1]
         base = ref.firstgid + rank * blob.TILE_COUNT
         work[y0:y1, x0:x1][chosen] = (base + cases[chosen]).astype(gidlib.DTYPE)
 

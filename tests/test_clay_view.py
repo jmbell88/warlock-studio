@@ -1072,3 +1072,86 @@ def test_a_textured_document_uploads_its_uvs_and_its_maps(view) -> None:
 
     pixels = np.asarray(view.screenshot().convert("RGB"), dtype="i4")
     assert pixels.reshape(-1, 3).std(axis=0).max() > 2.0
+
+
+# --- the hover overlay --------------------------------------------------------
+
+
+def test_moving_the_hover_rebuilds_only_the_hover_draw(view) -> None:
+    """Hover used to be in the overlay's cache key, so crossing onto the next
+    face released the whole overlay and built it again -- the position buffer
+    re-uploaded and the guide wireframe's index buffer, two indices per edge and
+    megabytes on an import, minted from scratch, on every mouse move."""
+    doc = _doc(count=1)
+    _face_mode(doc)
+    uid = doc.objects[0].uid
+    view.frame_selection(doc)
+    view.hover_element = (uid, 0)
+    view.draw(doc, RECT, 0.0)
+
+    overlay = view._overlays[uid]
+    guides, positions = list(overlay._vaos), overlay.pos_vbo
+    assert len(overlay._hover_vaos) == 1, "the hovered face is drawn"
+
+    view.hover_element = (uid, 1)
+    view.draw(doc, RECT, 0.0)
+
+    assert view._overlays[uid] is overlay, "the overlay survived the cursor moving"
+    assert overlay._vaos == guides, "and so did the guides and the selection"
+    assert overlay.pos_vbo is positions, "the vertices were not re-uploaded"
+    assert len(overlay._hover_vaos) == 1, "one hover buffer, not two"
+
+
+def test_the_hover_draw_appears_and_goes_away(view) -> None:
+    """The other half: splitting the key must not cost the overlay its hover."""
+    doc = _doc(count=1)
+    _face_mode(doc)
+    uid = doc.objects[0].uid
+    view.frame_selection(doc)
+
+    view.hover_element = None
+    view.draw(doc, RECT, 0.0)
+    without = len(view._element_overlays(doc))
+    assert view._overlays[uid]._hover_vaos == []
+
+    view.hover_element = (uid, 2)
+    hovered = len(view._element_overlays(doc))
+    assert hovered == without + 1, "the hovered face is one more draw"
+
+    view.hover_element = None
+    assert len(view._element_overlays(doc)) == without
+    assert view._overlays[uid]._hover_vaos == [], "and its buffer went with it"
+
+
+def test_every_element_mode_hovers_without_a_rebuild(view) -> None:
+    for mode in ("vertex", "edge", "face"):
+        doc = _doc(count=1)
+        doc.set_element_mode(mode)
+        uid = doc.objects[0].uid
+        view.frame_selection(doc)
+        view.hover_element = (uid, 0)
+        view.draw(doc, RECT, 0.0)
+        overlay = view._overlays[uid]
+        guides = list(overlay._vaos)
+
+        view.hover_element = (uid, 1)
+        view.draw(doc, RECT, 0.0)
+        assert view._overlays[uid] is overlay, mode
+        assert overlay._vaos == guides, mode
+        assert len(overlay._hover_vaos) == 1, mode
+
+
+def test_a_selection_change_still_rebuilds_the_overlay(view) -> None:
+    """The key lost hover, not its job."""
+    from warlock.studio.clay import elements as el
+
+    doc = _doc(count=1)
+    _face_mode(doc)
+    uid = doc.objects[0].uid
+    view.frame_selection(doc)
+    view.draw(doc, RECT, 0.0)
+    overlay = view._overlays[uid]
+
+    doc.set_element_sel(uid, el.ElementSel(faces=[0]))
+    view.draw(doc, RECT, 0.0)
+    assert view._overlays[uid] is not overlay
