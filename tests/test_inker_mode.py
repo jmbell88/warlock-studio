@@ -184,11 +184,66 @@ def test_zooming_keeps_the_pixel_under_the_cursor_under_the_cursor():
 
 
 def test_zoom_is_clamped_at_both_ends():
+    """The module defaults, which Plotter and Packwright both take."""
     view = PaintView(zoom=1.0)
     inker_state.zoom_about(view, (0.0, 0.0), (0.0, 0.0), 200.0)
     assert view.zoom == pytest.approx(inker_state.MAX_ZOOM)
     inker_state.zoom_about(view, (0.0, 0.0), (0.0, 0.0), -400.0)
     assert view.zoom == pytest.approx(inker_state.MIN_ZOOM)
+
+
+def _inker_bounds() -> dict[str, float]:
+    return {"lo": inker_state.INKER_MIN_ZOOM, "hi": inker_state.INKER_MAX_ZOOM}
+
+
+def test_the_inker_bounds_are_narrower_than_the_shared_ones():
+    """A tile map wants 5%; a drawing at 5% is a postage stamp."""
+    assert inker_state.MIN_ZOOM < inker_state.INKER_MIN_ZOOM
+    assert inker_state.INKER_MAX_ZOOM < inker_state.MAX_ZOOM
+
+
+def test_zoom_is_clamped_to_the_inker_bounds_when_they_are_passed():
+    view = PaintView(zoom=1.0)
+    inker_state.zoom_step(view, (0.0, 0.0), (0.0, 0.0), 500.0, **_inker_bounds())
+    assert view.zoom == pytest.approx(inker_state.INKER_MAX_ZOOM)
+    inker_state.zoom_step(view, (0.0, 0.0), (0.0, 0.0), -500.0, **_inker_bounds())
+    assert view.zoom == pytest.approx(inker_state.INKER_MIN_ZOOM)
+
+
+def test_a_wheel_notch_is_five_percent_and_snapped_to_the_grid():
+    view = PaintView(zoom=0.25)
+    for expected in (0.30, 0.35, 0.40):
+        inker_state.zoom_step(view, (0.0, 0.0), (0.0, 0.0), 1.0, **_inker_bounds())
+        assert view.zoom == pytest.approx(expected)
+
+
+def test_a_notch_joins_the_grid_rather_than_carrying_a_fitted_fraction():
+    """A zoom arrived at by fitting is arbitrary; one notch makes it round."""
+    view = PaintView(zoom=0.834)
+    inker_state.zoom_step(view, (0.0, 0.0), (0.0, 0.0), 1.0, **_inker_bounds())
+    assert view.zoom == pytest.approx(0.90)
+
+
+def test_stepping_keeps_the_pixel_under_the_cursor_under_the_cursor():
+    view = PaintView(zoom=1.0, pan=(0.0, 0.0))
+    origin, mouse = (0.0, 0.0), (120.0, 80.0)
+    before = inker_state.to_image(view, origin, *mouse)
+    inker_state.zoom_step(view, origin, mouse, 3.0, **_inker_bounds())
+    assert inker_state.to_image(view, origin, *mouse) == pytest.approx(before)
+    assert view.zoom == pytest.approx(1.15)
+
+
+def test_a_step_that_changes_nothing_leaves_the_pan_alone():
+    view = PaintView(zoom=inker_state.INKER_MAX_ZOOM, pan=(13.0, -7.0))
+    inker_state.zoom_step(view, (0.0, 0.0), (50.0, 50.0), 4.0, **_inker_bounds())
+    assert view.pan == pytest.approx((13.0, -7.0))
+
+
+def test_fitting_under_a_floor_centres_at_the_floor_and_overflows():
+    """The stated cost of having a floor: a huge page does not shrink to meet it."""
+    view = PaintView()
+    inker_state.fit(view, (8000, 8000), (400.0, 400.0), **_inker_bounds())
+    assert view.zoom == pytest.approx(inker_state.INKER_MIN_ZOOM)
 
 
 def test_centring_sets_an_exact_zoom():

@@ -101,12 +101,21 @@ moves or renames something keeps it, because those cannot invalidate it.
 | Edges, Faces | Collapse | Pulls the selection down to a single point. |
 | Verts | Weld | Merges vertices closer together than a distance you give. |
 | Any | Dissolve | Removes the selection and merges what it separated, rather than leaving a hole. |
+| Faces | Merge Faces | The same operation as Dissolve in face mode, under the name most people look for. |
 | Any | Smooth | Catmull-Clark subdivision over the whole object. Each level multiplies the face count by four. |
 
 An operation that cannot do what you asked says so in a toast naming the element and what to do
 instead, and changes nothing. Bevel refuses a boundary edge; dissolve refuses a selection that rings
 a face it does not include; fill hole refuses a pinched boundary. Those are refusals, not failures:
 the alternative is geometry that looks right and is not.
+
+**Merge Faces** and **Dissolve** in face mode are one operation with two names, and the duplication
+is deliberate: "dissolve" is the modelling word and is what the vertex and edge modes do too, but
+somebody who wants two faces to become one searches for "merge", finds nothing, and concludes the
+editor cannot do it. Two things about what it merges are worth knowing. A selection that falls into
+several disconnected blocks becomes one face *per block*, not one face overall — a face with a hole
+in it is not something this editor's meshes can hold, so there would be nothing to make. And a
+single face on its own is refused: there is no neighbour to merge it with.
 
 **Extrude** is one operation in all three modes, because it means the same thing in all three. In
 edge mode it grows a quad from each selected *boundary* edge — an edge with a face on each side has
@@ -227,14 +236,40 @@ merge at zero to keep two parts as separate shells, then merge *that* object wit
 non-zero distance, and the shells you kept apart are welded together. Merge the third one first, or
 keep the parts as separate objects until last.
 
-It is a weld and not a solid union. Geometry inside an overlap is kept rather than cut away,
-because deciding which faces are inside another solid means classifying every face against every
-other one, and a wrong classification quietly deletes a surface you can see. If you want the
-interior gone, delete those faces in face mode before merging.
+It is a weld and not a solid union. Geometry inside an overlap is kept rather than cut away — for
+that, use **Union Objects...** below.
 
 A merged object is no longer what a generator would build, so its generator claim is dropped along
 with the merge — the properties panel stops offering the size field that would have rebuilt a
 pristine box over your work. That drop is part of the same undo step.
+
+## Union objects
+
+**Union Objects...** (object mode, two or more visible objects selected) is the other way of turning
+several shapes into one, and it answers a different question. A merge keeps everything: two
+interpenetrating cubes come out as one object still carrying both sets of interior walls, which
+z-fight, get exported, and mean the result is not a closed solid. A union cuts those walls away, so
+what you get back is the single solid the two shapes look like they describe.
+
+Everything about *which* object survives is the same as a merge: the topmost selected object in the
+outliner keeps its name, transform and default material, everything else is carried into its frame,
+hidden objects are left alone, and the whole thing is one undo step with the generator claim dropped
+inside it. There is no weld distance, because a union has nothing to weld — it recomputes the
+surface rather than joining two of them.
+
+Three things it costs, which are why the merge is still here:
+
+- **Texture coordinates are lost.** A union recuts every face it touches, so no corner of the result
+  corresponds to any corner of the inputs and there is nothing honest to carry across. Unwrap the
+  result afterwards.
+- **Quads become triangles.** The solver works in triangles and hands back triangles, so a union of
+  two clean quad boxes is a triangle soup — worse to subdivide and worse to edit by hand.
+- **Every object must be a closed solid.** "Inside" is only meaningful for something that encloses a
+  volume, so an object with holes or loose faces is refused by name rather than guessed at. Fill the
+  holes first, or merge instead.
+
+Objects that do not touch at all are a perfectly good union: you get one object holding two separate
+shells, exactly as a merge at weld distance zero would give you.
 
 **Mirror X / Y / Z** reflects the object across a plane through its own origin. It is baked into the
 mesh rather than expressed as a negative scale, and that is deliberate: glTF readers disagree about

@@ -29,14 +29,17 @@ room it has, with a 3 × 3 anchor saying where the old picture sits in the new s
 
 ## Turning the page
 
-Two buttons on the canvas row change how the canvas is *shown*, and nothing else — no pixel
-moves, so there is nothing to undo and nothing to save. They are the one pair on that row that stays
+Three buttons on the canvas row change how the canvas is *shown*, and nothing else — no pixel
+moves, so there is nothing to undo and nothing to save. They are the one group on that row that stays
 live while a save is running: refusing to let you *look* at a drawing while it writes a file would
 be an odd kind of care.
 
 - **Rotate the view** (`Ctrl+4`, `Ctrl+Shift+4` the other way) turns the canvas a quarter at a time.
 - **Flip the view** (`Ctrl+5`) mirrors it left to right. This is the oldest check there is on a
   drawing: errors you have stopped seeing are obvious in the mirror.
+- **Center the page** puts the canvas back under the middle of the pane, keeping the zoom you are
+  already at. Use it when a pan has taken the drawing off screen and you do not want to lose the
+  magnification you were working at — which is what **Fit view** (`Ctrl+0`) would do instead.
 
 Quarter turns rather than a free angle, deliberately: at a quarter turn every overlay — the grid, the
 marching ants, the symmetry lines, the transform box — stays exactly as accurate as it was, and a
@@ -46,13 +49,25 @@ teaches the wrong hand.
 
 Do not confuse these with **Flip H**, **Flip V** and **Rotate** in the document panel's *canvas*
 section. Those move pixels: they are edits, they are one undo step each, and they change what a save
-writes. These two change nothing at all, which is also why they keep working while a save is in
+writes. These three change nothing at all, which is also why they keep working while a save is in
 flight — an editor that would not let you *look* at your drawing while it writes a file would be a
 strange one.
 
+## Zooming
+
+The wheel zooms in steps of 5%, and it rounds to that step first: come out of a **Fit view** at some
+awkward 83% and the first notch takes you to 85, not to 88. That is what makes 100% a place you can
+reach from either direction rather than a number you have to type. The zoom stops at 25% and at
+1000% — far enough out to see a large page whole, far enough in to place single pixels, and no
+further in either direction, because past those the canvas is either unreadable or unusable.
+
+One consequence worth knowing: an image too large to fit at 25% is centred at 25% and runs off the
+edges of the pane rather than shrinking to meet it. Every size this app makes fits comfortably; it
+takes a hand-opened file to run into.
+
 ## Tiled mode
 
-Beside those two is **Tiled**, with four positions: off, X, Y and X+Y. It is the one control on that
+Beside those is **Tiled**, with four positions: off, X, Y and X+Y. It is the one control on that
 row that changes what a stroke *does*, and that is the point — a canvas showing its neighbours while
 the brush went on stopping at the edge would be a picture of a seamless tile you cannot paint.
 

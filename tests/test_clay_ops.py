@@ -341,6 +341,60 @@ def test_dissolve_dispatches_on_the_mode() -> None:
     assert bm.face_count(doc.by_uid(uid).mesh) == 4
 
 
+def test_merge_faces_is_dissolve_under_the_name_a_user_looks_for() -> None:
+    """Two adjacent faces of a box become one, leaving five."""
+    doc, uid = _doc()
+    _faces(doc, uid, 0, 2)
+    assert clay_ops.run(_Ctx(), doc, clay_ops.get("merge_faces")) is True
+    assert bm.face_count(doc.by_uid(uid).mesh) == 5
+
+
+def test_merge_faces_offers_itself_only_in_face_mode() -> None:
+    """Vertex and edge selections have their own dissolve; a Merge Faces row
+    over an edge selection would be a third name for the same dispatch."""
+    assert "merge_faces" in [op.name for op in clay_ops.menu("face")]
+    assert "merge_faces" not in [op.name for op in clay_ops.menu("edge")]
+    assert "merge_faces" not in [op.name for op in clay_ops.menu("vertex")]
+    assert "merge_faces" not in [op.name for op in clay_ops.menu("object")]
+
+
+def test_merge_faces_needs_a_face_selection() -> None:
+    doc, uid = _doc()
+    doc.set_element_mode("face")
+    merge = clay_ops.get("merge_faces")
+    assert not merge.enabled(doc)
+    _faces(doc, uid, 0, 2)
+    assert merge.enabled(doc)
+
+
+def test_merge_faces_and_dissolve_agree_in_face_mode() -> None:
+    """The whole licence for the second name: it must stay the same operation.
+
+    Run on two documents that started identical, the two ops have to produce
+    the same face count -- if they ever diverge, one of them has become a
+    second implementation and the manual's claim that they are one thing is a
+    lie the user finds out about by undoing the wrong result.
+    """
+    counts = []
+    for name in ("merge_faces", "dissolve"):
+        doc, uid = _doc()
+        _faces(doc, uid, 0, 2)
+        assert clay_ops.run(_Ctx(), doc, clay_ops.get(name)) is True
+        counts.append(bm.face_count(doc.by_uid(uid).mesh))
+    assert counts[0] == counts[1]
+
+
+def test_merge_faces_refuses_a_selection_it_cannot_represent() -> None:
+    """Opposite faces of a box touch nowhere, so there is no single n-gon to
+    make. The refusal is a toast and the mesh is left alone."""
+    doc, uid = _doc()
+    before = bm.face_count(doc.by_uid(uid).mesh)
+    _faces(doc, uid, 0, 1)
+    ctx = _Ctx()
+    clay_ops.run(ctx, doc, clay_ops.get("merge_faces"))
+    assert bm.face_count(doc.by_uid(uid).mesh) == before
+
+
 def test_smooth_ignores_the_element_selection_and_takes_whole_objects() -> None:
     doc, uid = _doc()
     _faces(doc, uid, 0)

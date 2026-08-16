@@ -82,6 +82,52 @@ def test_clearing_the_viewport_drops_any_parse_still_in_flight(viewer) -> None:
     assert viewer.pending is None
 
 
+def test_clearing_the_reference_forgets_the_texture_before_releasing_it(
+    viewer, tmp_path, monkeypatch
+) -> None:
+    """The *Clear* button's route, and the same contract as a resize.
+
+    The reference texture is registered with the imgui backend by
+    ``main._draw_reference``, so releasing it without forgetting leaves the
+    backend holding a dead object under a name the driver may reissue.
+    """
+    from PIL import Image
+
+    path = tmp_path / "ref.png"
+    Image.new("RGBA", (8, 8), (255, 0, 0, 255)).save(path)
+    viewer.load_reference(path)
+    texture = viewer.reference
+    assert texture is not None
+
+    order: list[str] = []
+    monkeypatch.setattr(viewer, "_forget", lambda tex: order.append("forget"))
+    real_release = texture.release
+    monkeypatch.setattr(texture, "release", lambda: order.append("release") or real_release())
+
+    viewer.clear_reference()
+
+    assert order == ["forget", "release"]
+    assert viewer.reference is None
+
+
+def test_clearing_the_reference_leaves_the_mesh_side_alone(viewer, tmp_path) -> None:
+    """The two stages clear separately: a Clear on the Reference stage that
+    also dropped the mesh would empty a canvas nobody was looking at."""
+    from pathlib import Path
+
+    from PIL import Image
+
+    path = tmp_path / "ref.png"
+    Image.new("RGBA", (8, 8), (0, 255, 0, 255)).save(path)
+    viewer.load_reference(path)
+    viewer.adopt_model(_a_model(), Path("model.glb"))
+
+    viewer.clear_reference()
+
+    assert viewer.reference is None
+    assert viewer.has_model
+
+
 def test_release_forgets_the_texture_before_freeing_it(gl, monkeypatch) -> None:
     v = Viewer(gl)
     order: list[str] = []

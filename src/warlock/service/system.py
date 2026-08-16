@@ -110,10 +110,38 @@ def guidance_catalog(svc: WarlockService) -> dict[str, Any]:
     Takes the service for the matte gate alone: ``catalog()["defaults"]`` is
     what the generate form initialises from, so it has to be the value a submit
     would pick on *this* host, not the preference in the constant.
+
+    The ``sweeps`` sub-dict is an *addition* rather than a change: every
+    existing consumer reads a named key off this dict and none enumerates it,
+    so a new key is invisible to all of them. What it holds is the handful of
+    sweep axis params the guidance catalog has nothing to say about -- they are
+    ``create_job`` kwargs rather than taxonomy fields, so their legal values
+    live in ``validation`` and ``pipelines.optimize`` instead. Gathered here
+    rather than read directly by the Review pane for the reason the taxonomy is:
+    a pane that imported ``pipelines.optimize`` for a list of profile names
+    would be a pane reaching past the service layer, and the numbers would then
+    have two readers to keep in agreement.
     """
+    from ..pipelines import optimize
+    from . import validation
+
     return guidance.catalog(
         bg_default=guidance.default_bg_removal(svc.config.trellis_models_dir)
-    )
+    ) | {
+        "sweeps": {
+            "resolution": sorted(validation.ALLOWED_RESOLUTIONS),
+            "profile": list(optimize.PROFILES),
+            "trellis_band_range": [
+                validation.MIN_TRELLIS_BAND,
+                validation.MAX_TRELLIS_BAND,
+            ],
+            "trellis_tex_res_range": [
+                validation.MIN_TRELLIS_TEX_RES,
+                validation.MAX_TRELLIS_TEX_RES,
+            ],
+            "custom_triangles_range": [optimize.CUSTOM_MIN, optimize.CUSTOM_MAX],
+        }
+    }
 
 
 def prompt_preview(

@@ -39,6 +39,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -439,15 +440,74 @@ def delete_sweep(svc: WarlockService, sweep_id: str) -> dict[str, Any]:
     once the worker has unwound) finishes the job -- and the count says how
     many are left rather than reporting a deletion that did not happen.
     """
-    sweep = svc.store.get_sweep(sweep_id)
-    if sweep is None:
+    if svc.store.get_sweep(sweep_id) is None:
         raise NotFound("no such sweep")
+    return _remove_units(svc, sweep_id, jobs_mod.retained_job_ids(svc))
+
+
+def cleanup_sweep(
+    svc: WarlockService, sweep_id: str, *, keep_job_ids: Iterable[str] = ()
+) -> dict[str, Any]:
+    """Remove a fully judged sweep's assets, retention and all.
+
+    This is the **user-chosen override** of ``retained_job_ids``, and saying so
+    out loud is the point: everything ``retained_job_ids`` documents about the
+    2026-08-09 incident is still true, and this is not a decision that a bulk
+    delete may quietly make. It is offered only where the user has just looked
+    at every unit in the sweep and filed a verdict on each one -- at which point
+    the assets have served the purpose retention was protecting, and leaving a
+    judged sweep's twenty meshes on disk forever is the cost of a rule with no
+    exit.
+
+    The wording that reaches the user carries the same burden ``ask_clean``
+    carries (``studio/panes/library.py``): the app has told them twice that a
+    bulk delete keeps their evidence, so the one place that is false has to say
+    which promise it is breaking rather than only that something is being
+    deleted. Here the promise is narrower and so is the breach -- one sweep, all
+    of whose units the user has just judged -- which is why this is a toast
+    after the fact rather than a second modal, and why the offer is made up
+    front on the entry card instead.
+
+    What is *not* broken: verdicts, observations and findings live in the
+    database, so an accepted unit's row and its config vector survive this
+    exactly as they survive ``delete_sweep``. What is lost is the pixels and the
+    meshes behind them -- which is the whole of what ``retained_job_ids`` exists
+    to defend, and the whole of what the user is choosing to give up.
+
+    ``keep_job_ids`` is the caller's own exception list, refused if it names a
+    job outside this sweep: a keep id from another sweep would silently do
+    nothing, which is the shape of a bug that only shows up as missing files.
+    """
+    if svc.store.get_sweep(sweep_id) is None:
+        raise NotFound("no such sweep")
+    keep = {str(job_id) for job_id in keep_job_ids}
+    if keep:
+        mine = {job["id"] for job in svc.store.sweep_jobs(sweep_id)}
+        stray = sorted(keep - mine)
+        if stray:
+            raise Invalid(
+                f"{stray[0]} is not a unit of this sweep.", field="keep_job_ids"
+            )
+    return _remove_units(svc, sweep_id, keep)
+
+
+def _remove_units(
+    svc: WarlockService, sweep_id: str, keep: set[str]
+) -> dict[str, Any]:
+    """Cancel and remove every unit outside *keep*. -> the shared result shape.
+
+    Extracted from ``delete_sweep`` verbatim so the two callers cannot drift:
+    the guards below (cancel first, then ``worker_is_inside`` /
+    ``dependent_jobs`` / ``delete_if_not_running``) are the ones a rollback and
+    a stale-row incident were both traced to, and a second copy of them is a
+    second place for one to be forgotten. The *only* thing the two callers
+    differ in is what goes into ``keep``.
+    """
     removed = 0
     remaining = 0
     kept = 0
-    retained = jobs_mod.retained_job_ids(svc)
     for job in svc.store.sweep_jobs(sweep_id):
-        if job["id"] in retained:
+        if job["id"] in keep:
             # Checked before the cancel: a queued unit is not evidence yet, so
             # this can only match a finished one, but reaching the cancel first
             # would still be asking the worker to stop a job we are keeping.

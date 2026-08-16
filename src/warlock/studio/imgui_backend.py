@@ -320,6 +320,17 @@ _MODIFIER_MAP = {
 
 _MOUSE_MAP = {2: imgui.MouseButton_.middle, 3: imgui.MouseButton_.right}
 
+# What a physical wheel notch becomes in ``io.mouse_wheel``. Halved because one
+# SDL notch scrolled a list two rows at a time, and it is applied here so that
+# every scroller in the app inherits it from one place.
+#
+# It is a *named* constant rather than a literal because it is not private to
+# this module in one respect: a pane that wants notches back (Inker's canvas
+# steps the zoom by a fixed 5% per notch, not by a fraction of one) has to
+# divide it out, and doing that against a bare ``0.5`` would be a second copy
+# of this decision that nothing would update if the scroll speed ever changed.
+WHEEL_SCALE = 0.5
+
 # The keys imgui's navigation moves and activates on.
 #
 # **Tab is deliberately not in the set.** That is the whole rule keyboard
@@ -384,7 +395,7 @@ def process_event(event: Any) -> bool:
         io.add_mouse_button_event(_MOUSE_MAP.get(event.button, event.button - 1), down)
         return True
     if event.type == pygame.MOUSEWHEEL:
-        io.add_mouse_wheel_event(event.x * 0.5, event.y * 0.5)
+        io.add_mouse_wheel_event(event.x * WHEEL_SCALE, event.y * WHEEL_SCALE)
         return True
     if event.type == pygame.TEXTINPUT:
         # SDL's *committed* text, and since UX-19 the only source of characters

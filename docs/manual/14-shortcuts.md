@@ -119,6 +119,19 @@ bones happened to share a name.
 | Left / Right | Previous / next unit |
 | Esc | Clear the pending sign and tags |
 
+## Review — a judging pass
+
+While a judging pass is open, four keys mean something else. Everything not listed here — the
+digits, the tag modifiers, the arrows — works exactly as it does above, and a grade pressed during a
+pass files and advances the pass like an accept does.
+
+| Keys | Action |
+| --- | --- |
+| A | Accept — files +3 |
+| R | Reject — files −3, rather than arming a negative sign |
+| S | Skip to the next unjudged unit, staying in the pass |
+| Esc | End the pass and show its report |
+
 ## Review — labelling images
 
 While a labelling pass is open it owns these keys, and the verdict bindings above do not apply:

@@ -6,6 +6,48 @@ record of what a version actually changed. The top heading's version must
 match `pyproject.toml` — a test asserts it, so a release bump cannot leave this
 file behind.
 
+## 0.0.23 — 2026-08-16
+
+- **Review judges in one guided pass.** **Start judging** at the top of the
+  sweep list walks every unit that has no verdict yet, across every bucket, one
+  at a time: `A` accepts, `R` rejects, `S` skips, `Esc` finishes early. The
+  header counts your position in the whole run rather than in the sweep on
+  screen. The eleven-point scale has not moved — the grade row and the digits
+  keep working inside a pass, and a grade pressed there files and advances just
+  as an accept does. When the pass ends a card reports what it did, per sweep
+  and overall.
+- **A fully judged sweep cleans itself up.** Once every unit of a sweep has a
+  verdict, its images and meshes are removed automatically, with a toast and no
+  dialog — the offer on the entry card is the warning. Every verdict,
+  observation and finding survives, because each one carries its own copy of the
+  settings it judged. This is the one place a delete overrides the rule that
+  your accepted assets are never touched in bulk, and it applies whether the
+  sweep was judged in a pass or one grade at a time.
+- **The sweep form says what it wants.** Each axis is drawn as whatever the
+  parameter actually accepts — tick boxes for a taxonomy field or a switch, a
+  hint naming the legal range for a number — and a line under the form spells
+  out what will be queued rather than showing a bare count. Every sweep in the
+  list now says what it varied, so a run called "test2" is still legible a week
+  later.
+- **Inker: a zoom you can land on.** The wheel steps 5% at a time and rounds to
+  that step first, so coming out of a fit at 83% takes you to 85 rather than to
+  88, and 100% is reachable from either direction. The zoom stops at 25% and at
+  1000%. A new **Center view** button puts the page back under the middle of the
+  pane at the zoom you are already at — which is what **Fit view** cannot do.
+- **Create: clearing what is on screen.** A **Clear** button on the viewport
+  toolbar empties the canvas for the stage you are on and it stays empty;
+  reselect the asset to bring it back. The Mesh settings gained the **Reset…**
+  the image settings have always had.
+- **Clay: Merge Faces and Union Objects.** *Merge Faces* is the face-mode
+  dissolve under the name most people look for. *Union Objects* is new: a real
+  boolean that removes the geometry inside an overlap, where *Merge Objects*
+  welds and keeps it. A union costs the texture coordinates and turns quads into
+  triangles, and needs every object to be a closed solid, which is why both
+  operations are here.
+- **Panels have room to breathe.** Every pane's content now sits inside the
+  12 px inset it was always meant to have; it had been running flush to the
+  column edge.
+
 ## 0.0.22 — 2026-08-15
 
 - **Plotter models most of what Tiled models.** Maps carry Tiled's richer

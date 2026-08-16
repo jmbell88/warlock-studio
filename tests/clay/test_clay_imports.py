@@ -49,8 +49,11 @@ BANNED_ROOTS = {"imgui", "imgui_bundle", "moderngl", "pygame", "OpenGL", "glfw"}
 
 #: Imported inside the functions that need it, never at module scope. Only the
 #: serializer touches a pixel at all, and a top-level Pillow import would put a
-#: tenth of a second onto importing ``mesh``.
-LAZY_ONLY = {"PIL"}
+#: tenth of a second onto importing ``mesh``. ``trimesh`` joins it for the same
+#: reason wearing different clothes: it is reached for by exactly one function
+#: in ``ops_boolean``, it drags a CSG kernel behind it, and this package is
+#: imported to answer questions about what an extrude does to a UV.
+LAZY_ONLY = {"PIL", "trimesh", "manifold3d"}
 
 
 def _outward(path: Path) -> set[str]:
@@ -178,6 +181,7 @@ def test_the_package_imports_with_no_optional_dependency_present():
         mesh,
         ops,
         ops_bevel,
+        ops_boolean,
         ops_dissolve,
         ops_subdiv,
         ops_topo,

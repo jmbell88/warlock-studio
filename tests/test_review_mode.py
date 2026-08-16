@@ -33,21 +33,32 @@ class FakeCtx:
     would have done without needing one."""
 
     def __init__(self, svc: Any, *, accept: bool = True) -> None:
+        from warlock.service import system as svc_system
+
         self.svc = svc
         self.runtime = _Runtime(svc.config)
+        # The real catalog, because ``axis_options`` reads it and a fake that
+        # answered ``{}`` would let every param quietly fall back to a text
+        # field -- which is exactly the state these tests exist to detect.
+        self.guidance = svc_system.guidance_catalog(svc)
         self.state = AppState()
         self.state.review = None
         self.settings = _Settings()
         self.submitted: list[str] = []
+        self.tags: list[Any] = []
         self.toasts: list[tuple[str, str]] = []
         self.accept = accept
         self.result: Any = None
 
-    def submit(self, key: str, run: Any, *args: Any) -> bool:
+    def submit(self, key: str, run: Any, *args: Any, tag: Any = None, **kw: Any) -> bool:
+        # ``tag`` and ``**kw`` because the real ``Ctx.submit`` takes them, and a
+        # fake that refuses one fails on the call site rather than on the
+        # behaviour -- the same lesson ``toast`` learned above.
         self.submitted.append(key)
+        self.tags.append(tag)
         if not self.accept:
             return False
-        self.result = run(*args)
+        self.result = run(*args, **kw)
         return True
 
     def toast(self, message: str, kind: str = "info", **extra: Any) -> None:
@@ -74,9 +85,12 @@ class _Settings:
 
 
 class _Done:
-    def __init__(self, key: str, result: Any = None) -> None:
+    def __init__(self, key: str, result: Any = None, tag: Any = None) -> None:
         self.key = key
         self.result = result
+        # The real ``Done`` carries one, and the cleanup toast names the sweep
+        # off it -- a fake without the field would make that branch untestable.
+        self.tag = tag
 
 
 @pytest.fixture(autouse=True)
@@ -595,11 +609,17 @@ def test_the_last_unit_stays_put_when_there_is_nothing_left_to_do(ctx, svc):
 
 
 def test_a_re_review_supersedes_rather_than_duplicating(ctx, svc):
-    sweep_id, ids = _sweep(svc, n=1)
+    """Two units, not one, and that is now load-bearing: judging the *last*
+    unit of a sweep triggers the automatic cleanup, which removes the job rows
+    a re-grade would have to name. The supersede rule under test is about the
+    verdict table and is unchanged; this only keeps the sweep unfinished long
+    enough to exercise it."""
+    sweep_id, ids = _sweep(svc, n=2)
     state = _scanned(ctx)
     review_mode.open_sweep(ctx, sweep_id)
 
     review_mode.record(ctx, 3)
+    review_mode.step(state, -state.index)
     review_mode.record(ctx, -3, ("holes",))
 
     latest = svc.store.latest_verdicts()
@@ -1529,3 +1549,676 @@ def test_a_score_lands_on_the_rows_it_was_asked_about_not_on_whatever_is_open(
     assert all(unit.get("score") == 0.5 for unit in first["units"])
     assert all("score" not in unit for unit in second["units"])
     assert review_mode.unscored(state.units) == [u["job_id"] for u in second["units"]]
+
+
+# --- the sweep form's legibility ---------------------------------------------
+#
+# The form used to be a combo of thirty raw param names beside a free-text box
+# and a bare job count. Nothing here changes what is *stored* -- every control
+# still writes the same comma-separated string, and ``build_plan``/``_coerce``
+# are untouched -- so what is asserted is that the form can now say what each
+# param accepts, and that a param it cannot describe degrades to the old field
+# rather than to a broken one.
+
+
+def test_every_axis_param_either_resolves_or_has_a_help_line(ctx):
+    """The complement, deliberately. A param that stops resolving is caught by
+    having no help line rather than by somebody noticing an empty box."""
+    for row in review_mode.axis_options(ctx):
+        assert row["kind"] != "text" or row["help"], (
+            f"{row['param']} is a free-text field with nothing explaining it"
+        )
+
+
+def test_every_sweep_axis_param_is_described(ctx):
+    from warlock.service import sweeps as svc_sweeps
+
+    described = {row["param"] for row in review_mode.axis_options(ctx)}
+    assert described == set(svc_sweeps.axis_params())
+
+
+def test_a_taxonomy_param_offers_the_catalogs_options(ctx):
+    rows = {row["param"]: row for row in review_mode.axis_options(ctx)}
+    platform = rows["platform"]
+    assert platform["kind"] == "options"
+    assert platform["options"], "the catalog has platform options"
+    assert all(o["key"] and o["label"] for o in platform["options"])
+
+
+def test_a_numeric_param_carries_its_range_and_a_default(ctx):
+    rows = {row["param"]: row for row in review_mode.axis_options(ctx)}
+    weight = rows["lora_weight"]
+    assert weight["kind"] == "number"
+    low, high = weight["range"]
+    assert low < high
+    assert weight["default"] is not None
+
+
+def test_the_params_the_guidance_catalog_cannot_answer_come_from_the_sweeps_block(ctx):
+    """``resolution``, ``profile`` and the two trellis knobs are ``create_job``
+    kwargs rather than taxonomy fields, so their legal values live in
+    ``validation`` and ``pipelines.optimize`` -- gathered into the catalog by
+    ``guidance_catalog`` rather than read from a pane."""
+    rows = {row["param"]: row for row in review_mode.axis_options(ctx)}
+    assert rows["resolution"]["kind"] == "options"
+    assert "1024" in [o["key"] for o in rows["resolution"]["options"]]
+    assert rows["profile"]["kind"] == "options"
+    assert "raw" in [o["key"] for o in rows["profile"]["options"]]
+    assert rows["trellis_band"]["kind"] == "number"
+    assert rows["trellis_tex_res"]["kind"] == "number"
+
+
+def test_a_switch_is_a_switch(ctx):
+    rows = {row["param"]: row for row in review_mode.axis_options(ctx)}
+    assert rows["reference_prep"]["kind"] == "bool"
+
+
+def test_axis_options_falls_back_to_free_text_with_no_catalog(svc):
+    """The old behaviour survives whole: a headless caller, or a ctx built
+    before the catalog was fetched, gets the text field every row used to be.
+
+    ``reference_prep`` is the one exception and needs no catalog: on/off is a
+    fact about the param rather than a list somebody has to supply.
+    """
+    bare = FakeCtx(svc)
+    bare.guidance = {}
+    rows = {row["param"]: row for row in review_mode.axis_options(bare)}
+    assert rows["platform"]["kind"] == "text"
+    assert rows["lora_weight"]["kind"] == "text"
+    assert rows["reference_prep"]["kind"] == "bool"
+    assert not any(r["kind"] == "options" for r in rows.values()), (
+        "an options row with no options draws nothing at all"
+    )
+
+
+def test_the_preview_line_names_the_multiplication(ctx):
+    state = review_mode.ensure(ctx)
+    state.form.prompt = "a wooden chest"
+    state.form.seeds = "1, 2"
+    state.form.axes = [{"param": "lora_weight", "values": "0.4, 0.6, 0.9"}]
+
+    line = review_mode.preview_line(state)
+
+    assert line.startswith("8 jobs:")
+    assert "baseline" in line
+    assert "lora_weight x 3 value(s)" in line
+    assert "2 seed(s)" in line
+
+
+def test_the_preview_line_uses_the_labels_it_is_handed(ctx):
+    """Label resolution is the pane's -- this module may not import one."""
+    state = review_mode.ensure(ctx)
+    state.form.prompt = "a chest"
+    state.form.seeds = "1"
+    state.form.axes = [{"param": "lora_weight", "values": "0.4, 0.9"}]
+
+    line = review_mode.preview_line(state, {"lora_weight": "Style strength"})
+
+    assert "Style strength x 2 value(s)" in line
+
+
+def test_the_preview_line_is_empty_for_a_form_that_cannot_be_planned(ctx):
+    """Half an axis, which is what a form mid-typing routinely is."""
+    state = review_mode.ensure(ctx)
+    state.form.prompt = "a chest"
+    state.form.axes = [{"param": "lora_weight", "values": ""}]
+    assert review_mode.preview_line(state) == ""
+
+
+def test_the_preview_line_is_basic_latin_only(ctx):
+    """imgui's default atlas, the same rule ``score_line`` follows."""
+    state = review_mode.ensure(ctx)
+    state.form.prompt = "a chest"
+    state.form.axes = [{"param": "lora_weight", "values": "0.4, 0.9"}]
+    assert review_mode.preview_line(state).isascii()
+
+
+def test_a_stored_spec_is_summarised_for_the_list():
+    spec = {
+        "axes": [{"param": "lora_weight", "values": [0.4, 0.6, 0.9]}],
+        "seeds": [1, 2],
+    }
+    assert review_mode.spec_summary(spec) == "varies lora_weight (0.4, 0.6, 0.9) - 2 seed(s)"
+
+
+def test_a_spec_that_is_not_one_summarises_to_nothing():
+    """A sweep row written by an older build, or the recent bucket, which has
+    no spec at all."""
+    assert review_mode.spec_summary(None) == ""
+    assert review_mode.spec_summary({}) == ""
+
+
+def test_the_scan_carries_each_sweeps_spec(ctx, svc):
+    """``list_sweeps`` has always parsed it and this bucket always dropped it,
+    which left the list identifying a run by whatever name was typed at the
+    time."""
+    from warlock.service import sweeps as svc_sweeps
+
+    svc.store.create_sweep("test2", "a chest", {"axes": [{"param": "lora_weight",
+                                                          "values": [0.4, 0.9]}],
+                                                "seeds": [1]})
+    state = _scanned(ctx)
+
+    sweeps = [s for s in state.sweeps if s["id"] != review_mode.RECENT_ID]
+    assert sweeps and sweeps[0]["spec"]["axes"][0]["param"] == "lora_weight"
+    assert "varies lora_weight" in review_mode.spec_summary(sweeps[0]["spec"])
+    del svc_sweeps
+
+
+def test_the_recent_bucket_has_no_spec_to_show(ctx):
+    state = _scanned(ctx)
+    recent = state.sweeps[0]
+    assert recent["id"] == review_mode.RECENT_ID
+    assert review_mode.spec_summary(recent.get("spec")) == ""
+
+
+# --- the guided judging pass -------------------------------------------------
+
+
+def _two_sweeps(svc):
+    """Two sweeps, returned **in the order the list presents them**.
+
+    ``list_sweeps`` is newest-first, so the one created second is the one a
+    pass opens first -- and a test that assumed creation order would be
+    asserting against an order the user never sees.
+    """
+    older, _ = _sweep(svc, "one", n=2)
+    newer, _ = _sweep(svc, "two", n=2)
+    return newer, older
+
+
+def test_todo_total_counts_every_bucket(ctx, svc):
+    _two_sweeps(svc)
+    state = _scanned(ctx)
+    assert review_mode.todo_total(state) == 4
+
+
+def test_starting_a_pass_opens_the_first_bucket_with_work(ctx, svc):
+    first, _second = _two_sweeps(svc)
+    state = _scanned(ctx)
+    state.sweep_id = None
+
+    assert review_mode.start_judging(ctx) is True
+
+    assert state.judging is not None
+    assert state.judging.total == 4
+    assert state.judging.filed == 0
+    # The recent bucket has no work here, so the first sweep is where it lands.
+    assert state.sweep_id == first
+    assert review_mode.RECENT_ID not in state.judging.order
+
+
+def test_starting_a_pass_disarms(ctx, svc):
+    """The armed sign belongs to whatever was on screen before the pass."""
+    _two_sweeps(svc)
+    state = _scanned(ctx)
+    state.pending_negative = True
+    state.pending_tags = ["holes"]
+
+    review_mode.start_judging(ctx)
+
+    assert state.pending_negative is False
+    assert state.pending_tags == []
+
+
+def test_a_pass_refuses_with_nothing_to_judge(ctx, svc):
+    state = _scanned(ctx)
+    assert review_mode.todo_total(state) == 0
+    assert review_mode.start_judging(ctx) is False
+    assert state.judging is None
+
+
+def test_a_pass_refuses_while_a_scan_is_running(ctx, svc):
+    _two_sweeps(svc)
+    state = _scanned(ctx)
+    state.scanning = True
+    assert review_mode.start_judging(ctx) is False
+
+
+def test_accept_and_reject_file_the_binary_grades(ctx, svc):
+    """Read back through the store, not off the in-memory unit: the point is
+    that the pass writes real verdicts through the same door everything else
+    does."""
+    from warlock.vectors import BINARY_GRADES
+
+    sweep_id, _ids = _sweep(svc, n=2)
+    state = _scanned(ctx)
+    review_mode.open_sweep(ctx, sweep_id)
+    state.judging = review_mode.JudgingPass(total=2, order=[sweep_id])
+
+    assert _press(ctx, "a") is True
+    assert _press(ctx, "r") is True
+
+    grades = sorted(v["grade"] for v in svc.store.latest_verdicts())
+    assert grades == [BINARY_GRADES["reject"], BINARY_GRADES["accept"]]
+
+
+def test_a_bare_a_outside_a_pass_still_records_nothing(ctx, svc):
+    """The pin the pass must not weaken. ``a`` is bound because a loop the user
+    entered on purpose says on screen what it does -- not because the key is
+    free."""
+    sweep_id, _ = _sweep(svc)
+    _scanned(ctx)
+    review_mode.open_sweep(ctx, sweep_id)
+
+    assert _press(ctx, "a") is False
+    assert svc.store.latest_verdicts() == []
+
+
+def test_r_inside_a_pass_rejects_rather_than_arming_a_sign(ctx, svc):
+    """A binary loop has no magnitude to arm. The negative grades stay on the
+    digits and the pane's own buttons."""
+    sweep_id, _ = _sweep(svc, n=2)
+    state = _scanned(ctx)
+    review_mode.open_sweep(ctx, sweep_id)
+    state.judging = review_mode.JudgingPass(total=2, order=[sweep_id])
+
+    _press(ctx, "r")
+
+    assert state.pending_negative is False
+    assert len(svc.store.latest_verdicts()) == 1
+
+
+def test_a_grade_pressed_inside_a_pass_still_files_and_counts(ctx, svc):
+    """The eleven-point scale is the power path and keeps working."""
+    sweep_id, _ = _sweep(svc, n=3)
+    state = _scanned(ctx)
+    review_mode.open_sweep(ctx, sweep_id)
+    state.judging = review_mode.JudgingPass(total=3, order=[sweep_id])
+
+    _press(ctx, "5")
+
+    assert svc.store.latest_verdicts()[0]["grade"] == 5
+    assert state.judging.filed == 1
+
+
+def test_skip_inside_a_pass_files_nothing_and_moves_on(ctx, svc):
+    sweep_id, _ = _sweep(svc, n=3)
+    state = _scanned(ctx)
+    review_mode.open_sweep(ctx, sweep_id)
+    state.judging = review_mode.JudgingPass(total=3, order=[sweep_id])
+    before = state.index
+
+    assert _press(ctx, "s") is True
+
+    assert svc.store.latest_verdicts() == []
+    assert state.index != before
+    assert state.judging is not None, "skipping does not end the pass"
+
+
+def test_a_pass_moves_from_one_bucket_to_the_next(ctx, svc):
+    first, second = _two_sweeps(svc)
+    state = _scanned(ctx)
+    review_mode.start_judging(ctx)
+    assert state.sweep_id == first
+
+    _press(ctx, "a")
+    _press(ctx, "a")
+
+    assert state.sweep_id == second
+    assert state.judging is not None
+
+
+def test_a_pass_ends_when_every_bucket_is_judged(ctx, svc):
+    _two_sweeps(svc)
+    state = _scanned(ctx)
+    review_mode.start_judging(ctx)
+    for _ in range(4):
+        _press(ctx, "a")
+
+    assert state.judging is None
+    assert state.judging_report is not None
+    assert state.judging_report["filed"] == 4
+    assert state.judging_report["remaining"] == 0
+
+
+def test_escape_ends_a_pass_early_and_counts_what_is_left(ctx, svc):
+    """A pass abandoned halfway is exactly when the summary is most useful."""
+    _two_sweeps(svc)
+    state = _scanned(ctx)
+    review_mode.start_judging(ctx)
+    _press(ctx, "a")
+
+    assert _press(ctx, "ESCAPE") is True
+
+    assert state.judging is None
+    report = state.judging_report
+    assert report["filed"] == 1
+    assert report["remaining"] == 3
+
+
+def test_escape_outside_a_pass_still_only_disarms(ctx, svc):
+    sweep_id, _ = _sweep(svc, n=2)
+    state = _scanned(ctx)
+    review_mode.open_sweep(ctx, sweep_id)
+    state.pending_negative = True
+
+    _press(ctx, "ESCAPE")
+
+    assert state.pending_negative is False
+    assert state.judging_report is None
+
+
+def test_the_report_is_tallied_from_state_rather_than_the_store(ctx, svc, monkeypatch):
+    """Never a DB read on the frame thread: ``_collect`` already fetched the
+    units and ``record`` keeps them current."""
+    sweep_id, _ = _sweep(svc, n=2)
+    state = _scanned(ctx)
+    review_mode.start_judging(ctx)
+    _press(ctx, "a")
+
+    def boom(*_a, **_kw):
+        raise AssertionError("the report must not read the store")
+
+    monkeypatch.setattr(svc.store, "latest_verdicts", boom)
+    monkeypatch.setattr(svc.store, "sweep_jobs", boom)
+    review_mode.end_judging(ctx)
+
+    row = next(r for r in state.judging_report["sweeps"] if r["id"] == sweep_id)
+    assert row["accepted"] == 1
+    assert row["total"] == 2
+    assert row["mean_grade"] == 3.0
+
+
+def test_a_blind_report_stays_blind(ctx, svc):
+    """Naming the arms at the end would un-blind every unit after the fact,
+    which is most of what blinding was protecting."""
+    sweep_id, _ = _sweep(svc, "lora-weight-arms", n=2)
+    state = _scanned(ctx)
+    review_mode.set_blind(ctx, True)
+    review_mode.start_judging(ctx)
+    _press(ctx, "a")
+    review_mode.end_judging(ctx)
+
+    labels = [row["label"] for row in state.judging_report["sweeps"]]
+    assert "lora-weight-arms" not in labels
+    assert labels == [f"#{sweep_id[:6]}"]
+
+
+def test_dismissing_the_report_clears_it(ctx, svc):
+    _sweep(svc, n=1)
+    _scanned(ctx)
+    review_mode.start_judging(ctx)
+    _press(ctx, "a")
+    state = ctx.state.review
+    assert state.judging_report is not None
+
+    review_mode.dismiss_report(ctx)
+
+    assert state.judging_report is None
+
+
+def test_nothing_about_a_pass_is_persisted(ctx, svc):
+    """``ReviewState`` persists nothing at all, and the pass is no exception:
+    a stored one would resume against buckets since judged or deleted."""
+    import dataclasses
+
+    fields = {f.name for f in dataclasses.fields(review_mode.ReviewState)}
+    assert {"judging", "judging_report"} <= fields
+    assert ctx.settings.store == {}
+
+
+# --- automatic cleanup once a sweep is judged --------------------------------
+
+
+def test_judging_the_last_unit_submits_a_cleanup(ctx, svc):
+    sweep_id, _ = _sweep(svc, n=2)
+    _scanned(ctx)
+    review_mode.open_sweep(ctx, sweep_id)
+
+    review_mode.record(ctx, 3)
+    assert review_mode.CLEANUP_KEY not in ctx.submitted
+    review_mode.record(ctx, 3)
+
+    assert review_mode.CLEANUP_KEY in ctx.submitted
+
+
+def test_cleanup_fires_for_hand_grading_outside_a_pass(ctx, svc):
+    """The requirement is about the sweep rather than about how it was judged:
+    a hand-graded sweep has been judged just as thoroughly as a pass-driven
+    one."""
+    sweep_id, _ = _sweep(svc, n=1)
+    state = _scanned(ctx)
+    review_mode.open_sweep(ctx, sweep_id)
+    assert state.judging is None
+
+    review_mode.record(ctx, -3)
+
+    assert review_mode.CLEANUP_KEY in ctx.submitted
+
+
+def test_cleanup_actually_removes_the_assets(ctx, svc):
+    """``FakeCtx`` runs a submit inline, so this is the whole round trip."""
+    sweep_id, ids = _sweep(svc, n=1)
+    _scanned(ctx)
+    review_mode.open_sweep(ctx, sweep_id)
+
+    review_mode.record(ctx, 3)
+
+    assert svc.store.get(ids[0]) is None
+    assert not svc.job_dir(ids[0]).exists()
+    # And what was learned survives, which is the whole licence for removing
+    # the files at all.
+    assert len(svc.store.latest_verdicts()) == 1
+
+
+def test_cleanup_refuses_the_recent_bucket(ctx, svc):
+    """Its units are ordinary library rows that happen not to carry a verdict
+    yet; deleting them because they were judged would delete the user's assets.
+    Pruning the library is prune's job and has its own confirmation."""
+    _mesh(svc, "a chest")
+    state = _scanned(ctx)
+    review_mode.open_sweep(ctx, review_mode.RECENT_ID)
+
+    assert review_mode.auto_cleanup(ctx, review_mode.RECENT_ID) is False
+    review_mode.record(ctx, 3)
+    assert review_mode.CLEANUP_KEY not in ctx.submitted
+    assert state.sweeps[0]["todo"] == 0
+
+
+def test_a_finished_cleanup_toasts_and_rescans(ctx, svc):
+    _sweep(svc, n=1)
+    _scanned(ctx)
+    ctx.toasts.clear()
+
+    review_mode.on_task_done(
+        ctx,
+        _Done(
+            review_mode.CLEANUP_KEY,
+            {"ok": True, "deleted": 3, "remaining": 0, "kept": 0},
+            tag="lora",
+        ),
+    )
+
+    said = " ".join(text for text, _kind in ctx.toasts)
+    assert "Cleaned up lora" in said
+    assert "Verdicts and findings kept" in said
+    assert review_mode.SCAN_KEY in ctx.submitted
+
+
+def test_a_cleanup_that_could_not_finish_says_so(ctx, svc):
+    _scanned(ctx)
+    ctx.toasts.clear()
+
+    review_mode.on_task_done(
+        ctx,
+        _Done(
+            review_mode.CLEANUP_KEY,
+            {"ok": True, "deleted": 1, "remaining": 2, "kept": 0},
+            tag="lora",
+        ),
+    )
+
+    said = " ".join(text for text, _kind in ctx.toasts)
+    assert "still finishing" in said
+
+
+def test_a_failed_cleanup_is_toasted_rather_than_swallowed(ctx, svc):
+    """Nobody pressed a button for it, but the entry card promised it would
+    happen -- silence would leave a failed promise looking like a kept one."""
+    _scanned(ctx)
+    ctx.toasts.clear()
+
+    review_mode.on_task_failed(ctx, _Done(review_mode.CLEANUP_KEY, None))
+
+    assert any(kind == "error" for _text, kind in ctx.toasts)
+
+
+def test_the_cleanup_key_carries_the_review_prefix():
+    """The app claims a result by prefix; a key without one is delivered
+    nowhere."""
+    assert review_mode.CLEANUP_KEY.startswith("review-")
+
+
+# --- the pass and the rescan its own cleanup triggers -------------------------
+#
+# Both of these are one bug found by driving the real app, and it deadlocked the
+# feature outright. Judging a sweep out fires a cleanup; the cleanup lands as a
+# task and rescans; the rescan's fallback opened the *first* bucket, which by
+# then was an emptied recent bucket with no units. ``record`` returns early with
+# no current unit and ``judging_skip`` needs one too -- so the only two things
+# that moved the pass along could not run, and it sat there with work still
+# outstanding in another sweep and no key that did anything.
+
+
+def test_a_cleanups_rescan_does_not_drop_the_bucket_the_pass_moved_to(ctx, svc):
+    """A manual delete removes the sweep you were looking at, so forgetting it
+    is right. A pass's cleanup fires for a sweep the pass has already walked
+    past, and clearing the selection there is what sent the rescan's fallback
+    to the wrong bucket."""
+    newer, older = _two_sweeps(svc)
+    state = _scanned(ctx)
+    review_mode.start_judging(ctx)
+    state.sweep_id = older
+
+    review_mode.on_task_done(
+        ctx,
+        _Done(review_mode.CLEANUP_KEY, {"ok": True, "deleted": 2, "remaining": 0, "kept": 0}),
+    )
+
+    assert state.sweep_id == older, "the pass keeps the bucket it had moved to"
+    del newer
+
+
+def test_a_delete_outside_a_pass_still_drops_the_selection(ctx, svc):
+    """The pin the fix above must not weaken."""
+    newer, _older = _two_sweeps(svc)
+    state = _scanned(ctx)
+    review_mode.open_sweep(ctx, newer)
+    assert state.judging is None
+
+    review_mode.on_task_done(
+        ctx,
+        _Done(review_mode.DELETE_KEY, {"ok": True, "deleted": 2, "remaining": 0, "kept": 0}),
+    )
+
+    # The rescan runs inline in this fake, so the selection has already fallen
+    # back to the first bucket rather than staying on a sweep that is going.
+    assert state.sweep_id != newer or not any(s["id"] == newer for s in state.sweeps)
+
+
+def test_a_pass_parked_on_an_empty_bucket_moves_itself_on(ctx, svc):
+    """The deadlock, reproduced directly: no unit on screen, so neither of the
+    pass's other two pumps can run."""
+    newer, older = _two_sweeps(svc)
+    state = _scanned(ctx)
+    review_mode.start_judging(ctx)
+    # An emptied bucket, which is exactly what a cleaned sweep and a drained
+    # recent bucket both look like after a rescan.
+    empty = {"id": "empty", "label": "Empty", "prompt": "", "units": [], "todo": 0}
+    state.sweeps = [empty] + [s for s in state.sweeps if s["id"] in (newer, older)]
+    state.sweep_id, state.units, state.index = "empty", [], 0
+    assert review_mode.current(state) is None
+
+    review_mode.on_task_done(ctx, _Done(review_mode.SCAN_KEY, state.sweeps))
+
+    assert state.judging is not None, "there is still work; the pass must not end"
+    assert state.sweep_id in (newer, older)
+    assert review_mode.current(state) is not None, "a unit is on screen again"
+
+
+def test_a_scan_that_leaves_nothing_to_judge_ends_the_pass(ctx, svc):
+    """The other half of the same pump: a pass whose work all disappeared has
+    to finish and report, not sit on an empty list."""
+    _two_sweeps(svc)
+    state = _scanned(ctx)
+    review_mode.start_judging(ctx)
+    for sweep in state.sweeps:
+        sweep["units"], sweep["todo"] = [], 0
+    state.units, state.index = [], 0
+
+    review_mode.on_task_done(ctx, _Done(review_mode.SCAN_KEY, state.sweeps))
+
+    assert state.judging is None
+    assert state.judging_report is not None
+
+
+def test_the_pump_does_not_re_clean_a_sweep_that_is_already_gone(ctx, svc):
+    """``_pump_judging`` runs after a scan now, so it meets buckets that have
+    been cleaned already and buckets that were never sweeps."""
+    newer, _older = _two_sweeps(svc)
+    state = _scanned(ctx)
+    review_mode.start_judging(ctx)
+    entry = next(s for s in state.sweeps if s["id"] == newer)
+    entry["units"], entry["todo"] = [], 0
+    state.sweep_id, state.units, state.index = newer, [], 0
+    ctx.submitted.clear()
+
+    review_mode.on_task_done(ctx, _Done(review_mode.SCAN_KEY, state.sweeps))
+
+    assert review_mode.CLEANUP_KEY not in ctx.submitted
+
+
+def test_a_whole_pass_survives_the_cleanups_it_triggers(ctx, svc):
+    """End to end, and it is the *delivery* that makes it worth having.
+
+    ``FakeCtx`` runs a submitted callable inline but does not route its result
+    back through ``on_task_done`` -- which is the App's job -- so a pass driven
+    by keys alone never meets the rescan its own cleanup causes, and that
+    rescan is the whole bug. This loop plays the App's part: after each press,
+    every task the pass submitted is delivered, in order, exactly as the frame
+    loop delivers them.
+    """
+    _two_sweeps(svc)
+    _mesh(svc, "a wooden chest")
+    state = _scanned(ctx)
+    outstanding = review_mode.todo_total(state)
+    assert outstanding == 5
+
+    def deliver() -> None:
+        """Hand back every result the last action produced."""
+        for _ in range(8):
+            pending = [k for k in ctx.submitted if k.startswith("review-")]
+            if not pending:
+                return
+            ctx.submitted.clear()
+            for key in pending:
+                if key == review_mode.SCAN_KEY:
+                    review_mode.on_task_done(ctx, _Done(key, _collect_now(ctx)))
+                elif key == review_mode.CLEANUP_KEY:
+                    review_mode.on_task_done(
+                        ctx,
+                        _Done(key, {"ok": True, "deleted": 1, "remaining": 0, "kept": 0}),
+                    )
+
+    review_mode.start_judging(ctx)
+    ctx.submitted.clear()
+    for _ in range(30):
+        if state.judging is None:
+            break
+        assert review_mode.current(state) is not None, (
+            f"stalled with no unit on screen: sweep_id={state.sweep_id} "
+            f"todo={review_mode.todo_total(state)}"
+        )
+        _press(ctx, "a")
+        deliver()
+
+    assert state.judging is None, "the pass finished by itself"
+    assert state.judging_report["remaining"] == 0
+    assert review_mode.todo_total(state) == 0
+
+
+def _collect_now(ctx: Any) -> list[dict[str, Any]]:
+    """What a scan would have found, read now rather than when it was asked
+    for -- the store has moved on since the submit."""
+    return review_mode._collect(ctx.svc)

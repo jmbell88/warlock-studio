@@ -42,6 +42,29 @@ deliberately *not* remapped onto +3: silently filing the mildest usable grade fo
 somebody reaching for the old key is a wrong number rather than a missing one.
 The labelling pass keeps its own A/R, because an image label is still one bit.
 
+**The guided pass is the second holder of that licence, and it is binary on
+purpose.** ``JudgingPass`` walks every bucket with work left, in one run, with
+Accept/Reject filing ``vectors.BINARY_GRADES`` (+-3, which is what migration 10
+backfilled a binary row to and what a reviewer with no stronger key was
+asserting). It does not replace the scale -- the grade row and the digits keep
+working inside a pass, and a grade pressed there files and advances the pass
+like anything else. It exists for the case the scale is bad at: twenty units, no
+strong opinions, and a reviewer who will not start at all if the price of the
+first unit is choosing between -2 and -3. Nothing about it is silent: it is
+entered from a button, its panel labels its own keys, and ``a`` stays unbound
+outside it. Two shifts inside a pass are worth stating because they are not the
+outer loop's: ``R`` is *reject* rather than "arm the negative sign" (a binary
+loop has no magnitude to arm; negative grades stay on the digits and the pane's
+buttons), and ``Esc`` ends the pass rather than disarming.
+
+**A sweep every unit of which has been judged has its assets removed, with a
+toast and no dialog.** That is a deliberate, user-chosen override of
+``jobs.retained_job_ids`` -- see ``sweeps.cleanup_sweep``, which carries the
+argument -- and the warning is given up front on the entry card rather than as a
+modal after the fact. It fires on ``todo`` reaching zero whether or not a pass
+was running, because the requirement is about the sweep rather than about how it
+was judged, and it refuses ``RECENT_ID``, whose units are ordinary library rows.
+
 **The advance is to the next thing to do, not the next row.** A session is
 resumed far more often than it is started, so opening a sweep lands on its
 first unverdicted unit and recording steps past everything already answered.
@@ -76,6 +99,7 @@ log = logging.getLogger(__name__)
 # one is a result delivered nowhere.
 SCAN_KEY = "review-scan"
 DELETE_KEY = "review-delete"
+CLEANUP_KEY = "review-cleanup"
 FINDINGS_KEY = "review-findings"
 LABELS_KEY = "review-labels"
 TRAIN_KEY = "review-train"
@@ -187,6 +211,39 @@ class LabelPass:
 
 
 @dataclass
+class JudgingPass:
+    """One guided run through everything left to judge.
+
+    A *pass* rather than a mode flag, for ``LabelPass``' reason: while one is
+    open the keyboard means something different, and "which loop is A pressing"
+    must have exactly one answer rather than two flags that can disagree.
+
+    It is **binary on purpose** and that is the whole of what it adds. The
+    eleven-point scale is not going anywhere -- it is still in the verdict pane,
+    still on the digits, and a grade pressed during a pass files and advances
+    like everything else. What the pass is for is the case the scale is bad at:
+    twenty units, no strong opinions, and a reviewer who will not start at all
+    if the price of the first unit is choosing between -2 and -3. Accept/Reject
+    files +3/-3 through ``vectors.BINARY_GRADES``, which is exactly what
+    migration 10 backfilled a binary row to and exactly what a reviewer with no
+    stronger key was asserting.
+
+    ``total`` is the count at the moment the pass started, so "3 of 20" counts
+    up to a number that does not move under the reader. ``filed`` counts what
+    this pass filed rather than what is left, so a unit re-graded twice does not
+    make the header count down.
+    """
+
+    total: int = 0
+    filed: int = 0
+    # Bucket ids with work to do when the pass started, RECENT_ID first and then
+    # sweeps in list order. Fixed at the start rather than recomputed: a bucket
+    # that gains a unit mid-pass (a job finishing) would otherwise extend a pass
+    # the user was told the length of.
+    order: list[str] = field(default_factory=list)
+
+
+@dataclass
 class ReviewState:
     """One review session: which sweeps exist, which one is open, where in it.
 
@@ -229,6 +286,14 @@ class ReviewState:
     # those rows. Not "the units that are open": the user can open another sweep
     # while the pass runs. Empty means nothing is in flight.
     score_request: list[str] = field(default_factory=list)
+    # The guided pass, or None for "the ordinary loop owns the keyboard".
+    # Session-only like everything else here, and for the same reason: a stored
+    # pass would resume against buckets that have since been judged or deleted.
+    judging: JudgingPass | None = None
+    # What the pass that just ended did, as a plain dict ready to draw. Built
+    # once at the end from what is in memory -- never a DB read on the frame
+    # thread -- and cleared by the report card's Dismiss.
+    judging_report: dict[str, Any] | None = None
 
 
 def ensure(ctx: Any) -> ReviewState:
@@ -291,6 +356,12 @@ def _collect(svc: Any) -> list[dict[str, Any]]:
                 "id": sweep["id"],
                 "label": sweep["label"],
                 "prompt": sweep["prompt"],
+                # What the sweep actually varied. ``list_sweeps`` has always
+                # parsed it and this bucket has always dropped it, which left
+                # the list identifying a run by whatever the user typed as its
+                # name -- routinely "test2", days after the fact. See
+                # ``spec_summary``.
+                "spec": sweep.get("spec") or {},
                 "units": units,
                 "todo": sum(1 for u in units if u["verdict"] is None),
             }
@@ -436,41 +507,70 @@ def clear_scores(state: ReviewState) -> None:
     state.score_request = []
 
 
+def _removal_toast(ctx: Any, done: Any) -> None:
+    """What a delete or a cleanup says afterwards. -> nothing.
+
+    One block for both keys, because the *result* is the same shape and the
+    three cases mean the same three things whichever button produced them. Only
+    the verb differs, and it comes off the key rather than from a second copy of
+    this branch -- which is exactly how the "delete again in a moment" sentence
+    would have come to be missing from one of the two.
+    """
+    cleaning = done.key == CLEANUP_KEY
+    # Named, when the caller said which sweep. A cleanup fires without anybody
+    # pressing anything for it, so "3 asset folders removed" on its own is a
+    # sentence about nothing the reader can place.
+    named = str(getattr(done, "tag", None) or "")
+    verb = f"Cleaned up {named}:" if cleaning and named else (
+        "Cleaned up" if cleaning else "Deleted"
+    )
+    removed = remaining = kept = 0
+    if isinstance(done.result, dict):
+        removed = int(done.result.get("deleted") or 0)
+        remaining = int(done.result.get("remaining") or 0)
+        kept = int(done.result.get("kept") or 0)
+    if kept and not remaining:
+        # Said apart from the transient case, and without "delete again":
+        # pressing again will never remove these, so an invitation to
+        # retry would be a lie that renews itself every press. What the
+        # user can still do is named, because the per-asset delete is the
+        # deliberate escape hatch this guard leaves open.
+        ctx.toast(
+            f"{verb} {removed} asset folder(s); kept {kept} you reviewed. "
+            "Delete those from the library if you want them gone."
+        )
+    elif remaining:
+        # A unit the worker is still inside is cancelled but not deleted --
+        # its directory is being written to. Say so and say what to do,
+        # rather than reporting a deletion that did not happen.
+        # Plain info: the toast vocabulary is info|error (widgets.py reads
+        # nothing else), and a partial delete is neither a failure nor a
+        # surprise -- it is what cancelling something mid-run looks like.
+        ctx.toast(
+            f"{verb} {removed} asset folder(s); {remaining} still finishing. "
+            "Delete again in a moment."
+        )
+    else:
+        ctx.toast(
+            f"{verb} {removed} asset folder(s). Verdicts and findings kept."
+        )
+
+
 def on_task_done(ctx: Any, done: Any) -> None:
     """Called from the app for every ``review-`` key."""
     state = ensure(ctx)
-    if done.key == DELETE_KEY:
-        removed = remaining = kept = 0
-        if isinstance(done.result, dict):
-            removed = int(done.result.get("deleted") or 0)
-            remaining = int(done.result.get("remaining") or 0)
-            kept = int(done.result.get("kept") or 0)
-        if kept and not remaining:
-            # Said apart from the transient case, and without "delete again":
-            # pressing again will never remove these, so an invitation to
-            # retry would be a lie that renews itself every press. What the
-            # user can still do is named, because the per-asset delete is the
-            # deliberate escape hatch this guard leaves open.
-            ctx.toast(
-                f"Deleted {removed} job(s); kept {kept} you reviewed. "
-                "Delete those from the library if you want them gone."
-            )
-        elif remaining:
-            # A unit the worker is still inside is cancelled but not deleted --
-            # its directory is being written to. Say so and say what to do,
-            # rather than reporting a deletion that did not happen.
-            # Plain info: the toast vocabulary is info|error (widgets.py reads
-            # nothing else), and a partial delete is neither a failure nor a
-            # surprise -- it is what cancelling something mid-run looks like.
-            ctx.toast(
-                f"Deleted {removed} job(s); {remaining} still finishing. "
-                "Delete again in a moment."
-            )
-        else:
-            ctx.toast(f"Deleted {removed} job(s). Verdicts and findings kept.")
+    if done.key in (DELETE_KEY, CLEANUP_KEY):
+        _removal_toast(ctx, done)
         # The counts are now wrong and the viewer may be showing a mesh that no
         # longer exists -- both are fixed by the rescan.
-        if state.sweep_id is not None and state.sweep_id != RECENT_ID:
+        #
+        # The selection is dropped only when **no pass is running**. A manual
+        # delete removes the sweep you were looking at, so forgetting it is
+        # right; a pass's cleanup fires for a sweep the pass has already walked
+        # *past*, and clearing the id there sent the rescan's fallback to the
+        # first bucket -- which is how a pass ended up parked on an emptied
+        # recent bucket with two units still outstanding elsewhere.
+        if state.judging is None and state.sweep_id not in (None, RECENT_ID):
             state.sweep_id = None
         scan(ctx)
         return
@@ -531,6 +631,11 @@ def on_task_done(ctx: Any, done: Any) -> None:
         open_sweep(ctx, state.sweeps[0]["id"])
     else:
         state.sweep_id, state.units, state.index = None, [], 0
+    # And let a running pass re-decide where it is. A scan is the one thing
+    # that can empty the open bucket without a keypress -- a cleanup's rescan
+    # does exactly that -- and the pass's other two pumps both need a unit on
+    # screen, so without this it has no way out of a bucket with none.
+    _pump_judging(ctx, state)
 
 
 def on_task_failed(ctx: Any, done: Any) -> None:
@@ -544,6 +649,11 @@ def on_task_failed(ctx: Any, done: Any) -> None:
         state.scanning = False
     if done.key == DELETE_KEY:
         ctx.toast("Could not delete that sweep.", "error")
+    if done.key == CLEANUP_KEY:
+        # Toasted rather than swallowed, even though nobody pressed a button for
+        # it: the entry card promised the assets would go, and silence would
+        # leave the user believing a promise that had failed.
+        ctx.toast("Could not clean up that sweep's assets.", "error")
     if done.key == LABELS_KEY and state.labels is not None:
         # ``loading`` gates the grid's empty state; leaving it set is what makes
         # a failed listing look like a pass that is still starting, forever.
@@ -740,7 +850,18 @@ def record(ctx: Any, grade: int, tags: Any = ()) -> None:
     if tags:
         filed += " - " + ", ".join(tags)
     ctx.toast(f"Filed {filed} for {label(state, unit)}. Left arrow to re-grade it.")
+    if state.judging is not None:
+        state.judging.filed += 1
     advance(state, unverdicted_only=True)
+    # After the advance, so a pass that has just emptied its last bucket ends
+    # with the cursor already parked rather than being moved by a report.
+    # Unconditional rather than gated on ``judging``: a sweep hand-graded to
+    # zero outside a pass has been judged just as thoroughly, and the
+    # requirement is about the sweep rather than about how it was reached.
+    if state.judging is not None:
+        _pump_judging(ctx, state)
+    elif state.sweep_id is not None and _todo_of(state, state.sweep_id) == 0:
+        auto_cleanup(ctx, state.sweep_id)
 
 
 def _recount(state: ReviewState) -> None:
@@ -749,6 +870,196 @@ def _recount(state: ReviewState) -> None:
     for sweep in state.sweeps:
         if sweep["id"] == state.sweep_id:
             sweep["todo"] = sum(1 for unit in sweep["units"] if unit["verdict"] is None)
+
+
+# --- the guided judging pass -------------------------------------------------
+
+
+def todo_total(state: ReviewState) -> int:
+    """How many units, across every bucket, have no verdict. Pure."""
+    return sum(int(sweep.get("todo") or 0) for sweep in state.sweeps)
+
+
+def start_judging(ctx: Any) -> bool:
+    """Open a guided pass over everything left to judge. -> whether one opened.
+
+    It opens the first bucket with work rather than leaving the user where they
+    were: the pass is a claim about *all* the outstanding units, and starting it
+    in the middle of one sweep would make the "3 of 20" header describe a walk
+    the user cannot see the shape of.
+    """
+    state = ensure(ctx)
+    if state.scanning or state.judging is not None:
+        return False
+    order = [
+        str(sweep["id"]) for sweep in state.sweeps if int(sweep.get("todo") or 0) > 0
+    ]
+    if not order:
+        return False
+    state.judging = JudgingPass(total=todo_total(state), order=order)
+    state.judging_report = None
+    _disarm(state)
+    # ``open_sweep`` already lands on the first unverdicted unit and already
+    # honours blinding, so there is nothing for the pass to re-decide here.
+    open_sweep(ctx, order[0])
+    return True
+
+
+def judging_skip(ctx: Any) -> None:
+    """Leave this unit unjudged and move on, staying inside the pass."""
+    state = ensure(ctx)
+    if state.judging is None:
+        return
+    advance(state, unverdicted_only=True)
+    _pump_judging(ctx, state)
+
+
+def _pump_judging(ctx: Any, state: ReviewState) -> None:
+    """Move the pass on when the open bucket runs out.
+
+    Called after every file, after every skip, **and after every scan lands** --
+    and that third caller is not belt-and-braces. The first two both need a
+    unit on screen to have been reached at all, so a pass parked on an empty
+    bucket could not pump itself out of one: `record` returns early with no
+    current unit, so nothing ever ran this again. A cleanup's own rescan lands
+    on the recent bucket when it has emptied, which is exactly that state, and
+    the pass stopped dead with work still outstanding in another sweep.
+
+    The bucket-to-bucket step is what makes this a pass over the *session* and
+    not over one sweep -- which is the whole difference between it and simply
+    pressing digits, and the reason the entry card can promise a number.
+    """
+    pass_ = state.judging
+    if pass_ is None:
+        return
+    open_id = state.sweep_id
+    entry = next((s for s in state.sweeps if s["id"] == open_id), None)
+    if entry is not None and entry.get("units") and _todo_of(state, open_id) == 0:
+        # Judged out. The cleanup is fired from here rather than from
+        # ``finish_judging`` so a sweep's assets go as soon as it is finished
+        # with, rather than all of them at the end of a long pass.
+        #
+        # Gated on the bucket still *having* units, because this now runs after
+        # a rescan too: a sweep whose cleanup already landed is a row that is
+        # gone, and an emptied recent bucket is not a sweep at all -- neither is
+        # something to submit a second removal for.
+        auto_cleanup(ctx, open_id)
+    remaining = [sid for sid in pass_.order if _todo_of(state, sid) > 0]
+    if not remaining:
+        finish_judging(ctx)
+        return
+    if open_id not in remaining:
+        open_sweep(ctx, remaining[0])
+
+
+def _todo_of(state: ReviewState, sweep_id: str) -> int:
+    entry = next((s for s in state.sweeps if s["id"] == sweep_id), None)
+    return int((entry or {}).get("todo") or 0)
+
+
+def end_judging(ctx: Any) -> None:
+    """Stop early -- Esc, or the Finish button. Still writes the report.
+
+    A pass abandoned halfway is exactly the case a summary is most useful for:
+    what it says is how much was done and how much is left, and hiding that
+    because the user stopped would be punishing them for stopping.
+    """
+    finish_judging(ctx)
+
+
+def finish_judging(ctx: Any) -> None:
+    """Close the pass and build its report. Frame thread, from memory only.
+
+    **Never a DB read.** ``_collect`` fetched every unit and ``record`` keeps
+    the dicts current as verdicts are filed, so the numbers are already here --
+    and this runs on the frame thread, behind the store's one serialized
+    connection, at the moment a reviewer is expecting the pass to end.
+    """
+    state = ensure(ctx)
+    pass_ = state.judging
+    if pass_ is None:
+        return
+    state.judging = None
+    per_sweep = []
+    filed = accepted = rejected = remaining = 0
+    for sweep in state.sweeps:
+        if str(sweep["id"]) not in pass_.order:
+            continue
+        units = sweep.get("units") or []
+        graded = [u for u in units if isinstance(u.get("grade"), int)]
+        row = {
+            "id": sweep["id"],
+            # Blind sessions get blind labels here too. A report naming the arms
+            # at the end of a blinded pass would un-blind every unit in it after
+            # the fact, which is most of what blinding was protecting.
+            "label": (
+                f"#{str(sweep['id'])[:6]}"
+                if state.blind and sweep["id"] != RECENT_ID
+                else str(sweep.get("label") or sweep["id"])
+            ),
+            "total": len(units),
+            "accepted": sum(1 for u in units if u.get("verdict") == "accept"),
+            "rejected": sum(1 for u in units if u.get("verdict") == "reject"),
+            "no_opinion": sum(1 for u in units if u.get("grade") == 0),
+            "todo": int(sweep.get("todo") or 0),
+            "mean_grade": (
+                round(sum(int(u["grade"]) for u in graded) / len(graded), 1)
+                if graded
+                else None
+            ),
+        }
+        per_sweep.append(row)
+        accepted += row["accepted"]
+        rejected += row["rejected"]
+        remaining += row["todo"]
+    filed = pass_.filed
+    state.judging_report = {
+        "sweeps": per_sweep,
+        "filed": filed,
+        "accepted": accepted,
+        "rejected": rejected,
+        "remaining": remaining,
+    }
+
+
+def dismiss_report(ctx: Any) -> None:
+    state = ensure(ctx)
+    state.judging_report = None
+
+
+def auto_cleanup(ctx: Any, sweep_id: str) -> bool:
+    """Remove a fully judged sweep's assets. -> whether it was submitted.
+
+    Fired from ``record`` and from the pass, both on ``todo`` reaching zero:
+    the requirement is "once a sweep has been judged", which a hand-graded sweep
+    meets exactly as a pass-driven one does.
+
+    ``RECENT_ID`` is refused, and not as a special case: the recent bucket is
+    ordinary library rows that happen not to carry a verdict yet, so deleting
+    them because they were judged would delete the user's own assets. Pruning
+    the library is prune's job and has its own confirmation.
+
+    No dialog, per the user's explicit choice -- the entry card carries the
+    warning up front instead, and the toast says what went and what was kept.
+    """
+    from ..service import sweeps as sweeps_mod
+
+    if sweep_id == RECENT_ID:
+        return False
+    state = ensure(ctx)
+    entry = next((s for s in state.sweeps if s["id"] == sweep_id), None)
+    # Captured now and carried on the tag, because by the time this lands the
+    # rescan will have dropped the row this label came from.
+    named = (
+        f"#{str(sweep_id)[:6]}"
+        if state.blind
+        else str((entry or {}).get("label") or sweep_id)
+    )
+    return bool(
+        ctx.submit(
+            CLEANUP_KEY, sweeps_mod.cleanup_sweep, ctx.svc, sweep_id, tag=named
+        )
+    )
 
 
 # --- the labelling pass ------------------------------------------------------
@@ -1063,6 +1374,164 @@ def launch(ctx: Any) -> bool:
     return True
 
 
+# One line per axis param, for the params whose *name* is the whole of what the
+# form says about them. Only the ones that resolve to a free-text field need one
+# -- an enumerated param draws its own options and a numeric one draws its range
+# -- but the test asserts the complement, so a param that stops resolving is
+# caught by having no help line rather than by somebody noticing the blank box.
+AXIS_HELP: dict[str, str] = {
+    "custom_triangles": (
+        "Triangle budget, used only when profile is 'custom'. Ignored by 'raw'."
+    ),
+    "negative_prompt": (
+        "What to steer away from. Only reaches models that take a real CFG "
+        "scale; commas separate the values, so avoid them inside one prompt."
+    ),
+}
+
+
+def _catalog_options(ctx: Any, field: str) -> list[dict[str, str]]:
+    entries = (getattr(ctx, "guidance", None) or {}).get("fields") or {}
+    return [
+        {"key": str(o.get("key") or ""), "label": str(o.get("label") or o.get("key") or "")}
+        for o in entries.get(field) or []
+    ]
+
+
+def axis_options(ctx: Any) -> list[dict[str, Any]]:
+    """What each sweep axis param may be set to. -> one row per param.
+
+    ``kind`` is what the form draws: ``options`` gets a checkbox per legal
+    value, ``number`` a hint naming its range, ``bool`` an on/off pair, and
+    ``text`` is the free field every row used to be. Whatever the kind, the row
+    is written back as the same comma-separated string, so ``build_plan`` and
+    ``_coerce`` are untouched -- this is a control over an existing field, not a
+    second representation of it.
+
+    Headless, and built from ``ctx.guidance`` rather than from the service: the
+    catalog is fetched once at startup and this runs per frame the form is open.
+    A param the catalog cannot resolve falls through to ``text``, which is
+    exactly today's behaviour -- so a param added to ``axis_params`` without
+    being described here is *less* discoverable, never broken.
+    """
+    from ..service import sweeps as sweeps_mod
+
+    guidance = getattr(ctx, "guidance", None) or {}
+    sweeps_extra = guidance.get("sweeps") or {}
+    defaults = guidance.get("defaults") or {}
+    rows: list[dict[str, Any]] = []
+    for param in sweeps_mod.axis_params():
+        row: dict[str, Any] = {
+            "param": param,
+            "kind": "text",
+            "options": [],
+            "range": None,
+            "default": defaults.get(param),
+            "help": AXIS_HELP.get(param, ""),
+        }
+        options = _catalog_options(ctx, param)
+        if param == "bg_removal":
+            options = [{"key": k, "label": k} for k in guidance.get("bg_removal") or []]
+        elif param in ("resolution", "profile"):
+            options = [
+                {"key": str(v), "label": str(v)} for v in sweeps_extra.get(param) or []
+            ]
+        # Only when the list is non-empty, and that is not defensiveness: an
+        # ``options`` row with nothing in it draws a label and no controls at
+        # all, which is strictly worse than the free-text field it replaced.
+        if options:
+            row["kind"], row["options"] = "options", options
+        elif param == "reference_prep":
+            row["kind"] = "bool"
+        elif (bounds := _axis_range(guidance, sweeps_extra, param)) is not None:
+            row["kind"], row["range"] = "number", bounds
+            if row["default"] is None:
+                row["default"] = bounds[0]
+        rows.append(row)
+    return rows
+
+
+def _axis_range(
+    guidance: dict[str, Any], sweeps_extra: dict[str, Any], param: str
+) -> tuple[Any, Any] | None:
+    """``(low, high)`` for a numeric axis, or None.
+
+    Two spellings because the catalog grew two: the guidance half named its
+    ranges ``<param>_range`` beside ``size_range_m``, and the sweeps sub-dict
+    follows the first of those. Looked up rather than tabulated so a range added
+    to either half is offered here by having been added.
+    """
+    for source, key in (
+        (guidance, f"{param}_range"),
+        (sweeps_extra, f"{param}_range"),
+        (guidance, "size_range_m" if param == "size_m" else ""),
+    ):
+        bounds = source.get(key) if key else None
+        if isinstance(bounds, (list, tuple)) and len(bounds) == 2:
+            return (bounds[0], bounds[1])
+    return None
+
+
+def spec_summary(spec: Any) -> str:
+    """What a stored sweep varied, in one line. Pure.
+
+    Drawn under a sweep in the list, because a sweep is judged days after it is
+    launched and its *name* is whatever the user typed at the time -- routinely
+    "test2". The spec is the only record of what the run was actually asking.
+
+    Basic-Latin only (imgui's default atlas), so " - " and not an en dash.
+    """
+    if not isinstance(spec, dict):
+        return ""
+    parts = []
+    for axis in spec.get("axes") or ():
+        if not isinstance(axis, dict):
+            continue
+        param = str(axis.get("param") or "")
+        values = ", ".join(str(v) for v in axis.get("values") or ())
+        if param and values:
+            parts.append(f"varies {param} ({values})")
+    seeds = spec.get("seeds") or ()
+    if seeds:
+        parts.append(f"{len(seeds)} seed(s)")
+    if spec.get("vectors"):
+        parts.append(f"{len(spec['vectors'])} explicit vector(s)")
+    return " - ".join(parts)
+
+
+def preview_line(state: ReviewState, labels: dict[str, str] | None = None) -> str:
+    """What the form would queue, said in words rather than as a bare count.
+
+    "12 jobs" is a number the user has to reverse-engineer the form to check.
+    Naming the multiplication -- baseline, then each axis by its values, then by
+    the seeds -- is what makes a mis-typed axis visible *before* two hours of
+    GPU rather than after.
+
+    ``labels`` is a param -> human-name map the *caller* supplies, because label
+    resolution is ``panes.settings_2d.field_label``'s and this module may not
+    import a pane. Absent, the param names are used, which is what a headless
+    caller wants anyway.
+
+    Basic-Latin only, so " x " and " - " rather than the typographic forms.
+    """
+    planned = preview_units(state)
+    if planned <= 0:
+        return ""
+    labels = labels or {}
+    parts = ["baseline"]
+    for row in state.form.axes:
+        param = (row.get("param") or "").strip()
+        count = len([v for v in (row.get("values") or "").split(",") if v.strip()])
+        if param and count:
+            parts.append(f"{labels.get(param, param)} x {count} value(s)")
+    seeds = len(state.form.seeds.split(",")) if state.form.seeds.strip() else 0
+    tail = f" x {seeds} seed(s)" if seeds > 1 else ""
+    return (
+        f"{planned} jobs: {' + '.join(parts)}{tail} - everything else from your "
+        "captured settings."
+    )
+
+
 def preview_units(state: ReviewState) -> int:
     """How many jobs the form would queue, or -1 if it cannot be planned yet."""
     from ..service import sweeps as sweeps_mod
@@ -1223,6 +1692,48 @@ def handle_key(ctx: Any, event: Any) -> bool:
         # verdict -- which would file an accept about a mesh from a keypress
         # about a picture.
         return _label_key(ctx, state, event, name)
+    # Modifiers are read off ``event.mod`` rather than off the key name, because
+    # ``pygame.key.name`` returns "1" whether or not Ctrl or Shift is held --
+    # the digit is the same key, and only the modifier says which of three
+    # things it means. There is no collision with a global binding: the
+    # positional Alt+digit switch was deleted with ``mode_for_digit``, and
+    # Ctrl+K is answered above the modes either way.
+    #
+    # Read *above* the Escape/arrow branches because the guided pass below needs
+    # to know a bare key is bare, and those two do not care either way.
+    ctrl = bool(event.mod & pygame.KMOD_CTRL)
+    shift = bool(event.mod & pygame.KMOD_SHIFT)
+    if state.judging is not None:
+        # The guided pass owns A/R/S and Esc while it is open. This is the
+        # ``LabelPass`` licence extended: the objection to reviving ``a`` was
+        # that a *silent* remap files the mildest usable grade for somebody
+        # reaching for a key that no longer exists. Here nothing is silent --
+        # the pass is entered deliberately, its panel draws "Accept (A)" and
+        # "Reject (R)" above the grade row, and the mapping to +-3 is what
+        # ``vectors.BINARY_GRADES`` already means. Outside a pass ``a`` stays
+        # unbound, which is what the fall-through at the bottom is still for.
+        #
+        # ``R`` is *reject* here rather than "arm the negative sign": a binary
+        # loop has no magnitude to arm, and the negative grades stay reachable
+        # through the digits and the pane's own buttons, which keep working.
+        # Esc **ends the pass** rather than disarming, because leaving is the
+        # thing a user in a modal-feeling flow reaches Esc for.
+        if event.key == pygame.K_ESCAPE:
+            end_judging(ctx)
+            return True
+        if not ctrl and not shift and current(state) is not None:
+            if name == "a":
+                record(ctx, verdicts_mod.BINARY_GRADES["accept"], state.pending_tags)
+                return True
+            if name == "r":
+                record(ctx, verdicts_mod.BINARY_GRADES["reject"], state.pending_tags)
+                return True
+            if name == "s":
+                judging_skip(ctx)
+                return True
+        # Everything else -- the digits, the tag modifiers, the arrows -- falls
+        # through to the ordinary branches below, so a reviewer who wants to say
+        # "-5, holes" mid-pass still can and the pass still counts it.
     if event.key == pygame.K_ESCAPE:
         _disarm(state)
         return True
@@ -1233,14 +1744,6 @@ def handle_key(ctx: Any, event: Any) -> bool:
         # Nothing on screen to judge: every key below acts on a unit.
         return False
 
-    # Modifiers are read off ``event.mod`` rather than off the key name, because
-    # ``pygame.key.name`` returns "1" whether or not Ctrl or Shift is held --
-    # the digit is the same key, and only the modifier says which of three
-    # things it means. There is no collision with a global binding: the
-    # positional Alt+digit switch was deleted with ``mode_for_digit``, and
-    # Ctrl+K is answered above the modes either way.
-    ctrl = bool(event.mod & pygame.KMOD_CTRL)
-    shift = bool(event.mod & pygame.KMOD_SHIFT)
     # Tags before grades, or Ctrl+1 would file a +1 and stage nothing.
     if ctrl and name in GOOD_TAG_KEYS:
         toggle_tag(state, GOOD_TAG_KEYS[name])
@@ -1266,10 +1769,13 @@ def handle_key(ctx: Any, event: Any) -> bool:
         if name == "s":
             advance(state)
             return True
-    # ``a`` deliberately falls through unconsumed. It was Accept, and a mesh
-    # verdict is a grade now: silently mapping it onto +3 would file the mildest
-    # usable grade every time somebody reached for the old key, which is a wrong
-    # number rather than a missing one. The label pass keeps its own A/R.
+    # ``a`` deliberately falls through unconsumed *outside a pass*. It was
+    # Accept, and a mesh verdict is a grade now: silently mapping it onto +3
+    # would file the mildest usable grade every time somebody reached for the
+    # old key, which is a wrong number rather than a missing one. The label pass
+    # keeps its own A/R, and the guided judging pass above is the second holder
+    # of that same licence -- in both cases the key is bound because a loop the
+    # user explicitly entered says on screen what it does.
     return False
 
 

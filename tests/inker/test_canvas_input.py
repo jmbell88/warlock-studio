@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from warlock.studio import inker, inker_mode, inker_state
+from warlock.studio import imgui_backend, inker, inker_mode, inker_state
 from warlock.studio.inker import brush, tiling
 from warlock.studio.panes import inker_canvas, inker_tools
 
@@ -63,11 +63,14 @@ class _Mouse:
         self.at = (0.0, 0.0)
         self.down = {0: False, 1: False, 2: False}
         self.clicked = {0: False, 1: False, 2: False}
+        # As the backend delivers it -- already scaled by ``WHEEL_SCALE`` -- so
+        # a test that sets it is exercising the same number the pane sees.
+        self.wheel = 0.0
 
     def module(self) -> SimpleNamespace:
         return SimpleNamespace(
             get_io=lambda: SimpleNamespace(
-                mouse_wheel=0.0, key_shift=False, key_alt=False, delta_time=1.0 / 60.0
+                mouse_wheel=self.wheel, key_shift=False, key_alt=False, delta_time=1.0 / 60.0
             ),
             get_mouse_pos=lambda: SimpleNamespace(x=self.at[0], y=self.at[1]),
             is_mouse_clicked=lambda button: self.clicked[button],
@@ -89,12 +92,13 @@ def driven(monkeypatch):
         view=inker_state.PaintView(zoom=1.0, pan=(0.0, 0.0), fitted=True),
     )
 
-    def frame(at, *, click=None, down=()):
+    def frame(at, *, click=None, down=(), wheel=0.0):
         mouse.at = (float(at[0]), float(at[1]))
         mouse.clicked = {0: False, 1: False, 2: False}
         if click is not None:
             mouse.clicked[click] = True
         mouse.down = {b: b in down for b in (0, 1, 2)}
+        mouse.wheel = float(wheel)
         inker_canvas._input(None, state, tab, (0.0, 0.0), active=True, hovered=True)
 
     return state, tab, frame
@@ -475,3 +479,31 @@ def test_cancelling_a_move_that_is_not_open_falls_through(scene):
     goes on to cancel the float or drop the selection as it always did."""
     _state, tab = scene
     assert tab.doc.cancel_layer_move() is False
+
+
+# --- the wheel --------------------------------------------------------------
+
+
+def test_one_wheel_notch_moves_the_zoom_by_five_percent(driven):
+    """The backend halves every wheel event; the pane divides that back out.
+
+    Asserted through ``_input`` rather than against ``zoom_step`` directly,
+    because the number under test is exactly the one that crosses the boundary
+    between the two modules.
+    """
+    _state, tab, frame = driven
+    tab.view.zoom = 1.0
+    frame((16.0, 16.0), wheel=imgui_backend.WHEEL_SCALE)
+    assert tab.view.zoom == pytest.approx(1.05)
+    frame((16.0, 16.0), wheel=-imgui_backend.WHEEL_SCALE)
+    assert tab.view.zoom == pytest.approx(1.0)
+
+
+def test_the_wheel_stops_at_the_inker_bounds(driven):
+    _state, tab, frame = driven
+    for _ in range(400):
+        frame((16.0, 16.0), wheel=imgui_backend.WHEEL_SCALE)
+    assert tab.view.zoom == pytest.approx(inker_state.INKER_MAX_ZOOM)
+    for _ in range(400):
+        frame((16.0, 16.0), wheel=-imgui_backend.WHEEL_SCALE)
+    assert tab.view.zoom == pytest.approx(inker_state.INKER_MIN_ZOOM)

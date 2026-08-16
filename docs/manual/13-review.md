@@ -66,6 +66,43 @@ Verdicts are append-only and the latest one per job wins, so changing your mind 
 not editing. And each verdict carries its own copy of the settings it judged — the learning corpus
 survives the assets it was learned from, so pruning old jobs costs no knowledge.
 
+## A judging pass
+
+**Start judging** at the top of the sweep list walks every unit that has no verdict yet, in one run,
+across every bucket — the recent ones first, then each sweep in list order. The header counts your
+position in the whole run rather than in the sweep on screen, because the run is what you agreed to.
+
+Inside a pass the answer is binary: `A` accepts, `R` rejects, `S` skips, and `Esc` finishes early.
+Accept files **+3** and reject files **−3** — the same values a pre-grades accept and reject were
+read as, and the same claim: usable, or not. The eleven-point scale has not gone anywhere. The grade
+row and the digits keep working inside a pass and a grade pressed there files, counts and advances
+exactly as `A` does. Use the pass when you have twenty units and no strong opinions about any of
+them; use the grades when you want to say how close something came.
+
+Two keys mean something different inside a pass than outside it, and both are labelled on screen:
+`R` is *reject* rather than "arm the negative sign" — a binary answer has no magnitude to arm, and
+negative grades stay on the digits and on the buttons — and `Esc` ends the pass rather than clearing
+a pending sign. Clicking a sweep in the list also leaves the pass: you are no longer on the walk the
+header is counting.
+
+When the pass ends, early or otherwise, a card reports what it did: per sweep, how many were
+accepted and rejected out of how many, with the average grade where one was given, and one line for
+the whole run. **Dismiss** clears it.
+
+**Once every unit of a sweep has a verdict, its images and meshes are removed automatically.** There
+is no confirmation — the offer on the entry card is the warning, which is why it says so up front.
+What goes is the files; what stays is every verdict, observation and finding they produced, because
+each verdict carries its own copy of the settings it judged. This is the one place the app overrides
+its own rule that a bulk delete never touches something you accepted: you have just looked at every
+unit in that sweep, so the assets have served the purpose that rule protects. It applies whether the
+sweep was judged in a pass or one grade at a time, and it never touches the recent-unreviewed bucket
+— those are ordinary library assets that happen not to be judged yet, and clearing the library is
+what **Clean** in Settings is for.
+
+One consequence worth knowing: filing a verdict on a sweep's *last* unit takes that sweep's meshes
+away immediately, so the "press Left to re-grade" route the toast normally offers is gone for that
+one. Re-grade before you finish the sweep, not after.
+
 ## Sweeps
 
 A sweep turns "which setting is better" from a hunch into rows you can judge side by side. The form
@@ -73,10 +110,18 @@ at the bottom of the sweep list takes:
 
 - **Prompt and seeds** — one subject, one or more seeds (comma-separated). Every unit shares them,
   so the only thing that varies is what you asked to vary.
-- **Axes** — a parameter name and a comma-separated list of values. The sweep plans a baseline unit
-  plus one unit per differing value, per seed.
+- **What to vary** — a parameter and the values to try it at. The sweep plans a baseline unit plus
+  one unit per differing value, per seed. The values are drawn as whatever the parameter actually
+  accepts: tick boxes for a taxonomy field or a switch, and a hint naming the legal range for a
+  number. Whichever you use, what is stored is the same comma-separated list, so you can still type
+  one out by hand.
 - **Start from current settings** — captures the Reference and Mesh stage forms as the baseline the axes vary
   from. A sweep off an unstated baseline is not reproducible.
+
+Under the form is a line spelling out what will be queued — "12 jobs: baseline + Style strength x 3
+values x 2 seeds" — because a bare count is a number you have to reverse-engineer the form to check,
+and a mistyped axis is two hours of GPU. Each sweep in the list carries a line saying what it varied,
+for the same reason: by the time you come back to judge it, the name you typed is rarely enough.
 
 Because every unit shares the prompt and the seeds, the baseline and each axis unit form
 **matched pairs** — same subject, same seed, one setting differing — which is what the axis

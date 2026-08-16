@@ -145,10 +145,58 @@ def _draw_form(
     _hint(ctx, "reference_prep", form["reference_prep"])
 
     _rig(ctx, form)
+    _reset_row(ctx)
     _submit(ctx, form)
 
 
 # --- pieces -----------------------------------------------------------------
+
+
+def _reset_row(ctx: Any) -> None:
+    """The 2D pane's *Reset...* had no counterpart here, and the asymmetry was
+    the whole of the reason: both panes accumulate overrides across a session
+    and only one of them offered a way back.
+
+    Above the submit rather than below it, exactly as 2D places it: a
+    destructive control under the primary action is one the hand reaches by
+    accident.
+    """
+    if controls.button("Reset...", role=controls.ButtonRole.GHOST):
+        ctx.confirms.ask(
+            dialogs.Confirm(
+                title="Reset the model settings?",
+                message=(
+                    "The mesh resolution, size, background removal, seed, "
+                    "candidate count and rig controls go back to their "
+                    "defaults. The chosen source is kept, and the image form "
+                    "is untouched."
+                ),
+                confirm_label="Reset",
+                cancel_label="Cancel",
+                on_confirm=lambda: _reset(ctx),
+            )
+        )
+
+
+def _reset(ctx: Any) -> None:
+    """The 3D form back to first-launch defaults.
+
+    A fresh copy of ``DEFAULT_FORM_3D`` rather than a field-by-field clear, for
+    ``settings_2d._reset``'s reason: a field added later is reset by having been
+    added rather than by somebody remembering this function. A *copy*, because
+    the module-level dict is the default and a form aliased onto it would edit
+    it for the rest of the process -- which is the shape ``AppState.form_3d``'s
+    own default_factory already takes.
+
+    The source job is deliberately not cleared. It is not part of this form at
+    all (it lives on ``state.source_job``), and a reset that silently dropped
+    what the user had picked to work from would be a different, larger action
+    than the one the button offers.
+    """
+    from ..state import DEFAULT_FORM_3D
+
+    ctx.state.form_3d = dict(DEFAULT_FORM_3D)
+    ctx.toast("The model settings are back to their defaults.")
 
 
 def _findings_hint(ctx: Any, param: str, value: Any) -> str | None:

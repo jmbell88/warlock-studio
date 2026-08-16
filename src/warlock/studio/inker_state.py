@@ -27,6 +27,24 @@ MIN_ZOOM = 0.05
 MAX_ZOOM = 32.0
 ZOOM_STEP = 1.15
 
+# Inker's own, narrower bounds. Separate constants rather than a change to the
+# three above, because Plotter and Packwright import those and a tile map wants
+# to sit at 5% while a drawing at 5% is a postage stamp nobody can nib. Every
+# view function below takes ``lo``/``hi`` defaulting to the globals, so those
+# two callers are untouched and this pane passes its own pair.
+#
+# Known and accepted: an image too large to fit at 25% centres and overflows the
+# pane rather than shrinking to meet it. The presets top out at 2048 px, which
+# fits a 700 px pane at ~34%, so it takes a hand-opened file to reach.
+INKER_MIN_ZOOM = 0.25
+INKER_MAX_ZOOM = 10.0
+
+# The wheel's granularity, in percent. Additive and *snapped* rather than the
+# multiplicative ``ZOOM_STEP``: a 15% ratio step from 100% lands on 115, 132.25,
+# 152.09 -- the status bar reads a different arbitrary number every notch, and
+# there is no way back to a round one. See :func:`zoom_step`.
+ZOOM_PERCENT_STEP = 5
+
 # The swatch row's own capacity. Not a palette editor -- the eyedropper is how
 # a user gets the colours actually in their image; this only has to hold the
 # handful they keep coming back to.
@@ -303,8 +321,16 @@ class PaintView:
     flipped: bool = False
 
 
-def clamp_zoom(zoom: float) -> float:
-    return max(MIN_ZOOM, min(MAX_ZOOM, float(zoom)))
+def clamp_zoom(zoom: float, lo: float = MIN_ZOOM, hi: float = MAX_ZOOM) -> float:
+    """Hold a zoom inside its bounds.
+
+    The bounds are arguments rather than the module constants, because the
+    three consumers of this view math want different ones -- see
+    ``INKER_MIN_ZOOM``. Defaulting to the globals is what keeps Plotter's and
+    Packwright's call sites unchanged.
+    """
+
+    return max(lo, min(hi, float(zoom)))
 
 
 def _quarter(view: PaintView) -> int:
@@ -370,11 +396,17 @@ def view_extent(
 
 
 def _place(
-    view: PaintView, size: tuple[int, int], region: tuple[float, float], zoom: float
+    view: PaintView,
+    size: tuple[int, int],
+    region: tuple[float, float],
+    zoom: float,
+    *,
+    lo: float = MIN_ZOOM,
+    hi: float = MAX_ZOOM,
 ) -> None:
     """Set the zoom and centre the oriented canvas in the region."""
     (lo_x, lo_y), (hi_x, hi_y) = view_extent(view, size)
-    view.zoom = clamp_zoom(zoom)
+    view.zoom = clamp_zoom(zoom, lo, hi)
     view.pan = (
         (region[0] - (hi_x - lo_x) * view.zoom) * 0.5 - lo_x * view.zoom,
         (region[1] - (hi_y - lo_y) * view.zoom) * 0.5 - lo_y * view.zoom,
@@ -382,18 +414,37 @@ def _place(
     view.fitted = True
 
 
-def fit(view: PaintView, size: tuple[int, int], region: tuple[float, float]) -> None:
-    """Scale to show the whole document, centred."""
+def fit(
+    view: PaintView,
+    size: tuple[int, int],
+    region: tuple[float, float],
+    *,
+    lo: float = MIN_ZOOM,
+    hi: float = MAX_ZOOM,
+) -> None:
+    """Scale to show the whole document, centred.
+
+    Under a floor (``lo``) a document too large to fit is centred at the floor
+    and overflows the pane. That is the stated cost of having a floor at all;
+    the alternative is a "fit" that is not one, which is worse in the case the
+    floor exists for.
+    """
     (lo_x, lo_y), (hi_x, hi_y) = view_extent(view, size)
     zoom = min(region[0] / max(hi_x - lo_x, 1.0), region[1] / max(hi_y - lo_y, 1.0))
-    _place(view, size, region, zoom)
+    _place(view, size, region, zoom, lo=lo, hi=hi)
 
 
 def centre(
-    view: PaintView, size: tuple[int, int], region: tuple[float, float], zoom: float
+    view: PaintView,
+    size: tuple[int, int],
+    region: tuple[float, float],
+    zoom: float,
+    *,
+    lo: float = MIN_ZOOM,
+    hi: float = MAX_ZOOM,
 ) -> None:
     """Set an explicit zoom and re-centre -- what Ctrl+1 (100%) does."""
-    _place(view, size, region, zoom)
+    _place(view, size, region, zoom, lo=lo, hi=hi)
 
 
 def rotate_view(view: PaintView, quarter_turns: int = 1) -> None:
@@ -440,12 +491,17 @@ def to_screen(view: PaintView, origin: tuple[float, float], x: float, y: float):
     )
 
 
-def zoom_about(
-    view: PaintView, origin: tuple[float, float], mouse: tuple[float, float], steps: float
+def _anchor(
+    view: PaintView, origin: tuple[float, float], mouse: tuple[float, float], after: float
 ) -> None:
-    """Zoom keeping whatever pixel is under the cursor under the cursor."""
+    """Move to ``after``, keeping whatever pixel is under the cursor there.
+
+    Factored out rather than written twice: :func:`zoom_about` and
+    :func:`zoom_step` differ only in how they pick the new zoom, and a second
+    copy of this pan correction is the classic way for one of the two routes
+    into the same view to start drifting.
+    """
     before = view.zoom
-    after = clamp_zoom(before * (ZOOM_STEP**steps))
     if after == before:
         return
     local = (mouse[0] - origin[0], mouse[1] - origin[1])
@@ -455,6 +511,46 @@ def zoom_about(
         local[0] - (local[0] - view.pan[0]) * ratio,
         local[1] - (local[1] - view.pan[1]) * ratio,
     )
+
+
+def zoom_about(
+    view: PaintView,
+    origin: tuple[float, float],
+    mouse: tuple[float, float],
+    steps: float,
+    *,
+    lo: float = MIN_ZOOM,
+    hi: float = MAX_ZOOM,
+) -> None:
+    """Zoom keeping whatever pixel is under the cursor under the cursor.
+
+    Multiplicative: a fixed *ratio* per step, which is the right shape for a
+    keyboard zoom spanning three orders of magnitude. The wheel uses
+    :func:`zoom_step` instead.
+    """
+    _anchor(view, origin, mouse, clamp_zoom(view.zoom * (ZOOM_STEP**steps), lo, hi))
+
+
+def zoom_step(
+    view: PaintView,
+    origin: tuple[float, float],
+    mouse: tuple[float, float],
+    notches: float,
+    *,
+    lo: float = MIN_ZOOM,
+    hi: float = MAX_ZOOM,
+) -> None:
+    """One wheel notch: +-``ZOOM_PERCENT_STEP`` percent, snapped to the grid.
+
+    Snapped *first*, so a zoom arrived at by fitting (an arbitrary 83.4%) joins
+    the lattice on the first notch instead of carrying its fraction forever --
+    which is what makes the status bar read 85, 90, 95 rather than 88.4, 93.4.
+    The rounding is what a user coming from any paint program expects and what
+    the multiplicative ratio cannot give: 100% is reachable from either side.
+    """
+    percent = round(view.zoom * 100 / ZOOM_PERCENT_STEP) * ZOOM_PERCENT_STEP
+    percent += ZOOM_PERCENT_STEP * notches
+    _anchor(view, origin, mouse, clamp_zoom(percent / 100.0, lo, hi))
 
 
 # --- one open document ------------------------------------------------------

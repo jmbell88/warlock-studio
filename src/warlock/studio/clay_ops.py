@@ -432,6 +432,30 @@ def _join(ctx: Any, doc: Any, weld: float = 1e-4, **_: Any) -> None:
     doc.select([uids[0]])
 
 
+def _union(ctx: Any, doc: Any, **_: Any) -> None:
+    """Boolean-union every selected object into the topmost one.
+
+    ``_join``'s shape exactly -- topmost visible as the target, the geometry
+    from ``clay.ops_boolean``, the bookkeeping from ``ClayDoc.join_objects``,
+    the survivor left selected -- and every one of those reasons carries over
+    unchanged. What is different is only which function computes the mesh, and
+    that a refusal is possible: a union is defined over closed solids, so
+    ``ops_boolean.union`` raises :class:`OpError` where ``ops.join`` cannot.
+    That is caught where every other element-op refusal is, in ``run``.
+
+    In-process and synchronous, unlike a mesh pipeline: manifold is CPU and
+    fast at the scale Clay authors at, and handing this to ``TaskRunner`` would
+    mean a document edit landing from another thread.
+    """
+    from .clay import ops_boolean
+
+    del ctx
+    uids = [obj.uid for obj in doc.objects if obj.uid in doc.selection and obj.visible]
+    mesh = ops_boolean.union([doc.by_uid(uid) for uid in uids])
+    doc.join_objects(uids[0], mesh, uids[1:])
+    doc.select([uids[0]])
+
+
 def mirror(ctx: Any, doc: Any, axis: int, **_: Any) -> None:
     from .clay import ops as clay_ops_geom
 
@@ -708,6 +732,21 @@ def _register_defaults() -> None:
             ),
         )
     )
+    # Beside *Merge Objects...*, never instead of it. The two answer different
+    # questions and the manual says which is which: a merge welds and keeps the
+    # geometry inside the overlap, a union removes it -- and pays for that with
+    # the UVs and the n-gons, which is exactly why the weld cannot simply be
+    # retired in its favour. Same predicate, because "fewer than two visible" is
+    # the identity for both.
+    register(
+        Op(
+            name="union",
+            label="Union Objects...",
+            modes=("object",),
+            run=_union,
+            enabled=has_two_visible,
+        )
+    )
     for axis, label in enumerate(("X", "Y", "Z")):
         register(
             Op(
@@ -781,6 +820,26 @@ def _register_defaults() -> None:
             run=_dissolve,
             enabled=has_elements,
             separator_before=True,
+        )
+    )
+    # Deliberately a second name for ``dissolve`` in face mode rather than a
+    # second implementation. ``ops_dissolve.dissolve_faces`` has always merged a
+    # connected block of faces into one n-gon; what it lacked was a name anyone
+    # would look for. "Dissolve" is the modelling word and stays, because it is
+    # what the vertex and edge modes do too and splitting it would be exposing
+    # the implementation -- but a user who wants to merge two faces searches for
+    # "merge", finds nothing, and concludes the editor cannot do it.
+    #
+    # Registering it (rather than adding a button) is what gets it into all
+    # three surfaces at once: the Clay menu, the tools pane and the bare-letter
+    # keys all read this table.
+    register(
+        Op(
+            name="merge_faces",
+            label="Merge Faces",
+            modes=("face",),
+            run=_element("ops_dissolve.dissolve_faces"),
+            enabled=in_mode("face"),
         )
     )
     register(

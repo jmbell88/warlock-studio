@@ -151,6 +151,12 @@ class Ctx:
     # until the App attaches it, so a headless caller does nothing rather than
     # quitting a process it does not own.
     ask_quit: Any = None
+    # "Clear the canvas", for the same reason again: emptying the viewport is
+    # only half the job -- the other half is pinning ``viewer.path`` so the
+    # App's own ``_sync_viewer`` does not refill it on the next cache tick, and
+    # that is the App's mechanism rather than a pane's. None until attached, so
+    # a headless caller does nothing instead of leaving a half-cleared viewer.
+    clear_viewport: Any = None
     guidance: dict[str, Any] = field(default_factory=dict)
     sheet_options: dict[str, Any] = field(default_factory=dict)
     # The monitor scale sampled at startup, kept apart from tokens.SCALE so the

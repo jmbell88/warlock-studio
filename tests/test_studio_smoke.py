@@ -626,6 +626,44 @@ def test_the_overlay_builds_with_a_toolbar_and_a_banner(app_ctx, imgui_ctx):
     )
 
 
+def test_the_overlay_offers_clear_only_where_there_is_something_to_clear(app_ctx, imgui_ctx):
+    """The button's whole predicate, per stage.
+
+    Asked per stage rather than as one ``has_model or reference``, because the
+    two stages draw from two different fields -- so a Clear offered on the
+    Reference stage because a *mesh* happened to be loaded would appear to do
+    nothing at all.
+    """
+    from warlock.studio.panes import overlay
+
+    app_ctx.clear_viewport = lambda: None
+    was_mode = app_ctx.state.mode
+    # ``create_stages.at`` asks the mode *and* the stage together, deliberately
+    # -- ``create_stage`` is not cleared on a mode change -- so a stage set
+    # without the mode is not "on the Reference stage" at all.
+    app_ctx.state.mode = "create"
+    try:
+        app_ctx.state.create_stage = "reference"
+        assert overlay._has_content(app_ctx, app_ctx.viewer) is False
+        app_ctx.viewer.gpu = object()
+        assert overlay._has_content(app_ctx, app_ctx.viewer) is False, (
+            "a mesh is not the Reference stage's canvas"
+        )
+        app_ctx.state.create_stage = "mesh"
+        assert overlay._has_content(app_ctx, app_ctx.viewer) is True
+
+        # And it draws, on both stages, with content present.
+        app_ctx.viewer.reference = object()
+        for stage in ("reference", "mesh"):
+            app_ctx.state.create_stage = stage
+            _frame(imgui_ctx, lambda: overlay.toolbar(app_ctx))
+    finally:
+        app_ctx.viewer.gpu = None
+        app_ctx.viewer.reference = None
+        app_ctx.clear_viewport = None
+        app_ctx.state.mode = was_mode
+
+
 def test_toasts_and_dialogs_build(app_ctx, imgui_ctx):
     from warlock.studio import dialogs, widgets
 
@@ -1914,6 +1952,10 @@ class _ReviewApp:
     _review_runs = _main.App._review_runs
     _review_delete_button = _main.App._review_delete_button
     _review_form = _main.App._review_form
+    _review_axis_values = _main.App._review_axis_values
+    _review_judging_card = _main.App._review_judging_card
+    _review_judging_report = _main.App._review_judging_report
+    _review_judging_controls = _main.App._review_judging_controls
     _review_units = _main.App._review_units
     _review_verdict = _main.App._review_verdict
     _review_findings = _main.App._review_findings
@@ -1968,6 +2010,51 @@ def test_the_review_panes_build_with_a_sweep_and_a_unit(app_ctx, imgui_ctx):
             app._review_verdict(app_ctx, state, review_mode),
         ),
     )
+
+
+def test_the_review_panes_build_with_a_judging_pass_running(app_ctx, imgui_ctx):
+    """The entry card gives way to the in-pane controls, and the verdict panel
+    grows an Accept/Reject pair above the grade row it does not replace."""
+    from warlock.studio import review_mode
+
+    app = _ReviewApp()
+    state = _review_state(app_ctx)
+    state.sweeps[1]["todo"] = 1
+    state.units[0]["verdict"] = None
+    state.judging = review_mode.JudgingPass(total=3, filed=1, order=["abcdef012345"])
+
+    _frame(
+        imgui_ctx,
+        lambda: (
+            app._review_runs(app_ctx, state, review_mode),
+            app._review_units(state, review_mode),
+            app._review_verdict(app_ctx, state, review_mode),
+        ),
+    )
+
+
+def test_the_review_panes_build_the_judging_entry_card(app_ctx, imgui_ctx):
+    from warlock.studio import review_mode
+
+    app = _ReviewApp()
+    state = _review_state(app_ctx)
+    state.sweeps[1]["todo"] = 2
+    assert review_mode.todo_total(state) == 2
+
+    _frame(imgui_ctx, lambda: app._review_runs(app_ctx, state, review_mode))
+
+
+def test_the_review_panes_build_the_judging_report(app_ctx, imgui_ctx):
+    from warlock.studio import review_mode
+
+    app = _ReviewApp()
+    state = _review_state(app_ctx)
+    review_mode.start_judging(app_ctx)
+    state.judging = review_mode.JudgingPass(total=1, filed=1, order=["abcdef012345"])
+    review_mode.finish_judging(app_ctx)
+    assert state.judging_report is not None
+
+    _frame(imgui_ctx, lambda: app._review_runs(app_ctx, state, review_mode))
 
 
 def test_the_review_panes_build_with_nothing_recorded(app_ctx, imgui_ctx):
@@ -3710,6 +3797,7 @@ def _canvas_items():
         toolbar.Item("redo", "Redo", icons.REDO, pinned=True),
         toolbar.Item("rotate", "Rotate view", icons.ROTATE_CW),
         toolbar.Item("flip", "Flip view", icons.FLIP_HORIZONTAL),
+        toolbar.Item("center", "Center view", icons.CROSSHAIR),
         toolbar.Item("upright", "90 deg + flipped"),
     ]
 

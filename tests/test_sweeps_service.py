@@ -378,3 +378,103 @@ def test_a_sweep_naming_a_base_model_that_is_not_on_disk_is_refused(svc, monkeyp
     assert "download it with" in caught.value.message
     assert svc_sweeps.list_sweeps(svc) == []
     assert svc.store.list(limit=50) == []
+
+
+# --- cleanup: the user-chosen override of retention -------------------------
+#
+# ``delete_sweep`` must keep an accepted unit's mesh; ``cleanup_sweep`` is the
+# one place the user may say otherwise, after judging every unit in the sweep.
+# Both halves are asserted here, because the value of each is that the other
+# exists: a cleanup that kept the accepts would not free anything a judged sweep
+# is full of, and a delete that dropped them is the 2026-08-09 incident.
+
+
+def test_cleanup_removes_an_accepted_unit_that_a_delete_would_keep(svc):
+    from warlock.service import verdicts as svc_verdicts
+
+    plan = _plan(seeds=(1, 2), axes=(Axis("lora_weight", (0.6,)),))
+    result = svc_sweeps.create_sweep(svc, plan)
+    units = svc.store.sweep_jobs(result["id"])
+    for unit in units:
+        svc.store.set_status(unit["id"], "done")
+    svc_verdicts.record_verdict(svc, units[0]["id"], grade=3)
+
+    outcome = svc_sweeps.cleanup_sweep(svc, result["id"])
+
+    assert outcome["kept"] == 0
+    assert outcome["deleted"] == len(units)
+    assert svc.store.get(units[0]["id"]) is None
+    assert svc_sweeps.list_sweeps(svc) == []
+
+
+def test_cleanup_keeps_the_verdicts_it_was_measured_from(svc):
+    """The whole licence for removing the assets: what was learned outlives
+    them, because the config vector is snapshotted onto the verdict row."""
+    from warlock.service import verdicts as svc_verdicts
+
+    plan = _plan(seeds=(1,), axes=(Axis("lora_weight", (0.6,)),))
+    result = svc_sweeps.create_sweep(svc, plan)
+    units = svc.store.sweep_jobs(result["id"])
+    for unit in units:
+        svc.store.set_status(unit["id"], "done")
+        svc_verdicts.record_verdict(svc, unit["id"], grade=3)
+
+    svc_sweeps.cleanup_sweep(svc, result["id"])
+
+    assert len(svc.store.latest_verdicts()) == len(units)
+
+
+def test_cleanup_honours_an_explicit_keep_list(svc):
+    plan = _plan(seeds=(1, 2), axes=(Axis("lora_weight", (0.6,)),))
+    result = svc_sweeps.create_sweep(svc, plan)
+    units = svc.store.sweep_jobs(result["id"])
+    for unit in units:
+        svc.store.set_status(unit["id"], "done")
+
+    outcome = svc_sweeps.cleanup_sweep(svc, result["id"], keep_job_ids=[units[0]["id"]])
+
+    assert outcome["kept"] == 1
+    assert outcome["deleted"] == len(units) - 1
+    assert svc.store.get(units[0]["id"]) is not None
+    # The row survives while a unit does, for ``delete_sweep``'s reason: a kept
+    # unit is hidden from the library and Review is the only way back to it.
+    assert [s["id"] for s in svc_sweeps.list_sweeps(svc)] == [result["id"]]
+
+
+def test_cleanup_refuses_a_keep_id_from_another_sweep(svc):
+    """Silently doing nothing is the shape of a bug that only shows up later as
+    missing files."""
+    plan = _plan(seeds=(1,), axes=(Axis("lora_weight", (0.6,)),))
+    mine = svc_sweeps.create_sweep(svc, plan)
+    other = svc_sweeps.create_sweep(svc, _plan(label="other", seeds=(3,)))
+    stray = svc.store.sweep_jobs(other["id"])[0]["id"]
+
+    with pytest.raises(Invalid) as caught:
+        svc_sweeps.cleanup_sweep(svc, mine["id"], keep_job_ids=[stray])
+
+    assert caught.value.field == "keep_job_ids"
+    assert svc.store.get(stray) is not None
+
+
+def test_cleanup_refuses_an_unknown_sweep(svc):
+    with pytest.raises(NotFound):
+        svc_sweeps.cleanup_sweep(svc, "no-such-sweep")
+
+
+def test_cleanup_leaves_a_unit_the_worker_is_inside(svc):
+    """The guard is shared with ``delete_sweep`` rather than reimplemented, so
+    a cleanup cannot rmtree a directory a reconstruction is writing into."""
+    plan = _plan(seeds=(1, 2), axes=(Axis("lora_weight", (0.6,)),))
+    result = svc_sweeps.create_sweep(svc, plan)
+    units = svc.store.sweep_jobs(result["id"])
+    busy = units[0]["id"]
+    svc.store.set_status(busy, "running")
+    svc.job_dir(busy).mkdir(parents=True, exist_ok=True)
+    (svc.job_dir(busy) / "source.glb").write_bytes(b"partial")
+    svc.worker = _FakeWorker(busy)
+
+    outcome = svc_sweeps.cleanup_sweep(svc, result["id"])
+
+    assert outcome["remaining"] == 1
+    assert svc.store.get(busy) is not None
+    assert svc.job_dir(busy).exists()

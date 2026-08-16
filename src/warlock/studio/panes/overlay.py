@@ -119,7 +119,33 @@ def toolbar(ctx: Any) -> None:
         if controls.button(f"{icons.X} Exit comparison"):
             state.comparing = None
             viewer.exit_compare()
+    if _has_content(ctx, viewer) and ctx.clear_viewport is not None:
+        # Last, and only when there is something to clear: a "Clear" offered
+        # over an empty canvas is a button whose whole effect is nothing. It
+        # sits at the end because the tiering rule sheds from the right and
+        # this is the one control here with no urgency at all.
+        _wrap(f"{icons.ERASER} Clear")
+        if controls.button(
+            f"{icons.ERASER} Clear",
+            tooltip="Clears the canvas; reselect the asset to bring it back.",
+        ):
+            ctx.clear_viewport()
     _texture_losses(viewer)
+
+
+def _has_content(ctx: Any, viewer: Any) -> bool:
+    """Whether this stage's canvas is showing anything.
+
+    Asked per stage rather than as one ``has_model or reference``, because the
+    two stages draw from two different fields and a Clear offered on the
+    Reference stage because a *mesh* happened to be loaded would appear to do
+    nothing at all.
+    """
+    from .. import create_stages
+
+    if create_stages.at(ctx.state, "reference"):
+        return viewer.reference is not None
+    return viewer.has_model
 
 
 def _texture_losses(viewer: Any) -> None:

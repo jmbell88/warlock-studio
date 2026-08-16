@@ -536,6 +536,7 @@ class App:
         # handler from the first frame rather than toasting "not wired up yet".
         ctx.clay_send_to_3d = self._clay_send_to_3d
         ctx.ask_quit = self._ask_quit
+        ctx.clear_viewport = self._clear_viewport
         ctx.guidance = svc_system.guidance_catalog(self.svc)
         ctx.sheet_options = svc_sheets.sheet_options()
         self._refresh_model_answers()
@@ -1487,6 +1488,60 @@ class App:
         self.viewer.path = None
         self.viewer.pending = None
         self._sync_viewer()
+
+    def _clear_viewport(self) -> None:
+        """Empty the canvas of whichever Create stage is on screen.
+
+        The hard part is not the clearing but making it *stay* clear.
+        ``_sync_viewer`` runs from four places and again within ~3s off the
+        cache tick, and it decides what to show from the selection alone -- so a
+        plain ``clear()`` is undone by the next tick, which is exactly the
+        "reference wants the picture, mesh wants the mesh" rule doing its job.
+        What stops it is the short-circuit ``viewer.path == wanted``: leave the
+        path naming the thing that *would* be loaded and the sync agrees there
+        is nothing to do. This is ``_review_load``'s idiom -- clear, then pin --
+        applied at the other end of the same mechanism.
+
+        So the two stages clear differently and neither is arbitrary.
+        ``clear_reference`` releases just the texture (forgetting the backend's
+        registration before the release, which is the whole reason to call it
+        rather than release the texture here), while ``clear()`` empties the
+        mesh side and nulls path *and* pending. Nulling ``pending`` is not
+        incidental: a parse may be in flight, and ``_adopt_model`` would
+        otherwise land it on the emptied viewport a moment later. The pin is
+        then written back explicitly in both branches, rather than relying on
+        one of the two clears happening to leave ``path`` alone.
+
+        The pin releases on its own the moment the selection or the stage
+        changes, because ``wanted`` changes with it. Reselecting the same job
+        re-shows it, which is what the tooltip says.
+        """
+        from . import create_stages, modes
+
+        ctx = self.app_ctx
+        viewer = self.viewer
+        if viewer is None or ctx.state.mode not in modes.VIEWPORT_MODES:
+            return
+        # A strip renders off the mesh that is about to go; finishing it would
+        # spend frames on an image of something no longer on screen.
+        viewer.cancel_sheet_strip()
+        if ctx.state.comparing:
+            ctx.state.comparing = None
+            viewer.exit_compare()
+        job = ctx.job()
+        job_dir = None if job is None else ctx.job_dir(job["id"])
+        files = [] if job is None else (job.get("files") or [])
+        # ``wanted``, computed exactly as ``_sync_viewer`` computes it -- the
+        # two must agree or the pin names something the sync does not want and
+        # the canvas refills on the next tick.
+        if create_stages.at(ctx.state, "reference"):
+            viewer.clear_reference()
+            name = "input.png"
+        else:
+            viewer.clear()
+            name = "model.glb"
+        if job_dir is not None and name in files:
+            viewer.path = job_dir / name
 
     def _sync_viewer(self) -> None:
         """Show whatever the selection implies, when it changes.
@@ -3474,6 +3529,7 @@ class App:
         from . import icons, widgets
         from .manual import render as manual_render
 
+        self._review_judging_card(ctx, state, review_mode)
         widgets.section("Sweeps")
         manual_render.help_button(ctx, "review")
         if widgets.disabled_button(
@@ -3516,8 +3572,20 @@ class App:
             total = len(sweep["units"])
             selected = sweep["id"] == state.sweep_id
             if imgui.selectable(f"{sweep['label']}##sweep-{sweep['id']}", selected)[0]:
+                # Picking a sweep by hand leaves the pass: the pass is a walk
+                # over every outstanding bucket in a stated order, and a user
+                # who jumps out of that order is no longer on the walk its
+                # header is counting. Cleared here rather than inside
+                # ``open_sweep``, which the pass itself calls.
+                state.judging = None
                 review_mode.open_sweep(ctx, sweep["id"])
             widgets.muted(f"   {total - todo}/{total} reviewed")
+            # What the run actually varied, under the name the user typed for
+            # it at the time -- which is routinely "test2" by the time anyone
+            # comes back to judge it.
+            summary = review_mode.spec_summary(sweep.get("spec"))
+            if summary:
+                widgets.muted(f"   {summary}")
             if selected and sweep["id"] != review_mode.RECENT_ID:
                 self._review_delete_button(ctx, state, review_mode, sweep)
         widgets.no_matches(needle, shown)
@@ -3535,6 +3603,79 @@ class App:
                     review_mode.open_labels(ctx, stage)
         imgui.separator()
         self._review_form(ctx, state, review_mode)
+
+    def _review_judging_card(self, ctx: Any, state: Any, review_mode: Any) -> None:
+        """The offer to start a guided pass, or the report from the last one.
+
+        A card at the top of the column rather than a modal, deliberately: the
+        pass is a *convenience* over the loop that is already on screen, and a
+        dialog in front of Review would make judging feel like something you
+        have to commit to before you can look at anything.
+        """
+        from imgui_bundle import imgui
+
+        from . import widgets
+
+        if state.judging_report is not None:
+            self._review_judging_report(ctx, state, review_mode)
+            return
+        if state.judging is not None or state.scanning:
+            # Nothing to offer: the pass is running (its controls are in the
+            # verdict pane, beside the mesh they are about) or the list is still
+            # being read and its counts are not yet true.
+            return
+        outstanding = review_mode.todo_total(state)
+        if outstanding <= 0:
+            return
+        widgets.section("Judging")
+        widgets.muted(f"{outstanding} unit(s) across every bucket have no verdict.")
+        if widgets.primary_button("Start judging", (-1, 0)):
+            review_mode.start_judging(ctx)
+        # The up-front warning, and the only one there is. The user chose no
+        # dialog, so this sentence is carrying the whole of the notice that a
+        # judged sweep's files are about to go -- which is why it says what
+        # survives as well as what does not.
+        widgets.hint_text(
+            "One at a time, Accept or Reject. Once every unit of a sweep has "
+            "been judged its images and meshes are removed automatically; the "
+            "verdicts and findings they produced are kept."
+        )
+        imgui.separator()
+
+    def _review_judging_report(self, ctx: Any, state: Any, review_mode: Any) -> None:
+        """What the pass that just ended did.
+
+        Drawn from the stored dict and never recomputed: the numbers were
+        tallied once, in memory, at the moment the pass ended -- recomputing
+        per frame would be a table scan behind the one serialized connection,
+        every frame, for a card that says the same thing each time.
+        """
+        from imgui_bundle import imgui
+
+        from . import widgets
+
+        report = state.judging_report
+        widgets.section("Judging pass")
+        # Wrapped, not ``muted``: these are sentences with a sweep's own name in
+        # them, in a 300 px sidebar, and the unwrapped form clipped both the
+        # average grade off the end of every row and the word "do" off the
+        # overall line -- so the two numbers the card exists to report were the
+        # two the reader could not see.
+        for row in report["sweeps"]:
+            line = (
+                f"{row['label']}: {row['accepted']} accepted / "
+                f"{row['rejected']} rejected of {row['total']}"
+            )
+            if row["mean_grade"] is not None:
+                line += f", avg {row['mean_grade']:+.1f}"
+            widgets.muted_wrapped(line)
+        widgets.muted_wrapped(
+            f"{report['filed']} filed this pass - {report['accepted']} accepted, "
+            f"{report['rejected']} rejected, {report['remaining']} still to do."
+        )
+        if imgui.button("Dismiss"):
+            review_mode.dismiss_report(ctx)
+        imgui.separator()
 
     def _review_delete_button(self, ctx: Any, state: Any, review_mode: Any, sweep: Any) -> None:
         """Delete a sweep's jobs and meshes, keeping what they taught.
@@ -3581,6 +3722,11 @@ class App:
         from ..service import sweeps as sweeps_mod
         from . import widgets
 
+        # The label table for every guidance field, which is where a param's
+        # human name already lives. Resolved here rather than in ``review_mode``
+        # for that module's own rule: it may not import a pane.
+        from .panes import settings_2d
+
         if not widgets.header("New sweep", default_open=False):
             return
         form = state.form
@@ -3595,16 +3741,26 @@ class App:
             form.base = review_mode.capture_base(ctx)
             form.base_note = f"{len(form.base)} setting(s) captured"
             ctx.toast("Captured the current settings as this sweep's baseline.")
-        widgets.muted(form.base_note or "No baseline captured; units use the defaults.")
+        widgets.muted(
+            form.base_note
+            # Names the button, because "the defaults" is a fact about a sweep
+            # that is unreproducible rather than merely unconfigured -- and the
+            # remedy is one control away and was not being pointed at.
+            or "No baseline captured; units use the defaults. Press "
+            '"Start from current 2D/3D settings" above to use your own.'
+        )
 
-        widgets.field_label("vary")
-        options = [("", "-")] + [(p, p) for p in sweeps_mod.axis_params()]
+        # "what to vary", not "vary": the old label was a verb with no object,
+        # over a combo of thirty raw param names.
+        widgets.field_label("what to vary")
+        rows = {row["param"]: row for row in review_mode.axis_options(ctx)}
+        options = [("", "-")] + [
+            (p, settings_2d.field_label(p)) for p in sweeps_mod.axis_params()
+        ]
         for i, row in enumerate(form.axes):
             imgui.push_id(f"axis-{i}")
             row["param"] = widgets.combo("##param", row.get("param", ""), options, width=-1)
-            row["values"] = widgets.input_text(
-                "##values", row.get("values", ""), max_length=200, hint="comma-separated"
-            )
+            self._review_axis_values(row, rows.get(row.get("param") or ""))
             imgui.pop_id()
         if imgui.button("Add axis"):
             form.axes.append({"param": "", "values": ""})
@@ -3614,13 +3770,59 @@ class App:
                 form.axes.pop()
 
         planned = review_mode.preview_units(state)
-        widgets.muted(
-            "Fill in the prompt and one axis." if planned < 0
-            else f"{planned} job(s) - roughly two minutes of GPU each."
-        )
+        if planned < 0:
+            widgets.muted("Fill in the prompt and one axis.")
+        else:
+            labels = {p: settings_2d.field_label(p) for p in rows}
+            widgets.muted_wrapped(review_mode.preview_line(state, labels))
+            widgets.muted(f"Roughly two minutes of GPU each - {planned * 2} minutes in all.")
         enabled = planned > 0 and not form.submitting and not state.scanning
         if widgets.primary_button("Launch sweep", (-1, 0), enabled=enabled):
             review_mode.launch(ctx)
+
+    def _review_axis_values(self, row: dict[str, Any], spec: Any) -> None:
+        """One axis row's values, drawn as whatever the param actually accepts.
+
+        **Every kind writes back the same comma-separated string.** That is the
+        whole design: ``build_plan`` and ``_coerce`` parse one representation
+        and are untouched, so this is a better *control* over the existing
+        field rather than a second way of storing an axis -- and a param the
+        catalog cannot resolve falls back to the free-text field the row has
+        always been, which is why an unknown param is less discoverable rather
+        than broken.
+        """
+        from . import controls, widgets
+
+        kind = (spec or {}).get("kind", "text")
+        if spec and spec.get("help"):
+            widgets.help_marker(spec["help"])
+        if kind in ("options", "bool"):
+            entries = (
+                spec["options"]
+                if kind == "options"
+                else [{"key": "true", "label": "on"}, {"key": "false", "label": "off"}]
+            )
+            chosen = [v.strip() for v in (row.get("values") or "").split(",") if v.strip()]
+            for entry in entries:
+                key = entry["key"]
+                changed, _ticked = controls.checkbox(f"{entry['label']}##{key}", key in chosen)
+                if changed:
+                    # Rebuilt from the *entry order* rather than by appending, so
+                    # the string the user sees back is stable however they
+                    # clicked -- and so a value typed by hand and then unticked
+                    # cannot leave a duplicate behind.
+                    picked = set(chosen) ^ {key}
+                    chosen = [e["key"] for e in entries if e["key"] in picked]
+                    row["values"] = ", ".join(chosen)
+            return
+        hint = "comma-separated"
+        if kind == "number" and spec.get("range"):
+            low, high = spec["range"]
+            default = spec.get("default")
+            hint = f"{low}-{high}" + (f", e.g. {default}" if default is not None else "")
+        row["values"] = widgets.input_text(
+            "##values", row.get("values", ""), max_length=200, hint=hint
+        )
 
     def _review_units(self, state: Any, review_mode: Any) -> None:
         from imgui_bundle import imgui
@@ -3644,6 +3846,36 @@ class App:
                 i == state.index,
             )[0]:
                 review_mode.step(state, i - state.index)
+
+    def _review_judging_controls(
+        self, ctx: Any, state: Any, review_mode: Any, enabled: bool
+    ) -> None:
+        """Accept / Reject / Finish, for a pass that is running.
+
+        The keys are named on the buttons, which is the whole of what licenses
+        binding ``A`` again: the objection was never to the key, it was to a
+        *silent* remap onto a grade the reviewer had not chosen. A button
+        labelled "Accept (A)" in a mode entered on purpose says exactly what it
+        files.
+        """
+        from imgui_bundle import imgui
+
+        from ..vectors import BINARY_GRADES
+        from . import controls, widgets
+
+        reason = "A scan is running; the queue is being rebuilt."
+        if widgets.disabled_button("Accept (A)", enabled, reason=reason):
+            review_mode.record(ctx, BINARY_GRADES["accept"], state.pending_tags)
+        imgui.same_line()
+        if widgets.disabled_button("Reject (R)", enabled, reason=reason):
+            review_mode.record(ctx, BINARY_GRADES["reject"], state.pending_tags)
+        imgui.same_line()
+        if controls.button("Finish", role=controls.ButtonRole.GHOST):
+            review_mode.end_judging(ctx)
+        widgets.hint_text(
+            f"Files {BINARY_GRADES['accept']:+d} or {BINARY_GRADES['reject']:+d}. "
+            "Use the grades below to say more; Esc ends the pass."
+        )
 
     def _review_viewport(self, state: Any, review_mode: Any, width: float) -> None:
         """The unit's mesh, in the shared viewer.
@@ -3734,7 +3966,17 @@ class App:
             self._review_findings(ctx)
             return
 
-        widgets.section(review_mode.label(state, unit))
+        if state.judging is not None:
+            # The pass's own position, above the unit's. It counts *filed*
+            # against the total outstanding when the pass started, which is a
+            # different question from "where in this sweep am I" -- and the one
+            # a reviewer who has agreed to do twenty of these is asking.
+            widgets.section(
+                f"Judging {state.judging.filed + 1} of {state.judging.total}"
+            )
+            widgets.muted(review_mode.label(state, unit))
+        else:
+            widgets.section(review_mode.label(state, unit))
         widgets.muted(f"{state.index + 1} of {len(state.units)}  -  {unit['job_id']}")
 
         reference = review_mode.reference_path(unit)
@@ -3768,6 +4010,13 @@ class App:
             widgets.text_colored(
                 theme.WARN, "Negative armed: the next digit files a minus. Esc drops it."
             )
+
+        if state.judging is not None:
+            # Above the grade row, not instead of it. The binary pair is the
+            # fast path; the eleven-point scale below is the power path and
+            # keeps working, files a grade and advances the pass exactly as
+            # these two do.
+            self._review_judging_controls(ctx, state, review_mode, enabled)
 
         with forms.Form("review-verdict") as form_ui:
             with form_ui.field(
@@ -4089,6 +4338,15 @@ class App:
                 ("S", "Skip to the next unverdicted unit"),
                 ("Left / Right", "Previous / next unit"),
                 ("Esc", "Clear the pending sign and tags"),
+            ],
+        )
+        table(
+            "Review - a judging pass",
+            [
+                ("A", "Accept - files +3"),
+                ("R", "Reject - files -3, rather than arming a negative"),
+                ("S", "Skip, staying in the pass"),
+                ("Esc", "End the pass and show its report"),
             ],
         )
         from .clay_mode import TOOL_KEYS as CLAY_KEYS

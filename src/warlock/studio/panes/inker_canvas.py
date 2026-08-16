@@ -24,7 +24,17 @@ from typing import Any
 import numpy as np
 from imgui_bundle import imgui
 
-from .. import ants, controls, icons, inker_mode, inker_state, theme, toolbar, widgets
+from .. import (
+    ants,
+    controls,
+    icons,
+    imgui_backend,
+    inker_mode,
+    inker_state,
+    theme,
+    toolbar,
+    widgets,
+)
 from ..inker import textstamp
 from ..inker.document import catmull_rom, curve_points, curve_spans
 from ..inker.indexed import shade_ramp
@@ -49,6 +59,13 @@ TILED_LABELS = (
     ("y", "Tiled: Y"),
     ("both", "Tiled: X+Y"),
 )
+
+#: The zoom range this pane holds its view to, splatted into every
+#: ``inker_state`` view call. Inker's own, narrower than the module globals that
+#: Plotter and Packwright share -- see ``inker_state.INKER_MIN_ZOOM``. One dict
+#: rather than a keyword pair per call site, because the four calls have to
+#: agree or a fit and a wheel notch would clamp to different numbers.
+_BOUNDS = {"lo": inker_state.INKER_MIN_ZOOM, "hi": inker_state.INKER_MAX_ZOOM}
 
 
 def _u32(colour: int, alpha: float = 1.0) -> int:
@@ -198,6 +215,13 @@ def _file_row(ctx: Any, state: Any) -> None:
         toolbar.Item(
             "flip", "Flip view", icons.FLIP_HORIZONTAL, tooltip="Flip the view (Ctrl+5)"
         ),
+        # Distinct from *Fit view* (Ctrl+0), which is on the View menu: this
+        # keeps the zoom the user chose and only puts the page back under the
+        # pane. Panning far enough to lose the canvas entirely is easy and the
+        # only way back was to re-fit, which threw the zoom away.
+        toolbar.Item(
+            "center", "Center view", icons.CROSSHAIR, tooltip="Center the page"
+        ),
     ]
     if view.rotation or view.flipped:
         # Said out loud, because the two are invisible once you have looked
@@ -235,6 +259,11 @@ def _view_action(ctx: Any, tab: Any, key: str) -> None:
         inker_state.rotate_view(view, 1)
     elif key == "flip":
         inker_state.flip_view(view)
+    elif key == "center":
+        # ``pending_zoom`` and not ``fitted = False``, exactly as ``rotate_view``
+        # and ``flip_view`` do it: clearing ``fitted`` re-*scales* as well as
+        # re-centring, which is the one thing this button must not do.
+        view.pending_zoom = view.zoom
     elif key == "upright":
         view.rotation, view.flipped = 0, False
         view.pending_zoom = view.zoom
@@ -521,10 +550,10 @@ def _canvas(ctx: Any, state: Any, tab: Any) -> None:
         region = (max(avail.x, 16.0), max(avail.y, 16.0))
         view = tab.view
         if view.pending_zoom is not None:
-            inker_state.centre(view, tab.doc.size, region, view.pending_zoom)
+            inker_state.centre(view, tab.doc.size, region, view.pending_zoom, **_BOUNDS)
             view.pending_zoom = None
         elif not view.fitted:
-            inker_state.fit(view, tab.doc.size, region)
+            inker_state.fit(view, tab.doc.size, region, **_BOUNDS)
         # The right button is taken as well as the left: it paints with the
         # background colour (C12d) and the canvas has no context menu to
         # conflict with. Without the flag imgui simply never reports the press.
@@ -574,7 +603,11 @@ def _input(ctx: Any, state: Any, tab: Any, origin, *, active: bool, hovered: boo
     point = inker_state.to_image(tab.view, origin, mouse.x, mouse.y)
 
     if hovered and io.mouse_wheel:
-        inker_state.zoom_about(tab.view, origin, (mouse.x, mouse.y), io.mouse_wheel)
+        # Back to physical notches before stepping: the backend halves every
+        # wheel event so lists scroll at a sane rate, and this pane wants the
+        # count the user's hand made, not a fraction of it.
+        notches = io.mouse_wheel / imgui_backend.WHEEL_SCALE
+        inker_state.zoom_step(tab.view, origin, (mouse.x, mouse.y), notches, **_BOUNDS)
 
     # Middle-drag always pans; space-drag pans with the left button, which is
     # what every paint program does and what makes a tablet usable.

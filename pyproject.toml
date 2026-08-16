@@ -1,6 +1,6 @@
 [project]
 name = "warlock"
-version = "0.0.22"
+version = "0.0.23"
 description = "Local AI 3D asset generator (Meshy-style) for game development"
 requires-python = ">=3.12"
 dependencies = [
@@ -9,6 +9,11 @@ dependencies = [
     "httpx>=0.27",
     "pillow>=10.0",
     "trimesh>=4.4",
+    # The CSG backend behind Clay's Union Objects. trimesh.boolean dispatches to
+    # an engine and ships none: without this, ``engine="manifold"`` raises at
+    # call time rather than at import -- the same shape as scipy below, and the
+    # same reason it is core rather than an extra. Clay is part of the base app.
+    "manifold3d>=2.5",
     "numpy>=1.26",
     # QHull, via trimesh's convex_hull. The collision-mesh export is a convex
     # hull and trimesh delegates the hull itself to scipy.spatial -- without

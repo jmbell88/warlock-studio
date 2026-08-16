@@ -299,6 +299,14 @@ def pane(
     Child borders stay disabled.  A caller names at most the one edge that
     separates this pane from another major region, which avoids turning every
     stacked child into a bordered card.
+
+    ``always_use_window_padding`` goes with that borderlessness rather than
+    beside it: Dear ImGui zeroes a *borderless* child's window padding, so the
+    ``PANE_PADDING`` pushed two lines below had no effect at all and every
+    pane's content sat flush against the column edge. Two panes had already
+    worked around it locally (``panes/app_settings``, ``panes/landing``) --
+    those two draw into ``##content`` rather than through here, so they keep
+    their own flag.
     """
 
     try:
@@ -314,7 +322,9 @@ def pane(
     imgui.push_style_color(
         imgui.Col_.child_bg.value, imgui.ImVec4(*theme.rgba(_pane_fill(resolved_role)))
     )
-    visible = imgui.begin_child(pane_id, size, 0, window_flags)
+    visible = imgui.begin_child(
+        pane_id, size, imgui.ChildFlags_.always_use_window_padding.value, window_flags
+    )
     imgui.pop_style_color()
     imgui.pop_style_var()
     try:
@@ -330,12 +340,16 @@ def pane_child(
     """Compatibility entry point for third-party panes and older tests.
 
     Studio code uses :func:`pane`; this retains the old begin/end shape for
-    callers outside the migration boundary. It is intentionally borderless.
+    callers outside the migration boundary. It is intentionally borderless --
+    and carries ``always_use_window_padding`` for that reason, exactly as
+    :func:`pane` does.
     """
 
     pad = sp(PANE_PADDING)
     imgui.push_style_var(imgui.StyleVar_.window_padding.value, (pad, pad))
-    visible = imgui.begin_child(pane_id, size, 0, window_flags)
+    visible = imgui.begin_child(
+        pane_id, size, imgui.ChildFlags_.always_use_window_padding.value, window_flags
+    )
     imgui.pop_style_var()
     return visible
 

@@ -361,6 +361,14 @@ def commands(ctx: Any) -> list[Command]:
         if ctx.viewer is not None:
             ctx.viewer.frame()
 
+    def clear_viewport(ctx: Any) -> None:
+        # Through the App's helper rather than ``viewer.clear()``, because
+        # emptying the viewer is only half of it -- the pin against
+        # ``_sync_viewer`` is the other half, and a palette command that cleared
+        # the canvas for one frame would look broken rather than useful.
+        if ctx.clear_viewport is not None:
+            ctx.clear_viewport()
+
     def fps(ctx: Any) -> None:
         ctx.state.show_fps = not ctx.state.show_fps
 
@@ -497,6 +505,14 @@ def commands(ctx: Any) -> list[Command]:
             group="Viewport",
             run=frame,
             hint="F",
+            enabled=_viewport,
+            why=_VIEWPORT_WHY,
+        ),
+        Command(
+            key="clear-viewport",
+            label="Clear the viewport",
+            group="Viewport",
+            run=clear_viewport,
             enabled=_viewport,
             why=_VIEWPORT_WHY,
         ),
