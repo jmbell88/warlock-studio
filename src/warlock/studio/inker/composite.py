@@ -78,15 +78,25 @@ BLEND_MODES: tuple[str, ...] = (
 # must never be. Written-out also means the numbers are free of the list's
 # order, so the menu above could be regrouped without invalidating a DLL.
 #
-# **The seven modes added after ``difference`` are deliberately absent from
-# here** -- exclusion, subtract, divide, hue, saturation, color and luminosity
-# are numpy-only, and the four non-separable ones could not be a per-channel C
-# case at all. The consequence is worth stating because it is bigger than the
-# mode: ``_stack_native`` is all-or-nothing, so *one* layer in one of these
-# modes puts the **whole stack** on the numpy fold, not just that layer. That is
-# the intended trade -- a correct composite at the old speed -- and it is the
-# reason none of the seven may be given a number here without a matching case in
-# ``native/composite.c``.
+# **Every mode in BLEND_MODES is here, and that was not always true.** The seven
+# appended after ``difference`` were numpy-only until 2026-08-16, on the reading
+# that the four non-separable ones "could not be a per-channel C case" -- true,
+# and beside the point, because they are per-*pixel* independent and the kernel
+# was free to hand the whole pixel over. What the gap actually cost was measured
+# before it was closed (``docs/measurements/2026-08-16-blend-modes-and-dither.md``)
+# and it was not the mode: ``_stack_native`` is all-or-nothing, so *one* layer in
+# one of the seven put the **whole stack** on the numpy fold. A 256-square dab
+# invalidate over six layers went 5.4 ms to 39-49 ms, and a full-canvas rebuild
+# 256 ms to 2.8 s -- an eleven-fold cliff a user fell off by picking a mode from
+# a menu.
+#
+# The rule the gap existed to protect is unchanged and is why this map is still
+# written out: **a number here without a matching case in native/composite.c
+# composites as normal, silently.** Adding a mode is one entry in BLEND_MODES,
+# one here, one in the warlockc.h enum and one case in the C -- and for a
+# non-separable one, a case in ``blend_nonseparable`` rather than in
+# ``blend_channel``, which is why the enum keeps those four at the top of its
+# range.
 _MODE_IDS: dict[str, int] = {
     "normal": 0,
     "multiply": 1,
@@ -100,6 +110,14 @@ _MODE_IDS: dict[str, int] = {
     "hard-light": 9,
     "soft-light": 10,
     "difference": 11,
+    "exclusion": 12,
+    "subtract": 13,
+    "divide": 14,
+    # The non-separable four, last -- see the enum's note in native/warlockc.h.
+    "hue": 15,
+    "saturation": 16,
+    "color": 17,
+    "luminosity": 18,
 }
 
 # Not a mode: what ``over``'s early-out does, spelled so the fused stack kernel
@@ -190,7 +208,19 @@ def blend(backdrop: np.ndarray, source: np.ndarray, mode: str) -> np.ndarray:
         # colour-dodge's reason: a zero channel is most of a flat drawing.
         divisor = np.where(source > 0.0, source, 1.0)
         ratio = np.minimum(backdrop / divisor, 1.0)
-        return np.where(source > 0.0, ratio, np.where(backdrop > 0.0, 1.0, 0.0))
+        # The zero-divisor answer is spelled as a *cast of the mask* rather than
+        # as ``np.where(backdrop > 0.0, 1.0, 0.0)``, which is what it was until
+        # 2026-08-16 and which is the same numbers at the wrong width: a
+        # ``where`` between a bool array and two Python scalars has no array
+        # operand to take a dtype from, so numpy answered float64 -- and this
+        # was the only one of the nineteen modes that did. The cost was not the
+        # branch: ``over`` then ran its entire ``num`` chain in double for a
+        # divide layer, three full-size float64 temporaries in a module whose
+        # first paragraph says it speaks float32, and the kernel could not be
+        # bit-identical to it without carrying a double path for one mode.
+        # ``.astype`` of the mask is 1.0 and 0.0 in the arithmetic's own dtype,
+        # so this follows a float64 caller up as well as a float32 one down.
+        return np.where(source > 0.0, ratio, (backdrop > 0.0).astype(ratio.dtype))
     if mode in _NON_SEPARABLE:
         return _non_separable(backdrop, source, mode)
     if mode == "hard-light":
@@ -236,8 +266,9 @@ def blend(backdrop: np.ndarray, source: np.ndarray, mode: str) -> np.ndarray:
 # hue / saturation / color / luminosity, straight out of the W3C compositing
 # spec's own pseudo-code (Lum, ClipColor, SetLum, Sat, SetSat) rather than out
 # of anybody's simplification of it. They are the only modes that read all three
-# channels of a pixel to decide one of them, which is why they cannot be a
-# per-channel C case and why they are absent from ``_MODE_IDS``.
+# channels of a pixel to decide one of them, which is why they are not a
+# per-channel C case: the kernel routes them through ``blend_nonseparable``,
+# with the whole pixel, and this is the reference it is measured against.
 #
 # Every division below is guarded even where the branch that would divide by
 # zero is not taken: ``np.where`` evaluates both arms, and this module is

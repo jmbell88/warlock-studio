@@ -47,6 +47,47 @@ file behind.
 - **Panels have room to breathe.** Every pane's content now sits inside the
   12 px inset it was always meant to have; it had been running flush to the
   column edge.
+- **New map asks what the map is.** *New map...* now opens a setup dialog
+  instead of silently making a 32 x 32 grid of 32 px orthogonal cells: three
+  presets, then the projection, the map size in tiles and the tile size in
+  pixels, with a line saying what that comes to overall and a note when an
+  isometric cell is not 2:1. A last question — add a tileset from a file,
+  generate a ground set, or nothing yet — means a new map can arrive paintable.
+  All five doors go through it: the canvas, the map panel, Home, the command
+  palette and `Ctrl+N`.
+- **The map's tile size can be changed after the fact.** Under *Resize* in the
+  tools pane, beside the grid fields. Cells are redrawn at the new size and
+  objects scale with them; nothing painted is lost, because a tile keeps its
+  identity whatever size the cell under it is. It is one undo step. The manual
+  had claimed this worked for some time.
+- **Fixed: the Resize button did nothing.** The *Resize* section and its
+  *Resize* button had the same name, and imgui addresses an item by a hash of
+  its label — so the button claimed the section's identity and never acted,
+  which is what made a map look unresizable. Dear ImGui's own "conflicting ID"
+  warning was the red panel some of you saw over the fields. Every Plotter pane
+  is now held to one id per item by a test.
+- **Fixed: three file pickers listed almost nothing.** Plotter's *Add from a
+  file…* opened on a filter that claimed six formats and in fact showed only
+  Tiled `.tsx` files, so a folder of PNGs looked empty. Plotter's *Open a map*
+  could not see `.tmx` or `.tmj` at all, and Packwright's image picker showed
+  only PNGs. All three now open on a row that lists everything it names, and
+  Add a tileset offers narrower *Tiled tileset* and *Images* rows beneath it.
+- **Fixed: seven blend modes made the whole drawing slow.** `exclusion`,
+  `subtract`, `divide`, `hue`, `saturation`, `color` and `luminosity` were the
+  only modes the fast compositor did not know, and because it composites a stack
+  as one piece, a single layer in one of them put *every* layer back on the slow
+  path. One `saturation` layer took a brush dab from 5 ms to 49 and a full
+  recomposite from 0.26 s to 2.8. All seven are now composited natively, 4.6–7.7×
+  faster, and the pixels are identical to what the old path produced.
+- **Fixed: `divide` did its arithmetic at the wrong precision.** It was the one
+  mode of nineteen computing in double rather than single, which made a divide
+  layer's whole composite twice as wide for no benefit. Values move by at most
+  one part in eight million — 27 bytes in 7.9 million changed in testing.
+- **Converting to a palette with Floyd–Steinberg is ~70× faster.** It ran at
+  about ten microseconds a pixel, so a 1024 x 1024 drawing took 10.6 seconds and
+  a 2048 x 2048 one about 43 — long enough that changing the method in the
+  preview looked like a hang. The same conversion is now 139 ms and 0.5 s. The
+  dithering itself is unchanged, pixel for pixel.
 
 ## 0.0.22 — 2026-08-15
 

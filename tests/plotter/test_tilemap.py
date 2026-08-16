@@ -240,6 +240,92 @@ def test_a_resized_layer_does_not_alias_the_history():
     assert not doc.layer(tiles.uid).data.any()
 
 
+# --- tile size ----------------------------------------------------------------
+#
+# The map's tile size is the *grid cell*, not the tileset's slicing. ``render``
+# says so directly -- "a tileset whose tiles are larger than the map's grid is
+# ordinary, a 32px map with 48px trees" -- so changing it re-places what is
+# painted and never re-slices or invalidates it. That is the whole reason this
+# is allowed on a map with content, where changing the *projection* is not.
+
+
+def test_set_tile_size_moves_the_grid_and_leaves_the_painting_alone():
+    doc = _doc()
+    tiles = doc.add_tile_layer()
+    doc.write_region(tiles.uid, 1, 1, np.array([[7]], gid.DTYPE))
+
+    assert doc.set_tile_size(32, 32) is True
+    assert (doc.tile_w, doc.tile_h) == (32, 32)
+    assert (doc.pixel_width, doc.pixel_height) == (256, 192)
+    # The gids are untouched: a gid names a tile, and which tile it names has
+    # nothing to do with how big the cell it sits in is.
+    assert int(doc.layer(tiles.uid).data[1, 1]) == 7
+    assert doc.layer(tiles.uid).data.shape == (6, 8)
+
+
+def test_set_tile_size_scales_objects_so_they_keep_their_cells():
+    """``resize``'s rule, for the other way the grid can move: an object is
+    absolute pixels, so a cell that changes size leaves it describing a
+    different part of the map unless it travels with the geometry."""
+    doc = _doc()
+    objects = doc.add_object_layer()
+    obj = doc.add_object(
+        objects.uid, MapObject(uid=new_uid(), name="s", kind="rect", x=32, y=16, w=16, h=16)
+    )
+    doc.set_tile_size(32, 32)
+    assert (obj.x, obj.y) == (64.0, 32.0)
+    assert (obj.w, obj.h) == (32.0, 32.0)
+
+
+def test_set_tile_size_undoes_to_the_size_and_objects_it_replaced():
+    doc = _doc()
+    objects = doc.add_object_layer()
+    obj = doc.add_object(
+        objects.uid, MapObject(uid=new_uid(), name="s", kind="rect", x=32, y=16, w=16, h=16)
+    )
+    doc.set_tile_size(8, 24)
+    doc.undo()
+    assert (doc.tile_w, doc.tile_h) == (16, 16)
+    assert (obj.x, obj.y, obj.w, obj.h) == (32.0, 16.0, 16.0, 16.0)
+
+
+def test_set_tile_size_scales_a_polygons_vertices_too():
+    """Four of the seven shapes state an extent as ``w``/``h`` and two state it
+    as vertices. A scale that knew only the first spelling would leave every
+    polygon at its old size, which is the one case where the map visibly stops
+    matching itself."""
+    from warlock.studio.plotter._map_model import Polygon
+
+    doc = _doc()
+    objects = doc.add_object_layer()
+    obj = doc.add_object(
+        objects.uid,
+        MapObject(
+            uid=new_uid(),
+            name="zone",
+            shape=Polygon(points=((0.0, 0.0), (16.0, 0.0), (16.0, 16.0))),
+        ),
+    )
+    doc.set_tile_size(32, 32)
+    assert obj.shape.points == ((0.0, 0.0), (32.0, 0.0), (32.0, 32.0))
+    doc.undo()
+    assert obj.shape.points == ((0.0, 0.0), (16.0, 0.0), (16.0, 16.0))
+
+
+def test_setting_the_tile_size_it_already_has_pushes_nothing():
+    doc = _doc()
+    head = doc.history.head
+    assert doc.set_tile_size(16, 16) is False
+    assert doc.history.head == head
+
+
+@pytest.mark.parametrize("bad", [0, -4])
+def test_set_tile_size_refuses_a_dimension_that_is_not_one(bad):
+    doc = _doc()
+    with pytest.raises(ValueError):
+        doc.set_tile_size(bad, 16)
+
+
 # --- objects ------------------------------------------------------------------
 
 

@@ -39,8 +39,10 @@ WPACK_FILTER = ["Warlock atlas (*.wpack)", "*.wpack"]
 # Label *and* patterns from ``filetypes``, which is the whole point: the label
 # was hand-written and named three of the five suffixes the pattern list
 # accepted, so the dialog told the user two of the formats it would have opened
-# were unsupported.
-IMAGE_FILTER = [filetypes.describe("Images"), *filetypes.globs()]
+# were unsupported. ``pattern()`` rather than a splatted ``globs()``, because
+# portable-file-dialogs pairs a filter list off two at a time -- splatting left
+# this row filtering on ``*.png`` alone while advertising five formats.
+IMAGE_FILTER = [filetypes.describe("Images"), filetypes.pattern()]
 PNG_FILTER = ["PNG image (*.png)", "*.png"]
 
 # The lazy-PIL RGBA decode and the submit-or-unlock helper are one rule for

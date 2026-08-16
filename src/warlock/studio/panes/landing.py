@@ -789,7 +789,9 @@ def start_plotter(ctx: Any) -> None:
 
     set_mode(ctx.state, "plotter")
     if not plotter_mode.ensure(ctx).docs:
-        plotter_mode.new_document(ctx)
+        # Asks rather than invents. Entering Plotter from Home *was* the act of
+        # creating a map, silently and at whatever the default happened to be.
+        plotter_mode.ask_new_document(ctx)
 
 
 def start_packwright(ctx: Any) -> None:

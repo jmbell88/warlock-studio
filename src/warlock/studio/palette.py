@@ -375,7 +375,7 @@ def commands(ctx: Any) -> list[Command]:
     def new_map(ctx: Any) -> None:
         from . import plotter_mode
 
-        plotter_mode.new_document(ctx)
+        plotter_mode.ask_new_document(ctx)
 
     def quit_app(ctx: Any) -> None:
         # Through the app's own guard, never straight to the exit: it is the

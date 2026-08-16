@@ -46,7 +46,7 @@ extern "C" {
  * routinely carries a stale locally-built DLL next to newer sources -- without
  * this guard that DLL would silently compute the old behaviour, which is the
  * one failure mode a fallback path must never have. */
-#define WARLOCKC_ABI 7
+#define WARLOCKC_ABI 8
 
 WARLOCKC_API int32_t warlockc_abi(void);
 
@@ -68,13 +68,20 @@ WARLOCKC_API void warlockc_rasterise(const double *ax, const double *ay,
                                      const double *area2, int64_t n,
                                      int32_t resolution, uint8_t *covered);
 
-/* Separable blend modes: the numbers composite._MODE_IDS hands over.
+/* The blend modes: the numbers composite._MODE_IDS hands over.
  *
  * The names live in Python and the numbers live here, which means adding a
  * mode is one entry in BLEND_MODES, one in composite._MODE_IDS and one case in
- * blend_channel. The *number* is the coupling, so it is spelled out in both
- * places rather than inferred in either -- and deliberately not the position in
- * BLEND_MODES, which is menu order and is free to be regrouped. */
+ * blend_channel (or, for a non-separable one, in blend_nonseparable). The
+ * *number* is the coupling, so it is spelled out in both places rather than
+ * inferred in either -- and deliberately not the position in BLEND_MODES,
+ * which is menu order and is free to be regrouped.
+ *
+ * **The four non-separable modes are the top of the range, and blend_rgb tests
+ * for them with `mode >= WARLOCKC_BLEND_HUE`.** They read all three channels of
+ * a pixel to decide one of them, so they cannot be a blend_channel case at all;
+ * a mode added above LUMINOSITY without moving that test would be dispatched as
+ * non-separable and read a garbage formula. Add separable modes below HUE. */
 enum {
   /* Not a blend mode: "this layer replaces what is under it", which is what
    * over()'s early-out does for an opaque normal layer at full opacity. That
@@ -93,7 +100,17 @@ enum {
   WARLOCKC_BLEND_COLOR_BURN = 8,
   WARLOCKC_BLEND_HARD_LIGHT = 9,
   WARLOCKC_BLEND_SOFT_LIGHT = 10,
-  WARLOCKC_BLEND_DIFFERENCE = 11
+  WARLOCKC_BLEND_DIFFERENCE = 11,
+  /* Separable, and the two arithmetic ones follow Krita's definitions rather
+   * than the W3C's, which has no word for them -- see composite.blend. */
+  WARLOCKC_BLEND_EXCLUSION = 12,
+  WARLOCKC_BLEND_SUBTRACT = 13,
+  WARLOCKC_BLEND_DIVIDE = 14,
+  /* Non-separable from here down; keep them last, see above. */
+  WARLOCKC_BLEND_HUE = 15,
+  WARLOCKC_BLEND_SATURATION = 16,
+  WARLOCKC_BLEND_COLOR = 17,
+  WARLOCKC_BLEND_LUMINOSITY = 18
 };
 
 /* Composite `source` onto `backdrop`, straight alpha, float32, 0..1, four
@@ -237,6 +254,41 @@ WARLOCKC_API void warlockc_morph_u8(const uint8_t *src, int64_t src_stride,
                                     uint8_t *scratch, uint8_t *out,
                                     int64_t out_stride, int64_t h, int64_t w,
                                     int64_t radius, int32_t op);
+
+/* Serpentine Floyd-Steinberg error diffusion, in place on a float32 RGB work
+ * plane -- warlock.studio.inker.dither._floyd_steinberg's loop.
+ *
+ * The one kernel here whose reference is a *Python* loop rather than a numpy
+ * expression, and the reason is in the reference's own docstring: error
+ * diffusion is sequential by definition, every pixel's input depends on its
+ * neighbours' already-quantised output, so there is no vectorisation of it that
+ * is still Floyd-Steinberg. What that costs in Python is about ten numpy
+ * dispatches per pixel -- measured at ~10 us/px, which is 43 seconds for one
+ * 2048-square conversion and is flat in palette size, because the cost is the
+ * dispatch and not the arithmetic. Here the whole per-pixel chain is a handful
+ * of instructions.
+ *
+ * Scalar-sequential also means this kernel has none of the bit-parity tension a
+ * float *reduction* has: there is no order to choose, so the transcription is
+ * operand-for-operand and the bar is np.array_equal as everywhere else.
+ *
+ * `work` is h by w by 3 float32 in the 0..255 domain, `work_stride` counting
+ * floats between row starts and the three channels of a pixel contiguous; it is
+ * both input and output. `visible` is the h by w uint8 alpha mask (numpy's
+ * bool array): a zero pixel is neither quantised nor used as an error sink,
+ * because its dead RGB is not a colour. `entries` is n_entries by 3 float32,
+ * contiguous. The caller does the final clamp-and-narrow in numpy, which is
+ * vectorised and not worth a seam.
+ *
+ * Nothing is clamped in here. The reference lets the diffused values run out of
+ * range and clips once at the end, and a clamp per write would be a different
+ * dither -- errors that fall off the bottom of the range are supposed to keep
+ * being owed. */
+WARLOCKC_API void warlockc_dither_fs(float *work, int64_t work_stride,
+                                     const uint8_t *visible,
+                                     int64_t visible_stride,
+                                     const float *entries, int64_t n_entries,
+                                     int64_t h, int64_t w);
 
 #ifdef __cplusplus
 }

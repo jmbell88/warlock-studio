@@ -264,6 +264,30 @@ def resize_shape(shape: Shape, w: Any, h: Any) -> Shape:
     return replace(shape, w=width, h=height)
 
 
+def scaled_shape(shape: Shape, scale_x: float, scale_y: float) -> Shape:
+    """The same shape with every length multiplied through.
+
+    For the map's *tile size* changing, where the grid keeps its cell counts and
+    each cell changes size: an object drawn two cells wide should still be two
+    cells wide afterwards, so its extent scales exactly as its position does.
+
+    Both spellings of an extent are handled because the union has both -- four
+    shapes state ``w``/``h`` and two state vertices -- and a helper that knew
+    only about ``w``/``h`` would silently leave every polygon at its old size,
+    which is the one case where the map visibly stops matching itself.
+    ``Point`` has no extent and comes back untouched.
+    """
+    if (scale_x, scale_y) == (1.0, 1.0):
+        return shape
+    if hasattr(shape, "points"):
+        return replace(
+            shape, points=tuple((x * scale_x, y * scale_y) for x, y in shape.points)
+        )
+    if hasattr(shape, "w"):
+        return replace(shape, w=shape.w * scale_x, h=shape.h * scale_y)
+    return shape
+
+
 def shape_for_kind(kind: str, w: Any = 0.0, h: Any = 0.0) -> Shape:
     """The compat door: a shape from the two kinds the editor can author.
 

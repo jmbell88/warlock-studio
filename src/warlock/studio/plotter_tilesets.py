@@ -28,13 +28,25 @@ from .plotter_io import _decode, _resolve_source, _within_ceiling
 from .plotter_state import active
 
 # A ``.tsx`` carries its own slicing; anything else is an image sliced at the
-# map's tile size. Both halves of the entry are derived, because the label used
-# to read "(*.tsx *.png)" over a pattern list that also accepted .jpg, .jpeg,
-# .webp and .bmp -- a dialog disclaiming four formats it would have opened.
+# map's tile size. Both halves of every entry are derived, because the label
+# used to read "(*.tsx *.png)" over a pattern list that also accepted .jpg,
+# .jpeg, .webp and .bmp -- a dialog disclaiming four formats it would have
+# opened.
+#
+# **Pairs**, and the pairing is the whole of it. This was one label followed by
+# a splatted ``globs()`` -- seven entries -- and portable-file-dialogs reads a
+# filter list two at a time, so the row the picker opens on advertised six
+# formats and filtered on ``*.tsx`` alone. A folder of PNGs came up empty. The
+# combined row goes first so that is the one it opens on; the narrower rows
+# follow, the shape ``inker_mode.PALETTE_FILTER`` already uses.
 _TILESET_SUFFIXES = (".tsx", *filetypes.IMAGE_SUFFIXES)
 TILESET_FILTER = [
     filetypes.describe("Tilesets and images", _TILESET_SUFFIXES),
-    *filetypes.globs(_TILESET_SUFFIXES),
+    filetypes.pattern(_TILESET_SUFFIXES),
+    "Tiled tileset (*.tsx)",
+    "*.tsx",
+    filetypes.describe("Images"),
+    filetypes.pattern(),
 ]
 
 

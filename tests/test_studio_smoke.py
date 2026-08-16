@@ -3939,3 +3939,127 @@ def test_every_key_a_row_publishes_is_one_its_dispatcher_answers():
         for item in items:
             assert f'"{item.key}"' in source, f"{label}: nothing answers {item.key!r}"
 
+
+
+# --- no two items may claim one imgui id --------------------------------------
+#
+# imgui addresses every item by an id hashed from its label and the id stack, and
+# routes hover, focus and activation by that id alone. Two items sharing one is
+# not a cosmetic clash: the second never reliably acts, because the first
+# already answers for the id. Plotter's Resize section shipped that way -- a
+# ``header("Resize")`` and a ``primary_button("Resize")`` in one window -- and
+# the button did nothing, which read as "the map cannot be resized".
+#
+# The probe is the same question imgui asks itself: resolve each label through
+# ``get_id`` at the moment it is submitted, so the id stack is accounted for,
+# and look for one id claimed twice in a frame. imgui's own warning is a popup
+# in a debug build and invisible in a release one, so this is the only place the
+# conflict is an error rather than a red rectangle nobody screenshots.
+
+_ID_WIDGETS = (
+    "button", "small_button", "invisible_button", "arrow_button", "checkbox",
+    "radio_button", "slider_int", "slider_float", "drag_int", "drag_float",
+    "input_text", "input_int", "input_float", "combo", "begin_combo",
+    "selectable", "collapsing_header", "tree_node", "color_edit3",
+    "color_edit4", "image_button", "menu_item", "begin_child",
+)
+
+
+def _claimed_ids(imgui, build, title):
+    """Draw ``build`` in its own window; return {id: [(call, label), ...]}.
+
+    Its *own* window, never the shared ``##host``: an id stack is seeded per
+    window, so two panes that are separate windows in the app cannot collide and
+    a probe that stacked them would report conflicts the user can never meet.
+    """
+    seen: list[tuple[int, str, str]] = []
+    originals = {name: getattr(imgui, name) for name in _ID_WIDGETS if hasattr(imgui, name)}
+
+    def wrap(fn):
+        def recorded(label, *args, **kwargs):
+            if isinstance(label, str):
+                seen.append((imgui.get_id(label), fn.__name__, label))
+            return fn(label, *args, **kwargs)
+
+        return recorded
+
+    for name, fn in originals.items():
+        setattr(imgui, name, wrap(fn))
+    try:
+        imgui.new_frame()
+        imgui.set_next_window_size((420, 900))
+        imgui.begin(title)
+        build()
+        imgui.end()
+        imgui.render()
+    finally:
+        for name, fn in originals.items():
+            setattr(imgui, name, fn)
+    claims: dict[int, list[tuple[str, str]]] = {}
+    for ident, call, label in seen:
+        claims.setdefault(ident, []).append((call, label))
+    return {k: v for k, v in claims.items() if len(v) > 1}
+
+
+def test_the_new_map_dialog_opens_once_per_request(app_ctx, imgui_ctx):
+    """``setup_pending`` is a request, not a state. Left set, the dialog would
+    re-open itself every frame and could never be cancelled -- and the five
+    doors that raise it are spread across four windows, so the only place that
+    can honour it is the one that draws it."""
+    from warlock.studio import plotter_mode
+    from warlock.studio.panes import plotter_canvas
+
+    state = plotter_mode.ensure(app_ctx)
+    plotter_mode.ask_new_document(app_ctx)
+    assert state.setup_pending is True
+
+    _frame(imgui_ctx, lambda: plotter_canvas.setup_popup(app_ctx, state))
+    assert state.setup_pending is False
+    # And a second frame with nothing pending draws without reopening it.
+    _frame(imgui_ctx, lambda: plotter_canvas.setup_popup(app_ctx, state))
+    assert state.setup_pending is False
+
+
+@pytest.mark.parametrize(
+    "pane",
+    ["tools", "tileset", "layers", "bridge", "setup"],
+)
+def test_no_two_plotter_items_claim_one_imgui_id(app_ctx, imgui_ctx, pane):
+    from warlock.studio import plotter_mode
+    from warlock.studio.panes import (
+        plotter_bridge,
+        plotter_canvas,
+        plotter_layers,
+        plotter_tileset,
+        plotter_tools,
+    )
+
+    imgui, _renderer = imgui_ctx
+    tab = plotter_mode.new_document(app_ctx, (8, 8, 16, 16))
+    # With a tileset attached, so the picker, the terrain rows and the "back
+    # from Inker" rows are all submitted rather than skipped by an empty branch.
+    tab.doc.add_tileset(_tileset())
+    state = plotter_mode.ensure(app_ctx)
+
+    def setup(_ctx):
+        # The New map dialog, open: it is a form of buttons and fields inside a
+        # window that already has a "Create" and a "Cancel", which is exactly
+        # the shape the Resize collision had.
+        state.setup_pending = True
+        plotter_canvas.setup_popup(app_ctx, state)
+
+    draw = {
+        "tools": plotter_tools.draw,
+        "tileset": plotter_tileset.draw,
+        "layers": plotter_layers.draw,
+        "bridge": plotter_bridge.draw,
+        "setup": setup,
+    }[pane]
+    title = f"##idprobe-{pane}"
+    _claimed_ids(imgui, lambda: draw(app_ctx), title)  # settle headers and combos
+    conflicts = _claimed_ids(imgui, lambda: draw(app_ctx), title)
+    detail = "; ".join(
+        f"{ident}: " + " == ".join(f"{call}({label!r})" for call, label in items)
+        for ident, items in conflicts.items()
+    )
+    assert not conflicts, f"{pane}: {detail}"

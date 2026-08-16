@@ -18,16 +18,36 @@ middle, the layer stack and the file panel on the right. Several maps stay open 
 
 ## Starting a map
 
-With nothing open, the middle column offers **New map** and **Open a file...**, and lists the maps
+With nothing open, the middle column offers **New map...** and **Open a file...**, and lists the maps
 you had open recently — clicking one reopens it, and hovering it shows the full path. The map panel
 on the right offers the same two buttons. Once a map is open, `Ctrl+N` and `Ctrl+O` do the same two
 things from the keyboard.
 
-A new map is 32 by 32 cells of 32 by 32 pixels, with one tile layer called *Ground* already on it.
-Both sizes can be changed later; the grid under **Resize** in the tools pane grows or crops the map
-and moves every object with the content, so a trigger volume drawn around a doorway stays around
-that doorway. The **Offset** fields decide where the old content lands, which is how you add rows at
-the *top* rather than the bottom.
+**New map** asks what the map is before making it. Three presets start you off — 16 px tiles, 32 px
+tiles, or a 2:1 isometric cell — and each one fills in every field below, which you can then change.
+The fields are the projection, the map size in tiles, and the tile size in pixels; a line under them
+says what that comes to in pixels overall, because a map is authored in tiles and exported in pixels
+and the two numbers are easy to be surprised by. Choosing *Isometric* with a cell that is not twice
+as wide as it is tall says so, and still lets you do it.
+
+Two of those answers are worth getting right at this point. The **projection** is fixed once anything
+is painted, because a tileset drawn for one lattice paints the wrong shape into every cell drawn for
+the other. The **tile size** is what a plain image is sliced at when you add it, so a tileset added
+to a 32 px map is a 32 px tileset for good. Neither is a trap you can fall into silently any more,
+which is what the dialog is for.
+
+Last, **Then** picks what happens once the map exists: add a tileset from a file, generate a ground
+set, or nothing yet. A map cannot be painted until it has a tileset, so the dialog offers both doors
+rather than leaving you to find them.
+
+Every new map arrives with one tile layer called *Ground* already on it. Both sizes can be changed
+later, under **Resize** in the tools pane. The grid fields grow or crop the map and move every object
+with the content, so a trigger volume drawn around a doorway stays around that doorway; the
+**Offset** fields decide where the old content lands, which is how you add rows at the *top* rather
+than the bottom. Below them, **Tile size** redraws every cell at a new size and scales the objects
+with it — nothing painted is lost, because a tile keeps its identity whatever size the cell under it
+is. Tilesets already on the map keep the slicing they arrived with, which is why the size you start
+with still matters.
 
 ## Tilesets
 

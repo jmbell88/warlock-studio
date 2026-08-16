@@ -449,3 +449,110 @@ def test_over_is_bit_identical_on_a_nan_channel(mode, monkeypatch):
     fast, slow = _both(lambda: cp.over(backdrop, source, mode=mode), monkeypatch)
     assert fast.dtype == slow.dtype
     assert np.array_equal(fast, slow, equal_nan=True), mode
+
+
+# --- the non-separable four ---------------------------------------------------
+#
+# These four are the only modes the kernel cannot decide a channel at a time, so
+# they take a different route through it (``blend_nonseparable``, with the whole
+# pixel) and the parity risk is different too. The sweeps above use uniform
+# random floats, which never produce two exactly equal channels and rarely push
+# a composited value outside 0..1 -- and those are precisely the inputs the
+# W3C's SetSat and ClipColor branch on. So the pixels are built by hand here.
+
+NON_SEPARABLE = ("hue", "saturation", "color", "luminosity")
+
+
+def _pixels(rows: list[list[float]]) -> np.ndarray:
+    """One column of hand-written RGBA pixels."""
+    return np.array([[row] for row in rows], dtype=np.float32)
+
+
+@needs_dll
+@pytest.mark.parametrize("mode", NON_SEPARABLE)
+def test_non_separable_agrees_on_the_ties_random_floats_never_make(mode, monkeypatch):
+    """``_set_sat`` sorts the three channels and the reference leans on that
+    sort being *stable* for the two-equal case -- so the kernel does an
+    insertion sort rather than something quicker that is not.
+
+    A fully grey pixel is the other half: ``span`` is zero, every channel ends
+    at zero, and it is the spec's else-branch rather than a division that is
+    guarded away.
+    """
+    greys_and_ties = _pixels(
+        [
+            [0.5, 0.5, 0.5, 1.0],  # all three equal: span == 0
+            [0.25, 0.25, 0.75, 1.0],  # low pair tied
+            [0.75, 0.25, 0.75, 1.0],  # high pair tied
+            [0.0, 0.0, 0.0, 1.0],  # black
+            [1.0, 1.0, 1.0, 1.0],  # white
+            [0.0, 0.0, 0.0, 0.0],  # empty: the ao == 0 guard
+            [0.5, 0.5, 0.5, 0.5],
+        ]
+    )
+    other = _pixels(
+        [
+            [0.2, 0.9, 0.4, 1.0],
+            [0.5, 0.5, 0.5, 1.0],
+            [0.0, 1.0, 0.0, 0.75],
+            [1.0, 1.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [0.3, 0.6, 0.9, 1.0],
+            [0.5, 0.5, 0.5, 0.5],
+        ]
+    )
+    for backdrop, source in ((greys_and_ties, other), (other, greys_and_ties)):
+        for opacity in OPACITIES:
+            fast, slow = _both(
+                lambda b=backdrop, s=source, o=opacity: cp.over(b, s, opacity=o, mode=mode),
+                monkeypatch,
+            )
+            assert np.array_equal(fast, slow), mode
+
+
+@needs_dll
+@pytest.mark.parametrize("mode", NON_SEPARABLE)
+def test_non_separable_agrees_where_clip_colour_actually_bites(mode, monkeypatch):
+    """``_set_lum`` shifts a colour to a target luminance and can push a channel
+    out of 0..1; ClipColor pulls it back *towards its own luminance* so that
+    fixing the range cannot change the luminance again.
+
+    Both of its branches need reaching, and the reference guards a divisor in
+    each -- the kernel takes only the branch that is selected, which is the same
+    value and a different set of operations, so this is where that argument gets
+    tested rather than asserted.
+    """
+    # A saturated source against a very dark and a very bright backdrop is the
+    # reliable way to drive the shifted colour off both ends.
+    dark = _pixels([[0.02, 0.0, 0.01, 1.0], [0.0, 0.0, 0.0, 1.0]])
+    bright = _pixels([[0.99, 1.0, 0.98, 1.0], [1.0, 1.0, 1.0, 1.0]])
+    saturated = _pixels([[1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]])
+
+    for backdrop in (dark, bright):
+        for source in (saturated, bright, dark):
+            fast, slow = _both(
+                lambda b=backdrop, s=source: cp.over(b, s, mode=mode), monkeypatch
+            )
+            assert np.array_equal(fast, slow), mode
+
+
+@needs_dll
+@pytest.mark.parametrize("mode", NON_SEPARABLE)
+def test_a_non_separable_layer_folds_identically_inside_a_stack(mode, monkeypatch):
+    """The fold is where the backdrop is the *accumulator*, so a non-separable
+    mode reads three channels that the previous layer just wrote. Getting that
+    read-before-write wrong is invisible in ``over`` (whose backdrop is an input
+    it never touches) and wrong in every pixel here."""
+    rng = np.random.default_rng(2026)
+    planes = [rng.integers(0, 256, (17, 23, 4), dtype=np.uint8) for _ in range(5)]
+    entries = list(
+        zip(
+            planes,
+            (1.0, 0.8, 0.55, 1.0, 0.4),
+            ("normal", "multiply", mode, mode, "screen"),
+            strict=True,
+        )
+    )
+
+    fast, slow = _both(lambda: cp.stack_region(entries, (0, 0, 23, 17)), monkeypatch)
+    assert np.array_equal(fast, slow), mode

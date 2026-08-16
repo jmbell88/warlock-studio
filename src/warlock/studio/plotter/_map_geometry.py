@@ -15,8 +15,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from . import gid as gidlib
-from ._map_model import ObjectLayer, TileLayer, _dimension
-from .edits import ResizeEdit
+from ._map_model import ObjectLayer, Shape, TileLayer, _dimension, scaled_shape
+from .edits import ResizeEdit, TileSizeEdit
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .tilemap import MapDoc
@@ -73,6 +73,73 @@ class GeometryOps:
         )
         self._apply_resize((width, height), after, after_objects)
         return True
+
+    def set_tile_size(self: MapDoc, tile_w: int, tile_h: int) -> bool:
+        """Change the size of a cell, keeping every painted tile where it is.
+
+        **This is allowed on a map with content, and the projection is not.**
+        The two look alike and are not: a projection decides the *lattice*, so a
+        set drawn for one paints the wrong shape into every cell already painted
+        for the other, while a cell's size decides only how large that cell is
+        drawn. A gid names a tile either way, and ``render`` already treats a
+        tileset whose tiles do not match the grid as ordinary -- a 32px map with
+        48px trees, anchored bottom left -- so nothing is re-sliced, nothing is
+        renumbered and nothing is lost. What it *does* mean is that a plain
+        image added later is sliced at the new size, because that is the size
+        ``plotter_tilesets`` slices at; tilesets already attached keep the
+        slicing they arrived with, which is exactly Tiled's model.
+        """
+        tile_w = _dimension(tile_w, "tile width")
+        tile_h = _dimension(tile_h, "tile height")
+        if (tile_w, tile_h) == (self.tile_w, self.tile_h):
+            return False
+
+        # A ratio rather than a cell walk: an object is not on the grid, it is
+        # at a pixel, and the pixel that was two cells across is still two cells
+        # across afterwards only if it moves by the same factor the cell did.
+        scale_x = tile_w / float(self.tile_w)
+        scale_y = tile_h / float(self.tile_h)
+        before_objects: dict[int, list[tuple[float, float, Shape]]] = {}
+        after_objects: dict[int, list[tuple[float, float, Shape]]] = {}
+        for layer in self.all_layers():
+            if not isinstance(layer, ObjectLayer):
+                continue
+            # The whole ``shape``, not a ``(w, h)`` pair: ``w``/``h`` are
+            # *derived* from the shape and read-only, and three of the seven
+            # shapes carry their extent as vertices instead. Replaying the
+            # object it was is also what makes the undo exact rather than
+            # approximately the same rectangle.
+            before_objects[layer.uid] = [(o.x, o.y, o.shape) for o in layer.objects]
+            after_objects[layer.uid] = [
+                (o.x * scale_x, o.y * scale_y, scaled_shape(o.shape, scale_x, scale_y))
+                for o in layer.objects
+            ]
+
+        self.history.push(
+            TileSizeEdit(
+                before_size=(self.tile_w, self.tile_h),
+                after_size=(tile_w, tile_h),
+                before_objects=before_objects,
+                after_objects=after_objects,
+            )
+        )
+        self._apply_tile_size((tile_w, tile_h), after_objects)
+        return True
+
+    def _apply_tile_size(
+        self: MapDoc,
+        size: tuple[int, int],
+        objects: dict[int, list[tuple[float, float, Shape]]],
+    ) -> None:
+        self.tile_w, self.tile_h = int(size[0]), int(size[1])
+        for uid, placed in objects.items():
+            layer = self.layer(uid)
+            if isinstance(layer, ObjectLayer):
+                # ``strict`` for ``_apply_resize``'s reason: a length mismatch
+                # means the list changed between the record and the replay, at
+                # which point these rectangles describe other objects.
+                for obj, (x, y, shape) in zip(layer.objects, placed, strict=True):
+                    obj.x, obj.y, obj.shape = float(x), float(y), shape
 
     def _apply_resize(
         self: MapDoc,

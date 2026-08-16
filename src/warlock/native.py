@@ -46,7 +46,7 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 # Must match WARLOCKC_ABI in native/warlockc.h.
-ABI = 7
+ABI = 8
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_DLL = _PROJECT_ROOT / "vendor" / "warlockc" / "warlockc.dll"
@@ -145,6 +145,14 @@ def _bind(lib: ctypes.CDLL) -> None:
         i64, i64,  # h, w
         i64,  # radius
         ctypes.c_int32,  # 0 max (grow), 1 min (shrink)
+    ]
+
+    lib.warlockc_dither_fs.restype = None
+    lib.warlockc_dither_fs.argtypes = [
+        f, i64,  # work, (h, w, 3) float32, row stride in floats
+        u8, i64,  # visible, (h, w) uint8, row stride in bytes
+        f, i64,  # entries, (n, 3) float32
+        i64, i64,  # h, w
     ]
 
     lib.warlockc_contours.restype = i64
@@ -419,6 +427,30 @@ def morph_u8(src: Any, scratch: Any, out: Any, radius: int, op: int) -> None:
         ctypes.c_int64(width),
         ctypes.c_int64(radius),
         ctypes.c_int32(op),
+    )
+
+
+def dither_fs(work: Any, visible: Any, entries: Any) -> None:
+    """Diffuse ``work`` onto ``entries`` in place, serpentine Floyd-Steinberg.
+
+    ``work`` is (h, w, 3) float32 in the 0..255 domain and is both input and
+    output; ``visible`` is the (h, w) bool/uint8 alpha mask; ``entries`` is
+    (n, 3) float32 and C-contiguous. The caller does the final clamp and
+    narrowing, which is vectorised and not worth crossing the seam for.
+    """
+    handle = lib()
+    if handle is None:  # pragma: no cover - callers check available() first
+        raise RuntimeError("warlockc is not loaded")
+    height, width, _ = work.shape
+    handle.warlockc_dither_fs(
+        _ptr(work, ctypes.c_float),
+        ctypes.c_int64(work.strides[0] // work.itemsize),
+        _ptr(visible, ctypes.c_uint8),
+        ctypes.c_int64(visible.strides[0]),
+        _ptr(entries, ctypes.c_float),
+        ctypes.c_int64(entries.shape[0]),
+        ctypes.c_int64(height),
+        ctypes.c_int64(width),
     )
 
 

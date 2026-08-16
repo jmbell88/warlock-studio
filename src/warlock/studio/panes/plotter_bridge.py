@@ -28,8 +28,8 @@ def draw(ctx: Any) -> None:
     manual_render.help_button(ctx, "plotter-bridge")
 
     width = widgets.grid_width(2)
-    if controls.button(f"{icons.PLUS} New", (width, 0)):
-        plotter_mode.new_document(ctx)
+    if controls.button(f"{icons.PLUS} New...", (width, 0)):
+        plotter_mode.ask_new_document(ctx)
     imgui.same_line()
     if controls.button(f"{icons.FOLDER_OPEN} Open...", (width, 0)):
         plotter_mode.ask_open(ctx)

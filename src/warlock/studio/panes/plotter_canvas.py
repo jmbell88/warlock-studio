@@ -23,8 +23,18 @@ from typing import Any
 
 import numpy as np
 
-from .. import inker_state, plotter_mode, plotter_state, theme, widgets
+from .. import (
+    controls,
+    icons,
+    inker_state,
+    plotter_mode,
+    plotter_setup,
+    plotter_state,
+    theme,
+    widgets,
+)
 from ..plotter import gid as gidlib
+from ..plotter import project
 from ..plotter import render as plotter_render
 from ..plotter import scene as plotter_scene
 from ..plotter import terrain as plotter_terrain
@@ -81,6 +91,9 @@ def draw(ctx: Any) -> None:
 
     state = plotter_mode.ensure(ctx)
     _tabs(ctx, state)
+    # Before the empty-state return, or "New map" would open a dialog that only
+    # exists on the branch where a map is already open.
+    setup_popup(ctx, state)
     tab = state.active
     if tab is None:
         _empty(ctx)
@@ -165,10 +178,136 @@ def _empty(ctx: Any) -> None:
     widgets.nothing_open(
         f"Start a map, open one, or drop a {plotter_state.MAP_SUFFIX_TEXT} on the window.",
         [
-            ("New map", lambda: plotter_mode.new_document(ctx)),
+            ("New map...", lambda: plotter_mode.ask_new_document(ctx)),
             ("Open a file...", lambda: plotter_mode.ask_open(ctx)),
         ],
     )
+
+
+#: The setup popup's name, which imgui also takes as its id -- so what is opened
+#: and what is begun have to be this one string. One window owns it (this pane),
+#: because a popup belongs to the window that begins it and this is the only
+#: Plotter pane drawn on both the empty and the open branch.
+SETUP_POPUP = "New map"
+
+
+def setup_popup(ctx: Any, state: Any) -> None:
+    """Ask what the new map is, then make it.
+
+    Opened from ``state.setup_pending`` rather than from a button, because the
+    five doors that ask for a map are spread across four windows and only this
+    one can begin the popup. See :func:`.plotter_mode.ask_new_document`.
+    """
+    from imgui_bundle import imgui
+
+    if state.setup_pending:
+        state.setup_pending = False
+        imgui.open_popup(SETUP_POPUP)
+
+    key = "plotter_new_map"
+    form = ctx.state.preview.get(key)
+    if not isinstance(form, dict):
+        form = plotter_setup.blank_form()
+        ctx.state.preview[key] = form
+
+    opened, _ = imgui.begin_popup_modal(
+        SETUP_POPUP, None, imgui.WindowFlags_.always_auto_resize.value
+    )
+    if not opened:
+        return
+    _setup_body(ctx, form, key)
+    imgui.end_popup()
+
+
+def _setup_body(ctx: Any, form: dict, key: str) -> None:
+    from imgui_bundle import imgui
+
+    widgets.muted_wrapped(
+        "The projection and the tile size are worth getting right now: a map's "
+        "lattice is fixed once anything is painted on it, and a plain image is "
+        "sliced at whatever tile size the map has when it is added."
+    )
+    imgui.dummy((0, sp(6)))
+
+    widgets.field_label("Start from")
+    width = widgets.grid_width(len(plotter_setup.PRESETS))
+    for index, preset in enumerate(plotter_setup.PRESETS):
+        if index:
+            imgui.same_line()
+        label = preset[0]
+        if controls.button(f"{label}##preset-{index}", (width, 0)):
+            plotter_setup.apply_preset(form, label)
+
+    imgui.dummy((0, sp(6)))
+    form["projection"] = widgets.labeled_combo(
+        "Projection",
+        form["projection"],
+        [(name, name.capitalize()) for name in project.PROJECTIONS],
+    )
+    # ``W``/``H`` beside a field label rather than four spelled-out labels:
+    # imgui draws an input's label to its right, so "Width (tiles)" on a pair of
+    # fields on one line is two sentences competing for the same row. This is
+    # ``inker_canvas``'s new-canvas layout.
+    widgets.field_label("Map size, in tiles")
+    imgui.set_next_item_width(sp(80))
+    _, form["width"] = controls.input_int("W##map-w", int(form["width"]), 0)
+    imgui.same_line()
+    imgui.set_next_item_width(sp(80))
+    _, form["height"] = controls.input_int("H##map-h", int(form["height"]), 0)
+
+    widgets.field_label("Tile size, in pixels")
+    imgui.set_next_item_width(sp(80))
+    _, form["tile_w"] = controls.input_int("W##tile-w", int(form["tile_w"]), 0)
+    imgui.same_line()
+    imgui.set_next_item_width(sp(80))
+    _, form["tile_h"] = controls.input_int("H##tile-h", int(form["tile_h"]), 0)
+    # Clamped on the way in as well as on the way out, so the fields never go on
+    # showing a number Create will not honour.
+    plotter_setup.clamp(form)
+
+    widgets.muted(plotter_setup.summary(form))
+    warning = plotter_setup.isometric_warning(form)
+    if warning:
+        widgets.hint_text(warning)
+
+    imgui.dummy((0, sp(6)))
+    widgets.field_label("Then")
+    for label, value in (
+        (f"{icons.PLUS} Add a tileset from a file", plotter_setup.NEXT_FILE),
+        (f"{icons.WAND} Generate a ground set", plotter_setup.NEXT_GENERATE),
+        ("Nothing yet", plotter_setup.NEXT_EMPTY),
+    ):
+        # Through ``controls`` rather than imgui: an AST guard rejects a pane
+        # reaching for a presentational widget directly, and this is one of the
+        # three states that has to look selected in the app's one language.
+        if controls.radio_button(f"{label}##next-{value}", form["next"] == value):
+            form["next"] = value
+
+    imgui.dummy((0, sp(8)))
+    if widgets.primary_button("Create", (sp(180), 0)):
+        _create(ctx, form)
+        ctx.state.preview.pop(key, None)
+        imgui.close_current_popup()
+    imgui.same_line()
+    if controls.button("Cancel", (sp(120), 0)) or imgui.is_key_pressed(imgui.Key.escape):
+        imgui.close_current_popup()
+
+
+def _create(ctx: Any, form: dict) -> None:
+    """Make the map, then open whichever tileset door was chosen.
+
+    The routing is here rather than in ``plotter_setup`` because both doors are
+    UI: one opens an OS picker on a task thread and the other asks a *section*
+    to unfold, and neither is something a pure form module should know.
+    """
+    plotter_mode.new_document(
+        ctx, plotter_setup.size_of(form), projection=form["projection"]
+    )
+    choice = form.get("next")
+    if choice == plotter_setup.NEXT_FILE:
+        plotter_mode.ask_add_tileset(ctx)
+    elif choice == plotter_setup.NEXT_GENERATE:
+        widgets.request_open("plotter/generate")
 
 
 def _status(ctx: Any, state: Any, tab: Any) -> None:

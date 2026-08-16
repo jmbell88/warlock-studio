@@ -26,7 +26,9 @@ Alpha is never touched and fully transparent pixels are never read, for the
 reasons ``indexed`` gives at length: a palette is a set of colours, not a set of
 opacities, and a transparent pixel has no colour to convert.
 
-Pure numpy and stdlib, like the rest of this package.
+Pure numpy and stdlib, like the rest of this package -- ``warlock.native`` is
+the one import beyond that, and it is stdlib-only itself and returns ``None``
+rather than raising when the DLL is absent, exactly as ``composite`` uses it.
 """
 
 from __future__ import annotations
@@ -35,6 +37,7 @@ from collections.abc import Iterable, Sequence
 
 import numpy as np
 
+from ... import native
 from . import indexed as ix
 
 __all__ = [
@@ -206,6 +209,31 @@ def _ordered(out: np.ndarray, table: np.ndarray, matrix: np.ndarray) -> np.ndarr
     return out
 
 
+def _diffuse_native(work: np.ndarray, visible: np.ndarray, entries: np.ndarray) -> bool:
+    """Run the diffusion in C, or return False for "not this call's shape".
+
+    A refusal is a fallback and never an error, the same as everywhere else at
+    this seam. The arrays are all freshly built by the caller, so the contiguity
+    tests below are formalities that keep the kernel free of strides it would
+    never see -- but they are cheap and a stride the kernel indexed wrongly
+    would be silent.
+    """
+    if not native.available():
+        return False
+    if work.dtype != np.float32 or entries.dtype != np.float32:
+        return False
+    if not work.flags["C_CONTIGUOUS"] or not entries.flags["C_CONTIGUOUS"]:
+        return False
+    if visible.dtype != np.bool_ or not visible.flags["C_CONTIGUOUS"]:
+        return False
+    if work.ndim != 3 or work.shape[2] != 3 or entries.ndim != 2 or entries.shape[1] != 3:
+        return False
+    if visible.shape != work.shape[:2] or not entries.shape[0]:
+        return False
+    native.dither_fs(work, visible, entries)
+    return True
+
+
 def _floyd_steinberg(out: np.ndarray, table: np.ndarray) -> np.ndarray:
     """Serpentine error diffusion in straight float32 RGB.
 
@@ -214,6 +242,13 @@ def _floyd_steinberg(out: np.ndarray, table: np.ndarray) -> np.ndarray:
     already-quantised output -- so there is no vectorisation of it that is still
     Floyd-Steinberg. The preview above this memoises per (palette, method) for
     exactly this reason, the same way the blur filter does.
+
+    Which is also why this is the one kernel in ``native/`` whose reference is a
+    Python loop: what it costs is not arithmetic but about ten numpy dispatches
+    per pixel, measured at ~10 us/px and near enough flat in palette size, so a
+    2048-square conversion took about 43 seconds. The loop below is never
+    deleted -- it is the fallback and the thing ``tests/inker/test_dither_native.py``
+    measures the kernel against, bit for bit.
 
     Serpentine (alternate rows right-to-left) rather than raster order: a
     one-directional scan piles its error up towards one edge and leaves a visible
@@ -227,6 +262,10 @@ def _floyd_steinberg(out: np.ndarray, table: np.ndarray) -> np.ndarray:
     work = out[..., :3].astype(np.float32)
     visible = out[..., 3] > 0
     entries = table.astype(np.float32)
+
+    if _diffuse_native(work, visible, entries):
+        out[..., :3][visible] = np.clip(work, 0.0, 255.0)[visible].astype(np.uint8)
+        return out
 
     for y in range(height):
         rightwards = y % 2 == 0

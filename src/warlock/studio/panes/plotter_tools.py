@@ -9,8 +9,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import controls, icons, plotter_mode, plotter_state, widgets
+from .. import controls, icons, plotter_mode, plotter_setup, plotter_state, widgets
 from ..manual import render as manual_render
+from ..tokens import sp
 from . import plotter_layers
 
 # The tool letters, drawn on the buttons. From ``plotter_state.TOOLS`` rather
@@ -220,7 +221,12 @@ def _resize_form(ctx: Any, tab: Any) -> None:
     _, form["dx"] = widgets.labeled_slider_int("Offset X", int(form["dx"]), -64, 64)
     _, form["dy"] = widgets.labeled_slider_int("Offset Y", int(form["dy"]), -64, 64)
     imgui.dummy((0, 4))
-    if widgets.primary_button("Resize", (-1, 0)):
+    # ``##apply`` is load-bearing. The section around this is ``header("Resize")``
+    # and imgui hashes an item's id from its label, so a button reading "Resize"
+    # inside it claimed the *header's* id -- and imgui routes activation by id,
+    # so the button never acted and the map could not be resized at all. The
+    # suffix is invisible to the reader and makes the id its own.
+    if widgets.primary_button("Resize##apply", (-1, 0)):
         try:
             tab.doc.resize(
                 int(form["w"]), int(form["h"]),
@@ -230,6 +236,54 @@ def _resize_form(ctx: Any, tab: Any) -> None:
             # Framed rather than forwarded: the engine's sentence says what was
             # wrong with the number and nothing about what was being attempted.
             ctx.toast(f"The map was not resized: {exc}.", "error")
+            return
+        ctx.state.preview.pop(key, None)
+        tab.view.fitted = False
+
+    imgui.dummy((0, 10))
+    _tile_size_form(ctx, tab)
+
+
+def _tile_size_form(ctx: Any, tab: Any) -> None:
+    """How big a cell is, on a map that already exists.
+
+    Beside the grid resize because they are the two halves of one question --
+    how many cells, and how big is a cell -- and neither is a projection: the
+    lattice is what cannot move once tiles are on the map, and a cell's *size*
+    can, because a gid names the same tile whatever size the cell under it is.
+    """
+    from imgui_bundle import imgui
+
+    key = f"plotter_tile_px:{tab.uid}"
+    stamp = (tab.doc.tile_w, tab.doc.tile_h)
+    form = ctx.state.preview.get(key)
+    if form is None or form.get("for") != stamp:
+        form = {"for": stamp, "w": tab.doc.tile_w, "h": tab.doc.tile_h}
+        ctx.state.preview[key] = form
+
+    widgets.field_label("Tile size, in pixels")
+    imgui.set_next_item_width(sp(80))
+    _, form["w"] = controls.input_int("W##tile-px-w", int(form["w"]), 0)
+    imgui.same_line()
+    imgui.set_next_item_width(sp(80))
+    _, form["h"] = controls.input_int("H##tile-px-h", int(form["h"]), 0)
+    width = max(1, min(int(form["w"] or 1), plotter_setup.MAX_TILE_PX))
+    height = max(1, min(int(form["h"] or 1), plotter_setup.MAX_TILE_PX))
+    form["w"], form["h"] = width, height
+
+    widgets.muted_wrapped(
+        "Cells are redrawn at the new size and every object scales with them. "
+        "Tilesets already on the map keep the slicing they arrived with; only "
+        "an image added *after* this is sliced at the new size."
+    )
+    if widgets.disabled_button(
+        "Apply tile size", (width, height) != stamp, (-1, 0)
+    ):
+        try:
+            tab.doc.set_tile_size(width, height)
+        except ValueError as exc:
+            # Framed rather than forwarded, ``_resize_form``'s rule.
+            ctx.toast(f"The tile size was not changed: {exc}.", "error")
             return
         ctx.state.preview.pop(key, None)
         tab.view.fitted = False

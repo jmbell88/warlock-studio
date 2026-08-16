@@ -38,11 +38,13 @@ import numpy as np
 from . import dialogs, docmodes, plotter_state
 from .plotter_state import PlotterDoc, active, ensure
 
+# One row, all three patterns on it. Written as four entries once, which
+# portable-file-dialogs pairs as ("Map documents (...)", "*.wmap") and
+# ("*.tmx", "*.tmj") -- so "Open a map" could not see a Tiled file at all, and
+# the second row of the dropdown was titled ``*.tmx``.
 MAP_FILTER = [
     "Map documents (*.wmap *.tmx *.tmj)",
-    "*.wmap",
-    "*.tmx",
-    "*.tmj",
+    "*.wmap *.tmx *.tmj",
 ]
 WMAP_FILTER = ["Warlock map (*.wmap)", "*.wmap"]
 TMX_FILTER = ["Tiled map (*.tmx)", "*.tmx"]

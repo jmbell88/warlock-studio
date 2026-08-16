@@ -87,31 +87,102 @@ def test_the_seven_are_appended_rather_than_filed_into_their_families():
     assert len(cp.BLEND_MODES) == 19
 
 
-def test_none_of_the_seven_is_a_kernel_mode(monkeypatch):
+def test_every_one_of_the_seven_is_a_kernel_mode():
     """``_MODE_IDS`` is the contract with ``native/composite.c``, and a number
-    here with no ``case`` there composites as normal, silently."""
-    monkeypatch.setattr(native, "available", lambda: True)
-    assert set(NEW_MODES).isdisjoint(cp._MODE_IDS)
-    px = np.zeros((2, 2, 4), dtype=np.float32)
-    for mode in NEW_MODES:
-        assert cp._over_native(px, px, 1.0, mode) is None, mode
+    here with no ``case`` there composites as normal, silently.
+
+    The seven were numpy-only until 2026-08-16, which is why this test used to
+    assert the opposite: the reading was that the four non-separable ones "could
+    not be a per-channel C case", which is true and was the wrong conclusion --
+    they are per-*pixel* independent, and the kernel now takes the whole pixel.
+    What the gap cost is in ``docs/measurements/2026-08-16-blend-modes-and-dither.md``:
+    ``_stack_native`` is all-or-nothing, so one such layer put the whole stack
+    on the numpy fold and a dab invalidate went 5.4 ms to 49.
+
+    Asserted over ``BLEND_MODES`` rather than over the seven, because the thing
+    worth pinning now is that the map is *complete* -- a mode added to the menu
+    and not to the kernel is the next silent cliff.
+    """
+    assert set(cp._MODE_IDS) == set(cp.BLEND_MODES)
 
 
-def test_one_layer_in_a_new_mode_puts_the_whole_stack_on_numpy(monkeypatch):
-    """The consequence worth stating out loud: ``_stack_native`` is
-    all-or-nothing, so this is not "that layer is slower", it is "this
-    document's every recomposite is the numpy fold". That is the accepted trade
-    and it is accepted knowingly."""
-    monkeypatch.setattr(native, "available", lambda: True)
+@pytest.mark.skipif(not native.available(), reason="needs the built DLL")
+@pytest.mark.parametrize("mode", NEW_MODES)
+def test_a_new_mode_reaches_the_kernel_and_agrees_with_numpy_bit_for_bit(mode):
+    """The pair that matters: the kernel accepts the mode *and* what it computes
+    is the numpy body's answer exactly, not closely."""
+    rng = np.random.default_rng(hash(mode) % 2**32)
+    backdrop = rng.random((11, 13, 4), dtype=np.float32)
+    source = rng.random((11, 13, 4), dtype=np.float32)
+
+    fast = cp._over_native(backdrop, source, 0.75, mode)
+    assert fast is not None, f"{mode} was refused by the kernel"
+
+    cb, cs = backdrop[..., :3], source[..., :3]
+    ab = backdrop[..., 3:4]
+    a_s = source[..., 3:4] * 0.75
+    ao = a_s + ab * (1.0 - a_s)
+    mixed = cp.blend(cb, cs, mode)
+    num = a_s * (1.0 - ab) * cs + a_s * ab * mixed + (1.0 - a_s) * ab * cb
+    shown = ao > 0.0
+    ref = np.empty_like(backdrop)
+    np.divide(num, np.where(shown, ao, 1.0), out=ref[..., :3])
+    ref[..., :3] = np.where(shown, ref[..., :3], 0.0)
+    ref[..., 3:4] = ao
+
+    assert np.array_equal(ref.view(np.uint32), fast.view(np.uint32))
+
+
+@pytest.mark.skipif(not native.available(), reason="needs the built DLL")
+def test_one_layer_in_a_new_mode_no_longer_drops_the_stack_off_the_kernel():
+    """The cliff this file used to document, pinned in the direction it now
+    falls. ``_stack_native`` is still all-or-nothing -- that has not changed and
+    is still the right trade -- but there is no longer a mode in the menu that
+    triggers it.
+
+    Not monkeypatched, unlike the version of this test that asserted the
+    opposite: a *refusal* can be tested against a claimed library because it
+    never calls into one, and an acceptance cannot.
+    """
     plane = np.zeros((4, 4, 4), dtype=np.uint8)
-    entries = [(plane, 1.0, "normal"), (plane, 1.0, "luminosity")]
-    assert cp._stack_native(entries, (0, 0, 4, 4), None) is None
-    # And the fold still answers, through the body that was always there. Off
-    # the patch for this half: ``available`` is claiming a library this machine
-    # may not have built, which is fine for a refusal that never calls it and
-    # not fine for the numpy path underneath.
-    monkeypatch.undo()
-    assert cp.stack_region(entries, (0, 0, 4, 4)).shape == (4, 4, 4)
+    for mode in NEW_MODES:
+        entries = [(plane, 1.0, "normal"), (plane, 1.0, mode)]
+        assert cp._stack_native(entries, (0, 0, 4, 4), None) is not None, mode
+
+
+def test_the_numpy_fold_still_answers_for_the_seven(monkeypatch):
+    """The half that has to hold with no DLL at all: the reference is the
+    fallback and is never deleted."""
+    monkeypatch.setattr(native, "available", lambda: False)
+    plane = np.zeros((4, 4, 4), dtype=np.uint8)
+    for mode in NEW_MODES:
+        entries = [(plane, 1.0, "normal"), (plane, 1.0, mode)]
+        assert cp.stack_region(entries, (0, 0, 4, 4)).shape == (4, 4, 4), mode
+
+
+def test_divide_stays_in_float32_like_every_other_mode():
+    """The one mode that did not, until 2026-08-16.
+
+    ``np.where(backdrop > 0.0, 1.0, 0.0)`` is a bool array between two Python
+    scalars -- no array operand to take a dtype from, so numpy answered float64
+    and ``over`` then ran its whole ``num`` chain at double width for a divide
+    layer. In a module whose first paragraph says it speaks float32, and which
+    a bit-parity kernel has to agree with.
+    """
+    for mode in cp.BLEND_MODES:
+        cb = np.full((2, 2, 3), 0.5, dtype=np.float32)
+        cs = np.full((2, 2, 3), 0.25, dtype=np.float32)
+        assert cp.blend(cb, cs, mode).dtype == np.float32, mode
+
+
+def test_divide_by_an_empty_channel_still_follows_kritas_convention():
+    """The dtype fix rewrote the expression, so the convention it encodes is
+    re-pinned here rather than trusted to have survived: dividing by zero gives
+    white where there is anything to divide and stays black where there is not.
+    """
+    cb = _rgb(0.5, 0.0, 1.0)
+    cs = _rgb(0.0, 0.0, 0.0)
+    assert np.array_equal(cp.blend(cb, cs, "divide"), _rgb(1.0, 0.0, 1.0))
 
 
 # --- the three separable ones -----------------------------------------------

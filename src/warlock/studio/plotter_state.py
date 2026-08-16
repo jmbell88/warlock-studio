@@ -170,6 +170,16 @@ class PlotterState:
     # terrain set and "terrain 2" alone does not say whose.
     terrain: tuple[int, int] | None = None
 
+    # A "New map" was asked for and the setup dialog has not opened yet.
+    #
+    # A flag rather than each door opening the dialog itself, because a popup
+    # belongs to the window that begins it (the rule ``inker_canvas``'s
+    # new-canvas popup is written around) and three of the five doors -- the
+    # command palette, Home, and Ctrl+N -- are not Plotter panes at all. They
+    # all say *that* a map was asked for; the canvas pane is the one window that
+    # can ask what it should be, and it clears this when it opens.
+    setup_pending: bool = False
+
     grid: bool = True
     show_objects: bool = True
     minimap: bool = True

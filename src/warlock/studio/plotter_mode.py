@@ -145,10 +145,34 @@ def adopt(
     return tab
 
 
-def new_document(ctx: Any, size: tuple[int, int, int, int] = DEFAULT_MAP) -> PlotterDoc:
+def ask_new_document(ctx: Any) -> None:
+    """The door every "New map" now goes through: ask, then make.
+
+    It does not make a map. Two of the four numbers a map is built from cannot
+    be taken back later -- see :mod:`.plotter_setup` -- so the answer is the
+    user's rather than a default nobody was offered. Switching modes here is
+    what lets Home and the command palette use the one door: the dialog is
+    Plotter's, so the caller has to be in Plotter to see it.
+    """
+    set_mode(ctx.state, "plotter")
+    ensure(ctx).setup_pending = True
+
+
+def new_document(
+    ctx: Any,
+    size: tuple[int, int, int, int] = DEFAULT_MAP,
+    *,
+    projection: str | None = None,
+) -> PlotterDoc:
+    """A blank map. ``projection`` defaults to whatever ``MapDoc`` defaults to.
+
+    Keyword-only and defaulted rather than a fifth member of ``size``, because
+    ``size`` is four numbers in two units and a string is neither -- and because
+    every existing caller passes the tuple positionally.
+    """
     from .plotter.tilemap import MapDoc
 
-    doc = MapDoc(*size)
+    doc = MapDoc(*size) if projection is None else MapDoc(*size, projection=projection)
     doc.add_tile_layer("Ground")
     # A blank document with no layer has nothing to paint into and no row in the
     # layers panel, which reads as broken rather than as empty. The layer is
@@ -615,7 +639,7 @@ def _ctrl_key(
     ctx: Any, state: PlotterState, tab: PlotterDoc | None, name: str, *, shift: bool
 ) -> bool:
     if name == "n":
-        new_document(ctx)
+        ask_new_document(ctx)
         return True
     if name == "o":
         ask_open(ctx)

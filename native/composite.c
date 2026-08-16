@@ -64,6 +64,36 @@ static float blend_channel(int32_t mode, float cb, float cs) {
         const float diff = cb - cs;
         return diff < 0.0f ? -diff : diff;
     }
+    case WARLOCKC_BLEND_EXCLUSION:
+        /* `backdrop + source - 2.0 * backdrop * source`, in the association
+         * Python gives it: (cb + cs) - ((2 * cb) * cs). Reassociating is
+         * algebraically free and numerically is not. */
+        return (cb + cs) - ((2.0f * cb) * cs);
+    case WARLOCKC_BLEND_SUBTRACT: {
+        /* np.maximum(cb - cs, 0.0), and its NaN rule is the darken case's:
+         * numpy returns the *first* operand when it is NaN, so the guard
+         * cannot be folded into the comparison. Clamped at the bottom rather
+         * than wrapped -- the reference says why. */
+        const float diff = cb - cs;
+        if (diff != diff) {
+            return diff;
+        }
+        /* `diff > 0` rather than `>= 0` so a -0.0 difference comes back as the
+         * +0.0 numpy's maximum returns for it (it picks the second operand on
+         * anything that is not strictly greater). */
+        return diff > 0.0f ? diff : 0.0f;
+    }
+    case WARLOCKC_BLEND_DIVIDE: {
+        /* Krita's zero convention, which the reference pins and this mirrors
+         * branch for branch: a zero divisor gives white where there is
+         * anything to divide and stays black where there is not. A NaN source
+         * fails `> 0` and lands in the same arm, exactly as np.where does. */
+        if (cs > 0.0f) {
+            const float ratio = cb / cs;
+            return ratio > 1.0f ? 1.0f : ratio;
+        }
+        return cb > 0.0f ? 1.0f : 0.0f;
+    }
     case WARLOCKC_BLEND_HARD_LIGHT:
         /* Overlay with the operands swapped, which is what it *is* -- and
          * saying so rather than writing the formula out inverted is what makes
@@ -130,6 +160,204 @@ static float blend_channel(int32_t mode, float cb, float cs) {
     }
 }
 
+/* -- the non-separable four -------------------------------------------------
+ *
+ * hue / saturation / color / luminosity, transcribed from composite._lum,
+ * _sat, _clip_colour, _set_lum, _set_sat -- which are themselves the W3C
+ * compositing spec's pseudo-code rather than anybody's simplification of it.
+ * They read all three channels of a pixel to decide one of them, so they are
+ * not a blend_channel case: `blend_rgb` below routes them here with the whole
+ * pixel.
+ *
+ * Two things make the parity argument here different from the separable ones,
+ * and both are settled by measurement rather than by reading:
+ *
+ *   * The reference's `np.where` evaluates *both* arms and selects. This code
+ *     evaluates only the taken one. That is identical wherever the reference
+ *     defines a value, and the untaken arm is exactly where the reference
+ *     guards its divisors -- so nothing that is selected here was computed
+ *     differently there.
+ *   * `_lum` is a three-element float32 *reduction*, which is where an order
+ *     could be chosen and lost. numpy's pairwise sum takes its `n < 8` branch,
+ *     which accumulates left to right from a zero seed; that was checked
+ *     against this build's numpy over two million random triples before this
+ *     was written, and it is why the seed below is spelled out rather than
+ *     started at the first product.
+ */
+
+/* np.min / np.max over the channel axis, which propagate NaN where a bare
+ * comparison chain would return the other operand -- the darken case's trap,
+ * one axis over. */
+static float min3(const float c[3]) {
+    float m = c[0];
+    for (int i = 1; i < 3; ++i) {
+        if (m != m) {
+            return m;
+        }
+        if (c[i] != c[i] || c[i] < m) {
+            m = c[i];
+        }
+    }
+    return m;
+}
+
+static float max3(const float c[3]) {
+    float m = c[0];
+    for (int i = 1; i < 3; ++i) {
+        if (m != m) {
+            return m;
+        }
+        if (c[i] != c[i] || c[i] > m) {
+            m = c[i];
+        }
+    }
+    return m;
+}
+
+/* The spec's luminance weights as float32, not Rec.709: this is a blend mode
+ * and its answer has to match the editor on the other end of the file. */
+static float lum3(const float c[3]) {
+    const float p0 = c[0] * 0.30f;
+    const float p1 = c[1] * 0.59f;
+    const float p2 = c[2] * 0.11f;
+    /* The zero seed is numpy's, not decoration -- see the note above. */
+    return (((0.0f + p0) + p1) + p2);
+}
+
+static float sat3(const float c[3]) { return max3(c) - min3(c); }
+
+/* The spec's ClipColor: pull an out-of-range colour back towards its own
+ * luminance, so that fixing the range cannot change the luminance. */
+static void clip_colour3(const float c[3], float out[3]) {
+    const float lum = lum3(c);
+    const float low = min3(c);
+    const float high = max3(c);
+
+    /* n and x are computed once, before C is touched, as the pseudo-code has
+     * them -- so the second stage reads the *original* extremes and the
+     * original luminance, not the first stage's. */
+    float mid[3];
+    if (low < 0.0f) {
+        const float under = lum - low;
+        const float denom = under != 0.0f ? under : 1.0f;
+        for (int i = 0; i < 3; ++i) {
+            mid[i] = lum + ((c[i] - lum) * lum) / denom;
+        }
+    } else {
+        mid[0] = c[0];
+        mid[1] = c[1];
+        mid[2] = c[2];
+    }
+
+    if (high > 1.0f) {
+        const float over_ = high - lum;
+        const float denom = over_ != 0.0f ? over_ : 1.0f;
+        for (int i = 0; i < 3; ++i) {
+            out[i] = lum + ((mid[i] - lum) * (1.0f - lum)) / denom;
+        }
+    } else {
+        out[0] = mid[0];
+        out[1] = mid[1];
+        out[2] = mid[2];
+    }
+}
+
+static void set_lum3(const float c[3], float lum, float out[3]) {
+    /* `colour + (lum - _lum(colour))`: the difference is a per-pixel scalar in
+     * the reference too, broadcast across the channels, so it is computed once
+     * and rounded once. */
+    const float delta = lum - lum3(c);
+    const float shifted[3] = {c[0] + delta, c[1] + delta, c[2] + delta};
+    clip_colour3(shifted, out);
+}
+
+/* numpy's npy_float_LT, which is what argsort orders by: NaN sorts last, and
+ * the comparison is strict so equal values keep their order. */
+static int sort_lt(float a, float b) { return (a < b) || ((b != b) && (a == a)); }
+
+/* The spec's SetSat. The reference says it with argsort; three elements is
+ * below numpy's introsort threshold, so what argsort actually runs is an
+ * insertion sort, which is *stable* -- and the reference's docstring leans on
+ * that for the two-equal-channels case. This is that insertion sort, so the
+ * tie-break is the same by construction rather than by coincidence. */
+static void set_sat3(const float c[3], float sat, float out[3]) {
+    int order[3] = {0, 1, 2};
+    for (int i = 1; i < 3; ++i) {
+        const int key = order[i];
+        int j = i - 1;
+        while (j >= 0 && sort_lt(c[key], c[order[j]])) {
+            order[j + 1] = order[j];
+            --j;
+        }
+        order[j + 1] = key;
+    }
+
+    const float low = c[order[0]];
+    const float mid = c[order[1]];
+    const float high = c[order[2]];
+    const float span = high - low;
+
+    /* On a grey pixel span is zero and every channel ends at zero, which is
+     * the spec's else-branch. The reference's guarded divisor is the untaken
+     * arm of the same test. */
+    if (span > 0.0f) {
+        out[order[0]] = 0.0f;
+        out[order[1]] = ((mid - low) * sat) / span;
+        out[order[2]] = sat;
+    } else {
+        out[order[0]] = 0.0f;
+        out[order[1]] = 0.0f;
+        out[order[2]] = 0.0f;
+    }
+}
+
+static void blend_nonseparable(int32_t mode, const float cb[3], const float cs[3], float out[3]) {
+    float tinted[3];
+    switch (mode) {
+    case WARLOCKC_BLEND_HUE:
+        set_sat3(cs, sat3(cb), tinted);
+        set_lum3(tinted, lum3(cb), out);
+        return;
+    case WARLOCKC_BLEND_SATURATION:
+        set_sat3(cb, sat3(cs), tinted);
+        set_lum3(tinted, lum3(cb), out);
+        return;
+    case WARLOCKC_BLEND_COLOR:
+        set_lum3(cs, lum3(cb), out);
+        return;
+    default: /* WARLOCKC_BLEND_LUMINOSITY */
+        set_lum3(cb, lum3(cs), out);
+        return;
+    }
+}
+
+/* Is this mode one that reads the whole pixel? The split is the enum's, and
+ * warlockc.h says why HUE has to stay the bottom of the non-separable range. */
+static int is_nonseparable(int32_t mode) { return mode >= WARLOCKC_BLEND_HUE; }
+
+/* Co for one channel:
+ *
+ *     Co = [ as(1-ab)Cs + as*ab*B(Cb,Cs) + (1-as)ab*Cb ] / ao
+ *
+ * The *only* copy of the compositing arithmetic in this file, called from four
+ * places -- both kernels, each on both sides of the separable/non-separable
+ * branch. That branch is hoisted out to the call sites rather than taken inside
+ * a `blend_rgb` helper because the separable path is then never made to
+ * materialise a three-float `mixed` buffer at all, which measured about 3%
+ * on an all-separable full-canvas fold and 5% with a non-separable layer in it.
+ * Duplicating *this* expression to buy that would have been the wrong trade --
+ * two copies of a formula held to bit-parity are two things to keep equal --
+ * so it is written once and the cheap half is what got duplicated.
+ *
+ * `ao > 0` mirrors np.divide(..., where=ao > 0) followed by the reference's
+ * np.where: the net semantics are "0 where ao <= 0", and the division only
+ * ever happens where it is taken. */
+static float combine_channel(float k_src, float cs, float k_mix, float mixed, float k_back,
+                             float cb, float ao) {
+    const float num = (k_src * cs + k_mix * mixed) + k_back * cb;
+    return ao > 0.0f ? num / ao : 0.0f;
+}
+
 void warlockc_over_f32(const float *backdrop, int64_t backdrop_stride, const float *source,
                        int64_t source_stride, float *out, int64_t out_stride, int64_t h,
                        int64_t w, float opacity, int32_t mode) {
@@ -154,14 +382,17 @@ void warlockc_over_f32(const float *backdrop, int64_t backdrop_stride, const flo
             const float k_mix = a_s * ab;
             const float k_back = (1.0f - a_s) * ab;
 
-            for (int c = 0; c < 3; ++c) {
-                const float mixed = blend_channel(mode, cb[c], cs[c]);
-                const float num = (k_src * cs[c] + k_mix * mixed) + k_back * cb[c];
-                /* np.divide(..., where=ao > 0) leaves the output untouched
-                 * where the mask is false and the reference then np.wheres
-                 * zeros in; net semantics are "0 where ao <= 0", and the
-                 * division only ever happens where it is taken. */
-                op[c] = ao > 0.0f ? num / ao : 0.0f;
+            if (is_nonseparable(mode)) {
+                float mixed[3];
+                blend_nonseparable(mode, cb, cs, mixed);
+                for (int c = 0; c < 3; ++c) {
+                    op[c] = combine_channel(k_src, cs[c], k_mix, mixed[c], k_back, cb[c], ao);
+                }
+            } else {
+                for (int c = 0; c < 3; ++c) {
+                    const float mixed = blend_channel(mode, cb[c], cs[c]);
+                    op[c] = combine_channel(k_src, cs[c], k_mix, mixed, k_back, cb[c], ao);
+                }
             }
             op[3] = ao;
         }
@@ -248,12 +479,22 @@ void warlockc_stack_f32(const uint8_t **layers, const int64_t *strides, const fl
                 const float k_back = (1.0f - a_s) * ab;
 
                 /* The backdrop is the accumulator, so every channel has to be
-                 * read before any is written -- hence the third buffer. */
+                 * read before any is written -- hence the third buffer. The
+                 * non-separable modes need that anyway: they read all three
+                 * of the accumulator's channels to decide one. */
+                const float cb[3] = {acc[0], acc[1], acc[2]};
                 float next[3];
-                for (int c = 0; c < 3; ++c) {
-                    const float mixed = blend_channel(modes[i], acc[c], cs[c]);
-                    const float num = (k_src * cs[c] + k_mix * mixed) + k_back * acc[c];
-                    next[c] = ao > 0.0f ? num / ao : 0.0f;
+                if (is_nonseparable(modes[i])) {
+                    float mixed[3];
+                    blend_nonseparable(modes[i], cb, cs, mixed);
+                    for (int c = 0; c < 3; ++c) {
+                        next[c] = combine_channel(k_src, cs[c], k_mix, mixed[c], k_back, cb[c], ao);
+                    }
+                } else {
+                    for (int c = 0; c < 3; ++c) {
+                        const float mixed = blend_channel(modes[i], cb[c], cs[c]);
+                        next[c] = combine_channel(k_src, cs[c], k_mix, mixed, k_back, cb[c], ao);
+                    }
                 }
                 acc[0] = next[0];
                 acc[1] = next[1];

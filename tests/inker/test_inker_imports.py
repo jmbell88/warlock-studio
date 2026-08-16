@@ -41,6 +41,7 @@ PACKAGE = "warlock.studio.inker"
 OUTWARD_IMPORTS = {
     ("anim_edits.py", "warlock.studio.undo"),
     ("composite.py", "warlock.native"),
+    ("dither.py", "warlock.native"),
     ("selection.py", "warlock.native"),
     ("sheetout.py", "warlock.pipelines"),
     ("undo.py", "warlock.studio.undo"),

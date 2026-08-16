@@ -14,6 +14,7 @@ teardown test that opens one is a teardown test that leaves one behind.
 from __future__ import annotations
 
 import inspect
+import re
 import sys
 from types import SimpleNamespace
 from typing import Any
@@ -21,6 +22,7 @@ from typing import Any
 import pytest
 
 from warlock.studio import (
+    clay_mode,
     dialogs,
     filetypes,
     fonts,
@@ -389,20 +391,86 @@ def test_the_whole_strip_renderer_is_not_callable():
 )
 def test_every_image_picker_offers_every_droppable_suffix(entry):
     """The refusal, the accept and the picker have to agree. Two of these used
-    to accept ``.jpeg`` and ``.bmp`` while advertising neither."""
-    patterns = " ".join(entry[1:])
-    label = entry[0]
+    to accept ``.jpeg`` and ``.bmp`` while advertising neither.
+
+    ``entry[1]`` specifically -- the patterns of the *first* row, which is the
+    one the picker opens on. This read ``" ".join(entry[1:])`` and so was
+    satisfied by a suffix appearing anywhere in the tail, which is precisely
+    what let three mis-paired filters through: joining the tail erases the
+    pairing that decides which patterns are actually in force.
+    """
     for suffix in filetypes.IMAGE_SUFFIXES:
-        assert f"*{suffix}" in patterns, f"{suffix} missing from {label}"
+        assert f"*{suffix}" in entry[1].split(), f"{suffix} missing from {entry[0]}"
 
 
-@pytest.mark.parametrize("entry", [packwright_mode.IMAGE_FILTER, plotter_mode.TILESET_FILTER])
-def test_a_filter_label_advertises_what_its_patterns_accept(entry):
-    """The worst version of the drift: the dialog telling the user a format is
-    unsupported by the very picker that would have opened it."""
-    label, patterns = entry[0], entry[1:]
-    for pattern in patterns:
-        assert pattern in label, f"{pattern} accepted but not advertised"
+# --- every picker filter is pairs, not a label and a pile of globs -----------
+
+
+def _declared_filters():
+    """Every ``*_FILTER`` list in the modules that own one, deduplicated.
+
+    A scan rather than a hand-written parametrize list, because the bug this
+    guards is one a *fourth* filter would reproduce: the two tests below were
+    already parametrized over the four image pickers and passed while three of
+    them were mis-paired.
+    """
+    modules = (
+        clay_mode,
+        dialogs,
+        inker_mode,
+        packwright_io,
+        packwright_mode,
+        plotter_io,
+        plotter_mode,
+        plotter_tilesets,
+    )
+    seen: dict[int, tuple[str, list[str]]] = {}
+    for module in modules:
+        for name, value in vars(module).items():
+            if name.endswith("_FILTER") and isinstance(value, list):
+                seen.setdefault(id(value), (f"{module.__name__.rpartition('.')[2]}.{name}", value))
+    for suffix, value in dialogs.ARTIFACT_FILTERS.items():
+        seen.setdefault(id(value), (f"ARTIFACT_FILTERS[{suffix!r}]", value))
+    return sorted(seen.values())
+
+
+_PICKER_FILTERS = _declared_filters()
+
+
+@pytest.mark.parametrize(
+    "name,entry", _PICKER_FILTERS, ids=[name for name, _ in _PICKER_FILTERS]
+)
+def test_a_picker_filter_is_label_pattern_pairs(name, entry):
+    """portable-file-dialogs consumes ``filters`` **two at a time** -- a label,
+    then that label's space-separated patterns -- and its loop is
+    ``i + 1 < size``, so a trailing odd element is dropped without a word.
+
+    A label followed by one entry per glob therefore does not mean "these
+    patterns under this label"; it means the second glob becomes the first
+    row's *only* pattern and the third glob becomes the second row's *label*.
+    That is how "Add a tileset" came to open on a row advertising six formats
+    and list only ``.tsx`` -- a folder of PNGs looked empty.
+
+    ``pfd.all_files_filter()`` returning ``["All files", "*"]`` is the shape
+    stated by the library itself.
+    """
+    assert len(entry) >= 2, f"{name} is not a label and its patterns"
+    assert len(entry) % 2 == 0, f"{name} has {len(entry)} entries; pfd drops the last"
+    for index in range(0, len(entry), 2):
+        label, patterns = entry[index], entry[index + 1]
+        assert not label.startswith("*"), f"{name}[{index}] is a pattern where a label goes"
+        globs = patterns.split()
+        assert globs, f"{name}[{index + 1}] has no patterns"
+        for glob in globs:
+            assert glob == "*" or glob.startswith("*."), f"{name}: {glob!r} is not a pattern"
+        # A row that names formats must name *exactly* the ones beside it, both
+        # directions. Advertising more is the dialog telling the user a format
+        # is unsupported by the very picker that would have opened it;
+        # advertising fewer is the same drift running the other way. A label
+        # that names none ("Images") is deliberate and says nothing to break.
+        advertised = set(re.findall(r"\*\.[A-Za-z0-9]+", label))
+        if advertised:
+            assert advertised == set(globs), f"{name}[{index}] says {advertised}, filters {globs}"
 
 
 def test_no_module_writes_out_a_list_of_image_suffixes():

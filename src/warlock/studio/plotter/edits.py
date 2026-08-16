@@ -387,3 +387,36 @@ class ResizeEdit(Edit):
 
     def redo(self, doc: Any) -> None:
         doc._apply_resize(self.after_size, self.after, self.after_objects)
+
+
+@dataclass
+class TileSizeEdit(Edit):
+    """The grid's cell size, before and after, with the objects that rode it.
+
+    Two ints and a handful of coordinates, where :class:`ResizeEdit` is every
+    array in the document -- because changing a *cell's size* changes no layer's
+    shape and no gid. The tile arrays are deliberately absent: a gid names a
+    tile, and how large the cell under it is drawn has nothing to do with which
+    tile that is. Snapshotting them would cost the whole document to record
+    nothing.
+
+    The object rectangles are here for ``ResizeEdit``'s reason, arrived at from
+    the other direction: they are absolute pixels, so a grid whose cells change
+    size leaves them describing a different part of the map unless they are
+    scaled with it.
+    """
+
+    before_size: tuple[int, int]
+    after_size: tuple[int, int]
+    before_objects: dict[int, list[tuple[float, float, float, float]]] = field(
+        default_factory=dict
+    )
+    after_objects: dict[int, list[tuple[float, float, float, float]]] = field(
+        default_factory=dict
+    )
+
+    def undo(self, doc: Any) -> None:
+        doc._apply_tile_size(self.before_size, self.before_objects)
+
+    def redo(self, doc: Any) -> None:
+        doc._apply_tile_size(self.after_size, self.after_objects)

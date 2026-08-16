@@ -53,6 +53,10 @@ class _AppState:
     def __init__(self) -> None:
         self.plotter = None
         self.mode = "home"
+        # ``set_mode`` writes both of these, and ``ask_new_document`` switches
+        # modes so Home and the palette can reach a dialog that is Plotter's.
+        self.previous_mode = "home"
+        self.mode_observed = "home"
         self.preview: dict[str, Any] = {}
 
 
@@ -1922,3 +1926,119 @@ def test_a_container_property_gets_a_one_line_summary_rather_than_a_crash():
     npc = Prop("class", {"hp": Prop("int", 3), "name": Prop("string", "Bob")}, propertytype="NPC")
     assert plotter_layers._summary(npc) == "NPC (2 members)"
     assert plotter_layers._summary(Prop("list", [Prop("int", 1)])) == "list (1 item)"
+
+
+# --- asking before making -----------------------------------------------------
+
+
+def test_ask_new_document_asks_and_makes_nothing():
+    """The whole point of the door. It used to *be* ``new_document``, so a map
+    existed at 32x32x32 orthogonal before anybody was offered the choice -- and
+    two of those numbers cannot be taken back once tiles are on the map."""
+    ctx = FakeCtx()
+    plotter_mode.ask_new_document(ctx)
+    state = plotter_mode.ensure(ctx)
+    assert state.setup_pending is True
+    assert state.docs == []
+
+
+def test_ask_new_document_switches_to_plotter():
+    """Home and the command palette are not Plotter panes, and the dialog is
+    Plotter's -- so the door has to carry the caller to where it is drawn."""
+    ctx = FakeCtx()
+    ctx.state.mode = "home"
+    plotter_mode.ask_new_document(ctx)
+    assert ctx.state.mode == "plotter"
+
+
+def test_a_new_document_takes_the_projection_it_is_given():
+    ctx = FakeCtx()
+    tab = plotter_mode.new_document(ctx, (4, 4, 64, 32), projection="isometric")
+    assert tab.doc.projection == "isometric"
+    assert (tab.doc.tile_w, tab.doc.tile_h) == (64, 32)
+
+
+def test_a_new_document_still_opens_clean_and_undoes_to_nothing():
+    """The ``history.clear()`` contract, re-pinned because the projection
+    argument now runs before it."""
+    ctx = FakeCtx()
+    tab = plotter_mode.new_document(ctx, (4, 4, 16, 16), projection="isometric")
+    assert not tab.doc.dirty
+    # Nothing to undo: the Ground layer is added before the history is cleared.
+    assert tab.doc.undo() is False
+
+
+def test_every_new_map_door_asks_rather_than_inventing():
+    """Five doors, one of them a keyboard shortcut, and the bug they all had was
+    the same: calling ``new_document`` straight. A source scan rather than five
+    click tests, because what matters is that no *sixth* door reintroduces it.
+    """
+    import inspect
+
+    from warlock.studio import palette
+    from warlock.studio.panes import landing, plotter_bridge, plotter_canvas
+
+    for module in (palette, landing, plotter_bridge, plotter_canvas, plotter_mode):
+        source = inspect.getsource(module)
+        for number, line in enumerate(source.splitlines(), 1):
+            if "new_document(ctx)" not in line or "ask_new_document" in line:
+                continue
+            assert "plotter_mode" not in line and "def " not in line, (
+                f"{module.__name__}:{number} makes a map without asking: {line.strip()}"
+            )
+
+
+def test_create_builds_the_map_the_form_describes(monkeypatch):
+    """The dialog's one job. ``_create`` is what Create is wired to, so this is
+    the assertion that the numbers on screen are the numbers in the map."""
+    from warlock.studio import plotter_setup
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    form = plotter_setup.blank_form()
+    form.update(
+        width=12, height=9, tile_w=64, tile_h=32,
+        projection="isometric", next=plotter_setup.NEXT_EMPTY,
+    )
+    plotter_canvas._create(ctx, form)
+
+    tab = plotter_mode.ensure(ctx).active
+    assert (tab.doc.width, tab.doc.height) == (12, 9)
+    assert (tab.doc.tile_w, tab.doc.tile_h) == (64, 32)
+    assert tab.doc.projection == "isometric"
+
+
+def test_create_opens_the_tileset_door_the_form_chose(monkeypatch):
+    """A new map cannot be painted until it has a tileset, so the dialog offers
+    both doors rather than leaving the user to find them. Monkeypatched because
+    one of them opens an OS picker."""
+    from warlock.studio import plotter_setup, widgets
+    from warlock.studio.panes import plotter_canvas
+
+    asked: list[str] = []
+    monkeypatch.setattr(plotter_mode, "ask_add_tileset", lambda _c: asked.append("file"))
+    monkeypatch.setattr(widgets, "request_open", lambda key: asked.append(key))
+
+    for choice, expected in (
+        (plotter_setup.NEXT_FILE, "file"),
+        (plotter_setup.NEXT_GENERATE, "plotter/generate"),
+        (plotter_setup.NEXT_EMPTY, None),
+    ):
+        asked.clear()
+        form = plotter_setup.blank_form()
+        form["next"] = choice
+        plotter_canvas._create(FakeCtx(), form)
+        assert asked == ([expected] if expected else [])
+
+
+def test_create_clamps_a_number_the_field_would_have_accepted(monkeypatch):
+    """The cap is enforced where the map is built, not only where it is typed:
+    the form is restored from ``state.preview`` and could carry anything."""
+    from warlock.studio import plotter_setup
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    form = plotter_setup.blank_form()
+    form.update(width=99999, next=plotter_setup.NEXT_EMPTY)
+    plotter_canvas._create(ctx, form)
+    assert plotter_mode.ensure(ctx).active.doc.width == plotter_setup.MAX_TILES
