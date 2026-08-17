@@ -66,6 +66,7 @@ KINDS: tuple[Kind, ...] = (
     Kind("lora", models.STYLE_LORAS, "style LoRA: ", "Style LoRAs"),
     Kind("adapter", models.IP_ADAPTERS, "IP-Adapter: ", "Conditioning"),
     Kind("control", models.CONTROLNETS, "ControlNet: ", "Conditioning"),
+    Kind("expander", models.EXPANDER_MODELS, "prompt expander: ", "Image models"),
     Kind("metric", models.METRIC_MODELS, "metric model: ", "Measurement"),
     Kind("pose", models.POSE_MODELS, "pose model: ", "Measurement"),
     Kind("matting", models.MATTING_MODELS, "host matting: ", "Measurement"),
@@ -793,4 +794,11 @@ def present(config: Config, kind: str, spec: Any) -> bool:
         return (base / "config.json").exists() and (
             base / f"diffusion_pytorch_model{variant}.safetensors"
         ).exists()
+    if kind == "expander":
+        base = root / spec.dir_name
+        # The weights by name, not only config.json: the repo ships
+        # pytorch_model.bin as its single weight file, and a config-only
+        # directory would read as present and fail at load with the job
+        # already dispatched.
+        return (base / "config.json").exists() and (base / "pytorch_model.bin").exists()
     return (root / spec.dir_name / "config.json").exists()

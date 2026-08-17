@@ -1016,6 +1016,65 @@ METRIC_MODELS: dict[str, MetricModel] = _table(
 )
 
 
+DEFAULT_EXPANDER = "fooocus"
+
+
+@dataclass(frozen=True, slots=True)
+class ExpanderModel:
+    """A model that expands a short prompt into a dense descriptive one.
+
+    Its own table for PoseModel's reason: it is read by the *generation* path
+    -- the worker asks it to enrich the prompt before SDXL sees it -- while a
+    metric only ever grades a finished asset. Like everything here it is
+    optional and never downloaded at runtime; unlike a style LoRA its absence
+    is refused at the door rather than skipped, because ``expand`` is in
+    ``vectors.VECTOR_PARAMS`` and a job that recorded an expansion that never
+    ran would join the findings corpus as evidence about it.
+    """
+
+    key: str
+    label: str
+    dir_name: str
+    fetch: tuple[Fetch, ...] = ()
+
+    @property
+    def download(self) -> str:
+        return download_text(self.fetch)
+
+
+EXPANDER_MODELS: dict[str, ExpanderModel] = _table(
+    ExpanderModel(
+        # The Fooocus GPT-2 prompt expander (~124M params, CPU is fine): the
+        # offline precedent for the LLM prompt-rewriting every hosted image
+        # service does before its image model sees the text. The repo ships
+        # ``positive.txt`` -- the token whitelist pipelines/expand.py biases
+        # generation with -- alongside the weights, which is why the fetch
+        # takes ``*.txt``. Weights are AGPL-3.0: they are data the user fetches
+        # deliberately, never code this process executes.
+        "fooocus",
+        "Prompt expander (Fooocus GPT-2)",
+        "prompt-expander-fooocus",
+        fetch=(
+            Fetch(
+                "LykosAI/GPT-Prompt-Expansion-Fooocus-v2",
+                "prompt-expander-fooocus",
+                # From the hub's refs/main on 2026-08-17 (last modified
+                # 2023-11-25, so the branch is long settled); confirm against
+                # local .metadata the first time a host actually fetches it,
+                # the pixelklein rule.
+                revision="a1fa8a394dc4614ec944ed188d8873648df85a10",
+                # The repo ships no safetensors -- pytorch_model.bin is the
+                # only weight file there is. ``*.txt`` carries merges.txt and
+                # positive.txt (the whitelist); ``*.json`` the config and
+                # tokenizer files.
+                allow_patterns=("*.json", "*.txt", "*.bin"),
+                size_gib=0.7,
+            ),
+        ),
+    ),
+)
+
+
 DEFAULT_POSE_MODEL = "vitpose"
 
 

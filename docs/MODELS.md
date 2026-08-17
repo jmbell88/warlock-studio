@@ -116,7 +116,7 @@ Rename-Item $HOME/.warlock/models/loras/pytorch_lora_weights.safetensors pixel-a
 
 ## Conditioning, matting and measurement models
 
-Four more registry entries, none of them required to generate anything. They lived only in
+Five more registry entries, none of them required to generate anything. They lived only in
 `models.py` until the download machinery started generating both lists from the same `Fetch`
 records; `warlock doctor` reports each one and the Settings pane can fetch it.
 
@@ -150,6 +150,15 @@ uvx hf download ZhengPeng7/BiRefNet --revision e2bf8e4460fc8fa32bba5ea4d94b3233d
 # with. A missing one costs a number, never a job.
 uvx hf download facebook/dinov2-base --revision f9e44c814b77203eaa57a6bdbbd535f21ede1415 `
   --include "*.json" --include "*.safetensors" --local-dir $HOME/.warlock/models/dinov2-base
+
+# Prompt expander (~700 MB): the Fooocus GPT-2 (124M params, CPU) that enriches
+# short prompts with aesthetic detail before SDXL sees them -- the offline form
+# of the LLM prompt rewriting every hosted image service does. Off by default;
+# the 2D pane's "enrich" select turns it on per job, and prompts that already
+# carry their own description are left as written. positive.txt (in *.txt) is
+# the whitelist generation is constrained to. The weights are AGPL-3.0.
+uvx hf download LykosAI/GPT-Prompt-Expansion-Fooocus-v2 --revision a1fa8a394dc4614ec944ed188d8873648df85a10 `
+  --include "*.json" --include "*.txt" --include "*.bin" --local-dir $HOME/.warlock/models/prompt-expander-fooocus
 ```
 
 ## Landmark-informed joint placement (rigging)

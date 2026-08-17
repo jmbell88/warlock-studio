@@ -46,6 +46,35 @@ is why the preview reports chunks rather than warning about truncation. The soft
 applies, though: a longer conditioning sequence dilutes attention, so your prompt is best kept to a
 sentence.
 
+### Prompt enrichment
+
+Under the prompt box, the **enrich** select turns on a local prompt expander — a small GPT-2 model
+(the one Fooocus ships) that appends aesthetic detail to short prompts before the image model sees
+them. This is the offline form of what every hosted image service does silently: a language model
+rewrites "a sword" into a dense descriptive caption, and the image model's output improves because
+the description did. It is **off** by default and needs its own download (about 700 MB, listed in
+Settings → Models as "Prompt expander"); with expansion selected and the weights absent, the
+submit is refused with the download command.
+
+Two modes, because the right enrichment depends on what the picture is for:
+
+- **3D asset** enriches the prompt and keeps the single-subject, plain-background framing — the
+  right choice when the image is a reference for a mesh.
+- **General 2D** enriches the prompt *and* swaps the fixed template for one that allows
+  composition, backgrounds and scene lighting. Use it for pictures that will stay pictures: a
+  reference generated this way will usually be refused at promotion, because it is no longer a
+  single centred object.
+
+Three things the expander deliberately does not do. It never touches a prompt that is already
+detailed (roughly forty tokens or more) — appending tag soup to a paragraph dilutes it. It never
+rewrites your subject: generation is constrained to a fixed whitelist of aesthetic vocabulary, so
+it can only add phrases like lighting and quality terms, not change what the picture is of. And it
+never runs on a seamless tile, whose prompt describes a surface rather than a subject.
+
+The expansion is deterministic in the job's seed and is recorded on the finished job's params as
+`expanded_prompt`, so a job's provenance always shows the text the image model actually received —
+**Prompt actually sent** previews it with the mode on.
+
 ## The pane at a glance
 
 The form is one flat column of sections: **Output** (Object or Seamless tile), **Profile**,

@@ -29,6 +29,7 @@ from typing import Any
 from .. import leases, models
 from .prompt import (
     PROMPT_TEMPLATE,
+    SCENE_TEMPLATE,
     SHEET_TEMPLATE,
     TILE_TEMPLATE,
     chunk,
@@ -812,6 +813,7 @@ class Text2Image:
         cancel_event: threading.Event | None = None,
         tile: bool = False,
         sheet: bool = False,
+        scene: bool = False,
     ) -> Path:
         """Generate a reference image and save it to ``output_path``.
 
@@ -853,6 +855,7 @@ class Text2Image:
                 cancel_event=cancel_event,
                 tile=tile,
                 sheet=sheet,
+                scene=scene,
             )
 
     def _generate(
@@ -870,6 +873,7 @@ class Text2Image:
         cancel_event: threading.Event | None = None,
         tile: bool = False,
         sheet: bool = False,
+        scene: bool = False,
     ) -> Path:
         self.load(on_state)
         assert self._pipe is not None
@@ -948,8 +952,17 @@ class Text2Image:
             # its left and right edges are different directions of the same
             # subject, and making them continuous would bleed one cell into
             # another.
+            # ``scene`` is last in the chain and loses to all three job-shaped
+            # flags: sheet and tile describe what the pixels are *for*, and a
+            # prompt mode must never override that.
             template = (
-                SHEET_TEMPLATE if sheet else (TILE_TEMPLATE if tile else PROMPT_TEMPLATE)
+                SHEET_TEMPLATE
+                if sheet
+                else (
+                    TILE_TEMPLATE
+                    if tile
+                    else (SCENE_TEMPLATE if scene else PROMPT_TEMPLATE)
+                )
             )
             text = template.format(prompt=prompt)
             if style is not None and style.trigger and lora in self._adapters:

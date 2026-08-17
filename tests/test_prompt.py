@@ -161,7 +161,9 @@ DEFAULT_COMPOSITION = (
 
 def test_the_default_composition_is_byte_identical_across_the_retirement():
     assert prompt.build("a barrel", {}) == DEFAULT_COMPOSITION
-    assert prompt.PROMPT_VERSION == 5
+    # 6 is the scene-template/expansion bump; the literal above still holding
+    # is the proof the object path did not move with it.
+    assert prompt.PROMPT_VERSION == 6
 
 
 def test_stale_taxonomy_params_compose_the_default():

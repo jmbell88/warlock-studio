@@ -370,6 +370,12 @@ def _materialize_generative_weights(config) -> None:
         variant = f".{cn.variant}" if cn.variant else ""
         touch(root / cn.dir_name / "config.json")
         touch(root / cn.dir_name / f"diffusion_pytorch_model{variant}.safetensors")
+    for expander in models.EXPANDER_MODELS.values():
+        # Generative-path like the four above: check_weights probes it when a
+        # job turns expansion on, and a submit-shaped test must not be refused
+        # for a download it is not about. A test about the refusal unlinks it.
+        touch(root / expander.dir_name / "config.json")
+        touch(root / expander.dir_name / "pytorch_model.bin")
 
 
 @pytest.fixture(scope="session")
@@ -528,6 +534,7 @@ class FakeText2Image:
         self.conditionings: list = []
         self.tiles: list[bool] = []
         self.sheets: list[bool] = []
+        self.scenes: list[bool] = []
         self.last_prompt = ""
         self.last_recipe: dict = {}
 
@@ -546,10 +553,12 @@ class FakeText2Image:
         cancel_event=None,
         tile=False,
         sheet=False,
+        scene=False,
     ):
         self.prompts.append(prompt)
         self.tiles.append(tile)
         self.sheets.append(sheet)
+        self.scenes.append(scene)
         self.last_prompt = prompt
         self.lora_calls.append((lora, lora_weight))
         self.negatives.append(negative_prompt)

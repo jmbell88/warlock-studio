@@ -208,7 +208,7 @@ def test_input_png_written_before_the_db_row_is_created(svc, assets, monkeypatch
 def test_the_guidance_catalog_is_served(svc):
     body = svc_system.guidance_catalog(svc)
     assert set(body["fields"]) == {
-        "platform", "base_model", "style_lora", "ip_adapter", "control",
+        "platform", "expand", "base_model", "style_lora", "ip_adapter", "control",
     }
     assert body["defaults"]["platform"] in {o["key"] for o in body["fields"]["platform"]}
     assert body["defaults"]["base_model"] in {o["key"] for o in body["fields"]["base_model"]}
@@ -355,6 +355,7 @@ def test_health_reports_the_worker_and_the_doctor_checks(svc, worker):
         + len(models.STYLE_LORAS)
         + len(models.IP_ADAPTERS)
         + len(models.CONTROLNETS)
+        + len(models.EXPANDER_MODELS)
         + len(models.METRIC_MODELS)
         + len(models.MATTING_MODELS)
         + len(models.POSE_MODELS)

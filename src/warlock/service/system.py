@@ -184,7 +184,35 @@ def prompt_preview(
     trigger = style.trigger if style and fetch.present(svc.config, "lora", style) else ""
     if len(prompt) > MAX_PROMPT:
         raise Invalid(f"prompt must be at most {MAX_PROMPT} characters", field="prompt")
-    positive = prompt_pipeline.build(prompt, params, trigger=trigger, tile=tile)
+
+    # The expansion the worker would run, so "Prompt actually sent" stays
+    # true with the mode on. Best-effort in exactly the token-count way: the
+    # expander is an optional download and a real model load, and a preview
+    # with no expansion beats an error toast per keystroke. The seed comes
+    # from the form when it carries one; an unlocked seed rerolls at submit,
+    # so the preview then shows *a* roll of the expansion rather than *the*
+    # roll -- which is what a preview of a stochastic step can honestly say.
+    scene = params.get("expand") == "scene"
+    expanded = None
+    if params.get("expand") and not tile:
+        try:
+            from ..pipelines import expand as expand_pipeline
+
+            spec = models.EXPANDER_MODELS[models.DEFAULT_EXPANDER]
+            expanded = expand_pipeline.expand(
+                guidance.compose_prompt(prompt, params),
+                svc.config.t2i_model_root / spec.dir_name,
+                seed=int(raw.get("seed") or 0),
+            )
+        except Exception:
+            log.debug("prompt preview could not expand the prompt", exc_info=True)
+    positive = prompt_pipeline.build(
+        expanded if expanded is not None else prompt,
+        params,
+        trigger=trigger,
+        tile=tile,
+        scene=scene,
+    )
 
     tokens = chunks = None
     try:
@@ -211,6 +239,9 @@ def prompt_preview(
 
     return {
         "prompt": positive,
+        # What the expander appended, or None when it was off, skipped a
+        # detailed prompt, or could not run -- the pane says nothing for None.
+        "expanded": expanded,
         "negative_prompt": params["negative_prompt"],
         "tokens": tokens,
         "chunks": chunks,

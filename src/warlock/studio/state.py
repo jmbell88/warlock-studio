@@ -34,6 +34,10 @@ def default_form_2d() -> dict[str, Any]:
 
     return {
         "prompt": "",
+        # Prompt expansion mode: "off" | "asset" | "scene". "off" rather than
+        # "" so the combo shows its own first entry; submit sends it and
+        # normalize stores nothing for it.
+        "expand": "off",
         "negative_prompt": "",
         "base_model": "",
         "style_lora": "",

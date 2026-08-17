@@ -81,6 +81,21 @@ SHEET_TEMPLATE = (
     "each cell a complete figure, no text, no watermark"
 )
 
+# The general-2D template, reachable only when the prompt-expansion mode is
+# "scene" (guidance.EXPAND_MODES). The three templates above all serve a
+# machine reader -- TRELLIS, the tiler, the sheet restyle -- and their clauses
+# exist to keep a reconstruction honest. This one serves a person looking at a
+# picture: no single-subject constraint, no plain background, no orthographic
+# flattening, because a scene *is* composition and lighting. What survives
+# from the others is exactly the clause set that is about SDXL's failure
+# modes rather than about framing: text, watermarks and borders are artifacts
+# whatever the picture is of. The expander (pipelines/expand.py) supplies the
+# aesthetic density the other templates get from their framing clauses.
+SCENE_TEMPLATE = (
+    "{prompt}, detailed illustration, coherent composition, rich lighting, "
+    "high quality, sharp focus, no text, no watermark, no border"
+)
+
 # Bumped whenever PROMPT_TEMPLATE, TILE_TEMPLATE or chunk() changes. Recorded
 # by provenance.versions() so a prompt-compiler edit cannot silently
 # invalidate a benchmark comparison -- no dependency version moves when this
@@ -102,7 +117,15 @@ SHEET_TEMPLATE = (
 # byte-identical to 4 (tests/test_prompt.py pins it as a literal); the bump is
 # for every stored job whose params carried taxonomy fragments, whose composed
 # prompt genuinely shortens under this compiler.
-PROMPT_VERSION = 5
+#
+# 6: SCENE_TEMPLATE, and the prompt-expansion entry point beside it. The same
+# shape of change as 2 and 3 -- a fourth template, reachable only from
+# expand="scene", with the object, tile and sheet paths byte-identical to 5
+# when expansion is off (the default). The bump is for jobs that *did* expand:
+# their composed prompt is a function of the expander's weights and seed as
+# well as of this compiler, and a benchmark comparing across the bump must
+# know it.
+PROMPT_VERSION = 6
 
 _tokenizer_cache: dict[Path, list[Any]] = {}
 
@@ -241,18 +264,25 @@ def pad_pair(a: list[str], b: list[str]) -> tuple[list[str], list[str]]:
 
 
 def build(
-    user_prompt: str, params: dict[str, Any], *, trigger: str = "", tile: bool = False
+    user_prompt: str,
+    params: dict[str, Any],
+    *,
+    trigger: str = "",
+    tile: bool = False,
+    scene: bool = False,
 ) -> str:
     """The final positive prompt.
 
     The composed subject, then the LoRA trigger (if any), then the template --
     the same assembly text2image.generate() does by hand, exposed here so the
     prompt preview can show it before a job runs. ``tile`` swaps in the
-    tileable template, whose framing is its own flat top-down clause.
+    tileable template, whose framing is its own flat top-down clause; ``scene``
+    the general-2D one, and tile wins when both are set because circular
+    padding is a property of the job's output kind, not of its prompt mode.
     """
     from .. import guidance
 
     composed = guidance.compose_prompt(user_prompt, params)
-    template = TILE_TEMPLATE if tile else PROMPT_TEMPLATE
+    template = TILE_TEMPLATE if tile else (SCENE_TEMPLATE if scene else PROMPT_TEMPLATE)
     text = template.format(prompt=composed)
     return f"{trigger}, {text}" if trigger else text

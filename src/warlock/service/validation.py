@@ -81,6 +81,11 @@ MAX_TAG_LEN = 32
 # queue.py writes into params.
 DERIVED_PARAMS = (
     "composed_prompt",
+    # What the prompt expander actually appended on *this* run. The mode
+    # (``expand``) is an input and survives a reroll; the text is a property
+    # of one run's sampling, and a reroll wearing it would claim an expansion
+    # that never ran -- the worker re-records it.
+    "expanded_prompt",
     "scale_factor",
     "mesh_audit",
     "mesh_report",
@@ -400,6 +405,21 @@ def check_weights(svc: Any, kind: str, params: dict[str, Any]) -> None:
             field=field,
             rows=(f"{kindname}:{spec.key}",),
         )
+    # The prompt expander, refused the same way but keyed differently: the
+    # param holds a *mode*, not a registry key, and every mode runs the one
+    # expander entry. Refused rather than skipped for the reason the style
+    # LoRA is: ``expand`` is in VECTOR_PARAMS, so a job that recorded a mode
+    # whose expansion never ran would join the findings corpus as evidence
+    # about it.
+    if params.get("expand"):
+        spec = models.EXPANDER_MODELS[models.DEFAULT_EXPANDER]
+        if not fetch.present(svc.config, "expander", spec):
+            raise Invalid(
+                f"Prompt expansion is on but {spec.label!r} is not downloaded. "
+                f"{install_remedy(spec.label, fetch.download_text(svc.config, 'expander', spec))}",
+                field="expand",
+                rows=(f"expander:{spec.key}",),
+            )
 
 
 def random_seed() -> int:

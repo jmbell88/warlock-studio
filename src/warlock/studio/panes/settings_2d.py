@@ -84,6 +84,7 @@ def draw(ctx: Any) -> None:
                 manual_render.help_button(ctx, "settings-2d")
                 _prompt(ctx, form, form_ui)
                 _history(ctx, form)
+                _expand(ctx, form)
                 _preview(ctx)
                 widgets.section("References")
                 _references(ctx, form)
@@ -287,6 +288,47 @@ def _history(ctx: Any, form: dict[str, Any]) -> None:
                 form["prompt"] = entry
                 ctx.state.preview_dirty_at = time.monotonic()
         imgui.end_popup()
+
+
+EXPAND_NOTES = {
+    "asset": (
+        "A local model enriches short prompts with detail that suits a 3D "
+        "reference: the single-subject framing stays."
+    ),
+    "scene": (
+        "A local model enriches short prompts and the single-subject framing "
+        "is dropped -- for 2D pictures, not for meshes."
+    ),
+}
+
+
+def _expand(ctx: Any, form: dict[str, Any]) -> None:
+    """The prompt-expansion mode, under the prompt it acts on.
+
+    Options come from the catalog like every other select; unlike them the
+    combo has no blank entry, because "off" is a real mode rather than "say
+    nothing about this". Detailed prompts skip expansion on their own (the
+    worker's gate), which the note under the live modes says.
+    """
+    widgets.field_label("enrich")
+    entries = (ctx.guidance.get("fields") or {}).get("expand") or []
+    options = [(e["key"], e["label"]) for e in entries] or [("off", "Off")]
+    before = form.get("expand") or "off"
+    form["expand"] = widgets.combo("##expand", before, options)
+    widgets.field_error(ctx.state, "expand")
+    if form["expand"] != before:
+        ctx.state.preview_dirty_at = time.monotonic()
+        ctx.state.clear_field_error("expand")
+    note = EXPAND_NOTES.get(form["expand"])
+    if note is not None:
+        widgets.muted_wrapped(
+            note + " Prompts that are already detailed are left as written."
+        )
+        if form.get("output") == "tile":
+            widgets.muted_wrapped(
+                "A seamless tile is never expanded: the enrichment describes "
+                "subjects, and a tile has none."
+            )
 
 
 def _preview(ctx: Any) -> None:
@@ -935,6 +977,18 @@ def weights_problem(ctx: Any, form: dict[str, Any]) -> widgets.Problem | None:
             f"Install it in Settings, or pick another.",
             field,
         )
+    # The expander, keyed differently: the form holds a *mode*, and every
+    # mode runs the one registry entry -- so the row is looked up by that
+    # entry's key rather than by the form value.
+    if (form.get("expand") or "off") != "off":
+        row = by_key.get(f"expander:{modelslib.DEFAULT_EXPANDER}")
+        if row is not None and not row.get("present"):
+            label = row.get("label") or modelslib.DEFAULT_EXPANDER
+            return widgets.Problem(
+                f"Prompt expansion needs {label!r}, which is not downloaded. "
+                f"Install it in Settings, or turn expansion off.",
+                "expand",
+            )
     return None
 
 

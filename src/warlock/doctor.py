@@ -508,6 +508,20 @@ def _t2i_checks(config: Config) -> list[Check]:
             )
         )
         checks.append(Check(fetch.check_name("control", cn.label), ok, detail, fatal=False))
+    for expander in models.EXPANDER_MODELS.values():
+        path = config.t2i_model_root / expander.dir_name
+        ok = fetch.present(config, "expander", expander)
+        detail = (
+            str(path)
+            if ok
+            else (
+                f"not found at {path} -- prompt expansion unavailable; "
+                f"download with:\n  {fetch.download_text(config, 'expander', expander)}"
+            )
+        )
+        checks.append(
+            Check(fetch.check_name("expander", expander.label), ok, detail, fatal=False)
+        )
     checks.extend(_metric_checks(config))
     return checks
 
