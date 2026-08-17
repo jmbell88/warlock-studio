@@ -8,6 +8,37 @@ file behind.
 
 ## 0.0.24 — 2026-08-17
 
+- **Inker has three colour modes.** A **Mode** row at the top of the palette
+  section switches between **RGB**, **Indexed** and **Grayscale**, each a
+  whole-document conversion and each a single Ctrl+Z.
+- **Indexed is real now: the file stores palette slots, not colours.** Editing
+  a slot repaints its pixels across every layer and frame instantly, because it
+  is a lookup table changing rather than pixels being rewritten. Two slots
+  holding the same colour stay separate, so painting with the second brown and
+  recolouring the first later does what you meant. Moving or sorting slots
+  becomes an undo step, because it moves your pixels with it — and the
+  transparent slot moves with them. One slot is transparent, marked with a
+  corner notch and movable with **Make transparent**; it is the only way a
+  pixel becomes a hole, so a painted black can no longer collapse into the
+  black that means "nothing". Palettes cap at 256 and say so.
+- **Grayscale flattens colour to brightness and keeps every later write grey.**
+  Storage stays RGBA, which is sound because all nineteen blend modes preserve
+  grayness — so the composite of a grey document is grey too.
+- **`.aseprite` files keep what they knew.** An indexed file's slots arrive as
+  slots rather than being flattened through its table, so a duplicate swatch
+  survives the import; a grayscale file opens as a grayscale document. An
+  Aseprite background layer painted in the transparent index keeps its colour:
+  the slot is duplicated and the layer re-pointed at the copy, which is only
+  possible because slots are now what the document stores.
+- **Indexed `.ora` files carry the slots.** Each layer is written as a paletted
+  PNG, so Krita, GIMP and a browser all open it correctly — and an exported GIF
+  writes the slots you painted rather than re-deriving them from the colours.
+  Opening such a file in an older build and saving it still writes plain colour
+  back, the same cost an animated `.ora` has.
+- **Palette-constrained RGB is still there and still works.** Every drawing
+  indexed before this version opens in it, unchanged: RGBA pixels with the
+  table applied as a write constraint, so soft edges stay legal. Only that mode
+  can hold them, which is why it was kept rather than replaced.
 - **Packwright imports tilesets.** A `.tsx` or a sliced tileset image is a
   source like any other: the tiles arrive as individual sprites, ready to
   re-pack. The source key carries the tile size, so two slicings of one image

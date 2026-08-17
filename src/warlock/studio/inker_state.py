@@ -830,6 +830,17 @@ class InkerState:
     onion_after: int = 1
     onion_alpha: float = 0.35
     fg: tuple[int, int, int, int] = (0, 0, 0, 255)
+    #: Which palette **slot** the foreground came from, or None when it came
+    #: from the wheel, the eyedropper or the session swatch row.
+    #:
+    #: It only matters in a truly indexed document, where it becomes
+    #: ``Document.paint_slot`` and decides which of two identical swatches a
+    #: stroke lands in. A colour is not enough to answer that -- which is the
+    #: whole reason an index plane exists -- so the answer has to be carried
+    #: from the click that chose it, and it has to be **cleared** by every other
+    #: way of choosing a colour or the brush would keep claiming a slot the user
+    #: has moved away from. :meth:`set_fg` is the one door, for that reason.
+    fg_slot: int | None = None
     bg: tuple[int, int, int, int] = (255, 255, 255, 255)
     swatches: list[tuple[int, int, int, int]] = field(
         default_factory=lambda: list(DEFAULT_SWATCHES)
@@ -1342,6 +1353,18 @@ class InkerState:
         else:
             self.palette_slots = [index]
             self.palette_slot = index
+
+    def set_fg(self, colour: Any, slot: int | None = None) -> None:
+        """Load the brush, recording which palette slot it came from.
+
+        One door for all four ways a foreground is chosen -- the wheel, the
+        eyedropper, the session swatch row, a palette slot -- because the thing
+        that has to be right is the *clearing*, and a clear that lives at three
+        of the four sites is a brush that goes on claiming a slot the user moved
+        away from. Only a palette click passes ``slot``.
+        """
+        self.fg = tuple(int(c) for c in tuple(colour)[:4])  # type: ignore[assignment]
+        self.fg_slot = None if slot is None else int(slot)
 
     def clamp_slots(self, count: int) -> None:
         """Drop selected slots the palette no longer has.

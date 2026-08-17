@@ -179,7 +179,7 @@ the outline around it. Alpha is never touched, which also means "preserve transp
 changes nothing about what a shade stroke does.
 
 Shading needs an indexed document: with no palette, or with only one colour in it, the tool is
-greyed out in the toolbox and says why. [Indexed colour](#indexed-colour) is how to give a drawing
+greyed out in the toolbox and says why. [Colour modes](#colour-modes) is how to give a drawing
 one. There is no **Opacity** for it either, for the same reason there is no hardness on a pixel
 nib — a shift lands on the next swatch exactly or it does not happen, and there is no partial
 version of it to scale.
@@ -359,18 +359,61 @@ colours are a right-click each, where a palette silently wiped has no way back.
 
 The `I` **Pick** tool samples a colour from the canvas into the foreground.
 
-### Indexed colour
+### Colour modes
 
 Under the swatch row is the **palette** section, and it is a different thing from the swatches above
 it. A swatch is a colour you keep reaching for this session; a palette slot is a colour *this file
-is made of*. **Index to the swatches**, **Index to a palette file...**, **Palette from an image...**
-or **Convert...** turns the mode on, and from then on every write — a stroke, a fill, a shape, a
-gradient, a filter, a paste — lands on the nearest colour in the table. Alpha is never snapped, so a
-soft brush still fades; it just bands, which is what the mode is for.
+is made of*. At the top of it is a **Mode** row with three buttons — **RGB**, **Indexed** and
+**Grayscale** — and the one you are in is the one you cannot click. Each is a whole-document
+conversion and each is a single Ctrl+Z.
 
-The pixels stay full-colour RGBA underneath. "Indexed" here means the writes are constrained, not
-that the document stores palette indices — so nothing about layers, blending or export changes shape,
-and turning the mode off leaves every pixel exactly where it is.
+**RGB** is the default and the unconstrained one: any colour, anywhere.
+
+**Indexed** makes every pixel a numbered slot in the palette. That number is what the file stores,
+and the picture you see is the palette applied to it — which has three consequences worth knowing
+before you switch:
+
+- **Editing a slot repaints its pixels instantly**, across every layer and every frame, with nothing
+  rewritten anywhere. It is a lookup table changing, so it is as fast on a forty-frame clip as on
+  one drawing.
+- **Two slots holding the same colour stay separate.** A palette with the same brown in slots 3 and
+  7 is two different browns as far as the document is concerned: paint with slot 7 and recolouring
+  slot 3 later will not touch what you drew. Clicking a swatch is what tells the brush which one you
+  mean.
+- **Moving a slot is now an edit**, because it moves your pixels with it. In RGB mode reordering the
+  table is free and pushes nothing; in indexed mode `<`, `>` and **Sort** each cost one Ctrl+Z.
+
+One slot is the **transparent** one, marked with a small corner notch. It is the only way a pixel
+becomes a hole — an eraser reaches it, a painted colour never does, even when that colour is exactly
+the one the transparent slot displays. **Make transparent** moves it to whichever slot is selected;
+nothing is repainted, only what the numbers mean changes. An indexed palette holds at most 256
+colours and says so rather than quietly dropping any.
+
+The brush's **Nib** offers the two pixel nibs only while a document is indexed. A soft nib would
+still work — the edge is simply rounded to the shape you drew, since there is no partial coverage to
+be had — but a control that promises a feathered edge and delivers a hard one is worse than one that
+is not there.
+
+**Grayscale** flattens every colour to its brightness and keeps every later write grey. There is
+nothing to restore the colour from afterwards, which is why it is a mode you enter deliberately
+rather than a filter.
+
+**Index to the swatches**, **Index to a palette file...**, **Palette from an image...** and
+**Convert...** all build a table; the Mode row is what decides whether that table is a *constraint*
+or the document's storage.
+
+### Palette-constrained RGB
+
+There is a fourth state, and every drawing you indexed before this version is in it: an **RGB**
+document that has a palette. Every write is snapped onto the table as it commits — a stroke, a fill,
+a shape, a gradient, a filter, a paste — but the pixels stay full-colour RGBA underneath, so alpha is
+never snapped and a soft brush still fades and bands.
+
+It is kept rather than replaced because it can hold something true indexing cannot: soft edges. One
+index per pixel has no way to say "60% of this colour", so a document full of feathered strokes would
+lose them on the way in. Press **Indexed** when you want the storage as well as the constraint, and
+**RGB** with the palette still in place when you want the constraint back. Leaving either mode
+repaints nothing — the pixels you have are the pixels you keep.
 
 ### Converting a drawing onto a palette
 
@@ -420,8 +463,12 @@ With a slot selected:
 - **+ from colour** adds the current foreground as a new slot, repainting nothing;
 - **Remove** drops a slot and merges its pixels into the nearest surviving colour, because the
   pixels are the picture and a palette edit is a statement about the table;
-- **&lt;** and **&gt;** reorder, which changes no pixel — the order is what an exported `.gpl` and an
-  exported GIF colour table carry;
+- **&lt;** and **&gt;** reorder. In an RGB document that changes no pixel — the order is only what an
+  exported `.gpl` and an exported GIF colour table carry — so it is free and pushes nothing. In an
+  **indexed** document the slot number *is* the pixel, so a reorder rewrites every plane in the file
+  and costs one Ctrl+Z;
+- **Make transparent** (indexed only) hands the "this slot is a hole" meaning to the selected slot
+  and gives it back by the old one. Nothing is repainted;
 - **Count usage** walks the document once and reports how many pixels sit on each slot, so a slot
   showing zero is one you can delete without losing anything. It is a button rather than a live
   figure because counting is a pass over every pixel of every frame.
@@ -436,14 +483,27 @@ the last **Count usage** figures, and takes them itself if you have not asked fo
 slider beside it says. Colours already in the table are skipped rather than added twice. Select the
 two ends with Ctrl-click or Shift-click first.
 
-Neither sorting nor inserting is an undo step, and neither changes a pixel. Order is presentation in
-an indexed document — it is what an exported palette and an exported GIF colour table carry — and a
-new swatch is a colour you *may* paint with rather than a claim about what is already on the canvas.
-Editing or removing a slot does repaint, and those are one Ctrl+Z each, table and pixels together.
+In an **RGB** document neither sorting nor inserting is an undo step, and neither changes a pixel.
+Order is presentation there — it is what an exported palette and an exported GIF colour table carry —
+and a new swatch is a colour you *may* paint with rather than a claim about what is already on the
+canvas. Editing or removing a slot does repaint, and those are one Ctrl+Z each, table and pixels
+together.
+
+In an **indexed** document every one of them is an undo step, and for one reason: the slot number is
+what each pixel *is*, so rearranging the table rearranges the drawing. Sorting a palette by hue moves
+your pixels to follow their own colours, the transparent slot moves with them, and one press of
+Ctrl+Z puts all of it back exactly — including two identical swatches, which stay two.
 
 The table is saved inside the `.ora` as a `palette.gpl` member, so it comes back when the file does;
 an editor that does not know about it opens the file as an ordinary image, which is exactly what the
-pixels already are. **Export palette** writes it out as a GIMP `.gpl` or a JASC `.pal`, whichever
+pixels already are. An **indexed** document also writes each layer as a paletted PNG inside the same
+archive — that is where the slot numbers live, and where the table's alpha lives, which `.gpl` cannot
+carry. Krita, GIMP and a browser all read those correctly, so the file looks right anywhere. The one
+cost is the same one an animated `.ora` has: opening an indexed file in something that does not know
+about the slot numbers — **including an older build of Warlock** — and saving it writes the layers
+back as plain colour, and two identical swatches become one.
+
+**Export palette** writes it out as a GIMP `.gpl` or a JASC `.pal`, whichever
 suffix you give the file; both are plain text and neither has an alpha channel, so exported swatches
 are opaque. **Export animated GIF** on an indexed document writes your table verbatim instead of
 quantising each frame, so slot *n* is the same colour in every frame of the clip.

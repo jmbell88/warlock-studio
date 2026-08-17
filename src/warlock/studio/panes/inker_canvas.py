@@ -924,6 +924,13 @@ def _locked_out(ctx: Any, state: Any, tab: Any) -> bool:
 def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
     doc = tab.doc
     tool = state.tool
+    # Handed over once, here, at the top of every gesture. The document's funnel
+    # reads it to decide which of two identical swatches a stroke lands in (see
+    # ``Document.paint_slot``), and here is the one place that is true of every
+    # tool at once -- a brush, a fill, a shape, a gradient and a text stamp all
+    # paint the foreground and all deserve the slot the user clicked. Setting it
+    # per tool would be five places to forget.
+    doc.paint_slot = getattr(state, "fg_slot", None)
     state.drag_anchor = point
     state.last_point = point
     state.combine = _combine_op()
@@ -972,7 +979,7 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
             if state.drag_button == 1:
                 state.bg = picked
             else:
-                state.fg = picked
+                state.set_fg(picked)
         state.drag_kind = ""
         return
     if state.drag_button == 1 and tool not in BG_BUTTON_TOOLS:

@@ -19,7 +19,6 @@ from PIL import Image
 from warlock import guidance, models
 from warlock.config import get_config
 from warlock.pipelines import ground
-from warlock.pipelines import prompt as prompt_lib
 from warlock.pipelines.text2image import Text2Image
 from warlock.studio.plotter import blob, groundtex
 from warlock.studio.plotter.tileset import TerrainSpec, Tileset
@@ -56,7 +55,14 @@ def painted(pipe, tmp_path_factory):
         for role, subject in zip(ground.ROLES, subjects, strict=True):
             path = scratch / f"t{index}-{role}.png"
             pipe.generate(
-                guidance.compose_prompt(subject, {}, fields=prompt_lib.TILE_FIELDS),
+                # No ``fields=``: the taxonomy retirement (PROMPT_VERSION 5)
+                # deleted ``prompt.TILE_FIELDS`` along with the tables it
+                # restricted, and this citation was left behind -- so the whole
+                # module has errored at fixture setup ever since, which only the
+                # opt-in gpu lane runs and so nobody saw. ``compose_prompt``'s
+                # ``fields`` is inert while ``_PROMPT_FIELDS`` is empty, and the
+                # composed prompt is the same string either way.
+                guidance.compose_prompt(subject, {}),
                 path,
                 seed=ground.texture_seed(42, index, role),
                 tile=True,

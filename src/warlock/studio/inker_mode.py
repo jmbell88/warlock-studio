@@ -2571,6 +2571,79 @@ def export_palette(ctx: Any) -> None:
 # rather than its pixels, which is what keeps a 40-frame clip inside a frame.
 
 
+#: What the mode picker offers, in the order it draws them.
+COLOR_MODES = ("rgb", "indexed", "grayscale")
+
+#: How each mode is written on a button.
+COLOR_MODE_LABELS = {"rgb": "RGB", "indexed": "Indexed", "grayscale": "Grayscale"}
+
+
+def set_color_mode(ctx: Any, tab: Any, mode: str, *, max_colours: int = 32) -> bool:
+    """Move a document between RGB, true indexed and grayscale. -> whether it moved.
+
+    One door for all three, because they are one question and because the
+    refusals belong together: each conversion is a whole-document rewrite, one
+    undo step, and inline on the frame thread for ``index_to``'s reason (a
+    partial rewrite landing mid-save writes an archive whose parts disagree).
+
+    Entering **indexed** with no palette builds one from the drawing's own
+    colours, exactly as ``palette_from_document`` does for constrained mode --
+    two published operations and no third one. Entering it *with* a palette
+    keeps the table the user authored.
+    """
+    if tab is None or tab.busy or mode not in COLOR_MODES:
+        return False
+    state = ensure(ctx)
+    doc = tab.doc
+    if doc.color_mode == mode:
+        return False
+    try:
+        if mode == "indexed":
+            moved = doc.convert_to_indexed(
+                doc.palette or None, "nearest", max_colours=max_colours
+            )
+        elif mode == "grayscale":
+            moved = doc.convert_to_grayscale()
+        else:
+            moved = doc.convert_to_rgb()
+    except ValueError as exc:
+        # By name, and with the attempt in front of it: every refusal this can
+        # raise is about the palette the user can see (too many colours, a
+        # transparent index naming no slot), and a silent False would leave a
+        # button that does nothing. The frame is the house rule -- library text
+        # with no subject makes the reader work out what was being tried.
+        ctx.toast(f"Cannot switch to {COLOR_MODE_LABELS[mode]}: {exc}.", "warn")
+        return False
+    if not moved:
+        return False
+    state.palette_slot = 0
+    state.palette_slots = []
+    state.palette_usage = None
+    state.fg_slot = None
+    if mode == "indexed":
+        ctx.toast(
+            f"Indexed: {len(doc.palette)} colours, slot {doc.transparent_index}"
+            " is transparent.",
+            "success",
+        )
+    elif mode == "grayscale":
+        ctx.toast("Grayscale. Every write lands on a grey from here.", "success")
+    else:
+        # Worth saying, because the pixels do not move: leaving a mode lifts a
+        # constraint, and the drawing looks exactly as it did a moment ago.
+        ctx.toast("RGB colour. The pixels are unchanged.")
+    return True
+
+
+def set_transparent_slot(ctx: Any, tab: Any, index: int) -> bool:
+    """Move which palette slot means "hole". Indexed documents only."""
+    if tab is None or tab.busy or not tab.doc.set_transparent_index(index):
+        return False
+    ensure(ctx).palette_usage = None
+    ctx.toast(f"Slot {index} is transparent now.", "success")
+    return True
+
+
 def index_to(ctx: Any, tab: Any, colours: Any) -> bool:
     """Make *tab* indexed against *colours*, or plain RGBA with ``None``."""
     if tab is None or tab.busy:

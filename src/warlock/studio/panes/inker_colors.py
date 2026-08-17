@@ -57,7 +57,7 @@ def draw(ctx: Any) -> None:
 
     changed, value = controls.color_edit4("Foreground", _vec(state.fg), FLAGS)
     if changed:
-        state.fg = _to_rgba(value)
+        state.set_fg(_to_rgba(value))
     changed, value = controls.color_edit4("Background", _vec(state.bg), FLAGS)
     if changed:
         state.bg = _to_rgba(value)
@@ -111,11 +111,58 @@ def _indexed(ctx: Any, state: Any) -> None:
     # rebinds whole layer planes, and one landing mid-save writes an archive
     # whose parts disagree about the document.
     imgui.begin_disabled(tab.busy)
+    _mode_row(ctx, tab)
     if not doc.palette:
         _not_indexed(ctx, state, tab)
     else:
         _slots(ctx, state, tab)
     imgui.end_disabled()
+
+
+def _mode_row(ctx: Any, tab: Any) -> None:
+    """The document's colour mode, as three buttons with the current one out.
+
+    Buttons rather than a combo, and the current mode *disabled* rather than
+    highlighted: each of these is a whole-document conversion and one undo step,
+    so the control that says "you are already here" has to be the one that
+    cannot be clicked. The disabled reason is what a combo could not say.
+    """
+    doc = tab.doc
+    widgets.muted("Mode")
+    imgui.same_line()
+    for mode in inker_mode.COLOR_MODES:
+        label = inker_mode.COLOR_MODE_LABELS[mode]
+        if widgets.disabled_button(
+            f"{label}##mode{mode}",
+            doc.color_mode != mode,
+            reason="Already this mode.",
+            tooltip=_MODE_HELP[mode],
+        ):
+            inker_mode.set_color_mode(ctx, tab, mode)
+        if mode != inker_mode.COLOR_MODES[-1]:
+            imgui.same_line()
+
+
+#: What each mode does, said on the button that enters it. Long enough to carry
+#: the one consequence a user cannot guess: that indexed mode is destructive to
+#: colours off the table, and that leaving it is not.
+_MODE_HELP = {
+    "rgb": (
+        "Any colour, no constraint. Leaving indexed or grayscale mode repaints "
+        "nothing -- the pixels you have are the pixels you keep."
+    ),
+    "indexed": (
+        "Every pixel becomes a numbered slot in the palette. Editing a slot "
+        "repaints its pixels across every layer and frame instantly, and two "
+        "slots holding the same colour stay separate. Colours off the table are "
+        "snapped onto it, once, as one undo step."
+    ),
+    "grayscale": (
+        "Every write lands on a grey. The colour that is there now is flattened "
+        "to its brightness -- one undo step -- and there is nothing to restore "
+        "it from afterwards."
+    ),
+}
 
 
 def _not_indexed(ctx: Any, state: Any, tab: Any) -> None:
@@ -139,11 +186,27 @@ def _not_indexed(ctx: Any, state: Any, tab: Any) -> None:
     )
 
 
+def _hole_marker(at: Any, side: float) -> None:
+    """A small notch on the transparent slot's top-left corner."""
+    draw = imgui.get_window_draw_list()
+    size = max(sp(4.0), side * 0.3)
+    draw.add_triangle_filled(
+        imgui.ImVec2(at.x, at.y),
+        imgui.ImVec2(at.x + size, at.y),
+        imgui.ImVec2(at.x, at.y + size),
+        imgui.get_color_u32(imgui.ImVec4(*theme.rgba(theme.ACCENT))),
+    )
+
+
 def _slots(ctx: Any, state: Any, tab: Any) -> None:
     doc = tab.doc
     palette = list(doc.palette)
     state.clamp_slots(len(palette))
     counts = _usage(state, doc, len(palette))
+    # ``is_indexed`` and not ``bool(palette)``: a palette-constrained RGB
+    # document has a table and no transparent index, and marking a slot on one
+    # would be marking a meaning it does not have.
+    hole = doc.transparent_index if doc.is_indexed else -1
 
     avail = imgui.get_content_region_avail().x
     gap = imgui.get_style().item_spacing.x
@@ -169,13 +232,25 @@ def _slots(ctx: Any, state: Any, tab: Any) -> None:
                 # a palette slot is almost always to use it. Only on a plain
                 # click -- a Ctrl+click that *deselects* a slot must not leave
                 # the brush loaded with it.
-                state.fg = colour
+                #
+                # The *slot* rides along, which is what makes painting with the
+                # second of two identical swatches land in the second one.
+                state.set_fg(colour, index)
         if chosen or member:
             imgui.pop_style_var()
             imgui.pop_style_color()
+        if hole == index:
+            # A checker corner rather than a border: the two borders above are
+            # already spent on the selection, and the thing this marks is not a
+            # selection state -- it is what the slot *means*. Drawn after the
+            # button so it sits on top of the swatch's own fill.
+            _hole_marker(imgui.get_item_rect_min(), side)
         if imgui.is_item_hovered():
             used = "" if counts is None else f"  -  {counts[index]} px"
-            imgui.set_tooltip(f"{colour}{used}\nCtrl-click to add, Shift-click for a range")
+            note = "\nThis slot is transparent." if hole == index else ""
+            imgui.set_tooltip(
+                f"{colour}{used}{note}\nCtrl-click to add, Shift-click for a range"
+            )
         imgui.pop_id()
         if index % per_row != per_row - 1:
             imgui.same_line()
@@ -205,6 +280,17 @@ def _slots(ctx: Any, state: Any, tab: Any) -> None:
         state.palette_slot = slot + 1
     imgui.same_line()
     widgets.muted(f"{slot + 1} of {len(palette)}")
+
+    if doc.is_indexed and widgets.disabled_button(
+        "Make transparent",
+        slot != hole,
+        reason="This slot is already the transparent one.",
+        tooltip=(
+            "Pixels in this slot become holes and the old transparent slot goes "
+            "solid. Nothing is repainted -- only what the numbers mean changes."
+        ),
+    ):
+        inker_mode.set_transparent_slot(ctx, tab, slot)
 
     _sort_and_ramp(ctx, state, doc, counts)
 
@@ -338,7 +424,7 @@ def _swatches(ctx: Any, state: Any) -> None:
     for index, colour in enumerate(list(state.swatches)):
         imgui.push_id(f"swatch{index}")
         if imgui.color_button("##swatch", _vec(colour), 0, (side, side)):
-            state.fg = colour
+            state.set_fg(colour)
         # Right-click removes: a swatch row with no way to prune it fills up
         # with mistakes and stops being useful within a session.
         if imgui.is_item_clicked(1):

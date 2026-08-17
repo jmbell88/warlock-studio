@@ -1,6 +1,6 @@
 # ASEPRITE_PARITY.md — the Aseprite-parity master program
 
-**Status: SPEC WRITTEN 2026-08-17. Execution not started.**
+**Status: Waves 0 and 1 DONE 2026-08-17. Waves 2-5 not started.**
 **Progress is tracked by editing the wave status lines below (the PLOTTER_PLAN.md precedent). Each wave (or chunk) is a future session: its detailed implementation plan is written at execution time, arguing from this spec.**
 
 Goal: make Inker a genuine Aseprite alternative. Six P0 gaps from the 2026-08-17 gap
@@ -68,7 +68,7 @@ Small, immediate, independent of everything below.
 
 ---
 
-## Wave 1 — True indexed & grayscale color modes (P0 item 1) — **NOT STARTED**
+## Wave 1 — True indexed & grayscale color modes (P0 item 1) — **DONE 2026-08-17** (all six sub-waves)
 
 ### The architecture
 
@@ -262,6 +262,44 @@ instead of re-snapping; transparent-index alignment with `TRANSPARENT_INDEX`.
   stay full-colour RGBA underneath" paragraph is now only true of palette-constrained
   RGB) + new Indexed/Grayscale sections + the changed undo behavior of slot moves;
   INVARIANTS.md rewrite (below).
+
+### Deviations from this spec, as executed (Wave 1)
+
+Six, each argued at its site and recorded here so the spec stays the record:
+
+1. **The paint slot is a document field, not a `begin_stroke` parameter.** Every
+   tool paints the foreground -- fill, shape, gradient, text stamp -- so
+   `Document.paint_slot` is set once per gesture at `inker_canvas._press` rather
+   than threaded through twelve signatures. `InkerState.set_fg` is the one door
+   that records or clears it, pinned by an AST scan.
+2. **`grayscale()` lives in `indexed.py`, not `index_plane.py`.** It is a write
+   constraint like `snap`, it reuses that module's `_LUMA`, and `index_plane` is
+   about slots.
+3. **`convert_to_rgb` keeps the palette**, landing the document in
+   palette-constrained RGB rather than free RGB. Discarding a table the user
+   authored would be the most destructive thing that menu could do;
+   `set_palette(None)` is the separate, undoable act.
+4. **The transparent slot's stored alpha is canonicalised on ORA read**, not
+   normalised on the document. Its `tRNS` byte is *forced* to zero on write (the
+   hole must be a hole to Krita/GIMP/a browser), so reading it back literally
+   would read the writer's own requirement as user data -- and normalising the
+   document instead left the *previous* hole stranded at alpha 0 when the index
+   moved. The RGB survives; the alpha does not exist to survive.
+5. **The `.aseprite` background-layer conflict is resolved by duplicating the
+   slot**, not by the spec's "keep the `_lut(palette, None)` distinction" (which
+   would have meant mixed planes in one document). A new entry with the
+   transparent slot's colour is appended and the background re-pointed at it --
+   only possible because slots are now what is stored. A full palette falls back
+   to a warning by name.
+6. **The GIF index passthrough is decided by equality, not by structure.**
+   `sheetout.index_plane_one` picks the candidate structurally and then requires
+   that materialising it reproduces the flatten byte for byte, which is safe
+   without the condition list being complete.
+
+Also fixed in passing: `tests/test_ground_gpu.py` cited `prompt.TILE_FIELDS`,
+deleted by the taxonomy retirement, so the whole module had errored at fixture
+setup and the gpu lane had been red since `2c8fe73`. It is green again (23
+passed).
 
 ### INVARIANTS.md changes (Wave 1)
 

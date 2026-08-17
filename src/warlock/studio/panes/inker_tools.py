@@ -180,12 +180,31 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
         if changed:
             state.brush_size = inker.clamp_brush(size)
     if tool in PAINT_TOOLS:
-        state.nib = widgets.labeled_combo("Nib", state.nib, list(NIB_LABELS))
+        # **An indexed document is offered the pixel nibs only**, and the soft
+        # one is taken off the list rather than greyed beside them. It is not a
+        # restriction the engine needs -- a soft nib is legal there and the
+        # commit funnel simply thresholds it -- which is exactly the problem: the
+        # control would go on promising a feathered edge and deliver a hard one.
+        # A menu that cannot lie is better than a slider that can. (Aseprite
+        # reaches the same place from the other direction: it has no
+        # antialiasing in indexed mode at all.)
+        indexed = bool(getattr(tab.doc, "is_indexed", False)) if tab is not None else False
+        labels = [pair for pair in NIB_LABELS if not indexed or pair[0] in inker.PIXEL_NIBS]
+        if indexed and state.nib not in inker.PIXEL_NIBS:
+            state.nib = labels[0][0]
+        state.nib = widgets.labeled_combo("Nib", state.nib, labels)
         widgets.help_marker(
             "Soft is the antialiased disc, which is what a painted reference "
             "wants. The two pixel nibs lay down whole pixels only -- no partial "
             "coverage anywhere -- which is what pixel art wants and what keeps "
             "a drawing's colour count from growing along every edge."
+            + (
+                "\n\nThis document is indexed, so every pixel is a palette slot "
+                "and there is no partial coverage to be had: the soft nib is not "
+                "offered because it could not do what it says."
+                if indexed
+                else ""
+            )
         )
         if state.nib in inker.PIXEL_NIBS:
             # Not for the spray: the corner filter is about a *line*, and the
