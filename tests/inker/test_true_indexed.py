@@ -616,3 +616,43 @@ def test_applying_an_index_patch_to_a_planeless_layer_is_refused_by_name():
     with pytest.raises(ValueError, match="no index plane"):
         edit.redo(doc)
 
+
+# --- what the exporter is told ----------------------------------------------
+
+
+def test_the_exporter_is_handed_a_frame_s_own_index_plane():
+    """``sheetout.index_plane_one`` is what makes a GIF slot-stable. It answers
+    only when the flatten *is* a cel's materialisation, and the test of that is
+    equality rather than a list of structural conditions."""
+    from warlock.studio.inker import sheetout
+
+    doc = _doc()
+    _mark_duplicate(doc)
+    doc.add_frame()
+    uid = doc.anim.frames[0].uid
+
+    plane = sheetout.index_plane_one(doc, uid)
+    assert plane is not None and plane[0, 0] == 3
+
+
+def test_a_blended_frame_is_not_offered_as_an_exact_plane():
+    """A second layer means the flatten is a composite, not a materialisation --
+    so the export falls back to a colour lookup rather than writing slots that
+    describe a picture nobody is looking at."""
+    from warlock.studio.inker import sheetout
+
+    doc = _doc()
+    doc.add_layer()
+    doc.stack.active.blend = "multiply"
+    doc.stack.active.pixels[:, :] = GREEN
+    doc.add_frame()
+
+    assert sheetout.index_plane_one(doc, doc.anim.frames[0].uid) is None
+
+
+def test_an_rgb_document_is_never_offered_a_plane():
+    from warlock.studio.inker import sheetout
+
+    doc = Document.blank(4, 4)
+    doc.add_frame()
+    assert sheetout.index_plane_one(doc, doc.anim.frames[0].uid) is None

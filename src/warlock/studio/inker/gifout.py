@@ -109,7 +109,9 @@ def quantise(frame: np.ndarray) -> Any:
         rgba.close()
 
 
-def map_to_palette(frame: np.ndarray, palette: Sequence[Any]) -> Any:
+def map_to_palette(
+    frame: np.ndarray, palette: Sequence[Any], indices: np.ndarray | None = None
+) -> Any:
     """One RGBA plane as a palette image using *palette* verbatim.
 
     The indexed path. Every pixel is looked up in the table rather than
@@ -121,6 +123,15 @@ def map_to_palette(frame: np.ndarray, palette: Sequence[Any]) -> Any:
     opacities and blend modes, which can land a pixel between two swatches. The
     nearest one is the only answer that keeps the export a picture of the
     document.
+
+    ``indices`` short-circuits all of that. A truly indexed document already
+    knows which slot each pixel is in, and a colour lookup is strictly worse
+    than being told: two palette slots holding the same colour are one colour in
+    a flattened plane, so the lookup has to pick one of them and the export
+    stops being slot-stable. ``sheetout.index_plane_one`` supplies it only when
+    the flatten *is* a cel's materialisation, so passing it is never a guess.
+    Transparency still comes off the frame's alpha, because that is what decides
+    which pixels the format draws at all.
     """
     from PIL import Image
 
@@ -129,13 +140,27 @@ def map_to_palette(frame: np.ndarray, palette: Sequence[Any]) -> Any:
     table = [tuple(colour)[:3] for colour in palette]
     if not table or len(table) > MAX_PALETTE:
         raise ValueError(f"a gif palette holds 1..{MAX_PALETTE} colours")
-    flat = ix.snap(np.ascontiguousarray(frame), palette)
-    rgb = flat[..., :3].reshape(-1, 3)
-    lookup = {colour: index for index, colour in enumerate(table)}
-    picks = np.zeros(rgb.shape[0], dtype=np.uint8)
-    for colour, index in lookup.items():
-        picks[(rgb == np.asarray(colour, dtype=np.uint8)).all(axis=1)] = index
-    picks = picks.reshape(flat.shape[:2])
+    if indices is not None and indices.shape != frame.shape[:2]:
+        raise ValueError("an index plane is the size of the frame it indexes")
+    flat = np.ascontiguousarray(frame) if indices is not None else ix.snap(
+        np.ascontiguousarray(frame), palette
+    )
+    if indices is not None:
+        picks = np.minimum(indices, len(table) - 1).astype(np.uint8)
+    else:
+        rgb = flat[..., :3].reshape(-1, 3)
+        # ``setdefault``, so a duplicate colour keeps the **lowest** slot rather
+        # than whichever one the loop reached last. Deterministic for the same
+        # reason ``index_plane.resolve`` is: an export that moved a pixel between
+        # two identical swatches from one run to the next would make "two
+        # exports of an unchanged document are byte-identical" false.
+        lookup: dict[tuple[int, ...], int] = {}
+        for index, colour in enumerate(table):
+            lookup.setdefault(colour, index)
+        picks = np.zeros(rgb.shape[0], dtype=np.uint8)
+        for colour, index in lookup.items():
+            picks[(rgb == np.asarray(colour, dtype=np.uint8)).all(axis=1)] = index
+        picks = picks.reshape(flat.shape[:2])
     picks[flat[..., 3] < ALPHA_THRESHOLD] = TRANSPARENT_INDEX
 
     indexed = Image.fromarray(picks, "P")
@@ -193,12 +218,19 @@ def write_gif(
     *,
     loop: bool | int = True,
     palette: Sequence[Any] | None = None,
+    indices: Sequence[Any] | None = None,
 ) -> None:
     """Write one animated GIF. Off-thread: takes arrays, not a document.
 
     With *palette*, the document's own colour table is written verbatim; see
     the module docstring. A palette too long for the format falls back to the
     adaptive quantiser rather than dropping swatches.
+
+    *indices* is one exact index plane per frame, or None in the slots where
+    there is not one -- a truly indexed document supplies them where the flatten
+    is a cel's own materialisation, and a colour lookup is used everywhere else.
+    Per frame rather than all-or-nothing, because a clip routinely has one frame
+    with a blended layer on it and forty without.
 
     ``loop`` takes a tag's repeat count as well as a flag; see
     :func:`loop_option` for what each spelling writes.
@@ -210,10 +242,14 @@ def write_gif(
     shape = frames[0].shape[:2]
     if any(plane.shape[:2] != shape for plane in frames):
         raise ValueError("every frame of a gif is the same size")
+    if indices is not None and len(indices) != len(frames):
+        raise ValueError("every frame needs an index plane or None")
 
     fixed = bool(palette) and len(palette) <= MAX_PALETTE
+    planes = list(indices) if indices is not None else [None] * len(frames)
     images = [
-        map_to_palette(plane, palette) if fixed else quantise(plane) for plane in frames
+        map_to_palette(plane, palette, slots) if fixed else quantise(plane)
+        for plane, slots in zip(frames, planes, strict=True)
     ]
     try:
         images[0].save(

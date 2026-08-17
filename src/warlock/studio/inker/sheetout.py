@@ -487,6 +487,42 @@ def flatten_one(doc: Any, uid: str) -> np.ndarray:
     return plane
 
 
+def index_plane_one(doc: Any, uid: str) -> np.ndarray | None:
+    """One frame's own index plane, when the flatten *is* a cel's materialisation.
+
+    An indexed clip whose frames are one visible layer at full opacity in normal
+    blend -- which is most pixel-art animation -- already holds the exact answer
+    a GIF wants, slot for slot. Handing it over means the export writes the slots
+    the user painted rather than re-deriving them from the colours, which is the
+    one place a duplicate swatch would otherwise collapse: two slots holding the
+    same brown are one brown in a flattened plane, so a colour-keyed lookup has
+    to pick one of them and the export stops being slot-stable.
+
+    None whenever anything makes that untrue -- more than one contributing
+    layer, a blend mode, an opacity, a matte -- and **the test is equality, not
+    structure**. The structural walk only picks the candidate; what decides is
+    whether materialising the candidate reproduces the flatten byte for byte.
+    A condition list would have to be complete to be safe, and this is safe
+    without being complete.
+    """
+    if getattr(doc, "color_mode", "rgb") != "indexed":
+        return None
+    anim = getattr(doc, "anim", None)
+    if anim is None:
+        return None
+    frame = next((entry for entry in anim.frames if str(entry.uid) == str(uid)), None)
+    if frame is None:
+        return None
+    stack = doc.frame_stack(frame)
+    live = [layer for layer in stack if layer.visible and layer.opacity > 0.0]
+    if len(live) != 1 or live[0].indices is None:
+        return None
+    flat = doc.frame_flat(uid)
+    if flat is None or not np.array_equal(flat, live[0].pixels):
+        return None
+    return live[0].indices
+
+
 def timing(
     doc: Any, span: tuple[int, int] | None = None
 ) -> tuple[list[int], list[Any], DirectionalLayout | None]:

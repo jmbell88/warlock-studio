@@ -49,6 +49,7 @@ from typing import Any
 
 import numpy as np
 
+from . import index_plane as ixp
 from .animation import Animation, Frame, Tag, Track
 from .layers import Layer, LayerStack
 from .slices import Slice, SliceKey
@@ -706,8 +707,29 @@ def _decode(cel: AseCel, sprite: Sprite, lut: np.ndarray | None) -> np.ndarray:
     return lut[indices]
 
 
+def _decode_indices(cel: AseCel, sprite: Sprite) -> np.ndarray | None:
+    """One cel's tight rectangle as a raw ``(h, w) uint8`` index plane.
+
+    The *record*, where :func:`_decode` produces the materialisation. Reading
+    both is what stops this importer flattening away the thing an indexed file
+    knows and an RGBA plane cannot say: which **slot** each pixel is in. A file
+    whose palette holds the same brown twice arrives with the two browns still
+    distinguishable, so a later recolour reaches the pixels of one and not the
+    other -- and a save puts the file back the way it came.
+
+    None for a non-indexed depth, which is how the caller asks the question.
+    """
+    if sprite.depth != _INDEXED:
+        return None
+    width, height = cel.width, cel.height
+    if width < 1 or height < 1:
+        return np.zeros((0, 0), dtype=np.uint8)
+    # Length is already checked by ``_decode``, which every caller runs first.
+    return np.frombuffer(cel.data, dtype=np.uint8).reshape(height, width).copy()
+
+
 def _place(
-    tight: np.ndarray, size: tuple[int, int], offset: tuple[int, int]
+    tight: np.ndarray, size: tuple[int, int], offset: tuple[int, int], fill: int = 0
 ) -> tuple[np.ndarray, bool]:
     """A tight rectangle on a canvas-sized plane. -> ``(plane, was clipped)``.
 
@@ -717,7 +739,11 @@ def _place(
     package (``layers.py`` states why), so the caller warns.
     """
     width, height = size
-    plane = np.zeros((height, width, 4), dtype=np.uint8)
+    # ``fill`` rather than ``zeros``: an index plane's empty room is the
+    # document's transparent index, which is only slot 0 by coincidence -- the
+    # same argument ``transform.resize_canvas`` makes for its own ``fill``.
+    shape = (height, width) if tight.ndim == 2 else (height, width, 4)
+    plane = np.full(shape, int(fill), dtype=np.uint8)
     tall, wide = tight.shape[:2]
     x, y = offset
     x0, y0 = max(0, x), max(0, y)
@@ -772,6 +798,7 @@ def _build_cels(sprite: Sprite, warn: Callable[[str], None]) -> dict[tuple[int, 
         luts[True] = _lut(palette, None)
 
     tight: dict[tuple[int, int], np.ndarray] = {}
+    tight_indices: dict[tuple[int, int], np.ndarray] = {}
     made: dict[tuple[int, int], Layer] = {}
     for key, cel in by_slot.items():
         if cel.kind == _CEL_LINKED:
@@ -793,7 +820,12 @@ def _build_cels(sprite: Sprite, warn: Callable[[str], None]) -> dict[tuple[int, 
         plane, clipped = _place(pixels, size, (cel.x, cel.y))
         if clipped:
             warn("a cel reaching past the canvas was cropped to it")
-        made[key] = Layer(pixels=plane, name=layer.name)
+        slots = _decode_indices(cel, sprite)
+        indices = None
+        if slots is not None:
+            tight_indices[key] = slots
+            indices, _ = _place(slots, size, (cel.x, cel.y), transparent)
+        made[key] = Layer(pixels=plane, name=layer.name, indices=indices)
 
     for key, cel in by_slot.items():
         if cel.kind != _CEL_LINKED:
@@ -817,8 +849,89 @@ def _build_cels(sprite: Sprite, warn: Callable[[str], None]) -> dict[tuple[int, 
         plane, clipped = _place(tight[source_key], size, (cel.x, cel.y))
         if clipped:
             warn("a cel reaching past the canvas was cropped to it")
-        made[key] = Layer(pixels=plane, name=sprite.layers[cel.layer].name)
+        indices = None
+        if source_key in tight_indices:
+            indices, _ = _place(tight_indices[source_key], size, (cel.x, cel.y), transparent)
+        made[key] = Layer(
+            pixels=plane, name=sprite.layers[cel.layer].name, indices=indices
+        )
     return made
+
+
+def _install_indexed(doc, sprite: Sprite, warn: Callable[[str], None]) -> None:
+    """Make the opened document truly indexed, keeping the file's slot identity.
+
+    The planes are already on the layers; what is left is the colour state and
+    one genuine conflict between the two models.
+
+    **The conflict.** Aseprite draws the transparent index as its palette colour
+    on a *background* layer and as nothing everywhere else -- the one place that
+    flag changes pixels rather than chrome. This package has no background layer
+    (divergence 6: it has a document ``matte``) and exactly one transparent
+    index, so a single materialisation cannot render the same slot two ways.
+
+    **The resolution is the feature paying for itself.** The identity an index
+    plane keeps is precisely what makes the fix possible: append a *duplicate*
+    of the transparent slot's colour and re-point the background layers' pixels
+    at it. The picture is byte-identical to what Aseprite shows, the document is
+    consistently indexed, and the new slot is a real one the user can see and
+    recolour. It costs one palette entry, and only when a background layer
+    actually paints in that slot.
+
+    A palette already at 256 has no room, so there the pixels become holes and
+    the loss is warned about by name rather than left to be discovered.
+    """
+    palette = [tuple(colour) for colour in (sprite.palette or [])]
+    if not palette:  # pragma: no cover - refused far earlier
+        return
+    transparent = sprite.transparent_index
+    if not 0 <= transparent < len(palette):
+        transparent = 0
+
+    backgrounds = {
+        index for index, layer in enumerate(sprite.layers) if layer.background
+    }
+    planes = [
+        layer
+        for layer in (doc.stack if doc.anim is None else doc.anim.unique_cel_layers())
+        if layer.indices is not None
+    ]
+    # Which layers are backgrounds is known by *row*, and the layers here are
+    # addressed by object, so the link is the name the row gave them. Names are
+    # unique per Aseprite file in practice and a collision costs only the
+    # duplicate-slot repair, never a pixel of an ordinary layer.
+    background_names = {sprite.layers[index].name for index in backgrounds}
+    opaque = [
+        layer
+        for layer in planes
+        if layer.name in background_names and bool((layer.indices == transparent).any())
+    ]
+
+    if opaque and len(palette) < ixp.MAX_COLOURS:
+        spare = len(palette)
+        palette.append(palette[transparent])
+        for layer in opaque:
+            layer.indices[layer.indices == transparent] = spare
+    elif opaque:
+        warn(
+            "a background layer painted in the transparent index reads as"
+            " transparent here; the palette is full, so no slot could be spared"
+        )
+
+    doc.palette = palette
+    doc.color_mode = "indexed"
+    doc.transparent_index = transparent
+    table = doc._index_lut()
+    for layer in planes:
+        doc._rematerialize(layer, table, notify=False)
+    doc.invalidate_all()
+    # Re-asked after the materialisation, not before: the caller computed it off
+    # the RGBA planes this method has just rewritten, and on a file with a
+    # background layer that is exactly the difference between an opaque document
+    # and one with holes in it.
+    from .document import matte_for
+
+    doc.matte = matte_for(doc.composite)
 
 
 def _group_tree(sprite: Sprite, member_uids: dict[int, int]) -> tuple[dict, dict]:
@@ -1006,11 +1119,15 @@ def document_from_aseprite(
         # Only for an indexed file. Aseprite writes a palette into every
         # document it saves, RGBA ones included, and adopting that table on an
         # RGBA drawing would silently put the *whole editor* into indexed mode
-        # -- which here is a constraint on every write, not a storage format
-        # (see :mod:`.indexed`). ``snap=False`` for the ORA reader's reason: the
-        # pixels came off the palette already, so re-snapping them would push an
-        # undo step for opening a file.
-        doc.set_palette(sprite.palette, snap=False)
+        # for a table nobody asked to be constrained by.
+        _install_indexed(doc, sprite, warn)
+    elif sprite.depth == _GRAYSCALE:
+        # The expansion ``_decode`` performs is exact -- Aseprite renders a grey
+        # as ``(v, v, v)`` too -- so a grayscale file opens as a grayscale
+        # *document*, not as an RGB one that happens to be grey. The mode is
+        # what makes the next stroke stay grey. Divergence 2's grayscale half:
+        # behaviour parity, storage divergence, lossless round trip.
+        doc.color_mode = "grayscale"
     doc.file_format = "ora"
     doc.path = None
     return doc, list(sprite.warnings)

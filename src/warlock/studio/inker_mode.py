@@ -973,6 +973,11 @@ class _Export:
     suggested: str
     uids: list[str]
     frames: list[Any] = field(default_factory=list)
+    #: One exact index plane per read frame, or None where the frame's flatten
+    #: is not a cel's own materialisation. Parallel to ``frames`` and appended
+    #: in the same step, so the two cannot come apart. Only a GIF reads it --
+    #: see ``sheetout.index_plane_one``.
+    planes: list[Any] = field(default_factory=list)
     #: The inclusive frame range being exported, or None for the whole
     #: timeline. Sliced **at begin**, and ``timing`` is sliced at submit with
     #: this same pair -- safe because the tab has been locked (``saving``) for
@@ -1086,9 +1091,14 @@ def pump_export(ctx: Any) -> None:
         state.export = None
         return
     try:
-        export.frames.append(
-            sheetout.flatten_one(tab.doc, export.uids[len(export.frames)])
-        )
+        uid = export.uids[len(export.frames)]
+        plane = sheetout.flatten_one(tab.doc, uid)
+        # Read here, beside the flatten it describes and on the same frame:
+        # taken later it would describe a document the user has since edited,
+        # and the two have to be a matched pair or the GIF is drawn with one
+        # frame's slots and another frame's colours.
+        export.planes.append(sheetout.index_plane_one(tab.doc, uid))
+        export.frames.append(plane)
     except (ValueError, IndexError, KeyError):
         state.export = None
         tab.saving = False
@@ -1201,6 +1211,13 @@ def _submit_export(ctx: Any, export: _Export) -> None:
             durations,
             loop=export.loop,
             palette=palette,
+            # Magnified by the same whole number as the pixels, which is exact
+            # on an index plane in a way it is on nothing else: ``upscale``
+            # repeats each element, so a magnified slot is still that slot.
+            indices=[
+                None if slots is None else upscale(slots, scale)
+                for slots in export.planes
+            ],
         )
         return {"exported": dest}
 

@@ -195,3 +195,106 @@ def test_a_repeat_of_three_asks_for_two_more_plays(tmp_path):
     plane = _plane((4, 4), (10, 200, 10, 255))
     gifout.write_gif(dest, [plane] * 2, [100, 100], loop=3)
     assert _netscape_block(dest) == NETSCAPE + b"\x02\x00\x00"
+
+
+# --- the exact index path ----------------------------------------------------
+
+
+def _read_slots(path):
+    """Every frame's raw palette indices, without converting to RGB."""
+    with Image.open(path) as im:
+        out = []
+        for index in range(getattr(im, "n_frames", 1)):
+            im.seek(index)
+            out.append(np.asarray(im.convert("P"), dtype=np.uint8).copy())
+        return out
+
+
+def test_an_exact_index_plane_is_written_slot_for_slot(tmp_path):
+    """The gap a colour lookup cannot close: slots 1 and 3 are the same red, so
+    a flattened plane is one red and the lookup has to pick one of them. Told
+    which slot each pixel is in, the export keeps both -- which is what makes a
+    GIF's colour table mean the same thing as the document's."""
+    palette = [(0, 0, 0, 255), (200, 20, 20, 255), (20, 200, 20, 255), (200, 20, 20, 255)]
+    plane = np.zeros((1, 4, 4), np.uint8)
+    plane[0, 0] = plane[0, 1] = (200, 20, 20, 255)
+    plane[0, 2] = (20, 200, 20, 255)
+    plane[0, 3] = (200, 20, 20, 255)
+    slots = np.asarray([[1, 3, 2, 1]], dtype=np.uint8)
+
+    dest = tmp_path / "exact.gif"
+    gifout.write_gif(dest, [plane], [100], palette=palette, indices=[slots])
+    assert _read_slots(dest)[0].tolist() == [[1, 3, 2, 1]]
+
+
+def test_without_a_plane_a_duplicate_colour_falls_to_the_lowest_slot(tmp_path):
+    """Deterministic, and stated: an export that moved a pixel between two
+    identical swatches from one run to the next would make "two exports of an
+    unchanged document are byte-identical" false."""
+    palette = [(0, 0, 0, 255), (200, 20, 20, 255), (20, 200, 20, 255), (200, 20, 20, 255)]
+    plane = np.zeros((1, 2, 4), np.uint8)
+    plane[0, 0] = plane[0, 1] = (200, 20, 20, 255)
+
+    dest = tmp_path / "dup.gif"
+    gifout.write_gif(dest, [plane], [100], palette=palette)
+    assert _read_slots(dest)[0].tolist() == [[1, 1]]
+
+
+def test_alpha_still_decides_transparency_even_with_a_plane(tmp_path):
+    """The index plane says which *colour* a pixel is; the format's own
+    transparency is a separate slot, and what puts a pixel in it is alpha."""
+    palette = [(0, 0, 0, 255), (200, 20, 20, 255)]
+    plane = np.zeros((1, 2, 4), np.uint8)
+    plane[0, 0] = (200, 20, 20, 255)
+    slots = np.asarray([[1, 1]], dtype=np.uint8)
+
+    dest = tmp_path / "hole.gif"
+    gifout.write_gif(dest, [plane], [100], palette=palette, indices=[slots])
+    read = _read_slots(dest)[0]
+    assert read[0, 0] == 1
+    assert read[0, 1] == gifout.TRANSPARENT_INDEX
+
+
+def test_planes_are_per_frame_and_may_be_none(tmp_path):
+    """A clip routinely has one frame with a blended layer on it and forty
+    without, so all-or-nothing would throw away the forty."""
+    palette = [(0, 0, 0, 255), (200, 20, 20, 255), (200, 20, 20, 255), (20, 200, 20, 255)]
+    first = np.zeros((1, 1, 4), np.uint8)
+    first[0, 0] = (200, 20, 20, 255)
+    # A *different* colour, so Pillow's inter-frame delta cannot collapse the
+    # second frame to nothing and leave the reader looking at the background.
+    second = np.zeros((1, 1, 4), np.uint8)
+    second[0, 0] = (20, 200, 20, 255)
+
+    dest = tmp_path / "mixed.gif"
+    gifout.write_gif(
+        dest,
+        [first, second],
+        [100, 100],
+        palette=palette,
+        indices=[np.asarray([[2]], np.uint8), None],
+    )
+    assert _read_slots(dest)[0][0, 0] == 2, "told, so the second of the two identical reds"
+    # The second frame is asserted by *colour* rather than by slot. Pillow hands
+    # back later frames of a transparent GIF already promoted to RGBA -- the raw
+    # indices are gone by the time a reader sees them -- so a slot assertion here
+    # would be testing Pillow's re-quantise, not what was written. The colour is
+    # the part that has to be right when there is no plane to be told about.
+    with Image.open(dest) as im:
+        im.seek(1)
+        assert tuple(np.asarray(im.convert("RGBA"))[0, 0]) == (20, 200, 20, 255)
+
+
+def test_a_mismatched_plane_is_refused_by_name():
+    plane = np.zeros((2, 2, 4), np.uint8)
+    with pytest.raises(ValueError, match="the size of the frame"):
+        gifout.map_to_palette(plane, [(0, 0, 0, 255)], np.zeros((3, 3), np.uint8))
+
+
+def test_a_short_plane_list_is_refused_by_name(tmp_path):
+    plane = np.zeros((1, 1, 4), np.uint8)
+    with pytest.raises(ValueError, match="an index plane or None"):
+        gifout.write_gif(
+            tmp_path / "x.gif", [plane, plane], [10, 10], palette=[(0, 0, 0, 255)],
+            indices=[None],
+        )

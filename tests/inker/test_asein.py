@@ -413,10 +413,11 @@ def test_an_indexed_file_carries_its_palette_and_its_transparent_index():
     )
     doc, warnings = asein.document_from_aseprite(data)
     assert doc.palette == colours
-    # Palette-constrained RGB for now: the reader flattens the file's index
-    # planes through its table. Wave 1.4 makes this ``is_indexed`` and keeps the
-    # planes, at which point the duplicate-swatch fixture below becomes exact.
-    assert doc.is_palette_locked
+    # Truly indexed: the file's index planes are kept as the record rather than
+    # flattened through the table, so the slots the file names survive.
+    assert doc.is_indexed and not doc.is_palette_locked
+    assert doc.stack[0].indices.tolist() == [[0, 1]]
+    doc.check_materialized()
     # Index 0 is the header's transparent index, so it reads as nothing.
     assert tuple(doc.stack[0].pixels[0, 0]) == (0, 0, 0, 0)
     assert tuple(doc.stack[0].pixels[0, 1]) == (255, 0, 0, 255)
@@ -437,8 +438,73 @@ def test_the_transparent_index_is_a_colour_on_a_background_layer():
             )
         ],
     )
-    doc, _ = asein.document_from_aseprite(data)
+    doc, warnings = asein.document_from_aseprite(data)
     assert tuple(doc.stack[0].pixels[0, 0]) == (7, 8, 9, 255)
+    # And the picture is kept by the feature paying for itself. Aseprite renders
+    # the transparent index two ways -- as its colour on a background layer, as
+    # nothing everywhere else -- and one materialisation cannot do both. So the
+    # slot is *duplicated*: a new entry with the same colour is appended and the
+    # background's pixels re-pointed at it, which only an index plane makes
+    # possible. The document stays consistently indexed and the user sees a real
+    # swatch they can recolour.
+    assert doc.is_indexed
+    assert doc.palette == [*colours, (7, 8, 9, 255)]
+    assert doc.stack[0].indices.tolist() == [[2]]
+    assert doc.transparent_index == 0
+    assert warnings == []
+    doc.check_materialized()
+
+
+def test_a_duplicate_swatch_survives_the_import_as_two_slots():
+    """The thing an RGBA round trip cannot promise, and the reason this reader
+    stopped flattening: slots 1 and 3 are the same red, and after the import the
+    two pixels painted in them are still distinguishable."""
+    colours = [(0, 0, 0, 255), (200, 20, 20, 255), (20, 200, 20, 255), (200, 20, 20, 255)]
+    data = _file(
+        _header(1, 4, 1, INDEXED_DEPTH, transparent=0),
+        [_frame([_layer("Art"), _palette(colours), _cel(0, bytes([0, 1, 2, 3]), 4, 1)])],
+    )
+    doc, _ = asein.document_from_aseprite(data)
+
+    assert doc.stack[0].indices.tolist() == [[0, 1, 2, 3]]
+    assert tuple(doc.stack[0].pixels[0, 1]) == tuple(doc.stack[0].pixels[0, 3])
+    doc.recolour_slot(3, (5, 5, 250, 255))
+    assert tuple(doc.stack[0].pixels[0, 1]) == (200, 20, 20, 255)
+    assert tuple(doc.stack[0].pixels[0, 3]) == (5, 5, 250, 255)
+
+
+def test_an_indexed_linked_cel_shares_one_index_plane():
+    colours = [(0, 0, 0, 255), (255, 0, 0, 255)]
+    data = _file(
+        _header(2, 2, 1, INDEXED_DEPTH, transparent=0),
+        [
+            _frame([_layer("Art"), _palette(colours), _cel(0, bytes([0, 1]), 2, 1)]),
+            _frame([_linked_cel(0, 0)]),
+        ],
+    )
+    doc, _ = asein.document_from_aseprite(data)
+    cels = list(doc.anim.unique_cel_layers())
+    assert len(cels) == 1 and cels[0].indices is not None
+    doc.check_materialized()
+
+
+def test_a_grayscale_file_opens_as_a_grayscale_document():
+    """The expansion the reader performs is exact, so the mode is what is left
+    to carry -- and it is the mode that makes the *next* stroke stay grey."""
+    data = _file(
+        _header(1, 2, 1, GRAY_DEPTH),
+        [_frame([_layer("Art"), _cel(0, bytes([90, 255, 200, 128]), 2, 1)])],
+    )
+    doc, _ = asein.document_from_aseprite(data)
+
+    assert doc.color_mode == "grayscale" and doc.is_grayscale
+    assert tuple(doc.stack[0].pixels[0, 0]) == (90, 90, 90, 255)
+    assert tuple(doc.stack[0].pixels[0, 1]) == (200, 200, 200, 128)
+
+    doc.begin_stroke((0, 0), (200, 20, 20, 255), size=1, nib="pixel")
+    doc.end_stroke()
+    r, g, b, _a = doc.stack[0].pixels[0, 0]
+    assert r == g == b
 
 
 def test_an_rgba_file_does_not_become_indexed_by_carrying_a_palette():
