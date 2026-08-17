@@ -19,13 +19,25 @@ from warlock.studio.inker.selection import SelectionMask
 GREY = (128, 128, 128, 255)
 BRIGHTER = {"brightness": 0.5, "contrast": 0.0}
 
+#: Slots 1 and 3 hold the same grey, which is what makes an indexed assertion
+#: about *identity* possible at all. ``test_true_indexed``'s palette, restated
+#: here in this file's own colours rather than imported: the two files are about
+#: different things and a shared constant would tie their fixtures together.
+#: Slot 2 is the brightened grey, so a brightening genuinely *moves* a slot
+#: rather than resolving back to the one it started on -- which is the other
+#: half of what these tests have to tell apart.
+BLACK = (0, 0, 0, 255)
+INDEXED_PALETTE = [BLACK, GREY, (192, 192, 192, 255), GREY]
+
 
 def _paint(doc: Document, colour: tuple[int, int, int, int] = GREY) -> None:
     weight = np.ones((4, 4), dtype=np.float32)
     assert doc.write_colour((0, 0, 4, 4), colour, weight)
 
 
-def _clip(frames: int = 3, tracks: int = 1) -> Document:
+def _clip(
+    frames: int = 3, tracks: int = 1, colour: tuple[int, int, int, int] = GREY
+) -> Document:
     doc = Document.blank(4, 4)
     for _ in range(tracks - 1):
         doc.add_layer()
@@ -34,7 +46,7 @@ def _clip(frames: int = 3, tracks: int = 1) -> Document:
             doc.add_frame()
         for track in range(tracks):
             doc.set_active_layer(track)
-            _paint(doc)
+            _paint(doc, colour)
     doc.history.clear()
     return doc
 
@@ -42,6 +54,21 @@ def _clip(frames: int = 3, tracks: int = 1) -> Document:
 def _cel(doc: Document, track: int, frame: int):
     anim = doc.anim
     return anim.cels.get((anim.tracks[track].uid, anim.frames[frame].uid))
+
+
+def _indexed_clip(frames: int = 3) -> Document:
+    doc = _clip(frames)
+    assert doc.convert_to_indexed(INDEXED_PALETTE)
+    doc.check_materialized()
+    doc.history.clear()
+    return doc
+
+
+def _gray_clip(frames: int = 3) -> Document:
+    doc = _clip(frames, colour=(200, 20, 20, 255))
+    assert doc.convert_to_grayscale()
+    doc.history.clear()
+    return doc
 
 
 def test_a_range_filter_writes_every_cel_it_covers_as_one_step():
@@ -169,6 +196,71 @@ def test_a_range_filter_commits_a_float_before_it_reads_the_cels():
     # Brightened, i.e. the cel the commit conjured was filtered with the rest
     # rather than left as the only unfiltered frame in the range.
     assert int(landed.pixels[0, 0, 0]) > GREY[0]
+
+
+# --- the colour mode ---------------------------------------------------------
+#
+# A range op writes many cels under one Ctrl+Z, so it cannot use ``_commit_patch``
+# -- the funnel pushes a step of its own per call. What it uses instead is
+# ``_patch_edit_for``, the funnel's list-returning sibling, and these are the
+# assertions that say the two agree about what a colour mode means.
+
+
+def test_a_range_filter_on_an_indexed_document_keeps_the_planes_in_step():
+    """The gap this helper closed: a filter wrote RGBA straight onto an indexed
+    cel and left ``layer.indices`` describing the picture from before it."""
+    doc = _indexed_clip(3)
+    assert doc.filter_range("brightness / contrast", BRIGHTER, 0, 0, 0, 2)
+    doc.check_materialized()
+    assert len(doc.history) == 1
+
+
+def test_a_range_filter_on_an_indexed_document_pushes_index_patches():
+    """Indices are the record, so the step has to be one: an RGBA patch would
+    put the *colours* back on undo and collapse every duplicate slot doing it."""
+    from warlock.studio.inker.undo import CompoundEdit, IndexPatchEdit
+
+    doc = _indexed_clip(2)
+    before = [_cel(doc, 0, i).indices.copy() for i in range(2)]
+    assert doc.filter_range("brightness / contrast", BRIGHTER, 0, 0, 0, 1)
+
+    step = doc.history.top
+    parts = step.edits if isinstance(step, CompoundEdit) else [step]
+    assert parts and all(isinstance(part, IndexPatchEdit) for part in parts)
+    # The slots genuinely moved: a stale-index write would leave these equal and
+    # every assertion below would pass for the wrong reason.
+    assert not np.array_equal(_cel(doc, 0, 0).indices, before[0])
+
+    assert doc.history.undo(doc)
+    doc.check_materialized()
+    assert np.array_equal(_cel(doc, 0, 0).indices, before[0])
+    assert np.array_equal(_cel(doc, 0, 1).indices, before[1])
+
+
+def test_a_range_filter_on_a_grayscale_document_stays_gray():
+    """A red-only invert is exactly the write the constraint exists for: it
+    produces a colour, and the mode has to flatten it back to luma."""
+    doc = _gray_clip(2)
+    assert doc.filter_range(
+        "invert", {"red": 1.0, "green": 0.0, "blue": 0.0}, 0, 0, 0, 1
+    )
+    for index in range(2):
+        cel = _cel(doc, 0, index)
+        assert np.array_equal(cel.pixels[..., 0], cel.pixels[..., 1])
+        assert np.array_equal(cel.pixels[..., 1], cel.pixels[..., 2])
+
+
+def test_a_range_filter_the_palette_resolves_back_to_nothing_pushes_nothing():
+    """The indexed no-op, reached by different arithmetic than the RGB one: a
+    brightening whose every pixel lands back on the slot it came from changed
+    the picture not at all, so it must not move the history head."""
+    doc = _indexed_clip(2)
+    # A brightening so slight that ``resolve`` snaps every pixel back.
+    assert not doc.filter_range(
+        "brightness / contrast", {"brightness": 0.002, "contrast": 0.0}, 0, 0, 0, 1
+    )
+    assert len(doc.history) == 0
+    doc.check_materialized()
 
 
 def test_a_still_document_has_no_range_to_filter():

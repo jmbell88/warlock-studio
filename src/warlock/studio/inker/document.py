@@ -1043,6 +1043,64 @@ class Document(
         self.history.push(edit if not pending else CompoundEdit([*pending, edit]))
         self.invalidate(rect, layer_uid=layer.uid)
 
+    def _patch_edit_for(
+        self, layer: Layer, rect: tuple[int, int, int, int], before: np.ndarray
+    ) -> Any:
+        """The list-returning sibling of :meth:`_commit_patch`.
+
+        A range op writes many cels under **one** Ctrl+Z, so it cannot go
+        through the funnel: ``_commit_patch`` pushes a step per call, and a
+        rect of five cels would arrive on the stack as five. What it can share
+        is everything the funnel is actually *for* -- the colour mode. So the
+        constraint is applied here, to a region the caller has already written,
+        and the edit is handed back for the caller's ``_push_range`` instead of
+        being pushed.
+
+        The order matters and is the funnel's own: indexed takes the whole
+        method with it (the step it makes is an index patch), and grayscale and
+        the palette snap are two ``if``s rather than an ``if``/``elif``,
+        because a grayscale document with a palette gets both.
+
+        ``None`` is "the mode resolved this write to nothing" -- the caller
+        skips the cel, and the materialisation has already been put back, so
+        the document is left exactly as it was found.
+        """
+        x0, y0, x1, y1 = rect
+        if self.color_mode == "indexed" and layer.indices is not None:
+            # The RGBA ``before`` is deliberately unused on this path, for
+            # ``_commit_indexed_patch``'s reason: the indices are the record,
+            # and the crop of them sitting in ``layer.indices`` right now is
+            # still the before-state, because nothing but these three methods
+            # ever writes one.
+            idx_before = layer.indices[y0:y1, x0:x1].copy()
+            table = self._index_lut()
+            prefer = None
+            slot = self.paint_slot
+            if slot is not None and self.palette and 0 <= slot < len(self.palette):
+                prefer = (self.palette[slot], slot)
+            idx_after = ixp.resolve(
+                layer.pixels[y0:y1, x0:x1], table, self.transparent_index, prefer=prefer
+            )
+            layer.indices[y0:y1, x0:x1] = idx_after
+            # Materialised *before* the no-op test, as the funnel does it: a
+            # write whose every pixel resolves back to the slot it came from
+            # has to leave the pixels saying what the slots say, or the caller
+            # skips the cel and the drift it just made stays.
+            layer.pixels[y0:y1, x0:x1] = ixp.materialize(idx_after, table)
+            if np.array_equal(idx_before, idx_after):
+                return None
+            return IndexPatchEdit(layer.uid, rect, idx_before, idx_after)
+        if self.color_mode == "grayscale":
+            region = layer.pixels[y0:y1, x0:x1]
+            layer.pixels[y0:y1, x0:x1] = ix.grayscale(region)
+        if self.palette:
+            region = layer.pixels[y0:y1, x0:x1]
+            layer.pixels[y0:y1, x0:x1] = ix.snap(region, self.palette)
+        after = layer.pixels[y0:y1, x0:x1].copy()
+        if np.array_equal(before, after):
+            return None
+        return PatchEdit(layer.uid, rect, before, after)
+
     # -- whole-canvas geometry ---------------------------------------------
 
     def _replay(self, run: Any) -> None:

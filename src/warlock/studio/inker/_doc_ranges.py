@@ -698,16 +698,26 @@ class RangeOps:
         for layer in targets:
             before = layer.pixels[y0:y1, x0:x1].copy()
             filtered = filters.apply_named(name, before, **params)
-            after = masked_apply(before, filtered, weight, alpha_lock=layer.alpha_lock)
-            if np.array_equal(before, after):
+            layer.pixels[y0:y1, x0:x1] = masked_apply(
+                before, filtered, weight, alpha_lock=layer.alpha_lock
+            )
+            # Through ``_patch_edit_for`` rather than straight into a
+            # ``PatchEdit``, and that is the whole of what makes this op
+            # mode-aware: an indexed cel filtered with a raw RGBA write left
+            # ``layer.indices`` describing the picture from before it, and the
+            # document went on looking right until it was saved or undone.
+            # It also subsumes the old no-op test -- ``None`` *is* "nothing
+            # changed", reached by whichever arithmetic the mode uses.
+            edit = self._patch_edit_for(layer, box, before)
+            if edit is None:
                 continue
-            layer.pixels[y0:y1, x0:x1] = after
             # Per touched layer, never ``_stamp_all``: the frames a cel appears
             # on are exactly the flattens this write invalidates, and stamping
             # the whole timeline would throw away every other frame's cache for
-            # a write that did not touch it.
+            # a write that did not touch it. After the no-op test, so a write
+            # the mode resolved back to nothing stamps nothing either.
             self._stamp_layer(layer.uid)
-            edits.append(PatchEdit(layer.uid, box, before, after))
+            edits.append(edit)
         if not edits:
             return False
         pushed = self._push_range(edits)
