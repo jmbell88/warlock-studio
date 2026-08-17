@@ -45,7 +45,7 @@ from .anim_edits import (
     FrameRemoveEdit,
 )
 from .animation import Frame, clamp_duration
-from .undo import CompoundEdit, PatchEdit
+from .undo import CompoundEdit
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .document import Document

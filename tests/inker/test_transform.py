@@ -164,6 +164,46 @@ def test_a_canvas_resize_that_overlaps_nothing_gives_an_empty_plane():
     assert out.max() == 0
 
 
+# --- whole-pixel translation --------------------------------------------------
+
+
+def test_translate_wraps_exactly():
+    """``wrap`` is an exact permutation, which is the property the timeline's
+    range shift leans on: nothing is invented and nothing falls off, so the
+    same shift back is the identity."""
+    plane = np.arange(16, dtype=np.uint8).reshape(4, 4)
+    out = tf.translate(plane, 1, 0, wrap=True)
+    assert np.array_equal(out, np.roll(plane, 1, axis=1))
+    assert np.array_equal(tf.translate(out, -1, 0, wrap=True), plane)
+
+
+def test_translate_zero_fills_with_the_given_value():
+    plane = np.full((4, 4), 7, dtype=np.uint8)
+    out = tf.translate(plane, 2, 0, wrap=False, fill=3)
+    assert (out[:, :2] == 3).all()
+    assert (out[:, 2:] == 7).all()
+
+
+def test_translate_is_shape_agnostic():
+    """An ``(H, W, 4)`` plane and an ``(H, W)`` index plane go through the same
+    function, as they do for every other primitive here."""
+    rgba = np.random.default_rng(0).integers(0, 255, (4, 4, 4), dtype=np.uint8)
+    out = tf.translate(rgba, 0, -1, wrap=True)
+    assert np.array_equal(out, np.roll(rgba, -1, axis=0))
+
+
+def test_translate_off_the_edge_leaves_nothing_but_fill():
+    plane = np.full((4, 4), 7, dtype=np.uint8)
+    assert (tf.translate(plane, 9, 0) == 0).all()
+    assert (tf.translate(plane, 0, -9, fill=5) == 5).all()
+
+
+def test_translate_by_nothing_is_the_identity_either_way():
+    plane = np.arange(16, dtype=np.uint8).reshape(4, 4)
+    assert np.array_equal(tf.translate(plane, 0, 0), plane)
+    assert np.array_equal(tf.translate(plane, 0, 0, wrap=True), plane)
+
+
 # --- multi-stop gradients (Ink6) ---------------------------------------------
 
 

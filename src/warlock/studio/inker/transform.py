@@ -43,6 +43,36 @@ def rotate90(pixels: np.ndarray, quarters: int = 1) -> np.ndarray:
     return np.ascontiguousarray(np.rot90(pixels, int(quarters) % 4))
 
 
+def translate(
+    pixels: np.ndarray, dx: int, dy: int, *, wrap: bool = False, fill: int = 0
+) -> np.ndarray:
+    """Shift a plane by whole pixels. Nothing is resampled.
+
+    ``wrap`` carries content round the far edge, which makes the result an
+    exact *permutation* -- no pixel is invented and none is lost, so shifting
+    back is the identity. That is what the timeline's range shift needs: an
+    index plane shifted this way keeps two slots holding one colour as two
+    slots, because the slots are only being moved.
+
+    Without it the vacated cells take ``fill``, which is zero -- transparent
+    black -- for every RGBA caller and the *transparent index* for an index
+    plane. Those are only the same value by coincidence, and a document whose
+    transparent index is 7 would otherwise vacate into a band of solid slot-0
+    colour. See :func:`resize_canvas`, whose ``fill`` exists for this reason
+    and whose one caller passes exactly the same thing.
+    """
+    dx, dy = int(dx), int(dy)
+    if wrap:
+        return np.ascontiguousarray(np.roll(pixels, (dy, dx), axis=(0, 1)))
+    out = np.full_like(pixels, int(fill))
+    height, width = pixels.shape[:2]
+    sx0, sx1 = max(0, -dx), min(width, width - dx)
+    sy0, sy1 = max(0, -dy), min(height, height - dy)
+    if sx0 < sx1 and sy0 < sy1:
+        out[sy0 + dy : sy1 + dy, sx0 + dx : sx1 + dx] = pixels[sy0:sy1, sx0:sx1]
+    return out
+
+
 def _premultiplied(pixels: np.ndarray) -> np.ndarray:
     out = pixels.astype(np.float32)
     out[..., :3] *= out[..., 3:4] / 255.0
