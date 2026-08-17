@@ -37,6 +37,7 @@ import numpy as np
 
 from . import composite as cp
 from . import filters
+from . import transform as tf
 from .anim_edits import (
     CelSetEdit,
     FrameAddEdit,
@@ -45,7 +46,7 @@ from .anim_edits import (
     FrameRemoveEdit,
 )
 from .animation import Frame, clamp_duration
-from .undo import CompoundEdit
+from .undo import CompoundEdit, IndexPatchEdit, PatchEdit
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .document import Document
@@ -636,6 +637,122 @@ class RangeOps:
         )
         return self._push_range(edits)
 
+    # -- permutations --------------------------------------------------------
+
+    def _cels_in(self: Document, rect: tuple[int, int, int, int]) -> list[Any]:
+        """Every *distinct* cel of a rect, deduped by ``id()``, in slot order.
+
+        The one piece of bookkeeping every cel-wise range op needs and the
+        easiest thing here to get wrong: a background linked across ten frames
+        is one object, and an op that walked the slots would flip it ten times
+        -- which for a flip is not ten times the flip, it is the identity on an
+        even span and therefore an op that silently did nothing.
+        """
+        anim = self.anim
+        assert anim is not None
+        seen: set[int] = set()
+        cels: list[Any] = []
+        for track, frame in self._slots_in(rect):
+            cel = anim.cels.get((track.uid, frame.uid))
+            if cel is None or id(cel) in seen:
+                continue
+            seen.add(id(cel))
+            cels.append(cel)
+        return cels
+
+    def _permute_range(
+        self: Document, rect: tuple[int, int, int, int] | None, pix_fn: Any, index_fn: Any
+    ) -> bool:
+        """One exact, shape-preserving permutation over every cel of a rect.
+
+        Shared by flip, rotate and shift, and what it shares with them is
+        ``_map_planes``' index discipline applied one cel at a time: given an
+        indexed document the *index plane* is permuted and the pixels re-derived
+        from it, never re-resolved from the mapped colours. Two palette slots
+        holding one colour therefore come out the other side still two slots.
+        Re-resolving would collapse them, and nothing on screen would change --
+        which is what would make it silent.
+
+        Whole cels, with no mask: the selection is a *weight*, and a weighted
+        permutation would have to invent what goes in the part it did not move.
+        The ops that do honour it -- ``fill_range``, ``filter_range`` -- are the
+        ones where fading between before and after means something.
+
+        Written in place rather than by rebinding ``layer.pixels``: the flatten
+        cache, the texture uploader and an open floating buffer may all be
+        holding that array. ``_map_planes`` may rebind because it rebuilds the
+        stack afterwards; this does not.
+        """
+        anim = self.anim
+        if anim is None or rect is None:
+            return False
+        # Committed before the slots are read, as everywhere else in this
+        # module: a commit autovivifies the cel it lands in, and a target set
+        # taken first would miss it.
+        self.commit_floating()
+        targets = self._cels_in(rect)
+        if not targets:
+            return False
+        width, height = self.size
+        box = (0, 0, width, height)
+        edits: list[Any] = []
+        for layer in targets:
+            if self.color_mode == "indexed" and layer.indices is not None:
+                before = layer.indices.copy()
+                after = index_fn(layer.indices)
+                if np.array_equal(before, after):
+                    continue
+                layer.indices[...] = after
+                self._rematerialize(layer, notify=False)
+                edits.append(IndexPatchEdit(layer.uid, box, before, after))
+            else:
+                before = layer.pixels.copy()
+                after = pix_fn(layer.pixels)
+                if np.array_equal(before, after):
+                    continue
+                layer.pixels[...] = after
+                edits.append(PatchEdit(layer.uid, box, before, after))
+            self._stamp_layer(layer.uid)
+        if not edits:
+            return False
+        pushed = self._push_range(edits)
+        self.invalidate_all()
+        return pushed
+
+    def flip_range(
+        self: Document, axis: str, t0: int, t1: int, f0: int, f1: int
+    ) -> bool:
+        """Mirror every distinct cel of a rect, as one step.
+
+        ``axis`` is one of ``transform.FLIPS`` and is validated there rather
+        than here, which is that tuple's whole reason for existing: a third
+        axis cannot be offered by a menu and refused by the function.
+        """
+        fn = lambda plane: tf.flip(plane, axis)  # noqa: E731
+        return self._permute_range(self._range(t0, t1, f0, f1), fn, fn)
+
+    def rotate_range(
+        self: Document, quarters: int, t0: int, t1: int, f0: int, f1: int
+    ) -> bool:
+        """Turn every distinct cel of a rect, counter-clockwise, as one step.
+
+        **Refused on a non-square canvas for an odd number of quarters**, by
+        name. A quarter turn transposes the plane and a cel is a full-canvas
+        array, so turning the cels without turning the canvas would leave the
+        grid holding planes of two different shapes -- which the next flatten
+        would raise on, somewhere with no clue about where it came from.
+        Turning the canvas instead is ``GeometryOps.rotate90``, and it is a
+        different request: it turns the whole document, not a range of it.
+        """
+        quarters = int(quarters) % 4
+        if quarters == 0:
+            return False
+        width, height = self.size
+        if quarters % 2 == 1 and width != height:
+            raise ValueError("a 90-degree rotation of a cel range needs a square canvas")
+        fn = lambda plane: tf.rotate90(plane, quarters)  # noqa: E731
+        return self._permute_range(self._range(t0, t1, f0, f1), fn, fn)
+
     # -- filters ------------------------------------------------------------
 
     def filter_range(
@@ -658,10 +775,9 @@ class RangeOps:
         cel, each of them stamping and recompositing, to show a preview of a
         frame that is not on screen.
 
-        A cel is filtered **once however many slots hold it**, deduped by
-        ``id()``: a background linked across ten frames blurred ten times is
-        ten times the blur, and it is the single easiest thing to get wrong
-        here.
+        A cel is filtered **once however many slots hold it** -- see
+        ``_cels_in``, which is where that dedupe lives now that three other ops
+        need it.
 
         It never autovivifies. A filter over an empty cel is a no-op, not a
         fresh transparent cel with a filtered nothing in it -- the write paths
@@ -684,14 +800,7 @@ class RangeOps:
             return False
         x0, y0, x1, y1 = box
         weight = None if self.mask is None else self.mask.mask[y0:y1, x0:x1]
-        seen: set[int] = set()
-        targets: list[Any] = []
-        for track, frame in self._slots_in(rect):
-            cel = anim.cels.get((track.uid, frame.uid))
-            if cel is None or id(cel) in seen:
-                continue
-            seen.add(id(cel))
-            targets.append(cel)
+        targets = self._cels_in(rect)
         if not targets:
             return False
         edits: list[Any] = []

@@ -13,6 +13,7 @@ point.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from warlock.studio.inker._doc_ranges import clamp_span
 from warlock.studio.inker.document import Document
@@ -39,6 +40,30 @@ def _clip(frames: int = 4, tracks: int = 1) -> Document:
         for track in range(tracks):
             doc.set_active_layer(track)
             _paint(doc, (10 * index + track, 0, 0, 255))
+    doc.history.clear()
+    return doc
+
+
+#: Slots 1 and 3 are the same red, which is the whole point: a permutation
+#: keeps them apart and a re-resolve collapses them onto the lower one.
+BLACK = (0, 0, 0, 255)
+INDEXED_PALETTE = [BLACK, RED, GREEN, RED]
+
+
+def _indexed_clip(frames: int = 2) -> Document:
+    """A clip in true indexed mode, with one pixel parked in the *other* red.
+
+    By hand rather than by painting, ``test_true_indexed``'s way: this is the
+    state an ``.aseprite`` import produces, and what the tests below ask is
+    what a range op does to it.
+    """
+    doc = _clip(frames)
+    assert doc.convert_to_indexed(INDEXED_PALETTE)
+    for index in range(frames):
+        cel = _cel(doc, 0, index)
+        cel.indices[0, 3] = 3
+        doc._rematerialize(cel)
+    doc.check_materialized()
     doc.history.clear()
     return doc
 
@@ -145,6 +170,150 @@ def test_clearing_an_empty_rect_pushes_nothing():
     head = doc.history.head
     assert not doc.clear_range(0, 0, 0, 1)
     assert doc.history.head == head
+
+
+# --- flip and rotate ----------------------------------------------------------
+#
+# Whole cels, deliberately: the selection weights a *fill* and a *filter*, but a
+# weighted permutation is not a thing -- half-mirroring a region would have to
+# invent what goes in the half it did not mirror.
+
+
+def test_flipping_a_range_is_one_step_and_leaves_the_rest_alone():
+    doc = _clip(4)
+    before = [_cel(doc, 0, i).pixels.copy() for i in range(4)]
+
+    assert doc.flip_range("horizontal", 0, 0, 1, 2)
+    for index in (1, 2):
+        assert np.array_equal(_cel(doc, 0, index).pixels, before[index][:, ::-1])
+    for index in (0, 3):
+        assert np.array_equal(_cel(doc, 0, index).pixels, before[index])
+    assert len(doc.history) == 1
+
+    assert doc.history.undo(doc)
+    for index in range(4):
+        assert np.array_equal(_cel(doc, 0, index).pixels, before[index])
+
+
+def test_a_linked_cel_is_flipped_once_however_many_slots_hold_it():
+    """Twice the flip is not the flip -- it is the identity, which is worse:
+    the op would silently do nothing at all on a linked span of even length."""
+    doc = _clip(1)
+    doc.add_frame(link=True)
+    doc.add_frame(link=True)
+    doc.history.clear()
+    shared = _cel(doc, 0, 0)
+    assert _cel(doc, 0, 2) is shared
+    once = shared.pixels[:, ::-1].copy()
+
+    assert doc.flip_range("horizontal", 0, 0, 0, 2)
+    assert np.array_equal(shared.pixels, once)
+    assert len(doc.history) == 1
+
+
+def test_flipping_an_empty_range_pushes_nothing():
+    doc = _clip(2)
+    assert doc.clear_range(0, 0, 0, 1)
+    doc.history.clear()
+    assert not doc.flip_range("horizontal", 0, 0, 0, 1)
+    assert len(doc.history) == 0
+
+
+def test_flipping_a_range_that_changes_nothing_pushes_nothing():
+    """A cel already symmetric about the axis. ``dirty`` is a comparison
+    against the history head, so a step that changed nothing would make a
+    saved document ask to be saved."""
+    doc = _clip(2)
+    for index in range(2):
+        _cel(doc, 0, index).pixels[:, :] = RED
+    doc.history.clear()
+    assert not doc.flip_range("horizontal", 0, 0, 0, 1)
+    assert len(doc.history) == 0
+
+
+def test_flipping_a_range_commits_a_float_before_it_reads_the_cels():
+    doc = _clip(2)
+    assert doc.clear_range(0, 0, 1, 1)  # frame 1 is empty
+    doc.set_current_frame(1)
+    _float_over(doc)
+    doc.history.clear()
+
+    assert doc.flip_range("horizontal", 0, 0, 0, 1)
+    assert doc.floating is None
+    landed = _cel(doc, 0, 1)
+    assert landed is not None
+    # The commit's cel was flipped with the rest rather than missed: the green
+    # square went down at the left and is now at the right.
+    assert int(landed.pixels[0, 3, 1]) == 255
+
+
+def test_flipping_an_indexed_range_is_an_exact_index_permutation():
+    """Never a re-resolve. Slots 1 and 3 hold the same red, so a resolve would
+    land the pixel on slot 1 and the duplicate identity would be gone -- and
+    nothing on screen would change, which is what makes it silent."""
+    doc = _indexed_clip(2)
+    before = [_cel(doc, 0, i).indices.copy() for i in range(2)]
+
+    assert doc.flip_range("horizontal", 0, 0, 0, 1)
+    for index in range(2):
+        assert np.array_equal(_cel(doc, 0, index).indices, before[index][:, ::-1])
+        assert int(_cel(doc, 0, index).indices[0, 0]) == 3
+    doc.check_materialized()
+    assert len(doc.history) == 1
+
+    assert doc.history.undo(doc)
+    doc.check_materialized()
+    assert np.array_equal(_cel(doc, 0, 0).indices, before[0])
+
+
+def test_rotating_a_range_by_a_quarter_turns_every_cel_it_covers():
+    doc = _clip(2)
+    before = [_cel(doc, 0, i).pixels.copy() for i in range(2)]
+    assert doc.rotate_range(1, 0, 0, 0, 1)
+    for index in range(2):
+        assert np.array_equal(
+            _cel(doc, 0, index).pixels, np.rot90(before[index], 1)
+        )
+    assert len(doc.history) == 1
+
+
+def test_rotating_a_range_on_a_non_square_canvas_is_refused_by_name():
+    """A quarter turn transposes the plane, and a cel is a full-canvas array:
+    turning one of them and not the canvas would leave the grid holding planes
+    of two shapes. Refused rather than silently resized."""
+    doc = _clip(2)
+    doc.resize_canvas((4, 6))
+    doc.history.clear()
+
+    with pytest.raises(ValueError, match="square"):
+        doc.rotate_range(1, 0, 0, 0, 1)
+    assert len(doc.history) == 0
+
+
+def test_rotating_a_range_by_180_works_on_any_canvas():
+    doc = _clip(2)
+    doc.resize_canvas((4, 6))
+    doc.history.clear()
+    before = _cel(doc, 0, 0).pixels.copy()
+
+    assert doc.rotate_range(2, 0, 0, 0, 1)
+    assert np.array_equal(_cel(doc, 0, 0).pixels, np.rot90(before, 2))
+
+
+def test_rotating_a_range_by_a_whole_turn_pushes_nothing():
+    doc = _clip(2)
+    assert not doc.rotate_range(0, 0, 0, 0, 1)
+    assert not doc.rotate_range(4, 0, 0, 0, 1)
+    assert len(doc.history) == 0
+
+
+def test_rotating_an_indexed_range_is_an_exact_index_permutation():
+    doc = _indexed_clip(2)
+    before = _cel(doc, 0, 0).indices.copy()
+    assert doc.rotate_range(1, 0, 0, 0, 0)
+    assert np.array_equal(_cel(doc, 0, 0).indices, np.rot90(before, 1))
+    assert int(_cel(doc, 0, 0).indices.max()) == 3
+    doc.check_materialized()
 
 
 # --- duplicate ---------------------------------------------------------------
@@ -513,5 +682,7 @@ def test_a_still_document_refuses_every_range_op():
     assert not doc.link_range(0, 0, 0, 0)
     assert not doc.unlink_range(0, 0, 0, 0)
     assert not doc.set_range_duration(0, 0, 50)
+    assert not doc.flip_range("horizontal", 0, 0, 0, 0)
+    assert not doc.rotate_range(1, 0, 0, 0, 0)
     assert doc.copy_cels(0, 0, 0, 0) is None
     assert len(doc.history) == 0
