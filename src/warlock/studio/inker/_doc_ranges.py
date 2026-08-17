@@ -44,8 +44,9 @@ from .anim_edits import (
     FrameDurationEdit,
     FrameOrderEdit,
     FrameRemoveEdit,
+    TrackPropsEdit,
 )
-from .animation import Frame, clamp_duration
+from .animation import TRACK_PROPS, Frame, clamp_duration
 from .undo import CompoundEdit, IndexPatchEdit, PatchEdit
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -377,6 +378,44 @@ class RangeOps:
             self._set_duration(frame.uid, after)
             edits.append(FrameDurationEdit(frame.uid, before, after))
         return self._push_range(edits)
+
+    # -- track properties ----------------------------------------------------
+
+    def set_range_props(self: Document, t0: int, t1: int, **props: Any) -> bool:
+        """One property change across a span of tracks, as one step.
+
+        ``set_range_duration``'s rule one axis over: a ``TrackPropsEdit`` per
+        track that *actually changes*, so hiding a span most of which is
+        already hidden does not make undo walk back through a row of no-ops.
+
+        The keys are checked against a list rather than trusted, because this
+        writes with ``setattr``: an unknown one would otherwise mint a new
+        attribute on the track, silently, and be lost at the next save.
+        """
+        anim = self.anim
+        if anim is None:
+            return False
+        span = clamp_span(t0, t1, len(anim.tracks))
+        if span is None:
+            return False
+        unknown = set(props) - TRACK_PROPS
+        if unknown:
+            raise ValueError(f"unknown track property: {sorted(unknown)[0]}")
+        self.commit_floating()
+        edits: list[Any] = []
+        for index in range(span[0], span[1] + 1):
+            track = anim.tracks[index]
+            before = {key: getattr(track, key) for key in props}
+            if before == props:
+                continue
+            for key, value in props.items():
+                setattr(track, key, value)
+            edits.append(TrackPropsEdit(track.uid, before, dict(props)))
+        if not edits:
+            return False
+        pushed = self._push_range(edits)
+        self._anim_changed()
+        return pushed
 
     # -- cels ---------------------------------------------------------------
 

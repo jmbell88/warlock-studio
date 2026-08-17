@@ -306,6 +306,13 @@ class LayerOps:
         the tab compares against to decide whether the document is dirty.
         """
         index = self.stack.active_index if index is None else index
+        if "continuous" in props and self.anim is None:
+            # The one track property a ``Layer`` has no counterpart for: it
+            # says what autovivification writes, and a still document has no
+            # timeline for a cel to be carried forward into. Refused by name
+            # rather than let through, because the branch below would setattr
+            # it onto a Layer where nothing would ever read it again.
+            raise ValueError("a still image has no timeline to be continuous on")
         # The track when there is one: it is authoritative, so writing the
         # property onto the materialised layer instead would last exactly until
         # the next time that frame was rebuilt.

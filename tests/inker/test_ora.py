@@ -641,3 +641,62 @@ def test_a_file_written_before_layouts_existed_reads_as_none(tmp_path):
     path = tmp_path / "old.ora"
     inker_ora.write_ora(_animated(), path)
     assert inker_ora.read_ora(path).anim.layout is None
+
+
+# --- continuous tracks (Wave 2) ---------------------------------------------
+
+
+def test_a_discontinuous_document_writes_no_continuous_key_at_all(tmp_path):
+    """``repeat``'s rule rather than ``direction``'s: false is what every track
+    ever written already means, so a document with no continuous rows has to
+    produce the bytes it always did -- which is what the determinism pin on
+    this member measures."""
+    path = tmp_path / "plain.ora"
+    inker_ora.write_ora(_animated(), path)
+
+    with zipfile.ZipFile(path) as zf:
+        payload = json.loads(zf.read(inker_ora.ANIMATION_MEMBER))
+    assert payload["tracks"]
+    assert all("continuous" not in track for track in payload["tracks"])
+
+
+def test_the_continuous_flag_round_trips(tmp_path):
+    doc = _animated()
+    doc.anim.tracks[1].continuous = True
+    path = tmp_path / "cont.ora"
+    inker_ora.write_ora(doc, path)
+
+    back = inker.Document.load(path)
+    assert [t.continuous for t in back.anim.tracks] == [False, True]
+
+
+def test_the_continuous_flag_does_not_bump_the_version(tmp_path):
+    doc = _animated()
+    doc.anim.tracks[0].continuous = True
+    path = tmp_path / "cont2.ora"
+    inker_ora.write_ora(doc, path)
+
+    with zipfile.ZipFile(path) as zf:
+        payload = json.loads(zf.read(inker_ora.ANIMATION_MEMBER))
+    assert payload["version"] == inker_ora.ANIMATION_VERSION == 1
+
+
+def test_a_file_written_before_continuous_existed_reads_as_discontinuous(tmp_path):
+    """``.get``-based like every other key here, which is the whole reason the
+    version can stay 1."""
+    doc = _animated()
+    path = tmp_path / "old.ora"
+    inker_ora.write_ora(doc, path)
+
+    with zipfile.ZipFile(path) as zf:
+        members = {name: zf.read(name) for name in zf.namelist()}
+    payload = json.loads(members[inker_ora.ANIMATION_MEMBER])
+    for track in payload["tracks"]:
+        track.pop("continuous", None)
+    members[inker_ora.ANIMATION_MEMBER] = json.dumps(payload).encode("utf-8")
+    with zipfile.ZipFile(path, "w") as zf:
+        for name, data in members.items():
+            zf.writestr(name, data)
+
+    back = inker.Document.load(path)
+    assert all(not t.continuous for t in back.anim.tracks)

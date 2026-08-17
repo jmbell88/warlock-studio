@@ -149,6 +149,18 @@ class DirectionalLayout:
         )
 
 
+#: Every property a track owns and an editor may set: the six that are copied
+#: down onto a materialised ``Layer``, plus ``continuous``, which is not.
+#:
+#: An allowlist rather than a `hasattr` check, because the writers use
+#: ``setattr``: an unknown key would otherwise mint a new attribute on the
+#: track, silently, and lose it at the next save. It lives here beside the
+#: dataclass so the two cannot drift.
+TRACK_PROPS = frozenset(
+    {"name", "opacity", "visible", "blend", "alpha_lock", "locked", "continuous"}
+)
+
+
 @dataclass
 class Track:
     """One row of the grid: a layer's identity and its properties.
@@ -170,6 +182,16 @@ class Track:
     #: property left out of one of them is a lock that is on in the panel and
     #: off at the door.
     locked: bool = False
+    #: Whether a fresh cel on this row starts as a *copy* of the drawing before
+    #: it rather than blank -- Aseprite's continuous layer, and how a held pose
+    #: or a background is carried forward.
+    #:
+    #: Deliberately **not** one of the six properties above and deliberately
+    #: absent from :meth:`props`. Those are copied down onto whichever ``Layer``
+    #: materialises for the current frame, because they describe how a cel is
+    #: shown; this describes what autovivification *writes*, so a cel has no
+    #: use for it and a copy would only be a second answer to drift from.
+    continuous: bool = False
     uid: int = field(default_factory=new_uid)
 
     @classmethod

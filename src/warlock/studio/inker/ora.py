@@ -459,7 +459,17 @@ def _animation_json(doc, names: dict[int, str]) -> bytes:
     payload = {
         "version": ANIMATION_VERSION,
         "frames": [{"duration_ms": int(frame.duration_ms)} for frame in anim.frames],
-        "tracks": [track.props() for track in anim.tracks],
+        # ``continuous`` is written **only when it is set**, which is
+        # ``repeat``'s rule below rather than ``direction``'s: false is what
+        # every track ever written already means, so omitting it keeps a
+        # document with no continuous rows byte-identical to what it was, and
+        # the determinism pin depends on exactly that. Built here rather than
+        # inside ``Track.props`` because that dict is *also* the six-property
+        # copy-down list, and this is not one of the six.
+        "tracks": [
+            {**track.props(), **({"continuous": True} if track.continuous else {})}
+            for track in anim.tracks
+        ],
         "cels": cels,
         # ``direction`` is additive and the version is unchanged deliberately:
         # every reader of this section is ``.get``-based, so an older build
@@ -906,6 +916,11 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int], reader=None):
                 # before the content lock existed reads as unlocked rather than
                 # failing the whole grid. That is why the version stays 1.
                 locked=bool(entry.get("locked", False)),
+                # Same ``.get``, same reason -- and no ``stack.xml`` attribute
+                # to go with it: a foreign editor has no concept for "new cels
+                # start as a copy of the last one", so there is nowhere honest
+                # to put it outside our own section.
+                continuous=bool(entry.get("continuous", False)),
             )
             for i, entry in enumerate(payload["tracks"])
         ]

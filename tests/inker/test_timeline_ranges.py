@@ -680,6 +680,62 @@ def test_a_ranged_commit_on_a_still_document_commits_plain():
     assert doc.floating is None
 
 
+# --- track properties over a range ------------------------------------------------
+
+
+def test_setting_props_on_a_track_range_is_one_step():
+    doc = _clip(2, tracks=3)
+    assert doc.set_range_props(0, 2, visible=False)
+    assert [t.visible for t in doc.anim.tracks] == [False, False, False]
+    assert len(doc.history) == 1
+
+    assert doc.history.undo(doc)
+    assert [t.visible for t in doc.anim.tracks] == [True, True, True]
+
+
+def test_setting_props_pushes_one_edit_per_track_that_actually_changes():
+    doc = _clip(2, tracks=3)
+    doc.anim.tracks[1].visible = False
+    doc.history.clear()
+
+    assert doc.set_range_props(0, 2, visible=False)
+    # Undo restores only the two that moved; the third was already there.
+    assert doc.history.undo(doc)
+    assert [t.visible for t in doc.anim.tracks] == [True, False, True]
+
+
+def test_setting_props_a_range_already_has_pushes_nothing():
+    doc = _clip(2, tracks=2)
+    assert not doc.set_range_props(0, 1, visible=True)
+    assert len(doc.history) == 0
+
+
+def test_setting_an_unknown_prop_on_a_range_is_refused_by_name():
+    doc = _clip(2, tracks=2)
+    with pytest.raises(ValueError, match="unknown track property"):
+        doc.set_range_props(0, 1, sparkly=True)
+    assert len(doc.history) == 0
+
+
+def test_setting_continuous_over_a_range_is_one_step():
+    doc = _clip(2, tracks=2)
+    assert doc.set_range_props(0, 1, continuous=True)
+    assert all(t.continuous for t in doc.anim.tracks)
+    assert doc.history.undo(doc)
+    assert not any(t.continuous for t in doc.anim.tracks)
+
+
+def test_setting_continuous_on_a_still_document_is_refused_by_name():
+    """A still image has no timeline for a new cel to be carried forward
+    *into*, and the property lives on the track -- so on a still document
+    ``set_layer_props`` would quietly setattr it onto a Layer, where nothing
+    would ever read it."""
+    doc = Document.blank(4, 4)
+    with pytest.raises(ValueError, match="timeline"):
+        doc.set_layer_props(0, continuous=True)
+    assert len(doc.history) == 0
+
+
 # --- duplicate ---------------------------------------------------------------
 
 
@@ -1050,5 +1106,6 @@ def test_a_still_document_refuses_every_range_op():
     assert not doc.rotate_range(1, 0, 0, 0, 0)
     assert not doc.shift_range(1, 0, True, 0, 0, 0, 0)
     assert not doc.fill_range(RED, 0, 0, 0, 0)
+    assert not doc.set_range_props(0, 0, visible=False)
     assert doc.copy_cels(0, 0, 0, 0) is None
     assert len(doc.history) == 0

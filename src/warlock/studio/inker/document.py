@@ -752,6 +752,22 @@ class Document(
             return
         track, frame = anim.tracks[index], anim.frame
         width, height = self.size
+        # A *continuous* track starts its new cels from the nearest earlier
+        # drawing rather than from nothing. Walked backwards from this frame
+        # rather than taken from frame zero: a gap in the middle of a track
+        # must not send the copy all the way to the beginning.
+        #
+        # A copy, not a link -- Aseprite links here and we do not. Linking
+        # would make the first stroke on the new frame edit the old one too,
+        # which is the opposite of "carry it forward and change it", and
+        # linking afterwards is a verb the timeline already has.
+        source = None
+        if track.continuous:
+            for earlier in range(anim.frame_index(frame.uid) - 1, -1, -1):
+                found = anim.cels.get((track.uid, anim.frames[earlier].uid))
+                if found is not None:
+                    source = found
+                    break
         # Every one of the six track properties, not four: ``alpha_lock`` was
         # the one left out, and the write that autovivified the cel is normally
         # one line away from reading it back off the layer -- ``begin_stroke``
@@ -763,16 +779,24 @@ class Document(
         # ``placeholder`` and ``layers_for`` both copy all six; this is the
         # third copy of that list and it has to agree with them.
         real = Layer(
-            pixels=cp.empty(width, height),
+            pixels=cp.empty(width, height) if source is None else source.pixels.copy(),
             # A fresh cel in an indexed document is a plane of the transparent
             # index, not of zero: they are only the same slot by coincidence,
             # and a document whose transparent index is 7 would autovivify a
             # canvas full of slot 0 -- an opaque rectangle of whatever colour
             # slot 0 happens to hold, appearing the instant a stroke starts.
+            #
+            # A continuous copy takes the source's plane instead, indices and
+            # all: copying the pixels alone would leave the two describing
+            # different pictures from the moment the cel existed.
             indices=(
-                None
-                if self.color_mode != "indexed"
-                else np.full((height, width), self.transparent_index, dtype=np.uint8)
+                (
+                    None
+                    if self.color_mode != "indexed"
+                    else np.full((height, width), self.transparent_index, dtype=np.uint8)
+                )
+                if source is None
+                else (None if source.indices is None else source.indices.copy())
             ),
             name=track.name,
             opacity=track.opacity,

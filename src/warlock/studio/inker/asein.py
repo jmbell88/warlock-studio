@@ -127,6 +127,12 @@ _TAG_DIRECTIONS = ("forward", "reverse", "pingpong", "pingpong")
 _LAYER_VISIBLE = 1
 _LAYER_EDITABLE = 2
 _LAYER_BACKGROUND = 8
+#: Aseprite's "prefer linked cels", which is what its continuous layer is
+#: stored as. Ours is a *copy* rather than a link -- see ``Track.continuous``
+#: -- which is the nearest honest reading of it: the alternative is dropping
+#: the flag and silently giving the user blank frames where they drew a pose
+#: once and expected it held.
+_LAYER_CONTINUOUS = 16
 _LAYER_REFERENCE = 64
 
 # Layer chunk types.
@@ -214,6 +220,7 @@ class AseLayer:
     blend: str = "normal"
     group: bool = False
     background: bool = False
+    continuous: bool = False
     child_level: int = 0
 
 
@@ -463,6 +470,7 @@ def _read_layer(state: _Parse, r: _Reader, opacity_valid: bool) -> None:
             blend=mode,
             group=kind == _LAYER_GROUP,
             background=bool(flags & _LAYER_BACKGROUND),
+            continuous=bool(flags & _LAYER_CONTINUOUS),
             child_level=child_level,
         )
     )
@@ -1064,6 +1072,7 @@ def document_from_aseprite(
                 visible=sprite.layers[index].visible,
                 blend=sprite.layers[index].blend,
                 locked=sprite.layers[index].locked,
+                continuous=sprite.layers[index].continuous,
             )
             for index in image_rows
         }

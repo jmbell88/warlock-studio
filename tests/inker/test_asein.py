@@ -119,11 +119,13 @@ def _layer(
     editable: bool = True,
     background: bool = False,
     reference: bool = False,
+    continuous: bool = False,
 ) -> bytes:
     flags = (
         (1 if visible else 0)
         | (2 if editable else 0)
         | (8 if background else 0)
+        | (16 if continuous else 0)
         | (64 if reference else 0)
     )
     return _chunk(
@@ -1021,3 +1023,43 @@ def test_the_parse_is_pure_data_and_keeps_the_cels_as_the_file_holds_them():
     assert sprite.durations == [100]
     assert sprite.cels[0].width == 2
     assert sprite.warnings == []
+
+
+def test_aseprites_prefer_linked_cels_flag_arrives_as_continuous():
+    """Bit 16 is Aseprite's "continuous layer": new cels start from the last
+    drawing rather than blank. Aseprite *links* them and we *copy*, which is
+    the nearest honest reading -- the alternative is dropping the flag and
+    silently giving the user blank frames where they drew one pose.
+    """
+    data = _file(
+        _header(2, 2, 2),
+        [
+            _frame(
+                [
+                    _layer("Held", continuous=True),
+                    _cel(0, _rgba(2, 2, (1, 1, 1, 255)), 2, 2),
+                ]
+            ),
+            _frame([]),
+        ],
+    )
+    doc, _ = asein.document_from_aseprite(data)
+    assert doc.anim is not None
+    assert [t.continuous for t in doc.anim.tracks] == [True]
+
+
+def test_a_plain_aseprite_layer_is_not_continuous():
+    data = _file(
+        _header(2, 2, 2),
+        [
+            _frame(
+                [
+                    _layer("Plain"),
+                    _cel(0, _rgba(2, 2, (1, 1, 1, 255)), 2, 2),
+                ]
+            ),
+            _frame([]),
+        ],
+    )
+    doc, _ = asein.document_from_aseprite(data)
+    assert [t.continuous for t in doc.anim.tracks] == [False]

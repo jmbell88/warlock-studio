@@ -111,3 +111,98 @@ def test_write_colour_on_a_fresh_unlocked_cel_still_paints():
     assert doc.write_colour((0, 0, 4, 4), RED, np.ones((4, 4), dtype=np.float32))
     assert doc.stack.active.alpha_lock is False
     assert tuple(int(v) for v in doc.stack.active.pixels[0, 0]) == RED
+
+
+# --- continuous tracks (Wave 2) -----------------------------------------------
+#
+# The sixth thing autovivification can be asked to do. A *continuous* track is
+# one where a new cel starts as a copy of the drawing before it rather than
+# blank -- Aseprite's "continuous layer", and the way a background or a held
+# pose is drawn once and carried forward.
+#
+# A copy, not a link. Aseprite links; we copy. Linking would make the first
+# stroke on the new frame edit the old one too, which is the opposite of what
+# "carry it forward and change it" means, and unlinking afterwards is a verb
+# the timeline already has.
+
+
+def _continuous(frames: int = 3) -> Document:
+    doc = Document.blank(8, 8)
+    doc.write_colour((0, 0, 4, 4), RED, np.ones((4, 4), dtype=np.float32))
+    for _ in range(frames - 1):
+        doc.add_frame()
+    doc.anim.tracks[0].continuous = True
+    doc.history.clear()
+    return doc
+
+
+def test_a_continuous_track_autovivifies_a_copy_of_the_nearest_earlier_cel():
+    doc = _continuous()
+    source = doc.anim.cels[(doc.anim.tracks[0].uid, doc.anim.frames[0].uid)]
+    doc.set_current_frame(2)
+    assert doc.anim.is_placeholder(doc.stack.active)
+
+    assert doc.write_colour((6, 6, 7, 7), (0, 0, 255, 255), np.ones((1, 1), np.float32))
+    fresh = doc.stack.active
+    assert not doc.anim.is_placeholder(fresh)
+    # A copy: the earlier drawing is there, the new pixel is on top, and the
+    # object is not the one frame 0 holds.
+    assert fresh is not source
+    assert tuple(int(v) for v in fresh.pixels[0, 0]) == RED
+    assert tuple(int(v) for v in fresh.pixels[6, 6]) == (0, 0, 255, 255)
+    assert tuple(int(v) for v in source.pixels[6, 6]) == (0, 0, 0, 0)
+
+
+def test_a_continuous_track_with_no_earlier_cel_autovivifies_blank():
+    doc = Document.blank(8, 8)
+    doc.add_frame()
+    doc.anim.tracks[0].continuous = True
+    doc.set_current_frame(1)
+
+    assert doc.write_colour((0, 0, 2, 2), RED, np.ones((2, 2), dtype=np.float32))
+    assert int(doc.stack.active.pixels[4, 4, 3]) == 0
+
+
+def test_a_continuous_track_walks_back_past_empty_frames():
+    """The *nearest earlier* cel, not the first one: a gap in the middle of a
+    track must not send the copy all the way back to frame zero."""
+    doc = _continuous(4)
+    doc.set_current_frame(1)
+    doc.write_colour((4, 4, 6, 6), (0, 255, 0, 255), np.ones((2, 2), np.float32))
+    doc.set_current_frame(3)
+
+    assert doc.write_colour((7, 7, 8, 8), (0, 0, 255, 255), np.ones((1, 1), np.float32))
+    assert tuple(int(v) for v in doc.stack.active.pixels[4, 4]) == (0, 255, 0, 255)
+
+
+def test_a_discontinuous_track_still_autovivifies_blank():
+    """The negative control: nothing about a plain track changes."""
+    doc = _continuous()
+    doc.anim.tracks[0].continuous = False
+    doc.set_current_frame(2)
+    assert doc.write_colour((6, 6, 7, 7), RED, np.ones((1, 1), dtype=np.float32))
+    assert int(doc.stack.active.pixels[0, 0, 3]) == 0
+
+
+def test_a_continuous_indexed_track_copies_the_index_plane_too():
+    doc = _continuous()
+    assert doc.convert_to_indexed([(0, 0, 0, 255), RED])
+    doc.check_materialized()
+    doc.set_current_frame(2)
+
+    assert doc.write_colour((6, 6, 7, 7), RED, np.ones((1, 1), dtype=np.float32))
+    doc.check_materialized()
+    assert doc.stack.active.indices is not None
+    assert int(doc.stack.active.indices[0, 0]) == 1
+
+
+def test_undoing_a_first_draw_on_a_continuous_track_removes_the_cel():
+    """The copy rides the same compound the blank cel always did, so one
+    Ctrl+Z takes the stroke and the cel it conjured together."""
+    doc = _continuous()
+    doc.set_current_frame(2)
+    assert doc.write_colour((6, 6, 7, 7), (0, 0, 255, 255), np.ones((1, 1), np.float32))
+    assert not doc.anim.is_placeholder(doc.stack.active)
+
+    assert doc.history.undo(doc)
+    assert doc.anim.is_placeholder(doc.stack.active)
