@@ -34,6 +34,7 @@ import numpy as np
 
 __all__ = [
     "SORT_KEYS",
+    "grayscale",
     "histogram",
     "nearest",
     "ramp_between",
@@ -57,6 +58,11 @@ SORT_KEYS = ("hue", "saturation", "luma", "red", "green", "blue", "alpha", "usag
 # Rec. 709. The same coefficients ``dither.luma`` uses, and deliberately: "sort
 # by brightness" and "the built palette's order" must mean one thing.
 _LUMA = (0.2126, 0.7152, 0.0722)
+
+# The same three numbers as an array, for :func:`grayscale`'s one matrix
+# multiply. Derived from the tuple above rather than written out again, so
+# "sorted by brightness" and "what grey this colour becomes" cannot drift.
+_LUMA_F32 = np.asarray(_LUMA, dtype=np.float32)
 
 
 def _table(palette: Sequence[RGBA]) -> np.ndarray:
@@ -118,6 +124,54 @@ def snap(pixels: np.ndarray, palette: Sequence[RGBA]) -> np.ndarray:
     delta = colours[:, None, :].astype(np.int32) - table[None, :, :].astype(np.int32)
     picks = np.argmin((delta * delta).sum(axis=2), axis=1)
     out[..., :3][visible] = table[picks][inverse].astype(np.uint8)
+    return out
+
+
+def grayscale(pixels: np.ndarray) -> np.ndarray:
+    """*pixels* with every visible pixel's ``r``, ``g`` and ``b`` made equal.
+
+    **Grayscale is a constraint over RGBA storage, not a storage change**, and
+    that is a decision rather than a shortcut. Aseprite stores ``(value,
+    alpha)``; we keep ``(v, v, v, a)``. Three arguments, in order of weight:
+
+    *There is no identity problem.* The whole reason an indexed document needs
+    an index plane is that two palette slots can be the same colour and an RGBA
+    plane cannot tell them apart. ``(v, a)`` and ``(v, v, v, a)`` are
+    informationally equivalent and ``v`` is exactly recoverable from either, so
+    a second representation buys nothing.
+
+    *A two-channel plane forks every consumer.* The compositor, the caches, the
+    texture uploader, the native kernels, five export formats -- the same list
+    the indexed design was shaped to avoid forking, and here with nothing on the
+    other side of the trade.
+
+    *All nineteen blend modes preserve grayness.* The channelwise ones trivially
+    (they compute each channel from equal inputs by one formula); the HSL family
+    because a grey has zero saturation, so hue and saturation transfers from a
+    grey source leave a grey and luminosity transfer is grey by definition. So
+    even the **composite** of a grayscale document is grey, which is what makes
+    the constraint honest rather than merely enforced at the door.
+
+    Alpha rides through untouched and fully transparent pixels are returned
+    verbatim, for ``indexed.snap``'s reasons: a transparent pixel has no colour
+    to convert, and rewriting its dead RGB would make a no-op write look like an
+    edit to the funnel and push an undo step for a gesture that did nothing.
+    """
+    if pixels.dtype != np.uint8 or pixels.ndim != 3 or pixels.shape[2] != 4:
+        raise ValueError("grayscale takes (H, W, 4) uint8")
+    out = pixels.copy()
+    if out.size == 0:
+        return out
+    visible = out[..., 3] > 0
+    if not visible.any():
+        return out
+    rgb = out[..., :3][visible].astype(np.float32)
+    # ``+ 0.5`` then floor, rather than numpy's round-half-to-even: the values
+    # are 0..255 and the tie-break has to be the one every other integer
+    # conversion in this package uses, or a flat 50% grey lands on a different
+    # byte here than in ``composite.to_uint8``.
+    value = np.floor(rgb @ _LUMA_F32 + 0.5).clip(0, 255).astype(np.uint8)
+    out[..., :3][visible] = value[:, None]
     return out
 
 

@@ -741,6 +741,51 @@ class IndexedOps:
         self._color_step(state, lambda: self._resolve_planes(wanted, method, hole))
         return True
 
+    def _flatten_planes(self: Document) -> None:
+        """The raw work of entering grayscale mode: every cel through the luma.
+
+        ``_replay``'s rule again -- this is the closure redo re-runs, never the
+        public method.
+        """
+        for layer in self._index_planes():
+            layer.pixels[...] = ix.grayscale(layer.pixels)
+        self._stamp_all()
+        self.invalidate_all()
+
+    def convert_to_grayscale(self: Document) -> bool:
+        """Enter grayscale mode: every visible pixel gets ``r == g == b``.
+
+        A constraint over the storage this document already has, not a change of
+        storage -- see :func:`indexed.grayscale` for the three-part argument, of
+        which the load-bearing part is that all nineteen blend modes preserve
+        grayness, so even the *composite* stays grey.
+
+        An indexed document converting here **leaves indexed mode**: an index
+        plane and a luma constraint are two different answers to "what is a
+        pixel", and a document cannot hold both. Its palette is kept, which
+        makes it a grayscale document with a table of colours it may not paint
+        -- so the palette is dropped here, the one place a mode change discards
+        something the user authored, because keeping it would be keeping a lie.
+        """
+        if self.color_mode == "grayscale":
+            return False
+        self.commit_floating()
+        state = self._color_state()
+        # Read before the mode is assigned, or it is always False and the planes
+        # are left behind describing a picture nothing materialises from.
+        had_planes = self.is_indexed
+        self.color_mode = "grayscale"
+        self.palette = None
+        self.transparent_index = 0
+
+        def run() -> None:
+            if had_planes:
+                self._drop_planes()
+            self._flatten_planes()
+
+        self._color_step(state, run)
+        return True
+
     def convert_to_rgb(self: Document) -> bool:
         """Leave indexed (or grayscale) mode. The pixels stay exactly as they are.
 

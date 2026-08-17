@@ -984,6 +984,10 @@ class Document(
         if self.color_mode == "indexed" and layer.indices is not None:
             self._commit_indexed_patch(layer, rect)
             return
+        if self.color_mode == "grayscale":
+            x0, y0, x1, y1 = rect
+            region = layer.pixels[y0:y1, x0:x1]
+            layer.pixels[y0:y1, x0:x1] = ix.grayscale(region)
         if self.palette:
             x0, y0, x1, y1 = rect
             region = layer.pixels[y0:y1, x0:x1]
