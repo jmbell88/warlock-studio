@@ -126,7 +126,7 @@ def draw(ctx: Any) -> None:
         return
     _options(ctx, state, tab)
     imgui.dummy((0, 6))
-    _canvas_options(state)
+    _canvas_options(ctx, state)
 
 
 def _grid(state: Any, doc: Any = None) -> None:
@@ -853,7 +853,7 @@ def _selection_actions(state: Any, doc: Any) -> None:
         doc.crop_to_selection()
 
 
-def _canvas_options(state: Any) -> None:
+def _canvas_options(ctx: Any, state: Any) -> None:
     widgets.section("Canvas")
     state.symmetry = widgets.labeled_combo("Symmetry", state.symmetry, list(SYMMETRY_LABELS))
     if state.symmetry == "radial":
@@ -865,23 +865,39 @@ def _canvas_options(state: Any) -> None:
             state.radial_count = int(count)
     if state.symmetry != "none":
         _symmetry_axis(state)
+    # Every write below goes back through ``persist``: the grid and the rulers
+    # are how the user likes to see, and a preference that resets on the next
+    # launch is a control they have to rediscover. Persisting on the change
+    # rather than only at quit is what survives a crash.
     changed, value = controls.checkbox("Grid", state.grid)
     if changed:
         state.grid = value
+        inker_mode.persist(ctx)
     if state.grid:
         imgui.same_line()
         imgui.set_next_item_width(sp(80))
         changed, size = controls.input_int("##gridsize", state.grid_size, 0)
         if changed:
             state.grid_size = max(2, min(512, size))
+        if imgui.is_item_deactivated_after_edit():
+            inker_mode.persist(ctx)
         changed, value = controls.checkbox("Snap to grid", state.grid_snap)
         if changed:
             state.grid_snap = value
+            inker_mode.persist(ctx)
         widgets.help_marker(
             "Shapes, lines and the marquee land on grid intersections. "
             "Freehand strokes never snap -- quantising a brush to a lattice is "
             "a different tool, not a drawing aid."
         )
+    changed, value = controls.checkbox("Rulers", state.rulers)
+    if changed:
+        state.rulers = value
+        inker_mode.persist(ctx)
+    widgets.help_marker(
+        "Pixel rulers along the canvas's top and left edges, for a sense of "
+        "size. Tick steps follow the decimal 1/2/5 ladder."
+    )
 
 
 def _symmetry_axis(state: Any) -> None:

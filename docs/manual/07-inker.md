@@ -233,9 +233,13 @@ Two canvas-wide aids sit below the tool options. **Symmetry** mirrors every stro
 left/right, top/bottom, both, or **radial**, which repeats it around a circle a set number of ways
 (2 to 32) for snowflakes and mandalas. With any symmetry on you can set the **axis** the mirrors
 reflect about, in image coordinates; **Centre** puts it back, and "centred" means exactly that even
-after the canvas is resized. **Grid** overlays a grid at a spacing you set, from 2 to 512 pixels,
-and **Snap to grid** lands shapes, lines and the marquee on its intersections. Freehand strokes
-never snap: quantising a brush to a lattice is a different tool, not a drawing aid.
+after the canvas is resized. **Grid** overlays a grid at a spacing you set, from 2 to 512 pixels —
+32 by default, the most common sprite and tile cell — and **Snap to grid** lands shapes, lines and
+the marquee on its intersections. Freehand strokes never snap: quantising a brush to a lattice is a
+different tool, not a drawing aid. **Rulers** draws pixel rulers along the canvas's top and left
+edges, with a marker shadowing the cursor on each; tick labels follow the decimal 1/2/5 ladder, so
+the numbers you read are always round ones. The grid and the rulers remember how you left them
+across sessions.
 
 Two modifiers apply while you drag a line, a rectangle or an ellipse. **Shift** constrains it — a
 square, a circle, or a line at a multiple of 45° — and **Alt** grows it from the point you pressed
@@ -446,12 +450,14 @@ quantising each frame, so slot *n* is the same colour in every frame of the clip
 
 ## Layers
 
-The layers panel shows the stack top-first, the way every editor shows it.
-
-Each layer has a visibility checkbox, a thumbnail, a name, an **Opacity** slider and a **Blend**
-mode. Above the list are **Add**, **Copy**, **Delete**, **Merge down** and **Flatten**. Dragging the
-opacity slider previews live but records a single undo step when you let go, rather than one step
-per pixel of drag.
+The layers panel shows the stack top-first, the way every editor shows it, and is laid out the way
+Photoshop and Krita lay theirs out. At the top are the **Blend** mode, the **Opacity** slider and
+the two lock toggles, and they always describe the *active* layer. Each row in the list is an eye
+(visibility), a thumbnail and the layer's name — hovering a row shows its blend, opacity and locks,
+and a locked layer wears a small padlock beside its name. Under the list is the action strip:
+**add**, **duplicate**, **group**, **merge down**, **flatten** and **delete**, as icon buttons whose
+names are in their tooltips. Dragging the opacity slider previews live but records a single undo
+step when you let go, rather than one step per pixel of drag.
 
 There are nineteen blend modes, listed in the order every editor groups them — darkening, then
 lightening, then contrast, then comparison, then the arithmetic and colour ones:

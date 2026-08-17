@@ -40,37 +40,45 @@ def _busy_why(tab: Any) -> str:
 def draw(ctx: Any) -> None:
     state = inker_mode.ensure(ctx)
     tab = state.active
-    widgets.section("File")
-    manual_render.help_button(ctx, "inker-bridge")
-    _file(ctx, state, tab)
+    # Most-touched first: Canvas, Animation, Pipeline, then Document and File
+    # with the recent list trailing -- so with the Layers pane above, the column
+    # reads Layers, Canvas, Animation, Pipeline, Document, File, Recent. The
+    # first three only exist with a document open; the help button rides the
+    # first heading actually drawn, whichever that is.
+    if tab is not None:
+        widgets.section("Canvas")
+        manual_render.help_button(ctx, "inker-bridge")
+        _canvas_ops(ctx, tab)
+        imgui.dummy((0, 8))
+        _animation(ctx, tab)
+        imgui.dummy((0, 8))
+        _pipeline(ctx, tab)
+        imgui.dummy((0, 8))
 
-    imgui.dummy((0, 8))
     widgets.section("Document")
+    if tab is None:
+        manual_render.help_button(ctx, "inker-bridge")
     # Above the tab check: importing a sheet *makes* a document, so it has to
     # be reachable when there is none open, which is exactly the moment a user
     # is most likely to want it.
     _sheet_import(ctx)
     if tab is None:
         widgets.muted("Nothing open.")
-        return
-
-    doc = tab.doc
-    width, height = doc.size
-    widgets.muted(f"{width} x {height} - {len(doc.stack)} layer(s)")
-    widgets.muted(f"{tab.view.zoom * 100:.0f}%  -  {tab.file_format.upper()}")
-    if tab.path is not None:
-        imgui.text_wrapped(str(tab.path))
-    if tab.linked:
-        widgets.text_colored(theme.OK, f"linked to job {tab.job_id[:8]}")
     else:
-        widgets.muted("not part of a job")
+        doc = tab.doc
+        width, height = doc.size
+        widgets.muted(f"{width} x {height} - {len(doc.stack)} layer(s)")
+        widgets.muted(f"{tab.view.zoom * 100:.0f}%  -  {tab.file_format.upper()}")
+        if tab.path is not None:
+            imgui.text_wrapped(str(tab.path))
+        if tab.linked:
+            widgets.text_colored(theme.OK, f"linked to job {tab.job_id[:8]}")
+        else:
+            widgets.muted("not part of a job")
 
     imgui.dummy((0, 8))
-    _animation(ctx, tab)
-    imgui.dummy((0, 8))
-    _pipeline(ctx, tab)
-    imgui.dummy((0, 8))
-    _canvas_ops(ctx, tab)
+    widgets.section("File")
+    _file(ctx, state, tab)
 
 
 def _file_why(state: Any, tab: Any) -> str:
@@ -191,8 +199,9 @@ def _pipeline(ctx: Any, tab: Any) -> None:
 
 
 def _canvas_ops(ctx: Any, tab: Any) -> None:
+    """The body only: ``draw`` owns the "Canvas" heading, because the help
+    button has to ride the pane's first heading row."""
     doc = tab.doc
-    widgets.section("Canvas")
     # Every control below either rebinds a layer's pixels (the geometry ops,
     # via _map_planes) or rebinds the stack wholesale (undo, via
     # restore_snapshot). ``write_ora`` flattens, writes stack.xml and then

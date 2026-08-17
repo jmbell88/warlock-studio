@@ -798,11 +798,19 @@ class InkerState:
     # same answer for every document open in a pixel-art session.
     resample: str = "smooth"
     grid: bool = False
-    grid_size: int = 16
+    # 32 by default: the most common tile and sprite cell in the corpus this
+    # app feeds, and what the user asked the grid to assume. Changeable in the
+    # tools pane's Canvas section, and persisted with the rest of the block.
+    grid_size: int = 32
     # Whether a shape, a marquee or a line snaps to the grid. Deliberately not
     # applied to freehand strokes: quantising a brush to a 16-pixel lattice is
     # not a drawing aid, it is a different tool.
     grid_snap: bool = False
+    # The pixel rulers along the canvas's top and left edges. On by default --
+    # they exist to give a sense of size, which is exactly what a first-run
+    # user lacks -- and metric in the decimal sense: tick steps come off the
+    # 1/2/5 ladder, never inches or twelfths.
+    rulers: bool = True
 
     # Onion skinning: app-level, like every other tool setting, because it is a
     # property of how the user works rather than of the drawing. Tinted red

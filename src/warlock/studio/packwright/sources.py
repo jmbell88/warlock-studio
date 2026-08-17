@@ -237,3 +237,74 @@ def sprite_from_image(pixels: Any, *, key: str, name: str = "") -> Sprite:
     """A loose image file, already decoded. Here rather than in the host so the
     RGBA check and the copy happen in exactly one place."""
     return Sprite(key=key, name=name or key, pixels=pixels)
+
+
+# --- already-made tile sheets -------------------------------------------------
+
+
+def tile_key(prefix: str, column: int, row: int) -> str:
+    """One grid cell's key. Row-major and zero-padded, so the lexical order the
+    packer sorts into is the reading order of the sheet it came from."""
+    return f"{prefix}#tile{row:03d}x{column:03d}"
+
+
+def tileset_occupancy(pixels: Any, *, tile: tuple[int, int]) -> np.ndarray:
+    """A ``(rows, columns)`` bool grid: which full cells hold any opaque pixel.
+
+    The one answer both the popup's preview and the import compute their counts
+    from -- two implementations of "is this cell empty" is one disagreement
+    between the number promised and the number added. Full cells only: a
+    remainder strip narrower than a tile is outside the grid, which is what
+    Tiled does with the same sheet.
+    """
+    tile_w, tile_h = int(tile[0]), int(tile[1])
+    if tile_w < 1 or tile_h < 1:
+        raise ValueError("a tile must be at least 1 x 1")
+    array = np.asarray(pixels)
+    if array.ndim != 3 or array.shape[2] != 4:
+        raise ValueError("a tile sheet must be RGBA, shaped (h, w, 4)")
+    rows, columns = array.shape[0] // tile_h, array.shape[1] // tile_w
+    if rows < 1 or columns < 1:
+        return np.zeros((0, 0), dtype=bool)
+    alpha = array[: rows * tile_h, : columns * tile_w, 3]
+    return alpha.reshape(rows, tile_h, columns, tile_w).any(axis=(1, 3))
+
+
+def sprites_from_tileset(
+    pixels: Any, *, tile: tuple[int, int], prefix: str, name: str = ""
+) -> list[Sprite]:
+    """Slice an already-made tile sheet into one sprite per *occupied* cell.
+
+    An empty cell -- no opaque pixel anywhere in it -- is dropped rather than
+    packed, which is the point of re-packing a sheet: what comes out is the
+    tiles, on a smaller canvas. Dropping is safe here where it is not for
+    animation frames (see the module head): a tileset's cells carry no temporal
+    order, and the sheet the pack writes is a new sheet, not an edit of the old
+    one. A sheet whose every pixel is opaque -- the usual decode of an RGB
+    file -- simply keeps every cell.
+    """
+    occupied = tileset_occupancy(pixels, tile=tile)
+    kept = int(occupied.sum())
+    from .layout import MAX_SPRITES
+
+    if kept > MAX_SPRITES:
+        raise ValueError(
+            f"that slicing makes {kept} tiles; the packer's ceiling is {MAX_SPRITES}"
+        )
+    tile_w, tile_h = int(tile[0]), int(tile[1])
+    array = np.asarray(pixels)
+    base = name or prefix
+    out: list[Sprite] = []
+    for row in range(occupied.shape[0]):
+        for column in range(occupied.shape[1]):
+            if not occupied[row, column]:
+                continue
+            y0, x0 = row * tile_h, column * tile_w
+            out.append(
+                Sprite(
+                    key=tile_key(prefix, column, row),
+                    name=f"{base} r{row + 1}c{column + 1}",
+                    pixels=array[y0 : y0 + tile_h, x0 : x0 + tile_w],
+                )
+            )
+    return out

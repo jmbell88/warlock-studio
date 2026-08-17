@@ -27,6 +27,7 @@ from imgui_bundle import imgui
 from .. import (
     ants,
     controls,
+    fonts,
     icons,
     imgui_backend,
     inker_mode,
@@ -568,6 +569,11 @@ def _canvas(ctx: Any, state: Any, tab: Any) -> None:
         hovered = imgui.is_item_hovered()
         _input(ctx, state, tab, (origin.x, origin.y), active=active, hovered=hovered)
         _paint(ctx, state, tab, (origin.x, origin.y), hovered=hovered)
+        # After everything ``_paint`` draws, because the bands sit on top of
+        # the canvas -- and outside it, because ``_paint`` early-outs when
+        # there is no composite yet and the rulers should not blink with it.
+        if state.rulers:
+            _rulers(tab, (origin.x, origin.y), region, hovered=hovered)
         # Inside the child, because that is where ``_press`` opened it from and
         # an imgui popup's id is computed off the id stack it was opened on.
         _text_popup(ctx, state, tab)
@@ -2095,6 +2101,137 @@ def _grid(state: Any, draw_list: Any, view: Any, origin, size, top_left, bottom_
         a = inker_state.to_screen(view, origin, 0, y)
         b = inker_state.to_screen(view, origin, width, y)
         draw_list.add_line(a, b, colour)
+
+
+# --- rulers ------------------------------------------------------------------
+
+#: The bands' thickness in design pixels (through ``sp`` at draw time). Small
+#: enough that four-digit labels overhang the vertical band a little, which is
+#: the GIMP answer and better than a band wide enough for the worst label.
+RULER_THICKNESS = 18.0
+
+#: Labelled ticks want at least this many screen pixels between them.
+RULER_LABEL_PX = 48.0
+
+
+def ruler_step(zoom: float, minimum_px: float = RULER_LABEL_PX) -> int:
+    """The smallest 1/2/5-ladder step whose labels sit ``minimum_px`` apart.
+
+    Metric in the decimal sense -- the ladder is 1, 2, 5, 10, 20, 50, ... -- so
+    every number a user reads off the band is a round one, at every zoom the
+    pane allows. Pure, so the test can walk the whole zoom range.
+    """
+    if zoom <= 0.0:
+        return 1
+    magnitude = 1
+    while True:
+        for base in (1, 2, 5):
+            step = base * magnitude
+            if step * zoom >= minimum_px:
+                return int(step)
+        magnitude *= 10
+
+
+def ruler_minor(step: int) -> int:
+    """The minor-tick spacing under ``step``: fifths when they divide whole,
+    halves otherwise, nothing when the step cannot split (step 1)."""
+    if step % 5 == 0:
+        return step // 5
+    return step // 2
+
+
+def _rulers(tab: Any, origin, region, *, hovered: bool) -> None:
+    """Pixel rulers along the canvas child's top and left edges.
+
+    An overlay, drawn after everything on the canvas: it owns no layout and
+    swallows no clicks. Each band measures whichever *image* axis currently
+    runs along it -- under a quarter turn the top ruler is reading image Y --
+    found by sampling the view transform at the band's two ends; interpolating
+    between those samples is exact because the transform is affine.
+    """
+    view = tab.view
+    draw_list = imgui.get_window_draw_list()
+    thickness = sp(RULER_THICKNESS)
+    left, top = origin
+    right, bottom = left + region[0], top + region[1]
+    back = _u32(theme.ELEV_1, 0.95)
+    ink = _u32(theme.MUTED)
+    draw_list.add_rect_filled((left, top), (right, top + thickness), back)
+    draw_list.add_rect_filled((left, top), (left + thickness, bottom), back)
+    with fonts.small(imgui):
+        _ruler_band(
+            draw_list, view, origin, (left, right), top, thickness, ink, horizontal=True
+        )
+        _ruler_band(
+            draw_list, view, origin, (top, bottom), left, thickness, ink, horizontal=False
+        )
+    # The corner square after both bands, so neither's ticks show through it,
+    # and the two edge lines after the corner so they run unbroken.
+    draw_list.add_rect_filled((left, top), (left + thickness, top + thickness), back)
+    edge = _u32(theme.EDGE)
+    draw_list.add_line((left, top + thickness), (right, top + thickness), edge)
+    draw_list.add_line((left + thickness, top), (left + thickness, bottom), edge)
+    if hovered:
+        # The cursor's shadow on each band -- the part of a ruler that answers
+        # "how big is what I am about to draw" while a drag is in flight.
+        mouse = imgui.get_mouse_pos()
+        accent = _u32(theme.ACCENT)
+        if left <= mouse.x <= right:
+            draw_list.add_line((mouse.x, top), (mouse.x, top + thickness), accent)
+        if top <= mouse.y <= bottom:
+            draw_list.add_line((left, mouse.y), (left + thickness, mouse.y), accent)
+
+
+def _ruler_band(
+    draw_list: Any,
+    view: Any,
+    origin,
+    span: tuple[float, float],
+    cross: float,
+    thickness: float,
+    ink: int,
+    *,
+    horizontal: bool,
+) -> None:
+    """One band's ticks and labels, between screen positions ``span`` at the
+    fixed other coordinate ``cross``."""
+    a0, a1 = span
+    if horizontal:
+        p0 = inker_state.to_image(view, origin, a0, cross)
+        p1 = inker_state.to_image(view, origin, a1, cross)
+    else:
+        p0 = inker_state.to_image(view, origin, cross, a0)
+        p1 = inker_state.to_image(view, origin, cross, a1)
+    # Which image axis runs along this band: under a quarter turn exactly one
+    # coordinate varies, and the flipped view only flips its sign.
+    axis = 0 if abs(p1[0] - p0[0]) >= abs(p1[1] - p0[1]) else 1
+    v0, v1 = p0[axis], p1[axis]
+    if abs(v1 - v0) < 1e-9:
+        return
+    scale = (a1 - a0) / (v1 - v0)
+    step = ruler_step(abs(scale))
+    minor = ruler_minor(step)
+    if minor and minor * abs(scale) < sp(5.0):
+        minor = 0
+    tick = minor or step
+    lo, hi = min(v0, v1), max(v0, v1)
+    start = int(math.floor(lo / tick)) * tick
+    for value in range(start, int(math.ceil(hi)) + tick, tick):
+        position = a0 + (value - v0) * scale
+        major = value % step == 0
+        length = thickness * (0.45 if major else 0.25)
+        if horizontal:
+            draw_list.add_line(
+                (position, cross + thickness - length), (position, cross + thickness), ink
+            )
+            if major:
+                draw_list.add_text((position + 3.0, cross + 1.0), ink, str(value))
+        else:
+            draw_list.add_line(
+                (cross + thickness - length, position), (cross + thickness, position), ink
+            )
+            if major:
+                draw_list.add_text((cross + 2.0, position + 1.0), ink, str(value))
 
 
 def _symmetry(state: Any, draw_list: Any, view: Any, origin, size) -> None:

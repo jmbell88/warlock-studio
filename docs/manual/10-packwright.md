@@ -30,10 +30,19 @@ does not sit there failing every time you look at it.
 
 ## Sources
 
-Three ways in.
+Four ways in.
 
 **Add an image...** takes one file. Dropping images on the window adds them too — several at once,
 and one that is already in the atlas is skipped rather than refusing the whole batch.
+
+**Add a tile set...** takes a sheet that is already a tileset and slices it back into tiles. You
+give the tile size — 32×32 until you change it — and the popup answers with the grid it makes and
+how many cells that keeps, live as you type. A cell with no opaque pixel anywhere in it is dropped,
+which is the point: a sparse sheet re-packs into a smaller one. A strip left over where the sheet's
+size is not a multiple of the tile is outside the grid and ignored, which is what Tiled does with
+the same sheet, and a sheet with no transparency at all simply keeps every cell. Re-importing the
+same file cut at a different tile size adds a second set rather than being skipped as duplicates of
+the first cut.
 
 **From Inker** is the reason this mode sits beside the raster editor. Every document open in
 [Inker](07-inker.md) gets a button here: an animated document contributes one sprite per frame, and

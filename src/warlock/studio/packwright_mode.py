@@ -138,6 +138,59 @@ def ask_add_sources(ctx: Any) -> None:
     ctx.submit(f"packwright-add:{uid}", run)
 
 
+def ask_add_tileset(ctx: Any) -> None:
+    """The picker and decode for an already-made tile sheet.
+
+    The slicing happens later, in the sources pane's popup, because a sheet
+    cannot say its own tile size -- the user provides it there, with a live
+    count of what each answer would keep and drop.
+    """
+    tab = active(ctx)
+    if tab is None:
+        ctx.toast("Start or open an atlas first.", "error")
+        return
+    uid = tab.uid
+
+    def run() -> dict[str, Any] | None:
+        path = dialogs.open_file("Add a tile set", IMAGE_FILTER)
+        if path is None:
+            return None
+        return {"tileset": (str(path), path.stem, _decode(path)), "uid": uid}
+
+    ctx.submit(f"packwright-tileset:{uid}", run)
+
+
+def import_tileset(ctx: Any) -> bool:
+    """Slice the pending sheet with the popup's cell size and add the tiles.
+
+    The key carries the tile size as well as the path, so re-importing the same
+    sheet cut differently adds a different set rather than being skipped as
+    duplicates of the first cut.
+    """
+    from .packwright.sources import sprites_from_tileset
+
+    state = ensure(ctx)
+    tab = active(ctx)
+    if tab is None or state.tileset_import is None:
+        return False
+    path, stem, pixels = state.tileset_import
+    tile = state.tileset_cell
+    try:
+        sprites = sprites_from_tileset(
+            pixels, tile=tile, prefix=f"{path}@{tile[0]}x{tile[1]}", name=stem
+        )
+    except ValueError as exc:
+        ctx.toast(f"That tile set was not imported: {exc}", "error")
+        return False
+    state.tileset_import = None
+    state.tileset_import_open = False
+    added = _add_sprites(ctx, tab, sprites)
+    ctx.toast(
+        f"Added {added} tile(s)." if added else "Those tiles are already in this atlas."
+    )
+    return True
+
+
 def add_source_paths(ctx: Any, paths: list[Path]) -> None:
     """Files dropped on the window."""
     tab = active(ctx)
@@ -356,6 +409,14 @@ def on_task_done(ctx: Any, done: Any) -> None:
             tab.adopt_pack(result["layout"], result["atlas"])
         else:
             tab.packing = False
+        return
+
+    if name == "packwright-tileset":
+        # The decode landing: the sheet parks on the state until the popup's
+        # tile-size answer turns it into sprites, or a cancel drops it.
+        if isinstance(result, dict):
+            state.tileset_import = result["tileset"]
+            state.tileset_import_open = False
         return
 
     if name == "packwright-add":

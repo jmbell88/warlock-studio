@@ -90,6 +90,7 @@ def ensure(ctx: Any) -> InkerState:
                 if isinstance(s, list | tuple) and len(s) == 4
             ] or list(inker_state.DEFAULT_SWATCHES)
         _restore_presets(state, stored.get("presets"))
+        _restore_canvas(state, stored.get("canvas"))
         ctx.state.inker = state
     return state
 
@@ -139,7 +140,28 @@ def persist(ctx: Any) -> None:
         name: {"tool": saved["tool"], "options": dict(saved["options"])}
         for name, saved in state.presets.items()
     }
+    # The canvas furniture: how the user likes to see, which -- like the
+    # swatches -- is a property of the person rather than of any document.
+    block["canvas"] = {
+        "grid": bool(state.grid),
+        "grid_size": int(state.grid_size),
+        "grid_snap": bool(state.grid_snap),
+        "rulers": bool(state.rulers),
+    }
     ctx.settings.set("inker", block)
+
+
+def _restore_canvas(state: InkerState, stored: Any) -> None:
+    """The grid and ruler preferences back off disk, validated not trusted --
+    the same doctrine as ``_restore_presets``, for the same hand-editable file."""
+    if not isinstance(stored, dict):
+        return
+    state.grid = bool(stored.get("grid", state.grid))
+    size = stored.get("grid_size")
+    if isinstance(size, int) and not isinstance(size, bool):
+        state.grid_size = max(2, min(512, size))
+    state.grid_snap = bool(stored.get("grid_snap", state.grid_snap))
+    state.rulers = bool(stored.get("rulers", state.rulers))
 
 
 def _restore_presets(state: InkerState, stored: Any) -> None:

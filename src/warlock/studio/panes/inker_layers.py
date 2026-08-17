@@ -12,7 +12,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import controls, icons, inker, inker_mode, theme, widgets
+from .. import controls, icons, inker, inker_mode, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 from . import inker_textures
@@ -42,7 +42,10 @@ def draw(ctx: Any) -> None:
     # the same reason; disabling is the panel's version of that, and it says so
     # on screen rather than swallowing clicks.
     imgui.begin_disabled(tab.busy)
-    _actions(ctx, doc)
+    # The Photoshop/Krita shape: what applies to the *active* layer -- blend,
+    # opacity, the locks -- reads as a header above the stack, the stack is
+    # rows of eye/thumbnail/name, and the verbs sit in an icon bar underneath.
+    _header_controls(ctx, doc)
     imgui.dummy((0, 4))
 
     # J86, and inside the disable for the reason everything else here is.
@@ -63,6 +66,8 @@ def draw(ctx: Any) -> None:
         shown += 1
         _row(ctx, tab, doc, index, len(open_groups))
     widgets.no_matches(needle, shown)
+    imgui.dummy((0, 4))
+    _actions_bar(ctx, doc)
     imgui.end_disabled()
 
 
@@ -190,35 +195,20 @@ def _can_merge(doc: Any) -> bool:
     return not (doc.write_locked(doc.stack[index]) or doc.write_locked(doc.stack[index - 1]))
 
 
-def _actions(ctx: Any, doc: Any) -> None:
-    if controls.button("Add"):
-        doc.add_layer()
-    imgui.same_line()
-    if controls.button("Copy"):
-        doc.duplicate_layer()
-    imgui.same_line()
-    if widgets.disabled_button("Delete", len(doc.stack) > 1):
-        doc.remove_layer()
-    # Both work on an animated document now, across every frame at once: a
-    # merge is memoised on the pair of cels it consumes, so frames that shared
-    # a drawing go on sharing the merged one.
-    if widgets.disabled_button("Merge down", _can_merge(doc)):
-        doc.merge_down()
-    imgui.same_line()
-    if widgets.disabled_button("Flatten", len(doc.stack) > 1):
-        doc.flatten_layers()
-    if widgets.disabled_button("Group", len(doc.stack) > 0):
-        doc.group_layers()
-    widgets.help_marker(
-        "Wraps the active layer in a folder. Folders fold visibility, opacity "
-        "and the lock down onto what is inside them, and drag a layer onto a "
-        "folder's header to move it in. A folder is made around layers that "
-        "are already next to each other -- there are no empty ones."
-    )
-    if doc.anim is not None:
-        widgets.muted("Merge and flatten apply to every frame.")
+def _header_controls(ctx: Any, doc: Any) -> None:
+    """The active layer's blend, opacity and locks -- the Photoshop header.
 
+    Blend first, then opacity, which is the order every layers panel since
+    Photoshop has used and therefore the one a user's eye already knows.
+    """
     layer = doc.stack.active
+    blend = widgets.labeled_combo("Blend", layer.blend, [(m, m) for m in inker.BLEND_MODES])
+    widgets.help_marker(
+        "How this layer combines with everything under it. Saved into the .ora "
+        "so other editors read it the same way."
+    )
+    if blend != layer.blend:
+        doc.set_layer_props(blend=blend)
     changed, value = widgets.labeled_slider_float("Opacity", layer.opacity, 0.0, 1.0)
     widgets.help_marker(
         "The active layer's opacity. Dragging previews it live and records one "
@@ -237,30 +227,88 @@ def _actions(ctx: Any, doc: Any) -> None:
         was = _opacity_drag.pop(layer.uid, None)
         if was is not None:
             doc.set_layer_props(opacity=layer.opacity, was={"opacity": was})
-    blend = widgets.labeled_combo("Blend", layer.blend, [(m, m) for m in inker.BLEND_MODES])
-    widgets.help_marker(
-        "How this layer combines with everything under it. Saved into the .ora "
-        "so other editors read it the same way."
-    )
-    if blend != layer.blend:
-        doc.set_layer_props(blend=blend)
-    changed, locked = controls.checkbox("Lock alpha", layer.alpha_lock)
-    widgets.help_marker(
-        "Paints inside what is already on this layer and never past its edge: "
-        "colours change, transparency does not. The eraser does nothing on a "
-        "locked layer, because erasing is changing transparency."
-    )
-    if changed:
-        doc.set_layer_props(alpha_lock=locked)
-    changed, content = controls.checkbox("Lock layer", layer.locked)
-    widgets.help_marker(
-        "Refuses every tool: no strokes, fills, gradients, filters, lifts or "
-        "pastes land on it. Renaming, hiding, reordering and deleting still "
-        "work, and so do whole-document changes like a rotate or a crop -- the "
-        "lock is about what gets painted, not about managing the layer."
-    )
-    if changed:
-        doc.set_layer_props(locked=content)
+
+    widgets.muted("Lock:")
+    imgui.same_line()
+    if _toggle_icon(
+        f"{icons.SQUARE_DASHED}##lockalpha",
+        layer.alpha_lock,
+        "Lock alpha: paints inside what is already on this layer and never "
+        "past its edge -- colours change, transparency does not. The eraser "
+        "does nothing here, because erasing is changing transparency.",
+    ):
+        doc.set_layer_props(alpha_lock=not layer.alpha_lock)
+    imgui.same_line()
+    if _toggle_icon(
+        f"{icons.LOCK}##locklayer",
+        layer.locked,
+        "Lock layer: refuses every tool -- no strokes, fills, gradients, "
+        "filters, lifts or pastes land on it. Renaming, hiding, reordering "
+        "and deleting still work, and so do whole-document changes like a "
+        "rotate or a crop.",
+    ):
+        doc.set_layer_props(locked=not layer.locked)
+
+
+def _toggle_icon(icon: str, engaged: bool, tooltip: str) -> bool:
+    """An icon button that shows its on state -- the anchor grid's idiom."""
+    if engaged:
+        imgui.push_style_color(
+            imgui.Col_.button.value,
+            imgui.get_style().color_(imgui.Col_.button_active.value),
+        )
+    clicked = widgets.icon_button(icon, tooltip)
+    if engaged:
+        imgui.pop_style_color()
+    return clicked
+
+
+def _actions_bar(ctx: Any, doc: Any) -> None:
+    """The verbs, as the icon strip under the stack -- where Photoshop and
+    Krita both keep them, and where they stop pushing the rows off screen."""
+    if widgets.icon_button(f"{icons.PLUS}##addlayer", "Add a layer"):
+        doc.add_layer()
+    imgui.same_line()
+    if widgets.icon_button(
+        f"{icons.COPY}##duplayer", "Duplicate the active layer"
+    ):
+        doc.duplicate_layer()
+    imgui.same_line()
+    if widgets.icon_button(
+        f"{icons.LAYERS}##grouplayer",
+        "Group the active layer. Folders fold visibility, opacity and the "
+        "lock down onto what is inside them; drag a layer onto a folder's "
+        "header to move it in.",
+        enabled=len(doc.stack) > 0,
+    ):
+        doc.group_layers()
+    imgui.same_line()
+    # Both work on an animated document, across every frame at once: a merge
+    # is memoised on the pair of cels it consumes, so frames that shared a
+    # drawing go on sharing the merged one.
+    if widgets.icon_button(
+        f"{icons.CHEVRON_DOWN}##mergedown",
+        "Merge down: the active layer into the one under it",
+        enabled=_can_merge(doc),
+    ):
+        doc.merge_down()
+    imgui.same_line()
+    if widgets.icon_button(
+        f"{icons.SQUARE}##flatten",
+        "Flatten every layer into one",
+        enabled=len(doc.stack) > 1,
+    ):
+        doc.flatten_layers()
+    imgui.same_line()
+    if widgets.icon_button(
+        f"{icons.TRASH}##dellayer",
+        "Delete the active layer",
+        danger=True,
+        enabled=len(doc.stack) > 1,
+    ):
+        doc.remove_layer()
+    if doc.anim is not None:
+        widgets.muted("Merge and flatten apply to every frame.")
 
 
 def _row(ctx: Any, tab: Any, doc: Any, index: int, depth: int = 0) -> None:
@@ -270,9 +318,15 @@ def _row(ctx: Any, tab: Any, doc: Any, index: int, depth: int = 0) -> None:
         imgui.indent(INDENT * depth)
     active = index == doc.stack.active_index
 
-    changed, visible = controls.checkbox("##visible", layer.visible)
-    if changed:
-        doc.set_layer_props(index, visible=visible)
+    # The eye, not a checkbox: it is what every layers panel draws there, and
+    # the off state is a different glyph rather than an empty box -- an empty
+    # box beside a thumbnail reads as "unselected", which visibility is not.
+    if widgets.icon_button(
+        f"{icons.EYE if layer.visible else icons.EYE_OFF}##visible",
+        "Hide this layer" if layer.visible else "Show this layer",
+        borderless=True,
+    ):
+        doc.set_layer_props(index, visible=not layer.visible)
     imgui.same_line()
 
     texture = inker_textures.layer_thumb(ctx, tab, index)
@@ -280,18 +334,24 @@ def _row(ctx: Any, tab: Any, doc: Any, index: int, depth: int = 0) -> None:
         imgui.image(widgets.texture_ref(texture), (THUMB, THUMB))
         imgui.same_line()
 
-    imgui.begin_group()
-    label = layer.name if layer.visible else f"{layer.name} (hidden)"
-    if controls.selectable(f"{label}##pick", active, 0, (0, THUMB * 0.5))[0]:
+    # Name only, the full thumbnail tall: the blend/opacity subtitle moved to
+    # the header above (it always described the active layer's controls) and
+    # into this row's tooltip, which is where a compact panel keeps detail.
+    label = layer.name
+    if layer.locked or layer.alpha_lock:
+        label += f"  {icons.LOCK}"
+    if controls.selectable(f"{label}##pick", active, 0, (0, THUMB))[0]:
         doc.set_active_layer(index)
     _reorder(doc, index)
-    imgui.text_colored(
-        imgui.ImVec4(*theme.rgba(theme.MUTED)),
-        f"{layer.blend}  {layer.opacity * 100:.0f}%"
-        + ("  alpha" if layer.alpha_lock else "")
-        + ("  locked" if layer.locked else ""),
-    )
-    imgui.end_group()
+    if imgui.is_item_hovered():
+        detail = f"{layer.blend}  {layer.opacity * 100:.0f}%"
+        if not layer.visible:
+            detail += "  hidden"
+        if layer.alpha_lock:
+            detail += "  alpha locked"
+        if layer.locked:
+            detail += "  locked"
+        imgui.set_tooltip(detail)
 
     if imgui.begin_popup_context_item("layer-menu"):
         widgets.popup_chrome(_imgui=imgui)

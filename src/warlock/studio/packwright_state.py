@@ -118,6 +118,15 @@ class PackwrightState:
     # "which sprite are we talking about" rather than three.
     selected: int | None = None
 
+    # A decoded tile sheet waiting for its cell size: ``(path, display name,
+    # pixels)``, set by the decode task and consumed (or dropped, on cancel)
+    # by the sources pane's popup. Inker's ``sheet_import`` trio, verbatim,
+    # because a sheet cannot say its own tile size and the user answers in a
+    # popup either way.
+    tileset_import: tuple[str, str, np.ndarray] | None = None
+    tileset_import_open: bool = False
+    tileset_cell: tuple[int, int] = (32, 32)
+
     @property
     def active(self) -> PackTab | None:
         for doc in self.docs:

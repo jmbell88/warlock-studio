@@ -35,6 +35,18 @@ def draw(ctx: Any) -> None:
     if widgets.disabled_button(f"{icons.PLUS} Add an image...", editable, (-1, 0)):
         packwright_mode.ask_add_sources(ctx)
 
+    if widgets.disabled_button(f"{icons.GRID} Add a tile set...", editable, (-1, 0)):
+        packwright_mode.ask_add_tileset(ctx)
+    widgets.help_marker(
+        "Loads an already-made tile sheet, slices it on a grid you set, drops "
+        "the empty cells, and packs what is left -- so a sparse sheet comes "
+        "back as a smaller one."
+    )
+    if state.tileset_import is not None and not state.tileset_import_open:
+        state.tileset_import_open = True
+        imgui.open_popup(TILESET_POPUP)
+    _tileset_popup(ctx, state)
+
     _from_inker(ctx, tab, editable)
 
     imgui.dummy((0, 6))
@@ -50,6 +62,81 @@ def draw(ctx: Any) -> None:
     imgui.dummy((0, 2))
     for source in sources:
         _row(ctx, state, tab, source, editable)
+
+
+TILESET_POPUP = "packwright-tileset-import"
+
+
+def _cell_pair(value: tuple[int, int]) -> tuple[int, int]:
+    """Two small integer fields on one row -- ``inker_bridge._pair``'s shape."""
+    from imgui_bundle import imgui
+
+    from ..tokens import sp
+
+    imgui.set_next_item_width(sp(70))
+    _changed_x, x = controls.input_int("##tilew", int(value[0]), 1, 8)
+    imgui.same_line()
+    imgui.set_next_item_width(sp(70))
+    _changed_y, y = controls.input_int("##tileh", int(value[1]), 1, 8)
+    imgui.same_line()
+    widgets.muted("tile size")
+    return (max(1, int(x)), max(1, int(y)))
+
+
+def _tileset_popup(ctx: Any, state: Any) -> None:
+    from imgui_bundle import imgui
+
+    from .. import theme
+    from ..packwright.layout import MAX_SPRITES
+    from ..packwright.sources import tileset_occupancy
+    from ..tokens import sp
+
+    if not imgui.begin_popup(TILESET_POPUP):
+        # imgui closes a popup on a click outside, and the sheet is a megabyte
+        # or two: dropping it here is what keeps a cancelled import from
+        # pinning the pixels for the rest of the session.
+        if state.tileset_import_open:
+            state.tileset_import_open = False
+            state.tileset_import = None
+        return
+    widgets.popup_chrome(_imgui=imgui)
+    if state.tileset_import is None:
+        imgui.end_popup()
+        return
+    _path, stem, pixels = state.tileset_import
+    height, width = pixels.shape[:2]
+    widgets.muted(f"{stem} - {width} x {height}")
+
+    state.tileset_cell = _cell_pair(state.tileset_cell)
+
+    # The counts the numbers above actually produce, computed from the same
+    # occupancy grid the import slices by -- so what the popup promises and
+    # what the import does cannot disagree.
+    occupied = tileset_occupancy(pixels, tile=state.tileset_cell)
+    rows, columns = occupied.shape
+    kept = int(occupied.sum())
+    dropped = rows * columns - kept
+    problem = ""
+    if kept == 0:
+        problem = "No occupied cells at that tile size."
+    elif kept > MAX_SPRITES:
+        problem = f"{kept} tiles; the packer's ceiling is {MAX_SPRITES}."
+    if problem:
+        widgets.text_colored(theme.WARN, problem)
+    else:
+        widgets.muted(f"{columns} x {rows} cells - {kept} tile(s), {dropped} empty dropped")
+
+    imgui.dummy((0, 4))
+    imgui.begin_disabled(bool(problem))
+    if controls.button("Import", (sp(90), 0)) and packwright_mode.import_tileset(ctx):
+        imgui.close_current_popup()
+    imgui.end_disabled()
+    imgui.same_line()
+    if controls.button("Cancel##tileset", (sp(90), 0)):
+        state.tileset_import = None
+        state.tileset_import_open = False
+        imgui.close_current_popup()
+    imgui.end_popup()
 
 
 def _from_inker(ctx: Any, tab: Any, editable: bool) -> None:
