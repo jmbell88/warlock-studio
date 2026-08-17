@@ -512,6 +512,174 @@ def test_filling_a_range_commits_a_float_before_it_reads_the_cels():
     assert (landed.pixels == np.array(BLUE, dtype=np.uint8)).all()
 
 
+# --- the ranged transform commit -------------------------------------------------
+#
+# The preview only ever shows the *active* cel -- the buffer holds that cel's
+# pixels and nothing else's. Commit is where the range takes effect: the recorded
+# gesture is replayed per cel, each one reading its own content.
+
+
+def _lift_square(doc: Document, box=(0, 0, 2, 2)) -> None:
+    """Select a square on the active cel and float it."""
+    from warlock.studio.inker.selection import SelectionMask
+
+    mask = np.zeros((4, 4), dtype=np.uint8)
+    mask[box[1] : box[3], box[0] : box[2]] = 255
+    doc.select(SelectionMask(mask))
+    assert doc.lift()
+
+
+def test_a_ranged_commit_writes_the_same_pixels_a_plain_commit_would():
+    """The replay *is* the commit, on the cel the user was looking at. Two
+    documents, the same gesture, one committed each way."""
+    plain, ranged = _clip(2), _clip(2)
+    for doc in (plain, ranged):
+        doc.set_current_frame(0)
+        _lift_square(doc)
+        assert doc.transform_floating(angle=90.0, resample="nearest")
+        doc.move_floating(1, 0)
+
+    assert plain.commit_floating()
+    assert ranged.commit_floating_range(0, 0, 0, 0)
+    assert np.array_equal(_cel(plain, 0, 0).pixels, _cel(ranged, 0, 0).pixels)
+
+
+def test_a_ranged_commit_replays_the_affine_on_every_cel_in_the_range():
+    """Every cel shows its *own* content transformed, not the active cel's --
+    a commit that pasted the buffer everywhere would make three copies of one
+    drawing, which is the thing this cannot be."""
+    doc = _clip(3)
+    for index in range(3):
+        _cel(doc, 0, index).pixels[:, :] = (0, 0, 0, 0)
+        _cel(doc, 0, index).pixels[0, 0] = (10 * index + 5, 0, 0, 255)
+    doc.set_current_frame(0)
+    _lift_square(doc)
+    doc.move_floating(2, 2)
+
+    assert doc.commit_floating_range(0, 0, 0, 2)
+    for index in range(3):
+        cel = _cel(doc, 0, index)
+        assert tuple(cel.pixels[2, 2]) == (10 * index + 5, 0, 0, 255)
+        assert int(cel.pixels[0, 0, 3]) == 0
+
+
+def test_a_ranged_commit_is_one_step_and_undo_restores_every_cel():
+    doc = _clip(3)
+    before = [_cel(doc, 0, i).pixels.copy() for i in range(3)]
+    doc.set_current_frame(0)
+    _lift_square(doc)
+    doc.move_floating(2, 2)
+    # The lift is on the stack (over the selection's own step); the commit
+    # revokes it and pushes one step of its own, so the depth is unchanged and
+    # the gesture is one Ctrl+Z.
+    steps = len(doc.history)
+    assert doc.commit_floating_range(0, 0, 0, 2)
+    assert len(doc.history) == steps
+
+    assert doc.history.undo(doc)
+    for index in range(3):
+        assert np.array_equal(_cel(doc, 0, index).pixels, before[index])
+
+
+def test_a_ranged_commit_touches_a_linked_cel_once():
+    doc = _clip(1)
+    doc.add_frame(link=True)
+    doc.add_frame(link=True)
+    doc.history.clear()
+    shared = _cel(doc, 0, 0)
+    doc.set_current_frame(0)
+    _lift_square(doc)
+    doc.move_floating(2, 2)
+    steps = len(doc.history)
+
+    assert doc.commit_floating_range(0, 0, 0, 2)
+    assert _cel(doc, 0, 2) is shared
+    assert len(doc.history) == steps
+
+
+def test_a_ranged_commit_includes_the_active_cel_outside_the_range():
+    """The user watched *that* cel transform. Leaving it out because the rect
+    happens to exclude it would drop the one change they could actually see."""
+    doc = _clip(3)
+    doc.set_current_frame(0)
+    _lift_square(doc)
+    doc.move_floating(2, 2)
+
+    assert doc.commit_floating_range(0, 0, 1, 2)
+    assert int(_cel(doc, 0, 0).pixels[2, 2, 3]) == 255
+
+
+def test_a_pasted_buffer_commits_plain_even_with_a_range():
+    """A paste has no source rectangle to re-cut, so there is nothing to
+    replay: it lands on the one cel it was aimed at, as it always did."""
+    doc = _clip(3)
+    doc.set_current_frame(0)
+    pixels = np.zeros((2, 2, 4), dtype=np.uint8)
+    pixels[:] = GREEN
+    doc.clipboard.put(pixels, np.full((2, 2), 255, dtype=np.uint8))
+    assert doc.paste((0, 0))
+
+    assert doc.commit_floating_range(0, 0, 0, 2)
+    assert tuple(_cel(doc, 0, 0).pixels[0, 0]) == GREEN
+    assert tuple(_cel(doc, 0, 1).pixels[0, 0]) != GREEN
+
+
+def test_cancelling_a_transform_still_touches_only_the_active_cel():
+    doc = _clip(3)
+    before = [_cel(doc, 0, i).pixels.copy() for i in range(3)]
+    doc.set_current_frame(0)
+    _lift_square(doc)
+    assert doc.transform_floating(angle=90.0, resample="nearest")
+
+    assert doc.cancel_floating()
+    for index in range(3):
+        assert np.array_equal(_cel(doc, 0, index).pixels, before[index])
+
+
+def test_a_ranged_commit_skips_empty_cels_without_autovivifying():
+    doc = _clip(3)
+    assert doc.clear_range(0, 0, 2, 2)
+    doc.set_current_frame(0)
+    _lift_square(doc)
+    doc.move_floating(2, 2)
+
+    assert doc.commit_floating_range(0, 0, 0, 2)
+    assert _cel(doc, 0, 2) is None
+
+
+def test_a_flip_then_rotate_replays_in_the_recorded_order():
+    """The buffer records its flips as a list and its resample beside them, so
+    the replay runs the same gesture. Order matters: a flip after a turn is a
+    different picture from a turn after a flip."""
+    plain, ranged = _clip(2), _clip(2)
+    for doc in (plain, ranged):
+        doc.set_current_frame(0)
+        _cel(doc, 0, 0).pixels[:, :] = (0, 0, 0, 0)
+        _cel(doc, 0, 0).pixels[0, 0] = RED
+        _cel(doc, 0, 0).pixels[0, 1] = GREEN
+        _lift_square(doc, (0, 0, 3, 3))
+        assert doc.flip_floating("horizontal")
+        assert doc.transform_floating(angle=90.0, resample="nearest")
+
+    assert plain.commit_floating()
+    assert ranged.commit_floating_range(0, 0, 0, 0)
+    assert np.array_equal(_cel(plain, 0, 0).pixels, _cel(ranged, 0, 0).pixels)
+
+
+def test_a_ranged_commit_with_no_buffer_is_false():
+    doc = _clip(2)
+    assert not doc.commit_floating_range(0, 0, 0, 1)
+
+
+def test_a_ranged_commit_on_a_still_document_commits_plain():
+    doc = Document.blank(4, 4)
+    doc.stack.active.pixels[:, :] = RED
+    _lift_square(doc)
+    doc.move_floating(1, 1)
+    assert doc.commit_floating_range(0, 0, 0, 0)
+    assert doc.floating is None
+
+
 # --- duplicate ---------------------------------------------------------------
 
 

@@ -19,7 +19,7 @@ from .anim_edits import TrackAddEdit
 from .animation import Track
 from .brush import MAX_STAMP, Stamp
 from .layers import Layer
-from .selection import FloatingBuffer, SelectionMask, magic_wand
+from .selection import FloatingBuffer, SelectionMask, magic_wand, render_transform
 from .undo import CompoundEdit, LayerAddEdit, PatchEdit, SelectionEdit
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -218,6 +218,10 @@ class SelectionOps:
         self.floating = FloatingBuffer(
             pixels=pixels, mask=crop.copy(), offset=(x0, y0), layer_uid=layer.uid,
             lift_edit=edit,
+            # Where these pixels were cut from. A ranged commit re-cuts the
+            # same rectangle out of every other cel in the range, which is what
+            # makes the gesture repeatable rather than a stamp of this one cel.
+            source_box=box,
         )
         self.history.push(edit)
         self.invalidate(box, layer_uid=layer.uid)
@@ -268,6 +272,142 @@ class SelectionOps:
         layer.pixels[y0:y1, x0:x1] = cp.to_uint8(merged)
         self._commit_patch(layer, box, before)
         return True
+
+    def commit_floating_range(
+        self: Document, t0: int, t1: int, f0: int, f1: int
+    ) -> bool:
+        """Commit the floating buffer to every cel of a timeline rect.
+
+        **The preview only ever showed the active cel** -- the buffer holds
+        that cel's pixels and no others -- so commit is where the range takes
+        effect. What is replayed is the *gesture*, not the buffer: cut the
+        lift's rectangle with the lift's mask, run the recorded flips in order,
+        render one scale-then-shear-then-rotate through
+        :func:`~.selection.render_transform`, composite at the offset the user
+        dragged to. Every cel therefore shows its own content moved, which is
+        what a timeline-target transform means; pasting the buffer into each
+        slot would make N copies of one drawing.
+
+        Three falls back to the plain commit, because for each of them a range
+        means nothing: no animation, a rect that misses the grid, and a
+        **paste** -- which has no ``source_box``, so there is no rectangle to
+        re-cut out of anybody else. The call site can therefore stay dumb and
+        always ask for the ranged one.
+
+        The active cel replays like every other: its lift is reversed first
+        (by identity, ``revoke``'s rule -- the lift is routinely no longer the
+        newest step) so the replay reads pristine pixels. If that lift had
+        autovivified the cel it came from, revoking takes the cel back out and
+        the slot is simply skipped below -- there was nothing there to
+        transform.
+        """
+        floating = self.floating
+        if floating is None:
+            return False
+        rect = self._range(t0, t1, f0, f1)
+        if rect is None or floating.source_box is None:
+            return self.commit_floating()
+        # The whole recipe, captured before the buffer is torn down.
+        flips = list(floating.flips)
+        angle, scale, shear = floating.angle, floating.scale, floating.shear
+        resample = floating.resample
+        dest = floating.offset
+        source_box = floating.source_box
+        src_mask = (
+            floating.source_mask if floating.source is not None else floating.mask
+        ).copy()
+        lift_edit = floating.lift_edit
+        active_uid = floating.layer_uid
+
+        self.floating = None
+        if lift_edit is not None:
+            self.history.revoke(self, lift_edit)
+
+        targets = [cel for _track, cel in self._cels_in(rect)]
+        active = self.stack.by_uid(active_uid)
+        if active is not None and not any(cel is active for cel in targets):
+            # The cel the user actually watched transform. In even when the
+            # rect excludes it: dropping the one change they could see because
+            # of where the marquee happened to stop would be indefensible.
+            targets.append(active)
+        if not targets:
+            return True
+        edits: list[Any] = []
+        for layer in targets:
+            edit = self._replay_transform_on(
+                layer, source_box, src_mask, flips, angle, scale, shear, resample, dest
+            )
+            if edit is None:
+                continue
+            self._stamp_layer(layer.uid)
+            edits.append(edit)
+        if edits:
+            self._push_range(edits)
+        self.invalidate_all()
+        return True
+
+    def _replay_transform_on(
+        self: Document,
+        layer: Any,
+        source_box: tuple[int, int, int, int],
+        src_mask: np.ndarray,
+        flips: list[str],
+        angle: float,
+        scale: tuple[float, float],
+        shear: tuple[float, float],
+        resample: str,
+        dest: tuple[int, int],
+    ) -> Any:
+        """One cel through the recorded gesture: cut, render, composite.
+
+        The cut is ``lift``'s own partition of alpha -- what floats away is
+        subtracted from what stays, rather than each half being computed
+        independently, because two independent floors lose a level of alpha on
+        every feathered pixel. One patch over the union of the two rectangles,
+        so a single undo puts back both the hole and the landing.
+
+        Every cel is cut from the same ``source_box`` with the same mask, so
+        every render has the same shape, so the active buffer's final offset
+        places every replay exactly. That is what lets ``dest`` be one number
+        for the whole range rather than one per cel.
+        """
+        sx0, sy0, sx1, sy1 = source_box
+        region = layer.pixels[sy0:sy1, sx0:sx1]
+        lifted = _masked_alpha(region, src_mask)
+        source, mask = lifted, src_mask.copy()
+        for axis in flips:
+            source, mask = tf.flip(source, axis), tf.flip(mask, axis)
+        moved, _moved_mask = render_transform(
+            source, mask, angle, scale, shear, resample
+        )
+        dest_h, dest_w = moved.shape[:2]
+        landing = self.clip((dest[0], dest[1], dest[0] + dest_w, dest[1] + dest_h))
+        box = (
+            (sx0, sy0, sx1, sy1)
+            if landing is None
+            else (
+                min(sx0, landing[0]),
+                min(sy0, landing[1]),
+                max(sx1, landing[2]),
+                max(sy1, landing[3]),
+            )
+        )
+        bx0, by0, bx1, by1 = box
+        before = layer.pixels[by0:by1, bx0:bx1].copy()
+        # ``region`` is a view, so this is the hole, cut in place -- and it
+        # happens after ``before`` is read, or the patch would record the state
+        # halfway through its own gesture.
+        region[..., 3] = region[..., 3] - lifted[..., 3]
+        if landing is not None:
+            lx0, ly0, lx1, ly1 = landing
+            crop = moved[
+                ly0 - dest[1] : ly1 - dest[1], lx0 - dest[0] : lx1 - dest[0]
+            ]
+            base = layer.pixels[ly0:ly1, lx0:lx1]
+            layer.pixels[ly0:ly1, lx0:lx1] = cp.to_uint8(
+                cp.over(cp.to_float(base), cp.to_float(crop))
+            )
+        return self._patch_edit_for(layer, box, before)
 
     def cancel_floating(self: Document) -> bool:
         """Put the pixels back where they were lifted from, exactly.

@@ -17,7 +17,7 @@ the pane walks dashes along them with its own clock.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
@@ -556,6 +556,52 @@ def _contiguous(
 # --- floating pixels --------------------------------------------------------
 
 
+def render_transform(
+    source: np.ndarray,
+    mask: np.ndarray,
+    angle: float,
+    scale: tuple[float, float],
+    shear: tuple[float, float],
+    resample: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    """One scale-then-shear-then-rotate render. Pure, and the only copy of it.
+
+    **Scale, then shear, then rotate**, and the order is part of the contract
+    because these do not commute -- shearing a turned rectangle and turning a
+    sheared one are different pictures, and the numbers in the panel have to
+    mean one of them. This order is the one that reads the way the fields are
+    written: the scale is a statement about the lifted pixels, the shear slants
+    that, and the rotation turns the whole result. It is also the order that
+    keeps each field independent, since a rotate applied first would make the
+    shear axes something other than the page's.
+
+    ``resample`` reaches the *mask* as well as the pixels, and that is not an
+    oversight to tidy up later: a nearest-neighbour rotation whose mask was
+    filtered would keep a one-pixel band of partial coverage all the way round,
+    so the hard edge the setting exists to preserve would survive in the
+    colours and be thrown away at the composite.
+
+    A module function rather than a method, because it has **two** callers that
+    must not drift: the buffer's own live render, and the per-cel replay a
+    ranged commit runs (``Document._replay_transform_on``). Two spellings of
+    this would mean a transform that previewed one way and landed another.
+    """
+    from . import transform as tf
+
+    height, width = source.shape[:2]
+    target = (max(1, round(width * scale[0])), max(1, round(height * scale[1])))
+    if target != (width, height):
+        source = tf.scale(source, target, resample=resample)
+        mask = tf.scale(mask, target, resample=resample)
+    if shear != (0.0, 0.0):
+        source = tf.shear(source, shear, resample=resample)
+        mask = tf.shear(mask, shear, resample=resample)
+    if abs(angle) > 1e-6:
+        source = tf.rotate(source, angle, expand=True, resample=resample)
+        mask = tf.rotate(mask, angle, expand=True, resample=resample)
+    return source, mask
+
+
 @dataclass
 class FloatingBuffer:
     """Pixels lifted off a layer and hovering over it.
@@ -597,6 +643,29 @@ class FloatingBuffer:
     #: and re-rendered from ``source`` with them rather than compounded -- a
     #: shear dragged back and forth is one shear, not a chain of them.
     shear: tuple[float, float] = (0.0, 0.0)
+
+    # --- what a *ranged* commit replays -------------------------------------
+    #
+    # A transform is a gesture, and until Wave 2 the buffer only had to hold
+    # its *result*. Committing it over a timeline range means running the same
+    # gesture against a cel whose pixels the buffer has never seen, so the
+    # three things below are what turn the result back into the recipe.
+
+    #: The canvas rectangle a lift cut from, or None for a paste. It is what
+    #: "the same gesture on another cel" needs and the only thing a paste
+    #: cannot supply -- there is no source to re-cut -- so it doubles as the
+    #: test for whether a ranged commit means anything at all.
+    source_box: tuple[int, int, int, int] | None = None
+    #: Flips, in the order they were asked for. A list rather than a pair of
+    #: booleans because a flip is applied to the *source* and the replay has to
+    #: run them before the affine, in sequence: flipping a turned rectangle and
+    #: turning a flipped one are different pictures.
+    flips: list[str] = field(default_factory=list)
+    #: The filter the last render used. Recorded because ``flip`` re-renders,
+    #: and re-rendering with the default silently threw a nearest-neighbour
+    #: setting away mid-gesture -- a pixel-art transform that had been exact
+    #: came back Lanczos-blurred the moment the user pressed the flip button.
+    resample: str = "smooth"
 
     @property
     def lifted(self) -> bool:
@@ -645,24 +714,12 @@ class FloatingBuffer:
         corner sends the subject off across the canvas, which is not what
         grabbing a rotate handle means.
 
-        **Scale, then shear, then rotate**, and the order is part of the
-        contract because these do not commute -- shearing a turned rectangle
-        and turning a sheared one are different pictures, and the numbers in
-        the panel have to mean one of them. This order is the one that reads
-        the way the fields are written: the scale is a statement about the
-        lifted pixels, the shear slants that, and the rotation turns the whole
-        result. It is also the order that keeps each field independent, since a
-        rotate applied first would make the shear axes something other than the
-        page's.
-
-        ``resample`` reaches the *mask* as well as the pixels, and that is not
-        an oversight to tidy up later: a nearest-neighbour rotation whose mask
-        was filtered would keep a one-pixel band of partial coverage all the way
-        round, so the hard edge the setting exists to preserve would survive in
-        the colours and be thrown away at the composite.
+        The render itself is :func:`render_transform`, which owns the order the
+        three are applied in and why. What stays here is the *state*: which
+        pixels to render from, where to put the result, and -- since Wave 2 --
+        what the recipe was, so a ranged commit can run it again on a cel this
+        buffer has never held.
         """
-        from . import transform as tf
-
         if self.source is None:
             self.source = self.pixels.copy()
             self.source_mask = self.mask.copy()
@@ -672,20 +729,12 @@ class FloatingBuffer:
             self.scale = (max(0.01, float(scale[0])), max(0.01, float(scale[1])))
         if shear is not None:
             self.shear = (float(shear[0]), float(shear[1]))
+        self.resample = resample
 
         cx, cy = self.centre
-        pixels, mask = self.source, self.source_mask
-        height, width = pixels.shape[:2]
-        target = (max(1, round(width * self.scale[0])), max(1, round(height * self.scale[1])))
-        if target != (width, height):
-            pixels = tf.scale(pixels, target, resample=resample)
-            mask = tf.scale(mask, target, resample=resample)
-        if self.shear != (0.0, 0.0):
-            pixels = tf.shear(pixels, self.shear, resample=resample)
-            mask = tf.shear(mask, self.shear, resample=resample)
-        if abs(self.angle) > 1e-6:
-            pixels = tf.rotate(pixels, self.angle, expand=True, resample=resample)
-            mask = tf.rotate(mask, self.angle, expand=True, resample=resample)
+        pixels, mask = render_transform(
+            self.source, self.source_mask, self.angle, self.scale, self.shear, resample
+        )
 
         self.pixels, self.mask = pixels, mask
         new_h, new_w = pixels.shape[:2]
@@ -696,7 +745,14 @@ class FloatingBuffer:
 
     def flip(self, axis: str) -> None:
         """Flip in place. Applied to the *source* as well, so a later rotate
-        does not undo it by re-rendering from the unflipped pixels."""
+        does not undo it by re-rendering from the unflipped pixels.
+
+        Recorded in ``flips`` in the order asked for, and re-rendered with the
+        buffer's own ``resample`` rather than the default: a flip in the middle
+        of a nearest-neighbour gesture used to re-render the whole thing
+        smooth, which turned a pixel-art transform into a blurred one at the
+        press of a button.
+        """
         from . import transform as tf
 
         if self.source is None:
@@ -704,7 +760,8 @@ class FloatingBuffer:
             self.source_mask = self.mask.copy()
         self.source = tf.flip(self.source, axis)
         self.source_mask = tf.flip(self.source_mask, axis)
-        self.transform()
+        self.flips.append(axis)
+        self.transform(resample=self.resample)
 
     def moved(self, dx: int, dy: int) -> None:
         self.offset = (self.offset[0] + int(dx), self.offset[1] + int(dy))
