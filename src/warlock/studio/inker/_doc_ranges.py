@@ -753,6 +753,28 @@ class RangeOps:
         fn = lambda plane: tf.rotate90(plane, quarters)  # noqa: E731
         return self._permute_range(self._range(t0, t1, f0, f1), fn, fn)
 
+    def shift_range(
+        self: Document, dx: int, dy: int, wrap: bool, t0: int, t1: int, f0: int, f1: int
+    ) -> bool:
+        """Shift every distinct cel of a rect by whole pixels, as one step.
+
+        ``wrap`` carries content round the far edge -- Aseprite's own
+        range-shift behaviour, and the only variant that is an exact
+        permutation, so an indexed cel keeps its duplicate slots. Without it
+        the vacated pixels are transparent, which for an index plane means the
+        *transparent index* and not slot zero: ``resize_canvas``'s precedent,
+        and the same trap.
+        """
+        if int(dx) == 0 and int(dy) == 0:
+            return False
+        return self._permute_range(
+            self._range(t0, t1, f0, f1),
+            lambda plane: tf.translate(plane, dx, dy, wrap=wrap),
+            lambda plane: tf.translate(
+                plane, dx, dy, wrap=wrap, fill=self.transparent_index
+            ),
+        )
+
     # -- filters ------------------------------------------------------------
 
     def filter_range(

@@ -316,6 +316,85 @@ def test_rotating_an_indexed_range_is_an_exact_index_permutation():
     doc.check_materialized()
 
 
+# --- shift ---------------------------------------------------------------------
+
+
+def test_a_wrapped_shift_of_a_full_cycle_pushes_nothing():
+    """The canvas is 4 wide, so shifting by 4 with wrap is the identity -- and
+    an op that changes nothing must not move the history head."""
+    doc = _clip(2)
+    assert not doc.shift_range(4, 0, True, 0, 0, 0, 1)
+    assert len(doc.history) == 0
+
+
+def test_a_shift_by_nothing_pushes_nothing():
+    doc = _clip(2)
+    assert not doc.shift_range(0, 0, True, 0, 0, 0, 1)
+    assert not doc.shift_range(0, 0, False, 0, 0, 0, 1)
+    assert len(doc.history) == 0
+
+
+def test_a_wrapped_shift_round_trips_exactly():
+    doc = _clip(2)
+    before = [_cel(doc, 0, i).pixels.copy() for i in range(2)]
+
+    assert doc.shift_range(1, 2, True, 0, 0, 0, 1)
+    assert not np.array_equal(_cel(doc, 0, 0).pixels, before[0])
+    assert doc.shift_range(-1, -2, True, 0, 0, 0, 1)
+    for index in range(2):
+        assert np.array_equal(_cel(doc, 0, index).pixels, before[index])
+    # Two gestures, two steps -- and the second is not a no-op, so it pushed.
+    assert len(doc.history) == 2
+
+
+def test_an_unwrapped_shift_vacates_with_transparent_pixels():
+    doc = _clip(1)
+    doc.add_frame()
+    doc.history.clear()
+    assert doc.shift_range(2, 0, False, 0, 0, 0, 0)
+    assert (_cel(doc, 0, 0).pixels[:, :2, 3] == 0).all()
+
+
+def test_shifting_an_indexed_range_vacates_with_the_transparent_index():
+    """Not slot 0. They are the same slot only by coincidence, and a document
+    whose transparent index is 7 would vacate into a band of slot-0 colour."""
+    doc = _indexed_clip(2)
+    assert doc.shift_range(1, 0, False, 0, 0, 0, 1)
+    assert (_cel(doc, 0, 0).indices[:, 0] == doc.transparent_index).all()
+    doc.check_materialized()
+
+
+def test_shifting_an_indexed_range_with_wrap_keeps_the_duplicate_slot():
+    doc = _indexed_clip(2)
+    before = _cel(doc, 0, 0).indices.copy()
+    assert doc.shift_range(1, 0, True, 0, 0, 0, 1)
+    assert np.array_equal(_cel(doc, 0, 0).indices, np.roll(before, 1, axis=1))
+    assert int(_cel(doc, 0, 0).indices.max()) == 3
+    doc.check_materialized()
+
+
+def test_shifting_a_linked_cel_touches_it_once():
+    doc = _clip(1)
+    doc.add_frame(link=True)
+    doc.add_frame(link=True)
+    doc.history.clear()
+    shared = _cel(doc, 0, 0)
+    once = np.roll(shared.pixels, 1, axis=1).copy()
+
+    assert doc.shift_range(1, 0, True, 0, 0, 0, 2)
+    assert np.array_equal(shared.pixels, once)
+    assert len(doc.history) == 1
+
+
+def test_an_unwrapped_shift_off_the_edge_is_still_one_undoable_step():
+    doc = _clip(2)
+    before = _cel(doc, 0, 0).pixels.copy()
+    assert doc.shift_range(99, 0, False, 0, 0, 0, 1)
+    assert _cel(doc, 0, 0).pixels.max() == 0
+    assert doc.history.undo(doc)
+    assert np.array_equal(_cel(doc, 0, 0).pixels, before)
+
+
 # --- duplicate ---------------------------------------------------------------
 
 
@@ -684,5 +763,6 @@ def test_a_still_document_refuses_every_range_op():
     assert not doc.set_range_duration(0, 0, 50)
     assert not doc.flip_range("horizontal", 0, 0, 0, 0)
     assert not doc.rotate_range(1, 0, 0, 0, 0)
+    assert not doc.shift_range(1, 0, True, 0, 0, 0, 0)
     assert doc.copy_cels(0, 0, 0, 0) is None
     assert len(doc.history) == 0
