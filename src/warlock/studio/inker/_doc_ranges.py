@@ -639,25 +639,37 @@ class RangeOps:
 
     # -- permutations --------------------------------------------------------
 
-    def _cels_in(self: Document, rect: tuple[int, int, int, int]) -> list[Any]:
-        """Every *distinct* cel of a rect, deduped by ``id()``, in slot order.
+    def _cels_in(
+        self: Document, rect: tuple[int, int, int, int]
+    ) -> list[tuple[Any, Any]]:
+        """Every *distinct* ``(track, cel)`` of a rect, deduped by ``id()``.
 
         The one piece of bookkeeping every cel-wise range op needs and the
         easiest thing here to get wrong: a background linked across ten frames
         is one object, and an op that walked the slots would flip it ten times
         -- which for a flip is not ten times the flip, it is the identity on an
-        even span and therefore an op that silently did nothing.
+        even span and therefore an op that silently did nothing. A cel is keyed
+        by ``(track, frame)``, so each distinct one belongs to exactly one
+        track and there is no ambiguity about which is returned beside it.
+
+        **The track comes back with it because the track is authoritative.**
+        Properties are copied down onto a cel only when its frame is
+        materialised, so a cel two frames along carries whatever the lock said
+        the last time the playhead was on it -- and a range op reading
+        ``cel.alpha_lock`` painted straight through "preserve transparency" on
+        every frame but the one on screen. ``layers_for`` states the rule; this
+        is the door it has to hold at.
         """
         anim = self.anim
         assert anim is not None
         seen: set[int] = set()
-        cels: list[Any] = []
+        cels: list[tuple[Any, Any]] = []
         for track, frame in self._slots_in(rect):
             cel = anim.cels.get((track.uid, frame.uid))
             if cel is None or id(cel) in seen:
                 continue
             seen.add(id(cel))
-            cels.append(cel)
+            cels.append((track, cel))
         return cels
 
     def _permute_range(
@@ -696,7 +708,7 @@ class RangeOps:
         width, height = self.size
         box = (0, 0, width, height)
         edits: list[Any] = []
-        for layer in targets:
+        for _track, layer in targets:
             if self.color_mode == "indexed" and layer.indices is not None:
                 before = layer.indices.copy()
                 after = index_fn(layer.indices)
@@ -775,6 +787,63 @@ class RangeOps:
             ),
         )
 
+    # -- fill -----------------------------------------------------------------
+
+    def fill_range(
+        self: Document,
+        colour: tuple[int, int, int, int],
+        t0: int,
+        t1: int,
+        f0: int,
+        f1: int,
+    ) -> bool:
+        """Flood every distinct cel of a rect with one colour, as one step.
+
+        ``filter_range``'s shape with a solid plane where the filter was, and
+        that is the point: the selection is a **weight** here too, so a
+        feathered edge fades the colour in rather than stopping it at a
+        rectangle. The permutations above cannot honour it and say so; this
+        can, because fading between what was there and one flat colour is
+        something a partial coverage can mean.
+
+        Like a filter and unlike a stroke, it never autovivifies: a fill over
+        an empty cel is a no-op, not a fresh cel full of colour.
+        """
+        rect = self._range(t0, t1, f0, f1)
+        if rect is None:
+            return False
+        self.commit_floating()
+        width, height = self.size
+        bounds = self.mask.bounds if self.mask is not None else None
+        box = self.clip(bounds or (0, 0, width, height))
+        if box is None:
+            return False
+        x0, y0, x1, y1 = box
+        weight = None if self.mask is None else self.mask.mask[y0:y1, x0:x1]
+        targets = self._cels_in(rect)
+        if not targets:
+            return False
+        # Minted once and never written into: ``masked_apply`` may hand this
+        # very array back when there is no weight and no lock, and the
+        # assignment below copies out of it.
+        solid = np.full((y1 - y0, x1 - x0, 4), colour, dtype=np.uint8)
+        edits: list[Any] = []
+        for track, layer in targets:
+            before = layer.pixels[y0:y1, x0:x1].copy()
+            layer.pixels[y0:y1, x0:x1] = masked_apply(
+                before, solid, weight, alpha_lock=track.alpha_lock
+            )
+            edit = self._patch_edit_for(layer, box, before)
+            if edit is None:
+                continue
+            self._stamp_layer(layer.uid)
+            edits.append(edit)
+        if not edits:
+            return False
+        pushed = self._push_range(edits)
+        self.invalidate_all()
+        return pushed
+
     # -- filters ------------------------------------------------------------
 
     def filter_range(
@@ -826,11 +895,11 @@ class RangeOps:
         if not targets:
             return False
         edits: list[Any] = []
-        for layer in targets:
+        for track, layer in targets:
             before = layer.pixels[y0:y1, x0:x1].copy()
             filtered = filters.apply_named(name, before, **params)
             layer.pixels[y0:y1, x0:x1] = masked_apply(
-                before, filtered, weight, alpha_lock=layer.alpha_lock
+                before, filtered, weight, alpha_lock=track.alpha_lock
             )
             # Through ``_patch_edit_for`` rather than straight into a
             # ``PatchEdit``, and that is the whole of what makes this op

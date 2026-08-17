@@ -151,6 +151,22 @@ def test_the_selection_is_honoured_as_a_weight_not_a_rectangle():
     assert not np.array_equal(after[2], full[2])
 
 
+def test_a_range_filter_reads_the_alpha_lock_off_the_track():
+    """The track is authoritative and its properties reach a cel only when
+    that cel's frame is materialised -- so a cel two frames along still says
+    whatever the lock said the last time the playhead was on it. Reading it
+    there painted straight through "preserve transparency" on every frame but
+    the one on screen."""
+    doc = _clip(3)
+    doc.set_current_frame(2)
+    doc.set_layer_props(0, alpha_lock=True)
+    before = [_cel(doc, 0, i).pixels[..., 3].copy() for i in range(3)]
+
+    assert doc.filter_range("brightness / contrast", BRIGHTER, 0, 0, 0, 2)
+    for index in range(3):
+        assert np.array_equal(_cel(doc, 0, index).pixels[..., 3], before[index])
+
+
 def test_a_range_filter_touches_only_the_tracks_it_covers():
     doc = _clip(2, tracks=2)
     untouched = _cel(doc, 1, 0).pixels.copy()

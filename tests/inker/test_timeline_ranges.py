@@ -395,6 +395,123 @@ def test_an_unwrapped_shift_off_the_edge_is_still_one_undoable_step():
     assert np.array_equal(_cel(doc, 0, 0).pixels, before)
 
 
+# --- fill -----------------------------------------------------------------------
+#
+# The other kind of range op: this one *does* honour the selection, because
+# fading between what was there and one flat colour is a thing a feathered edge
+# can mean. A permutation's cannot -- see the flip tests above.
+
+
+def test_filling_a_range_floods_every_cel_it_covers_as_one_step():
+    doc = _clip(3)
+    assert doc.fill_range(GREEN, 0, 0, 0, 1)
+    for index in range(2):
+        assert (_cel(doc, 0, index).pixels == np.array(GREEN, dtype=np.uint8)).all()
+    assert not (_cel(doc, 0, 2).pixels == np.array(GREEN, dtype=np.uint8)).all()
+    assert len(doc.history) == 1
+
+
+def test_filling_a_range_honours_the_selection_as_a_weight():
+    from warlock.studio.inker.selection import SelectionMask
+
+    doc = _clip(2)
+    mask = np.zeros((4, 4), dtype=np.uint8)
+    mask[0:2, :] = 255
+    mask[2, :] = 128  # a feathered row
+    doc.mask = SelectionMask(mask)
+    before = _cel(doc, 0, 0).pixels.copy()
+
+    assert doc.fill_range(GREEN, 0, 0, 0, 1)
+    after = _cel(doc, 0, 0).pixels
+    green = np.array(GREEN, dtype=np.uint8)
+    assert (after[0:2] == green).all()
+    assert np.array_equal(after[3], before[3])
+    assert not np.array_equal(after[2], before[2])
+    assert not (after[2] == green).all()
+
+
+def test_filling_a_range_respects_alpha_lock():
+    doc = _clip(2)
+    doc.set_layer_props(0, alpha_lock=True)
+    before = [_cel(doc, 0, i).pixels[..., 3].copy() for i in range(2)]
+
+    assert doc.fill_range(GREEN, 0, 0, 0, 1)
+    for index in range(2):
+        assert np.array_equal(_cel(doc, 0, index).pixels[..., 3], before[index])
+        assert (_cel(doc, 0, index).pixels[..., :3] == np.array(GREEN[:3])).all()
+
+
+def test_filling_a_range_never_autovivifies_an_empty_cel():
+    doc = _clip(2)
+    assert doc.clear_range(0, 0, 1, 1)
+    doc.history.clear()
+    assert doc.fill_range(GREEN, 0, 0, 0, 1)
+    assert _cel(doc, 0, 1) is None
+
+
+def test_filling_with_the_colour_already_there_pushes_nothing():
+    doc = _clip(2)
+    assert doc.fill_range(GREEN, 0, 0, 0, 1)
+    doc.history.clear()
+    assert not doc.fill_range(GREEN, 0, 0, 0, 1)
+    assert len(doc.history) == 0
+
+
+def test_filling_a_range_with_no_cels_at_all_pushes_nothing():
+    doc = _clip(2)
+    assert doc.clear_range(0, 0, 0, 1)
+    doc.history.clear()
+    assert not doc.fill_range(GREEN, 0, 0, 0, 1)
+    assert len(doc.history) == 0
+
+
+def test_filling_an_indexed_range_lands_on_the_painted_slot():
+    """Slots 1 and 3 are the same red. Which of them a fill lands on is what
+    ``paint_slot`` is for, and it has to reach a range fill as it reaches a
+    stroke -- otherwise filling with the colour the user picked silently moves
+    every pixel onto the lower slot."""
+    doc = _indexed_clip(2)
+    doc.paint_slot = 3
+    assert doc.fill_range(RED, 0, 0, 0, 1)
+    for index in range(2):
+        assert (_cel(doc, 0, index).indices == 3).all()
+    doc.check_materialized()
+
+
+def test_filling_a_grayscale_range_flattens_to_luma():
+    doc = _clip(2)
+    assert doc.convert_to_grayscale()
+    doc.history.clear()
+    assert doc.fill_range((200, 20, 20, 255), 0, 0, 0, 1)
+    for index in range(2):
+        cel = _cel(doc, 0, index)
+        assert np.array_equal(cel.pixels[..., 0], cel.pixels[..., 1])
+        assert np.array_equal(cel.pixels[..., 1], cel.pixels[..., 2])
+
+
+def test_filling_a_linked_cel_touches_it_once():
+    doc = _clip(1)
+    doc.add_frame(link=True)
+    doc.history.clear()
+    assert _cel(doc, 0, 0) is _cel(doc, 0, 1)
+    assert doc.fill_range(GREEN, 0, 0, 0, 1)
+    assert len(doc.history) == 1
+
+
+def test_filling_a_range_commits_a_float_before_it_reads_the_cels():
+    doc = _clip(2)
+    assert doc.clear_range(0, 0, 1, 1)
+    doc.set_current_frame(1)
+    _float_over(doc)
+    doc.history.clear()
+
+    assert doc.fill_range(BLUE, 0, 0, 0, 1)
+    assert doc.floating is None
+    landed = _cel(doc, 0, 1)
+    assert landed is not None
+    assert (landed.pixels == np.array(BLUE, dtype=np.uint8)).all()
+
+
 # --- duplicate ---------------------------------------------------------------
 
 
@@ -764,5 +881,6 @@ def test_a_still_document_refuses_every_range_op():
     assert not doc.flip_range("horizontal", 0, 0, 0, 0)
     assert not doc.rotate_range(1, 0, 0, 0, 0)
     assert not doc.shift_range(1, 0, True, 0, 0, 0, 0)
+    assert not doc.fill_range(RED, 0, 0, 0, 0)
     assert doc.copy_cels(0, 0, 0, 0) is None
     assert len(doc.history) == 0
