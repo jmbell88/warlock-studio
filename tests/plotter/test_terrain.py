@@ -283,3 +283,78 @@ def test_the_retile_cost_does_not_follow_the_map_size():
             blob.indices_from = real
         assert counted, "a paint retiles"
         assert max(counted) <= 5 * 5, f"{size}: read {max(counted)} cells for one painted cell"
+
+
+# -- phase variants ------------------------------------------------------------
+
+
+def _phase_ref(k: int = 2, count: int = 3) -> TilesetRef:
+    from warlock.studio.plotter import groundtex
+    from warlock.studio.plotter.tileset import Tileset
+
+    tw = th = 8
+
+    def _texture(seed: int) -> np.ndarray:
+        total = k * th * k * tw * 4
+        flat = (np.arange(total, dtype=np.int64) * 7 + seed * 101) % 251
+        return flat.astype(np.uint8).reshape(k * th, k * tw, 4)
+
+    fills = [_texture(i) for i in range(count)]
+    borders = [_texture(100 + i) for i in range(count)]
+    atlas = groundtex.compose_atlas(tw, th, "orthogonal", 2, fills, borders, k)
+    return TilesetRef(
+        firstgid=1,
+        tileset=Tileset(
+            name="ground",
+            pixels=atlas,
+            tile_w=tw,
+            tile_h=th,
+            terrains=terrain.DEFAULT_TERRAINS[:count],
+            phases=k,
+        ),
+    )
+
+
+def test_a_painted_field_carries_the_coordinate_phase():
+    """Phase is the cell's absolute map coordinates mod k -- what makes the map
+    show consecutive periods of one surface, with no RNG and repaint-stable."""
+    k = 2
+    ref = _phase_ref(k)
+    data = np.zeros((6, 6), dtype=gidlib.DTYPE)
+    _apply(data, terrain.paint_terrain_cells(
+        data, [(x, y) for y in range(6) for x in range(6)], 1, ref))
+    local = gidlib.tile_ids(data).astype(np.int64) - ref.firstgid
+    subs = (local // blob.TILE_COUNT) % (k * k)
+    for y in range(6):
+        for x in range(6):
+            assert int(subs[y, x]) == (y % k) * k + (x % k), (x, y)
+    # And the terrain reads back through the phase arithmetic.
+    assert (terrain.rank_field(data, ref) == 1).all()
+
+
+def test_repainting_a_phased_field_changes_nothing():
+    """Idempotence is what proves the phase comes from absolute coordinates:
+    a window-local phase would shift under the smaller repaint box."""
+    ref = _phase_ref(4)
+    data = np.zeros((8, 8), dtype=gidlib.DTYPE)
+    _apply(data, terrain.paint_terrain_cells(
+        data, [(x, y) for y in range(8) for x in range(8)], 0, ref))
+    assert terrain.paint_terrain_cells(
+        data, [(x, y) for y in range(2, 5) for x in range(3, 6)], 0, ref
+    ) is None
+
+
+def test_a_phased_junction_still_resolves_to_one_tile_each():
+    ref = _phase_ref(2)
+    data = np.zeros((7, 7), dtype=gidlib.DTYPE)
+    _apply(data, terrain.paint_terrain_cells(
+        data, [(x, y) for y in range(7) for x in range(7)], 0, ref))
+    _apply(data, terrain.paint_terrain_cells(
+        data, [(x, y) for y in range(2, 6) for x in range(2, 6)], 1, ref))
+    _apply(data, terrain.paint_terrain_cells(
+        data, [(x, y) for y in range(3, 5) for x in range(3, 5)], 2, ref))
+    ranks = terrain.rank_field(data, ref)
+    assert ranks[0, 0] == 0 and ranks[2, 2] == 1 and ranks[3, 3] == 2
+    cases = _cases(data, ref)
+    assert (cases[ranks == 0] == blob.FULL).all()
+    assert int(cases[2, 2]) == int(blob.BLOB_INDEX[blob.E | blob.S | blob.SE])

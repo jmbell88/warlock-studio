@@ -84,7 +84,9 @@ def rank_field(data: np.ndarray, ref: TilesetRef) -> np.ndarray:
     if not tileset.is_terrain_set:
         return ranks
     inside = (ids >= ref.firstgid) & (ids <= ref.last_gid)
-    rows = (ids.astype(np.int64) - ref.firstgid) // blob.TILE_COUNT
+    rows = (ids.astype(np.int64) - ref.firstgid) // (
+        blob.TILE_COUNT * tileset.phases * tileset.phases
+    )
     known = inside & (rows >= 0) & (rows < len(tileset.terrains))
     ranks[known] = rows[known].astype(np.int16)
     return ranks
@@ -164,13 +166,23 @@ def _retile_into(
     grown = work[gy0:gy1, gx0:gx1]
     ranks = rank_field(grown, ref)
     window = ranks[iy0:iy1, ix0:ix1]
+    # The phase is the cell's *absolute* map coordinates mod k, so a repaint of
+    # any window reproduces the same phases and a grown box equals the whole
+    # layer -- a phase derived from window-local coordinates would shift the
+    # pattern with the box.
+    k = tileset.phases
+    phase_grid = (np.arange(y0, y1, dtype=np.int64)[:, None] % k) * k + (
+        np.arange(x0, x1, dtype=np.int64)[None, :] % k
+    )
     for rank in range(len(tileset.terrains)):
         chosen = window == rank
         if not chosen.any():
             continue
         cases = blob.indices_from(ranks >= rank, outside=outside)[iy0:iy1, ix0:ix1]
-        base = ref.firstgid + rank * blob.TILE_COUNT
-        work[y0:y1, x0:x1][chosen] = (base + cases[chosen]).astype(gidlib.DTYPE)
+        base = ref.firstgid + rank * k * k * blob.TILE_COUNT
+        work[y0:y1, x0:x1][chosen] = (
+            base + phase_grid[chosen] * blob.TILE_COUNT + cases[chosen]
+        ).astype(gidlib.DTYPE)
 
 
 def _finish(

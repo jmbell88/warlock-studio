@@ -149,9 +149,11 @@ def band_coverage(
     return out
 
 
-def _material(pixels: np.ndarray, tile_w: int, tile_h: int, what: str) -> np.ndarray:
-    """One texture as ``(tile_h, tile_w, 4)`` uint8, or a refusal naming both
-    sizes.
+def _material(
+    pixels: np.ndarray, tile_w: int, tile_h: int, what: str, variants: int = 1
+) -> np.ndarray:
+    """One texture as ``(variants * tile_h, variants * tile_w, 4)`` uint8, or a
+    refusal naming both sizes.
 
     Refused rather than resized: the caller reduced this texture on purpose and
     to an exact period (see the module docstring), so a texture arriving at the
@@ -159,16 +161,17 @@ def _material(pixels: np.ndarray, tile_w: int, tile_h: int, what: str) -> np.nda
     tile-to-tile seam in a way that only shows up as a faint grid on a painted
     map.
     """
+    want_h, want_w = int(variants) * tile_h, int(variants) * tile_w
     array = np.asarray(pixels, dtype=np.uint8)
     if array.ndim != 3 or array.shape[2] not in (3, 4):
         raise ValueError(f"{what} must be RGB or RGBA, shaped (h, w, 3 or 4)")
-    if array.shape[0] != tile_h or array.shape[1] != tile_w:
+    if array.shape[0] != want_h or array.shape[1] != want_w:
         raise ValueError(
-            f"{what} is {array.shape[1]}x{array.shape[0]}, and this set's tile is "
-            f"{tile_w}x{tile_h}; reduce it to the tile size first"
+            f"{what} is {array.shape[1]}x{array.shape[0]}, and this set needs it at "
+            f"{want_w}x{want_h}; reduce it to that size first"
         )
     if array.shape[2] == 3:
-        opaque = np.full((tile_h, tile_w, 4), 255, dtype=np.uint8)
+        opaque = np.full((want_h, want_w, 4), 255, dtype=np.uint8)
         opaque[:, :, :3] = array
         return opaque
     return np.ascontiguousarray(array)
@@ -181,20 +184,36 @@ def compose_atlas(
     border: int,
     fills,
     borders,
+    variants: int = 1,
 ) -> np.ndarray:
-    """The whole atlas: one row per terrain, one column per blob case.
+    """The whole atlas: one column per blob case, ``variants ** 2`` sub-rows
+    per terrain.
 
-    ``fills`` and ``borders`` are one tile-sized texture each per terrain, in the
-    terrain order the set declares. Integer-only and RNG-free, so the same
-    textures give the same bytes -- the promise :mod:`.tilegen` makes, kept by a
-    module whose input happens to have come from a diffusion model.
+    ``fills`` and ``borders`` are one texture each per terrain at
+    ``variants * tile`` -- the period is ``variants`` tiles -- in the terrain
+    order the set declares. Each phase ``(px, py)`` is the tile-sized slice at
+    ``(px * tile_w, py * tile_h)`` of both materials, so a painted field whose
+    cells carry phase ``(x mod k, y mod k)`` shows consecutive periods of one
+    surface. Sub-rows are row-major by phase: local id
+    ``(terrain * k**2 + py * k + px) * TILE_COUNT + case``. Every phase gets
+    all forty-seven cases, fill *and* border -- a phase applied only to FULL
+    tiles would discontinue the pattern at every field boundary, which is a
+    new seam.
+
+    ``variants=1`` is byte-identical to what this function always produced.
+    Integer-only and RNG-free, so the same textures give the same bytes -- the
+    promise :mod:`.tilegen` makes, kept by a module whose input happens to have
+    come from a diffusion model.
     """
+    k = int(variants)
+    if k < 1:
+        raise ValueError("a ground set has at least one phase variant per axis")
     fill_list = [
-        _material(tex, tile_w, tile_h, f"terrain {i + 1}'s fill texture")
+        _material(tex, tile_w, tile_h, f"terrain {i + 1}'s fill texture", k)
         for i, tex in enumerate(fills)
     ]
     border_list = [
-        _material(tex, tile_w, tile_h, f"terrain {i + 1}'s border texture")
+        _material(tex, tile_w, tile_h, f"terrain {i + 1}'s border texture", k)
         for i, tex in enumerate(borders)
     ]
     if not fill_list:
@@ -206,28 +225,39 @@ def compose_atlas(
         )
 
     columns = blob.TILE_COUNT
-    out = np.zeros((len(fill_list) * tile_h, columns * tile_w, 4), dtype=np.uint8)
-    # The coverage of a case does not depend on the terrain, so it is computed
-    # once per case and painted once per terrain -- forty-seven rasterisations
-    # for any number of terrains rather than forty-seven times as many.
+    out = np.zeros((len(fill_list) * k * k * tile_h, columns * tile_w, 4), dtype=np.uint8)
+    # The coverage of a case does not depend on the terrain or the phase, so it
+    # is computed once per case and painted once per sub-row -- forty-seven
+    # rasterisations for any number of terrains rather than forty-seven times
+    # as many.
     coverage = [
         band_coverage(tile_w, tile_h, projection, case, border) for case in range(columns)
     ]
     for row, (fill_tex, border_tex) in enumerate(zip(fill_list, border_list, strict=True)):
-        y0 = row * tile_h
-        for column, codes in enumerate(coverage):
-            x0 = column * tile_w
-            tile = out[y0 : y0 + tile_h, x0 : x0 + tile_w]
-            tile[codes == FILL] = fill_tex[codes == FILL]
-            tile[codes == BORDER] = border_tex[codes == BORDER]
-            # VOID stays fully transparent: outside the diamond is not this
-            # cell. Everything else is forced fully *opaque*, which is a second
-            # statement and is stated because it is easy to miss: a generated
-            # material carrying partial alpha -- which ``_material`` accepts --
-            # is flattened to solid here. That is right for a ground tile (a
-            # half-transparent floor is a hole in the map) and it means the
-            # atlas is not a general compositor for arbitrary RGBA input.
-            tile[codes != VOID, 3] = 255
+        for py in range(k):
+            for px in range(k):
+                fill_phase = fill_tex[
+                    py * tile_h : (py + 1) * tile_h, px * tile_w : (px + 1) * tile_w
+                ]
+                border_phase = border_tex[
+                    py * tile_h : (py + 1) * tile_h, px * tile_w : (px + 1) * tile_w
+                ]
+                y0 = (row * k * k + py * k + px) * tile_h
+                for column, codes in enumerate(coverage):
+                    x0 = column * tile_w
+                    tile = out[y0 : y0 + tile_h, x0 : x0 + tile_w]
+                    tile[codes == FILL] = fill_phase[codes == FILL]
+                    tile[codes == BORDER] = border_phase[codes == BORDER]
+                    # VOID stays fully transparent: outside the diamond is not
+                    # this cell. Everything else is forced fully *opaque*,
+                    # which is a second statement and is stated because it is
+                    # easy to miss: a generated material carrying partial
+                    # alpha -- which ``_material`` accepts -- is flattened to
+                    # solid here. That is right for a ground tile (a
+                    # half-transparent floor is a hole in the map) and it
+                    # means the atlas is not a general compositor for
+                    # arbitrary RGBA input.
+                    tile[codes != VOID, 3] = 255
     return out
 
 
@@ -247,6 +277,9 @@ class GroundSpec:
     projection: str = project.ORTHOGONAL
     border: int = 0
     name: str = "Ground"
+    # Phase variants per axis. 1 is the classic one-tile period; 2 and 4 make
+    # the period k tiles, k**2 sub-rows per terrain in the atlas.
+    variants: int = 1
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "terrains", tuple(self.terrains))
@@ -276,7 +309,25 @@ class GroundSpec:
                 f"1..{(shorter - 1) // 2} pixels"
             )
         object.__setattr__(self, "border", chosen)
+        object.__setattr__(self, "variants", int(self.variants))
+        if self.variants not in (1, 2, 4):
+            raise ValueError("a ground set's phase count per axis is 1, 2 or 4")
+        # The period must fit inside one 1024px generation, or the reduction
+        # target would be larger than the source it reduces.
+        if self.variants * max(self.tile_w, self.tile_h) > 1024:
+            raise ValueError(
+                f"{self.variants} phases of a {self.tile_w}x{self.tile_h} tile "
+                "run past the 1024px generation"
+            )
 
     def atlas(self, fills, borders) -> np.ndarray:
         """:func:`compose_atlas` with this spec's numbers already filled in."""
-        return compose_atlas(self.tile_w, self.tile_h, self.projection, self.border, fills, borders)
+        return compose_atlas(
+            self.tile_w,
+            self.tile_h,
+            self.projection,
+            self.border,
+            fills,
+            borders,
+            self.variants,
+        )

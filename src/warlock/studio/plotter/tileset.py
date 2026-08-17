@@ -145,6 +145,10 @@ class Tileset:
     # Empty for an ordinary atlas. Non-empty makes this a *terrain set*: one row
     # per terrain, one column per blob case, so a tile's role is its position.
     terrains: tuple[TerrainSpec, ...] = ()
+    # Phase variants per axis for a terrain set: each terrain owns phases**2
+    # consecutive sub-rows, row-major by phase, and the painter places phase
+    # (x mod k, y mod k) at cell (x, y). 1 is the classic single-row set.
+    phases: int = 1
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "pixels", frozen_rgba(self.pixels))
@@ -177,16 +181,20 @@ class Tileset:
         # whose geometry does not match its declaration is a file or a form
         # somebody got wrong, and the useful moment to say so is now rather than
         # when a paint stroke indexes past the end of a row.
+        object.__setattr__(self, "phases", int(self.phases))
+        if self.phases not in (1, 2, 4):
+            raise ValueError("a terrain set's phase count per axis is 1, 2 or 4")
         if self.terrains:
             if self.columns != blob.TILE_COUNT:
                 raise ValueError(
                     f"a terrain set is {blob.TILE_COUNT} columns wide, one blob case "
                     f"per column; this one is {self.columns}"
                 )
-            if self.rows < len(self.terrains):
+            needed = len(self.terrains) * self.phases * self.phases
+            if self.rows < needed:
                 raise ValueError(
-                    f"{len(self.terrains)} terrains need {len(self.terrains)} rows, "
-                    f"and this image holds {self.rows}"
+                    f"{len(self.terrains)} terrains at {self.phases} phases need "
+                    f"{needed} rows, and this image holds {self.rows}"
                 )
 
     # -- geometry ------------------------------------------------------------
@@ -268,17 +276,25 @@ class Tileset:
         index = int(local_id)
         if index < 0 or index >= self.tile_count:
             return None
-        row = index // blob.TILE_COUNT
+        row = (index // blob.TILE_COUNT) // (self.phases * self.phases)
         return row if row < len(self.terrains) else None
 
-    def local_for(self, terrain: int, blob_index: int) -> int:
-        """The local id of one terrain's one blob case. The layout, in one line."""
-        row, column = int(terrain), int(blob_index)
+    def local_for(self, terrain: int, blob_index: int, phase: int = 0) -> int:
+        """The local id of one terrain's one blob case. The layout, in one line.
+
+        ``phase`` is ``py * phases + px``, the row-major index into the
+        terrain's ``phases**2`` sub-rows; 0 is the only phase of a classic set.
+        """
+        row, column, sub = int(terrain), int(blob_index), int(phase)
         if row < 0 or row >= len(self.terrains):
             raise IndexError(f"terrain {row} is outside this set (0..{len(self.terrains) - 1})")
         if column < 0 or column >= blob.TILE_COUNT:
             raise IndexError(f"blob case {column} is outside 0..{blob.TILE_COUNT - 1}")
-        return row * blob.TILE_COUNT + column
+        if sub < 0 or sub >= self.phases * self.phases:
+            raise IndexError(
+                f"phase {sub} is outside 0..{self.phases * self.phases - 1}"
+            )
+        return (row * self.phases * self.phases + sub) * blob.TILE_COUNT + column
 
     def uv(self, local_id: int) -> tuple[float, float, float, float]:
         """``(u0, v0, u1, v1)`` for one tile, for a draw-list quad.

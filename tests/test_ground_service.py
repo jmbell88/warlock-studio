@@ -264,3 +264,40 @@ def test_the_options_block_reports_the_same_ceilings():
     assert options["max_terrains"] == grounds.MAX_TERRAINS
     assert options["projections"] == list(grounds.PROJECTIONS)
     assert options["colors"] == list(grounds.COLOR_CHOICES)
+
+
+# -- phases and prompt defaults, at the door -----------------------------------
+
+
+def test_the_block_stores_the_phase_count(svc):
+    """One writer: the worker and the adoption read a stored fact rather than
+    each re-deriving the table."""
+    made = _create(svc, tile_w=32, tile_h=32)
+    assert svc.store.get(made["id"])["params"]["ground"]["phases"] == 4
+    made = _create(svc, tile_w=32, tile_h=32, projection="isometric")
+    assert svc.store.get(made["id"])["params"]["ground"]["phases"] == 1
+    made = _create(svc, tile_w=100, tile_h=100)
+    assert svc.store.get(made["id"])["params"]["ground"]["phases"] == 2
+
+
+def test_an_absent_negative_prompt_takes_the_pipelines_default(svc):
+    from warlock.pipelines import ground
+
+    made = _create(svc)
+    assert (
+        svc.store.get(made["id"])["params"]["negative_prompt"]
+        == ground.GROUND_NEGATIVE_PROMPT
+    )
+
+
+def test_an_explicit_empty_negative_prompt_is_honoured(svc):
+    """An empty string is a user asking for none; only ``None`` means 'the
+    form said nothing'."""
+    made = _create(svc, negative_prompt="")
+    assert svc.store.get(made["id"])["params"]["negative_prompt"] == ""
+
+
+def test_the_colors_default_is_sixty_four(svc):
+    made = _create(svc)
+    assert svc.store.get(made["id"])["params"]["colors"] == 64
+    assert grounds.ground_options()["defaults"]["colors"] == 64

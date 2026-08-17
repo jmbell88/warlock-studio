@@ -116,6 +116,43 @@ def test_the_result_is_a_tileset_the_terrain_brush_can_use(painted):
     assert tileset.terrain_of(tileset.local_for(1, blob.FULL)) == 1
 
 
+def test_the_reduction_keeps_the_texture_contrast(painted):
+    """The defect the two-stage sampler fixed: the old box mean flattened a
+    texture to ~0.55-0.78 of its art-resolution contrast, and the tiles read as
+    near-solid colours. Thresholds are the pre-registered rule from
+    ``docs/measurements/2026-08-17-ground-reduction.md``: per-channel std at
+    least half the same texture's 128px box-mean reference, floor 6.0
+    (observed minimum ratio 0.92, minimum std 15.8)."""
+
+    def contrast(texture: np.ndarray) -> float:
+        return float(
+            np.mean([texture[:, :, c].astype(np.float64).std() for c in range(3)])
+        )
+
+    for key, full in painted.items():
+        reference = ground._box_reduce(full, 128, 128)
+        small = ground.reduce_texture(full, TILE, TILE)
+        assert contrast(small) >= 0.5 * contrast(reference), key
+        assert contrast(small) >= 6.0, key
+
+
+def test_two_terrains_come_back_distinct(painted):
+    """Stone and water must not reduce to the same near-mean mush. Floors are
+    half the measured minimums (fill-vs-fill 32, fill-vs-border 18)."""
+
+    def diff(a: np.ndarray, b: np.ndarray) -> float:
+        return float(
+            np.abs(a[:, :, :3].astype(np.int64) - b[:, :, :3].astype(np.int64)).mean()
+        )
+
+    small = {
+        key: ground.reduce_texture(full, TILE, TILE) for key, full in painted.items()
+    }
+    assert diff(small[(0, ground.FILL)], small[(1, ground.FILL)]) >= 15.0
+    for index in range(2):
+        assert diff(small[(index, ground.FILL)], small[(index, ground.BORDER)]) >= 8.0
+
+
 def test_an_interior_tile_still_wraps_after_compositing(painted):
     """The map-level promise: two FULL tiles side by side are two consecutive
     periods of one surface, so the interior tile must carry the seam through."""

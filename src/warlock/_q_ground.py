@@ -149,6 +149,16 @@ class GroundOps:
                 "no fill would be left to tell the forty-seven cases apart"
             )
         border = stored_band or groundtex.default_border(tile_w, tile_h)
+        # Default 1, so a job stored before phases existed still runs; anything
+        # else the door computed, and a value outside the table is corruption.
+        phases = int(block.get("phases") or 1)
+        if phases not in (1, 2, 4):
+            raise ValueError("a ground set's phase count per axis is 1, 2 or 4")
+        if phases * max(tile_w, tile_h) > TEXTURE_PX:
+            raise ValueError(
+                f"{phases} phases of a {tile_w}x{tile_h} tile run past the "
+                f"{TEXTURE_PX}px generation"
+            )
         colors = int(params.get("colors", 32))
         seed = int(params.get("seed", 42))
         theme = job["prompt"] or ""
@@ -295,13 +305,25 @@ class GroundOps:
             job_id, phase="compose", label="Composing the tileset",
             inner=0.0, inner_next=1.0, nominal=3.0, detail="",
         )
+        # The period is ``phases`` tiles: reduced to k * tile and sliced into
+        # k**2 tile-sized phase variants by the compositor.
         for _name, role, image in full:
             small = await asyncio.to_thread(
-                ground.reduce_texture, np.asarray(image), tile_w, tile_h
+                ground.reduce_texture,
+                np.asarray(image),
+                tile_w * phases,
+                tile_h * phases,
             )
             (fills if role == ground.FILL else borders).append(small)
         atlas = await asyncio.to_thread(
-            groundtex.compose_atlas, tile_w, tile_h, projection, border, fills, borders
+            groundtex.compose_atlas,
+            tile_w,
+            tile_h,
+            projection,
+            border,
+            fills,
+            borders,
+            phases,
         )
 
         self.progress.update(
@@ -361,6 +383,7 @@ class GroundOps:
             projection=projection,
             border=border,
             colors=colors,
+            phases=phases,
             terrains=rows,
             palette=palette,
             recipe=recipe,
@@ -381,6 +404,7 @@ class GroundOps:
                     "textures": total,
                     "palette": len(palette),
                     "border": border,
+                    "phases": phases,
                     "tile_w": tile_w,
                     "tile_h": tile_h,
                     "recipe": recipe,

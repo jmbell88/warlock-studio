@@ -184,6 +184,73 @@ def test_an_rgb_texture_is_accepted_and_made_opaque():
     assert (atlas[:, :, 3] == 255).all()
 
 
+# -- phase variants -----------------------------------------------------------
+
+
+def test_variants_one_is_byte_identical_to_the_classic_atlas():
+    """The regression pin: k=1 must not move a single byte, or every stored
+    set recomposes differently."""
+    fills, borders = _pair(2, 16, 16)
+    classic = groundtex.compose_atlas(16, 16, ORTHO, 3, fills, borders)
+    explicit = groundtex.compose_atlas(16, 16, ORTHO, 3, fills, borders, 1)
+    assert classic.tobytes() == explicit.tobytes()
+
+
+def test_each_phase_is_its_own_slice_of_the_period():
+    """Phase (px, py)'s FULL tile is the texture's tile-sized slice at
+    (px * w, py * h) -- the whole reason a painted field reads as one larger
+    surface."""
+    k, tw, th = 2, 8, 8
+    fills = [_texture(1, k * tw, k * th)]
+    borders = [_texture(2, k * tw, k * th)]
+    atlas = groundtex.compose_atlas(tw, th, ORTHO, 2, fills, borders, k)
+    assert atlas.shape == (k * k * th, blob.TILE_COUNT * tw, 4)
+    x0 = blob.FULL * tw
+    for py in range(k):
+        for px in range(k):
+            y0 = (py * k + px) * th
+            tile = atlas[y0 : y0 + th, x0 : x0 + tw]
+            want = fills[0][py * th : (py + 1) * th, px * tw : (px + 1) * tw].copy()
+            want[:, :, 3] = 255
+            assert np.array_equal(tile, want), (px, py)
+
+
+def test_the_full_tiles_reassemble_the_whole_fill_texture():
+    """k x k FULL tiles laid out in phase order are the period, exactly."""
+    k, tw, th = 4, 4, 4
+    fills = [_texture(5, k * tw, k * th)]
+    borders = [_texture(6, k * tw, k * th)]
+    atlas = groundtex.compose_atlas(tw, th, ORTHO, 1, fills, borders, k)
+    x0 = blob.FULL * tw
+    rebuilt = np.zeros((k * th, k * tw, 4), dtype=np.uint8)
+    for py in range(k):
+        for px in range(k):
+            y0 = (py * k + px) * th
+            rebuilt[py * th : (py + 1) * th, px * tw : (px + 1) * tw] = atlas[
+                y0 : y0 + th, x0 : x0 + tw
+            ]
+    want = fills[0].copy()
+    want[:, :, 3] = 255
+    assert np.array_equal(rebuilt, want)
+
+
+def test_a_phase_texture_of_the_wrong_size_is_refused_naming_both_sizes():
+    fills = [np.zeros((8, 8, 4), dtype=np.uint8)]
+    borders = [np.zeros((16, 16, 4), dtype=np.uint8)]
+    with pytest.raises(ValueError) as excinfo:
+        groundtex.compose_atlas(8, 8, ORTHO, 2, fills, borders, 2)
+    message = str(excinfo.value)
+    assert "8x8" in message and "16x16" in message
+
+
+def test_a_spec_validates_the_phase_count_and_the_period():
+    with pytest.raises(ValueError):
+        groundtex.GroundSpec(tile_w=16, tile_h=16, variants=3)
+    with pytest.raises(ValueError):
+        groundtex.GroundSpec(tile_w=512, tile_h=512, variants=4)
+    assert groundtex.GroundSpec(tile_w=16, tile_h=16, variants=4).variants == 4
+
+
 # -- refusals ----------------------------------------------------------------
 
 

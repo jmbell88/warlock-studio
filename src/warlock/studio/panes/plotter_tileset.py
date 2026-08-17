@@ -302,7 +302,7 @@ def _generator(ctx: Any, state: Any, tab: Any) -> None:
             "for": stamp,
             "projection": doc.projection,
             "theme": "",
-            "colors": "32",
+            "colors": "64",
             "rows": [
                 {
                     "name": entry.name,
@@ -462,7 +462,7 @@ def _ai_ground(ctx: Any, tab: Any, form: dict, problem: str) -> None:
     )
     form["colors"] = widgets.labeled_combo(
         "Colours",
-        str(form.get("colors", "32")),
+        str(form.get("colors", "64")),
         [(str(count), f"{count} colours") for count in svc_grounds.COLOR_CHOICES],
     )
 
@@ -516,7 +516,7 @@ def _ai_ground(ctx: Any, tab: Any, form: dict, problem: str) -> None:
                 }
                 for row in form["rows"]
             ],
-            colors=int(form.get("colors", "32")),
+            colors=int(form.get("colors", "64")),
             border=0,
         )
 

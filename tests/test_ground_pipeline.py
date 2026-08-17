@@ -87,6 +87,14 @@ def test_an_empty_theme_leaves_no_dangling_separator():
         assert ", ," not in text
 
 
+def test_both_subjects_end_with_the_detail_clause():
+    """Last comma part, deliberately: the material leads (CLIP weighs early
+    tokens hardest) and the clause is the same on every subject."""
+    fill, border = ground.texture_prompts("dungeon", "stone", "flagstone", "", (128,) * 3)
+    assert fill.endswith(ground.DETAIL_CLAUSE)
+    assert border.endswith(ground.DETAIL_CLAUSE)
+
+
 def test_the_prompts_are_a_function_of_their_arguments():
     args = ("dungeon", "stone", "flagstone", "", (128, 128, 128))
     assert ground.texture_prompts(*args) == ground.texture_prompts(*args)
@@ -156,12 +164,32 @@ def test_an_odd_target_still_partitions_the_source():
     assert (out == 200).all()
 
 
-def test_an_exact_divisor_is_a_plain_box_average():
+def test_an_exact_small_divisor_is_a_pure_centre_sample():
+    """8x8 -> 4x4 is m=2: the prefilter stage is the identity, so the result is
+    the centre sample of each 2x2 block."""
     source = _noise(8, 8)
     out = ground.reduce_texture(source, 4, 4)
-    expected = source.astype(np.int64).reshape(4, 2, 4, 2, 4).sum(axis=(1, 3))
-    expected = ((expected + 2) // 4).astype(np.uint8)
-    assert np.array_equal(out, expected)
+    assert np.array_equal(out, source[1::2, 1::2])
+
+
+def test_the_prefilter_stage_is_capped_at_four():
+    """1024 -> 32 must prefilter to 128 -- one mid pixel per LoRA art pixel --
+    then sample; an uncapped m would sample the raw source and keep noise."""
+    source = _noise(64, 64)
+    mid = ground._box_reduce(source, 16, 16)
+    assert np.array_equal(ground.reduce_texture(source, 4, 4), mid[2::4, 2::4])
+
+
+def test_block_structured_art_survives_the_reduction():
+    """The defect this change exists to fix: an extreme 8x8 art grid blown up
+    4x reduces back to *members of its own value set*, where the old box mean
+    averaged neighbouring art pixels into colours the art never contained."""
+    rng = np.random.default_rng(3)
+    art = rng.choice(np.array([0, 255], dtype=np.uint8), size=(8, 8, 4))
+    source = np.kron(art, np.ones((4, 4, 1), dtype=np.uint8))
+    out = ground.reduce_texture(source, 8, 8)
+    assert set(np.unique(out).tolist()) <= {0, 255}
+    assert np.array_equal(out, art)
 
 
 def test_reducing_to_the_same_size_changes_nothing():
@@ -188,6 +216,35 @@ def test_a_flat_array_is_refused():
         ground.reduce_texture(np.zeros((8, 8), dtype=np.uint8), 4, 4)
 
 
+# -- the phase factor ---------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "tile_w,tile_h,projection,expected",
+    [
+        (16, 16, "orthogonal", 4),
+        (32, 32, "orthogonal", 4),
+        (64, 64, "orthogonal", 4),
+        (65, 65, "orthogonal", 2),
+        (128, 128, "orthogonal", 2),
+        (129, 32, "orthogonal", 1),
+        (512, 512, "orthogonal", 1),
+        (32, 32, "isometric", 1),
+        (32, 32, "oblique", 4),
+    ],
+)
+def test_the_variant_factor_table(tile_w, tile_h, projection, expected):
+    """Pinned, because the stored ``ground`` block carries the answer and a
+    moved table would repaint old sets differently on rerun."""
+    assert ground.variant_factor(tile_w, tile_h, projection) == expected
+
+
+def test_the_variant_period_always_fits_the_generation():
+    for edge in range(4, 513):
+        k = ground.variant_factor(edge, edge, "orthogonal")
+        assert k * edge <= 1024
+
+
 # -- the sidecar -------------------------------------------------------------
 
 
@@ -199,12 +256,14 @@ def test_the_sidecar_records_the_version_and_the_recipe():
         projection="orthogonal",
         border=4,
         colors=32,
+        phases=4,
         terrains=[{"name": "stone", "material": "flagstone"}],
         palette=["#000000"],
         recipe={"base_model": "sdxl_cfg", "seed": 42},
         created=1.5,
     )
     assert doc["version"] == ground.GROUND_VERSION
+    assert doc["phases"] == 4
     assert doc["image"] == "input.png"
     assert doc["recipe"]["base_model"] == "sdxl_cfg"
     assert doc["terrains"][0]["name"] == "stone"
@@ -221,6 +280,7 @@ def test_the_sidecar_copies_its_inputs():
         projection="orthogonal",
         border=2,
         colors=16,
+        phases=1,
         terrains=terrains,
         palette=[],
         recipe={},

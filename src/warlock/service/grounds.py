@@ -77,7 +77,9 @@ def ground_options() -> dict[str, Any]:
         "colors": list(COLOR_CHOICES),
         "base_model": GROUND_BASE_MODEL,
         "rows": list(GROUND_ROWS),
-        "defaults": {"colors": 32, "border": 0},
+        # 64, not 32: the measured occupancy at 32 was saturated for even a
+        # two-terrain set (docs/measurements/2026-08-17-ground-reduction.md).
+        "defaults": {"colors": 64, "border": 0},
     }
 
 
@@ -147,7 +149,7 @@ def create_ground_set(
     tile_h: int,
     projection: str = "orthogonal",
     seed: int | None = None,
-    colors: int = 32,
+    colors: int = 64,
     border: int | None = None,
     negative_prompt: str | None = None,
 ) -> dict[str, Any]:
@@ -166,7 +168,17 @@ def create_ground_set(
         raise Invalid("a ground set needs a theme", field="theme")
     if len(text) > MAX_PROMPT:
         raise Invalid(f"theme must be at most {MAX_PROMPT} characters", field="theme")
-    negative = str(negative_prompt or "")
+    # ``None`` means "the form said nothing", and what the absent value means
+    # is the pipeline's own default -- an empty *string* is a user explicitly
+    # asking for no negative prompt, and is honoured. Function-local import in
+    # the allowed direction (service -> pipelines), ``sheets.py``'s precedent.
+    from ..pipelines import ground
+
+    negative = (
+        ground.GROUND_NEGATIVE_PROMPT
+        if negative_prompt is None
+        else str(negative_prompt)
+    )
     if len(negative) > MAX_PROMPT:
         raise Invalid(
             f"negative_prompt must be at most {MAX_PROMPT} characters",
@@ -266,6 +278,11 @@ def create_ground_set(
             "tile_h": height,
             "projection": str(projection),
             "border": band,
+            # Computed here, the block's single writer, so the worker and the
+            # adoption step read one stored fact rather than each re-deriving
+            # the table. (This "version" is the params schema the adoption
+            # reads, not ``ground.GROUND_VERSION`` -- the sidecar's number.)
+            "phases": ground.variant_factor(width, height, str(projection)),
             "terrains": rows,
         },
     }

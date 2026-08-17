@@ -248,3 +248,63 @@ def test_tiled_unsupported_is_a_value_error():
     clause."""
     assert issubclass(tsx.TiledUnsupported, ValueError)
     assert tsx.TiledUnsupported("hex maps").feature == "hex maps"
+
+
+# --- phase variants -------------------------------------------------------------
+
+
+def _terrain_tileset(k: int, terrains: int = 2) -> Tileset:
+    from warlock.studio.plotter import blob
+    from warlock.studio.plotter.tileset import TerrainSpec
+
+    tile = 8
+    specs = tuple(
+        TerrainSpec(f"T{i}", (10 * i, 200, 0, 255), (0, 90, 0, 255))
+        for i in range(terrains)
+    )
+    return Tileset(
+        name="ground",
+        pixels=_pixels(blob.TILE_COUNT * tile, terrains * k * k * tile),
+        tile_w=tile,
+        tile_h=tile,
+        terrains=specs,
+        phases=k,
+    )
+
+
+@pytest.mark.parametrize("k", [1, 4])
+def test_a_phased_terrain_set_round_trips(k):
+    """Recognise-or-refuse symmetry at both phase counts: every file this
+    writes, this reads, with the phase count intact."""
+    source = _terrain_tileset(k)
+    data = tsx.tsx_bytes(source, image_name="ground.png")
+    back = tsx.read_tsx(data, np.asarray(source.pixels))
+    assert back.phases == k
+    assert len(back.terrains) == 2
+    assert [entry.name for entry in back.terrains] == ["T0", "T1"]
+    # The property is the field's spelling, not a second stored fact.
+    assert "phases" not in back.properties
+
+
+def test_the_phases_property_is_written_only_when_it_says_something():
+    data = tsx.tsx_bytes(_terrain_tileset(1), image_name="g.png")
+    assert b'"phases"' not in data and b"phases" not in data
+    data4 = tsx.tsx_bytes(_terrain_tileset(4), image_name="g.png")
+    assert b'name="phases"' in data4
+
+
+def test_a_wangset_whose_count_disagrees_with_its_phases_is_refused():
+    """A phases property over a classic-count wangset is a foreign file."""
+    data = tsx.tsx_bytes(_terrain_tileset(2), image_name="g.png")
+    text = data.decode()
+    hacked = text.replace('value="2"', 'value="4"').encode()
+    with pytest.raises(tsx.TiledUnsupported):
+        tsx.read_tsx(hacked, _pixels())
+
+
+def test_a_phases_property_on_an_ordinary_tileset_is_just_a_property():
+    source = _tileset(properties={"phases": tsx.Prop("int", 3)})
+    data = tsx.tsx_bytes(source, image_name="t.png")
+    back = tsx.read_tsx(data, _pixels())
+    assert back.phases == 1
+    assert back.properties == {"phases": tsx.Prop("int", 3)}

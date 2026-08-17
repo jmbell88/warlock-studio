@@ -10,12 +10,14 @@ them, no torch, no service, no decision about where a file goes.
 
 **The period is the tile.** A generated texture is seamless on a torus of its
 own 1024px period; :func:`reduce_texture` brings it to exactly ``tile_w`` by
-``tile_h`` by averaging a *partition* of that torus, which leaves it seamless on
-the smaller one. That is the entire trick behind the map continuing a pattern
-across cells: a tile samples its material at tile-local coordinates, so two
-interior tiles side by side are two consecutive periods of one surface. Any
-resampling that did not partition -- a bilinear resize, a crop -- would put a
-faint grid on every painted field, and no amount of prompt work would fix it.
+``tile_h`` in two stages, both of which *partition* that torus -- a box mean
+down to the art resolution, then a centre sample of each remaining group --
+which leaves it seamless on the smaller one. That is the entire trick behind
+the map continuing a pattern across cells: a tile samples its material at
+tile-local coordinates, so two interior tiles side by side are two consecutive
+periods of one surface. Any resampling that did not partition -- a bilinear
+resize, a crop -- would put a faint grid on every painted field, and no amount
+of prompt work would fix it.
 """
 
 from __future__ import annotations
@@ -26,7 +28,12 @@ from typing import Any
 #: Bumped when anything below changes what a given form produces: the prompts,
 #: the seed derivation, or the reduction. Recorded in the sidecar so a set can
 #: say which compiler drew it, the way ``PIXEL_SHEET_VERSION`` does.
-GROUND_VERSION = 1
+#:
+#: 2 (2026-08-17): the reduction became the two-stage partition sampler, the
+#: subjects grew :data:`DETAIL_CLAUSE`, an absent negative prompt defaults to
+#: :data:`GROUND_NEGATIVE_PROMPT` at the service door, and the atlas may carry
+#: phase variants. Measured in ``docs/measurements/2026-08-17-ground-reduction.md``.
+GROUND_VERSION = 2
 
 #: A fill material and a border material. The whole reason a generated set reads
 #: as art rather than as a flat fill with a line around it.
@@ -42,6 +49,25 @@ ROLES: tuple[str, str] = (FILL, BORDER)
 #: may not import the service layer. ``tests/test_ground_pipeline.py`` pins the
 #: two together, so the copy cannot drift.
 MAX_SEED = 2**31 - 1
+
+#: Appended to every texture subject. The pixel-art LoRA draws ~8px "art
+#: pixels" at 1024, so a tile keeps at most ~128px of true detail -- and a
+#: material whose elements are smaller than that reduces to near-noise. Asking
+#: for oversized, high-contrast elements is what survives the reduction.
+DETAIL_CLAUSE = (
+    "chunky oversized texture details, strong colour contrast, "
+    "large distinct repeating elements"
+)
+
+#: What the service door uses when the form left the negative prompt empty.
+#: ``sdxl_cfg`` runs at CFG 7.0, where a negative prompt actually steers; an
+#: empty one was leaving the anti-pixel-art failure modes (photo gradients, a
+#: single centred object, a vignette frame) unpenalised.
+GROUND_NEGATIVE_PROMPT = (
+    "blurry, smooth gradients, photorealistic, photo, 3d render, "
+    "film grain, soft focus, depth of field, single centered object, "
+    "text, watermark, signature, vignette, picture frame"
+)
 
 #: The palette hint, as words. A terrain row already carries an RGBA fill that
 #: the user picked, and the nearest name in this table is how that colour reaches
@@ -121,13 +147,26 @@ def texture_prompts(
     The colour hint goes in both, because the two materials have to read as the
     same terrain -- a grey rim around a green field is a different terrain, not
     a border.
+
+    :data:`DETAIL_CLAUSE` is appended here, deliberately not in
+    ``prompt.TILE_TEMPLATE``: the template serves other job kinds and a change
+    to it bumps ``PROMPT_VERSION``, whereas these subjects are this module's
+    own and sit under :data:`GROUND_VERSION`.
     """
     hint = colour_hint(rgb)
     fill_material = str(material).strip() or str(name).strip() or "ground"
     border_material = str(edge).strip() or default_edge(fill_material)
     theme_text = str(theme).strip()
-    fill = ", ".join(part for part in (fill_material, f"{hint} palette", theme_text) if part)
-    border = ", ".join(part for part in (border_material, f"{hint} palette", theme_text) if part)
+    fill = ", ".join(
+        part
+        for part in (fill_material, f"{hint} palette", theme_text, DETAIL_CLAUSE)
+        if part
+    )
+    border = ", ".join(
+        part
+        for part in (border_material, f"{hint} palette", theme_text, DETAIL_CLAUSE)
+        if part
+    )
     return (fill, border)
 
 
@@ -153,6 +192,44 @@ def texture_seed(base_seed: int, index: int, role: str) -> int:
 def reduce_texture(pixels: Any, out_w: int, out_h: int) -> Any:
     """A generated texture at exactly the tile size, still seamless.
 
+    Two stages, both partitions of the source torus, so the whole reduction
+    still commutes with tiling: a box mean down to ``out * m`` (a light
+    prefilter to the art resolution -- at 1024 -> 32 the cap of 4 lands on
+    128px, one mid pixel per pixel-art-LoRA "art pixel"), then the centre
+    sample of each remaining ``m x m`` group. A pure box mean all the way down
+    averaged ~4x4 uncorrelated art pixels into every output pixel and
+    regressed each material to its mean colour; a pure centre sample keeps
+    single-pixel noise. Measured in
+    ``docs/measurements/2026-08-17-ground-reduction.md``.
+
+    Identity when the target equals the source, and ``m`` degrades to 1 for
+    tiles near the source size, where the stages collapse back to the plain
+    box mean. Integer-only throughout, so the answer does not depend on a
+    float rounding mode -- ``groundtex`` promises byte determinism and this is
+    the last place a float could get into the atlas.
+    """
+    import numpy as np
+
+    array = np.asarray(pixels, dtype=np.uint8)
+    if array.ndim != 3:
+        raise ValueError("a texture is (h, w, channels)")
+    height, width = int(array.shape[0]), int(array.shape[1])
+    out_w, out_h = int(out_w), int(out_h)
+    if out_w < 1 or out_h < 1:
+        raise ValueError("a reduced texture is at least one pixel across")
+    if out_w > width or out_h > height:
+        raise ValueError(
+            f"this texture is {width}x{height} and cannot be reduced to "
+            f"{out_w}x{out_h}; generate it larger"
+        )
+    m = max(1, min(4, height // out_h, width // out_w))
+    mid = _box_reduce(array, out_w * m, out_h * m)
+    return np.ascontiguousarray(mid[m // 2 :: m, m // 2 :: m])
+
+
+def _box_reduce(pixels: Any, out_w: int, out_h: int) -> Any:
+    """The integer box mean over an exact partition of the source.
+
     Every output pixel is the integer mean of one *block* of input pixels, and
     the blocks partition the source exactly -- so the reduction commutes with
     tiling the source, which is what preserves the torus. Blocks are allowed to
@@ -161,8 +238,7 @@ def reduce_texture(pixels: Any, out_w: int, out_h: int) -> Any:
     invisible because the neighbouring blocks are still adjacent.
 
     Integer accumulation in ``int64`` with round-half-up, so the answer does not
-    depend on a float rounding mode -- ``groundtex`` promises byte determinism
-    and this is the last place a float could get into the atlas.
+    depend on a float rounding mode.
     """
     import numpy as np
 
@@ -196,6 +272,31 @@ def reduce_texture(pixels: Any, out_w: int, out_h: int) -> Any:
     return ((summed + counts // 2) // counts).astype(np.uint8)
 
 
+def variant_factor(tile_w: int, tile_h: int, projection: str) -> int:
+    """How many tiles long the texture period is, per axis.
+
+    The period becomes ``k`` tiles: the texture is reduced to ``k * tile`` and
+    sliced into ``k**2`` tile-sized phases, and the painter places phase
+    ``(x mod k, y mod k)`` at cell ``(x, y)`` -- so a painted field shows
+    consecutive periods of one larger surface, seamless by construction, with
+    no RNG and stable under repaint.
+
+    The table: ``k * tile`` must stay within the 1024px generation, and
+    ``1024 / (4 * 32) = 8`` is the pixel-art LoRA's own art-pixel pitch, so at
+    the house 32px tile the k=4 period *is* the art resolution. Isometric is 1
+    -- today's behaviour bit-identical; a half-tile phase lattice for the
+    diamond is an explicit follow-up, not an oversight.
+    """
+    if str(projection) == "isometric":
+        return 1
+    longest = max(int(tile_w), int(tile_h))
+    if longest <= 64:
+        return 4
+    if longest <= 128:
+        return 2
+    return 1
+
+
 def ground_sidecar(
     *,
     theme: str,
@@ -204,6 +305,7 @@ def ground_sidecar(
     projection: str,
     border: int,
     colors: int,
+    phases: int,
     terrains: Sequence[Mapping[str, Any]],
     palette: Sequence[str],
     recipe: Mapping[str, Any],
@@ -226,6 +328,7 @@ def ground_sidecar(
         "projection": str(projection),
         "border": int(border),
         "colors": int(colors),
+        "phases": int(phases),
         "terrains": [dict(entry) for entry in terrains],
         "palette": list(palette),
         "recipe": dict(recipe),

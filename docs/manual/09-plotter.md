@@ -104,6 +104,13 @@ size and then reduced to your tile size, which is what lets a painted field carr
 one cell into the next instead of repeating a single stamped tile. The rim is drawn along every
 exposed edge with real thickness, so water against stone reads as a bank rather than as a line.
 
+On an orthogonal map with tiles up to 128 pixels, the set also carries **phase variants**: the
+pattern's period spans several tiles, and each cell shows the slice belonging to its own map
+position — so a painted field reads as one larger surface rather than the same tile stamped over
+and over. There is nothing to configure and nothing random about it: repainting a cell always
+produces the same picture, and the seams still line up by construction. Isometric sets keep the
+classic one-tile period.
+
 It is queued like any other job and takes a few minutes — two generations per terrain, one after
 another. The map stays editable while it paints, and the set arrives as one undo step with the
 terrain brush already pointed at it. Cancel from the progress row and nothing is published.

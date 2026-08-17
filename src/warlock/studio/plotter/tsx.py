@@ -66,6 +66,7 @@ __all__ = [
     "Prop",
     "TiledUnsupported",
     "check_tileset_features",
+    "phases_from_properties",
     "read_properties",
     "read_tsx",
     "read_wangsets",
@@ -121,7 +122,9 @@ def check_tileset_features(root: ET.Element) -> None:
     embedded and external paths come to accept different files.
     """
     node = root.find("wangsets")
-    if node is not None and read_wangsets(node) is None:
+    if node is not None and read_wangsets(
+        node, phases_from_properties(read_properties(root))[0]
+    ) is None:
         raise TiledUnsupported(
             "Wang sets / terrain brushes",
             f"Plotter models one blob set: {blob.TILE_COUNT} tiles per terrain colour, "
@@ -264,20 +267,47 @@ def _hex_rgba(value: str) -> tuple[int, int, int, int]:
         return (0, 0, 0, 255)
 
 
-def _expected_wangids(colours: int) -> dict[int, str]:
+def _expected_wangids(colours: int, phases: int = 1) -> dict[int, str]:
     """``{tile id: wangid}`` for the one set this editor models.
 
     Extracted so the XML and JSON readers ask the *same* question: what is
     recognised is precisely what :func:`write_wangsets` emits, and two copies of
     that table is how one spelling comes to adopt a set the other refuses.
+
+    Every one of a terrain's ``phases**2`` sub-rows carries the same wangid per
+    case -- Tiled treats equal wangids as random alternatives, so its terrain
+    brush keeps working on an exported phase set.
     """
     want: dict[int, str] = {}
     for index in range(colours):
-        for case, mask in enumerate(blob.BLOB_MASKS):
-            want[index * blob.TILE_COUNT + case] = ",".join(
-                str(index + 1 if mask & bit else 0) for bit in _WANG_BITS
-            )
+        wangids = [
+            ",".join(str(index + 1 if mask & bit else 0) for bit in _WANG_BITS)
+            for mask in blob.BLOB_MASKS
+        ]
+        for sub in range(phases * phases):
+            base = (index * phases * phases + sub) * blob.TILE_COUNT
+            for case, wangid in enumerate(wangids):
+                want[base + case] = wangid
     return want
+
+
+def phases_from_properties(props: dict[str, Prop]) -> tuple[int, dict[str, Prop]]:
+    """The declared phase count, popped out of a properties mapping.
+
+    ``(phases, the mapping without the key)``. Absent means 1 -- every file
+    written before phases existed. Malformed comes back as 0, which no reader
+    recognises, so the tileset is refused rather than half-read. Popped rather
+    than left in place, because the writer re-derives the property from the
+    ``phases`` field on every export -- carrying both would double the key.
+    """
+    prop = props.get("phases")
+    if prop is None:
+        return 1, props
+    rest = {key: value for key, value in props.items() if key != "phases"}
+    try:
+        return int(prop.value), rest
+    except (TypeError, ValueError):
+        return 0, rest
 
 
 def _terrains_from_colours(colours: list[tuple[str, str]]) -> tuple[TerrainSpec, ...]:
@@ -298,7 +328,7 @@ def _terrains_from_colours(colours: list[tuple[str, str]]) -> tuple[TerrainSpec,
     return tuple(out)
 
 
-def read_wangsets_json(entries: Any) -> tuple[TerrainSpec, ...] | None:
+def read_wangsets_json(entries: Any, phases: int = 1) -> tuple[TerrainSpec, ...] | None:
     """:func:`read_wangsets` over Tiled's JSON spelling of the same block.
 
     Same contract, same table, same ``None``-rather-than-exception rule -- one
@@ -317,11 +347,14 @@ def read_wangsets_json(entries: Any) -> tuple[TerrainSpec, ...] | None:
         return None
     if not all(isinstance(colour, dict) for colour in colours):
         return None
+    if phases not in (1, 2, 4):
+        return None
     tiles = wangset.get("wangtiles")
-    if not isinstance(tiles, list) or len(tiles) != len(colours) * blob.TILE_COUNT:
+    expected = len(colours) * phases * phases * blob.TILE_COUNT
+    if not isinstance(tiles, list) or len(tiles) != expected:
         return None
 
-    want = _expected_wangids(len(colours))
+    want = _expected_wangids(len(colours), phases)
     for tile in tiles:
         if not isinstance(tile, dict) or not isinstance(tile.get("wangid"), list):
             return None
@@ -338,7 +371,7 @@ def read_wangsets_json(entries: Any) -> tuple[TerrainSpec, ...] | None:
     )
 
 
-def read_wangsets(node: ET.Element) -> tuple[TerrainSpec, ...] | None:
+def read_wangsets(node: ET.Element, phases: int = 1) -> tuple[TerrainSpec, ...] | None:
     """A ``<wangsets>`` block as this editor's terrains, or ``None``.
 
     ``None`` rather than an exception, so the caller owns the refusal sentence
@@ -366,11 +399,13 @@ def read_wangsets(node: ET.Element) -> tuple[TerrainSpec, ...] | None:
     colours = wangset.findall("wangcolor")
     if not colours:
         return None
+    if phases not in (1, 2, 4):
+        return None
     tiles = wangset.findall("wangtile")
-    if len(tiles) != len(colours) * blob.TILE_COUNT:
+    if len(tiles) != len(colours) * phases * phases * blob.TILE_COUNT:
         return None
 
-    want = _expected_wangids(len(colours))
+    want = _expected_wangids(len(colours), phases)
     for tile in tiles:
         try:
             tileid = int(tile.get("tileid", ""))
@@ -384,12 +419,19 @@ def read_wangsets(node: ET.Element) -> tuple[TerrainSpec, ...] | None:
     )
 
 
-def write_wangsets(parent: ET.Element, terrains: tuple[TerrainSpec, ...]) -> None:
+def write_wangsets(
+    parent: ET.Element, terrains: tuple[TerrainSpec, ...], phases: int = 1
+) -> None:
     """Describe a terrain set as a Tiled Wang set.
 
     Derived from ``terrains`` on every write rather than stored, so it cannot
     drift from the atlas it describes -- and a generated set opened in Tiled
     arrives with a working terrain brush rather than as 235 anonymous tiles.
+
+    A phase set writes every sub-row's tiles with the *same* wangid per case:
+    Tiled treats equal wangids as random alternatives, so its brush still
+    paints (randomising phases, which ``docs/PLOTTER_COMPAT.md`` accepts),
+    while exported *layers* carry concrete gids and travel exactly.
     """
     if not terrains:
         return
@@ -406,23 +448,13 @@ def write_wangsets(parent: ET.Element, terrains: tuple[TerrainSpec, ...]) -> Non
                 "probability": "1",
             },
         )
-    for index in range(len(terrains)):
-        for case, mask in enumerate(blob.BLOB_MASKS):
-            ET.SubElement(
-                wangset,
-                "wangtile",
-                {
-                    "tileid": str(index * blob.TILE_COUNT + case),
-                    "wangid": ",".join(
-                        str(index + 1 if mask & bit else 0) for bit in _WANG_BITS
-                    ),
-                },
-            )
+    for tileid, wangid in sorted(_expected_wangids(len(terrains), phases).items()):
+        ET.SubElement(wangset, "wangtile", {"tileid": str(tileid), "wangid": wangid})
 
 
-def _terrains_of(root: ET.Element) -> tuple[TerrainSpec, ...]:
+def _terrains_of(root: ET.Element, phases: int = 1) -> tuple[TerrainSpec, ...]:
     node = root.find("wangsets")
-    return () if node is None else (read_wangsets(node) or ())
+    return () if node is None else (read_wangsets(node, phases) or ())
 
 
 def read_tsx(data: bytes, image: np.ndarray) -> Tileset:
@@ -431,6 +463,12 @@ def read_tsx(data: bytes, image: np.ndarray) -> Tileset:
     check_tileset_features(root)
     grid = root.find("grid")
     transformations = root.find("transformations")
+    props = read_properties(root)
+    declared, remaining = phases_from_properties(props)
+    terrains = _terrains_of(root, declared)
+    # The property is structural only on a recognised terrain set; anywhere
+    # else "phases" is somebody's ordinary custom property and travels intact.
+    phases = declared if terrains else 1
     return Tileset(
         name=root.get("name") or "tileset",
         class_name=root.get("class") or root.get("type") or "",
@@ -465,8 +503,9 @@ def read_tsx(data: bytes, image: np.ndarray) -> Tileset:
             transformations.get("rotate", "0") not in ("0", "false"),
             transformations.get("preferuntransformed", "0") not in ("0", "false"),
         ),
-        properties=read_properties(root),
-        terrains=_terrains_of(root),
+        properties=remaining if terrains else props,
+        terrains=terrains,
+        phases=phases,
     )
 
 
@@ -530,8 +569,13 @@ def tsx_element(ts: Tileset, *, image_name: str) -> ET.Element:
             "height": str(ts.image_h),
         },
     )
-    write_properties(root, ts.properties)
-    write_wangsets(root, ts.terrains)
+    props = ts.properties
+    if ts.terrains and ts.phases > 1:
+        # Re-derived from the field on every write -- the reader popped it out
+        # of the stored properties, so this is the one spelling of the fact.
+        props = {**props, "phases": Prop("int", ts.phases)}
+    write_properties(root, props)
+    write_wangsets(root, ts.terrains, ts.phases if ts.terrains else 1)
     return root
 
 

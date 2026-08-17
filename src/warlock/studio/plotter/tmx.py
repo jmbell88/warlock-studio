@@ -82,6 +82,7 @@ from .tsx import (
     TSX_VERSION,
     check_tileset_features,
     check_tileset_features_json,
+    phases_from_properties,
     read_wangsets,
     read_wangsets_json,
     to_bytes,
@@ -400,6 +401,11 @@ def _read_tmx_tilesets(
         wangsets = node.find("wangsets")
         grid = node.find("grid")
         transformations = node.find("transformations")
+        props = read_properties(node)
+        declared, remaining = phases_from_properties(props)
+        terrains = () if wangsets is None else _refuse_wangsets(
+            read_wangsets(wangsets, declared)
+        )
         refs.append(
             TilesetRef(
                 firstgid=firstgid,
@@ -440,14 +446,17 @@ def _read_tmx_tilesets(
                         transformations.get("preferuntransformed", "0")
                         not in ("0", "false"),
                     ),
-                    properties=read_properties(node),
+                    # The "phases" property is structural only on a recognised
+                    # terrain set (the reader popped it; the writer re-derives
+                    # it); anywhere else it is somebody's ordinary custom
+                    # property and travels intact.
+                    properties=remaining if terrains else props,
                     # ``check_tileset_features`` already refused an unrecognised
                     # set; an embedded one that *is* recognised is a terrain set
                     # and used to be accepted and then dropped, which left the
                     # tool greyed out on a map whose atlas plainly declares it.
-                    terrains=() if wangsets is None else _refuse_wangsets(
-                        read_wangsets(wangsets)
-                    ),
+                    terrains=terrains,
+                    phases=declared if terrains else 1,
                 ),
             )
         )
@@ -777,8 +786,10 @@ def _read_tmj_tilesets(
         if not isinstance(transformations, dict):
             raise ValueError("tileset transformations are not an object")
         wangsets = entry.get("wangsets")
+        props = read_json_properties(entry.get("properties"))
+        declared, remaining = phases_from_properties(props)
         terrains: tuple[TerrainSpec, ...] = (
-            () if not wangsets else _refuse_wangsets(read_wangsets_json(wangsets))
+            () if not wangsets else _refuse_wangsets(read_wangsets_json(wangsets, declared))
         )
         image = str(entry.get("image", ""))
         if not image:
@@ -807,8 +818,9 @@ def _read_tmj_tilesets(
                         bool(transformations.get("rotate", False)),
                         bool(transformations.get("preferuntransformed", False)),
                     ),
-                    properties=read_json_properties(entry.get("properties")),
+                    properties=remaining if terrains else props,
                     terrains=terrains,
+                    phases=declared if terrains else 1,
                 ),
             )
         )

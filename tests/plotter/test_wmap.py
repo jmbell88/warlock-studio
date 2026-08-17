@@ -207,7 +207,7 @@ def test_tiled_112_fields_select_version_four_and_round_trip():
     )
 
     payload = json.loads(wmap.manifest_json(doc))
-    assert payload["version"] == wmap.VERSION == 4
+    assert payload["version"] == wmap.TILED_ERA_VERSION == 4
     assert doc_facts(wmap.read_wmap(wmap.wmap_bytes(doc))) == doc_facts(doc)
 
 
@@ -1059,3 +1059,59 @@ def test_an_older_fixture_saves_forward_as_version_3(stem):
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         assert json.loads(zf.read(wmap.MANIFEST))["version"] == 3
     assert doc_facts(wmap.read_wmap(data)) == doc_facts(doc)
+
+
+# --- phase variants -------------------------------------------------------------
+
+
+def _terrain_pixels(k: int, tile: int = 8, terrains: int = 1) -> np.ndarray:
+    from warlock.studio.plotter import blob
+
+    array = np.zeros((terrains * k * k * tile, blob.TILE_COUNT * tile, 4), np.uint8)
+    array[..., 3] = 255
+    return array
+
+
+def _terrain_doc(k: int) -> MapDoc:
+    from warlock.studio.plotter.tileset import TerrainSpec
+
+    doc = MapDoc(6, 4, 8, 8)
+    doc.add_tileset(
+        Tileset(
+            name="ground",
+            pixels=_terrain_pixels(k),
+            tile_w=8,
+            tile_h=8,
+            terrains=(TerrainSpec("Grass", (0, 200, 0, 255), (0, 90, 0, 255)),),
+            phases=k,
+        )
+    )
+    doc.add_tile_layer("Ground")
+    doc.mark_saved()
+    return doc
+
+
+def test_phases_gate_version_five_and_round_trip():
+    """The gate is mandatory: an old reader that dropped ``phases`` would
+    divide every local id by the wrong row count and misattribute the terrain
+    of every painted cell, silently."""
+    doc = _terrain_doc(4)
+    payload = json.loads(wmap.manifest_json(doc))
+    assert payload["version"] == wmap.VERSION == 5
+    back = wmap.read_wmap(wmap.wmap_bytes(doc))
+    assert back.tilesets[0].tileset.phases == 4
+    assert len(back.tilesets[0].tileset.terrains) == 1
+
+
+def test_a_single_phase_terrain_set_keeps_its_old_version():
+    doc = _terrain_doc(1)
+    payload = json.loads(wmap.manifest_json(doc))
+    assert payload["version"] == wmap.BASE_VERSION
+    data = wmap.wmap_bytes(doc)
+    assert wmap.wmap_bytes(wmap.read_wmap(data)) == data
+
+
+def test_a_file_without_the_phases_key_reads_as_one():
+    """Every file written before version 5, byte for byte."""
+    data = _rewrite(_terrain_doc(1), lambda m: m["tilesets"][0].pop("phases"))
+    assert wmap.read_wmap(data).tilesets[0].tileset.phases == 1

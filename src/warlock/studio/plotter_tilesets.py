@@ -253,7 +253,7 @@ def paint_ground_set(
     *,
     theme: str,
     rows: list[dict[str, Any]],
-    colors: int = 32,
+    colors: int = 64,
     border: int = 0,
 ) -> None:
     """Queue an AI-painted ground set for the open map.
@@ -337,6 +337,8 @@ def adopt_ground_set(ctx: Any, job: Any) -> None:
         )
         return
     terrains = [dict(entry) for entry in block.get("terrains") or []]
+    # 1 for every set painted before phases existed; ``Tileset`` re-validates.
+    phases = int(block.get("phases") or 1)
     uid = tab.uid
 
     def run() -> dict[str, Any]:
@@ -365,6 +367,7 @@ def adopt_ground_set(ctx: Any, job: Any) -> None:
                 tile_w=width,
                 tile_h=height,
                 terrains=tuple(specs),
+                phases=phases,
             )
         except ValueError as exc:
             raise invalid_from(

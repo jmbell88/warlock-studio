@@ -52,6 +52,13 @@ entries are written unconditionally, so a field the gate does not ask about
 produces a file declaring version 3 while carrying a key a version 3 reader
 drops in silence.
 
+**Version 5 is phase variants**: a terrain tileset whose ``phases`` is 2 or 4
+carries ``phases**2`` sub-rows per terrain, and the field is gated because it
+is *not* additive -- an old reader that dropped it would divide every local id
+by the wrong row count and misattribute the terrain of every painted cell. A
+map whose tilesets are all ``phases == 1`` keeps writing its old version, so
+existing documents re-save byte-stable.
+
 Versions 1 and 2 are still read, through tolerant defaults rather than a branch
 per version -- the ``locked`` precedent. A version 1 file predates projections
 and is orthogonal by definition; a version 2 file has no tint, offset, parallax
@@ -102,7 +109,10 @@ from .tilemap import (
 )
 from .tileset import TerrainSpec, Tileset, TilesetRef
 
-VERSION = 4
+VERSION = 5
+#: The 1.12-era additions (see the module docstring); written when one of them
+#: is present and no tileset carries phase variants.
+TILED_ERA_VERSION = 4
 BASE_VERSION = 3
 MANIFEST = "map.json"
 LAYER_DIR = "layers"
@@ -380,6 +390,13 @@ def _document_version(doc: MapDoc) -> int:
         raise WmapUnstorable(
             f"the version {VERSION} .wmap format has no sparse chunk entry for an infinite map"
         )
+    # Phase variants first: 5 is the ceiling, so nothing below can override it.
+    # The gate is mandatory rather than tolerant -- ``phases`` is written
+    # unconditionally, and an old reader that dropped it would divide every
+    # local id by the wrong row count and misattribute the terrain of every
+    # painted cell, silently.
+    if any(ref.tileset.phases > 1 for ref in doc.tilesets):
+        return VERSION
     if (
         doc.class_name
         or tuple(doc.parallax_origin) != (0.0, 0.0)
@@ -390,7 +407,7 @@ def _document_version(doc: MapDoc) -> int:
         or doc.stagger_index != "odd"
         or doc.hex_side
     ):
-        return VERSION
+        return TILED_ERA_VERSION
     if any(
         ref.tileset.class_name
         or (
@@ -402,24 +419,24 @@ def _document_version(doc: MapDoc) -> int:
         or any(ref.tileset.transformations)
         for ref in doc.tilesets
     ):
-        return VERSION
+        return TILED_ERA_VERSION
     if _has_list_property(doc.properties):
-        return VERSION
+        return TILED_ERA_VERSION
     for layer in doc.all_layers():
         if not isinstance(layer, (TileLayer, ObjectLayer, ImageLayer, GroupLayer)):
             continue
         if layer.blend_mode != "normal" or _has_list_property(layer.properties):
-            return VERSION
+            return TILED_ERA_VERSION
         if isinstance(layer, ObjectLayer):
             # ``color`` before the objects, because it is the layer's own field
             # and an empty object layer still carries it.
             if layer.color:
-                return VERSION
+                return TILED_ERA_VERSION
             for obj in layer.objects:
                 if obj.opacity != 1.0 or shape_kind(obj.shape) == "capsule":
-                    return VERSION
+                    return TILED_ERA_VERSION
                 if _has_list_property(obj.properties):
-                    return VERSION
+                    return TILED_ERA_VERSION
     return BASE_VERSION
 
 
@@ -456,6 +473,9 @@ def manifest_json(doc: MapDoc) -> str:
                     {"name": entry.name, "fill": list(entry.fill), "outline": list(entry.outline)}
                     for entry in ts.terrains
                 ],
+                # Written unconditionally like every key here; the version gate
+                # above is what keeps an old reader from ever seeing k > 1.
+                "phases": int(ts.phases),
             }
         )
 
@@ -951,6 +971,9 @@ def read_wmap(data: bytes) -> MapDoc:
                         margin=int(entry.get("margin", 0)),
                         properties=read_wmap_properties(entry.get("properties")),
                         terrains=_terrains_from(entry.get("terrains")),
+                        # Absent in every file before version 5, where 1 is
+                        # what the absence meant.
+                        phases=int(entry.get("phases", 1) or 1),
                     ),
                     source=str(entry.get("source", "")),
                 )

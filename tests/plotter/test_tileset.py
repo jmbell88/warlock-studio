@@ -99,3 +99,53 @@ def test_firstgid_belongs_to_the_reference_not_the_tileset():
     assert (a.last_gid, b.last_gid) == (4, 104)
     assert a.holds(4) and not a.holds(5)
     assert b.local(103) == 2
+
+
+# --- phase variants -------------------------------------------------------------
+
+
+def test_a_phased_terrain_set_maps_ids_both_ways():
+    from warlock.studio.plotter import blob
+    from warlock.studio.plotter.tileset import TerrainSpec, Tileset
+
+    k, tile = 2, 8
+    terrains = (
+        TerrainSpec("A", (1, 2, 3, 255), (0, 0, 0, 255)),
+        TerrainSpec("B", (4, 5, 6, 255), (0, 0, 0, 255)),
+    )
+    ts = Tileset(
+        name="g",
+        pixels=_pixels(blob.TILE_COUNT * tile, len(terrains) * k * k * tile),
+        tile_w=tile,
+        tile_h=tile,
+        terrains=terrains,
+        phases=k,
+    )
+    for terrain in range(2):
+        for phase in range(k * k):
+            local = ts.local_for(terrain, blob.FULL, phase)
+            assert ts.terrain_of(local) == terrain
+    with pytest.raises(IndexError):
+        ts.local_for(0, blob.FULL, k * k)
+
+
+def test_a_phase_count_outside_the_table_is_refused():
+    from warlock.studio.plotter.tileset import Tileset
+
+    with pytest.raises(ValueError):
+        Tileset(name="g", pixels=_pixels(16, 16), tile_w=8, tile_h=8, phases=3)
+
+
+def test_a_phased_set_needs_phase_squared_rows_per_terrain():
+    from warlock.studio.plotter import blob
+    from warlock.studio.plotter.tileset import TerrainSpec, Tileset
+
+    with pytest.raises(ValueError):
+        Tileset(
+            name="g",
+            pixels=_pixels(blob.TILE_COUNT * 8, 8),  # one row, four needed
+            tile_w=8,
+            tile_h=8,
+            terrains=(TerrainSpec("A", (1, 2, 3, 255), (0, 0, 0, 255)),),
+            phases=2,
+        )

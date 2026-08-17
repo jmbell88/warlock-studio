@@ -132,7 +132,7 @@ frame thread as a crash.
 | `an embedded tileset image` | refused | Embedded image payloads or missing source paths are not decoded. |
 | `tileset image transparent colour` | refused | Atlas color-key transparency is not applied to decoded pixels. |
 | `an external .tsj tileset` | refused | Re-save as TSX; external JSON tilesets are not resolved yet. |
-| `Wang sets / terrain brushes` | refused | Generic corner/edge/mixed Wang sets stop unless they match the blob preset. |
+| `Wang sets / terrain brushes` | refused | Generic corner/edge/mixed Wang sets stop unless they match the blob preset. A blob set exported with phase variants (`phases > 1`, declared by an int `phases` tileset property) writes every phase sub-row with the same wangid per case: Tiled's terrain brush treats equal wangids as random alternatives and keeps working, at the accepted cost that it *randomises* phases where Plotter derives them from cell coordinates. Exported layers carry concrete gids per cell, so position-baked phases travel exactly. |
 | `terrain types` | refused | Deprecated pre-Wang terrain syntax. |
 | `per-tile animation` | refused | Tile animation metadata is not modeled yet. |
 | `per-tile collision shapes` | refused | Tile collision object groups are not modeled yet. |

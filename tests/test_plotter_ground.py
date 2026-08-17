@@ -109,10 +109,19 @@ def _rows(count: int = 2) -> list[dict]:
 
 
 def _painted(svc, job_id: str, *, terrains: int = 2, tile_w: int = 16, tile_h: int = 16):
-    """A finished ground job with a real 47-column atlas on disk."""
+    """A finished ground job with a real 47-column atlas on disk.
+
+    Rows follow the job's own stored phase count, the way the worker's atlas
+    does -- adoption validates against it, so a classic 2-row sheet under a
+    4-phase block is the mismatch it exists to refuse.
+    """
+    phases = int(svc.store.get(job_id)["params"]["ground"].get("phases") or 1)
     job_dir = svc.job_dir(job_id)
     job_dir.mkdir(parents=True, exist_ok=True)
-    pixels = np.zeros((terrains * tile_h, blob.TILE_COUNT * tile_w, 4), dtype=np.uint8)
+    pixels = np.zeros(
+        (terrains * phases * phases * tile_h, blob.TILE_COUNT * tile_w, 4),
+        dtype=np.uint8,
+    )
     pixels[..., 3] = 255
     Image.fromarray(pixels, "RGBA").save(job_dir / "input.png")
 
