@@ -1,0 +1,10 @@
+{
+  "key": "klein-distilled-raw",
+  "label": "FLUX.2 klein 4B distilled, no LoRA",
+  "notes": "The non-SDXL architecture as a reference source. Distilled arm because the 4-step recipe is the one whose speed could justify a switch; klein-base at 50 steps is a different time class entirely.",
+  "guidance": {
+    "base_model": "flux_klein_distilled",
+    "platform": "3d"
+  },
+  "profile": "raw"
+}

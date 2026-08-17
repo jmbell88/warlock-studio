@@ -1,0 +1,10 @@
+{
+  "key": "sdxl-cfg-raw",
+  "label": "SDXL 1.0 full CFG, no LoRA",
+  "notes": "The shipped default recipe, bare -- the control arm every reference-source comparison stands against.",
+  "guidance": {
+    "base_model": "sdxl_cfg",
+    "platform": "3d"
+  },
+  "profile": "raw"
+}

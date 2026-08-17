@@ -1,0 +1,10 @@
+{
+  "key": "sdxl-cfg-pag-raw",
+  "label": "SDXL 1.0 + PAG / CFG-rescale, no LoRA",
+  "notes": "The default's weights with the two training-free sampling upgrades (PAG 3.0, rescale 0.7). This arm against sdxl-cfg-raw is the measurement that would flip DEFAULT_BASE_MODEL.",
+  "guidance": {
+    "base_model": "sdxl_cfg_pag",
+    "platform": "3d"
+  },
+  "profile": "raw"
+}
