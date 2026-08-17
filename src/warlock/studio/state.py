@@ -18,33 +18,13 @@ from typing import Any
 # enough to find yesterday's phrasing, short enough to scan.
 MAX_HISTORY = 20
 
-def guidance_fields() -> tuple[str, ...]:
-    """The taxonomy selects the 2D pane owns.
-
-    Read off ``guidance.form_fields()`` rather than listed here, so a new table
-    in guidance.py appears in the pane without an edit -- the same reason the
-    HTTP layer had one ``_pick_guidance``. The exceptions are fields the pane
-    renders as something other than a plain combo: the two model pickers sit
-    under Advanced, the two conditioning pickers live in the Reference section
-    and are hidden until there is an image to condition on, and ``platform``
-    is deliberately split in two.
-    """
-    from .. import guidance
-
-    return tuple(
-        f
-        for f in guidance.form_fields()
-        if f not in ("base_model", "style_lora", "platform", "ip_adapter", "control")
-    )
-
-
 def default_form_2d() -> dict[str, Any]:
     """What a submit is composed from.
 
     Split across the two panes deliberately: a control belongs to exactly one
-    of them, and ``platform`` is *two* fields because one control cannot be
-    owned by two panes -- the 2D pane's is a prompt fragment, the 3D pane's is
-    the geometry resolution.
+    of them. ``platform`` is the 3D pane's alone since the taxonomy retirement
+    -- it is a geometry resolution, and this form carries no prompt-fragment
+    fields any more.
 
     The seed is rolled here rather than being a constant: it is deliberately
     not persisted (settings.VOLATILE), so a literal default meant every launch
@@ -52,7 +32,7 @@ def default_form_2d() -> dict[str, Any]:
     """
     from ..service.validation import random_seed
 
-    form: dict[str, Any] = {
+    return {
         "prompt": "",
         "negative_prompt": "",
         "base_model": "",
@@ -61,7 +41,6 @@ def default_form_2d() -> dict[str, Any]:
         "seed": random_seed(),
         "seed_locked": False,
         "count": 1,
-        "platform": "",
         # reference | tile. What this pane submits. A tile is the same pipeline
         # with circular padding and a different framing template, so it belongs
         # to the pane that owns the prompt rather than to a mode of its own --
@@ -78,8 +57,6 @@ def default_form_2d() -> dict[str, Any]:
         "control_scale": 0.65,
         "control_end": 0.8,
     }
-    form.update(dict.fromkeys(guidance_fields(), ""))
-    return form
 
 def form_from_params(params: dict[str, Any]) -> dict[str, Any]:
     """A 2D form filled from a finished job's params -- "another like this".

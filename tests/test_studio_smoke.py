@@ -286,7 +286,7 @@ def _seed_findings(ctx, param, value):
 
 @pytest.mark.parametrize(
     ("pane", "param", "value"),
-    [("settings_2d", "art_style", "nes"), ("settings_3d", "platform", "pc")],
+    [("settings_2d", "base_model", "turbo"), ("settings_3d", "platform", "pc")],
 )
 def test_an_evidence_hint_stays_inside_the_pane(app_ctx, imgui_ctx, pane, param, value):
     """The hints are the whole visible payoff of the observation corpus, and
@@ -306,14 +306,21 @@ def test_an_evidence_hint_stays_inside_the_pane(app_ctx, imgui_ctx, pane, param,
     (app_ctx.state.form_2d if pane == "settings_2d" else app_ctx.state.form_3d)[param] = value
 
     measured: list[float] = []
-    real = widgets.hint_text
+    # The 3D pane draws its hints through hint_text; the 2D pane's surviving
+    # hints (base_model/style_lora/lora_weight) go through secondary after a
+    # same_line, so both are spied.
+    real_hint, real_secondary = widgets.hint_text, widgets.secondary
 
-    def spy(text):
-        right = imgui.get_cursor_screen_pos().x + imgui.get_content_region_avail().x
-        real(text)
-        measured.append(imgui.get_item_rect_max().x - right)
+    def _spying(real):
+        def spy(text):
+            right = imgui.get_cursor_screen_pos().x + imgui.get_content_region_avail().x
+            real(text)
+            measured.append(imgui.get_item_rect_max().x - right)
 
-    widgets.hint_text = spy
+        return spy
+
+    widgets.hint_text = _spying(real_hint)
+    widgets.secondary = _spying(real_secondary)
     try:
         _frame(
             imgui_ctx,
@@ -324,7 +331,8 @@ def test_an_evidence_hint_stays_inside_the_pane(app_ctx, imgui_ctx, pane, param,
             ),
         )
     finally:
-        widgets.hint_text = real
+        widgets.hint_text = real_hint
+        widgets.secondary = real_secondary
     assert measured, "the hint never drew -- the fixture no longer produces one"
     assert max(measured) <= 1.0, f"a hint overflows by {max(measured):.0f} px"
 
@@ -1997,7 +2005,6 @@ class _ReviewApp:
     _review_labels = _main.App._review_labels
     _review_label_panel = _main.App._review_label_panel
     _LABEL_CELL = _main.App._LABEL_CELL
-    _save_vector_preset = _main.App._save_vector_preset
 
 
 def _review_state(ctx, *, with_units=True):
@@ -2242,24 +2249,15 @@ def test_the_review_pane_builds_a_findings_table(app_ctx, imgui_ctx):
     _frame(imgui_ctx, lambda: app._review_verdict(app_ctx, state, review_mode))
 
 
-def test_the_2d_pane_builds_with_a_saved_vector_preset(app_ctx, imgui_ctx):
-    from warlock.studio import vector_presets
+def test_the_2d_pane_builds_with_stale_vector_preset_settings(app_ctx, imgui_ctx):
+    # The vector-preset save mechanism retired with the taxonomy; a
+    # studio_settings.json still carrying old entries must not break the pane.
     from warlock.studio.panes import settings_2d
 
-    vector_presets.save_preset(
-        app_ctx.settings, "chests", {"genre": "fantasy", "platform": "pc"}
+    app_ctx.settings.set(
+        "vector_presets", {"chests": {"genre": "fantasy", "platform": "pc"}}
     )
     _frame(imgui_ctx, lambda: settings_2d.draw(app_ctx))
-
-    # And the Forget branch, which only appears once one has been applied --
-    # presets could be saved and applied but never removed, and nothing capped
-    # the list.
-    app_ctx.state.preview["vector_preset"] = "chests"
-    _frame(imgui_ctx, lambda: settings_2d.draw(app_ctx))
-
-    settings_2d._forget_vector_preset(app_ctx, "chests")
-    assert vector_presets.list_presets(app_ctx.settings) == {}
-    assert "vector_preset" not in app_ctx.state.preview
 
 
 def test_the_inspector_builds_its_verdict_section_with_and_without_staged_tags(

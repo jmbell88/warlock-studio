@@ -8,8 +8,8 @@ What it is for. A sweep queues a family of settings vectors as ordinary jobs;
 this mode is where they are looked at, one at a time, with the reference image
 beside the mesh and a keypress to say how well it worked. Those verdicts compile
 into ``findings.json``, which is what puts a "usable 6/8" under a control in
-the generate panes and what a saved vector preset is built from. The loop
-closes here.
+the generate panes and what the "Apply to forms" vectors are ranked from. The
+loop closes here.
 
 Four rules shape it.
 
@@ -1239,8 +1239,8 @@ def capture_base(ctx: Any) -> dict[str, Any]:
     """The settings vector the two generate forms currently describe.
 
     Reusing the forms the user has already tuned is the whole point: a sweep is
-    "this, but vary that", and re-picking a checkpoint and twelve taxonomy
-    selects inside a second form would be its own small hell.
+    "this, but vary that", and re-picking every setting inside a second form
+    would be its own small hell.
     """
     from .. import guidance
 
@@ -1254,8 +1254,8 @@ def capture_base(ctx: Any) -> dict[str, Any]:
         base["lora_weight"] = float(form_2d["lora_weight"])
     if form_2d.get("negative_prompt"):
         base["negative_prompt"] = form_2d["negative_prompt"]
-    # The 3D pane's platform is the geometry resolution and wins over the 2D
-    # pane's prompt-fragment one, because a sweep unit runs to a mesh.
+    # platform is the 3D pane's alone (the geometry resolution) since the
+    # taxonomy retirement; a sweep unit runs to a mesh.
     if form_3d.get("platform"):
         base["platform"] = form_3d["platform"]
     if form_3d.get("bg_removal"):
@@ -1809,3 +1809,70 @@ def _label_key(ctx: Any, state: ReviewState, event: Any, name: str) -> bool:
     # Everything else is swallowed, not passed down: the verdict loop's keys act
     # on a mesh nobody is looking at while this grid is on screen.
     return False
+
+
+# --- applying a found vector to the generate forms ---------------------------
+#
+# Moved here from the deleted ``studio/vector_presets.py`` when the save
+# mechanism retired with the taxonomy (2026-08-17): "Apply to forms" survives,
+# only saving died. Both modules are headless-pure, so the move changes no
+# import discipline.
+
+# Which form each key belongs to. A control is owned by exactly one pane, so a
+# vector is applied by splitting it the same way -- there is no key both halves
+# may write. ``platform`` goes to the 3D form, whose select it is.
+# ``resolution`` is derived from platform and is not applied at all, nor is
+# ``stage``, which is not a setting.
+FORM_3D_KEYS = ("platform", "profile", "custom_triangles", "size_m", "bg_removal",
+                "reference_prep")
+SKIP_KEYS = ("stage", "resolution")
+
+
+def describe_vector(vector: dict[str, Any]) -> str:
+    """A vector as one readable line, skipping what is not a knob."""
+    parts = [
+        f"{k}={v}" for k, v in sorted(vector.items()) if k not in SKIP_KEYS
+    ]
+    return ", ".join(parts) or "the defaults"
+
+
+def apply_vector(state: Any, vector: dict[str, Any]) -> None:
+    """Overlay a vector onto the two generate forms, in place.
+
+    Only keys a form already has are touched, and each is coerced to the type
+    the form's default has -- the ``form_from_params`` rule, and for the same
+    reason: a value that arrived through JSON can come back as an int where the
+    form holds a float, and the persisted-settings merge would then drop it.
+    A retired taxonomy key in an old findings vector matches no form key and is
+    simply skipped.
+    """
+    for form, keys in (
+        (state.form_2d, None),
+        (state.form_3d, FORM_3D_KEYS),
+    ):
+        for key, value in vector.items():
+            if key in SKIP_KEYS:
+                continue
+            if keys is not None and key not in keys:
+                continue
+            if keys is None and key in FORM_3D_KEYS:
+                # Owned by the 3D form; see the note on platform above.
+                continue
+            if key not in form:
+                continue
+            form[key] = _coerce_form_value(form[key], value)
+
+
+def _coerce_form_value(default: Any, value: Any) -> Any:
+    try:
+        if isinstance(default, bool):
+            return bool(value)
+        if isinstance(default, float):
+            return float(value)
+        if isinstance(default, int):
+            return int(value)
+        if isinstance(default, str):
+            return str(value)
+    except (TypeError, ValueError):
+        return default
+    return value

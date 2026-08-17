@@ -36,7 +36,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import guidance, models
-from .pipelines import prompt as prompt_lib
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .queue import Worker
@@ -235,9 +234,7 @@ class GroundOps:
                             detail=f"{row.get('name') or index + 1} {role}",
                         )
                         out_path = scratch / f"t{index}-{role}.png"
-                        composed = guidance.compose_prompt(
-                            subject, params, fields=prompt_lib.TILE_FIELDS
-                        )
+                        composed = guidance.compose_prompt(subject, params)
                         composed_prompts.append(composed)
                         await asyncio.to_thread(
                             functools.partial(

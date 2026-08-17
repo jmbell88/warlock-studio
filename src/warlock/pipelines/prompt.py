@@ -45,15 +45,14 @@ from typing import Any
 # vectors.VECTOR_PARAMS -- unchanged, so no stored vector is re-keyed and every
 # unit recorded before today still pairs in findings.comparisons.
 #
-# The view clause is a ``{view}`` slot rather than a literal, filled from
-# ``guidance.FRAMINGS`` (see view_clause below). Whether a front-orthographic
-# plate reconstructs better than a 3/4 view is a question a sweep answers, not
-# one this constant should decide -- and the default fragment *is* the literal
-# that used to be here, so the composed default is byte-identical and
-# PROMPT_VERSION stays at 4.
+# The view clause is a literal again since the 2026-08-17 taxonomy retirement:
+# the ``{view}`` slot and ``guidance.FRAMINGS`` are gone, and the string below
+# is exactly the default fragment the slot used to receive, so the empty-params
+# composition is byte-identical across the change (the PROMPT_VERSION 5 bump is
+# about the taxonomy fragments, not this clause).
 PROMPT_TEMPLATE = (
     "{prompt}, a single subject centered on a plain light gray background, "
-    "no other objects, {view}, studio lighting, game asset render, "
+    "no other objects, 3/4 perspective view, studio lighting, game asset render, "
     "full object in frame, no cropping, no text, no watermark"
 )
 
@@ -82,16 +81,10 @@ SHEET_TEMPLATE = (
     "each cell a complete figure, no text, no watermark"
 )
 
-# The half of the taxonomy that describes a *surface*. The rest -- category,
-# silhouette, rarity, mood, emissive, platform -- describes an object, and
-# naming one in a tile prompt is how a "cobblestone" tile comes back as a
-# picture of a cobblestone.
-TILE_FIELDS = ("material", "condition", "palette", "setting", "genre", "art_style")
-
-# Bumped whenever PROMPT_TEMPLATE, TILE_TEMPLATE, TILE_FIELDS or chunk()
-# changes. Recorded by provenance.versions() so a prompt-compiler edit cannot
-# silently invalidate a benchmark comparison -- no dependency version moves
-# when this file does.
+# Bumped whenever PROMPT_TEMPLATE, TILE_TEMPLATE or chunk() changes. Recorded
+# by provenance.versions() so a prompt-compiler edit cannot silently
+# invalidate a benchmark comparison -- no dependency version moves when this
+# file does.
 #
 # 2: TILE_TEMPLATE and the tile field subset. The object path's output is
 # unchanged, so an object recipe recorded under 1 still reproduces exactly;
@@ -103,14 +96,13 @@ TILE_FIELDS = ("material", "condition", "palette", "setting", "genre", "art_styl
 # for: an object recipe recorded under 1-3 no longer reproduces byte-for-byte,
 # and a benchmark comparing across the bump is comparing two compilers.
 #
-# Deliberately *not* bumped for the ``framing`` field: the view clause moved out
-# of PROMPT_TEMPLATE into guidance.FRAMINGS, and the default fragment is the
-# string that used to be inline, so every recipe recorded under 4 still
-# reproduces byte-for-byte. A recipe that *asks* for front_ortho is a different
-# configuration, not a different compiler -- that is what a vector records, and
-# vectors.VECTOR_PARAMS carries the key. tests/test_prompt.py pins the default
-# composition as a literal, which is the whole argument for leaving this at 4.
-PROMPT_VERSION = 4
+# 5: the taxonomy retirement (docs/measurements/2026-08-17-taxonomy-retirement.md).
+# guidance._PROMPT_FIELDS emptied, TILE_FIELDS and the ``{view}`` slot deleted
+# with the view literal re-inlined. The empty-params composition is
+# byte-identical to 4 (tests/test_prompt.py pins it as a literal); the bump is
+# for every stored job whose params carried taxonomy fragments, whose composed
+# prompt genuinely shortens under this compiler.
+PROMPT_VERSION = 5
 
 _tokenizer_cache: dict[Path, list[Any]] = {}
 
@@ -248,40 +240,19 @@ def pad_pair(a: list[str], b: list[str]) -> tuple[list[str], list[str]]:
     return (a + [""] * (n - len(a)), b + [""] * (n - len(b)))
 
 
-def view_clause(framing: Any = None) -> str:
-    """The fragment PROMPT_TEMPLATE's ``{view}`` slot takes for a framing key.
-
-    A thin forward to guidance.framing_clause, imported lazily exactly as
-    build() imports compose_prompt: this module stays importable with no
-    taxonomy loaded, and text2image.py -- which already imports the templates
-    from here -- gets the clause from the same place the preview does, so the
-    two can never disagree about what a stored ``framing`` means.
-    """
-    from .. import guidance
-
-    return guidance.framing_clause(framing)
-
-
 def build(
     user_prompt: str, params: dict[str, Any], *, trigger: str = "", tile: bool = False
 ) -> str:
     """The final positive prompt.
 
-    Guidance fragments, then the LoRA trigger (if any), then the framing
-    template -- the same assembly text2image.generate() does by hand, exposed
-    here so the prompt preview can show it before a job runs. ``tile`` swaps
-    both halves at once: the surface-only field subset and the tileable
-    template, which have to travel together because either alone produces the
-    wrong picture.
+    The composed subject, then the LoRA trigger (if any), then the template --
+    the same assembly text2image.generate() does by hand, exposed here so the
+    prompt preview can show it before a job runs. ``tile`` swaps in the
+    tileable template, whose framing is its own flat top-down clause.
     """
     from .. import guidance
 
-    composed = guidance.compose_prompt(
-        user_prompt, params, fields=TILE_FIELDS if tile else None
-    )
+    composed = guidance.compose_prompt(user_prompt, params)
     template = TILE_TEMPLATE if tile else PROMPT_TEMPLATE
-    # ``view`` is passed to both templates and consumed by one: TILE_TEMPLATE
-    # has its own flat top-down framing, so the field is inert on a tile rather
-    # than composing two cameras into one prompt.
-    text = template.format(prompt=composed, view=view_clause(params.get("framing")))
+    text = template.format(prompt=composed)
     return f"{trigger}, {text}" if trigger else text

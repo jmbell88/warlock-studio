@@ -116,7 +116,7 @@ it the engine falls back to a threshold cutout, which is worse on anything with 
 
 The reference image is the single biggest lever on final mesh quality — the reconstruction engine
 can only be as good as the picture it is handed — so the image model and an optional style LoRA are
-per-job choices in the guidance panel. Everything below is optional and independently skippable, and
+per-job choices in the settings pane. Everything below is optional and independently skippable, and
 `warlock doctor` lists each one with the exact command to fetch it.
 
 **Only the models listed here can be selected, and that is deliberate.** Dropping a

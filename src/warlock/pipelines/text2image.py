@@ -33,7 +33,6 @@ from .prompt import (
     TILE_TEMPLATE,
     chunk,
     pad_pair,
-    view_clause,
 )
 
 log = logging.getLogger(__name__)
@@ -813,7 +812,6 @@ class Text2Image:
         cancel_event: threading.Event | None = None,
         tile: bool = False,
         sheet: bool = False,
-        framing: str = "",
     ) -> Path:
         """Generate a reference image and save it to ``output_path``.
 
@@ -855,7 +853,6 @@ class Text2Image:
                 cancel_event=cancel_event,
                 tile=tile,
                 sheet=sheet,
-                framing=framing,
             )
 
     def _generate(
@@ -873,7 +870,6 @@ class Text2Image:
         cancel_event: threading.Event | None = None,
         tile: bool = False,
         sheet: bool = False,
-        framing: str = "",
     ) -> Path:
         self.load(on_state)
         assert self._pipe is not None
@@ -947,9 +943,6 @@ class Text2Image:
             # are what the adapter was fitted on, so they belong with the rest
             # of the model-facing scaffolding.
             style = models.STYLE_LORAS.get(lora or "")
-            # Only the framing template belongs here; the guidance-field subset
-            # a tile wants is applied by the caller, which composes ``prompt``,
-            # exactly as it is for an object today.
             # Template only -- ``sheet`` deliberately does not imply the
             # circular padding ``tile`` does. A contact sheet must not wrap:
             # its left and right edges are different directions of the same
@@ -958,11 +951,7 @@ class Text2Image:
             template = (
                 SHEET_TEMPLATE if sheet else (TILE_TEMPLATE if tile else PROMPT_TEMPLATE)
             )
-            # ``view`` fills PROMPT_TEMPLATE's framing slot and is inert in the
-            # other two, which carry framings of their own. A framing this
-            # build does not carry composes the default rather than raising:
-            # the row is already written by the time we are here.
-            text = template.format(prompt=prompt, view=view_clause(framing))
+            text = template.format(prompt=prompt)
             if style is not None and style.trigger and lora in self._adapters:
                 text = f"{style.trigger}, {text}"
             self.last_prompt = text

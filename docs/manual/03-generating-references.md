@@ -20,8 +20,8 @@ show. Picking one replaces what is in the box. The history is per session and pe
 text only — if you want a whole recipe back, use **Copy settings to form** from a job's overflow
 menu instead, which is described in [Rerun and promotion](11-library-and-jobs.md#rerun-and-promotion).
 
-Under **Advanced** there is a second box, **Negative**, listing what the image must not contain. It
-is pre-filled with the things that most often ruin a reconstruction:
+Under **Negative prompt**, further down the pane, is a second box listing what the image must not
+contain. It is pre-filled with the things that most often ruin a reconstruction:
 
 ```text
 blurry, low quality, multiple objects, cropped, cut off,
@@ -34,77 +34,38 @@ you have to discover. You can edit it freely, or empty it deliberately. Note tha
 only has an effect on a model that runs with real classifier-free guidance; the two four-step
 distilled defaults ignore it. See [Models and style LoRAs](#models-and-style-loras).
 
-Expand **Prompt actually sent** to see the complete composed prompt — your text plus every guidance
-fragment — along with its token count and how many chunks it was split into. It updates about a
+Expand **Prompt actually sent** to see the complete composed prompt — your text inside the fixed
+template — along with its token count and how many chunks it was split into. It updates about a
 third of a second after you stop typing, computed on a background thread because counting tokens
 means loading a tokenizer.
-
-## More options
-
-The pane opens on the short path: the preset picker, the Object / Seamless tile switch, the prompt,
-and **Run** — how many references and which seed. Everything else lives behind **More options**, one
-reveal that remembers whether you left it open. Nothing is removed by that; while it is closed the
-line under it names what is inside and how many of those fields are set, so a form carrying a style
-and a conditioning image does not look like an empty one. A refusal that names a control inside the
-fold opens it for you.
-
-## Guidance fields
-
-Under **More options** are twelve optional selects, grouped by what they describe:
-
-| Group | Fields |
-| --- | --- |
-| Subject | category, genre, setting, silhouette, framing |
-| Style | era style, palette, mood, rarity |
-| Surface | material, condition, emissive |
-
-Each one is a small closed vocabulary — genre offers Fantasy, Sci-fi, Modern, Post-apocalyptic,
-Horror and Cartoon; condition offers Pristine, Worn, Damaged, Ancient, Rusted, Overgrown and Burned;
-and so on. Every entry maps to a short prompt fragment of two to four words, and the fragments are
-appended to your prompt in a fixed order that reads like a sentence: category, silhouette,
-material, condition, rarity, emissive, setting, genre, mood, era style, palette, platform.
-
-Leaving a field unset simply omits its fragment. Nothing is filled in for you except the platform
-default.
-
-**Framing** is the exception to all of that: it is not appended to your prompt but substituted into
-the framing template's view clause, and it always has a value. *3/4 view* is the only choice offered
-and is the wording every reference generated before this control existed was drawn under.
-
-There was a second one — *Front orthographic*, a straight-on plate — added so the question "does a
-front view reconstruct into a better mesh than a 3/4 one" could be measured rather than argued.
-It was measured, under blind review, and it lost: the result was null and pointed slightly the wrong
-way, so it was withdrawn from this select on 2026-08-12. The option still exists for the sweep tools,
-and any job already generated under it still reruns; there is just no reason to offer it to you.
-
-Two of these have effects beyond the text. **Category** supplies a default physical size when you
-do not give one — a prop is 0.4 m, a weapon 1 m, a character 1.8 m, a vehicle 4.5 m, an environment
-piece 8 m, a consumable 0.15 m. And **detail brief**, which sits on its own below the groups,
-is a hint about how much fine detail to draw — 2D or 3D, defaulting to 3D. It is a *brief*, not a
-measurement: it goes into the prompt and the sampler may or may not honour it. How much geometry
-the mesh gets is the Mesh stage's **Mesh resolution**, which is a different control entirely.
-
-At the top of the pane is **preset**, a picker of four complete shipped recipes
-(hand-painted fantasy prop, PS1 low-poly character, sci-fi hero weapon, modern consumable pickup).
-Choosing one fills in the prompt and every field it names and then gets out of the way — everything
-it set stays visible and editable, and the picker shows "Custom" the moment you change anything. A
-preset is a starting point, not a mode.
-
-Beside **Save as...** at the top of the pane is **Reset...**, which puts the whole 2D form back to
-its first-launch defaults after a confirm — the prompt, the negative prompt, every guidance select,
-the model and LoRA, the reference and the run controls, with a freshly rolled seed. It touches
-nothing outside this pane: saved profiles and presets are kept, and the 3D form is left alone.
 
 The composed prompt has no hard length ceiling. CLIP's text encoders stop at 77 tokens, but the app
 splits a longer prompt into several chunks on comma boundaries — never mid-phrase — encodes each
 separately and joins them, which the image model's cross-attention accepts without complaint. That
 is why the preview reports chunks rather than warning about truncation. The soft limit still
-applies, though: a longer conditioning sequence dilutes attention, so every shipped fragment is
-kept to a few words and your own prompt is best kept to a sentence.
+applies, though: a longer conditioning sequence dilutes attention, so your prompt is best kept to a
+sentence.
+
+## The pane at a glance
+
+The form is one flat column of sections: **Output** (Object or Seamless tile), **Profile**,
+**Prompt**, **References** (conditioning on an image), **Seed** (how many and which seed),
+**Model**, **LoRA** and **Negative prompt**. There are no folds — everything is on screen, and the
+Generate button stays pinned below the column.
+
+Earlier versions carried a twelve-select creative taxonomy (category, genre, material and the
+rest) behind a "More options" reveal. It was retired on 2026-08-17: no taxonomy axis ever measured
+a quality win, and your prompt is the brief. Assets generated under it are unaffected — rerolling
+or promoting one simply composes without the retired fragments.
+
+In the **Profile** row, beside **Save as...**, is **Reset...**, which puts the whole 2D form back
+to its first-launch defaults after a confirm — the prompt, the negative prompt, the model and LoRA,
+the reference and the run controls, with a freshly rolled seed. It touches nothing outside this
+pane: saved profiles are kept, and the 3D form is left alone.
 
 ## Models and style LoRAs
 
-The **Advanced** section holds the model choice. Nine base models ship in the registry:
+The **Model** section holds the model choice. Nine base models ship in the registry:
 
 | Model | What it is | Runs at |
 | --- | --- | --- |
@@ -145,13 +106,12 @@ switch for free, with no reload. Five ship:
 
 - **3D render** — a general 3D-render look.
 - **3D render (Redmond)** — a second, differently trained take on the same idea.
-- **PS1 / low-poly game** — chunky untextured geometry, which pairs naturally with the PS1-era art
-  style and is among the easiest things to reconstruct cleanly.
+- **PS1 / low-poly game** — chunky untextured geometry, which is among the easiest things to
+  reconstruct cleanly.
 - **Pixel art (pixel-art-xl)** — generates on a pixel grid rather than producing a smooth image that
   is later downscaled into one. It defaults to a strength of 1.2 rather than the usual 0.9: below
   that the output keeps SDXL's anti-aliased gradients, and no downscale recovers a clean grid from
-  them. The **Pixel-art sprite** preset picks it together with the LCM base and the NES-era art
-  style, whose flat shading and bold silhouette are what survive a reduction.
+  them. It pairs naturally with the LCM base, the recipe it was trained against.
 - **Pixel art (FLUX.2 klein)** — the same idea for the other architecture, and the only adapter here
   that is not an SDXL one. It is offered on the two FLUX.2 klein entries and on nothing else. Its
   default strength is 0.0625, far below every other entry, because the adapter declares a trained
@@ -172,7 +132,7 @@ noticeably stronger on the SDXL entries than on Turbo.
 ## Seeds and candidates
 
 Generation is deterministic in its seed: the same form and the same seed produce the same image
-every time. The **Run** section, directly above the Generate button, is where you control that.
+every time. The **Seed** section is where you control that.
 
 **References** picks how many candidates one submit queues: 1, 2, 4 or 8. Each is a real job holding
 a place in the serial queue, which is why eight is the ceiling. Because each one gets its own seed,
@@ -195,8 +155,8 @@ The mesh has its own separate seed, at the Mesh stage. See
 
 ## Conditioning on an image
 
-Beyond the prompt, you can steer the image with a picture. Open the **Reference** section, then
-either **Choose an image...** or drop a file onto the window. Everything below the picker stays
+Beyond the prompt, you can steer the image with a picture. In the **References** section, either
+**Choose an image...** or drop a file onto the window. Everything below the picker stays
 hidden until there is an image, because a control with nothing to act on is a control that cannot
 do anything.
 
@@ -308,12 +268,10 @@ ordinary render has no lattice to find and takes the plain path unchanged, which
 already on disk was cut with. The provenance line says which happened. Palette reduction runs on colour only, with
 transparency carried around it, so the cutout survives the quantization exactly.
 
-The Reference stage's art-style select names console eras rather than abstract styles — **NES era**,
-**SNES era**, **PS1 era**, **PS2 era**, **PS3/360 era**, **PS5 era** — and the retro end of that
-ladder is what pairs with the pixel exports. NES and SNES deliberately do not put the words "pixel
-art" into the prompt: at 512 or 1024 the image model draws fake chunky pixels that then alias under
-the real reduction. What they ask for is flat shading and a bold silhouette — the things that
-survive being made small.
+If you are generating for the pixel exports, ask your prompt for flat shading and a bold
+silhouette — the things that survive being made small — and avoid the words "pixel art": at 512 or
+1024 the image model draws fake chunky pixels that then alias under the real reduction. The
+pixel-art LoRA is the exception, because it authors a genuine pixel grid.
 
 ### The manifest
 
@@ -331,10 +289,9 @@ The **Object / Seamless tile** control at the top of the 2D settings pane switch
 between two kinds of output. A tile is a repeating texture rather than a subject: it is drawn with
 wrapping convolutions, so its left edge continues into its right and its top into its bottom.
 
-Choosing it changes what the pane offers. The object taxonomy — category, silhouette, rarity and
-the rest — describes a *thing*, and a tile has none, so those selects are hidden. What remains is
-the surface half: material, condition, palette, setting, genre and era style. The Mesh stage's platform
-detail is hidden for the same reason.
+The rest of the form means the same thing for a tile as for an object: the prompt describes the
+surface ("mossy cobblestone"), and the model, LoRA and negative prompt choose the machinery that
+draws it.
 
 A tile cannot be made into a mesh, and the app does not offer to: there is no subject to
 reconstruct. It also cannot produce the cutout exports, because every one of them lifts a subject

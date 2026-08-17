@@ -1,24 +1,19 @@
 {
-  "key": "pixel-v1",
-  "label": "Pixel-art benchmark v1",
+  "key": "pixel-v2",
+  "label": "Pixel-art benchmark v2",
   "seeds": [
     42,
     1337,
     20240701,
     987654321
   ],
-  "notes": "Never edited in place. Changing a prompt means pixel-v2.json: old manifests reference this file's fingerprint, and an in-place edit would silently invalidate every comparison made against them. Subjects are sprite-shaped rather than reconstruction-shaped -- this suite is run at the reference stage, where the measurement is whether the generator drew on a pixel grid, not whether a mesh came out of it.",
+  "notes": "Re-minted from pixel-v1 for the 2026-08-17 taxonomy retirement (guidance blocks stripped of retired keys). Never edited in place: changing a prompt means pixel-v3.json -- old manifests reference the v1 fingerprint.",
   "items": [
     {
       "id": "character-01",
       "category": "character",
       "prompt": "a hooded adventurer standing in a neutral pose",
-      "guidance": {
-        "category": "character",
-        "genre": "fantasy",
-        "art_style": "nes",
-        "silhouette": "slender"
-      },
+      "guidance": {},
       "tags": [
         "biped"
       ],
@@ -28,12 +23,7 @@
       "id": "character-02",
       "category": "character",
       "prompt": "a stout dwarf smith with a heavy hammer",
-      "guidance": {
-        "category": "character",
-        "genre": "fantasy",
-        "art_style": "nes",
-        "silhouette": "bulky"
-      },
+      "guidance": {},
       "tags": [
         "biped"
       ],
@@ -43,12 +33,7 @@
       "id": "character-03",
       "category": "character",
       "prompt": "a knight in plate armour, front facing",
-      "guidance": {
-        "category": "character",
-        "genre": "fantasy",
-        "art_style": "snes",
-        "material": "steel"
-      },
+      "guidance": {},
       "tags": [
         "biped"
       ],
@@ -58,11 +43,7 @@
       "id": "creature-01",
       "category": "character",
       "prompt": "a small green slime with two eyes",
-      "guidance": {
-        "category": "character",
-        "genre": "fantasy",
-        "art_style": "nes"
-      },
+      "guidance": {},
       "tags": [
         "blob"
       ],
@@ -72,12 +53,7 @@
       "id": "creature-02",
       "category": "character",
       "prompt": "a giant spider with long thin legs",
-      "guidance": {
-        "category": "character",
-        "genre": "fantasy",
-        "art_style": "nes",
-        "silhouette": "slender"
-      },
+      "guidance": {},
       "tags": [
         "thin"
       ],
@@ -87,12 +63,7 @@
       "id": "weapon-01",
       "category": "weapon",
       "prompt": "a broadsword with a leather-wrapped grip",
-      "guidance": {
-        "category": "weapon",
-        "genre": "fantasy",
-        "art_style": "nes",
-        "material": "steel"
-      },
+      "guidance": {},
       "tags": [
         "thin"
       ],
@@ -102,12 +73,7 @@
       "id": "weapon-02",
       "category": "weapon",
       "prompt": "a wooden bow with a taut string",
-      "guidance": {
-        "category": "weapon",
-        "genre": "fantasy",
-        "art_style": "nes",
-        "material": "wood"
-      },
+      "guidance": {},
       "tags": [
         "thin"
       ],
@@ -117,13 +83,7 @@
       "id": "prop-01",
       "category": "prop",
       "prompt": "a weathered wooden crate bound with iron",
-      "guidance": {
-        "category": "prop",
-        "genre": "fantasy",
-        "art_style": "nes",
-        "material": "wood",
-        "condition": "worn"
-      },
+      "guidance": {},
       "tags": [
         "boxy"
       ],
@@ -133,12 +93,7 @@
       "id": "prop-02",
       "category": "prop",
       "prompt": "a treasure chest with a heavy iron lock",
-      "guidance": {
-        "category": "prop",
-        "genre": "fantasy",
-        "art_style": "snes",
-        "material": "wood"
-      },
+      "guidance": {},
       "tags": [
         "boxy"
       ],
@@ -148,12 +103,7 @@
       "id": "consumable-01",
       "category": "prop",
       "prompt": "a red healing potion in a round flask",
-      "guidance": {
-        "category": "consumable",
-        "genre": "fantasy",
-        "art_style": "nes",
-        "material": "glass"
-      },
+      "guidance": {},
       "tags": [
         "small"
       ],

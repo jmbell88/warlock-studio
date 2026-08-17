@@ -1,19 +1,17 @@
 """Named 2D style profiles.
 
 A profile is the *look* half of the 2D form -- which checkpoint, which LoRA,
-and the four taxonomy selects that decide a house style (genre, art style,
-setting, palette) -- saved under a name so a user who works on two kinds of
-asset does not re-pick them each time they switch. What it deliberately does
-not carry is the per-generation half: the prompt, the seed, its lock and the
-reference count are about one submit, not about a look -- nor the taxonomy
-fields that describe the *subject* rather than the style (category, material,
-condition, emissive, rarity, silhouette, mood), which change per asset and
-would otherwise be dragged along by every profile switch.
+its weight and the negative prompt -- saved under a name so a user who works
+on two kinds of asset does not re-pick them each time they switch. What it
+deliberately does not carry is the per-generation half: the prompt, the seed,
+its lock and the reference count are about one submit, not about a look. The
+taxonomy selects it used to carry retired with the taxonomy on 2026-08-17;
+``apply`` already tolerates old saved profiles that still hold those keys.
 
 Stored in the same ``studio_settings.json`` the forms already live in, under
 ``user_profiles`` -- named that rather than ``profiles`` because the app
-already has two other things by that name: ``guidance.PRESETS`` (shipped
-starting points) and the 3D form's ``profile`` (a mesh optimisation tier).
+already has another thing by that name: the 3D form's ``profile`` (a mesh
+optimisation tier).
 """
 
 from __future__ import annotations
@@ -47,18 +45,12 @@ ANCHOR_ADAPTER = "plus"
 # edit by hand, and this string becomes a path.
 _ANCHOR_RE = re.compile(r"^[0-9a-f]{12}\.png$")
 
-_FIXED = ("base_model", "style_lora", "lora_weight", "negative_prompt", "platform")
-
-# The taxonomy selects that describe a *look* rather than a subject. Named
-# explicitly rather than derived from guidance.py: a new table there is far
-# more likely to be another per-asset field than another style one, so it must
-# be opted in here.
-TAXONOMY = ("genre", "art_style", "setting", "palette")
+_FIXED = ("base_model", "style_lora", "lora_weight", "negative_prompt")
 
 
 def profile_fields() -> tuple[str, ...]:
     """Every form_2d key a profile captures."""
-    return _FIXED + TAXONOMY
+    return _FIXED
 
 
 def capture(form: dict[str, Any]) -> dict[str, Any]:
@@ -69,9 +61,9 @@ def capture(form: dict[str, Any]) -> dict[str, Any]:
 def apply(form: dict[str, Any], fields: dict[str, Any]) -> dict[str, Any]:
     """Overlay a profile onto a form, in place.
 
-    Only keys the profile actually holds are touched, so a profile saved before
-    a taxonomy field existed leaves the new field at whatever the form had
-    rather than blanking it.
+    Only keys both the profile and the current field list hold are touched, so
+    an old saved profile that still carries retired taxonomy keys applies its
+    surviving fields and the rest are silently ignored.
     """
     known = set(profile_fields())
     for key, value in (fields or {}).items():

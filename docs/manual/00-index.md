@@ -10,7 +10,7 @@ it running and keeping it running, and Part III explains how it is built.
 
 - [Overview](01-overview.md) — what the app is, the two-stage pipeline, and what each part of the window does.
 - [The Home screen](02-home.md) — the chooser the app opens on, and the diagnostics row under it.
-- [Generating references](03-generating-references.md) — the prompt, the guidance selects, models, seeds and image conditioning.
+- [Generating references](03-generating-references.md) — the prompt, models, seeds and image conditioning.
 - [Generating meshes](04-generating-meshes.md) — promoting a reference, mesh settings, triangle budgets, quality reports and exports.
 - [Rigging and posing](05-rigging-and-posing.md) — fitting a skeleton, posing it with gizmos, and saving poses.
 - [Sprite sheets](06-sprite-sheets.md) — baking poses and directions into a 2D sheet with a JSON sidecar.
@@ -34,4 +34,4 @@ it running and keeping it running, and Part III explains how it is built.
 
 - [Architecture](19-architecture.md) — the process, the threads, the job store and the service layer.
 - [Pipelines](20-pipelines.md) — how a job travels from prompt to GLB.
-- [Extending](21-extending.md) — adding a model, a skeleton or a guidance field.
+- [Extending](21-extending.md) — adding a model, a style or a skeleton.

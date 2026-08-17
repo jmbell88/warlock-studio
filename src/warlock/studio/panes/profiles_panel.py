@@ -210,9 +210,6 @@ def _summary(ctx: Any, fields: dict[str, Any]) -> str:
         _label(ctx.base_models, fields.get("base_model")),
         _label(ctx.style_loras, fields.get("style_lora")),
     ]
-    chosen = [f for f in profiles.TAXONOMY if fields.get(f)]
-    if chosen:
-        parts.append(f"{len(chosen)} style field{'s' if len(chosen) > 1 else ''}")
     return " - ".join(p for p in parts if p) or "nothing set"
 
 
@@ -298,46 +295,6 @@ def _editor_form(ctx: Any, form_ui: forms.Form, negative_prompt: Any) -> None:
     if inert is not None:
         imgui.end_disabled()
         widgets.muted(inert)
-
-    # Grouped and labelled, through the 2D form's own tables rather than a
-    # second arrangement of the same fields (UX-16). These combos were a column
-    # of identical unlabelled selects -- the exact defect ``GUIDANCE_GROUPS``
-    # and ``FIELD_LABELS`` were written to fix on the generate form, where a
-    # chosen value ("worn", "brass") no longer said which question it answered.
-    # A profile is a saved instance of that same form, so it gets the same
-    # headings, the same names and the same "art style..." placeholder.
-    for title, fields in settings_2d.GUIDANCE_GROUPS:
-        shown = [f for f in fields if f in profiles.TAXONOMY]
-        if not shown:
-            continue
-        widgets.section(title)
-        for field in shown:
-            _changed, draft[field] = form_ui.combo(
-                field,
-                settings_2d.field_label(field),
-                draft.get(field, ""),
-                settings_2d._field_options(ctx, field),
-            )
-    # Anything the registry has that the groups do not mention, so adding a
-    # taxonomy cannot silently drop it off this pane.
-    grouped = {f for _t, fields in settings_2d.GUIDANCE_GROUPS for f in fields}
-    rest = [f for f in profiles.TAXONOMY if f not in grouped]
-    if rest:
-        widgets.section("Other")
-        for field in rest:
-            _changed, draft[field] = form_ui.combo(
-                field,
-                settings_2d.field_label(field),
-                draft.get(field, ""),
-                settings_2d._field_options(ctx, field),
-            )
-    widgets.section("Platform")
-    _changed, draft["platform"] = form_ui.combo(
-        "platform",
-        settings_2d.field_label("platform"),
-        draft.get("platform", ""),
-        settings_2d._field_options(ctx, "platform"),
-    )
 
     _anchor(ctx, name)
 

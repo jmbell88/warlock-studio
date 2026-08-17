@@ -421,6 +421,8 @@ def test_copying_settings_fills_the_form_from_a_jobs_params():
             "style_lora": "render3d",
             "lora_weight": 1,  # JSON round-trips a float as an int
             "seed": 42,
+            # A retired taxonomy key on an old row: the form is the allowlist,
+            # so it must simply not come back.
             "material": "wood",
         }
     )
@@ -428,7 +430,7 @@ def test_copying_settings_fills_the_form_from_a_jobs_params():
     assert form["style_lora"] == "render3d"
     assert form["lora_weight"] == 1.0
     assert form["seed"] == 42
-    assert form["material"] == "wood"
+    assert "material" not in form
 
 
 def test_copying_settings_cannot_smuggle_a_derived_value_into_the_form():

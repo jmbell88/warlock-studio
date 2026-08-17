@@ -135,7 +135,7 @@ back on the next launch, and asks whether to open the folder your log is in. Ans
 nothing — the log is written either way, and the recovery offer does not depend on it.
 
 Not everything the app remembers has a control in this pane. `studio_settings.json` also holds your
-saved profiles and settings presets, the sidebar's internal split, and the pixel-art export
+saved profiles, the sidebar's internal split, and the pixel-art export
 preferences — the
 size and palette set in an asset's [Pixel art](03-generating-references.md#pixel-art) section, which
 are the app's preferences rather than any one job's and so apply to whichever asset you look at

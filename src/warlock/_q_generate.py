@@ -36,7 +36,6 @@ from typing import TYPE_CHECKING, Any
 
 from . import fetch, guidance, models, provenance
 from .pipelines import control, reference, seam
-from .pipelines import prompt as prompt_lib
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .queue import Worker
@@ -181,21 +180,10 @@ class GenerateOps:
             # caller that has one. `handoff` is kept for the finally below.
             t2i, handoff = await self._acquire_t2i(spec, base_key, cond)
             is_tile = job.get("stage") == "tile"
-            # The guidance fragments steer the subject; text2image's own
-            # PROMPT_TEMPLATE still wraps this with the TRELLIS-friendly
-            # single-object framing.
-            #
-            # A tile's guidance is the surface half of the taxonomy only:
-            # category, silhouette and rarity describe an object that is
-            # deliberately not in the picture, and naming one gets an object.
-            # The template half of the same switch is generate()'s, chosen off
-            # the tile= flag below -- both have to move together, which is what
-            # prompt.build() mirrors for the preview.
-            composed = guidance.compose_prompt(
-                job["prompt"] or "",
-                params,
-                fields=prompt_lib.TILE_FIELDS if is_tile else None,
-            )
+            # text2image's own PROMPT_TEMPLATE (or TILE_TEMPLATE, off the
+            # tile= flag below) wraps this with the TRELLIS-friendly
+            # single-object scaffolding.
+            composed = guidance.compose_prompt(job["prompt"] or "", params)
             # The reroll lives *inside* the try below, so however many samples
             # it draws there is still one load and one unload around all of
             # them: the VRAM handoff is a property of the stage, not of an
@@ -220,11 +208,6 @@ class GenerateOps:
                             on_step=lambda i, n: self._t2i_step(job_id, i, n),
                             cancel_event=self._cancel.event,
                             tile=is_tile,
-                            # The other half of compose_prompt above: the
-                            # framing field is a clause of PROMPT_TEMPLATE
-                            # rather than of the subject, so it travels beside
-                            # the composed text rather than inside it.
-                            framing=str(params.get("framing") or ""),
                         )
                     )
                     params["composed_prompt"] = t2i.last_prompt or composed

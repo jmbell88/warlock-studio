@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from warlock import guidance, vram
+from warlock import vram
 from warlock.service.errors import NotFound
 
 # --- P120: hole_worst is inverted, and nothing may imply otherwise ----------
@@ -72,62 +72,9 @@ def test_the_band_sweep_table_does_not_state_the_inverted_rule_generally(capsys)
     assert "one subject at one seed" in out
 
 
-# --- P124: the taxonomy says what it is contributing ------------------------
-
-
-def test_a_style_and_a_palette_that_disagree_are_named():
-    params = guidance.normalize({"art_style": "snes", "palette": "mono"})
-    (conflict,) = guidance.colour_conflicts(params)
-    assert "SNES era" in conflict
-    assert "Monochrome" in conflict
-
-
-def test_a_style_and_a_palette_that_agree_are_silent():
-    params = guidance.normalize({"art_style": "snes", "palette": "vibrant"})
-    assert guidance.colour_conflicts(params) == []
-
-
-def test_the_documented_case(  # the one that produced the item
-):
-    """TODO.md §5: the brief asked for "black and silver and blue" and the
-    composed prompt contributed "vivid saturated colours" on top of it."""
-    params = guidance.normalize({"art_style": "snes"})
-    (conflict,) = guidance.colour_conflicts(params, "a rogue in black and silver and blue")
-    assert "saturated" in conflict
-    for colour in ("black", "silver", "blue"):
-        assert colour in conflict
-
-
-def test_one_named_colour_is_not_a_palette():
-    """"A red sword" names a subject's colour and asks for no scheme; flagging
-    it would make the warning noise, and a warning that is usually noise is one
-    nobody reads when it is not."""
-    params = guidance.normalize({"art_style": "snes"})
-    assert guidance.colour_conflicts(params, "a red sword") == []
-
-
-def test_a_stated_palette_answers_the_brief_and_ends_the_matter():
-    """One disagreement, one sentence: a chosen palette *is* the user's colour
-    decision, so reporting the brief on top of it would be two sentences about
-    one thing."""
-    params = guidance.normalize({"art_style": "snes", "palette": "mono"})
-    conflicts = guidance.colour_conflicts(params, "a rogue in black and silver and blue")
-    assert len(conflicts) == 1
-    assert "Monochrome" in conflicts[0]
-
-
-def test_a_style_with_no_colour_claim_says_nothing():
-    params = guidance.normalize({"art_style": "ps1"})
-    assert guidance.colour_conflicts(params, "black and silver and blue") == []
-
-
-def test_the_preview_carries_them(svc):
-    from warlock.service import system as svc_system
-
-    out = svc_system.prompt_preview(
-        svc, {"art_style": "snes", "palette": "mono"}, "a rogue"
-    )
-    assert out["conflicts"]
+# P124's colour-conflict advisor retired with the taxonomy (2026-08-17): with
+# no style or palette fragments left, there is nothing for fragments to argue
+# about, and ``guidance.colour_conflicts`` is gone.
 
 
 # --- N113: one set of remedies, two checks ----------------------------------

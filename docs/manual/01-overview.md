@@ -61,8 +61,8 @@ appears only when something is failing its startup check.
   single list of everything you were recently working on. Returning here is never destructive.
 
 - **Create.** One mode for the whole asset pipeline, drawn as five **stages** on a rail above the
-  settings column. **Reference** owns the prompt and every control that composes it — the guidance
-  selects, the negative prompt, the image model and style LoRA, the seed and the candidate count.
+  settings column. **Reference** owns the prompt and every control that composes it — the
+  negative prompt, the image model and style LoRA, the seed and the candidate count.
   **Mesh** owns no prompt controls at all: a mesh job starts from a finished reference or from an
   uploaded image, and the column holds only the reconstruction decisions. **Rig** fits a skeleton,
   **Pose** edits one, and **Export** is what you can take away. A stage you cannot enter yet is

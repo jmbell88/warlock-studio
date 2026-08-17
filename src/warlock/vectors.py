@@ -57,20 +57,13 @@ from .pipelines.reference import REFUSAL_CODES
 # ``validation.DERIVED_PARAMS`` (measurements of one run's artifacts), the rig
 # and pose keys (they describe a follow-up job, not this one's settings), and
 # ``hand_edited``/``imported``/``built``/``rerun_of`` (provenance, not config).
+# The twelve taxonomy keys were removed on 2026-08-17 (see
+# docs/measurements/2026-08-17-taxonomy-retirement.md): same-settings vectors
+# re-key and evidence accumulation restarts per configuration, the accepted
+# cost that document records. A stale key in old stored params is skipped by
+# config_vector's membership test, never an error.
 VECTOR_PARAMS = (
-    "category",
-    "silhouette",
-    "material",
-    "condition",
-    "rarity",
-    "emissive",
-    "setting",
-    "genre",
-    "mood",
-    "art_style",
-    "palette",
     "platform",
-    "framing",
     "base_model",
     "style_lora",
     "lora_weight",

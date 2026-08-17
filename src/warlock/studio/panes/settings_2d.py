@@ -1,9 +1,11 @@
 """The 2D pane: everything that composes the SDXL prompt, and Generate.
 
-This pane owns the prompt and every guidance select; the 3D pane owns nothing
-that reaches the text encoder. The one field both need is ``platform``, which
-is why it is deliberately *two* controls -- here it is a prompt fragment, there
-it is the geometry resolution, and one control cannot be owned by two panes.
+This pane owns the prompt and every field that reaches the text encoder; the
+3D pane owns nothing that does. Since the 2026-08-17 taxonomy retirement the
+form is flat -- no folds, no guidance groups -- and every section draws as a
+full-width tinted block, matching Plotter's tools pane: the block scope is
+opened *inside* the ``2d-form`` child so the fills land on the child's own
+draw list rather than under its opaque background.
 
 The composed-prompt preview is debounced and computed on a task thread: it
 loads CLIP's tokenizers to count tokens, which is far too slow for a keystroke.
@@ -21,7 +23,6 @@ from ... import guidance as guidancelib
 from ... import models as modelslib
 from ... import vectors
 from ...bench import findings as findings_lib
-from ...pipelines import prompt as prompt_lib
 from ...service import jobs as svc_jobs
 from ...service import system as svc_system
 from ...service.errors import Invalid
@@ -31,7 +32,7 @@ from ...service.validation import (
     MAX_UPLOAD_BYTES,
     random_seed,
 )
-from .. import controls, dialogs, focus, forms, profiles, theme, tokens, vector_presets, widgets
+from .. import controls, dialogs, focus, forms, profiles, theme, tokens, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 from ..widgets import field_options as _options
@@ -39,10 +40,8 @@ from ..widgets import field_options as _options
 PREVIEW_DEBOUNCE = 0.3
 
 # This pane's key in the focus ring (UX.md Phase 3). The controls on the common
-# path take a place in it and the ones behind the fold do not: the ring exists
-# so a first job can be composed and submitted without the mouse, and Tab
-# through forty controls is not that. Anything behind "More options" is reached
-# by opening it, which is one Tab and one Enter away.
+# path take a place in it: the ring exists so a first job can be composed and
+# submitted without the mouse.
 FOCUS_PANE = "2d"
 
 
@@ -65,23 +64,37 @@ def draw(ctx: Any) -> None:
     # field_error(ctx.state, "style_lora")
     # field_error(ctx.state, "count")
     with forms.Form("create-2d", errors=ctx.state.field_errors) as form_ui:
-        # The form scrolls; Generate does not (K92). This pane is twelve
-        # collapsible sections tall, and the one control every visit ends with
-        # sat at the bottom of all of them.
+        # The form scrolls; Generate does not (K92): the one control every
+        # visit ends with must never sit at the bottom of a scrolled column.
         focus.pump(state, FOCUS_PANE)
         focus.begin(state, FOCUS_PANE)
         if imgui.begin_child("2d-form", (0, -sp(_submit_px[0]))):
-            _presets(ctx, form)
-            _vector_presets(ctx)
-            _profiles(ctx, form)
-            _output(ctx, form)
-            widgets.section("Prompt")
-            manual_render.help_button(ctx, "settings-2d")
-            _prompt(ctx, form, form_ui)
-            _history(ctx, form)
-            _preview(ctx)
-            _run_controls(ctx, form, form_ui)
-            _more(ctx, form)
+            # The block scope opens *inside* the child: section() fills go to
+            # the current window's draw list, and a scope opened outside would
+            # paint onto the parent pane's list, where this child's opaque
+            # PANEL background covers all but the 8dp left overhang. The
+            # ``with`` closes before end_child -- an unbalanced splitter
+            # corrupts the next frame (widgets.py, _BlockScope).
+            with widgets.section_blocks():
+                widgets.section("Output")
+                _output(ctx, form)
+                widgets.section("Profile")
+                _profiles(ctx, form)
+                widgets.section("Prompt")
+                manual_render.help_button(ctx, "settings-2d")
+                _prompt(ctx, form, form_ui)
+                _history(ctx, form)
+                _preview(ctx)
+                widgets.section("References")
+                _references(ctx, form)
+                widgets.section("Seed")
+                _run_controls(ctx, form, form_ui)
+                widgets.section("Model")
+                _model(ctx, form)
+                widgets.section("LoRA")
+                _lora(ctx, form)
+                widgets.section("Negative prompt")
+                _negative(ctx, form)
         imgui.end_child()
         top = imgui.get_cursor_pos_y()
         _submit(ctx, form)
@@ -90,159 +103,15 @@ def draw(ctx: Any) -> None:
             _submit_px[0] = height / max(tokens.SCALE, 0.01)
 
 
-# The twelve optional taxonomies, grouped by what they describe. Grouping and
-# per-field labels are the fix for the old column of identical unlabelled
-# combos, where a chosen value ("worn", "brass") no longer said which question
-# it answered.
-GUIDANCE_GROUPS = (
-    # ``framing`` sits here rather than in the 3D pane: it is a clause of the
-    # SDXL prompt, so the one-owner rule puts it with the pane that owns the
-    # prompt. It is not in TILE_FIELDS, so guidance_groups drops it for a tile,
-    # which is right -- TILE_TEMPLATE has a framing of its own.
-    ("Subject", ("category", "genre", "setting", "silhouette", "framing")),
-    ("Style", ("art_style", "palette", "mood", "rarity")),
-    ("Surface", ("material", "condition", "emissive")),
-)
-
 # What a field is *called* on screen, where that is not its key with the
-# underscores taken out. The key stays ``art_style`` deliberately: it is what
-# every job on disk recorded, what ``guidance._lookup`` re-normalizes a rerun
-# through, and what the findings and verdict buckets are keyed on -- renaming
-# it would need a ``_LEGACY_ALIASES`` entry and would still split the corpus in
-# two, because a vector recorded under the old spelling is a different string.
-FIELD_LABELS = {"art_style": "era style"}
+# underscores taken out. Empty since the taxonomy retirement (it carried
+# ``art_style``); the helper stays because the sweep-axis forms and Review's
+# base-capture labels still route every field name through it.
+FIELD_LABELS: dict[str, str] = {}
 
 
 def field_label(field: str) -> str:
     return FIELD_LABELS.get(field, field.replace("_", " "))
-
-
-def _field_options(ctx: Any, field: str) -> list[tuple[str, str]]:
-    """``widgets.field_options`` with this pane's own name for the blank entry.
-
-    The empty option is the one that names the *question* -- it is what the
-    combo shows until something is chosen -- so a renamed label that stopped at
-    the heading would leave the control itself still saying "art style...".
-    """
-    options = widgets.field_options(ctx, field)
-    if options and options[0][0] == "":
-        options[0] = ("", f"{field_label(field)}...")
-    return options
-
-
-def guidance_groups(form: dict[str, Any]) -> tuple[tuple[str, tuple[str, ...]], ...]:
-    """The taxonomy groups this form should draw.
-
-    A tile has no subject, so category, silhouette, rarity, mood and emissive
-    describe something that is deliberately not in the picture -- drawing them
-    would offer controls the prompt compiler then throws away. The fields are
-    not *cleared*, only hidden and unsubmitted, so switching back brings back
-    what was typed.
-    """
-    if form.get("output") != "tile":
-        return GUIDANCE_GROUPS
-    allowed = set(prompt_lib.TILE_FIELDS)
-    out = []
-    for title, fields in GUIDANCE_GROUPS:
-        kept = tuple(f for f in fields if f in allowed)
-        if kept:
-            out.append((title, kept))
-    return tuple(out)
-
-
-# The one reveal (UX.md Phase 3), and what is behind it. A key rather than a
-# literal at three call sites because ``request_open`` names it too.
-MORE_KEY = "2d/more"
-
-# The header nested one level deeper inside the fold, and the fields it draws
-# refusals against. Named beside MORE_KEY because a refusal reaching one of
-# these must open *both* headers: opening the outer fold alone rings a control
-# the inner, still-collapsed "Advanced" header never draws.
-ADVANCED_KEY = "2d/advanced"
-ADVANCED_FIELDS = ("base_model", "style_lora", "negative_prompt")
-
-
-def folded_fields(form: dict[str, Any]) -> tuple[str, ...]:
-    """Every form key that lives behind "More options".
-
-    Derived from the taxonomy groups rather than written out, so a field added
-    to ``GUIDANCE_GROUPS`` is folded by having been added -- and the three that
-    are not in a group are named here because they are genuinely a different
-    list, not because anybody chose to restate one.
-    """
-    grouped = tuple(f for _title, fields in GUIDANCE_GROUPS for f in fields)
-    return grouped + (
-        "platform",
-        "ref_path",
-        "ip_adapter",
-        "control",
-        "base_model",
-        "style_lora",
-        "negative_prompt",
-    )
-
-
-def more_summary(form: dict[str, Any]) -> str:
-    """What the fold is hiding, said while it is closed.
-
-    Disclosure, not deletion: the point of a reveal is that the user can see
-    there is something behind it and roughly what. The *count* is the half that
-    matters and the reason this is not a static caption -- a form restored with
-    a style, a genre and a conditioning image set looks identical to an empty
-    one with the fold shut, which is how somebody comes to spend two minutes of
-    GPU on settings they had forgotten were there.
-    """
-    from ..state import default_form_2d
-
-    defaults = default_form_2d()
-    set_count = sum(
-        1
-        for key in folded_fields(form)
-        if form.get(key) not in ("", None) and form.get(key) != defaults.get(key)
-    )
-    what = "Subject, Style, Surface, Reference and the model"
-    if not set_count:
-        return f"{what} - nothing set."
-    return f"{what} - {set_count} set."
-
-
-def _more(ctx: Any, form: dict[str, Any]) -> None:
-    """The twelve taxonomy selects, the reference and Advanced, behind one fold.
-
-    This pane was "twelve collapsible sections tall" by its own comment, and the
-    disclosure it had -- ``default_open=False`` on two of them -- did not help,
-    because the eight that were open are the ones a first job does not need. The
-    common path above is what the first screen shows: what to draw, what kind of
-    output, how many. Everything here refines that.
-
-    Nothing is removed and nothing is hidden that could refuse a submit
-    silently: the aggregate block above Generate still lists every problem, and
-    a refusal that names a control *in here* opens the fold on the next frame
-    rather than ringing a control nobody can see.
-    """
-    for key in folds_to_open(set(ctx.state.field_errors), form):
-        widgets.request_open(key)
-    if not widgets.header("More options", default_open=False, persist_key=MORE_KEY):
-        widgets.muted_wrapped(more_summary(form))
-        return
-    _guidance(ctx, form)
-    _reference(ctx, form)
-    _advanced(ctx, form)
-
-
-def folds_to_open(named: set[str], form: dict[str, Any]) -> tuple[str, ...]:
-    """Which persist keys a refusal naming ``named`` fields must reveal.
-
-    A pure function of the error set and the form, so the safety property --
-    a refusal never rings a control nothing draws -- is assertable without a
-    GL context. Outer fold first: ``request_open`` is order-insensitive, but
-    the tuple reads as the path the user will watch open.
-    """
-    if not named & set(folded_fields(form)):
-        return ()
-    if named & set(ADVANCED_FIELDS):
-        return (MORE_KEY, ADVANCED_KEY)
-    return (MORE_KEY,)
 
 
 def _findings_hint(ctx: Any, param: str, value: Any) -> str | None:
@@ -269,140 +138,7 @@ def _findings_hint(ctx: Any, param: str, value: Any) -> str | None:
     )
 
 
-def _guidance(ctx: Any, form: dict[str, Any]) -> None:
-    for title, fields in guidance_groups(form):
-        widgets.section(title)
-        if imgui.begin_table(f"guidance/{title}", 2):
-            for field in fields:
-                imgui.table_next_column()
-                widgets.field_label(field_label(field))
-                imgui.set_next_item_width(-1)
-                options = _field_options(ctx, field)
-                before = form[field]
-                form[field] = widgets.combo(f"##{field}", form[field], options, 0)
-                # One call site for twelve controls: the refusal is looked up by
-                # the field's own name, so the loop that draws the taxonomy is
-                # also the loop that points at whichever of them was refused.
-                widgets.field_error(ctx.state, field)
-                if form[field] != before:
-                    ctx.state.clear_field_error(field)
-                hint = _findings_hint(ctx, field, form[field])
-                if hint is not None:
-                    widgets.hint_text(hint)
-            imgui.end_table()
-    if form.get("output") == "tile":
-        # platform is a hint about how much detail to draw an *object* with,
-        # and is not in TILE_FIELDS -- so on a tile it is a control whose value
-        # the prompt compiler discards.
-        return
-    # Narrowed to leave room for the marker: a full-width combo pushes it off
-    # the panel.
-    #
-    # "detail brief", not "platform detail" (UX.md Phase 3). This and the 3D
-    # pane's "Detail" were two near-identical names for a prompt fragment and a
-    # geometry resolution, kept apart by nothing but a tooltip on each
-    # apologising for the other -- and both were called after the *key*
-    # (``platform``), which is a storage name rather than a description of what
-    # the control does. It says "brief" because that is what it is: an
-    # instruction in the prompt about how much detail to draw, which the sampler
-    # may or may not honour. The key stays ``platform``: it is what every job on
-    # disk recorded and what the findings buckets are keyed on, and this is
-    # ``FIELD_LABELS``' own argument for keeping ``art_style``.
-    widgets.field_label("detail brief")
-    before = form["platform"]
-    form["platform"] = widgets.combo(
-        "##g_platform", form["platform"], _options(ctx, "platform"), width=-30
-    )
-    widgets.field_error(ctx.state, "platform")
-    if form["platform"] != before:
-        ctx.state.clear_field_error("platform")
-    widgets.help_marker(
-        "A prompt hint about how much detail to draw. How much geometry the "
-        "mesh gets is the 3D pane's Mesh resolution, and separate."
-    )
-
-
 # --- pieces -----------------------------------------------------------------
-
-
-def _preset_matches(form: dict[str, Any], preset: dict[str, Any]) -> bool:
-    fields = {k: v for k, v in (preset.get("fields") or {}).items() if k in form}
-    if any(form.get(k) != v for k, v in fields.items()):
-        return False
-    return not preset.get("prompt") or form.get("prompt") == preset["prompt"]
-
-
-def _presets(ctx: Any, form: dict[str, Any]) -> None:
-    presets = ctx.guidance.get("presets") or []
-    if not presets:
-        return
-    # The combo *shows* the preset the form currently equals, or "Custom": the
-    # old write-only picker showed "preset..." forever, so applying one left no
-    # trace of which one the form was wearing.
-    current = next((p["key"] for p in presets if _preset_matches(form, p)), "")
-    options = [("", "Custom")] + [(p["key"], p["label"]) for p in presets]
-    widgets.field_label("preset")
-    with focus.item(ctx.state, FOCUS_PANE, "preset"):
-        chosen = widgets.combo("##preset", current, options)
-    if not chosen or chosen == current:
-        return
-    preset = next((p for p in presets if p["key"] == chosen), None)
-    if preset is None:
-        return
-    # A preset fills the fields rather than becoming a hidden mode: everything
-    # it set stays visible and editable, which is what makes it a starting
-    # point rather than a black box.
-    form.update({k: v for k, v in (preset.get("fields") or {}).items() if k in form})
-    if preset.get("prompt"):
-        form["prompt"] = preset["prompt"]
-    ctx.state.preview_dirty_at = time.monotonic()
-
-
-def _vector_presets(ctx: Any) -> None:
-    """The settings vectors Review found and the user saved.
-
-    A second picker rather than more entries in the shipped-preset combo: those
-    are starting points somebody wrote, these are configurations the recorded
-    verdicts say worked. Hidden entirely until one is saved, so a user who never
-    reviews anything never sees an empty control.
-
-    It fills *both* forms -- a vector carries the mesh-side settings too -- which
-    is why it takes ctx rather than the 2D form alone.
-
-    The last-applied name is remembered only so there is something for Forget
-    to name. Presets could be saved (from Review) and applied but never
-    removed, and nothing capped the list, so ``studio_settings.json`` grew
-    monotonically with no way back.
-    """
-    saved = vector_presets.list_presets(ctx.settings)
-    if not saved:
-        return
-    widgets.field_label("found settings")
-    options = [("", "-")] + [(name, name) for name in sorted(saved)]
-    chosen = widgets.combo("##vector-preset", "", options)
-    if chosen and chosen in saved:
-        vector_presets.apply(ctx.state, saved[chosen])
-        ctx.state.preview_dirty_at = time.monotonic()
-        ctx.state.preview["vector_preset"] = chosen
-        ctx.toast(f"Applied {chosen} to the 2D and 3D forms.")
-    last = ctx.state.preview.get("vector_preset")
-    if last in saved:
-        imgui.same_line()
-        if widgets.disabled_button(f"Forget {last}", True):
-            ctx.confirms.ask(
-                dialogs.Confirm(
-                    title="Forget this preset?",
-                    message=f"{last} will be removed from your saved settings.",
-                    on_confirm=lambda name=last: _forget_vector_preset(ctx, name),
-                )
-            )
-
-
-def _forget_vector_preset(ctx: Any, name: str) -> None:
-    vector_presets.delete_preset(ctx.settings, name)
-    if ctx.state.preview.get("vector_preset") == name:
-        ctx.state.preview.pop("vector_preset", None)
-    ctx.toast(f"Forgot the preset {name}.")
 
 
 def _output(ctx: Any, form: dict[str, Any]) -> None:
@@ -429,10 +165,9 @@ def _output(ctx: Any, form: dict[str, Any]) -> None:
     if form["output"] != before:
         ctx.state.preview_dirty_at = time.monotonic()
     if form["output"] == "tile":
-        widgets.muted(
+        widgets.muted_wrapped(
             "A tile is drawn with wrapping convolutions, so its edges match "
-            "when repeated. It has no subject, so the object taxonomy is "
-            "hidden and it cannot be made into a mesh."
+            "when repeated. It has no subject and cannot be made into a mesh."
         )
 
 
@@ -455,13 +190,14 @@ def _profiles(ctx: Any, form: dict[str, Any]) -> None:
             else ""
         )
         options = [("", "Custom")] + [(name, name) for name in sorted(saved)]
-        widgets.field_label("profile")
         chosen = widgets.combo("##profile", current, options, width=-84)
         if chosen and chosen != current and chosen in saved:
             profiles.apply(form, saved[chosen])
             profiles.set_active(ctx.settings, chosen)
             ctx.state.preview_dirty_at = time.monotonic()
-        imgui.same_line()
+        # Wrap-aware, all three: with the picker taking the row's width, the
+        # buttons continued past the pane edge at 1.5 scale and were clipped.
+        widgets.same_line_or_wrap(widgets.button_width("Save as..."))
     if controls.button("Save as..."):
         ctx.prompts.ask(
             dialogs.Prompt(
@@ -471,7 +207,7 @@ def _profiles(ctx: Any, form: dict[str, Any]) -> None:
                 on_accept=lambda name: _save_profile(ctx, form, name),
             )
         )
-    imgui.same_line()
+    widgets.same_line_or_wrap(widgets.button_width("Manage..."))
     # The manager, from the picker it is about (the UI redesign, wave 3). It was a
     # top-level mode, which put a shelf of saved settings in the navigation
     # beside the six creative workspaces and made "manage my styles" somewhere
@@ -480,16 +216,16 @@ def _profiles(ctx: Any, form: dict[str, Any]) -> None:
         from . import profiles_panel
 
         profiles_panel.open_sheet(ctx)
-    imgui.same_line()
+    widgets.same_line_or_wrap(widgets.button_width("Reset..."))
     if controls.button("Reset..."):
         ctx.confirms.ask(
             dialogs.Confirm(
                 title="Reset the image settings?",
                 message=(
-                    "The prompt, the negative prompt, every guidance select, "
-                    "the model, the LoRA, the reference and the run controls go "
-                    "back to their defaults. Saved profiles and presets are "
-                    "kept, and the 3D form is untouched."
+                    "The prompt, the negative prompt, the model, the LoRA, "
+                    "the reference and the run controls go back to their "
+                    "defaults. Saved profiles are kept, and the 3D form is "
+                    "untouched."
                 ),
                 confirm_label="Reset",
                 cancel_label="Cancel",
@@ -580,14 +316,6 @@ def _preview(ctx: Any) -> None:
         return
     if imgui.tree_node("Prompt actually sent"):
         imgui.text_wrapped(preview.get("prompt") or "")
-        # Advisory, never a refusal (P124): a deliberate clash is a legitimate
-        # thing to ask a sampler for. What was wrong was composing it silently
-        # -- ``art_style=snes`` contributes "vivid saturated colours" over a
-        # brief that named black and silver and blue, and the only way to
-        # notice was to read the sentence above and know which words were the
-        # user's.
-        for conflict in preview.get("conflicts") or []:
-            widgets.text_colored(theme.WARN, conflict)
         tokens, chunks = preview.get("tokens"), preview.get("chunks")
         if tokens is not None:
             # Chunks, not a truncation warning: the composed prompt is split on
@@ -597,7 +325,7 @@ def _preview(ctx: Any) -> None:
         imgui.tree_pop()
 
 
-def _reference(ctx: Any, form: dict[str, Any]) -> None:
+def _references(ctx: Any, form: dict[str, Any]) -> None:
     """Conditioning: an image to steer appearance and/or structure.
 
     Every control below the picker is hidden until there is a reference, and
@@ -606,12 +334,8 @@ def _reference(ctx: Any, form: dict[str, Any]) -> None:
     the LoRA strength slider without a LoRA: a control with nothing to act on
     is a control that cannot do anything.
     """
-    if not widgets.header("Reference", default_open=False, persist_key="2d/reference"):
-        return
-
     # The block is grouped so a dropped file can outline exactly what it landed
-    # in (H70) -- this section is collapsed by default, so a drop used to be
-    # accepted with nothing on screen moving.
+    # in (H70).
     imgui.begin_group()
     origin = imgui.get_cursor_screen_pos()
     try:
@@ -632,7 +356,7 @@ def _reference_body(ctx: Any, form: dict[str, Any]) -> None:
         found = profiles.active_anchor(ctx.settings, ctx.svc.config)
         if found is not None:
             active = profiles.get_active(ctx.settings)
-            widgets.muted(
+            widgets.muted_wrapped(
                 f"The profile {active} has a style anchor; every generation "
                 "under it is conditioned on that image. Attaching one here "
                 "replaces it for this asset."
@@ -661,7 +385,10 @@ def _reference_body(ctx: Any, form: dict[str, Any]) -> None:
         widgets.muted("...or drop an image on the window.")
         return
 
-    widgets.section("Appearance")
+    # Field labels rather than nested section() calls: inside the block scope
+    # a section would open a new block, and these are two halves of the one
+    # References block.
+    widgets.field_label("appearance")
     form["ip_adapter"] = widgets.combo(
         "##ip_adapter", form["ip_adapter"], _options(ctx, "ip_adapter")
     )
@@ -672,10 +399,10 @@ def _reference_body(ctx: Any, form: dict[str, Any]) -> None:
         if changed:
             form["ip_scale"] = value
 
-    widgets.section("Structure")
+    widgets.field_label("structure")
     note = structure_note(ctx, form)
     if note is not None:
-        widgets.muted(note)
+        widgets.muted_wrapped(note)
         return
     form["control"] = widgets.combo("##control", form["control"], _options(ctx, "control"))
     if form["control"]:
@@ -874,11 +601,11 @@ def clear_unusable(ctx: Any, form: dict[str, Any]) -> list[str]:
     return cleared
 
 
-def _advanced(ctx: Any, form: dict[str, Any]) -> None:
-    if not widgets.header("Advanced", default_open=False, persist_key=ADVANCED_KEY):
-        return
+def _model(ctx: Any, form: dict[str, Any]) -> None:
+    # The section heading is the label; a labeled_combo here would say
+    # "Model" twice in two type styles.
     before = form["base_model"]
-    form["base_model"] = widgets.labeled_combo("Model", form["base_model"], ctx.base_models)
+    form["base_model"] = widgets.combo("##base_model", form["base_model"], ctx.base_models)
     # The refusal this most often carries is ``check_weights``' -- a model that
     # is selected and not downloaded, with the ``hf download`` line in it -- and
     # the control it names is three collapsed sections away from the button that
@@ -891,11 +618,15 @@ def _advanced(ctx: Any, form: dict[str, Any]) -> None:
     # about the change just made, and the structure control's own section is
     # behind a header the user may never open.
     for note in ctx.state.preview.get(CLEARED_KEY) or ():
-        widgets.muted(note)
+        widgets.muted_wrapped(note)
+    # On its own line, not same_line: the combo above takes the full width, so
+    # a continuation would start on the right edge and clip entirely.
     hint = _findings_hint(ctx, "base_model", form["base_model"])
     if hint is not None:
-        imgui.same_line()
-        widgets.secondary(hint)
+        widgets.hint_text(hint)
+
+
+def _lora(ctx: Any, form: dict[str, Any]) -> None:
     no_lora = lora_note(ctx, form)
     if no_lora is not None:
         # Disabled rather than hidden, this pane's stated rule: the form holds
@@ -904,16 +635,15 @@ def _advanced(ctx: Any, form: dict[str, Any]) -> None:
         # submit is now refused.
         imgui.begin_disabled()
     was_lora = form["style_lora"]
-    form["style_lora"] = widgets.labeled_combo(
-        "Style LoRA", form["style_lora"], lora_options(ctx, form)
+    form["style_lora"] = widgets.combo(
+        "##style_lora", form["style_lora"], lora_options(ctx, form)
     )
     widgets.field_error(ctx.state, "style_lora")
     if form["style_lora"] != was_lora:
         ctx.state.clear_field_error("style_lora")
     hint = _findings_hint(ctx, "style_lora", form["style_lora"])
     if hint is not None:
-        imgui.same_line()
-        widgets.secondary(hint)
+        widgets.hint_text(hint)
     if form["style_lora"]:
         # Hidden without a LoRA rather than disabled: a weight slider with
         # nothing to weight is a control that cannot do anything.
@@ -926,35 +656,35 @@ def _advanced(ctx: Any, form: dict[str, Any]) -> None:
         # float32 rounding a slider hands back (see its docstring).
         hint = _findings_hint(ctx, "lora_weight", form["lora_weight"])
         if hint is not None:
-            imgui.same_line()
-            widgets.secondary(hint)
+            widgets.hint_text(hint)
     if no_lora is not None:
         imgui.end_disabled()
-        widgets.muted(no_lora)
+        widgets.muted_wrapped(no_lora)
     else:
         # One sentence at a time: lora_note explains a control that cannot act,
         # lora_filter_note one acting on less than the whole list, and both
         # under a disabled combo would be one control saying two things.
         narrowed = lora_filter_note(ctx, form)
         if narrowed is not None:
-            widgets.muted(narrowed)
+            widgets.muted_wrapped(narrowed)
+
+
+def _negative(ctx: Any, form: dict[str, Any]) -> None:
     inert = negative_prompt_note(ctx, form)
     if inert is not None:
         # Disabled rather than hidden, and with the reason underneath: the
         # field holds text the user typed under another base, and hiding it
         # would make that text vanish without saying why.
         imgui.begin_disabled()
-    # Above the box, not beside it: imgui draws a multiline's label to the
-    # *right* of the field, and this one is -1 wide, so the word "Negative" was
-    # clipped off the edge of the panel and the box was unlabelled.
-    widgets.field_label("negative prompt")
+    # The section heading above is the label; imgui would draw a multiline's
+    # own label to the *right* of a -1-wide field, clipped off the panel.
     before = form["negative_prompt"]
     form["negative_prompt"] = widgets.multiline("##negative", before, 54, MAX_PROMPT)
     if form["negative_prompt"] != before:
         ctx.state.preview_dirty_at = time.monotonic()
     if inert is not None:
         imgui.end_disabled()
-        widgets.muted(inert)
+        widgets.muted_wrapped(inert)
 
 
 def _run_controls(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
@@ -964,7 +694,6 @@ def _run_controls(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
     required re-expanding a collapsed section every session while the submit
     footer talked about the count as if it were visible.
     """
-    widgets.section("Run")
     with focus.item(ctx.state, FOCUS_PANE, "count") as focused:
         changed, picked = form_ui.segmented_choice(
             "count",
@@ -1114,15 +843,9 @@ def submit_kwargs(form: dict[str, Any]) -> dict[str, Any]:
     approved. A tile has no second stage at all.
     """
     tile = form.get("output") == "tile"
+    # Every surviving field is machinery (model identity, conditioning) rather
+    # than subject taxonomy, so a tile submits the same set an object does.
     known = set(guidancelib.form_fields())
-    if tile:
-        # The hidden groups must not reach the submit either: a row claiming a
-        # category the prompt compiler discarded is a lie about what produced
-        # the image. base_model and style_lora are re-added because they are
-        # model identity rather than subject taxonomy -- a tile still needs a
-        # checkpoint, and the trigger word of a style LoRA is prepended to a
-        # tile prompt exactly as it is to an object's.
-        known &= set(prompt_lib.TILE_FIELDS) | {"base_model", "style_lora"}
     fields = {k: v for k, v in form.items() if k in known and v not in ("", None)}
     return {
         "kind": "text",

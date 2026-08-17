@@ -288,9 +288,9 @@ def _measured(parts: list[tuple[str, int]]) -> str:
     *meshes*, not *runs*, and that word is doing work. These lines appear
     under 2D prompt controls as well as mesh ones, because an observation
     credits every param in its vector exactly as a verdict does -- so
-    "art_style snes" carries the hole fraction of the meshes reconstructed
-    from SNES-era references. That is a true and useful statement, but only if the
-    reader can tell it is about geometry rather than about the picture.
+    "style_lora pixelxl" carries the hole fraction of the meshes reconstructed
+    from pixel-style references. That is a true and useful statement, but only
+    if the reader can tell it is about geometry rather than about the picture.
     """
     if len({count for _text, count in parts}) == 1:
         return f"{' · '.join(text for text, _ in parts)} ({parts[0][1]} meshes)"

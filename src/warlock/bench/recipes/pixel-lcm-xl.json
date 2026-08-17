@@ -5,7 +5,6 @@
   "guidance": {
     "base_model": "pixel",
     "style_lora": "pixelxl",
-    "art_style": "nes",
     "platform": "2d"
   },
   "lora_weight": 1.2,

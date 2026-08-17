@@ -135,10 +135,10 @@ def test_a_rollback_leaves_a_unit_the_worker_is_inside_alone(svc, monkeypatch):
 def test_each_param_is_routed_to_the_tier_create_job_expects():
     plan = _plan(
         seeds=(7,),
-        base={"genre": "fantasy", "lora_weight": 0.9, "trellis_band": 8},
+        base={"platform": "2d", "lora_weight": 0.9, "trellis_band": 8},
     )
     kwargs = svc_sweeps.unit_kwargs(plan, svc_sweeps.expand(plan)[0])
-    assert kwargs["guidance_fields"] == {"genre": "fantasy", "style_lora": "render3d"}
+    assert kwargs["guidance_fields"] == {"platform": "2d", "style_lora": "render3d"}
     assert kwargs["lora_weight"] == 0.9
     assert kwargs["trellis_band"] == 8
     assert kwargs["seed"] == 7

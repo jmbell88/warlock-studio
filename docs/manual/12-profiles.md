@@ -6,7 +6,7 @@ does not re-pick the same settings each time they switch.
 
 ## What a profile stores
 
-Exactly nine fields:
+Exactly four fields:
 
 | Field | Why |
 | --- | --- |
@@ -14,26 +14,15 @@ Exactly nine fields:
 | style LoRA | And its adapter. |
 | LoRA strength | How hard the adapter is applied. |
 | negative prompt | Part of the house style, not of one image. |
-| platform | The prompt-side detail hint. |
-| genre | A style choice. |
-| era style | A style choice. |
-| setting | A style choice. |
-| palette | A style choice. |
 
 What it deliberately does **not** store is the per-generation half: the prompt, the seed, the seed
-lock and the candidate count are about one submit rather than about a look. Nor does it store the
-taxonomy fields that describe the *subject* — category, silhouette, material, condition, emissive,
-rarity and mood — which change per asset and would otherwise be dragged along by every profile
-switch.
-
-The split is not automatic. A new guidance table is far more likely to be another per-asset field
-than another style one, so a field joins the profile set only by being named — which is why adding
-one to `guidance.py` does not silently start dragging it between assets. See
-[Extending](21-extending.md).
+lock and the candidate count are about one submit rather than about a look. (Profiles saved before
+the 2026-08-17 taxonomy retirement may still carry the old style selects on disk; applying one
+simply ignores them.)
 
 ## Where they are managed
 
-At the **Reference stage**, a profile picker sits beside the preset picker. Choosing one fills the fields
+At the **Reference stage**, the **Profile** section holds the picker. Choosing one fills the fields
 and makes it active, and the picker shows "Custom" once you edit past it. **Save as...** asks for a
 name and captures the current form's profile fields.
 
@@ -41,8 +30,8 @@ name and captures the current form's profile fields.
 and not somewhere you travel to: managing your styles is something you do to the form in front of
 you, so it opens from the control it is about and Esc puts it away. (The command palette's **Manage
 style profiles** is the same door from anywhere else; it goes to the Reference stage first.) **New profile**
-starts from whatever the 2D form currently holds. Each saved profile lists its model, its LoRA and
-how many style fields it sets, with up to four actions: **Set active**, **Edit**, **Apply to form**
+starts from whatever the 2D form currently holds. Each saved profile lists its model and its LoRA,
+with up to four actions: **Set active**, **Edit**, **Apply to form**
 and **Delete** — the active profile hides **Set active**.
 
 Closing the sheet over a draft you have started asks before discarding it, exactly as leaving the
@@ -50,16 +39,16 @@ mode used to.
 
 The editor works on a *draft*, not on the live form, so editing a profile never changes what your
 next Generate would send. Renaming a profile in the editor moves it rather than forking it — a typo
-correction does not leave you with a duplicate. Applying a profile only touches the keys the profile
-actually holds, so a profile saved before a field existed leaves that new field alone rather than
-blanking it.
+correction does not leave you with a duplicate. Applying a profile only touches keys the current
+form still has, so a profile saved under an older form neither blanks new fields nor resurrects
+retired ones.
 
 Deleting a profile removes only the profile. Nothing already generated changes.
 
 ## The style anchor
 
 A profile can also carry one **anchor image**: a picture every generation under that profile is
-conditioned on, through the IP-Adapter. Where the nine fields above describe a look in words, an
+conditioned on, through the IP-Adapter. Where the four fields above describe a look in words, an
 anchor shows it — which is the difference between asking for "hand-painted texture style" and
 handing the model an example of yours.
 

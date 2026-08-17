@@ -147,7 +147,9 @@ async def test_cancel_mid_t2i_never_starts_trellis(worker):
     assert worker.trellis.generate_calls == []
 
 
-async def test_guidance_is_folded_into_the_image_prompt(worker):
+async def test_stale_taxonomy_params_do_not_reach_the_image_prompt(worker):
+    # A stored job from before the taxonomy retirement still runs; its
+    # fragments are simply gone from the composed prompt.
     job_id = worker.store.create(
         "text",
         "a plasma rifle",
@@ -157,12 +159,8 @@ async def test_guidance_is_folded_into_the_image_prompt(worker):
     await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
     await worker.shutdown()
 
-    from warlock import guidance
-
     prompt = worker._text2image.prompts[0]
-    assert prompt.startswith("a plasma rifle, ")
-    assert guidance.GENRES["scifi"].prompt in prompt
-    assert guidance.ART_STYLES["ps1"].prompt in prompt
+    assert prompt == "a plasma rifle"
     # Recorded on the job so a finished asset can explain how it was made.
     assert worker.store.get(job_id)["params"]["composed_prompt"] == prompt
 
@@ -2378,34 +2376,14 @@ async def test_an_ordinary_reference_does_not_tile(worker):
     assert worker._text2image.tiles == [False]
 
 
-async def test_a_tile_composes_only_the_surface_half_of_the_taxonomy(worker):
-    # The half of the tile switch the worker owns. text2image chooses the
-    # template; the field subset is chosen here, and B6 shipped the template
-    # without it -- so a tile got the tileable framing wrapped around a prompt
-    # that still named a weapon.
-    from warlock import guidance
-
-    params = guidance.normalize({"material": "stone", "category": "weapon"})
-    params["seed"] = 1
-    job_id = worker.store.create("text", "cobblestone", params, stage="tile")
-    worker.start()
-    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
-    await worker.shutdown()
-
-    composed = worker._text2image.prompts[0]
-    assert guidance.MATERIALS["stone"].prompt in composed
-    assert guidance.CATEGORIES["weapon"].prompt not in composed
-
-
 async def test_the_prompt_preview_mirror_agrees_with_the_worker_and_the_pipeline(worker):
     # prompt.build() is a *mirror* of an assembly split across two modules --
-    # queue.py picks the field subset, text2image.generate picks the template
-    # -- and nothing else checks that the two agree. A tile is the first case
-    # where they can differ, because both halves change at once.
+    # queue.py composes the subject, text2image.generate picks the template
+    # -- and nothing else checks that the two agree.
     from warlock import guidance
     from warlock.pipelines import prompt as prompt_lib
 
-    params = guidance.normalize({"material": "stone", "category": "weapon"})
+    params = guidance.normalize({})
     params["seed"] = 1
     tile_id = worker.store.create("text", "cobblestone", dict(params), stage="tile")
     ref_id = worker.store.create("text", "cobblestone", dict(params), stage="reference")
@@ -2427,15 +2405,9 @@ async def test_the_prompt_preview_mirror_agrees_with_the_worker_and_the_pipeline
     assert prompt_lib.build("cobblestone", params, tile=True) == (
         prompt_lib.TILE_TEMPLATE.format(prompt=tile_composed)
     )
-    # ``view`` is the other half of what the worker hands generate(): the
-    # framing clause travels beside the composed subject rather than inside it,
-    # so the mirror has to apply the same field the worker passed along.
     assert prompt_lib.build("cobblestone", params) == (
-        prompt_lib.PROMPT_TEMPLATE.format(
-            prompt=ref_composed, view=prompt_lib.view_clause(params.get("framing"))
-        )
+        prompt_lib.PROMPT_TEMPLATE.format(prompt=ref_composed)
     )
-    assert worker._text2image.framings == [str(params.get("framing") or "")] * 2
 
 
 async def test_a_tile_is_measured_for_seams_not_for_composition(worker, monkeypatch):

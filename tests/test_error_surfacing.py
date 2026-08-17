@@ -138,11 +138,11 @@ def test_a_guidance_refusal_carries_the_control_it_came_from():
     passthroughs could never supply one, so the app's most common refusals
     highlighted nothing."""
     with pytest.raises(guidance.GuidanceError) as caught:
-        guidance.normalize({"art_style": "not-a-style"})
-    assert caught.value.field == "art_style"
+        guidance.normalize({"platform": "not-a-platform"})
+    assert caught.value.field == "platform"
 
     wrapped = invalid_from(caught.value, "Those generation settings are not usable")
-    assert wrapped.field == "art_style"
+    assert wrapped.field == "platform"
 
 
 def test_a_guidance_error_is_still_a_value_error():
@@ -159,7 +159,7 @@ def test_a_guidance_error_is_still_a_value_error():
         ({"bg_removal": "magic"}, "bg_removal"),
         ({"negative_prompt": "x" * 5000}, "negative_prompt"),
         ({"ip_scale": 99.0}, "ip_scale"),
-        ({"category": "nonsense"}, "category"),
+        ({"platform": "nonsense"}, "platform"),
     ],
 )
 def test_every_bounded_guidance_field_names_itself(raw, field):
@@ -172,9 +172,11 @@ def test_the_service_wraps_rather_than_forwards_a_guidance_message(svc):
     from warlock.service import jobs as svc_jobs
 
     with pytest.raises(Invalid) as caught:
-        svc_jobs.create_job(svc, kind="text", prompt="a rock", guidance_fields={"mood": "???"})
+        svc_jobs.create_job(
+            svc, kind="text", prompt="a rock", guidance_fields={"platform": "???"}
+        )
     assert caught.value.message.startswith("Those generation settings are not usable:")
-    assert caught.value.field == "mood"
+    assert caught.value.field == "platform"
 
 
 # --- E50: a status word is not a sentence ----------------------------------

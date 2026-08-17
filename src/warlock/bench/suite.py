@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 SUITE_DIR = Path(__file__).resolve().parent / "suites"
-DEFAULT_SUITE = "core-v1"
+DEFAULT_SUITE = "core-v2"
 
 # The categories a suite may use. Enforced at load: ``--filter`` matches on
 # this string, so a typo'd category in a suite file selects zero items and

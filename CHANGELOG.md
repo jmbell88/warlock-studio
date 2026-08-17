@@ -6,6 +6,32 @@ record of what a version actually changed. The top heading's version must
 match `pyproject.toml` — a test asserts it, so a release bump cannot leave this
 file behind.
 
+## 0.0.24 — 2026-08-17
+
+- **The Create Reference form is flat, and much smaller.** The twelve-select
+  creative taxonomy (category, genre, material, era style and the rest), the
+  shipped presets, the "found settings" picker, the detail brief and the
+  "More options"/"Advanced" folds are gone. What remains is one column:
+  Output, Profile, Prompt, References, Seed, Model, LoRA and Negative prompt,
+  with Generate pinned below. Your prompt is the brief — no taxonomy axis
+  ever measured a quality win (`docs/measurements/2026-08-17-taxonomy-
+  retirement.md`), and assets generated under the old fields still reroll and
+  promote, composing without the retired fragments.
+- **The retirement goes all the way down.** `PROMPT_VERSION` is 5 (the
+  empty-params composition is byte-identical; prompts of taxonomy-carrying
+  jobs shorten), the findings vocabulary drops the twelve keys (evidence
+  re-accumulates per configuration), profiles keep only model, LoRA, strength
+  and negative prompt, the vector-preset save mechanism retires (Review's
+  "Apply to forms" survives), bench suites are re-minted as `core-v2` /
+  `pixel-v2`, and the taxonomy-bearing campaign scripts are deleted — their
+  findings live on in `docs/measurements/`.
+- **Create's section headings draw as full gray blocks again.** The fills
+  were landing under the form's own opaque background, leaving only a sliver
+  at the left edge; the block scope now opens inside the form child. The
+  Profile row's buttons wrap instead of clipping at 1.5 scale, and the
+  evidence hints under Model/LoRA sit on their own line instead of
+  overflowing the pane.
+
 ## 0.0.23 — 2026-08-16
 
 - **Paint a ground set with AI.** Plotter's tileset pane has a **Paint with

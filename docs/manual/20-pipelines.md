@@ -10,17 +10,15 @@ A reference job composes a prompt, encodes it and denoises an image. The composi
 `guidance.py` and `pipelines/prompt.py`, both of which are pure and torch-free — you can see the
 result before spending any GPU on it, which is what the prompt preview at the Reference stage shows.
 
-Three things go into the composed prompt, in this order: any trigger words the chosen style LoRA was
-trained on, then your own text with the guidance fragments appended in a fixed order that reads like
-a sentence, then the framing clause of the prompt template — one object, plain background, no
-cropping — that biases the image toward something the reconstruction engine handles well. The
-guidance fragments are two to four words each. That is not a limit imposed by the encoder any more,
-but a longer fragment still dilutes cross-attention across everything else you asked for.
+Two things go into the composed prompt, in this order: any trigger words the chosen style LoRA was
+trained on, then your own text inside the prompt template — one object, plain background, a 3/4
+view, no cropping — which biases the image toward something the reconstruction engine handles
+well.
 
 Then the encoding, which is where the interesting constraint lives. CLIP's text encoders accept 77
-tokens — a begin marker, up to 75 content tokens and an end marker — and with a dozen optional
-guidance fields the composed prompt routinely exceeds that. Truncating would silently drop whatever
-came last, which is the guidance you chose most deliberately.
+tokens — a begin marker, up to 75 content tokens and an end marker — and a long brief plus the
+trigger and the template scaffolding can exceed that. Truncating would silently drop whatever came
+last, which is the part you typed most deliberately.
 
 So `prompt.chunk()` splits the composed text into as many 77-token chunks as it needs, always on a
 comma boundary. Commas are safe because every join in the composition uses `", "`, so a break never

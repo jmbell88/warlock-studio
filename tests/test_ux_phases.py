@@ -255,59 +255,27 @@ def test_the_service_still_names_the_controls_the_panes_ring():
     # variable, so the literal scan above cannot see them; the table it walks
     # is the statement of intent.
     assert '("style_lora", "lora"' in inspect.getsource(validation.check_weights)
-    for key in ("prompt", "base_model", "style_lora", "count", "platform"):
+    for key in ("prompt", "base_model", "style_lora", "count"):
         assert f'field_error(ctx.state, "{key}")' in panes
 
 
-# --- Phase 3: the common path -----------------------------------------------
+# --- the flat form ------------------------------------------------------------
 
 
-def test_the_fold_is_derived_from_the_taxonomy_rather_than_written_out():
-    """A field added to ``GUIDANCE_GROUPS`` is folded by having been added."""
-    folded = settings_2d.folded_fields({})
-    for _title, fields in settings_2d.GUIDANCE_GROUPS:
-        for name in fields:
-            assert name in folded
-    assert "base_model" in folded and "ref_path" in folded
-    # And the common path is not in it: those are the controls a first job
-    # needs, which is the whole point of the split.
-    for name in ("prompt", "count", "seed", "output"):
-        assert name not in folded
-
-
-def test_the_closed_fold_says_how_much_is_behind_it():
-    """A form restored with a style, a genre and a conditioning image set looks
-    identical to an empty one with the fold shut."""
-    from warlock.studio.state import default_form_2d
-
-    empty = default_form_2d()
-    assert "nothing set" in settings_2d.more_summary(empty)
-    filled = {**empty, "genre": "fantasy", "art_style": "ps2"}
-    assert "2 set" in settings_2d.more_summary(filled)
-
-
-def test_a_refusal_behind_the_fold_opens_it():
-    """A ring round a control nobody can see is not a pointer."""
-    source = inspect.getsource(settings_2d._more)
-    assert "request_open" in source
-    # The which-folds decision moved into ``folds_to_open`` (which consults
-    # ``folded_fields`` and adds the nested Advanced header when the refusal
-    # names one of its fields); the pane is pinned to route through it.
-    assert "folds_to_open" in source
-
-
-def test_the_first_screen_is_the_common_path():
-    """Prompt, preset, output and Run above the fold; everything else behind
-    one reveal."""
+def test_the_2d_form_is_flat_with_no_folds():
+    """The taxonomy retirement took the "More options" fold with it: every
+    section draws unconditionally, in one column, inside the block scope."""
     source = inspect.getsource(settings_2d.draw)
-    for call in ("_presets", "_output", "_prompt", "_run_controls", "_more"):
+    for call in (
+        "_output", "_profiles", "_prompt", "_references",
+        "_run_controls", "_model", "_lora", "_negative",
+    ):
         assert call in source
-    assert source.index("_run_controls") < source.index("_more(")
-    # The three that moved are reached through the fold and from nowhere else.
-    body = inspect.getsource(settings_2d._more)
-    for call in ("_guidance", "_reference", "_advanced"):
-        assert call in body
-        assert f"        {call}(ctx, form)" not in source
+    assert "section_blocks" in source
+    for retired in ("_more", "_guidance", "_presets", "_vector_presets"):
+        assert not hasattr(settings_2d, retired)
+    pane = inspect.getsource(settings_2d)
+    assert "widgets.header(" not in pane
 
 
 # --- Phase 3: the focus ring ------------------------------------------------
@@ -419,16 +387,13 @@ def test_the_confirms_that_stay_are_the_irreversible_ones():
 # --- naming -----------------------------------------------------------------
 
 
-def test_the_two_detail_controls_have_real_and_different_names():
-    """"Platform detail" and "Detail" were one collision papered over with a
-    tooltip on each apologising for the other."""
+def test_the_mesh_resolution_control_keeps_its_real_name():
+    """The 2D "detail brief" retired with the taxonomy; the 3D pane's control
+    keeps the name that says what it does."""
     from warlock.studio.panes import settings_3d
 
-    two_d = _code(settings_2d._guidance)
     three_d = _code(settings_3d.draw)
-    assert 'field_label("detail brief")' in two_d
     assert '"Mesh resolution"' in three_d
-    assert '"platform detail"' not in two_d
     assert 'labeled_combo(\n            "Detail"' not in three_d
 
 
@@ -441,9 +406,9 @@ def test_the_manual_calls_them_what_the_app_calls_them():
     if not docs.is_dir():  # a wheel install has no docs tree
         return
     body = "\n".join(p.read_text(encoding="utf-8") for p in docs.glob("*.md"))
-    assert "detail brief" in body
     assert "Mesh resolution" in body
     assert "platform detail" not in body
+    assert "detail brief" not in body
 
 
 # --- the navigation control --------------------------------------------------

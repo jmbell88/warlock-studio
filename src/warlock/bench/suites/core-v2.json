@@ -1,24 +1,19 @@
 {
-  "key": "core-v1",
-  "label": "Core benchmark v1",
+  "key": "core-v2",
+  "label": "Core benchmark v2",
   "seeds": [
     42,
     1337,
     20240701,
     987654321
   ],
-  "notes": "Never edited in place. Changing a prompt means core-v2.json: old manifests reference this file's fingerprint, and an in-place edit would silently invalidate every comparison made against them.",
+  "notes": "Re-minted from core-v1 for the 2026-08-17 taxonomy retirement (guidance blocks stripped of retired keys). Never edited in place: changing a prompt means core-v3.json -- old manifests reference the v1 fingerprint.",
   "items": [
     {
       "id": "prop-01",
       "category": "prop",
       "prompt": "a weathered wooden crate bound with iron",
-      "guidance": {
-        "category": "prop",
-        "genre": "fantasy",
-        "material": "wood",
-        "condition": "worn"
-      },
+      "guidance": {},
       "tags": [
         "boxy",
         "hard-surface"
@@ -29,12 +24,7 @@
       "id": "prop-02",
       "category": "prop",
       "prompt": "a hanging brass lantern with a glass pane",
-      "guidance": {
-        "category": "prop",
-        "genre": "fantasy",
-        "material": "glass",
-        "emissive": "runes"
-      },
+      "guidance": {},
       "tags": [
         "thin",
         "transparent"
@@ -45,11 +35,7 @@
       "id": "prop-03",
       "category": "prop",
       "prompt": "a stack of leather-bound books",
-      "guidance": {
-        "category": "prop",
-        "genre": "fantasy",
-        "material": "leather"
-      },
+      "guidance": {},
       "tags": [
         "stacked"
       ],
@@ -59,11 +45,7 @@
       "id": "prop-04",
       "category": "prop",
       "prompt": "a ceramic vase with a narrow neck",
-      "guidance": {
-        "category": "prop",
-        "material": "ceramic",
-        "silhouette": "rounded"
-      },
+      "guidance": {},
       "tags": [
         "rotational"
       ],
@@ -73,11 +55,7 @@
       "id": "prop-05",
       "category": "prop",
       "prompt": "an anvil on a wooden block",
-      "guidance": {
-        "category": "prop",
-        "material": "iron",
-        "silhouette": "bulky"
-      },
+      "guidance": {},
       "tags": [
         "two-part"
       ],
@@ -87,11 +65,7 @@
       "id": "prop-06",
       "category": "prop",
       "prompt": "a coiled rope with a rusted hook",
-      "guidance": {
-        "category": "prop",
-        "material": "iron",
-        "condition": "rusted"
-      },
+      "guidance": {},
       "tags": [
         "thin",
         "self-occluding"
@@ -102,11 +76,7 @@
       "id": "prop-07",
       "category": "prop",
       "prompt": "a wooden barrel with iron hoops",
-      "guidance": {
-        "category": "prop",
-        "genre": "fantasy",
-        "material": "wood"
-      },
+      "guidance": {},
       "tags": [
         "rotational"
       ],
@@ -116,12 +86,7 @@
       "id": "prop-08",
       "category": "prop",
       "prompt": "a treasure chest with a domed lid",
-      "guidance": {
-        "category": "prop",
-        "genre": "fantasy",
-        "material": "wood",
-        "rarity": "rare"
-      },
+      "guidance": {},
       "tags": [
         "boxy"
       ],
@@ -131,11 +96,7 @@
       "id": "weapon-01",
       "category": "weapon",
       "prompt": "a straight longsword with a crossguard",
-      "guidance": {
-        "category": "weapon",
-        "genre": "fantasy",
-        "material": "steel"
-      },
+      "guidance": {},
       "tags": [
         "thin",
         "flat"
@@ -146,12 +107,7 @@
       "id": "weapon-02",
       "category": "weapon",
       "prompt": "a battle axe with a wide curved head",
-      "guidance": {
-        "category": "weapon",
-        "genre": "fantasy",
-        "material": "iron",
-        "silhouette": "bulky"
-      },
+      "guidance": {},
       "tags": [
         "asymmetric"
       ],
@@ -161,12 +117,7 @@
       "id": "weapon-03",
       "category": "weapon",
       "prompt": "a compact energy rifle with glowing vents",
-      "guidance": {
-        "category": "weapon",
-        "genre": "scifi",
-        "material": "steel",
-        "emissive": "neon"
-      },
+      "guidance": {},
       "tags": [
         "hard-surface"
       ],
@@ -176,11 +127,7 @@
       "id": "weapon-04",
       "category": "weapon",
       "prompt": "a wooden bow with a taut string",
-      "guidance": {
-        "category": "weapon",
-        "genre": "fantasy",
-        "material": "wood"
-      },
+      "guidance": {},
       "tags": [
         "thin",
         "string"
@@ -191,11 +138,7 @@
       "id": "weapon-05",
       "category": "weapon",
       "prompt": "a spiked war hammer with a long haft",
-      "guidance": {
-        "category": "weapon",
-        "material": "iron",
-        "condition": "damaged"
-      },
+      "guidance": {},
       "tags": [
         "thin",
         "spikes"
@@ -206,12 +149,7 @@
       "id": "weapon-06",
       "category": "weapon",
       "prompt": "a curved dagger with a jewelled pommel",
-      "guidance": {
-        "category": "weapon",
-        "genre": "fantasy",
-        "material": "gold",
-        "rarity": "epic"
-      },
+      "guidance": {},
       "tags": [
         "small"
       ],
@@ -221,11 +159,7 @@
       "id": "weapon-07",
       "category": "weapon",
       "prompt": "a riot shield with a reinforced rim",
-      "guidance": {
-        "category": "weapon",
-        "genre": "modern",
-        "material": "steel"
-      },
+      "guidance": {},
       "tags": [
         "flat"
       ],
@@ -235,12 +169,7 @@
       "id": "weapon-08",
       "category": "weapon",
       "prompt": "a gnarled wooden staff topped with a crystal",
-      "guidance": {
-        "category": "weapon",
-        "genre": "fantasy",
-        "material": "crystal",
-        "emissive": "arcane"
-      },
+      "guidance": {},
       "tags": [
         "thin",
         "elongated"
@@ -251,11 +180,7 @@
       "id": "character-01",
       "category": "character",
       "prompt": "a hooded adventurer standing in a neutral pose",
-      "guidance": {
-        "category": "character",
-        "genre": "fantasy",
-        "art_style": "ps3"
-      },
+      "guidance": {},
       "tags": [
         "humanoid",
         "rig"
@@ -266,11 +191,7 @@
       "id": "character-02",
       "category": "character",
       "prompt": "a plate-armoured knight standing at attention",
-      "guidance": {
-        "category": "character",
-        "genre": "fantasy",
-        "material": "steel"
-      },
+      "guidance": {},
       "tags": [
         "humanoid",
         "rig"
@@ -281,11 +202,7 @@
       "id": "character-03",
       "category": "character",
       "prompt": "a robed wizard holding a staff",
-      "guidance": {
-        "category": "character",
-        "genre": "fantasy",
-        "emissive": "arcane"
-      },
+      "guidance": {},
       "tags": [
         "humanoid",
         "prop-in-hand"
@@ -296,11 +213,7 @@
       "id": "character-04",
       "category": "character",
       "prompt": "a squat armoured goblin with a club",
-      "guidance": {
-        "category": "character",
-        "genre": "fantasy",
-        "silhouette": "compact"
-      },
+      "guidance": {},
       "tags": [
         "humanoid",
         "nonstandard-proportions"
@@ -311,11 +224,7 @@
       "id": "character-05",
       "category": "character",
       "prompt": "a slender android in a jumpsuit",
-      "guidance": {
-        "category": "character",
-        "genre": "scifi",
-        "art_style": "ps5"
-      },
+      "guidance": {},
       "tags": [
         "humanoid",
         "rig"
@@ -326,10 +235,7 @@
       "id": "character-06",
       "category": "character",
       "prompt": "a four-legged wolf standing alert",
-      "guidance": {
-        "category": "character",
-        "genre": "fantasy"
-      },
+      "guidance": {},
       "tags": [
         "quadruped"
       ],
@@ -339,11 +245,7 @@
       "id": "character-07",
       "category": "character",
       "prompt": "a cartoon mushroom creature with stubby arms",
-      "guidance": {
-        "category": "character",
-        "genre": "cartoon",
-        "art_style": "snes"
-      },
+      "guidance": {},
       "tags": [
         "humanoid",
         "stylised"
@@ -354,11 +256,7 @@
       "id": "character-08",
       "category": "character",
       "prompt": "a skeleton warrior holding a rusted sword",
-      "guidance": {
-        "category": "character",
-        "genre": "horror",
-        "condition": "ancient"
-      },
+      "guidance": {},
       "tags": [
         "humanoid",
         "thin",
@@ -370,11 +268,7 @@
       "id": "vehicle-01",
       "category": "vehicle",
       "prompt": "a wooden handcart with two spoked wheels",
-      "guidance": {
-        "category": "vehicle",
-        "genre": "fantasy",
-        "material": "wood"
-      },
+      "guidance": {},
       "tags": [
         "wheels",
         "thin"
@@ -385,11 +279,7 @@
       "id": "vehicle-02",
       "category": "vehicle",
       "prompt": "a boxy armoured personnel carrier",
-      "guidance": {
-        "category": "vehicle",
-        "genre": "scifi",
-        "silhouette": "bulky"
-      },
+      "guidance": {},
       "tags": [
         "hard-surface"
       ],
@@ -399,11 +289,7 @@
       "id": "vehicle-03",
       "category": "vehicle",
       "prompt": "a single-seat racing hovercraft",
-      "guidance": {
-        "category": "vehicle",
-        "genre": "scifi",
-        "emissive": "neon"
-      },
+      "guidance": {},
       "tags": [
         "smooth"
       ],
@@ -413,11 +299,7 @@
       "id": "vehicle-04",
       "category": "vehicle",
       "prompt": "a rusted pickup truck with a flat tyre",
-      "guidance": {
-        "category": "vehicle",
-        "genre": "postapoc",
-        "condition": "rusted"
-      },
+      "guidance": {},
       "tags": [
         "hard-surface"
       ],
@@ -427,10 +309,7 @@
       "id": "vehicle-05",
       "category": "vehicle",
       "prompt": "a small wooden rowboat with oars",
-      "guidance": {
-        "category": "vehicle",
-        "material": "wood"
-      },
+      "guidance": {},
       "tags": [
         "concave"
       ],
@@ -440,11 +319,7 @@
       "id": "vehicle-06",
       "category": "vehicle",
       "prompt": "a steampunk airship gondola with brass fittings",
-      "guidance": {
-        "category": "vehicle",
-        "setting": "steampunk",
-        "material": "bronze"
-      },
+      "guidance": {},
       "tags": [
         "ornate"
       ],
@@ -454,11 +329,7 @@
       "id": "vehicle-07",
       "category": "vehicle",
       "prompt": "a military motorcycle with saddlebags",
-      "guidance": {
-        "category": "vehicle",
-        "genre": "modern",
-        "setting": "military"
-      },
+      "guidance": {},
       "tags": [
         "thin",
         "wheels"
@@ -469,11 +340,7 @@
       "id": "vehicle-08",
       "category": "vehicle",
       "prompt": "a cargo sled on iron runners",
-      "guidance": {
-        "category": "vehicle",
-        "material": "iron",
-        "silhouette": "elongated"
-      },
+      "guidance": {},
       "tags": [
         "simple"
       ],
@@ -483,11 +350,7 @@
       "id": "environment-01",
       "category": "environment",
       "prompt": "a modular stone wall section with a doorway",
-      "guidance": {
-        "category": "environment",
-        "material": "stone",
-        "setting": "medieval"
-      },
+      "guidance": {},
       "tags": [
         "modular",
         "concave"
@@ -498,11 +361,7 @@
       "id": "environment-02",
       "category": "environment",
       "prompt": "a weathered stone well with a wooden roof",
-      "guidance": {
-        "category": "environment",
-        "material": "stone",
-        "condition": "worn"
-      },
+      "guidance": {},
       "tags": [
         "two-part"
       ],
@@ -512,11 +371,7 @@
       "id": "environment-03",
       "category": "environment",
       "prompt": "a gnarled dead tree with bare branches",
-      "guidance": {
-        "category": "environment",
-        "genre": "horror",
-        "condition": "ancient"
-      },
+      "guidance": {},
       "tags": [
         "thin",
         "branching"
@@ -527,11 +382,7 @@
       "id": "environment-04",
       "category": "environment",
       "prompt": "a market stall with a striped awning",
-      "guidance": {
-        "category": "environment",
-        "material": "fabric",
-        "setting": "medieval"
-      },
+      "guidance": {},
       "tags": [
         "thin",
         "cloth"
@@ -542,11 +393,7 @@
       "id": "environment-05",
       "category": "environment",
       "prompt": "a mossy stone staircase",
-      "guidance": {
-        "category": "environment",
-        "material": "stone",
-        "condition": "overgrown"
-      },
+      "guidance": {},
       "tags": [
         "stepped"
       ],
@@ -556,11 +403,7 @@
       "id": "environment-06",
       "category": "environment",
       "prompt": "a sci-fi corridor segment with panel lighting",
-      "guidance": {
-        "category": "environment",
-        "genre": "scifi",
-        "emissive": "neon"
-      },
+      "guidance": {},
       "tags": [
         "modular",
         "concave"
@@ -571,11 +414,7 @@
       "id": "environment-07",
       "category": "environment",
       "prompt": "a wooden watchtower on stilts",
-      "guidance": {
-        "category": "environment",
-        "material": "wood",
-        "silhouette": "elongated"
-      },
+      "guidance": {},
       "tags": [
         "thin",
         "tall"
@@ -586,11 +425,7 @@
       "id": "environment-08",
       "category": "environment",
       "prompt": "a large mossy boulder",
-      "guidance": {
-        "category": "environment",
-        "material": "stone",
-        "condition": "overgrown"
-      },
+      "guidance": {},
       "tags": [
         "convex",
         "simple"

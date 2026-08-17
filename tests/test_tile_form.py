@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from warlock.pipelines import prompt as prompt_lib
 from warlock.pipelines import seam
 from warlock.studio import theme
 from warlock.studio.panes import inspector, settings_2d
@@ -33,40 +32,9 @@ def test_switching_to_tile_changes_what_is_submitted():
     assert settings_2d.submit_kwargs(form)["output"] == "tile"
 
 
-def test_a_tile_form_only_draws_the_surface_guidance_groups():
-    form = default_form_2d()
-    form["output"] = "tile"
-    shown = {f for _title, fields in settings_2d.guidance_groups(form) for f in fields}
-    assert shown <= set(prompt_lib.TILE_FIELDS)
-    assert "category" not in shown
-    assert "material" in shown
-
-
-def test_an_object_form_draws_every_group():
-    form = default_form_2d()
-    shown = {f for _title, fields in settings_2d.guidance_groups(form) for f in fields}
-    assert "category" in shown and "material" in shown
-
-
-def test_a_tile_does_not_carry_subject_guidance_it_cannot_use():
-    # The fields stay in the form -- switching back must not lose them -- but
-    # they must not reach a submit that will ignore them, or the job row claims
-    # a taxonomy that did not touch the prompt.
-    form = default_form_2d()
-    form["prompt"] = "cobblestone"
-    form["category"] = "weapon"
-    form["material"] = "stone"
-    form["output"] = "tile"
-
-    fields = settings_2d.submit_kwargs(form)["guidance_fields"]
-
-    assert "category" not in fields
-    assert fields["material"] == "stone"
-
-
 def test_a_tile_keeps_the_checkpoint_it_is_drawn_with():
-    # Model identity is not subject taxonomy: a tile still has to say which
-    # base and which style LoRA drew it, and neither is in TILE_FIELDS.
+    # Model identity: a tile still has to say which base and which style LoRA
+    # drew it.
     form = default_form_2d()
     form["prompt"] = "cobblestone"
     form["base_model"] = "turbo"
@@ -74,23 +42,12 @@ def test_a_tile_keeps_the_checkpoint_it_is_drawn_with():
     assert settings_2d.submit_kwargs(form)["guidance_fields"]["base_model"] == "turbo"
 
 
-def test_a_tile_does_not_submit_the_platform_prompt_fragment():
-    # platform is a hint about how much detail to draw *an object* with; the
-    # tile prompt compiler discards it, so submitting it would be a claim the
-    # picture cannot support.
-    form = default_form_2d()
-    form["prompt"] = "cobblestone"
-    form["platform"] = "pc"
-    form["output"] = "tile"
-    assert "platform" not in settings_2d.submit_kwargs(form)["guidance_fields"]
-
-
 def test_switching_back_keeps_what_was_typed():
     form = default_form_2d()
-    form["category"] = "weapon"
+    form["base_model"] = "turbo"
     form["output"] = "tile"
     form["output"] = "reference"
-    assert settings_2d.submit_kwargs(form)["guidance_fields"]["category"] == "weapon"
+    assert settings_2d.submit_kwargs(form)["guidance_fields"]["base_model"] == "turbo"
 
 
 def test_a_tile_still_needs_a_prompt():

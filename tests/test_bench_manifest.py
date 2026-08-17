@@ -39,7 +39,7 @@ def test_a_manifest_is_json_safe(tmp_path):
 
 def test_a_manifest_records_what_can_move_a_pixel(tmp_path):
     doc = _doc(tmp_path)
-    assert doc["suite"]["key"] == "core-v1"
+    assert doc["suite"]["key"] == "core-v2"
     assert doc["recipe"]["key"] == "baseline-turbo-raw"
     assert set(doc["config"]) == set(manifest_mod.CONFIG_FIELDS)
     assert "trellis_server_exe" in doc["models"]
@@ -49,7 +49,7 @@ def test_a_manifest_records_what_can_move_a_pixel(tmp_path):
 def test_a_manifest_round_trips_through_disk(tmp_path):
     run_dir = tmp_path / "run"
     manifest_mod.write_manifest(run_dir, _doc(tmp_path))
-    assert manifest_mod.read_manifest(run_dir)["suite"]["key"] == "core-v1"
+    assert manifest_mod.read_manifest(run_dir)["suite"]["key"] == "core-v2"
 
 
 def test_an_identical_setup_is_resumable(tmp_path):
@@ -75,7 +75,7 @@ def test_a_narrowed_item_list_does_not_block_a_resume(tmp_path):
     "patch,needle",
     [
         ({"stage": "model"}, "stage"),
-        ({"suite": {"key": "core-v2", "file": "x", "seeds": []}}, "suite.key"),
+        ({"suite": {"key": "other-suite", "file": "x", "seeds": []}}, "suite.key"),
         ({"recipe": {"key": "other", "file": "x"}}, "recipe.key"),
     ],
 )

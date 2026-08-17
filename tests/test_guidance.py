@@ -11,9 +11,8 @@ def test_defaults_fill_in_when_nothing_is_chosen():
     assert params["resolution"] == guidance.PLATFORMS[guidance.DEFAULT_PLATFORM].resolution
     assert params["size_m"] == guidance.DEFAULT_SIZE_M
     # Optional fields stay absent rather than being stored as empty strings.
-    assert "genre" not in params
-    assert "art_style" not in params
-    assert "category" not in params
+    assert "style_lora" not in params
+    assert "ip_adapter" not in params
 
 
 def test_platform_supplies_the_geometry_resolution():
@@ -27,16 +26,7 @@ def test_explicit_resolution_overrides_the_platform_preset():
     assert params["platform"] == "2d"
 
 
-def test_category_supplies_a_default_size():
-    assert guidance.normalize({"category": "character"})["size_m"] == 1.8
-    assert guidance.normalize({"category": "consumable"})["size_m"] == 0.15
-
-
-def test_explicit_size_wins_over_the_category_default():
-    assert guidance.normalize({"category": "character", "size_m": "0.5"})["size_m"] == 0.5
-
-
-@pytest.mark.parametrize("field", ["genre", "art_style", "category", "platform"])
+@pytest.mark.parametrize("field", ["platform", "base_model", "style_lora"])
 def test_unknown_values_are_rejected(field):
     with pytest.raises(ValueError, match=field):
         guidance.normalize({field: "nonsense"})
@@ -44,7 +34,7 @@ def test_unknown_values_are_rejected(field):
 
 @pytest.mark.parametrize("value", ["", None])
 def test_blank_means_unspecified_not_invalid(value):
-    assert guidance.normalize({"genre": value}) == guidance.normalize({})
+    assert guidance.normalize({"platform": value}) == guidance.normalize({})
 
 
 def test_size_out_of_range_is_rejected():
@@ -59,40 +49,6 @@ def test_non_numeric_size_is_rejected():
         guidance.normalize({"size_m": "big"})
 
 
-def test_compose_prompt_orders_fragments_after_the_user_text():
-    params = guidance.normalize(
-        {"genre": "scifi", "art_style": "ps1", "category": "weapon", "platform": "2d"}
-    )
-    composed = guidance.compose_prompt("a plasma rifle", params)
-    assert composed.startswith("a plasma rifle, ")
-    positions = [
-        composed.index(guidance.CATEGORIES["weapon"].prompt),
-        composed.index(guidance.GENRES["scifi"].prompt),
-        composed.index(guidance.ART_STYLES["ps1"].prompt),
-        composed.index(guidance.PLATFORMS["2d"].prompt),
-    ]
-    assert positions == sorted(positions)
-
-
-def test_retro_era_styles_normalize_and_compose():
-    params = guidance.normalize({"art_style": "nes"})
-    assert params["art_style"] == "nes"
-    composed = guidance.compose_prompt("a knight", params)
-    assert guidance.ART_STYLES["nes"].prompt in composed
-    # The soft ceiling on guidance fragments: 2-4 words each, or the extra
-    # tokens dilute cross-attention rather than steering it.
-    for fragment in guidance.ART_STYLES["nes"].prompt.split(","):
-        assert len(fragment.split()) <= 4
-
-
-@pytest.mark.parametrize("style", ["nes", "snes"])
-def test_no_retro_era_style_ever_says_pixel(style):
-    # At 512/1024 SDXL renders fake chunky pixels for that token, and they
-    # alias under the real NEAREST downscale in asset2d.pixel.
-    composed = guidance.compose_prompt("a knight", guidance.normalize({"art_style": style}))
-    assert "pixel" not in composed
-
-
 @pytest.mark.parametrize(
     ("stored", "canonical"),
     [("mobile", "2d"), ("desktop", "3d"), ("hero", "3d")],
@@ -103,41 +59,57 @@ def test_legacy_platform_keys_normalize_to_the_new_ones(stored, canonical):
     assert params["resolution"] == guidance.PLATFORMS[canonical].resolution
 
 
-@pytest.mark.parametrize(
-    ("stored", "canonical"),
-    [
-        ("realistic", "ps5"), ("stylized", "ps3"), ("lowpoly", "ps1"),
-        ("handpainted", "ps2"), ("toon", "snes"), ("pixelart", "nes"),
-    ],
-)
-def test_legacy_art_style_keys_normalize_to_the_new_ones(stored, canonical):
-    assert guidance.normalize({"art_style": stored})["art_style"] == canonical
+# --- taxonomy-retirement tolerance -------------------------------------------
+#
+# The twelve taxonomy tables (and framing) were retired on 2026-08-17
+# (docs/measurements/2026-08-17-taxonomy-retirement.md). Every job row already
+# on disk still carries those keys, and rerun/promotion re-run normalize() over
+# stored params -- so a stale key must be *ignored*, never refused.
 
 
-def test_compose_honours_a_legacy_key_a_stored_job_never_migrated():
-    # compose_prompt reads params directly, so a job row that has not been
-    # through normalize() since the rename still composes the right fragment
-    # rather than silently dropping it.
-    composed = guidance.compose_prompt(
-        "a knight", {"art_style": "lowpoly", "platform": "hero"}
+def test_stale_taxonomy_keys_in_old_params_normalize_cleanly():
+    old = {
+        "art_style": "nes",
+        "framing": "front_ortho",
+        "category": "weapon",
+        "genre": "fantasy",
+        "material": "steel",
+        "platform": "2d",
+    }
+    params = guidance.normalize(old)
+    assert params["platform"] == "2d"
+    for retired in ("art_style", "framing", "category", "genre", "material"):
+        assert retired not in params
+
+
+def test_a_stale_category_no_longer_supplies_a_size():
+    # The category default died with CATEGORIES; the fallback is the constant.
+    params = guidance.normalize({"category": "character"})
+    assert params["size_m"] == guidance.DEFAULT_SIZE_M
+
+
+def test_compose_prompt_ignores_stale_taxonomy_values():
+    """Params can come from a job row written before the retirement; the
+    fragments are simply gone rather than the job failing."""
+    assert guidance.compose_prompt("a barrel", {"genre": "fantasy"}) == "a barrel"
+    assert (
+        guidance.compose_prompt("a barrel", {"art_style": "nes", "framing": "front_ortho"})
+        == "a barrel"
     )
-    assert guidance.ART_STYLES["ps1"].prompt in composed
-    assert guidance.PLATFORMS["3d"].prompt in composed
 
 
 def test_compose_prompt_with_no_guidance_is_just_the_prompt():
     assert guidance.compose_prompt("  a barrel  ", {}) == "a barrel"
 
 
-def test_compose_prompt_ignores_stale_values():
-    """Params can come from a job row written before a key was renamed; a
-    slightly less specific prompt beats failing an otherwise valid job."""
-    assert guidance.compose_prompt("a barrel", {"genre": "retired"}) == "a barrel"
+def test_compose_prompt_field_subset_is_inert_while_no_field_composes():
+    params = guidance.normalize({"platform": "3d"})
+    assert guidance.compose_prompt("x", params) == "x"
+    assert guidance.compose_prompt("x", params, fields=("platform",)) == "x"
+    assert guidance.compose_prompt("x", params, fields=None) == "x"
 
 
 def test_catalog_publishes_the_cfg_bases_the_ui_gates_on():
-    from warlock import models
-
     catalog = guidance.catalog()
     assert catalog["cfg_bases"] == models.cfg_bases()
 
@@ -147,24 +119,25 @@ def test_catalog_covers_every_field_and_is_json_safe():
 
     catalog = guidance.catalog()
     assert set(catalog["fields"]) == {
-        "genre", "art_style", "category", "platform", "framing",
-        "base_model", "style_lora",
-        "ip_adapter", "control",
-        "material", "condition", "setting", "palette", "emissive", "rarity",
-        "silhouette", "mood",
+        "platform", "base_model", "style_lora", "ip_adapter", "control",
     }
     assert all(o["resolution"] for o in catalog["fields"]["platform"])
-    assert all(o["default_size_m"] for o in catalog["fields"]["category"])
     assert all(o["default_weight"] for o in catalog["fields"]["style_lora"])
     json.dumps(catalog)
+
+
+def test_form_fields_covers_every_table():
+    assert set(guidance.form_fields()) == {
+        "platform", "base_model", "style_lora", "ip_adapter", "control",
+    }
 
 
 # --- model selection --------------------------------------------------------
 
 
 def test_base_model_defaults_and_is_always_present():
-    # The worker must never have to guess a checkpoint, so unlike genre or
-    # category this key is written even when the request omits it.
+    # The worker must never have to guess a checkpoint, so unlike the optional
+    # selections this key is written even when the request omits it.
     assert guidance.normalize({})["base_model"] == models.DEFAULT_BASE_MODEL
 
 
@@ -277,15 +250,12 @@ def test_model_selection_never_leaks_into_the_prompt():
     must not appear here either."""
     params = guidance.normalize({"base_model": "sdxl", "style_lora": "render3d"})
     prompt = guidance.compose_prompt("a barrel", params)
-    # The default platform still contributes its fragment; nothing model-facing does.
-    assert prompt == guidance.compose_prompt("a barrel", {"platform": params["platform"]})
+    assert prompt == "a barrel"
     for token in ("sdxl", "render3d", "3d render", "Hyper"):
         assert token.lower() not in prompt.lower()
 
 
 def test_negative_prompt_defaults_and_is_length_capped():
-    from warlock import guidance
-
     assert guidance.normalize({})["negative_prompt"] == guidance.DEFAULT_NEGATIVE_PROMPT
     assert guidance.normalize({"negative_prompt": " smooth "})["negative_prompt"] == "smooth"
     with pytest.raises(ValueError):
@@ -299,87 +269,32 @@ def test_explicit_empty_negative_prompt_means_none_not_the_default():
     assert guidance.normalize({"negative_prompt": ""})["negative_prompt"] == ""
 
 
-def test_every_shipped_preset_normalizes():
-    from warlock import guidance
-
-    assert guidance.PRESETS
-    for preset in guidance.PRESETS:
-        # If a preset names a taxonomy or model key that has been renamed or
-        # removed, this is where it fails -- not in the user's browser as an
-        # uninterpretable 400 at submit time.
-        guidance.normalize(dict(preset["fields"]))
-        assert preset["prompt"]
-        assert preset["label"]
-
-
 def test_no_guidance_fragment_ever_says_pixel():
-    """The pixel-art profile is a LoRA trigger, not taxonomy.
+    """The pixel-art profile is a LoRA trigger, not a prompt fragment.
 
-    "pixel" in a prompt fragment would fire on every job carrying the field
-    that owns it, whether or not the pixel LoRA is loaded -- and the fragments
-    that actually survive a downscale (flat shading, bold silhouette) already
-    exist under the console-era art styles.
+    "pixel" in a fragment would fire on every job carrying the field that owns
+    it, whether or not the pixel LoRA is loaded.
     """
-    from warlock import guidance
-
     for field, table in guidance._OPTION_TABLES.items():
         for option in table.values():
             assert "pixel" not in option.prompt.lower(), f"{field}/{option.key}"
 
 
-def test_presets_appear_in_the_catalog():
-    from warlock import guidance
-
-    keys = {p["key"] for p in guidance.catalog()["presets"]}
-    assert "handpainted_prop" in keys
-
-
-def test_new_fields_validate_and_reject_unknown():
-    for field in (
-        "material", "condition", "setting", "palette", "emissive",
-        "rarity", "silhouette", "mood",
-    ):
-        table = getattr(guidance, {
-            "material": "MATERIALS", "condition": "CONDITIONS", "setting": "SETTINGS",
-            "palette": "PALETTES", "emissive": "EMISSIVES", "rarity": "RARITIES",
-            "silhouette": "SILHOUETTES", "mood": "MOODS",
-        }[field])
-        some_key = next(iter(table))
-        assert guidance.normalize({field: some_key})[field] == some_key
-        with pytest.raises(ValueError, match=field):
-            guidance.normalize({field: "nonsense"})
-
-
-def test_a_chosen_new_field_value_survives_into_params():
-    params = guidance.normalize({"material": "iron", "mood": "grim"})
-    assert params["material"] == "iron"
-    assert params["mood"] == "grim"
-
-
-def test_compose_prompt_emits_new_fragments_in_prompt_field_order():
-    params = guidance.normalize(
-        {"category": "weapon", "silhouette": "angular", "material": "steel",
-         "genre": "scifi", "platform": "3d"}
-    )
-    composed = guidance.compose_prompt("a rifle", params)
-    positions = [
-        composed.index(guidance.CATEGORIES["weapon"].prompt),
-        composed.index(guidance.SILHOUETTES["angular"].prompt),
-        composed.index(guidance.MATERIALS["steel"].prompt),
-        composed.index(guidance.GENRES["scifi"].prompt),
-        composed.index(guidance.PLATFORMS["3d"].prompt),
-    ]
-    assert positions == sorted(positions)
-
-
-def test_form_fields_covers_every_table():
-    assert set(guidance.form_fields()) == {
-        "genre", "art_style", "category", "platform", "framing",
-        "base_model", "style_lora",
-        "ip_adapter", "control",
-        "material", "condition", "setting", "palette", "emissive", "rarity",
-        "silhouette", "mood",
+def test_no_option_is_hidden_and_no_default_is():
+    """The ``hidden`` mechanism survives the retirement with no instance; a
+    default the catalogue does not offer would be a form that opens on a value
+    the user cannot choose again after changing it."""
+    hidden = {
+        (field, opt.key)
+        for field, table in guidance._OPTION_TABLES.items()
+        for opt in table.values()
+        if opt.hidden
     }
+    assert hidden == set()
+    for field, table in guidance._OPTION_TABLES.items():
+        default = guidance.catalog()["defaults"].get(field)
+        if default:
+            assert not table[default].hidden, f"{field} defaults to a hidden option"
 
 
 def test_an_unknown_conditioning_selection_is_rejected():
@@ -501,123 +416,11 @@ def test_loras_by_base_reaches_the_ui_through_the_catalog():
 def test_the_composed_prompt_never_sees_a_conditioning_field():
     """The bit-identity rule at the prompt layer: conditioning changes what
     the pipeline is handed, never a single character of the text."""
-    plain = guidance.normalize({"category": "prop", "base_model": "sdxl_cfg"})
+    plain = guidance.normalize({"base_model": "sdxl_cfg"})
     conditioned = guidance.normalize(
-        {"category": "prop", "base_model": "sdxl_cfg", "ip_adapter": "plus",
+        {"base_model": "sdxl_cfg", "ip_adapter": "plus",
          "ip_scale": 1.1, "control": "canny", "control_scale": 0.4, "control_end": 0.9}
     )
     assert guidance.compose_prompt("a crate", plain) == guidance.compose_prompt(
         "a crate", conditioned
     )
-
-
-def test_compose_prompt_can_be_restricted_to_a_field_subset():
-    params = guidance.normalize({"material": "stone", "category": "weapon"})
-    both = guidance.compose_prompt("x", params)
-    narrow = guidance.compose_prompt("x", params, fields=("material",))
-    assert len(narrow) < len(both)
-    assert guidance.MATERIALS["stone"].prompt in narrow
-
-
-def test_compose_prompt_with_no_subset_is_unchanged():
-    params = guidance.normalize({"material": "stone", "category": "weapon"})
-    assert guidance.compose_prompt("x", params) == guidance.compose_prompt(
-        "x", params, fields=None
-    )
-
-
-# --- framing ------------------------------------------------------------------
-
-
-def test_framing_defaults_to_the_three_quarter_view():
-    """Legacy params carry no ``framing`` at all -- every job row already on
-    disk was composed under the 3/4 clause that used to be a template literal,
-    so absence has to mean exactly that. No ``_LEGACY_ALIASES`` entry is
-    involved and none is wanted: nothing was *renamed*, a field was added, and
-    an alias maps an old spelling of a value onto a new one rather than filling
-    in a value that was never written."""
-    assert guidance.normalize({})["framing"] == guidance.DEFAULT_FRAMING
-    assert guidance.normalize({"framing": ""})["framing"] == guidance.DEFAULT_FRAMING
-    assert guidance.DEFAULT_FRAMING == "three_quarter"
-    assert "framing" not in guidance._LEGACY_ALIASES
-
-
-def test_a_chosen_framing_survives_into_params():
-    assert guidance.normalize({"framing": "front_ortho"})["framing"] == "front_ortho"
-    with pytest.raises(ValueError, match="framing"):
-        guidance.normalize({"framing": "isometric"})
-
-
-def test_framing_composes_no_subject_fragment():
-    """It is injected into PROMPT_TEMPLATE's view slot, not folded into the
-    subject clause -- so compose_prompt's output must be byte-identical with
-    and without it, exactly as it is for base_model and the conditioning
-    selections."""
-    assert "framing" not in guidance._PROMPT_FIELDS
-    ortho = guidance.normalize({"category": "prop", "framing": "front_ortho"})
-    plain = guidance.normalize({"category": "prop"})
-    assert ortho["framing"] != plain["framing"]
-    assert guidance.compose_prompt("a barrel", ortho) == guidance.compose_prompt(
-        "a barrel", plain
-    )
-
-
-def test_the_framing_clause_falls_back_rather_than_raising():
-    assert guidance.framing_clause(None) == guidance.FRAMINGS["three_quarter"].prompt
-    assert guidance.framing_clause("") == guidance.FRAMINGS["three_quarter"].prompt
-    assert guidance.framing_clause("retired") == guidance.FRAMINGS["three_quarter"].prompt
-    assert guidance.framing_clause("front_ortho") == guidance.FRAMINGS["front_ortho"].prompt
-
-
-def test_front_ortho_is_withdrawn_from_the_ui_and_kept_everywhere_else():
-    """It lost its bake-off (``docs/measurements/2026-08-09-framing-axis.md``:
-    null and directionally against), so on 2026-08-12 it stopped being offered.
-
-    Withdrawn is not deleted, and the difference is the whole point of the
-    ``hidden`` flag. A user cannot pick it; the bench can still name it as an
-    axis, every job row already carrying it still normalizes rather than 400ing,
-    and ``framing_clause`` still knows its fragment. Deleting the option would
-    have deleted the ability to re-run the measurement that retired it."""
-    offered = {e["key"] for e in guidance.catalog()["fields"]["framing"]}
-    assert offered == {"three_quarter"}
-    assert "front_ortho" in guidance.FRAMINGS
-    assert guidance.FRAMINGS["front_ortho"].hidden is True
-    assert guidance.normalize({"framing": "front_ortho"})["framing"] == "front_ortho"
-    # And the withdrawal is one option, not a habit: nothing else is hidden.
-    hidden = {
-        (field, opt.key)
-        for field, table in guidance._OPTION_TABLES.items()
-        for opt in table.values()
-        if opt.hidden
-    }
-    assert hidden == {("framing", "front_ortho")}
-
-
-def test_a_hidden_option_is_never_the_default():
-    """A default the catalogue does not offer is a form that opens on a value
-    the user cannot choose again after changing it."""
-    for field, table in guidance._OPTION_TABLES.items():
-        default = guidance.catalog()["defaults"].get(field)
-        if default:
-            assert not table[default].hidden, f"{field} defaults to a hidden option"
-
-
-def test_framing_is_a_recorded_config_axis():
-    """It changes the image, so a verdict has to be filed against it -- and
-    VECTOR_PARAMS is an allowlist, so it only counts if it is named."""
-    from warlock import vectors
-
-    assert "framing" in vectors.VECTOR_PARAMS
-    vector = vectors.config_vector({"params": guidance.normalize({"framing": "front_ortho"})})
-    assert vector["framing"] == "front_ortho"
-
-
-def test_the_2d_pane_owns_the_framing_control():
-    """It composes the reference prompt, so under the one-owner rule it belongs
-    to the pane that owns the prompt and to no other."""
-    from pathlib import Path
-
-    from warlock.studio.panes import settings_2d, settings_3d
-
-    assert any("framing" in fields for _title, fields in settings_2d.GUIDANCE_GROUPS)
-    assert "framing" not in Path(settings_3d.__file__).read_text(encoding="utf-8")

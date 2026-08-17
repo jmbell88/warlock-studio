@@ -599,52 +599,27 @@ def test_a_profile_captures_style_and_not_the_generation():
     from warlock.studio import profiles
 
     form = statelib.default_form_2d()
-    form.update(prompt="a barrel", genre="fantasy", base_model="turbo", count=4)
+    form.update(prompt="a barrel", base_model="turbo", negative_prompt="smooth", count=4)
     captured = profiles.capture(form)
-    assert captured["genre"] == "fantasy"
     assert captured["base_model"] == "turbo"
+    assert captured["negative_prompt"] == "smooth"
     for volatile in ("prompt", "seed", "seed_locked", "count"):
         assert volatile not in captured
 
 
-def test_a_profile_carries_the_look_fields_and_not_the_per_asset_ones():
-    """A profile is a house style. Dragging 'category' or 'mood' along with it
-    would make switching profiles quietly rewrite what the asset *is*."""
-    from warlock.studio import profiles
-
-    form = statelib.default_form_2d()
-    form.update(
-        genre="fantasy",
-        art_style="painterly",
-        setting="dungeon",
-        palette="muted",
-        category="weapon",
-        material="wood",
-        condition="worn",
-        emissive="none",
-        rarity="common",
-        silhouette="tall",
-        mood="grim",
-    )
-    captured = profiles.capture(form)
-    assert set(profiles.TAXONOMY) <= set(captured)
-    for per_asset in (
-        "category", "material", "condition", "emissive", "rarity", "silhouette", "mood",
-    ):
-        assert per_asset not in captured
-
-
-def test_a_profile_saved_with_per_asset_fields_is_inert_when_applied():
-    """Old profiles on disk keep their extra keys; apply() must ignore them
+def test_an_old_profile_with_retired_taxonomy_keys_is_inert_when_applied():
+    """Old profiles on disk keep their taxonomy keys; apply() must ignore them
     rather than needing a migration."""
     from warlock.studio import profiles
 
     form = statelib.default_form_2d()
-    form["mood"] = "cheerful"
-    profiles.apply(form, {"genre": "fantasy", "mood": "grim", "category": "weapon"})
-    assert form["genre"] == "fantasy"
-    assert form["mood"] == "cheerful"
-    assert form["category"] == statelib.default_form_2d()["category"]
+    profiles.apply(
+        form, {"base_model": "turbo", "genre": "fantasy", "mood": "grim",
+               "category": "weapon", "platform": "2d"}
+    )
+    assert form["base_model"] == "turbo"
+    for retired in ("genre", "mood", "category", "platform"):
+        assert retired not in form
 
 
 def test_applying_a_profile_leaves_the_generation_fields_alone():
@@ -652,8 +627,8 @@ def test_applying_a_profile_leaves_the_generation_fields_alone():
 
     form = statelib.default_form_2d()
     form.update(prompt="a barrel", seed=7, count=4)
-    profiles.apply(form, {"genre": "fantasy", "prompt": "hijacked", "bogus": 1})
-    assert form["genre"] == "fantasy"
+    profiles.apply(form, {"base_model": "turbo", "prompt": "hijacked", "bogus": 1})
+    assert form["base_model"] == "turbo"
     assert (form["prompt"], form["seed"], form["count"]) == ("a barrel", 7, 4)
     assert "bogus" not in form
 
@@ -662,13 +637,13 @@ def test_profiles_round_trip_through_settings(tmp_path):
     from warlock.studio import profiles
 
     s = settingslib.Settings.load(tmp_path)
-    profiles.save_profile(s, "props", {"genre": "fantasy"})
+    profiles.save_profile(s, "props", {"base_model": "turbo"})
     profiles.set_active(s, "props")
-    assert profiles.active_fields(s) == {"genre": "fantasy"}
+    assert profiles.active_fields(s) == {"base_model": "turbo"}
     s.flush()
 
     reloaded = settingslib.Settings.load(tmp_path)
-    assert profiles.list_profiles(reloaded) == {"props": {"genre": "fantasy"}}
+    assert profiles.list_profiles(reloaded) == {"props": {"base_model": "turbo"}}
 
     profiles.delete_profile(reloaded, "props")
     assert profiles.list_profiles(reloaded) == {}
@@ -707,12 +682,11 @@ def test_the_reference_path_never_persists():
     assert restored["ref_path"] == ""
 
 
-def test_the_conditioning_pickers_are_not_plain_guidance_combos():
-    """They live in the Reference section and are hidden until there is an
-    image to condition on, so the generic loop must not draw them too."""
-    fields = statelib.guidance_fields()
-    assert "ip_adapter" not in fields
-    assert "control" not in fields
+def test_the_conditioning_pickers_live_in_the_references_section():
+    """They are hidden until there is an image to condition on, so the form
+    still carries their keys but no generic combo loop exists to draw them."""
+    form = statelib.default_form_2d()
+    assert "ip_adapter" in form and "control" in form
 
 
 # --- ordering ----------------------------------------------------------------

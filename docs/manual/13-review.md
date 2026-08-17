@@ -3,8 +3,8 @@
 Review is where finished meshes get judged, and where those judgements start paying you back. Every
 grade you give a mesh is recorded as a **verdict** against the job it was filed on, together with a
 copy of the settings that produced it — and the pool of verdicts is aggregated into the "What works"
-findings that the generate panes surface as hints, ranked configurations you can apply to the forms
-or save as presets. Ten seconds of judging a mesh teaches the app which settings earn their place.
+findings that the generate panes surface as hints, ranked configurations you can apply to the
+forms. Ten seconds of judging a mesh teaches the app which settings earn their place.
 
 There are two ways to file a verdict, feeding one pool:
 
@@ -112,7 +112,7 @@ at the bottom of the sweep list takes:
   so the only thing that varies is what you asked to vary.
 - **What to vary** — a parameter and the values to try it at. The sweep plans a baseline unit plus
   one unit per differing value, per seed. The values are drawn as whatever the parameter actually
-  accepts: tick boxes for a taxonomy field or a switch, and a hint naming the legal range for a
+  accepts: tick boxes for a choice field or a switch, and a hint naming the legal range for a
   number. Whichever you use, what is stored is the same comma-separated list, so you can still type
   one out by hand.
 - **Start from current settings** — captures the Reference and Mesh stage forms as the baseline the axes vary
@@ -197,7 +197,7 @@ outranking a solid 19-of-20 — and the average is the mean grade behind it. The
 rather than doing the ranking: over one sample its own spread is zero, which would re-create exactly
 the lucky-5-for-5 problem the floor exists to prevent. A configuration needs five verdicts to
 appear, and carries muted lines of its machine measurements and its tag tallies when it has any.
-"Apply to forms" writes one into the Reference and Mesh stage forms; "Save as preset..." keeps it under a name.
+"Apply to forms" writes one into the Reference and Mesh stage forms.
 
 The same findings feed the small hints next to controls in the generate panes, so the learning is
 visible where the decisions are made: "usable 6/8 (41%+) · avg +2.6" once a value has enough

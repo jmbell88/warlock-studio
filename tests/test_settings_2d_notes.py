@@ -276,34 +276,11 @@ def test_every_mesh_setting_that_evidence_exists_for_shows_it():
     assert hinted == owned - {"size_m", "custom_triangles"}
 
 
-def test_the_era_style_control_is_renamed_without_renaming_its_key():
-    """A relabel, not a rename. ``art_style`` is what every job on disk
-    recorded and what the findings and verdict buckets are keyed on, so
-    renaming the key would need a ``_LEGACY_ALIASES`` entry *and* would still
-    split the corpus -- a vector recorded under the old spelling is a different
-    string, and evidence under it would simply stop accumulating.
-    """
-    assert settings_2d.field_label("art_style") == "era style"
-    assert "art_style" in guidance.form_fields()
-    assert "era_style" not in guidance.form_fields()
-    # And the group still names the key, because that is what the form holds.
-    style = dict(settings_2d.GUIDANCE_GROUPS)["Style"]
-    assert "art_style" in style
-
-
-def test_every_other_field_still_reads_as_its_key():
+def test_every_field_reads_as_its_key():
+    # FIELD_LABELS emptied with the taxonomy (it carried art_style); every
+    # surviving field's on-screen name is its key with the underscores out.
     for field in guidance.form_fields():
-        if field != "art_style":
-            assert settings_2d.field_label(field) == field.replace("_", " ")
-
-
-def test_the_blank_option_is_named_by_the_pane_not_by_the_key():
-    """The empty entry is what the combo shows until something is chosen, so a
-    relabel that stopped at the heading would leave it saying "art style...".
-    """
-    options = settings_2d._field_options(_ctx(), "art_style")
-    assert options[0] == ("", "era style...")
-    assert settings_2d._field_options(_ctx(), "palette")[0] == ("", "palette...")
+        assert settings_2d.field_label(field) == field.replace("_", " ")
 
 
 # --- which styles the picker offers ------------------------------------------
@@ -379,25 +356,9 @@ def test_the_catalog_and_the_registry_agree_about_which_loras_fit():
     assert guidance.catalog()["loras_by_base"] == models.loras_by_base()
 
 
-def test_a_refusal_naming_a_folded_field_opens_the_fold():
-    from warlock.studio.state import default_form_2d
-
-    form = default_form_2d()
-    assert settings_2d.folds_to_open({"art_style"}, form) == (settings_2d.MORE_KEY,)
-    assert settings_2d.folds_to_open(set(), form) == ()
-    # A field the fold does not hold opens nothing: the control is on screen.
-    assert settings_2d.folds_to_open({"prompt"}, form) == ()
-
-
-def test_a_refusal_on_an_advanced_field_opens_both_headers():
-    """check_weights' refusal most often names base_model or style_lora, which
-    live inside the nested Advanced header: opening the outer fold alone rings
-    a control the inner, still-collapsed header never draws."""
-    from warlock.studio.state import default_form_2d
-
-    form = default_form_2d()
-    for field in settings_2d.ADVANCED_FIELDS:
-        assert settings_2d.folds_to_open({field}, form) == (
-            settings_2d.MORE_KEY,
-            settings_2d.ADVANCED_KEY,
-        )
+def test_no_fold_machinery_survives_the_flat_form():
+    """The flat form has no folds, so a refusal can never name a control
+    nothing draws -- the machinery that guaranteed that is gone with the folds
+    themselves."""
+    for name in ("folds_to_open", "folded_fields", "MORE_KEY", "ADVANCED_KEY"):
+        assert not hasattr(settings_2d, name)

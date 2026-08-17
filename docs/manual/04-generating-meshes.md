@@ -109,8 +109,7 @@ The **Mesh** section holds the reconstruction settings.
 | 3D | 1024 |
 
 The question the select is asking is what the asset is *for*: a 2D asset is going to be seen flat
-and small, a 3D one in a scene. This is a different control from the Reference stage's platform, which is a
-phrase in the prompt. Higher resolutions cost more VRAM and more time, and on a card that cannot
+and small, a 3D one in a scene. Higher resolutions cost more VRAM and more time, and on a card that cannot
 hold both models at once they may need the exclusive VRAM mode (`WARLOCK_VRAM_EXCLUSIVE=1`), which
 stops the reconstruction engine while the image model runs.
 
@@ -122,8 +121,8 @@ it.
 
 **Size** is the physical size the finished GLB is scaled to, along its largest dimension. Drag it —
 about a centimetre per pixel — or double-click to type a figure; the readout carries the unit, and at
-zero it reads *unset*, which means "keep whatever the reference recorded". That in turn falls back to
-the category's typical size, or 1 m if no category was chosen. There is no upper stop, because there
+zero it reads *unset*, which means "keep whatever the reference recorded". That in turn falls back
+to 1 m. There is no upper stop, because there
 is no largest asset: a wall section is legitimately 8 m.
 
 Scaling is optional, but **grounding is not**. Every finished mesh is centred on X and Z and has its

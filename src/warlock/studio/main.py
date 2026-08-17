@@ -4069,7 +4069,7 @@ class App:
 
         from ..bench import findings as findings_lib
         from ..service import findings as svc_findings
-        from . import controls, dialogs, vector_presets, widgets
+        from . import controls, review_mode, widgets
 
         imgui.separator()
         if not widgets.header("What works", default_open=False):
@@ -4101,7 +4101,7 @@ class App:
             )
             return
         for entry in top[:5]:
-            summary = vector_presets.describe(entry["vector"])
+            summary = review_mode.describe_vector(entry["vector"])
             imgui.text_wrapped(f"{findings_lib.vector_line(entry)}  -  {summary}")
             measured = findings_lib.metrics_line(entry.get("metrics"))
             if measured:
@@ -4111,33 +4111,9 @@ class App:
                 widgets.muted(tagged)
             vector = entry["vector"]
             if controls.button(f"Apply to forms##apply-{entry['key']}"):
-                vector_presets.apply(ctx.state, vector)
+                review_mode.apply_vector(ctx.state, vector)
                 ctx.toast("Applied those settings to the 2D and 3D forms.")
-            widgets.same_line_or_wrap(widgets.button_width("Save as preset..."))
-            if controls.button(
-                f"Save as preset...##save-{entry['key']}",
-                role=controls.ButtonRole.GHOST,
-            ):
-                ctx.prompts.ask(
-                    dialogs.Prompt(
-                        title="Save settings preset",
-                        label="Name",
-                        value="",
-                        on_accept=lambda name, v=vector: self._save_vector_preset(ctx, name, v),
-                    )
-                )
             imgui.separator()
-
-    @staticmethod
-    def _save_vector_preset(ctx: Any, name: str, vector: dict) -> None:
-        from . import vector_presets
-
-        if vector_presets.save_preset(ctx.settings, name, vector):
-            ctx.toast(f"Saved the preset {name}.")
-            return
-        # A name that is empty or only spaces is the one refusal, and it used to
-        # be silent: the modal closed and nothing was saved or said.
-        ctx.toast("A preset needs a name.", "error")
 
     def _overlays(self, viewport: Any) -> None:
         """Toasts and modals, drawn over whichever layout ran.

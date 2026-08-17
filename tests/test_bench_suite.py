@@ -10,11 +10,13 @@ from warlock import guidance
 from warlock.bench import recipe as recipe_mod
 from warlock.bench import suite as suite_mod
 
-# The v1 item ids, frozen. A suite file is never edited in place -- a run's
+# The item ids, frozen. A suite file is never edited in place -- a run's
 # manifest records its fingerprint, so changing a prompt after the fact
 # silently invalidates every comparison made against it. Changing the set
-# means core-v2.json, and this test is what says so out loud.
-CORE_V1_IDS = tuple(
+# means core-v3.json, and this test is what says so out loud. (core-v2 was
+# re-minted from core-v1 for the 2026-08-17 taxonomy retirement, keeping the
+# ids and prompts and stripping the retired guidance keys.)
+CORE_V2_IDS = tuple(
     f"{category}-{n:02d}"
     for category in ("prop", "weapon", "character", "vehicle", "environment")
     for n in range(1, 9)
@@ -23,13 +25,20 @@ CORE_V1_IDS = tuple(
 
 def test_the_default_suite_loads():
     s = suite_mod.load()
-    assert s.key == "core-v1"
+    assert s.key == "core-v2"
     assert len(s.items) == 40
     assert len(s.seeds) == 4
 
 
-def test_the_v1_item_ids_are_frozen():
-    assert tuple(i.id for i in suite_mod.load("core-v1").items) == CORE_V1_IDS
+def test_the_v2_item_ids_are_frozen():
+    assert tuple(i.id for i in suite_mod.load("core-v2").items) == CORE_V2_IDS
+
+
+def test_no_suite_carries_a_retired_guidance_key():
+    known = set(guidance.form_fields())
+    for key in suite_mod.available():
+        for item in suite_mod.load(key).items:
+            assert set(item.guidance) <= known, (key, item.id)
 
 
 def test_every_category_is_evenly_covered():
@@ -55,7 +64,7 @@ def test_every_item_has_a_prompt_and_a_category():
 
 
 def test_an_unknown_suite_says_what_there_is():
-    with pytest.raises(ValueError, match="core-v1"):
+    with pytest.raises(ValueError, match="core-v2"):
         suite_mod.load("nope")
 
 
@@ -89,10 +98,11 @@ def test_an_unknown_guidance_value_is_refused(tmp_path):
     raw = {
         "seeds": [1],
         "items": [
-            {"id": "a", "prompt": "x", "category": "prop", "guidance": {"material": "stonee"}}
+            {"id": "a", "prompt": "x", "category": "prop",
+             "guidance": {"base_model": "sdxll"}}
         ],
     }
-    with pytest.raises(ValueError, match="material"):
+    with pytest.raises(ValueError, match="base_model"):
         suite_mod.parse(raw, tmp_path / "s.json")
 
 
@@ -155,12 +165,17 @@ def test_job_kwargs_is_exactly_what_create_job_takes():
 
 def test_the_item_wins_over_the_recipe_on_a_shared_field():
     """The recipe sets the backend; the item describes the subject. A suite
-    that asks for stone must not have it overwritten."""
+    field must not be overwritten by the recipe's."""
     s = suite_mod.load()
-    item = next(i for i in s.items if i.guidance.get("material"))
-    r = recipe_mod.parse({"key": "x", "guidance": {"material": "gold"}}, None)
-    fields = recipe_mod.job_kwargs(r, item, 1)["guidance_fields"]
-    assert fields["material"] == item.guidance["material"]
+    item = s.items[0]
+    assert not item.guidance.get("platform")
+    forged = suite_mod.Item(
+        id=item.id, category=item.category, prompt=item.prompt,
+        guidance={"platform": "2d"},
+    )
+    r = recipe_mod.parse({"key": "x", "guidance": {"platform": "3d"}}, None)
+    fields = recipe_mod.job_kwargs(r, forged, 1)["guidance_fields"]
+    assert fields["platform"] == "2d"
 
 
 def test_the_backend_comes_from_the_recipe():

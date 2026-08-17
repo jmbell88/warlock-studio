@@ -318,3 +318,42 @@ def test_end_section_is_harmless_with_no_block_open(frame):
         return list(scope.blocks)
 
     assert len(frame(build)) == 1
+
+
+def test_a_scope_inside_a_child_window_is_a_real_second_scope(frame):
+    """The 2D pane's fix (2026-08-17). ``layout.pane`` opens a scope on the
+    pane's own draw list; the 2D form then opens a child window (``2d-form``)
+    with its *own* list and an opaque background -- so fills painted on the
+    parent's list are covered, and only the 8dp left overhang survived. The fix
+    is a second scope opened inside the child, and it is only a fix because the
+    dedup keys on the draw list's owner name (distinct per child window) rather
+    than treating any nested scope as a no-op."""
+    from imgui_bundle import imgui
+
+    from warlock.studio import layout
+
+    def build():
+        depths = []
+        blocks = []
+        with layout.pane("probe-2d", (320.0, 500.0)) as visible:
+            if visible:
+                depths.append(widgets.section_scope_depth())
+                if imgui.begin_child("probe-2d-form", (0.0, 300.0)):
+                    child_left = imgui.get_cursor_screen_pos().x
+                    child_width = imgui.get_content_region_avail().x
+                    with widgets.section_blocks() as scope:
+                        depths.append(widgets.section_scope_depth())
+                        widgets.section("Output")
+                        widgets.muted("a row")
+                    blocks = list(scope.blocks)
+                imgui.end_child()
+        return depths, blocks, child_left, child_width
+
+    depths, blocks, child_left, child_width = frame(build)
+    assert depths == [1, 2], "the child's scope is real, not the pane's again"
+    assert len(blocks) == 1
+    x0, _y0, x1, _y1 = blocks[0]
+    # The block spans the child's content width (give or take the overhang),
+    # not a sliver at the left edge.
+    assert x1 - x0 >= child_width * 0.9, (x0, x1, child_width)
+    assert x0 <= child_left

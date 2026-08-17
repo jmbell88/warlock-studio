@@ -1042,16 +1042,15 @@ def test_an_axis_with_no_values_is_refused(ctx):
 
 
 def test_the_baseline_is_captured_from_the_forms_the_user_already_tuned(ctx):
-    ctx.state.form_2d["genre"] = "fantasy"
     ctx.state.form_2d["style_lora"] = "some-lora"
     ctx.state.form_2d["lora_weight"] = 0.75
     ctx.state.form_3d["platform"] = "pc"
     ctx.state.form_3d["reference_prep"] = True
 
     base = review_mode.capture_base(ctx)
-    assert base["genre"] == "fantasy"
+    assert base["style_lora"] == "some-lora"
     assert base["lora_weight"] == 0.75
-    # The 3D pane's platform is the geometry resolution and wins.
+    # platform is the 3D pane's geometry-resolution select.
     assert base["platform"] == "pc"
     assert base["reference_prep"] is True
     # The prompt is not a setting: it belongs to the sweep, not to its base.

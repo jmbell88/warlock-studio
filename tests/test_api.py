@@ -208,10 +208,7 @@ def test_input_png_written_before_the_db_row_is_created(svc, assets, monkeypatch
 def test_the_guidance_catalog_is_served(svc):
     body = svc_system.guidance_catalog(svc)
     assert set(body["fields"]) == {
-        "genre", "art_style", "category", "platform", "framing",
-        "base_model", "style_lora", "ip_adapter", "control",
-        "material", "condition", "setting", "palette", "emissive", "rarity",
-        "silhouette", "mood",
+        "platform", "base_model", "style_lora", "ip_adapter", "control",
     }
     assert body["defaults"]["platform"] in {o["key"] for o in body["fields"]["platform"]}
     assert body["defaults"]["base_model"] in {o["key"] for o in body["fields"]["base_model"]}
@@ -223,24 +220,23 @@ def test_guidance_is_stored_on_the_job(svc):
         kind="text",
         prompt="a plasma rifle",
         guidance_fields={
-            "genre": "scifi",
-            "art_style": "ps1",
-            "category": "weapon",
             "platform": "2d",
+            # Retired taxonomy keys arriving from an old caller are ignored,
+            # never refused, and never stored.
+            "genre": "scifi",
+            "category": "weapon",
         },
     )["id"]
     params = _params(svc, job_id)
-    assert params["genre"] == "scifi"
-    assert params["art_style"] == "ps1"
-    assert params["category"] == "weapon"
+    assert params["platform"] == "2d"
     assert params["resolution"] == 512  # derived from the 2D platform preset
-    assert params["size_m"] == 1.0  # derived from the weapon category default
+    assert params["size_m"] == 1.0  # the constant default
+    assert "genre" not in params
+    assert "category" not in params
 
 
-def test_explicit_size_overrides_the_category_default(svc):
-    job_id = svc_jobs.create_job(
-        svc, kind="text", prompt="x", size_m=0.25, guidance_fields={"category": "weapon"}
-    )["id"]
+def test_explicit_size_is_stored(svc):
+    job_id = svc_jobs.create_job(svc, kind="text", prompt="x", size_m=0.25)["id"]
     assert _params(svc, job_id)["size_m"] == 0.25
 
 
@@ -253,7 +249,7 @@ def test_a_job_without_guidance_still_gets_usable_defaults(svc):
 
 @pytest.mark.parametrize(
     ("field", "value"),
-    [("genre", "nonsense"), ("category", "nonsense"), ("platform", "nonsense")],
+    [("platform", "nonsense"), ("base_model", "nonsense"), ("style_lora", "nonsense")],
 )
 def test_invalid_guidance_rejected(svc, field, value):
     with pytest.raises(Invalid):
@@ -268,44 +264,38 @@ def test_an_out_of_range_size_is_rejected(svc):
 def test_rejected_guidance_leaves_no_input_png_behind(svc, assets):
     with pytest.raises(Invalid):
         svc_jobs.create_job(
-            svc, kind="image", image=_png_bytes(), guidance_fields={"genre": "nonsense"}
+            svc, kind="image", image=_png_bytes(), guidance_fields={"platform": "nonsense"}
         )
     assert not list(assets.glob("*/input.png"))
 
 
-def test_the_newer_guidance_fields_are_accepted(svc):
+def test_stale_taxonomy_guidance_is_ignored_not_refused(svc):
+    # Retired keys with any value at all: an old client or a stored form must
+    # never be able to 400 a submit over a field that no longer exists.
     job_id = svc_jobs.create_job(
         svc,
         kind="text",
         prompt="a rifle",
-        guidance_fields={"material": "steel", "condition": "pristine", "rarity": "epic"},
+        guidance_fields={"material": "unobtainium", "art_style": "nonsense"},
     )["id"]
     params = _params(svc, job_id)
-    assert params["material"] == "steel"
-    assert params["condition"] == "pristine"
-    assert params["rarity"] == "epic"
-
-
-def test_an_unknown_guidance_value_is_refused(svc):
-    with pytest.raises(Invalid):
-        svc_jobs.create_job(
-            svc, kind="text", prompt="x", guidance_fields={"material": "unobtainium"}
-        )
+    assert "material" not in params
+    assert "art_style" not in params
 
 
 # --- prompt preview ---------------------------------------------------------
 
 
 def test_the_prompt_preview_returns_the_composed_prompt(svc):
-    body = svc_system.prompt_preview(svc, {"genre": "scifi"}, "a barrel")
+    body = svc_system.prompt_preview(svc, {}, "a barrel")
     assert body["prompt"].startswith("a barrel, ")
-    assert "science fiction" in body["prompt"]
+    assert "single subject" in body["prompt"]
     assert body["negative_prompt"]  # falls back to the guidance default
 
 
 def test_the_prompt_preview_rejects_unknown_guidance(svc):
     with pytest.raises(Invalid):
-        svc_system.prompt_preview(svc, {"material": "unobtainium"}, "x")
+        svc_system.prompt_preview(svc, {"platform": "nonsense"}, "x")
 
 
 def test_the_prompt_preview_degrades_to_null_tokens_without_a_tokenizer(svc, monkeypatch):
@@ -492,7 +482,7 @@ def test_a_malformed_job_id_is_rejected_by_every_entry_point(svc, bad):
 
 def test_reroll_copies_the_prompt_and_guidance_with_a_new_seed(svc):
     src = svc_jobs.create_job(
-        svc, kind="text", prompt="a barrel", seed=42, guidance_fields={"genre": "fantasy"}
+        svc, kind="text", prompt="a barrel", seed=42, guidance_fields={"platform": "2d"}
     )["id"]
     # Pretend the worker finished it and recorded its derived values.
     svc.store.merge_params(
@@ -508,7 +498,7 @@ def test_reroll_copies_the_prompt_and_guidance_with_a_new_seed(svc):
     new = svc.store.get(new_id)
     assert new["kind"] == "text"
     assert new["prompt"] == "a barrel"
-    assert new["params"]["genre"] == "fantasy"
+    assert new["params"]["platform"] == "2d"
     assert new["params"]["seed"] != 42
     assert new["params"]["rerun_of"] == src
     # Derived values describe the source run, not this one.
@@ -845,15 +835,18 @@ def test_the_form_default_matches_what_a_submit_would_pick(svc):
 
 
 def test_promote_migrates_a_reference_carrying_legacy_guidance(svc):
-    # Every reference on disk from before the platform and art-style tables
-    # were renamed carries the old keys, and an override re-normalizes the
-    # whole stored dict -- so without the alias table this is a 400 on an
-    # otherwise valid asset, and the user has no way to edit it.
+    # Every reference on disk from before the platform rename carries the old
+    # spelling, and an override re-normalizes the whole stored dict -- so
+    # without the alias this is a 400 on an otherwise valid asset. A retired
+    # taxonomy key on the same row must be dropped silently, not refused.
     ref_id = _done_reference(svc)
     svc.store.merge_params(ref_id, {"platform": "hero", "art_style": "handpainted"})
     params = _params(svc, svc_jobs.promote_to_model(svc, ref_id, size_m=2.0)["id"])
     assert params["platform"] == "3d"
-    assert params["art_style"] == "ps2"
+    # The stale taxonomy key rides along in stored params (nothing rewrites
+    # history) but is never read: the promotion succeeded, which is the whole
+    # tolerance the retirement rests on.
+    assert params["art_style"] == "handpainted"
 
 
 def test_promote_does_not_claim_to_be_a_rerun(svc):

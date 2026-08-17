@@ -62,8 +62,8 @@ between jobs is free where changing base model is not.
 The trigger words are the detail most likely to be put in the wrong place. They are prepended to the
 composed prompt alongside the prompt template, and they are deliberately absent from the guidance
 module's prompt fields. A trigger is model-facing scaffolding — it exists because the adapter was
-trained to answer to it — not creative direction, and the taxonomy in `guidance.py` is meant to hold
-only the latter. Model keys and LoRA keys are validated in `guidance.py` so that a bad value
+trained to answer to it — never part of the user's brief. Model keys and LoRA keys are validated in
+`guidance.py` so that a bad value
 produces one kind of error from one place, but they contribute nothing to the composed prompt: its
 text is byte-identical with and without any of them.
 

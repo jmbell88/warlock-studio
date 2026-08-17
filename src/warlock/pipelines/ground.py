@@ -140,9 +140,9 @@ def texture_prompts(
     """``(fill subject, border subject)`` for one terrain.
 
     Subjects, not finished prompts: the caller runs each through
-    ``guidance.compose_prompt`` with ``prompt.TILE_FIELDS``, which is what adds
-    the seamless-tileable, flat-orthographic, no-focal-object clauses. Putting
-    those here would mean a tile prompt assembled two ways.
+    ``guidance.compose_prompt`` and ``prompt.TILE_TEMPLATE``, which is what
+    adds the seamless-tileable, flat-orthographic, no-focal-object clauses.
+    Putting those here would mean a tile prompt assembled two ways.
 
     The colour hint goes in both, because the two materials have to read as the
     same terrain -- a grey rim around a green field is a different terrain, not
