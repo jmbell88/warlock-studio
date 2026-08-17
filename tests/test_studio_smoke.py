@@ -1331,7 +1331,7 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
     # exists once a document has a table, and every control in it acts on the
     # *document* rather than on the session swatch row.
     assert inker_mode.index_to(app_ctx, tab, [(0, 0, 0, 255), (255, 255, 255, 255)])
-    assert tab.doc.is_indexed
+    assert tab.doc.is_palette_locked
     _frame(imgui_ctx, build)
     state.palette_slot = 1
     _frame(imgui_ctx, build)
@@ -1356,7 +1356,7 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
     _frame(imgui_ctx, build)
     state.tool = "brush"
     assert inker_mode.index_to(app_ctx, tab, None)
-    assert not tab.doc.is_indexed
+    assert not tab.doc.is_palette_locked
     _frame(imgui_ctx, build)
 
     # The conversion popup: the filter popup's shape against a whole-document

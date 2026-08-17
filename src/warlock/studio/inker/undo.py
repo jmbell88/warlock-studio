@@ -55,8 +55,11 @@ __all__ = [
     "UNDO_BYTES",
     "UNDO_MAX_DEPTH",
     "UNDO_MIN_DEPTH",
+    "ColorStateEdit",
     "CompoundEdit",
     "Edit",
+    "IndexPatchEdit",
+    "IndexRemapEdit",
     "LayerAddEdit",
     "LayerMoveEdit",
     "LayerPropsEdit",
@@ -136,6 +139,132 @@ class PatchEdit(Edit):
 
     def redo(self, doc: Any) -> None:
         self._put(doc, self.after)
+
+
+@dataclass
+class IndexPatchEdit(Edit):
+    """:class:`PatchEdit` for a truly indexed document: **index** crops.
+
+    A quarter of the bytes of the RGBA patch it replaces, which is not the
+    reason it exists -- the reason is that indices are the record, and an RGBA
+    patch cannot restore them. Undoing a stroke by writing back the *colours*
+    would land every pixel on the lowest-numbered slot holding that colour, so
+    one undo would silently collapse the duplicate-slot identity the mode is
+    for.
+
+    Both directions write indices and then re-materialise through the
+    document's **live** lookup table rather than through one recorded here. That
+    is correct by history *ordering* rather than by luck: a palette change is
+    itself an edit on the same stack, inside the same compound where the two
+    happen together, so by the time this runs the table is always the one that
+    belongs beside these indices. Recording a table here would be a second
+    answer to the same question and the two would drift.
+    """
+
+    layer_uid: int
+    rect: tuple[int, int, int, int]
+    before: np.ndarray
+    after: np.ndarray
+
+    def __post_init__(self) -> None:
+        # Owned outright, for ``PatchEdit``'s reason spelled at length there.
+        self.before = self.before.copy()
+        self.after = self.after.copy()
+        self.cost = int(self.before.nbytes + self.after.nbytes)
+
+    def _put(self, doc: Any, plane: np.ndarray) -> None:
+        doc.apply_indices(self.layer_uid, self.rect, plane)
+
+    def undo(self, doc: Any) -> None:
+        self._put(doc, self.before)
+
+    def redo(self, doc: Any) -> None:
+        self._put(doc, self.after)
+
+
+@dataclass
+class IndexRemapEdit(Edit):
+    """A slot permutation applied to every index plane in the document.
+
+    About a kilobyte for a whole-document reorder that would otherwise be a full
+    snapshot per layer per frame: the two tables are 256 bytes each, and the
+    work is one fancy-index per distinct plane. That is what makes reordering a
+    palette in indexed mode affordable *and* undoable, where in constrained-RGB
+    mode it is free and unrecorded because no pixel moves.
+
+    ``forward`` and ``inverse`` are both carried rather than one being derived:
+    a permutation's inverse is cheap to compute but the *pair* is what
+    ``index_plane.permutation_tables`` guarantees agrees with the list operation
+    performed on the table, and re-deriving it here would be a second place for
+    that agreement to be got wrong.
+    """
+
+    forward: np.ndarray
+    inverse: np.ndarray
+
+    def __post_init__(self) -> None:
+        self.forward = self.forward.copy()
+        self.inverse = self.inverse.copy()
+        self.cost = int(self.forward.nbytes + self.inverse.nbytes)
+
+    def undo(self, doc: Any) -> None:
+        doc.apply_remap(self.inverse)
+
+    def redo(self, doc: Any) -> None:
+        doc.apply_remap(self.forward)
+
+
+@dataclass
+class ColorStateEdit(Edit):
+    """Colour mode, palette and transparent index, before and after.
+
+    :class:`PaletteEdit` generalised to everything a document's colour state
+    holds, and both types stay: ``PaletteEdit`` remains what a
+    palette-constrained RGB op pushes, so that path's steps are byte-for-byte
+    what they were, and this is what the indexed ops push.
+
+    Each side is ``(mode, palette, transparent)``. Restoring all three together
+    is the point -- the three are one fact. A mode restored without its palette
+    is a document declaring itself indexed with nothing to index onto, and a
+    transparent index restored without its mode moves the hole in a document
+    that has none.
+
+    Applying it **re-materialises**, which is what makes an instant palette
+    recolour instant in both directions: the indices never moved, so putting the
+    old table back is the whole undo.
+    """
+
+    before: tuple[str, list[Any] | None, int]
+    after: tuple[str, list[Any] | None, int]
+
+    def __post_init__(self) -> None:
+        self.before = _copy_state(self.before)
+        self.after = _copy_state(self.after)
+        # ``PaletteEdit``'s reckoning: bookkeeping rather than a figure eviction
+        # will act on, counted anyway because an edit reporting zero is one the
+        # budget cannot see at all.
+        self.cost = 16 * sum(len(state[1] or ()) for state in (self.before, self.after))
+
+    def _apply(self, doc: Any, state: tuple[str, list[Any] | None, int]) -> None:
+        mode, table, transparent = state
+        doc.color_mode = mode
+        doc.palette = _copy_table(table)
+        doc.transparent_index = int(transparent)
+        doc.rev += 1
+        # After the assignment, never before: the materialisation reads the
+        # table off the document.
+        doc._rematerialize_all()
+
+    def undo(self, doc: Any) -> None:
+        self._apply(doc, self.before)
+
+    def redo(self, doc: Any) -> None:
+        self._apply(doc, self.after)
+
+
+def _copy_state(state: tuple[str, list[Any] | None, int]) -> tuple[str, list[Any] | None, int]:
+    mode, table, transparent = state
+    return (str(mode), _copy_table(table), int(transparent))
 
 
 @dataclass

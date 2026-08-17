@@ -63,6 +63,7 @@ from .slices import Slice
 from .undo import (
     UNDO_BYTES,
     CompoundEdit,
+    IndexPatchEdit,
     PatchEdit,
     ReplayEdit,
     UndoStack,
@@ -213,6 +214,23 @@ class Document(
     #: step -- so making the memory itself part of the document's state would
     #: mean an undo could change what Ctrl+Shift+D is about to give you.
     _last_mask: np.ndarray | None = field(init=False, default=None, repr=False)
+    #: The palette slot the foreground colour was picked from, or None when it
+    #: came from the wheel, the eyedropper or anywhere else. Read only by
+    #: :meth:`_commit_indexed_patch`, where it becomes ``index_plane.resolve``'s
+    #: ``prefer``: pixels the user painted in *that colour* take *that slot*
+    #: rather than the lowest-numbered duplicate of it.
+    #:
+    #: A field the studio sets when the swatch changes, rather than a parameter
+    #: on ``begin_stroke``, because every tool needs it and not only the brush
+    #: -- a fill, a shape, a gradient stop and a text stamp all paint in the
+    #: foreground colour and all deserve to land on the slot the user clicked.
+    #: One setter is also one thing to get wrong; twelve signatures are twelve.
+    #:
+    #: Not history, not persisted, not undoable -- ``_last_mask``'s rule. It
+    #: describes what the user is holding, not what the document contains, and
+    #: an undo that changed which swatch is selected would be answering a
+    #: question nobody asked.
+    paint_slot: int | None = field(init=False, default=None, repr=False)
     #: Cels autovivified by writes that have not yet been committed. They ride
     #: along into the same ``CompoundEdit`` as the patch, so drawing on an empty
     #: frame is one Ctrl+Z rather than two. A *list* rather than one slot: the
@@ -746,6 +764,16 @@ class Document(
         # third copy of that list and it has to agree with them.
         real = Layer(
             pixels=cp.empty(width, height),
+            # A fresh cel in an indexed document is a plane of the transparent
+            # index, not of zero: they are only the same slot by coincidence,
+            # and a document whose transparent index is 7 would autovivify a
+            # canvas full of slot 0 -- an opaque rectangle of whatever colour
+            # slot 0 happens to hold, appearing the instant a stroke starts.
+            indices=(
+                None
+                if self.color_mode != "indexed"
+                else np.full((height, width), self.transparent_index, dtype=np.uint8)
+            ),
             name=track.name,
             opacity=track.opacity,
             visible=track.visible,
@@ -826,6 +854,76 @@ class Document(
         table = self._index_lut() if table is None else table
         layer.pixels[...] = ixp.materialize(layer.indices, table)
 
+    def check_materialized(self) -> None:
+        """Raise unless every layer's pixels are what its indices say.
+
+        The one invariant a truly indexed document can lose *silently*: any code
+        that writes ``pixels`` without going through the funnel leaves the two
+        planes describing different pictures, and the document goes on looking
+        right until it is saved, undone, or reordered -- at which point the
+        indices win and the drawing changes.
+
+        Cheap enough to be called from anywhere (a full-canvas comparison per
+        distinct cel), and called from the indexed test suite after every
+        operation rather than from the ops themselves: an assertion inside the
+        model would be either always on (a whole extra materialisation per
+        stroke) or off in the build that matters.
+        """
+        if self.color_mode != "indexed":
+            return
+        table = self._index_lut()
+        layers = self.stack if self.anim is None else self.anim.unique_cel_layers()
+        for layer in layers:
+            if layer.indices is None:
+                continue
+            want = ixp.materialize(layer.indices, table)
+            if not np.array_equal(layer.pixels, want):
+                raise AssertionError(
+                    f"layer {layer.uid} ({layer.name!r}) has drifted from its index plane"
+                )
+
+    def apply_indices(
+        self, layer_uid: int, rect: tuple[int, int, int, int], plane: np.ndarray
+    ) -> None:
+        """Write one rectangle of one layer's index plane and re-derive it.
+
+        The hook :class:`~.undo.IndexPatchEdit` calls in both directions, and
+        public for that reason alone -- an edit type is not a member of this
+        package's private surface, it is a stored object that outlives the call
+        that made it.
+
+        ``layer_by_uid`` rather than ``stack.by_uid``, for ``PatchEdit._put``'s
+        reason: on an animated document the cel this patch was recorded against
+        may be on a frame the playhead has since moved off, and it must still be
+        written.
+        """
+        layer = self.layer_by_uid(layer_uid)
+        if layer.indices is None:
+            # The document left indexed mode under this edit. Refused by name
+            # rather than silently skipped: a half-applied history walk is worse
+            # than a stopped one, and the guard exists to say which happened.
+            raise ValueError("an index patch cannot apply to a layer with no index plane")
+        x0, y0, x1, y1 = rect
+        layer.indices[y0:y1, x0:x1] = plane
+        table = self._index_lut()
+        layer.pixels[y0:y1, x0:x1] = ixp.materialize(layer.indices[y0:y1, x0:x1], table)
+        self.invalidate(rect, layer_uid=layer_uid)
+
+    def apply_remap(self, forward: np.ndarray) -> None:
+        """Push a slot permutation through every distinct index plane.
+
+        :class:`~.undo.IndexRemapEdit`'s hook, public for the same reason. The
+        table is applied and the pixels re-derived; the *palette* is not touched
+        here, because the compound this edit rides in carries a
+        :class:`~.undo.ColorStateEdit` that owns it. Two edits, one act, and
+        neither one duplicating the other's half.
+        """
+        layers = self.stack if self.anim is None else self.anim.unique_cel_layers()
+        for layer in layers:
+            if layer.indices is not None:
+                layer.indices = ixp.apply_remap(layer.indices, forward)
+        self._rematerialize_all()
+
     def _rematerialize_all(self) -> None:
         """Every *distinct* plane in the document, once each.
 
@@ -856,14 +954,23 @@ class Document(
         nothing must not move the history head, or the document asks to be saved
         for a gesture that did not happen.
 
-        **This is where an indexed document is snapped**, and it is the one
-        place worth doing it: every write that is undoable arrives here --
-        strokes, fills, shapes, gradients, filters, pastes, floating commits --
-        so the constraint holds for all of them rather than for the list
-        somebody remembered. Snapped *before* ``after`` is read, so the undo
-        step records the pixels the document actually ends up with, and an undo
-        followed by a redo lands on the same colours.
+        **This is where the colour mode is applied**, and it is the one place
+        worth doing it: every write that is undoable arrives here -- strokes,
+        fills, shapes, gradients, filters, pastes, floating commits -- so the
+        constraint holds for all of them rather than for the list somebody
+        remembered. Applied *before* ``after`` is read, so the undo step records
+        the pixels the document actually ends up with, and an undo followed by a
+        redo lands on the same colours.
+
+        One funnel, three constraints: palette-constrained RGB snaps onto the
+        table, indexed resolves to slots (and takes the whole rest of the method
+        with it -- the step it pushes is an index patch), grayscale flattens to
+        luma. Tools go on painting RGBA in all three, which is what keeps this
+        the *only* place any of them has to be known.
         """
+        if self.color_mode == "indexed" and layer.indices is not None:
+            self._commit_indexed_patch(layer, rect)
+            return
         if self.palette:
             x0, y0, x1, y1 = rect
             region = layer.pixels[y0:y1, x0:x1]
@@ -874,6 +981,48 @@ class Document(
             return
         pending, self._pending_cels = self._pending_cels, []
         edit: Any = PatchEdit(layer.uid, rect, before, after)
+        self.history.push(edit if not pending else CompoundEdit([*pending, edit]))
+        self.invalidate(rect, layer_uid=layer.uid)
+
+    def _commit_indexed_patch(self, layer: Layer, rect: tuple[int, int, int, int]) -> None:
+        """The indexed half of the funnel: RGBA in, slots resolved and stored.
+
+        The RGBA ``before`` its caller holds is deliberately **not** used. The
+        indices are the record, so the before-state is the index crop -- and it
+        is still sitting untouched in ``layer.indices`` at this moment, because
+        the tool wrote pixels and nothing writes indices except this method.
+        Reading it here rather than threading it through every call site is what
+        lets the entire tool layer stay index-unaware.
+
+        The materialisation happens **before** the no-op test rather than after
+        it, which is the whole reason a soft nib is legal in indexed mode: the
+        tool's antialiased edge is written, resolved, and then overwritten by
+        what the slots actually say. A gesture whose every pixel thresholds back
+        to where it started therefore changes nothing, pushes nothing, and takes
+        its autovivified cel back out again -- the same rule the RGBA path
+        follows, reached by different arithmetic.
+        """
+        x0, y0, x1, y1 = rect
+        before = layer.indices[y0:y1, x0:x1].copy()
+        table = self._index_lut()
+        prefer = None
+        slot = self.paint_slot
+        if slot is not None and self.palette and 0 <= slot < len(self.palette):
+            prefer = (self.palette[slot], slot)
+        after = ixp.resolve(
+            layer.pixels[y0:y1, x0:x1], table, self.transparent_index, prefer=prefer
+        )
+        layer.indices[y0:y1, x0:x1] = after
+        layer.pixels[y0:y1, x0:x1] = ixp.materialize(after, table)
+        if np.array_equal(before, after):
+            self._discard_pending_cel()
+            # Still recomposited: the tool's raw write is on screen and has just
+            # been rolled back to what the slots say, so the canvas is showing
+            # pixels the document no longer holds until this runs.
+            self.invalidate(rect, layer_uid=layer.uid)
+            return
+        pending, self._pending_cels = self._pending_cels, []
+        edit: Any = IndexPatchEdit(layer.uid, rect, before, after)
         self.history.push(edit if not pending else CompoundEdit([*pending, edit]))
         self.invalidate(rect, layer_uid=layer.uid)
 
@@ -939,7 +1088,9 @@ class Document(
             "current": anim.current,
         }
 
-    def _map_planes(self, fn: Any, *, mask_fn: Any = _SAME_AS_PIXELS) -> None:
+    def _map_planes(
+        self, fn: Any, *, mask_fn: Any = _SAME_AS_PIXELS, index_fn: Any = None
+    ) -> None:
         """Apply *fn* to every distinct pixel plane, and *mask_fn* to the mask.
 
         ``mask_fn`` defaults to ``fn`` because the first callers were geometry:
@@ -954,6 +1105,20 @@ class Document(
         2-D array, so ``set_palette``, ``recolour_slot`` and ``remove_slot``
         every one of them refused outright -- out of the middle of the op, with
         the table already assigned -- whenever a selection happened to be up.
+
+        ``index_fn`` is the third kind of caller, and its **default is the
+        honest one rather than the exact one**. Given a callable, the index
+        plane is transformed by it -- which for a flip, a quarter turn, a crop
+        or a canvas resize is the same permutation the pixels get, so duplicate
+        slots survive geometry exactly and nothing is ever re-inferred. Given
+        nothing, the plane is re-*resolved* from the mapped pixels, which is the
+        only thing that can be done when the op resampled (a smooth scale
+        invents colours that were never in the table, so there is no
+        permutation to apply) and is the one stated place in the whole design
+        where indices come back from colours. An op that could have been exact
+        and forgot to say so loses duplicate identity and stays correct; the
+        reverse default would hand a 2-D array to ``indexed.snap`` and raise out
+        of the middle of a rotate.
         """
         if self.mask is not None:
             apply = fn if mask_fn is _SAME_AS_PIXELS else mask_fn
@@ -963,11 +1128,13 @@ class Document(
         if anim is None:
             for layer in self.stack:
                 layer.pixels = fn(layer.pixels)
+                self._map_index_plane(layer, index_fn)
             return
         # Each *distinct* cel exactly once. Walking the stack, or the slots,
         # would rotate a background linked across three frames three times.
         for layer in anim.unique_cel_layers():
             layer.pixels = fn(layer.pixels)
+            self._map_index_plane(layer, index_fn)
         self._stamp_all()
         anim._blank = None
         probe = next(anim.unique_cel_layers(), None)
@@ -982,3 +1149,21 @@ class Document(
         # Rebuilt against ``size`` rather than through ``_materialize_frame``,
         # whose ``self.size`` still reads the old canvas off a stale stack.
         self.stack = LayerStack(anim.layers_for(anim.frame, size), self.stack.active_index)
+
+    def _map_index_plane(self, layer: Layer, index_fn: Any) -> None:
+        """One layer's index plane through a geometry op. See ``_map_planes``.
+
+        The pixels are then re-derived rather than trusted: ``fn`` and
+        ``index_fn`` are two spellings of the same permutation, and re-deriving
+        is what makes them impossible to disagree. On the re-resolve path it is
+        the definition of the result.
+        """
+        if self.color_mode != "indexed" or layer.indices is None:
+            return
+        if index_fn is None:
+            layer.indices = ixp.resolve(
+                layer.pixels, self._index_lut(), self.transparent_index
+            )
+        else:
+            layer.indices = index_fn(layer.indices)
+        self._rematerialize(layer)

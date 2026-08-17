@@ -415,12 +415,21 @@ def anchor_offset(
 
 
 def resize_canvas(
-    pixels: np.ndarray, size: tuple[int, int], offset: tuple[int, int] = (0, 0)
+    pixels: np.ndarray, size: tuple[int, int], offset: tuple[int, int] = (0, 0), fill: int = 0
 ) -> np.ndarray:
-    """A bigger or smaller canvas with the pixels placed, never rescaled."""
+    """A bigger or smaller canvas with the pixels placed, never rescaled.
+
+    ``fill`` is what the new room is made of. Zero -- transparent black -- for
+    every RGBA caller there has ever been, and therefore the default, so this
+    stays byte-identical for them. An **index plane** is the one caller that
+    needs another value: its empty room has to be the document's transparent
+    index, which is only slot 0 by coincidence, and filling it with zero on a
+    document whose transparent index is 7 would grow the canvas by a rectangle
+    of solid slot-0 colour.
+    """
     width, height = max(1, int(size[0])), max(1, int(size[1]))
     shape = (height, width) if pixels.ndim == 2 else (height, width, pixels.shape[2])
-    out = np.zeros(shape, dtype=np.uint8)
+    out = np.full(shape, int(fill), dtype=np.uint8)
     ox, oy = int(offset[0]), int(offset[1])
 
     sx0, sy0 = max(0, -ox), max(0, -oy)

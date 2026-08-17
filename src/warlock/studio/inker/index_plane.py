@@ -48,6 +48,7 @@ __all__ = [
     "merge_table",
     "permutation_tables",
     "resolve",
+    "tables_from_order",
 ]
 
 RGBA = tuple[int, int, int, int]
@@ -232,16 +233,38 @@ def apply_remap(indices: np.ndarray, forward: np.ndarray) -> np.ndarray:
     return np.ascontiguousarray(forward[safe])
 
 
+def tables_from_order(order: Sequence[int]) -> tuple[np.ndarray, np.ndarray]:
+    """``(forward, inverse)`` from "the new table's slot *p* holds old ``order[p]``".
+
+    The single definition of what a palette reorder does to a plane, expressed in
+    the only terms every reorder in the app already speaks: ``sort_palette``
+    builds exactly this list, and ``move_slot``'s
+    ``table.insert(to, table.pop(index))`` is one case of it. Derived from the
+    order rather than written out per operation, so a reorder cannot rearrange
+    the table one way and the pixels another.
+
+    ``inverse`` *is* the order (old slot of each new position); ``forward`` is
+    its argsort (new position of each old slot), which is what a plane gets.
+    Both are returned because undo needs the other one and here is the only
+    place where the permutation is known exactly.
+    """
+    count = len(order)
+    if count < 1:
+        raise ValueError("a palette has at least one slot")
+    if sorted(int(i) for i in order) != list(range(count)):
+        raise ValueError("a reorder is a permutation of every slot")
+    inverse = np.asarray([int(i) for i in order], dtype=np.uint8)
+    forward = np.zeros(count, dtype=np.uint8)
+    forward[inverse] = np.arange(count, dtype=np.uint8)
+    return forward, inverse
+
+
 def permutation_tables(count: int, index: int, to: int) -> tuple[np.ndarray, np.ndarray]:
     """``(forward, inverse)`` for moving slot *index* to position *to*.
 
     The exact inverse of the list operation ``table.insert(to, table.pop(index))``
-    performs, derived from that operation rather than written out, so the two
-    cannot drift: the new table's position *p* holds the old table's ``order[p]``,
-    which makes ``inverse = order`` and ``forward`` its argsort.
-
-    Both are returned because undo needs the inverse and there is no cheaper way
-    to get it than to build it here, where the permutation is known exactly.
+    performs, and derived by *performing that operation on the positions* rather
+    than by writing the arithmetic out a second time -- so the two cannot drift.
     """
     count = int(count)
     if count < 1:
@@ -250,10 +273,7 @@ def permutation_tables(count: int, index: int, to: int) -> tuple[np.ndarray, np.
     to = max(0, min(int(to), count - 1))
     order = list(range(count))
     order.insert(to, order.pop(index))
-    inverse = np.asarray(order, dtype=np.uint8)
-    forward = np.zeros(count, dtype=np.uint8)
-    forward[inverse] = np.arange(count, dtype=np.uint8)
-    return forward, inverse
+    return tables_from_order(order)
 
 
 def merge_table(count: int, gone: int, into: int) -> np.ndarray:

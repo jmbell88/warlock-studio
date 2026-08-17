@@ -413,7 +413,10 @@ def test_an_indexed_file_carries_its_palette_and_its_transparent_index():
     )
     doc, warnings = asein.document_from_aseprite(data)
     assert doc.palette == colours
-    assert doc.is_indexed
+    # Palette-constrained RGB for now: the reader flattens the file's index
+    # planes through its table. Wave 1.4 makes this ``is_indexed`` and keeps the
+    # planes, at which point the duplicate-swatch fixture below becomes exact.
+    assert doc.is_palette_locked
     # Index 0 is the header's transparent index, so it reads as nothing.
     assert tuple(doc.stack[0].pixels[0, 0]) == (0, 0, 0, 0)
     assert tuple(doc.stack[0].pixels[0, 1]) == (255, 0, 0, 255)

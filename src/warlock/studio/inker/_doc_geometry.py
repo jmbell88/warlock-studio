@@ -6,6 +6,15 @@ floating, then hand ``_replay`` a closure over ``_map_planes``. The machinery
 they lean on (``_replay``, ``_grid_snapshot``, ``_map_planes``) stays in
 ``document.py``: it is shared with the indexed-colour ops and with anything else
 that rewrites every plane at once.
+
+**Four of the five are exact on an indexed document and say so.** A flip, a
+quarter turn, a crop and a canvas resize move pixels without inventing any, so
+they hand ``_map_planes`` an ``index_fn`` -- the same permutation, applied to
+the index plane -- and two palette slots holding the same colour come out the
+other side still two slots. ``scale`` is the exception and cannot be anything
+else: a smooth resample produces colours that were never in the table, so its
+indices are re-resolved from the result. That is the one stated place in the
+whole indexed design where indices are inferred rather than permuted.
 """
 
 from __future__ import annotations
@@ -32,7 +41,10 @@ class GeometryOps:
 
         def run() -> None:
             self._slices_flip(axis)
-            self._map_planes(lambda plane: tf.flip(plane, axis))
+            self._map_planes(
+                lambda plane: tf.flip(plane, axis),
+                index_fn=lambda plane: tf.flip(plane, axis),
+            )
 
         self._replay(run)
 
@@ -41,7 +53,10 @@ class GeometryOps:
 
         def run() -> None:
             self._slices_rotate90(quarters)
-            self._map_planes(lambda plane: tf.rotate90(plane, quarters))
+            self._map_planes(
+                lambda plane: tf.rotate90(plane, quarters),
+                index_fn=lambda plane: tf.rotate90(plane, quarters),
+            )
 
         self._replay(run)
 
@@ -62,7 +77,10 @@ class GeometryOps:
 
         def run() -> None:
             self._slices_offset((-box[0], -box[1]), (box[2] - box[0], box[3] - box[1]))
-            self._map_planes(lambda plane: tf.crop(plane, box))
+            self._map_planes(
+                lambda plane: tf.crop(plane, box),
+                index_fn=lambda plane: tf.crop(plane, box),
+            )
 
         self._replay(run)
         return True
@@ -91,6 +109,13 @@ class GeometryOps:
 
         def run() -> None:
             self._slices_offset(where, size)
-            self._map_planes(lambda plane: tf.resize_canvas(plane, size, where))
+            self._map_planes(
+                lambda plane: tf.resize_canvas(plane, size, where),
+                # The new room is the *transparent index*, which is only slot 0
+                # by coincidence -- see ``transform.resize_canvas``'s ``fill``.
+                index_fn=lambda plane: tf.resize_canvas(
+                    plane, size, where, self.transparent_index
+                ),
+            )
 
         self._replay(run)

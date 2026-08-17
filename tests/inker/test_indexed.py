@@ -284,7 +284,13 @@ def test_the_palette_survives_an_ora_round_trip(tmp_path):
 
     back = read_ora(path)
 
-    assert back.is_indexed is True
+    # ``is_palette_locked``, not ``is_indexed``: an ORA carrying a palette but
+    # no index planes is *palette-constrained RGB*, which is what every document
+    # written before true indexed mode existed is. The two questions were one
+    # property until the modes split; conflating them is what would let a pane
+    # offer a transparent-index marker on a document with no index to mark.
+    assert back.is_palette_locked is True
+    assert back.is_indexed is False
     assert back.palette == RAMP
 
 
@@ -294,7 +300,8 @@ def test_an_ora_without_a_palette_opens_unindexed(tmp_path):
     path = tmp_path / "plain.ora"
     write_ora(_doc(), path)
 
-    assert read_ora(path).is_indexed is False
+    back = read_ora(path)
+    assert back.is_indexed is False and back.is_palette_locked is False
 
 
 def test_opening_an_indexed_file_pushes_no_undo_step(tmp_path):
