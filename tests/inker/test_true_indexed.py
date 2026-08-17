@@ -615,3 +615,4 @@ def test_applying_an_index_patch_to_a_planeless_layer_is_refused_by_name():
     doc.stack.active.indices = None
     with pytest.raises(ValueError, match="no index plane"):
         edit.redo(doc)
+

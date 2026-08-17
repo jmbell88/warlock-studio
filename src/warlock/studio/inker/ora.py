@@ -67,6 +67,7 @@ import numpy as np
 
 from . import composite as cp
 from . import gpl
+from . import index_plane as ixp
 from .animation import (
     DEFAULT_DURATION_MS,
     Animation,
@@ -152,6 +153,102 @@ def _png(pixels: np.ndarray) -> bytes:
     buf = io.BytesIO()
     Image.fromarray(pixels, "RGBA").save(buf, "PNG")
     return buf.getvalue()
+
+
+def _png_indexed(indices: np.ndarray, palette, transparent: int) -> bytes:
+    """An index plane as a **PNG mode-P image**: ``PLTE``, ``tRNS``, raw slots.
+
+    The record/projection doctrine a third time (``animation.json`` and
+    ``mergedimage.png`` are the other two). These bytes are the record for both
+    the indices and the *full-alpha* table; ``palette.gpl`` stays the interop
+    projection and ``stack.xml``'s colours stay the picture a foreign editor
+    gets. Writing our own container instead would have bought a format only this
+    app can read, in exchange for nothing.
+
+    **Old and foreign readers degrade perfectly**, which is the whole reason
+    this shape was chosen: ``_decode`` already ends in ``im.convert("RGBA")``,
+    which honours ``PLTE`` + ``tRNS``, so a build that has never heard of index
+    planes opens the file with the right pixels and lands in
+    palette-constrained RGB via ``palette.gpl``. Krita and GIMP decode a P-PNG
+    natively. The stated forward-compat cost mirrors ``animation.json``'s: an
+    old build that *re-saves* writes RGBA planes back, and index identity is
+    gone.
+
+    The transparent slot keeps its **stored colour** in ``PLTE`` and gets alpha
+    zero in ``tRNS``. Zeroing the colour too would be an edit rather than a
+    projection, and a ``.aseprite`` writer has to put that colour back.
+    """
+    from PIL import Image
+
+    height, width = indices.shape
+    im = Image.frombytes("P", (width, height), indices.tobytes())
+    entries = [tuple(colour) for colour in palette]
+    rgb: list[int] = []
+    for colour in entries:
+        rgb.extend(int(c) for c in colour[:3])
+    im.putpalette(rgb)
+    alpha = bytes(
+        0 if i == transparent else int(colour[3]) if len(colour) > 3 else 255
+        for i, colour in enumerate(entries)
+    )
+    buf = io.BytesIO()
+    # ``optimize`` is deliberately off (it is off by default and stated here
+    # because turning it on would be a plausible-looking change): Pillow's
+    # optimiser drops unused palette entries and renumbers the plane, which is
+    # exactly the identity this member exists to preserve. A slot nothing is
+    # painted in is still a slot the user authored.
+    im.save(buf, "PNG", transparency=alpha)
+    return buf.getvalue()
+
+
+def _read_indexed_png(data: bytes, size: tuple[int, int]):
+    """``(indices, palette)`` out of a P-PNG, or None when it is not one.
+
+    None rather than a raise, this reader's rule throughout: a document whose
+    ``color`` block says indexed but whose planes are ordinary RGBA -- an old
+    build re-saved it, or the archive was assembled by hand -- opens as the
+    picture it is, with the indices re-inferred from the pixels. Losing
+    duplicate-slot identity is a real cost and a much smaller one than refusing
+    the file.
+    """
+    from PIL import Image
+
+    with Image.open(io.BytesIO(data)) as im:
+        if im.mode != "P":
+            return None
+        im.load()
+        indices = np.asarray(im, dtype=np.uint8).copy()
+        raw = im.getpalette() or []
+        transparency = im.info.get("transparency", b"")
+    count = len(raw) // 3
+    if not count:
+        return None
+    # ``transparency`` comes back in **two shapes**, and reading only one of
+    # them silently loses the table's alpha. Pillow writes a ``tRNS`` chunk only
+    # as long as it needs to (trailing opaque entries are dropped), and when
+    # exactly one leading entry is transparent it hands the whole chunk back as
+    # a bare ``int`` -- the "single transparent index" form. A palette carrying
+    # a translucent swatch gets the ``bytes`` form. Both mean the same thing:
+    # every entry the chunk does not reach is opaque.
+    if isinstance(transparency, int):
+        alphas = bytes([255] * transparency) + b"\x00"
+    elif isinstance(transparency, (bytes, bytearray)):
+        alphas = bytes(transparency)
+    else:
+        alphas = b""
+    palette = [
+        (
+            raw[i * 3],
+            raw[i * 3 + 1],
+            raw[i * 3 + 2],
+            alphas[i] if i < len(alphas) else 255,
+        )
+        for i in range(count)
+    ]
+    width, height = size
+    if (indices.shape[1], indices.shape[0]) != (width, height):
+        return None
+    return indices, palette
 
 
 def _group_nester(doc, container):
@@ -484,7 +581,33 @@ def _warlock_json(doc) -> bytes:
         "version": WARLOCK_VERSION,
         "slices": [_slice_json(entry, frames) for entry in doc.slices],
     }
+    colour = _colour_block(doc)
+    if colour is not None:
+        payload["color"] = colour
     return json.dumps(payload, indent=2).encode("utf-8")
+
+
+def _colour_block(doc) -> dict | None:
+    """The colour mode, or None on an ordinary RGB document.
+
+    **Additive, and written only when it is not the default**, which is what
+    keeps ``WARLOCK_VERSION`` at 1 and every RGB document's archive byte-for-byte
+    what this writer produced before the block existed. The bump rule -- "a
+    reader could get it wrong in a way it cannot detect" -- is not met: an older
+    reader ignores the key and opens the file as the RGBA picture the planes
+    already are.
+
+    A malformed block costs the *mode metadata* and never the file. The P-PNGs
+    are self-describing, so the indices survive; the transparent index recovers
+    from ``tRNS`` or falls back to zero, with a line in the log.
+    """
+    mode = getattr(doc, "color_mode", "rgb")
+    if mode == "rgb":
+        return None
+    block: dict = {"mode": mode}
+    if mode == "indexed":
+        block["transparent"] = int(getattr(doc, "transparent_index", 0))
+    return block
 
 
 def _groups_payload(doc, tracks: dict[int, int]) -> dict | None:
@@ -563,25 +686,34 @@ def write_ora(doc, path: Path) -> None:
         zf.writestr(
             zipfile.ZipInfo("mimetype", _EPOCH), b"image/openraster", zipfile.ZIP_STORED
         )
+        # One encoder for both paths, chosen by the document's mode rather than
+        # per layer: a document is indexed or it is not, and a mixed archive is
+        # a state no reader (ours least of all) has a sensible answer for.
+        def encode(layer) -> bytes:
+            if getattr(doc, "color_mode", "rgb") == "indexed" and layer.indices is not None:
+                return _png_indexed(layer.indices, doc.palette, doc.transparent_index)
+            return _png(layer.pixels)
+
         if anim is None:
             zf.writestr(_member("stack.xml"), _stack_xml(doc))
             for index, layer in enumerate(reversed(list(doc.stack))):
-                zf.writestr(_member(f"data/layer{index}.png"), _png(layer.pixels))
+                zf.writestr(_member(f"data/layer{index}.png"), encode(layer))
         else:
             zf.writestr(_member("stack.xml"), _stack_xml_animated(doc, names))
             # One PNG per name, with no de-duplication needed: ``_cel_names``
             # is built from the same ``unique_cel_layers`` walk and gives each
             # distinct cel its own name, so the two can only ever agree.
             for layer in anim.unique_cel_layers():
-                zf.writestr(_member(names[id(layer)]), _png(layer.pixels))
+                zf.writestr(_member(names[id(layer)]), encode(layer))
             zf.writestr(_member(ANIMATION_MEMBER), _animation_json(doc, names))
         if getattr(doc, "palette", None):
             zf.writestr(_member(PALETTE_MEMBER), gpl.dumps(doc.palette).encode("utf-8"))
-        # Only when there are slices. A document with none produces an archive
-        # byte-identical to the one this build wrote before the member existed,
-        # which is what the determinism suite pins and what makes this addition
-        # invisible to every reader that has never heard of it.
-        if getattr(doc, "slices", None):
+        # Only when there are slices *or* a colour mode to record. A plain RGB
+        # document with neither produces an archive byte-identical to the one
+        # this build wrote before either existed, which is what the determinism
+        # suite pins and what makes both additions invisible to every reader
+        # that has never heard of them.
+        if getattr(doc, "slices", None) or _colour_block(doc) is not None:
             zf.writestr(_member(WARLOCK_MEMBER), _warlock_json(doc))
         zf.writestr(_member("mergedimage.png"), _png(merged))
         zf.writestr(_member("Thumbnails/thumbnail.png"), thumb_buf.getvalue())
@@ -731,7 +863,7 @@ def _known_blend(name: object, zf: zipfile.ZipFile) -> str:
     return "normal"
 
 
-def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int]):
+def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int], reader=None):
     """The grid and the payload it came from, or None to fall back to flat.
 
     The payload rides back out because the *grouping* is read from it too, and
@@ -793,8 +925,12 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int]):
             layer = planes.get(src)
             if layer is None:
                 track = tracks[ti]
+                # Read once and used twice: the RGBA decode and the index plane
+                # beside it are two readings of the same bytes, and reading the
+                # member twice would be two chances for them to disagree.
+                data = zf.read(src)
                 layer = Layer(
-                    pixels=_decode(zf.read(src), size),
+                    pixels=_decode(data, size),
                     name=track.name,
                     opacity=track.opacity,
                     visible=track.visible,
@@ -802,6 +938,8 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int]):
                     alpha_lock=track.alpha_lock,
                     locked=track.locked,
                 )
+                if reader is not None:
+                    reader.attach(layer, data)
                 planes[src] = layer
             cels[(tracks[ti].uid, frames[fi].uid)] = layer
 
@@ -908,6 +1046,108 @@ def _read_palette(zf) -> list | None:
     except (UnicodeDecodeError, ValueError) as exc:
         log.warning("ignoring %s in %s: %s", PALETTE_MEMBER, getattr(zf, "filename", "?"), exc)
         return None
+
+
+def _read_colour(zf) -> tuple[str, int]:
+    """``(mode, transparent index)``, defaulting to plain RGB.
+
+    Read from ``warlock.json`` before anything decodes a plane, because it is
+    what decides *how* the planes are read. It fails the way every optional
+    member here fails -- to the default, with a log line -- and the failure is
+    cheap by design: the P-PNGs are self-describing, so a lost block costs the
+    mode label and the transparent index, not a pixel.
+    """
+    try:
+        raw = zf.read(WARLOCK_MEMBER)
+    except KeyError:
+        return ("rgb", 0)
+    try:
+        payload = json.loads(raw)
+        if int(payload.get("version", 0)) != WARLOCK_VERSION:
+            raise ValueError(f"{WARLOCK_MEMBER} version {payload.get('version')!r}")
+        block = payload.get("color")
+        if not isinstance(block, dict):
+            return ("rgb", 0)
+        mode = str(block.get("mode", "rgb"))
+        if mode not in ("rgb", "indexed", "grayscale"):
+            raise ValueError(f"unknown colour mode {mode!r}")
+        return (mode, int(block.get("transparent", 0)))
+    except (AttributeError, KeyError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        log.warning("ignoring colour mode in %s: %s", getattr(zf, "filename", "?"), exc)
+        return ("rgb", 0)
+
+
+class _IndexReader:
+    """Collects index planes off the P-PNGs as the layers decode.
+
+    A small object rather than a return value threaded through two decode paths,
+    because the *table* is a whole-document fact discovered inside a per-layer
+    loop: the first plane that carries one wins, and every later plane in a
+    well-formed archive carries the same one. It is optional throughout -- every
+    RGB document reads with ``None`` here and pays nothing.
+    """
+
+    def __init__(self, size):
+        self.size = size
+        self.palette = None
+
+    def attach(self, layer, data: bytes) -> None:
+        got = _read_indexed_png(data, self.size)
+        if got is None:
+            return
+        indices, palette = got
+        layer.indices = indices
+        if self.palette is None:
+            self.palette = palette
+
+
+def _finish_colour(doc, mode: str, transparent: int, reader, palette) -> None:
+    """Install the colour mode once the layers exist, and make it consistent.
+
+    Last rather than first because it needs the document: the planes have to be
+    on layers before the table can be applied to them, and a half-built indexed
+    document is exactly the state ``check_materialized`` exists to catch.
+
+    Two degradations are deliberate. A file whose block says indexed but which
+    carries **no table at all** stays RGB with a log line -- an indexed document
+    with nothing to index onto is not a document. A file whose block says
+    indexed but whose *planes* are RGBA (an old build re-saved it) has its
+    indices re-inferred, which is exactly the forward-compat cost this format
+    states: the picture is intact and the duplicate-slot identity is gone.
+
+    The table comes from the P-PNGs where they carry one, because ``tRNS`` holds
+    per-entry alpha and ``palette.gpl`` cannot. The ``.gpl`` is the fallback and
+    the interop projection, never the record.
+    """
+    if mode == "grayscale":
+        doc.color_mode = "grayscale"
+        return
+    if mode != "indexed":
+        return
+    table = (reader.palette if reader is not None else None) or palette
+    if not table:
+        log.warning("a document declared indexed carries no colour table; opening as RGB")
+        return
+    doc.palette = [tuple(colour) for colour in table]
+    doc.color_mode = "indexed"
+    doc.transparent_index = transparent if 0 <= transparent < len(doc.palette) else 0
+    # The transparent slot's ``tRNS`` byte is *forced* to zero on the way out --
+    # it has to be, or the hole is not a hole to Krita, GIMP or a browser -- so
+    # reading it back literally would be reading back the writer's own
+    # requirement as though it were the user's data. Canonically opaque here, in
+    # the one place that knows which slot it is: the RGB (which Aseprite
+    # displays and a writer must put back) survives untouched, the alpha does
+    # not exist to survive, and save-open-save is a fixpoint.
+    hole = doc.transparent_index
+    entry = doc.palette[hole]
+    doc.palette[hole] = (entry[0], entry[1], entry[2], 255)
+    lut = doc._index_lut()
+    layers = doc.stack if doc.anim is None else doc.anim.unique_cel_layers()
+    for layer in layers:
+        if layer.indices is None:
+            layer.indices = ixp.resolve(layer.pixels, lut, doc.transparent_index)
+        doc._rematerialize(layer, lut, notify=False)
+    doc.invalidate_all()
 
 
 def _read_slices(zf: zipfile.ZipFile, anim: Animation | None) -> list:
@@ -1028,7 +1268,10 @@ def read_ora(path: Path, *, budget: int | None = None):
         # grid's cels are decoded against that size, and guessing it from the
         # first PNG would be guessing for every later one too.
         palette = _read_palette(zf)
-        got = _read_animation(zf, (width, height)) if width and height else None
+        # Before any plane decodes, because it decides how they are read.
+        mode, transparent = _read_colour(zf)
+        reader = _IndexReader((width, height)) if mode == "indexed" else None
+        got = _read_animation(zf, (width, height), reader) if width and height else None
         anim, grid_payload = got if got is not None else (None, None)
         # After the grid, and outside its guard: the keys are stored by frame
         # index, so they can only be resolved against the timeline that was
@@ -1053,10 +1296,14 @@ def read_ora(path: Path, *, budget: int | None = None):
             # ``snap=False``: the pixels in the file were written snapped, so
             # re-snapping them would cost a whole-document rewrite on every
             # open and push an undo step for opening a file.
-            doc.set_palette(palette, snap=False)
+            if mode == "rgb":
+                doc.set_palette(palette, snap=False)
+            else:
+                _finish_colour(doc, mode, transparent, reader, palette)
             return doc
 
         layers: list[Layer] = []
+        planes_data: list[bytes] = []
         tree: tuple[dict, dict] = ({}, {})
         parents: dict[int, int] = {}
         # From the document's own root ``<stack>``, not from ``<image>``: the
@@ -1078,6 +1325,7 @@ def read_ora(path: Path, *, budget: int | None = None):
             with Image.open(io.BytesIO(data)) as im:
                 im.load()
                 pixels = np.asarray(im.convert("RGBA"), dtype=np.uint8).copy()
+            planes_data.append(data)
             if not width or not height:
                 width, height = pixels.shape[1], pixels.shape[0]
             offset = (int(element.get("x") or 0), int(element.get("y") or 0))
@@ -1115,5 +1363,14 @@ def read_ora(path: Path, *, budget: int | None = None):
     doc.matte = matte_for(doc.composite)
     doc.file_format = "ora"
     doc.path = Path(path)
-    doc.set_palette(palette, snap=False)
+    if mode == "rgb":
+        doc.set_palette(palette, snap=False)
+    else:
+        if reader is not None:
+            # Paired after the reverse, not inside the loop: the flat path
+            # reverses its list before building the stack, so attaching in file
+            # order would put every plane on the wrong layer.
+            for layer, data in zip(reversed(layers), planes_data, strict=False):
+                reader.attach(layer, data)
+        _finish_colour(doc, mode, transparent, reader, palette)
     return doc

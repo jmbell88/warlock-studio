@@ -841,18 +841,31 @@ class Document(
         """
         return ixp.lut(self.palette or [TRANSPARENT], self.transparent_index)
 
-    def _rematerialize(self, layer: Layer, table: np.ndarray | None = None) -> None:
+    def _rematerialize(
+        self, layer: Layer, table: np.ndarray | None = None, *, notify: bool = True
+    ) -> None:
         """Rewrite one layer's pixels from its index plane, in place.
 
         In place rather than by rebinding ``layer.pixels``: the frame-flatten
         cache, the texture uploader and an open floating buffer may all be
         holding the array, and a rebind would leave them looking at the plane
         the document has stopped using.
+
+        It invalidates by default, because writing pixels and not saying so is
+        the one mistake this method can make silently: ``flatten`` answers from
+        the cached composite, so a rematerialisation nobody announced shows the
+        *old* colours in the exported PNG, in the thumbnail and in the ORA's
+        ``mergedimage`` while the canvas is correct. ``notify=False`` is for the
+        bulk paths below, which end in one ``invalidate_all`` rather than paying
+        for a recomposite per layer.
         """
         if layer.indices is None:
             return
         table = self._index_lut() if table is None else table
         layer.pixels[...] = ixp.materialize(layer.indices, table)
+        if notify:
+            width, height = layer.size
+            self.invalidate((0, 0, width, height), layer_uid=layer.uid)
 
     def check_materialized(self) -> None:
         """Raise unless every layer's pixels are what its indices say.
@@ -936,7 +949,7 @@ class Document(
         table = self._index_lut()
         layers = self.stack if self.anim is None else self.anim.unique_cel_layers()
         for layer in layers:
-            self._rematerialize(layer, table)
+            self._rematerialize(layer, table, notify=False)
         self._stamp_all()
         self.invalidate_all()
 
@@ -1166,4 +1179,4 @@ class Document(
             )
         else:
             layer.indices = index_fn(layer.indices)
-        self._rematerialize(layer)
+        self._rematerialize(layer, notify=False)
