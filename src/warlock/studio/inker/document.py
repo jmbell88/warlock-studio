@@ -35,6 +35,7 @@ from . import composite as cp
 # object they find; an import in ``_doc_paint`` alone binds the name there and
 # on the package, never on this module, and the patch would land nowhere.
 from . import filters  # noqa: F401
+from . import index_plane as ixp
 from . import indexed as ix
 from ._doc_anim import AnimOps
 from ._doc_geometry import GeometryOps
@@ -137,6 +138,27 @@ class Document(
     #: carry. See :mod:`.indexed` for why this is a constraint on writes rather
     #: than an index plane.
     palette: list[RGBA] | None = None
+    #: ``"rgb"`` | ``"indexed"`` | ``"grayscale"``. The document's colour mode,
+    #: and the branch every write takes at :meth:`_commit_patch` -- one funnel,
+    #: three constraints (snap / index-resolve / luma).
+    #:
+    #: ``"rgb"`` is today's document bit for bit, **including** the
+    #: constrain-on-write behaviour above when ``palette`` is set. That
+    #: combination has a name now -- *palette-constrained RGB* -- and it is kept
+    #: rather than replaced: documents saved before true indexing existed
+    #: legally contain soft alpha, which one index per pixel cannot represent,
+    #: so they must open exactly as they always did and entering indexed mode
+    #: must be something the user asks for and can undo.
+    #:
+    #: ``"indexed"`` requires a palette of 1..256 entries and makes every
+    #: layer's ``indices`` plane the record. ``"grayscale"`` is a constraint
+    #: rather than a storage change -- see :meth:`_commit_patch`.
+    color_mode: str = "rgb"
+    #: The palette slot that materialises as ``(0, 0, 0, 0)``. Meaningful only
+    #: in indexed mode, where it is the *only* way a pixel becomes a hole: it is
+    #: never a nearest-match candidate, so a black the user painted cannot
+    #: collapse into the black that means transparent.
+    transparent_index: int = 0
     #: Named rectangles on the canvas -- pivots, hitboxes, nine-slice panels.
     #: On the *document* rather than on the grid because a still drawing has
     #: them too (a nine-slice button is one PNG), and the per-frame overrides
@@ -770,6 +792,55 @@ class Document(
         width, height = self.size
         x, y = int(xy[0]), int(xy[1])
         return 0 <= x < width and 0 <= y < height
+
+    # -- index planes -------------------------------------------------------
+    #
+    # The materialisation has **one owner**, and these three methods are it.
+    # Anything that writes an index plane calls one of them on the way out, so
+    # "pixels are what the indices say they are" is a property of the model
+    # rather than a rule each caller has to remember. The suite asserts it after
+    # every session close (see ``_check_materialized``).
+
+    def _index_lut(self) -> np.ndarray:
+        """The document's palette as a ``(P, 4)`` lookup table.
+
+        Built on demand rather than cached beside the palette. A table of at
+        most 256 rows is a few microseconds to assemble, and a cache would need
+        invalidating from ``set_palette``, ``recolour_slot``, ``add_slot``,
+        ``remove_slot``, ``move_slot``, ``sort_palette``, ``insert_ramp``,
+        ``PaletteEdit.undo`` and ``ColorStateEdit.undo`` -- nine places, each
+        one a silent wrong-colour bug if it is missed, to save a rounding error.
+        """
+        return ixp.lut(self.palette or [TRANSPARENT], self.transparent_index)
+
+    def _rematerialize(self, layer: Layer, table: np.ndarray | None = None) -> None:
+        """Rewrite one layer's pixels from its index plane, in place.
+
+        In place rather than by rebinding ``layer.pixels``: the frame-flatten
+        cache, the texture uploader and an open floating buffer may all be
+        holding the array, and a rebind would leave them looking at the plane
+        the document has stopped using.
+        """
+        if layer.indices is None:
+            return
+        table = self._index_lut() if table is None else table
+        layer.pixels[...] = ixp.materialize(layer.indices, table)
+
+    def _rematerialize_all(self) -> None:
+        """Every *distinct* plane in the document, once each.
+
+        ``unique_cel_layers`` for ``_map_planes``' reason: a background linked
+        across three frames is one object, and materialising it three times is
+        three times the work to reach the same bytes.
+        """
+        if self.color_mode != "indexed":
+            return
+        table = self._index_lut()
+        layers = self.stack if self.anim is None else self.anim.unique_cel_layers()
+        for layer in layers:
+            self._rematerialize(layer, table)
+        self._stamp_all()
+        self.invalidate_all()
 
     # -- writing to a layer -------------------------------------------------
 

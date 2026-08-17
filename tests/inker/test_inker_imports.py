@@ -190,6 +190,7 @@ def test_the_package_imports_with_no_optional_dependency_present():
         gpl,
         gradient,
         groups,
+        index_plane,
         indexed,
         layers,
         ora,

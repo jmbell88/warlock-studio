@@ -38,6 +38,7 @@ from collections.abc import Iterable, Sequence
 import numpy as np
 
 from ... import native
+from . import index_plane as ixp
 from . import indexed as ix
 
 __all__ = [
@@ -47,6 +48,7 @@ __all__ = [
     "bayer_matrix",
     "build_palette",
     "convert",
+    "convert_indices",
     "luma",
     "tile_matrix",
 ]
@@ -156,6 +158,64 @@ def convert(pixels: np.ndarray, palette: Sequence[RGBA], method: str = "nearest"
     if method == "floyd-steinberg":
         return _floyd_steinberg(out, table)
     return _ordered(out, table, bayer_matrix(BAYER_SIZES[method]))
+
+
+def convert_indices(
+    pixels: np.ndarray,
+    palette: Sequence[RGBA],
+    method: str = "nearest",
+    *,
+    transparent: int = 0,
+) -> np.ndarray:
+    """*pixels* converted onto *palette* as an ``(H, W) uint8`` **index plane**.
+
+    :func:`convert`'s answer to the other question. That one returns the picture
+    in RGBA, which is what palette-constrained RGB wants; this returns the slots,
+    which is what a truly indexed document stores.
+
+    **Delegated, never reimplemented**, for the reason ``convert`` gives about
+    nearest being the snap: the dithering arithmetic is subtle -- a reflected
+    second candidate, a canvas-anchored threshold matrix, a serpentine
+    diffusion -- and two copies of it are how a document converted through one
+    door and repainted through the other come to disagree along an edge. So the
+    real work is ``convert`` on the *candidate* table, and this adds only the
+    two things indices have and colours do not: which slot a colour came from,
+    and where the holes are.
+
+    The candidate table is the palette **without its transparent slot**. That is
+    ``index_plane.resolve``'s rule applied one level up and it matters most
+    here: dithering is allowed to pick any candidate for any pixel, so a
+    transparent slot left in the running would scatter holes through a solid
+    area wherever its colour happened to win.
+
+    Alpha decides the holes, at ``index_plane.OPAQUE_THRESHOLD``, and it is read
+    off the *input* -- ``convert`` passes alpha through byte-identically, so the
+    two agree, and reading the input says so.
+    """
+    if pixels.dtype != np.uint8 or pixels.ndim != 3 or pixels.shape[2] != 4:
+        raise ValueError("convert_indices takes (H, W, 4) uint8")
+    count = len(palette)
+    if not count:
+        raise ValueError("a conversion needs at least one colour")
+    if count > ixp.MAX_COLOURS:
+        raise ValueError(f"an indexed palette holds at most {ixp.MAX_COLOURS} colours")
+    hole = int(transparent) if 0 <= int(transparent) < count else 0
+    slots = [i for i in range(count) if i != hole] or list(range(count))
+    candidates = [tuple(palette[i]) for i in slots]
+
+    out = np.full(pixels.shape[:2], hole, dtype=np.uint8)
+    if pixels.size == 0:
+        return out
+    visible = pixels[..., 3] >= ixp.OPAQUE_THRESHOLD
+    if not visible.any():
+        return out
+
+    painted = convert(pixels, candidates, method)
+    # ``transparent=None``: this sub-table has no hole in it, every entry is a
+    # candidate, and the holes were labelled above off the input's alpha.
+    local = ixp.resolve(painted, ixp.lut(candidates, transparent=-1), None)
+    out[visible] = np.asarray(slots, dtype=np.uint8)[local[visible]]
+    return out
 
 
 def _ordered(out: np.ndarray, table: np.ndarray, matrix: np.ndarray) -> np.ndarray:

@@ -70,6 +70,22 @@ __all__ = [
 ]
 
 
+def _plane_bytes(layer: Any) -> int:
+    """What holding *layer* costs the byte budget.
+
+    Its pixels plus its index plane, where it has one. Written as a ``getattr``
+    against the layer's own ``plane_bytes`` rather than reaching for the two
+    arrays here, so a layer subclass that carries a third plane -- a tilemap
+    cel's refs, next wave -- answers for itself and this stays the one question.
+
+    The fallback is for the duck-typed stand-ins the animation tests build,
+    which have pixels and nothing else. A ``0`` here would be the failure this
+    helper exists to prevent, so it is deliberately not the fallback.
+    """
+    cost = getattr(layer, "plane_bytes", None)
+    return int(cost) if cost is not None else int(layer.pixels.nbytes)
+
+
 @dataclass
 class PatchEdit(Edit):
     """Exact pixels of one rectangle of one layer, before and after.
@@ -136,7 +152,7 @@ class LayerAddEdit(Edit):
         # a cost of zero made it invisible to the byte budget: a document could
         # pin an unbounded number of them past the 192 MiB ceiling. Same
         # measurement LayerRemoveEdit already made.
-        self.cost = int(self.layer.pixels.nbytes)
+        self.cost = _plane_bytes(self.layer)
 
     def undo(self, doc: Any) -> None:
         doc.stack.remove(doc.stack.index_of(self.layer.uid))
@@ -153,7 +169,7 @@ class LayerRemoveEdit(Edit):
     layer: Any
 
     def __post_init__(self) -> None:
-        self.cost = int(self.layer.pixels.nbytes)
+        self.cost = _plane_bytes(self.layer)
 
     def undo(self, doc: Any) -> None:
         doc.stack.insert(self.index, self.layer)
@@ -321,7 +337,7 @@ class ReplayEdit(Edit):
 
     def __post_init__(self) -> None:
         self.selection = _pack(self.selection)
-        self.cost = sum(int(layer.pixels.nbytes) for layer in self.snapshot)
+        self.cost = sum(_plane_bytes(layer) for layer in self.snapshot)
 
     def undo(self, doc: Any) -> None:
         # Before the snapshot, so the ``invalidate_all`` that ends

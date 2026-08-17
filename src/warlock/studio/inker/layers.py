@@ -9,6 +9,12 @@ written back out as zero). At 2048x2048 that is 16 MiB a layer; ten layers is
 And a layer has a stable ``uid`` that has nothing to do with its position.
 Undo records patches against the uid, so reordering a stack between an edit and
 its undo cannot make the patch land on a different layer.
+
+A layer on a **truly indexed** document carries a third thing: an ``(H, W)``
+index plane which is the record, with ``pixels`` kept beside it as the
+materialisation. The RGBA invariant above is unchanged -- ``pixels`` is always
+``(H, W, 4)`` and always valid -- so nothing that reads a layer needs a new
+case. See :mod:`.index_plane` for why identity, not storage, is what that buys.
 """
 
 from __future__ import annotations
@@ -52,12 +58,51 @@ class Layer:
     # it, and a locked layer flattens exactly as an unlocked one does.
     locked: bool = False
     uid: int = field(default_factory=lambda: next(_uids))
+    #: The **record**, on a document in ``color_mode == "indexed"`` -- and None
+    #: on every other document, which is every document until somebody converts
+    #: one. When it is present, ``pixels`` is its materialisation through the
+    #: document's palette (``pixels == index_plane.materialize(indices, lut)``)
+    #: and this plane is what geometry permutes, what undo records and what the
+    #: ORA writer stores.
+    #:
+    #: ``pixels`` stays ``(H, W, 4)`` and stays *valid* either way, which is the
+    #: decision the whole indexed design turns on: the compositor's nineteen
+    #: blend modes, the frame-flatten cache, texture upload, GIF and sheet
+    #: flatten, thumbnails and every native kernel read ``pixels`` and change by
+    #: zero lines. The invariant above is demoted from "the record" to "the
+    #: projection" on an indexed document; it is not weakened.
+    #:
+    #: A **linked cel shares its index plane for free**, because a link is the
+    #: same ``Layer`` object in two ``Animation.cels`` slots and there is only
+    #: one plane to share. See :mod:`.index_plane`.
+    indices: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         if self.pixels.dtype != np.uint8 or self.pixels.ndim != 3 or self.pixels.shape[2] != 4:
             raise ValueError("a layer holds (H, W, 4) uint8")
         if self.blend not in cp.BLEND_MODES:
             raise ValueError(f"unknown blend mode {self.blend!r}")
+        if self.indices is not None:
+            # Shape-matched against the pixels rather than against the canvas:
+            # a layer is canvas-sized by ``LayerStack.insert``'s rule, and the
+            # one thing that must never come apart is these two describing
+            # different rectangles -- every materialisation writes the whole of
+            # ``pixels`` from the whole of ``indices``.
+            if self.indices.dtype != np.uint8 or self.indices.ndim != 2:
+                raise ValueError("an index plane is (H, W) uint8")
+            if self.indices.shape != self.pixels.shape[:2]:
+                raise ValueError("an index plane is the size of the layer it indexes")
+
+    @property
+    def plane_bytes(self) -> int:
+        """What this layer costs the undo budget and the frame caches.
+
+        One helper rather than ``pixels.nbytes`` spelled at each cost site,
+        because an index plane is a fifth field those sites did not know about
+        and an edit that under-reports its size is one the byte budget cannot
+        evict.
+        """
+        return int(self.pixels.nbytes) + (0 if self.indices is None else int(self.indices.nbytes))
 
     @property
     def size(self) -> tuple[int, int]:
@@ -84,6 +129,11 @@ class Layer:
             blend=self.blend,
             alpha_lock=self.alpha_lock,
             locked=self.locked,
+            # Copied like the pixels, and for the same reason: a history
+            # snapshot holds this for as long as it is on the stack, and a
+            # shared plane would let the next stroke rewrite what the undo is
+            # supposed to restore.
+            indices=None if self.indices is None else self.indices.copy(),
             **({} if uid is None else {"uid": uid}),
         )
 

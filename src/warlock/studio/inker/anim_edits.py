@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..undo import Edit
+from .undo import _plane_bytes
 
 __all__ = [
     "AnimateEdit",
@@ -58,7 +59,7 @@ def pixel_bytes(layers: Iterable[Any]) -> int:
     seen: dict[int, int] = {}
     for layer in layers:
         if layer is not None:
-            seen[id(layer)] = int(layer.pixels.nbytes)
+            seen[id(layer)] = _plane_bytes(layer)
     return sum(seen.values())
 
 
