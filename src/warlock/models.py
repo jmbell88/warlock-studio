@@ -1048,6 +1048,43 @@ METRIC_MODELS: dict[str, MetricModel] = _table(
             ),
         ),
     ),
+    MetricModel(
+        # PickScore v1: a CLIP-H fine-tuned on 500k human A/B preferences over
+        # generated images (arXiv 2305.01569) -- the inference-time stand-in
+        # for the preference post-training every hosted image service bakes
+        # in. Scores an image *for a prompt*, so the candidate ranker can add
+        # "which of these would a person pick" beside composition and the
+        # style anchor. CPU like the DINOv2 anchor, and for the same rule: a
+        # metric must not take VRAM from the models making the asset. One repo
+        # carries the processor and tokenizer beside the weights; the pattern
+        # set skips the redundant pytorch_model.bin duplicate of the
+        # safetensors named explicitly.
+        "pickscore",
+        "PickScore v1 (human preference metric)",
+        "pickscore-v1",
+        # Two records against one repository, the IP-Adapter's shape and for a
+        # sharper reason, learned the hard way on 2026-08-17: `hf download`
+        # silently ignores --include when a positional filename is also given,
+        # so a single record mixing the two downloads the weights alone and
+        # doctor's probe then reports a model that cannot load. The in-app
+        # fetch would have unioned them; the pasted command is what breaks.
+        fetch=(
+            Fetch(
+                "yuvalkirstain/PickScore_v1",
+                "pickscore-v1",
+                revision="a4e4367c6dfa7288a00c550414478f865b875800",
+                filenames=("model.safetensors",),
+                size_gib=3.7,
+            ),
+            Fetch(
+                "yuvalkirstain/PickScore_v1",
+                "pickscore-v1",
+                revision="a4e4367c6dfa7288a00c550414478f865b875800",
+                allow_patterns=("*.json", "*.txt"),
+                size_gib=0.1,
+            ),
+        ),
+    ),
 )
 
 

@@ -121,7 +121,7 @@ Rename-Item $HOME/.warlock/models/loras/pytorch_lora_weights.safetensors pixel-a
 
 ## Conditioning, matting and measurement models
 
-Five more registry entries, none of them required to generate anything. They lived only in
+Six more registry entries, none of them required to generate anything. They lived only in
 `models.py` until the download machinery started generating both lists from the same `Fetch`
 records; `warlock doctor` reports each one and the Settings pane can fetch it.
 
@@ -155,6 +155,17 @@ uvx hf download ZhengPeng7/BiRefNet --revision e2bf8e4460fc8fa32bba5ea4d94b3233d
 # with. A missing one costs a number, never a job.
 uvx hf download facebook/dinov2-base --revision f9e44c814b77203eaa57a6bdbbd535f21ede1415 `
   --include "*.json" --include "*.safetensors" --local-dir $HOME/.warlock/models/dinov2-base
+
+# PickScore v1 (~3.7 GB): a CLIP-H fine-tuned on human A/B preferences over
+# generated images. With it, ranking a submit's candidates adds "which of
+# these would a person pick for this prompt" beside composition and the style
+# anchor; without it the ranking is exactly what it was. CPU, like the anchor.
+# Two commands, deliberately: `hf download` ignores --include when a filename
+# is also given, so one merged line fetches the weights and drops the configs.
+uvx hf download yuvalkirstain/PickScore_v1 --revision a4e4367c6dfa7288a00c550414478f865b875800 model.safetensors `
+  --local-dir $HOME/.warlock/models/pickscore-v1
+uvx hf download yuvalkirstain/PickScore_v1 --revision a4e4367c6dfa7288a00c550414478f865b875800 `
+  --include "*.json" --include "*.txt" --local-dir $HOME/.warlock/models/pickscore-v1
 
 # Prompt expander (~700 MB): the Fooocus GPT-2 (124M params, CPU) that enriches
 # short prompts with aesthetic detail before SDXL sees them -- the offline form

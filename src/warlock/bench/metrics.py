@@ -315,6 +315,96 @@ def reference_cosine(
     return float(torch.sum(_embed(a, config, device) * _embed(b, config, device)).item())
 
 
+def pickscore_available(config: Any = None) -> bool:
+    """Whether the preference model's weights are on disk. Existence before
+    the torch import, the ordering this whole module keeps."""
+    return (_pickscore_dir(config) / "model.safetensors").exists()
+
+
+def _pickscore_dir(config: Any = None) -> Path:
+    from .. import models
+    from ..config import get_config
+
+    spec = models.METRIC_MODELS["pickscore"]
+    root = (config or get_config()).t2i_model_root
+    return root / spec.dir_name
+
+
+def _pickscore_model(config: Any = None, device: str | None = None):
+    """Load PickScore once per (path, device), the ``_dino_model`` pattern
+    exactly -- same cache, same existence-before-torch ordering, same explicit
+    ``device`` so the app can pin it to the CPU beside a resident trellis."""
+    path = _pickscore_dir(config)
+    if not (path / "model.safetensors").exists():
+        from .. import models
+
+        raise RuntimeError(
+            f"PickScore not found at {path}. Download once with:\n"
+            f"  {models.METRIC_MODELS['pickscore'].download}"
+        )
+    import torch
+
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    key = f"pickscore|{path}|{device}"
+    hit = _model_cache.get(key)
+    if hit is not None:
+        return hit
+
+    from transformers import AutoModel, AutoProcessor
+
+    processor = AutoProcessor.from_pretrained(str(path), local_files_only=True)
+    model = AutoModel.from_pretrained(str(path), local_files_only=True)
+    model.eval()
+    model = model.to(device)
+    _model_cache[key] = (processor, model, device)
+    return _model_cache[key]
+
+
+def preference_score(
+    prompt: str, image_path: Path, config: Any = None, device: str | None = None
+) -> float | None:
+    """PickScore's raw preference logit for this image given this prompt.
+
+    Higher is better; the scale is the model's own (logit_scale times a
+    cosine, landing around 17-24 on SDXL-class output). Deliberately returned
+    raw rather than squashed here: the normalization is a ranking decision and
+    lives in ``pipelines/rank.py`` where it is pure and pinned by tests.
+
+    None when the image has no readable pixels; a missing model raises (the
+    caller decides whether absence is a skip or an error, exactly as
+    ``_dino_model``'s callers do).
+    """
+    from PIL import Image
+
+    try:
+        with Image.open(image_path) as im:
+            image = im.convert("RGB")
+    except OSError:
+        return None
+    import torch
+
+    processor, model, resolved = _pickscore_model(config, device)
+    image_inputs = processor(images=image, return_tensors="pt").to(resolved)
+    text_inputs = processor(
+        text=prompt or "", padding=True, truncation=True, max_length=77,
+        return_tensors="pt",
+    ).to(resolved)
+    def _features(out: Any) -> Any:
+        # transformers 4.x returns the projected tensor; 5.x returns the full
+        # BaseModelOutputWithPooling with the projection written into
+        # ``pooler_output``. Both are the same vector.
+        return out if torch.is_tensor(out) else out.pooler_output
+
+    with torch.no_grad():
+        image_emb = _features(model.get_image_features(**image_inputs))
+        image_emb = image_emb / image_emb.norm(dim=-1, keepdim=True)
+        text_emb = _features(model.get_text_features(**text_inputs))
+        text_emb = text_emb / text_emb.norm(dim=-1, keepdim=True)
+        score = model.logit_scale.exp() * (text_emb @ image_emb.T)
+    return float(score.item())
+
+
 def available(config: Any = None) -> tuple[str, ...]:
     """Which metrics can actually run here. silhouette_iou always can."""
     out = ["silhouette_iou"]

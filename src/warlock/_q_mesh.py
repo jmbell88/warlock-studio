@@ -208,6 +208,12 @@ class MeshPostOps:
         only there on a run that had one, and DINOv2 is an optional download.
         What is left is the composition score, which is free: the report was
         measured either way.
+
+        The preference half (PickScore) is opportunistic the same way -- an
+        optional download, gated on the same switch, every failure a missing
+        number -- and is scored against the *composed* prompt, because "would
+        a person pick this for what was asked" has to be asked about the text
+        the sampler actually received, expansion and template included.
         """
         from .bench import metrics
         from .pipelines import rank
@@ -226,7 +232,20 @@ class MeshPostOps:
                     )
             except Exception:
                 log.exception("anchor similarity failed; ranking on composition alone")
-        return rank.score(report, cosine)
+        preference = None
+        if self.config.rank_candidates:
+            try:
+                if metrics.pickscore_available(self.config):
+                    # CPU for the anchor's reason exactly.
+                    preference = metrics.preference_score(
+                        str(params.get("composed_prompt") or ""),
+                        image_path,
+                        self.config,
+                        device="cpu",
+                    )
+            except Exception:
+                log.exception("preference scoring failed; ranking without it")
+        return rank.score(report, cosine, preference)
 
     async def _audit_mesh(
         self: Worker, job_id: str, glb_path: Path, params: dict[str, Any]
