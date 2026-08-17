@@ -93,6 +93,11 @@ def routed(monkeypatch, tmp_path):
         StableDiffusionXLControlNetPipeline=fake_class("controlnet"),
         StableDiffusionXLControlNetImg2ImgPipeline=fake_class("controlnet_img2img"),
         StableDiffusionXLImg2ImgPipeline=fake_class("img2img"),
+        # The PAG variants, importable even though a pag_scale=0 spec never
+        # picks one -- the imports sit beside their plain siblings.
+        StableDiffusionXLControlNetPAGPipeline=fake_class("controlnet_pag"),
+        StableDiffusionXLControlNetPAGImg2ImgPipeline=fake_class("controlnet_pag_img2img"),
+        StableDiffusionXLPAGImg2ImgPipeline=fake_class("pag_img2img"),
     )
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
     monkeypatch.setitem(sys.modules, "diffusers", fake_diffusers)

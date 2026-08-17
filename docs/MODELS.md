@@ -30,6 +30,11 @@ for free.
 # with real structural control: it takes ControlNet, and the negative prompt
 # carries full weight. Everything below in this block reuses these weights.
 
+# SDXL 1.0 + PAG -- also no download: the default recipe with two training-free
+# sampling upgrades (perturbed-attention guidance at 3.0, CFG rescale at 0.7,
+# which counters high-CFG washout). The opt-in arm the bench compares against
+# the default before any flip.
+
 # SDXL-Turbo (~7 GB): the 4-step fast option, at 512 px and guidance 0. Its own
 # checkpoint rather than a recipe -- nothing else in the registry shares it --
 # and no longer part of the core setup. Worth having when iteration speed

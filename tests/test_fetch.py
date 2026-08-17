@@ -1037,8 +1037,8 @@ def _entries(*row_keys: str) -> list[fetch.Entry]:
 
 
 def test_one_shared_recipe_frees_only_its_own_adapter(tmp_path):
-    """Four recipes over one 7 GiB directory. Uninstalling ``sdxl`` alone must
-    not take the checkpoint the other three are standing on -- and the freed
+    """Five recipes over one 7 GiB directory. Uninstalling ``sdxl`` alone must
+    not take the checkpoint the other four are standing on -- and the freed
     figure has to say 0.8, not 7, or the label is a lie."""
     cfg = _config(tmp_path)
     removal = fetch.removal_plan(cfg, _entries("base:sdxl"))
@@ -1047,10 +1047,14 @@ def test_one_shared_recipe_frees_only_its_own_adapter(tmp_path):
     assert removal.freed_gib == pytest.approx(0.8)
 
 
-def test_all_four_recipes_together_do_take_the_checkpoint(tmp_path):
+def test_all_five_recipes_together_do_take_the_checkpoint(tmp_path):
     cfg = _config(tmp_path)
     removal = fetch.removal_plan(
-        cfg, _entries("base:sdxl", "base:sdxl_cfg", "base:pixel", "base:lightning")
+        cfg,
+        _entries(
+            "base:sdxl", "base:sdxl_cfg", "base:sdxl_cfg_pag", "base:pixel",
+            "base:lightning",
+        ),
     )
     assert cfg.t2i_model_root / "sdxl-base-1.0" in removal.paths
     assert removal.freed_gib == pytest.approx(7.0 + 0.8 + 0.4 + 0.4)

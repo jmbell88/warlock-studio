@@ -36,8 +36,8 @@ def test_removing_a_style_lora_takes_one_file_and_says_what_it_freed(svc):
 
 def test_one_shared_recipe_leaves_the_checkpoint_the_others_stand_on(svc):
     """The rule the whole feature turns on. Removing ``sdxl`` must take its
-    Hyper-SD adapter and *not* the 7 GiB directory ``sdxl_cfg``, ``pixel`` and
-    ``lightning`` are all still standing on."""
+    Hyper-SD adapter and *not* the 7 GiB directory ``sdxl_cfg``, ``sdxl_cfg_pag``,
+    ``pixel`` and ``lightning`` are all still standing on."""
     base_dir = fetch.base_model_dir(svc.config, fetch.find("base:sdxl").spec)
     hyper = _lora(svc, "Hyper-SDXL-4steps-lora.safetensors")
 
@@ -46,15 +46,17 @@ def test_one_shared_recipe_leaves_the_checkpoint_the_others_stand_on(svc):
     assert not hyper.exists()
     assert base_dir.is_dir(), "the shared checkpoint must survive"
     assert result["freed_gib"] == pytest.approx(0.8)
-    # And the three siblings still read as present.
-    for key in ("base:sdxl_cfg", "base:pixel", "base:lightning"):
+    # And the four siblings still read as present.
+    for key in ("base:sdxl_cfg", "base:sdxl_cfg_pag", "base:pixel", "base:lightning"):
         assert fetch.find(key).is_present(svc.config), key
 
 
-def test_all_four_recipes_together_do_take_the_checkpoint(svc):
+def test_all_five_recipes_together_do_take_the_checkpoint(svc):
     base_dir = fetch.base_model_dir(svc.config, fetch.find("base:sdxl").spec)
     result = svc_downloads.uninstall(
-        svc, ["base:sdxl", "base:sdxl_cfg", "base:pixel", "base:lightning"]
+        svc,
+        ["base:sdxl", "base:sdxl_cfg", "base:sdxl_cfg_pag", "base:pixel",
+         "base:lightning"],
     )
     assert not base_dir.exists()
     assert result["freed_gib"] == pytest.approx(8.6)
@@ -260,7 +262,9 @@ def test_removing_the_default_base_model_is_allowed(svc):
 
     # Everything sharing sdxl-base-1.0, so the directory actually goes.
     svc_downloads.uninstall(
-        svc, ["base:sdxl", "base:sdxl_cfg", "base:pixel", "base:lightning"]
+        svc,
+        ["base:sdxl", "base:sdxl_cfg", "base:sdxl_cfg_pag", "base:pixel",
+         "base:lightning"],
     )
     assert models.DEFAULT_BASE_MODEL == "sdxl_cfg"
     with pytest.raises(Invalid) as caught:

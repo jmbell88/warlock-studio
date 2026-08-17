@@ -94,7 +94,7 @@ pane: saved profiles are kept, and the 3D form is left alone.
 
 ## Models and style LoRAs
 
-The **Model** section holds the model choice. Nine base models ship in the registry:
+The **Model** section holds the model choice. Eleven base models ship in the registry:
 
 | Model | What it is | Runs at |
 | --- | --- | --- |
@@ -103,10 +103,12 @@ The **Model** section holds the model choice. Nine base models ship in the regis
 | SDXL 1.0 + Lightning (4-step) | The same weights and the same idea, distilled a different way — an alternative to compare Hyper-SD against. | 1024 px, 4 steps, guidance 0 |
 | Playground v2.5 (highest fidelity, slow) | The best-looking output, and correspondingly slow. | 1024 px, 25 steps, guidance 3.0 |
 | SDXL 1.0 (full CFG, structural control) | **The default.** The same weights as the Hyper-SD entry, run the way the checkpoint was trained — the negative prompt and ControlNet both work here. | 1024 px, 30 steps, guidance 7.0 |
+| SDXL 1.0 + PAG (full CFG, cleaner structure) | The default's weights and recipe with two training-free sampling upgrades: perturbed-attention guidance and CFG rescale, which counters the washed-out look of high guidance. No new download. | 1024 px, 30 steps, guidance 7.0 |
 | SDXL 1.0 + LCM (pixel art) | The same weights again, under a consistency adapter — the recipe the pixel-art LoRA was trained against. | 1024 px, 8 steps, guidance 1.0 |
 | Juggernaut XL v9 (photoreal) | A photoreal SDXL finetune, at its own documented recipe. | 1024 px, 35 steps, guidance 4.0 |
 | DreamShaper XL (stylised) | The stylised counterpart to Juggernaut. | 1024 px, 25 steps, guidance 7.0 |
 | FLUX.2 klein-base 4B (full CFG) | A different architecture entirely, and the slowest thing here. | 1024 px, 50 steps, guidance 4.0 |
+| FLUX.2 klein 4B (distilled, 4-step) | The same architecture at the opposite recipe — the negative prompt is inert on it, and it exists so the FLUX.2 pixel-art style can run at the recipe it was trained on. | 1024 px, 4 steps, guidance 1.0 |
 
 The sampler settings travel with the checkpoint and are not yours to set. They are part of the
 model's identity: a four-step distilled model run at 25 steps with guidance produces mush, and both

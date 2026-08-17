@@ -292,11 +292,23 @@ class Text2Image:
         # LoRA raises by design, an OOM in .to("cuda"), a cancel) left a
         # half-configured pipe that every later load() returned early on, with
         # the weights resident and nothing able to reach them.
+        load_kwargs: dict[str, Any] = {}
+        if self.spec.pag_scale > 0:
+            # Only ever passed when set: with the kwarg absent, AutoPipeline
+            # resolves the exact classes it always did, which is what keeps
+            # every pag_scale=0 recipe's output byte-identical.
+            if self.spec.family != models.FAMILY_SDXL:
+                raise RuntimeError(
+                    f"{self.spec.label} sets pag_scale but is not an "
+                    "SDXL-family checkpoint; PAG perturbs UNet self-attention"
+                )
+            load_kwargs["enable_pag"] = True
         pipe = AutoPipelineForText2Image.from_pretrained(
             str(self._model_dir),
             torch_dtype=torch.bfloat16,
             variant=self.spec.variant,
             local_files_only=True,
+            **load_kwargs,
         )
         try:
             if self.spec.scheduler is not None:
@@ -613,19 +625,38 @@ class Text2Image:
                 # doubles from ~7 GB to ~14 GB, which does not fit beside
                 # trellis. Measured 2026-08-03: build the pipe without this and
                 # never call it, and the next plain generate() already differs.
+                # A PAG spec's resident pipe is the PAG class, and from_pipe
+                # to a non-PAG ControlNet class would silently drop the
+                # perturbation -- the recipe's own setting going inert on
+                # exactly the conditioned jobs. So the class is chosen by the
+                # spec, in each branch.
+                pag = self.spec.pag_scale > 0
                 if cond.uses_init:
                     # Structure hint *and* a starting picture: a different
                     # pipeline class again, and the kwargs swap places -- see
                     # the routing note below.
                     from diffusers import (
                         StableDiffusionXLControlNetImg2ImgPipeline,
+                        StableDiffusionXLControlNetPAGImg2ImgPipeline,
                     )
 
-                    target = StableDiffusionXLControlNetImg2ImgPipeline.from_pipe(
+                    cls = (
+                        StableDiffusionXLControlNetPAGImg2ImgPipeline
+                        if pag
+                        else StableDiffusionXLControlNetImg2ImgPipeline
+                    )
+                    target = cls.from_pipe(
                         self._pipe, controlnet=controlnet, torch_dtype=torch.bfloat16
                     )
                 else:
-                    target = StableDiffusionXLControlNetPipeline.from_pipe(
+                    from diffusers import StableDiffusionXLControlNetPAGPipeline
+
+                    cls = (
+                        StableDiffusionXLControlNetPAGPipeline
+                        if pag
+                        else StableDiffusionXLControlNetPipeline
+                    )
+                    target = cls.from_pipe(
                         self._pipe, controlnet=controlnet, torch_dtype=torch.bfloat16
                     )
                 # Set the moment the ControlNet is attached, so a failure in the
@@ -665,13 +696,20 @@ class Text2Image:
                     # No ControlNet in play, so the plain img2img class. Pure
                     # component reuse like the branch above: no second UNet,
                     # VAE or text encoder, and therefore no teardown flag --
-                    # there is nothing attached to detach.
+                    # there is nothing attached to detach. The PAG variant for
+                    # the class-drop reason above.
                     import torch
-                    from diffusers import StableDiffusionXLImg2ImgPipeline
-
-                    target = StableDiffusionXLImg2ImgPipeline.from_pipe(
-                        self._pipe, torch_dtype=torch.bfloat16
+                    from diffusers import (
+                        StableDiffusionXLImg2ImgPipeline,
+                        StableDiffusionXLPAGImg2ImgPipeline,
                     )
+
+                    cls = (
+                        StableDiffusionXLPAGImg2ImgPipeline
+                        if self.spec.pag_scale > 0
+                        else StableDiffusionXLImg2ImgPipeline
+                    )
+                    target = cls.from_pipe(self._pipe, torch_dtype=torch.bfloat16)
                 with Image.open(cond.init_image) as im:
                     extra["image"] = im.convert("RGB")
                 extra["strength"] = float(cond.strength)
@@ -1036,6 +1074,16 @@ class Text2Image:
                 self._pipe, negative_chunks
             )
 
+        # The two opt-in sampling upgrades, present only when the spec sets
+        # them -- the same absence-not-None rule as `extra` below, and for the
+        # same reason: a kwarg that is never passed cannot move a bit on the
+        # recipes that do not ask for it.
+        upgrades: dict[str, Any] = {}
+        if self.spec.pag_scale > 0:
+            upgrades["pag_scale"] = self.spec.pag_scale
+        if self.spec.guidance_rescale > 0:
+            upgrades["guidance_rescale"] = self.spec.guidance_rescale
+
         # extra is splatted rather than passed as explicit None kwargs:
         # diffusers branches on `is not None`, and "probably identical"
         # is not what the bit-identity rule asks for.
@@ -1050,6 +1098,7 @@ class Text2Image:
             height=self.spec.image_size,
             generator=torch.Generator("cuda").manual_seed(seed),
             callback_on_step_end=step_cb,
+            **upgrades,
             **extra,
         ).images[0]
         return image, len(positive_chunks)
@@ -1125,6 +1174,15 @@ class Text2Image:
             "negative_prompt": negative_prompt or "",
             "prompt_chunks": chunks,
             "tile": bool(tile),
+            # Present only when the spec sets them, mirroring how they are
+            # sampled: a recipe key that is absent says "this upgrade did not
+            # run", which no recorded 0.0 could say as plainly.
+            **({"pag_scale": self.spec.pag_scale} if self.spec.pag_scale > 0 else {}),
+            **(
+                {"guidance_rescale": self.spec.guidance_rescale}
+                if self.spec.guidance_rescale > 0
+                else {}
+            ),
             "models": provenance.model_fingerprints({"base_model": self._model_dir}),
             "versions": provenance.versions(),
         }

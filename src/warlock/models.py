@@ -316,6 +316,21 @@ class BaseModel:
     # future base at CFG 1.5 must not silently become "controllable" because it
     # cleared a threshold nobody qualified it against.
     controlnet: bool = False
+    # Perturbed-Attention Guidance (arXiv 2403.17377), a training-free sampling
+    # upgrade: the self-attention map is perturbed to make a second "degraded"
+    # prediction, and the sample is steered away from it -- structure gets
+    # cleaner at no new weights. 0.0 means off, and off means *class-identical*:
+    # the loader only asks diffusers for a PAG pipeline when this is set, so
+    # every existing recipe's path is byte-for-byte untouched. SDXL-family
+    # only (the perturbation targets UNet self-attention); the loader refuses
+    # a non-SDXL spec that sets it rather than sampling something undefined.
+    pag_scale: float = 0.0
+    # diffusers' guidance_rescale (Lin et al. 2023, "Common Diffusion Noise
+    # Schedules and Sample Steps are Flawed"): rescales the CFG output's
+    # variance to fix the washed-out look of high-CFG sampling. 0.0 means the
+    # kwarg is never passed -- the same absence-not-default rule as pag_scale,
+    # for the same bit-identity reason.
+    guidance_rescale: float = 0.0
     # Which architecture this is, from FAMILIES. Everything the image half of
     # the app does -- chunked CLIP encoding, the pooled embeddings, style
     # LoRAs, ControlNet, IP-Adapter, img2img -- is an SDXL fact, so a
@@ -546,6 +561,26 @@ BASE_MODELS: dict[str, BaseModel] = _table(
         steps=30,
         guidance_scale=7.0,
         controlnet=True,
+        fetch=(_SDXL_BASE_1_0,),
+    ),
+    BaseModel(
+        # The same weights and recipe as sdxl_cfg with two training-free
+        # sampling upgrades on top: PAG at the paper's 3.0, and CFG rescale at
+        # the 0.7 its paper recommends against exactly the high-CFG washout a
+        # 7.0 guidance produces. A separate row rather than fields on sdxl_cfg
+        # because that row's unconditioned output is bit-identity-pinned: this
+        # is the opt-in arm the bench compares against it, and a measured win
+        # is what would flip DEFAULT_BASE_MODEL here -- with the
+        # docs/measurements/ note that rule requires. No new download.
+        "sdxl_cfg_pag",
+        "SDXL 1.0 + PAG (full CFG, cleaner structure)",
+        "sdxl-base-1.0",
+        image_size=1024,
+        steps=30,
+        guidance_scale=7.0,
+        controlnet=True,
+        pag_scale=3.0,
+        guidance_rescale=0.7,
         fetch=(_SDXL_BASE_1_0,),
     ),
     BaseModel(
