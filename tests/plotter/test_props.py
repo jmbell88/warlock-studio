@@ -302,36 +302,39 @@ def test_a_malformed_wmap_record_is_refused():
         P.read_wmap_properties({"n": "not a record"})
 
 
-# --- list, which Tiled has no syntax for --------------------------------------
+# --- Tiled 1.12 list properties ----------------------------------------------
 
 
-def test_a_list_property_is_refused_by_name_on_both_tiled_writers():
-    """Modelled in the document and in our own archive, refused at the Tiled
-    door: Tiled 1.12.2 has no list-valued property, so there is no syntax to
-    write that it would read back. Refusing beats inventing one."""
-    values = {"bag": Prop("list", [Prop("int", 1)])}
-    with pytest.raises(TiledUnsupported) as exc:
-        _xml_text(values)
-    assert exc.value.feature == "a list-valued custom property"
-    with pytest.raises(TiledUnsupported) as exc:
-        P.write_json_properties(values)
-    assert exc.value.feature == "a list-valued custom property"
+def test_a_nested_list_property_round_trips_through_both_tiled_codecs():
+    values = {
+        "bag": Prop(
+            "list",
+            [
+                Prop("int", 1),
+                Prop("string", "two"),
+                Prop("list", [Prop("bool", True)]),
+                Prop("class", {"hp": Prop("int", 3)}, propertytype="NPC"),
+            ],
+        )
+    }
+    assert _xml_round_trip(values) == values
+    assert _json_round_trip(values) == values
+    xml = _xml_text(values)
+    assert '<property name="bag" type="list">' in xml
+    assert '<item type="int" value="1"' in xml
 
 
-def test_a_list_property_is_refused_by_name_on_both_tiled_readers():
-    root = ET.fromstring(
-        '<map><properties><property name="bag" type="list" value="1"/></properties></map>'
-    )
-    with pytest.raises(TiledUnsupported) as exc:
-        P.read_properties(root)
-    assert exc.value.feature == "a list-valued custom property"
-    with pytest.raises(TiledUnsupported) as exc:
-        P.read_json_properties([{"name": "bag", "type": "list", "value": [1]}])
-    assert exc.value.feature == "a list-valued custom property"
-
-
-def test_a_list_inside_a_class_is_refused_by_the_same_name():
-    values = {"npc": Prop("class", {"bag": Prop("list", [])}, propertytype="N")}
-    with pytest.raises(TiledUnsupported) as exc:
-        _xml_text(values)
-    assert exc.value.feature == "a list-valued custom property"
+def test_a_list_inside_a_class_round_trips():
+    values = {
+        "npc": Prop(
+            "class",
+            {"bag": Prop("list", [Prop("file", "items/key.png")])},
+            propertytype="N",
+        )
+    }
+    assert _xml_round_trip(values) == values
+    # JSON class members do not carry scalar member types without a project
+    # schema, but the list structure and value still survive.
+    back = _json_round_trip(values)
+    assert back["npc"].value["bag"].type == "list"
+    assert back["npc"].value["bag"].value[0].value == "items/key.png"

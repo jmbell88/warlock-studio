@@ -61,6 +61,21 @@ def test_a_stamp_replaces_wholesale_including_empty_cells():
     assert result is not None and result[2].tolist() == [[5, 0]]
 
 
+def test_random_mode_chooses_one_nonempty_tile_from_the_stamp():
+    brush = np.array([[0, 5], [7, 9]], gid.DTYPE)
+    rng = np.random.default_rng(4)
+    seen = {
+        int(tools.random_stamp(_layer(), 2, 1, brush, rng=rng)[2][0, 0])
+        for _ in range(20)
+    }
+    assert seen <= {5, 7, 9}
+    assert len(seen) > 1
+
+
+def test_random_mode_with_no_nonempty_choice_is_nothing():
+    assert tools.random_stamp(_layer(), 0, 0, np.zeros((2, 2), gid.DTYPE)) is None
+
+
 # --- rectangles ---------------------------------------------------------------
 
 

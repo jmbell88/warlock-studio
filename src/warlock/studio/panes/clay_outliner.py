@@ -162,6 +162,7 @@ def _context_menu(ctx: Any, state: Any, doc: Any, obj: Any) -> None:
     """
     if not imgui.begin_popup_context_item(f"clayrow{obj.uid}"):
         return
+    widgets.popup_chrome(_imgui=imgui)
     if obj.uid not in doc.selection:
         doc.select([obj.uid])
     if controls.menu_item(f"{icons.PENCIL} Rename", "", False)[0]:

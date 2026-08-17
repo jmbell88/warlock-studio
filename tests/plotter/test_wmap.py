@@ -20,6 +20,7 @@ import pytest
 
 from warlock.studio.plotter import gid, tsx, wmap
 from warlock.studio.plotter.tilemap import (
+    Capsule,
     Ellipse,
     MapDoc,
     MapObject,
@@ -177,10 +178,37 @@ def test_every_member_is_stamped_at_the_epoch():
 
 def test_the_manifest_is_sorted_and_readable():
     payload = json.loads(wmap.manifest_json(_doc()))
-    assert payload["version"] == wmap.VERSION
+    assert payload["version"] == wmap.BASE_VERSION
     assert list(payload) == sorted(payload)
     assert payload["layers"][0]["data"] == "layers/0.npy"
     assert payload["tilesets"][0]["image"] == "tilesets/0.png"
+
+
+def test_tiled_112_fields_select_version_four_and_round_trip():
+    """The v4 gate is semantic: old documents stay v3, expanded ones do not."""
+    doc = _doc()
+    doc.class_name = "Dungeon"
+    doc.parallax_origin = (3.5, -2.0)
+    doc.projection = "oblique"
+    doc.skew_x, doc.skew_y = 8, -2
+    doc.layers[0].blend_mode = "multiply"
+    objects = doc.layers[1]
+    doc.add_object(
+        objects.uid,
+        MapObject(
+            uid=new_uid(),
+            name="pill",
+            x=8,
+            y=9,
+            rotation=17,
+            opacity=0.4,
+            shape=Capsule(10, 18),
+        ),
+    )
+
+    payload = json.loads(wmap.manifest_json(doc))
+    assert payload["version"] == wmap.VERSION == 4
+    assert doc_facts(wmap.read_wmap(wmap.wmap_bytes(doc))) == doc_facts(doc)
 
 
 def test_a_png_is_stored_rather_than_deflated():
@@ -287,7 +315,7 @@ def test_an_unknown_layer_kind_is_refused():
 def test_an_unknown_object_kind_is_refused():
     """Through the tagged ``shape`` record, which is where an object's kind
     lives since version 3 -- and ``"ellipse"`` is no longer the example, because
-    the document models all seven of Tiled's geometries now."""
+    the document models all eight of Tiled's geometries now."""
     def rename(manifest):
         manifest["layers"][1]["objects"][0]["shape"]["kind"] = "wobble"
 
@@ -302,7 +330,7 @@ def test_an_unknown_object_kind_in_the_version_2_spelling_is_refused():
     def downgrade(manifest):
         entry = manifest["layers"][1]["objects"][0]
         del entry["shape"]
-        entry["kind"] = "ellipse"
+        entry["kind"] = "bezier"
 
     with pytest.raises(ValueError, match="unknown kind"):
         wmap.read_wmap(_rewrite(_doc(), downgrade))
@@ -496,7 +524,7 @@ def test_a_property_that_gained_nothing_is_stored_as_version_2_stored_it():
 #
 # Version 3 is what the document outgrew version 2 into: a tree of four layer
 # kinds, each carrying a class, a tint, a pixel offset and a parallax factor;
-# objects carrying a persistent id, a rotation and one of seven tagged
+# objects carrying a persistent id, a rotation and one of seven original tagged
 # geometries; and the two id counters. The two properties at the top of this
 # file are unchanged and every test below is written against them -- the tree
 # lives in ``map.json``, so the half of the archive that holds megabytes is the
@@ -514,7 +542,7 @@ _RICH_PROPS = {
     "bag": tsx.Prop("list", [tsx.Prop("int", 1), tsx.Prop("string", "two")]),
 }
 
-#: All seven of Tiled's geometries, one object apiece. The tile object's gid is
+#: The seven geometries introduced with v3, one object apiece. The tile object's gid is
 #: composed with a flip so the flags are proven to ride in the number rather
 #: than being dropped on the way through the manifest.
 _SHAPES = (
@@ -531,7 +559,7 @@ _SHAPES = (
 def _gate_doc() -> MapDoc:
     """Milestone 2's exit gate, as a document.
 
-    Nested groups, an image layer, all seven object shapes, rotation, an
+    Nested groups, an image layer, all seven v3 object shapes, rotation, an
     ``"index"`` draw order, decorated layers at two depths, and the four
     property types version 2's codec could not spell. Everything the milestone
     taught the model, in one map -- which is the point: a gate assembled from
@@ -599,7 +627,7 @@ def _gate_doc() -> MapDoc:
 
 
 def test_the_milestone_gate_document_survives_a_round_trip():
-    """**The wave's gate.** Nested groups, an image layer, all seven shapes,
+    """**The wave's gate.** Nested groups, an image layer, all seven v3 shapes,
     rotation, ``draworder="index"``, decorated layers and the four recursive
     property types, compared with the same ``doc_facts`` every Plotter-Tiled
     gate is built on -- which is uid-blind by construction and therefore the

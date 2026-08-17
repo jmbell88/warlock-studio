@@ -273,6 +273,7 @@ def toolbar(
         if widgets.icon_button(f"{icons.ELLIPSIS}##{bar_id}/overflow", "More", borderless=True):
             imgui.open_popup(popup)
         if imgui.begin_popup(popup):
+            widgets.popup_chrome(_imgui=imgui)
             for item, tier in zip(items, tiers, strict=True):
                 if tier != MENU:
                     continue

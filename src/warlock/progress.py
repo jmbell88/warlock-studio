@@ -116,6 +116,26 @@ PHASES_RETEXTURE: dict[str, tuple[float, float]] = {
     "assemble": (0.95, 1.00),
 }
 
+# A ground set is one txt2img pass per *texture* -- two per terrain, up to
+# sixteen -- through the resident pipe, followed by a CPU tail that composites
+# the forty-seven cases and quantizes the sheet to one palette. Same shape as
+# the pixel sheet above and for the same reason: "paint" carries the k-of-2N
+# handover, the load and sampling slices are where the minutes actually go, and
+# the tail gets narrow but non-zero slices because a 47-tile composite plus a
+# median cut is seconds rather than milliseconds.
+#
+# Registered here rather than left to the ``PHASES_IMAGE`` fallback, which is
+# the trap CON-02 documents: an unknown phase maps onto the whole bar, so the
+# last sampling step of the *first* texture would emit 100% and the never-regress
+# creep would pin it there for the rest of the job.
+PHASES_GROUND_SET: dict[str, tuple[float, float]] = {
+    "paint": (0.00, 0.06),
+    "t2i_load": (0.06, 0.14),
+    "t2i_sample": (0.14, 0.88),
+    "compose": (0.88, 0.95),
+    "quantize": (0.95, 1.00),
+}
+
 _PHASES_BY_KIND: dict[str, dict[str, tuple[float, float]]] = {
     "text": PHASES_TEXT,
     "image": PHASES_IMAGE,
@@ -124,6 +144,7 @@ _PHASES_BY_KIND: dict[str, dict[str, tuple[float, float]]] = {
     "sprite_synthesis": PHASES_SPRITE,
     "pixel_sheet": PHASES_PIXEL_SHEET,
     "retexture": PHASES_RETEXTURE,
+    "ground_set": PHASES_GROUND_SET,
 }
 
 

@@ -290,7 +290,7 @@ def test_set_tile_size_undoes_to_the_size_and_objects_it_replaced():
 
 
 def test_set_tile_size_scales_a_polygons_vertices_too():
-    """Four of the seven shapes state an extent as ``w``/``h`` and two state it
+    """Five of the eight shapes state an extent as ``w``/``h`` and two state it
     as vertices. A scale that knew only the first spelling would leave every
     polygon at its old size, which is the one case where the map visibly stops
     matching itself."""
@@ -347,12 +347,9 @@ def test_objects_add_edit_and_remove_by_uid():
 
 
 def test_an_unknown_object_kind_is_refused():
-    """``OBJECT_KINDS`` is what the *editor* can author, and the kind door is
-    still held to it. The document models all seven geometries -- see
-    ``test_shapes.py`` -- but an exotic one is constructed rather than
-    spelled, so a kind string nothing can draw is still a refusal."""
+    """The string constructor covers Tiled's core shapes, and nothing else."""
     with pytest.raises(ValueError):
-        MapObject(uid=new_uid(), kind="ellipse")
+        MapObject(uid=new_uid(), kind="bezier")
 
 
 # --- persistent ids -------------------------------------------------------
@@ -619,6 +616,42 @@ def test_the_maps_own_properties_are_undoable():
     assert doc.properties == {}
     doc.redo()
     assert doc.properties == {"theme": Prop("string", "cave")}
+
+
+def test_map_metadata_is_validated_and_undoable_as_one_step():
+    doc = _doc()
+    depth = len(doc.history)
+    doc.set_map_settings(
+        class_name="Dungeon",
+        parallax_origin=(3, 5),
+        renderorder="left-up",
+        backgroundcolor="#102030",
+        skew_x=8,
+        skew_y=-2,
+    )
+    assert doc.map_settings() == {
+        "class_name": "Dungeon",
+        "parallax_origin": (3.0, 5.0),
+        "renderorder": "left-up",
+        "backgroundcolor": "#102030",
+        "skew_x": 8,
+        "skew_y": -2,
+    }
+    assert len(doc.history) == depth + 1
+    doc.undo()
+    assert doc.map_settings()["class_name"] == ""
+    assert doc.map_settings()["backgroundcolor"] is None
+    doc.redo()
+    assert doc.map_settings()["class_name"] == "Dungeon"
+
+
+def test_invalid_map_metadata_changes_nothing_and_pushes_nothing():
+    doc = _doc()
+    before, depth = doc.map_settings(), len(doc.history)
+    with pytest.raises(ValueError, match="background colour"):
+        doc.set_map_settings(class_name="Would leak", backgroundcolor="purple")
+    assert doc.map_settings() == before
+    assert len(doc.history) == depth
 
 
 def test_a_map_properties_edit_owns_its_dicts():

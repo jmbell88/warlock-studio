@@ -10,9 +10,14 @@ That gathering is :meth:`ProjectionOps._lattice`, and it is the only new thing
 here: six methods repeated ``self.projection, self.width, self.height,
 self.tile_w, self.tile_h`` verbatim, which is five chances apiece to pass tile
 height where tile width goes and get an answer that is wrong only for
-non-square tiles. The document has no ``stagger_axis``/``stagger_index``/
-``hex_side`` fields yet -- M5 seam, see :mod:`.project` -- so ``_lattice``
-leaves those three at :class:`~.project.Lattice`'s own defaults.
+non-square tiles.
+
+``stagger_axis``, ``stagger_index`` and ``hex_side`` are carried on the document
+even though staggered and hexagonal maps remain named Tiled refusals, so the
+shared lattice signature needs no model migration on the day they stop being
+refusals. (This paragraph was left mid-edit as two half-sentences spliced
+together -- "The document has no ... fields are carried even while ..." -- and
+said the opposite of the code in its first clause.)
 """
 
 from __future__ import annotations
@@ -31,7 +36,19 @@ class ProjectionOps:
 
     def _lattice(self: MapDoc) -> Lattice:
         """The one object every :mod:`.project` call takes."""
-        return Lattice(self.projection, self.width, self.height, self.tile_w, self.tile_h)
+        return Lattice(
+            self.projection,
+            self.width,
+            self.height,
+            self.tile_w,
+            self.tile_h,
+            stagger_axis=self.stagger_axis,
+            stagger_index=self.stagger_index,
+            hex_side=self.hex_side,
+            skew_x=self.skew_x,
+            skew_y=self.skew_y,
+            render_order=self.renderorder,
+        )
 
     @property
     def isometric(self: MapDoc) -> bool:

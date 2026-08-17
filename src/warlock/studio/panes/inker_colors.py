@@ -55,10 +55,10 @@ def draw(ctx: Any) -> None:
     # lands on whatever the pane above drew.
     manual_render.help_button(ctx, "inker-colors")
 
-    changed, value = imgui.color_edit4("Foreground", _vec(state.fg), FLAGS)
+    changed, value = controls.color_edit4("Foreground", _vec(state.fg), FLAGS)
     if changed:
         state.fg = _to_rgba(value)
-    changed, value = imgui.color_edit4("Background", _vec(state.bg), FLAGS)
+    changed, value = controls.color_edit4("Background", _vec(state.bg), FLAGS)
     if changed:
         state.bg = _to_rgba(value)
 
@@ -182,7 +182,7 @@ def _slots(ctx: Any, state: Any, tab: Any) -> None:
     imgui.new_line()
 
     slot = state.palette_slot
-    changed, value = imgui.color_edit4("Slot", _vec(palette[slot]), FLAGS)
+    changed, value = controls.color_edit4("Slot", _vec(palette[slot]), FLAGS)
     if changed and doc.recolour_slot(slot, _to_rgba(value)):
         state.palette_usage = None
     if controls.button("+ from colour") and doc.add_slot(state.fg):

@@ -78,6 +78,133 @@ def _capture(app, path: Path) -> None:
     print(f"  {path.name}", flush=True)
 
 
+def _close_popups(app) -> None:
+    """Reset every transient surface after an isolated popup capture."""
+    import pygame
+    from imgui_bundle import imgui
+
+    from warlock.studio import matte_preview, plotter_mode
+
+    ctx = app.app_ctx
+    while ctx.confirms.pending is not None:
+        ctx.confirms.dismiss()
+    while ctx.prompts.pending is not None:
+        ctx.prompts.dismiss()
+    matte_preview.close(ctx)
+    plotter_mode.ensure(ctx).setup_pending = False
+    # Guarded. ``close_popup_to_level`` walks the open-popup stack and trips an
+    # IM_ASSERT when there is nothing on it, and the last capture of the run
+    # reaches here with the stack already empty -- so the whole ``--popups``
+    # pass aborted on its final step, *after* writing its images, which is why
+    # it read as a crash with a complete-looking output directory. The public
+    # any-popup query is the cheap way to ask before walking.
+    any_popup = (
+        imgui.PopupFlags_.any_popup_id.value | imgui.PopupFlags_.any_popup_level.value
+    )
+    if imgui.is_popup_open("", any_popup):
+        imgui.internal.close_popup_to_level(0, True)
+    # Let popup owners observe the close before another owner opens one under
+    # the same host window.
+    app.frame(1.0 / 60.0)
+    pygame.display.flip()
+
+
+def _seed_matte(app) -> None:
+    """Put a deterministic, already-computed matte in the model modal."""
+    from PIL import Image, ImageDraw
+
+    from warlock.service.matte import Preview, stamp_for
+    from warlock.studio import matte_preview
+
+    ctx = app.app_ctx
+    job_id = ctx.svc.store.create(
+        "text",
+        "a hooded adventurer standing",
+        {"seed": 7},
+        stage="reference",
+        status="done",
+    )
+    job_dir = ctx.svc.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    Image.new("RGBA", (320, 320), (90, 110, 150, 255)).save(job_dir / "input.png")
+
+    preview = Image.new("RGB", (320, 320), (180, 180, 180))
+    draw = ImageDraw.Draw(preview)
+    cell = 16
+    for y in range(0, 320, cell):
+        for x in range(0, 320, cell):
+            if (x // cell + y // cell) % 2:
+                draw.rectangle((x, y, x + cell - 1, y + cell - 1), fill=(140, 140, 140))
+    draw.ellipse((72, 24, 248, 306), fill=(82, 103, 148))
+    draw.ellipse((118, 42, 202, 132), fill=(198, 171, 145))
+
+    stamp = stamp_for(job_dir / "input.png")
+    result = Preview(
+        job_id=job_id,
+        stamp=stamp,
+        width=preview.width,
+        height=preview.height,
+        rgb=preview.tobytes(),
+        source="birefnet",
+        approved=False,
+        coverage=0.47,
+        warnings=("Check the fine edges around the hood before building.",),
+    )
+    state = matte_preview.open_for(ctx, job_id, {"mesh_seed": 11})
+    state.stamp = stamp
+    state.preview = result
+    state.cache[job_id] = result
+
+
+def _capture_popups(app, out: Path, theme_name: str) -> None:
+    """Capture every full-size transient container, including model flow."""
+    from warlock.studio import create_stages, dialogs, plotter_mode, rail
+
+    ctx = app.app_ctx
+    ctx.state.mode = create_stages.MODE
+    ctx.state.create_stage = "mesh"
+
+    rail.request("diagnostics")
+    _capture(app, out / f"{theme_name}-popup-diagnostics.png")
+    _close_popups(app)
+
+    ctx.confirms.ask(
+        dialogs.Confirm(
+            title="Delete generated model?",
+            message=(
+                "The generated model and its derived files will be removed. "
+                "The source reference is kept."
+            ),
+            confirm_label="Delete",
+            cancel_label="Keep",
+        )
+    )
+    _capture(app, out / f"{theme_name}-modal-confirm.png")
+    _close_popups(app)
+
+    ctx.prompts.ask(
+        dialogs.Prompt(title="Name generated model", label="Name", value="Hooded adventurer")
+    )
+    _capture(app, out / f"{theme_name}-modal-prompt.png")
+    _close_popups(app)
+
+    _seed_matte(app)
+    _capture(app, out / f"{theme_name}-modal-model-matte.png")
+    _close_popups(app)
+
+    # Into Plotter first. ``setup_pending`` is drawn by the *plotter* pane, and
+    # this function opens on Create -- so the new-map modal was raised on a
+    # frame nothing drew it in, and the capture was an ordinary picture of the
+    # Create mode under a filename claiming to be a modal. A screenshot that
+    # silently shows the wrong screen is worse than a missing one, because
+    # nothing about the file says so.
+    ctx.state.mode = "plotter"
+    plotter_mode.ask_new_document(ctx)
+    _capture(app, out / f"{theme_name}-modal-new-map.png")
+    _close_popups(app)
+    ctx.state.mode = create_stages.MODE
+
+
 def _seed(app) -> None:
     """Open a canvas and a model, so the panes that need one are not empty.
 
@@ -311,6 +438,14 @@ def main() -> int:
         help="also capture the developer component gallery",
     )
     ap.add_argument(
+        "--popups",
+        action="store_true",
+        help=(
+            "also capture diagnostics, confirm and prompt containers, the model "
+            "matte modal, and Plotter's new-map modal"
+        ),
+    )
+    ap.add_argument(
         "--scale",
         type=float,
         default=None,
@@ -448,6 +583,8 @@ def main() -> int:
                 component_gallery.request()
                 _capture(app, args.out / f"{name}-components.png")
                 imgui.internal.close_popups_except_modals()
+            if args.popups:
+                _capture_popups(app, args.out, name)
     finally:
         app.teardown()
     return 0

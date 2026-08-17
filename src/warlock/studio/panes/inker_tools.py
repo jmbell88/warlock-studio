@@ -542,7 +542,7 @@ def _gradient_stops(state: Any) -> None:
         if changed:
             state.gradient_stops[index] = (float(value), colour)
         imgui.same_line()
-        edited, rgba = imgui.color_edit4(
+        edited, rgba = controls.color_edit4(
             "##col",
             [c / 255.0 for c in colour],
             imgui.ColorEditFlags_.no_inputs.value | imgui.ColorEditFlags_.alpha_bar.value,

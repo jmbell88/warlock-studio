@@ -455,6 +455,7 @@ def new_popup(ctx: Any) -> None:
     """
     if not imgui.begin_popup("new-canvas"):
         return
+    widgets.popup_chrome(_imgui=imgui)
     imgui.text("New canvas")
     for width, height in inker_mode.NEW_PRESETS:
         if controls.button(f"{width} x {height}", (sp(160), 0)):
@@ -1410,6 +1411,7 @@ def _text_popup(ctx: Any, state: Any, tab: Any) -> None:
     """
     if not imgui.begin_popup(TEXT_POPUP):
         return
+    widgets.popup_chrome(_imgui=imgui)
     state.text_buffer = widgets.multiline(
         "##inkertext", state.text_buffer, sp(TEXT_BOX_HEIGHT), TEXT_MAX
     )

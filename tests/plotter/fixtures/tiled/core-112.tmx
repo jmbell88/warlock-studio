@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<map version="1.10" tiledversion="1.12.2" class="CoreMap" orientation="orthogonal" renderorder="left-up" width="4" height="4" tilewidth="16" tileheight="16" infinite="0" parallaxoriginx="3" parallaxoriginy="5" backgroundcolor="#182030" nextlayerid="6" nextobjectid="9">
+ <properties>
+  <property name="inventory" type="list">
+   <item type="int" value="2"/>
+   <item value="torch"/>
+   <item type="list">
+    <item type="bool" value="true"/>
+   </item>
+  </property>
+ </properties>
+ <tileset firstgid="1" source="core-1.12.tsx"/>
+ <group id="1" name="World" class="WorldGroup" opacity="0.9" tintcolor="#e0ffffff" offsetx="2" offsety="1" parallaxx="0.75" parallaxy="0.8" mode="multiply">
+  <layer id="2" name="Ground" class="Floor" width="4" height="4" mode="screen">
+   <properties>
+    <property name="walkable" type="bool" value="true"/>
+   </properties>
+   <data encoding="csv">
+1,2,0,0,
+0,2147483651,0,0,
+0,0,1073741828,0,
+0,0,0,536870913
+</data>
+  </layer>
+  <objectgroup color="#ff55aa" draworder="index" id="3" name="Objects" class="Gameplay" mode="overlay">
+   <object id="1" name="rect" type="Trigger" x="2" y="3" width="12" height="8" rotation="15" opacity="0.75"/>
+   <object id="2" name="point" x="20" y="6">
+    <point/>
+   </object>
+   <object id="3" name="ellipse" x="25" y="3" width="10" height="8">
+    <ellipse/>
+   </object>
+   <object id="4" name="capsule" x="38" y="3" width="10" height="18">
+    <capsule/>
+   </object>
+   <object id="5" name="polygon" x="5" y="30">
+    <polygon points="0,0 8,0 4,7"/>
+   </object>
+   <object id="6" name="polyline" x="20" y="30">
+    <polyline points="0,0 6,4 10,0"/>
+   </object>
+   <object id="7" name="tile" gid="2" x="35" y="45" width="16" height="16" rotation="12"/>
+   <object id="8" name="text" x="3" y="48" width="28" height="14">
+    <text fontfamily="Arial" pixelsize="11" color="#336699" bold="1" halign="center">Hello</text>
+   </object>
+  </objectgroup>
+ </group>
+ <imagelayer id="4" name="Backdrop" opacity="0.35" offsetx="1" offsety="2" mode="add" repeatx="1" repeaty="1">
+  <image source="basic.png" width="32" height="32"/>
+ </imagelayer>
+ <layer id="5" name="Top" width="4" height="4">
+  <data encoding="csv">
+0,0,0,0,
+0,0,0,0,
+0,0,0,0,
+0,0,0,1
+</data>
+ </layer>
+</map>

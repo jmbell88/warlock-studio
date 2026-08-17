@@ -92,6 +92,29 @@ set is what makes a map isometric, and it happens in the same undo step as the t
 Once anything is painted the choice is fixed, because a set drawn for one lattice would paint the
 wrong shape into every cell already drawn for the other.
 
+### Painting a ground set with AI
+
+**Paint with AI**, inside the same section, builds the same 47 cells out of generated art instead of
+flat colour. Give the set a **theme** — what the whole place is made of — and, per terrain, what its
+**surface** and its **rim** are. Leave a field blank and the terrain's own name is used; the greyed
+suggestion under the rim field is exactly the string an empty one means.
+
+Two textures are generated per terrain: the surface and the rim. Each is painted seamless at full
+size and then reduced to your tile size, which is what lets a painted field carry its pattern from
+one cell into the next instead of repeating a single stamped tile. The rim is drawn along every
+exposed edge with real thickness, so water against stone reads as a bank rather than as a line.
+
+It is queued like any other job and takes a few minutes — two generations per terrain, one after
+another. The map stays editable while it paints, and the set arrives as one undo step with the
+terrain brush already pointed at it. Cancel from the progress row and nothing is published.
+
+The set is painted **for this map**, at its tile size and projection. Resize the map while it is
+painting and the finished atlas is refused by name rather than sliced wrong; paint another. It also
+lands in the library like any other job, so closing the tab does not lose it.
+
+Ground sets need the SDXL checkpoint and the pixel-art LoRA. If either is missing, the section says
+so and offers to install them rather than letting the button fail.
+
 ### Polishing an atlas in Inker
 
 **Polish in Inker** opens a tileset's atlas as an ordinary drawing — one flat layer, not sliced into
@@ -103,12 +126,16 @@ cell keeps its tile and simply redraws with the new art, because the numbering i
 atlas whose size changed is refused by name rather than accepted — the roles are positional, so a
 cropped atlas is one whose tile 93 is no longer the tile the map thinks it is.
 
-## Isometric maps
+## Isometric and oblique maps
 
-A map is drawn on one of two lattices, and which one is a property of the map. On an **isometric**
+A map is drawn on one of three lattices, and which one is a property of the map. On an **isometric**
 map a cell is a 2:1 diamond, the grid follows the two lattice directions rather than the screen
 axes, and the status line under the canvas shows the cell under the pointer — which is the only
 thing that reliably answers "am I about to click the diamond I mean".
+
+An **oblique** map is the square lattice sheared: each cell keeps its size and the grid leans by the
+map's skew. It is Plotter's own projection rather than one of Tiled's, so an oblique map exported to
+`.tmx` will not open in Tiled — see "What Plotter writes that Tiled does not read" below.
 
 Everything else is unchanged. The same tools paint, the same layers stack, and the flat render an
 export produces places a cell exactly where the canvas does.
@@ -314,18 +341,33 @@ Plotter does not model is **refused by name** rather than loaded with half of it
 because the drop is invisible right up to the moment you save, at which point the other half is
 gone. The message says which feature and what to do about it.
 
-Refused: staggered and hexagonal maps; infinite (chunked) maps; group and image layers;
-ellipse, polygon, polyline and text objects; tile objects and object templates; rotated objects;
-image-collection tilesets; Wang sets that are not one of Plotter's own terrain sets, and Tiled's
-older terrain types; per-tile animation, properties and collision shapes; zstd-compressed
-layer data; layer pixel offsets; and custom properties of a type outside Tiled's own set.
+Refused: staggered and hexagonal maps; infinite (chunked) maps; object templates; image-collection
+tilesets and embedded tileset images; external `.tsj` tilesets; Wang sets that are not one of
+Plotter's own terrain sets, and Tiled's older terrain types; per-tile animation, properties,
+collision shapes, class, probability and terrain assignment; tileset object alignment, render size,
+fill mode, background colour and tile offset; zstd-compressed layer data; deprecated tile-space
+layer coordinates and image-layer transparent colours; and custom properties of a type outside the
+set Plotter models.
 
-A *hidden* object is modelled rather than refused — hiding something changes nothing about where it
-is. A *rotated* one is refused, because an unrotated outline drawn for a rotated object is a wrong
-picture, and a wrong picture is worse than a refusal.
+Group layers, image layers, layer offsets, tints, parallax and classes, every one of the eight
+object shapes, object rotation and object templates' *contents* all load — several of those were on
+the refusal list in earlier versions and left it as the editor learned to draw them. A *hidden*
+object is modelled rather than refused: hiding something changes nothing about where it is.
 
-The full list of what Plotter reads, refuses and preserves is kept in `docs/PLOTTER_COMPAT.md`,
-checked against the code on every test run.
+### What Plotter writes that Tiled does not read
+
+The document model has grown a handful of things Tiled has no spelling for, and they go into a
+`.tmx` or `.tmj` anyway because losing them on export would be worse. They are **Warlock dialect**:
+an oblique projection with its skew, a per-layer blend mode, a per-object opacity, the capsule
+object shape, and list-valued custom properties. A file carrying any of them opens in Plotter and
+will not open cleanly in Tiled.
+
+If a map has to go to Tiled, keep it to the features in the round-trip list. If it only has to come
+back here, `.wmap` holds everything without qualification — which is why exporting deliberately
+does not retarget `Ctrl+S`.
+
+The full list of what Plotter reads, refuses, preserves and writes as dialect is kept in
+`docs/PLOTTER_COMPAT.md`, checked against the code on every test run.
 
 ## Sending a map to the library
 

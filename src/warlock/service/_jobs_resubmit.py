@@ -77,6 +77,21 @@ def rerun_job(
     check_seed("seed", seed)
     source = svc.require_job(job_id)
 
+    if source["kind"] == "ground_set":
+        # Refused by name rather than left to fall through. A ground set's
+        # params carry a whole ``ground`` block -- the terrains, the geometry,
+        # the band -- that this function knows nothing about and would copy
+        # verbatim while changing the one seed every texture is derived from;
+        # and the copy would skip ``create_ground_set``'s weights admission
+        # entirely, which is the check that stops a set finishing as sixteen
+        # un-styled textures. The Plotter section is the door, and it is where
+        # the geometry can be checked against the map that will adopt it.
+        raise Invalid(
+            "a ground set is re-painted from Plotter's Generate section, where "
+            "it can be matched to the map that will use it",
+            field="mode",
+        )
+
     if mode == "remesh" and source["stage"] == "tile":
         # The other door onto a reconstruction, and it has to be shut for the
         # same reason promote_to_model's is: a remesh is an image job at stage

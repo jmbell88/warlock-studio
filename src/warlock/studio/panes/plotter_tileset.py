@@ -24,7 +24,7 @@ from typing import Any
 
 import numpy as np
 
-from .. import icons, plotter_mode, widgets
+from .. import controls, icons, plotter_mode, widgets
 from ..manual import render as manual_render
 from ..plotter import gid as gidlib
 from ..tokens import sp
@@ -45,6 +45,10 @@ def draw(ctx: Any) -> None:
 
     doc = tab.doc
     disabled = tab.busy
+    # Before anything is drawn, and outside the collapsing generator header: a
+    # ground set that finished while the header was shut must still be adopted,
+    # and the header is shut by default.
+    ground_watch(ctx, tab)
 
     def add_button() -> None:
         if widgets.disabled_button(f"{icons.PLUS} Add from a file...", not disabled, (-1, 0)):
@@ -92,6 +96,63 @@ def draw(ctx: Any) -> None:
     _inker_row(ctx, state, tab, index)
     imgui.dummy((0, 8))
     _generator(ctx, state, tab)
+
+
+#: How many consecutive frames ``ground_watch`` tolerates its job being absent
+#: from the jobs cache before it gives up. Ten seconds at 60 fps -- long enough
+#: that an ordinary cache refresh window cannot trip it, short enough that the
+#: user is told while they still remember asking.
+GROUND_WATCH_MISSES = 600
+
+
+def ground_watch(ctx: Any, tab: Any) -> None:
+    """Notice that this tab's ground-set job has finished, and adopt it.
+
+    A frame-thread poll of the job cache rather than a task callback, because
+    the job is minutes long and outlives any task: nothing on the task layer is
+    still waiting when it lands. Cheap by construction -- one dict lookup per
+    frame while a paint is in flight, and nothing at all otherwise.
+
+    **The watch is cleared before the adoption is submitted.** A refused
+    adoption -- a geometry mismatch, a tab whose map was resized -- must be a
+    refusal, not a refusal sixty times a second.
+
+    Deliberately only while the user is in Plotter: adoption mutates the
+    document and pushes an undo step. A job that finishes while they are
+    elsewhere lands in the library exactly like every other job, and the map
+    picks it up the next time this pane draws.
+    """
+    job_id = getattr(tab, "ground_job", None)
+    if not job_id:
+        return
+    row = ctx.cache.get(job_id)
+    if row is None:
+        # Bounded rather than plumbed through a second lookup. ``ctx.cache`` is
+        # one page of the newest jobs and this pane may not touch the store on
+        # the frame thread, so a row that has fallen off the page is a row this
+        # function can never see again -- and the honest answer is the one the
+        # docstring already gives for a job that finishes elsewhere: it is in
+        # the library like every other job.
+        tab.ground_misses += 1
+        if tab.ground_misses > GROUND_WATCH_MISSES:
+            tab.ground_job = None
+            tab.ground_misses = 0
+            ctx.toast(
+                "That ground set is no longer in the recent job list -- open it "
+                "from the Library to use it as a tileset."
+            )
+        return
+    tab.ground_misses = 0
+    status = str(row.get("status") or "")
+    if status in ("queued", "running"):
+        return
+    tab.ground_job = None
+    if status == "done":
+        plotter_mode.adopt_ground_set(ctx, row)
+    elif status == "cancelled":
+        ctx.toast("That ground set was cancelled.")
+    else:
+        ctx.toast(f"The ground set failed: {row.get('error') or 'unknown error'}", "error")
 
 
 def _picker(ctx: Any, state: Any, ref: Any, index: int, uid: str) -> None:
@@ -240,8 +301,19 @@ def _generator(ctx: Any, state: Any, tab: Any) -> None:
         form = {
             "for": stamp,
             "projection": doc.projection,
+            "theme": "",
+            "colors": "32",
             "rows": [
-                {"name": entry.name, "colour": [part / 255.0 for part in entry.fill[:3]]}
+                {
+                    "name": entry.name,
+                    "colour": [part / 255.0 for part in entry.fill[:3]],
+                    # The AI half's two fields, carried on the same row: a
+                    # terrain is one thing, and a second row list keyed by name
+                    # is how the two come to disagree about which terrain is
+                    # which.
+                    "material": "",
+                    "edge": "",
+                }
                 for entry in tilegen.DEFAULT_TERRAINS
             ],
         }
@@ -288,7 +360,7 @@ def _generator(ctx: Any, state: Any, tab: Any) -> None:
         imgui.set_next_item_width(sp(120))
         row["name"] = widgets.input_text("##name", row["name"], max_length=24)
         imgui.same_line()
-        changed, colour = imgui.color_edit3(
+        changed, colour = controls.color_edit3(
             "##fill",
             row["colour"],
             imgui.ColorEditFlags_.no_inputs.value | imgui.ColorEditFlags_.no_label.value,
@@ -305,7 +377,14 @@ def _generator(ctx: Any, state: Any, tab: Any) -> None:
     if widgets.disabled_button(
         f"{icons.PLUS} Add a terrain", len(form["rows"]) < tilegen.MAX_TERRAINS, (-1, 0)
     ):
-        form["rows"].append({"name": f"Terrain {len(form['rows']) + 1}", "colour": [0.5, 0.5, 0.5]})
+        form["rows"].append(
+            {
+                "name": f"Terrain {len(form['rows']) + 1}",
+                "colour": [0.5, 0.5, 0.5],
+                "material": "",
+                "edge": "",
+            }
+        )
 
     names = [row["name"].strip() for row in form["rows"]]
     problem = ""
@@ -328,6 +407,130 @@ def _generator(ctx: Any, state: Any, tab: Any) -> None:
                 name="Ground",
             ),
         )
+
+    imgui.dummy((0, 8))
+    _ai_ground(ctx, tab, form, problem)
+
+
+def _ai_ground(ctx: Any, tab: Any, form: dict, problem: str) -> None:
+    """The same forty-seven cases, painted by SDXL instead of filled flat.
+
+    A sub-block of the generator rather than a section of its own, because it
+    answers the *same* question -- "make me a ground set" -- with a slower and
+    better answer. The flat path above stays exactly as it was: it is the
+    offline answer, it costs nothing, and its bytes are test-pinned.
+
+    Nothing here queues while the tab already has a paint in flight: the pending
+    row replaces the button, so the duplicate-key refusal is never the thing the
+    user meets.
+    """
+    from imgui_bundle import imgui
+
+    from ...service import grounds as svc_grounds
+    from ...service import jobs as svc_jobs
+    from ..plotter import blob
+    from . import model_gate
+
+    widgets.section("Paint with AI")
+    widgets.muted_wrapped(
+        "Two seamless textures per terrain -- a surface and its rim -- painted "
+        "at full size, reduced to the tile, and composited into the same "
+        f"{blob.TILE_COUNT} cases. Queued like any other job."
+    )
+    # The running job comes first, *above* the model gate. The gate answers
+    # "can this host start one", which is a question about a paint that has not
+    # begun -- and it draws a download offer and returns, so a row going missing
+    # from the registry while a set was painting took the progress bar and the
+    # only Cancel button off screen with it, leaving a job the user could see no
+    # way to stop.
+    pending = getattr(tab, "ground_job", None)
+    if pending:
+        progress = ctx.runtime.progress(pending)
+        widgets.progress_bar(float((progress or {}).get("percent") or 0.0))
+        widgets.muted(str((progress or {}).get("label") or "queued"))
+        if widgets.disabled_button(f"{icons.X} Cancel", True, (-1, 0)):
+            ctx.submit(f"cancel:{pending}", svc_jobs.cancel_job, ctx.svc, pending)
+        return
+
+    if model_gate.draw(ctx, svc_grounds.GROUND_ROWS, what="Painting a ground set"):
+        return
+
+    widgets.field_label("Theme")
+    imgui.set_next_item_width(-1)
+    form["theme"] = widgets.input_text(
+        "##theme", form.get("theme", ""), max_length=120, hint="a damp stone dungeon"
+    )
+    form["colors"] = widgets.labeled_combo(
+        "Colours",
+        str(form.get("colors", "32")),
+        [(str(count), f"{count} colours") for count in svc_grounds.COLOR_CHOICES],
+    )
+
+    imgui.dummy((0, 4))
+    widgets.muted("What each terrain is made of. Blank means the terrain's name.")
+    for index, row in enumerate(form["rows"]):
+        imgui.push_id(1000 + index)
+        material = row.get("material", "")
+        widgets.field_label(row["name"].strip() or f"Terrain {index + 1}")
+        imgui.set_next_item_width(-1)
+        row["material"] = widgets.input_text(
+            "##material", material, max_length=120,
+            hint=row["name"].strip().lower() or "surface",
+        )
+        imgui.set_next_item_width(-1)
+        row["edge"] = widgets.input_text(
+            "##edge", row.get("edge", ""), max_length=120,
+            # The placeholder is the string that would actually be used, not a
+            # description of it: a greyed-out suggestion that is not what the
+            # absent value means is a form that lies. Read from ``row`` and not
+            # from the ``material`` local captured above the field, which is
+            # last frame's value -- so the hint trailed the text being typed by
+            # one frame and the comment above it was untrue of the line below.
+            hint=groundtex_edge_hint(row["material"] or row["name"]),
+        )
+        imgui.pop_id()
+
+    theme = form.get("theme", "").strip()
+    reason = problem or ("" if theme else "A theme says what the whole set is made of.")
+    if reason and not problem:
+        widgets.hint_text(reason)
+    widgets.cost_note(
+        f"{len(form['rows']) * 2} image generations, one after another on the GPU. "
+        "The map stays editable while it paints."
+    )
+    if widgets.disabled_button(
+        f"{icons.WAND} Paint with AI", not tab.busy and not reason, (-1, 0)
+    ):
+        plotter_mode.paint_ground_set(
+            ctx,
+            theme=theme,
+            rows=[
+                {
+                    "name": row["name"].strip(),
+                    "material": row.get("material", "").strip(),
+                    "edge": row.get("edge", "").strip(),
+                    "color": [
+                        *(int(round(part * 255)) for part in row["colour"]),
+                        255,
+                    ],
+                }
+                for row in form["rows"]
+            ],
+            colors=int(form.get("colors", "32")),
+            border=0,
+        )
+
+
+def groundtex_edge_hint(material: str) -> str:
+    """The border material's placeholder, from the pipeline's own default.
+
+    Read from ``pipelines.ground`` rather than spelled again here, so the
+    greyed-out suggestion is character-for-character the string the worker would
+    use for an empty field.
+    """
+    from ...pipelines import ground as groundlib
+
+    return groundlib.default_edge(material)
 
 
 def _spec_of(row: dict) -> Any:

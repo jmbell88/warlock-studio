@@ -242,6 +242,7 @@ def _canvas_ops(ctx: Any, tab: Any) -> None:
 def _resize_popup(ctx: Any, tab: Any) -> None:
     if not imgui.begin_popup("inker-resize"):
         return
+    widgets.popup_chrome(_imgui=imgui)
     key = f"inker_resize:{tab.uid}"
     width, height = ctx.state.preview.get(key) or tab.doc.size
     imgui.set_next_item_width(sp(90))
@@ -391,7 +392,7 @@ def _filter_control(state: Any, values: dict[str, Any], key: str) -> None:
         # ``inker_colors``' own conversions rather than a second pair here: the
         # rounding between imgui's floats and the 8-bit tuple the engine writes
         # with is a rule, and two copies of a rule are one disagreement waiting.
-        changed, value = imgui.color_edit4(
+        changed, value = controls.color_edit4(
             f"{label}##{key}", inker_colors._vec(tuple(values[key])), inker_colors.FLAGS
         )
         if changed:
@@ -442,6 +443,7 @@ def _filter_popup(ctx: Any, tab: Any) -> None:
             state.filter_open = False
             tab.doc.cancel_filter()
         return
+    widgets.popup_chrome(_imgui=imgui)
 
     name = widgets.combo(
         "Filter", state.filter_name, [(key, key) for key in filters.FILTERS]
@@ -577,6 +579,7 @@ def _sheet_import_popup(ctx: Any, state: Any) -> None:
             state.sheet_import_open = False
             state.sheet_import = None
         return
+    widgets.popup_chrome(_imgui=imgui)
     if state.sheet_import is None:
         imgui.end_popup()
         return
@@ -704,6 +707,7 @@ def convert_popup(ctx: Any, tab: Any) -> None:
     if not imgui.begin_popup(CONVERT_POPUP):
         inker_mode.end_convert_session(ctx)
         return
+    widgets.popup_chrome(_imgui=imgui)
     if owner is None or tab is None or owner.uid != tab.uid:
         inker_mode.end_convert_session(ctx)
         imgui.close_current_popup()

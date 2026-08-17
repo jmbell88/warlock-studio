@@ -46,6 +46,7 @@ def draw(ctx: Any, view: Any) -> None:
         imgui.open_popup(POPUP)
 
     if imgui.begin_popup(POPUP):
+        widgets.popup_chrome(_imgui=imgui)
         _rows(ctx, state, tab, tab.doc)
         imgui.end_popup()
     params_popup(ctx, state, tab)
@@ -108,6 +109,7 @@ def params_popup(ctx: Any, state: Any, tab: Any) -> None:
         imgui.open_popup(PARAM_POPUP)
     if not imgui.begin_popup(PARAM_POPUP):
         return
+    widgets.popup_chrome(_imgui=imgui)
     values = state.op_params.setdefault(op.name, clay_ops.defaults_for(op))
     imgui.text(op.label.rstrip("."))
     imgui.separator()

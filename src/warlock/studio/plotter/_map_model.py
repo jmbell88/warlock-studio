@@ -19,7 +19,7 @@ the one method that looks like an exception and is not -- it is what a layer
 The ``Shape`` union lives here too, beside the object that carries one, rather
 than in a module of its own. It is data with no behaviour and exactly one
 consumer, and this package's import set is pinned file by file
-(``tests/plotter/test_plotter_imports.py``): a new module for seven frozen
+(``tests/plotter/test_plotter_imports.py``): a new module for eight frozen
 dataclasses would buy a roster entry and a second place to look for what an
 object is.
 
@@ -43,13 +43,19 @@ from .tileset import RGBA, frozen_rgba, rgba_colour
 _uids = itertools.count(1)
 
 # What the *editor* can author, which is not the same question as what an
-# object may be. The document models all seven of Tiled's geometries (see
-# ``Shape`` below); this is the subset the canvas has a gesture for and the
-# only one the ``kind=`` compat constructor accepts. An ellipse is
-# *constructed* -- ``MapObject(shape=Ellipse(...))`` -- never spelled, which
-# keeps "a kind string nothing can draw" a refusal while the model stays
-# complete.
-OBJECT_KINDS = ("rect", "point")
+# object may be. The document and canvas model all eight of Tiled's core
+# geometries (see ``Shape`` below); this is also the set accepted by the
+# ``kind=`` compatibility constructor.
+OBJECT_KINDS = (
+    "rect",
+    "point",
+    "ellipse",
+    "capsule",
+    "polygon",
+    "polyline",
+    "tile",
+    "text",
+)
 
 # How an object layer asks to be drawn. Tiled's two, spelled its way.
 DRAW_ORDERS = ("topdown", "index")
@@ -83,7 +89,7 @@ def _dimension(value: Any, what: str) -> int:
 
 # --- what an object's geometry is ---------------------------------------------
 #
-# Tiled's seven object geometries as a tagged union of **frozen** dataclasses,
+# Tiled's eight object geometries as a tagged union of **frozen** dataclasses,
 # and frozen is the load-bearing word. An object edit snapshots the object, a
 # drag snapshots it once per frame, and undo holds both sides of every step: a
 # mutable shape would have to be deep-copied at each of those points or the
@@ -146,6 +152,19 @@ class Ellipse:
 
     def __post_init__(self) -> None:
         width, height = _size(self.w, self.h, "ellipse")
+        object.__setattr__(self, "w", width)
+        object.__setattr__(self, "h", height)
+
+
+@dataclass(frozen=True)
+class Capsule:
+    """Tiled 1.12's capsule, bounded by the object's width and height."""
+
+    w: float = 0.0
+    h: float = 0.0
+
+    def __post_init__(self) -> None:
+        width, height = _size(self.w, self.h, "capsule")
         object.__setattr__(self, "w", width)
         object.__setattr__(self, "h", height)
 
@@ -218,7 +237,7 @@ class Text:
         object.__setattr__(self, "h", height)
 
 
-Shape = Rect | Point | Ellipse | Polygon | Polyline | TileShape | Text
+Shape = Rect | Point | Ellipse | Capsule | Polygon | Polyline | TileShape | Text
 
 #: Every shape and the name it answers to, which is Tiled's name for it. The
 #: tuple form (rather than ``type.__name__.lower()``) is what lets
@@ -229,6 +248,7 @@ SHAPE_KINDS: tuple[tuple[type, str], ...] = (
     (Rect, "rect"),
     (Point, "point"),
     (Ellipse, "ellipse"),
+    (Capsule, "capsule"),
     (Polygon, "polygon"),
     (Polyline, "polyline"),
     (TileShape, "tile"),
@@ -289,18 +309,24 @@ def scaled_shape(shape: Shape, scale_x: float, scale_y: float) -> Shape:
 
 
 def shape_for_kind(kind: str, w: Any = 0.0, h: Any = 0.0) -> Shape:
-    """The compat door: a shape from the two kinds the editor can author.
-
-    Deliberately narrower than :data:`SHAPE_KINDS`. The other five cannot be
-    built from a kind and a size at all -- a polygon needs vertices, a tile
-    object needs a gid -- and accepting the two that *could* be
-    (``ellipse``/``text``) would leave a string parameter as a second way to
-    say something the ``shape=`` argument already says exactly.
-    """
+    """A useful default geometry for every shape the editor can author."""
+    width, height = _size(w, h, f"{kind} object")
     if kind == "rect":
-        return Rect(*_size(w, h, "rect"))
+        return Rect(width, height)
     if kind == "point":
         return Point()
+    if kind == "ellipse":
+        return Ellipse(width, height)
+    if kind == "capsule":
+        return Capsule(width, height)
+    if kind == "polygon":
+        return Polygon(((0.0, 0.0), (width, 0.0), (width, height), (0.0, height)))
+    if kind == "polyline":
+        return Polyline(((0.0, 0.0), (width, height)))
+    if kind == "tile":
+        return TileShape(gid=0, w=width, h=height)
+    if kind == "text":
+        return Text("Text", width, height)
     raise ValueError(f"an object is one of {list(OBJECT_KINDS)}, not {kind!r}")
 
 
@@ -355,12 +381,12 @@ class MapObject:
     # because a hidden object is still exactly where it is -- the picture stays
     # right, and drawing it faintly is one branch in the canvas.
     visible: bool
+    # Tiled 1.12 lets each object fade independently of its layer. Kept as a
+    # scalar on the object because it affects tile/text rendering but not the
+    # geometry used for hit testing.
+    opacity: float
     properties: dict[str, Any]
-    # Degrees clockwise about the object's origin, Tiled's own sense. The
-    # document models it; :mod:`.tmx` refuses a rotated object at *both* doors
-    # -- an unrotated outline drawn for a rotated object is a wrong picture,
-    # and an export that dropped the angle would be a wrong file. This is the
-    # field those refusals will be flipped onto.
+    # Degrees clockwise about the object's origin, Tiled's own sense.
     rotation: float
     shape: Shape
 
@@ -375,6 +401,7 @@ class MapObject:
         h: float = 0.0,
         obj_class: str = "",
         visible: bool = True,
+        opacity: float = 1.0,
         properties: dict[str, Any] | None = None,
         rotation: float = 0.0,
         shape: Shape | None = None,
@@ -395,6 +422,7 @@ class MapObject:
         self.y = y
         self.obj_class = obj_class
         self.visible = visible
+        self.opacity = opacity
         self.properties = {} if properties is None else properties
         self.rotation = rotation
         if shape is None:
@@ -413,6 +441,9 @@ class MapObject:
             )
         self.x, self.y = float(self.x), float(self.y)
         self.rotation = float(self.rotation)
+        self.opacity = float(self.opacity)
+        if not 0.0 <= self.opacity <= 1.0:
+            raise ValueError("an object's opacity must be between 0 and 1")
 
     @property
     def kind(self) -> str:
@@ -448,6 +479,7 @@ class MapObject:
             "shape": self.shape,
             "obj_class": self.obj_class,
             "visible": bool(self.visible),
+            "opacity": float(self.opacity),
             "properties": dict(self.properties),
         }
 
@@ -460,8 +492,7 @@ def merged_object_values(before: dict[str, Any], values: dict[str, Any]) -> dict
     go through it rather than each spreading a dict. The rules:
 
     * ``shape=`` says it exactly, and may not arrive with ``kind``/``w``/``h``;
-    * ``kind=`` rebuilds the shape (and is still held to the two kinds the
-      editor can author);
+    * ``kind=`` rebuilds a useful default of that core shape;
     * ``w``/``h`` alone resize whatever shape is already there;
     * and the ``kind``/``w``/``h`` keys of the result are then re-derived from
       the shape that won, so the dict handed to an edit is self-consistent
@@ -488,6 +519,10 @@ def merged_object_values(before: dict[str, Any], values: dict[str, Any]) -> dict
     else:
         shape = before["shape"]
     after = {**before, **given, "shape": shape}
+    after["opacity"] = float(after["opacity"])
+    if not 0.0 <= after["opacity"] <= 1.0:
+        raise ValueError("an object's opacity must be between 0 and 1")
+    after["rotation"] = float(after["rotation"])
     after["kind"] = shape_kind(shape)
     after["w"], after["h"] = shape_size(shape)
     return after
@@ -512,11 +547,30 @@ OPAQUE_WHITE: RGBA = (255, 255, 255, 255)
 
 DECORATION_FIELDS = (
     "class_name",
+    "blend_mode",
     "tint",
     "offset_x",
     "offset_y",
     "parallax_x",
     "parallax_y",
+)
+
+# Tiled 1.12's layer blend modes, in the order used by its UI and format
+# documentation. ``normal`` is the identity/default.
+BLEND_MODES = (
+    "normal",
+    "add",
+    "multiply",
+    "screen",
+    "overlay",
+    "darken",
+    "lighten",
+    "color-dodge",
+    "color-burn",
+    "hard-light",
+    "soft-light",
+    "difference",
+    "exclusion",
 )
 
 
@@ -529,6 +583,11 @@ def _normalize_layer(layer: Any) -> None:
     layer's and an object's are separate values.
     """
     layer.class_name = str(layer.class_name)
+    layer.blend_mode = str(layer.blend_mode)
+    if layer.blend_mode not in BLEND_MODES:
+        raise ValueError(
+            f"a layer blend mode is one of {list(BLEND_MODES)}, not {layer.blend_mode!r}"
+        )
     layer.tint = rgba_colour(layer.tint, "a layer tint")
     layer.offset_x = float(layer.offset_x)
     layer.offset_y = float(layer.offset_y)
@@ -561,6 +620,11 @@ def normalize_layer_values(values: dict[str, Any]) -> dict[str, Any]:
     out = dict(values)
     out["name"] = str(out["name"])
     out["class_name"] = str(out["class_name"])
+    out["blend_mode"] = str(out["blend_mode"])
+    if out["blend_mode"] not in BLEND_MODES:
+        raise ValueError(
+            f"a layer blend mode is one of {list(BLEND_MODES)}, not {out['blend_mode']!r}"
+        )
     out["visible"] = bool(out["visible"])
     out["opacity"] = float(out["opacity"])
     out["locked"] = bool(out["locked"])
@@ -581,6 +645,7 @@ def _layer_snapshot(layer: Any) -> dict[str, Any]:
     return {
         "name": layer.name,
         "class_name": str(layer.class_name),
+        "blend_mode": str(layer.blend_mode),
         "visible": bool(layer.visible),
         "opacity": float(layer.opacity),
         "locked": bool(layer.locked),
@@ -615,6 +680,7 @@ class TileLayer:
     # ``offset`` is in pixels and sums down the tree, ``parallax`` is a factor
     # against the camera and multiplies, ``tint`` multiplies per channel.
     class_name: str = ""
+    blend_mode: str = "normal"
     tint: RGBA = OPAQUE_WHITE
     offset_x: float = 0.0
     offset_y: float = 0.0
@@ -659,7 +725,12 @@ class ObjectLayer:
     # survives a save; whether a renderer honours it is the renderer's
     # question.
     draworder: str = "topdown"
+    # Tiled's editor/display colour for shape outlines. It is not multiplied
+    # into tile objects (that is ``tint``); keeping it separate prevents an
+    # imported metadata colour from changing rendered pixels.
+    color: str | None = None
     class_name: str = ""
+    blend_mode: str = "normal"
     tint: RGBA = OPAQUE_WHITE
     offset_x: float = 0.0
     offset_y: float = 0.0
@@ -672,10 +743,15 @@ class ObjectLayer:
             raise ValueError(
                 f"a draw order is one of {list(DRAW_ORDERS)}, not {self.draworder!r}"
             )
+        self.color = None if self.color in (None, "") else str(self.color)
         _normalize_layer(self)
 
     def snapshot(self) -> dict[str, Any]:
-        return {**_layer_snapshot(self), "draworder": str(self.draworder)}
+        return {
+            **_layer_snapshot(self),
+            "draworder": str(self.draworder),
+            "color": self.color,
+        }
 
 
 @dataclass
@@ -703,6 +779,7 @@ class GroupLayer:
     opacity: float = 1.0
     locked: bool = False
     class_name: str = ""
+    blend_mode: str = "normal"
     tint: RGBA = OPAQUE_WHITE
     offset_x: float = 0.0
     offset_y: float = 0.0
@@ -754,6 +831,7 @@ class ImageLayer:
     opacity: float = 1.0
     locked: bool = False
     class_name: str = ""
+    blend_mode: str = "normal"
     tint: RGBA = OPAQUE_WHITE
     offset_x: float = 0.0
     offset_y: float = 0.0

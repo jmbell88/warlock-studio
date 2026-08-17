@@ -15,6 +15,8 @@ and not an exception. Only a placement *entirely* outside the map returns None.
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 
 from . import gid as gidlib
@@ -159,6 +161,41 @@ def stamp(data: np.ndarray, x: int, y: int, brush: np.ndarray) -> Region | None:
     if span_w <= 0 or span_h <= 0:
         return None
     return tx0, ty0, np.ascontiguousarray(block[sy0 : sy0 + span_h, sx0 : sx0 + span_w])
+
+
+#: The generator :func:`random_stamp` reaches for when a caller names none.
+#: Held rather than built per call: the canvas places one cell per interpolated
+#: point of a drag, so ``np.random.default_rng()`` inside the function was a
+#: fresh seed sequence -- and an OS entropy read -- for every cell of every
+#: scatter stroke. Built lazily so importing this module costs nothing, and
+#: kept out of the signature's default so a caller that passes its own
+#: generator is still exactly deterministic, which is what the tests do.
+_RNG: Any = None
+
+
+def _default_rng() -> Any:
+    global _RNG
+    if _RNG is None:
+        _RNG = np.random.default_rng()
+    return _RNG
+
+
+def random_stamp(
+    data: np.ndarray,
+    x: int,
+    y: int,
+    brush: np.ndarray,
+    *,
+    rng: Any = None,
+) -> Region | None:
+    """Choose one non-empty encoded gid from a stamp and place it at a cell."""
+    choices = np.asarray(brush, dtype=gidlib.DTYPE).reshape(-1)
+    choices = choices[choices != gidlib.EMPTY]
+    if not choices.size:
+        return None
+    generator = _default_rng() if rng is None else rng
+    chosen = choices[int(generator.integers(0, len(choices)))]
+    return stamp(data, x, y, np.asarray([[chosen]], dtype=gidlib.DTYPE))
 
 
 def fill_rect(

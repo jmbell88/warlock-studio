@@ -4173,6 +4173,38 @@ def test_plotter_tileset_pane_leads_with_the_picker_and_ends_with_the_generator(
     ), f"the generator must sit below the Inker row: {labels}"
 
 
+def test_the_ai_ground_block_draws_in_both_of_its_states(app_ctx, imgui_ctx):
+    """The generator header is collapsed by default, so nothing else in this
+    file ever executes what is inside it -- and the AI sub-block is the half
+    with a progress bar, a model gate and eight text fields in a loop.
+
+    Both states, because they are different widget trees: the form when the tab
+    is idle, and the progress-and-cancel row that replaces it while a paint is
+    in flight.
+    """
+    from warlock.studio import plotter_mode, widgets
+    from warlock.studio.panes import plotter_tileset
+
+    imgui, _renderer = imgui_ctx
+    tab = plotter_mode.new_document(app_ctx, (8, 8, 16, 16))
+    tab.doc.add_tileset(_tileset())
+
+    previous = widgets.FORCE_SECTIONS_OPEN
+    widgets.FORCE_SECTIONS_OPEN = True
+    try:
+        title = "##tileset-ai"
+        _drawn_labels(imgui, lambda: plotter_tileset.draw(app_ctx), title)
+        labels = _drawn_labels(imgui, lambda: plotter_tileset.draw(app_ctx), title)
+        assert _index_of(labels, "Paint with AI") >= 0, labels
+
+        tab.ground_job = "deadbeefcafe"
+        pending = _drawn_labels(imgui, lambda: plotter_tileset.draw(app_ctx), title)
+        assert _index_of(pending, "Cancel") >= 0, pending
+    finally:
+        widgets.FORCE_SECTIONS_OPEN = previous
+        tab.ground_job = None
+
+
 def test_plotter_tileset_pane_still_leads_with_the_generator_when_empty(app_ctx, imgui_ctx):
     """The one branch where generating is *not* a last resort.
 

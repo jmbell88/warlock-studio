@@ -216,6 +216,24 @@ class MapPropsEdit(Edit):
 
 
 @dataclass
+class MapSettingsEdit(Edit):
+    """Map-level Tiled metadata such as class, parallax origin and render order."""
+
+    before: dict[str, Any]
+    after: dict[str, Any]
+
+    def __post_init__(self) -> None:
+        self.before = dict(self.before)
+        self.after = dict(self.after)
+
+    def undo(self, doc: Any) -> None:
+        doc._apply_map_settings(self.before)
+
+    def redo(self, doc: Any) -> None:
+        doc._apply_map_settings(self.after)
+
+
+@dataclass
 class TilesetAddEdit(Edit):
     """Adding a tileset to the map's list.
 

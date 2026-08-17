@@ -71,7 +71,13 @@ ICONS: dict[str, str] = {
 # for ``service.files.EDITABLE_STAGES`` even though the pair currently agree:
 # that list answers "can Inker open this", which is a question about pixels,
 # and this one answers "is this row a picture rather than a mesh".
-IMAGE_STAGES = ("reference", "tile")
+# "ground" joins the two for the reason the sentence above gives and no other:
+# a painted terrain atlas is a picture. It is deliberately *not* added to
+# ``service.files.EDITABLE_STAGES`` (Inker opens a ground set through Plotter's
+# own Polish row, against the tileset rather than the job row) and not to any
+# promote/remesh gate, which is what keeps a forty-seven-case sheet from being
+# offered two minutes of trellis.
+IMAGE_STAGES = ("reference", "tile", "ground")
 
 
 def _reached_reference(job: Any, rig_meta: Any, poses: Any) -> bool:
@@ -214,6 +220,18 @@ def available(stage: str, job: Any, ctx: Any = None) -> str | None:
             # seamless texture; there is no subject in it to reconstruct, and
             # the promotion refuses in exactly these words.
             return "a tile has no subject to reconstruct"
+        if row_stage == "ground":
+            # ``promote_to_model``'s own sentence for this row, verbatim: it
+            # refuses every stage but "reference", and names a ground set with
+            # the general case. Needed explicitly because the arms below fall
+            # through to None -- which is right for a "model" row (the Mesh
+            # segment is the stage you are standing on) and wrong for this one.
+            # A ground set reaching Create at all is deliberate: IMAGE_STAGES
+            # carries it because a terrain atlas is a picture. That is a claim
+            # about the *Reference* stage, and the comment on IMAGE_STAGES says
+            # the promote gates are untouched -- so this is where that promise
+            # is actually kept.
+            return "this job is not a reference"
         if row_stage == "reference" and job.get("status") != "done":
             return not_done_message("That reference", str(job.get("status") or ""))
         return None

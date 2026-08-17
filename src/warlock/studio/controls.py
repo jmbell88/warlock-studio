@@ -329,6 +329,10 @@ def input_text(*args: Any, **kwargs: Any) -> Any:
     return _field_call("input_text", *args, **kwargs)
 
 
+def input_text_with_hint(*args: Any, **kwargs: Any) -> Any:
+    return _field_call("input_text_with_hint", *args, **kwargs)
+
+
 def input_text_multiline(*args: Any, **kwargs: Any) -> Any:
     return _field_call("input_text_multiline", *args, **kwargs)
 
@@ -351,6 +355,18 @@ def input_float3(*args: Any, **kwargs: Any) -> Any:
 
 def input_float4(*args: Any, **kwargs: Any) -> Any:
     return _field_call("input_float4", *args, **kwargs)
+
+
+def color_edit4(*args: Any, **kwargs: Any) -> Any:
+    """Four-channel colour field with the shared field-state treatment."""
+
+    return _field_call("color_edit4", *args, **kwargs)
+
+
+def color_edit3(*args: Any, **kwargs: Any) -> Any:
+    """Three-channel colour field with the shared field-state treatment."""
+
+    return _field_call("color_edit3", *args, **kwargs)
 
 
 def drag_int(*args: Any, **kwargs: Any) -> Any:

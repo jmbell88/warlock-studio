@@ -106,9 +106,14 @@ def test_two_exports_of_a_fixture_are_byte_identical(stem):
     document, and to every fixture rather than only the first -- a writer
     that is deterministic on one map and not another is a writer with a
     conditional in it somewhere, and the first fixture alone cannot find it.
-    Collects zero cases while the corpus is empty, consistent with every
-    other parametrized test in this file: 'no fixtures yet' is a state this
-    milestone passes through on purpose, not a failure to paper over."""
+
+    ``MANIFEST`` now names four stems, so this collects four cases. It said the
+    corpus was empty, which was true of the milestone that wrote it and has not
+    been since. What the corpus proves is bounded in a different way now, and
+    the bound is documented rather than in a docstring here: every fixture is
+    *synthesized* by this editor rather than authored in Tiled, so a green run
+    is a statement about our own encoder's determinism and not about Tiled.
+    See ``fixtures/tiled/FIXTURES.md``."""
     loaders = loaders_for(FIXTURE_DIR)
     doc = tmx.read_tmx((FIXTURE_DIR / f"{stem}.tmx").read_bytes(), **loaders)
     assert tmx.tmx_export(doc) == tmx.tmx_export(doc)

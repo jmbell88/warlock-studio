@@ -513,6 +513,156 @@ async def test_a_load_is_refused_when_commit_is_short_in_bytes_not_in_percent(
         worker.store.close()
 
 
+def _commit_scenario(monkeypatch):
+    """MDL-04's memory setup, made switchable mid-test.
+
+    Returns a dict whose ``free`` key the test rewrites; the monkeypatched
+    ``system_memory`` reads it on every call, so a test can be short before an
+    unload and roomy after it.
+    """
+    import warlock.queue as queue_mod
+    from warlock import memlog
+
+    state = {"free": 40.0}
+    monkeypatch.setattr(queue_mod, "commit_fraction", lambda: 0.85)
+    monkeypatch.setattr(
+        memlog,
+        "system_memory",
+        lambda: memlog.SystemMemory(60.0 - state["free"], 60.0),
+    )
+    return state
+
+
+def _offloaded_key():
+    from warlock import models
+
+    return next(
+        key
+        for key, spec in models.BASE_MODELS.items()
+        if spec.residency == models.OFFLOAD
+    )
+
+
+async def test_a_base_switch_unloads_the_old_pipe_before_the_commit_check(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    """The live klein refusal: 13.2 GiB free with ~12 GiB of the shortfall
+    being the resident SDXL pipe the switch was guaranteed to unload one call
+    later. The check must measure a host that has already given those weights
+    back, not charge the outgoing model against the incoming one."""
+    from warlock import models
+
+    state = _commit_scenario(monkeypatch)
+    klein = _offloaded_key()
+    worker = _make_worker(tmp_path)
+    try:
+        await worker._acquire_t2i(models.BASE_MODELS[models.DEFAULT_BASE_MODEL],
+                                  models.DEFAULT_BASE_MODEL)
+        old = worker._text2image
+        assert old is not None
+
+        # Short while the old pipe is resident, roomy once it has unloaded --
+        # exactly the live machine's shape.
+        def free():
+            return 6.0 if old.unload_calls == 0 else 40.0
+
+        from warlock import memlog
+        monkeypatch.setattr(
+            memlog, "system_memory",
+            lambda: memlog.SystemMemory(60.0 - free(), 60.0),
+        )
+        del state
+
+        pipe, _handoff = await worker._acquire_t2i(models.BASE_MODELS[klein], klein)
+        assert old.unload_calls == 1
+        assert pipe is not old
+        assert worker._t2i_key == klein
+    finally:
+        worker.store.close()
+
+
+async def test_a_switch_still_short_after_the_unload_is_refused(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    """Re-measure, never credit: if the host is genuinely short even after the
+    stale pipe is gone, the refusal still fires -- against post-unload numbers."""
+    from warlock import models
+
+    state = _commit_scenario(monkeypatch)
+    klein = _offloaded_key()
+    worker = _make_worker(tmp_path)
+    try:
+        await worker._acquire_t2i(models.BASE_MODELS[models.DEFAULT_BASE_MODEL],
+                                  models.DEFAULT_BASE_MODEL)
+        old = worker._text2image
+        state["free"] = 6.0
+
+        with pytest.raises(RuntimeError, match="host memory"):
+            await worker._acquire_t2i(models.BASE_MODELS[klein], klein)
+        assert old.unload_calls == 1
+        assert worker._text2image is None, "nothing may be loaded after a refusal"
+    finally:
+        worker.store.close()
+
+
+async def test_a_warm_same_key_pipe_is_never_commit_checked(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    """The weights are in commit either way; refusing a warm hit would fail a
+    job for memory it is not about to ask for."""
+    from warlock import models
+
+    state = _commit_scenario(monkeypatch)
+    worker = _make_worker(tmp_path)
+    try:
+        await worker._acquire_t2i(models.BASE_MODELS[models.DEFAULT_BASE_MODEL],
+                                  models.DEFAULT_BASE_MODEL)
+        first = worker._text2image
+        state["free"] = 0.0
+
+        pipe, _handoff = await worker._acquire_t2i(
+            models.BASE_MODELS[models.DEFAULT_BASE_MODEL], models.DEFAULT_BASE_MODEL
+        )
+        assert pipe is first
+        assert first.unload_calls == 0
+    finally:
+        worker.store.close()
+
+
+async def test_a_store_generation_bump_reloads_through_the_commit_check(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    """The previously unchecked path: a generation-forced rebuild of a same-key
+    pipe skipped the bytes check entirely, because the gate keyed on the base
+    key alone. It now unloads first and then passes through the check."""
+    from warlock import fetch, memlog, models
+
+    _commit_scenario(monkeypatch)
+    worker = _make_worker(tmp_path)
+    try:
+        await worker._acquire_t2i(models.BASE_MODELS[models.DEFAULT_BASE_MODEL],
+                                  models.DEFAULT_BASE_MODEL)
+        old = worker._text2image
+        fetch.bump_store_generation()
+
+        # Short before the unload, roomy after: passes only if the check runs
+        # on the far side of the eviction.
+        monkeypatch.setattr(
+            memlog, "system_memory",
+            lambda: memlog.SystemMemory(
+                60.0 - (6.0 if old.unload_calls == 0 else 40.0), 60.0
+            ),
+        )
+
+        pipe, _handoff = await worker._acquire_t2i(
+            models.BASE_MODELS[models.DEFAULT_BASE_MODEL], models.DEFAULT_BASE_MODEL
+        )
+        assert old.unload_calls == 1
+        assert pipe is not old, "the rebuilt pipe must be a new object"
+    finally:
+        worker.store.close()
+
+
 async def test_idle_cache_eviction_runs_again_for_a_cache_loaded_off_the_queue(
     tmp_path, fake_pipelines, monkeypatch
 ):
@@ -2674,6 +2824,16 @@ async def test_the_worker_never_imports_service_studio_or_imgui():
     count -- this package's house style uses them for deferral, and one of
     those is exactly how the rule would be broken by accident.
 
+    There is exactly **one** allowance, listed below rather than tolerated by a
+    loosened predicate: ``_q_ground`` reaches into ``studio.plotter.groundtex``
+    for the forty-seven-case compositor. It survives the rule's reasoning --
+    ``groundtex`` is pure numpy in a package pinned against importing a
+    pipeline, the service or the queue, so the dependency is one-way and cannot
+    become the cycle this test exists to prevent -- and the alternative is a
+    second copy of the tile geometry in ``pipelines/``, which is how the
+    worker's atlas comes to disagree with the editor that paints with it. A
+    *second* entry here is a decision to argue for, not a line to add.
+
     ``async def`` only because this module marks every test asyncio; there is
     nothing to await.
     """
@@ -2684,6 +2844,7 @@ async def test_the_worker_never_imports_service_studio_or_imgui():
     files = [src / "queue.py"] + sorted(src.glob("_q_*.py"))
     assert len(files) >= 6, "the mixin siblings are not being scanned"
 
+    allowed = {("_q_ground.py", "studio.plotter"), ("_q_ground.py", "studio.plotter.groundtex")}
     offenders: list[str] = []
     for path in files:
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
@@ -2698,6 +2859,8 @@ async def test_the_worker_never_imports_service_studio_or_imgui():
                 names = [base] if base else []
                 names += [f"{base}.{a.name}" if base else a.name for a in node.names]
             for name in names:
+                if (path.name, name) in allowed:
+                    continue
                 root = name.split(".")[0]
                 if root in ("service", "studio") or "imgui" in name:
                     offenders.append(f"{path.name}: {name}")

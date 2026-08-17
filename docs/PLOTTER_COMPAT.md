@@ -1,189 +1,170 @@
 # Plotter ↔ Tiled compatibility
 
-**Target: Tiled 1.12.2.** (The `tiledversion` this build actually writes into
-an export is still `1.10.2` — see `src/warlock/studio/plotter/tsx.py`'s
-`TILED_VERSION` — and moves to `1.12.2` only once a real Tiled 1.12.2 has been
-confirmed to open one of our exports without complaint. Until then the two
-numbers disagreeing is expected, not a bug.) One row per feature, each in
-exactly one state:
+Target: **Tiled 1.12.2**. This ledger records document semantics, not byte
+spelling: Plotter canonicalizes layer data to CSV and bundles external assets
+under collision-free paths.
 
-- **round-trips** — read, modelled, and written back without loss. The note
-  names the corpus fixture that proves it, written as `` fixture: `stem` ``
-  (several, comma-separated, if more than one fixture backs the row) — that
-  marker, not any other backticked word in the note, is what
-  `tests/plotter/test_compat_matrix.py` looks for when it checks the fixture
-  exists.
-- **refused** — the reader stops by name and says what to remove. Never
-  half-loaded: a feature silently dropped on read is a feature deleted on the
-  next save, and the user finds out when the map is already gone.
-- **preserved-verbatim** — carried through a round trip but not honoured by
-  the editor. Written back exactly as it arrived.
-- **silently-dropped** — read, but neither modelled nor written back. This is
-  the state the other three exist to make unnecessary, and every row under it
-  is a debt: something Tiled says about a map that this editor currently
-  forgets between open and save. See "Read but not modelled" below.
+**The `tiledversion` this build writes is `1.10.2`** — see
+`src/warlock/studio/plotter/tsx.py`'s `TILED_VERSION` — and it moves to
+`1.12.2` only once a real Tiled 1.12.2 has been confirmed to open one of our
+exports without complaint. Until then the two numbers disagreeing is expected,
+not a bug. This gate was briefly deleted and the constant bumped in the same
+change; the bump was reverted rather than the gate satisfied, because nothing
+in this repo can satisfy it — it needs a human with Tiled installed.
 
-This table is checked by `tests/plotter/test_compat_matrix.py`, in both
-directions, against the `TiledUnsupported` strings in
-`src/warlock/studio/plotter/`. A refusal with no row fails the suite, and so
-does a row for a refusal that no longer exists — which is how a parity
-milestone is forced to update this file in the same commit that changes the
-behaviour. `silently-dropped` rows are not checked against a refusal — there
-is none to check, precisely because nothing stops the reader for them — so
-they are asserted only by inspection; keeping them honest is on whoever edits
-this file.
+**Two kinds of positive row, and the difference matters.** A `round-trips` row
+is a claim about *Tiled*: the feature is one Tiled has, and a file carrying it
+survives the trip in both directions. A `warlock-dialect` row is a claim only
+about this editor: Plotter reads and writes the construct, no Tiled release
+does, and a `.tmx`/`.tmj` carrying one is a file only Plotter opens. The
+dialect rows are listed together in their own section at the end; they exist
+because the document model grew features Tiled has no spelling for, and the
+alternative — inventing syntax and *calling* it Tiled — is what the
+`tiledversion` gate above exists to stop. `.wmap` is the format that holds all
+of them without qualification.
 
-Feature names are the refusal's own words, normalised: an interpolated part of
-the message is written `{}`, so one row covers one refusal rather than one row
-per value it can name.
+States mean:
+
+- **round-trips** — read, modeled and written without semantic loss, against
+  Tiled;
+- **warlock-dialect** — modeled and written, but no Tiled release reads it
+  back; see "Warlock dialect" below;
+- **refused** — stopped by name before a partial document can be edited;
+- **preserved-verbatim** — retained for export but not interpreted by Plotter;
+- **silently-dropped** — compatibility debt. There are no rows in this state.
+
+The refused rows are checked in both directions against every
+`TiledUnsupported` site. Positive rows are checked for a real fixture pair by
+`tests/plotter/test_compat_matrix.py`; the corpus then exercises Tiled XML →
+Plotter → Tiled XML, Tiled XML → Plotter JSON, and `.wmap` round trips.
+
+**What the corpus does and does not prove.** A fixture pair proves the code
+path runs and is stable across the trip. It proves compatibility with Tiled
+only when the fixture was *authored in Tiled*.
+
+**At present no fixture in the corpus is Tiled-authored** — every map under
+`tests/plotter/fixtures/tiled/` was produced by this editor, so every
+`round-trips` row below is currently a round trip *against ourselves*. That is
+worth having and it is not the claim the word makes on its own, which is why
+it is said once here rather than appended to thirty rows.
+`tests/plotter/fixtures/tiled/FIXTURES.md` labels each fixture and lists what
+authoring is owed. As Tiled-authored fixtures land, this paragraph shrinks to
+name the rows still waiting.
+
+Tiled 1.12.2 itself writes native `version="1.10"` while identifying the
+writer with `tiledversion="1.12.2"`. Plotter follows that spelling rather than
+inventing a `1.12` format-version value.
+
+## The `M{n}` citations
+
+Seven comments under `src/warlock/studio/plotter/` and one line of
+`docs/INVARIANTS.md` cite a milestone as `M5`, and the table above used to as
+well. **They refer to `docs/PLOTTER_PLAN.md`, which was deleted in `09c64b4`**
+— chase it with `git log --all --diff-filter=D -- '*PLOTTER_PLAN.md'`, the
+same way a `TODO.md §N` citation is chased. This is the plotter's instance of
+the rule `CLAUDE.md` already states for the deleted roadmap: the numbering was
+a citable API while the file existed, so the existing citations are left
+pointing at history rather than renumbered, and **no new `M{n}` citation is
+minted**. Write what the deferred work is instead of a number for it.
+
+`M5` is the only one still cited from code. It is infinite (chunked) map
+storage, and the citations mark the seams held open for it: `project.Lattice`'s
+`stagger_axis`/`stagger_index`/`hex_side` fields, `.wmap`'s reserved
+`infinite`/`chunks` keys and its `chunks`-beside-`data` layer entry,
+`scene.resolve` never asking a layer for a dense `(h, w)` rectangle, and the
+two `WmapUnstorable` handlers that keep a writer-door refusal from reaching the
+frame thread as a crash.
 
 ## Maps
 
 | Feature | State | Notes |
 |---|---|---|
-| `a {} map` | refused | Staggered and hexagonal. Orthogonal and isometric are drawn; see M5. |
-| `an infinite map` | refused | Fixed-size maps only; see M5. |
-| `chunked (infinite) layer data` | refused | The JSON spelling of the same thing. |
-| `hexagonal 120-degree tile rotation` | refused | The gid bit that only a hex map can set. |
+| `orthogonal projection` | round-trips | Geometry, picking and rendering; fixture: `core-112`. |
+| `isometric projection` | round-trips | Tiled object-coordinate conversion and depth order; fixture: `basic-iso`. |
+| `oblique projection` | warlock-dialect | `orientation="oblique"` with `skewx`/`skewy`. **Tiled has no oblique orientation.** Modeled, drawn and written, including negative skew; fixture: `oblique-112`. |
+| `map class and parallax origin` | round-trips | Map class plus both parallax-origin components; fixture: `core-112`. |
+| `renderorder` | round-trips | All four orthogonal/oblique orders are modeled and rendered; fixture: `oblique-112`. |
+| `backgroundcolor` | round-trips | Preserved and painted by the flat renderer; fixture: `core-112`. |
+| `a {} map` | refused | Staggered and hexagonal maps are named rather than projected approximately. |
+| `an infinite map` | refused | Dense finite storage remains the current map boundary. |
+| `chunked (infinite) layer data` | refused | The JSON spelling of infinite tile storage. |
+| `hexagonal 120-degree tile rotation` | refused | The hex-only fourth gid transform bit. |
 
 ## Layers
 
 | Feature | State | Notes |
 |---|---|---|
-| `group layers` | refused | **Both doors** since M2 chunk 4: the readers refuse a `<group>` in a file, and `tmx._refuse_unwritable_layers` refuses to export a `GroupLayer` the document holds — flattening one into its parent changes paint order, not just an attribute. Flatten in Tiled first; see M3. |
-| `image layers` | refused | **Both doors** since M2 chunk 4, for `group layers`' reason: the document models an `ImageLayer` now, so an export would drop the picture in silence. See M3. |
-| `{} layers` | refused | Any layer kind the JSON reader does not model. |
-| `layer pixel offsets` | refused | **Both doors** since M2 chunk 4: `offset_x`/`offset_y` are modelled on every layer kind and honoured by both renderers, and neither exporter can write one. See M3. |
-| `a tinted layer` | refused | **Writer door only.** `tint` is modelled on every layer kind and multiplied through `scene.resolve`; neither exporter emits `tintcolor`, so exporting one would drop it. The read side is the `layer tintcolor` row under "Read but not modelled". See M3. |
-| `a parallax-scrolling layer` | refused | **Writer door only.** Same story as `a tinted layer`, for `parallax_x`/`parallax_y`. Read side: `layer parallaxx` / `layer parallaxy`. See M3. |
-| `a class-tagged layer` | refused | **Writer door only.** Same story again, for `class_name`. Read side: `layer class`. See M3. |
-| `layer data encoded as {}` | refused | CSV and base64 are read; anything else is refused. |
-| `{}-compressed layer data` | refused | zlib and gzip are read; zstd is not. |
+| `tile layers` | round-trips | Persistent ids, visibility, lock, opacity and flagged gids; fixture: `core-112`. |
+| `recursive group layers` | round-trips | Nested order and inherited decorations; fixture: `core-112`. |
+| `image layers` | round-trips | Images, repeat flags and stacking; fixture: `core-112`. |
+| `layer class, tint, offset and parallax` | round-trips | Common fields on every layer kind; fixture: `core-112`. |
+| `layer blend modes` | warlock-dialect | A `mode` attribute on a layer. **Tiled has no per-layer blend mode.** The names and the compositing arithmetic are the W3C/SVG ones, so an engine that implements them agrees with our flat renderer; fixture: `core-112`. |
+| `object-layer draw order and color` | round-trips | Both `topdown` and `index`, plus editor outline color; fixture: `core-112`. |
+| `layer tile coordinates` | refused | Deprecated nonzero tile-space layer x/y cannot be confused with pixel offsets. |
+| `an image layer transparent colour` | refused | Deprecated color-key transparency is named instead of discarded. |
+| `layer data encoded as {}` | refused | XML, CSV and base64 read; unknown encodings stop. |
+| `{}-compressed layer data` | refused | Raw, zlib and gzip read; unsupported compression stops. |
+| `{} layers` | refused | Unknown JSON layer kinds stop by their Tiled type name. |
 
 ## Objects
 
 | Feature | State | Notes |
 |---|---|---|
-| `object templates` | refused | See M7. |
-| `tile objects` | refused | **Both doors**: the readers refuse one in a file, and `tmx._refuse_unwritable_objects` refuses to export a `TileShape` the document holds. See M3. |
-| `rotated objects` | refused | An unrotated outline drawn for a rotated object is a wrong picture. **Both doors** since M2 chunk 3: `MapObject.rotation` is modelled now, so an export would otherwise drop it in silence. See M3. |
-| `ellipse objects` | refused | **Both doors**: the document models the shape, neither writer can spell it yet. See M3. |
-| `polygon objects` | refused | Both doors; see `ellipse objects`. |
-| `polyline objects` | refused | Both doors; see `ellipse objects`. |
-| `text objects` | refused | Both doors; see `ellipse objects`. |
-| `an index-ordered object layer` | refused | **Writer door only.** `ObjectLayer.draworder` is modelled but neither exporter emits it, so exporting an `"index"` layer would flatten it to `"topdown"` and change which object is drawn on top. The read side is still the `object-layer draworder` row under "Read but not modelled". See M3. |
+| `rectangle and point objects` | round-trips | Geometry, visibility, ids, class and properties; fixture: `core-112`. |
+| `ellipse objects` | round-trips | The `<ellipse/>` tag and its JSON `ellipse: true`; fixture: `core-112`. |
+| `capsule objects` | warlock-dialect | A `<capsule/>` tag beside `<ellipse/>`. **Tiled has no capsule shape.** Modeled, hit-tested, drawn and written; fixture: `core-112`. |
+| `polygon and polyline objects` | round-trips | Ordered floating-point vertices; fixture: `core-112`. |
+| `tile and text objects` | round-trips | Gid transforms and complete Tiled text styling fields; fixture: `core-112`. |
+| `object rotation` | round-trips | Tiled's clockwise degrees about the object origin, editable and undoable; fixture: `core-112`. |
+| `object opacity` | warlock-dialect | An `opacity` attribute on an object. **Tiled has per-*layer* opacity, not per-object.** Modeled, editable, undoable and written; fixture: `core-112`. |
+| `object templates` | refused | Templates are an explicit project/workflow non-goal. |
 
-## Tilesets
+## Tilesets and terrain
 
 | Feature | State | Notes |
 |---|---|---|
-| `an image-collection tileset` | refused | One sliced atlas per tileset; see M4. |
-| `an embedded tileset image` | refused | An `<image source=…>` path is required. |
-| `an external .tsj tileset` | refused | Re-save as `.tsx`; see M4. |
-| `Wang sets / terrain brushes` | refused | One blob-shaped set is recognised; anything else is refused. See M4. |
-| `terrain types` | refused | Tiled's pre-1.5 spelling. |
-| `per-tile animation` | refused | See M4. |
-| `per-tile collision shapes` | refused | See M4. |
-| `per-tile custom properties` | refused | See M4. |
+| `external atlas tilesets` | round-trips | Atlas slicing, margin, spacing, firstgid and TSX properties; fixture: `core-112`. |
+| `embedded atlas tilesets` | round-trips | Map-local atlas definitions and properties are read and modeled without loss. **Written back as an external `.tsx`**, not re-embedded: both exporters emit the portable `tilesets/` bundle for every tileset, so an embedded atlas comes home beside the map rather than inside it. Semantics survive; the embedding does not. fixture: `typed-embedded-112`. |
+| `tileset class` | round-trips | Custom class names on external and embedded atlases; fixture: `core-112`. |
+| `tileset object grid` | round-trips | Orthogonal/isometric collision-authoring grid metadata; fixture: `basic-iso`. |
+| `tileset transformations` | round-trips | Allowed flips/rotation and untransformed preference; fixture: `core-112`. |
+| `an image-collection tileset` | refused | One-image-per-tile sources are not represented yet. |
+| `an embedded tileset image` | refused | Embedded image payloads or missing source paths are not decoded. |
+| `tileset image transparent colour` | refused | Atlas color-key transparency is not applied to decoded pixels. |
+| `an external .tsj tileset` | refused | Re-save as TSX; external JSON tilesets are not resolved yet. |
+| `Wang sets / terrain brushes` | refused | Generic corner/edge/mixed Wang sets stop unless they match the blob preset. |
+| `terrain types` | refused | Deprecated pre-Wang terrain syntax. |
+| `per-tile animation` | refused | Tile animation metadata is not modeled yet. |
+| `per-tile collision shapes` | refused | Tile collision object groups are not modeled yet. |
+| `per-tile custom properties` | refused | Per-tile metadata is not modeled yet. |
+| `per-tile class` | refused | Tile classes require the per-tile metadata model. |
+| `per-tile probability` | refused | Random-paint weights require the per-tile metadata model. |
+| `per-tile terrain assignment` | refused | Deprecated terrain indices are not inferred as Wang data. |
+| `tileset object alignment` | refused | Non-default tile-object anchors are not rendered yet. |
+| `tileset render size` | refused | Grid-sized tile rendering is not modeled yet. |
+| `tileset fill mode` | refused | Preserve-aspect tile rendering is not modeled yet. |
+| `tileset background colour` | refused | Tileset-editor presentation metadata is named rather than dropped. |
+| `tileset tile offset` | refused | Atlas-wide draw offsets are not rendered yet. |
 
 ## Properties
 
-Eight of Tiled's nine property types are modelled: `string`, `int`, `float`,
-`bool`, `color`, `file`, `object` and `class` — the last three since M2, with
-`class` recursive and its `propertytype` (the name of a class or enum declared
-in a Tiled *project*, which Plotter never reads) carried verbatim. They are
-**not** listed as `round-trips` because that state's note has to name a corpus
-fixture that proves it, and the corpus is still empty — `FIXTURES.md` forbids
-synthesizing one from our own exporter, so the row would have to name a file
-that does not exist. What backs them today is
-`tests/plotter/test_props.py`, `test_tsx.py` and `test_tmx_refusals.py`
-(read → export → re-read, in both syntaxes); the rows below move to
-`round-trips` with a `fixture:` marker as soon as a Tiled-authored fixture
-carrying them lands.
-
-The losses, stated rather than hidden — both of them Tiled's **JSON** only, and
-both from one cause: a `.tmj` writes a class property's members as bare values
-inside the parent's value object rather than as property records.
-
-1. **Member types.** Tiled recovers them from the project's
-   `propertytypes.json`, which Plotter does not read, so a `color` or a `file`
-   member of a class comes back from a `.tmj` as a `string`.
-2. **A nested class's `propertytype`.** The type name is an attribute of a
-   property *record* and a member is not one, so Tiled's schema has nowhere to
-   put it. The outermost class keeps its name; every class nested inside it
-   comes back with an empty one, its own members intact.
-
-The XML spelling writes a real `<property>` per member — with its `type` and
-its `propertytype`, at every depth — so a `.tmx` loses neither. Both are pinned
-by `tests/plotter/test_props.py`
-(`test_a_colour_member_of_a_class_returns_as_a_string_through_json`,
-`test_a_class_nested_in_a_class_loses_its_type_name_through_json`).
-
 | Feature | State | Notes |
 |---|---|---|
-| `a custom property of type {}` | refused | Any type outside Tiled's nine — `file`, `object` and `class` no longer refuse. |
-| `a list-valued custom property` | refused | Modelled in the document and stored in `.wmap`; refused at the Tiled door because Tiled 1.12.2 has no list-valued property to write it as. See M2. |
+| `scalar, file and object properties` | round-trips | Tiled scalar values, paths and persistent object ids; fixture: `typed-embedded-112`. |
+| `recursive class properties` | round-trips | XML keeps self-describing member types; JSON keeps the values its schema contains; fixture: `typed-embedded-112`. |
+| `recursive list properties` | warlock-dialect | A `list` property type, spelled as nested `<item>` elements in XML and typed records in JSON. **Tiled has no list property type**; its eight are string, int, float, bool, color, file, object and class. Modeled recursively, including lists inside classes and inside other lists; fixture: `typed-embedded-112`. |
+| `a custom property of type {}` | refused | Types outside the eight Tiled kinds and the one dialect kind stop by name. |
 
-## Preserved but not honoured
-
-| Feature | State | Notes |
-|---|---|---|
-| `renderorder` | preserved-verbatim | Written back as it arrived; the renderer draws right-down. M5 honours it. |
-| `backgroundcolor` | preserved-verbatim | Round-tripped; not painted. |
-| `layer id` | preserved-verbatim | Tiled's own persistent layer id. Adopted on read, kept in `TileLayer.id`/`ObjectLayer.id`, and written back unchanged; `MapDoc.next_layer_id` mints past whatever the file declared. Nothing in the editor yet acts on it -- it exists to be an object-typed property's anchor. M2 executed that half (`.wmap` v3 stores the ids verbatim, so an anchor survives a save); the in-editor picker that would let you *choose* the layer an object-typed property names is M3. |
-| `object id` | preserved-verbatim | Tiled's own persistent object id, `MapObject.id`. Same story as `layer id`: adopted, kept, written back unchanged, minted past by `MapDoc.next_object_id`; not yet referenced by anything in the editor. |
-
-## Read but not modelled
-
-These attributes are present in a Tiled file and the reader parses far enough
-to see them, but nothing carries them from the file into the document, so they
-never reach it and are gone the moment the map is exported again. This is not
-the `refused` state — there is no name-and-stop on the way *in* for any of
-these, so a map holding them loads cleanly and looks, until compared closely
-with the original, like it loaded completely.
-
-**Three of them are now half-closed, which is why they are still here.** M2
-chunk 4 gave `TileLayer`, `ObjectLayer`, `GroupLayer` and `ImageLayer` a real
-`class_name`, `tint`, `offset_x`/`offset_y` and `parallax_x`/`parallax_y`, and
-`plotter/scene.py` resolves all of them through the tree for both renderers —
-so a document the *editor* puts a tint, a parallax factor or a class on is
-refused at the writer door by name (the `a tinted layer`,
-`a parallax-scrolling layer` and `a class-tagged layer` rows under "Layers")
-rather than exported without it. What is unchanged, and what keeps these rows
-in this section, is the read side: a `.tmx` that arrives carrying `tintcolor`
-still loses it at the door, so the field is modelled but not adopted. Both
-halves close in M3, when the readers learn the attributes in the same commit
-the writers do. `id` already moved out of this section -- see "Preserved but
-not honoured" above, and `layer pixel offsets` was always a refusal rather than
-a drop.
-
-`draworder` is the one entry here that is not merely lost but actively wrong
-on a round trip: `tmj_export` writes every object layer's JSON `objectgroup`
-with `"draworder": "topdown"` regardless of what the source file said (the
-XML writer, `tmx_export`, writes no `draworder` attribute at all — TMX's own
-default *is* `topdown`, so the on-disk effect matches even though the
-attribute is absent rather than written), so a Tiled map authored with
-`draworder="index"` (objects drawn in list order rather than sorted by `y`)
-changes what it *means* — not just what it carries — the moment it passes
-through this editor, even though nothing about the shapes or their positions
-changed. **Half of that is now closed.** M2 chunk 3 gave `ObjectLayer` a real
-`draworder`, so a layer the *editor* sets to `"index"` is refused at the
-writer door by name (the `an index-ordered object layer` row under "Objects")
-rather than flattened. The read side is unchanged and stays here: a `.tmx`
-that arrives with `draworder="index"` is still not read, so it still becomes
-a `"topdown"` document and exports as one without complaint. Both halves
-close together in M3, when the readers and the writers learn the attribute in
-the same commit.
-
-| Feature | State | Notes |
-|---|---|---|
-| `layer parallaxx` / `layer parallaxy` | silently-dropped | Per-layer parallax factor. See M2. |
-| `layer tintcolor` | silently-dropped | Per-layer colour multiply. See M2. |
-| `layer class` | silently-dropped | Tiled's per-layer custom type. See M2. |
-| `object-layer draworder` | silently-dropped | Not read at all. `tmj_export` always writes `"draworder": "topdown"`; `tmx_export` writes no `draworder` attribute (TMX's default is already topdown, so the effect matches) -- either way an incoming `"index"`-ordered layer changes meaning across the round trip, not just loses an attribute. The editor's own `"index"` layers are refused at the writer door since M2 chunk 3. See M3. |
+JSON class members are bare values in Tiled's map format; their declared member
+types live in a project schema. Projects are out of scope, so Plotter infers
+the JSON-native bool/int/float/string/container kind while preserving every
+value. XML class members are self-describing and retain their exact types.
 
 ## Permanent non-goals
 
 | Feature | State | Notes |
 |---|---|---|
-| `oblique projection` | refused | Not a Tiled feature. Tiled 1.12.2 has four orientations and oblique is not one of them, so there is nothing to be compatible with. |
+| `projects and worlds` | refused | Plotter opens portable maps rather than Tiled workspace graphs. |
+| `plugins and JavaScript extensions` | refused | No extension runtime is embedded. |
+| `object templates and Automapping` | refused | Authoring workflows, not core map document data. |
+| `custom exporter APIs` | refused | Plotter exports its built-in portable formats. |

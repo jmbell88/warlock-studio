@@ -45,6 +45,15 @@ from .tileset import TerrainSpec, Tileset
 
 # What this build writes. Tiled accepts anything it recognises; these are the
 # values a current Tiled writes and so the values least likely to surprise it.
+#
+# ``TILED_VERSION`` is deliberately *behind* the target in
+# ``docs/PLOTTER_COMPAT.md``, and that gap is the point: it is a claim that a
+# real Tiled of that version opens what we write, and nothing in this repository
+# can establish it -- a fixture we authored ourselves proves a round trip
+# against ourselves. It moves to "1.12.2" when a human with Tiled installed has
+# opened one of our exports without complaint, and not before. It was bumped
+# once, in the same change that deleted the sentence saying not to; the bump was
+# reverted, because the gate was never satisfied.
 TSX_VERSION = "1.10"
 TILED_VERSION = "1.10.2"
 
@@ -120,13 +129,35 @@ def check_tileset_features(root: ET.Element) -> None:
         )
     if root.find("terraintypes") is not None:
         raise TiledUnsupported("terrain types")
-    if root.find("image") is None:
+    if root.get("objectalignment", "unspecified") != "unspecified":
+        raise TiledUnsupported("tileset object alignment")
+    if root.get("tilerendersize", "tile") != "tile":
+        raise TiledUnsupported("tileset render size")
+    if root.get("fillmode", "stretch") != "stretch":
+        raise TiledUnsupported("tileset fill mode")
+    if root.get("backgroundcolor"):
+        raise TiledUnsupported("tileset background colour")
+    offset = root.find("tileoffset")
+    if offset is not None and (
+        int(offset.get("x", 0) or 0) or int(offset.get("y", 0) or 0)
+    ):
+        raise TiledUnsupported("tileset tile offset")
+    image = root.find("image")
+    if image is None:
         raise TiledUnsupported(
             "an image-collection tileset",
             "every tile is its own file; Plotter needs one sliced atlas",
         )
+    if image.get("trans"):
+        raise TiledUnsupported("tileset image transparent colour")
     for tile in root.findall("tile"):
         where = f"tile {tile.get('id', '?')}"
+        if tile.get("class") or tile.get("type"):
+            raise TiledUnsupported("per-tile class", where)
+        if tile.get("probability") is not None:
+            raise TiledUnsupported("per-tile probability", where)
+        if tile.get("terrain") is not None:
+            raise TiledUnsupported("per-tile terrain assignment", where)
         if tile.find("animation") is not None:
             raise TiledUnsupported("per-tile animation", where)
         if tile.find("image") is not None:
@@ -151,10 +182,31 @@ def check_tileset_features_json(entry: dict[str, Any]) -> None:
     """
     if entry.get("terrains"):
         raise TiledUnsupported("terrain types")
+    if str(entry.get("objectalignment", "unspecified")) != "unspecified":
+        raise TiledUnsupported("tileset object alignment")
+    if str(entry.get("tilerendersize", "tile")) != "tile":
+        raise TiledUnsupported("tileset render size")
+    if str(entry.get("fillmode", "stretch")) != "stretch":
+        raise TiledUnsupported("tileset fill mode")
+    if entry.get("backgroundcolor"):
+        raise TiledUnsupported("tileset background colour")
+    offset = entry.get("tileoffset") or {}
+    if isinstance(offset, dict) and (
+        int(offset.get("x", 0) or 0) or int(offset.get("y", 0) or 0)
+    ):
+        raise TiledUnsupported("tileset tile offset")
+    if entry.get("transparentcolor"):
+        raise TiledUnsupported("tileset image transparent colour")
     for tile in entry.get("tiles") or ():
         if not isinstance(tile, dict):
             continue
         where = f"tile {tile.get('id', '?')}"
+        if tile.get("class") or tile.get("type"):
+            raise TiledUnsupported("per-tile class", where)
+        if "probability" in tile:
+            raise TiledUnsupported("per-tile probability", where)
+        if "terrain" in tile:
+            raise TiledUnsupported("per-tile terrain assignment", where)
         if tile.get("animation"):
             raise TiledUnsupported("per-tile animation", where)
         if tile.get("image"):
@@ -377,13 +429,42 @@ def read_tsx(data: bytes, image: np.ndarray) -> Tileset:
     """A ``.tsx``'s bytes plus its decoded image, as a :class:`Tileset`."""
     root = xml_root(data, "tileset")
     check_tileset_features(root)
+    grid = root.find("grid")
+    transformations = root.find("transformations")
     return Tileset(
         name=root.get("name") or "tileset",
+        class_name=root.get("class") or root.get("type") or "",
         pixels=image,
         tile_w=int(root.get("tilewidth", 0) or 0),
         tile_h=int(root.get("tileheight", 0) or 0),
         spacing=int(root.get("spacing", 0) or 0),
         margin=int(root.get("margin", 0) or 0),
+        grid_orientation=(
+            "orthogonal" if grid is None else grid.get("orientation", "orthogonal")
+        ),
+        grid_width=(
+            int(root.get("tilewidth", 0) or 0)
+            if grid is None
+            else int(grid.get("width", root.get("tilewidth", 0)) or 0)
+        ),
+        grid_height=(
+            int(root.get("tileheight", 0) or 0)
+            if grid is None
+            else int(grid.get("height", root.get("tileheight", 0)) or 0)
+        ),
+        transformations=(
+            False,
+            False,
+            False,
+            False,
+        )
+        if transformations is None
+        else (
+            transformations.get("hflip", "0") not in ("0", "false"),
+            transformations.get("vflip", "0") not in ("0", "false"),
+            transformations.get("rotate", "0") not in ("0", "false"),
+            transformations.get("preferuntransformed", "0") not in ("0", "false"),
+        ),
         properties=read_properties(root),
         terrains=_terrains_of(root),
     )
@@ -404,12 +485,40 @@ def tsx_element(ts: Tileset, *, image_name: str) -> ET.Element:
             "tileheight": str(ts.tile_h),
         },
     )
+    if ts.class_name:
+        root.set("class", ts.class_name)
     # Tiled omits both when they are zero; matching that keeps our output
     # diff-clean against a file Tiled wrote for the same tileset.
     if ts.spacing:
         root.set("spacing", str(ts.spacing))
     if ts.margin:
         root.set("margin", str(ts.margin))
+    if (ts.grid_orientation, ts.grid_width, ts.grid_height) != (
+        "orthogonal",
+        ts.tile_w,
+        ts.tile_h,
+    ):
+        ET.SubElement(
+            root,
+            "grid",
+            {
+                "orientation": ts.grid_orientation,
+                "width": str(ts.grid_width),
+                "height": str(ts.grid_height),
+            },
+        )
+    if any(ts.transformations):
+        hflip, vflip, rotate, prefer = ts.transformations
+        ET.SubElement(
+            root,
+            "transformations",
+            {
+                "hflip": "1" if hflip else "0",
+                "vflip": "1" if vflip else "0",
+                "rotate": "1" if rotate else "0",
+                "preferuntransformed": "1" if prefer else "0",
+            },
+        )
     root.set("tilecount", str(ts.tile_count))
     root.set("columns", str(ts.columns))
     ET.SubElement(

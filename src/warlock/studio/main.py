@@ -3465,7 +3465,7 @@ class App:
         """What is being labelled, and what the probe knows so far."""
         from imgui_bundle import imgui
 
-        from . import widgets
+        from . import controls, widgets
 
         labels = state.labels
         row = review_mode.current_label(state)
@@ -3499,7 +3499,7 @@ class App:
         imgui.same_line()
         if widgets.disabled_button("Skip (S)", row is not None, reason=no_row):
             review_mode.advance_labels(labels)
-        if imgui.button("Done"):
+        if controls.button("Done", role=controls.ButtonRole.GHOST):
             review_mode.close_labels(ctx)
 
         # The snapshot the listing task read, kept current by ``record_label``.
@@ -3528,7 +3528,7 @@ class App:
         """The sweep list, and the form that launches a new one."""
         from imgui_bundle import imgui
 
-        from . import icons, widgets
+        from . import controls, icons, widgets
         from .manual import render as manual_render
 
         self._review_judging_card(ctx, state, review_mode)
@@ -3573,7 +3573,7 @@ class App:
             todo = sweep["todo"]
             total = len(sweep["units"])
             selected = sweep["id"] == state.sweep_id
-            if imgui.selectable(f"{sweep['label']}##sweep-{sweep['id']}", selected)[0]:
+            if controls.selectable(f"{sweep['label']}##sweep-{sweep['id']}", selected)[0]:
                 # Picking a sweep by hand leaves the pass: the pass is a walk
                 # over every outstanding bucket in a stated order, and a user
                 # who jumps out of that order is no longer on the walk its
@@ -3598,7 +3598,7 @@ class App:
         widgets.section("Teach the judge")
         for stage, title in _LABEL_TITLES.items():
             open_here = state.labels is not None and state.labels.stage == stage
-            if imgui.selectable(f"{title}##label-{stage}", open_here)[0]:
+            if controls.selectable(f"{title}##label-{stage}", open_here)[0]:
                 if open_here:
                     review_mode.close_labels(ctx)
                 else:
@@ -3654,7 +3654,7 @@ class App:
         """
         from imgui_bundle import imgui
 
-        from . import widgets
+        from . import controls, widgets
 
         report = state.judging_report
         widgets.section("Judging pass")
@@ -3675,7 +3675,7 @@ class App:
             f"{report['filed']} filed this pass - {report['accepted']} accepted, "
             f"{report['rejected']} rejected, {report['remaining']} still to do."
         )
-        if imgui.button("Dismiss"):
+        if controls.button("Dismiss", role=controls.ButtonRole.GHOST):
             review_mode.dismiss_report(ctx)
         imgui.separator()
 
@@ -3722,7 +3722,7 @@ class App:
         from imgui_bundle import imgui
 
         from ..service import sweeps as sweeps_mod
-        from . import widgets
+        from . import controls, widgets
 
         # The label table for every guidance field, which is where a param's
         # human name already lives. Resolved here rather than in ``review_mode``
@@ -3739,7 +3739,7 @@ class App:
         widgets.field_label("seeds")
         form.seeds = widgets.input_text("##sweep-seeds", form.seeds, max_length=120)
 
-        if imgui.button("Start from current 2D/3D settings"):
+        if controls.button("Start from current 2D/3D settings"):
             form.base = review_mode.capture_base(ctx)
             form.base_note = f"{len(form.base)} setting(s) captured"
             ctx.toast("Captured the current settings as this sweep's baseline.")
@@ -3764,11 +3764,11 @@ class App:
             row["param"] = widgets.combo("##param", row.get("param", ""), options, width=-1)
             self._review_axis_values(row, rows.get(row.get("param") or ""))
             imgui.pop_id()
-        if imgui.button("Add axis"):
+        if controls.button("Add axis"):
             form.axes.append({"param": "", "values": ""})
         if len(form.axes) > 1:
             imgui.same_line()
-            if imgui.button("Remove axis"):
+            if controls.button("Remove axis", role=controls.ButtonRole.GHOST):
                 form.axes.pop()
 
         planned = review_mode.preview_units(state)
@@ -3827,9 +3827,7 @@ class App:
         )
 
     def _review_units(self, state: Any, review_mode: Any) -> None:
-        from imgui_bundle import imgui
-
-        from . import icons, widgets
+        from . import controls, icons, widgets
 
         widgets.section("Units")
         if not state.units:
@@ -3843,7 +3841,7 @@ class App:
             mark = review_mode.grade_text(unit.get("grade")) or {
                 "accept": icons.CHECK, "reject": icons.X
             }.get(unit["verdict"] or "", " ")
-            if imgui.selectable(
+            if controls.selectable(
                 f"{mark} {review_mode.label(state, unit)}##unit-{unit['job_id']}",
                 i == state.index,
             )[0]:
@@ -4071,7 +4069,7 @@ class App:
 
         from ..bench import findings as findings_lib
         from ..service import findings as svc_findings
-        from . import dialogs, vector_presets, widgets
+        from . import controls, dialogs, vector_presets, widgets
 
         imgui.separator()
         if not widgets.header("What works", default_open=False):
@@ -4112,11 +4110,14 @@ class App:
             if tagged:
                 widgets.muted(tagged)
             vector = entry["vector"]
-            if imgui.button(f"Apply to forms##apply-{entry['key']}"):
+            if controls.button(f"Apply to forms##apply-{entry['key']}"):
                 vector_presets.apply(ctx.state, vector)
                 ctx.toast("Applied those settings to the 2D and 3D forms.")
             widgets.same_line_or_wrap(widgets.button_width("Save as preset..."))
-            if imgui.button(f"Save as preset...##save-{entry['key']}"):
+            if controls.button(
+                f"Save as preset...##save-{entry['key']}",
+                role=controls.ButtonRole.GHOST,
+            ):
                 ctx.prompts.ask(
                     dialogs.Prompt(
                         title="Save settings preset",
@@ -4264,9 +4265,21 @@ class App:
     def _shortcuts_popup(self) -> None:
         from imgui_bundle import imgui
 
-        from . import widgets
+        from . import icons, widgets
         from .tokens import sp
 
+        viewport = imgui.get_main_viewport()
+        popup_width = min(sp(520), viewport.work_size.x - sp(32))
+        popup_height = min(sp(720), viewport.work_size.y - sp(64))
+        imgui.set_next_window_pos(
+            (
+                viewport.work_pos.x + viewport.work_size.x - sp(16),
+                viewport.work_pos.y + sp(48),
+            ),
+            imgui.Cond_.appearing.value,
+            (1.0, 0.0),
+        )
+        imgui.set_next_window_size((popup_width, popup_height))
         alpha, rise = widgets.popup_enter("shortcuts")
         # Translucent (UX.md Phase 5): cleared before ``begin`` paints it,
         # painted back below as a blur of the app or as the solid fill.
@@ -4283,6 +4296,10 @@ class App:
             widgets.window_backdrop(radius=rounding)
         if rise > 0.0:
             imgui.dummy((0, rise))
+        widgets.pane_header(
+            "Keyboard shortcuts",
+            actions=(("close", f"{icons.X} Close", imgui.close_current_popup),),
+        )
 
         # Collected first, drawn after the box (UX.md Phase 4). The list is ~60
         # rows over eight groups, which is a scroll and a read rather than a
@@ -4296,7 +4313,6 @@ class App:
         def table(title: str, rows: list[tuple[str, str]]) -> None:
             sections.append((title, rows))
 
-        imgui.dummy((sp(420), 0))
         table(
             "Everywhere",
             [
@@ -4457,7 +4473,9 @@ class App:
                 ("Middle drag", "Pan (wheel zooms)"),
             ],
         )
-        self._draw_shortcut_rows(sections)
+        if imgui.begin_child("shortcuts/scroll", (0, 0)):
+            self._draw_shortcut_rows(sections)
+        imgui.end_child()
         imgui.end_popup()
         imgui.pop_style_var()
 
@@ -4466,9 +4484,7 @@ class App:
         from imgui_bundle import imgui
 
         from . import widgets
-        from .tokens import sp
-
-        imgui.set_next_item_width(sp(420))
+        imgui.set_next_item_width(-1)
         self._shortcuts_query = widgets.input_text(
             "##shortcuts-filter",
             self._shortcuts_query,
@@ -4496,7 +4512,18 @@ class App:
         from .tokens import sp
 
         ctx = self.app_ctx
-        imgui.set_next_window_size((sp(460), 0))
+        viewport = imgui.get_main_viewport()
+        popup_width = min(sp(480), viewport.work_size.x - sp(32))
+        popup_height = min(sp(720), viewport.work_size.y - sp(64))
+        imgui.set_next_window_pos(
+            (
+                viewport.work_pos.x + viewport.work_size.x - sp(16),
+                viewport.work_pos.y + sp(48),
+            ),
+            imgui.Cond_.appearing.value,
+            (1.0, 0.0),
+        )
+        imgui.set_next_window_size((popup_width, popup_height))
         alpha, rise = widgets.popup_enter("diagnostics")
         # Translucent (UX.md Phase 5): cleared before ``begin`` paints it,
         # painted back below as a blur of the app or as the solid fill.
@@ -4513,7 +4540,10 @@ class App:
             widgets.window_backdrop(radius=rounding)
         if rise > 0.0:
             imgui.dummy((0, rise))
-        widgets.section("Issues")
+        widgets.pane_header(
+            "Issues",
+            actions=(("close", f"{icons.X} Close", imgui.close_current_popup),),
+        )
         for check in checks:
             colour = theme.OK if check.ok else (theme.ERR if check.fatal else theme.WARN)
             # Lucide, as the status pills now are (UX.md Phase 2): "o" and "x"

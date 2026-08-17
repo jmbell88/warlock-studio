@@ -44,17 +44,25 @@ def test_a_mesh_is_not_offered_a_sprite_of_its_own_input():
 
 
 def test_every_job_can_still_take_away_its_source_image():
-    for stage in ("reference", "model"):
+    # "ground" included: its input.png is the finished atlas rather than a
+    # source, which makes taking it away the *whole* point of the row.
+    for stage in ("reference", "model", "ground"):
         names = [n for n, _label in widgets.artifacts_for(_job(stage=stage))]
-        assert "input.png" in names
+        assert "input.png" in names, stage
 
 
 def test_every_offered_name_is_servable():
+    """Every stage, including any newly added one. The loop is the point: an
+    offered name that ``files.MEDIA`` does not carry is a download button that
+    answers NotReady for ever, and a stage left out of this list is exactly how
+    one ships."""
     from warlock.service import files as svc_files
 
-    for stage in ("reference", "tile", "model"):
-        for name, _label in widgets.artifacts_for(_job(stage=stage)):
-            assert name in svc_files.MEDIA
+    for stage in ("reference", "tile", "model", "ground"):
+        offered = widgets.artifacts_for(_job(stage=stage))
+        assert offered, f"{stage} offers nothing at all"
+        for name, _label in offered:
+            assert name in svc_files.MEDIA, f"{stage}: {name}"
 
 
 def test_a_tile_is_not_offered_the_cutout_exports():
@@ -104,7 +112,7 @@ def test_the_grid_offers_exactly_what_each_stage_can_derive():
     """
     from warlock.service import files as svc_files
 
-    for stage in ("reference", "tile"):
+    for stage in ("reference", "tile", "ground"):
         offered = {n for n, _label in widgets.artifacts_for(_job(stage=stage))}
         # input.png is the source image every job may take away, and is served
         # rather than derived -- so it is the one name in the grid that is not

@@ -89,6 +89,31 @@ def test_every_floating_surface_draws_the_one_shadow():
     assert "window_shadow" in inspect.getsource(widgets.toasts)
 
 
+def test_workflow_modals_use_the_same_overlay_recipe():
+    """Generation and document setup must not fall outside dialog chrome."""
+    from warlock.studio import dialogs
+    from warlock.studio.panes import plotter_canvas, settings_3d
+
+    owners = (
+        dialogs.ConfirmQueue.draw,
+        dialogs.PromptQueue.draw,
+        settings_3d.matte_modal,
+        plotter_canvas.setup_popup,
+    )
+    for owner in owners:
+        source = inspect.getsource(owner)
+        assert "popover_enter" in source, owner
+        assert "push_surface_rounding" in source, owner
+        assert 'window_shadow("overlay"' in source, owner
+        assert "window_backdrop" in source, owner
+
+
+def test_plain_popups_have_one_named_raised_surface_recipe():
+    source = inspect.getsource(widgets.popup_chrome)
+    assert 'window_shadow("raised"' in source
+    assert "window_backdrop" not in source, "plain popups do not block the app"
+
+
 def test_the_surface_radius_arrived_with_its_readers():
     """``RADIUS_L`` was deleted once for having none, and Phase 0 deliberately
     declined to re-add it ahead of them."""

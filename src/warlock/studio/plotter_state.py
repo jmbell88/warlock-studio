@@ -110,6 +110,20 @@ class PlotterDoc:
     journal_head: int | None = None
     journal_at: float = 0.0
 
+    # The queued ``ground_set`` job this tab is waiting on, if any. Frame-thread
+    # only, never serialised, and it dies with the tab: it is a *watch*, not a
+    # property of the map, and the job finishes into the library either way.
+    # Deliberately not part of ``busy`` -- painting a ground set takes minutes
+    # of GPU and there is no reason the map cannot be edited meanwhile; the
+    # adoption at the end is one ordinary undo step like any other.
+    ground_job: str | None = None
+    #: Consecutive frames ``ground_watch`` has looked for ``ground_job`` in the
+    #: jobs cache and not found it. The cache is one page of the newest jobs, so
+    #: a set that painted for minutes while enough newer rows were submitted
+    #: falls off the page -- and a watch with no bound would then poll for a row
+    #: that can never come back, silently, for the life of the tab.
+    ground_misses: int = 0
+
     @property
     def busy(self) -> bool:
         """Whether the document may be restructured right now.
@@ -154,6 +168,9 @@ class PlotterState:
     # about a map. Deliberately *not* a pair of tools: they are one gesture with
     # one preview and one undo step, and Tiled's Shape Fill is one button too.
     shape_mode: str = "rect"
+    # Geometry placed by the Object tool. Kept with the other tool settings so
+    # switching maps does not unexpectedly switch the insertion tool.
+    object_shape: str = "rect"
     # Which tileset the palette is showing, by index into ``doc.tilesets``.
     # An index rather than a firstgid because tilesets are append-only and the
     # palette is a view of a list -- and because index 0 is a meaningful
@@ -162,6 +179,9 @@ class PlotterState:
     # The block the palette last selected, as encoded gids. ``None`` means
     # nothing is picked, which is what an empty document starts as.
     brush: np.ndarray | None = None
+    # Tiled-compatible random mode chooses one non-empty tile from the current
+    # palette stamp for each placement instead of stamping the whole block.
+    random_mode: bool = False
     # The palette's own drag, in local tile coordinates of the active tileset.
     palette_anchor: tuple[int, int] | None = None
     # Which terrain the Terrain tool lays down, as ``(tileset index, terrain)``.

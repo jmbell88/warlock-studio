@@ -13,7 +13,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import fonts, icons, theme, tokens, widgets
+from .. import controls, fonts, icons, theme, tokens, widgets
 from ..tokens import sp
 from . import loader, parser
 from .targets import HELP_TARGETS, TROUBLESHOOTING
@@ -89,9 +89,13 @@ def open_at(ctx: Any, target: tuple[str, str | None]) -> None:
 
 
 def troubleshooting_button(ctx: Any, label: str = "Troubleshooting") -> bool:
-    """A small button onto chapter 12. -> whether it was pressed, so a caller
-    that wants to close a popup first can."""
-    if not imgui.small_button(label):
+    """A small button onto the troubleshooting chapter (18). -> whether it was
+    pressed, so a caller that wants to close a popup first can.
+
+    The number is written out of habit and has already outlived one
+    renumbering -- it said 12. ``TROUBLESHOOTING`` is the target; a chapter
+    number in a docstring is a copy of it that no test reads."""
+    if not controls.small_button(label):
         return False
     open_at(ctx, TROUBLESHOOTING)
     return True
@@ -231,7 +235,7 @@ def draw_body(ctx: Any) -> None:
 
 def _draw_toc(ms: Any) -> None:
     imgui.set_next_item_width(-1)
-    changed, ms.search = imgui.input_text_with_hint(
+    changed, ms.search = controls.input_text_with_hint(
         "##manual-search", "Search chapters...", ms.search
     )
     needle = ms.search.strip().lower()
@@ -245,7 +249,7 @@ def _draw_toc(ms: Any) -> None:
             widgets.section(chapter.part)
         part = chapter.part
         label = chapter.title if chapter.part else "Contents"
-        if imgui.selectable(f"{label}##{chapter.key}", ms.chapter == chapter.key)[0]:
+        if controls.selectable(f"{label}##{chapter.key}", ms.chapter == chapter.key)[0]:
             ms.open_at(chapter.key)
     if needle and not found:
         # H73. A search that matches nothing used to empty the whole table of
@@ -333,12 +337,18 @@ def _draw_chapter(ctx: Any, ms: Any) -> None:
     imgui.separator()
     toc = _toc()
     idx = next((i for i, c in enumerate(toc) if c.key == ms.chapter), 0)
-    if idx > 0 and imgui.button(f"{icons.ARROW_LEFT} {toc[idx - 1].title}"):
+    if idx > 0 and controls.button(
+        f"{icons.ARROW_LEFT} {toc[idx - 1].title}",
+        role=controls.ButtonRole.GHOST,
+    ):
         ms.open_at(toc[idx - 1].key)
     if idx + 1 < len(toc):
         if idx > 0:
             imgui.same_line()
-        if imgui.button(f"{toc[idx + 1].title} {icons.CHEVRON_RIGHT}"):
+        if controls.button(
+            f"{toc[idx + 1].title} {icons.CHEVRON_RIGHT}",
+            role=controls.ButtonRole.GHOST,
+        ):
             ms.open_at(toc[idx + 1].key)
 
 
@@ -380,7 +390,7 @@ def _draw_block(ctx: Any, ms: Any, block: parser.Block, index: int, anchor: str 
     elif isinstance(block, parser.CodeBlock):
         rows = block.text.count("\n") + 1
         height = imgui.get_text_line_height_with_spacing() * rows + sp(12)
-        imgui.input_text_multiline(
+        controls.input_text_multiline(
             f"##code-{index}", block.text, (_measure(), height),
             imgui.InputTextFlags_.read_only.value,
         )

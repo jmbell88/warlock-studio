@@ -669,6 +669,7 @@ def _news_footer(ctx: Any) -> None:
 def _news_popup() -> None:
     if not imgui.begin_popup("landing-news-all"):
         return
+    widgets.popup_chrome(_imgui=imgui)
     releases = changelog.entries()
     if not releases:
         widgets.muted("No changelog shipped with this build.")
@@ -702,6 +703,7 @@ def _start(ctx: Any) -> None:
     if widgets.primary_button(f"{icons.PLUS}  New...", (sp(160), 0)):
         imgui.open_popup("landing-new")
     if imgui.begin_popup("landing-new"):
+        widgets.popup_chrome(_imgui=imgui)
         for key, label, icon, action in NEW_ITEMS:
             if controls.menu_item(f"{icon}  {label}##landing-new-{key}", "", False)[0]:
                 action(ctx)

@@ -1,10 +1,13 @@
 """What an object's geometry *is*, now that it is a tagged shape.
 
-Tiled models seven object geometries and this package used to model two, with
-the other five refused at the reader's door. The refusals still stand -- a
-``.tmx`` carrying an ellipse is still refused, because refusing is honest until
-something can draw one -- but the *document* now models all seven, which is the
-thing those refusals will be flipped onto.
+This package used to model two geometries, with the rest refused at the
+reader's door. **Those refusals are gone**: the document models all eight, the
+canvas draws and hit-tests each, and both Tiled spellings carry them -- which
+is exactly the flip the refusals existed to be flipped onto. The docstring here
+said they still stood, directly above the tests asserting they do not.
+
+Seven of the eight are Tiled's; ``capsule`` is Warlock dialect and no Tiled
+release reads it back. See ``docs/PLOTTER_COMPAT.md``.
 
 The rule the file is written around: ``kind``/``w``/``h`` are **derived** from
 the shape and never stored beside it. Two fields that must agree is a bug
@@ -24,6 +27,7 @@ import pytest
 
 from warlock.studio.plotter import gid, tmx
 from warlock.studio.plotter.tilemap import (
+    Capsule,
     Ellipse,
     MapDoc,
     MapObject,
@@ -58,6 +62,7 @@ def test_every_shape_names_its_kind():
         (Rect(4, 5), "rect"),
         (Point(), "point"),
         (Ellipse(4, 5), "ellipse"),
+        (Capsule(4, 5), "capsule"),
         (Polygon(((0, 0), (4, 0), (4, 4))), "polygon"),
         (Polyline(((0, 0), (4, 0))), "polyline"),
         (TileShape(gid=1, w=16, h=16), "tile"),
@@ -157,13 +162,10 @@ def test_the_old_construction_form_still_builds_a_point():
     assert (obj.kind, obj.w, obj.h) == ("point", 0.0, 0.0)
 
 
-def test_only_the_ui_creatable_kinds_build_from_a_kind_string():
-    """``OBJECT_KINDS`` still means "what the editor can author", so the kind
-    door still refuses the other five. The *shape* door takes all seven -- an
-    exotic object is constructed, never spelled."""
-    with pytest.raises(ValueError):
-        MapObject(uid=new_uid(), kind="ellipse")
-    assert MapObject(uid=new_uid(), shape=Ellipse(4, 4)).kind == "ellipse"
+def test_every_ui_creatable_kind_builds_a_useful_default_shape():
+    kinds = ("rect", "point", "ellipse", "capsule", "polygon", "polyline", "tile", "text")
+    for kind in kinds:
+        assert MapObject(uid=new_uid(), kind=kind, w=4, h=5).kind == kind
 
 
 def test_a_shape_and_a_size_cannot_both_be_given():
@@ -256,6 +258,24 @@ def test_a_rotation_change_round_trips_through_undo():
     assert obj.rotation == 0.0
 
 
+def test_an_object_opacity_change_round_trips_through_undo():
+    doc = _doc()
+    layer = doc.add_object_layer()
+    obj = doc.add_object(layer.uid, MapObject(uid=new_uid(), opacity=0.8))
+    doc.set_object(layer.uid, obj.uid, opacity=0.25)
+    assert obj.opacity == 0.25
+    doc.undo()
+    assert obj.opacity == 0.8
+    doc.redo()
+    assert obj.opacity == 0.25
+
+
+@pytest.mark.parametrize("opacity", [-0.01, 1.01])
+def test_an_object_opacity_outside_zero_to_one_is_refused(opacity):
+    with pytest.raises(ValueError, match="opacity"):
+        MapObject(uid=new_uid(), opacity=opacity)
+
+
 def test_resizing_by_w_and_h_keeps_the_shape_it_was():
     """The canvas resizes by ``w``/``h`` and knows nothing about shapes. An
     ellipse dragged by a handle stays an ellipse."""
@@ -283,7 +303,7 @@ def test_the_kind_door_still_refuses_an_exotic_kind_on_an_edit():
     layer = doc.add_object_layer()
     obj = doc.add_object(layer.uid, MapObject(uid=new_uid(), kind="rect", w=8, h=8))
     with pytest.raises(ValueError):
-        doc.set_object(layer.uid, obj.uid, kind="polygon")
+        doc.set_object(layer.uid, obj.uid, kind="bezier")
 
 
 def test_a_kind_change_rebuilds_the_shape():
@@ -294,6 +314,14 @@ def test_a_kind_change_rebuilds_the_shape():
     assert obj.shape == Point()
     doc.undo()
     assert obj.shape == Rect(8.0, 8.0)
+
+
+def test_a_kind_change_can_rebuild_a_core_non_rect_shape():
+    doc = _doc()
+    layer = doc.add_object_layer()
+    obj = doc.add_object(layer.uid, MapObject(uid=new_uid(), kind="rect", w=8, h=6))
+    doc.set_object(layer.uid, obj.uid, kind="capsule")
+    assert obj.shape == Capsule(8.0, 6.0)
 
 
 def test_setting_the_same_shape_pushes_nothing():

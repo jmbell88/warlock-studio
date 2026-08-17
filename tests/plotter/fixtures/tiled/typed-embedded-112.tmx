@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<map version="1.10" tiledversion="1.12.2" class="PropertyMap" orientation="orthogonal" renderorder="right-down" width="2" height="2" tilewidth="16" tileheight="16" infinite="0" nextlayerid="3" nextobjectid="2">
+ <properties>
+  <property name="alive" type="bool" value="true"/>
+  <property name="colour" type="color" value="#804080c0"/>
+  <property name="count" type="int" value="7"/>
+  <property name="ratio" type="float" value="0.30000000000000004"/>
+  <property name="reference" type="object" value="1"/>
+  <property name="source-file" type="file" value="basic.png"/>
+  <property name="stats" type="class">
+   <properties>
+    <property name="hp" type="int" value="12"/>
+    <property name="title" value="Scout"/>
+   </properties>
+  </property>
+  <property name="tags" type="list">
+   <item value="fast"/>
+   <item type="int" value="3"/>
+   <item type="list">
+    <item type="bool" value="true"/>
+   </item>
+  </property>
+ </properties>
+ <tileset firstgid="1" name="Embedded Atlas" tilewidth="16" tileheight="16" tilecount="4" columns="2">
+  <properties>
+   <property name="license" value="fixture"/>
+  </properties>
+  <image source="basic.png" width="32" height="32"/>
+ </tileset>
+ <layer id="1" name="Ground" class="Floor" width="2" height="2">
+  <properties>
+   <property name="friction" type="float" value="0.5"/>
+  </properties>
+  <data encoding="csv">
+1,2,
+3,4
+</data>
+ </layer>
+ <objectgroup id="2" name="Things">
+  <object id="1" name="target" type="Marker" x="4" y="5">
+   <properties>
+    <property name="enabled" type="bool" value="true"/>
+   </properties>
+   <point/>
+  </object>
+ </objectgroup>
+</map>

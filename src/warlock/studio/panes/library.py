@@ -340,6 +340,7 @@ KIND_OPTIONS = [
     ("rig", "rigs"),
     ("sheet", "sheets"),
     ("sprite", "sprite sheets"),
+    ("ground", "ground sets"),
 ]
 
 
@@ -748,6 +749,7 @@ def _card_actions(ctx: Any, job: Any) -> None:
 def _overflow(ctx: Any, job: Any) -> None:
     if not imgui.begin_popup("more"):
         return
+    widgets.popup_chrome(_imgui=imgui)
     job_id = job["id"]
     files = job.get("files") or []
     if job.get("deleted_at"):
@@ -776,13 +778,22 @@ def _overflow(ctx: Any, job: Any) -> None:
                 ),
             )
         )
-    if job.get("params") and controls.menu_item("Copy settings to form", "", False)[0]:
+    # A ground set's params are a *document description* -- terrains, geometry,
+    # a band -- and the 2D form has no control for any of it, so copying them
+    # would fill the form with a seed and a base model and silently drop the
+    # rest. Its recipe is re-entered in Plotter, where the map it is for is.
+    copyable = bool(job.get("params")) and job["kind"] != "ground_set"
+    if copyable and controls.menu_item("Copy settings to form", "", False)[0]:
         _copy_settings(ctx, job)
     if job["status"] in ("done", "error", "cancelled"):
         # A hand-made reference has no generator behind it, so there is nothing
         # a new seed could change; the service refuses it, and offering the
-        # menu item anyway only buys the user an error toast.
-        rerollable = not (job["kind"] == "image" and job.get("stage") == "reference")
+        # menu item anyway only buys the user an error toast. A ground set is
+        # refused for its own reason (``rerun_job`` says it in words): a reroll
+        # would skip the weights admission its door holds.
+        rerollable = job["kind"] != "ground_set" and not (
+            job["kind"] == "image" and job.get("stage") == "reference"
+        )
         if rerollable and controls.menu_item("Reroll", "", False)[0]:
             ctx.submit(f"rerun:{job_id}", svc_jobs.rerun_job, ctx.svc, job_id, mode="reroll")
         if _remeshable(job) and controls.menu_item("Remesh", "", False)[0]:
@@ -1015,8 +1026,22 @@ def _remeshable(job: Any) -> bool:
     and came back as an error toast. That is the rule ``rerollable`` two lines
     above the menu item states in prose: never offer an action the service will
     refuse. Stated once, it cannot be honoured in one place and not the other.
+
+    The ground-set arm is the same lesson a second time. A ground set publishes
+    an ``input.png`` and is not staged "tile", so it satisfied both terms above
+    and the exclusion list quietly grew a hole the day the kind was added:
+    ``rerun_job`` refuses it by *kind*, in both modes, so Remesh offered it an
+    error toast -- and the retry ladder, which routes an errored card through
+    ``mode="remesh" if _remeshable(job) else "reroll"``, had no reachable answer
+    at all. Keyed on the kind rather than the stage for exactly that reason:
+    the service's refusal is by kind, and a predicate that guesses at a
+    different column is one that goes stale the next time a stage moves.
     """
-    return "input.png" in (job.get("files") or []) and job.get("stage") != "tile"
+    return (
+        "input.png" in (job.get("files") or [])
+        and job.get("stage") != "tile"
+        and job.get("kind") != "ground_set"
+    )
 
 
 def run_action(ctx: Any, job: Any, action: str) -> None:

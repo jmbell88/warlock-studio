@@ -85,6 +85,7 @@ def _row(ctx: Any, state: Any, tab: Any, source: Any, editable: bool) -> None:
         sprite = source.sprite
         imgui.set_tooltip(f"{sprite.width} x {sprite.height}\n{sprite.key}")
     if imgui.begin_popup_context_item("src-menu"):
+        widgets.popup_chrome(_imgui=imgui)
         if controls.menu_item_simple("Remove") and editable:
             packwright_mode.remove_source(ctx, source.uid, tab)
         imgui.end_popup()

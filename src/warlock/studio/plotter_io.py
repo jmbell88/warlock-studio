@@ -229,18 +229,19 @@ def _encoded(ctx: Any, doc: Any, file_format: str) -> dict[str, bytes] | None:
 
     Encoding used to be the one step in a save that could not fail, so every
     caller ran it bare on the frame thread. It can now: the Tiled exporters
-    refuse by name what the document models and they cannot yet spell (a
-    rotation, an ``"index"``-ordered object layer, five object shapes, a group,
-    an image layer, a decorated layer), and an exception raised on the frame
-    thread takes the window with it.
+    refuse by name what a document uses and they cannot yet spell, and an
+    exception raised on the frame thread takes the window with it.
 
     ``.wmap``'s own door is quieter than it was and is still named here: its
-    version 3 container stores everything version 2 refused, so nothing an
-    ordinary document holds reaches ``WmapUnstorable`` today. The handler stays
-    because the door does -- a layer kind the container has no entry for lands
-    there now, and chunked storage (M5) will -- and removing the plumbing in
-    order to re-add it next wave would leave the intervening builds crashing
-    the frame thread instead of toasting.
+    version 3 container stores everything version 2 refused, and version 4 adds
+    the 1.12-era fields on top, so nothing an ordinary document holds reaches
+    ``WmapUnstorable`` today. The handler stays because the door does -- a layer
+    kind the container has no entry for lands there now, and an infinite map
+    does too (the ``M5`` citation those comments carry points at the deleted
+    ``docs/PLOTTER_PLAN.md``; see the ``M{n}`` section of
+    ``docs/PLOTTER_COMPAT.md``) -- and removing the plumbing in order to re-add
+    it next wave would leave the intervening builds crashing the frame thread
+    instead of toasting.
 
     **Both refusal types by name, and nothing wider.** ``TiledUnsupported``
     covers the two exporters and ``WmapUnstorable`` covers ours -- a door that

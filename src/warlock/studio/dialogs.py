@@ -22,7 +22,7 @@ from imgui_bundle import imgui
 from imgui_bundle import portable_file_dialogs as pfd
 
 from ..service.errors import Failed
-from . import filetypes, theme, widgets
+from . import controls, filetypes, theme, widgets
 from .tokens import sp
 
 log = logging.getLogger(__name__)
@@ -133,6 +133,25 @@ def ask_delete(ctx: Any, *, title: str, message: str, on_confirm: Any) -> None:
             on_confirm=on_confirm,
         )
     )
+
+
+def _has_context() -> bool:
+    """Whether there is a live ImGui context for ``widgets`` to draw into.
+
+    The precondition for the renderer-only typography in :func:`draw_prompt`:
+    ``widgets.field_label`` reaches for ``widgets.imgui`` whatever this module's
+    own binding was replaced with, so what has to be true is that a context
+    exists -- not that two modules hold the same object. Written defensively
+    because the headless interaction tests' backend is a deliberately tiny
+    stand-in and need not carry the getter at all.
+    """
+    getter = getattr(widgets.imgui, "get_current_context", None)
+    if getter is None:
+        return False
+    try:
+        return getter() is not None
+    except Exception:  # noqa: BLE001 - a stand-in backend may raise instead
+        return False
 
 
 def _enter_pressed() -> bool:
@@ -247,7 +266,12 @@ class ConfirmQueue:
         # a destructive question a coin toss.
         confirmed = widgets.destructive_button(confirm.confirm_label, (sp(BUTTON_W), 0))
         imgui.same_line()
-        cancelled = imgui.button(confirm.cancel_label, (sp(BUTTON_W), 0))
+        cancelled = controls.button(
+            confirm.cancel_label,
+            (sp(BUTTON_W), 0),
+            role=controls.ButtonRole.SECONDARY,
+            _imgui=imgui,
+        )
         # Focus lands on the *safe* button, and Enter activates that one.
         #
         # It used to land on the destructive one, with Enter confirming it --
@@ -346,6 +370,21 @@ class PromptQueue:
             widgets.window_backdrop(radius=radius)
         if rise > 0.0:
             imgui.dummy((0, rise))
+        # A prompt is a one-field form, so it follows the same label-above-
+        # field pattern as every pane.  The headless interaction tests replace
+        # only this module's ImGui binding; renderer-only typography is skipped
+        # for that deliberately tiny backend.
+        #
+        # Asked as "is there a live context for ``widgets.field_label`` to draw
+        # into", which is the actual precondition -- that function reaches for
+        # ``widgets.imgui`` regardless of what this module was rebound to. It
+        # used to be ``imgui is widgets.imgui``, an object-identity test, which
+        # makes the *production* label conditional on two modules happening to
+        # hold the same object: any tool or test that rebinds either one, for a
+        # reason having nothing to do with this label, ships a form field with
+        # no label at all, and no test exercises the production shape.
+        if _has_context():
+            widgets.field_label(prompt.label)
         imgui.set_next_item_width(sp(FIELD_W))
         if not imgui.is_any_item_active():
             imgui.set_keyboard_focus_here()
@@ -355,8 +394,11 @@ class PromptQueue:
         # ``value`` at whatever it was seeded with for the whole modal, so
         # typing a name and clicking Save saved the old one (or, for a fresh
         # prompt, silently refused an empty string). Only Enter ever worked.
-        entered, value = imgui.input_text(
-            prompt.label, prompt.value, imgui.InputTextFlags_.enter_returns_true.value
+        entered, value = controls.input_text(
+            "##prompt-value",
+            prompt.value,
+            imgui.InputTextFlags_.enter_returns_true.value,
+            _imgui=imgui,
         )
         prompt.value = value
         if self.waiting:
@@ -379,10 +421,25 @@ class PromptQueue:
             # sentence in the modal that says why Save will not work, so it is
             # the last copy in the app that should be drawn at 3.20:1.
             imgui.text_colored(imgui.ImVec4(*theme.rgba(theme.MUTED)), "Name required.")
-        saved = imgui.button("Save", (sp(BUTTON_W), 0))
+        saved = controls.button(
+            "Save",
+            (sp(BUTTON_W), 0),
+            role=controls.ButtonRole.PRIMARY,
+            enabled=not blank,
+            reason="Enter a name first.",
+            _imgui=imgui,
+        )
         accepted = (entered or saved) and not blank
         imgui.same_line()
-        cancelled = imgui.button("Cancel", (sp(BUTTON_W), 0)) or _escape_pressed()
+        cancelled = (
+            controls.button(
+                "Cancel",
+                (sp(BUTTON_W), 0),
+                role=controls.ButtonRole.GHOST,
+                _imgui=imgui,
+            )
+            or _escape_pressed()
+        )
         if accepted and prompt.value.strip():
             self._answered()
             if prompt.on_accept is not None:

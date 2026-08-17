@@ -586,24 +586,39 @@ def matte_modal(ctx: Any) -> None:
     state = matte_preview.pump(ctx)
     if state is None:
         return
-    if not state._open:
+    appearing = not state._open
+    if appearing:
         imgui.open_popup(MATTE_TITLE)
         state._open = True
     centre = imgui.get_main_viewport().get_center()
     imgui.set_next_window_pos(centre, imgui.Cond_.appearing.value, (0.5, 0.5))
+    alpha, rise = widgets.popover_enter("matte-preview", appearing)
+    frosted = widgets.frosted()
+    if frosted:
+        imgui.set_next_window_bg_alpha(0.0)
+    imgui.push_style_var(imgui.StyleVar_.alpha.value, alpha)
+    radius = widgets.push_surface_rounding()
     opened, _ = imgui.begin_popup_modal(
         MATTE_TITLE, None, imgui.WindowFlags_.always_auto_resize.value
     )
+    widgets.pop_surface_rounding()
     if not opened:
         # Escape dismisses a modal without going through any of the buttons,
         # and imgui will not reopen a popup whose id it thinks is already open:
         # without this the modal would vanish once and never come back, with
         # ``job_id`` still set and every later press of Make 3D doing nothing.
+        imgui.pop_style_var()
         state._open = False
         matte_preview.close(ctx)
         return
+    widgets.window_shadow("overlay", radius=radius)
+    if frosted:
+        widgets.window_backdrop(radius=radius)
+    if rise > 0.0:
+        imgui.dummy((0, rise))
     _matte_body(ctx, state)
     imgui.end_popup()
+    imgui.pop_style_var()
 
 
 def _matte_body(ctx: Any, state: Any) -> None:
@@ -630,7 +645,14 @@ def _matte_body(ctx: Any, state: Any) -> None:
     # user can see happening -- so the sentence says what is being waited for
     # rather than restating that the button is off.
     preview_why = "The cutout is still being prepared."
-    if widgets.disabled_button(label, ready, (sp(150), 0), reason=preview_why):
+    role = controls.ButtonRole.DESTRUCTIVE if refused else controls.ButtonRole.PRIMARY
+    if controls.button(
+        label,
+        (sp(150), 0),
+        role=role,
+        enabled=ready,
+        reason=preview_why,
+    ):
         imgui.close_current_popup()
         state._open = False
         # Read *before* ``accept``, which closes the state before it calls
@@ -642,13 +664,17 @@ def _matte_body(ctx: Any, state: Any) -> None:
         )
         return
     imgui.same_line()
-    if widgets.disabled_button("Fix matte", ready, (sp(150), 0), reason=preview_why):
+    if controls.button(
+        "Fix matte", (sp(150), 0), enabled=ready, reason=preview_why
+    ):
         imgui.close_current_popup()
         state._open = False
         matte_preview.fix(ctx)
         return
     imgui.same_line()
-    if controls.button("Cancel", (sp(100), 0)):
+    if controls.button(
+        "Cancel", (sp(100), 0), role=controls.ButtonRole.GHOST
+    ):
         imgui.close_current_popup()
         state._open = False
         matte_preview.close(ctx)

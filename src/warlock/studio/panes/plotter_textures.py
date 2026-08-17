@@ -13,9 +13,13 @@ That is also why the cache key is the tileset's *identity*: two maps that opened
 the same ``.tsx`` hold two distinct objects, so they get two textures, and one
 map's close cannot free the other's.
 
-The canvas draws one quad per visible cell out of these, which is why there is
-no composited map image anywhere in the mode -- see ``plotter/render.py`` for
-the one that exists, and for why it is only ever asked for by an export.
+The canvas draws one quad per visible cell out of these, which is why the mode
+builds no composited map image in the ordinary case -- see ``plotter/render.py``
+for the one that exists, and for why an export is its ordinary caller. A
+document carrying a non-normal blend mode is the exception, because the draw
+list cannot express one: :func:`blend_slot` is where that composite is parked,
+and ``plotter_canvas.BLEND_PREVIEW_PIXELS`` is the budget that keeps it from
+being asked for on a map where it would cost a frame.
 """
 
 from __future__ import annotations
@@ -93,6 +97,21 @@ def image_texture(ctx: Any, uid: str, name: str, pixels: Any, stamp: Any) -> Any
         ctx.state.preview[key] = texture
         ctx.state.preview[stamp_key] = stamp
     return texture
+
+
+def blend_slot(uid: str) -> str:
+    """Where the canvas parks its composited blend surface for one tab.
+
+    A key rather than a texture, because what is cached is the *array* the
+    composite produced -- ``image_texture`` above turns it into a texture under
+    a key of its own. It lives under ``PREFIX`` so ``release_doc`` drops it with
+    the rest of the tab's entries: it was cached as ``plotter_blended:{uid}``,
+    which no sweep covers, so a session that opened and closed ten maps with a
+    non-normal blend mode on them held ten whole-map RGBA composites for as long
+    as the app ran. ``release_prefix`` separates a texture from a plain value by
+    looking for ``.release``, so an ndarray parks here safely beside them.
+    """
+    return _slot(uid, "blended-cache")
 
 
 def release_doc(ctx: Any, uid: str) -> None:

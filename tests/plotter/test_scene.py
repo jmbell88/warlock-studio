@@ -530,57 +530,49 @@ def test_a_flat_document_still_writes_a_wmap():
     assert wmap.read_wmap(wmap.wmap_bytes(doc)).width == doc.width
 
 
-@pytest.mark.parametrize("export", ["tmx_export", "tmj_export"])
-def test_exporting_a_document_holding_a_group_is_refused(export):
+def test_groups_and_image_layers_are_written_to_both_tiled_formats():
+    import json
+    import xml.etree.ElementTree as ET
+
     from warlock.studio.plotter import tmx
-    from warlock.studio.plotter.props import TiledUnsupported
 
     doc = _doc()
-    doc.add_tile_layer("t")
-    doc.add_group_layer("G")
-    with pytest.raises(TiledUnsupported) as excinfo:
-        getattr(tmx, export)(doc)
-    assert excinfo.value.feature == "group layers"
-    assert excinfo.value.exporting is True
+    group = doc.add_group_layer("G")
+    doc.add_image_layer("sky", pixels=_picture(), parent_uid=group.uid)
+
+    xml_files = tmx.tmx_export(doc)
+    root = ET.fromstring(xml_files["map.tmx"])
+    assert root.find("group/imagelayer") is not None
+    assert any(name.endswith(".png") for name in xml_files)
+
+    payload = json.loads(tmx.tmj_export(doc)["map.tmj"])
+    assert payload["layers"][0]["type"] == "group"
+    assert payload["layers"][0]["layers"][0]["type"] == "imagelayer"
 
 
-@pytest.mark.parametrize("export", ["tmx_export", "tmj_export"])
-def test_exporting_a_document_holding_an_image_layer_is_refused(export):
-    from warlock.studio.plotter import tmx
-    from warlock.studio.plotter.props import TiledUnsupported
-
-    doc = _doc()
-    doc.add_tile_layer("t")
-    doc.add_image_layer("sky", pixels=_picture())
-    with pytest.raises(TiledUnsupported) as excinfo:
-        getattr(tmx, export)(doc)
-    assert excinfo.value.feature == "image layers"
-    assert excinfo.value.exporting is True
-
-
-@pytest.mark.parametrize("export", ["tmx_export", "tmj_export"])
 @pytest.mark.parametrize(
-    ("values", "feature"),
+    ("values", "xml_attr", "json_key"),
     [
-        ({"offset_y": 8.0}, "layer pixel offsets"),
-        ({"tint": (255, 0, 0, 255)}, "a tinted layer"),
-        ({"parallax_x": 0.5}, "a parallax-scrolling layer"),
-        ({"class_name": "Ground"}, "a class-tagged layer"),
+        ({"offset_y": 8.0}, "offsety", "offsety"),
+        ({"tint": (255, 0, 0, 255)}, "tintcolor", "tintcolor"),
+        ({"parallax_x": 0.5}, "parallaxx", "parallaxx"),
+        ({"class_name": "Ground"}, "class", "class"),
+        ({"blend_mode": "multiply"}, "mode", "mode"),
     ],
 )
-def test_exporting_a_decorated_layer_is_refused_by_name(export, values, feature):
-    """The rotation precedent, one level up. A field the document models and no
-    writer can spell is a refusal at the writer door, never a silent drop."""
+def test_decorated_layers_are_written_to_both_tiled_formats(values, xml_attr, json_key):
+    import json
+    import xml.etree.ElementTree as ET
+
     from warlock.studio.plotter import tmx
-    from warlock.studio.plotter.props import TiledUnsupported
 
     doc = _doc()
     layer = doc.add_tile_layer("t")
     doc.set_layer_props(layer.uid, **values)
-    with pytest.raises(TiledUnsupported) as excinfo:
-        getattr(tmx, export)(doc)
-    assert excinfo.value.feature == feature
-    assert excinfo.value.exporting is True
+    node = ET.fromstring(tmx.tmx_export(doc)["map.tmx"]).find("layer")
+    assert node is not None and node.get(xml_attr) is not None
+    payload = json.loads(tmx.tmj_export(doc)["map.tmj"])
+    assert json_key in payload["layers"][0]
 
 
 @pytest.mark.parametrize(

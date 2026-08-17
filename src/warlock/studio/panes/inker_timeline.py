@@ -545,6 +545,7 @@ def _frame_menu(tab: Any, index: int) -> None:
     doc = tab.doc
     if not imgui.begin_popup_context_item(f"framemenu{index}"):
         return
+    widgets.popup_chrome(_imgui=imgui)
     imgui.begin_disabled(tab.busy)
     if controls.menu_item_simple("Insert before"):
         doc.add_frame(index)
@@ -727,6 +728,7 @@ def _cell_menu(
     doc = tab.doc
     if not imgui.begin_popup_context_item("celmenu"):
         return
+    widgets.popup_chrome(_imgui=imgui)
     imgui.begin_disabled(tab.busy)
     imgui.begin_disabled(fi <= 0)
     if controls.menu_item_simple("Link to previous frame"):
@@ -911,6 +913,7 @@ def _tag_menu(ctx: Any, tab: Any, index: int, tag: Any) -> None:
     state = ctx.state.inker
     if not imgui.begin_popup_context_item("tagmenu"):
         return
+    widgets.popup_chrome(_imgui=imgui)
     imgui.begin_disabled(tab.busy)
     if controls.menu_item_simple("Rename"):
         state.tag_editing = index

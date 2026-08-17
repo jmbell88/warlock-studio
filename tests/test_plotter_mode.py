@@ -18,7 +18,7 @@ import pytest
 
 from warlock.studio import plotter_io, plotter_mode
 from warlock.studio.plotter import gid, tmx, wmap
-from warlock.studio.plotter.tilemap import Ellipse, MapObject, new_uid
+from warlock.studio.plotter.tilemap import MapObject, new_uid
 from warlock.studio.plotter.tileset import Tileset
 
 
@@ -264,27 +264,22 @@ def test_a_refused_submit_clears_the_lock_too(tmp_path):
     assert not tab.saving
 
 
-def test_an_export_refusal_is_toasted_rather_than_raised_on_the_frame_thread(tmp_path):
-    """Encoding used to be the one step of a save that could not fail, so every
-    caller ran it bare on the frame thread. Both writers refuse by name now --
-    the Tiled ones because the document models a rotation, a draw order, five
-    shapes, a layer tree and layer decorations they cannot spell, and ``.wmap``
-    because its version 2 manifest has nowhere to put the last two -- and an
-    exception raised here takes the window with it.
-    """
+def test_an_export_refusal_is_toasted_rather_than_raised_on_the_frame_thread(
+    tmp_path, monkeypatch
+):
+    """A named exporter refusal cannot be allowed to take down the UI thread."""
     ctx = FakeCtx()
     tab = _tab(ctx)
-    layer = tab.doc.add_object_layer()
-    tab.doc.add_object(layer.uid, MapObject(uid=new_uid(), shape=Ellipse(4, 4)))
+
+    def refuse(_doc, _format):
+        raise tmx.TiledUnsupported("a synthetic future feature", exporting=True)
+
+    monkeypatch.setattr(plotter_io, "_encode", refuse)
 
     plotter_mode.save_to(ctx, tab, tmp_path / "a.tmx", "tmx")
     assert ctx.toasts and ctx.toasts[-1][1] == "error"
-    assert "ellipse objects" in ctx.toasts[-1][0]
+    assert "a synthetic future feature" in ctx.toasts[-1][0]
     assert not tab.saving, "a refused encode must not leave the tab locked"
-
-    ctx.toasts.clear()
-    plotter_mode.save_to(ctx, tab, tmp_path / "a.wmap", "wmap")
-    assert not [t for t in ctx.toasts if t[1] == "error"]
 
 
 class _FutureLayer:
@@ -1022,9 +1017,48 @@ def test_dragging_a_corner_past_its_opposite_flips_rather_than_going_negative():
     from warlock.studio.panes import plotter_canvas
 
     # Pinned at (40, 60); the pointer crosses well past it.
-    x, y, w, h = plotter_canvas._resized("nw", (40.0, 60.0), (100.0, 90.0))
+    class Unrotated:
+        rotation = 0.0
+
+    x, y, w, h = plotter_canvas._resized(Unrotated(), (40.0, 60.0), (100.0, 90.0))
     assert (x, y, w, h) == (40.0, 60.0, 60.0, 30.0)
     assert w >= 0 and h >= 0
+
+
+def test_resizing_a_rotated_object_keeps_the_pinned_corner_still():
+    """The whole point of pinning a corner: it must not move.
+
+    ``x``/``y``/``w``/``h`` are the object's *unrotated* origin and extent, so
+    a resize that took the min and max of two map-space points wrote a
+    rectangle that -- once ``_rotated`` put the rotation back -- was neither
+    the size asked for nor in the place it was grabbed. Asserted through
+    ``_handle_corners`` rather than against the raw fields, because what has to
+    hold is a statement about where the corner ends up on screen.
+    """
+    import math
+
+    from warlock.studio.panes import plotter_canvas
+
+    class Obj:
+        x, y, w, h = 100.0, 100.0, 40.0, 20.0
+        rotation = 30.0
+
+    obj = Obj()
+    # Pin the north-west corner and drag the south-east one somewhere new.
+    fixed = plotter_canvas._opposite("se", obj)
+    target = plotter_canvas._rotated(obj, 90.0, 50.0)
+    obj.x, obj.y, obj.w, obj.h = plotter_canvas._resized(obj, fixed, target)
+
+    moved = plotter_canvas._handle_corners(obj)
+    assert math.isclose(moved["nw"][0], fixed[0], abs_tol=1e-9)
+    assert math.isclose(moved["nw"][1], fixed[1], abs_tol=1e-9)
+    # And the dragged corner lands under the pointer, which is the other half
+    # of what a resize promises.
+    assert math.isclose(moved["se"][0], target[0], abs_tol=1e-9)
+    assert math.isclose(moved["se"][1], target[1], abs_tol=1e-9)
+    # The extent is the diagonal measured in the object's own frame.
+    assert math.isclose(obj.w, 90.0, abs_tol=1e-9)
+    assert math.isclose(obj.h, 50.0, abs_tol=1e-9)
 
 
 def test_only_a_rect_has_resize_handles():
@@ -1898,10 +1932,8 @@ class _FakeInkerDoc:
 # wrong when the property model grows a type.
 
 
-def test_the_new_property_row_offers_every_type_that_fits_on_one_line():
-    """``class`` and ``list`` are deliberately absent: a class needs its
-    members and a list its items, neither of which a single row can author.
-    Both still *display* -- the case below."""
+def test_the_new_property_row_offers_scalar_and_recursive_types():
+    """Class and list start empty, then unfold into the recursive editor."""
     from warlock.studio.panes import plotter_layers
 
     assert plotter_layers.AUTHORABLE_TYPES == (
@@ -1912,20 +1944,38 @@ def test_the_new_property_row_offers_every_type_that_fits_on_one_line():
         "color",
         "file",
         "object",
+        "class",
+        "list",
     )
     assert plotter_layers._blank_value("object") == 0
     assert plotter_layers._blank_value("file") == ""
+    assert plotter_layers._blank_value("class") == {}
+    assert plotter_layers._blank_value("list") == []
 
 
-def test_a_container_property_gets_a_one_line_summary_rather_than_a_crash():
-    """A map arriving from Tiled with a class property has to be readable
-    before it is editable; the recursive editor is a later milestone."""
+def test_a_container_property_gets_a_compact_summary_for_its_editor_header():
     from warlock.studio.panes import plotter_layers
     from warlock.studio.plotter.props import Prop
 
     npc = Prop("class", {"hp": Prop("int", 3), "name": Prop("string", "Bob")}, propertytype="NPC")
     assert plotter_layers._summary(npc) == "NPC (2 members)"
     assert plotter_layers._summary(Prop("list", [Prop("int", 1)])) == "list (1 item)"
+
+
+def test_object_property_choices_use_persistent_ids_in_recursive_layers():
+    from warlock.studio.panes import plotter_layers
+
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    group = tab.doc.add_group_layer("Nested")
+    layer = tab.doc.add_object_layer("Things", parent_uid=group.uid)
+    obj = tab.doc.add_object(
+        layer.uid, MapObject(uid=new_uid(), name="Spawn", kind="point")
+    )
+    assert plotter_layers.object_options(tab.doc) == [
+        ("0", "None"),
+        (str(obj.id), f"Spawn ({obj.id})"),
+    ]
 
 
 # --- asking before making -----------------------------------------------------

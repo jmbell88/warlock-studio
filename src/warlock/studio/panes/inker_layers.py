@@ -129,6 +129,7 @@ def _group_row(ctx: Any, tab: Any, doc: Any, node: Any, depth: int) -> None:
     controls.selectable(f"{label}##grouphead", False)
     _drop_onto_group(doc, node.uid)
     if imgui.begin_popup_context_item("group-menu"):
+        widgets.popup_chrome(_imgui=imgui)
         if controls.selectable("Ungroup", False)[0]:
             doc.ungroup(node.uid)
         if controls.selectable("Rename", False)[0]:
@@ -293,6 +294,7 @@ def _row(ctx: Any, tab: Any, doc: Any, index: int, depth: int = 0) -> None:
     imgui.end_group()
 
     if imgui.begin_popup_context_item("layer-menu"):
+        widgets.popup_chrome(_imgui=imgui)
         if controls.selectable("Rename", False)[0]:
             _ask_rename(ctx, doc, index)
         if controls.selectable("Move up", False)[0]:

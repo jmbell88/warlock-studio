@@ -785,6 +785,17 @@ def ready(job: dict[str, Any], job_dir: Path, name: str) -> bool:
         # and the worker writes rig.json last, which makes it the completion
         # marker for the pair.
         return (job_dir / "rig.json").exists() and path.exists()
+    if name == "input.png" and job.get("stage") == "ground":
+        # The one stage where input.png is *output*. Everywhere else it is the
+        # picture the run was given, complete before the run began, which is why
+        # the fallthrough below serves it on existence alone. A ground set
+        # publishes its own atlas under that name and then writes ground.json
+        # last as the completion marker -- so existence alone hands a reader the
+        # atlas of a job that errored between the two writes, and the library
+        # lists, exports and *adopts* it as a finished tileset. Gated on the
+        # sidecar for rig.glb's reason, not on status: the row is marked failed
+        # after the artifacts are already on disk.
+        return (job_dir / "ground.json").exists() and path.exists()
     if name in DERIVED_2D:
         # A reference's or a tile's pixels, and only those: a mesh job's
         # input.png is the picture it was reconstructed *from*, so an icon
@@ -833,6 +844,12 @@ def unready_reason(job: dict[str, Any], job_dir: Path, name: str) -> str:
         return "This asset has not been rigged yet."
     if name == "rig_qa.png" and not (job_dir / "rig_qa.json").exists():
         return "The deformation sheet is only made when a rig is."
+    if (
+        name == "input.png"
+        and job.get("stage") == "ground"
+        and not (job_dir / "ground.json").exists()
+    ):
+        return "This ground set did not finish painting, so its tileset is incomplete."
     if name in DERIVED_2D and name not in derived_2d_for(job.get("stage")):
         return f"{name} is only offered for a reference or a tile, not for a mesh."
     if name in DERIVED_2D and not (job_dir / "input.png").exists():

@@ -1,4 +1,4 @@
-"""Where a cell is, in both projections, and how a click gets back.
+"""Where a cell is, in every affine projection, and how a click gets back.
 
 One module owns the lattice, for the reason ``gid`` owns the transform flags:
 the canvas and the flat renderer must place a cell identically or an export
@@ -35,9 +35,11 @@ from typing import NamedTuple
 
 ORTHOGONAL = "orthogonal"
 ISOMETRIC = "isometric"
-#: The two this editor draws. Staggered and hexagonal are refused at the door by
-#: :mod:`.tmx`, which is what keeps this tuple short enough to branch on.
-PROJECTIONS: tuple[str, ...] = (ORTHOGONAL, ISOMETRIC)
+OBLIQUE = "oblique"
+#: The affine projections this editor draws. Staggered and hexagonal require a
+#: nearest-centre hit test and remain explicit refusals at the Tiled door.
+PROJECTIONS: tuple[str, ...] = (ORTHOGONAL, ISOMETRIC, OBLIQUE)
+RENDER_ORDERS: tuple[str, ...] = ("right-down", "right-up", "left-down", "left-up")
 
 
 class Lattice(NamedTuple):
@@ -58,6 +60,9 @@ class Lattice(NamedTuple):
     stagger_axis: str = "y"
     stagger_index: str = "odd"
     hex_side: int = 0
+    skew_x: int = 0
+    skew_y: int = 0
+    render_order: str = "right-down"
 
 
 def check(projection: str) -> str:
@@ -83,12 +88,25 @@ def _origin_x(lat: Lattice) -> float:
     return (lat.height * lat.tile_w) / 2.0 if lat.projection == ISOMETRIC else 0.0
 
 
+def _oblique_origin(lat: Lattice) -> tuple[float, float]:
+    """Offset the skewed lattice so its finite bounding box starts at zero."""
+    return (
+        -min(0.0, float(lat.height * lat.skew_x)),
+        -min(0.0, float(lat.width * lat.skew_y)),
+    )
+
+
 def map_size(lat: Lattice) -> tuple[int, int]:
     """The pixel extent of the whole map -- Tiled's own bounding box."""
     if lat.projection == ISOMETRIC:
         return (
             (lat.width + lat.height) * lat.tile_w // 2,
             (lat.width + lat.height) * lat.tile_h // 2,
+        )
+    if lat.projection == OBLIQUE:
+        return (
+            int(abs(lat.height * lat.skew_x) + lat.width * lat.tile_w),
+            int(abs(lat.width * lat.skew_y) + lat.height * lat.tile_h),
         )
     return (lat.width * lat.tile_w, lat.height * lat.tile_h)
 
@@ -106,6 +124,12 @@ def cell_corner(lat: Lattice, column: float, row: float) -> tuple[float, float]:
         return (
             (column - row) * half_w + _origin_x(lat),
             (column + row) * half_h,
+        )
+    if lat.projection == OBLIQUE:
+        origin_x, origin_y = _oblique_origin(lat)
+        return (
+            column * lat.tile_w + row * lat.skew_x + origin_x,
+            row * lat.tile_h + column * lat.skew_y + origin_y,
         )
     return (column * lat.tile_w, row * lat.tile_h)
 
@@ -139,6 +163,15 @@ def cell_at(lat: Lattice, x: float, y: float) -> tuple[int, int]:
         u = (float(x) - _origin_x(lat)) / half_w
         v = float(y) / half_h
         return (math.floor((u + v) / 2.0), math.floor((v - u) / 2.0))
+    if lat.projection == OBLIQUE:
+        origin_x, origin_y = _oblique_origin(lat)
+        px, py = float(x) - origin_x, float(y) - origin_y
+        determinant = lat.tile_w * lat.tile_h - lat.skew_x * lat.skew_y
+        if determinant == 0:
+            raise ValueError("an oblique map's skew collapses its grid")
+        column = (px * lat.tile_h - py * lat.skew_x) / determinant
+        row = (py * lat.tile_w - px * lat.skew_y) / determinant
+        return (math.floor(column), math.floor(row))
     return (math.floor(float(x) / lat.tile_w), math.floor(float(y) / lat.tile_h))
 
 
@@ -153,6 +186,16 @@ def cell_point(lat: Lattice, x: float, y: float) -> tuple[float, float]:
         u = (float(x) - _origin_x(lat)) / half_w
         v = float(y) / half_h
         return ((u + v) / 2.0, (v - u) / 2.0)
+    if lat.projection == OBLIQUE:
+        origin_x, origin_y = _oblique_origin(lat)
+        px, py = float(x) - origin_x, float(y) - origin_y
+        determinant = lat.tile_w * lat.tile_h - lat.skew_x * lat.skew_y
+        if determinant == 0:
+            raise ValueError("an oblique map's skew collapses its grid")
+        return (
+            (px * lat.tile_h - py * lat.skew_x) / determinant,
+            (py * lat.tile_w - px * lat.skew_y) / determinant,
+        )
     return (float(x) / lat.tile_w, float(y) / lat.tile_h)
 
 
@@ -222,6 +265,8 @@ def draw_order(lat: Lattice):
     invisible today and correct on the day something does.
     """
     width, height = lat.width, lat.height
+    if lat.render_order not in RENDER_ORDERS:
+        raise ValueError(f"unknown render order {lat.render_order!r}")
     if lat.projection == ISOMETRIC:
         for depth in range(width + height - 1):
             lo = max(0, depth - (height - 1))
@@ -229,6 +274,8 @@ def draw_order(lat: Lattice):
             for column in range(lo, hi + 1):
                 yield (column, depth - column)
         return
-    for row in range(height):
-        for column in range(width):
+    columns = range(width) if lat.render_order.startswith("right") else range(width - 1, -1, -1)
+    rows = range(height) if lat.render_order.endswith("down") else range(height - 1, -1, -1)
+    for row in rows:
+        for column in columns:
             yield (column, row)

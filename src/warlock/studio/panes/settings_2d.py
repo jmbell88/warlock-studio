@@ -544,6 +544,7 @@ def _history(ctx: Any, form: dict[str, Any]) -> None:
     if controls.button("Recent"):
         imgui.open_popup("prompt-history")
     if imgui.begin_popup("prompt-history"):
+        widgets.popup_chrome(_imgui=imgui)
         for entry in ctx.state.history:
             label = entry if len(entry) <= 60 else entry[:57] + "..."
             if controls.menu_item(f"{label}##{hash(entry)}", "", False)[0]:

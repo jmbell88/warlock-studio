@@ -73,8 +73,10 @@ from .plotter_state import (  # noqa: F401
 from .plotter_tilesets import (  # noqa: F401
     TILESET_FILTER,
     add_tileset_path,
+    adopt_ground_set,
     ask_add_tileset,
     generate_terrain_set,
+    paint_ground_set,
     polish_in_inker,
     tileset_from_inker,
     use_as_tileset,
@@ -288,6 +290,20 @@ def on_task_done(ctx: Any, done: Any) -> None:
 
     tab = state.get(key.split(":", 1)[1]) if ":" in key else None
     if tab is None:
+        return
+
+    if name == "plotter-ground":
+        # The submission landed, not the paint: what came back is a queued job
+        # id, and the atlas is minutes away. The tab holds the id and the
+        # tileset pane watches it -- deliberately, since the adoption mutates
+        # the document and pushes an undo step, which is only meaningful while
+        # the user is looking at the map. A failure raised at the door arrives
+        # through ``on_task_failed`` like every other refusal.
+        if isinstance(result, dict) and result.get("ground_job"):
+            tab.ground_job = str(result["ground_job"])
+            ctx.cache.invalidate()
+            count = int(result.get("textures") or 0)
+            ctx.toast(f"Painting a ground set -- {count} textures queued.")
         return
 
     if name == "plotter-tileset":

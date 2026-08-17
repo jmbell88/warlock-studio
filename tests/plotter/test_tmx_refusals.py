@@ -16,7 +16,7 @@ import json
 import numpy as np
 import pytest
 
-from warlock.studio.plotter import tilemap, tmx, tsx
+from warlock.studio.plotter import tilemap, tmx, tsx, wmap
 from warlock.studio.plotter.tileset import Tileset
 
 
@@ -100,18 +100,26 @@ def test_a_chunked_json_layer_is_refused():
 # --- layers -------------------------------------------------------------------
 
 
-def test_group_layers_are_refused():
-    _refuses(_map(body=_EMPTY_LAYER + '<group id="9" name="G"/>'), "group layers")
+def test_group_layers_are_modelled_recursively():
+    body = '<group id="9" name="G">' + _EMPTY_LAYER + "</group>"
+    doc = tmx.read_tmx(_map(body=body), **LOADERS)
+    assert isinstance(doc.layers[0], tilemap.GroupLayer)
+    assert isinstance(doc.layers[0].children[0], tilemap.TileLayer)
 
 
-def test_image_layers_are_refused():
-    _refuses(_map(body=_EMPTY_LAYER + '<imagelayer id="9" name="I"/>'), "image layers")
+def test_an_empty_image_layer_is_modelled():
+    doc = tmx.read_tmx(
+        _map(body=_EMPTY_LAYER + '<imagelayer id="9" name="I"/>'), **LOADERS
+    )
+    assert isinstance(doc.layers[1], tilemap.ImageLayer)
+    assert doc.layers[1].pixels.shape == (0, 0, 4)
 
 
 @pytest.mark.parametrize("attr", ["offsetx", "offsety"])
-def test_a_layer_with_a_pixel_offset_is_refused(attr):
+def test_a_layer_with_a_pixel_offset_is_modelled(attr):
     body = _EMPTY_LAYER.replace('name="L"', f'name="L" {attr}="8"')
-    _refuses(_map(body=body), "layer pixel offsets")
+    layer = tmx.read_tmx(_map(body=body), **LOADERS).layers[0]
+    assert getattr(layer, "offset_x" if attr == "offsetx" else "offset_y") == 8.0
 
 
 def test_zstd_layer_data_is_refused_with_the_remedy_named():
@@ -153,22 +161,25 @@ def test_an_unknown_json_layer_type_is_refused():
 
 
 @pytest.mark.parametrize(
-    ("shape", "feature"),
+    ("shape", "kind"),
     [
-        ("<ellipse/>", "ellipse objects"),
-        ('<polygon points="0,0 1,1"/>', "polygon objects"),
-        ('<polyline points="0,0 1,1"/>', "polyline objects"),
-        ('<text>hi</text>', "text objects"),
+        ("<ellipse/>", "ellipse"),
+        ('<capsule/>', "capsule"),
+        ('<polygon points="0,0 1,1 2,0"/>', "polygon"),
+        ('<polyline points="0,0 1,1"/>', "polyline"),
+        ('<text>hi</text>', "text"),
     ],
 )
-def test_an_object_shape_that_cannot_be_drawn_is_refused(shape, feature):
+def test_every_xml_object_shape_is_modelled(shape, kind):
     body = f'<objectgroup id="2" name="O"><object id="1" x="0" y="0">{shape}</object></objectgroup>'
-    _refuses(_map(body=_EMPTY_LAYER + body), feature)
+    doc = tmx.read_tmx(_map(body=_EMPTY_LAYER + body), **LOADERS)
+    assert doc.layers[1].objects[0].kind == kind
 
 
-def test_a_tile_object_is_refused():
+def test_a_tile_object_is_modelled():
     body = '<objectgroup id="2" name="O"><object id="1" gid="1" x="0" y="0"/></objectgroup>'
-    _refuses(_map(body=_EMPTY_LAYER + body), "tile objects")
+    doc = tmx.read_tmx(_map(body=_EMPTY_LAYER + body), **LOADERS)
+    assert doc.layers[1].objects[0].kind == "tile"
 
 
 def test_a_templated_object_is_refused():
@@ -179,32 +190,28 @@ def test_a_templated_object_is_refused():
     _refuses(_map(body=_EMPTY_LAYER + body), "object templates")
 
 
-def test_a_rotated_object_is_refused():
-    """An unrotated outline drawn for a rotated object is a *wrong* picture,
-    and a wrong picture is worse than a refusal. Contrast a hidden object,
-    which is modelled: hiding it changes nothing about where it is."""
+def test_a_rotated_object_is_modelled():
     body = (
         '<objectgroup id="2" name="O">'
         '<object id="1" x="0" y="0" rotation="45"/></objectgroup>'
     )
-    _refuses(_map(body=_EMPTY_LAYER + body), "rotated objects")
+    doc = tmx.read_tmx(_map(body=_EMPTY_LAYER + body), **LOADERS)
+    assert doc.layers[1].objects[0].rotation == 45.0
 
 
 @pytest.mark.parametrize(
-    ("shape", "feature"),
+    ("shape", "kind"),
     [
-        ({"ellipse": True}, "ellipse objects"),
-        ({"polygon": [{"x": 0, "y": 0}]}, "polygon objects"),
-        ({"polyline": [{"x": 0, "y": 0}]}, "polyline objects"),
-        ({"text": {"text": "hi"}}, "text objects"),
-        ({"gid": 3}, "tile objects"),
-        ({"template": "tree.tj"}, "object templates"),
-        ({"rotation": 90}, "rotated objects"),
+        ({"ellipse": True}, "ellipse"),
+        ({"capsule": True}, "capsule"),
+        ({"polygon": [{"x": 0, "y": 0}, {"x": 1, "y": 1}, {"x": 2, "y": 0}]}, "polygon"),
+        ({"polyline": [{"x": 0, "y": 0}, {"x": 1, "y": 1}]}, "polyline"),
+        ({"text": {"text": "hi"}}, "text"),
+        ({"gid": 3}, "tile"),
+        ({"rotation": 90}, "rect"),
     ],
 )
-def test_the_json_reader_refuses_exactly_the_same_object_shapes(shape, feature):
-    """One model, two spellings. If the two lists drifted, one format would
-    accept a file the editor cannot draw."""
+def test_the_json_reader_models_the_same_object_shapes(shape, kind):
     payload = {
         "type": "map",
         "orientation": "orthogonal",
@@ -217,9 +224,50 @@ def test_the_json_reader_refuses_exactly_the_same_object_shapes(shape, feature):
             {"type": "objectgroup", "name": "O", "objects": [{"id": 1, "x": 0, "y": 0, **shape}]}
         ],
     }
-    with pytest.raises(tsx.TiledUnsupported) as exc:
+    doc = tmx.read_tmj(json.dumps(payload).encode(), **LOADERS)
+    assert doc.layers[0].objects[0].kind == kind
+    if "rotation" in shape:
+        assert doc.layers[0].objects[0].rotation == 90.0
+
+
+def test_a_templated_object_is_refused_on_the_json_path_too():
+    """The XML half of this pair is above. This file's header says the two
+    lists must not drift, and this one had no JSON case at all -- so a reader
+    that learned to ignore ``template`` in ``.tmj`` alone would have loaded a
+    map with an object whose real geometry lives in a file nothing opened."""
+    payload = {
+        "type": "map",
+        "orientation": "orthogonal",
+        "width": 2,
+        "height": 2,
+        "tilewidth": 16,
+        "tileheight": 16,
+        "tilesets": [{"firstgid": 1, "source": "t.tsx"}],
+        "layers": [
+            {
+                "type": "objectgroup",
+                "name": "O",
+                "objects": [{"id": 1, "x": 0, "y": 0, "template": "tree.tx"}],
+            }
+        ],
+    }
+    with pytest.raises(tmx.TiledUnsupported) as excinfo:
         tmx.read_tmj(json.dumps(payload).encode(), **LOADERS)
-    assert feature in str(exc.value)
+    assert excinfo.value.feature == "object templates"
+
+
+def test_a_tile_object_with_the_hex_rotation_bit_is_refused_by_name():
+    """The same probe the layer-data pass makes, on the other gid in a
+    document. ``gid.decompose`` strips the three transform flags and leaves bit
+    28, so without this the object arrived at the accounting check as tile
+    268435457 and was refused as "a tile no tileset accounts for" -- true, and
+    about the wrong problem."""
+    hex_gid = 1 | 0x10000000
+    body = (
+        f'<objectgroup id="2" name="O"><object id="1" gid="{hex_gid}" '
+        'x="0" y="0"/></objectgroup>'
+    )
+    _refuses(_map(body=_EMPTY_LAYER + body), "hexagonal 120-degree tile rotation")
 
 
 # --- tilesets -----------------------------------------------------------------
@@ -534,15 +582,25 @@ def test_a_property_type_outside_tileds_nine_is_still_refused():
     _refuses(_map(body=body), "vector2")
 
 
-def test_a_list_property_is_refused_because_tiled_has_no_syntax_for_one():
-    """Modelled in the document and stored in a ``.wmap``, refused at the
-    Tiled door: Tiled 1.12.2 has no list-valued property, so there is nothing
-    to write that it would read back, and inventing a syntax would produce a
-    file only this editor can open. See ``tests/plotter/test_props.py``."""
+def test_a_tiled_112_list_property_round_trips_recursively():
     body = _EMPTY_LAYER.replace(
-        "<data", '<properties><property name="bag" type="list" value="1"/></properties><data'
+        "<data",
+        '<properties><property name="bag" type="list">'
+        '<item type="int" value="1"/><item type="string" value="torch"/>'
+        '<item type="list"><item type="bool" value="true"/></item>'
+        "</property></properties><data",
     )
-    _refuses(_map(body=body), "list-valued custom property")
+    doc = tmx.read_tmx(_map(body=body), **LOADERS)
+    assert doc.layers[0].properties["bag"] == tsx.Prop(
+        "list",
+        [
+            tsx.Prop("int", 1),
+            tsx.Prop("string", "torch"),
+            tsx.Prop("list", [tsx.Prop("bool", True)]),
+        ],
+    )
+    again = tmx.read_tmx(tmx.tmx_export(doc)["map.tmx"], **LOADERS)
+    assert again.layers[0].properties == doc.layers[0].properties
 
 
 def test_an_embedded_tileset_image_with_no_path_is_refused():
@@ -587,11 +645,9 @@ def test_a_tsx_declaring_a_dtd_is_refused_by_the_same_door():
 
 # --- the writer door ----------------------------------------------------------
 #
-# The document models rotation, a draw order and five object shapes that
-# neither exporter can yet spell, so the same list is refused on the way *out*.
-# A silent half-write is worse than the half-read every case above forbids: the
-# user keeps their document, and the file they just handed to an engine is
-# quietly wrong with nothing saying so. Both doors flip together in M3.
+# Every core object spelling the document models must leave through both writer
+# doors and return through the matching reader without a weaker rectangle being
+# substituted for it.
 
 
 def _exportable_doc() -> tilemap.MapDoc:
@@ -603,17 +659,6 @@ def _exportable_doc() -> tilemap.MapDoc:
     return doc
 
 
-def _refuses_export(doc: tilemap.MapDoc, feature: str) -> None:
-    """Both writers, one assertion: a refusal only one of them made would let
-    a user reach the same broken file by picking the other format."""
-    for export in (tmx.tmx_export, tmx.tmj_export):
-        with pytest.raises(tsx.TiledUnsupported) as exc:
-            export(doc)
-        assert exc.value.feature == feature
-        assert feature in str(exc.value)
-        assert "this map uses" in str(exc.value), "an export refusal is not about a file"
-
-
 def test_the_control_map_exports_from_both_writers():
     """The control, first: everything below refuses, so this is what says the
     writer door is not simply refusing everything."""
@@ -622,40 +667,45 @@ def test_the_control_map_exports_from_both_writers():
     assert tmx.tmx_export(doc) and tmx.tmj_export(doc)
 
 
-def test_exporting_a_rotated_object_is_refused():
-    doc = _exportable_doc()
-    doc.add_object(
-        doc.layers[1].uid,
-        tilemap.MapObject(uid=tilemap.new_uid(), kind="rect", rotation=45.0),
-    )
-    _refuses_export(doc, "rotated objects")
-
-
-@pytest.mark.parametrize(
-    ("shape", "feature"),
-    [
-        (tilemap.Ellipse(4, 4), "ellipse objects"),
-        (tilemap.Polygon(((0, 0), (4, 0), (4, 4))), "polygon objects"),
-        (tilemap.Polyline(((0, 0), (4, 0))), "polyline objects"),
-        (tilemap.Text("hi"), "text objects"),
-        (tilemap.TileShape(gid=1, w=16, h=16), "tile objects"),
-    ],
-)
-def test_exporting_a_shape_no_writer_can_spell_is_refused(shape, feature):
-    """The same five sentences the readers refuse these with, out of one table
-    -- two doors on one limit, not two features that share a name."""
-    doc = _exportable_doc()
-    doc.add_object(doc.layers[1].uid, tilemap.MapObject(uid=tilemap.new_uid(), shape=shape))
-    _refuses_export(doc, feature)
-
-
-def test_exporting_an_index_ordered_object_layer_is_refused():
-    """Not merely an attribute lost: ``"index"`` means the list order *is* the
-    stacking order, so flattening it to ``"topdown"`` changes which object is
-    drawn on top."""
+def test_both_writers_round_trip_rotation_opacity_shapes_and_index_order():
     doc = _exportable_doc()
     doc.set_layer_props(doc.layers[1].uid, draworder="index")
-    _refuses_export(doc, "an index-ordered object layer")
+    shapes = (
+        tilemap.Rect(4, 5),
+        tilemap.Point(),
+        tilemap.Ellipse(4, 5),
+        tilemap.Capsule(4, 5),
+        tilemap.Polygon(((0, 0), (4, 0), (4, 4))),
+        tilemap.Polyline(((0, 0), (4, 0))),
+        tilemap.Text("hi", pixel_size=12, color="#ff112233"),
+        tilemap.TileShape(gid=1, w=16, h=16),
+    )
+    for index, shape in enumerate(shapes):
+        doc.add_object(
+            doc.layers[1].uid,
+            tilemap.MapObject(
+                uid=tilemap.new_uid(),
+                name=f"shape-{index}",
+                x=float(index),
+                rotation=15.0,
+                opacity=0.75,
+                shape=shape,
+            ),
+        )
+
+    for export, read, filename in (
+        (tmx.tmx_export, tmx.read_tmx, "map.tmx"),
+        (tmx.tmj_export, tmx.read_tmj, "map.tmj"),
+    ):
+        files = export(doc)
+        again = read(files[filename], **LOADERS)
+        layer = next(
+            layer for layer in again.all_layers() if isinstance(layer, tilemap.ObjectLayer)
+        )
+        assert layer.draworder == "index"
+        assert [obj.shape for obj in layer.objects] == list(shapes)
+        assert {obj.rotation for obj in layer.objects} == {15.0}
+        assert {obj.opacity for obj in layer.objects} == {0.75}
 
 
 def test_a_default_object_layer_still_exports():
@@ -664,6 +714,19 @@ def test_a_default_object_layer_still_exports():
     doc = _exportable_doc()
     assert doc.layers[1].draworder == "topdown"
     assert tmx.tmx_export(doc) and tmx.tmj_export(doc)
+
+
+def test_an_infinite_document_cannot_be_silently_exported_as_finite():
+    doc = tilemap.MapDoc(2, 2, 16, 16, infinite=True)
+    doc.add_tile_layer()
+    assert doc.infinite is True
+    for export in (tmx.tmx_export, tmx.tmj_export):
+        with pytest.raises(tmx.TiledUnsupported) as exc:
+            export(doc)
+        assert exc.value.feature == "an infinite map"
+        assert exc.value.exporting is True
+    with pytest.raises(wmap.WmapUnstorable, match="infinite map"):
+        wmap.wmap_bytes(doc)
 
 
 # --- what is *not* refused ----------------------------------------------------

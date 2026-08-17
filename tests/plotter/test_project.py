@@ -57,6 +57,25 @@ def test_an_isometric_map_is_the_bounding_box_of_its_diamonds():
     assert (max(xs), max(ys)) == (float(size[0]), float(size[1]))
 
 
+@pytest.mark.parametrize("skew", [(8, 0), (-8, 3), (0, -4), (5, 7)])
+def test_an_oblique_map_round_trips_and_has_a_zero_based_bounding_box(skew):
+    lat = project.Lattice(project.OBLIQUE, 6, 4, 32, 16, skew_x=skew[0], skew_y=skew[1])
+    for column in range(lat.width):
+        for row in range(lat.height):
+            centre = project.cell_corner(lat, column + 0.5, row + 0.5)
+            assert project.cell_at(lat, *centre) == (column, row)
+    corners = [
+        project.cell_corner(lat, column, row)
+        for column, row in ((0, 0), (lat.width, 0), (lat.width, lat.height), (0, lat.height))
+    ]
+    assert min(x for x, _ in corners) == 0
+    assert min(y for _, y in corners) == 0
+    assert project.map_size(lat) == (
+        int(max(x for x, _ in corners)),
+        int(max(y for _, y in corners)),
+    )
+
+
 @pytest.mark.parametrize("projection", project.PROJECTIONS)
 def test_the_four_cells_meeting_at_a_node_each_own_their_own_side(projection):
     """``floor`` breaks the tie the same way everywhere, which is the whole
@@ -115,6 +134,21 @@ def test_orthogonal_draw_order_is_row_major():
     assert list(project.draw_order(lat)) == [
         (0, 0), (1, 0), (2, 0), (0, 1), (1, 1), (2, 1)
     ]
+
+
+@pytest.mark.parametrize(
+    ("order", "expected"),
+    [
+        ("right-down", [(0, 0), (1, 0), (0, 1), (1, 1)]),
+        ("left-down", [(1, 0), (0, 0), (1, 1), (0, 1)]),
+        ("right-up", [(0, 1), (1, 1), (0, 0), (1, 0)]),
+        ("left-up", [(1, 1), (0, 1), (1, 0), (0, 0)]),
+    ],
+)
+def test_orthogonal_and_oblique_render_orders_are_honoured(order, expected):
+    for projection in (project.ORTHOGONAL, project.OBLIQUE):
+        lat = project.Lattice(projection, 2, 2, 16, 16, render_order=order)
+        assert list(project.draw_order(lat)) == expected
 
 
 def test_an_unknown_projection_is_refused_by_name():

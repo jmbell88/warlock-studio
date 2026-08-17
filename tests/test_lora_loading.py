@@ -23,6 +23,7 @@ class FakePipe:
     def __init__(self) -> None:
         self.loaded: list[str] = []
         self.applied: list[tuple[list[str], list[float]]] = []
+        self.deleted: list[list[str]] = []
         self.disabled = 0
         self.enabled = 0
         # The order the pipe was driven in, which is half of what is under test.
@@ -44,6 +45,10 @@ class FakePipe:
     def disable_lora(self) -> None:
         self.disabled += 1
         self.calls.append("disable")
+
+    def delete_adapters(self, names) -> None:
+        self.deleted.append(list(names))
+        self.calls.append("delete")
 
 
 def _t2i(tmp_path: Path, base_key: str, on_disk: list[str]) -> tuple[Text2Image, FakePipe]:
@@ -91,8 +96,13 @@ def test_only_same_family_adapters_are_loaded(tmp_path, base_key):
     t2i._load_loras(pipe)
     # Nothing optional is attached before a job asks for it.
     assert t2i._adapters == set()
-    _select_all_fitting(t2i, pipe, base_key)
-    assert sorted(t2i._adapters) == sorted(_fitting(base_key))
+    fitting = _select_all_fitting(t2i, pipe, base_key)
+    # Every fitting style reached the pipe when its job selected it. Only the
+    # *last* is still attached -- deselection deletes the rest (MDL-17).
+    assert sorted(pipe.loaded) == sorted(
+        fitting + ([base.base_lora and models.BASE_LORA_ADAPTER] if base.base_lora else [])
+    )
+    assert t2i._adapters == ({fitting[-1]} if fitting else set())
     foreign = {
         lora.key for lora in models.STYLE_LORAS.values() if lora.family != base.family
     }
@@ -176,14 +186,20 @@ def test_a_pipe_with_no_adapters_is_never_disabled(tmp_path):
     assert pipe.applied == []
 
 
-def test_a_loaded_adapter_is_disabled_when_nothing_is_selected(tmp_path):
+def test_a_still_attached_adapter_is_disabled_when_nothing_is_selected(tmp_path):
+    """A deselected style is normally *deleted* (MDL-17), which leaves nothing
+    to disable. The disable branch survives for the degraded case: a failed
+    delete leaves real PEFT state on the pipe, and that state must still be
+    switched off for the styleless job."""
     t2i, pipe = _t2i(tmp_path, "turbo", _all_files())
     t2i._load_loras(pipe)
-    # A style has to have been selected at some point for there to be PEFT
-    # state to disable -- which is the same condition as before, reached the
-    # lazy way.
     t2i._apply_adapters(pipe, _fitting("turbo")[0], 1.0)
     assert t2i._has_adapters
+
+    def _explode(names):
+        raise RuntimeError("peft says no")
+
+    pipe.delete_adapters = _explode
     t2i._apply_adapters(pipe, None, 1.0)
     assert pipe.disabled == 1
 
@@ -264,11 +280,14 @@ def test_a_style_survives_a_run_that_had_none_before_it(tmp_path):
     # A first styled job, which is what puts PEFT state on the pipe at all now
     # that adapters attach on selection rather than at load().
     t2i._apply_adapters(pipe, chosen, 0.9)
-    # Then a job with no style: this is the call that sets _disable_adapters.
+    # Then a job with no style: the adapter is deleted outright now (MDL-17),
+    # so there is no PEFT state left to disable.
     t2i._apply_adapters(pipe, None, 1.0)
-    assert pipe.disabled == 1
-    # And a third that wants the style back.
+    assert pipe.deleted == [[chosen]]
+    assert pipe.disabled == 0
+    # And a third that wants the style back: reloaded from disk and enabled.
     t2i._apply_adapters(pipe, chosen, 0.9)
+    assert pipe.loaded == [chosen, chosen]
     assert pipe.enabled == 2, "the adapter was never re-enabled"
     assert pipe.applied[-1] == ([chosen], [0.9])
 
@@ -340,6 +359,105 @@ def test_the_recipe_records_a_style_only_when_it_actually_applied(tmp_path):
     recipe = bare._recipe(1, "p", None, chosen, 0.5, None, 1, False)
     assert "style_lora" not in recipe
     assert "lora_weight" not in recipe
+
+
+# --- stale styles are deleted, not just disabled (MDL-17) ---------------------
+
+
+def test_a_style_the_next_job_does_not_use_is_deleted(tmp_path):
+    """The unbounded-accumulation half of MDL-17: adapters attached lazily and
+    were never detached, so every style picked during a pipe's life stayed
+    resident in host and VRAM until full unload -- and ``vram._adapter_cost``
+    prices only base + selected style, so attached exceeded priced."""
+    a, b = _fitting("turbo")[0], _fitting("turbo")[1]
+    t2i, pipe = _t2i(tmp_path, "turbo", _all_files())
+    t2i._load_loras(pipe)
+    t2i._apply_adapters(pipe, a, 1.0)
+    t2i._apply_adapters(pipe, b, 1.0)
+    assert pipe.deleted == [[a]]
+    assert t2i._adapters == {b}
+    # Deleted before the surviving set is enabled, so a pipe whose adapters
+    # were all just deleted is never enable_lora()'d over nothing.
+    last_delete = len(pipe.calls) - 1 - pipe.calls[::-1].index("delete")
+    assert last_delete < pipe.calls.index("enable", last_delete)
+    assert last_delete < pipe.calls.index("set", last_delete)
+
+
+def test_the_base_distillation_adapter_is_never_deleted(tmp_path):
+    """The base LoRA is step distillation, not style: it lives in
+    ``_base_adapter``, never in ``_adapters``, so it is structurally out of
+    reach of the stale-set arithmetic."""
+    base = models.BASE_MODELS["lightning"]
+    files = _all_files() + [base.base_lora]
+    t2i, pipe = _t2i(tmp_path, "lightning", files)
+    t2i._load_loras(pipe)
+    style = _fitting("lightning")[0]
+    t2i._apply_adapters(pipe, style, 0.7)
+    t2i._apply_adapters(pipe, None, 1.0)
+    assert [style] in pipe.deleted
+    assert all(models.BASE_LORA_ADAPTER not in entry for entry in pipe.deleted)
+    # And a later styled apply still carries it, always at full strength.
+    t2i._apply_adapters(pipe, style, 0.7)
+    names, weights = pipe.applied[-1]
+    assert models.BASE_LORA_ADAPTER in names
+    assert weights[names.index(models.BASE_LORA_ADAPTER)] == 1.0
+
+
+def test_repeating_a_style_neither_deletes_nor_reloads(tmp_path):
+    """Same-style repeats are the common case and must stay free: no delete,
+    and the idempotence guard in ``_ensure_adapter`` skips the reload."""
+    a = _fitting("turbo")[0]
+    t2i, pipe = _t2i(tmp_path, "turbo", _all_files())
+    t2i._load_loras(pipe)
+    t2i._apply_adapters(pipe, a, 1.0)
+    t2i._apply_adapters(pipe, a, 0.5)
+    assert pipe.deleted == []
+    assert pipe.loaded == [a]
+
+
+def test_a_deleted_style_reattaches_when_selected_again(tmp_path):
+    """Alternating styles pay one load_lora_weights from disk per switch --
+    seconds, against the minutes of sampling around it."""
+    a, b = _fitting("turbo")[0], _fitting("turbo")[1]
+    t2i, pipe = _t2i(tmp_path, "turbo", _all_files())
+    t2i._load_loras(pipe)
+    t2i._apply_adapters(pipe, a, 1.0)
+    t2i._apply_adapters(pipe, b, 1.0)
+    t2i._apply_adapters(pipe, a, 1.0)
+    assert pipe.loaded == [a, b, a]
+    assert t2i._adapters == {a}
+
+
+def test_a_pipe_whose_only_adapter_was_deleted_is_not_disabled(tmp_path):
+    """turbo has no base LoRA, so deleting the one style leaves no PEFT state
+    at all -- disable_lora() on that pipe is the exact call the derived
+    ``_has_adapters`` predicate exists to prevent. The delete must run before
+    the predicate is read."""
+    a = _fitting("turbo")[0]
+    t2i, pipe = _t2i(tmp_path, "turbo", _all_files())
+    t2i._load_loras(pipe)
+    t2i._apply_adapters(pipe, a, 1.0)
+    t2i._apply_adapters(pipe, None, 1.0)
+    assert pipe.deleted == [[a]]
+    assert pipe.disabled == 0
+
+
+def test_a_failed_delete_keeps_the_bookkeeping_truthful(tmp_path):
+    """Degrades to the old accumulation, loudly: nothing escapes, ``_adapters``
+    only shrinks on success (so the reload guard keeps skipping the
+    still-attached adapter), and the job's own set is still applied."""
+    a, b = _fitting("turbo")[0], _fitting("turbo")[1]
+    t2i, pipe = _t2i(tmp_path, "turbo", _all_files())
+    t2i._load_loras(pipe)
+    t2i._apply_adapters(pipe, a, 1.0)
+
+    def _explode(names):
+        raise RuntimeError("peft says no")
+
+    pipe.delete_adapters = _explode
+    t2i._apply_adapters(pipe, b, 0.8)
+    assert a in t2i._adapters
+    assert pipe.applied[-1] == ([b], [0.8])
 
 
 # --- load() is transactional -------------------------------------------------

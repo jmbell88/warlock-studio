@@ -271,6 +271,19 @@ def estimate_parts(
         image = _image_model_cost(params)
         sprite = image + CONTROLNET_GIB + IP_ENCODER_GIB
         return (sprite if exclusive else sprite + TRELLIS_GIB), image
+    if kind == "ground_set":
+        # Up to sixteen txt2img passes, one after the other through the same
+        # resident pipe, so the peak is one pass -- the terrain count is
+        # deliberately not a term, exactly as ``retexture``'s view count is not.
+        # No ControlNet and no IP-Adapter: a seamless texture is conditioned on
+        # nothing but its prompt (the circular-padding patch allocates nothing),
+        # which is the one thing that makes this the cheapest generating kind
+        # here. Priced from the registry rather than assumed to be SDXL, because
+        # ``params["base_model"]`` is a stored value and the day it names an
+        # offloaded spec this term has to move with it. Never trellis: a ground
+        # set has no mesh anywhere near it.
+        image = _image_model_cost(params)
+        return (image if exclusive else image + TRELLIS_GIB), image
     if kind not in ("text", "image"):
         # rig / pose / sheet are Blender, out of process and CPU-side.
         return 0.0, 0.0

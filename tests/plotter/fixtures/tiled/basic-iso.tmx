@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<map version="1.10" tiledversion="1.12.2" orientation="isometric" renderorder="right-down" width="4" height="4" tilewidth="32" tileheight="16" infinite="0" nextlayerid="2" nextobjectid="1">
+ <tileset firstgid="1" source="iso.tsx"/>
+ <layer id="1" name="Ground" width="4" height="4">
+  <data encoding="csv">
+1,0,0,2,
+0,3,0,0,
+0,0,4,0,
+2,0,0,1
+</data>
+ </layer>
+</map>

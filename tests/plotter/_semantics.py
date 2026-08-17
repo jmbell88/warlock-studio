@@ -49,6 +49,19 @@ def _digest(array: np.ndarray) -> str:
     return hashlib.sha256(contiguous.tobytes()).hexdigest()[:16]
 
 
+def _property_value(value: Any) -> Any:
+    """A recursively JSON-shaped property value, including Tiled 1.12 lists."""
+    if hasattr(value, "type") and hasattr(value, "value"):
+        return _prop(value)
+    if isinstance(value, dict):
+        return {name: _property_value(value[name]) for name in sorted(value)}
+    if isinstance(value, (tuple, list)):
+        return [_property_value(item) for item in value]
+    if isinstance(value, float):
+        return _num(value)
+    return value
+
+
 def _prop(value: Any) -> Any:
     """One custom property. Handles both spellings the codebase carries.
 
@@ -58,9 +71,10 @@ def _prop(value: Any) -> Any:
     """
     kind = getattr(value, "type", None)
     if kind is None:
-        return ["untyped", value if not isinstance(value, float) else _num(value)]
+        return ["untyped", _property_value(value)]
     raw = value.value
-    return [kind, _num(raw) if kind == "float" else raw]
+    propertytype = getattr(value, "propertytype", "")
+    return [kind, propertytype, _property_value(raw)]
 
 
 def _props(properties: dict[str, Any]) -> dict[str, Any]:
@@ -75,8 +89,23 @@ def _tileset_facts(ref: Any) -> dict[str, Any]:
     tileset = ref.tileset
     return {
         "firstgid": int(ref.firstgid),
-        "source": ref.source,
+        # ``ref.source`` is deliberately absent. Path spelling is packaging,
+        # not tileset semantics: Plotter emits a portable, collision-free
+        # ``tilesets/`` bundle even when the Tiled source kept the TSX beside
+        # the map.
+        #
+        # **What that omission also hides, stated so it is a decision and not a
+        # blind spot**: an *embedded* atlas has no source at all going in and
+        # comes back out as an external ``.tsx``, because both exporters write
+        # every tileset as a ``source=`` reference. The atlas, its properties
+        # and its terrains survive intact -- which is what this comparison is
+        # for -- but "embedded" does not, and ``docs/PLOTTER_COMPAT.md``'s
+        # `embedded atlas tilesets` row says so rather than leaving the reader
+        # to infer it from a passing round trip.
         "name": tileset.name,
+        "class_name": tileset.class_name,
+        "grid": [tileset.grid_orientation, tileset.grid_width, tileset.grid_height],
+        "transformations": list(tileset.transformations),
         "tile_w": int(tileset.tile_w),
         "tile_h": int(tileset.tile_h),
         "spacing": int(tileset.spacing),
@@ -106,7 +135,7 @@ def _geometry_facts(shape: Any) -> dict[str, Any]:
 
     Enumerated rather than listed, which is the opposite of how the rest of
     this module works and is right exactly here: a shape is a frozen dataclass
-    of plain values, the union has seven members and will gain more, and a
+    of plain values, the union will gain more, and a
     hand-written list would be a blind spot per shape rather than one for the
     whole file. ``kind``, ``w`` and ``h`` are already above -- this is what
     those three cannot say: a polygon's vertices, a tile object's gid, a text
@@ -135,6 +164,7 @@ def _object_facts(obj: Any) -> dict[str, Any]:
         "w": _num(obj.w),
         "h": _num(obj.h),
         "rotation": _num(obj.rotation),
+        "opacity": _num(obj.opacity),
         # Named ``geometry`` and not ``shape`` because a tile *layer*'s facts
         # already spend that word on its array's dimensions.
         "geometry": _geometry_facts(obj.shape),
@@ -150,6 +180,7 @@ def _layer_facts(layer: Any) -> dict[str, Any]:
         "id": int(layer.id),
         "name": layer.name,
         "class_name": str(layer.class_name),
+        "blend_mode": str(layer.blend_mode),
         "visible": bool(layer.visible),
         "opacity": _num(layer.opacity),
         "locked": bool(layer.locked),
@@ -177,6 +208,7 @@ def _layer_facts(layer: Any) -> dict[str, Any]:
     elif hasattr(layer, "objects"):
         facts["type"] = "object"
         facts["draworder"] = str(layer.draworder)
+        facts["color"] = layer.color
         facts["objects"] = [_object_facts(obj) for obj in layer.objects]
     else:
         facts["type"] = "tile"
@@ -205,12 +237,17 @@ def doc_facts(doc: Any) -> dict[str, Any]:
     """
     return {
         "projection": doc.projection,
+        "infinite": bool(doc.infinite),
         "width": int(doc.width),
         "height": int(doc.height),
         "tile_w": int(doc.tile_w),
         "tile_h": int(doc.tile_h),
         "renderorder": doc.renderorder,
         "backgroundcolor": doc.backgroundcolor,
+        "class_name": str(doc.class_name),
+        "parallax_origin": [_num(value) for value in doc.parallax_origin],
+        "skew": [int(doc.skew_x), int(doc.skew_y)],
+        "stagger": [doc.stagger_axis, doc.stagger_index, int(doc.hex_side)],
         "properties": _props(doc.properties),
         "tilesets": [_tileset_facts(ref) for ref in doc.tilesets],
         "layers": [_layer_facts(layer) for layer in doc.layers],

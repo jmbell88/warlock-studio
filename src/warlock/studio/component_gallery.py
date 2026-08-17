@@ -6,7 +6,7 @@ import os
 
 from imgui_bundle import imgui
 
-from . import controls, widgets
+from . import controls, icons, widgets
 from .tokens import sp
 
 ENV_KEY = "WARLOCK_DEV_COMPONENTS"
@@ -104,15 +104,34 @@ def draw() -> None:
     if _requested:
         imgui.open_popup(POPUP)
         _requested = False
-    imgui.set_next_window_size((sp(760), sp(640)), imgui.Cond_.appearing.value)
+    viewport = imgui.get_main_viewport()
+    imgui.set_next_window_pos(
+        viewport.get_center(), imgui.Cond_.appearing.value, (0.5, 0.5)
+    )
+    # Floored. The inset is subtracted unconditionally, so on a viewport
+    # narrower than the margin itself the requested size goes *negative* and
+    # imgui is asked for a window of impossible extent. 240 design px is small
+    # enough to fit anything that can host a window at all and large enough to
+    # still be a gallery rather than a sliver.
+    inset = sp(64)
+    floor = sp(240)
+    imgui.set_next_window_size(
+        (
+            max(floor, min(sp(760), viewport.work_size.x - inset)),
+            max(floor, min(sp(640), viewport.work_size.y - inset)),
+        ),
+        imgui.Cond_.appearing.value,
+    )
     if not imgui.begin_popup(POPUP):
         return
-    widgets.window_shadow("overlay")
+    widgets.popup_chrome(_imgui=imgui)
     widgets.pane_header(
-        "Component gallery", help_text="Developer preview of shared control states."
+        "Component gallery",
+        help_text="Developer preview of shared control states.",
+        actions=(("close", f"{icons.X} Close", imgui.close_current_popup),),
     )
     widgets.muted("Shared controls in the current theme and UI scale.")
-    if imgui.begin_child("gallery/scroll", (0, -sp(42))):
+    if imgui.begin_child("gallery/scroll", (0, 0)):
         # The gallery exists to show shared controls as a pane draws them, so it
         # asks for the blocks a pane gets -- a gallery that showed the headings
         # flat would be showing a look no pane has.
@@ -122,6 +141,4 @@ def draw() -> None:
             _fields()
             _choices()
     imgui.end_child()
-    if controls.button("Close", role=controls.ButtonRole.GHOST):
-        imgui.close_current_popup()
     imgui.end_popup()

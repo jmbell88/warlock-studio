@@ -23,10 +23,14 @@ from warlock.studio.plotter.tileset import Tileset
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "tiled"
 
 # The fixture stems the corpus gate requires, each present as both a ``.tmx``
-# and a ``.tmj``. Empty until the fixtures are authored in Tiled 1.12.2 --
-# see ``fixtures/tiled/FIXTURES.md``. Adding a file means adding its stem
-# here in the same commit, or nothing tests it.
-MANIFEST: tuple[str, ...] = ()
+# and a ``.tmj``. Adding a file means adding its stem here in the same commit,
+# or nothing tests it.
+MANIFEST: tuple[str, ...] = (
+    "basic-iso",
+    "core-112",
+    "oblique-112",
+    "typed-embedded-112",
+)
 
 
 def pairs() -> list[str]:

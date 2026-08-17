@@ -476,6 +476,11 @@ def card_kind(job: dict[str, Any]) -> str:
         # falls through to: a sprite draft is 2D and its next step is Inker, so
         # a workshop filtered to meshes should not be showing it.
         return "sprite"
+    if job.get("kind") == "ground_set":
+        # Its own kind for the sprite draft's reason exactly: a ground set is
+        # 2D, its next step is a map rather than a mesh, and a workshop filtered
+        # to meshes has no business showing one.
+        return "ground"
     stage = job.get("stage")
     if stage in ("reference", "tile"):
         return stage
@@ -1110,6 +1115,24 @@ def primary_action(job: dict[str, Any], *, rigging_available: bool = True) -> st
     status = job.get("status")
     if status in ("queued", "running"):
         return "cancel"
+    if job.get("kind") == "ground_set":
+        # Both arms of the ladder, in one place, because this kind answers
+        # differently to each and fell through both.
+        #
+        # No retry: ``rerun_job`` refuses a ground set by name in *either*
+        # mode, so the ladder's "error -> retry" default was offering the one
+        # button guaranteed to produce an error toast. Re-painting is done from
+        # Plotter's Generate section, which is the door that can match the set's
+        # geometry to the map -- there is no card-sized version of that.
+        #
+        # And "open" when it finished, which is the answer a tile gets three
+        # lines below for the same reason: the deliverable *is* the published
+        # image, and Open selects the row and shows the Export tab. Without
+        # this the ladder walked past the stage arms, found no ``model.glb``
+        # and offered a finished tileset no action at all.
+        if status != "done":
+            return None
+        return "open" if "input.png" in (job.get("files") or []) else None
     if status == "error":
         return "retry"
     if status != "done":

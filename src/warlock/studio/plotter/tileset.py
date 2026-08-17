@@ -46,6 +46,31 @@ def rgba_colour(colour: Any, what: str) -> RGBA:
     return values  # type: ignore[return-value]
 
 
+def colour_text(value: Any, what: str) -> str | None:
+    """Tiled's ``#RRGGBB``/``#AARRGGBB`` *spelling*, validated. ``None`` if unset.
+
+    :func:`rgba_colour`'s sibling for the two fields that are stored as Tiled's
+    own text rather than as channels -- a map's ``backgroundcolor`` and an
+    object layer's ``color``. They are kept as text because they are round-trip
+    values nothing in the editor computes with, and the cost of that is exactly
+    this: without a check at the setter, an arbitrary string reaches the TMX
+    writer verbatim and produces a file Tiled cannot parse, from an editor that
+    had no complaint. ``backgroundcolor`` grew this check inline; ``color`` had
+    none at all, which is what a second private copy always turns into.
+    """
+    if value in (None, ""):
+        return None
+    text = str(value)
+    digits = text[1:] if text.startswith("#") else ""
+    if len(digits) not in (6, 8):
+        raise ValueError(f"{what} is #RRGGBB or #AARRGGBB")
+    try:
+        int(digits, 16)
+    except ValueError as exc:
+        raise ValueError(f"{what} is #RRGGBB or #AARRGGBB") from exc
+    return text
+
+
 @dataclass(frozen=True)
 class TerrainSpec:
     """One terrain a tileset declares: what it is called and what it is made of.
@@ -104,6 +129,17 @@ class Tileset:
     tile_h: int
     spacing: int = 0
     margin: int = 0
+    # Tiled's custom class name for the tileset itself. This is independent of
+    # per-tile classes (which remain a named refusal at the reader door).
+    class_name: str = ""
+    # Coordinate grid used when authoring per-tile collision objects. It is
+    # still document metadata when an atlas carries no collision objects.
+    grid_orientation: str = "orthogonal"
+    grid_width: int = 0
+    grid_height: int = 0
+    # hflip, vflip, rotate, prefer-untransformed: the choices a terrain/random
+    # brush is allowed to derive from this tileset.
+    transformations: tuple[bool, bool, bool, bool] = (False, False, False, False)
     # Preserved verbatim from a .tsx so a round trip does not quietly drop it.
     properties: dict[str, Any] = field(default_factory=dict)
     # Empty for an ordinary atlas. Non-empty makes this a *terrain set*: one row
@@ -112,11 +148,23 @@ class Tileset:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "pixels", frozen_rgba(self.pixels))
+        object.__setattr__(self, "class_name", str(self.class_name))
         for name in ("tile_w", "tile_h", "spacing", "margin"):
             object.__setattr__(self, name, int(getattr(self, name)))
         object.__setattr__(self, "terrains", tuple(self.terrains))
         if self.tile_w < 1 or self.tile_h < 1:
             raise ValueError("a tile must be at least one pixel across")
+        object.__setattr__(self, "grid_orientation", str(self.grid_orientation))
+        object.__setattr__(self, "grid_width", int(self.grid_width or self.tile_w))
+        object.__setattr__(self, "grid_height", int(self.grid_height or self.tile_h))
+        if self.grid_orientation not in ("orthogonal", "isometric"):
+            raise ValueError("a tileset object grid is orthogonal or isometric")
+        if self.grid_width < 1 or self.grid_height < 1:
+            raise ValueError("a tileset object grid must be at least one pixel across")
+        transforms = tuple(bool(value) for value in self.transformations)
+        if len(transforms) != 4:
+            raise ValueError("tileset transformations hold four flags")
+        object.__setattr__(self, "transformations", transforms)
         if self.spacing < 0 or self.margin < 0:
             raise ValueError("spacing and margin cannot be negative")
         if self.columns < 1 or self.rows < 1:

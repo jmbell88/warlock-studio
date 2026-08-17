@@ -1,10 +1,19 @@
 """Plotter's centre pane: the map, drawn cell by cell.
 
-**One textured quad per *visible* cell, through imgui's draw list.** No
-composited image exists anywhere in the mode -- a 200x200 map at 32px is a
-40-megapixel RGBA buffer, and recompositing it per frame is not something that
-happens between ``new_frame`` and ``render``. The flat renderer in
-``plotter/render.py`` builds one, and only an export ever asks it to.
+**One textured quad per *visible* cell, through imgui's draw list.** A
+composited image is what this mode spends its effort not building -- a 200x200
+map at 32px is a 40-megapixel RGBA buffer, and recompositing it per frame is
+not something that happens between ``new_frame`` and ``render``. The flat
+renderer in ``plotter/render.py`` builds one, and an export is its ordinary
+caller.
+
+**The one exception is a non-normal blend mode**, which the draw list cannot
+express at all: it can tint a texture but has no per-quad blend switch, so
+either the flat composite is drawn or the mode is not shown. :data:`BLEND_PREVIEW_PIXELS`
+is the budget that keeps that exception from becoming the rule, and
+:func:`_blended` is where it is applied -- above the budget, mid-stroke, or
+with no GL context, the cell loop runs instead and the canvas says on its face
+that the modes are not being shown.
 
 The quads are ``add_image_quad`` rather than ``add_image``, and that is what
 makes the diagonal flip drawable at all: a transpose cannot be expressed by
@@ -111,7 +120,16 @@ def draw(ctx: Any) -> None:
             entry.doc.end_stroke()
             entry.doc.end_object_edit()
     avail = imgui.get_content_region_avail()
-    region = (max(float(avail.x), 1.0), max(float(avail.y), 1.0))
+    # The status is drawn *after* the invisible canvas item, so its line has to
+    # be reserved before that item claims the remaining region. Without this,
+    # the cursor advances below the pane and the zoom/layer/cell readout is
+    # clipped -- most painfully on isometric maps, where the cell coordinate is
+    # the only unambiguous picking feedback.
+    status_height = float(imgui.get_text_line_height_with_spacing())
+    region = (
+        max(float(avail.x), 1.0),
+        max(float(avail.y) - status_height, 1.0),
+    )
     size_px = (doc.pixel_width, doc.pixel_height)
 
     if not view.fitted:
@@ -200,7 +218,8 @@ def setup_popup(ctx: Any, state: Any) -> None:
     """
     from imgui_bundle import imgui
 
-    if state.setup_pending:
+    appearing = bool(state.setup_pending)
+    if appearing:
         state.setup_pending = False
         imgui.open_popup(SETUP_POPUP)
 
@@ -210,18 +229,38 @@ def setup_popup(ctx: Any, state: Any) -> None:
         form = plotter_setup.blank_form()
         ctx.state.preview[key] = form
 
+    centre = imgui.get_main_viewport().get_center()
+    imgui.set_next_window_pos(centre, imgui.Cond_.appearing.value, (0.5, 0.5))
+    alpha, rise = widgets.popover_enter("plotter-new-map", appearing)
+    frosted = widgets.frosted()
+    if frosted:
+        imgui.set_next_window_bg_alpha(0.0)
+    imgui.push_style_var(imgui.StyleVar_.alpha.value, alpha)
+    radius = widgets.push_surface_rounding()
     opened, _ = imgui.begin_popup_modal(
         SETUP_POPUP, None, imgui.WindowFlags_.always_auto_resize.value
     )
+    widgets.pop_surface_rounding()
     if not opened:
+        imgui.pop_style_var()
         return
+    widgets.window_shadow("overlay", radius=radius)
+    if frosted:
+        widgets.window_backdrop(radius=radius)
+    if rise > 0.0:
+        imgui.dummy((0, rise))
     _setup_body(ctx, form, key)
     imgui.end_popup()
+    imgui.pop_style_var()
 
 
 def _setup_body(ctx: Any, form: dict, key: str) -> None:
     from imgui_bundle import imgui
 
+    # The three presets are the widest row in this modal.  Giving the form a
+    # stable minimum measure keeps "Isometric, 64 x 32" intact instead of
+    # allowing always-auto-resize to settle on the paragraph's narrower width.
+    imgui.dummy((sp(480), 0))
     widgets.muted_wrapped(
         "The projection and the tile size are worth getting right now: a map's "
         "lattice is fixed once anything is painted on it, and a plain image is "
@@ -319,6 +358,7 @@ def _status(ctx: Any, state: Any, tab: Any) -> None:
         doc.projection,
         f"{int(tab.view.zoom * 100)}%",
         name,
+        f"tool {state.tool}",
     ]
     # The hovered cell is the affordance an isometric map actually needs:
     # nothing on screen says which diamond you are in, so "did I click the one
@@ -355,7 +395,17 @@ def _backdrop(draw_list: Any, doc: Any, view: Any, origin: tuple[float, float]) 
         inker_state.to_screen(view, origin, *doc.cell_corner(column, row))
         for column, row in ((0, 0), (doc.width, 0), (doc.width, doc.height), (0, doc.height))
     ]
-    draw_list.add_convex_poly_filled(quad, imgui.get_color_u32(theme.rgba(theme.ELEV_1)))
+    colour = theme.rgba(theme.ELEV_1)
+    if doc.backgroundcolor:
+        text = str(doc.backgroundcolor).lstrip("#")
+        if len(text) == 6:
+            text = "ff" + text
+        try:
+            alpha, red, green, blue = (int(text[i : i + 2], 16) for i in range(0, 8, 2))
+            colour = (red / 255.0, green / 255.0, blue / 255.0, alpha / 255.0)
+        except (ValueError, TypeError):
+            pass
+    draw_list.add_convex_poly_filled(quad, imgui.get_color_u32(colour))
     # thickness *before* flags: the binding reverses imgui's own
     # ``AddPolyline(points, num, col, flags, thickness)``, and passing them the
     # C++ way is a TypeError rather than a wrong-looking line.
@@ -479,6 +529,80 @@ def _corner_uvs(uv, flip_h: bool, flip_v: bool, flip_d: bool):
     return corners
 
 
+#: How many pixels this pane will composite between ``new_frame`` and
+#: ``render``.
+#:
+#: Deliberately *not* ``render.MAX_RENDER_PIXELS``. That one is an arithmetic
+#: refusal -- "past this the allocation is absurd" -- set at a gigabyte of RGBA
+#: for a renderer that runs on a task thread and may take as long as it takes.
+#: The question a frame asks is a different one: how much blending fits inside
+#: a frame. 4 megapixels is a 2048-square image, which is a 64-square map at
+#: 32px or a 128-square map at 16px -- tens of milliseconds of blend and
+#: upload, so a hitch on the frame an edit lands rather than a stall. Above it
+#: the pane declines and says why; the exporter is unaffected and still gets
+#: the full ceiling.
+BLEND_PREVIEW_PIXELS = 1 << 22
+
+
+def _blended(ctx: Any, tab: Any, doc: Any, draw_list: Any, origin, view) -> bool:
+    """Draw the map as one correctly-composited texture. -> whether it drew.
+
+    Three reasons it declines, and the caller falls back to the ordinary cell
+    loop -- which is what this mode did before blend modes existed at all, so
+    the fallback is a documented rendering rather than a broken one.
+
+    * **Past the frame budget.** ``render_map`` allocates and blends the whole
+      map at full size; at 512 cells square and 32px tiles that is a
+      268-megapixel composite plus a same-size GL upload, on the frame thread,
+      on every edit. It also *raises* past its own ceiling, and a raise from a
+      pane draw is not caught anywhere (``main.py``'s frame loop does not wrap
+      pane draws), so on a large enough map the first frame that drew a
+      multiply layer took the window down. Checked before the call rather than
+      caught after it: the point is not to survive the allocation, it is not to
+      make it.
+    * **Mid-stroke.** The cache stamp is ``history.head`` and the tree shape,
+      and a paint stroke writes the live array and pushes nothing until
+      ``end_stroke``. Keyed on that alone the composite was pinned for the
+      whole stroke, so painting on a map with any non-normal layer showed
+      nothing at all until the mouse came up. Declining instead means the cells
+      go down live and the modes come back on release.
+    * **No GL context**, which is every headless test.
+
+    ``ValueError`` is still caught around the call. The ceiling is not the only
+    thing ``render_map`` raises for -- an unparseable ``backgroundcolor``
+    reaches it as well -- and none of them is a reason to lose the window from
+    inside a draw list.
+    """
+    if doc.stroking:
+        return False
+    if int(doc.pixel_width) * int(doc.pixel_height) > BLEND_PREVIEW_PIXELS:
+        return False
+    stamp = (doc.history.head, doc.tree_shape(), "blend")
+    key = plotter_textures.blend_slot(tab.uid)
+    cached = ctx.state.preview.get(key)
+    if cached is None or cached[0] != stamp:
+        try:
+            cached = (stamp, plotter_render.render_map(doc))
+        except ValueError:
+            return False
+        ctx.state.preview[key] = cached
+    texture = plotter_textures.image_texture(
+        ctx, tab.uid, "blended-map", cached[1], stamp
+    )
+    if texture is None:
+        return False
+    p0 = inker_state.to_screen(view, origin, 0.0, 0.0)
+    draw_list.add_image(
+        widgets.texture_ref(texture),
+        p0,
+        (
+            p0[0] + doc.pixel_width * view.zoom,
+            p0[1] + doc.pixel_height * view.zoom,
+        ),
+    )
+    return True
+
+
 def _layers(ctx: Any, tab: Any, draw_list: Any, origin, region) -> None:
     """Every drawable layer, through the resolver both renderers share.
 
@@ -494,6 +618,27 @@ def _layers(ctx: Any, tab: Any, draw_list: Any, origin, region) -> None:
     view = tab.view
     zoom = view.zoom
     tile_w, tile_h = doc.tile_w, doc.tile_h
+    resolved = plotter_scene.resolve(doc)
+    # ImGui's draw list can tint a texture but has no per-quad blend-mode
+    # switch, so the only way to show a non-normal mode is the flat renderer's
+    # composited surface -- the one thing this module's header says never
+    # happens here, for the reason it gives. :func:`_blended` is where that
+    # exception is bounded; when it declines, the cell loop below draws every
+    # layer as though its mode were normal and the note says so.
+    if any(entry.blend_mode != "normal" for entry in resolved):
+        if _blended(ctx, tab, doc, draw_list, origin, view):
+            return
+        # Said out loud rather than left looking like a rendering bug: a
+        # multiply layer about to be drawn as an opaque one is a canvas that
+        # disagrees with its own export, and silence gives the user nothing to
+        # go on. Cheap enough to draw every frame -- it is one string.
+        draw_list.add_text(
+            (origin[0] + sp(8), origin[1] + sp(8)),
+            imgui.get_color_u32(theme.rgba(theme.WARN)),
+            "Blend modes are not shown while painting"
+            if doc.stroking
+            else "Blend modes are not shown on a map this large",
+        )
     # One texture per tileset per frame. This hoist only ever covered the
     # *upload* -- ``tileset_texture`` is a dict lookup, but deciding which ref
     # holds a given id stayed a linear scan run once per visible cell per layer,
@@ -504,7 +649,7 @@ def _layers(ctx: Any, tab: Any, draw_list: Any, origin, region) -> None:
     }
     memo = _index_memo(tab.uid, doc.tileset_epoch)
 
-    for entry in plotter_scene.resolve(doc):
+    for entry in resolved:
         if entry.opacity <= 0.0:
             continue
         layer = entry.layer
@@ -524,9 +669,13 @@ def _layers(ctx: Any, tab: Any, draw_list: Any, origin, region) -> None:
         # Back to front. For an orthogonal map that is row-major and this is
         # the order the block already has; for an isometric one depth is
         # ``column + row``, and row-major is not monotone in it.
-        cells = [
-            (row, column) for row in range(ids.shape[0]) for column in range(ids.shape[1])
-        ]
+        rows = list(range(ids.shape[0]))
+        columns = list(range(ids.shape[1]))
+        if doc.renderorder.startswith("left"):
+            columns.reverse()
+        if doc.renderorder.endswith("up"):
+            rows.reverse()
+        cells = [(row, column) for row in rows for column in columns]
         if doc.isometric:
             cells.sort(key=lambda cell: cell[0] + cell[1])
         for row, column in cells:
@@ -657,7 +806,7 @@ def _objects(state: Any, doc: Any, draw_list: Any, view: Any, origin) -> None:
         dx, dy = _layer_shift(view, origin, entry)
         for obj in layer.objects:
             selected = state.selected_object == obj.uid
-            alpha = 1.0 if obj.visible else 0.4
+            alpha = float(obj.opacity) * float(entry.opacity) * (1.0 if obj.visible else 0.4)
             colour = imgui.get_color_u32(
                 theme.rgba(theme.ACCENT if selected else theme.OK, alpha)
             )
@@ -666,10 +815,17 @@ def _objects(state: Any, doc: Any, draw_list: Any, view: Any, origin) -> None:
                 draw_list.add_circle_filled(p0, sp(4), colour, 12)
                 draw_list.add_circle(p0, sp(7), colour, 12)
             else:
-                p1 = inker_state.to_screen(
-                    view, origin, obj.x + obj.w + dx, obj.y + obj.h + dy
+                outline = [
+                    inker_state.to_screen(view, origin, px + dx, py + dy)
+                    for px, py in _object_outline(obj)
+                ]
+                closed = obj.kind != "polyline"
+                draw_list.add_polyline(
+                    outline,
+                    colour,
+                    sp(2) if selected else sp(1),
+                    imgui.ImDrawFlags_.closed.value if closed else 0,
                 )
-                draw_list.add_rect(p0, p1, colour, 0.0, sp(2) if selected else sp(1))
                 if selected and not entry.locked:
                     # Only on the selected one, and only when it can actually be
                     # dragged: a handle on a locked layer is a control that
@@ -685,6 +841,57 @@ def _objects(state: Any, doc: Any, draw_list: Any, view: Any, origin) -> None:
                         )
             if obj.name:
                 draw_list.add_text((p0[0] + sp(6), p0[1] - sp(14)), colour, obj.name)
+
+
+def _rotated(obj: Any, x: float, y: float) -> tuple[float, float]:
+    """An object-local point in the map plane, using Tiled's clockwise angle."""
+    # Lightweight integrations sometimes pass an object-shaped protocol value
+    # rather than a MapObject. Absence means Tiled's default of zero rotation.
+    angle = math.radians(float(getattr(obj, "rotation", 0.0)))
+    cosine, sine = math.cos(angle), math.sin(angle)
+    return (
+        obj.x + x * cosine - y * sine,
+        obj.y + x * sine + y * cosine,
+    )
+
+
+def _object_outline(obj: Any) -> list[tuple[float, float]]:
+    """Polyline used for every Tiled object shape in the live canvas."""
+    if obj.kind in ("polygon", "polyline"):
+        local = list(obj.shape.points)
+    elif obj.kind == "ellipse":
+        local = [
+            (
+                obj.w * 0.5 + math.cos(index * math.tau / 32) * obj.w * 0.5,
+                obj.h * 0.5 + math.sin(index * math.tau / 32) * obj.h * 0.5,
+            )
+            for index in range(32)
+        ]
+    elif obj.kind == "capsule":
+        local = _capsule_outline(obj.w, obj.h)
+    else:
+        local = [(0.0, 0.0), (obj.w, 0.0), (obj.w, obj.h), (0.0, obj.h)]
+    return [_rotated(obj, x, y) for x, y in local]
+
+
+def _capsule_outline(width: float, height: float) -> list[tuple[float, float]]:
+    steps = 16
+    if width >= height:
+        radius = height * 0.5
+        centres = ((width - radius, radius, -math.pi / 2), (radius, radius, math.pi / 2))
+    else:
+        radius = width * 0.5
+        centres = ((radius, height - radius, 0.0), (radius, radius, math.pi))
+    points: list[tuple[float, float]] = []
+    for cx, cy, start in centres:
+        points.extend(
+            (
+                cx + math.cos(start + index * math.pi / steps) * radius,
+                cy + math.sin(start + index * math.pi / steps) * radius,
+            )
+            for index in range(steps + 1)
+        )
+    return points
 
 
 # The minimap's longest edge, in design pixels.
@@ -743,9 +950,19 @@ def _minimap(ctx: Any, state: Any, tab: Any, draw_list: Any, origin, region) -> 
     vy0 = y + (max(0, r0) / max(1, doc.height)) * h
     vx1 = x + (min(doc.width, c1 + 1) / max(1, doc.width)) * w
     vy1 = y + (min(doc.height, r1 + 1) / max(1, doc.height)) * h
-    draw_list.add_rect(
-        (vx0, vy0), (vx1, vy1), imgui.get_color_u32(theme.rgba(theme.ACCENT)), 0.0, sp(1.5)
-    )
+    # When the whole map is visible this rectangle is exactly the minimap's
+    # outside edge. Painting it purple made an empty map look selected and hid
+    # the neutral container boundary underneath; in that state the location
+    # marker carries no information, so leave the ordinary edge visible.
+    whole_map = c0 <= 0 and r0 <= 0 and c1 >= doc.width - 1 and r1 >= doc.height - 1
+    if not whole_map:
+        draw_list.add_rect(
+            (vx0, vy0),
+            (vx1, vy1),
+            imgui.get_color_u32(theme.rgba(theme.ACCENT)),
+            0.0,
+            sp(1.5),
+        )
 
 
 def _marquee(state: Any, tab: Any, draw_list: Any, origin) -> None:
@@ -822,8 +1039,16 @@ def _cursor(state: Any, tab: Any, draw_list: Any, origin, hovered: bool) -> None
     # A shape drag in progress: outline what would land at release. The rect
     # tool this replaced had no preview at all, so the only way to place one was
     # to draw it and undo.
-    if state.drag_kind == "rect" and state.drag_anchor is not None:
-        _shape_preview(state, tab, draw_list, origin, state.drag_anchor, cell)
+    if state.drag_kind in ("rect", "erase-rect") and state.drag_anchor is not None:
+        _shape_preview(
+            state,
+            tab,
+            draw_list,
+            origin,
+            state.drag_anchor,
+            cell,
+            mode="rect" if state.drag_kind == "erase-rect" else None,
+        )
         return
 
     # Shift with a "from" cell in hand: show the run that is about to land, not
@@ -877,7 +1102,14 @@ def _shifted(point: tuple[float, float], shift: tuple[float, float]) -> tuple[fl
 
 
 def _shape_preview(
-    state: Any, tab: Any, draw_list: Any, origin, a: tuple[int, int], b: tuple[int, int]
+    state: Any,
+    tab: Any,
+    draw_list: Any,
+    origin,
+    a: tuple[int, int],
+    b: tuple[int, int],
+    *,
+    mode: str | None = None,
 ) -> None:
     """The outline of what a shape drag would fill, rect or ellipse."""
     from imgui_bundle import imgui
@@ -887,7 +1119,7 @@ def _shape_preview(
     draw_list.add_polyline(
         [
             inker_state.to_screen(view, origin, *_shifted(doc.cell_corner(px, py), shift))
-            for px, py in _shape_points(state.shape_mode, a, b)
+            for px, py in _shape_points(state.shape_mode if mode is None else mode, a, b)
         ],
         imgui.get_color_u32(theme.rgba(theme.ACCENT)),
         sp(1.5),
@@ -957,9 +1189,14 @@ def _events(ctx: Any, state: Any, tab: Any, origin, hovered: bool, region) -> No
         # gesture is a corner-to-corner drag either way, and only what lands at
         # release differs. Renaming it would also collide with the object tool's
         # own "rect", which is a third, unrelated use of the word.
-        state.drag_kind = "rect" if state.tool == "shape" else "paint"
+        if state.tool == "shape":
+            state.drag_kind = "rect"
+        elif state.tool == "erase" and io.key_shift:
+            state.drag_kind = "erase-rect"
+        else:
+            state.drag_kind = "paint"
         state.drag_anchor = cell
-        if state.tool != "shape":
+        if state.drag_kind == "paint":
             # Stamp, erase and terrain are the three tools a *drag* repeats, and
             # so the three that would otherwise push one step per cell. Fill,
             # rect and pick fire once and need no session.
@@ -980,6 +1217,8 @@ def _events(ctx: Any, state: Any, tab: Any, origin, hovered: bool, region) -> No
     elif state.drag_kind and imgui.is_mouse_released(0):
         if state.drag_kind == "rect" and state.drag_anchor is not None:
             _apply_shape(ctx, state, tab, state.drag_anchor, cell)
+        elif state.drag_kind == "erase-rect" and state.drag_anchor is not None:
+            _apply_erase_rect(ctx, state, tab, state.drag_anchor, cell)
         tab.doc.end_stroke()
         state.clear_drag()
 
@@ -1185,7 +1424,11 @@ def _apply(ctx: Any, state: Any, tab: Any, cell: tuple[int, int]) -> None:
         if state.brush is None:
             ctx.toast("Pick a tile from the tileset first.", "error")
             return
-        result = plotter_tools.stamp(layer.data, cell[0], cell[1], state.brush)
+        result = (
+            plotter_tools.random_stamp(layer.data, cell[0], cell[1], state.brush)
+            if state.random_mode
+            else plotter_tools.stamp(layer.data, cell[0], cell[1], state.brush)
+        )
     elif state.tool == "erase":
         # Erasing a terrain cell is not erasing a tile: the hole has to grow an
         # outline on everything that now borders it, or the field keeps the edge
@@ -1268,6 +1511,22 @@ def _apply_shape(ctx: Any, state: Any, tab: Any, a: tuple[int, int], b: tuple[in
         tab.doc.write_region(layer.uid, *result)
 
 
+def _apply_erase_rect(
+    ctx: Any, state: Any, tab: Any, a: tuple[int, int], b: tuple[int, int]
+) -> None:
+    """Shift-drag Erase: clear one constrained rectangle in one undo step."""
+    layer = _layer_for_paint(ctx, tab)
+    if layer is None:
+        return
+    result = _constrained(
+        state,
+        tab.doc,
+        plotter_tools.fill_rect(layer.data, a[0], a[1], b[0], b[1], gidlib.EMPTY),
+    )
+    if result is not None:
+        tab.doc.write_region(layer.uid, *result)
+
+
 def _object_input(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None:
     """Click an object to select it, drag on empty space to draw a rectangle.
 
@@ -1341,7 +1600,7 @@ def _object_input(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None
             at = point
             if imgui.get_io().key_ctrl:
                 at = doc.cell_corner(*doc.cell_at(*point))
-            x, y, w, h = _resized(state.drag_handle, fixed, at)
+            x, y, w, h = _resized(target, fixed, at)
             doc.place_object(x=float(x), y=float(y), w=float(w), h=float(h))
     elif state.drag_kind in ("object-move", "object-resize") and imgui.is_mouse_released(0):
         # One step for the whole gesture, and none at all for a click that never
@@ -1353,9 +1612,25 @@ def _object_input(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None
         x0, x1 = sorted((start[0], point[0]))
         y0, y1 = sorted((start[1], point[1]))
         w, h = x1 - x0, y1 - y0
-        kind = "rect" if w >= tab.doc.tile_w * 0.25 and h >= tab.doc.tile_h * 0.25 else "point"
+        kind = state.object_shape
+        if kind != "point":
+            w = w if w >= tab.doc.tile_w * 0.25 else float(tab.doc.tile_w)
+            h = h if h >= tab.doc.tile_h * 0.25 else float(tab.doc.tile_h)
+        tile_gid = 0
+        if kind == "tile":
+            brush = np.asarray(state.brush).reshape(-1) if state.brush is not None else ()
+            tile_gid = next((int(value) for value in brush if int(value)), 0)
+            if not tile_gid and doc.tilesets:
+                tile_gid = int(doc.tilesets[0].firstgid)
         obj = plotter_layers.add_object(
-            doc, layer, kind, x0, y0, w if kind == "rect" else 0.0, h if kind == "rect" else 0.0
+            doc,
+            layer,
+            kind,
+            x0,
+            y0,
+            w if kind != "point" else 0.0,
+            h if kind != "point" else 0.0,
+            gid=tile_gid,
         )
         state.selected_object = obj.uid
         state.clear_drag()
@@ -1369,10 +1644,10 @@ _HANDLES = ("nw", "ne", "se", "sw")
 def _handle_corners(obj: Any) -> dict[str, tuple[float, float]]:
     """Each handle's position in map-pixel space."""
     return {
-        "nw": (obj.x, obj.y),
-        "ne": (obj.x + obj.w, obj.y),
-        "se": (obj.x + obj.w, obj.y + obj.h),
-        "sw": (obj.x, obj.y + obj.h),
+        "nw": _rotated(obj, 0.0, 0.0),
+        "ne": _rotated(obj, obj.w, 0.0),
+        "se": _rotated(obj, obj.w, obj.h),
+        "sw": _rotated(obj, 0.0, obj.h),
     }
 
 
@@ -1396,7 +1671,13 @@ def _handle_at(
     where the handles are hardest to hit. ``shift`` is the layer's displacement,
     the same one ``_objects`` drew the handles at.
     """
-    if obj.kind != "rect":
+    shape = getattr(obj, "shape", None)
+    if shape is None:
+        # Backwards-compatible structural objects only carry a kind and
+        # dimensions. Rectangles remain resizable; points do not gain handles.
+        if getattr(obj, "kind", "") != "rect":
+            return None
+    elif not hasattr(shape, "w"):
         return None
     for name, (px, py) in _handle_corners(obj).items():
         sx, sy = inker_state.to_screen(view, origin, px + shift[0], py + shift[1])
@@ -1405,16 +1686,49 @@ def _handle_at(
     return None
 
 
-def _resized(handle: str, fixed: tuple[float, float], point: tuple[float, float]):
+def _resized(obj: Any, fixed: tuple[float, float], point: tuple[float, float]):
     """``(x, y, w, h)`` from the pinned corner and the pointer.
 
-    Normalized as it goes, so dragging a corner *past* its opposite flips the
-    rectangle rather than giving it a negative size -- which would draw as
-    nothing and export as a rectangle no engine can read.
+    **Worked in the object's own unrotated frame, then put back.** Everything
+    around this already speaks rotated map space -- ``_handle_corners`` rotates
+    the four corners, ``_opposite`` picks the rotated one to pin, ``_handle_at``
+    hit-tests where they are actually drawn -- and this one function used to
+    take the min and max of two *map* points and write the result straight onto
+    ``x``/``y``/``w``/``h``. Those fields are the object's **unrotated** origin
+    and extent (``_rotated`` turns them into what you see), so for any
+    ``rotation != 0`` the answer described a different rectangle in a different
+    place: grabbing a corner made the object jump. Rotation is newly authorable
+    here and arrives on every import, so this stopped being unreachable.
+
+    The arithmetic: with ``R`` the object's rotation and ``P`` the pinned corner
+    (already in map space), the pointer's offset ``M - P`` rotated *back* by
+    ``R`` is the new rectangle's diagonal in object space. Its absolute
+    components are the new width and height, and the corner nearest the local
+    origin -- ``min(0, ...)`` on each axis, which is what normalizes a drag past
+    the opposite corner into a flip rather than a negative size -- rotated
+    forward again and added to ``P`` is the new origin. At zero rotation every
+    term collapses and this is exactly the sorted min/max it replaces, which is
+    what ``test_dragging_a_corner_past_its_opposite_flips_rather_than_going_negative``
+    still pins.
+
+    ``handle`` is gone from the signature because ``fixed`` already says which
+    corner is pinned and the normalization already says which way the drag
+    went; taking both invited them to disagree.
     """
-    x0, x1 = sorted((fixed[0], point[0]))
-    y0, y1 = sorted((fixed[1], point[1]))
-    return x0, y0, x1 - x0, y1 - y0
+    angle = math.radians(float(getattr(obj, "rotation", 0.0)))
+    cosine, sine = math.cos(angle), math.sin(angle)
+    mx, my = point[0] - fixed[0], point[1] - fixed[1]
+    # R is a rotation, so its inverse is its transpose -- no division, and no
+    # special case at 90 degrees.
+    local_x = mx * cosine + my * sine
+    local_y = -mx * sine + my * cosine
+    left, top = min(0.0, local_x), min(0.0, local_y)
+    return (
+        fixed[0] + left * cosine - top * sine,
+        fixed[1] + left * sine + top * cosine,
+        abs(local_x),
+        abs(local_y),
+    )
 
 
 def _object_at(layer: Any, point: tuple[float, float]):
@@ -1424,6 +1738,76 @@ def _object_at(layer: Any, point: tuple[float, float]):
         if obj.kind == "point":
             if abs(obj.x - x) <= 8 and abs(obj.y - y) <= 8:
                 return obj
-        elif obj.x <= x <= obj.x + obj.w and obj.y <= y <= obj.y + obj.h:
+            continue
+        local_x, local_y = _object_local(obj, x, y)
+        if obj.kind == "ellipse":
+            rx, ry = obj.w * 0.5, obj.h * 0.5
+            if rx and ry and ((local_x - rx) / rx) ** 2 + ((local_y - ry) / ry) ** 2 <= 1:
+                return obj
+        # One arm per kind, and the *kind* alone decides the arm. These two
+        # used to share an arm whose condition was "polygon and inside, or
+        # polyline and near" -- so a polygon the pointer missed did not stop
+        # there, it fell through the capsule arm into the rectangle test at the
+        # bottom and was picked by its bounding box. Harmless only because a
+        # polygon's derived ``w``/``h`` are currently zero, which makes that a
+        # hit at the object's origin and nowhere else; it becomes a real
+        # mis-selection the moment those shapes report an extent.
+        elif obj.kind == "polygon":
+            if _inside_polygon(local_x, local_y, obj.shape.points):
+                return obj
+        elif obj.kind == "polyline":
+            if _near_polyline(local_x, local_y, obj.shape.points):
+                return obj
+        elif obj.kind == "capsule":
+            if _inside_capsule(local_x, local_y, obj.w, obj.h):
+                return obj
+        elif 0 <= local_x <= obj.w and 0 <= local_y <= obj.h:
             return obj
     return None
+
+
+def _object_local(obj: Any, x: float, y: float) -> tuple[float, float]:
+    angle = math.radians(-float(obj.rotation))
+    cosine, sine = math.cos(angle), math.sin(angle)
+    dx, dy = x - obj.x, y - obj.y
+    return (dx * cosine - dy * sine, dx * sine + dy * cosine)
+
+
+def _inside_polygon(x: float, y: float, points: Any) -> bool:
+    inside = False
+    previous = points[-1]
+    for current in points:
+        x0, y0 = previous
+        x1, y1 = current
+        if (y0 > y) != (y1 > y):
+            crossing = (x1 - x0) * (y - y0) / (y1 - y0) + x0
+            if x < crossing:
+                inside = not inside
+        previous = current
+    return inside
+
+
+def _near_polyline(x: float, y: float, points: Any, tolerance: float = 8.0) -> bool:
+    for (x0, y0), (x1, y1) in zip(points, points[1:], strict=False):
+        dx, dy = x1 - x0, y1 - y0
+        length_sq = dx * dx + dy * dy
+        t = (
+            0.0
+            if not length_sq
+            else max(0.0, min(1.0, ((x - x0) * dx + (y - y0) * dy) / length_sq))
+        )
+        if math.hypot(x - (x0 + t * dx), y - (y0 + t * dy)) <= tolerance:
+            return True
+    return False
+
+
+def _inside_capsule(x: float, y: float, width: float, height: float) -> bool:
+    if width >= height:
+        radius = height * 0.5
+        near_x = max(radius, min(width - radius, x))
+        near_y = radius
+    else:
+        radius = width * 0.5
+        near_x = radius
+        near_y = max(radius, min(height - radius, y))
+    return math.hypot(x - near_x, y - near_y) <= radius

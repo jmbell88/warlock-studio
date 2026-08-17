@@ -38,6 +38,26 @@ def test_a_tileset_round_trips_through_its_own_writer():
     assert (back.columns, back.rows, back.tile_count) == (4, 4, 16)
 
 
+def test_a_tileset_class_round_trips_through_its_own_writer():
+    source = _tileset(class_name="BiomeAtlas")
+    data = tsx.tsx_bytes(source, image_name="terrain.png")
+    assert b'class="BiomeAtlas"' in data
+    assert tsx.read_tsx(data, _pixels()).class_name == "BiomeAtlas"
+
+
+def test_tileset_transformations_round_trip_through_the_writer():
+    source = _tileset(transformations=(True, False, True, True))
+    data = tsx.tsx_bytes(source, image_name="terrain.png")
+    assert b'<transformations hflip="1" vflip="0" rotate="1"' in data
+    assert b'preferuntransformed="1"' in data
+    assert tsx.read_tsx(data, _pixels()).transformations == (
+        True,
+        False,
+        True,
+        True,
+    )
+
+
 def test_spacing_and_margin_survive_and_are_omitted_when_zero():
     """Tiled omits both at zero, and matching that keeps a file written here
     diff-clean against the same tileset written there."""
@@ -169,6 +189,10 @@ def test_a_property_type_outside_tileds_nine_is_refused_by_name():
         ('<tile id="0"><image source="x.png"/></tile>', "image-collection"),
         ('<tile id="0"><objectgroup/></tile>', "per-tile collision"),
         ('<tile id="0"><properties/></tile>', "per-tile custom properties"),
+        ('<tile id="0" class="Water"/>', "per-tile class"),
+        ('<tile id="0" probability="0.5"/>', "per-tile probability"),
+        ('<tile id="0" terrain="0,,,"/>', "per-tile terrain assignment"),
+        ('<tileoffset x="1" y="0"/>', "tileset tile offset"),
     ],
 )
 def test_an_unsupported_tileset_feature_is_refused_and_named(body, feature):
@@ -185,6 +209,31 @@ def test_an_image_collection_with_no_atlas_at_all_is_refused():
     data = b'<tileset name="t" tilewidth="16" tileheight="16"><grid/></tileset>'
     with pytest.raises(tsx.TiledUnsupported, match="image-collection"):
         tsx.tsx_source(data)
+
+
+@pytest.mark.parametrize(
+    ("attribute", "feature"),
+    [
+        ('objectalignment="center"', "tileset object alignment"),
+        ('tilerendersize="grid"', "tileset render size"),
+        ('fillmode="preserve-aspect-fit"', "tileset fill mode"),
+        ('backgroundcolor="#ff00ff"', "tileset background colour"),
+    ],
+)
+def test_an_unsupported_tileset_attribute_is_refused_and_named(attribute, feature):
+    data = f'''<tileset name="t" tilewidth="16" tileheight="16" {attribute}>
+ <image source="a.png" width="64" height="64"/>
+</tileset>'''.encode()
+    with pytest.raises(tsx.TiledUnsupported, match=feature):
+        tsx.read_tsx(data, _pixels())
+
+
+def test_a_tileset_image_transparent_colour_is_refused():
+    data = b'''<tileset name="t" tilewidth="16" tileheight="16">
+ <image source="a.png" width="64" height="64" trans="ff00ff"/>
+</tileset>'''
+    with pytest.raises(tsx.TiledUnsupported, match="transparent colour"):
+        tsx.read_tsx(data, _pixels())
 
 
 def test_a_file_that_is_not_a_tileset_is_refused_plainly():

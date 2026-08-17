@@ -439,6 +439,18 @@ class Text2Image:
         the two share, but set_adapters/disable_lora are pipeline methods --
         calling them on the wrong object is the kind of thing that silently
         generates without the style LoRA.
+
+        Style adapters the job did not select are *deleted*, not just
+        disabled (the unbounded-accumulation half of MDL-17): adapters
+        attached lazily and were never detached, so every style picked during
+        a pipe's life stayed resident in host and VRAM until full unload --
+        and ``vram._adapter_cost`` prices only base + selected style, so
+        attached exceeded priced. Deleting bounds residency at the base
+        adapter plus at most one style, and attached now equals priced.
+        Same-style repeats delete nothing and reload nothing; alternating
+        styles pay one load_lora_weights from disk (seconds, against minutes
+        of sampling). The base adapter lives in ``_base_adapter``, never in
+        ``_adapters``, so it is structurally undeletable.
         """
         assert self._pipe is not None
         names: list[str] = []
@@ -473,6 +485,22 @@ class Text2Image:
                 self._ensure_adapter(pipe, lora)
                 names.append(lora)
                 weights.append(weight)
+        # Before enable_lora()/set_adapters(), and before _has_adapters is
+        # read: a pipe whose only adapters were just deleted must not get
+        # disable_lora(), and _has_adapters being derived makes that fall out.
+        stale = self._adapters - set(names)
+        if stale:
+            try:
+                pipe.delete_adapters(sorted(stale))
+            except Exception:
+                # Degrades to the old accumulation, loudly and per-job.
+                # _adapters only shrinks on success, so the bookkeeping stays
+                # truthful, the reload guard keeps skipping still-attached
+                # adapters, and the delete is retried on the next apply.
+                log.warning("failed to detach style LoRAs %s", sorted(stale), exc_info=True)
+            else:
+                self._adapters -= stale
+                log.info("detached style LoRAs %s", sorted(stale))
         if names:
             # enable_lora() first, and it is not belt-and-braces: disable_lora()
             # sets ``_disable_adapters`` on every PEFT layer, and set_adapters()

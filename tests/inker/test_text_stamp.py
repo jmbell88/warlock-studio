@@ -463,6 +463,10 @@ class _Popup:
     def help_marker(self, text):
         pass
 
+    def popup_chrome(self, **_kwargs):
+        """Renderer-only chrome is a no-op in this interaction recorder."""
+        pass
+
 
 def _driven(monkeypatch, pressed, popup):
     """One frame of the popup body, with the recorder in force for that frame

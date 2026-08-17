@@ -21,7 +21,24 @@ from pathlib import Path
 MATRIX = Path(__file__).resolve().parents[2] / "docs" / "PLOTTER_COMPAT.md"
 ENGINE = Path(__file__).resolve().parents[2] / "src" / "warlock" / "studio" / "plotter"
 
-STATES = {"round-trips", "refused", "preserved-verbatim", "silently-dropped"}
+STATES = {
+    "round-trips",
+    # A construct this editor reads and writes that no Tiled release does --
+    # an oblique orientation, a layer blend mode, an object opacity, a capsule
+    # shape, a list property. A separate state rather than a ``round-trips``
+    # row with a caveat in its note, because the two make different claims and
+    # a note is not machine-checkable: ``round-trips`` says a Tiled file
+    # survives the trip, and this says only that *our* file does. Both are
+    # positive rows and both must name a fixture; see the fixture test below.
+    "warlock-dialect",
+    "refused",
+    "preserved-verbatim",
+    "silently-dropped",
+}
+
+#: The states that assert a feature is carried rather than stopped. Both owe a
+#: fixture.
+POSITIVE_STATES = {"round-trips", "warlock-dialect"}
 
 
 def _normal_form(node: ast.expr) -> str | None:
@@ -55,25 +72,7 @@ def _normal_form(node: ast.expr) -> str | None:
 # not how it reaches ``raise`` -- the scan below no longer cares whether the
 # call is the direct argument of a ``raise`` or is assigned to a name and
 # raised later, so the key does not need to either.
-DYNAMIC_REFUSALS: dict[tuple[str, str], tuple[str, ...]] = {
-    ("tmx.py", "_refuse_object_shape"): (
-        "ellipse objects",
-        "polygon objects",
-        "polyline objects",
-        "text objects",
-    ),
-    # The writer door. Same five sentences the readers use, looked up by shape
-    # kind out of ``tmx._UNWRITABLE_SHAPES`` -- one table rather than a second
-    # list, so the two doors cannot drift into refusing an ellipse under two
-    # different names.
-    ("tmx.py", "_refuse_unwritable_objects"): (
-        "ellipse objects",
-        "polygon objects",
-        "polyline objects",
-        "text objects",
-        "tile objects",
-    ),
-}
+DYNAMIC_REFUSALS: dict[tuple[str, str], tuple[str, ...]] = {}
 
 
 class _RefusalCallVisitor(ast.NodeVisitor):
@@ -191,21 +190,42 @@ def test_every_refused_row_still_refuses():
     assert refused - _raised_features() == set()
 
 
-def test_a_row_that_claims_to_round_trip_names_a_fixture_that_exists():
-    """A ``round-trips`` claim is only worth what backs it. The note column
-    carries the fixture stem behind a ``fixture:`` marker -- see the ``Feature
-    names are...`` intro paragraph and the ``round-trips`` bullet in the doc's
-    own header -- rather than in any backticked word, because notes already
-    carry unrelated backticked prose (` ``zstd`` `, format names, and so on)
-    that an unanchored pattern would mistake for a fixture stem."""
+def test_a_positive_row_names_a_fixture_that_exists():
+    """A positive claim is only worth what backs it. The note column carries
+    the fixture stem behind a ``fixture:`` marker -- see the state bullets in
+    the doc's own header -- rather than in any backticked word, because notes
+    already carry unrelated backticked prose (` ``zstd`` `, format names, and
+    so on) that an unanchored pattern would mistake for a fixture stem.
+
+    Both positive states are checked. A ``warlock-dialect`` row makes a smaller
+    claim than a ``round-trips`` one, but it is still a claim that the
+    construct survives being written and read back, and an unbacked one is
+    exactly as empty."""
     from ._corpus import FIXTURE_DIR
 
     for feature, state, note in _rows():
-        if state != "round-trips":
+        if state not in POSITIVE_STATES:
             continue
         stems = re.findall(r"fixture:\s*`([a-z0-9-]+)`", note)
-        assert stems, f"{feature!r} claims to round-trip but names no fixture"
+        assert stems, f"{feature!r} is a {state} row but names no fixture"
         for stem in stems:
             assert (FIXTURE_DIR / f"{stem}.tmx").is_file(), (
                 f"{feature!r} names fixture {stem!r}, which is not in the corpus"
             )
+
+
+def test_every_dialect_row_says_tiled_does_not_have_it():
+    """The one thing a ``warlock-dialect`` row exists to say.
+
+    The state name alone is a word in a table; what stops the row being read as
+    a normal feature is the sentence naming what Tiled actually has instead.
+    Pinned because this table is the file a future milestone edits in a hurry,
+    and a dialect row that quietly loses its warning is indistinguishable from
+    a compatibility claim."""
+    for feature, state, note in _rows():
+        if state != "warlock-dialect":
+            continue
+        assert "Tiled has no" in note or "Tiled has per-" in note, (
+            f"{feature!r} is a dialect row but its note never says what Tiled "
+            "has instead"
+        )

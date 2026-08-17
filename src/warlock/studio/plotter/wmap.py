@@ -35,20 +35,31 @@ same way and for the same reasons, as ``images/N.png``.
 **Version 3 is the layer tree.** The document models what Tiled models -- a tree
 of tile/object/group/image layers, each carrying a class, a tint, a pixel offset
 and a parallax factor; objects carrying a persistent id, a rotation and one of
-seven tagged geometries -- and this is the version that stores all of it. The
+the tagged geometries -- and this is the version that stores all of it. The
 manifest's ``layers`` became *recursive* (a group entry carries a ``layers``
 list of its own) while the tile arrays stayed a **flat, depth-first**
 ``layers/N.npy`` enumeration, so the half of the container that holds megabytes
 did not churn for a change to the half that holds kilobytes.
+
+**Version 4 is the 1.12-era additions**, and it is written only when one of them
+is actually present: an object layer's ``color``, an object's ``opacity``, a
+layer ``blend_mode``, the ``capsule`` geometry (which takes the count to eight),
+a ``list``-typed custom property, an oblique projection with its skew, the
+stagger/hex-side fields, a map or tileset class, a parallax origin, and a
+tileset's grid and transformations. :func:`_document_version` is the one place
+that decides, and **every one of those fields has to be named in it** -- the
+entries are written unconditionally, so a field the gate does not ask about
+produces a file declaring version 3 while carrying a key a version 3 reader
+drops in silence.
 
 Versions 1 and 2 are still read, through tolerant defaults rather than a branch
 per version -- the ``locked`` precedent. A version 1 file predates projections
 and is orthogonal by definition; a version 2 file has no tint, offset, parallax
 or class and those are identity; neither stores an ``id``, so both get fresh
 persistent ids minted from the document's own counters on read, exactly as
-:func:`.tmx._export_ids` assigns one to an object that has none. Only version 3
-is *written*: a format that wrote whichever version a document happened to need
-would be four writers to keep in step.
+:func:`.tmx._export_ids` assigns one to an object that has none. The writer uses
+version 3 until a 1.12-era field needs version 4; this is one schema with
+additive defaults, not two independent writers.
 
 **A half-read document is worse than a refused one.** A file from a newer
 version, a layer whose array is the wrong shape or dtype, a tileset naming a
@@ -91,7 +102,8 @@ from .tilemap import (
 )
 from .tileset import TerrainSpec, Tileset, TilesetRef
 
-VERSION = 3
+VERSION = 4
+BASE_VERSION = 3
 MANIFEST = "map.json"
 LAYER_DIR = "layers"
 IMAGE_DIR = "images"
@@ -192,7 +204,7 @@ def _shape_record(shape: Shape) -> dict[str, Any]:
 
     Enumerated off the dataclass rather than written out per shape, which is
     the same choice ``tests/plotter/_semantics._geometry_facts`` makes and right
-    for the same reason: the union has seven members and will gain more, and a
+    for the same reason: the union has eight members and will gain more, and a
     hand-written branch per shape is a field silently dropped per shape. A
     polygon's vertices, a tile object's gid and a text object's dozen styling
     fields all travel because they are *fields*, not because this function
@@ -226,6 +238,7 @@ def _object_entry(obj: MapObject) -> dict[str, Any]:
         "x": float(obj.x),
         "y": float(obj.y),
         "rotation": float(obj.rotation),
+        "opacity": float(obj.opacity),
         "shape": _shape_record(obj.shape),
         "class": obj.obj_class,
         "visible": bool(obj.visible),
@@ -266,6 +279,7 @@ def _layer_entries(
             specific = {
                 "type": "object",
                 "draworder": str(layer.draworder),
+                "color": layer.color,
                 "objects": [_object_entry(obj) for obj in layer.objects],
             }
         elif isinstance(layer, ImageLayer):
@@ -308,6 +322,7 @@ def _layer_entries(
                 # and the file has no such problem and every reason to match
                 # the word Tiled uses for the same field.
                 "class": str(layer.class_name),
+                "blend_mode": str(layer.blend_mode),
                 "visible": bool(layer.visible),
                 "opacity": float(layer.opacity),
                 # Written unconditionally, unlike the TMX side. This is our own
@@ -327,6 +342,87 @@ def _layer_entries(
     return out
 
 
+def _has_list_property(props: Any) -> bool:
+    """Whether any property in this block is (or contains) a ``list``.
+
+    Recursive, because a list can sit inside a class member or inside another
+    list. ``list`` is one of the 1.12-era property types, so a document
+    carrying one has to declare version 4 for the same reason an object opacity
+    does: the entry is written either way, and a reader that predates the type
+    would take the record apart into something else.
+    """
+    values = props.values() if isinstance(props, dict) else props
+    for prop in values or ():
+        kind = getattr(prop, "type", None)
+        if kind == "list":
+            return True
+        if kind in ("class", "list") and _has_list_property(getattr(prop, "value", None)):
+            return True
+    return False
+
+
+def _document_version(doc: MapDoc) -> int:
+    """The oldest version emitted by this writer that represents ``doc``.
+
+    Version 3 already stores the layer tree, decorations and seven original
+    shapes. Version 4 is used only when one of the Tiled 1.12 additions would
+    otherwise be lost.
+
+    **Every field the version 4 writer added has to be named here.** The entries
+    are written unconditionally -- this function chooses only the number at the
+    top of the manifest -- so a field the gate does not ask about is a document
+    declared version 3 while carrying a key a version 3 reader drops on the
+    floor, silently and with nothing in the file to say it happened.
+    ``ObjectLayer.color`` was exactly that: the one decoration on the object
+    arm below that nothing looked at.
+    """
+    if doc.infinite:
+        raise WmapUnstorable(
+            f"the version {VERSION} .wmap format has no sparse chunk entry for an infinite map"
+        )
+    if (
+        doc.class_name
+        or tuple(doc.parallax_origin) != (0.0, 0.0)
+        or doc.projection == project.OBLIQUE
+        or doc.skew_x
+        or doc.skew_y
+        or doc.stagger_axis != "y"
+        or doc.stagger_index != "odd"
+        or doc.hex_side
+    ):
+        return VERSION
+    if any(
+        ref.tileset.class_name
+        or (
+            ref.tileset.grid_orientation,
+            ref.tileset.grid_width,
+            ref.tileset.grid_height,
+        )
+        != ("orthogonal", ref.tileset.tile_w, ref.tileset.tile_h)
+        or any(ref.tileset.transformations)
+        for ref in doc.tilesets
+    ):
+        return VERSION
+    if _has_list_property(doc.properties):
+        return VERSION
+    for layer in doc.all_layers():
+        if not isinstance(layer, (TileLayer, ObjectLayer, ImageLayer, GroupLayer)):
+            continue
+        if layer.blend_mode != "normal" or _has_list_property(layer.properties):
+            return VERSION
+        if isinstance(layer, ObjectLayer):
+            # ``color`` before the objects, because it is the layer's own field
+            # and an empty object layer still carries it.
+            if layer.color:
+                return VERSION
+            for obj in layer.objects:
+                if obj.opacity != 1.0 or shape_kind(obj.shape) == "capsule":
+                    return VERSION
+                if _has_list_property(obj.properties):
+                    return VERSION
+    return BASE_VERSION
+
+
 def manifest_json(doc: MapDoc) -> str:
     """``map.json``'s text: sorted keys, indented, one entry per layer.
 
@@ -342,6 +438,9 @@ def manifest_json(doc: MapDoc) -> str:
         tilesets.append(
             {
                 "name": ts.name,
+                "class": ts.class_name,
+                "grid": [ts.grid_orientation, ts.grid_width, ts.grid_height],
+                "transformations": list(ts.transformations),
                 "firstgid": int(ref.firstgid),
                 "source": ref.source,
                 "tile_w": ts.tile_w,
@@ -361,7 +460,7 @@ def manifest_json(doc: MapDoc) -> str:
         )
 
     payload = {
-        "version": VERSION,
+        "version": _document_version(doc),
         "width": doc.width,
         "height": doc.height,
         "tile_w": doc.tile_w,
@@ -375,6 +474,10 @@ def manifest_json(doc: MapDoc) -> str:
         # refuses a newer version: this build cannot draw one.
         "infinite": False,
         "projection": doc.projection,
+        "class": str(doc.class_name),
+        "parallax_origin": [float(value) for value in doc.parallax_origin],
+        "skew": [int(doc.skew_x), int(doc.skew_y)],
+        "stagger": [doc.stagger_axis, doc.stagger_index, int(doc.hex_side)],
         "renderorder": doc.renderorder,
         "backgroundcolor": doc.backgroundcolor,
         # Document state, and the reason a re-save after an add-then-undo
@@ -505,6 +608,16 @@ def _pair(entry: dict[str, Any], key: str, default: tuple[float, float]) -> tupl
     return (float(raw[0]), float(raw[1]))
 
 
+def _three(entry: dict[str, Any], key: str, default: Any) -> Any:
+    """One three-component metadata field, or its backwards-compatible default."""
+    if key not in entry:
+        return default
+    raw = entry[key]
+    if not isinstance(raw, (list, tuple)) or len(raw) != 3:
+        _malformed(f"a tileset's {key}")
+    return raw
+
+
 def _flags(entry: dict[str, Any], key: str) -> tuple[bool, bool]:
     """``repeat``: two booleans, which is a different type and so its own door.
 
@@ -561,6 +674,7 @@ def _read_layers(
             # opens unlocked rather than being refused.
             "locked": bool(entry.get("locked", False)),
             "class_name": str(entry.get("class", "")),
+            "blend_mode": str(entry.get("blend_mode", "normal")),
             # Straight to the constructor, which runs it through
             # ``rgba_colour`` and refuses a colour that is not one by name.
             "tint": entry.get("tint", OPAQUE_WHITE),
@@ -585,6 +699,7 @@ def _read_layers(
                     # Refused by ``ObjectLayer`` itself when it is not one of
                     # the two, so there is one list of legal draw orders.
                     draworder=str(entry.get("draworder", "topdown")),
+                    color=entry.get("color"),
                     objects=[_read_object(o) for o in entry.get("objects", [])],
                 )
             )
@@ -653,6 +768,7 @@ def _read_object(entry: Any) -> MapObject:
         x=float(entry.get("x", 0.0)),
         y=float(entry.get("y", 0.0)),
         rotation=float(entry.get("rotation", 0.0)),
+        opacity=float(entry.get("opacity", 1.0)),
         shape=_read_shape(entry),
         obj_class=str(entry.get("class", "")),
         visible=bool(entry.get("visible", True)),
@@ -789,6 +905,14 @@ def read_wmap(data: bytes) -> MapDoc:
         )
         doc.renderorder = str(manifest.get("renderorder", "right-down"))
         doc.backgroundcolor = manifest.get("backgroundcolor")
+        doc.class_name = str(manifest.get("class", ""))
+        doc.parallax_origin = _pair(manifest, "parallax_origin", (0.0, 0.0))
+        skew = _two(manifest, "skew", (0, 0))
+        doc.skew_x, doc.skew_y = int(skew[0]), int(skew[1])
+        stagger = _three(manifest, "stagger", ("y", "odd", 0))
+        doc.stagger_axis = str(stagger[0])
+        doc.stagger_index = str(stagger[1])
+        doc.hex_side = int(stagger[2])
         doc.properties = read_wmap_properties(manifest.get("properties"))
 
         previous = 0
@@ -800,11 +924,24 @@ def read_wmap(data: bytes) -> MapDoc:
                 # the overlap draws whichever comes first.
                 raise ValueError("this map's tilesets are numbered out of order")
             previous = firstgid
+            grid = _three(
+                entry,
+                "grid",
+                ("orthogonal", int(entry.get("tile_w", 1)), int(entry.get("tile_h", 1))),
+            )
+            transformations = entry.get("transformations", [False] * 4)
+            if not isinstance(transformations, (list, tuple)) or len(transformations) != 4:
+                _malformed("a tileset's transformations")
             doc.tilesets.append(
                 TilesetRef(
                     firstgid=firstgid,
                     tileset=Tileset(
                         name=str(entry.get("name", "tileset")),
+                        class_name=str(entry.get("class", "")),
+                        grid_orientation=str(grid[0]),
+                        grid_width=int(grid[1]),
+                        grid_height=int(grid[2]),
+                        transformations=tuple(bool(value) for value in transformations),
                         pixels=_read_picture(
                             zf, str(entry.get("image", "")), "a tileset image"
                         ),

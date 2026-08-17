@@ -103,6 +103,16 @@ class _FakeImgui:
 
 
 def _run(monkeypatch: pytest.MonkeyPatch, prompt: dialogs.Prompt, fake: _FakeImgui) -> Any:
+    # The stub is swapped into ``dialogs`` only, and ``widgets.frosted`` asks
+    # the *real* imgui whether a context exists -- so this file's "no real
+    # context" claim was true only for as long as no earlier file on the same
+    # xdist worker left one current. When one did, ``draw`` took the vibrancy
+    # branch and called a method the stub has never had, and six tests failed
+    # in a file nobody had touched. Pinned rather than stubbed: a fake with no
+    # renderer has no backdrop to blur, and that is the answer, not a gap.
+    from warlock.studio import widgets
+
+    monkeypatch.setattr(widgets, "frosted", lambda: False)
     monkeypatch.setattr(dialogs, "imgui", fake)
     queue = dialogs.PromptQueue()
     queue.ask(prompt)

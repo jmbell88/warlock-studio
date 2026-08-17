@@ -190,6 +190,27 @@ class JobOps:
                         rigging.sheet_path(job_dir, sheet_id),
                         rigging.sheet_png_path(job_dir, sheet_id),
                     ]
+        elif job["kind"] == "ground_set":
+            # This job's own directory, unlike the five above -- a ground set is
+            # not a derivation of anything on disk. All of it goes: ``input.png``
+            # here *is* the finished 47-column atlas, and a half-published one is
+            # a sheet ``use_as_tileset`` would happily slice into forty-seven
+            # tiles of nothing. The staging name goes too, for the reason the
+            # rig's temps do: a cancel that lands mid-rename must not leave one.
+            job_dir = self.config.job_dir(job["id"])
+            with contextlib.suppress(OSError):
+                shutil.rmtree(job_dir / "textures")
+            # Both staging names, not one. ``_publish_text`` already unlinks its
+            # own temp in a ``finally``, so ``.ground.json.tmp`` is belt and
+            # braces -- but the comment above promises "the staging name goes
+            # too" for a step that stages *twice*, and a list that covers one of
+            # them is the kind of asymmetry a later reader trusts.
+            paths = [
+                job_dir / "input.png",
+                job_dir / ".input.png.tmp",
+                job_dir / "ground.json",
+                job_dir / ".ground.json.tmp",
+            ]
         else:
             # Both halves of the contract: model.glb is what the user would
             # see, source.glb is what it was derived from. Leaving the source

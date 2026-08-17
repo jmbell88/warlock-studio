@@ -30,9 +30,11 @@ from .tilemap import OPAQUE_WHITE, ImageLayer, MapDoc, TileLayer
 # The flat composite is ``pixel_height * pixel_width * 4`` bytes in one
 # allocation, and both factors are the document's own numbers -- a 4096-square
 # map of 64-pixel tiles is 68 gigapixels and asks for a quarter of a terabyte
-# before anything here gets a turn. 2^28 pixels is a gigabyte of RGBA: far past
-# any map anyone renders on purpose (a 512-square map at 32px is 4 megapixels)
-# and far short of a machine's RAM. **New rather than corpus-keyed** -- nothing
+# before anything here gets a turn. 2^28 pixels is a gigabyte of RGBA: past any
+# map anyone renders on purpose (a 512-square map at 32px is 16384 pixels on a
+# side, so 268 megapixels -- the figure ``minimap`` below quotes, and the
+# arithmetic this line used to get wrong by a factor of sixty-seven) and far
+# short of a machine's RAM. **New rather than corpus-keyed** -- nothing
 # stored is measured against it, so it needs no ``docs/measurements/`` document;
 # it is a refusal about arithmetic, not a threshold about quality. Read from
 # module globals at call time so a test can lower it.
@@ -54,7 +56,58 @@ def orient(tile: np.ndarray, flip_h: bool, flip_v: bool, flip_d: bool) -> np.nda
     return tile
 
 
-def _over(dst: np.ndarray, src: np.ndarray, opacity: float) -> None:
+def _blend(backdrop: np.ndarray, source: np.ndarray, mode: str) -> np.ndarray:
+    """Tiled 1.12's separable SVG blend function, on straight 0..1 RGB."""
+    if mode == "multiply":
+        return backdrop * source
+    if mode == "screen":
+        return backdrop + source - backdrop * source
+    if mode == "overlay":
+        return np.where(
+            backdrop <= 0.5,
+            2.0 * backdrop * source,
+            1.0 - 2.0 * (1.0 - backdrop) * (1.0 - source),
+        )
+    if mode == "add":
+        return np.minimum(backdrop + source, 1.0)
+    if mode == "darken":
+        return np.minimum(backdrop, source)
+    if mode == "lighten":
+        return np.maximum(backdrop, source)
+    if mode == "difference":
+        return np.abs(backdrop - source)
+    if mode == "exclusion":
+        return backdrop + source - 2.0 * backdrop * source
+    if mode == "hard-light":
+        return _blend(source, backdrop, "overlay")
+    if mode == "color-dodge":
+        denominator = 1.0 - source
+        ratio = np.minimum(
+            backdrop / np.where(denominator > 0.0, denominator, 1.0), 1.0
+        )
+        return np.where(backdrop <= 0.0, 0.0, np.where(source >= 1.0, 1.0, ratio))
+    if mode == "color-burn":
+        ratio = np.minimum(
+            (1.0 - backdrop) / np.where(source > 0.0, source, 1.0), 1.0
+        )
+        return np.where(
+            backdrop >= 1.0, 1.0, np.where(source <= 0.0, 0.0, 1.0 - ratio)
+        )
+    if mode == "soft-light":
+        d = np.where(
+            backdrop <= 0.25,
+            ((16.0 * backdrop - 12.0) * backdrop + 4.0) * backdrop,
+            np.sqrt(np.maximum(backdrop, 0.0)),
+        )
+        return np.where(
+            source <= 0.5,
+            backdrop - (1.0 - 2.0 * source) * backdrop * (1.0 - backdrop),
+            backdrop + (2.0 * source - 1.0) * (d - backdrop),
+        )
+    raise ValueError(f"unknown layer blend mode {mode!r}")
+
+
+def _over(dst: np.ndarray, src: np.ndarray, opacity: float, mode: str = "normal") -> None:
     """Source-over, in place, on one cell-sized region.
 
     Float rather than integer arithmetic: a map is routinely a stack of layers
@@ -62,7 +115,11 @@ def _over(dst: np.ndarray, src: np.ndarray, opacity: float) -> None:
     shows as a visible dark fringe along every antialiased tile edge.
     """
     alpha = src[..., 3]
-    if float(opacity) >= 1.0 and bool(((alpha == 255) | (alpha == 0)).all()):
+    if (
+        mode == "normal"
+        and float(opacity) >= 1.0
+        and bool(((alpha == 255) | (alpha == 0)).all())
+    ):
         # A source whose alpha is *binary*, at full opacity, is a masked copy --
         # and exactly one, not an approximation. That is the shape a tile
         # actually has (an opaque body with a transparent surround), which is
@@ -94,10 +151,26 @@ def _over(dst: np.ndarray, src: np.ndarray, opacity: float) -> None:
     # Where the result is fully transparent there is no colour to divide by;
     # leaving those pixels alone is the same answer without the warning.
     safe = np.where(out_a > 0.0, out_a, 1.0)
-    rgb = (
-        src[..., :3].astype(np.float32) * sa + dst[..., :3].astype(np.float32) * da * (1.0 - sa)
-    ) / safe
-    dst[..., :3] = np.clip(np.rint(rgb), 0, 255).astype(np.uint8)
+    if mode == "normal":
+        # Keep the long-standing normal path bit-identical. Normal is every
+        # pre-1.12 map and changing its operation order would move pinned PNGs
+        # even though the blend is mathematically equivalent.
+        rgb = (
+            src[..., :3].astype(np.float32) * sa
+            + dst[..., :3].astype(np.float32) * da * (1.0 - sa)
+        ) / safe
+        dst[..., :3] = np.clip(np.rint(rgb), 0, 255).astype(np.uint8)
+    else:
+        source = src[..., :3].astype(np.float32) / 255.0
+        backdrop = dst[..., :3].astype(np.float32) / 255.0
+        mixed = _blend(backdrop, source, mode)
+        numerator = (
+            sa * (1.0 - da) * source
+            + sa * da * mixed
+            + (1.0 - sa) * da * backdrop
+        )
+        rgb = numerator / safe
+        dst[..., :3] = np.clip(np.rint(rgb * 255.0), 0, 255).astype(np.uint8)
     dst[..., 3:4] = np.clip(np.rint(out_a * 255.0), 0, 255).astype(np.uint8)
 
 
@@ -116,7 +189,14 @@ def _tinted(pixels: np.ndarray, tint: Any) -> np.ndarray:
     return np.clip(np.rint(pixels.astype(np.float32) * factor), 0, 255).astype(np.uint8)
 
 
-def _blit_over(out: np.ndarray, pixels: np.ndarray, x0: int, y0: int, opacity: float) -> None:
+def _blit_over(
+    out: np.ndarray,
+    pixels: np.ndarray,
+    x0: int,
+    y0: int,
+    opacity: float,
+    mode: str = "normal",
+) -> None:
     """``_over`` one image onto another at a place that may be off the edge.
 
     The clip idiom ``tools.stamp`` uses, shared by the tile loop and the image
@@ -134,6 +214,7 @@ def _blit_over(out: np.ndarray, pixels: np.ndarray, x0: int, y0: int, opacity: f
         out[dy0 : dy0 + span_h, dx0 : dx0 + span_w],
         pixels[sy0 : sy0 + span_h, sx0 : sx0 + span_w],
         opacity,
+        mode,
     )
 
 
@@ -145,6 +226,7 @@ def render_layer(
     offset: tuple[float, float] = (0.0, 0.0),
     opacity: float | None = None,
     tint: Any = OPAQUE_WHITE,
+    blend_mode: str = "normal",
 ) -> None:
     """Composite one tile layer onto ``out``, which is the map's pixel size.
 
@@ -217,6 +299,7 @@ def render_layer(
             int(origin_x) + shift_x,
             int(origin_y) + tile_h - height + shift_y,
             opacity,
+            blend_mode,
         )
 
 
@@ -245,6 +328,7 @@ def render_image(
     offset: tuple[float, float] = (0.0, 0.0),
     opacity: float | None = None,
     tint: Any = OPAQUE_WHITE,
+    blend_mode: str = "normal",
 ) -> None:
     """Composite one image layer onto ``out``.
 
@@ -261,7 +345,7 @@ def render_image(
     height, width = int(pixels.shape[0]), int(pixels.shape[1])
     for y0 in repeats(int(round(offset[1])), height, out.shape[0], layer.repeat_y):
         for x0 in repeats(int(round(offset[0])), width, out.shape[1], layer.repeat_x):
-            _blit_over(out, pixels, x0, y0, opacity)
+            _blit_over(out, pixels, x0, y0, opacity, blend_mode)
 
 
 def render_map(doc: MapDoc, *, include_hidden: bool = False) -> np.ndarray:
@@ -287,6 +371,19 @@ def render_map(doc: MapDoc, *, include_hidden: bool = False) -> np.ndarray:
             "this build will composite in one image"
         )
     out = np.zeros((height, width, 4), dtype=np.uint8)
+    if doc.backgroundcolor:
+        text = str(doc.backgroundcolor).lstrip("#")
+        if len(text) == 6:
+            text = "ff" + text
+        if len(text) != 8:
+            raise ValueError(f"invalid Tiled background colour {doc.backgroundcolor!r}")
+        try:
+            alpha, red, green, blue = (int(text[i : i + 2], 16) for i in range(0, 8, 2))
+        except ValueError as exc:
+            raise ValueError(
+                f"invalid Tiled background colour {doc.backgroundcolor!r}"
+            ) from exc
+        out[...] = (red, green, blue, alpha)
     for entry in scene.resolve(doc, include_hidden=include_hidden):
         if entry.opacity <= 0.0:
             continue
@@ -298,6 +395,7 @@ def render_map(doc: MapDoc, *, include_hidden: bool = False) -> np.ndarray:
                 offset=entry.offset,
                 opacity=entry.opacity,
                 tint=entry.tint,
+                blend_mode=entry.blend_mode,
             )
         elif isinstance(entry.layer, ImageLayer):
             render_image(
@@ -307,6 +405,7 @@ def render_map(doc: MapDoc, *, include_hidden: bool = False) -> np.ndarray:
                 offset=entry.offset,
                 opacity=entry.opacity,
                 tint=entry.tint,
+                blend_mode=entry.blend_mode,
             )
         # Object layers carry no pixels: they are metadata an engine reads, and
         # drawing the editor's handles into an export would be drawing the ruler
@@ -385,5 +484,10 @@ def minimap(doc: MapDoc) -> np.ndarray:
             if not picked.any():
                 continue
             cells[picked] = lut[ids[picked] - np.uint32(ref.firstgid)]
-        _over(out, _tinted(cells, entry.tint), float(entry.opacity))
+        _over(
+            out,
+            _tinted(cells, entry.tint),
+            float(entry.opacity),
+            entry.blend_mode,
+        )
     return out

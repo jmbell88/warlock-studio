@@ -8,6 +8,31 @@ file behind.
 
 ## 0.0.23 — 2026-08-16
 
+- **Paint a ground set with AI.** Plotter's tileset pane has a **Paint with
+  AI** section: name a theme and say what each terrain is made of, and the
+  queue generates two seamless textures per terrain — a surface and its rim —
+  reduces each to exactly your tile size, and composites the same forty-seven
+  blob cases the flat generator draws. The map stays editable while it paints,
+  the progress bar tracks the whole set rather than resetting per texture, and
+  the finished atlas is adopted straight onto the map. A set that did not
+  finish is not offered as one.
+- **Plotter reads and writes far more of Tiled.** Group layers, image layers,
+  layer class/tint/offset/parallax, all eight object shapes, object rotation
+  and index draw order now survive a round trip in both the `.tmx` and `.tmj`
+  spellings — most of them were refusals before. Rotated objects can be
+  selected, moved and resized on the canvas, and a resize now keeps the corner
+  you pinned exactly where it was.
+- **Five things Plotter writes that Tiled cannot read.** An oblique projection
+  with its skew, per-layer blend modes, per-object opacity, the capsule object
+  shape and list-valued custom properties are Plotter's own — a `.tmx`
+  carrying one will not open in Tiled. They are listed as a **Warlock dialect**
+  section in `docs/PLOTTER_COMPAT.md` and in the manual, and `.wmap` holds all
+  of them without qualification. Exports no longer claim to be Tiled 1.12.2
+  files.
+- **Blend modes on the canvas, without the stall.** A map using a non-normal
+  blend mode is drawn composited, up to a size budget; past it — or while you
+  are mid-stroke — the canvas draws layers unblended and says so on its face
+  rather than freezing a frame or, on a large map, taking the window down.
 - **Review judges in one guided pass.** **Start judging** at the top of the
   sweep list walks every unit that has no verdict yet, across every bucket, one
   at a time: `A` accepts, `R` rejects, `S` skips, `Esc` finishes early. The

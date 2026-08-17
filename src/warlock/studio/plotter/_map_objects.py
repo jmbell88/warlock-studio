@@ -194,6 +194,7 @@ class ObjectOps:
         obj.shape = values["shape"]
         obj.x, obj.y = float(values["x"]), float(values["y"])
         obj.rotation = float(values["rotation"])
+        obj.opacity = float(values["opacity"])
         obj.obj_class = str(values["obj_class"])
         obj.visible = bool(values["visible"])
         obj.properties = dict(values["properties"])

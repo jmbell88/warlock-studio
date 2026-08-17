@@ -32,8 +32,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import errors, leases, memlog, models, rigging, vectors, vram
+from . import errors, fetch, leases, memlog, models, rigging, vectors, vram
 from ._q_generate import GenerateOps
+from ._q_ground import GroundOps
 from ._q_jobs import JobOps
 from ._q_mesh import MeshPostOps
 from ._q_rig import RigOps
@@ -619,7 +620,7 @@ def commit_fraction() -> float | None:
     return None if sysmem is None else sysmem.commit_fraction
 
 
-class Worker(GenerateOps, RigOps, SpriteOps, MeshPostOps, JobOps):
+class Worker(GenerateOps, RigOps, SpriteOps, GroundOps, MeshPostOps, JobOps):
     def __init__(self, config: Config, store: JobStore) -> None:
         self.config = config
         self.store = store
@@ -891,8 +892,10 @@ class Worker(GenerateOps, RigOps, SpriteOps, MeshPostOps, JobOps):
     async def _evict_t2i(self, *, forget: bool = False) -> None:
         """Give back the resident image pipe's memory. A no-op when there is none.
 
-        Its own method because two callers now want it for two reasons, and
-        they differ in exactly one thing. The idle sweep keeps the pipe object:
+        Its own method because three callers now want it for three reasons,
+        and they differ in exactly one thing. Stale-pipe eviction
+        (``_evict_stale_t2i``) forgets, because a different key or generation
+        is about to replace the object. The idle sweep keeps the pipe object:
         it is the record of what ran, and reloading the same key is what it is
         for. ``forget`` additionally drops both references, which an *uninstall*
         needs -- the files this pipe was built from are about to stop existing,
@@ -905,6 +908,50 @@ class Worker(GenerateOps, RigOps, SpriteOps, MeshPostOps, JobOps):
             self._t2i_key = None
         if pipe is not None:
             await asyncio.to_thread(pipe.unload)
+
+    async def _evict_stale_t2i(self, base_key: str) -> bool:
+        """Unload the resident image pipe if the next job cannot reuse it.
+
+        Stale means the wrong base (``_t2i_key != base_key``) or the wrong
+        store generation -- the weights on disk changed while the pipe was
+        warm, so what it loaded is no longer what the store holds. The pipe's
+        adapter set is fixed at load() time and never revisited, so a style
+        LoRA installed since would be silently dropped at generate with a
+        "not downloaded" warning that is not true -- and the job would finish
+        looking successful, having recorded a style that never ran (MDL-05).
+        Rebuilding is the honest answer and costs one reload of a checkpoint
+        the user just changed the disk under.
+
+        This runs *before* ``_require_commit_headroom`` in ``_acquire_t2i``,
+        because the check would otherwise charge host commit the unload is
+        about to give back: a live klein load was refused at 13.2 GiB free
+        while ~12 GiB of the shortfall was the resident dreamshaper-xl pipe
+        the switch was guaranteed to unload one call later. The headroom check
+        then *re-measures* after the unload rather than crediting it
+        arithmetically -- arenas can retain part of what was freed -- and the
+        paired ``_log_mem`` lines are the record of how much commit actually
+        came back.
+
+        Returns True when an unload happened, False on a warm hit or no pipe.
+        """
+        if self._text2image is None:
+            return False
+        generation = fetch.store_generation()
+        if self._t2i_generation != generation:
+            log.info(
+                "model store changed (generation %s -> %s); reloading %s",
+                self._t2i_generation,
+                generation,
+                self._t2i_key,
+            )
+        elif self._t2i_key != base_key:
+            log.info("switching image model %s -> %s", self._t2i_key, base_key)
+        else:
+            return False
+        _log_mem(f"before unloading {self._t2i_key}")
+        await self._evict_t2i(forget=True)
+        _log_mem("after stale t2i unload")
+        return True
 
     async def unload_text2image(self) -> None:
         """Drop the resident image model, unconditionally. A no-op when there
@@ -1036,14 +1083,21 @@ class Worker(GenerateOps, RigOps, SpriteOps, MeshPostOps, JobOps):
         ``stop()`` can block for up to ~20 s, and it fires at the exact moment
         the user starts watching the progress bar.
 
-        The pipe is fetched after the stop and before trellis could restart in
-        exclusive mode: a base switch frees the previous 7 GB pipe, and doing
-        it in this order keeps the stop-before-load ordering intact either way.
+        The stale pipe (wrong base, or wrong store generation) is evicted
+        after the stop -- keeping the stop-before-load ordering intact -- and
+        *before* the commit-headroom check, so the check measures a host that
+        has already given the old pipe's weights back rather than charging
+        them against the load that replaces them.
 
-        ``cond`` defaults to ``_ALWAYS_CONDITIONED`` because every stage but
-        ``_generate`` is an img2img pass with a ControlNet -- there is no single
-        object to hand the predicate, and "unconditioned" is not reachable. The
-        text branch passes its real ``cond``.
+        ``cond`` defaults to ``_ALWAYS_CONDITIONED`` because the img2img stages
+        build a fresh ``Conditioning`` per band and per view -- there is no
+        single object to hand the predicate, and every one of their passes is
+        conditioned. Two callers pass a real value instead: ``_generate`` hands
+        over its actual ``cond``, and ``_ground_set`` passes ``None`` because a
+        seamless texture is conditioned on nothing at all. Taking the default
+        where the truth is None is not a conservative choice -- it stops a warm
+        trellis the accounting in ``vram.estimate`` has already priced as
+        co-resident, so the two halves of the same rule disagree.
         """
         handoff = _needs_handoff(
             spec,
@@ -1054,12 +1108,16 @@ class Worker(GenerateOps, RigOps, SpriteOps, MeshPostOps, JobOps):
         if handoff:
             await asyncio.to_thread(self.trellis.stop)
             _log_mem("after trellis stop")
-        # Immediately before the load, and after the handoff has given back
-        # whatever it was going to: this is the last moment the answer is still
-        # about the allocation that is about to happen. Skipped when the pipe is
-        # already resident -- the weights are in commit either way, and refusing
-        # here would fail a job for memory it is not about to ask for.
-        if self._text2image is None or self._t2i_key != base_key:
+        await self._evict_stale_t2i(base_key)
+        # Immediately before the load, and after the handoff and the stale
+        # eviction have given back whatever they were going to: this is the
+        # last moment the answer is still about the allocation that is about
+        # to happen. Skipped when a pipe survived the eviction -- that is
+        # exactly the warm same-key same-generation pipe, no load is coming,
+        # and refusing would fail a job for memory it is not about to ask for.
+        # None means a load is coming, including the generation-forced reload
+        # of a same-key pipe, which used to skip this check entirely.
+        if self._text2image is None:
             _require_commit_headroom(
                 f" before loading {spec.label}",
                 "Close other applications, or use a smaller image model.",
@@ -1139,8 +1197,9 @@ class Worker(GenerateOps, RigOps, SpriteOps, MeshPostOps, JobOps):
             # Measured reserved, not SDXL_GIB: reserved is what free was
             # actually debited by (7.52 GiB for sdxl-base-1.0 against the
             # flat 7.0 estimate). A base switch unloads the old pipe before
-            # loading the new (_get_text2image), so the credit holds even
-            # when the resident base is not the one this job wants.
+            # loading the new (_acquire_t2i via _evict_stale_t2i), so the
+            # credit holds even when the resident base is not the one this
+            # job wants.
             # The unmeasurable case reads the registry: a flat SDXL_GIB is
             # 3 GiB short of the offloaded klein entry's declared peak.
             mem = vram_gib()

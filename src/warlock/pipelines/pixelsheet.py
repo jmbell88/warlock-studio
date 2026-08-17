@@ -207,9 +207,22 @@ def quantize_shared(atlas: PILImage, colors: int) -> tuple[PILImage, list[str]]:
 
     Once, across every cell -- not per cell. Per-cell quantization is how the
     same shirt comes out two shades in two directions, which is the artefact
-    that reads as flicker when a character turns. Opaque pixels only, for the
-    reason ``asset2d.pixel`` gives: median cut spends entries on transparency
-    otherwise.
+    that reads as flicker when a character turns.
+
+    **The alpha is restored from the source, not quantized** -- ``opaque`` is
+    computed before the median cut and stamped back after it, so no palette
+    entry is spent representing a semi-transparent edge. That is as far as the
+    handling goes, and the sentence here used to over-claim it as "opaque
+    pixels only": the median cut is run over the *whole* RGB plane, transparent
+    region included. Where that region is a uniform colour it costs one entry
+    of the budget; a sprite sheet's transparent margin is black, so the cost is
+    the black entry the sheet almost certainly wanted anyway.
+
+    Newly worth stating because a ground-set atlas is the first caller with a
+    large transparent fraction -- an isometric sheet is about half VOID -- and
+    one entry out of eight is a different proposition from one out of
+    sixty-four. Changing it means changing the bytes of every sheet already
+    quantized, so it is written down rather than quietly fixed.
     """
     import numpy as np
     from PIL import Image

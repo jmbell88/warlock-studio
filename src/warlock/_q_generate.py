@@ -137,6 +137,9 @@ class GenerateOps:
         if job["kind"] == "retexture":
             await self._retexture(job)
             return
+        if job["kind"] == "ground_set":
+            await self._ground_set(job)
+            return
         job_dir = self.config.job_dir(job["id"])
         job_dir.mkdir(parents=True, exist_ok=True)
         params = job["params"]
@@ -679,28 +682,11 @@ class GenerateOps:
         unload() call site does: gc.collect() plus empty_cache() on the event
         loop stalls every other job on the queue.
         """
-        generation = fetch.store_generation()
-        if self._text2image is not None and self._t2i_generation != generation:
-            # The weights on disk changed while this pipe was warm, so what it
-            # loaded is no longer what the store holds. The pipe's adapter set
-            # is fixed at load() time and never revisited, so a style LoRA
-            # installed since would be silently dropped at generate with a
-            # "not downloaded" warning that is not true -- and the job would
-            # finish looking successful, having recorded a style that never ran
-            # (MDL-05). Rebuilding is the honest answer and costs one reload of
-            # a checkpoint the user just changed the disk under.
-            log.info(
-                "model store changed (generation %s -> %s); reloading %s",
-                self._t2i_generation,
-                generation,
-                self._t2i_key,
-            )
-            await asyncio.to_thread(self._text2image.unload)
-            self._text2image = None
-        if self._text2image is not None and self._t2i_key != base_key:
-            log.info("switching image model %s -> %s", self._t2i_key, base_key)
-            await asyncio.to_thread(self._text2image.unload)
-            self._text2image = None
+        # Backstop -- normally a no-op: _acquire_t2i (the only current caller)
+        # already evicted a stale pipe before its commit-headroom check. Kept
+        # so the staleness predicate has one owner and no future caller is
+        # handed a pipe with the wrong base or generation.
+        await self._evict_stale_t2i(base_key)
         if self._text2image is None:
             try:
                 from .pipelines.text2image import Text2Image

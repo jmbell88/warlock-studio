@@ -11,6 +11,7 @@ from typing import Any
 
 from .. import controls, icons, plotter_mode, plotter_setup, plotter_state, widgets
 from ..manual import render as manual_render
+from ..plotter import project
 from ..tokens import sp
 from . import plotter_layers
 
@@ -165,6 +166,14 @@ def draw(ctx: Any) -> None:
     if state.tool == "shape":
         _shape_picker(state)
         imgui.dummy((0, 6))
+    if state.tool == "stamp":
+        _, state.random_mode = widgets.toggle("Random mode", state.random_mode)
+        if state.random_mode:
+            widgets.muted_wrapped("Each cell chooses from the non-empty tiles in the stamp.")
+        imgui.dummy((0, 6))
+    if state.tool == "erase":
+        widgets.muted_wrapped("Drag to erase; Shift-drag clears a rectangle.")
+        imgui.dummy((0, 6))
     # Headed, where they used to be three loose toggles under whatever the tool
     # in hand had drawn. They are about what the *canvas* shows rather than what
     # a click does, and with sections drawn as blocks the difference stopped
@@ -186,6 +195,49 @@ def draw(ctx: Any) -> None:
         widgets.muted("Saving...")
         return
 
+    if widgets.header("Map metadata", default_open=False, persist_key="plotter/map-meta"):
+        class_name = widgets.input_text(
+            "##map-class", doc.class_name, max_length=64, hint="map class"
+        )
+        if class_name != doc.class_name:
+            doc.set_map_settings(class_name=class_name)
+        background = widgets.input_text(
+            "##map-background",
+            doc.backgroundcolor or "",
+            max_length=9,
+            hint="#RRGGBB or #AARRGGBB",
+        )
+        if background != (doc.backgroundcolor or ""):
+            try:
+                doc.set_map_settings(backgroundcolor=background or None)
+            except ValueError:
+                # Said in place rather than toasted. A text field is re-read on
+                # every frame, and "#4a7" on the way to "#4a7c3f" is refused on
+                # every one of them -- so the toast fired sixty times a second
+                # for as long as the caret sat in the middle of a colour, which
+                # is the exact failure ``ground_watch``'s docstring names. A
+                # half-typed value is not an error, it is a value in progress:
+                # the document keeps what it had until the text is a colour.
+                widgets.muted("Not a colour yet - #RRGGBB or #AARRGGBB.")
+        order = widgets.combo(
+            "Render order",
+            doc.renderorder,
+            [(value, value) for value in project.RENDER_ORDERS],
+        )
+        if order != doc.renderorder:
+            doc.set_map_settings(renderorder=order)
+        changed, origin = controls.input_float2(
+            "Parallax origin", [float(value) for value in doc.parallax_origin]
+        )
+        if changed:
+            doc.set_map_settings(parallax_origin=(float(origin[0]), float(origin[1])))
+        if doc.projection == project.OBLIQUE:
+            changed, skew = controls.input_float2(
+                "Skew", [float(doc.skew_x), float(doc.skew_y)]
+            )
+            if changed:
+                doc.set_map_settings(skew_x=int(skew[0]), skew_y=int(skew[1]))
+
     imgui.dummy((0, 6))
     if widgets.header("Properties", default_open=False, persist_key="plotter/map-props"):
         # The map's own custom properties. They survive a Tiled round trip and
@@ -195,6 +247,7 @@ def draw(ctx: Any) -> None:
             f"plotter_map_prop:{tab.uid}",
             doc.properties,
             doc.set_map_properties,
+            object_options=plotter_layers.object_options(doc),
         )
 
     imgui.dummy((0, 6))

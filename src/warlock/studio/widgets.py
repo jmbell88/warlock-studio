@@ -73,6 +73,14 @@ ARTIFACTS_TILE = (
     ("manifest.json", "Manifest"),
 )
 
+# And what a finished *ground set* can: its own atlas and nothing else. Every
+# cutout above is the operation of lifting a subject off a background and a
+# terrain sheet has no subject; every material map is a claim about a surface
+# and this is forty-seven of them. The atlas is the asset, so it is the whole
+# list -- an empty grid would read as broken and the mesh list would read as
+# eight buttons that produce nothing.
+ARTIFACTS_GROUND = (("input.png", "Tileset PNG"),)
+
 
 def artifacts_for(job: dict[str, Any]) -> tuple[tuple[str, str], ...]:
     """The Export tab's grid for one job.
@@ -97,6 +105,8 @@ def artifacts_for(job: dict[str, Any]) -> tuple[tuple[str, str], ...]:
         return ARTIFACTS_TILE
     if stage == "reference":
         return ARTIFACTS_2D
+    if stage == "ground":
+        return ARTIFACTS_GROUND
     return ARTIFACTS
 
 
@@ -481,6 +491,10 @@ STAGE_BADGES: dict[str, tuple[str, str]] = {
     "model": (icons.BOX, "model"),
     "rig": (icons.BONE, "rig"),
     "sheet": (icons.FILM, "sheet"),
+    # An image stage, so an image glyph -- but its own word, because "a
+    # reference" and "a forty-seven-case terrain atlas" are not the same answer
+    # to "what is this row".
+    "ground": (icons.PAINT_BUCKET, "ground set"),
 }
 
 
@@ -977,6 +991,26 @@ def window_shadow(elevation: str = "raised", *, radius: float | None = None) -> 
     draw.pop_clip_rect()
 
 
+def popup_chrome(*, _imgui: Any = None) -> None:
+    """Give an anchored popup the shared raised-surface treatment.
+
+    Menus, context menus and compact parameter popups are deliberately not
+    modal: they do not dim or blur the workspace underneath.  They are still
+    one physical kind of surface, though, and need the same raised shadow as
+    the header popups and command palette.  Keeping that decision here stops a
+    newly-added popup from choosing its own depth.
+
+    ``_imgui`` mirrors :mod:`.controls`' test seam.  Some interaction tests
+    replace a pane's local ImGui binding with a tiny recorder; in that case the
+    popup body remains testable and the renderer-only chrome is simply skipped.
+    """
+    backend = imgui if _imgui is None else _imgui
+    if backend is not imgui or not _has_context():
+        return
+    radius = imgui.get_style().popup_rounding
+    window_shadow("raised", radius=radius)
+
+
 def surface_fill(
     draw: Any,
     low: Any,
@@ -1400,17 +1434,23 @@ def disabled_button(
     explanation matters, and is why this cannot be a ``set_item_tooltip``
     one-liner. ``_glyph_button`` has always done it this way.
 
-    The hover is read *before* set_tooltip can run, and stored. SetTooltip
-    renders through TextV, which is an item of its own and overwrites
-    g.LastItemData -- so after the call, ``is_item_hovered`` and the item-rect
-    getters answer about the tooltip's text, not about this button. Asking in
-    that order is the bug palette.py had at its own call site: a caller that
-    follows this with a rect query would place whatever it draws next at the
-    tooltip. Cheap and unconditional, so the ~90 call sites that pass no note
-    cannot start depending on the order by accident. ``_glyph_button`` has
-    always captured first, for this reason -- and :func:`_button_with_note`
-    hands that captured answer back to the two wrappers that animate a fill
-    from it.
+    The hover is read *before* set_tooltip can run, and stored. **The reason
+    given for that here was wrong and is corrected rather than deleted**, since
+    a warning with no reader goes back in the next time somebody reorders these
+    lines. It said that SetTooltip renders through TextV, which is an item of
+    its own, and so overwrites ``g.LastItemData`` -- leaving ``is_item_hovered``
+    and the item-rect getters answering about the tooltip's text. Tested
+    against the pinned imgui 1.92.8: it does not reproduce. The tooltip path
+    backs up and restores ``LastItemData`` around itself, so a rect query after
+    the call answers about the button.
+
+    Capturing first is kept anyway, and now for the reason that survives
+    inspection: :func:`_button_with_note` hands the captured answer back to the
+    two wrappers that animate a fill from it, so the hover has to be a value
+    this function owns rather than a question the caller re-asks at whatever
+    point it happens to reach. That is also why it is unconditional -- the ~90
+    call sites that pass no note get the same object, and none of them can grow
+    an order dependency the other 90 do not have.
     """
     return _button_with_note(label, enabled, size, reason=reason, tooltip=tooltip)[0]
 

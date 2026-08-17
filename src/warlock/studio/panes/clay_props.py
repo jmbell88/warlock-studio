@@ -20,6 +20,7 @@ tool panel states.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from imgui_bundle import imgui
@@ -27,6 +28,8 @@ from imgui_bundle import imgui
 from .. import clay_mode, controls, icons, widgets
 from ..clay import primitives as bp
 from ..manual import render as manual_render
+
+log = logging.getLogger(__name__)
 
 # How a parameter's type decides its widget. Read off the *default value*,
 # because a registry entry carries no schema and does not need one: a float
@@ -195,10 +198,18 @@ def _generator(doc: Any, obj: Any) -> None:
         return
     try:
         mesh = build(**edited)
-    except Exception:
+    except Exception:  # noqa: BLE001
         # A generator raises on a value it cannot build -- a zero segment
         # count, a tube thicker than its radius. The old mesh stays; the field
         # keeps the number the user typed, so they can correct it.
+        #
+        # Logged, not merely swallowed. A refusal about a number and a
+        # ``TypeError`` from a renamed keyword are the same silence here, and
+        # the second is a defect that would look exactly like a slider that
+        # stopped working. Every comparable site in the tree logs; this one is
+        # on the frame thread and per-keystroke, so it must not toast.
+        log.debug("generator %r refused %r", getattr(build, "__name__", build), edited,
+                  exc_info=True)
         return
     doc.set_props(obj.uid, params=edited, was={"params": params})
     # The one place a new mesh does *not* invalidate the generator: this mesh
@@ -305,7 +316,9 @@ def _material(doc: Any, obj: Any) -> None:
     index = min(max(int(obj.material), 0), len(doc.materials) - 1)
     material = doc.materials[index]
     _texture_chip(material)
-    changed, colour = imgui.color_edit4("base colour##bm", list(material.base_color_factor))
+    changed, colour = controls.color_edit4(
+        "base colour##bm", list(material.base_color_factor)
+    )
     metal_changed, metallic = controls.slider_float(
         "metallic##bm", float(material.metallic_factor), 0.0, 1.0
     )

@@ -67,17 +67,19 @@ class Resolved:
     visible: bool
     tint: RGBA
     locked: bool
+    blend_mode: str
 
 
 #: What a layer at the root inherits: nothing, spelled as the identity of every
 #: one of the five rules.
-IDENTITY: tuple[tuple[float, float], tuple[float, float], float, bool, RGBA, bool] = (
+IDENTITY: tuple[tuple[float, float], tuple[float, float], float, bool, RGBA, bool, str] = (
     (0.0, 0.0),
     (1.0, 1.0),
     1.0,
     True,
     OPAQUE_WHITE,
     False,
+    "normal",
 )
 
 
@@ -102,7 +104,8 @@ def _combine(
     visible: bool,
     tint: RGBA,
     locked: bool,
-) -> tuple[tuple[float, float], tuple[float, float], float, bool, RGBA, bool]:
+    blend_mode: str,
+) -> tuple[tuple[float, float], tuple[float, float], float, bool, RGBA, bool, str]:
     """One layer's own decorations folded into what it inherited."""
     return (
         (offset[0] + float(layer.offset_x), offset[1] + float(layer.offset_y)),
@@ -111,6 +114,10 @@ def _combine(
         visible and bool(layer.visible),
         _tint_product(tint, layer.tint),
         locked or bool(layer.locked),
+        # A group's non-normal mode applies to descendants whose own mode is
+        # normal. A leaf with an explicit mode wins, matching the way the other
+        # inherited decorations let a child refine its parent.
+        layer.blend_mode if layer.blend_mode != "normal" else blend_mode,
     )
 
 

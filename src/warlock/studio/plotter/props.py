@@ -35,10 +35,8 @@ unknown name is dropping it, and dropping it rewrites the user's file.
 ``class``
     ``dict[str, Prop]``, recursively. ``propertytype`` names the user's class.
 ``list``
-    ``list[Prop]``. Modelled and stored in ``.wmap``, **refused at the Tiled
-    door**: Tiled 1.12.2 has no list-valued property, so there is no syntax to
-    write that it would read back, and inventing one would produce a file that
-    only this editor can open while claiming to be a Tiled file.
+    ``list[Prop]``. Tiled 1.12 stores XML entries as nested ``<item>`` elements
+    and JSON entries as typed ``{type, value}`` records, recursively.
 
 **The asymmetry between the syntaxes, stated rather than hidden.** XML writes
 a class's members as a nested ``<properties>`` block -- real ``<property>``
@@ -106,9 +104,8 @@ class TiledUnsupported(ValueError):
 
     **``exporting`` swaps the sentence, never the feature.** A refusal used to
     only ever be a reader's, so the frame could say "this file uses ... open it
-    in Tiled and remove that feature first". The writers refuse too now (the
-    document models rotation, a draw order and five shapes that neither
-    exporter can yet spell), and that sentence is actively wrong at that door:
+    in Tiled and remove that feature first". The writers can refuse too, and
+    that sentence is actively wrong at that door:
     the map is the user's own unsaved work, there is no file to open, and there
     is nothing for them to remove in Tiled. One flag rather than a second
     exception type, because the *feature* is one feature and the ledger is
@@ -126,9 +123,8 @@ class TiledUnsupported(ValueError):
             # unsaved work. "Save it as .wmap instead" *became* a true sentence
             # when the version 3 container landed -- it stores the tree, the
             # pictures, the decorations, the rotations and every shape -- and
-            # whether to offer it belongs with the milestone that decides which
-            # of these refusals survive at all (M3), not with a message edited
-            # in isolation while the list around it is about to move.
+            # whether to offer it belongs with the save UI, not with a format
+            # exception that has no access to the document's chosen path.
             message = (
                 f"this map uses {feature}, which Plotter cannot write to a "
                 f"Tiled file yet{tail}."
@@ -139,19 +135,6 @@ class TiledUnsupported(ValueError):
                 "Open it in Tiled and remove or flatten that feature first."
             )
         super().__init__(message)
-
-
-def _refuse_list(where: str = "") -> None:
-    """The one refusal this module raises for a type it *models*.
-
-    A list property is a real document field -- ``.wmap`` stores it and the
-    editor shows it -- and it is refused only where it would have to be
-    written in Tiled's syntax, because Tiled 1.12.2 has no such syntax.
-    """
-    raise TiledUnsupported(
-        "a list-valued custom property",
-        where or "Tiled has no list-valued property to write it as",
-    )
 
 
 @dataclass(frozen=True)
@@ -232,11 +215,16 @@ def read_properties(parent: ET.Element | None) -> dict[str, Prop]:
         kind = entry.get("type", "string")
         if kind not in PROPERTY_TYPES:
             raise TiledUnsupported(f"a custom property of type {kind!r}", f"property {name!r}")
-        if kind == "list":
-            _refuse_list(f"property {name!r}")
         propertytype = entry.get("propertytype", "")
         if kind == "class":
             out[name] = Prop("class", read_properties(entry), propertytype=propertytype)
+            continue
+        if kind == "list":
+            out[name] = Prop(
+                "list",
+                [_read_xml_item(item, f"property {name!r}") for item in entry.findall("item")],
+                propertytype=propertytype,
+            )
             continue
         # Tiled puts a multi-line string in the element's text instead of in
         # the attribute, so the attribute is preferred and the text is the
@@ -248,6 +236,26 @@ def read_properties(parent: ET.Element | None) -> dict[str, Prop]:
             type=kind, value=_parse_value(kind, raw), propertytype=propertytype
         )
     return out
+
+
+def _read_xml_item(entry: ET.Element, where: str) -> Prop:
+    """One Tiled 1.12 ``<item>`` inside a list property, recursively."""
+    kind = entry.get("type", "string")
+    if kind not in PROPERTY_TYPES:
+        raise TiledUnsupported(f"a custom property of type {kind!r}", where)
+    propertytype = entry.get("propertytype", "")
+    if kind == "class":
+        return Prop("class", read_properties(entry), propertytype=propertytype)
+    if kind == "list":
+        return Prop(
+            "list",
+            [_read_xml_item(item, where) for item in entry.findall("item")],
+            propertytype=propertytype,
+        )
+    raw = entry.get("value")
+    if raw is None:
+        raw = entry.text or ""
+    return Prop(kind, _parse_value(kind, raw), propertytype=propertytype)
 
 
 def _value_text(prop: Prop) -> str:
@@ -279,11 +287,28 @@ def _write_block(parent: ET.Element, props: dict[str, Prop]) -> None:
         if prop.propertytype:
             entry.set("propertytype", prop.propertytype)
         if prop.type == "list":
-            _refuse_list(f"property {name!r}")
+            for item in prop.value:
+                _write_xml_item(entry, item)
         elif prop.type == "class":
             _write_block(entry, prop.value)
         else:
             entry.set("value", _value_text(prop))
+
+
+def _write_xml_item(parent: ET.Element, prop: Prop) -> None:
+    """Write one typed value in a Tiled 1.12 list property."""
+    entry = ET.SubElement(parent, "item")
+    if prop.type != "string":
+        entry.set("type", prop.type)
+    if prop.propertytype:
+        entry.set("propertytype", prop.propertytype)
+    if prop.type == "class":
+        _write_block(entry, prop.value)
+    elif prop.type == "list":
+        for item in prop.value:
+            _write_xml_item(entry, item)
+    else:
+        entry.set("value", _value_text(prop))
 
 
 def write_properties(parent: ET.Element, props: dict[str, Prop]) -> None:
@@ -322,7 +347,27 @@ def _json_member(name: str, raw: Any) -> Prop:
     if isinstance(raw, dict):
         return Prop("class", {str(k): _json_member(str(k), v) for k, v in raw.items()})
     if isinstance(raw, list):
-        _refuse_list(f"class member {name!r}")
+        # Bare values, recursively -- which is the inference this function is
+        # *for*, and the shape the module docstring documents a class member
+        # arriving in. Every item used to go through ``_json_item``, which
+        # requires a typed ``{"type": ..., "value": ...}`` record, so the
+        # ordinary ``{"tags": ["a", "b"]}`` did not merely lose its member types
+        # (the documented, accepted loss) but failed the read outright with
+        # "malformed list item".
+        #
+        # A dict item carrying a ``type`` key is still read as a typed record,
+        # because that is exactly what this codec's own writer emits for a list
+        # inside a class -- so a file this editor wrote reads back unchanged,
+        # and one written the bare way reads back with inferred types.
+        return Prop(
+            "list",
+            [
+                _json_item(item, f"class member {name!r}")
+                if isinstance(item, dict) and "type" in item
+                else _json_member(f"{name} item", item)
+                for item in raw
+            ],
+        )
     raise ValueError(f"class member {name!r} has a value this reader cannot type")
 
 
@@ -338,8 +383,6 @@ def read_json_properties(entries: Any) -> dict[str, Prop]:
         if not name:
             continue
         kind = str(entry.get("type", "string"))
-        if kind == "list":
-            _refuse_list(f"property {name!r}")
         propertytype = str(entry.get("propertytype", "") or "")
         raw = entry.get("value")
         if kind == "class":
@@ -348,6 +391,15 @@ def read_json_properties(entries: Any) -> dict[str, Prop]:
             out[name] = Prop(
                 "class",
                 {str(k): _json_member(str(k), v) for k, v in raw.items()},
+                propertytype=propertytype,
+            )
+            continue
+        if kind == "list":
+            if not isinstance(raw, list):
+                raise ValueError(f"list property {name!r} has no item list")
+            out[name] = Prop(
+                "list",
+                [_json_item(item, f"property {name!r}") for item in raw],
                 propertytype=propertytype,
             )
             continue
@@ -361,9 +413,39 @@ def read_json_properties(entries: Any) -> dict[str, Prop]:
     return out
 
 
+def _json_item(record: Any, where: str) -> Prop:
+    """One typed JSON list item as written by Tiled 1.12.2."""
+    if not isinstance(record, dict):
+        raise ValueError(f"{where} has a malformed list item")
+    kind = str(record.get("type", "string"))
+    propertytype = str(record.get("propertytype", "") or "")
+    raw = record.get("value")
+    if kind == "class":
+        if not isinstance(raw, dict):
+            raise ValueError(f"{where} has a class item with no member block")
+        return Prop(
+            "class",
+            {str(key): _json_member(str(key), value) for key, value in raw.items()},
+            propertytype=propertytype,
+        )
+    if kind == "list":
+        if not isinstance(raw, list):
+            raise ValueError(f"{where} has a list item with no item list")
+        return Prop(
+            "list",
+            [_json_item(item, where) for item in raw],
+            propertytype=propertytype,
+        )
+    if kind == "object":
+        raw = int(raw or 0)
+    elif kind == "file":
+        raw = str(raw or "")
+    return Prop(kind, raw, propertytype=propertytype)
+
+
 def _json_value(name: str, prop: Prop) -> Any:
     if prop.type == "list":
-        _refuse_list(f"property {name!r}")
+        return [_json_item_record(item) for item in prop.value]
     if prop.type == "class":
         return {
             member: _json_value(member, prop.value[member]) for member in sorted(prop.value)
@@ -373,6 +455,15 @@ def _json_value(name: str, prop: Prop) -> Any:
     if prop.type == "file":
         return str(prop.value)
     return prop.value
+
+
+def _json_item_record(prop: Prop) -> dict[str, Any]:
+    """The name-less property record Tiled uses for a JSON list item."""
+    record: dict[str, Any] = {"type": prop.type}
+    if prop.propertytype:
+        record["propertytype"] = prop.propertytype
+    record["value"] = _json_value("list item", prop)
+    return record
 
 
 def write_json_properties(props: dict[str, Prop]) -> list[dict[str, Any]]:
