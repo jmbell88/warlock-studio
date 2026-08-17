@@ -8,6 +8,21 @@ file behind.
 
 ## 0.0.24 — 2026-08-17
 
+- **Packwright imports tilesets.** A `.tsx` or a sliced tileset image is a
+  source like any other: the tiles arrive as individual sprites, ready to
+  re-pack. The source key carries the tile size, so two slicings of one image
+  are two sources rather than one that quietly changed shape.
+- **A drawing opened from a JPG, WebP or BMP can no longer be overwritten with
+  PNG bytes.** Ctrl+S used to dispatch on the document's *format*, never on the
+  file's name, so saving an opened `photo.jpg` wrote a PNG into it — unreadable
+  by extension, unrecoverable, and silent. Those suffixes now route to Save As
+  with a toast saying why; `.png` and `.ora` save in place exactly as before.
+  Re-encoding to JPEG was the alternative and it is the worse one: a lossy
+  write over an original, on a keystroke that means "keep what I have".
+- **Inker: rulers, 32px grid presets, and a Photoshop-style layers pane.** The
+  canvas draws rulers along both edges, the grid presets include 32, and the
+  layers pane gets the compact PS7 row layout. The bridge's layer list is in
+  stack order again — it had been drawing bottom-up against the canvas.
 - **The Create Reference form is flat, and much smaller.** The twelve-select
   creative taxonomy (category, genre, material, era style and the rest), the
   shipped presets, the "found settings" picker, the detail brief and the

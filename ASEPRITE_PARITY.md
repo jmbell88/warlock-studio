@@ -40,7 +40,7 @@ Two decisions taken with the user on 2026-08-17:
 
 ---
 
-## Wave 0 — Landing zone + save safety — **NOT STARTED**
+## Wave 0 — Landing zone + save safety — **DONE 2026-08-17** (`54753b7` + the commit after it)
 
 Small, immediate, independent of everything below.
 

@@ -48,6 +48,20 @@ OPEN_FILTER = ["Images and layered files", filetypes.pattern(OPENABLE)]
 ASEPRITE_SUFFIXES = (".aseprite", ".ase")
 ASEPRITE_FILTER = ["Aseprite files", filetypes.pattern(ASEPRITE_SUFFIXES)]
 
+# The two suffixes an in-place save may write, and the reason ``OPENABLE`` is
+# not that list. ``Document.load`` stamps every non-ORA input ``file_format =
+# "png"`` and ``_write`` dispatches on the *format*, never on the path -- so
+# before this gate, opening ``foo.jpg`` and pressing Ctrl+S put PNG bytes into
+# a file still named ``.jpg``: a file no viewer reads by its extension and no
+# second open recovers, written with no prompt.
+#
+# Re-encoding to JPEG instead would be the other kind of silence -- a lossy
+# write the user did not ask for, over their original, on a keystroke that
+# means "keep what I have". So the refusal is the honest half of the same
+# argument the Aseprite comment above makes: what cannot be written back is
+# saved *somewhere else*, deliberately, through the Save As the user sees.
+WRITABLE_SUFFIXES = (".ora", ".png")
+
 NEW_PRESETS = ((512, 512), (1024, 1024), (2048, 2048))
 
 # The largest canvas the New dialog will make. Not a limit of the engine, which
@@ -727,6 +741,19 @@ def save(ctx: Any, tab: InkerDoc | None = None) -> None:
         _save_linked(ctx, tab)
         return
     if tab.path is None:
+        save_as(ctx, tab)
+        return
+    # ``tab.path`` *is* the record of where the document came from -- Save As
+    # replaces it with the ``.ora`` it wrote -- so the source suffix needs no
+    # field of its own. See ``WRITABLE_SUFFIXES`` for why a JPG cannot be
+    # saved in place.
+    suffix = tab.path.suffix.lower()
+    if suffix not in WRITABLE_SUFFIXES:
+        ctx.toast(
+            f"This drawing came from a {suffix.lstrip('.').upper()} file, which "
+            "Inker cannot write. Choose where to save the layered copy.",
+            "info",
+        )
         save_as(ctx, tab)
         return
     _submit_write(ctx, tab, f"inker-save:{tab.uid}", tab.path, tab.file_format)

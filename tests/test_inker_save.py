@@ -417,3 +417,113 @@ def test_a_failed_save_clears_the_saving_flag():
 
     inker_mode.on_task_failed(ctx, SimpleNamespace(key=f"inker-save:{tab.uid}"))
     assert not tab.saving
+
+
+# --- what an in-place save is allowed to write ------------------------------
+
+
+class _SaveCtx:
+    """A ctx that records toasts and runs submits inline, like ``FakeCtx``, but
+    carrying a real ``InkerState`` so ``_settle`` and the save lock behave."""
+
+    def __init__(self) -> None:
+        from warlock.studio.inker_state import InkerState
+
+        self.state = SimpleNamespace(inker=InkerState())
+        self.submitted: list[str] = []
+        self.toasts: list[tuple[str, str]] = []
+
+    def submit(self, key: str, run: Any, *args: Any) -> bool:
+        self.submitted.append(key)
+        self.result = run(*args)
+        return True
+
+    def toast(self, text: str, level: str = "info", *_: Any) -> None:
+        self.toasts.append((text, level))
+
+
+def _file_tab(ctx: _SaveCtx, path) -> InkerDoc:
+    doc = inker.Document.load(path)
+    tab = InkerDoc(doc=doc, title=path.name, path=path, file_format=doc.file_format)
+    ctx.state.inker.add(tab)
+    return tab
+
+
+def test_saving_a_jpg_routes_to_save_as_instead_of_writing_png_bytes(tmp_path, monkeypatch):
+    """The defect: ``Document.load`` stamps every non-ORA input
+    ``file_format="png"`` and ``_write`` dispatches on that format, never on the
+    path -- so Ctrl+S over an opened ``.jpg`` wrote PNG bytes into a file still
+    named ``.jpg``, silently, over the user's original.
+
+    The fix refuses the in-place write and offers Save As. Asserted on the
+    original bytes surviving as well as on the routing, because the routing is
+    only interesting for what it prevents.
+    """
+    src = tmp_path / "photo.jpg"
+    Image.new("RGB", (16, 16), (10, 200, 90)).save(src, "JPEG")
+    before = src.read_bytes()
+
+    ctx = _SaveCtx()
+    tab = _file_tab(ctx, src)
+    dest = tmp_path / "photo.ora"
+    monkeypatch.setattr(inker_mode.dialogs, "save_file", lambda *a, **k: dest)
+
+    inker_mode.save(ctx, tab)
+
+    assert any(key.startswith("inker-saveas:") for key in ctx.submitted)
+    assert not any(key.startswith("inker-save:") for key in ctx.submitted)
+    assert src.read_bytes() == before, "the JPG was overwritten"
+    assert dest.exists()
+    assert ctx.toasts and "JPG" in ctx.toasts[0][0]
+
+
+def test_every_openable_non_writable_suffix_is_gated(tmp_path, monkeypatch):
+    """The gate keys on the suffix rather than on JPEG specifically, so every
+    format ``filetypes`` advertises as openable but the app cannot write back
+    is covered by construction. WebP is skipped where Pillow lacks the codec.
+    """
+    from warlock.studio import filetypes
+
+    formats = {".jpg": "JPEG", ".jpeg": "JPEG", ".webp": "WEBP", ".bmp": "BMP"}
+    assert set(filetypes.IMAGE_SUFFIXES) - set(inker_mode.WRITABLE_SUFFIXES) == set(formats)
+
+    for suffix, encoder in formats.items():
+        src = tmp_path / f"pic{suffix}"
+        try:
+            Image.new("RGB", (8, 8), (1, 2, 3)).save(src, encoder)
+        except (OSError, KeyError, ValueError):  # pragma: no cover - codec absent
+            continue
+        ctx = _SaveCtx()
+        tab = _file_tab(ctx, src)
+        dest = tmp_path / f"out{suffix}.ora"
+        monkeypatch.setattr(inker_mode.dialogs, "save_file", lambda *a, _d=dest, **k: _d)
+        inker_mode.save(ctx, tab)
+        assert any(k.startswith("inker-saveas:") for k in ctx.submitted), suffix
+
+
+def test_a_png_still_saves_in_place(tmp_path):
+    """The negative control. The gate must not touch the two suffixes an
+    in-place save has always been allowed to write."""
+    src = tmp_path / "art.png"
+    src.write_bytes(_png(size=(8, 8), colour=(4, 5, 6, 255)))
+
+    ctx = _SaveCtx()
+    tab = _file_tab(ctx, src)
+    inker_mode.save(ctx, tab)
+
+    assert ctx.submitted == [f"inker-save:{tab.uid}"]
+    assert not ctx.toasts
+    assert Image.open(src).size == (8, 8)
+
+
+def test_an_ora_still_saves_in_place(tmp_path):
+    """The other half of the negative control."""
+    src = tmp_path / "art.ora"
+    inker.write_ora(inker.Document.blank(8, 8), src)
+
+    ctx = _SaveCtx()
+    tab = _file_tab(ctx, src)
+    inker_mode.save(ctx, tab)
+
+    assert ctx.submitted == [f"inker-save:{tab.uid}"]
+    assert not ctx.toasts

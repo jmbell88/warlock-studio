@@ -866,6 +866,11 @@ and write. That is the format that keeps your layers, their blend modes and thei
 
 - `Ctrl+S` saves. A document that has never been written anywhere asks where to put it first.
 - `Ctrl+Shift+S` is Save As.
+- A drawing you opened from a **JPG, WebP or BMP** also asks where to put it, every time. Inker can
+  read those formats but cannot write them, so `Ctrl+S` offers you an `.ora` beside the original
+  rather than either putting PNG bytes into a file named `.jpg` — unreadable by its own extension —
+  or re-encoding your original to JPEG and losing pixels on a keystroke that means "keep what I
+  have". The original file is never touched. `.png` and `.ora` save in place.
 - `Ctrl+E` adds the drawing to the library as a finished reference, which is what plain `Ctrl+E`
   does in Clay, Plotter and Packwright too. It does nothing for a document you opened *from* the
   library — that one is already there, and `Ctrl+S` is the write it wants.
