@@ -629,9 +629,10 @@ def test_a_dirty_document_is_journalled_once_the_interval_has_passed(tmp_path):
     state = inker_mode.ensure(ctx)
     tab = _dirty_tab(state)
 
-    journal.pump(ctx, now=0.0)
-    assert ctx.submitted == [], "not immediately -- the interval starts at zero"
-    journal.pump(ctx, now=journal.JOURNAL_SECONDS + 1.0)
+    boot = 5_000.0  # boot-relative, like the real time.monotonic()
+    journal.pump(ctx, now=boot)
+    assert ctx.submitted == [], "not immediately -- first sight arms the interval"
+    journal.pump(ctx, now=boot + journal.JOURNAL_SECONDS + 1.0)
     assert ctx.submitted == [f"journal:inker:{tab.uid}"]
     assert (tmp_path / tab.journal_name).exists()
     # And the sidecar, which is the completion gate: a payload without one was
@@ -649,7 +650,9 @@ def test_a_journal_entry_is_not_a_save(tmp_path):
     tab = _dirty_tab(state)
     head, title = tab.saved_head, tab.title
 
+    journal.pump(ctx, now=1.0)  # first sight arms the debounce
     journal.pump(ctx, now=journal.JOURNAL_SECONDS + 1.0)
+    assert ctx.submitted, "the copy was taken"
     assert tab.dirty
     assert tab.saved_head == head
     assert tab.title == title
@@ -694,6 +697,7 @@ def test_saving_for_real_drops_the_crash_copy(tmp_path):
     ctx = _AutosaveCtx(tmp_path)
     state = inker_mode.ensure(ctx)
     tab = _dirty_tab(state)
+    journal.pump(ctx, now=9_000.0)  # arm
     journal.pump(ctx, now=10_000.0)
     path = tmp_path / tab.journal_name
     assert path.exists() and journal.meta_path(path).exists()
@@ -711,6 +715,7 @@ def test_dropping_a_copy_that_is_already_gone_does_not_raise(tmp_path):
     ctx = _AutosaveCtx(tmp_path)
     state = inker_mode.ensure(ctx)
     tab = _dirty_tab(state)
+    journal.pump(ctx, now=9_000.0)  # arm
     journal.pump(ctx, now=10_000.0)
     (tmp_path / tab.journal_name).unlink()
     inker_mode.drop_autosave(ctx, tab)

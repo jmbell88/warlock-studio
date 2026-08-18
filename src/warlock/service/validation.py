@@ -97,6 +97,10 @@ DERIVED_PARAMS = (
     # Which battery was rendered against this rig's artifacts. A rerun would
     # otherwise claim a QA sheet of a mesh it has not bound yet.
     "deform_qa",
+    # Recorded by the *sheet* render worker about the atlas it produced. For
+    # the ``pixel_sheet`` kind the same key is an input -- which sheet the
+    # restyle depicts, written at the door -- so ``rerun_job`` re-seeds it
+    # from the source row for that kind after this strip.
     "sheet_id",
     "cells",
     "reference_report",

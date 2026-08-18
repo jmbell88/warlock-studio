@@ -125,6 +125,91 @@ def test_a_worker_that_exits_is_still_read_to_the_end(tmp_path, monkeypatch):
     assert (50.0, "half") in seen
 
 
+def test_a_child_that_floods_stderr_cannot_deadlock_the_fetch(tmp_path, monkeypatch):
+    """stderr is drained while the child runs, not read after exit.
+
+    huggingface_hub writes progress chatter to stderr; once it outgrows the OS
+    pipe buffer an undrained child blocks on its next write and never reaches
+    the exit the old post-mortem read was waiting on -- a deadlock the
+    four-hour timeout turned into a four-hour hang.
+    """
+    script = tmp_path / "flood.py"
+    script.write_text(
+        textwrap.dedent(
+            """
+            import json, sys
+            spec = json.loads(sys.stdin.read())
+            blob = "x" * 8192
+            for _ in range(256):  # ~2 MB, far past any pipe buffer
+                sys.stderr.write(blob + "\\n")
+            sys.stderr.flush()
+            with open(spec["result_path"], "w") as fh:
+                fh.write(json.dumps({"ok": True}))
+            """
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(downloads, "worker_argv", lambda: [sys.executable, str(script)])
+
+    result = downloads._run_worker(_Job(), on_progress=lambda p, label: None, timeout=15.0)
+
+    # Reaching here quickly *is* the assertion -- the undrained pipe made this
+    # raise the timeout Invalid instead.
+    assert result == {"ok": True}
+
+
+def test_a_dead_childs_stderr_still_reaches_the_refusal(tmp_path, monkeypatch):
+    """The pump must preserve ``_stderr_tail``'s role: a child that dies before
+    writing a result has only its stderr to say why."""
+    script = tmp_path / "dying.py"
+    script.write_text(
+        textwrap.dedent(
+            """
+            import sys
+            sys.stdin.read()
+            print("ImportError: kaboom, the venv is broken", file=sys.stderr)
+            raise SystemExit(1)
+            """
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(downloads, "worker_argv", lambda: [sys.executable, str(script)])
+
+    with pytest.raises(Invalid) as caught:
+        downloads._run_worker(_Job(), on_progress=lambda p, label: None, timeout=30.0)
+
+    assert "kaboom" in str(caught.value)
+
+
+def test_the_fetch_child_is_tracked_under_the_fetch_prefix(tmp_path, monkeypatch):
+    """The download Cancel button kills by ``winjob.terminate_tracked("fetch")``,
+    so the registry entry's wording is load-bearing, not decorative."""
+    from warlock import winjob
+
+    script = tmp_path / "quick2.py"
+    script.write_text(
+        textwrap.dedent(
+            """
+            import json, sys
+            spec = json.loads(sys.stdin.read())
+            with open(spec["result_path"], "w") as fh:
+                fh.write(json.dumps({"ok": True}))
+            """
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(downloads, "worker_argv", lambda: [sys.executable, str(script)])
+    whats: list[str] = []
+    real_track = winjob.track
+    monkeypatch.setattr(
+        winjob, "track", lambda pid, what: (whats.append(what), real_track(pid, what))[-1]
+    )
+
+    downloads._run_worker(_Job(), on_progress=lambda p, label: None, timeout=30.0)
+
+    assert whats and whats[-1].startswith("fetch ")
+
+
 # --- the move ---------------------------------------------------------------
 
 

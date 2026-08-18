@@ -567,7 +567,15 @@ def _read_palette(state: _Parse, r: _Reader) -> None:
         red, green, blue, alpha = r.u8(), r.u8(), r.u8(), r.u8()
         if flags & 1:
             r.string()
-        state.palette[index] = (red, green, blue, alpha)
+        entry = (red, green, blue, alpha)
+        if state.palette.get(index, entry) != entry:
+            # Divergence 20: one table per document. A later chunk rewriting an
+            # entry an earlier one set is a per-frame palette -- pre-1.0 legacy
+            # the format merely tolerates -- and the final table wins, but
+            # silently repainting frames the file coloured differently is not
+            # something to do without saying so.
+            state.warn("per-frame palettes are not kept; the final table is used")
+        state.palette[index] = entry
 
 
 def _read_old_palette(state: _Parse, r: _Reader, six_bit: bool) -> None:
@@ -577,9 +585,16 @@ def _read_old_palette(state: _Parse, r: _Reader, six_bit: bool) -> None:
     *superseded* by ``0x2019`` when it is present, which is the format's own
     instruction and matters because Aseprite writes both into every file it
     saves. Preferring the old one would cost every palette its alpha.
+
+    A later chunk changing an entry an earlier one set is a **per-frame
+    palette**, which is divergence 20's pre-1.0 legacy: warned about against
+    the table as it stood when this chunk began (the placeholder rows the loop
+    below appends are not "set" and must not trip it), and the final table is
+    used.
     """
     packets = r.u16()
-    table: list[RGBA] = list(state.old_palette or [])
+    previous: list[RGBA] = list(state.old_palette or [])
+    table: list[RGBA] = list(previous)
     index = 0
     for _ in range(packets):
         index += r.u8()
@@ -594,7 +609,10 @@ def _read_old_palette(state: _Parse, r: _Reader, six_bit: bool) -> None:
                 )
             while len(table) <= index:
                 table.append((0, 0, 0, 255))
-            table[index] = (red, green, blue, 255)
+            entry = (red, green, blue, 255)
+            if index < len(previous) and previous[index] != entry:
+                state.warn("per-frame palettes are not kept; the final table is used")
+            table[index] = entry
             index += 1
     state.old_palette = table
 

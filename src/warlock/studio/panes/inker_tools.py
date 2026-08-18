@@ -12,7 +12,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import controls, icons, inker, inker_mode, inker_state, theme, tokens, widgets
+from .. import controls, fonts, icons, inker, inker_mode, inker_state, theme, tokens, widgets
 from ..inker import brush, transform
 from ..inker_state import (
     OPEN_SHAPE_TOOLS,
@@ -42,6 +42,25 @@ BUTTON_H = 30.0
 #: scrolls, it is one that looks broken.
 OPTIONS_FLOOR = 132.0
 
+#: The gap ``draw`` leaves under the grid, in design px. Named so the dummy
+#: that draws it and the reservation that counts it are one number: the dummy
+#: used to emit 6 *physical* px while :func:`grid_height` counted 6 design px,
+#: which is a drift of ``6 * (SCALE - 1)`` at every UI scale but 1.0.
+GRID_GAP = 6.0
+
+
+def _reserve(rows: int, heading: float, spacing: float, scale: float) -> float:
+    """The toolbox reservation in design px, from physically measured parts.
+
+    Split out so the arithmetic is assertable without a GL context: ``heading``
+    and ``spacing`` arrive in physical px exactly as the style hands them over,
+    ``BUTTON_H`` and ``GRID_GAP`` are design px, and the answer is design px
+    because ``main`` passes it back through ``sp``. The parts measured at one
+    scale must therefore reserve the same design height at every scale.
+    """
+    scale = max(scale, 0.001)
+    return heading / scale + rows * (BUTTON_H + spacing / scale) + GRID_GAP
+
 
 def grid_height() -> float:
     """The toolbox block's height in design px: heading, rows, trailing gap.
@@ -52,13 +71,17 @@ def grid_height() -> float:
 
     The gap between rows is asked of the style for the reason ``grid_width``
     asks for the horizontal one: a literal is right at UI scale 1.0 and wrong
-    at every other, and 1.0 is the scale the smoke suite runs at.
+    at every other, and 1.0 is the scale the smoke suite runs at. The heading
+    row is *measured* for the same reason 28.0 was wrong: ``section`` draws
+    the label in ``fonts.label`` and the manual's help button rides the same
+    row at frame height, and both of those scale with the font.
     """
     rows = -(-len(inker_state.TOOLS) // COLUMNS)
-    spacing = imgui.get_style().item_spacing.y / max(tokens.SCALE, 0.001)
-    # Heading, the rows and the gaps between them, and the 6 px ``dummy`` the
-    # pane puts under the grid.
-    return 28.0 + rows * (BUTTON_H + spacing) + 6.0
+    style = imgui.get_style()
+    with fonts.label(imgui):
+        label_h = imgui.get_text_line_height()
+    heading = max(label_h, imgui.get_frame_height()) + style.item_spacing.y
+    return _reserve(rows, heading, style.item_spacing.y, tokens.SCALE)
 
 
 TOOL_ICONS = {
@@ -151,7 +174,9 @@ def draw(ctx: Any) -> None:
     widgets.section("Tools")
     manual_render.help_button(ctx, "inker-tools")
     _grid(state, None if tab is None else tab.doc)
-    imgui.dummy((0, 6))
+    # Through ``sp`` because ``grid_height`` counts this gap in design px --
+    # an unscaled 6 here is a reservation short by 6 * (SCALE - 1).
+    imgui.dummy((0, sp(GRID_GAP)))
     if tab is None:
         widgets.muted("Open something to paint on.")
         return
@@ -531,12 +556,18 @@ def _slice_options(ctx: Any, state: Any, tab: Any, entry: Any) -> None:
 
     if frame_uid is not None:
         keyed = frame_uid in entry.keys
-        if controls.button("Unkey this frame" if keyed else "Key this frame", (-1, 0)):
+        # ``tooltip=`` on the button, not a trailing ``help_marker``: a
+        # ``(-1, 0)`` button leaves zero room on its line, so the marker
+        # wrapped under it and read as the Delete button's.
+        if controls.button(
+            "Unkey this frame" if keyed else "Key this frame",
+            (-1, 0),
+            tooltip=(
+                "Keys are always explicit. Dragging a slice moves it on every"
+                " frame; a key is how one frame is allowed to differ."
+            ),
+        ):
             doc.set_slice_key(entry.uid, frame_uid, clear=keyed)
-        widgets.help_marker(
-            "Keys are always explicit. Dragging a slice moves it on every "
-            "frame; a key is how one frame is allowed to differ."
-        )
     if controls.button(f"Delete##slice{entry.uid}", (-1, 0)):
         doc.remove_slice(entry.uid)
 

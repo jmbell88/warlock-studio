@@ -397,6 +397,50 @@ def test_the_scene_roots_are_left_free_of_transforms(tmp_path):
         assert node["children"], "the root must still parent its content"
 
 
+def test_normalize_stages_through_a_dotfile(tmp_path, monkeypatch):
+    """The staged-writes rule: the staging file is a dotfile beside the served
+    name. This one spent a while as a visible ``m.glb.tmp`` sibling, outside
+    both the dotfile convention and any finally."""
+    from warlock.pipelines import postprocess
+
+    path = tmp_path / "m.glb"
+    trimesh.Scene(trimesh.creation.box(extents=(1.0, 1.0, 1.0))).export(path)
+
+    staged: list[str] = []
+    real_replace = os.replace
+
+    def spy(src, dst):
+        staged.append(Path(src).name)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(postprocess.os, "replace", spy)
+    postprocess.normalize_glb(path, None)
+
+    assert staged and staged[0].startswith(".m.glb.")
+    assert [p.name for p in tmp_path.iterdir()] == ["m.glb"]
+
+
+def test_a_failed_normalize_sweeps_its_staging_file(tmp_path, monkeypatch):
+    """A rebuild that raises must leave the served file untouched and no
+    staging litter -- a stranded dotfile sits in the job directory for its
+    whole life, because nothing ever sweeps one."""
+    from warlock.pipelines import postprocess
+
+    path = tmp_path / "m.glb"
+    trimesh.Scene(trimesh.creation.box(extents=(1.0, 1.0, 1.0))).export(path)
+    before = path.read_bytes()
+
+    def boom(*_args):
+        raise RuntimeError("encode failed")
+
+    monkeypatch.setattr(postprocess, "_rebuild_glb", boom)
+    with pytest.raises(RuntimeError, match="encode failed"):
+        postprocess.normalize_glb(path, None)
+
+    assert path.read_bytes() == before
+    assert [p.name for p in tmp_path.iterdir()] == ["m.glb"]
+
+
 def test_collision_hull_is_convex_and_small(tmp_path):
     import trimesh
 

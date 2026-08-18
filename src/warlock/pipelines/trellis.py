@@ -641,7 +641,9 @@ def _validate_glb(data: bytes) -> None:
 def _atomic_write(path: Path, data: bytes) -> None:
     """Stage beside the destination and rename, so a failed write never leaves
     a partial ``source.glb`` behind for the rest of the pipeline to read."""
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name, suffix=".tmp")
+    # A dotfile, per the staged-writes rule: a visible ``source.glb...tmp``
+    # sibling would sit beside the served name in every directory listing.
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)

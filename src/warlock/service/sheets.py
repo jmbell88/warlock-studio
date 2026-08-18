@@ -325,8 +325,10 @@ def create_pixel_sheet(
     params = {
         # Every one of these is an *input*: the restyle's own recipe is
         # recorded in the pixel sidecar, not here, so nothing in this dict is
-        # derived and a rerun copies it verbatim. That is why none of it joins
-        # DERIVED_PARAMS.
+        # derived. A rerun copies it, with one carve-out: ``sheet_id`` is on
+        # DERIVED_PARAMS for the *sheet* render kind's sake, so ``rerun_job``
+        # re-seeds it from the source row rather than letting the strip cost
+        # this kind its input.
         "source_job": job_id,
         "sheet_id": sheet_id,
         "logical_size": int(logical_size),

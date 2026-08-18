@@ -158,6 +158,19 @@ def _check_sprite_sheet(svc: WarlockService, block: Any) -> dict[str, Any]:
     # character, queue the sheet and fail it, which reads as a bug rather than
     # as a download the user has not done.
     svc_sprites._check_weights(svc)
+    # And the VRAM the follow-up will need, for the same reason: the direct
+    # door (``sprites.create_sprite_synthesis``) checks it, and this is the
+    # only other way a ``sprite_synthesis`` row comes to exist. A card that
+    # fits the character but not the checkpoint-plus-both-adapters sum would
+    # otherwise draw the reference and fail the sheet at dispatch, with no
+    # remedy in sight. ``base_model`` is the only param the estimate reads for
+    # this kind -- both adapters are priced unconditionally.
+    check_vram(
+        svc,
+        "sprite_synthesis",
+        "model",
+        {"base_model": svc_sprites.SPRITE_BASE_MODEL},
+    )
     return {"sheet_type": sheet_type, "logical_size": logical, "colors": colors}
 
 

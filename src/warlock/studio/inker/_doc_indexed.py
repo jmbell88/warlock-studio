@@ -565,6 +565,14 @@ class IndexedOps:
             return False
         if self.is_indexed:
             self._check_room(len(fresh))
+            # The float commits FIRST, as every sibling op commits it
+            # (``move_slot``, ``sort_palette``, ``remove_slot``, the
+            # conversions): committed after the table is reassigned, the
+            # buffer's pixels resolve into *new*-table numbering and are then
+            # pushed through a remap sized to the old table -- clamped, so the
+            # floated pixels land as the wrong colour, silently
+            # self-consistent.
+            self.commit_floating()
             state = self._color_state()
             # Inserted *inside* the table, so every slot above the insertion
             # point shifts -- and every pixel in one of them has to shift with
@@ -575,7 +583,6 @@ class IndexedOps:
             forward[low + 1 :] += len(fresh)
             if 0 <= self.transparent_index < len(table):
                 self.transparent_index = int(forward[self.transparent_index])
-            self.commit_floating()
             self.history.push(
                 CompoundEdit(
                     [

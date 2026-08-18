@@ -1003,6 +1003,15 @@ def read_wmap(data: bytes) -> MapDoc:
     return doc
 
 
+# Tiled's hexagonal 120-degree rotation flag, probed by name here for the same
+# reason ``tmx._finish`` probes it at the other door (see the note in
+# :mod:`.gid` for why the constant lives at the doors and not beside the other
+# three): the masks in :mod:`.gid` deliberately span bit 28, so a hand-edited
+# file carrying it read as a tile id 268435456 too large and was refused as "a
+# tile no tileset accounts for" -- a true sentence about the wrong problem.
+_HEX_ROTATE = gidlib.DTYPE(0x10000000)
+
+
 def _validate(doc: MapDoc) -> None:
     """Every nonzero gid resolves, or the file is refused.
 
@@ -1010,9 +1019,17 @@ def _validate(doc: MapDoc) -> None:
     accounts for draws as nothing and cannot be repainted with what it was,
     because nothing knows. A tile *object* carries a gid in exactly the same
     encoding -- flags in the top three bits -- so it is checked in the same
-    pass: a dangling gid is the same unreadable file wherever it sits.
+    pass: a dangling gid is the same unreadable file wherever it sits. And in
+    both halves the hexagonal-rotation bit is refused *by name* first, exactly
+    as :func:`.tmx._finish` refuses it, rather than being left to fail as an
+    out-of-range id.
     """
     for layer in doc.tile_layers():
+        if bool((np.asarray(layer.data) & _HEX_ROTATE).any()):
+            raise ValueError(
+                f"layer {layer.name!r} uses hexagonal 120-degree tile rotation, "
+                "which Plotter does not support"
+            )
         for tile_id in np.unique(gidlib.tile_ids(layer.data)).tolist():
             if tile_id and doc.ref_for(tile_id) is None:
                 raise ValueError(
@@ -1025,6 +1042,11 @@ def _validate(doc: MapDoc) -> None:
         for obj in layer.objects:
             if not isinstance(obj.shape, TileShape):
                 continue
+            if int(obj.shape.gid) & int(_HEX_ROTATE):
+                raise ValueError(
+                    f"object {obj.name!r} uses hexagonal 120-degree tile "
+                    "rotation, which Plotter does not support"
+                )
             tile_id = int(gidlib.decompose(obj.shape.gid)[0])
             if tile_id and doc.ref_for(tile_id) is None:
                 raise ValueError(

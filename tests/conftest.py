@@ -8,7 +8,6 @@ from __future__ import annotations
 import asyncio
 import functools
 import os
-import re
 import threading
 import time
 from pathlib import Path
@@ -32,11 +31,32 @@ _GPU_LANE = False
 def _selects_gpu(config) -> bool:
     """Whether this invocation is asking *for* the gpu tests.
 
-    The negated mention is skipped deliberately: the default expression is
+    Decided with pytest's own ``-m`` expression engine rather than matched as
+    text. The negated mention must be skipped -- the default expression is
     ``not gpu and not perf``, so a plain substring test answers yes to every
-    ordinary run.
+    ordinary run -- and a lookbehind regex cannot see a negation through a
+    parenthesis: ``-m "not (gpu or perf)"`` is a legal spelling of the same
+    default, and the old ``(?<!not )\\bgpu\\b`` counted it as selecting the
+    lane (refused under ``-n 8``; silently unpinned under ``-n 0``).
+
+    "Asking for gpu" means the expression admits a test marked ``gpu`` while
+    refusing an unmarked one: any negated mention fails the first half, and a
+    bare exclusion like ``not perf`` -- which admits everything -- fails the
+    second. An expression pytest itself cannot parse selects nothing here;
+    pytest will refuse it with its own error moments later.
     """
-    return bool(re.search(r"(?<!not )\bgpu\b", config.getoption("-m") or ""))
+    from _pytest.mark.expression import Expression
+
+    text = (config.getoption("-m") or "").strip()
+    if not text:
+        return False
+    try:
+        expr = Expression.compile(text)
+    except Exception:
+        return False
+    gpu_marked = expr.evaluate(lambda name: name == "gpu")
+    unmarked = expr.evaluate(lambda name: False)
+    return gpu_marked and not unmarked
 
 
 def pytest_configure(config):
@@ -136,10 +156,12 @@ def _no_migration(tmp_path_factory):
         return
 
     home = tmp_path_factory.mktemp("warlock-home")
-    # The same four directories ``get_config()._ensure_dirs`` makes, because a
-    # real ``~/.warlock`` has them and the pin is only supposed to change what
-    # is *in* the model root -- not whether the roots exist. Left out, tests
-    # that build a bare ``Config`` (bypassing ``_ensure_dirs``) hit
+    # The same directories the mkdir loop at the end of ``get_config()`` makes
+    # (config.py: ``for d in (cfg.home, cfg.data_dir, cfg.palette_dir,
+    # cfg.t2i_model_root)``), because a real ``~/.warlock`` has them and the
+    # pin is only supposed to change what is *in* the model root -- not whether
+    # the roots exist. Left out, tests that build a bare ``Config``
+    # (bypassing ``get_config()`` and its mkdirs) hit
     # ``doctor._disk_check``'s ``shutil.disk_usage`` on a path that is not
     # there: three failed that way before this was added, none of them about
     # disks. Empty, so ``matting.available`` is still False.

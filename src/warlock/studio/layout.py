@@ -209,6 +209,33 @@ def give_way(avail: float, share: float, wanted: float, floor: float) -> float:
         return 0.0
     ceiling = max(avail - floor, avail * SHARE_MIN)
     return min(max(avail * share, min(wanted, ceiling)), ceiling)
+
+
+def give_way_drag(
+    avail: float, share: float, wanted: float, floor: float, delta: float
+) -> float:
+    """The share after dragging the handle under a :func:`give_way` pane.
+
+    A drag measured against the *stored* share goes dead the moment give_way
+    pins the pane: ``min(wanted, ceiling)`` holds the height still while the
+    share keeps sliding, so the handle under the cursor moved nothing -- and
+    every other pane keyed to the same share moved instead, which read as a
+    broken handle dragging a pane across the window. So the delta is applied
+    to the height the pane is actually drawn at, clamped to the heights this
+    pane can really take, and the share re-derived from the result; a drag
+    the pane cannot follow leaves the share exactly where it was.
+    """
+    if avail <= 0:
+        return share
+    at = give_way(avail, share, wanted, floor)
+    lo = give_way(avail, SHARE_MIN, wanted, floor)
+    hi = give_way(avail, SHARE_MAX, wanted, floor)
+    target = min(max(at + delta, lo), hi)
+    if target == at:
+        return share
+    return min(max(target / avail, SHARE_MIN), SHARE_MAX)
+
+
 GRIP = 7.0  # hit-zone width in design px; the drawn line is 1px
 
 

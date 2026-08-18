@@ -162,6 +162,30 @@ def test_a_missing_controlnet_is_refused_before_the_character_is_drawn(svc):
     assert excinfo.value.rows
 
 
+def test_the_follow_ups_card_is_admitted_at_the_references_door(svc, monkeypatch):
+    """The VRAM half of the same rule: the worker mints the follow-up row
+    itself and can refuse nothing, so the sprite sum -- checkpoint plus both
+    adapters -- has to be admitted here, exactly as the direct door
+    (``sprites.create_sprite_synthesis``) admits it. Without it, a coexist
+    card that fits the reference but not the sprite sum drew the character and
+    failed the sheet at dispatch, with no remedy in sight."""
+    from warlock.service import _jobs_create
+    from warlock.service import sprites as svc_sprites
+
+    seen: list[tuple] = []
+    monkeypatch.setattr(
+        _jobs_create,
+        "check_vram",
+        lambda svc, kind, stage, params: seen.append(
+            (kind, stage, params.get("base_model"))
+        ),
+    )
+    svc_jobs.create_job(
+        svc, kind="text", prompt="a ranger", output="reference", sprite_sheet={}
+    )
+    assert ("sprite_synthesis", "model", svc_sprites.SPRITE_BASE_MODEL) in seen
+
+
 def test_a_reroll_holds_the_same_door_the_first_submit_did(svc):
     """The other way in, and it needs the check for the reason the tile sheet's
     reroll does: a reroll can be days later, against a models directory the

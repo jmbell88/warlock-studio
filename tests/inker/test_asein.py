@@ -555,6 +555,56 @@ def test_a_modern_palette_chunk_supersedes_the_old_one():
     assert doc.palette == [(1, 2, 3, 128)]
 
 
+def test_a_per_frame_palette_warns_and_the_final_table_is_used():
+    """Divergence 20: one table per document. Per-frame palettes are pre-1.0
+    legacy the format merely tolerates, and losing them silently repaints
+    frames the file coloured differently -- so the reader says so, and the
+    final table wins."""
+    data = _file(
+        _header(2, 1, 1, INDEXED_DEPTH, transparent=255),
+        [
+            _frame(
+                [_layer("Art"), _palette([(10, 20, 30, 255)]), _cel(0, bytes([0]), 1, 1)]
+            ),
+            _frame([_palette([(200, 100, 50, 255)]), _cel(0, bytes([0]), 1, 1)]),
+        ],
+    )
+    doc, warnings = asein.document_from_aseprite(data)
+    assert doc.palette == [(200, 100, 50, 255)], "the final table is used"
+    assert "per-frame palettes are not kept; the final table is used" in warnings
+
+
+def test_a_per_frame_old_palette_warns_the_same_way():
+    """The pre-1.0 chunk pair is where per-frame palettes actually live, and the
+    placeholder rows the old decoder appends must not trip the warning."""
+    data = _file(
+        _header(2, 1, 1, INDEXED_DEPTH, transparent=255),
+        [
+            _frame([_layer("Art"), _old_palette([(1, 2, 3)]), _cel(0, bytes([0]), 1, 1)]),
+            _frame([_old_palette([(9, 8, 7)]), _cel(0, bytes([0]), 1, 1)]),
+        ],
+    )
+    doc, warnings = asein.document_from_aseprite(data)
+    assert doc.palette == [(9, 8, 7, 255)]
+    assert "per-frame palettes are not kept; the final table is used" in warnings
+
+
+def test_restating_an_identical_palette_does_not_warn():
+    """The warning is about a table that *changed*: a file that repeats the same
+    entries has one palette as far as this import is concerned, and a warning on
+    it would teach the user to ignore the one that matters."""
+    colours = [(1, 2, 3, 255)]
+    data = _file(
+        _header(2, 1, 1, INDEXED_DEPTH, transparent=255),
+        [
+            _frame([_layer("Art"), _palette(colours), _cel(0, bytes([0]), 1, 1)]),
+            _frame([_palette(colours), _cel(0, bytes([0]), 1, 1)]),
+        ],
+    )
+    _doc, warnings = asein.document_from_aseprite(data)
+    assert warnings == []
+
+
 def test_a_grayscale_file_is_converted_rather_than_refused():
     """The one conversion this reader performs, and it is exact: Aseprite draws
     a grey as ``(v, v, v)`` too, so replicating the channel loses nothing."""

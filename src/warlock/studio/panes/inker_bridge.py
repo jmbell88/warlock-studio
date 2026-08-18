@@ -155,14 +155,24 @@ def _animation(ctx: Any, tab: Any) -> None:
     """
     widgets.section("Animation")
     if tab.doc.anim is None:
+        # The help rides the button as ``tooltip=`` rather than trailing it as
+        # a ``help_marker``: after a ``(-1, 0)`` button there is exactly zero
+        # room on the line, so ``same_line_or_wrap`` -- correctly -- dropped
+        # the glyph onto the next control's row, where it read as that one's.
+        # ``field_label``'s docstring names the defect class; a button has no
+        # label row, so its own hover is where the sentence goes.
         if widgets.disabled_button(
-            "Animate", not tab.busy, (-1, 0), reason=_busy_why(tab)
+            "Animate",
+            not tab.busy,
+            (-1, 0),
+            reason=_busy_why(tab),
+            tooltip=(
+                "Turns this drawing into frame one of an animation and adds a"
+                " second frame. The layers become tracks; Ctrl+Z undoes the"
+                " whole thing."
+            ),
         ):
             inker_mode.animate(ctx, tab)
-        widgets.help_marker(
-            "Turns this drawing into frame one of an animation and adds a second"
-            " frame. The layers become tracks; Ctrl+Z undoes the whole thing."
-        )
         return
     anim = tab.doc.anim
     widgets.muted(f"{len(anim.frames)} frames, {len(anim.tracks)} tracks")
@@ -173,20 +183,31 @@ def _pipeline(ctx: Any, tab: Any) -> None:
     widgets.section("Pipeline")
     busy = tab.busy
     why = _busy_why(tab)
-    if not tab.linked:
-        if widgets.disabled_button("Save as reference", not busy, (-1, 0), reason=why):
-            inker_mode.save_as_reference(ctx, tab)
-        widgets.help_marker(
-            "Adds this image to the library as a finished reference, so it can be"
-            " meshed, promoted and rerun like a generated one."
-        )
+    # Help as ``tooltip=`` on each full-width button, not a trailing
+    # ``help_marker`` -- the Animation row above says why.
+    if not tab.linked and widgets.disabled_button(
+        "Save as reference",
+        not busy,
+        (-1, 0),
+        reason=why,
+        tooltip=(
+            "Adds this image to the library as a finished reference, so it"
+            " can be meshed, promoted and rerun like a generated one."
+        ),
+    ):
+        inker_mode.save_as_reference(ctx, tab)
     # "Make 3D", not "Send to 3D": there is no 3D to send anything *to* since
     # wave 5 folded 2D and 3D into Create's stages, and this is the same act
     # the Mesh stage's own button performs on a reference -- so it is the same
     # words. The function keeps its name; it is not what anybody reads.
-    if widgets.disabled_button("Make 3D", not busy, (-1, 0), reason=why):
+    if widgets.disabled_button(
+        "Make 3D",
+        not busy,
+        (-1, 0),
+        reason=why,
+        tooltip="Queues the mesh stage from the flattened image.",
+    ):
         inker_mode.send_to_3d(ctx, tab)
-    widgets.help_marker("Queues the mesh stage from the flattened image.")
     if tab.linked and widgets.disabled_button(
         "Revert to original",
         tab.has_original and not busy,
@@ -534,13 +555,19 @@ SHEET_IMPORT_POPUP = "inker-sheet-import"
 def _sheet_import(ctx: Any) -> None:
     """The Import sheet button, and the grid popup once a file is chosen."""
     state = inker_mode.ensure(ctx)
-    if controls.button("Import sprite sheet...", (-1, 0)):
+    # ``tooltip=`` rather than a trailing ``help_marker`` -- the Animation row
+    # says why a full-width button cannot be followed by one.
+    if controls.button(
+        "Import sprite sheet...",
+        (-1, 0),
+        tooltip=(
+            "Slices any image into one frame per cell, row by row. For a sheet"
+            " this app generated, opening the draft from the library carries"
+            " its directions and tags as well; this is for a sheet from"
+            " anywhere else."
+        ),
+    ):
         inker_mode.ask_import_sheet(ctx)
-    widgets.help_marker(
-        "Slices any image into one frame per cell, row by row. For a sheet this"
-        " app generated, opening the draft from the library carries its"
-        " directions and tags as well; this is for a sheet from anywhere else."
-    )
     if state.sheet_import is not None and not state.sheet_import_open:
         state.sheet_import_open = True
         imgui.open_popup(SHEET_IMPORT_POPUP)
@@ -556,15 +583,18 @@ def _aseprite_import(ctx: Any) -> None:
     that one does: a sheet has to be told how to cut and an Aseprite file
     already says where everything is.
     """
-    if controls.button("Import Aseprite file...", (-1, 0)):
+    if controls.button(
+        "Import Aseprite file...",
+        (-1, 0),
+        tooltip=(
+            "Reads an .aseprite or .ase file: layers, groups, the timeline,"
+            " tags, slices, and cels shared between frames as shared cels here"
+            " too. Reading only -- the import opens as an unsaved document, so"
+            " saving it writes an .ora and never back over the file it came"
+            " from. Anything dropped on the way in is named in a message."
+        ),
+    ):
         inker_mode.ask_import_aseprite(ctx)
-    widgets.help_marker(
-        "Reads an .aseprite or .ase file: layers, groups, the timeline, tags,"
-        " slices, and cels shared between frames as shared cels here too."
-        " Reading only -- the import opens as an unsaved document, so saving it"
-        " writes an .ora and never back over the file it came from. Anything"
-        " dropped on the way in is named in a message."
-    )
 
 
 def _pair(label: str, value: tuple[int, int], low: int = 0) -> tuple[int, int]:

@@ -3121,14 +3121,23 @@ class App:
                 inker_tools.draw(ctx)
         drag = layout_mod.splitter("inker-sidebar-share", vertical=False, length=sidebar_w)
         if drag and avail_y > 0:
-            lay.settings_share = min(
-                max(
-                    lay.settings_share + drag * tokens_mod.SCALE / avail_y,
-                    layout_mod.SHARE_MIN,
-                ),
-                layout_mod.SHARE_MAX,
+            # Applied to the height the pane is actually drawn at, not to the
+            # stored share: ``give_way`` above can pin the tools pane, and a
+            # drag measured against the stored share then updated a share this
+            # handle was not moving -- zero travel under the cursor while the
+            # right column's layers/bridge split (keyed to the same share, no
+            # give_way) resized in real time. ``give_way_drag`` leaves the
+            # share alone whenever the pane under the handle cannot follow.
+            share = layout_mod.give_way_drag(
+                avail_y,
+                lay.settings_share,
+                sp(inker_tools.grid_height() + inker_tools.OPTIONS_FLOOR),
+                sp(inker_colors.PANEL_FLOOR),
+                drag * tokens_mod.SCALE,
             )
-            lay.save()
+            if share != lay.settings_share:
+                lay.settings_share = share
+                lay.save()
         with layout_mod.pane(
             "inker-colors",
             (sidebar_w, 0),
@@ -3161,6 +3170,13 @@ class App:
         ) as visible:
             if visible:
                 inker_canvas.draw(ctx)
+            elif tab is not None:
+                # A keyboard zoom rung banked by ``handle_key`` is consumed
+                # inside the canvas child; on a frame the centre pane does not
+                # draw at all it would survive and fire later, unprompted.
+                # Dropped here for the same reason the canvas's own invisible
+                # branch drops it.
+                tab.view.pending_zoom_rung = 0
         if animated:
             with layout_mod.pane(
                 "inker-timeline",

@@ -163,6 +163,13 @@ def _declare(kernel32: Any) -> None:
     kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
     kernel32.GetLastError.restype = wintypes.DWORD
     kernel32.GetLastError.argtypes = []
+    kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+    kernel32.QueryFullProcessImageNameW.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.LPWSTR,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
 
 
 def assign(pid: int) -> bool:
@@ -222,8 +229,13 @@ def tracked() -> dict[int, str]:
         return dict(_children)
 
 
-def terminate_tracked() -> list[int]:
-    """Kill every tracked child. -> the pids that were asked to stop.
+def terminate_tracked(what_prefix: str | None = None) -> list[int]:
+    """Kill every tracked child, or only those whose recorded reason starts
+    with ``what_prefix``. -> the pids that were asked to stop.
+
+    The filter exists for the download Cancel button, which must stop the
+    fetch child without taking a live Blender bake or the persistent matting
+    worker with it; shutdown keeps the no-argument kill-everything semantics.
 
     Best-effort, like everything else here: a child that has already exited,
     or that this process cannot open, is not a reason to raise on the way out
@@ -231,6 +243,8 @@ def terminate_tracked() -> list[int]:
     """
     killed: list[int] = []
     for pid, what in tracked().items():
+        if what_prefix is not None and not what.startswith(what_prefix):
+            continue
         log.info("terminating tracked child %d (%s)", pid, what)
         if terminate(pid):
             killed.append(pid)
@@ -366,7 +380,12 @@ def image_path(pid: int) -> str | None:
         return None
     try:
         kernel32 = ctypes.windll.kernel32
-        kernel32.OpenProcess.restype = wintypes.HANDLE
+        # The full _declare, not a lone OpenProcess restype: CloseHandle,
+        # TerminateProcess and QueryFullProcessImageNameW were only typed if
+        # _ensure_job had happened to run first, and an undeclared HANDLE
+        # argument truncates through the default c_int above 2^31 -- the
+        # exact failure schedule documented on _ensure_job_locked.
+        _declare(kernel32)
         handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
         if not handle:
             return None
@@ -391,7 +410,7 @@ def terminate(pid: int) -> bool:
         return False
     try:
         kernel32 = ctypes.windll.kernel32
-        kernel32.OpenProcess.restype = wintypes.HANDLE
+        _declare(kernel32)  # image_path's reasoning: never inherit the guesswork
         handle = kernel32.OpenProcess(_PROCESS_TERMINATE, False, pid)
         if not handle:
             log.warning("could not open pid %d to terminate it", pid)

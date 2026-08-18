@@ -1117,12 +1117,16 @@ class Worker(GenerateOps, RigOps, SpriteOps, TileSheetOps, MeshPostOps, JobOps):
         # Immediately before the load, and after the handoff and the stale
         # eviction have given back whatever they were going to: this is the
         # last moment the answer is still about the allocation that is about
-        # to happen. Skipped when a pipe survived the eviction -- that is
-        # exactly the warm same-key same-generation pipe, no load is coming,
-        # and refusing would fail a job for memory it is not about to ask for.
-        # None means a load is coming, including the generation-forced reload
-        # of a same-key pipe, which used to skip this check entirely.
-        if self._text2image is None:
+        # to happen. Skipped only when a *loaded* pipe survived the eviction --
+        # that is exactly the warm same-key same-generation pipe, no load is
+        # coming, and refusing would fail a job for memory it is not about to
+        # ask for. Everything else means a load is coming: None (including the
+        # generation-forced reload of a same-key pipe, which used to skip this
+        # check entirely), and the retained-but-unloaded object ``_generate``'s
+        # handoff teardown keeps around -- ``.loaded`` is what answers "is a
+        # pipe resident" (see that teardown's comment), and gating on the
+        # object alone let every reuse of it re-allocate ~16 GiB unchecked.
+        if self._text2image is None or not self._text2image.loaded:
             _require_commit_headroom(
                 f" before loading {spec.label}",
                 "Close other applications, or use a smaller image model.",

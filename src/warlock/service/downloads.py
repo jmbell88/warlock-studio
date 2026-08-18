@@ -26,6 +26,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
@@ -587,21 +588,20 @@ def _remove_one(path: Path, root: Path) -> None:
 # what name the failure; the whole thing belongs in the log, not in a toast.
 STDERR_TAIL = 400
 
+# How many stderr lines the pump retains. Bounded because huggingface_hub can
+# chatter for hours and only the tail is ever quoted; generous enough that a
+# whole traceback survives whatever preceded it.
+_STDERR_KEEP_LINES = 200
 
-def _stderr_tail(proc: subprocess.Popen[str]) -> str:
+
+def _stderr_tail(lines: deque[str], reader: threading.Thread) -> str:
     """The end of the child's stderr, or "". Never raises and never blocks long.
 
-    The pipe is already at EOF by the time this is called -- the process has
-    exited -- so the read returns immediately.
+    ``lines`` is the pump thread's bounded buffer; the pump hits EOF when the
+    child exits, so the short join only covers a kill racing its last read.
     """
-    stream = proc.stderr
-    if stream is None:
-        return ""
-    try:
-        text = stream.read() or ""
-    except (OSError, ValueError):
-        return ""
-    text = text.strip()
+    reader.join(timeout=2.0)
+    text = "".join(lines).strip()
     if not text:
         return ""
     log.error("fetch worker stderr:%s%s", chr(10), text)
@@ -675,6 +675,24 @@ def _run_worker(
         # stop (MDL-02, and the Cancel button MDL-14 asks for).
         winjob.track(proc.pid, f"fetch {spec.get('repo_id', '')}")
         assert proc.stdin is not None and proc.stdout is not None
+        assert proc.stderr is not None
+
+        # stderr is drained from the start, not read after exit: a child whose
+        # stderr outgrows the OS pipe buffer blocks on its next write and never
+        # reaches the exit that read was waiting on -- a deadlock the four-hour
+        # timeout turns into a four-hour hang. The pump keeps only a bounded
+        # tail, which is all ``_stderr_tail`` ever quoted.
+        err_lines: deque[str] = deque(maxlen=_STDERR_KEEP_LINES)
+
+        def _pump_err(stream: Any) -> None:
+            try:
+                for raw in stream:
+                    err_lines.append(raw)
+            except (OSError, ValueError):
+                pass
+
+        err_reader = threading.Thread(target=_pump_err, args=(proc.stderr,), daemon=True)
+        err_reader.start()
 
         def _send() -> None:
             try:
@@ -757,7 +775,7 @@ def _run_worker(
         if not result.get("error"):
             # No result file means the child died before it could write one, so
             # its stderr is the only thing that knows why.
-            tail = _stderr_tail(proc)
+            tail = _stderr_tail(err_lines, err_reader)
             if tail:
                 detail += f": {tail}"
         log.warning("fetch of %s failed: %s", job.repo_id, detail)

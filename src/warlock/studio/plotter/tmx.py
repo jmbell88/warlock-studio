@@ -1187,7 +1187,15 @@ def _image_layer_files(doc: MapDoc, files: dict[str, bytes]) -> dict[int, str]:
         stem = _SAFE.sub("-", layer.name).strip("-") or "image"
         path = source if safe else f"images/{index:02d}-{stem}.png"
         if path in files and files[path] != raw:
-            path = f"images/{index:02d}-{stem}.png"
+            # The colliding path can *be* this layer's fallback -- another
+            # layer's safe source spelt ``images/NN-stem.png`` -- so recomputing
+            # the fallback once reproduced the same string and clobbered the
+            # other layer's bytes. Bump until the name is genuinely free (or
+            # already holds these exact bytes, which is sharing, not a clash).
+            for bump in itertools.count(index):
+                path = f"images/{bump:02d}-{stem}.png"
+                if path not in files or files[path] == raw:
+                    break
         files[path] = raw
         paths[layer.uid] = path
     return paths

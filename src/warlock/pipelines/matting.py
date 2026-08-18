@@ -333,6 +333,12 @@ def _reset_child_locked() -> None:
             # Nothing useful left to do: it is in the kill-on-close job, so it
             # cannot outlive the app, and this is an advisory release.
             log.warning("the matting worker (pid %s) did not exit", proc.pid)
+    # Forgotten from winjob's registry as well as from the module globals:
+    # entries are removed on reap by contract, or terminate_tracked later
+    # opens a recycled pid with PROCESS_TERMINATE. Unconditional, like the
+    # forget above -- a child that ignored the kill is being abandoned to the
+    # kill-on-close job either way, and a second TerminateProcess adds nothing.
+    winjob.untrack(proc.pid)
     for stream in (proc.stdin, proc.stdout):
         if stream is not None:
             with contextlib.suppress(OSError):

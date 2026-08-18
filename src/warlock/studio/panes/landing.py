@@ -575,16 +575,25 @@ def _recovery_row(ctx: Any, journal: Any, entry: Any) -> None:
     imgui.push_id(f"recovery-{entry.path.name}")
     imgui.text(_MODE_ICONS.get(mode, icons.FILE_IMAGE))
     imgui.same_line()
-    imgui.text(entry.title)
-    imgui.same_line()
     provider = journal.provider_for(entry.kind)
     stamp = ago(entry.at)
     what = provider.label if provider is not None else entry.kind
+    note = f"{what}, {stamp}" if stamp else what
+    width = sp(RECOVER_BUTTON)
+    # Trimmed to what the row can actually hold -- the note beside it and the
+    # right-aligned button are both fixed, so an untrimmed title simply ran
+    # under the Recover button. Measured, not counted, like the Resume grid's
+    # cells (``widgets.fit_text`` says why a character budget is wrong).
     with fonts.small(imgui):
-        widgets.muted(f"{what}, {stamp}" if stamp else what)
+        note_w = imgui.calc_text_size(note).x
+    spacing = imgui.get_style().item_spacing.x
+    room = imgui.get_content_region_avail().x - note_w - width - spacing * 3
+    imgui.text(widgets.fit_text(entry.title, max(room, sp(48))))
+    imgui.same_line()
+    with fonts.small(imgui):
+        widgets.muted(note)
     imgui.same_line()
     # Right-aligned, so a column of them lines up whatever the titles do.
-    width = sp(RECOVER_BUTTON)
     imgui.same_line(imgui.get_content_region_avail().x + imgui.get_cursor_pos_x() - width)
     if entry.adoptable:
         if controls.button(f"Recover##{entry.path.name}", (width, 0)):

@@ -594,6 +594,13 @@ def _canvas(ctx: Any, state: Any, tab: Any) -> None:
         # Inside the child, because that is where ``_press`` opened it from and
         # an imgui popup's id is computed off the id stack it was opened on.
         _text_popup(ctx, state, tab)
+    else:
+        # A keyboard zoom aimed at a canvas that did not draw this frame is
+        # dropped, not banked: ``pending_zoom_rung`` is set by ``handle_key``
+        # from outside the canvas, so left alone here it survives the frame
+        # and fires a zoom rung later, unprompted. ``pending_zoom`` cannot do
+        # this -- it is only ever set from inside a visible canvas.
+        tab.view.pending_zoom_rung = 0
     imgui.end_child()
     _status_bar(state, tab, origin, hovered)
 
@@ -1026,6 +1033,24 @@ def _combine_op() -> str:
 _READ_ONLY_TOOLS = frozenset({"eyedropper"}) | SELECT_TOOLS
 
 
+def _group_shown(doc: Any) -> bool:
+    """Whether the groups above the active layer let it show at all.
+
+    Read off the same fold the compositor folds in (``LayerStack._entries``):
+    a layer inside a hidden group keeps its own eye on, so ``active.visible``
+    alone said "shown" about a stroke the composite would never draw. Missing
+    rows are treated as shown for ``_entries``' reason -- a fold caught
+    mid-rebuild must cost a missing warning at worst, never a wrong one.
+    """
+    fold = doc.stack.group_fold
+    if fold is None:
+        return True
+    index = doc.stack.active_index
+    if index >= len(fold):
+        return True
+    return bool(fold[index][0])
+
+
 def _locked_out(ctx: Any, state: Any, tab: Any) -> bool:
     """One toast per press when the active layer refuses tool-level writes.
 
@@ -1042,12 +1067,22 @@ def _locked_out(ctx: Any, state: Any, tab: Any) -> bool:
         # not show it, and the only thing on screen that could explain it is
         # an eye icon in a different pane. Painting under a hidden layer to
         # unhide it later is a real workflow, so the answer is a sentence
-        # rather than a refusal -- and one per press, like the lock's, rather
-        # than one per dab.
+        # rather than a refusal -- and coalesced through ``toast_once`` rather
+        # than raised per press: a multi-click shape tool presses once per
+        # vertex and a stroke-per-second painter presses without limit, and
+        # both were stacking one identical toast per press for as long as
+        # they went on.
         if not doc.stack.active.visible:
-            ctx.toast(
+            ctx.state.toast_once(
                 "That layer is hidden, so nothing you paint on it will show. "
                 "The eye in the layers panel turns it back on.",
+                "warn",
+            )
+        elif not _group_shown(doc):
+            ctx.state.toast_once(
+                "That layer is inside a hidden group, so nothing you paint on "
+                "it will show. The group's eye in the layers panel turns it "
+                "back on.",
                 "warn",
             )
         return False

@@ -72,6 +72,7 @@ not been asked -- "where should this go".
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -291,13 +292,24 @@ def _write_if_due(ctx: Any, provider: Provider, slot: Any, stamp: float) -> bool
         # rather than tracked with a flag, for ``dirty``'s reason: an undo back
         # to the journalled position is not a new edit.
         return False
+    if mark.at == 0.0:
+        # Never seen (Mark's default, and what ``drop`` resets to): arm the
+        # debounce at this pump rather than comparing against zero. The
+        # production clock is ``time.monotonic()``, which is *boot*-relative
+        # and so virtually always past ``JOURNAL_SECONDS`` already -- compared
+        # against a ``0.0`` default, the wait branch below was unreachable
+        # outside a test with a synthetic session clock, and the very first
+        # pump after an edit wrote: a copy taken while the user was still
+        # typing the first stroke. Armed here, the copy comes JOURNAL_SECONDS
+        # after the pump that first saw the document dirty, whether the
+        # session is two seconds or two days old -- and a dropped slot (saved,
+        # closed) re-arms the same way instead of re-firing early. A stamp of
+        # exactly 0.0 cannot arm (it is the sentinel); the clock is monotonic,
+        # so the next pump arms instead.
+        set_mark(slot, Mark(name=mark.name, head=mark.head, at=stamp))
+        return False
     if stamp - mark.at < JOURNAL_SECONDS:
-        # From zero, not from the first copy: a document dirtied in the first
-        # two minutes of a session waits like every other one. Inker's loop
-        # compared against a ``0.0`` default in exactly this way, and the
-        # difference is observable -- without it the very first pump after an
-        # edit writes, which is a copy taken while the user is still typing the
-        # first stroke.
+        # A document dirtied moments ago waits like every other one.
         return False
     return write(ctx, provider, slot, stamp)
 
@@ -324,11 +336,29 @@ def _same_head(a: Any, b: Any) -> bool:
 # back on the next launch for a properly-saved document. A generation per
 # payload name (the one identity both sides know), bumped by drop under the
 # same lock the task checks it under: a pending write whose generation is
-# stale skips rather than resurrecting the pair. Entries are never removed --
-# a name's queued write can drain arbitrarily late -- and each is a short
-# string and an int, so a session's worth of drops is bytes.
+# stale skips rather than resurrecting the pair.
+#
+# The lock the write task holds across its disk I/O is **per payload name**
+# (``_write_locks``), never module-wide: ``drop`` runs on the frame thread and
+# must wait for an in-flight write *of its own document* so its unlinks remove
+# what that write just put down -- but one global lock made it wait on any
+# document's write, so dropping a just-saved sketch parked the frame loop
+# behind an unrelated map's multi-MB encode landing on disk. ``_drop_lock``
+# now guards only the two registries and is never held across I/O. Entries
+# are never removed from either dict -- a name's queued write can drain
+# arbitrarily late -- and each is a short string, an int and a lock object,
+# so a session's worth of drops is bytes.
 _drop_lock = threading.Lock()
 _drop_gen: dict[str, int] = {}
+_write_locks: dict[str, threading.Lock] = {}
+
+
+def _write_lock(name: str) -> threading.Lock:
+    with _drop_lock:
+        lock = _write_locks.get(name)
+        if lock is None:
+            lock = _write_locks[name] = threading.Lock()
+        return lock
 
 
 def write(ctx: Any, provider: Provider, slot: Any, stamp: float | None = None) -> bool:
@@ -358,15 +388,21 @@ def write(ctx: Any, provider: Provider, slot: Any, stamp: float | None = None) -
         "at": time.time(),
     }
 
+    hold = _write_lock(name)
     with _drop_lock:
         gen = _drop_gen.get(name, 0)
 
     def run() -> None:
-        with _drop_lock:
-            if _drop_gen.get(name, 0) != gen:
-                # Dropped between submit and execution: the document was saved
-                # or closed, and writing now would resurrect the deleted pair.
-                return
+        # This name's lock is held across the whole write, so a ``drop`` for
+        # this document waits for the pair to be on disk before it unlinks --
+        # and only a drop for *this* document does; see the tombstone comment.
+        with hold:
+            with _drop_lock:
+                if _drop_gen.get(name, 0) != gen:
+                    # Dropped between submit and execution: the document was
+                    # saved or closed, and writing now would resurrect the
+                    # deleted pair.
+                    return
             _write_pair(payload, data, meta)
 
     if not ctx.submit(f"journal:{provider.kind}:{provider.uid_of(slot)}", run):
@@ -382,15 +418,30 @@ def _write_pair(payload: Path, data: bytes, meta: dict[str, Any]) -> None:
     absent, and writing the sidecar second makes the *pair* atomic. A crash
     between them leaves a payload nothing offers, which is the right answer --
     it is a copy that was interrupted mid-write.
+
+    Each staging name is unlinked in a ``finally`` -- ``service/derive.py``'s
+    ``_staged`` rule, for its reason: a staging file is a dotfile and nothing
+    ever sweeps one, so a ``write_bytes`` or ``os.replace`` that raises (disk
+    full, the directory yanked) would otherwise strand it beside the journal
+    for good. The suppress is for the unlink only; the write's own failure
+    still propagates to the task's logging.
     """
     payload.parent.mkdir(parents=True, exist_ok=True)
     tmp = payload.with_name(f".{payload.name}.tmp")
-    tmp.write_bytes(data)
-    os.replace(tmp, payload)
+    try:
+        tmp.write_bytes(data)
+        os.replace(tmp, payload)
+    finally:
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
     side = meta_path(payload)
     tmp_meta = side.with_name(f".{side.name}.tmp")
-    tmp_meta.write_text(json.dumps(meta, indent=2), encoding="utf-8")
-    os.replace(tmp_meta, side)
+    try:
+        tmp_meta.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        os.replace(tmp_meta, side)
+    finally:
+        with contextlib.suppress(OSError):
+            tmp_meta.unlink(missing_ok=True)
 
 
 def drop(ctx: Any, slot: Any) -> None:
@@ -415,11 +466,14 @@ def drop(ctx: Any, slot: Any) -> None:
         return
     payload = directory(ctx) / mark.name
     set_mark(slot, Mark())
-    with _drop_lock:
-        # Before the unlinks, and under the write task's lock: a queued write
-        # for this name that has not started yet sees the new generation and
-        # skips; one already inside ``_write_pair`` holds the lock, so the
-        # bump waits for it and the unlinks below remove what it just wrote.
+    # Before the unlinks, and under *this name's* write lock: a queued write
+    # for this name that has not started yet sees the new generation and
+    # skips; one already inside ``_write_pair`` holds the name's lock, so the
+    # bump waits for it and the unlinks below remove what it just wrote. A
+    # write for a different document holds a different lock and is not waited
+    # on -- this runs on the frame thread, and the frame loop never blocks on
+    # work that is not its own.
+    with _write_lock(mark.name), _drop_lock:
         _drop_gen[mark.name] = _drop_gen.get(mark.name, 0) + 1
     for path in (meta_path(payload), payload):
         # Sidecar first: it is the completion gate, so removing it first means

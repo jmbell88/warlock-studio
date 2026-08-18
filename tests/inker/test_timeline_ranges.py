@@ -648,13 +648,16 @@ def test_a_ranged_commit_skips_empty_cels_without_autovivifying():
 
 
 def test_a_ranged_commit_after_a_lift_that_autovivified_skips_the_slot():
-    """A lift on an empty slot autovivifies a cel; the commit revokes that
-    lift, which takes the cel back out -- and the placeholder rematerialised
-    in its place wears the *same uid*, so resolving the active layer by uid
-    finds a stand-in whose shared blank plane is read-only. Replaying onto it
-    raised mid-loop, after the real cels were already mutated with their edits
-    still unpushed. The slot has to be skipped: there was nothing there to
-    transform."""
+    """A lift on an empty slot autovivifies a cel and cuts nothing -- the no-op
+    rule takes the cel straight back out at lift time and pushes no step. The
+    placeholder rematerialised in its place wears the *same uid*, so resolving
+    the active layer by uid finds a stand-in whose shared blank plane is
+    read-only. Replaying onto it raised mid-loop, after the real cels were
+    already mutated with their edits still unpushed. The slot has to be
+    skipped: there was nothing there to transform. (On a *continuous* track the
+    autovivified cel carries a copy of an earlier drawing, the cut is real, and
+    the commit revokes the lift's own step instead -- the other way the slot's
+    cel leaves the grid.)"""
     doc = _clip(3)
     assert doc.clear_range(0, 0, 0, 0)
     others = [_cel(doc, 0, index).pixels.copy() for index in (1, 2)]
@@ -668,9 +671,9 @@ def test_a_ranged_commit_after_a_lift_that_autovivified_skips_the_slot():
     assert _cel(doc, 0, 0) is None
     for index in (1, 2):
         assert int(_cel(doc, 0, index).pixels[2, 2, 3]) == 255
-    # One step for the gesture (the lift was revoked), and one undo restores
-    # every cel that was touched.
-    assert len(doc.history) == steps
+    # One step for the whole gesture -- the commit's range step; the no-op lift
+    # cost nothing -- and one undo restores every cel that was touched.
+    assert len(doc.history) == steps + 1
     assert doc.history.undo(doc)
     for pixels, index in zip(others, (1, 2), strict=True):
         assert np.array_equal(_cel(doc, 0, index).pixels, pixels)

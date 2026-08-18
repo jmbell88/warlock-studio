@@ -1156,3 +1156,26 @@ def test_a_file_without_the_phases_key_reads_as_one():
     """Every file written before version 5, byte for byte."""
     data = _rewrite(_terrain_doc(1), lambda m: m["tilesets"][0].pop("phases"))
     assert wmap.read_wmap(data).tilesets[0].tileset.phases == 1
+
+
+def test_a_cell_carrying_the_hexagonal_rotation_bit_is_refused_by_name():
+    """Bit 28 is Tiled's hexagonal 120-degree rotation, and ``gid``'s masks
+    deliberately span it -- stripped of only the three transform flags, a
+    hand-edited cell carrying it read as tile 268435457 and was refused as "a
+    tile no tileset accounts for": a true sentence about the wrong problem.
+    ``tmx._finish`` probes the bit by name; this door must too."""
+    doc = _doc()
+    layer = doc.tile_layers()[0]
+    layer.data[0, 1] = gid.DTYPE(1) | gid.DTYPE(0x10000000)
+    with pytest.raises(ValueError, match="hexagonal 120-degree tile rotation"):
+        wmap.read_wmap(wmap.wmap_bytes(doc))
+
+
+def test_a_tile_object_carrying_the_hexagonal_rotation_bit_is_refused_by_name():
+    """The object half of the same rule: a tile object's gid is the same
+    encoding a cell's is, so the same hand-set bit gets the same sentence."""
+    def spin(manifest):
+        manifest["layers"][-1]["objects"][5]["shape"]["gid"] = 1 | 0x10000000
+
+    with pytest.raises(ValueError, match="hexagonal 120-degree tile rotation"):
+        wmap.read_wmap(_rewrite(_gate_doc(), spin))

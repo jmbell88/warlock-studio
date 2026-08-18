@@ -20,7 +20,7 @@ from .animation import Track
 from .brush import MAX_STAMP, Stamp
 from .layers import Layer
 from .selection import FloatingBuffer, SelectionMask, magic_wand, render_transform
-from .undo import CompoundEdit, LayerAddEdit, PatchEdit, SelectionEdit
+from .undo import CompoundEdit, LayerAddEdit, SelectionEdit
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .document import Document
@@ -205,16 +205,30 @@ class SelectionOps:
         cut[..., 3] = before[..., 3] - pixels[..., 3]
         layer.pixels[y0:y1, x0:x1] = cut
 
-        after = layer.pixels[y0:y1, x0:x1].copy()
-        edit: Any = PatchEdit(layer.uid, box, before, after)
-        # The buffer names the step that is actually *on the stack*, because
-        # ``cancel_floating`` revokes it by identity. Wrapping the patch in a
-        # compound and then naming the bare patch would leave the revoke
-        # searching for something the stack does not hold -- the alpha-cut would
-        # stay and the lifted pixels would be dropped.
-        pending, self._pending_cels = self._pending_cels, []
-        if pending:
-            edit = CompoundEdit([*pending, edit])
+        # Through the funnel's list-returning sibling, exactly as
+        # ``_replay_transform_on`` already does: the cut is a write like any
+        # other, and on an indexed document it has to reach the index plane --
+        # sub-threshold alpha becomes the transparent index -- or the plane
+        # goes on holding the colour slot, ``check_materialized`` raises, and
+        # the next save or rematerialisation resurrects the lifted pixels.
+        edit: Any = self._patch_edit_for(layer, box, before)
+        if edit is None:
+            # The cut changed nothing the mode can record (an all-transparent
+            # region, or an indexed cut whose every pixel thresholded back to
+            # its slot): the materialisation is already put back, so there is
+            # no step and the cel it may have autovivified goes back out. The
+            # buffer still floats -- with no lift step, cancelling simply drops
+            # it, which is exact because nothing was taken away.
+            self._discard_pending_cel()
+        else:
+            # The buffer names the step that is actually *on the stack*, because
+            # ``cancel_floating`` revokes it by identity. Wrapping the patch in a
+            # compound and then naming the bare patch would leave the revoke
+            # searching for something the stack does not hold -- the alpha-cut
+            # would stay and the lifted pixels would be dropped.
+            pending, self._pending_cels = self._pending_cels, []
+            if pending:
+                edit = CompoundEdit([*pending, edit])
         self.floating = FloatingBuffer(
             pixels=pixels, mask=crop.copy(), offset=(x0, y0), layer_uid=layer.uid,
             lift_edit=edit,
@@ -223,7 +237,8 @@ class SelectionOps:
             # makes the gesture repeatable rather than a stamp of this one cel.
             source_box=box,
         )
-        self.history.push(edit)
+        if edit is not None:
+            self.history.push(edit)
         self.invalidate(box, layer_uid=layer.uid)
         return True
 
@@ -478,10 +493,16 @@ class SelectionOps:
         entirely off canvas), ``[]`` for a cut that changed no pixel, and a list
         of steps otherwise.
 
-        It does not go through ``_commit_patch``, so it does not snap an indexed
-        document -- and does not need to. This write touches alpha alone, the
-        RGB it leaves behind was already snapped when it was written, and
-        ``snap`` never touches alpha in any case.
+        It cannot go through ``_commit_patch`` (the steps are folded into a
+        caller's compound), so it goes through ``_patch_edit_for`` -- the
+        funnel's list-returning sibling -- like every other range-shaped write.
+        The constrained-RGB argument for skipping the funnel entirely (this
+        write touches alpha alone, and ``snap`` never touches alpha) is true
+        and insufficient: on a *truly indexed* document a deleted pixel has to
+        become the transparent index in the layer's plane, or the plane goes on
+        holding the colour slot -- ``check_materialized`` raises, the ORA
+        writer records the pre-delete picture, and the next rematerialisation
+        resurrects the deleted pixels on screen.
         """
         if self.mask is None:
             return None
@@ -497,13 +518,13 @@ class SelectionOps:
         layer.pixels[y0:y1, x0:x1, 3] = (before[..., 3].astype(np.float32) * keep).astype(
             np.uint8
         )
-        after = layer.pixels[y0:y1, x0:x1].copy()
-        if np.array_equal(before, after):
+        edit = self._patch_edit_for(layer, box, before)
+        if edit is None:
             self._discard_pending_cel()
             return []
         pending, self._pending_cels = self._pending_cels, []
         self.invalidate(box, layer_uid=layer.uid)
-        return [*pending, PatchEdit(layer.uid, box, before, after)]
+        return [*pending, edit]
 
     def delete_selection(self: Document) -> bool:
         """Cut the selection out of the active layer without floating it."""
@@ -687,7 +708,13 @@ class SelectionOps:
         """
         width, height = self.size
         placed = tf.resize_canvas(pixels, (width, height), offset)
-        layer = Layer(pixels=placed, name=name)
+        # A minted layer in an indexed document gets a resolved index plane at
+        # birth -- ``_resolved_plane``'s contract. Left ``None``, the layer is
+        # silently skipped by ``check_materialized``, ``palette_usage`` falls
+        # back to the histogram, and the ORA writer stores it as RGBA in an
+        # archive that claims indexed -- duplicate-slot identity gone on the
+        # next open with nothing to say so.
+        layer = Layer(pixels=placed, indices=self._resolved_plane(placed), name=name)
         if self.anim is not None:
             # A track carrying one cel, on the current frame only: the new
             # pixels are a thing that happens at a moment, not a thing that is

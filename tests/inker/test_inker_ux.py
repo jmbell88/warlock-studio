@@ -103,6 +103,71 @@ def test_no_help_marker_is_left_on_a_line_of_its_own(path: Path) -> None:
     assert offenders == []
 
 
+#: The button wrappers whose ``(-1, 0)`` size draws at full width -- the same
+#: zero-room line as FULL_WIDTH, missed by the scan above because a button is
+#: not a labelled control. A button has no label row to carry the mark, so the
+#: help rides the button itself as ``tooltip=``.
+BUTTONS = {"button", "disabled_button", "primary_button", "ghost_button"}
+
+#: The panes the full-width-button sweep covers -- all of them, since the last
+#: named site (packwright_sources' tile-set button) moved its help onto the
+#: button's ``tooltip=``.
+SWEPT = sorted(PANES)
+
+
+def _full_width_button(call: ast.Call) -> bool:
+    """A button call drawn at ``(-1, 0)`` -- args or ``size=``."""
+    if _name(call) not in BUTTONS:
+        return False
+    sized = list(call.args) + [kw.value for kw in call.keywords if kw.arg == "size"]
+    for node in sized:
+        if not (isinstance(node, ast.Tuple) and node.elts):
+            continue
+        first = node.elts[0]
+        if (
+            isinstance(first, ast.UnaryOp)
+            and isinstance(first.op, ast.USub)
+            and isinstance(first.operand, ast.Constant)
+            and first.operand.value == 1
+        ):
+            return True
+    return False
+
+
+def _markers_after_full_width_buttons(path: Path) -> list[int]:
+    """`_orphaned_markers`, for the runs a ``(-1, 0)`` button begins."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    found: list[int] = []
+    for parent in ast.walk(tree):
+        body = getattr(parent, "body", None)
+        if not isinstance(body, list):
+            continue
+        pending = False
+        for stmt in body:
+            if _is_bare_marker(stmt):
+                if pending:
+                    found.append(stmt.lineno)
+                continue
+            calls = [n for n in ast.walk(stmt) if isinstance(n, ast.Call)]
+            if any(_full_width_button(c) for c in calls):
+                pending = True
+            elif any(_draws(c) for c in calls):
+                pending = False
+    return found
+
+
+@pytest.mark.parametrize("path", SWEPT, ids=lambda p: p.name)
+def test_no_marker_orphans_after_a_full_width_button(path: Path) -> None:
+    """The bridge pane's Animate/Save/Make 3D/import rows all had one: the
+    button took the whole line, ``same_line_or_wrap`` -- correctly -- refused
+    to draw past it, and the glyph landed on the next control's row where it
+    read as that one's. The help is the button's own ``tooltip=`` now."""
+    offenders = [
+        f"{path.name}:{line}" for line in _markers_after_full_width_buttons(path)
+    ]
+    assert offenders == []
+
+
 def _named_combos(path: Path) -> list[int]:
     """``widgets.combo`` calls whose label would be drawn and then clipped.
 
@@ -515,3 +580,78 @@ def test_both_floors_are_named_where_the_panes_are() -> None:
     source = main.read_text(encoding="utf-8")
     assert "inker_tools.grid_height()" in source
     assert "inker_colors.PANEL_FLOOR" in source
+
+
+def test_a_pinned_give_way_handle_does_not_drive_the_share() -> None:
+    """``give_way`` pins the tools pane at its own minimum, and the old drag
+    arithmetic kept updating the stored share anyway: zero travel under the
+    cursor while the right column -- keyed to the same share, no give_way --
+    resized in real time. A drag the pane cannot follow leaves the share
+    exactly where it was."""
+    avail, wanted, floor = 1000.0, 500.0, 200.0
+    share = 0.30
+    assert layout.give_way(avail, share, wanted, floor) == pytest.approx(500.0)
+    # Dragging up: the pane is already at its minimum, so nothing may move.
+    assert layout.give_way_drag(avail, share, wanted, floor, -40.0) == share
+    # Dragging down: the share moves from the height actually drawn, so the
+    # pane under the handle follows the very first pixel of the drag.
+    grown = layout.give_way_drag(avail, share, wanted, floor, 40.0)
+    assert layout.give_way(avail, grown, wanted, floor) == pytest.approx(540.0)
+
+
+def test_an_unpinned_give_way_drag_is_the_plain_arithmetic() -> None:
+    """With the share honoured untouched the handle behaves as it always did."""
+    avail, wanted, floor = 1000.0, 300.0, 200.0
+    assert layout.give_way_drag(avail, 0.55, wanted, floor, 30.0) == pytest.approx(0.58)
+    assert layout.give_way_drag(avail, 0.55, wanted, floor, -30.0) == pytest.approx(0.52)
+
+
+def test_a_give_way_drag_respects_both_ends_and_a_collapsed_column() -> None:
+    avail, wanted, floor = 1000.0, 300.0, 200.0
+    # Down past everything: clamped at SHARE_MAX.
+    assert layout.give_way_drag(avail, 0.6, wanted, floor, 900.0) == layout.SHARE_MAX
+    # Up past everything: the pane stops at its own minimum (the ``wanted``
+    # height here), and the share is re-derived from that height, not run to
+    # SHARE_MIN while the pane sits still.
+    pinched = layout.give_way_drag(avail, 0.6, wanted, floor, -900.0)
+    assert layout.give_way(avail, pinched, wanted, floor) == pytest.approx(300.0)
+    # A zero-height frame mid-resize changes nothing.
+    assert layout.give_way_drag(0.0, 0.55, wanted, floor, 40.0) == 0.55
+
+
+def test_the_grid_reservation_is_scale_invariant() -> None:
+    """``grid_height`` mixed units: the trailing gap was counted as 6 design px
+    while ``draw`` emitted a 6-*physical*-px dummy, and the heading row was a
+    remembered 28.0 -- both right at UI scale 1.0, which is the scale the smoke
+    suite runs at, and wrong at every other. The measured parts arrive in
+    physical px; the reservation, in design px, must not depend on the scale
+    they were measured at."""
+    at_one = inker_tools._reserve(5, 28.0, 8.0, 1.0)
+    at_150 = inker_tools._reserve(5, 28.0 * 1.5, 8.0 * 1.5, 1.5)
+    assert at_150 == pytest.approx(at_one)
+    # And the design-px constants are counted through, not scaled away.
+    assert at_one == pytest.approx(
+        28.0 + 5 * (inker_tools.BUTTON_H + 8.0) + inker_tools.GRID_GAP
+    )
+
+
+def test_the_trailing_gap_is_drawn_and_counted_as_one_number() -> None:
+    """The dummy under the grid goes through ``sp(GRID_GAP)`` so ``draw`` and
+    ``grid_height`` cannot drift apart again."""
+    source = Path(inker_tools.__file__).read_text(encoding="utf-8")
+    assert "imgui.dummy((0, sp(GRID_GAP)))" in source
+
+
+def test_a_zoom_rung_cannot_outlive_an_undrawn_canvas() -> None:
+    """``pending_zoom_rung`` is banked by ``handle_key`` from outside the
+    canvas and consumed inside the canvas child; on a frame the child (or the
+    whole centre pane) does not draw, the flag used to survive and fire a zoom
+    rung later, unprompted. ``pending_zoom`` cannot do this -- it is only ever
+    set from inside a visible canvas -- so both invisible branches drop the
+    rung rather than banking it."""
+    canvas = Path(inker_canvas.__file__).read_text(encoding="utf-8")
+    # Once consumed after stepping the ladder, once dropped by the invisible
+    # child's branch.
+    assert canvas.count("pending_zoom_rung = 0") >= 2
+    main = Path(inker_tools.__file__).resolve().parent.parent / "main.py"
+    assert "pending_zoom_rung = 0" in main.read_text(encoding="utf-8")

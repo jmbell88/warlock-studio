@@ -616,6 +616,10 @@ async def test_a_warm_same_key_pipe_is_never_commit_checked(
         await worker._acquire_t2i(models.BASE_MODELS[models.DEFAULT_BASE_MODEL],
                                   models.DEFAULT_BASE_MODEL)
         first = worker._text2image
+        # As after a real generate: the fake only flips this inside generate(),
+        # and "warm" means the weights are already in commit -- an unloaded
+        # object is the other case, covered by the retained-unloaded test.
+        first.loaded = True
         state["free"] = 0.0
 
         pipe, _handoff = await worker._acquire_t2i(
@@ -623,6 +627,45 @@ async def test_a_warm_same_key_pipe_is_never_commit_checked(
         )
         assert pipe is first
         assert first.unload_calls == 0
+    finally:
+        worker.store.close()
+
+
+async def test_a_retained_unloaded_pipe_still_passes_the_commit_check(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    """``_generate``'s handoff teardown unloads the pipe but keeps the object
+    (``.loaded`` is what answers "is a pipe resident"). The next load through
+    that retained object re-allocates the full checkpoint, so the byte check
+    must fire for it exactly as it does when the field is None."""
+    from warlock import models
+
+    state = _commit_scenario(monkeypatch)
+    worker = _make_worker(tmp_path)
+    try:
+        await worker._acquire_t2i(models.BASE_MODELS[models.DEFAULT_BASE_MODEL],
+                                  models.DEFAULT_BASE_MODEL)
+        pipe = worker._text2image
+        pipe.loaded = True  # as a finished generate leaves it
+        # _generate's teardown: unload, deliberately *without* clearing the
+        # field -- the object stays reusable.
+        pipe.unload()
+        assert worker._text2image is pipe and not pipe.loaded
+
+        state["free"] = 0.0
+        with pytest.raises(RuntimeError, match="host memory"):
+            await worker._acquire_t2i(
+                models.BASE_MODELS[models.DEFAULT_BASE_MODEL],
+                models.DEFAULT_BASE_MODEL,
+            )
+
+        # With room, the same acquire reuses the retained object -- the check
+        # gates the load, it does not evict the identity.
+        state["free"] = 40.0
+        again, _handoff = await worker._acquire_t2i(
+            models.BASE_MODELS[models.DEFAULT_BASE_MODEL], models.DEFAULT_BASE_MODEL
+        )
+        assert again is pipe
     finally:
         worker.store.close()
 

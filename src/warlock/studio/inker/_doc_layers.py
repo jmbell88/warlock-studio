@@ -14,6 +14,7 @@ import numpy as np
 
 from . import composite as cp
 from . import groups as gp
+from . import index_plane as ixp
 from .anim_edits import (
     CelSetEdit,
     TrackAddEdit,
@@ -35,7 +36,6 @@ from .undo import (
     LayerMoveEdit,
     LayerPropsEdit,
     LayerRemoveEdit,
-    PatchEdit,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -126,7 +126,21 @@ class LayerOps:
             )
             return self.stack[self.stack.active_index]
         width, height = self.size
-        layer = Layer.empty(width, height, name or f"Layer {len(self.stack) + 1}")
+        layer = Layer(
+            pixels=cp.empty(width, height),
+            # A fresh layer in an indexed document is a plane of the
+            # transparent index -- ``_ensure_cel_for``'s rule for a fresh cel,
+            # which the still branch has to agree with. Left ``None``, every
+            # stroke on the new layer would fall through the funnel's RGBA
+            # path, ``check_materialized`` would silently skip it, and the ORA
+            # writer would store RGBA under a mode that promises slots.
+            indices=(
+                None
+                if self.color_mode != "indexed"
+                else np.full((height, width), self.transparent_index, dtype=np.uint8)
+            ),
+            name=name or f"Layer {len(self.stack) + 1}",
+        )
         index = self.stack.insert(self.stack.active_index + 1, layer)
         self.invalidate_all()
         self._push_with_inheritance(LayerAddEdit(index, layer), parent)
@@ -339,6 +353,32 @@ class LayerOps:
         self.invalidate_all()
         return True
 
+    def _resolved_plane(self: Document, pixels: np.ndarray) -> np.ndarray | None:
+        """The index plane a freshly *minted* layer needs, or ``None`` outside
+        indexed mode.
+
+        Every op that mints a ``Layer`` from computed pixels inside a
+        still-indexed document -- a flatten, a track merge, a paste-as-layer --
+        has to give it a plane, because a planeless layer in an indexed
+        document is a silent gap: ``check_materialized`` skips it,
+        ``palette_usage`` falls back to the colour histogram, and the ORA
+        writer stores it as RGBA in an archive that claims indexed, so
+        duplicate-slot identity is quietly lost on the next open.
+
+        The resolution is the funnel's own (:func:`.index_plane.resolve`, no
+        ``prefer`` -- output no gesture authored has no paint slot to express),
+        and ``pixels`` is rewritten **in place** to the materialisation, so the
+        minted layer is born already agreeing with its plane -- soft alpha a
+        composite produced is thresholded here exactly as a committed stroke's
+        would be.
+        """
+        if self.color_mode != "indexed" or not self.palette:
+            return None
+        table = self._index_lut()
+        indices = ixp.resolve(pixels, table, self.transparent_index)
+        pixels[...] = ixp.materialize(indices, table)
+        return indices
+
     def merge_down(self: Document, index: int | None = None) -> bool:
         """Flatten a layer into the one beneath it, honouring its blend mode."""
         index = self.stack.active_index if index is None else index
@@ -373,6 +413,15 @@ class LayerOps:
         )
         before = lower.pixels.copy()
         lower.pixels[:] = merged
+        # Through the funnel's list-returning sibling rather than a raw
+        # ``PatchEdit``: the merge is a write into the lower layer like any
+        # other, so the colour mode applies -- and on an indexed document the
+        # lower's index plane has to be re-resolved from the merged pixels, or
+        # it goes on describing the pre-merge picture while the upper layer is
+        # gone: the save writes pre-merge indices and the merged artwork is
+        # silently lost. ``None`` (a merge that changed no slot) still removes
+        # the upper row; there is simply no pixel step to record.
+        patch = self._patch_edit_for(lower, (0, 0, width, height), before)
         # The merged result already has the lower layer's opacity baked into
         # it, so leaving that applied a second time would double it. Its blend
         # mode is *dropped* rather than absorbed -- there is nothing here for
@@ -388,7 +437,7 @@ class LayerOps:
         self.history.push(
             CompoundEdit(
                 [
-                    PatchEdit(lower.uid, (0, 0, width, height), before, merged.copy()),
+                    *([patch] if patch is not None else []),
                     LayerPropsEdit(
                         lower.uid, props_before, {"opacity": 1.0, "blend": "normal"}
                     ),
@@ -455,8 +504,13 @@ class LayerOps:
                     entries.append((lower.pixels, lower_track.opacity, lower_track.blend))
                 if upper_track.visible:
                     entries.append((upper.pixels, upper_track.opacity, upper_track.blend))
+                merged = cp.to_uint8(cp.stack_region(entries, (0, 0, width, height)))
+                # ``_resolved_plane``: a cel minted inside an indexed document
+                # is born with its index plane, or the save silently records
+                # RGBA under a mode that promises slots.
                 layer = Layer(
-                    pixels=cp.to_uint8(cp.stack_region(entries, (0, 0, width, height))),
+                    pixels=merged,
+                    indices=self._resolved_plane(merged),
                     name=lower_track.name,
                 )
                 merged_for[key] = layer
@@ -574,7 +628,12 @@ class LayerOps:
             # fold, or a hidden folder's layers reappear in the flattened cel.
             # Necessarily *before* the tree is cleared below.
             flat = self.frame_stack(frame).flatten()
-            layer = Layer(pixels=flat, name=track.name, uid=uid)
+            # ``_resolved_plane``, for ``_do_flatten``'s reason -- and per
+            # link-group, so two frames sharing one flattened cel share one
+            # plane, exactly as they share the pixels.
+            layer = Layer(
+                pixels=flat, indices=self._resolved_plane(flat), name=track.name, uid=uid
+            )
             for i in indices:
                 cels[(track_uid, anim.frames[i].uid)] = layer
         anim.tracks = [track]
@@ -634,9 +693,17 @@ class LayerOps:
             layer.pixels[:, :, 3] = cp.to_uint8_255(
                 layer.pixels[:, :, 3].astype(np.float32) * weight
             )
-            if np.array_equal(before, layer.pixels):
+            # The funnel's list-returning sibling, not a raw ``PatchEdit``: on
+            # an indexed document a cut-out pixel has to become the transparent
+            # index in the layer's plane, or the plane keeps the colour slot
+            # and the save resurrects everything the matte removed. It also
+            # owns the no-op test -- an indexed layer whose every pixel stayed
+            # over the threshold resolves to the same slots, contributes no
+            # step, and has its materialisation already put back.
+            edit = self._patch_edit_for(layer, rect, before)
+            if edit is None:
                 continue
-            edits.append(PatchEdit(layer.uid, rect, before, layer.pixels.copy()))
+            edits.append(edit)
         if not edits:
             return False
         self.history.push(CompoundEdit(edits))
@@ -649,7 +716,13 @@ class LayerOps:
 
     def _do_flatten(self: Document, uid: int) -> None:
         flat = self.stack.flatten()
-        self.stack = LayerStack([Layer(pixels=flat, name="Flattened", uid=uid)], 0)
+        # ``_resolved_plane``: the one layer an indexed document is left with
+        # must carry a plane, or the whole document is "indexed" with nothing
+        # indexed in it. Deterministic, which replay requires.
+        indices = self._resolved_plane(flat)
+        self.stack = LayerStack(
+            [Layer(pixels=flat, indices=indices, name="Flattened", uid=uid)], 0
+        )
         # One layer is nothing for a group to hold, so the tree goes with them.
         # Idempotent, which replay requires; ``ReplayEdit`` carries the tree it
         # replaced and puts it back.

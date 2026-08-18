@@ -740,3 +740,26 @@ def test_an_error_body_is_streamed_and_capped_like_a_success_body(tmp_path, monk
     with pytest.raises(RuntimeError, match="trellis-server 500"):
         asyncio.run(server.generate(image, tmp_path / "out.glb"))
     assert consumed["bytes"] <= 64, "the whole body was read despite the cap"
+
+
+def test_atomic_write_stages_through_a_dotfile(tmp_path, monkeypatch):
+    """The staged-writes rule: the staging sibling is a dotfile, not a visible
+    ``source.glbXXXX.tmp`` beside the served name."""
+    import os
+    from pathlib import Path
+
+    staged: list[str] = []
+    real_replace = os.replace
+
+    def spy(src, dst):
+        staged.append(Path(src).name)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(trellis_mod.os, "replace", spy)
+    dest = tmp_path / "source.glb"
+    trellis_mod._atomic_write(dest, b"payload")
+
+    assert dest.read_bytes() == b"payload"
+    assert staged and staged[0].startswith(".source.glb.")
+    assert staged[0].endswith(".tmp")
+    assert [p.name for p in tmp_path.iterdir()] == ["source.glb"]

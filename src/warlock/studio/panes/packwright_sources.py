@@ -35,13 +35,15 @@ def draw(ctx: Any) -> None:
     if widgets.disabled_button(f"{icons.PLUS} Add an image...", editable, (-1, 0)):
         packwright_mode.ask_add_sources(ctx)
 
-    if widgets.disabled_button(f"{icons.GRID} Add a tile set...", editable, (-1, 0)):
+    if widgets.disabled_button(
+        f"{icons.GRID} Add a tile set...",
+        editable,
+        (-1, 0),
+        tooltip="Loads an already-made tile sheet, slices it on a grid you "
+        "set, drops the empty cells, and packs what is left -- so a sparse "
+        "sheet comes back as a smaller one.",
+    ):
         packwright_mode.ask_add_tileset(ctx)
-    widgets.help_marker(
-        "Loads an already-made tile sheet, slices it on a grid you set, drops "
-        "the empty cells, and packs what is left -- so a sparse sheet comes "
-        "back as a smaller one."
-    )
     if state.tileset_import is not None and not state.tileset_import_open:
         state.tileset_import_open = True
         imgui.open_popup(TILESET_POPUP)

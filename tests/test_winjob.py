@@ -169,3 +169,43 @@ def test_terminate_tracked_actually_stops_a_live_child():
         if proc.poll() is None:  # pragma: no cover - only if terminate failed
             proc.kill()
             proc.wait(timeout=10)
+
+
+def test_terminate_tracked_can_be_scoped_to_one_kind_of_child():
+    """The download Cancel button's contract: stop the fetch child by its
+    "fetch" prefix and leave a live Blender bake or the persistent matting
+    worker alone. Shutdown keeps the no-argument kill-everything semantics."""
+    winjob.track(999_999_006, "fetch acme/model")
+    winjob.track(999_999_007, "blender worker")
+    try:
+        winjob.terminate_tracked("fetch")
+        live = winjob.tracked()
+        assert 999_999_006 not in live
+        assert live.get(999_999_007) == "blender worker"
+    finally:
+        winjob.untrack(999_999_006)
+        winjob.untrack(999_999_007)
+
+
+@windows_only
+def test_a_scoped_terminate_does_not_stop_the_other_live_child():
+    keep = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    stop = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    try:
+        winjob.track(keep.pid, "blender worker")
+        winjob.track(stop.pid, "fetch acme/model")
+        assert winjob.terminate_tracked("fetch") == [stop.pid]
+        assert stop.wait(timeout=10) is not None
+        assert keep.poll() is None, "the bake was killed by a download Cancel"
+    finally:
+        for proc in (keep, stop):
+            winjob.untrack(proc.pid)
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=10)

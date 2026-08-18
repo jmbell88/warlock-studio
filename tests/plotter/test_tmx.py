@@ -598,3 +598,26 @@ def test_only_the_locked_layer_carries_the_attribute():
     assert files["map.tmx"].count(b'locked="1"') == 1
     back = tmx.read_tmx(files["map.tmx"], **_loaders(files))
     assert [layer.locked for layer in back.layers] == [True, False]
+
+
+def test_an_image_layer_name_collision_never_clobbers_the_other_layers_bytes():
+    """Layer B's fallback name is exactly layer A's declared safe source, so
+    the collision branch used to recompute the *same* string and overwrite A's
+    bytes -- the export showed one layer's picture on both."""
+    from warlock.studio.plotter.pngio import png_bytes
+
+    doc = MapDoc(4, 4, 16, 16)
+    a_pixels = _pixels(8, 8)
+    b_pixels = _pixels(8, 8)
+    b_pixels[1, 1] = (11, 22, 33, 255)
+    doc.add_image_layer("first", pixels=a_pixels, source="images/01-image.png")
+    doc.add_image_layer("image", pixels=b_pixels, source="")
+
+    files = tmx.tmx_export(doc)
+    root = ET.fromstring(files["map.tmx"])
+    sources = [
+        node.find("image").get("source") for node in root.findall("imagelayer")
+    ]
+    assert len(set(sources)) == 2, "the two layers must reference two files"
+    assert files[sources[0]] == png_bytes(a_pixels)
+    assert files[sources[1]] == png_bytes(b_pixels)

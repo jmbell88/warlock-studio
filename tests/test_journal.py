@@ -108,6 +108,7 @@ def test_a_copy_is_a_payload_and_a_sidecar(tmp_path, kind):
     ctx = _Ctx(tmp_path)
     slot = _Slot()
     kind.slots.append(slot)
+    journal.pump(ctx, now=1.0)  # first sight arms the debounce
     journal.pump(ctx, now=journal.JOURNAL_SECONDS + 1.0)
     payload = tmp_path / slot.journal_name
     assert payload.read_bytes() == b"a"
@@ -142,16 +143,54 @@ def test_both_files_go_through_a_temp_name(tmp_path):
     assert all(src.startswith(".") and src.endswith(".tmp") for src, _dst in replaced)
 
 
+def test_a_failed_write_does_not_strand_its_staging_file(tmp_path, monkeypatch):
+    """The staged-write rule's second half (``service/derive.py::_staged``): a
+    staging file is a dotfile and nothing ever sweeps one, so the unlink has to
+    sit in a ``finally`` or a failed encode leaves it beside the journal for
+    good."""
+    import warlock.studio.journal as mod
+
+    # The payload's own write failing: non-bytes data raises inside write_bytes.
+    with pytest.raises(TypeError):
+        mod._write_pair(tmp_path / "x.probe", None, {"version": journal.VERSION})
+    assert list(tmp_path.glob(".*")) == []
+
+    # And the sidecar's replace failing after the payload already landed.
+    original = mod.os.replace
+
+    def full_disk(src, dst):
+        if str(dst).endswith(journal.META_SUFFIX):
+            raise OSError("disk full")
+        return original(src, dst)
+
+    monkeypatch.setattr(mod.os, "replace", full_disk)
+    with pytest.raises(OSError):
+        mod._write_pair(tmp_path / "y.probe", b"body", {"version": journal.VERSION})
+    monkeypatch.setattr(mod.os, "replace", original)
+    assert (tmp_path / "y.probe").exists(), "the payload half still landed whole"
+    assert not journal.meta_path(tmp_path / "y.probe").exists()
+    assert list(tmp_path.glob(".*")) == [], "no .tmp stranded by the failure"
+
+
 # --- the loop -----------------------------------------------------------------
 
 
 def test_nothing_is_written_before_the_interval(tmp_path, kind):
-    """From zero, not from the first copy: a document dirtied in the first two
-    minutes of a session waits like every other one."""
+    """From first-dirty, on the clock production actually runs on.
+
+    ``pump``'s default stamp is ``time.monotonic()``, which is *boot*-relative
+    -- hours or days, never seconds -- so a debounce that compared it against
+    ``Mark``'s 0.0 default was a no-op outside a test with a synthetic session
+    clock: the very first pump after an edit wrote. The first pump that sees a
+    dirty slot arms the clock instead, and the copy comes JOURNAL_SECONDS
+    later."""
     ctx = _Ctx(tmp_path)
     kind.slots.append(_Slot())
-    assert journal.pump(ctx, now=0.0) == 0
+    boot = 3 * 86_400.0  # the shape monotonic really has: days of uptime
+    assert journal.pump(ctx, now=boot) == 0, "first sight arms, never writes"
+    assert journal.pump(ctx, now=boot + journal.JOURNAL_SECONDS - 1.0) == 0
     assert ctx.submitted == []
+    assert journal.pump(ctx, now=boot + journal.JOURNAL_SECONDS + 1.0) == 1
 
 
 def test_an_unchanged_slot_is_not_rewritten(tmp_path, kind):
@@ -175,10 +214,12 @@ def test_a_refused_submit_is_retried_rather_than_recorded_as_done(tmp_path, kind
     ctx = _Ctx(tmp_path, accept=False)
     slot = _Slot()
     kind.slots.append(slot)
-    journal.pump(ctx, now=200.0)
+    journal.pump(ctx, now=100.0)  # arm
+    journal.pump(ctx, now=300.0)  # due; the submit is refused
+    assert ctx.submitted == ["journal:probe:s1"]
     assert slot.journal_name == "" and slot.journal_head is None
     ctx.accept = True
-    journal.pump(ctx, now=400.0)
+    journal.pump(ctx, now=500.0)
     assert slot.journal_name
 
 
@@ -199,6 +240,7 @@ def test_one_broken_provider_does_not_stop_the_others(tmp_path, kind):
     journal.register(broken)
     ctx = _Ctx(tmp_path)
     kind.slots.append(_Slot())
+    journal.pump(ctx, now=9_000.0)  # arm
     assert journal.pump(ctx, now=10_000.0) == 1
 
 
@@ -216,6 +258,7 @@ def test_an_encode_that_raises_writes_nothing_and_does_not_mark(tmp_path, kind):
             **{**kind.provider.__dict__, "encode": boom},
         )
     )
+    journal.pump(ctx, now=9_000.0)  # arm
     journal.pump(ctx, now=10_000.0)
     assert ctx.submitted == []
     assert slot.journal_name == ""
@@ -228,6 +271,7 @@ def test_dropping_removes_both_files_and_forgets_the_mark(tmp_path, kind):
     ctx = _Ctx(tmp_path)
     slot = _Slot()
     kind.slots.append(slot)
+    journal.pump(ctx, now=9_000.0)  # arm
     journal.pump(ctx, now=10_000.0)
     payload = tmp_path / slot.journal_name
     journal.drop(ctx, slot)
@@ -245,6 +289,7 @@ def test_dropping_a_copy_already_gone_does_not_raise(tmp_path, kind):
     ctx = _Ctx(tmp_path)
     slot = _Slot()
     kind.slots.append(slot)
+    journal.pump(ctx, now=9_000.0)  # arm
     journal.pump(ctx, now=10_000.0)
     (tmp_path / slot.journal_name).unlink()
     journal.drop(ctx, slot)
@@ -268,6 +313,7 @@ def test_a_write_still_queued_when_the_copy_is_dropped_does_not_resurrect_it(tmp
     ctx.submit = defer
     slot = _Slot()
     kind.slots.append(slot)
+    journal.pump(ctx, now=9_000.0)  # arm
     journal.pump(ctx, now=10_000.0)
     name = slot.journal_name
     assert name and len(queued) == 1
@@ -285,13 +331,90 @@ def test_a_fresh_copy_taken_after_a_drop_still_writes(tmp_path, kind):
     ctx = _Ctx(tmp_path)
     slot = _Slot()
     kind.slots.append(slot)
+    journal.pump(ctx, now=9_000.0)  # arm
     journal.pump(ctx, now=10_000.0)
     journal.drop(ctx, slot)
     slot.head = 2
-    journal.pump(ctx, now=20_000.0)
+    journal.pump(ctx, now=20_000.0)  # re-arm after the drop
+    journal.pump(ctx, now=20_000.0 + journal.JOURNAL_SECONDS + 1.0)
     payload = tmp_path / slot.journal_name
     assert payload.read_bytes() == b"a"
     assert journal.meta_path(payload).exists()
+
+
+def test_a_drop_re_arms_the_debounce_rather_than_re_firing_it(tmp_path, kind):
+    """``drop`` resets the mark to its never-seen default, and on the
+    boot-relative production clock a zeroed ``at`` used to mean the *next*
+    dirty pump wrote immediately -- a copy taken mid-first-stroke of the very
+    document the user just saved. A dropped slot waits the full interval from
+    the pump that next sees it dirty, like any other one."""
+    ctx = _Ctx(tmp_path)
+    slot = _Slot()
+    kind.slots.append(slot)
+    journal.pump(ctx, now=9_000.0)  # arm
+    journal.pump(ctx, now=10_000.0)
+    journal.drop(ctx, slot)
+    slot.head = 2
+    assert journal.pump(ctx, now=20_000.0) == 0, "first sight after the drop arms"
+    assert journal.pump(ctx, now=20_000.0 + journal.JOURNAL_SECONDS - 1.0) == 0
+    assert journal.pump(ctx, now=20_000.0 + journal.JOURNAL_SECONDS + 1.0) == 1
+
+
+def test_dropping_one_document_does_not_wait_on_anothers_write(tmp_path, kind, monkeypatch):
+    """``drop`` runs on the frame thread, and the frame loop never blocks. The
+    write task holds a lock across its whole disk write so a drop of the *same*
+    document removes what it just wrote -- but that lock is per payload name,
+    because a module-wide one parked closing a saved sketch behind an unrelated
+    map's multi-MB write."""
+    import threading
+
+    import warlock.studio.journal as mod
+
+    ctx = _Ctx(tmp_path)
+    queued: list[Any] = []
+    ctx.submit = lambda key, run, *a, **k: (queued.append(run), True)[1]
+    a, b = _Slot(uid="a", title="doc-a"), _Slot(uid="b", title="doc-b")
+    kind.slots.extend([a, b])
+    journal.pump(ctx, now=9_000.0)  # arm both
+    journal.pump(ctx, now=10_000.0)
+    assert len(queued) == 2 and a.journal_name and b.journal_name
+
+    entered, gate = threading.Event(), threading.Event()
+    real = mod._write_pair
+
+    def slow(payload, data, meta):
+        if b.journal_name in payload.name or payload.name == b.journal_name:
+            entered.set()
+            assert gate.wait(10.0)
+        return real(payload, data, meta)
+
+    monkeypatch.setattr(mod, "_write_pair", slow)
+    b_writer = threading.Thread(target=queued[1], daemon=True)  # b's queued write
+    b_writer.start()
+    assert entered.wait(10.0), "b's write is in flight and holding its own lock"
+
+    dropped = threading.Event()
+    dropper = threading.Thread(
+        target=lambda: (journal.drop(ctx, a), dropped.set()), daemon=True
+    )
+    dropper.start()
+    assert dropped.wait(10.0), "dropping a must not wait for b's write to land"
+    assert entered.is_set() and not gate.is_set(), "b's write was still in flight"
+
+    # And the same-name half of the contract survives the narrowing: dropping b
+    # waits for b's own in-flight write, so the unlinks remove what it wrote.
+    b_name = b.journal_name
+    b_dropped = threading.Event()
+    b_dropper = threading.Thread(
+        target=lambda: (journal.drop(ctx, b), b_dropped.set()), daemon=True
+    )
+    b_dropper.start()
+    assert not b_dropped.wait(0.3), "b's drop waits on b's own write"
+    gate.set()
+    assert b_dropped.wait(10.0)
+    b_writer.join(10.0)
+    assert not (tmp_path / b_name).exists(), "the drop removed what the write landed"
+    assert list(tmp_path.glob("*.probe")) == [], "both pairs are gone"
 
 
 # --- the offer ----------------------------------------------------------------
@@ -385,6 +508,7 @@ def test_a_crash_between_the_copy_and_the_next_launch_gives_the_work_back(tmp_pa
     first = _Ctx(tmp_path)
     slot = _Slot(title="work in progress", body=b"the pixels")
     kind.slots.append(slot)
+    journal.pump(first, now=1.0)  # first sight arms the debounce
     journal.pump(first, now=journal.JOURNAL_SECONDS + 1.0)
     del first  # the crash
 
@@ -405,6 +529,7 @@ def test_the_status_line_is_computed_rather_than_promised(tmp_path, kind):
     ctx = _Ctx(tmp_path)
     assert "No unsaved work" in journal.status_line(ctx)
     kind.slots.append(_Slot())
+    journal.pump(ctx, now=9_000.0)  # arm
     journal.pump(ctx, now=10_000.0)
     line = journal.status_line(ctx)
     assert "1 unsaved document" in line

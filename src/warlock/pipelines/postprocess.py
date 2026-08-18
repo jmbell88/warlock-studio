@@ -242,14 +242,13 @@ def normalize_glb(glb_path: Path, target_max_m: float | None) -> dict[str, Any]:
     nodes = gltf.setdefault("nodes", [])
     for root in gltf_scene.get("nodes", []):
         _insert_transform_below(nodes, root, factor, translation)
-    # Write to a temp file and rename into place instead of write_bytes(),
-    # which opens "wb" and truncates glb_path to 0 bytes before writing --
-    # a concurrent reader (the file-serving route, or another export) could
-    # observe a half-written file. os.replace is an atomic rename on both
-    # POSIX and Windows as long as tmp and glb_path share a filesystem.
-    tmp = glb_path.with_suffix(".glb.tmp")
-    tmp.write_bytes(_rebuild_glb(header, gltf, rest))
-    os.replace(tmp, glb_path)
+    # Staged, not write_bytes(), which opens "wb" and truncates glb_path to 0
+    # bytes before writing -- a concurrent reader (the file-serving route, or
+    # another export) could observe a half-written file. _staged is the house
+    # pattern: a dotfile beside the destination, os.replace on clean exit, and
+    # the unlink in a finally so a failed rebuild strands nothing.
+    with _staged(glb_path) as tmp:
+        tmp.write_bytes(_rebuild_glb(header, gltf, rest))
     return {
         "scale": factor,
         "translation": translation,

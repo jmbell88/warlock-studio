@@ -178,3 +178,104 @@ def test_a_remesh_is_not_refused_for_image_model_weights(svc, monkeypatch):
 
     new = svc_jobs.rerun_job(svc, job_id, mode="remesh")
     assert svc.store.get(new["id"])["kind"] == "image"
+
+
+# --- the restyle kinds: what a reroll may and may not inherit -----------------
+
+
+def _sprite_job(svc) -> str:
+    """A finished ``sprite_synthesis`` row carrying the params its door writes."""
+    from warlock import rigging
+    from warlock.service import sprites as svc_sprites
+
+    ref = _reference(svc)
+    params = {
+        "source_job": ref,
+        "sheet_type": "turnaround",
+        "logical_size": 64,
+        "colors": 32,
+        "seed_a": 11,
+        "seed_b": 12,
+        "draft_id": rigging.new_id(),
+        "base_model": svc_sprites.SPRITE_BASE_MODEL,
+    }
+    job_id = svc.store.create("sprite_synthesis", "a barrel", params)
+    svc.store.set_status(job_id, "done")
+    return job_id
+
+
+def test_a_sprite_reroll_mints_a_fresh_draft_id(svc):
+    """``draft_id`` names the trio this job publishes into the *source
+    reference's* directory, and it is minted at the door rather than recorded
+    by the worker -- so DERIVED_PARAMS never stripped it. Copied verbatim, a
+    cancelled reroll made ``_discard_artifacts`` delete the original job's
+    published trio, and a finished one silently overwrote it."""
+    from warlock import rigging
+
+    job_id = _sprite_job(svc)
+    old = svc.store.get(job_id)["params"]["draft_id"]
+    new = svc_jobs.rerun_job(svc, job_id, mode="reroll")
+    minted = svc.store.get(new["id"])["params"]["draft_id"]
+    assert rigging.is_valid_id(minted)
+    assert minted != old
+
+
+def test_a_sprite_reroll_rerolls_the_pair_the_worker_samples_from(svc):
+    """The worker reads ``seed_a``/``seed_b``; the generic ``seed`` is never
+    read by this kind, so copying the pair verbatim made "give me another"
+    reproduce a byte-identical sheet."""
+    job_id = _sprite_job(svc)
+    new = svc_jobs.rerun_job(svc, job_id, mode="reroll", seed=999)
+    params = svc.store.get(new["id"])["params"]
+    assert params["seed_a"] == 999, "a pinned seed lands on the first candidate"
+    assert params["seed_b"] != 999, "the pair must stay distinct"
+    assert (params["seed_a"], params["seed_b"]) != (11, 12)
+
+
+def test_a_sprite_reroll_readmits_the_weights(svc, monkeypatch):
+    """``check_weights`` is text-only, and both adapters plus the pixel LoRA
+    are mandatory for this kind: pruned since the original ran, the reroll must
+    be refused at the door rather than dispatched into a runtime failure --
+    the door-side check is ``sprites._check_weights``, held again here."""
+    from warlock import fetch
+
+    job_id = _sprite_job(svc)
+    monkeypatch.setattr(fetch, "present", lambda *a, **k: False)
+    with pytest.raises(Invalid) as exc:
+        svc_jobs.rerun_job(svc, job_id, mode="reroll")
+    assert exc.value.field in ("ip_adapter", "control", "style_lora")
+
+
+def _pixel_sheet_job(svc) -> str:
+    """A finished ``pixel_sheet`` row carrying the params its door writes."""
+    from warlock import rigging
+
+    render = _reference(svc)  # stands in for the sheet render's source job
+    params = {
+        "source_job": render,
+        "sheet_id": rigging.new_id(),
+        "logical_size": 32,
+        "colors": 32,
+        "strength": 0.5,
+        "structure_lock": True,
+        "seed": 7,
+        "base_model": "sdxl_cfg",
+    }
+    job_id = svc.store.create("pixel_sheet", "a barrel", params)
+    svc.store.set_status(job_id, "done")
+    return job_id
+
+
+def test_a_pixel_sheet_reroll_keeps_its_sheet_id(svc):
+    """``sheet_id`` is on DERIVED_PARAMS for the *sheet* render kind, where the
+    worker records it about its artifact; on this kind it is the input naming
+    which sheet the restyle depicts. Stripped, every reroll of a pixel sheet
+    dispatched straight into ``sheet_id is not a sheet id: ''``."""
+    from warlock import rigging
+
+    job_id = _pixel_sheet_job(svc)
+    wanted = svc.store.get(job_id)["params"]["sheet_id"]
+    new = svc_jobs.rerun_job(svc, job_id, mode="reroll")
+    kept = svc.store.get(new["id"])["params"]["sheet_id"]
+    assert kept == wanted
+    assert rigging.is_valid_id(kept)

@@ -1032,6 +1032,30 @@ class AppState:
         self.toast_log.insert(0, entry)
         del self.toast_log[TOAST_LOG_MAX:]
 
+    def toast_once(
+        self,
+        text: str,
+        level: str = "info",
+        action: str | None = None,
+        action_arg: str | None = None,
+    ) -> bool:
+        """:meth:`toast`, unless an identical toast is already on screen.
+
+        For the warnings a gesture can repeat: painting under a hidden layer
+        says one sentence per press, and a multi-click shape tool presses once
+        per vertex, so the unconditional append stacked one copy per click for
+        as long as the user kept clicking. Identity is text plus level over the
+        *live* toasts only -- once the copy on screen has expired the next
+        press earns a fresh one, which is what keeps this a coalesce rather
+        than a once-per-session gag. -> whether a toast was raised.
+        """
+        now = time.monotonic()
+        for entry in self.toasts:
+            if entry.text == text and entry.level == level and not entry.expired(now):
+                return False
+        self.toast(text, level, action, action_arg)
+        return True
+
     def expire_toasts(self) -> None:
         now = time.monotonic()
         self.toasts = [t for t in self.toasts if not t.expired(now)]

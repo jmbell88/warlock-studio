@@ -156,6 +156,36 @@ def rerun_job(
     # finishes at a mesh, so it keeps the default.
     stage = source["stage"] if mode == "reroll" else "model"
 
+    if kind == "pixel_sheet":
+        # ``sheet_id`` sits on DERIVED_PARAMS for the *sheet* render kind,
+        # where the worker records it about the atlas it produced. On this
+        # kind it is an input the door validated -- which sheet the restyle
+        # depicts -- so the strip above must not cost it, or the minted job
+        # dispatches straight into "sheet_id is not a sheet id: ''".
+        params["sheet_id"] = source["params"].get("sheet_id")
+    if kind == "sprite_synthesis":
+        # Reroll only: remesh forced ``kind`` to "image" above (and a sprite
+        # job has no input.png, so it is refused there anyway).
+        from .. import rigging
+
+        # The worker samples from ``seed_a``/``seed_b``; the generic ``seed``
+        # above is never read by this kind, so copying the pair verbatim made
+        # "give me another" reproduce a byte-identical sheet. Same shape as
+        # the door: the first seed honours a pinned request, the second is
+        # drawn until distinct.
+        params["seed_a"] = fresh
+        second = random_seed()
+        while second == fresh:
+            second = random_seed()
+        params["seed_b"] = second
+        # A fresh trio, never the source's: ``draft_id`` names the files this
+        # job publishes into the *source reference's* directory, and it is
+        # minted at the door rather than recorded by the worker -- so it is
+        # not in DERIVED_PARAMS and used to be copied verbatim. Carried over,
+        # a cancelled reroll made ``_discard_artifacts`` delete the original
+        # job's published trio, and a finished one silently overwrote it.
+        params["draft_id"] = rigging.new_id()
+
     # A remesh of a reference is the third door onto a mesh job (create_job
     # and promote_to_model are the other two), and the only one that used to
     # skip admission: the reference was admitted against the SDXL cost alone,
@@ -189,6 +219,17 @@ def rerun_job(
         _check_sheet_weights(
             svc, with_reference=(svc.job_dir(job_id) / "ref.png").exists()
         )
+    if kind == "sprite_synthesis":
+        # The same door ``create_sprite_synthesis`` holds, held again on the
+        # way back in -- the tile-sheet precedent above, for the same reason:
+        # ``check_weights`` is text-only, and both adapters plus the pixel
+        # LoRA are mandatory for this kind. A reroll can be days later,
+        # against a models directory the user has since pruned; without this
+        # it dispatches into a runtime failure instead of a refusal that
+        # names the download.
+        from .sprites import _check_weights as _check_sprite_weights
+
+        _check_sprite_weights(svc)
     if params.get("sprite_sheet"):
         # The sprite arm's half of the same rule, and it needs saying separately
         # because the job in front of this function is not the one the check is

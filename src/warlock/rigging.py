@@ -575,6 +575,11 @@ def run_worker(
             # pipe that never closes.
             with contextlib.suppress(Exception):
                 proc.wait(timeout=10.0)
+        # Every exit path leaves the child dead or killed, so the registry
+        # entry comes out with it -- winjob's contract is that entries are
+        # removed on reap, or terminate_tracked later opens a recycled pid
+        # with PROCESS_TERMINATE and can kill an unrelated process.
+        winjob.untrack(proc.pid)
 
     output = "\n".join(tail)[-ERROR_TAIL_CHARS:]
     if code != 0:

@@ -657,17 +657,20 @@ def _selection_progress(ctx: Any) -> None:
     if found and found.get("label"):
         widgets.muted(str(found["label"]))
     # Cancel, beside the bar. Every mechanism this needs already existed and
-    # only the button was missing: the fetch child is tracked (``winjob``) so it
-    # can be terminated, the kill-on-close job reaps it, and publication is
-    # staged -- so a cancelled download leaves no half-installed model, just the
-    # staging tree that the next download sweeps. Without it a mistaken 16 GB
-    # fetch on a slow line could be stopped only by quitting the app, because
-    # the timeout is four hours (MDL-14).
+    # only the button was missing: the fetch child is tracked (``winjob``,
+    # under a reason starting with "fetch") so it can be terminated *by that
+    # prefix* -- killing the whole registry here would take a live Blender bake
+    # or the persistent matting worker with it. The kill-on-close job reaps
+    # it, and publication is staged -- so a cancelled download leaves no
+    # half-installed model, just the staging tree that the next download
+    # sweeps. Without it a mistaken 16 GB fetch on a slow line could be
+    # stopped only by quitting the app, because the timeout is four hours
+    # (MDL-14).
     imgui.same_line()
     from ... import winjob
 
     if controls.small_button(f"Cancel##cancel-{key}"):
-        stopped = winjob.terminate_tracked()
+        stopped = winjob.terminate_tracked("fetch")
         ctx.toast(
             "Stopping the download..." if stopped else "Nothing left to stop."
         )
