@@ -38,12 +38,20 @@ PACKAGE = "warlock.studio.inker"
 #: for the *authority* on the sprite-sheet format, so ``version: 1`` cannot come
 #: to mean two subtly different documents. The others predate it -- the shared
 #: undo engine and the native kernel loader, both as headless as this package is.
+#:
+#: ``tiles.py``'s two entries are the tile model reaching for the *other*
+#: shared leaf, ``warlock.studio.tilegrid`` -- the gid word and the sliced-atlas
+#: type. Same reasoning as ``undo.py``'s entry above: a shared leaf is not a
+#: sibling engine (``SIBLING_PACKAGES`` says so explicitly), so this is a
+#: deliberate, permanent addition rather than a drift to chase down later.
 OUTWARD_IMPORTS = {
     ("anim_edits.py", "warlock.studio.undo"),
     ("composite.py", "warlock.native"),
     ("dither.py", "warlock.native"),
     ("selection.py", "warlock.native"),
     ("sheetout.py", "warlock.pipelines"),
+    ("tiles.py", "warlock.studio.tilegrid"),
+    ("tiles.py", "warlock.studio.tilegrid.tileset"),
     ("undo.py", "warlock.studio.undo"),
 }
 
@@ -204,6 +212,7 @@ def test_the_package_imports_with_no_optional_dependency_present():
         sheetout,
         slices,
         textstamp,
+        tiles,
         tiling,
         transform,
         undo,

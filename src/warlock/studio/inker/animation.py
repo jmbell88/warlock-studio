@@ -192,6 +192,18 @@ class Track:
     #: shown; this describes what autovivification *writes*, so a cel has no
     #: use for it and a copy would only be a second answer to drift from.
     continuous: bool = False
+    #: Which tileset (a :class:`~.tiles.TilesetSlot` uid) this track's cels
+    #: draw from, or ``None`` for an ordinary raster track. ``continuous``'s
+    #: shape exactly, and for the same reason: this describes what kind of
+    #: cel :meth:`~.document.Document._ensure_cel_for` autovivifies on this
+    #: row, not how an existing cel is *shown* -- so it is deliberately
+    #: **not** one of the six copied-down properties, **not** in
+    #: :meth:`props`, and **not** in ``TRACK_PROPS``. A tilemap track binds
+    #: exactly one tileset (Aseprite's rule); this field is that binding, is
+    #: authoring state serialized in ``tiles.json``, and is never copied down
+    #: onto a materialised ``Layer`` because a plain ``Layer`` has nowhere to
+    #: put the answer.
+    tileset_uid: int | None = None
     uid: int = field(default_factory=new_uid)
 
     @classmethod

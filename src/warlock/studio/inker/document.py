@@ -60,6 +60,7 @@ from .brush import StrokeState
 from .layers import Layer, LayerStack
 from .selection import Clipboard, FloatingBuffer, SelectionMask
 from .slices import Slice
+from .tiles import TilemapCel, grid_shape
 from .undo import (
     UNDO_BYTES,
     CompoundEdit,
@@ -174,6 +175,21 @@ class Document(
     #: :mod:`.groups`.
     groups: dict[int, Any] = field(default_factory=dict)
     group_of: dict[int, int] = field(default_factory=dict)
+    #: Every tileset this document owns, in insertion order. Document-level
+    #: rather than per-track because tilesets are shared -- two tracks may
+    #: bind the same slot -- and ``Track.tileset_uid`` is what names one of
+    #: these. Typed via ``tiles.TilesetSlot`` at runtime; kept as ``list[Any]``
+    #: here, and looked up by hand in ``_ensure_cel_for``, so this module does
+    #: not have to import ``tiles`` (which reaches for the shared ``tilegrid``
+    #: leaf) just to spell the field's type. See :mod:`.tiles`.
+    tilesets: list[Any] = field(default_factory=list)
+    #: Manual / Auto / Stack -- how a pixel edit on a tilemap cel is routed
+    #: back onto its tileset (Wave 3 chunk 3.3). **View state**, INVARIANTS'
+    #: Wave 3 entry 4: a toolbar toggle passed into a document call per
+    #: gesture must not be able to dirty a document, so this is never
+    #: serialized and never undoable -- ``repr=False`` for ``paint_slot``'s
+    #: reason, it is not part of what the document *is*.
+    tile_behavior: str = field(default="manual", repr=False)
 
     _composite: np.ndarray = field(init=False, repr=False)
     #: Per-frame change counters, keyed by frame uid, for the flatten cache.
@@ -752,60 +768,89 @@ class Document(
             return
         track, frame = anim.tracks[index], anim.frame
         width, height = self.size
-        # A *continuous* track starts its new cels from the nearest earlier
-        # drawing rather than from nothing. Walked backwards from this frame
-        # rather than taken from frame zero: a gap in the middle of a track
-        # must not send the copy all the way to the beginning.
-        #
-        # A copy, not a link -- Aseprite links here and we do not. Linking
-        # would make the first stroke on the new frame edit the old one too,
-        # which is the opposite of "carry it forward and change it", and
-        # linking afterwards is a verb the timeline already has.
-        source = None
-        if track.continuous:
-            for earlier in range(anim.frame_index(frame.uid) - 1, -1, -1):
-                found = anim.cels.get((track.uid, anim.frames[earlier].uid))
-                if found is not None:
-                    source = found
-                    break
-        # Every one of the six track properties, not four: ``alpha_lock`` was
-        # the one left out, and the write that autovivified the cel is normally
-        # one line away from reading it back off the layer -- ``begin_stroke``
-        # samples ``layer.alpha_lock`` immediately after ``_ensure_active_cel``
-        # -- so a missing lock did not merely mislabel the cel, it painted
-        # through "preserve transparency" on the first stroke of every fresh
-        # frame. ``locked`` (the content lock) joined the list for the same
-        # reason and would fail the same way, one door further out.
-        # ``placeholder`` and ``layers_for`` both copy all six; this is the
-        # third copy of that list and it has to agree with them.
-        real = Layer(
-            pixels=cp.empty(width, height) if source is None else source.pixels.copy(),
-            # A fresh cel in an indexed document is a plane of the transparent
-            # index, not of zero: they are only the same slot by coincidence,
-            # and a document whose transparent index is 7 would autovivify a
-            # canvas full of slot 0 -- an opaque rectangle of whatever colour
-            # slot 0 happens to hold, appearing the instant a stroke starts.
+        if track.tileset_uid is not None:
+            # A tilemap track autovivifies a ``TilemapCel``, not a ``Layer``:
+            # ``refs`` all-zero (every cell empty/blank) rather than anything
+            # copied forward -- ``continuous`` describes what a *raster*
+            # track's fresh cel starts from and a tilemap track has no
+            # matching notion yet (Wave 3 chunk 3.3 is where tile edits are
+            # routed). The tile size comes off the bound slot; a track whose
+            # tileset_uid names no slot in ``self.tilesets`` (a file mid-load,
+            # or a bug upstream) falls back to one cell covering the whole
+            # canvas rather than raising out of the middle of a gesture.
+            slot = next((s for s in self.tilesets if s.uid == track.tileset_uid), None)
+            tile_w, tile_h = (
+                (slot.tileset.tile_w, slot.tileset.tile_h) if slot is not None
+                else (width, height)
+            )
+            grid_h, grid_w = grid_shape((width, height), tile_w, tile_h)
+            real: Layer = TilemapCel(
+                pixels=cp.empty(width, height),
+                refs=np.zeros((grid_h, grid_w), dtype=np.uint32),
+                tileset_uid=track.tileset_uid,
+                name=track.name,
+                opacity=track.opacity,
+                visible=track.visible,
+                blend=track.blend,
+                alpha_lock=track.alpha_lock,
+                locked=track.locked,
+                uid=placeholder.uid,
+            )
+        else:
+            # A *continuous* track starts its new cels from the nearest earlier
+            # drawing rather than from nothing. Walked backwards from this frame
+            # rather than taken from frame zero: a gap in the middle of a track
+            # must not send the copy all the way to the beginning.
             #
-            # A continuous copy takes the source's plane instead, indices and
-            # all: copying the pixels alone would leave the two describing
-            # different pictures from the moment the cel existed.
-            indices=(
-                (
-                    None
-                    if self.color_mode != "indexed"
-                    else np.full((height, width), self.transparent_index, dtype=np.uint8)
-                )
-                if source is None
-                else (None if source.indices is None else source.indices.copy())
-            ),
-            name=track.name,
-            opacity=track.opacity,
-            visible=track.visible,
-            blend=track.blend,
-            alpha_lock=track.alpha_lock,
-            locked=track.locked,
-            uid=placeholder.uid,
-        )
+            # A copy, not a link -- Aseprite links here and we do not. Linking
+            # would make the first stroke on the new frame edit the old one too,
+            # which is the opposite of "carry it forward and change it", and
+            # linking afterwards is a verb the timeline already has.
+            source = None
+            if track.continuous:
+                for earlier in range(anim.frame_index(frame.uid) - 1, -1, -1):
+                    found = anim.cels.get((track.uid, anim.frames[earlier].uid))
+                    if found is not None:
+                        source = found
+                        break
+            # Every one of the six track properties, not four: ``alpha_lock`` was
+            # the one left out, and the write that autovivified the cel is normally
+            # one line away from reading it back off the layer -- ``begin_stroke``
+            # samples ``layer.alpha_lock`` immediately after ``_ensure_active_cel``
+            # -- so a missing lock did not merely mislabel the cel, it painted
+            # through "preserve transparency" on the first stroke of every fresh
+            # frame. ``locked`` (the content lock) joined the list for the same
+            # reason and would fail the same way, one door further out.
+            # ``placeholder`` and ``layers_for`` both copy all six; this is the
+            # third copy of that list and it has to agree with them.
+            real = Layer(
+                pixels=cp.empty(width, height) if source is None else source.pixels.copy(),
+                # A fresh cel in an indexed document is a plane of the transparent
+                # index, not of zero: they are only the same slot by coincidence,
+                # and a document whose transparent index is 7 would autovivify a
+                # canvas full of slot 0 -- an opaque rectangle of whatever colour
+                # slot 0 happens to hold, appearing the instant a stroke starts.
+                #
+                # A continuous copy takes the source's plane instead, indices and
+                # all: copying the pixels alone would leave the two describing
+                # different pictures from the moment the cel existed.
+                indices=(
+                    (
+                        None
+                        if self.color_mode != "indexed"
+                        else np.full((height, width), self.transparent_index, dtype=np.uint8)
+                    )
+                    if source is None
+                    else (None if source.indices is None else source.indices.copy())
+                ),
+                name=track.name,
+                opacity=track.opacity,
+                visible=track.visible,
+                blend=track.blend,
+                alpha_lock=track.alpha_lock,
+                locked=track.locked,
+                uid=placeholder.uid,
+            )
         anim.cels[(track.uid, frame.uid)] = real
         self.stack.layers[index] = real
         self._pending_cels.append(
