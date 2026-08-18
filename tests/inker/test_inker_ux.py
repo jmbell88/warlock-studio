@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from warlock.studio import inker_state, theme, tokens
-from warlock.studio.panes import inker_textures, inker_tools
+from warlock.studio import inker_mode, inker_state, theme, tokens
+from warlock.studio.panes import inker_canvas, inker_textures, inker_tools
 
 STUDIO = Path(inker_tools.__file__).resolve().parent.parent
 PANES = sorted((STUDIO / "panes").glob("*.py"))
@@ -282,3 +282,143 @@ def test_the_accent_line_about_a_live_transform_wraps() -> None:
     source = Path(inker_tools.__file__).read_text(encoding="utf-8")
     assert 'widgets.wrapped(theme.ACCENT, "Transforming' in source
     assert hasattr(theme, "ACCENT")
+
+
+# --- the Aseprite letters ----------------------------------------------------
+
+
+def test_the_letter_table_is_derived_from_the_toolbox() -> None:
+    """Two hand-kept tables of twenty-three entries were one table too many.
+
+    ``plotter_state`` had already replaced the arrangement with a derivation;
+    this is the same one line, so a letter cannot be changed in the toolbox and
+    left behind in the dispatcher.
+    """
+    derived = {letter.lower(): key for key, _label, letter in inker_state.TOOLS}
+    assert derived == inker_mode.TOOL_KEYS
+
+
+def test_every_tool_has_a_letter_and_no_two_share_one() -> None:
+    letters = [letter.lower() for _key, _label, letter in inker_state.TOOLS]
+    assert len(letters) == len(set(letters))
+    assert len(inker_mode.TOOL_KEYS) == len(inker_state.TOOLS)
+
+
+def test_aseprites_line_and_rectangle_letters_reach_the_line_and_rectangle() -> None:
+    """The two that were being squatted.
+
+    Letters were handed out in toolbox order, so ``L`` had gone to the polyline
+    and ``U`` to the gradient before the line and the rectangle were reached. A
+    hand trained on Aseprite pressing ``L`` for a line got a polyline -- not a
+    near miss but a different *gesture*, click-click-Enter instead of a drag.
+    """
+    assert inker_mode.TOOL_KEYS["l"] == "line"
+    assert inker_mode.TOOL_KEYS["u"] == "rect"
+
+
+def test_the_displaced_tools_took_the_letters_that_were_vacated() -> None:
+    assert inker_mode.TOOL_KEYS["p"] == "polyline"
+    assert inker_mode.TOOL_KEYS["k"] == "gradient"
+
+
+def test_every_shifted_letter_names_a_real_tool() -> None:
+    """Aseprite's slot-mates, added beside the plain letters rather than
+    instead of them: a hand trained there finds what it reaches for and a hand
+    trained here keeps what it had."""
+    tools = {key for key, _label, _letter in inker_state.TOOLS}
+    for letter, tool in inker_mode.SHIFT_TOOL_KEYS.items():
+        assert tool in tools, letter
+        assert len(letter) == 1 and letter.islower()
+    assert set(inker_mode.ALT_TOOL_CHORDS) == set(
+        inker_mode.SHIFT_TOOL_KEYS.values()
+    )
+
+
+# --- the zoom ladder ---------------------------------------------------------
+
+
+def test_every_rung_above_one_to_one_is_a_whole_scale() -> None:
+    """The rule the keyboard zoom exists for.
+
+    At 135% a source pixel is 1.35 screen pixels, so the renderer draws some of
+    them one pixel wide and some two and a checkerboard dither comes out as
+    bands. Every rung at or above 1:1 maps one source pixel onto a whole number
+    of screen pixels.
+    """
+    for rung in inker_state.ZOOM_LADDER:
+        if rung >= 1.0:
+            assert rung == int(rung), rung
+        else:
+            assert (1.0 / rung) == int(1.0 / rung), rung
+
+
+def test_the_ladder_is_sorted_and_inside_the_panes_bounds() -> None:
+    ladder = inker_state.ZOOM_LADDER
+    assert list(ladder) == sorted(ladder)
+    assert ladder[0] >= inker_state.INKER_MIN_ZOOM
+    assert ladder[-1] <= inker_state.INKER_MAX_ZOOM
+
+
+def test_a_rung_step_goes_strictly_past_the_current_zoom() -> None:
+    """Not nearest-then-step: a view sitting at 135% zooms *out* to 100% and
+    *in* to 200%, rather than snapping sideways to 100% on a press labelled
+    "in"."""
+    assert inker_state.zoom_rung(1.35, +1) == 2.0
+    assert inker_state.zoom_rung(1.35, -1) == 1.0
+    assert inker_state.zoom_rung(1.0, +1) == 2.0
+    assert inker_state.zoom_rung(1.0, -1) == 0.5
+
+
+def test_the_ladder_holds_at_both_ends() -> None:
+    ladder = inker_state.ZOOM_LADDER
+    assert inker_state.zoom_rung(ladder[-1], +1) == ladder[-1]
+    assert inker_state.zoom_rung(ladder[0], -1) == ladder[0]
+
+
+def test_the_wheel_still_moves_in_five_percent_notches() -> None:
+    """The keyboard took the ladder; the wheel is the *fine* control and keeps
+    what it had. Aseprite splits the two the same way round."""
+    assert inker_state.ZOOM_PERCENT_STEP == 5
+
+
+# --- the status bar ----------------------------------------------------------
+
+
+def test_the_status_bar_reads_the_four_things_it_used_to_leave_out() -> None:
+    """Cursor colour, brush size, selection size, and the layer and frame.
+
+    A source scan rather than a rendered frame: the bar is one ``muted`` line
+    built from a list, so what is in the list is the whole assertion, and
+    nothing headless has a cursor to hover with.
+    """
+    source = Path(inker_canvas.__file__).read_text(encoding="utf-8")
+    body = source.split("def _status_bar")[1].split("\n# --- input")[0]
+    assert "color_button" in body, "the colour under the cursor"
+    assert "brush_size" in body, "the brush size [ and ] change"
+    assert "mask.bounds" in body, "the size of the selection"
+    assert "stack.active" in body, "which layer is being drawn into"
+    assert "anim.current" in body, "which frame is being drawn into"
+
+
+def test_the_cursor_readout_is_gated_on_being_over_the_page() -> None:
+    """The invisible button covers the whole child, so "hovered" is not
+    "over the drawing" -- and with tiling off ``canonical`` folds nothing, which
+    is how a 256-wide document reported "-37, 412" as a position."""
+    source = Path(inker_canvas.__file__).read_text(encoding="utf-8")
+    body = source.split("def _cursor_pixel")[1].split("def _status_bar")[0]
+    assert "in_bounds" in body
+
+
+# --- what the pointer says ---------------------------------------------------
+
+
+def test_the_ring_reaches_every_tool_the_brush_slider_sizes() -> None:
+    """``doc.shape`` takes the same width the brush does, so a line has a
+    stroke width -- and nothing on screen said what it was until it committed."""
+    assert inker_canvas._RINGED_TOOLS == inker_state.PAINT_TOOLS | inker_state.SHAPE_TOOLS
+    assert "line" in inker_canvas._RINGED_TOOLS
+    assert "brush" in inker_canvas._RINGED_TOOLS
+
+
+def test_the_single_cell_outline_waits_until_a_cell_is_bigger_than_its_line() -> None:
+    assert inker_canvas.PIXEL_CELL_MIN_ZOOM >= 2.0

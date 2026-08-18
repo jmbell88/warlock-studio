@@ -569,6 +569,21 @@ def _canvas(ctx: Any, state: Any, tab: Any) -> None:
         )
         active = imgui.is_item_active()
         hovered = imgui.is_item_hovered()
+        if view.pending_zoom_rung:
+            # Anchored on the cursor while it is over the canvas and on the
+            # middle of the pane while it is not: a keyboard zoom must not
+            # depend on where the mouse happens to be resting off-pane, and
+            # zooming about a cursor two panes away throws the page off screen.
+            mouse = imgui.get_mouse_pos()
+            focus = (
+                (mouse.x, mouse.y)
+                if hovered
+                else (origin.x + region[0] / 2.0, origin.y + region[1] / 2.0)
+            )
+            inker_state.zoom_ladder_step(
+                view, (origin.x, origin.y), focus, view.pending_zoom_rung, **_BOUNDS
+            )
+            view.pending_zoom_rung = 0
         _input(ctx, state, tab, (origin.x, origin.y), active=active, hovered=hovered)
         _paint(ctx, state, tab, (origin.x, origin.y), hovered=hovered)
         # After everything ``_paint`` draws, because the bands sit on top of
@@ -583,22 +598,129 @@ def _canvas(ctx: Any, state: Any, tab: Any) -> None:
     _status_bar(state, tab, origin, hovered)
 
 
+#: The tools whose gesture is sized by the brush slider, and therefore the
+#: ones whose size is worth a place in the status bar. The shapes are in it
+#: because ``doc.shape`` takes the same width -- which is the thing that was
+#: invisible: a line tool has a stroke width and nothing on screen said so.
+_SIZED_TOOLS = PAINT_TOOLS | SHAPE_TOOLS
+
+
+def _os_cursor(state: Any, tab: Any, *, hovered: bool) -> None:
+    """What the pointer itself says about the gesture that is available.
+
+    The pointer never changed shape over this canvas -- not while space-panning,
+    not over the move tool, and not over a **locked layer**, which is the one
+    that mattered: the refusal was a toast raised *after* a press had already
+    been made, so the way to find out a layer was locked was to try to draw on
+    it. The pointer is the only surface that can say so before the click.
+
+    Set per frame while hovered, because imgui resets the cursor every frame;
+    left alone otherwise, so the rest of the window keeps its own.
+    """
+    if not hovered:
+        return
+    if state.space_held or state.drag_kind == "pan":
+        imgui.set_mouse_cursor(imgui.MouseCursor_.hand.value)
+        return
+    # The same question ``_locked_out`` asks at the press, and deliberately the
+    # same exemptions: a pick or a marquee over a locked layer is not refused,
+    # so it must not be shown as refused either.
+    nudging_a_float = state.tool == "move" and tab.doc.floating is not None
+    if (
+        state.tool not in _READ_ONLY_TOOLS
+        and tab.doc.write_locked()
+        and not nudging_a_float
+    ):
+        imgui.set_mouse_cursor(imgui.MouseCursor_.not_allowed.value)
+        return
+    if state.tool == "move":
+        imgui.set_mouse_cursor(imgui.MouseCursor_.resize_all.value)
+
+
+def _cursor_pixel(state: Any, tab: Any, origin, hovered: bool):
+    """The pixel under the cursor and its colour, or ``(None, None)``.
+
+    ``origin`` is the pane's top-left as an ``(x, y)`` pair -- the shape every
+    other view helper in this module takes, so the two callers cannot hand it
+    two different things.
+
+    In-bounds as well as hovered. The invisible button covers the whole child,
+    so the old readout answered for the dead space *around* the page too, and
+    with tiling off ``canonical`` folds nothing -- which is how a 256-wide
+    document came to report "-37, 412" as a position.
+    """
+    if not hovered or origin is None:
+        return None, None
+    mouse = imgui.get_mouse_pos()
+    px, py = inker_state.to_image(tab.view, origin, mouse.x, mouse.y)
+    # Folded onto the canonical tile: over a neighbour in the 3x3 view the
+    # raw number is off the canvas, and a readout saying "300, 40" on a
+    # 256-wide document is a coordinate the user cannot use.
+    px, py = canonical((px, py), tab.doc.size, axes_of(tab.tiled))
+    point = (int(px), int(py))
+    if not tab.doc.in_bounds(point):
+        return None, None
+    # Through the same ``sample_layer`` a pick would use, so the swatch is a
+    # promise about what Alt+click is *going* to give rather than a second
+    # opinion about the same pixel.
+    return point, tab.doc.eyedrop(point, layer_only=state.sample_layer)
+
+
 def _status_bar(state: Any, tab: Any, origin: Any, hovered: bool) -> None:
-    """Zoom, cursor position, active tool, document size -- the numbers a
-    paint program keeps under the canvas, which used to live in the far-right
-    bridge panel or nowhere."""
+    """The numbers a paint program keeps under the canvas.
+
+    It held four -- zoom, position, tool, document size -- and the four it did
+    not hold were the ones a drawing session actually asks for: **the colour
+    under the cursor** (the eyedropper's only feedback was a swatch in another
+    pane), **the brush size** (``[`` and ``]`` changed a number nothing
+    displayed), **the size of the selection** (``SelectionMask.bounds`` has
+    always been there and no pane read it), and **which layer and frame are
+    being drawn into** -- both of which were a highlight in a panel that can be
+    scrolled away from, on the far side of the window from the cursor.
+
+    In Aseprite's order, because that is the order the eye already knows:
+    what is under the cursor, then what is selected, then the tool, then the
+    document, then the zoom.
+    """
     view = tab.view
-    parts = [f"{view.zoom * 100:.0f}%"]
-    if hovered and origin is not None:
-        mouse = imgui.get_mouse_pos()
-        px, py = inker_state.to_image(view, (origin.x, origin.y), mouse.x, mouse.y)
-        # Folded onto the canonical tile: over a neighbour in the 3x3 view the
-        # raw number is off the canvas, and a readout saying "300, 40" on a
-        # 256-wide document is a coordinate the user cannot use.
-        px, py = canonical((px, py), tab.doc.size, axes_of(tab.tiled))
-        parts.append(f"{int(px)}, {int(py)}")
-    parts.append(inker_state.tool_label(state.tool))
-    parts.append(f"{tab.doc.size[0]} x {tab.doc.size[1]}")
+    doc = tab.doc
+    # The status bar is drawn outside the child, so it holds imgui's own cursor
+    # object rather than the pair every view helper takes.
+    at = None if origin is None else (origin.x, origin.y)
+    point, picked = _cursor_pixel(state, tab, at, hovered)
+    if picked is not None:
+        imgui.color_button(
+            "##inkerpick",
+            imgui.ImVec4(*(channel / 255.0 for channel in picked)),
+            imgui.ColorEditFlags_.alpha_preview_half.value,
+            (sp(11), sp(11)),
+        )
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "The colour under the cursor -- what Alt+click would pick up.\n"
+                f"#{picked[0]:02X}{picked[1]:02X}{picked[2]:02X}"
+                + ("" if picked[3] == 255 else f" at {picked[3] * 100 // 255}% alpha")
+            )
+        imgui.same_line()
+    parts = []
+    if point is not None:
+        parts.append(f"{point[0]}, {point[1]}")
+    mask = doc.mask
+    box = mask.bounds if mask is not None else None
+    if box is not None:
+        # The bounding box rather than a pixel count: ``bounds`` is cached
+        # against the mask and a count is a full-canvas walk, which is not a
+        # thing to do sixty times a second for a readout.
+        parts.append(f"sel {box[2] - box[0]} x {box[3] - box[1]}")
+    tool = inker_state.tool_label(state.tool)
+    parts.append(f"{tool} {state.brush_size}" if state.tool in _SIZED_TOOLS else tool)
+    active = doc.stack.active
+    if active is not None and active.name:
+        parts.append(active.name)
+    if doc.anim is not None and doc.anim.frames:
+        parts.append(f"frame {doc.anim.current + 1}/{len(doc.anim.frames)}")
+    parts.append(f"{doc.size[0]} x {doc.size[1]}")
+    parts.append(f"{view.zoom * 100:.0f}%")
     widgets.muted("   ".join(parts))
 
 
@@ -616,6 +738,8 @@ def _input(ctx: Any, state: Any, tab: Any, origin, *, active: bool, hovered: boo
         # count the user's hand made, not a fraction of it.
         notches = io.mouse_wheel / imgui_backend.WHEEL_SCALE
         inker_state.zoom_step(tab.view, origin, (mouse.x, mouse.y), notches, **_BOUNDS)
+
+    _os_cursor(state, tab, hovered=hovered)
 
     # Middle-drag always pans; space-drag pans with the left button, which is
     # what every paint program does and what makes a tablet usable.
@@ -1078,11 +1202,26 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
             return
         doc.commit_floating()
         spraying = tool == "spray"
+        # **Shift begins the stroke where the last one ended**, which is
+        # Aseprite's line-from-last-point and the one gesture in the box that
+        # is faster than the line tool for what it does: click, Shift-click,
+        # Shift-click walks a polyline in the brush you are already holding.
+        #
+        # Not a separate code path -- the stroke opens at the remembered point
+        # and is immediately walked to the click, so everything the brush does
+        # (nib, symmetry, pixel-perfect, the tip, the wrap) comes with it, and
+        # a Shift-*drag* carries on freehand from the end of the line. Never
+        # for the spray: its advance is ``spray_at`` on a timer rather than a
+        # walk down a segment, so there is no line for this to draw.
+        from_last = (
+            imgui.get_io().key_shift and not spraying and tab.view.last_paint is not None
+        )
+        opening = tab.view.last_paint if from_last else point
         # Asked once, and it decides two arguments rather than one; see
         # ``_press_mode`` for why the ink cannot be read independently of it.
         tip = state.tip_for(tool)
         doc.begin_stroke(
-            point,
+            opening,
             colour,
             size=_dab_size(state, spraying),
             hardness=state.hardness,
@@ -1117,6 +1256,8 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
             stamp=tip,
             stamp_align=state.stamp_align,
         )
+        if from_last:
+            doc.stroke_to(point)
         state.spray_carry = 0.0
         state.drag_kind = "spray" if spraying else "paint"
 
@@ -1827,6 +1968,11 @@ def _release(ctx: Any, state: Any, tab: Any, point) -> None:
         return
     if kind in ("paint", "spray"):
         doc.end_stroke()
+        # Where the next Shift-click draws from. After ``end_stroke``, so a
+        # refused or empty stroke still moves it -- the user's hand was here
+        # either way, and a line back to some earlier point they have forgotten
+        # about is more surprising than a line from where they just clicked.
+        tab.view.last_paint = point
     elif kind == "layer_move":
         doc.commit_layer_move()
     elif kind == "shape":
@@ -2000,8 +2146,14 @@ def _paint(ctx: Any, state: Any, tab: Any, origin, *, hovered: bool) -> None:
     # Beside the drag preview rather than inside it: a multi-click gesture holds
     # no ``drag_kind``, which is the first thing ``_preview`` returns on.
     _gesture_preview(state, tab, draw_list, origin)
-    if hovered and state.tool in PAINT_TOOLS:
-        _cursor(state, draw_list, view)
+    if hovered:
+        # **The shapes get the ring too.** ``doc.shape`` takes the same
+        # ``brush_size`` the brush does, so a line has a stroke width -- and
+        # nothing on screen said what it was, at any zoom, until it was
+        # committed. The ring is the only place a variable width is legible.
+        if state.tool in _RINGED_TOOLS:
+            _cursor(state, draw_list, view)
+        _pixel_cell(state, tab, draw_list, origin)
 
 
 def _tiled_extent(tab: Any, size) -> tuple[float, float, float, float]:
@@ -2445,6 +2597,41 @@ def _ellipse(draw_list: Any, a, b, colour: int) -> None:
     radii = (abs(b[0] - a[0]) * 0.5, abs(b[1] - a[1]) * 0.5)
     if radii[0] > 0.5 and radii[1] > 0.5:
         draw_list.add_ellipse(centre, radii, colour)
+
+
+#: Everything drawn with a ring under the cursor: the tools whose gesture is
+#: sized by the brush slider. ``PAINT_TOOLS`` alone left the six shape tools
+#: without one, and they take the same width.
+_RINGED_TOOLS = PAINT_TOOLS | SHAPE_TOOLS
+
+#: Screen pixels per image pixel below which the single-cell outline is not
+#: drawn. Under about this the cell is smaller than the line tracing it, so the
+#: outline stops being a cell and becomes a smudge that hides the art under it.
+PIXEL_CELL_MIN_ZOOM = 4.0
+
+
+def _pixel_cell(state: Any, tab: Any, draw_list: Any, origin) -> None:
+    """Outline the one pixel the next dab lands on, once it is big enough to see.
+
+    The ring says how *wide* the brush is and says nothing about *which* pixel
+    it is centred on, which at 800% is the only question being asked -- the ring
+    is drawn at the raw cursor and floats between cells rather than around one.
+    This is the half that was missing, and it is the half pixel art is made of.
+
+    Quarter turns keep the cell axis-aligned, so two corners describe it; a free
+    rotation would not, and the view deliberately does not have one.
+    """
+    view = tab.view
+    if view.zoom < PIXEL_CELL_MIN_ZOOM or origin is None:
+        return
+    point, _picked = _cursor_pixel(state, tab, origin, True)
+    if point is None:
+        return
+    a = inker_state.to_screen(view, origin, float(point[0]), float(point[1]))
+    b = inker_state.to_screen(view, origin, float(point[0] + 1), float(point[1] + 1))
+    lo = (min(a[0], b[0]), min(a[1], b[1]))
+    hi = (max(a[0], b[0]), max(a[1], b[1]))
+    draw_list.add_rect(lo, hi, _u32(theme.TEXT, 0.85))
 
 
 def _cursor(state: Any, draw_list: Any, view: Any) -> None:

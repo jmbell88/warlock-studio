@@ -160,7 +160,14 @@ def _grid(state: Any, doc: Any = None) -> None:
         if selected:
             imgui.pop_style_color()
         if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value):
-            note = f"{label}  ({shortcut})"
+            # Both bindings, because three tools have two: the tooltip is the
+            # only place a glyph button says what it does, so it is also the
+            # only place the second chord can be found.
+            chords = shortcut
+            alt = inker_mode.ALT_TOOL_CHORDS.get(key)
+            if alt:
+                chords = f"{shortcut} or {alt}"
+            note = f"{label}  ({chords})"
             imgui.set_tooltip(f"{note}\n{reason}" if reason else note)
         if index % COLUMNS != COLUMNS - 1:
             imgui.same_line()

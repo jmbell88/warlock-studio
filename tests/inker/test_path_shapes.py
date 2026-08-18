@@ -366,11 +366,22 @@ def test_the_alpha_lock_keeps_a_path_shape_invisible():
 
 
 def test_the_three_tools_are_listed_with_their_own_letters():
+    """A letter each, and not one another's.
+
+    The literal letters were pinned here until the Aseprite pass moved the
+    polyline off ``L`` -- which is Aseprite's *line* and had been handed out in
+    toolbox order before the line was reached. What is worth pinning is what
+    the test is named for: three tools, three distinct letters, each reachable.
+    ``TOOL_KEYS`` is derived from ``TOOLS`` now, so "the two tables agree" is
+    structural rather than something a test has to re-check -- but checking it
+    costs nothing and says where the letters come from.
+    """
     rows = {tool: shortcut.lower() for tool, _label, shortcut in inker_state.TOOLS}
     letters = {tool: key for key, tool in inker_mode.TOOL_KEYS.items()}
-    for tool, letter in (("polyline", "l"), ("polygon", "o"), ("curve", "f")):
-        assert rows[tool] == letter
-        assert letters[tool] == letter
+    three = ("polyline", "polygon", "curve")
+    assert len({rows[tool] for tool in three}) == 3
+    for tool in three:
+        assert rows[tool] == letters[tool]
         assert tool in inker_state.SHAPE_TOOLS
         assert tool in inker_state.PATH_SHAPE_TOOLS
         assert tool in inker_tools.TOOL_ICONS
@@ -408,6 +419,8 @@ class _Mouse:
         self.double = {0: False, 1: False, 2: False}
         self.shift = False
         self.alt = False
+        #: Every pointer shape ``_os_cursor`` asked for, newest last.
+        self.cursors: list[str] = []
 
     def module(self) -> SimpleNamespace:
         return SimpleNamespace(
@@ -422,6 +435,13 @@ class _Mouse:
             is_mouse_double_clicked=lambda button: self.double[button],
             is_mouse_down=lambda button: self.down[button],
             is_mouse_dragging=lambda button: False,
+            set_mouse_cursor=self.cursors.append,
+            MouseCursor_=SimpleNamespace(
+                **{
+                    name: SimpleNamespace(value=name)
+                    for name in ("hand", "not_allowed", "resize_all", "arrow")
+                }
+            ),
         )
 
 

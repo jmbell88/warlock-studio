@@ -97,24 +97,29 @@ not a property of the picture.
 The toolbox is an icon grid; hovering a tool shows its name and its letter. Every tool is listed in
 [Keyboard shortcuts](16-shortcuts.md).
 
+The letters are Aseprite's wherever Aseprite has one to lend: `L` is the line and `U` the rectangle,
+and three tools answer to a shifted letter as well as their own — `Shift+G` for the gradient,
+`Shift+U` for the ellipse, `Shift+M` for the elliptical marquee — because Aseprite files those
+two-to-a-slot. Where Aseprite lends nothing, the letter is the first free one of the tool's own name.
+
 | Tool | Key | What it does |
 | --- | --- | --- |
 | Brush | `B` | A soft round brush. |
 | Spray | `A` | An airbrush: scattered dabs for as long as you hold the button. |
 | Eraser | `E` | The same brush, cutting alpha instead of adding colour. |
 | Fill | `G` | Flood-fills from where you click. |
-| Gradient | `U` | Drag to lay a gradient. |
+| Gradient | `K` or `Shift+G` | Drag to lay a gradient. |
 | Blur | `R` | Softens what you drag over. |
 | Smudge | `N` | Pushes pixels along the drag. |
 | Shading | `H` | Moves what you drag over one swatch along a palette ramp. |
-| Line | `P` | A straight line. |
+| Line | `L` | A straight line. |
 | Curve | `F` | A smooth curve through the points you click. |
-| Rect | `K` | A rectangle, outlined or filled. |
-| Ellipse | `J` | An ellipse, outlined or filled. |
-| Polyline | `L` | A chain of straight segments, one click per corner. |
+| Rect | `U` | A rectangle, outlined or filled. |
+| Ellipse | `J` or `Shift+U` | An ellipse, outlined or filled. |
+| Polyline | `P` | A chain of straight segments, one click per corner. |
 | Polygon | `O` | The same, closed, and fillable. |
 | Marquee | `M` | Rectangular selection. |
-| Ellipse select | `S` | Elliptical selection. |
+| Ellipse select | `S` or `Shift+M` | Elliptical selection. |
 | Lasso | `Q` | Freehand selection. |
 | Poly lasso | `D` | Selection from clicked corners, one click per vertex. |
 | Wand | `W` | Selects a region of similar colour. |

@@ -66,16 +66,34 @@ class _Mouse:
         # As the backend delivers it -- already scaled by ``WHEEL_SCALE`` -- so
         # a test that sets it is exercising the same number the pane sees.
         self.wheel = 0.0
+        #: Every pointer shape asked for, newest last. See ``module``.
+        self.cursors: list[str] = []
+        #: Held modifiers, for the gestures that read them at the press.
+        self.shift = False
 
     def module(self) -> SimpleNamespace:
         return SimpleNamespace(
             get_io=lambda: SimpleNamespace(
-                mouse_wheel=self.wheel, key_shift=False, key_alt=False, delta_time=1.0 / 60.0
+                mouse_wheel=self.wheel,
+                key_shift=self.shift,
+                key_alt=False,
+                delta_time=1.0 / 60.0,
             ),
             get_mouse_pos=lambda: SimpleNamespace(x=self.at[0], y=self.at[1]),
             is_mouse_clicked=lambda button: self.clicked[button],
             is_mouse_down=lambda button: self.down[button],
             is_mouse_dragging=lambda button: False,
+            # The pointer shape ``_os_cursor`` sets. Recorded rather than
+            # ignored: what the pointer says over a locked layer is the whole
+            # point of that helper, so a fake that swallowed it would let the
+            # feedback regress silently.
+            set_mouse_cursor=self.cursors.append,
+            MouseCursor_=SimpleNamespace(
+                **{
+                    name: SimpleNamespace(value=name)
+                    for name in ("hand", "not_allowed", "resize_all", "arrow")
+                }
+            ),
         )
 
 
@@ -92,15 +110,17 @@ def driven(monkeypatch):
         view=inker_state.PaintView(zoom=1.0, pan=(0.0, 0.0), fitted=True),
     )
 
-    def frame(at, *, click=None, down=(), wheel=0.0):
+    def frame(at, *, click=None, down=(), wheel=0.0, shift=False, hovered=True):
         mouse.at = (float(at[0]), float(at[1]))
         mouse.clicked = {0: False, 1: False, 2: False}
         if click is not None:
             mouse.clicked[click] = True
         mouse.down = {b: b in down for b in (0, 1, 2)}
         mouse.wheel = float(wheel)
-        inker_canvas._input(None, state, tab, (0.0, 0.0), active=True, hovered=True)
+        mouse.shift = shift
+        inker_canvas._input(None, state, tab, (0.0, 0.0), active=True, hovered=hovered)
 
+    frame.mouse = mouse
     return state, tab, frame
 
 
@@ -507,3 +527,115 @@ def test_the_wheel_stops_at_the_inker_bounds(driven):
     for _ in range(400):
         frame((16.0, 16.0), wheel=-imgui_backend.WHEEL_SCALE)
     assert tab.view.zoom == pytest.approx(inker_state.INKER_MIN_ZOOM)
+
+
+# --- Shift paints a line from where the last stroke ended --------------------
+
+
+def test_shift_click_opens_the_stroke_at_the_last_point(driven):
+    """Aseprite's line-from-last-point, and the one gesture in the box faster
+    than the line tool for what it does: click, Shift-click, Shift-click walks a
+    polyline in the brush already in hand.
+
+    Not a separate code path -- the stroke *opens* at the remembered point and
+    is walked to the click -- so what is asserted is that pixels between the two
+    points were painted, which only a real segment can do.
+    """
+    state, tab, frame = driven
+    state.set_tool("brush")
+    state.brush_size = 1
+    state.nib = "pixel"
+    frame((4.0, 4.0), click=0, down=(0,))
+    frame((4.0, 4.0))
+    assert tab.view.last_paint == (4.0, 4.0)
+
+    frame((20.0, 4.0), click=0, down=(0,), shift=True)
+    frame((20.0, 4.0))
+    row = tab.doc.stack.active.pixels[4, 4:21, 3]
+    assert int(row.min()) > 0, "every pixel of the segment was laid down"
+
+
+def test_an_unmodified_click_paints_only_where_it_landed(driven):
+    """The control for the test above: without Shift there is no segment."""
+    state, tab, frame = driven
+    state.set_tool("brush")
+    state.brush_size = 1
+    state.nib = "pixel"
+    frame((4.0, 4.0), click=0, down=(0,))
+    frame((4.0, 4.0))
+    frame((20.0, 4.0), click=0, down=(0,))
+    frame((20.0, 4.0))
+    assert int(tab.doc.stack.active.pixels[4, 12, 3]) == 0, "nothing in between"
+
+
+def test_the_first_shift_click_of_a_session_is_an_ordinary_press(driven):
+    """Nothing to draw from, so nothing is drawn from it."""
+    state, tab, frame = driven
+    state.set_tool("brush")
+    state.brush_size = 1
+    state.nib = "pixel"
+    assert tab.view.last_paint is None
+    frame((20.0, 4.0), click=0, down=(0,), shift=True)
+    frame((20.0, 4.0))
+    assert int(tab.doc.stack.active.pixels[4, 12, 3]) == 0
+
+
+def test_the_spray_is_left_out_of_it(driven):
+    """Its advance is ``spray_at`` on a timer rather than a walk down a
+    segment, so there is no line for this to draw."""
+    state, tab, frame = driven
+    state.set_tool("spray")
+    frame((4.0, 4.0), click=0, down=(0,))
+    frame((4.0, 4.0))
+    before = tab.view.last_paint
+    frame((20.0, 4.0), click=0, down=(0,), shift=True)
+    assert state.drag_kind == "spray"
+    assert before == (4.0, 4.0)
+
+
+# --- what the pointer says ---------------------------------------------------
+
+
+def test_the_pointer_refuses_over_a_locked_layer(driven):
+    """The refusal was a toast raised *after* a press, so the way to find out a
+    layer was locked was to try to draw on it."""
+    state, tab, frame = driven
+    state.set_tool("brush")
+    tab.doc.stack.active.locked = True
+    frame((8.0, 8.0))
+    assert frame.mouse.cursors[-1] == "not_allowed"
+
+
+def test_a_pick_over_a_locked_layer_is_not_shown_as_refused(driven):
+    """Deliberately the same exemptions ``_locked_out`` uses: an eyedropper or
+    a marquee over a locked layer is not refused, so it must not look it."""
+    state, tab, frame = driven
+    tab.doc.stack.active.locked = True
+    for tool in ("eyedropper", "select"):
+        state.set_tool(tool)
+        frame.mouse.cursors.clear()
+        frame((8.0, 8.0))
+        assert "not_allowed" not in frame.mouse.cursors, tool
+
+
+def test_the_pointer_grabs_while_space_is_held(driven):
+    state, _tab, frame = driven
+    state.space_held = True
+    frame((8.0, 8.0))
+    assert frame.mouse.cursors[-1] == "hand"
+
+
+def test_the_move_tool_says_so(driven):
+    state, _tab, frame = driven
+    state.set_tool("move")
+    frame((8.0, 8.0))
+    assert frame.mouse.cursors[-1] == "resize_all"
+
+
+def test_nothing_is_asked_for_while_the_canvas_is_not_hovered(driven):
+    """imgui resets the cursor every frame, so a pane that set one while the
+    pointer was elsewhere would be overriding the rest of the window."""
+    state, _tab, frame = driven
+    state.set_tool("move")
+    frame((8.0, 8.0), hovered=False)
+    assert frame.mouse.cursors == []

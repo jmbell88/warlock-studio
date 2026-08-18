@@ -188,18 +188,18 @@ left-drag in empty space with `Q` selected sweeps a marquee.
 | `A` | Spray |
 | `E` | Eraser |
 | `G` | Fill |
-| `U` | Gradient |
+| `K` or `Shift+G` | Gradient |
 | `R` | Blur |
 | `N` | Smudge |
 | `H` | Shading |
-| `P` | Line |
+| `L` | Line |
 | `F` | Curve (Enter or a double-click finishes it, Esc abandons it) |
-| `K` | Rect |
-| `J` | Ellipse |
-| `L` | Polyline (finished the same way as the curve) |
+| `U` | Rect |
+| `J` or `Shift+U` | Ellipse |
+| `P` | Polyline (finished the same way as the curve) |
 | `O` | Polygon (also closes if you click back on its first point) |
 | `M` | Marquee select |
-| `S` | Ellipse select |
+| `S` or `Shift+M` | Ellipse select |
 | `Q` | Lasso |
 | `D` | Poly lasso (Enter or a double-click closes it, Esc abandons it) |
 | `W` | Wand |
@@ -209,6 +209,8 @@ left-drag in empty space with `Q` selected sweeps a marquee.
 | `C` | Slice |
 | `X` | Swap the two colours |
 | `[` / `]` | Brush size (with Shift, hardness) |
+| `+` / `-` | Zoom in / out, by whole scales |
+| Shift+click | With a paint tool, draw a line from where the last stroke ended |
 | Arrows | Nudge by a pixel — the floating selection, or the layer under the Move tool (Shift, 8 px) |
 | Ctrl+Z / Ctrl+Y | Undo / redo (Ctrl+Shift+Z also redoes) |
 | Ctrl+S / Ctrl+Shift+S | Save / save as |
@@ -235,7 +237,18 @@ left-drag in empty space with `Q` selected sweeps a marquee.
 
 Shift and Alt are modifiers rather than shortcuts: holding **Shift** while dragging a selection adds
 to the current one, and **Alt** subtracts. Both are described in
-[Selections and transform](08-inker.md#selections-and-transform).
+[Selections and transform](08-inker.md#selections-and-transform). With a *paint* tool Shift means
+something else — it draws a straight line from wherever the last stroke finished, so click,
+Shift+click, Shift+click walks a chain of segments in the brush already in your hand.
+
+Three tools answer to a shifted letter as well as their own, because Aseprite files them
+two-to-a-slot and a hand trained there reaches for the shifted one: `Shift+G` is the gradient,
+`Shift+U` the ellipse, `Shift+M` the elliptical marquee. The plain letters still work.
+
+`+` and `-` step through whole zoom scales — 25%, 50%, 100%, 200%, 300% and up — rather than the
+wheel's 5% notches. Pixel art wants the whole ones: at 135% a source pixel is 1.35 screen pixels, so
+some are drawn one wide and some two, and a dither comes out as bands. The wheel is still the fine
+control, and Ctrl+0 and Ctrl+1 still fit and reset.
 
 ### Inker — an animated document
 

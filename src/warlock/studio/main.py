@@ -4343,8 +4343,9 @@ class App:
                 ("Esc", "End the pass and show its report"),
             ],
         )
+        from . import inker_state
         from .clay_mode import TOOL_KEYS as CLAY_KEYS
-        from .inker_mode import TOOL_KEYS
+        from .inker_mode import ALT_TOOL_CHORDS
 
         table(
             "Clay",
@@ -4385,25 +4386,61 @@ class App:
                 ("Ctrl+5", "Orthographic / perspective"),
             ],
         )
-        tools = ", ".join(f"{k.upper()}" for k in sorted(TOOL_KEYS))
+        # **The letters, named, six to a row.** This was one squashed row
+        # reading "A, B, C, D, E, ..." with the note "hover a tool for its
+        # letter" -- which is a shortcut sheet declining to be one, and the
+        # only mode's table that did. Six per row keeps the two columns
+        # readable, and the order is the toolbox's, so the pairs that sit
+        # together there (brush/spray, line/curve, the two lassos) sit
+        # together here.
+        tool_rows = []
+        band = list(inker_state.TOOLS)
+        for start in range(0, len(band), 6):
+            chunk = band[start : start + 6]
+            tool_rows.append(
+                (
+                    " / ".join(letter for _key, _label, letter in chunk),
+                    " / ".join(label for _key, label, _letter in chunk),
+                )
+            )
+        # Aseprite files these two-to-a-slot and cycles with Shift; here they
+        # are second bindings beside the plain letters, so they are listed
+        # rather than left to the tooltips.
+        alt = " / ".join(
+            f"{chord} {inker_state.tool_label(tool)}"
+            for tool, chord in ALT_TOOL_CHORDS.items()
+        )
         table(
             "Inker",
             [
-                (tools, "Pick a tool (hover a tool for its letter)"),
+                *tool_rows,
+                (alt, "The same tools on Aseprite's shifted letters"),
                 ("X", "Swap colours"),
                 ("[ / ]", "Brush size (Shift: hardness)"),
+                ("Shift+click", "Paint a line from where the last stroke ended"),
+                ("+ / -", "Zoom in / out, by whole scales"),
+                ("Ctrl+0 / Ctrl+1", "Fit / 100%"),
+                ("Space / middle drag", "Pan (wheel zooms in 5% steps)"),
+                ("Ctrl+4 / Ctrl+5", "Rotate the view a quarter turn / flip it"),
+                ("Arrows", "Nudge a pixel (Shift: eight)"),
+                ("Delete", "Delete what is selected"),
+                ("Esc", "Cancel -- a move, playback, a float, then the selection"),
                 ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
                 ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
+                ("Ctrl+E", "Save as a reference in the library"),
                 ("Ctrl+Shift+E", "Export PNG"),
                 ("Ctrl+N / O / W", "New / open / close"),
                 ("Ctrl+A / D", "Select all / deselect"),
+                ("Ctrl+Shift+D", "Reselect what was last dismissed"),
                 ("Ctrl+C / X / V", "Copy / cut / paste"),
                 ("Ctrl+Shift+V", "Paste as a layer"),
+                ("Ctrl+J / Ctrl+Shift+J", "Copy / move the selection to its own layer"),
                 ("Ctrl+Shift+I", "Invert the selection"),
                 ("Ctrl+T", "Free transform"),
+                ("Ctrl+B", "Capture the selection as an image brush"),
                 ("Ctrl+Tab", "Next tab"),
-                ("Ctrl+0 / Ctrl+1", "Fit / 100%"),
-                ("Space / middle drag", "Pan (wheel zooms)"),
+                (", / .", "Previous / next frame (animated)"),
+                ("Enter", "Play or pause (animated)"),
             ],
         )
         from .plotter_state import TOOLS as PLOTTER_TOOLS

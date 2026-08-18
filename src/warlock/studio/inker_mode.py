@@ -2021,46 +2021,34 @@ def stamp_text(ctx: Any, state: Any, tab: InkerDoc) -> bool:
 
 # Aseprite's letters where they exist, because that is the muscle memory a user
 # arrives with. Held here rather than in the pane so the mapping is testable.
-TOOL_KEYS = {
-    "b": "brush",
-    "e": "eraser",
-    "g": "fill",
-    "u": "gradient",
-    "r": "blur",
-    "n": "smudge",
-    "p": "line",
-    "k": "rect",
-    "j": "ellipse",
-    "m": "select",
-    "s": "select_ellipse",
-    "q": "lasso",
-    "w": "wand",
-    "v": "move",
-    "i": "eyedropper",
-    # Aseprite's own letter for the slice tool, and it was free here: plain "c"
-    # was bound to nothing, and Ctrl+C is copy on a different branch entirely.
-    "c": "slice",
-    "a": "spray",
-    # Aseprite puts the polygonal lasso on the freehand one's letter and cycles
-    # between them; a letter of its own is one press rather than one-or-two, and
-    # "d" was free (Ctrl+D is deselect, on a different branch).
-    "d": "lasso_poly",
-    # Aseprite's letter for its text tool, and free here for the reason "c"
-    # was: a plain "t" was bound to nothing.
-    "t": "text",
-    # Aseprite has no letter to lend for shading -- there it is an ink on the
-    # ordinary brush rather than a tool -- so this is the first free letter of
-    # the word; see ``inker_state.TOOLS``.
-    "h": "shade",
-    # The clicked shapes (Q-c). Aseprite lends nothing here either -- its curve
-    # and polygon live on a right-click menu off the line tool rather than on
-    # letters -- so these are the free ones; see ``inker_state.TOOLS`` for which
-    # letter each word had left. All three are plain letters bound to nothing:
-    # Ctrl+O (open) and Ctrl+L are on the ctrl branch, and F is only ever
-    # "frame the viewer" in a mode Inker replaces.
-    "l": "polyline",
-    "o": "polygon",
-    "f": "curve",
+#: Letter to tool, **derived from the toolbox** rather than written out again.
+#:
+#: It was written out again, and that is a table of twenty-three entries kept in
+#: step with another table of twenty-three entries by hand -- the arrangement
+#: ``plotter_state`` had already replaced with this one line. Every letter and
+#: the reasoning for it now lives in exactly one place, ``inker_state.TOOLS``,
+#: where the tooltip and the manual read it from too.
+TOOL_KEYS = {letter.lower(): key for key, _label, letter in inker_state.TOOLS}
+
+#: Aseprite's *slot-mates*, as a second binding rather than a replacement.
+#:
+#: Aseprite files several tools two-to-a-slot and cycles them with Shift: the
+#: gradient sits on the paint bucket's, the ellipse on the rectangle's, the
+#: elliptical marquee on the rectangular one's. Inker gives every tool a letter
+#: of its own (twenty-three tools, twenty-three letters, no cycling), so these
+#: are added *beside* the plain letters, not instead of them -- a hand trained
+#: on Aseprite finds what it reaches for, and a hand trained here keeps what it
+#: had. Reconstructed from Aseprite's defaults; if one is wrong it is wrong in
+#: one dict.
+SHIFT_TOOL_KEYS = {
+    "g": "gradient",
+    "u": "ellipse",
+    "m": "select_ellipse",
+}
+
+#: How the toolbox writes a second binding, tool to the chord.
+ALT_TOOL_CHORDS = {
+    tool: f"Shift+{letter.upper()}" for letter, tool in SHIFT_TOOL_KEYS.items()
 }
 
 #: How far a Shift+arrow nudge moves the active layer, in pixels. Eight rather
@@ -2331,8 +2319,18 @@ def handle_key(ctx: Any, event: Any) -> bool:
             state.clear_drag()
             return True
 
-    if name in TOOL_KEYS and not shift:
+    if name in SHIFT_TOOL_KEYS and shift:
+        # Ahead of the plain branch, and gated on shift there, so the two
+        # cannot both fire on one press.
+        state.set_tool(SHIFT_TOOL_KEYS[name])
+    elif name in TOOL_KEYS and not shift:
         state.set_tool(TOOL_KEYS[name])
+    elif event.key in (pygame.K_EQUALS, pygame.K_PLUS, pygame.K_KP_PLUS):
+        # Aseprite's zoom in, and ``=`` unshifted answers it too because that
+        # is the same physical key on every layout this ships to.
+        tab.view.pending_zoom_rung = 1
+    elif event.key in (pygame.K_MINUS, pygame.K_KP_MINUS):
+        tab.view.pending_zoom_rung = -1
     elif name == "x":
         state.swap_colours()
     elif event.key == pygame.K_LEFTBRACKET:

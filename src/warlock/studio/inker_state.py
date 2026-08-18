@@ -45,6 +45,36 @@ INKER_MAX_ZOOM = 10.0
 # there is no way back to a round one. See :func:`zoom_step`.
 ZOOM_PERCENT_STEP = 5
 
+#: The keyboard's zoom ladder, as whole scales.
+#:
+#: **Integer above 1:1, halving below it.** This is the pixel-art rule and the
+#: reason the keyboard does not simply reuse the wheel's 5% steps: at 135% a
+#: source pixel is 1.35 screen pixels, so the renderer draws some of them one
+#: pixel wide and some two, and a checkerboard dither comes out as bands. Every
+#: rung here maps one source pixel onto a whole number of screen pixels (or a
+#: whole number of source pixels onto one), which is the only family of zooms at
+#: which pixel art is being shown rather than resampled.
+#:
+#: The wheel keeps its 5% notches deliberately -- it is the *fine* control, and
+#: ``test_canvas_input`` pins the notch size. Aseprite splits the two the same
+#: way round.
+ZOOM_LADDER = (0.25, 0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0)
+
+
+def zoom_rung(zoom: float, direction: int) -> float:
+    """The next rung of :data:`ZOOM_LADDER` in ``direction``. -> the new scale.
+
+    Strictly past the current zoom rather than nearest-then-step, so a view
+    sitting between two rungs at 135% zooms *out* to 100% and *in* to 200%
+    instead of snapping sideways to 100% on a press labelled "in". At either end
+    the ladder holds, which is the same answer the wheel gives at its bounds.
+    """
+    if direction > 0:
+        return next((rung for rung in ZOOM_LADDER if rung > zoom + 1e-6), ZOOM_LADDER[-1])
+    return next(
+        (rung for rung in reversed(ZOOM_LADDER) if rung < zoom - 1e-6), ZOOM_LADDER[0]
+    )
+
 # The swatch row's own capacity. Not a palette editor -- the eyedropper is how
 # a user gets the colours actually in their image; this only has to hold the
 # handful they keep coming back to.
@@ -71,7 +101,11 @@ TOOLS = (
     ("spray", "Spray", "A"),
     ("eraser", "Eraser", "E"),
     ("fill", "Fill", "G"),
-    ("gradient", "Gradient", "U"),
+    # ``K`` rather than the ``U`` this had, because ``U`` is Aseprite's
+    # rectangle and a gradient is not what a hand trained there expects from
+    # it. The gradient keeps a plain letter as well as ``Shift+G``, which is
+    # where Aseprite actually files it -- sharing the paint bucket's slot.
+    ("gradient", "Gradient", "K"),
     ("blur", "Blur", "R"),
     ("smudge", "Smudge", "N"),
     # ``H`` for shading, because Aseprite has no letter to borrow here -- its
@@ -83,17 +117,24 @@ TOOLS = (
     # rather than by how they are drawn: a user reaching for "a curved line"
     # wants it beside the straight one.
     #
-    # The clicked three (Q-c) took the letters that were left. Of "polygon" only
-    # ``O`` is free (P is the line, G the fill, N the smudge), so the polygon
-    # takes it and the polyline takes ``L`` one word along. Not one letter of
-    # "curve" is free -- C is the slice, U the gradient, R the blur, V the move,
-    # E the eraser -- so the curve takes ``F``, for the *free-form* curve it
-    # draws.
-    ("line", "Line", "P"),
+    # **``L`` is the line and ``U`` is the rectangle, because that is where
+    # Aseprite puts them.** They did not start here: the letters were handed out
+    # in toolbox order, so ``L`` had gone to the polyline and ``U`` to the
+    # gradient before the line and the rectangle were reached -- and a hand
+    # trained on Aseprite pressing ``L`` for a line got a polyline, which is a
+    # *different gesture* (click, click, Enter) rather than a near miss. The two
+    # tools they displaced take the letters they vacated: the polyline gets
+    # ``P``, still the first letter of its own name, and the gradient ``K``.
+    #
+    # The clicked shapes took what was left. Not one letter of "curve" is free
+    # -- C is the slice, U the rectangle, R the blur, V the move, E the eraser --
+    # so the curve takes ``F``, for the *free-form* curve it draws, and the
+    # polygon ``O``, "polygon" having nothing else spare.
+    ("line", "Line", "L"),
     ("curve", "Curve", "F"),
-    ("rect", "Rect", "K"),
+    ("rect", "Rect", "U"),
     ("ellipse", "Ellipse", "J"),
-    ("polyline", "Polyline", "L"),
+    ("polyline", "Polyline", "P"),
     ("polygon", "Polygon", "O"),
     # The selections, the freehand pair adjacent for the reason above.
     ("select", "Marquee", "M"),
@@ -326,11 +367,21 @@ class PaintView:
     # A zoom to snap to on the next frame, for the same reason: "100%, centred"
     # needs the pane's size, and a keypress does not have it.
     pending_zoom: float | None = None
+    # A zoom-ladder press waiting for a frame, +1 in or -1 out. Same reason
+    # again, and a *direction* rather than a scale because the anchor decides
+    # what the step means: over the canvas it holds the pixel under the cursor,
+    # off it the middle of the pane, and neither is known to a key handler.
+    pending_zoom_rung: int = 0
     # Display only, both of them: see ROTATIONS. ``rotation`` is clockwise on
     # screen in degrees; ``flipped`` mirrors left-to-right *after* it, which is
     # the order a physical sheet of paper does the two in.
     rotation: int = 0
     flipped: bool = False
+    # Where the last paint stroke finished, for Shift-click's line. On the
+    # *view* rather than on the session because it belongs to the drawing: a
+    # tab switch and back should continue the line you were drawing, and a
+    # session-wide field would carry one document's last point into another.
+    last_paint: tuple[float, float] | None = None
 
 
 def clamp_zoom(zoom: float, lo: float = MIN_ZOOM, hi: float = MAX_ZOOM) -> float:
@@ -563,6 +614,24 @@ def zoom_step(
     percent = round(view.zoom * 100 / ZOOM_PERCENT_STEP) * ZOOM_PERCENT_STEP
     percent += ZOOM_PERCENT_STEP * notches
     _anchor(view, origin, mouse, clamp_zoom(percent / 100.0, lo, hi))
+
+
+def zoom_ladder_step(
+    view: PaintView,
+    origin: tuple[float, float],
+    mouse: tuple[float, float],
+    direction: int,
+    *,
+    lo: float = MIN_ZOOM,
+    hi: float = MAX_ZOOM,
+) -> None:
+    """One press of zoom in or out: the next whole scale, cursor held.
+
+    Through the same ``_anchor`` the wheel and ``zoom_about`` use, for the
+    reason that helper exists at all -- a third copy of the pan correction is a
+    third route into the view that can start to drift from the other two.
+    """
+    _anchor(view, origin, mouse, clamp_zoom(zoom_rung(view.zoom, direction), lo, hi))
 
 
 # --- one open document ------------------------------------------------------
