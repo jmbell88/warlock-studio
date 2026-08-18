@@ -342,7 +342,7 @@ green (no model-loading changes expected, but the lane rule stands).
 
 ---
 
-## Wave 2 — Timeline target model: multi-cel/layer/frame editing (P0 item 4) — **NOT STARTED**
+## Wave 2 — Timeline target model: multi-cel/layer/frame editing (P0 item 4) — **DONE 2026-08-17** (nine commits, `eebbab5`..)
 
 Built on the existing range machinery — the pattern is fixed and has three worked
 examples (`_doc_ranges.py`: explicit ints in, dedupe by `id()` via
@@ -387,7 +387,60 @@ Key files: `inker/_doc_ranges.py`, `inker/_doc_selection.py`, `inker/animation.p
 **Gate:** for every new op — linked-cel-touched-once, one-undo-step,
 no-op-pushes-nothing, indexed-document identity preserved (flip/rotate/shift are
 exact index permutations); `animation.json` byte-stability for docs with no
-continuous tracks.
+continuous tracks. **All met.**
+
+### Deviations from this spec, as executed (Wave 2)
+
+Seven, each argued at its site and recorded here so the spec stays the record:
+
+1. **A range op does not go through the funnel; it goes through a new sibling.**
+   The spec says "they all write through the funnel", which is not possible:
+   `_commit_patch` pushes a step per call and a rect of five cels is one Ctrl+Z.
+   `Document._patch_edit_for` applies the identical constraint in the identical
+   order and *returns* the edit instead. Closing that gap fixed a pre-existing
+   bug the spec did not know about: `filter_range` was writing raw RGBA onto
+   indexed cels and leaving `layer.indices` stale.
+2. **The permutations bypass the colour mode deliberately.** `flip`/`rotate`/
+   `shift` permute the index plane and re-derive the pixels rather than
+   resolving from the mapped colours -- `_map_planes`' `index_fn` discipline,
+   applied one cel at a time. Re-resolving would collapse duplicate slots
+   silently.
+3. **`axis` is `transform.FLIPS` (`"horizontal"`/`"vertical"`)**, not the spec's
+   shorthand: that tuple exists precisely so a menu cannot offer an axis the
+   function refuses.
+4. **The transform commit is automatic and ranged**, per the user's decision of
+   2026-08-17: the normal commit (Enter, click outside) applies to the whole
+   highlighted range. Cancel is never ranged. The **active cel is unioned in**
+   even when the rect excludes it -- it is the one the user watched move. A
+   **paste** commits plain, because it has no `source_box` to re-cut. Two
+   supporting changes fell out: the buffer now records the *recipe*
+   (`source_box`, `flips`, `resample`) rather than only the result, and
+   `render_transform` was lifted out of `FloatingBuffer.transform` so the live
+   render and the replay cannot drift.
+5. **Continuous autovivification copies the nearest earlier occupied cel**
+   (walking back from the current frame; none found means blank), and **copies
+   rather than links** where Aseprite links. `asein` maps layer flag bit 16
+   ("prefer linked cels") onto it, which is the nearest honest reading. The
+   Timeline **Shift** menu verbs always wrap; the engine keeps `wrap=False` for
+   a future caller.
+6. **Flip/rotate/shift act on whole cels, ignoring the selection.** Only
+   `fill_range` and `filter_range` honour it as a weight -- a weighted
+   permutation would have to invent what goes in the part it did not move.
+7. **The alpha lock is read off the track, not the cel.** Found while writing
+   the `fill_range` test: track properties reach a cel only when its frame is
+   materialised, so both range writes were painting through "preserve
+   transparency" on every frame but the one on screen. `filter_range` had the
+   same gap and is fixed with it.
+
+Also found in passing and **not** fixed, because it is neither Wave 2's nor a
+regression: running `tests/test_studio_smoke.py` and `tests/test_studio_controls.py`
+in one process crashes the interpreter with an access violation inside the second
+file's `renderer.render` (`uv run pytest tests/test_studio_smoke.py
+tests/test_studio_controls.py -n 0`). It reproduces on the tree before this wave.
+Which files share a worker is `--dist loadfile` scheduling luck, so the full
+parallel run goes red at random as tests are added anywhere; two `ImguiRenderer`
+lifecycles in one process is the trigger, and a context of its own for the second
+one is *not* enough to avoid it.
 
 ---
 

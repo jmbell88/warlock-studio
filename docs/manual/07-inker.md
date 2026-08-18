@@ -511,8 +511,9 @@ quantising each frame, so slot *n* is the same colour in every frame of the clip
 ## Layers
 
 The layers panel shows the stack top-first, the way every editor shows it, and is laid out the way
-Photoshop and Krita lay theirs out. At the top are the **Blend** mode, the **Opacity** slider and
-the two lock toggles, and they always describe the *active* layer. Each row in the list is an eye
+Photoshop and Krita lay theirs out. At the top are the **Blend** mode, the **Opacity** slider, the
+two lock toggles and — on an animated document — the **Cels** toggle, and they always describe the
+*active* layer. Each row in the list is an eye
 (visibility), a thumbnail and the layer's name — hovering a row shows its blend, opacity and locks,
 and a locked layer wears a small padlock beside its name. Under the list is the action strip:
 **add**, **duplicate**, **group**, **merge down**, **flatten** and **delete**, as icon buttons whose
@@ -748,6 +749,15 @@ duplicate, reorder and delete. `,` and `.` step back and forward a frame.
 paint, and the first stroke on a blank frame creates the cel it needs. That is still one undo step,
 and a stroke that changes nothing leaves nothing behind.
 
+**Continuous layers** change what that new cel starts as. The **Cels** toggle at the top of the
+layers panel makes the active track continuous: drawing on an empty frame of it starts from a
+*copy* of the nearest earlier drawing on that track rather than from nothing, which is how you
+carry a held pose or a background forward and then change it. It is a copy and not a link, so
+editing it leaves the frame it came from alone — if you want them to stay the same drawing, use
+**Link** below. The flag is saved with the document, and an `.aseprite` layer marked "prefer linked
+cels" opens as a continuous one (Aseprite links there where this copies). It is a track setting,
+so a still image has nothing to be continuous about and the toggle is greyed until you Animate.
+
 **Linked cels are one drawing in several frames.** *Link* adds a frame that shares the current
 one's cels rather than copying them, so a background held across twenty frames is stored — and
 edited — once. Painting on any of them paints on all of them, which is the point. **Unlink** gives
@@ -809,6 +819,32 @@ block survives the paste as one drawing again), clear, link, unlink, duplicate t
 linked, reverse them, delete them, and set every frame's duration at once. Every one of them is a
 single `Ctrl+Z`, and each is refused rather than half-applied — deleting *every* frame is the one
 range delete that is not allowed, because a timeline keeps at least one frame.
+
+The same section carries the verbs that **draw on** every cel of the selection rather than
+rearranging them: **Flip horizontal** and **Flip vertical**, **Rotate 90 clockwise**,
+**anticlockwise** and **180**, the four **Shift** directions, and **Fill with foreground**. One
+`Ctrl+Z` each, a linked cel touched once however many frames it appears on, an empty cel left
+empty. The flips, turns and shifts act on the whole cel — a selection weights a *fill*, but there
+is no such thing as half-mirroring something — and they move pixels without inventing any, so on an
+indexed document two palette slots holding the same colour stay two slots. A shift carries what
+goes off one edge round to the other. The quarter turns need a square canvas and are greyed
+otherwise: a cel is the size of the canvas, and turning the cels without turning the canvas would
+leave the grid holding drawings of two different shapes. To turn the whole document instead, use
+**Rotate** in the Canvas panel.
+
+**A transform applies to the range.** With a range selected, committing a free transform (Enter, or
+a click outside it) replays the same move, turn, scale and slant on *every* cel in the selection —
+each one transforming its own contents, not a copy of the one you were watching. That is Aseprite's
+timeline-target behaviour, and the range outline is what tells you how far the commit will reach.
+The preview shows only the cel you are on, because that is the only one that has moved yet.
+Cancelling (`Esc`) is never ranged: nothing but that cel was ever touched. A *pasted* buffer
+commits to the one cel it was aimed at whatever the range says — there is nothing to replay, since
+it was never cut from anywhere.
+
+**The layers panel is the other half of a range.** Its rows are the timeline's tracks, so a row
+inside the selection draws highlighted there too, `Shift`+clicking a row stretches the selection
+across the tracks between it and the active one, and clicking the eye on a row of a multi-track
+range hides or shows the whole range as one step.
 
 **Cel thumbnails.** The **Thumbs** switch on the second row of the timeline draws each cel's picture
 in its cell and grows the cells to fit. Linked cels share one thumbnail, so a link looks like the

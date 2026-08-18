@@ -8,6 +8,40 @@ file behind.
 
 ## 0.0.24 — 2026-08-17
 
+- **Inker edits a whole range of the timeline at once.** With a range selected,
+  the cell menu's Range section gains flips, quarter turns, wrapping shifts and
+  Fill with foreground — each running over every cel in the selection as a
+  single Ctrl+Z, touching a linked cel once however many frames it appears on,
+  and leaving an empty cel empty. The turns, flips and shifts move pixels
+  without inventing any, so on an indexed drawing two slots holding the same
+  colour stay two slots. A quarter turn needs a square canvas and greys
+  otherwise: a cel is canvas-sized, so turning the cels without the canvas
+  would leave the grid holding two different shapes.
+- **A free transform now lands on the whole range.** Committing a move, turn,
+  scale or slant replays the same gesture on every cel in the selection, each
+  transforming its own drawing rather than receiving a copy of the one you were
+  watching. The preview still shows only the cel you are on, and cancelling
+  still touches only that one. A pasted buffer lands where it was aimed,
+  whatever the range says.
+- **Continuous layers.** The new **Cels** toggle at the top of the layers panel
+  makes drawing on an empty frame start from a copy of the last drawing on that
+  track instead of from nothing — how you carry a held pose or a background
+  forward and then change it. It is a copy, not a link, so editing it leaves
+  the frame it came from alone. Saved with the document, and an `.aseprite`
+  layer marked "prefer linked cels" opens as one.
+- **The layers panel is the other half of a range.** Rows inside the selection
+  draw highlighted, Shift-clicking a row stretches the selection across the
+  tracks between it and the active one, and the eye on a row of a multi-track
+  range hides or shows the whole range in one step.
+- **Fixed: a filter over a range corrupted an indexed drawing.** It wrote
+  colours straight onto the cels without telling the palette planes, so the
+  document looked right until it was saved, undone or reordered — and then the
+  slots won and the drawing changed. Range writes also read "preserve
+  transparency" off the layer row now rather than off the cel, so the lock no
+  longer applies to only the frame on screen.
+- **Fixed: flipping a floating selection threw away the pixel-art setting.** A
+  flip re-rendered the transform with the smooth filter regardless, so pressing
+  it mid-gesture blurred a nearest-neighbour rotation.
 - **Inker has three colour modes.** A **Mode** row at the top of the palette
   section switches between **RGB**, **Indexed** and **Grayscale**, each a
   whole-document conversion and each a single Ctrl+Z.
