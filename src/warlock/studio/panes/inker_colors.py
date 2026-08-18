@@ -47,6 +47,13 @@ def _vec(colour: tuple[int, int, int, int]) -> Any:
     return imgui.ImVec4(*[c / 255.0 for c in colour])
 
 
+#: The least this panel may be squeezed to, in design px, before the pane
+#: above it stops taking room: the heading, the two colour chips, the Swap row
+#: and one row of swatches. The tools pane can grow to fit its toolbox, and
+#: this is the number that stops it doing so by eating the colours entirely.
+PANEL_FLOOR = 210.0
+
+
 def draw(ctx: Any) -> None:
     state = inker_mode.ensure(ctx)
     widgets.section("Colour")

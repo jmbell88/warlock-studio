@@ -187,6 +187,28 @@ def measure() -> float:
 # on the two sidebars, which are the width-constrained case.
 PANE_PADDING = tokens.SP_3
 SHARE_MIN, SHARE_MAX = 0.25, 0.75
+
+
+def give_way(avail: float, share: float, wanted: float, floor: float) -> float:
+    """Height for the upper of two stacked panes. -> design px.
+
+    **The share is a preference, not a promise.** A pane whose content has a
+    known minimum -- a fixed grid of buttons, plus enough of the form under it
+    to be worth scrolling -- must be allowed to overrule a share that would cut
+    that minimum in half, and must still yield before it starves the pane below
+    it. That is the sidebar/centre give-way rule of INVARIANTS.md read down a
+    column instead of across a row, and it is written here rather than in the
+    workspace so it can be asserted without a window.
+
+    ``wanted`` and ``floor`` are the upper pane's minimum and the lower pane's,
+    both in the same units as ``avail``. When the two cannot both be met the
+    lower pane's floor wins, because the alternative is a pane with a heading
+    and nothing under it.
+    """
+    if avail <= 0:
+        return 0.0
+    ceiling = max(avail - floor, avail * SHARE_MIN)
+    return min(max(avail * share, min(wanted, ceiling)), ceiling)
 GRIP = 7.0  # hit-zone width in design px; the drawn line is 1px
 
 

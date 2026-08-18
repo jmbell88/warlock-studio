@@ -3092,7 +3092,25 @@ class App:
         # them room. Same value and same clamps as Create's, so the two handles
         # are one setting seen twice rather than two settings to keep in step.
         avail_y = imgui.get_content_region_avail().y
-        tools_height = avail_y * lay.settings_share
+        # **The share is a preference, not a promise.** The toolbox is a fixed
+        # five-across grid of twenty-three buttons, so its height is known --
+        # and at UI scale 1.5 it is very nearly the whole 55% this pane used to
+        # be given, which left the Brush heading at the bottom edge with its
+        # first control cut in half. The pane scrolls, so nothing was
+        # unreachable; it simply looked broken, and the panel a user reaches for
+        # most was the one below the fold.
+        #
+        # So the share is honoured when it is generous enough and overridden
+        # when it is not: the toolbox plus a floor of options wins, and the
+        # colour panel below keeps a floor of its own so this cannot swallow it
+        # on a short window. Same shape as the sidebar/centre give-way rule in
+        # INVARIANTS.md, applied down a column instead of across a row.
+        tools_height = layout_mod.give_way(
+            avail_y,
+            lay.settings_share,
+            sp(inker_tools.grid_height() + inker_tools.OPTIONS_FLOOR),
+            sp(inker_colors.PANEL_FLOOR),
+        )
         with layout_mod.pane(
             "inker-tools",
             (sidebar_w, tools_height),

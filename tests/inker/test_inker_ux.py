@@ -14,8 +14,13 @@ from pathlib import Path
 
 import pytest
 
-from warlock.studio import inker_mode, inker_state, theme, tokens
-from warlock.studio.panes import inker_canvas, inker_textures, inker_tools
+from warlock.studio import inker_mode, inker_state, layout, theme, tokens
+from warlock.studio.panes import (
+    inker_canvas,
+    inker_colors,
+    inker_textures,
+    inker_tools,
+)
 
 STUDIO = Path(inker_tools.__file__).resolve().parent.parent
 PANES = sorted((STUDIO / "panes").glob("*.py"))
@@ -470,3 +475,43 @@ def test_the_inker_workspace_has_drag_handles_of_its_own() -> None:
     source = main.read_text(encoding="utf-8")
     assert 'splitter("inker-sidebar-share"' in source
     assert 'splitter("inker-inspector-share"' in source
+
+
+def test_the_share_gives_way_to_the_toolboxs_own_height() -> None:
+    """A five-across grid of twenty-three buttons at UI scale 1.5 is very
+    nearly the whole 55% this pane used to be handed, which left the Brush
+    heading at the bottom edge with its first control cut in half."""
+    give_way = layout.give_way
+    # Generous share: it is honoured untouched.
+    assert give_way(1000.0, 0.55, 300.0, 200.0) == pytest.approx(550.0)
+    # Mean share, room to spare: the toolbox's own minimum wins.
+    assert give_way(1000.0, 0.25, 400.0, 200.0) == pytest.approx(400.0)
+    # No room for both: the panel below keeps its floor.
+    assert give_way(500.0, 0.9, 400.0, 200.0) == pytest.approx(300.0)
+
+
+def test_the_upper_pane_never_starves_the_lower_one() -> None:
+    """The alternative is a panel with a heading and nothing under it."""
+    for avail in (300.0, 640.0, 1080.0, 1600.0):
+        for share in (0.25, 0.55, 0.75):
+            height = layout.give_way(avail, share, 900.0, 210.0)
+            assert height <= avail
+            assert avail - height >= min(210.0, avail * (1 - layout.SHARE_MIN))
+
+
+def test_give_way_answers_for_a_collapsed_column() -> None:
+    """A pane can be laid out at zero height for a frame while the window is
+    being resized, and dividing by it is how a layout helper crashes."""
+    assert layout.give_way(0.0, 0.55, 400.0, 200.0) == 0.0
+    assert layout.give_way(-5.0, 0.55, 400.0, 200.0) == 0.0
+
+
+def test_both_floors_are_named_where_the_panes_are() -> None:
+    """The numbers belong to the panels that own them, not to the workspace
+    that stacks them: the workspace does not know what a colour panel needs."""
+    assert inker_tools.OPTIONS_FLOOR > 0
+    assert inker_colors.PANEL_FLOOR > 0
+    main = Path(inker_tools.__file__).resolve().parent.parent / "main.py"
+    source = main.read_text(encoding="utf-8")
+    assert "inker_tools.grid_height()" in source
+    assert "inker_colors.PANEL_FLOOR" in source

@@ -12,7 +12,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import controls, icons, inker, inker_mode, inker_state, theme, widgets
+from .. import controls, icons, inker, inker_mode, inker_state, theme, tokens, widgets
 from ..inker import brush, transform
 from ..inker_state import (
     OPEN_SHAPE_TOOLS,
@@ -29,6 +29,37 @@ from ..tokens import sp
 # truncated ("Ellipse select" in a 104px button) and anything wider is taller,
 # which the canvas pays for.
 COLUMNS = 5
+
+#: One toolbox button, in design px. The same number ``_grid`` draws with, said
+#: once so :func:`grid_height` cannot drift from it.
+BUTTON_H = 30.0
+
+#: How much of the options block has to be reachable without scrolling, in
+#: design px, before the toolbox is allowed to claim the rest of the pane.
+#: Three rows and a heading: the Brush section's own name, ``Size`` and its
+#: slider. Not "all of it" -- the panel scrolls and is meant to -- but a
+#: section heading with its first control cut in half is not a panel that
+#: scrolls, it is one that looks broken.
+OPTIONS_FLOOR = 132.0
+
+
+def grid_height() -> float:
+    """The toolbox block's height in design px: heading, rows, trailing gap.
+
+    Deterministic, because the toolbox is a fixed table laid out at a fixed
+    button height -- which is what lets the workspace reserve room for the
+    options *below* it instead of guessing a share and hoping.
+
+    The gap between rows is asked of the style for the reason ``grid_width``
+    asks for the horizontal one: a literal is right at UI scale 1.0 and wrong
+    at every other, and 1.0 is the scale the smoke suite runs at.
+    """
+    rows = -(-len(inker_state.TOOLS) // COLUMNS)
+    spacing = imgui.get_style().item_spacing.y / max(tokens.SCALE, 0.001)
+    # Heading, the rows and the gaps between them, and the 6 px ``dummy`` the
+    # pane puts under the grid.
+    return 28.0 + rows * (BUTTON_H + spacing) + 6.0
+
 
 TOOL_ICONS = {
     "brush": icons.BRUSH,

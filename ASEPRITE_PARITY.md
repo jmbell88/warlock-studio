@@ -456,6 +456,23 @@ parallel run goes red at random as tests are added anywhere; two `ImguiRenderer`
 lifecycles in one process is the trigger, and a context of its own for the second
 one is *not* enough to avoid it.
 
+Two things learned during the Inker UX pass (2026-08-18), which added ~160 tests
+and so shifted the scheduling this depends on:
+
+- The prediction above came true -- the full run went red on roughly one attempt
+  in two, on a *different* file each time, each passing alone.
+- It does not always crash cleanly. One run left a worker hung rather than
+  failing, so a suite that "takes too long" is a symptom of this and not only a
+  slow machine.
+- The faulting call is `imgui.new_frame()` on the second file's fresh context
+  (`test_studio_controls.py:132`), not `renderer.render` as recorded above --
+  i.e. the damage is already done by the time the second context draws, which
+  points at what the *first* renderer's `shutdown` leaves behind rather than at
+  the second one's setup.
+
+Still not fixed here, and still not a regression, but it is now frequent enough
+to be worth its own session.
+
 ---
 
 ## Wave 3 — Tilemap layers + tilesets (P0 item 3) — **NOT STARTED**
