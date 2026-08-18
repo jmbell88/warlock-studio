@@ -12,9 +12,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from warlock.studio.plotter import gid
 from warlock.studio.plotter.tilemap import MapDoc, MapObject, ObjectLayer, TileLayer, new_uid
-from warlock.studio.plotter.tileset import Tileset
+from warlock.studio.tilegrid import gid
+from warlock.studio.tilegrid.tileset import Tileset
 
 
 def _tileset(name: str = "t", tiles: int = 4) -> Tileset:
@@ -562,7 +562,7 @@ def test_a_stroke_covers_only_the_cells_that_moved():
 
 def test_replacing_a_tileset_keeps_every_painted_cell():
     from warlock.studio.plotter import terrain
-    from warlock.studio.plotter.tileset import repolish
+    from warlock.studio.tilegrid.tileset import repolish
 
     doc, ref, layer = _terrain_doc()
     region = terrain.paint_terrain(layer.data, 3, 3, 2, ref)
@@ -588,7 +588,7 @@ def test_replacing_a_tileset_of_a_different_size_is_refused():
 
 
 def test_a_replace_undoes_back_to_the_original_art():
-    from warlock.studio.plotter.tileset import repolish
+    from warlock.studio.tilegrid.tileset import repolish
 
     doc, ref, _layer = _terrain_doc()
     original = np.array(ref.tileset.pixels)
@@ -773,7 +773,7 @@ def test_undoing_a_tileset_change_moves_the_epoch_too():
 
 def test_a_failed_detach_leaves_the_epoch_alone():
     """The bump sits past the raise, so nothing invalidates on a no-op."""
-    from warlock.studio.plotter.tileset import TilesetRef
+    from warlock.studio.tilegrid.tileset import TilesetRef
 
     doc = MapDoc(6, 6, 16, 16)
     doc.add_tileset(_tileset("a"))

@@ -76,7 +76,7 @@ def add_tileset_path(
     def run() -> dict[str, Any]:
         from ..service.errors import invalid_from
         from .plotter import tsx as tsxlib
-        from .plotter.tileset import Tileset
+        from .tilegrid.tileset import Tileset
 
         try:
             if path.suffix.lower() == ".tsx":
@@ -127,7 +127,7 @@ def tileset_from_inker(ctx: Any, doc: Any, *, index: int | None = None) -> None:
     ``index`` names the tileset to repaint. Without one this is an ordinary
     append, which is what an unrelated drawing should be.
     """
-    from .plotter.tileset import Tileset, repolish
+    from .tilegrid.tileset import Tileset, repolish
 
     tab = active(ctx)
     if tab is None:
@@ -173,7 +173,7 @@ def ask_add_tileset(ctx: Any) -> None:
     def run() -> dict[str, Any] | None:
         from ..service.errors import invalid_from
         from .plotter import tsx as tsxlib
-        from .plotter.tileset import Tileset
+        from .tilegrid.tileset import Tileset
 
         path = dialogs.open_file("Add a tileset", TILESET_FILTER)
         if path is None:
@@ -211,7 +211,7 @@ def use_as_tileset(ctx: Any, job: Any) -> None:
 
     def run() -> dict[str, Any]:
         from ..service import files as svc_files
-        from .plotter.tileset import Tileset
+        from .tilegrid.tileset import Tileset
 
         path = svc_files.job_dir_file(ctx.svc, job_id, "input.png")
         tileset = Tileset(

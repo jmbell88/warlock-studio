@@ -24,7 +24,7 @@ from typing import Any
 
 import numpy as np
 
-from . import gid as gidlib
+from ..tilegrid import gid as gidlib
 from . import scene
 from .tilemap import OPAQUE_WHITE, ImageLayer, MapDoc, TileLayer
 

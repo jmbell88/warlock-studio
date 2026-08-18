@@ -25,7 +25,7 @@ import inspect
 import numpy as np
 import pytest
 
-from warlock.studio.plotter import gid, tmx
+from warlock.studio.plotter import tmx
 from warlock.studio.plotter.tilemap import (
     Capsule,
     Ellipse,
@@ -40,7 +40,8 @@ from warlock.studio.plotter.tilemap import (
     TileShape,
     new_uid,
 )
-from warlock.studio.plotter.tileset import Tileset
+from warlock.studio.tilegrid import gid
+from warlock.studio.tilegrid.tileset import Tileset
 
 
 def _doc() -> MapDoc:

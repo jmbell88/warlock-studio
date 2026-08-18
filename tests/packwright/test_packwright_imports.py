@@ -3,7 +3,7 @@
 Four outward imports, and every one of them is the same argument: reach for the
 module that *owns* a definition rather than restating it. ``pipelines.sheet``
 owns the atlas ceiling and what "trim" means; ``plotter.tsx`` owns the ``.tsx``
-format and ``plotter.tileset`` the type it is written from; ``studio.undo`` owns
+format and ``tilegrid.tileset`` the type it is written from; ``studio.undo`` owns
 history. Restating any of those is how two answers to one question appear and
 then drift.
 
@@ -33,7 +33,7 @@ OUTWARD_IMPORTS = {
     ("layout.py", "warlock.pipelines"),
     # The one .tsx writer in the repo. A second one is how a published format
     # comes to have two dialects.
-    ("tsxout.py", "warlock.studio.plotter.tileset"),
+    ("tsxout.py", "warlock.studio.tilegrid.tileset"),
     ("tsxout.py", "warlock.studio.plotter.tsx"),
     # The one RGBA-to-PNG encoder; the ``tsxout`` argument again. Four
     # byte-identical copies existed and all four sit on a determinism path, so
@@ -44,7 +44,7 @@ OUTWARD_IMPORTS = {
     # ``frozen_rgba``, over the edge ``tsxout`` had already established. A
     # sprite and a tileset image obey one immutability rule and used to hold
     # two byte-identical copies of it.
-    ("sources.py", "warlock.studio.plotter.tileset"),
+    ("sources.py", "warlock.studio.tilegrid.tileset"),
 }
 
 BANNED_ROOTS = {"imgui", "imgui_bundle", "moderngl", "pygame", "OpenGL", "glfw"}

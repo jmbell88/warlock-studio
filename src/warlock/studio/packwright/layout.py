@@ -5,7 +5,7 @@ sprite, row-major in key order. It is the mode that produces a *tileset* -- a
 regular atlas an engine can slice by arithmetic -- which is why the grid's
 geometry is spelled as Tiled's own margin and spacing: the outer border and the
 gutter are both ``padding``, so :mod:`.tsxout` can hand the numbers straight to
-``plotter.tileset.Tileset`` rather than approximating them.
+``tilegrid.tileset.Tileset`` rather than approximating them.
 
 **MaxRects** packs tightly and irregularly, which is what an atlas for
 individually-addressed sprites wants. Its size search is deterministic and

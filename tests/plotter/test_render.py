@@ -10,9 +10,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from warlock.studio.plotter import gid, render
+from warlock.studio.plotter import render
 from warlock.studio.plotter.tilemap import MapDoc
-from warlock.studio.plotter.tileset import Tileset
+from warlock.studio.tilegrid import gid
+from warlock.studio.tilegrid.tileset import Tileset
 
 
 # A 2x1 tileset of 2x2 tiles: tile 0 has one opaque red pixel at its top-left,

@@ -19,7 +19,7 @@ from typing import Any
 
 import numpy as np
 
-from . import gid as gidlib
+from ..tilegrid import gid as gidlib
 
 Region = tuple[int, int, np.ndarray]
 

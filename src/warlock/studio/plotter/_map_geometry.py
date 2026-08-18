@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from . import gid as gidlib
+from ..tilegrid import gid as gidlib
 from ._map_model import ObjectLayer, Shape, TileLayer, _dimension, scaled_shape
 from .edits import ResizeEdit, TileSizeEdit
 

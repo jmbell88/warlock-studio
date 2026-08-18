@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 
 from warlock.studio.plotter import tilemap, tmx, tsx, wmap
-from warlock.studio.plotter.tileset import Tileset
+from warlock.studio.tilegrid.tileset import Tileset
 
 
 def _pixels() -> np.ndarray:
@@ -310,7 +310,7 @@ def _tmj(tileset: dict) -> bytes:
 
 def _blob_wangset(colours: list[dict]) -> dict:
     """The set ``tsx.write_wangsets`` emits, in Tiled's JSON spelling."""
-    from warlock.studio.plotter import blob as bloblib
+    from warlock.studio.tilegrid import blob as bloblib
 
     tiles = []
     for index in range(len(colours)):
@@ -340,7 +340,7 @@ def test_a_tmj_wangset_this_build_wrote_is_recognised_rather_than_refused():
     """Recognise-or-refuse, the rule the XML side already followed. The JSON
     side used to refuse *every* wangset, so a ``.tmj`` carrying a set this build
     had itself written was turned away."""
-    from warlock.studio.plotter import blob as bloblib
+    from warlock.studio.tilegrid import blob as bloblib
 
     colours = [{"name": "Grass", "color": "#6a994e"}, {"name": "Sand", "color": "#d6c384"}]
     doc = tmx.read_tmj(
@@ -367,7 +367,7 @@ def test_a_tmj_wangset_this_build_wrote_is_recognised_rather_than_refused():
 def test_a_foreign_tmj_wangset_is_refused_and_says_what_is_modelled():
     """Corner-only sets, 255 colours, tiles that form no blob: adopting one
     would be the silent half-read the reader exists to prevent."""
-    from warlock.studio.plotter import blob as bloblib
+    from warlock.studio.tilegrid import blob as bloblib
 
     foreign = {
         "name": "Corners",

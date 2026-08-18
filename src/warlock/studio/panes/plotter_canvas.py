@@ -42,13 +42,13 @@ from .. import (
     theme,
     widgets,
 )
-from ..plotter import gid as gidlib
 from ..plotter import project
 from ..plotter import render as plotter_render
 from ..plotter import scene as plotter_scene
 from ..plotter import terrain as plotter_terrain
 from ..plotter import tools as plotter_tools
 from ..plotter.tilemap import ImageLayer, ObjectLayer, TileLayer
+from ..tilegrid import gid as gidlib
 from ..tokens import sp
 from . import plotter_layers, plotter_textures
 

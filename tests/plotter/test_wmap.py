@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from warlock.studio.plotter import gid, tsx, wmap
+from warlock.studio.plotter import tsx, wmap
 from warlock.studio.plotter.tilemap import (
     Capsule,
     Ellipse,
@@ -32,7 +32,8 @@ from warlock.studio.plotter.tilemap import (
     TileShape,
     new_uid,
 )
-from warlock.studio.plotter.tileset import Tileset
+from warlock.studio.tilegrid import gid
+from warlock.studio.tilegrid.tileset import Tileset
 
 from ._semantics import doc_facts
 
@@ -1106,7 +1107,7 @@ def test_an_older_fixture_saves_forward_as_version_3(stem):
 
 
 def _terrain_pixels(k: int, tile: int = 8, terrains: int = 1) -> np.ndarray:
-    from warlock.studio.plotter import blob
+    from warlock.studio.tilegrid import blob
 
     array = np.zeros((terrains * k * k * tile, blob.TILE_COUNT * tile, 4), np.uint8)
     array[..., 3] = 255
@@ -1114,7 +1115,7 @@ def _terrain_pixels(k: int, tile: int = 8, terrains: int = 1) -> np.ndarray:
 
 
 def _terrain_doc(k: int) -> MapDoc:
-    from warlock.studio.plotter.tileset import TerrainSpec
+    from warlock.studio.tilegrid.tileset import TerrainSpec
 
     doc = MapDoc(6, 4, 8, 8)
     doc.add_tileset(

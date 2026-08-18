@@ -3145,7 +3145,7 @@ def test_the_3d_form_builds_with_a_custom_budget(app_ctx, imgui_ctx, monkeypatch
 
 
 def _tileset(size: int = 32, tile: int = 16):
-    from warlock.studio.plotter.tileset import Tileset
+    from warlock.studio.tilegrid.tileset import Tileset
 
     pixels = np.zeros((size, size, 4), dtype=np.uint8)
     pixels[..., 3] = 255
@@ -3167,8 +3167,8 @@ def test_plotter_builds_empty_and_with_a_map(app_ctx, imgui_ctx):
         plotter_tileset,
         plotter_tools,
     )
-    from warlock.studio.plotter import gid
     from warlock.studio.plotter.tilemap import MapObject, new_uid
+    from warlock.studio.tilegrid import gid
     from warlock.studio.tokens import sp
 
     app_ctx.state.mode = "plotter"

@@ -32,7 +32,8 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from . import gid as gidlib
+from ..tilegrid import gid as gidlib
+from ..tilegrid.tileset import colour_text, rgba_colour
 from ._map_model import (
     DRAW_ORDERS,
     GroupLayer,
@@ -44,7 +45,6 @@ from ._map_model import (
     normalize_layer_values,
 )
 from .edits import LayerAddEdit, LayerMoveEdit, LayerPropsEdit, LayerRemoveEdit
-from .tileset import colour_text, rgba_colour
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .tilemap import MapDoc

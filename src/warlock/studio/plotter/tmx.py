@@ -48,8 +48,10 @@ from typing import Any
 
 import numpy as np
 
-from . import blob, project
-from . import gid as gidlib
+from ..tilegrid import blob
+from ..tilegrid import gid as gidlib
+from ..tilegrid.tileset import TerrainSpec, Tileset, TilesetRef, colour_text
+from . import project
 from .pngio import png_bytes
 from .props import (
     TiledUnsupported,
@@ -76,7 +78,6 @@ from .tilemap import (
     TileShape,
     new_uid,
 )
-from .tileset import TerrainSpec, Tileset, TilesetRef, colour_text
 from .tsx import (
     TILED_VERSION,
     TSX_VERSION,

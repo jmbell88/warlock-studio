@@ -56,8 +56,13 @@ LAZY_ONLY = {"PIL"}
 
 #: The other pure packages. Each is a peer, not a dependency: an edge between
 #: two of them is how "four independent engines" quietly becomes one.
-#: ``packwright -> plotter`` is the single declared exception in the tree and it
-#: runs the other way, so nothing here may point at any of them.
+#: ``packwright -> plotter`` is the single declared exception in the tree --
+#: shrunk by the ``tilegrid`` promotion to just ``tsx`` and ``pngio``, since the
+#: gid word, the sliced atlas and the blob collapse moved to the shared leaf
+#: both packages now reach for instead -- and it runs the other way, so nothing
+#: here may point at any of them. ``warlock.studio.tilegrid`` is not one of
+#: these: it is a shared leaf, not a sibling engine, and this package is free to
+#: import it.
 SIBLING_PACKAGES = (
     "warlock.studio.clay",
     "warlock.studio.plotter",

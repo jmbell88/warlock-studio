@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 
 from warlock.studio.plotter import tsx
-from warlock.studio.plotter.tileset import Tileset
+from warlock.studio.tilegrid.tileset import Tileset
 
 
 def _pixels(w: int = 64, h: int = 64) -> np.ndarray:
@@ -254,8 +254,8 @@ def test_tiled_unsupported_is_a_value_error():
 
 
 def _terrain_tileset(k: int, terrains: int = 2) -> Tileset:
-    from warlock.studio.plotter import blob
-    from warlock.studio.plotter.tileset import TerrainSpec
+    from warlock.studio.tilegrid import blob
+    from warlock.studio.tilegrid.tileset import TerrainSpec
 
     tile = 8
     specs = tuple(

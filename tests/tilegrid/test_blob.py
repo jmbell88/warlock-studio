@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from warlock.studio.plotter import blob
+from warlock.studio.tilegrid import blob
 
 
 def test_every_raw_mask_lands_in_the_table():

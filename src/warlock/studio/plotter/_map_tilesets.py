@@ -17,10 +17,10 @@ from __future__ import annotations
 import dataclasses
 from typing import TYPE_CHECKING
 
-from . import gid as gidlib
+from ..tilegrid import gid as gidlib
+from ..tilegrid.tileset import Tileset, TilesetRef
 from . import project
 from .edits import Edit, ProjectionEdit, TilesetAddEdit, TilesetReplaceEdit
-from .tileset import Tileset, TilesetRef
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .tilemap import MapDoc

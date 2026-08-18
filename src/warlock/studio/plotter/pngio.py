@@ -10,7 +10,7 @@ added to one and not the others, at which point one of those guarantees quietly
 becomes a claim about which writer happened to run.
 
 Here rather than in ``packwright/`` because the dependency already runs this
-way: ``packwright.tsxout`` reaches for ``plotter.tsx`` and ``plotter.tileset``,
+way: ``packwright.tsxout`` reaches for ``plotter.tsx`` and ``tilegrid.tileset``,
 and nothing in ``plotter/`` reaches back.
 
 Pillow is imported inside the function, the rule the whole package follows:

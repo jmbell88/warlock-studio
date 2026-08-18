@@ -48,9 +48,9 @@ from collections.abc import Iterable
 
 import numpy as np
 
-from . import blob
-from . import gid as gidlib
-from .tileset import TerrainSpec, TilesetRef
+from ..tilegrid import blob
+from ..tilegrid import gid as gidlib
+from ..tilegrid.tileset import TerrainSpec, TilesetRef
 from .tools import Region, flood_mask
 
 #: What an empty cell, or one belonging to some other tileset, ranks as. Below

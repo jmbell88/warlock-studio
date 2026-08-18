@@ -33,7 +33,8 @@ from typing import Any
 
 import numpy as np
 
-from . import blob
+from ..tilegrid import blob
+from ..tilegrid.tileset import TerrainSpec, Tileset
 from .props import (
     PROPERTY_TYPES,
     Prop,
@@ -41,7 +42,6 @@ from .props import (
     read_properties,
     write_properties,
 )
-from .tileset import TerrainSpec, Tileset
 
 # What this build writes. Tiled accepts anything it recognises; these are the
 # values a current Tiled writes and so the values least likely to surprise it.

@@ -46,6 +46,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..tilegrid.tileset import TilesetRef, colour_text
 from ..undo import CompoundEdit, Edit, UndoStack
 from . import project
 from ._map_geometry import GeometryOps
@@ -85,7 +86,6 @@ from ._map_paint import PaintOps
 from ._map_project import ProjectionOps
 from ._map_tilesets import TilesetOps
 from .edits import MapPropsEdit, MapSettingsEdit
-from .tileset import TilesetRef, colour_text
 
 # Re-exported, not merely imported. ``wmap``, ``tmx``, the panes and the tests
 # all say ``from .tilemap import TileLayer``, and this module is where a map's

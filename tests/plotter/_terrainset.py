@@ -20,9 +20,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from warlock.studio.plotter import blob
 from warlock.studio.plotter.terrain import DEFAULT_TERRAINS
-from warlock.studio.plotter.tileset import Tileset, TilesetRef
+from warlock.studio.tilegrid import blob
+from warlock.studio.tilegrid.tileset import Tileset, TilesetRef
 
 __all__ = ["DEFAULT_TERRAINS", "terrain_tileset", "terrain_ref"]
 

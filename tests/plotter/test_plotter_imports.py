@@ -8,6 +8,11 @@ turns up in a review three months later.
 
 This is the ``tests/inker/test_sheetout.py`` pin applied to the second pure
 package, and it is written the same way on purpose.
+
+The tile vocabulary itself -- the gid word, the sliced atlas, the blob
+collapse -- moved out to :mod:`warlock.studio.tilegrid` on 2026-08-18: the
+second shared leaf after ``studio/undo.py``, reached for by every module here
+that used to import ``.gid``, ``.tileset`` or ``.blob`` as a sibling.
 """
 
 from __future__ import annotations
@@ -24,9 +29,31 @@ PACKAGE = "warlock.studio.plotter"
 #: :mod:`~warlock.studio.undo` is the history engine the raster editor and Clay
 #: already share -- as headless as this package is, and the reason a ``.wmap``
 #: undo step and an ``.ora`` one obey the same byte budget.
+#: :mod:`~warlock.studio.tilegrid` and its ``.tileset`` submodule are the shared
+#: tile vocabulary -- every module that places, flips or slices a tile reaches
+#: for one or both.
 OUTWARD_IMPORTS = {
+    ("_map_geometry.py", "warlock.studio.tilegrid"),
+    ("_map_layers.py", "warlock.studio.tilegrid"),
+    ("_map_layers.py", "warlock.studio.tilegrid.tileset"),
+    ("_map_model.py", "warlock.studio.tilegrid.tileset"),
+    ("_map_paint.py", "warlock.studio.tilegrid"),
+    ("_map_tilesets.py", "warlock.studio.tilegrid"),
+    ("_map_tilesets.py", "warlock.studio.tilegrid.tileset"),
     ("edits.py", "warlock.studio.undo"),
+    ("render.py", "warlock.studio.tilegrid"),
+    ("scene.py", "warlock.studio.tilegrid.tileset"),
+    ("terrain.py", "warlock.studio.tilegrid"),
+    ("terrain.py", "warlock.studio.tilegrid.tileset"),
+    ("tilemap.py", "warlock.studio.tilegrid.tileset"),
     ("tilemap.py", "warlock.studio.undo"),
+    ("tmx.py", "warlock.studio.tilegrid"),
+    ("tmx.py", "warlock.studio.tilegrid.tileset"),
+    ("tools.py", "warlock.studio.tilegrid"),
+    ("tsx.py", "warlock.studio.tilegrid"),
+    ("tsx.py", "warlock.studio.tilegrid.tileset"),
+    ("wmap.py", "warlock.studio.tilegrid"),
+    ("wmap.py", "warlock.studio.tilegrid.tileset"),
 }
 
 BANNED_ROOTS = {"imgui", "imgui_bundle", "moderngl", "pygame", "OpenGL", "glfw"}
@@ -136,9 +163,7 @@ def test_the_package_imports_with_no_optional_dependency_present():
         _map_paint,
         _map_project,
         _map_tilesets,
-        blob,
         edits,
-        gid,
         pngio,
         project,
         props,
@@ -146,7 +171,6 @@ def test_the_package_imports_with_no_optional_dependency_present():
         scene,
         terrain,
         tilemap,
-        tileset,
         tmx,
         tools,
         tsx,

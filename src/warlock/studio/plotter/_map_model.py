@@ -38,7 +38,7 @@ from typing import Any
 
 import numpy as np
 
-from .tileset import RGBA, frozen_rgba, rgba_colour
+from ..tilegrid.tileset import RGBA, frozen_rgba, rgba_colour
 
 _uids = itertools.count(1)
 

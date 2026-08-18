@@ -12,9 +12,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from warlock.studio.plotter import gid, tsx
+from warlock.studio.plotter import tsx
 from warlock.studio.plotter.tilemap import Ellipse, MapDoc, MapObject, Polygon, Rect, new_uid
-from warlock.studio.plotter.tileset import Tileset
+from warlock.studio.tilegrid import gid
+from warlock.studio.tilegrid.tileset import Tileset
 
 from ._semantics import doc_facts
 
@@ -212,8 +213,8 @@ def test_a_tilesets_terrain_order_moves_the_facts():
     the earlier one wins. Reordering two terrains without changing either one
     must therefore move the facts. ``Tileset`` is frozen, so this is built as
     two documents rather than one mutated in place."""
-    from warlock.studio.plotter import blob
-    from warlock.studio.plotter.tileset import TerrainSpec
+    from warlock.studio.tilegrid import blob
+    from warlock.studio.tilegrid.tileset import TerrainSpec
 
     terrains = (
         TerrainSpec(name="grass", fill=(0, 255, 0, 255), outline=(0, 128, 0, 255)),

@@ -17,9 +17,10 @@ import numpy as np
 import pytest
 
 from warlock.studio import plotter_io, plotter_mode
-from warlock.studio.plotter import gid, tmx, wmap
+from warlock.studio.plotter import tmx, wmap
 from warlock.studio.plotter.tilemap import MapObject, new_uid
-from warlock.studio.plotter.tileset import Tileset
+from warlock.studio.tilegrid import gid
+from warlock.studio.tilegrid.tileset import Tileset
 
 
 class FakeCtx:
@@ -1883,7 +1884,7 @@ def _arrive(ctx, tab, *, projection=None, **kwargs):
 
 
 def test_an_arriving_set_is_one_tileset_and_one_undo_step():
-    from warlock.studio.plotter import blob
+    from warlock.studio.tilegrid import blob
 
     ctx = FakeCtx()
     tab = _tab(ctx)

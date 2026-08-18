@@ -10,7 +10,7 @@ interesting next to the settings that produce it. (The basename is
 The grid's geometry is the load-bearing part. It is spelled as Tiled's margin
 and spacing -- outer border and gutter both one ``padding`` -- because that is
 what lets :mod:`~warlock.studio.packwright.tsxout` hand the numbers straight to
-``plotter.tileset.Tileset`` instead of approximating them.
+``tilegrid.tileset.Tileset`` instead of approximating them.
 """
 
 from __future__ import annotations

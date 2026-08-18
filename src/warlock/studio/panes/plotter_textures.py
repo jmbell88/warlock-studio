@@ -7,7 +7,7 @@ atlas -- and it is ``forget_texture``d before release, or the backend keeps a
 dead object under a GL name the driver will reuse.
 
 What is different is that nothing here is ever re-uploaded in place. A
-tileset's pixels are frozen at construction (``plotter.tileset.Tileset`` copies
+tileset's pixels are frozen at construction (``tilegrid.tileset.Tileset`` copies
 them and clears the write flag), so a texture goes stale only when the
 document's tileset *list* changes -- which is what ``tileset_epoch`` counts,
 and why it is the staleness stamp here. The key is per tab: two maps that

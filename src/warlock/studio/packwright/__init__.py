@@ -5,11 +5,11 @@ no imgui, no moderngl, no pygame, no ``service``. It reaches outward exactly
 seven times: ``document.py`` for :mod:`warlock.studio.undo` (the shared history
 engine); ``layout.py`` for :mod:`warlock.pipelines.sheet` (the authority on the
 atlas ceiling and on what "trim" means); ``tsxout.py`` twice, for
-:mod:`warlock.studio.plotter.tileset` and :mod:`warlock.studio.plotter.tsx` (the
+:mod:`warlock.studio.tilegrid.tileset` and :mod:`warlock.studio.plotter.tsx` (the
 one ``.tsx`` writer in the repo, and the type it writes); ``compose.py`` and
 ``wpack.py`` for :mod:`warlock.studio.plotter.pngio` (the one RGBA-to-PNG
 encoder, which four byte-identical copies used to spell); and ``sources.py``
-for :mod:`warlock.studio.plotter.tileset` again, for ``frozen_rgba`` -- pinned
+for :mod:`warlock.studio.tilegrid.tileset` again, for ``frozen_rgba`` -- pinned
 exactly, and at that granularity, by
 ``tests/packwright/test_packwright_imports.py``.
 

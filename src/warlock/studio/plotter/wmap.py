@@ -86,7 +86,8 @@ from typing import Any, NoReturn
 
 import numpy as np
 
-from . import gid as gidlib
+from ..tilegrid import gid as gidlib
+from ..tilegrid.tileset import TerrainSpec, Tileset, TilesetRef
 from . import project
 from .pngio import png_bytes
 from .props import read_wmap_properties, write_wmap_properties
@@ -107,7 +108,6 @@ from .tilemap import (
     shape_for_kind,
     shape_kind,
 )
-from .tileset import TerrainSpec, Tileset, TilesetRef
 
 VERSION = 5
 #: The 1.12-era additions (see the module docstring); written when one of them

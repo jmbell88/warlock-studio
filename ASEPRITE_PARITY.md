@@ -1,6 +1,6 @@
 # ASEPRITE_PARITY.md — the Aseprite-parity master program
 
-**Status: Waves 0 and 1 DONE 2026-08-17. Waves 2-5 not started.**
+**Status: Waves 0-2 DONE 2026-08-17. Waves 3-5 not started.**
 **Progress is tracked by editing the wave status lines below (the PLOTTER_PLAN.md precedent). Each wave (or chunk) is a future session: its detailed implementation plan is written at execution time, arguing from this spec.**
 
 Goal: make Inker a genuine Aseprite alternative. Six P0 gaps from the 2026-08-17 gap

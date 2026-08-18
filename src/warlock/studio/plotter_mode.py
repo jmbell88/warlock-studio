@@ -567,7 +567,7 @@ def _copy(ctx: Any, state: PlotterState, tab: PlotterDoc, *, cut: bool) -> None:
     """Take the selected cells, optionally clearing them in one step."""
     import numpy as np
 
-    from .plotter import gid as gidlib
+    from .tilegrid import gid as gidlib
 
     layer, rect = _selected_tiles(ctx, state, tab, writing=cut)
     if layer is None:
@@ -619,7 +619,7 @@ def _delete(ctx: Any, state: PlotterState, tab: PlotterDoc) -> None:
     """
     import numpy as np
 
-    from .plotter import gid as gidlib
+    from .tilegrid import gid as gidlib
 
     if state.tool == "object" and state.selected_object is not None:
         layer = tab.doc.active()

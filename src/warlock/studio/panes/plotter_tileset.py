@@ -25,7 +25,7 @@ import numpy as np
 
 from .. import icons, plotter_mode, widgets
 from ..manual import render as manual_render
-from ..plotter import gid as gidlib
+from ..tilegrid import gid as gidlib
 from ..tokens import sp
 from . import plotter_textures
 

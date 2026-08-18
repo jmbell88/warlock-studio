@@ -33,11 +33,11 @@ from typing import Any
 import numpy as np
 
 # Shared rather than copied. This was a byte-identical second spelling of
-# ``plotter.tileset``'s helper, differing only in the noun in its error
+# ``tilegrid.tileset``'s helper, differing only in the noun in its error
 # message, which is now a parameter. The edge is already pinned in both
 # directions -- ``tsxout`` imports the same module for the .tsx writer -- so
 # this adds no dependency the package did not already have.
-from ..plotter.tileset import frozen_rgba
+from ..tilegrid.tileset import frozen_rgba
 
 
 @dataclass(frozen=True, slots=True)
