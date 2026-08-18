@@ -202,17 +202,26 @@ def _header_controls(ctx: Any, doc: Any) -> None:
     Photoshop has used and therefore the one a user's eye already knows.
     """
     layer = doc.stack.active
-    blend = widgets.labeled_combo("Blend", layer.blend, [(m, m) for m in inker.BLEND_MODES])
-    widgets.help_marker(
-        "How this layer combines with everything under it. Saved into the .ora "
-        "so other editors read it the same way."
+    blend = widgets.labeled_combo(
+        "Blend",
+        layer.blend,
+        [(m, m) for m in inker.BLEND_MODES],
+        help_text=(
+            "How this layer combines with everything under it. Saved into the .ora "
+            "so other editors read it the same way."
+        ),
     )
     if blend != layer.blend:
         doc.set_layer_props(blend=blend)
-    changed, value = widgets.labeled_slider_float("Opacity", layer.opacity, 0.0, 1.0)
-    widgets.help_marker(
-        "The active layer's opacity. Dragging previews it live and records one "
-        "undo step when you let go."
+    changed, value = widgets.labeled_slider_float(
+        "Opacity",
+        layer.opacity,
+        0.0,
+        1.0,
+        help_text=(
+            "The active layer's opacity. Dragging previews it live and records one "
+            "undo step when you let go."
+        ),
     )
     if changed:
         # Live while dragging, but only one undo step: set the value directly
@@ -327,7 +336,7 @@ def _actions_bar(ctx: Any, doc: Any) -> None:
     ):
         doc.remove_layer()
     if doc.anim is not None:
-        widgets.muted("Merge and flatten apply to every frame.")
+        widgets.muted_wrapped("Merge and flatten apply to every frame.")
 
 
 def track_range(tab: Any, doc: Any) -> tuple[int, int] | None:

@@ -219,7 +219,7 @@ def draw(ctx: Any) -> None:
                 # half-typed value is not an error, it is a value in progress:
                 # the document keeps what it had until the text is a colour.
                 widgets.muted("Not a colour yet - #RRGGBB or #AARRGGBB.")
-        order = widgets.combo(
+        order = widgets.labeled_combo(
             "Render order",
             doc.renderorder,
             [(value, value) for value in project.RENDER_ORDERS],

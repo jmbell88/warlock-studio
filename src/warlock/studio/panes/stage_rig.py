@@ -89,9 +89,11 @@ def _skeleton_picker(ctx: Any) -> None:
         return
     form = ctx.state.form_3d
     form["rig_template"] = widgets.labeled_combo(
-        "Skeleton", form.get("rig_template") or ctx.rig_default, options
-    )
-    widgets.help_marker(
-        "Which template's joints are fitted onto the mesh. The fit is by "
-        "proportion unless the mesh's own landmarks are found."
+        "Skeleton",
+        form.get("rig_template") or ctx.rig_default,
+        options,
+        help_text=(
+            "Which template's joints are fitted onto the mesh. The fit is by "
+            "proportion unless the mesh's own landmarks are found."
+        ),
     )

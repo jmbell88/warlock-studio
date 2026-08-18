@@ -75,7 +75,7 @@ def draw(ctx: Any) -> None:
         doc.add_image_layer()
 
     if isinstance(doc.active(), ObjectLayer):
-        state.object_shape = widgets.combo(
+        state.object_shape = widgets.labeled_combo(
             "Insert",
             state.object_shape,
             [
@@ -432,12 +432,12 @@ def _shape_fields(doc: Any, layer: Any, obj: MapObject) -> None:
     )
     changed_size, pixel_size = controls.input_int("Pixel size", shape.pixel_size, 1)
     color = widgets.input_text("##text-color", shape.color, max_length=9, hint="#RRGGBB")
-    halign = widgets.combo(
+    halign = widgets.labeled_combo(
         "Horizontal",
         shape.halign,
         [(value, value.title()) for value in ("left", "center", "right", "justify")],
     )
-    valign = widgets.combo(
+    valign = widgets.labeled_combo(
         "Vertical",
         shape.valign,
         [(value, value.title()) for value in ("top", "center", "bottom")],

@@ -155,6 +155,18 @@ def secondary(text: str) -> None:
     text_colored(theme.MUTED, text)
 
 
+def wrapped(value: int, text: str) -> None:
+    """``muted_wrapped`` for a line that carries a colour of its own.
+
+    The transform banner is the case: it is drawn in ACCENT because it is a
+    live mode indicator rather than a note, and at 42 characters it was being
+    cut off at the sidebar edge exactly like the muted sentences beside it.
+    """
+    imgui.push_text_wrap_pos(0.0)
+    text_colored(value, text)
+    imgui.pop_text_wrap_pos()
+
+
 def muted_wrapped(text: str) -> None:
     """A muted note that wraps to the pane rather than running off it.
 
@@ -645,7 +657,14 @@ def spinner(radius: float = 0.0, thickness: float = 0.0) -> None:
     draw.path_stroke(imgui.get_color_u32(theme.rgba(theme.ACCENT)), thickness=thickness)
 
 
-def combo(label: str, value: str, options: list[tuple[str, str]], width: float = -1.0):
+def combo(
+    label: str,
+    value: str,
+    options: list[tuple[str, str]],
+    width: float = -1.0,
+    *,
+    tooltip: str | None = None,
+):
     """A combo over (key, label) pairs. -> the (possibly unchanged) key.
 
     Keys rather than indices because every one of these is a guidance taxonomy
@@ -668,6 +687,12 @@ def combo(label: str, value: str, options: list[tuple[str, str]], width: float =
     if width:
         imgui.set_next_item_width(width)
     changed, index = imgui.combo(label, current, labels)
+    # A ``##``-hidden combo has no name on screen, so the tooltip *is* its
+    # accessible name -- the same rule INVARIANTS.md states for a glyph button.
+    # Here rather than at the call site because three of the four hidden combos
+    # in the Inker had written it out and the fourth had simply forgotten.
+    if tooltip is not None and imgui.is_item_hovered():
+        imgui.set_tooltip(tooltip)
     return keys[index] if changed else value
 
 
@@ -2138,19 +2163,44 @@ def small_icon_button(icon: str, tooltip: str, *, borderless: bool = False) -> b
     )
 
 
-def field_label(label: str) -> None:
-    """The small caps line above a control; what makes a combo answerable."""
+def field_label(label: str, help_text: str | None = None) -> None:
+    """The small caps line above a control; what makes a combo answerable.
+
+    ``help_text`` puts the marker **here, beside the name**, rather than after
+    the control, and it has to go here. ``help_marker`` ends in
+    ``same_line_or_wrap``, which -- correctly -- refuses to draw past the
+    content region and starts a new line instead; a full-width control leaves
+    *exactly* zero room on its own line. So every marker written after a
+    ``labeled_combo`` or a ``-1`` slider landed on a line of its own, between
+    the control it belongs to and the next field's name, where it reads as that
+    one's. Two of the three markers in the Layers panel and one in Brush were
+    orphaned this way, and a screenshot is what found them rather than a test.
+
+    The label row always has room, because a field label is short and drawn in
+    the small font.
+    """
     with fonts.small(imgui):
         text_colored(theme.MUTED, label.upper())
+    if help_text is not None:
+        help_marker(help_text)
 
 
-def labeled_combo(label: str, value: str, options: list[tuple[str, str]], width: float = -1.0):
+def labeled_combo(
+    label: str,
+    value: str,
+    options: list[tuple[str, str]],
+    width: float = -1.0,
+    *,
+    help_text: str | None = None,
+):
     """A combo that keeps saying what it is after a value is chosen."""
-    field_label(label)
+    field_label(label, help_text)
     return combo(f"##{label}", value, options, width)
 
 
-def labeled_slider_int(label: str, value: int, low: int, high: int) -> tuple[bool, int]:
+def labeled_slider_int(
+    label: str, value: int, low: int, high: int, *, help_text: str | None = None
+) -> tuple[bool, int]:
     """A full-width slider that keeps saying what it is. -> (changed, value)
 
     ``labeled_combo``'s rule, applied to the control it was missing. imgui
@@ -2160,7 +2210,7 @@ def labeled_slider_int(label: str, value: int, low: int, high: int) -> tuple[boo
     of a bare `0.850` with nothing to say it was Hardness. The value still
     reads inside the track; only the name was gone.
     """
-    field_label(label)
+    field_label(label, help_text)
     imgui.set_next_item_width(-1)
     return imgui.slider_int(f"##{label}", value, low, high)
 
@@ -2196,6 +2246,7 @@ def labeled_slider_float(
     *,
     fmt: str | None = None,
     percent: bool | None = None,
+    help_text: str | None = None,
 ) -> tuple[bool, float]:
     """``labeled_slider_int`` for a float. See it for why this exists.
 
@@ -2214,7 +2265,7 @@ def labeled_slider_float(
     :func:`float_format` picks one from the range, which is what stops a
     degrees-of-rotation slider reading ``45.000``.
     """
-    field_label(label)
+    field_label(label, help_text)
     imgui.set_next_item_width(-1)
     if percent is None:
         percent = low == 0.0 and high == 1.0

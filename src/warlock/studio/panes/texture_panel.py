@@ -63,11 +63,11 @@ def draw(ctx: Any, job: Any) -> None:
         # A denoising fraction, drawn as the percentage the reader thinks in.
         # The range does not start at zero, so the inference cannot see it.
         percent=True,
-    )
-    widgets.help_marker(
-        "How far each rendered view is taken from the mesh's current look. Low "
-        "keeps the shapes and recolours them; high reinterprets them. The top "
-        "of the range is only worth it with the geometry anchor on."
+        help_text=(
+            "How far each rendered view is taken from the mesh's current look. Low "
+            "keeps the shapes and recolours them; high reinterprets them. The top "
+            "of the range is only worth it with the geometry anchor on."
+        ),
     )
     _changed, form["depth"] = controls.checkbox(
         "Anchor to geometry (depth)",
@@ -85,21 +85,21 @@ def draw(ctx: Any, job: Any) -> None:
             float(form["control_scale"]),
             models.CONTROL_SCALE_MIN,
             models.CONTROL_SCALE_MAX,
+            help_text=(
+                "How firmly each restyle is held to the rendered depth. The "
+                "default is the model's own."
+            ),
         )
-        widgets.help_marker(
-            "How firmly each restyle is held to the rendered depth. The "
-            "default is the model's own."
-        )
-    form["texture_size"] = widgets.combo(
+    form["texture_size"] = widgets.labeled_combo(
         "Atlas size",
         form["texture_size"],
         [("", "Match the mesh")]
         + [(str(s), f"{s} px") for s in retexture.TEXTURE_SIZES],
-    )
-    widgets.help_marker(
-        "The default keeps the mesh's current atlas resolution. A smaller one "
-        "would also shrink the parts no view covers, which keep their old "
-        "colour."
+        help_text=(
+            "The default keeps the mesh's current atlas resolution. A smaller one "
+            "would also shrink the parts no view covers, which keep their old "
+            "colour."
+        ),
     )
 
     _warn(ctx, job, form)

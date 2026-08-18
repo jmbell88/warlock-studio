@@ -327,6 +327,16 @@ DENSE_PANES = (
 )
 
 
+#: The three ways a pane explains a control. ``help_text=`` is the third and
+#: newest: a marker written *after* a full-width control is drawn on a line of
+#: its own, where it reads as the next field's, so ``labeled_combo`` and the
+#: labelled sliders take the text and put the mark beside the name instead.
+#: ``texture_panel`` moved all three of its markers that way and this test --
+#: which greps for the call, not for the behaviour -- failed it for being
+#: better explained than before.
+EXPLAINS = ("help_marker", "set_tooltip", "help_text=", "tooltip=")
+
+
 @pytest.mark.parametrize("name", DENSE_PANES)
 def test_every_dense_pane_explains_at_least_one_of_its_controls(name):
     """K93, as a floor rather than a count. Seven of these ten had *no*
@@ -334,4 +344,4 @@ def test_every_dense_pane_explains_at_least_one_of_its_controls(name):
     are named but never explained sends the reader to the manual for every one
     of them."""
     source = (PANES / name).read_text(encoding="utf-8")
-    assert "help_marker" in source or "set_tooltip" in source
+    assert any(token in source for token in EXPLAINS)

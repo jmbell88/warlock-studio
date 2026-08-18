@@ -166,7 +166,7 @@ _MODE_HELP = {
 
 
 def _not_indexed(ctx: Any, state: Any, tab: Any) -> None:
-    widgets.muted("Not indexed - any colour is allowed.")
+    widgets.muted_wrapped("Not indexed - any colour is allowed.")
     if widgets.disabled_button(
         "Index to the swatches",
         bool(state.swatches),
@@ -355,7 +355,7 @@ def _sort_and_ramp(ctx: Any, state: Any, doc: Any, counts: list[int] | None) -> 
     if changed:
         state.palette_sort_desc = value
     if selection:
-        widgets.muted(f"{len(selection)} slot(s) selected; sorting them in place")
+        widgets.muted_wrapped(f"{len(selection)} slot(s) selected; sorting them in place")
 
     widgets.field_label("ramp")
     imgui.set_next_item_width(sp(70))
@@ -398,10 +398,14 @@ def _palette_files(ctx: Any, state: Any) -> None:
     save in this app is -- serialising after an unbounded modal would write
     whatever the user changed while it was open.
     """
-    if controls.small_button("Import palette"):
+    if controls.small_button("Import swatches"):
         inker_mode.import_palette(ctx)
     imgui.same_line()
-    if widgets.disabled_button("Export palette", bool(state.swatches)):
+    if widgets.disabled_button(
+        "Export swatches",
+        bool(state.swatches),
+        reason="The swatch row is empty.",
+    ):
         inker_mode.export_palette(ctx)
     widgets.help_marker(
         "GIMP .gpl, which Krita, Aseprite and Inkscape all read, or JASC .pal. "

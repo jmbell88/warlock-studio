@@ -263,12 +263,14 @@ def _resize_popup(ctx: Any, tab: Any) -> None:
         ctx.state.preview[key] = (max(1, width), max(1, height))
     state = inker_mode.ensure(ctx)
     state.resample = widgets.labeled_combo(
-        "Resample", state.resample, [(k, k) for k in transform.RESAMPLES]
-    )
-    widgets.help_marker(
-        "Nearest copies each source pixel whole, which is what pixel art needs "
-        "-- a filtered scale of a 32x32 sprite comes back blurred and with "
-        "thousands of colours in it. Smooth is right for everything else."
+        "Resample",
+        state.resample,
+        [(k, k) for k in transform.RESAMPLES],
+        help_text=(
+            "Nearest copies each source pixel whole, which is what pixel art needs "
+            "-- a filtered scale of a 32x32 sprite comes back blurred and with "
+            "thousands of colours in it. Smooth is right for everything else."
+        ),
     )
     anchor = _anchor_grid(ctx, tab)
     imgui.dummy((0, 4))
@@ -454,7 +456,7 @@ def _filter_popup(ctx: Any, tab: Any) -> None:
         return
     widgets.popup_chrome(_imgui=imgui)
 
-    name = widgets.combo(
+    name = widgets.labeled_combo(
         "Filter", state.filter_name, [(key, key) for key in filters.FILTERS]
     )
     if name != state.filter_name:
@@ -723,7 +725,7 @@ def convert_popup(ctx: Any, tab: Any) -> None:
         imgui.end_popup()
         return
 
-    state.convert_method = widgets.combo(
+    state.convert_method = widgets.labeled_combo(
         "Dither", state.convert_method, [(key, key) for key in dither.METHODS]
     )
     if not tab.doc.palette:

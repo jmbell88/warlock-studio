@@ -141,6 +141,13 @@ def test_no_module_cites_a_retired_plan_file():
 REASON_SWEPT = (
     "panes/clay_bridge.py",
     "panes/inker_bridge.py",
+    # Added in the Inker UX pass: this pane holds thirteen buttons that can
+    # grey out and every one of them was silent about it, which is worse here
+    # than on a bridge -- "Grow", "Shrink", "Border", "Feather" and "Crop to
+    # selection" all grey out for the *same* reason, and a user meeting five
+    # dead buttons at once has no way to learn it is one cause.
+    "panes/inker_tools.py",
+    "panes/inker_colors.py",
     "panes/packwright_bridge.py",
     "panes/plotter_bridge.py",
     "panes/candidates_panel.py",

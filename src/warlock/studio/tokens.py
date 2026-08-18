@@ -212,6 +212,12 @@ PALETTES: dict[str, dict[str, int]] = {
         "OK": 0x4CC38A,
         "ERR": 0xE5484D,
         "WARN": 0xE5A03D,
+        # The two squares of the transparency checker. Not a copy or a control
+        # role, so no contrast bar applies to them -- what they answer to is
+        # each *other*: the pair has to read as a checker rather than as a flat
+        # field, and the hard-coded pair these replace was 14 levels apart.
+        "CHECKER_A": 0x44464F,
+        "CHECKER_B": 0x2C2E35,
     },
     "light": {
         "BG": 0xF4F4F7,
@@ -226,6 +232,12 @@ PALETTES: dict[str, dict[str, int]] = {
         "OK": 0x1D7F53,
         "ERR": 0xC2262B,
         "WARN": 0x9A6410,
+        # Light on light, the way every other editor draws it. The pair these
+        # replace lived in the dark palette's range only, so a light-theme
+        # session drew a near-black checkerboard under a white window -- and
+        # dark artwork on it could not be seen, which is the half that mattered.
+        "CHECKER_A": 0xFFFFFF,
+        "CHECKER_B": 0xD6D6DE,
     },
 }
 

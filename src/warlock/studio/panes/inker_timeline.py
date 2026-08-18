@@ -18,10 +18,12 @@ A save is encoding the layer stack off-thread; playback is walking the playhead
 through frames. Both make restructuring the grid unsafe, and asking one question
 is what stops the third reason being added in one place and forgotten in nine.
 
-Cell thumbnails are deliberately not here. They are the obvious next thing and
-they are a per-cel texture on a grid that can be fifty wide, which is the
-``StripRender`` problem again -- worth doing on a budget, not worth doing by
-accident.
+Cell thumbnails **are** here, behind the *Thumbs* switch, and they are the
+reason that switch exists: a per-cel texture on a grid that can be fifty wide
+is the ``StripRender`` problem again, so they are drawn on a budget --
+``inker_textures.cel_thumb`` under a 512-entry LRU, at the same quarter-second
+throttle the layer thumbs use -- and they are off by default. (This paragraph
+said they were "deliberately not here" for four months after they shipped.)
 """
 
 from __future__ import annotations

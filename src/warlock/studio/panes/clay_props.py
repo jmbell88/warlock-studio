@@ -305,10 +305,14 @@ def _material(doc: Any, obj: Any) -> None:
         return
     _palette_row(doc, obj)
     options = [(str(i), m.name or f"slot {i}") for i, m in enumerate(doc.materials)]
-    picked = widgets.labeled_combo("slot", str(obj.material), options)
-    widgets.help_marker(
-        "Which palette entry this object renders and exports with. Editing an "
-        "entry writes a replacement, so every object using it follows."
+    picked = widgets.labeled_combo(
+        "slot",
+        str(obj.material),
+        options,
+        help_text=(
+            "Which palette entry this object renders and exports with. Editing an "
+            "entry writes a replacement, so every object using it follows."
+        ),
     )
     if picked != str(obj.material):
         doc.set_props(obj.uid, material=int(picked))

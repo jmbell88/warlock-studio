@@ -109,6 +109,18 @@ TOOLS = (
     ("slice", "Slice", "C"),
 )
 
+def tool_label(key: str) -> str:
+    """The display name for a tool key, or the key if it is not one.
+
+    One implementation, because there were four and two of them were wrong.
+    The toolbox grid and the status bar each looked the name up out of
+    ``TOOLS``; the Reset button and the preset list instead spelled the *key*
+    with its underscores swapped for spaces, so the box that said "Ellipse
+    select" was reset by a button that said "Reset select ellipse".
+    """
+    return next((label for tool, label, _ in TOOLS if tool == key), key)
+
+
 # Tools whose drag paints into the layer.
 PAINT_TOOLS = frozenset({"brush", "eraser", "blur", "smudge", "spray", "shade"})
 SHAPE_TOOLS = frozenset({"line", "rect", "ellipse", "polyline", "polygon", "curve"})

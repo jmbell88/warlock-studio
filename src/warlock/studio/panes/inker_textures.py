@@ -18,7 +18,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from .. import docmodes
+from .. import docmodes, theme, tokens
 
 # How often one layer's panel thumbnail may re-render while its pixels keep
 # changing (B24). During a stroke ``doc.rev`` ticks per dab, and every tick
@@ -29,10 +29,25 @@ THUMB_REFRESH_SECONDS = 0.25
 
 # The checkerboard behind transparency. One small texture drawn tiled, so the
 # pattern costs a single quad however far the canvas is zoomed out.
+#
+# **The two squares come out of the palette**, so the checker follows the theme
+# the way everything else does. They used to be module constants in the dark
+# palette's range, which meant a light-theme session drew a near-black
+# checkerboard under a white window -- and drew dark artwork onto a dark ground
+# where it could not be seen, which is the half that mattered. The cache is
+# keyed on the theme for the reason ``theme.__getattr__`` resolves live: a tile
+# built once under "dark" would otherwise outlive the switch that made it wrong.
 _CHECKER_KEY = "inker_checker"
 CHECKER_SQUARE = 8
-CHECKER_LIGHT = (58, 58, 64, 255)
-CHECKER_DARK = (44, 44, 50, 255)
+
+
+def _bytes(value: int) -> tuple[int, int, int, int]:
+    return ((value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF, 255)
+
+
+def checker_squares() -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]]:
+    """The two squares, as RGBA bytes, under the palette in force."""
+    return _bytes(theme.CHECKER_A), _bytes(theme.CHECKER_B)
 
 
 def _slot(uid: str, name: str) -> str:
@@ -336,19 +351,27 @@ def checker(ctx: Any) -> Any:
     """A two-square-by-two-square tile, drawn repeated under the canvas."""
     if ctx.viewer is None:
         return None
+    # Keyed on the theme, not merely cached: the palette can change under a
+    # running app, and a stale tile is the one bug this cache can cause.
+    stamp = tokens.THEME
     texture = ctx.state.preview.get(_CHECKER_KEY)
     if texture is not None:
-        return texture
+        if ctx.state.preview.get(f"{_CHECKER_KEY}:theme") == stamp:
+            return texture
+        ctx.state.preview.pop(_CHECKER_KEY, None)
+        docmodes.forget_texture(texture)
+    pale, dark = checker_squares()
     side = CHECKER_SQUARE * 2
     data = bytearray()
     for y in range(side):
         for x in range(side):
             light = (x < CHECKER_SQUARE) == (y < CHECKER_SQUARE)
-            data.extend(CHECKER_LIGHT if light else CHECKER_DARK)
+            data.extend(pale if light else dark)
     texture = ctx.viewer.ctx.texture((side, side), 4, bytes(data))
     texture.repeat_x = texture.repeat_y = True
     texture.filter = (ctx.viewer.ctx.NEAREST, ctx.viewer.ctx.NEAREST)
     ctx.state.preview[_CHECKER_KEY] = texture
+    ctx.state.preview[f"{_CHECKER_KEY}:theme"] = stamp
     return texture
 
 
@@ -372,6 +395,7 @@ def release_all(ctx: Any) -> None:
         k for k in list(ctx.state.preview) if k.startswith(_PER_TAB_KEYS)
     ]:
         ctx.state.preview.pop(key, None)
+    ctx.state.preview.pop(f"{_CHECKER_KEY}:theme", None)
     checker_texture = ctx.state.preview.pop(_CHECKER_KEY, None)
     if checker_texture is not None:
         docmodes.forget_texture(checker_texture)

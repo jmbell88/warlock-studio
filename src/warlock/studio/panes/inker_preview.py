@@ -90,12 +90,26 @@ def _transport(ctx: Any, tab: Any) -> None:
 
     imgui.same_line()
     speed = widgets.combo(
-        "##previewspeed", _speed_key(tab.preview_speed), _speed_options(), sp(64)
+        "##previewspeed",
+        _speed_key(tab.preview_speed),
+        _speed_options(),
+        sp(64),
+        tooltip=(
+            "Playback speed. A preview option rather than a document one -- the "
+            "frame durations in the timeline are what gets exported."
+        ),
     )
     tab.preview_speed = float(speed)
 
     scope = widgets.combo(
-        "##previewscope", tab.preview_scope, list(SCOPE_LABELS), sp(110)
+        "##previewscope",
+        tab.preview_scope,
+        list(SCOPE_LABELS),
+        sp(110),
+        tooltip=(
+            "How much of the document plays here: the whole clip, or just the "
+            "tag the playhead is inside."
+        ),
     )
     if scope != tab.preview_scope:
         tab.preview_scope = scope

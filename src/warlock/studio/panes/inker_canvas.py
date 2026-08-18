@@ -216,10 +216,12 @@ def _file_row(ctx: Any, state: Any) -> None:
         toolbar.Item(
             "flip", "Flip view", icons.FLIP_HORIZONTAL, tooltip="Flip the view (Ctrl+5)"
         ),
-        # Distinct from *Fit view* (Ctrl+0), which is on the View menu: this
-        # keeps the zoom the user chose and only puts the page back under the
-        # pane. Panning far enough to lose the canvas entirely is easy and the
-        # only way back was to re-fit, which threw the zoom away.
+        # Distinct from *Fit view* (Ctrl+0, and a button in the bridge panel):
+        # this keeps the zoom the user chose and only puts the page back under
+        # the pane. Panning far enough to lose the canvas entirely is easy and
+        # the only way back was to re-fit, which threw the zoom away. (The
+        # citation here used to say "the View menu"; this app has never had
+        # one, and a reader looking for it found nothing.)
         toolbar.Item(
             "center", "Center view", icons.CROSSHAIR, tooltip="Center the page"
         ),
@@ -595,8 +597,7 @@ def _status_bar(state: Any, tab: Any, origin: Any, hovered: bool) -> None:
         # 256-wide document is a coordinate the user cannot use.
         px, py = canonical((px, py), tab.doc.size, axes_of(tab.tiled))
         parts.append(f"{int(px)}, {int(py)}")
-    tool = next((label for key, label, _ in inker_state.TOOLS if key == state.tool), state.tool)
-    parts.append(tool)
+    parts.append(inker_state.tool_label(state.tool))
     parts.append(f"{tab.doc.size[0]} x {tab.doc.size[1]}")
     widgets.muted("   ".join(parts))
 
@@ -2387,7 +2388,21 @@ def _preview(state: Any, tab: Any, draw_list: Any, origin) -> None:
     view = tab.view
     mouse = imgui.get_mouse_pos()
     anchor = inker_state.to_screen(view, origin, *state.drag_anchor)
-    tip = (mouse.x, mouse.y)
+
+    # **The point the release will be handed, not the cursor.** The dispatcher
+    # commits through ``_release(..., _snapped(_local(point)))``, so a preview
+    # drawn from the raw mouse position is a picture of a gesture that is not
+    # about to happen. Derived once, here, because it was derived in the shape
+    # branch alone and the other four drew the cursor: with *Snap to grid* on,
+    # the marquee's rubber band tracked the cursor and the release landed on
+    # the lattice; in tiled view a band begun over a neighbouring tile was
+    # drawn from the canonical-tile anchor to a cursor two tiles away, i.e.
+    # stretched across the whole 3x3 view. The shape branch had been fixed for
+    # exactly this and carried the reasoning; the fix belongs above the split.
+    landing = _snapped(
+        state, _local(state, inker_state.to_image(view, origin, mouse.x, mouse.y))
+    )
+    tip = inker_state.to_screen(view, origin, *landing)
     colour = _u32(theme.ACCENT)
     kind, tool = state.drag_kind, state.tool
 
@@ -2403,20 +2418,8 @@ def _preview(state: Any, tab: Any, draw_list: Any, origin) -> None:
     if kind == "shape":
         # Through the same function the release goes through, and back to
         # screen: a preview drawn from the raw cursor while the commit applies a
-        # constraint is a picture of a shape the user is not about to get. The
-        # snap goes through here too, for the same reason -- the release reads a
-        # snapped point and this used to read the cursor.
-        p0, p1 = _shape_drag(
-            state,
-            state.drag_anchor,
-            # Through ``_local`` as well, because the anchor already is: a
-            # preview drawn a tile away from the shape the release will commit
-            # is worse than no preview at all.
-            _snapped(
-                state,
-                _local(state, inker_state.to_image(view, origin, mouse.x, mouse.y)),
-            ),
-        )
+        # constraint is a picture of a shape the user is not about to get.
+        p0, p1 = _shape_drag(state, state.drag_anchor, landing)
         anchor = inker_state.to_screen(view, origin, *p0)
         tip = inker_state.to_screen(view, origin, *p1)
 

@@ -192,19 +192,23 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
         labels = [pair for pair in NIB_LABELS if not indexed or pair[0] in inker.PIXEL_NIBS]
         if indexed and state.nib not in inker.PIXEL_NIBS:
             state.nib = labels[0][0]
-        state.nib = widgets.labeled_combo("Nib", state.nib, labels)
-        widgets.help_marker(
-            "Soft is the antialiased disc, which is what a painted reference "
-            "wants. The two pixel nibs lay down whole pixels only -- no partial "
-            "coverage anywhere -- which is what pixel art wants and what keeps "
-            "a drawing's colour count from growing along every edge."
-            + (
-                "\n\nThis document is indexed, so every pixel is a palette slot "
-                "and there is no partial coverage to be had: the soft nib is not "
-                "offered because it could not do what it says."
-                if indexed
-                else ""
-            )
+        state.nib = widgets.labeled_combo(
+            "Nib",
+            state.nib,
+            labels,
+            help_text=(
+                "Soft is the antialiased disc, which is what a painted reference "
+                "wants. The two pixel nibs lay down whole pixels only -- no partial "
+                "coverage anywhere -- which is what pixel art wants and what keeps "
+                "a drawing's colour count from growing along every edge."
+                + (
+                    "\n\nThis document is indexed, so every pixel is a palette slot "
+                    "and there is no partial coverage to be had: the soft nib is not "
+                    "offered because it could not do what it says."
+                    if indexed
+                    else ""
+                )
+            ),
         )
         if state.nib in inker.PIXEL_NIBS:
             # Not for the spray: the corner filter is about a *line*, and the
@@ -225,8 +229,6 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
             changed, value = widgets.labeled_slider_float("Hardness", state.hardness, 0.0, 1.0)
             if changed:
                 state.hardness = value
-        if tool in STAMP_TOOLS:
-            _image_brush(ctx, state, tab)
         if tool == "brush" and state.tip_for(tool) is None:
             # Hidden while an image tip is loaded, for the reason hardness is
             # hidden on a pixel nib: a captured picture's alpha is both its
@@ -252,14 +254,19 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
         # Spacing, smoothing and the corner filter are all about a *line*, and
         # a spray does not walk one -- the canvas forces the last two off, so
         # showing them would be controls that do nothing.
-        changed, rate = widgets.labeled_slider_int("Rate", int(state.spray_rate), 5, 400)
+        changed, rate = widgets.labeled_slider_int(
+            "Rate",
+            int(state.spray_rate),
+            5,
+            400,
+            help_text=(
+                "Dabs a second while the button is held. Size is the width of the "
+                "cloud rather than of one dab, so a wide spray is thin and a "
+                "narrow one builds up fast."
+            ),
+        )
         if changed:
             state.spray_rate = int(rate)
-        widgets.help_marker(
-            "Dabs a second while the button is held. Size is the width of the "
-            "cloud rather than of one dab, so a wide spray is thin and a "
-            "narrow one builds up fast."
-        )
     elif tool in PAINT_TOOLS:
         changed, value = widgets.labeled_slider_float(
             "Spacing", state.spacing, 0.02, 1.0, percent=True
@@ -273,19 +280,35 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
             if changed:
                 state.strength = value
         changed, value = widgets.labeled_slider_float(
-            "Smoothing", state.stabilise, 0.0, 0.95, percent=True
+            "Smoothing",
+            state.stabilise,
+            0.0,
+            0.95,
+            percent=True,
+            help_text=(
+                "The brush follows the cursor at a distance instead of exactly, "
+                "which turns a shaky line into a smooth one. It catches up when "
+                "you stop moving."
+            ),
         )
         if changed:
             state.stabilise = value
-        widgets.help_marker(
-            "The brush follows the cursor at a distance instead of exactly, "
-            "which turns a shaky line into a smooth one. It catches up when "
-            "you stop moving."
+        changed, value = widgets.labeled_slider_float(
+            "Taper",
+            state.speed_taper,
+            0.0,
+            1.0,
+            help_text="How much a fast stroke thins, for a pen-like flick.",
         )
-        changed, value = widgets.labeled_slider_float("Taper", state.speed_taper, 0.0, 1.0)
         if changed:
             state.speed_taper = value
-        widgets.help_marker("How much a fast stroke thins, for a pen-like flick.")
+    if tool in STAMP_TOOLS:
+        # Last, not in the middle of the brush options. ``section`` tints from
+        # its heading to the next one, so opening this one early put the ink
+        # radio, Opacity, Spacing, Smoothing and Taper inside a block headed
+        # "Image brush" -- controls it does not configure, under a name that
+        # says it does, on the three most-used tools in the box.
+        _image_brush(ctx, state, tab)
     if tool in SHAPE_TOOLS and tool not in OPEN_SHAPE_TOOLS:
         changed, filled = controls.checkbox("Filled", state.shape_filled)
         if changed:
@@ -317,7 +340,7 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
 
     if tool == "gradient":
         widgets.section("Gradient")
-        state.gradient_kind = widgets.combo(
+        state.gradient_kind = widgets.labeled_combo(
             "Shape",
             state.gradient_kind,
             [(k, k) for k in inker.GRADIENT_KINDS],
@@ -327,15 +350,15 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
             state.gradient_to_transparent = value
         # Derived from the engine's own tuple rather than written out, so the
         # combo cannot offer a matrix ``dither`` does not have.
-        state.gradient_dither = widgets.combo(
+        state.gradient_dither = widgets.labeled_combo(
             "Dither",
             state.gradient_dither,
             [("none", "none"), *((k, k) for k in inker.DITHER_ORDERED)],
-        )
-        widgets.help_marker(
-            "Throws away the blend between stops and thresholds each pixel onto "
-            "one of them instead, so the ramp lands on exactly the colours you "
-            "chose. A selection's soft edge is not dithered."
+            help_text=(
+                "Throws away the blend between stops and thresholds each pixel onto "
+                "one of them instead, so the ramp lands on exactly the colours you "
+                "chose. A selection's soft edge is not dithered."
+            ),
         )
         _gradient_stops(state)
 
@@ -356,7 +379,8 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
             "text object, so re-editing it is retyping it."
         )
 
-    if _has_options(tool) and controls.small_button(f"Reset {tool.replace('_', ' ')}##inkreset"):
+    reset = f"Reset {inker_state.tool_label(tool)}##inkreset"
+    if _has_options(tool) and controls.small_button(reset):
         state.reset_tool_options(tool)
 
     if _has_options(tool):
@@ -396,7 +420,7 @@ def _slices(ctx: Any, state: Any, tab: Any) -> None:
     """
     doc = tab.doc
     widgets.section("Slices")
-    widgets.muted("Drag on the canvas to add one; drag a corner to resize.")
+    widgets.muted_wrapped("Drag on the canvas to add one; drag a corner to resize.")
     changed, value = controls.checkbox("Show with other tools", state.show_slices)
     if changed:
         state.show_slices = value
@@ -511,7 +535,7 @@ def _shading(state: Any, doc: Any) -> None:
     """
     reason = inker_state.tool_reason("shade", doc)
     if reason:
-        widgets.muted(reason)
+        widgets.muted_wrapped(reason)
         return
     widgets.field_label("direction")
     for index, (value, label) in enumerate(SHADE_LABELS):
@@ -575,7 +599,12 @@ def _gradient_stops(state: Any) -> None:
         # Never below one stop: ``sample`` treats a single stop as a flat
         # colour rather than raising, but a list with none in it has no
         # gradient to draw and no way back to the preset except this button.
-        if widgets.disabled_button("x", len(state.gradient_stops) > 1):
+        if widgets.disabled_button(
+            "x",
+            len(state.gradient_stops) > 1,
+            reason="A gradient needs at least two stops.",
+            tooltip="Remove this stop.",
+        ):
             remove = index
         imgui.pop_id()
     if remove >= 0:
@@ -598,7 +627,11 @@ def _image_brush(ctx: Any, state: Any, tab: Any) -> None:
     turns and the two mirrors, which is six clicks and no numbers.
     """
     widgets.section("Image brush")
-    if widgets.disabled_button("Capture from selection##inkstamp", tab.doc.mask is not None):
+    if widgets.disabled_button(
+        "Capture from selection##inkstamp",
+        tab.doc.mask is not None,
+        reason="Select something first -- the selection is what becomes the tip.",
+    ):
         inker_mode.capture_brush(ctx)
     widgets.help_marker(
         "Turns what you have selected into the brush tip -- the drawing itself "
@@ -629,15 +662,17 @@ def _image_brush(ctx: Any, state: Any, tab: Any) -> None:
         inker_mode.clear_brush(ctx)
         return
     state.stamp_align = widgets.labeled_combo(
-        "Placing", state.stamp_align, list(STAMP_ALIGN_LABELS)
-    )
-    widgets.help_marker(
-        "Free puts the picture under the cursor, which is what a brush does. "
-        "Aligned snaps every dab to a grid of the tip's own size anchored on "
-        "the canvas, so neighbouring stamps line up into a pattern and going "
-        "over the same square twice changes nothing. Either way a stroke never "
-        "builds up on itself: dragging slowly over one spot leaves exactly what "
-        "one dab leaves."
+        "Placing",
+        state.stamp_align,
+        list(STAMP_ALIGN_LABELS),
+        help_text=(
+            "Free puts the picture under the cursor, which is what a brush does. "
+            "Aligned snaps every dab to a grid of the tip's own size anchored on "
+            "the canvas, so neighbouring stamps line up into a pattern and going "
+            "over the same square twice changes nothing. Either way a stroke never "
+            "builds up on itself: dragging slowly over one spot leaves exactly what "
+            "one dab leaves."
+        ),
     )
 
 
@@ -654,7 +689,11 @@ def _presets(ctx: Any, state: Any) -> None:
     _changed, name = controls.input_text("##inkpresetname", state.preset_name)
     state.preset_name = name[: inker_state.MAX_PRESET_NAME]
     imgui.same_line()
-    if widgets.disabled_button("Save##inkpresetsave", bool(state.preset_name.strip())):
+    if widgets.disabled_button(
+        "Save##inkpresetsave",
+        bool(state.preset_name.strip()),
+        reason="Give the preset a name first.",
+    ):
         state.save_preset(state.preset_name)
         state.preset_name = ""
         inker_mode.persist(ctx)
@@ -672,7 +711,7 @@ def _presets(ctx: Any, state: Any) -> None:
         if controls.small_button("x"):
             remove = saved_name
         imgui.same_line()
-        label = saved["tool"].replace("_", " ")
+        label = inker_state.tool_label(saved["tool"])
         if controls.selectable(f"{saved_name}  ({label})", False)[0]:
             state.apply_preset(saved_name)
         imgui.pop_id()
@@ -718,12 +757,12 @@ def _transform_entry(ctx: Any, state: Any, doc: Any) -> None:
     than a slot in the grid -- it takes the canvas over until it is applied."""
     widgets.section("Transform")
     if state.transforming:
-        widgets.text_colored(theme.ACCENT, "Transforming - Enter applies, Esc cancels.")
+        widgets.wrapped(theme.ACCENT, "Transforming - Enter applies, Esc cancels.")
         _transform_numbers(state, doc)
         return
     if controls.button("Free transform (Ctrl+T)", (-1, 0)):
         inker_mode.begin_transform(ctx)
-    widgets.muted("Rotates, scales and slants the selection, or the whole layer.")
+    widgets.muted_wrapped("Rotates, scales and slants the selection, or the whole layer.")
 
 
 def _transform_numbers(state: Any, doc: Any) -> None:
@@ -803,7 +842,7 @@ def _selection_actions(state: Any, doc: Any) -> None:
     if controls.button("All"):
         doc.select_all()
     imgui.same_line()
-    if widgets.disabled_button("None", doc.mask is not None):
+    if widgets.disabled_button("None", doc.mask is not None, reason="Nothing is selected."):
         doc.deselect()
     imgui.same_line()
     if controls.button("Invert"):
@@ -812,17 +851,25 @@ def _selection_actions(state: Any, doc: Any) -> None:
     # Enabled off the *memory* rather than off "there is no selection": the
     # useful case is exactly re-selecting after something else was selected,
     # and a mask the canvas has outgrown is refused by the engine.
-    if widgets.disabled_button("Reselect", doc._last_mask is not None):
+    if widgets.disabled_button(
+        "Reselect",
+        doc._last_mask is not None,
+        reason="Nothing has been deselected yet.",
+    ):
         doc.reselect()
     widgets.help_marker(
         "Brings back the selection you last dismissed (Ctrl+Shift+D). A "
         "selection from before a resize or a crop cannot come back -- it "
         "describes a canvas that no longer exists."
     )
-    if widgets.disabled_button("Copy to layer", doc.mask is not None):
+    if widgets.disabled_button(
+        "Copy to layer", doc.mask is not None, reason="Nothing is selected."
+    ):
         doc.layer_from_selection(cut=False)
     imgui.same_line()
-    if widgets.disabled_button("Move to layer", doc.mask is not None):
+    if widgets.disabled_button(
+        "Move to layer", doc.mask is not None, reason="Nothing is selected."
+    ):
         doc.layer_from_selection(cut=True)
     widgets.help_marker(
         "Ctrl+J copies the selection onto a layer of its own and leaves the "
@@ -842,7 +889,7 @@ def _selection_actions(state: Any, doc: Any) -> None:
     if changed:
         state.feather_radius = value
     imgui.same_line()
-    if widgets.disabled_button("Feather", doc.mask is not None):
+    if widgets.disabled_button("Feather", doc.mask is not None, reason="Nothing is selected."):
         doc.feather_selection(state.feather_radius)
 
     # Whole pixels, and its own control: feather softens an edge where these
@@ -855,20 +902,22 @@ def _selection_actions(state: Any, doc: Any) -> None:
     imgui.same_line()
     widgets.muted("by")
     has = doc.mask is not None
-    if widgets.disabled_button("Grow", has):
+    if widgets.disabled_button("Grow", has, reason="Nothing is selected."):
         doc.grow_selection(state.select_steps)
     imgui.same_line()
-    if widgets.disabled_button("Shrink", has):
+    if widgets.disabled_button("Shrink", has, reason="Nothing is selected."):
         doc.shrink_selection(state.select_steps)
     imgui.same_line()
-    if widgets.disabled_button("Border", has):
+    if widgets.disabled_button("Border", has, reason="Nothing is selected."):
         doc.border_selection(state.select_steps)
     widgets.help_marker(
         "Border replaces the selection with the band that many pixels either "
         "side of its edge -- fill it and you have stroked the outline."
     )
 
-    if widgets.disabled_button("Crop to selection", doc.mask is not None):
+    if widgets.disabled_button(
+        "Crop to selection", doc.mask is not None, reason="Nothing is selected."
+    ):
         doc.crop_to_selection()
 
 
@@ -935,7 +984,12 @@ def _symmetry_axis(state: Any) -> None:
     if changed:
         state.symmetry_axis = (float(values[0]), float(values[1]))
     imgui.same_line()
-    if widgets.disabled_button("Centre##symcentre", axis is not None):
+    if widgets.disabled_button(
+        "Centre##symcentre",
+        axis is not None,
+        reason="The axis is already centred.",
+        tooltip="Put the symmetry axis back in the middle of the canvas.",
+    ):
         # Back to None rather than to the middle of the current document: None
         # *is* the centre, and stays the centre across a resize.
         state.symmetry_axis = None

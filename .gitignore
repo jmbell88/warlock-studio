@@ -46,15 +46,13 @@ imgui.ini
 # And the meshes, for the same reason and more so: a re-texture corpus is a
 # copy of the input GLB plus its re-textured output, which is 27 MB a pair.
 /docs/measurements/data/**/*.glb
-# Screenshot-harness output (`scripts/screenshot_modes.py --out`). Per-run,
-# regenerable, and photographed for one review -- never an input to anything.
-/.tmp-ui-audit/
-# Same, from the Plotter review runs (`--out .tmp-plotter-review*`), including
-# the `WARLOCK_DATA_DIR` each one is pointed at. Written by a suite run, so
-# without this a `git add -A` after `uv run pytest` commits them.
-/.tmp-plotter-review*/
-# Same again, from the whole-studio passes (`--out .tmp-studio-audit`, one
-# subdirectory per theme and UI scale). 12 MB of PNGs the third time this
-# pattern needed a line -- the two above did not cover it, so a `git add -A`
-# would have committed the lot.
-/.tmp-studio-audit/
+# Screenshot-harness output (`scripts/screenshot_modes.py --out`), and the
+# `WARLOCK_HOME` each run is pointed at. Per-run, regenerable, photographed for
+# one review -- never an input to anything, and tens of MB of PNGs a pass.
+#
+# **One pattern, not one line per review.** This had grown a fourth entry
+# (`.tmp-ui-audit`, `.tmp-plotter-review*`, `.tmp-studio-audit`, and the Inker
+# UX pass) because each reviewer picked a new directory name, and the line
+# after the one they read did not cover them. A `git add -A` after a harness
+# run commits whatever the newest name was, so the rule is the prefix.
+/.tmp-*/
