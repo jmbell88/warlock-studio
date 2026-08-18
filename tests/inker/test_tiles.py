@@ -334,6 +334,27 @@ def test_a_track_without_a_tileset_uid_still_autovivifies_an_ordinary_layer():
     assert not isinstance(doc.stack[0], TilemapCel)
 
 
+def test_a_dangling_tileset_uid_autovivifies_nothing():
+    """A track whose ``tileset_uid`` names no slot in ``self.tilesets`` is an
+    impossible state, not a normal one to paper over -- ``_ensure_cel_for``
+    refuses exactly as it does for its other guard conditions: no cel is
+    invented, the slot stays a placeholder, and nothing is queued to commit."""
+    doc = _doc()
+    anim = doc.ensure_animation()
+    anim.tracks[0].tileset_uid = 999999  # no matching TilesetSlot was ever added
+
+    doc.add_frame()
+    placeholder = doc.stack[0]
+    assert doc.anim.is_placeholder(placeholder)
+
+    doc._ensure_cel_for(placeholder.uid)
+
+    assert doc.stack[0] is placeholder
+    assert doc.anim.is_placeholder(doc.stack[0])
+    assert (anim.tracks[0].uid, anim.frame.uid) not in anim.cels
+    assert doc._pending_cels == []
+
+
 def test_linked_tilemap_cel_shares_refs():
     doc = _doc()
     anim = doc.ensure_animation()

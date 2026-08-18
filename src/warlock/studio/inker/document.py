@@ -774,15 +774,17 @@ class Document(
             # copied forward -- ``continuous`` describes what a *raster*
             # track's fresh cel starts from and a tilemap track has no
             # matching notion yet (Wave 3 chunk 3.3 is where tile edits are
-            # routed). The tile size comes off the bound slot; a track whose
-            # tileset_uid names no slot in ``self.tilesets`` (a file mid-load,
-            # or a bug upstream) falls back to one cell covering the whole
-            # canvas rather than raising out of the middle of a gesture.
+            # routed). The tile size comes off the bound slot -- and a track
+            # whose ``tileset_uid`` names no slot in ``self.tilesets`` (a file
+            # mid-load, or a bug upstream) is refused exactly like the
+            # placeholder/track-index guard above: no cel is invented for a
+            # binding that names nothing, the slot stays a placeholder, and
+            # the caller's write lands nowhere until the dangling binding is
+            # fixed.
             slot = next((s for s in self.tilesets if s.uid == track.tileset_uid), None)
-            tile_w, tile_h = (
-                (slot.tileset.tile_w, slot.tileset.tile_h) if slot is not None
-                else (width, height)
-            )
+            if slot is None:
+                return
+            tile_w, tile_h = slot.tileset.tile_w, slot.tileset.tile_h
             grid_h, grid_w = grid_shape((width, height), tile_w, tile_h)
             real: Layer = TilemapCel(
                 pixels=cp.empty(width, height),
