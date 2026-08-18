@@ -422,3 +422,51 @@ def test_the_ring_reaches_every_tool_the_brush_slider_sizes() -> None:
 
 def test_the_single_cell_outline_waits_until_a_cell_is_bigger_than_its_line() -> None:
     assert inker_canvas.PIXEL_CELL_MIN_ZOOM >= 2.0
+
+
+# --- the pane fits in the pane ----------------------------------------------
+
+#: The blocks that fold, and the keys their open state is remembered under.
+#: Named rather than counted, because *which* three is the decision: the tool
+#: grid and the brush options are what the pane is for and stay open, and these
+#: are the ones reached once and then left alone for an hour.
+FOLDING = {
+    "Image brush": "inker/image-brush",
+    "Presets": "inker/presets",
+    "Canvas": "inker/canvas",
+}
+
+
+@pytest.mark.parametrize("label", sorted(FOLDING))
+def test_the_occasional_blocks_fold_and_remember(label: str) -> None:
+    """~45 rows of controls plus a five-row icon grid, in 55% of a 300 dp
+    sidebar, with no folding anywhere: about half the pane was below the fold at
+    UI scale 1.0 and the Brush section was almost entirely below it at 1.5.
+    Plotter had already answered this half; the splitter answers the other."""
+    source = Path(inker_tools.__file__).read_text(encoding="utf-8")
+    assert f'"{label}", default_open=False, persist_key="{FOLDING[label]}"' in source
+
+
+def test_the_blocks_that_are_the_panel_do_not_fold() -> None:
+    """An asset opened with every section collapsed shows a column of headings
+    and nothing to act on -- which is what ``widgets.header``'s own docstring
+    says, and why the brush options are still a plain section."""
+    source = Path(inker_tools.__file__).read_text(encoding="utf-8")
+    for label in ("Tools", "Brush", "Selection", "Transform"):
+        assert f'widgets.section("{label}")' in source
+
+
+def test_every_folding_key_is_namespaced_to_this_pane() -> None:
+    """They share one settings dict with every other pane's."""
+    for key in FOLDING.values():
+        assert key.startswith("inker/")
+
+
+def test_the_inker_workspace_has_drag_handles_of_its_own() -> None:
+    """Both of its shares were ``lay.settings_share`` and it had no splitter,
+    so the only way to change the split was to switch to Create and drag the
+    handle there. One setting seen twice, not two settings to keep in step."""
+    main = Path(inker_tools.__file__).resolve().parent.parent / "main.py"
+    source = main.read_text(encoding="utf-8")
+    assert 'splitter("inker-sidebar-share"' in source
+    assert 'splitter("inker-inspector-share"' in source

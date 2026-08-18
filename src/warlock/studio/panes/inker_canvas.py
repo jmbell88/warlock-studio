@@ -1034,14 +1034,29 @@ def _locked_out(ctx: Any, state: Any, tab: Any) -> bool:
     preview frame, and this is the only place that knows a press is a press.
     """
     doc = tab.doc
-    if state.tool in _READ_ONLY_TOOLS or not doc.write_locked():
+    if state.tool in _READ_ONLY_TOOLS:
+        return False
+    if not doc.write_locked():
+        # **Hidden is not refused, but it is no longer silent.** There is no
+        # visibility check at any door: the stroke lands, the composite does
+        # not show it, and the only thing on screen that could explain it is
+        # an eye icon in a different pane. Painting under a hidden layer to
+        # unhide it later is a real workflow, so the answer is a sentence
+        # rather than a refusal -- and one per press, like the lock's, rather
+        # than one per dab.
+        if not doc.stack.active.visible:
+            ctx.toast(
+                "That layer is hidden, so nothing you paint on it will show. "
+                "The eye in the layers panel turns it back on.",
+                "warn",
+            )
         return False
     # Nudging a buffer that is already floating writes to no layer -- the hole
     # it came out of was cut before the lock went on, and ``commit_floating``
     # is deliberately not refused either.
     if state.tool == "move" and doc.floating is not None:
         return False
-    ctx.toast("That layer is locked. Unlock it in the layers panel.", "warn")
+    ctx.toast(inker_mode.LOCKED_LAYER, "warn")
     state.drag_kind = ""
     return True
 

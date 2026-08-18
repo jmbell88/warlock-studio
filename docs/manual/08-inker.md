@@ -61,9 +61,37 @@ reach from either direction rather than a number you have to type. The zoom stop
 1000% — far enough out to see a large page whole, far enough in to place single pixels, and no
 further in either direction, because past those the canvas is either unreadable or unusable.
 
+`+` and `-` are the other zoom, and they move differently on purpose: they step through *whole*
+scales — 25%, 50%, 100%, 200%, 300%, 400%, 500%, 600%, 800%, 1000% — rather than 5% at a time. Those
+are the zooms at which pixel art is being shown rather than resampled. At 135% a pixel of the drawing
+is 1.35 pixels of the screen, so some are drawn one wide and some two: a checkerboard dither comes
+out as bands, and a one-pixel line thickens and thins along its length. The wheel is the fine
+control and the keys are the honest one. A step always goes past where you are, so 135% zooms out to
+100% and in to 200%, and both keys hold at the ends of the ladder rather than wrapping.
+
+Zooming with the keys holds whatever is under the cursor still, the way the wheel does, unless the
+cursor is off the canvas — then it holds the middle of the pane, so a keypress cannot throw the page
+off screen because the mouse happened to be resting in another panel.
+
+Above 400% a thin outline follows the cursor around the single pixel the next dab will land on. The
+brush ring says how *wide* the brush is; at that zoom the question is *which* pixel, and the ring
+cannot answer it.
+
 One consequence worth knowing: an image too large to fit at 25% is centred at 25% and runs off the
 edges of the pane rather than shrinking to meet it. Every size this app makes fits comfortably; it
 takes a hand-opened file to run into.
+
+## The status bar
+
+The muted line under the canvas is where the numbers live. Left to right: the colour under the
+cursor as a swatch, then the pixel it is over, then the size of the selection if there is one, then
+the tool and its brush size, the layer you are drawing into, the frame if the document is animated,
+the document's size, and the zoom.
+
+Two of those save a trip. The swatch is what `Alt`+click would pick up — the eyedropper's only other
+feedback is the foreground chip changing in a different panel — and the brush size is the number
+`[` and `]` are changing. The position and the swatch appear only while the cursor is actually over
+the page, not merely over the pane.
 
 ## Tiled mode
 
@@ -263,6 +291,17 @@ given a meaning where a wrong one cannot be taken back. Middle-drag still pans.
 one, and otherwise the whole layer while the Move tool is in your hand — each press is one undo
 step. Nudging is gated on the Move tool rather than global because quietly translating a layer
 because somebody pressed Right with the brush selected is not a trade worth making.
+
+### The shape of the panel
+
+**Image brush**, **Presets** and **Canvas** are collapsing sections, closed until you open one, and
+each remembers its own state across restarts. They hold the settings of a sitting rather than of a
+gesture — a captured tip, a saved bundle of tool options, the symmetry axis, the grid and the rulers
+— and left open they push the brush controls off the bottom of the panel.
+
+The divider between the toolbox and the colour panel can be dragged, and so can the one between the
+layers panel and the panel under it. It is one setting shared with the other workspaces, so moving
+it here moves it there.
 
 ### Image brushes
 
@@ -524,6 +563,12 @@ and a locked layer wears a small padlock beside its name. Under the list is the 
 **add**, **duplicate**, **group**, **merge down**, **flatten** and **delete**, as icon buttons whose
 names are in their tooltips. Dragging the opacity slider previews live but records a single undo
 step when you let go, rather than one step per pixel of drag.
+
+Two of the panel's states reach out to the canvas. A **locked** layer refuses to be painted on: the
+pointer becomes a no-entry sign over the canvas, and a click that gets through anyway says so. A
+**hidden** layer is not refused — painting under one and turning it back on afterwards is a real way
+to work — but the first press on one says that nothing you paint there will show, because otherwise
+the only clue is an eye icon on the other side of the window.
 
 There are nineteen blend modes, listed in the order every editor groups them — darkening, then
 lightening, then contrast, then comparison, then the arithmetic and colour ones:

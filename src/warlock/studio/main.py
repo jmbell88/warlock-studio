@@ -3064,6 +3064,7 @@ class App:
         from imgui_bundle import imgui
 
         from . import layout as layout_mod
+        from . import tokens as tokens_mod
         from .panes import (
             inker_bridge,
             inker_canvas,
@@ -3081,7 +3082,17 @@ class App:
         tab = None if ctx.state.inker is None else ctx.state.inker.active
         animated = tab is not None and tab.doc.anim is not None
         imgui.begin_group()
-        tools_height = imgui.get_content_region_avail().y * lay.settings_share
+        # **A drag handle, at last.** The two shares in this workspace have
+        # always been ``lay.settings_share``, and this workspace has never had a
+        # splitter -- so the only way an Inker user could change the split was
+        # to switch to Create and drag the handle *there*. It bites hardest at
+        # UI scale 1.5, where the toolbox grid alone is most of the 55% and the
+        # Brush section starts below the fold: a screenshot pass found the tool
+        # options unreachable without scrolling, and there was no way to give
+        # them room. Same value and same clamps as Create's, so the two handles
+        # are one setting seen twice rather than two settings to keep in step.
+        avail_y = imgui.get_content_region_avail().y
+        tools_height = avail_y * lay.settings_share
         with layout_mod.pane(
             "inker-tools",
             (sidebar_w, tools_height),
@@ -3090,6 +3101,16 @@ class App:
         ) as visible:
             if visible:
                 inker_tools.draw(ctx)
+        drag = layout_mod.splitter("inker-sidebar-share", vertical=False, length=sidebar_w)
+        if drag and avail_y > 0:
+            lay.settings_share = min(
+                max(
+                    lay.settings_share + drag * tokens_mod.SCALE / avail_y,
+                    layout_mod.SHARE_MIN,
+                ),
+                layout_mod.SHARE_MAX,
+            )
+            lay.save()
         with layout_mod.pane(
             "inker-colors",
             (sidebar_w, 0),
@@ -3150,7 +3171,8 @@ class App:
             ) as visible:
                 if visible:
                     inker_preview.draw(ctx)
-        layers_height = imgui.get_content_region_avail().y * lay.settings_share
+        right_avail = imgui.get_content_region_avail().y
+        layers_height = right_avail * lay.settings_share
         with layout_mod.pane(
             "inker-layers",
             (0, layers_height),
@@ -3159,6 +3181,19 @@ class App:
         ) as visible:
             if visible:
                 inker_layers.draw(ctx)
+        # The layer *list* is the thing this frees: at 1.5 the panel's own
+        # header, blend and opacity fill the pane and every layer is below the
+        # fold, on a panel whose entire job is picking one.
+        drag = layout_mod.splitter("inker-inspector-share", vertical=False, length=sidebar_w)
+        if drag and right_avail > 0:
+            lay.settings_share = min(
+                max(
+                    lay.settings_share + drag * tokens_mod.SCALE / right_avail,
+                    layout_mod.SHARE_MIN,
+                ),
+                layout_mod.SHARE_MAX,
+            )
+            lay.save()
         with layout_mod.pane(
             "inker-bridge",
             (0, 0),

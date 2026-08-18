@@ -633,7 +633,14 @@ def _image_brush(ctx: Any, state: Any, tab: Any) -> None:
     where you started -- and because the useful values are the four quarter
     turns and the two mirrors, which is six clicks and no numbers.
     """
-    widgets.section("Image brush")
+    imgui.dummy((0, 6))
+    # Folded by default: an image brush is a property of the brush rather than
+    # a step in using one, and eight rows of tip variants sat between the nib
+    # and the opacity for every session that never captured a tip.
+    if not widgets.header(
+        "Image brush", default_open=False, persist_key="inker/image-brush"
+    ):
+        return
     if widgets.disabled_button(
         "Capture from selection##inkstamp",
         tab.doc.mask is not None,
@@ -691,7 +698,9 @@ def _presets(ctx: Any, state: Any) -> None:
     tool. Clicking one selects its tool as well as its settings, because a
     preset called "inking pen" that arrived on the eraser would be half applied.
     """
-    widgets.section("Presets")
+    imgui.dummy((0, 6))
+    if not widgets.header("Presets", default_open=False, persist_key="inker/presets"):
+        return
     imgui.set_next_item_width(-sp(56))
     _changed, name = controls.input_text("##inkpresetname", state.preset_name)
     state.preset_name = name[: inker_state.MAX_PRESET_NAME]
@@ -929,7 +938,11 @@ def _selection_actions(state: Any, doc: Any) -> None:
 
 
 def _canvas_options(ctx: Any, state: Any) -> None:
-    widgets.section("Canvas")
+    imgui.dummy((0, 6))
+    # Symmetry, the grid, snapping and the rulers: settings of the *sitting*
+    # rather than of the gesture, reached once and then left for an hour.
+    if not widgets.header("Canvas", default_open=False, persist_key="inker/canvas"):
+        return
     state.symmetry = widgets.labeled_combo("Symmetry", state.symmetry, list(SYMMETRY_LABELS))
     if state.symmetry == "radial":
         imgui.set_next_item_width(sp(90))

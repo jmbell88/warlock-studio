@@ -2084,6 +2084,11 @@ def nudge(state: Any, tab: InkerDoc, dx: int, dy: int) -> bool:
 
 # --- playback ----------------------------------------------------------------
 
+#: The one sentence both doors say. It was written out at the canvas press and
+#: nowhere else, which is how the keyboard's copies of the same refusal came to
+#: be silent: there was nothing to reuse and no reason to notice.
+LOCKED_LAYER = "That layer is locked. Unlock it in the layers panel."
+
 #: A tick longer than this is treated as a stall rather than as elapsed time.
 #: Without the clamp, a two-second hitch (a dialog, a texture upload storm)
 #: fast-forwards the clip through twenty frames at once, which reads as a
@@ -2355,10 +2360,16 @@ def handle_key(ctx: Any, event: Any) -> bool:
     elif event.key in arrows:
         step = NUDGE_STEP if shift else 1
         dx, dy = arrows[event.key]
-        nudge(state, tab, dx * step, dy * step)
+        # **The return value is read now.** A nudge onto a locked layer came
+        # back False and the answer was thrown away, so the arrows did nothing
+        # and said nothing -- while the *same* refusal reached by a mouse press
+        # raised a toast. The two doors gave two different answers to one
+        # question, and the quiet one is the one a user meets by accident.
+        if not nudge(state, tab, dx * step, dy * step) and doc.write_locked():
+            ctx.toast(LOCKED_LAYER, "warn")
     elif event.key == pygame.K_DELETE:
-        if not tab.busy:
-            doc.delete_selection()
+        if not tab.busy and not doc.delete_selection() and doc.write_locked():
+            ctx.toast(LOCKED_LAYER, "warn")
     elif event.key == pygame.K_ESCAPE:
         # Never leaves the mode: Esc means "drop what I am doing", and losing a
         # workspace full of tabs to a stray keypress is not that.
