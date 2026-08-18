@@ -448,6 +448,36 @@ def test_every_real_provider_is_registered_by_ensure():
     assert kinds >= {"inker", "clay", "plotter", "packwright", "pose", "profile"}
 
 
+@pytest.mark.parametrize(
+    "module,cls",
+    [
+        ("warlock.studio.inker_state", "InkerDoc"),
+        ("warlock.studio.clay_state", "ClayTab"),
+        ("warlock.studio.plotter_state", "PlotterDoc"),
+        ("warlock.studio.packwright_state", "PackTab"),
+    ],
+)
+def test_every_journalled_state_class_declares_all_three_mark_fields(module, cls):
+    """``set_mark`` writes three attributes and ``mark_of`` reads them back
+    through ``getattr`` defaults -- so a slot class that *drops* one of them
+    keeps working, silently, with the debounce or the head reset to its default
+    on every restart. That is exactly how ``PlotterDoc.journal_at`` went missing
+    on 2026-08-18: it sat directly above a block of fields that were deleted
+    with the ground set, and nothing anywhere went red.
+
+    Declared fields rather than a round-trip through ``set_mark``, because the
+    round-trip is what passes either way. These four are the dataclasses; the
+    pose and profile slots carry the same three as properties over state that
+    outlives one document, which is checked by their own modes' tests.
+    """
+    import dataclasses
+    import importlib
+
+    target = getattr(importlib.import_module(module), cls)
+    names = {f.name for f in dataclasses.fields(target)}
+    assert {"journal_name", "journal_head", "journal_at"} <= names, sorted(names)
+
+
 def test_no_two_kinds_share_a_name_or_an_extension():
     """A shared extension would let two providers claim one file, and the
     sidecar's ``kind`` would be the only thing distinguishing them."""

@@ -116,11 +116,11 @@ DERIVED_PARAMS = (
     "mesh_attempts",
     "control_hint",
     "recipe",
-    # What the ground-set worker recorded about the atlas it painted -- the
-    # textures it actually generated, the palette, the base it ran on. Derived
-    # by definition, so a re-paint must start clean rather than wear a report
-    # about a sheet it is replacing.
-    "ground_report",
+    # What the tile-sheet worker recorded about the sheet it painted -- the
+    # finished pixel size, the palette it quantized to, the base and LoRA it
+    # actually ran with. Derived by definition, so a reroll must start clean
+    # rather than wear a report about the sheet it is replacing.
+    "sheet_report",
     # What a re-texture did to this mesh's surface -- coverage, view count, the
     # recipe that restyled it. Recorded on the mesh's own row because that is
     # where a reader asks what its skin is, and derived, so a reroll must not

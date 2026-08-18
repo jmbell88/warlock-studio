@@ -77,20 +77,16 @@ def rerun_job(
     check_seed("seed", seed)
     source = svc.require_job(job_id)
 
-    if source["kind"] == "ground_set":
-        # Refused by name rather than left to fall through. A ground set's
-        # params carry a whole ``ground`` block -- the terrains, the geometry,
-        # the band -- that this function knows nothing about and would copy
-        # verbatim while changing the one seed every texture is derived from;
-        # and the copy would skip ``create_ground_set``'s weights admission
-        # entirely, which is the check that stops a set finishing as sixteen
-        # un-styled textures. The Plotter section is the door, and it is where
-        # the geometry can be checked against the map that will adopt it.
-        raise Invalid(
-            "a ground set is re-painted from Plotter's Generate section, where "
-            "it can be matched to the map that will use it",
-            field="mode",
-        )
+    if mode == "remesh" and source["kind"] == "tile_sheet":
+        # Refused by name, and only in this mode: a reroll of a tile sheet is
+        # exactly meaningful -- the whole request is a prompt, a tile size and a
+        # seed, and "draw me another" is the reason the seed is stored. What
+        # cannot happen is a reconstruction: a remesh is an image job at stage
+        # "model", so a sheet taken through here would buy two minutes of
+        # trellis turning a grid of tiles into a lumpy plane.
+        # ``promote_to_model``'s sentence for a tile, restated for the thing a
+        # tile sheet is sixty-four of.
+        raise Invalid("a tile sheet has no subject to reconstruct")
 
     if mode == "remesh" and source["stage"] == "tile":
         # The other door onto a reconstruction, and it has to be shut for the
@@ -178,6 +174,35 @@ def rerun_job(
     # decision itself.
     check_weights(svc, kind, params)
     check_vram(svc, kind, stage, params)
+    if kind == "tile_sheet":
+        # The same door ``create_tile_sheet`` holds, held again on the way back
+        # in -- the ``retexture`` precedent below, for the reason the long
+        # comment above gives about ``style_lora``. ``check_weights`` is
+        # text-only, so without this a reroll days later, against a models
+        # directory the user has since pruned, would finish and come back a
+        # grid of flat photographs while the row claimed a pixel-art LoRA that
+        # never loaded. Gated on the *stored* reference rather than the params'
+        # adapter, because ``carry_ref`` below is what decides whether the new
+        # row will actually have one.
+        from .tilesheets import _check_weights as _check_sheet_weights
+
+        _check_sheet_weights(
+            svc, with_reference=(svc.job_dir(job_id) / "ref.png").exists()
+        )
+    if params.get("sprite_sheet"):
+        # The sprite arm's half of the same rule, and it needs saying separately
+        # because the job in front of this function is not the one the check is
+        # about: ``params["sprite_sheet"]`` is a *request for a follow-up*, and
+        # the row that would load these weights is minted by the worker minutes
+        # later, in ``_maybe_queue_sprite_sheet``, which cannot refuse anything.
+        # ``create_job`` holds this door on the way in for that reason; a reroll
+        # is the other way in, days later and against a models directory the
+        # user may have pruned since. Without it the character redraws, the
+        # sheet is queued behind it, and the pair fails at dispatch -- which
+        # reads as a bug rather than as a download nobody has done.
+        from ._jobs_create import _check_sprite_sheet
+
+        _check_sprite_sheet(svc, params["sprite_sheet"])
     if kind == "retexture":
         # The same door ``retexture_job`` holds, held again on the way back in.
         # A stored row's ``base_model`` outlives the door that admitted it -- a

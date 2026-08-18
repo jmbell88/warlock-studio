@@ -77,10 +77,10 @@ The expansion is deterministic in the job's seed and is recorded on the finished
 
 ## The pane at a glance
 
-The form is one flat column of sections: **Output** (Object or Seamless tile), **Profile**,
-**Prompt**, **References** (conditioning on an image), **Seed** (how many and which seed),
-**Model**, **LoRA** and **Negative prompt**. There are no folds — everything is on screen, and the
-Generate button stays pinned below the column.
+The form is one flat column of sections: **Output** (Object, Seamless tile or Sheet), **Sheet**
+(only while that output is chosen), **Profile**, **Prompt**, **References** (conditioning on an
+image), **Seed** (how many and which seed), **Model**, **LoRA** and **Negative prompt**. There are
+no folds — everything is on screen, and the Generate button stays pinned below the column.
 
 Earlier versions carried a twelve-select creative taxonomy (category, genre, material and the
 rest) behind a "More options" reveal. It was retired on 2026-08-17: no taxonomy axis ever measured
@@ -364,3 +364,46 @@ A ratio is hard to calibrate against by eye, so the section also offers a wrappe
 rolled by half, which puts what was the wrap edge through the middle of the frame where a
 discontinuity is obvious. It is `wrap_preview.png`, a derived export like any other, and the
 Export tab offers it too.
+
+## Sheets
+
+The third **Output** setting is **Sheet**, and it is the one that makes several pictures from one
+prompt. Under it, **Sheet type** picks between the two kinds.
+
+### Tile grids
+
+A tile grid is 64 tiles in an 8×8 arrangement — grass, path, water, cliffs, props — drawn as one
+picture and cut up. Being one generation is the point: every tile shares a palette, a light
+direction and a style, which is what separates a tileset from 64 unrelated pictures.
+
+Two settings, and only two. **Tile size** is how many pixels across one tile is; **Projection** is
+*Orthogonal* (square tiles seen from above) or *Isometric* (2:1 diamonds). The line under them says
+what the finished sheet comes to — a 32 px orthogonal sheet is 256×256, a 64 px isometric one is
+512×256 — so there is no arithmetic to do.
+
+Everything else is decided for you and is not a control: the grid is 8×8 because 1024 ÷ 8 is the
+true art resolution the pixel-art style draws at, and the palette is shared across the whole sheet
+for the reason above. The prompt is the brief; a **reference image**, if you attach one under
+*References*, shapes the style but is never required.
+
+Behind the scenes the grid is *imposed* rather than requested: the cell boundaries are drawn into a
+guide the structure control follows, so the tiles land where the app is going to cut. That is why a
+sheet comes back on the grid rather than as a picture that merely looks like one.
+
+A tile sheet cannot be made into a mesh, and offers no cutout exports, for the tile's reasons. To
+paint with it, take it into **Plotter** or cut it up in **Packwright** — both read the sheet from
+the library like any other asset.
+
+### Sprite sheets
+
+The other sheet type turns your prompt into a character and then into a sheet of it. **Layout** is
+a four-direction turnaround or a four-frame walk cycle in each direction; **Cell size** is how many
+pixels across one frame is.
+
+This one is two steps and shows as two rows in the library: the character is drawn first and kept
+as its own asset, and two candidate sheets are then imagined from it. That is deliberate — a sheet
+you dislike still leaves you the drawing it was made from, to reroll, edit or synthesise again with
+different settings. An attached reference shapes the character.
+
+The drafts appear under **Sprite sheet** in the inspector when the character is selected. See
+*Sprite sheets* for what to do with them.

@@ -41,6 +41,8 @@ def thumb_glyph(job: Any) -> str:
         "rig": icons.BONE,
         "sheet": icons.FILM,
         "sprite": icons.LAYERS,
+        # The badge's glyph, so a card's placeholder and its chip agree.
+        "tilesheet": icons.LAYERS,
     }.get(card_kind(job), icons.IMAGE)
 
 

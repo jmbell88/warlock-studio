@@ -136,8 +136,8 @@ class GenerateOps:
         if job["kind"] == "retexture":
             await self._retexture(job)
             return
-        if job["kind"] == "ground_set":
-            await self._ground_set(job)
+        if job["kind"] == "tile_sheet":
+            await self._tile_sheet(job)
             return
         job_dir = self.config.job_dir(job["id"])
         job_dir.mkdir(parents=True, exist_ok=True)

@@ -107,21 +107,32 @@ def test_a_pixel_sheet_restyle_costs_sdxl_plus_a_controlnet():
     assert coexist == pytest.approx(exclusive + vram.TRELLIS_GIB)
 
 
-def test_a_ground_set_costs_one_txt2img_pass_and_nothing_else():
-    """Sixteen textures are sixteen *sequential* passes through one resident
-    pipe, so the terrain count is not a term in the peak -- and a seamless
-    texture conditions on nothing, so neither a ControlNet nor an IP-Adapter is
-    ever loaded beside it. Never trellis: there is no mesh anywhere near it."""
-    exclusive = vram.estimate("ground_set", "ground", {}, exclusive=True)
-    assert exclusive == pytest.approx(vram.SDXL_GIB)
-    assert vram.estimate("ground_set", "ground", {}, exclusive=False) == pytest.approx(
-        exclusive + vram.TRELLIS_GIB
+def test_a_tile_sheet_costs_one_txt2img_pass_and_its_grid_guide():
+    """Sixty-four tiles are a *slicing* of one generation, not sixty-four
+    generations, so the grid is not a term in the peak. The ControlNet always
+    is -- the guide is the whole mechanism. Never trellis: there is no mesh
+    anywhere near it."""
+    exclusive = vram.estimate("tile_sheet", "tilesheet", {}, exclusive=True)
+    assert exclusive == pytest.approx(vram.SDXL_GIB + vram.CONTROLNET_GIB)
+    assert vram.estimate(
+        "tile_sheet", "tilesheet", {}, exclusive=False
+    ) == pytest.approx(exclusive + vram.TRELLIS_GIB)
+    # The grid genuinely does not move it.
+    big = {"sheet": {"tile_w": 64, "tile_h": 64, "columns": 8, "rows": 8}}
+    assert vram.estimate(
+        "tile_sheet", "tilesheet", big, exclusive=True
+    ) == pytest.approx(exclusive)
+
+
+def test_a_tile_sheets_reference_encoder_is_gated_on_the_reference():
+    """Unlike a sprite synthesis, this kind's IP-Adapter is optional -- so
+    charging its encoder unconditionally would refuse the common prompt-only
+    request on a card that fits it."""
+    plain = vram.estimate("tile_sheet", "tilesheet", {}, exclusive=True)
+    conditioned = vram.estimate(
+        "tile_sheet", "tilesheet", {"ip_adapter": "plus"}, exclusive=True
     )
-    # The terrain count genuinely does not move it.
-    many = {"ground": {"terrains": [{"name": f"t{i}"} for i in range(8)]}}
-    assert vram.estimate("ground_set", "ground", many, exclusive=True) == pytest.approx(
-        exclusive
-    )
+    assert conditioned == pytest.approx(plain + vram.IP_ENCODER_GIB)
 
 
 def test_a_retexture_costs_one_img2img_pass_and_never_trellis():

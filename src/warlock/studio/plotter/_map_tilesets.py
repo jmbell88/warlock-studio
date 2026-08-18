@@ -3,9 +3,9 @@
 The projection lives here rather than beside the placement arithmetic, and that
 is the seam rather than an oversight: ``_map_project`` answers *where a cell is*
 given a lattice, while changing which lattice a document is on is an undoable
-edit -- and one that routinely arrives welded to a tileset, because generating
-an isometric ground set is *how* a map becomes isometric. Splitting the two
-would put half of one step in each file.
+edit -- and one that can arrive welded to a tileset, since a set drawn for one
+lattice is only usable on a map that is on it. Splitting the two would put half
+of one step in each file.
 
 Public method plus private hook throughout, ``_map_layers``' rule: the hooks are
 the tileset list's only mutators and the public methods are the only things that
@@ -104,10 +104,16 @@ class TilesetOps:
     ) -> None:
         """Change the lattice, optionally adopting a tileset in the same step.
 
-        ``adding`` exists because the two arrive together: generating an
-        isometric ground set is *how* a map becomes isometric, and two steps
+        ``adding`` exists for the case where the two arrive together: two steps
         would leave a Ctrl+Z on a map whose only tileset is drawn for the
         lattice it is no longer on.
+
+        No door pairs them today. The one that did was the ground generator,
+        deleted on 2026-08-18, and a map's projection is now chosen in the
+        new-map dialog instead. The pairing is kept rather than unpicked because
+        it is the *correct* composition for any door that carries a lattice with
+        its art -- a Tiled ``.tsx`` that declares one is the obvious next -- and
+        re-deriving it later means re-deriving the one-undo-step argument too.
         """
         want = project.check(projection)
         steps: list[Edit] = []

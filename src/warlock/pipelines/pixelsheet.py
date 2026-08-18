@@ -218,11 +218,13 @@ def quantize_shared(atlas: PILImage, colors: int) -> tuple[PILImage, list[str]]:
     of the budget; a sprite sheet's transparent margin is black, so the cost is
     the black entry the sheet almost certainly wanted anyway.
 
-    Newly worth stating because a ground-set atlas is the first caller with a
-    large transparent fraction -- an isometric sheet is about half VOID -- and
-    one entry out of eight is a different proposition from one out of
-    sixty-four. Changing it means changing the bytes of every sheet already
-    quantized, so it is written down rather than quietly fixed.
+    Worth stating because of the callers with a large transparent fraction --
+    a sprite turnaround's cells are mostly margin -- where one entry out of
+    eight is a different proposition from one out of sixty-four. (A tile sheet
+    is the opposite case and costs nothing here: every cell is opaque edge to
+    edge, so no entry of its budget is spent on a region nobody looks at.)
+    Changing it means changing the bytes of every sheet already quantized, so
+    it is written down rather than quietly fixed.
     """
     import numpy as np
     from PIL import Image

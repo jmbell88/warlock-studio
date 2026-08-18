@@ -23,8 +23,11 @@ from ... import guidance as guidancelib
 from ... import models as modelslib
 from ... import vectors
 from ...bench import findings as findings_lib
+from ...pipelines import tilesheet as tilesheetlib
 from ...service import jobs as svc_jobs
+from ...service import sprites as svc_sprites
 from ...service import system as svc_system
+from ...service import tilesheets as svc_tilesheets
 from ...service.errors import Invalid
 from ...service.validation import (
     MAX_PROMPT,
@@ -36,6 +39,7 @@ from .. import controls, dialogs, focus, forms, profiles, theme, tokens, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 from ..widgets import field_options as _options
+from . import model_gate
 
 PREVIEW_DEBOUNCE = 0.3
 
@@ -78,6 +82,14 @@ def draw(ctx: Any) -> None:
             with widgets.section_blocks():
                 widgets.section("Output")
                 _output(ctx, form)
+                if form.get("output") == "sheet":
+                    # Its own block, directly under the switch that revealed
+                    # it: these are the fields the choice *is*, and putting
+                    # them below Prompt would separate a control from the
+                    # reason it appeared.
+                    widgets.section("Sheet")
+                    manual_render.help_button(ctx, "settings-sheet")
+                    _sheet(ctx, form, form_ui)
                 widgets.section("Profile")
                 _profiles(ctx, form)
                 widgets.section("Prompt")
@@ -142,34 +154,224 @@ def _findings_hint(ctx: Any, param: str, value: Any) -> str | None:
 # --- pieces -----------------------------------------------------------------
 
 
-def _output(ctx: Any, form: dict[str, Any]) -> None:
-    """Object or tile -- the one thing that changes what this pane submits.
+# The output kinds, in the order the segmented control draws them. A tuple
+# rather than three literals at four call sites: the keyboard arrows below step
+# through it by index, and a fourth kind added to the control and missed by the
+# arrows is a segment the keyboard cannot reach.
+OUTPUTS: tuple[tuple[str, str], ...] = (
+    ("reference", "Object"),
+    ("tile", "Seamless tile"),
+    ("sheet", "Sheet"),
+)
 
-    A segmented control rather than a combo: there are exactly two, and the
-    choice changes which guidance groups are on screen, so it has to read as a
-    mode and not as one more select in a column of selects.
+OUTPUT_NOTES: dict[str, str] = {
+    "tile": (
+        "A tile is drawn with wrapping convolutions, so its edges match "
+        "when repeated. It has no subject and cannot be made into a mesh."
+    ),
+    "sheet": (
+        "A sheet is one generation laid out on a grid and cut up, so every "
+        "cell shares a palette and a light direction. It cannot be made into "
+        "a mesh."
+    ),
+}
+
+
+def _output(ctx: Any, form: dict[str, Any]) -> None:
+    """Object, tile or sheet -- the one thing that changes what this pane
+    submits.
+
+    A segmented control rather than a combo: there are few of them, and the
+    choice changes which sections are on screen *and* which service door the
+    submit goes through, so it has to read as a mode and not as one more select
+    in a column of selects.
     """
     before = form.get("output", "reference")
+    keys = [key for key, _label in OUTPUTS]
     with focus.item(ctx.state, FOCUS_PANE, "output") as focused:
-        form["output"] = widgets.segmented_control(
-            "output",
-            [("reference", "Object"), ("tile", "Seamless tile")],
-            before,
-        )
+        form["output"] = widgets.segmented_control("output", list(OUTPUTS), before)
         # A hand-drawn control, so imgui's focus does nothing for it and the
         # keys are answered here. Left/Right rather than Enter, because it is a
-        # switch between two states rather than a thing to press.
-        if focused and imgui.is_key_pressed(imgui.Key.left_arrow):
-            form["output"] = "reference"
-        if focused and imgui.is_key_pressed(imgui.Key.right_arrow):
-            form["output"] = "tile"
+        # switch between states rather than a thing to press.
+        #
+        # Index arithmetic rather than a literal per arm: with two kinds a pair
+        # of assignments was the whole rule, and the third made "Right" mean
+        # something different depending on where you already were. ``count``'s
+        # own radio row solves it the same way.
+        if focused:
+            here = keys.index(form["output"]) if form["output"] in keys else 0
+            if imgui.is_key_pressed(imgui.Key.left_arrow):
+                form["output"] = keys[(here - 1) % len(keys)]
+            if imgui.is_key_pressed(imgui.Key.right_arrow):
+                form["output"] = keys[(here + 1) % len(keys)]
     if form["output"] != before:
         ctx.state.preview_dirty_at = time.monotonic()
-    if form["output"] == "tile":
-        widgets.muted_wrapped(
-            "A tile is drawn with wrapping convolutions, so its edges match "
-            "when repeated. It has no subject and cannot be made into a mesh."
+    note = OUTPUT_NOTES.get(form["output"])
+    if note is not None:
+        widgets.muted_wrapped(note)
+
+
+# The two things a Sheet can be. Tuple-of-pairs like OUTPUTS, and stepped
+# through by index for the same reason.
+SHEET_TYPES: tuple[tuple[str, str], ...] = (
+    ("tile", "Tile grid"),
+    ("sprite", "Sprite sheet"),
+)
+
+# ``tile_sheet_options()`` and ``sprite_options()`` are pure functions of module
+# constants, and this pane calls them from the frame loop. The tile-sheet one
+# builds a geometry per size per projection -- sixty-four Cell objects each --
+# which is nothing once and a thousand short-lived dataclasses a frame at 60fps.
+# Cached in a one-slot list, the ``_submit_px`` idiom, because there is nothing
+# for them to go stale against: neither reads config, disk or state.
+_sheet_options: list[Any] = [None, None]
+
+
+def _tile_options() -> dict[str, Any]:
+    if _sheet_options[0] is None:
+        _sheet_options[0] = svc_tilesheets.tile_sheet_options()
+    return _sheet_options[0]
+
+
+def _sprite_options() -> dict[str, Any]:
+    if _sheet_options[1] is None:
+        _sheet_options[1] = svc_sprites.sprite_options()
+    return _sheet_options[1]
+
+
+def sheet_rows(form: dict[str, Any]) -> tuple[str, ...]:
+    """Which registry rows the Sheet output currently needs.
+
+    A function of the form rather than a constant, because the two arms load
+    different things and the tile arm's own list depends on whether a reference
+    is attached: its IP-Adapter is optional, and a gate that demanded one would
+    tell a user with everything the common request uses that they are missing a
+    download. Shared with :func:`weights_problem` so the note above the button
+    and the gate inside the section cannot disagree.
+    """
+    if form.get("sheet_type") == "sprite":
+        return svc_sprites.SPRITE_ROWS
+    if form.get("ref_path"):
+        return svc_tilesheets.TILE_SHEET_REFERENCE_ROWS
+    return svc_tilesheets.TILE_SHEET_ROWS
+
+
+def _sheet(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
+    """The Sheet output's own fields, drawn only while it is selected.
+
+    Three controls at most, which is the feature: a sheet is composed from the
+    prompt every other output uses, plus the two facts the prompt cannot carry
+    -- how big a tile is and which way the grid runs. Everything else (the
+    palette, the grid, the negative prompt) is a measured default rather than a
+    control, because a form with nine fields is one nobody reaches the end of.
+    """
+    before = form.get("sheet_type", "tile")
+    keys = [key for key, _label in SHEET_TYPES]
+    with focus.item(ctx.state, FOCUS_PANE, "sheet_type") as focused:
+        form["sheet_type"] = widgets.segmented_control(
+            "sheet_type", list(SHEET_TYPES), before
         )
+        if focused:
+            here = keys.index(form["sheet_type"]) if form["sheet_type"] in keys else 0
+            if imgui.is_key_pressed(imgui.Key.left_arrow):
+                form["sheet_type"] = keys[(here - 1) % len(keys)]
+            if imgui.is_key_pressed(imgui.Key.right_arrow):
+                form["sheet_type"] = keys[(here + 1) % len(keys)]
+    if form["sheet_type"] != before:
+        ctx.state.preview_dirty_at = time.monotonic()
+
+    # Drawn before the fields rather than after, so a user on a host missing the
+    # ControlNet reads why nothing will happen before they fill anything in.
+    model_gate.draw(ctx, sheet_rows(form), what="A sheet")
+
+    if form["sheet_type"] == "sprite":
+        _sprite_fields(ctx, form, form_ui)
+    else:
+        _tile_fields(ctx, form, form_ui)
+
+
+def _tile_fields(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
+    options = _tile_options()
+    with focus.item(ctx.state, FOCUS_PANE, "tile_size"):
+        changed, picked = form_ui.segmented_choice(
+            "tile_size",
+            "Tile size",
+            str(form.get("tile_size", "32")),
+            tuple((str(size), str(size)) for size in options["tile_sizes"]),
+            help_text="How many pixels across one tile is.",
+            compact=True,
+        )
+    if changed:
+        form["tile_size"] = picked
+        ctx.state.clear_field_error("tile_size")
+    with focus.item(ctx.state, FOCUS_PANE, "projection"):
+        changed, picked = form_ui.segmented_choice(
+            "projection",
+            "Projection",
+            str(form.get("projection", "orthogonal")),
+            (("orthogonal", "Orthogonal"), ("isometric", "Isometric")),
+            help_text="Square tiles seen from above, or 2:1 diamonds.",
+            compact=True,
+        )
+    if changed:
+        form["projection"] = picked
+        ctx.state.clear_field_error("projection")
+    # The finished size, said rather than left to be worked out. The arithmetic
+    # is the service's (``tile_sheet_options`` returns it per size per
+    # projection) precisely so this line cannot drift from what lands on disk.
+    entry = next(
+        (row for row in options["sizes"] if str(row["key"]) == str(form.get("tile_size"))),
+        None,
+    )
+    if entry is not None:
+        shape = entry["projections"].get(form.get("projection")) or {}
+        if shape:
+            widgets.muted(
+                f"{options['tiles']} tiles of {shape['tile_w']}x{shape['tile_h']} "
+                f"- a {shape['sheet_w']}x{shape['sheet_h']} sheet"
+            )
+
+
+def _sprite_fields(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
+    """The sprite arm, which is two steps and says so.
+
+    The character is drawn first and kept as a row of its own; the sheet is a
+    follow-up job against it. Stated in the pane because the library will show
+    two rows for one button press, and a user who was not told that has watched
+    the app do something it did not offer to do.
+    """
+    options = _sprite_options()
+    types = tuple(
+        (row["key"], f"{row['key'].title()} ({row['columns']}x{row['rows']})")
+        for row in options["sheet_types"]
+    )
+    with focus.item(ctx.state, FOCUS_PANE, "sheet_layout"):
+        changed, picked = form_ui.segmented_choice(
+            "sheet_layout",
+            "Layout",
+            str(form.get("sheet_layout") or options["defaults"]["sheet_type"]),
+            types,
+            help_text="Four facings, or a four-frame walk cycle in each.",
+            compact=True,
+        )
+    if changed:
+        form["sheet_layout"] = picked
+    with focus.item(ctx.state, FOCUS_PANE, "cell_size"):
+        changed, picked = form_ui.segmented_choice(
+            "cell_size",
+            "Cell size",
+            str(form.get("cell_size") or options["defaults"]["logical_size"]),
+            tuple((str(size), str(size)) for size in options["logical_sizes"]),
+            help_text="How many pixels across one frame is.",
+            compact=True,
+        )
+    if changed:
+        form["cell_size"] = picked
+    widgets.muted_wrapped(
+        "Two steps: the character is drawn from the prompt and kept as its own "
+        "asset, then two candidate sheets are imagined from it. A reference "
+        "image, if you attach one, shapes the character."
+    )
 
 
 def _profiles(ctx: Any, form: dict[str, Any]) -> None:
@@ -329,6 +531,13 @@ def _expand(ctx: Any, form: dict[str, Any]) -> None:
                 "A seamless tile is never expanded: the enrichment describes "
                 "subjects, and a tile has none."
             )
+        if form.get("output") == "sheet" and form.get("sheet_type") != "sprite":
+            # The sprite arm is exempt: its first step is an ordinary reference
+            # of one character, which is exactly what the enrichment describes.
+            widgets.muted_wrapped(
+                "A tile grid is never expanded: the enrichment describes one "
+                "subject, and a sheet is sixty-four."
+            )
 
 
 def _preview(ctx: Any) -> None:
@@ -336,6 +545,19 @@ def _preview(ctx: Any) -> None:
     state = ctx.state
     if state.preview_dirty_at and time.monotonic() - state.preview_dirty_at > PREVIEW_DEBOUNCE:
         raw = {k: v for k, v in state.form_2d.items() if v not in ("", None)}
+        form = state.form_2d
+        grid = form.get("output") == "sheet" and form.get("sheet_type") != "sprite"
+        # The *subject*, not the raw prompt, for a grid: the projection and
+        # detail clauses are the pipeline's and are appended before the
+        # template, so a preview built from the bare prompt would be missing
+        # the half of the composition that this output kind adds.
+        subject = (
+            tilesheetlib.sheet_subject(
+                form["prompt"], str(form.get("projection") or "orthogonal")
+            )
+            if grid
+            else form["prompt"]
+        )
         # Only stop asking once the request was actually taken. ``submit``
         # refuses a key that is already in flight, and the first preview runs a
         # CLIP tokenizer -- so clearing the flag unconditionally dropped the
@@ -346,11 +568,12 @@ def _preview(ctx: Any) -> None:
             svc_system.prompt_preview,
             ctx.svc,
             {**raw, "prompt": None},
-            state.form_2d["prompt"],
+            subject,
             # Threaded rather than inferred: the output kind is not a guidance
             # field, so without it a tile would be previewed through the
             # single-centred-object framing its job will never use.
-            tile=state.form_2d.get("output") == "tile",
+            tile=form.get("output") == "tile",
+            tilesheet=grid,
         ):
             state.preview_dirty_at = 0.0
     preview = state.preview
@@ -736,6 +959,21 @@ def _run_controls(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
     required re-expanding a collapsed section every session while the submit
     footer talked about the count as if it were visible.
     """
+    if form.get("output") == "sheet":
+        # Pinned to one, and the control is not drawn at all. Both doors refuse
+        # a batch and say why -- a tile sheet is one generation by construction,
+        # and N characters each spawning two more sheets is 3N passes from one
+        # button -- so a row of radios here would be four choices of which three
+        # are refusals. Written into the form as well as skipped, because the
+        # value is persisted and a 4 left over from the Object output would
+        # reach the door.
+        form["count"] = 1
+        with focus.item(ctx.state, FOCUS_PANE, "seed"):
+            changed, seed = form_ui.number("seed", "Seed", int(form["seed"]))
+        if changed:
+            form["seed"] = max(0, seed)
+        _seed_row(ctx, form, form_ui)
+        return
     with focus.item(ctx.state, FOCUS_PANE, "count") as focused:
         changed, picked = form_ui.segmented_choice(
             "count",
@@ -763,6 +1001,17 @@ def _run_controls(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
         changed, seed = form_ui.number("seed", "Seed", int(form["seed"]))
     if changed:
         form["seed"] = max(0, seed)
+    _seed_row(ctx, form, form_ui)
+
+
+def _seed_row(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
+    """Reroll and Lock, beside the seed field both paths draw.
+
+    Split out when the Sheet output stopped drawing the count: the two paths
+    share everything from here down, and a second copy of a wrap-aware row is
+    exactly the kind of duplicate that comes back as a control drawn nowhere at
+    1.5 scale.
+    """
     # No ring on the seed, deliberately: nothing in ``service`` raises a
     # refusal naming it (the range check is fieldless, and the widget already
     # clamps), and a call here would also have to sit after the Reroll and Lock
@@ -795,10 +1044,22 @@ def _submit(ctx: Any, form: dict[str, Any]) -> None:
         imgui.text_wrapped(problem)
         imgui.pop_style_color()
     count = int(form["count"])
-    noun = "tile" if form.get("output") == "tile" else "reference"
-    widgets.muted(
-        f"{count} {noun}s - a few seconds each" if count > 1 else f"One {noun} - a few seconds"
-    )
+    if form.get("output") == "sheet":
+        # Its own sentence rather than a third noun in the line below: a sheet
+        # is one press and either one generation or three, which "One sheet - a
+        # few seconds" would misreport in the sprite case by a factor of three.
+        widgets.muted(
+            "One sheet - about a minute"
+            if form.get("sheet_type") != "sprite"
+            else "A character and two candidate sheets - a few minutes"
+        )
+    else:
+        noun = "tile" if form.get("output") == "tile" else "reference"
+        widgets.muted(
+            f"{count} {noun}s - a few seconds each"
+            if count > 1
+            else f"One {noun} - a few seconds"
+        )
     busy = ctx.busy("submit")
     enabled = not problems and not busy
     with focus.item(ctx.state, FOCUS_PANE, "generate") as focused:
@@ -844,23 +1105,38 @@ def validate(form: dict[str, Any]) -> list[widgets.Problem]:
                 f"References must be between 1 and {MAX_REFERENCE_COUNT}.", "count"
             )
         )
+    # The tile-grid arm is the one output that does not go through
+    # ``create_job``: ``create_tile_sheet`` pins its own base, its own LoRA and
+    # its own ControlNet and reads none of the four fields below. So the three
+    # checks after this are skipped for it -- not as a tolerance, but because a
+    # disabled Generate reading "Conditioning needs a reference image" over a
+    # ``control`` the run will never load is a refusal about somebody else's
+    # job. It is reachable rather than theoretical: ``control`` is persisted and
+    # ``ref_path`` is VOLATILE, so any session that once conditioned an Object
+    # reopens with the pair already split. The sprite arm is deliberately *not*
+    # exempt -- its first step is an ordinary reference job and reads all four.
+    grid = form.get("output") == "sheet" and form.get("sheet_type") != "sprite"
     # Both reachable from a restored form rather than from this frame's
     # controls, which is why they are checked here and not only where the
     # widgets are drawn: a persisted selection outlives the ref_path that
     # justified it (ref_path is VOLATILE), and the base model can be changed
     # under Advanced after a control was picked.
-    if not form.get("ref_path") and (form.get("ip_adapter") or form.get("control")):
+    if not grid and not form.get("ref_path") and (form.get("ip_adapter") or form.get("control")):
         problems.append(
             widgets.Problem("Conditioning needs a reference image.", "ref_path")
         )
-    if form.get("control") and form["base_model"] not in modelslib.controlnet_bases():
+    if (
+        not grid
+        and form.get("control")
+        and form["base_model"] not in modelslib.controlnet_bases()
+    ):
         problems.append(
             widgets.Problem("Structure control needs a full-CFG model.", "base_model")
         )
     # Reachable the same way: a style picked under one base survives a change
     # of base under Advanced, and the service refuses the submit outright
     # rather than generating without it.
-    if form.get("style_lora") and form["style_lora"] not in (
+    if not grid and form.get("style_lora") and form["style_lora"] not in (
         modelslib.loras_by_base().get(form["base_model"]) or []
     ):
         problems.append(
@@ -873,6 +1149,27 @@ def validate(form: dict[str, Any]) -> list[widgets.Problem]:
         problems.append(
             widgets.Problem("Seamless tiles need an SDXL model.", "base_model")
         )
+    if form.get("output") == "sheet":
+        # The tile arm's own two fields, and nothing about the model: what a
+        # sheet is short of on this host is a different question, and
+        # ``weights_problem`` asks it against the rows a sheet actually loads.
+        size = str(form.get("tile_size") or "")
+        if grid and size not in {str(s) for s in svc_tilesheets.TILE_SIZES}:
+            # Reachable from a restored form rather than from this frame's
+            # control: the value is persisted, and the menu it came from can
+            # change between releases.
+            problems.append(
+                widgets.Problem(
+                    f"Tile size must be one of {list(svc_tilesheets.TILE_SIZES)}.",
+                    "tile_size",
+                )
+            )
+        if grid and form.get("projection") not in svc_tilesheets.PROJECTIONS:
+            problems.append(
+                widgets.Problem(
+                    "Projection must be orthogonal or isometric.", "projection"
+                )
+            )
     return problems
 
 
@@ -889,11 +1186,24 @@ def submit_kwargs(form: dict[str, Any]) -> dict[str, Any]:
     # than subject taxonomy, so a tile submits the same set an object does.
     known = set(guidancelib.form_fields())
     fields = {k: v for k, v in form.items() if k in known and v not in ("", None)}
+    sprite_sheet = None
+    if form.get("output") == "sheet" and form.get("sheet_type") == "sprite":
+        # The sprite arm is an ordinary reference job carrying a follow-up
+        # request, which is the rig checkbox's shape: the character is a row in
+        # its own right and the sheet is queued against it once it lands. So it
+        # comes through this function rather than round a second door, and the
+        # only thing that distinguishes it is this block.
+        sprite_sheet = {
+            "sheet_type": form.get("sheet_layout") or "turnaround",
+            "logical_size": int(form.get("cell_size") or 64),
+            "colors": svc_sprites.DEFAULT_SPRITE_COLORS,
+        }
     return {
         "kind": "text",
         "prompt": form["prompt"].strip(),
         "output": "tile" if tile else "reference",
         "count": int(form["count"]),
+        **({"sprite_sheet": sprite_sheet} if sprite_sheet is not None else {}),
         "seed": int(form["seed"]),
         "negative_prompt": form["negative_prompt"] or None,
         "lora_weight": float(form["lora_weight"]) if form.get("style_lora") else None,
@@ -904,6 +1214,51 @@ def submit_kwargs(form: dict[str, Any]) -> dict[str, Any]:
         "control_end": float(form["control_end"]) if form.get("control") else None,
         "guidance_fields": fields,
     }
+
+
+def _generate_tile_sheet(ctx: Any, form: dict[str, Any]) -> None:
+    """Submit the tile grid, on the shared ``submit`` key.
+
+    The same key every other output uses, deliberately: it is one form and one
+    Generate button, so two submits in flight from it is the thing the key
+    exists to prevent -- and the busy state the button reads is keyed on that
+    name.
+
+    The form values are read here, on the frame thread, because they are UI
+    state; the reference *file* is read in the task, because a large one would
+    freeze the window for as long as the disk took. ``generate``'s own split,
+    kept.
+    """
+    prompt = form["prompt"].strip()
+    tile_size = int(form.get("tile_size") or 32)
+    projection = str(form.get("projection") or "orthogonal")
+    seed = int(form["seed"])
+    negative = form.get("negative_prompt") or None
+    ref_path = form.get("ref_path") or ""
+
+    def run():
+        reference = None
+        if ref_path:
+            try:
+                with Path(ref_path).open("rb") as fh:
+                    reference = fh.read(MAX_UPLOAD_BYTES + 1)
+            except OSError as exc:
+                # ``field=`` so the ring lands on the file control rather than
+                # the refusal arriving as a toast with no subject.
+                raise Invalid(
+                    f"could not read {Path(ref_path).name}: {exc}", field="ref_path"
+                ) from exc
+        return svc_tilesheets.create_tile_sheet(
+            ctx.svc,
+            prompt=prompt,
+            tile_size=tile_size,
+            projection=projection,
+            seed=seed,
+            negative_prompt=negative,
+            reference=reference,
+        )
+
+    ctx.submit("submit", run)
 
 
 def anchor_kwargs(ctx: Any, form: dict[str, Any], kwargs: dict[str, Any]) -> str:
@@ -963,6 +1318,24 @@ def weights_problem(ctx: Any, form: dict[str, Any]) -> widgets.Problem | None:
     """
     by_key = {str(row.get("row_key")): row for row in (getattr(ctx, "model_rows", None) or [])}
     if not by_key:
+        return None
+    if form.get("output") == "sheet":
+        # A sheet's doors pin their own base and LoRA and ignore the form's, so
+        # walking ``_WEIGHT_FIELDS`` here would refuse a submit over a style
+        # selection the run will never read -- and stay silent about the
+        # ControlNet it actually needs. Asked as "which of this sheet's rows is
+        # missing" instead, against the same list the section's gate draws from,
+        # so the note above the button and the gate cannot disagree.
+        for row_key in sheet_rows(form):
+            row = by_key.get(row_key)
+            if row is None or row.get("present"):
+                continue
+            label = row.get("label") or row_key
+            return widgets.Problem(
+                f"A sheet needs {label!r}, which is not downloaded. "
+                f"Install it in Settings.",
+                "output",
+            )
         return None
     for field, kind, noun in _WEIGHT_FIELDS:
         chosen = str(form.get(field) or "")
@@ -1039,6 +1412,13 @@ def generate(ctx: Any, form: dict[str, Any]) -> None:
         # otherwise produce the identical image twice and read as a no-op.
         form["seed"] = random_seed()
     ctx.state.remember_prompt(form["prompt"])
+    if form.get("output") == "sheet" and form.get("sheet_type") != "sprite":
+        # The one output that does not go through ``create_job``: a tile grid is
+        # its own job kind, with its own door and its own admission. The sprite
+        # arm deliberately *does* go through it -- see ``submit_kwargs`` -- so
+        # this is the only branch here.
+        _generate_tile_sheet(ctx, form)
+        return
     kwargs = submit_kwargs(form)
     ref_path = form.get("ref_path") or anchor_kwargs(ctx, form, kwargs)
 

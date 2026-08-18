@@ -36,9 +36,10 @@ the other. The **tile size** is what a plain image is sliced at when you add it,
 to a 32 px map is a 32 px tileset for good. Neither is a trap you can fall into silently any more,
 which is what the dialog is for.
 
-Last, **Then** picks what happens once the map exists: add a tileset from a file, generate a ground
-set, or nothing yet. A map cannot be painted until it has a tileset, so the dialog offers both doors
-rather than leaving you to find them.
+Last, **Then** picks what happens once the map exists: add a tileset from a file, or nothing yet.
+A map cannot be painted until it has a tileset, so the dialog offers the door rather than leaving
+you to find it. Tile sheets are made in **Create** — see *Sheets* — and reach a map from the library
+like any other asset.
 
 Every new map arrives with one tile layer called *Ground* already on it. Both sizes can be changed
 later, under **Resize** in the tools pane. The grid fields grow or crop the map and move every object
@@ -69,58 +70,6 @@ cell already painted — or leave a hole. Undo takes back a tileset you have onl
 The palette under the tileset combo is the atlas itself. Click a tile to pick it; drag across
 several and you get a multi-tile brush, which stamps as one block. The white outline shows what is
 selected, and the cursor on the canvas shows the footprint the brush is about to cover.
-
-### Generating a ground set
-
-**Generate a ground set**, at the foot of the tileset pane, builds a tileset instead of loading one:
-it is the last of the three routes onto a map and sits below them for that reason. Flat terrain
-colours with a one-pixel darker outline, laid out for **blob autotiling**. Each terrain gets 47
-cells — every combination of neighbours that looks different — so grass meeting dirt has a real
-inner corner rather than a staircase.
-
-Name the terrains and pick a colour each. **Order is precedence**: where two terrains meet, the one
-lower in the list is the one that gets the outline, and the one above it runs underneath unbroken.
-That is what makes a three-way meeting work — grass, then sand, then water gives you a beach, with
-sand outlined against the grass and water outlined against both.
-
-This is the *base* set, and it is meant to be painted over: it is deliberately plain so that the
-shapes are unambiguous, and it generates identically every time so you can compare a polished set
-against the one it started from.
-
-The **projection** is chosen here, and only while the map is still empty. Generating an isometric
-set is what makes a map isometric, and it happens in the same undo step as the tileset arriving.
-Once anything is painted the choice is fixed, because a set drawn for one lattice would paint the
-wrong shape into every cell already drawn for the other.
-
-### Painting a ground set with AI
-
-**Paint with AI**, inside the same section, builds the same 47 cells out of generated art instead of
-flat colour. Give the set a **theme** — what the whole place is made of — and, per terrain, what its
-**surface** and its **rim** are. Leave a field blank and the terrain's own name is used; the greyed
-suggestion under the rim field is exactly the string an empty one means.
-
-Two textures are generated per terrain: the surface and the rim. Each is painted seamless at full
-size and then reduced to your tile size, which is what lets a painted field carry its pattern from
-one cell into the next instead of repeating a single stamped tile. The rim is drawn along every
-exposed edge with real thickness, so water against stone reads as a bank rather than as a line.
-
-On an orthogonal map with tiles up to 128 pixels, the set also carries **phase variants**: the
-pattern's period spans several tiles, and each cell shows the slice belonging to its own map
-position — so a painted field reads as one larger surface rather than the same tile stamped over
-and over. There is nothing to configure and nothing random about it: repainting a cell always
-produces the same picture, and the seams still line up by construction. Isometric sets keep the
-classic one-tile period.
-
-It is queued like any other job and takes a few minutes — two generations per terrain, one after
-another. The map stays editable while it paints, and the set arrives as one undo step with the
-terrain brush already pointed at it. Cancel from the progress row and nothing is published.
-
-The set is painted **for this map**, at its tile size and projection. Resize the map while it is
-painting and the finished atlas is refused by name rather than sliced wrong; paint another. It also
-lands in the library like any other job, so closing the tab does not lose it.
-
-Ground sets need the SDXL checkpoint and the pixel-art LoRA. If either is missing, the section says
-so and offers to install them rather than letting the button fail.
 
 ### Polishing an atlas in Inker
 
@@ -188,9 +137,10 @@ fill that spilled through the mirrored ones would cross exactly the seam you dre
 is four-connected, so it cannot leak diagonally through a corner where two walls only touch at a
 point.
 
-The **Terrain** tool needs a terrain set on the map — see *Generating a ground set* above. It sets
-the cell you touch and then re-fits that cell and its eight neighbours, so edges, outer corners and
-inner corners follow as you draw rather than being placed one at a time.
+The **Terrain** tool needs a terrain set on the map: a tileset that carries terrain rows, which a
+Tiled `.tsx` with Wang sets does and a plain image does not. It sets the cell you touch and then
+re-fits that cell and its eight neighbours, so edges, outer corners and inner corners follow as you
+draw rather than being placed one at a time.
 
 Two other tools know about terrains, and both decide per cell rather than per map. **Erase** clears
 a plain tile as a plain tile, and clears a terrain cell by cutting a hole and re-fitting everything
@@ -332,7 +282,7 @@ which is the layout Tiled and every engine importer expects. TMX has no portable
 image, which is why an export is several files rather than one.
 
 A `.wmap` carries the map's projection and its terrain sets. A `.tmx` carries the projection and
-describes the terrain sets as Tiled Wang sets, so a generated atlas opens in Tiled with a working
+describes the terrain sets as Tiled Wang sets, so an atlas made here opens in Tiled with a working
 terrain brush.
 
 Exporting deliberately does *not* retarget `Ctrl+S`. The `.wmap` holds things the `.tmx` cannot, so

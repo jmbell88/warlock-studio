@@ -111,6 +111,56 @@ def resolve_profile(
 _resolve_profile = resolve_profile
 
 
+def _check_sprite_sheet(svc: WarlockService, block: Any) -> dict[str, Any]:
+    """The follow-up sprite sheet's options, validated at *this* door.
+
+    Validated here rather than when the follow-up is queued, and that is the
+    whole point of the function. The worker mints the follow-up row itself
+    (``_maybe_queue_sprite_sheet``, the shape ``_maybe_queue_rig`` established),
+    so it never passes through ``sprites.create_sprite_synthesis`` -- and a bad
+    option or a missing ControlNet discovered *there* would be a refusal an hour
+    later, on a row the user never submitted, after the reference they did
+    submit had already been paid for.
+
+    Delegating to ``sprites``' own constants rather than restating them: the two
+    are in the same layer, so the drift argument that makes ``grounds.py``
+    restate the plotter's numbers does not apply.
+    """
+    from . import sprites as svc_sprites
+
+    entries = dict(block or {})
+    sheet_type = str(entries.get("sheet_type") or svc_sprites.DEFAULT_SPRITE_SHEET_TYPE)
+    if sheet_type not in svc_sprites.SPRITE_SHEET_TYPES:
+        raise Invalid(
+            f"sheet_type must be one of {list(svc_sprites.SPRITE_SHEET_TYPES)}",
+            field="sheet_type",
+        )
+    try:
+        logical = int(
+            entries.get("logical_size") or svc_sprites.DEFAULT_SPRITE_LOGICAL_SIZE
+        )
+        colors = int(entries.get("colors") or svc_sprites.DEFAULT_SPRITE_COLORS)
+    except (TypeError, ValueError):
+        raise Invalid("a sprite sheet's sizes are whole numbers", field="sheet_type") from None
+    if logical not in svc_sprites.SPRITE_LOGICAL_SIZES:
+        raise Invalid(
+            f"logical_size must be one of {list(svc_sprites.SPRITE_LOGICAL_SIZES)}",
+            field="logical_size",
+        )
+    if colors not in svc_sprites.SPRITE_COLOR_CHOICES:
+        raise Invalid(
+            f"colors must be one of {list(svc_sprites.SPRITE_COLOR_CHOICES)}",
+            field="colors",
+        )
+    # The weights the *follow-up* will load, refused now. Both adapters are
+    # mandatory for a synthesis -- the pose guide is the ControlNet and the
+    # identity is the IP-Adapter -- so a host missing either would draw the
+    # character, queue the sheet and fail it, which reads as a bug rather than
+    # as a download the user has not done.
+    svc_sprites._check_weights(svc)
+    return {"sheet_type": sheet_type, "logical_size": logical, "colors": colors}
+
+
 def create_job(
     svc: WarlockService,
     *,
@@ -138,6 +188,7 @@ def create_job(
     reference: bytes | None = None,
     output: str = "model",
     count: int = 1,
+    sprite_sheet: dict[str, Any] | None = None,
     guidance_fields: dict[str, Any] | None = None,
     sweep_id: str | None = None,
     sweep_unit: str = "",
@@ -163,6 +214,33 @@ def create_job(
         # N meshes per submit is minutes of GPU each; only the cheap 4-step
         # image stages are worth batching.
         raise Invalid("count > 1 requires output=reference or output=tile", field="count")
+    if sprite_sheet is not None:
+        # The prompt-driven sprite sheet, expressed the way the rig checkbox
+        # already is: a *flag on the reference job*, honoured by the worker once
+        # the picture it needs exists. Not a job kind of its own, because the
+        # thing being asked for is genuinely two steps -- draw the character,
+        # then imagine its other three sides -- and the first step is exactly an
+        # ordinary reference. Chaining it that way means the character is a row
+        # the user can keep, reroll and edit even if the sheet is a disaster.
+        if output != "reference":
+            raise Invalid(
+                "a sprite sheet is drawn from a reference, so output must be "
+                "'reference'",
+                field="output",
+            )
+        if count > 1:
+            # N characters each spawning two more generations is 3N passes from
+            # one button. The Sheet output pins count to 1; this is the door
+            # holding the same line for the API.
+            raise Invalid(
+                "a sprite sheet is drawn from one reference at a time",
+                field="count",
+            )
+        # Checked here, at the top of the door, and the *result* carried down to
+        # the params write below rather than the check being made twice: it
+        # walks the model registry and stats the weight files, which is a real
+        # cost to pay once and a pointless one to pay twice for one submit.
+        sprite_block = _check_sprite_sheet(svc, sprite_sheet)
     if count > 1 and sweep_id:
         # A sweep unit is one job: it is what a verdict is filed against and
         # what a config vector describes. N candidates behind one unit label
@@ -264,6 +342,14 @@ def create_job(
         # rig. The worker queues the follow-up job when the mesh lands.
         params["rig"] = True
         params["rig_template"] = valid_template(rig_template, config.rig_template)
+    if sprite_sheet is not None:
+        # The block validation returned, at the top of the door, for the reason
+        # the rig template is checked there: the refusal should cost the request
+        # rather than the generation that precedes the follow-up. Stored as one
+        # nested block so ``_maybe_queue_sprite_sheet`` reads one key, and so
+        # VECTOR_PARAMS -- an allowlist of flat settings -- cannot pick any of
+        # it up by accident.
+        params["sprite_sheet"] = sprite_block
 
     # Last of the door checks and still before any write, so a refused job
     # leaves no input.png: the projected peak is a function of the normalized

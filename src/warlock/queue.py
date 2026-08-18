@@ -34,11 +34,11 @@ from typing import Any
 
 from . import errors, fetch, leases, memlog, models, rigging, vectors, vram
 from ._q_generate import GenerateOps
-from ._q_ground import GroundOps
 from ._q_jobs import JobOps
 from ._q_mesh import MeshPostOps
 from ._q_rig import RigOps
 from ._q_sprite import SpriteOps
+from ._q_tilesheet import TileSheetOps
 from .config import Config
 from .db import JobStore
 from .pipelines import pose2d, reference
@@ -620,7 +620,7 @@ def commit_fraction() -> float | None:
     return None if sysmem is None else sysmem.commit_fraction
 
 
-class Worker(GenerateOps, RigOps, SpriteOps, GroundOps, MeshPostOps, JobOps):
+class Worker(GenerateOps, RigOps, SpriteOps, TileSheetOps, MeshPostOps, JobOps):
     def __init__(self, config: Config, store: JobStore) -> None:
         self.config = config
         self.store = store
@@ -1093,10 +1093,15 @@ class Worker(GenerateOps, RigOps, SpriteOps, GroundOps, MeshPostOps, JobOps):
         build a fresh ``Conditioning`` per band and per view -- there is no
         single object to hand the predicate, and every one of their passes is
         conditioned. Two callers pass a real value instead: ``_generate`` hands
-        over its actual ``cond``, and ``_ground_set`` passes ``None`` because a
-        seamless texture is conditioned on nothing at all. Taking the default
-        where the truth is None is not a conservative choice -- it stops a warm
-        trellis the accounting in ``vram.estimate`` has already priced as
+        over its actual ``cond``, and ``_tile_sheet`` hands over the grid
+        guide's.
+
+        No caller passes ``None`` today -- the one that did was the ground set,
+        deleted on 2026-08-18 -- and the rule is written down anyway because it
+        is the one that is wrong by *omission*. A stage conditioned on nothing
+        but its prompt has to say ``None`` explicitly rather than take the
+        default: taking the default is not a conservative choice, it stops a
+        warm trellis the accounting in ``vram.estimate`` has already priced as
         co-resident, so the two halves of the same rule disagree.
         """
         handoff = _needs_handoff(
@@ -1320,6 +1325,13 @@ class Worker(GenerateOps, RigOps, SpriteOps, GroundOps, MeshPostOps, JobOps):
                         # marked done. A diagnostic must not be able to cost
                         # that; in this order the worst it can cost is itself.
                         await self._maybe_queue_rig(job)
+                        # Beside the rig and before the observation, for the
+                        # same reason and with the same ordering argument: it
+                        # is work the user asked for, and a diagnostic must not
+                        # be able to cost it. The two never both fire -- one is
+                        # a mesh job's follow-up and the other a reference's --
+                        # so their order relative to each other says nothing.
+                        await self._maybe_queue_sprite_sheet(job)
                         await self._record_observation(job_id)
                     else:
                         # An errored job too, and it is not a consolation

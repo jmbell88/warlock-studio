@@ -1,5 +1,15 @@
 # Ground-set reduction and prompts: the comparison, 2026-08-17
 
+> **The path this measured was deleted on 2026-08-18**, when tile sheets moved to
+> Create and the AI ground set was retired with Plotter's generators. The
+> *result* was not: the two-stage reduction, the detail clause and the negative
+> prompt were carried across to `pipelines/tilesheet.py` unchanged, and this
+> document is still what they cite. The argument transfers because it was never
+> about terrain -- it is about a 128px block of pixel-art-LoRA output reduced to
+> a 32px tile, which is exactly what a tile sheet's cell is. What did *not*
+> transfer is the seamless-torus half: a cell in a grid is not a torus, so the
+> seam-ratio column below constrained the old path and constrains nothing now.
+
 **Status: run taken, decisions applied.** The decision rules below were written
 before the run, in the shape [`2026-08-06-pixel-art-xl.md`](2026-08-06-pixel-art-xl.md)
 established; the Results section records what came back and which rule fired.

@@ -119,6 +119,78 @@ class JobOps:
             return
         log.info("queued follow-up rig %s for job %s", rig_id, job["id"])
 
+    async def _maybe_queue_sprite_sheet(self: Worker, job: dict[str, Any]) -> None:
+        """Honour the Create form's Sheet/Sprite output, once the character
+        exists.
+
+        ``_maybe_queue_rig``'s shape and its reasons. Queued as an ordinary
+        follow-up rather than run inline because it is two more generations the
+        user should be able to cancel on their own, and because chaining it
+        inside the reference job would hide it from the history and make one
+        cancel ambiguous between "stop drawing my character" and "stop
+        imagining its other sides".
+
+        The character is a row in its own right either way. That is the point
+        of the two-step shape: a sheet the user hates still leaves them the
+        drawing it was made from, to reroll or edit or synthesise again with
+        different options.
+        """
+        from . import rigging
+        from .pipelines import spritesynth
+
+        params = job["params"]
+        block = params.get("sprite_sheet")
+        if not block or job["stage"] != "reference":
+            return
+        if not (self.config.job_dir(job["id"]) / "input.png").exists():
+            return
+        # Derived from the character's own seed rather than drawn: this worker
+        # has no RNG and should not grow one -- every seed in this codebase
+        # comes from a door or from arithmetic over one that did. It also makes
+        # the whole chain reproducible from the single seed the user can lock.
+        base = int(params.get("reference_seed") or params.get("seed") or 0)
+        seed_a = spritesynth.candidate_seed(base, "a")
+        seed_b = spritesynth.candidate_seed(base, "b")
+        sheet_params = {
+            "source_job": job["id"],
+            "sheet_type": block.get("sheet_type"),
+            "logical_size": block.get("logical_size"),
+            "colors": block.get("colors"),
+            "seed_a": seed_a,
+            "seed_b": seed_b,
+            # Minted here because the door that normally mints it is not on this
+            # path. ``_discard_artifacts`` names this job's drafts by it, so a
+            # cancel deletes exactly its own trio and no earlier draft of the
+            # same character. Through ``rigging.new_id`` rather than a second
+            # copy of its two-line body: the format is that module's, and
+            # ``check_sprite_draft_id`` validates against it.
+            "draft_id": rigging.new_id(),
+            # ``service.sprites.SPRITE_BASE_MODEL``, restated because the queue
+            # may not import the service -- and *pinned*, deliberately not
+            # inherited from the character's row. A synthesis is a pixel-art
+            # restyle: its identity is the SDXL-fitted pixel-art LoRA, which is
+            # why the door writes this constant rather than a choice. Carrying
+            # the reference's ``base_model`` across looks like keeping the
+            # character's style and is the opposite -- a character drawn on
+            # klein would queue a sheet whose base cannot take the LoRA, so the
+            # worker's tolerance would draw both candidates bare and say so only
+            # in the log, from a button that offered two pixel-art sheets. It
+            # would also mean the door admitted the follow-up against one base's
+            # weights and VRAM and the job ran on another's.
+            "base_model": "sdxl_cfg",
+        }
+        try:
+            sheet_id = await asyncio.to_thread(
+                self.store.create, "sprite_synthesis", job["prompt"], sheet_params, None
+            )
+        except Exception:
+            # The character is finished and on disk. A failure to queue the
+            # optional follow-up must not retroactively fail the job that
+            # produced it -- the rig's rule, verbatim.
+            log.exception("could not queue follow-up sprite sheet for job %s", job["id"])
+            return
+        log.info("queued follow-up sprite sheet %s for job %s", sheet_id, job["id"])
+
     def _discard_artifacts(self: Worker, job: dict[str, Any]) -> None:
         """Remove what a cancelled job half-wrote -- and only that.
 
@@ -190,26 +262,27 @@ class JobOps:
                         rigging.sheet_path(job_dir, sheet_id),
                         rigging.sheet_png_path(job_dir, sheet_id),
                     ]
-        elif job["kind"] == "ground_set":
-            # This job's own directory, unlike the five above -- a ground set is
-            # not a derivation of anything on disk. All of it goes: ``input.png``
-            # here *is* the finished 47-column atlas, and a half-published one is
-            # a sheet ``use_as_tileset`` would happily slice into forty-seven
-            # tiles of nothing. The staging name goes too, for the reason the
-            # rig's temps do: a cancel that lands mid-rename must not leave one.
+        elif job["kind"] == "tile_sheet":
+            # This job's own directory, unlike the five above -- a tile sheet is
+            # not a derivation of anything on disk, and ``input.png`` here *is*
+            # the finished sheet. A half-published one is sixty-four tiles of
+            # nothing that ``use_as_tileset`` would happily slice. Both staging
+            # names go too, for the reason the rig's temps do: a cancel that
+            # lands mid-rename must not leave one.
+            #
+            # ``ref.png`` is deliberately **not** on the list. The door wrote it
+            # before the row existed, so it is an *input* the user supplied
+            # rather than something this run produced -- and a cancelled sheet
+            # whose reference survived is a row that can be re-run without the
+            # user finding the file again. It goes with the directory when the
+            # job is pruned, which is where an input belongs.
             job_dir = self.config.job_dir(job["id"])
-            with contextlib.suppress(OSError):
-                shutil.rmtree(job_dir / "textures")
-            # Both staging names, not one. ``_publish_text`` already unlinks its
-            # own temp in a ``finally``, so ``.ground.json.tmp`` is belt and
-            # braces -- but the comment above promises "the staging name goes
-            # too" for a step that stages *twice*, and a list that covers one of
-            # them is the kind of asymmetry a later reader trusts.
             paths = [
                 job_dir / "input.png",
                 job_dir / ".input.png.tmp",
-                job_dir / "ground.json",
-                job_dir / ".ground.json.tmp",
+                job_dir / "sheet.png",
+                job_dir / "sheet.json",
+                job_dir / ".sheet.json.tmp",
             ]
         else:
             # Both halves of the contract: model.glb is what the user would

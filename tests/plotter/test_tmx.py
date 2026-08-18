@@ -434,11 +434,13 @@ def test_an_embedded_tileset_keeps_the_terrains_its_wangset_declares():
     """The XML side recognised a wangset and then dropped it, which left the
     Terrain tool greyed out on a map whose own atlas declares one. Read-side
     parity with the ``.tmj`` case in ``test_tmx_refusals``."""
-    from warlock.studio.plotter import blob, tilegen
+    from warlock.studio.plotter import blob
     from warlock.studio.plotter import terrain as terrainlib
 
-    generated = tilegen.generate(
-        tilegen.GenSpec(terrains=terrainlib.DEFAULT_TERRAINS[:2], tile_w=8, tile_h=8)
+    from ._terrainset import terrain_tileset
+
+    generated = terrain_tileset(
+        terrains=terrainlib.DEFAULT_TERRAINS[:2], tile_w=8, tile_h=8
     )
     node = tsx.tsx_element(generated, image_name="atlas.png")
     embedded = ET.tostring(node, encoding="unicode").replace(

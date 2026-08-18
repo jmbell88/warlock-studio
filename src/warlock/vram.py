@@ -271,19 +271,28 @@ def estimate_parts(
         image = _image_model_cost(params)
         sprite = image + CONTROLNET_GIB + IP_ENCODER_GIB
         return (sprite if exclusive else sprite + TRELLIS_GIB), image
-    if kind == "ground_set":
-        # Up to sixteen txt2img passes, one after the other through the same
-        # resident pipe, so the peak is one pass -- the terrain count is
-        # deliberately not a term, exactly as ``retexture``'s view count is not.
-        # No ControlNet and no IP-Adapter: a seamless texture is conditioned on
-        # nothing but its prompt (the circular-padding patch allocates nothing),
-        # which is the one thing that makes this the cheapest generating kind
-        # here. Priced from the registry rather than assumed to be SDXL, because
-        # ``params["base_model"]`` is a stored value and the day it names an
-        # offloaded spec this term has to move with it. Never trellis: a ground
-        # set has no mesh anywhere near it.
+    if kind == "tile_sheet":
+        # One txt2img pass through the resident pipe, carrying the grid guide's
+        # ControlNet -- so the peak is that one pass. The sixty-four tiles are
+        # a *slicing* of it, not sixty-four generations, which is why the grid
+        # is deliberately not a term here any more than the terrain count was
+        # for a job with no mesh anywhere near it.
+        #
+        # The IP-Adapter is params-gated rather than unconditional, unlike
+        # ``sprite_synthesis`` above: a reference is optional on this kind, and
+        # charging its encoder to the common prompt-only request would refuse
+        # jobs on a card that fits them. The door writes ``ip_adapter`` only
+        # when a reference is actually attached, which is what makes the gate
+        # sound.
+        #
+        # The reduction and the palette are numpy and Pillow in this process,
+        # so neither costs this budget anything. Never trellis: a tile sheet
+        # has no mesh anywhere near it.
         image = _image_model_cost(params)
-        return (image if exclusive else image + TRELLIS_GIB), image
+        sheet = image + CONTROLNET_GIB
+        if params.get("ip_adapter"):
+            sheet += IP_ENCODER_GIB
+        return (sheet if exclusive else sheet + TRELLIS_GIB), image
     if kind not in ("text", "image"):
         # rig / pose / sheet are Blender, out of process and CPU-side.
         return 0.0, 0.0

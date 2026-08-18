@@ -535,6 +535,11 @@ class FakeText2Image:
         self.tiles: list[bool] = []
         self.sheets: list[bool] = []
         self.scenes: list[bool] = []
+        self.tilesheets: list[bool] = []
+        # The frame each call asked for, including the Nones. A tile sheet is
+        # sliced on a grid the caller decided in advance, so "what size did the
+        # worker ask for" is the fact its tests turn on.
+        self.sizes: list = []
         self.last_prompt = ""
         self.last_recipe: dict = {}
 
@@ -554,11 +559,15 @@ class FakeText2Image:
         tile=False,
         sheet=False,
         scene=False,
+        tilesheet=False,
+        size=None,
     ):
         self.prompts.append(prompt)
         self.tiles.append(tile)
         self.sheets.append(sheet)
         self.scenes.append(scene)
+        self.tilesheets.append(tilesheet)
+        self.sizes.append(size)
         self.last_prompt = prompt
         self.lora_calls.append((lora, lora_weight))
         self.negatives.append(negative_prompt)
@@ -578,7 +587,33 @@ class FakeText2Image:
             if on_step is not None:
                 on_step(i + 1, self.steps)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        if sheet:
+        if tilesheet:
+            # The one path whose caller slices what it wrote on a grid decided
+            # before the call, so the *size* has to be honoured here or every
+            # worker test would fail on a refusal about the frame rather than
+            # on what it was actually testing. Sixty-four distinguishable
+            # blocks rather than a flat colour: a reduction test that cannot
+            # tell one tile from another proves nothing.
+            from PIL import Image, ImageDraw
+
+            width, height = size or (1024, 1024)
+            image = Image.new("RGB", (width, height), (12, 12, 16))
+            draw = ImageDraw.Draw(image)
+            cell_w, cell_h = width // 8, height // 8
+            for row in range(8):
+                for col in range(8):
+                    shade = 20 + 3 * (row * 8 + col)
+                    draw.rectangle(
+                        (
+                            col * cell_w + 4,
+                            row * cell_h + 4,
+                            (col + 1) * cell_w - 5,
+                            (row + 1) * cell_h - 5,
+                        ),
+                        fill=(shade, 255 - shade, (shade * 7) % 256),
+                    )
+            image.save(output_path, "PNG")
+        elif sheet:
             # A sheet restyle's caller reopens and crops what it wrote, so this
             # one path has to produce a decodable image rather than a marker.
             # Deliberately a flat colour no source render uses, so a test can

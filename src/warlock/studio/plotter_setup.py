@@ -51,7 +51,6 @@ MAX_TILE_PX = 512
 #: to find them -- these are the keys, and ``panes.plotter_canvas`` routes them.
 NEXT_EMPTY = "empty"
 NEXT_FILE = "file"
-NEXT_GENERATE = "generate"
 
 
 def blank_form() -> dict[str, Any]:

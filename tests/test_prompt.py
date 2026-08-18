@@ -161,9 +161,43 @@ DEFAULT_COMPOSITION = (
 
 def test_the_default_composition_is_byte_identical_across_the_retirement():
     assert prompt.build("a barrel", {}) == DEFAULT_COMPOSITION
-    # 6 is the scene-template/expansion bump; the literal above still holding
-    # is the proof the object path did not move with it.
-    assert prompt.PROMPT_VERSION == 6
+    # 6 is the scene-template/expansion bump and 7 the tile-sheet one; the
+    # literal above still holding is the proof the object path did not move
+    # with either.
+    assert prompt.PROMPT_VERSION == 7
+
+
+def test_the_tilesheet_template_asks_for_separate_tiles_not_one_scene():
+    """The failure this template exists to prevent: handed "tile sheet" alone,
+    the model draws one large top-down scene across the whole frame, which
+    slices into sixty-four fragments of a picture rather than sixty-four
+    tiles."""
+    assert "separate tiles" in prompt.TILESHEET_TEMPLATE
+    assert "each cell one complete standalone tile" in prompt.TILESHEET_TEMPLATE
+    # SHEET_TEMPLATE's clause is about one character in eight poses, and is
+    # exactly wrong where the cells are sixty-four different things.
+    assert "character" not in prompt.TILESHEET_TEMPLATE
+    assert "single subject" not in prompt.TILESHEET_TEMPLATE
+
+
+def test_the_tilesheet_template_leaves_the_framing_to_the_pipeline():
+    """The projection clause differs between orthogonal and isometric and sits
+    under TILE_SHEET_VERSION, so it must not be duplicated here."""
+    assert "isometric" not in prompt.TILESHEET_TEMPLATE
+    assert "top-down" not in prompt.TILESHEET_TEMPLATE
+
+
+def test_a_sheet_prompt_keeps_the_users_words_first():
+    text = prompt.build("mossy dungeon floor", {}, tilesheet=True)
+    assert text.startswith("mossy dungeon floor, ")
+    assert "uniform grid of separate tiles" in text
+
+
+def test_the_sheet_output_kind_wins_over_the_prompt_mode():
+    """An output kind decides which clauses may be present at all; a prompt
+    mode only describes how the subject was written."""
+    both = prompt.build("stone", {}, tilesheet=True, tile=True, scene=True)
+    assert both == prompt.build("stone", {}, tilesheet=True)
 
 
 def test_stale_taxonomy_params_compose_the_default():

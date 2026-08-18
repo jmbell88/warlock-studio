@@ -2796,15 +2796,15 @@ async def test_the_worker_never_imports_service_studio_or_imgui():
     count -- this package's house style uses them for deferral, and one of
     those is exactly how the rule would be broken by accident.
 
-    There is exactly **one** allowance, listed below rather than tolerated by a
-    loosened predicate: ``_q_ground`` reaches into ``studio.plotter.groundtex``
-    for the forty-seven-case compositor. It survives the rule's reasoning --
-    ``groundtex`` is pure numpy in a package pinned against importing a
-    pipeline, the service or the queue, so the dependency is one-way and cannot
-    become the cycle this test exists to prevent -- and the alternative is a
-    second copy of the tile geometry in ``pipelines/``, which is how the
-    worker's atlas comes to disagree with the editor that paints with it. A
-    *second* entry here is a decision to argue for, not a line to add.
+    There are **no allowances**, and there is history in that. ``_q_ground``
+    used to hold one -- it reached into ``studio.plotter.groundtex`` for the
+    forty-seven-case compositor, on the argument that a second copy of the tile
+    geometry in ``pipelines/`` is how a worker's atlas comes to disagree with
+    the editor that paints with it. That module was deleted on 2026-08-18 when
+    tile sheets moved to Create, and its replacement needs nothing from the
+    studio: sixty-four crops and a paste live in ``pipelines.tilesheet``, where
+    the queue is allowed to look. So the allowlist is empty and the rule is now
+    absolute. An entry here is a decision to argue for, not a line to add.
 
     ``async def`` only because this module marks every test asyncio; there is
     nothing to await.
@@ -2816,7 +2816,7 @@ async def test_the_worker_never_imports_service_studio_or_imgui():
     files = [src / "queue.py"] + sorted(src.glob("_q_*.py"))
     assert len(files) >= 6, "the mixin siblings are not being scanned"
 
-    allowed = {("_q_ground.py", "studio.plotter"), ("_q_ground.py", "studio.plotter.groundtex")}
+    allowed: set[tuple[str, str]] = set()
     offenders: list[str] = []
     for path in files:
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):

@@ -81,6 +81,23 @@ SHEET_TEMPLATE = (
     "each cell a complete figure, no text, no watermark"
 )
 
+# The tile-sheet template. SHEET_TEMPLATE above protects a grid too, but of one
+# character in eight poses -- "each cell a complete figure" is exactly wrong
+# here, where the sixty-four cells are sixty-four *different* things. What this
+# one has to protect is that they stay different and stay separate: a model
+# handed "tile sheet" without the separate-cells clauses draws one large
+# top-down scene and lets it run across the whole frame, which slices into
+# sixty-four fragments of a picture rather than sixty-four tiles. The framing
+# clause is deliberately absent -- pipelines.tilesheet.sheet_subject supplies
+# it, because it differs between the projections and belongs to that module's
+# own version counter.
+TILESHEET_TEMPLATE = (
+    "{prompt}, tile sheet for a 2D game, uniform grid of separate tiles, "
+    "each cell one complete standalone tile, thin dark gutter between cells, "
+    "even diffuse lighting, no shadows, consistent scale and palette across "
+    "cells, no text, no watermark, no border"
+)
+
 # The general-2D template, reachable only when the prompt-expansion mode is
 # "scene" (guidance.EXPAND_MODES). The three templates above all serve a
 # machine reader -- TRELLIS, the tiler, the sheet restyle -- and their clauses
@@ -125,7 +142,14 @@ SCENE_TEMPLATE = (
 # their composed prompt is a function of the expander's weights and seed as
 # well as of this compiler, and a benchmark comparing across the bump must
 # know it.
-PROMPT_VERSION = 6
+#
+# 7: TILESHEET_TEMPLATE, reachable only from the tile-sheet job kind. The same
+# shape of change as 2, 3 and 6 -- a fifth template with every existing path
+# byte-identical to 6, which the DEFAULT_COMPOSITION literal in
+# tests/test_prompt.py is the standing proof of. The bump exists because
+# provenance.versions() records this number against every job, and a stored
+# tile sheet has to be able to say which compiler drew it.
+PROMPT_VERSION = 7
 
 _tokenizer_cache: dict[Path, list[Any]] = {}
 
@@ -270,19 +294,32 @@ def build(
     trigger: str = "",
     tile: bool = False,
     scene: bool = False,
+    tilesheet: bool = False,
 ) -> str:
     """The final positive prompt.
 
     The composed subject, then the LoRA trigger (if any), then the template --
     the same assembly text2image.generate() does by hand, exposed here so the
     prompt preview can show it before a job runs. ``tile`` swaps in the
-    tileable template, whose framing is its own flat top-down clause; ``scene``
-    the general-2D one, and tile wins when both are set because circular
-    padding is a property of the job's output kind, not of its prompt mode.
+    tileable template, whose framing is its own flat top-down clause;
+    ``tilesheet`` the grid one; ``scene`` the general-2D one.
+
+    The two output kinds win over ``scene``, and ``tilesheet`` wins over
+    ``tile``, for one reason applied twice: an output kind is a property of
+    what the job produces, and a prompt mode is a property of how its subject
+    was written. A caller that set both asked for a sheet in scene *style*, and
+    the sheet is the part that decides which clauses can be present at all.
     """
     from .. import guidance
 
     composed = guidance.compose_prompt(user_prompt, params)
-    template = TILE_TEMPLATE if tile else (SCENE_TEMPLATE if scene else PROMPT_TEMPLATE)
+    if tilesheet:
+        template = TILESHEET_TEMPLATE
+    elif tile:
+        template = TILE_TEMPLATE
+    elif scene:
+        template = SCENE_TEMPLATE
+    else:
+        template = PROMPT_TEMPLATE
     text = template.format(prompt=composed)
     return f"{trigger}, {text}" if trigger else text

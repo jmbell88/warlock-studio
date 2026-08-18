@@ -59,8 +59,14 @@ RANK_VOID: int = -1
 
 #: The base set, in precedence order: grass gives way to nothing, water gives
 #: way to everything. The colours are flat and the outlines are the same hue
-#: darkened -- this is the *outline base* set that a polished one is painted
-#: over, so it is deliberately plain and deliberately legible at 16 pixels.
+#: darkened -- deliberately plain and deliberately legible at 16 pixels.
+#:
+#: Nothing in the app reads it since the procedural generator that filled a
+#: tileset from it was deleted on 2026-08-18; ``tests/plotter/_terrainset.py``
+#: is its only caller now. Kept here rather than moved into the tests because
+#: the precedence order is a *statement about this module* -- ``rank_field``
+#: and the outlining below are what make "later wins" mean anything -- and a
+#: named example of a legal set is what a reader of that rule wants next.
 DEFAULT_TERRAINS: tuple[TerrainSpec, ...] = (
     TerrainSpec("Grass", (106, 153, 78, 255), (62, 96, 44, 255)),
     TerrainSpec("Dirt", (156, 122, 84, 255), (98, 74, 48, 255)),

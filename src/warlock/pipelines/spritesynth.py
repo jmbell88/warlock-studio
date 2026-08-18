@@ -189,6 +189,42 @@ def geometry(sheet_type: str) -> SheetGeometry:
         ) from None
 
 
+#: ``service.validation.MAX_SEED``, restated rather than imported: a pipeline
+#: may not import the service layer. ``tests/test_sprite_followup.py`` pins the
+#: two together, so the copy cannot drift.
+MAX_SEED = 2**31 - 1
+
+#: The candidate letters, in the order :func:`candidate_seed` steps through
+#: them. ``rigging.SPRITE_CANDIDATES`` is the same tuple and is deliberately not
+#: imported: that module knows about paths and this one may not.
+CANDIDATES: tuple[str, ...] = ("a", "b")
+
+
+def candidate_seed(base_seed: int, letter: str) -> int:
+    """One candidate's seed, derived from the source job's own stored seed.
+
+    Derived rather than drawn: the prompt-driven path mints its follow-up *in
+    the worker*, which has no random seed of its own and should not grow one --
+    every seed in this codebase comes from a door or from arithmetic over one
+    that did. Deriving them also
+    makes the whole two-step chain reproducible from the one seed the user can
+    see and lock: the same character, and the same pair of sheets from it.
+
+    The two must differ, which is ``create_sprite_synthesis``' own rule and its
+    reason: the deliverable is a *pair* to pick between, and two candidates one
+    apart in seed space come back looking like the same picture twice. A large
+    odd multiplier per letter is what keeps them unrelated rather than adjacent.
+    """
+    if letter not in CANDIDATES:
+        raise ValueError(f"unknown sprite candidate {letter!r}")
+    # Masked, not modulo'd by a prime: the caller's contract is only "a legal
+    # seed", and a mask is exactly that. Knuth's 32-bit golden-ratio multiplier,
+    # for the property this needs -- neither step is a small offset in seed
+    # space, so no two candidates land next to each other.
+    mixed = int(base_seed) + (CANDIDATES.index(letter) + 1) * 2_654_435_761
+    return mixed & MAX_SEED
+
+
 # --- guide templates --------------------------------------------------------
 
 

@@ -14,14 +14,15 @@ from __future__ import annotations
 
 import numpy as np
 
-from warlock.studio.plotter import blob, terrain, tilegen
+from warlock.studio.plotter import blob, terrain
 from warlock.studio.plotter import gid as gidlib
 from warlock.studio.plotter.tileset import TilesetRef
 
+from ._terrainset import terrain_ref
+
 
 def _ref(count: int = 5) -> TilesetRef:
-    spec = tilegen.GenSpec(terrains=terrain.DEFAULT_TERRAINS[:count], tile_w=8, tile_h=8)
-    return TilesetRef(firstgid=1, tileset=tilegen.generate(spec))
+    return terrain_ref(count=count)
 
 
 def _apply(data: np.ndarray, region) -> None:
@@ -289,30 +290,7 @@ def test_the_retile_cost_does_not_follow_the_map_size():
 
 
 def _phase_ref(k: int = 2, count: int = 3) -> TilesetRef:
-    from warlock.studio.plotter import groundtex
-    from warlock.studio.plotter.tileset import Tileset
-
-    tw = th = 8
-
-    def _texture(seed: int) -> np.ndarray:
-        total = k * th * k * tw * 4
-        flat = (np.arange(total, dtype=np.int64) * 7 + seed * 101) % 251
-        return flat.astype(np.uint8).reshape(k * th, k * tw, 4)
-
-    fills = [_texture(i) for i in range(count)]
-    borders = [_texture(100 + i) for i in range(count)]
-    atlas = groundtex.compose_atlas(tw, th, "orthogonal", 2, fills, borders, k)
-    return TilesetRef(
-        firstgid=1,
-        tileset=Tileset(
-            name="ground",
-            pixels=atlas,
-            tile_w=tw,
-            tile_h=th,
-            terrains=terrain.DEFAULT_TERRAINS[:count],
-            phases=k,
-        ),
-    )
+    return terrain_ref(count=count, phases=k, name="ground")
 
 
 def test_a_painted_field_carries_the_coordinate_phase():

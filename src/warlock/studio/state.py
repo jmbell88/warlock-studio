@@ -45,12 +45,33 @@ def default_form_2d() -> dict[str, Any]:
         "seed": random_seed(),
         "seed_locked": False,
         "count": 1,
-        # reference | tile. What this pane submits. A tile is the same pipeline
-        # with circular padding and a different framing template, so it belongs
-        # to the pane that owns the prompt rather than to a mode of its own --
-        # and it is persisted, unlike the seed, because someone making a
-        # texture set is making several.
+        # reference | tile | sheet. What this pane submits. A tile is the same
+        # pipeline with circular padding and a different framing template, so it
+        # belongs to the pane that owns the prompt rather than to a mode of its
+        # own -- and it is persisted, unlike the seed, because someone making a
+        # texture set is making several. A sheet is a different *door* (its own
+        # job kind), but it is composed from the same prompt, which is the whole
+        # reason it is a third value here rather than a fourth mode in the rail.
         "output": "reference",
+        # The Sheet output's three fields. Strings, including the tile size,
+        # because ``restore_form`` gates on ``type(value) is type(default)`` and
+        # the segmented controls that carry all three hand back strings -- an
+        # int default here would make every persisted size fail to restore
+        # silently. They are converted at the submit boundary, once.
+        #
+        # tile | sprite. Which door the Sheet output opens.
+        "sheet_type": "tile",
+        "tile_size": "32",
+        # The sprite arm's two, named apart from the tile arm's on purpose:
+        # "cell size" and "tile size" are the same measurement of different
+        # things, and one key serving both would carry 48 (legal for a sprite
+        # cell, not offered for a tile) across a switch of arms.
+        "sheet_layout": "turnaround",
+        "cell_size": "64",
+        # orthogonal | isometric. Deliberately not Plotter's three: oblique
+        # frames a cell exactly as orthogonal does, so it would be a third
+        # button that changed nothing about the picture.
+        "projection": "orthogonal",
         # Conditioning. Every number is a float literal on purpose:
         # restore_form gates on `type(value) is type(default)`, so an int here
         # would make a persisted 0.6 fail to restore.
@@ -457,11 +478,11 @@ def card_kind(job: dict[str, Any]) -> str:
         # falls through to: a sprite draft is 2D and its next step is Inker, so
         # a workshop filtered to meshes should not be showing it.
         return "sprite"
-    if job.get("kind") == "ground_set":
-        # Its own kind for the sprite draft's reason exactly: a ground set is
+    if job.get("kind") == "tile_sheet":
+        # Its own kind for the sprite draft's reason exactly: a tile sheet is
         # 2D, its next step is a map rather than a mesh, and a workshop filtered
         # to meshes has no business showing one.
-        return "ground"
+        return "tilesheet"
     stage = job.get("stage")
     if stage in ("reference", "tile"):
         return stage
@@ -1113,24 +1134,26 @@ def primary_action(job: dict[str, Any], *, rigging_available: bool = True) -> st
     status = job.get("status")
     if status in ("queued", "running"):
         return "cancel"
-    if job.get("kind") == "ground_set":
-        # Both arms of the ladder, in one place, because this kind answers
-        # differently to each and fell through both.
-        #
-        # No retry: ``rerun_job`` refuses a ground set by name in *either*
-        # mode, so the ladder's "error -> retry" default was offering the one
-        # button guaranteed to produce an error toast. Re-painting is done from
-        # Plotter's Generate section, which is the door that can match the set's
-        # geometry to the map -- there is no card-sized version of that.
-        #
-        # And "open" when it finished, which is the answer a tile gets three
-        # lines below for the same reason: the deliverable *is* the published
-        # image, and Open selects the row and shows the Export tab. Without
-        # this the ladder walked past the stage arms, found no ``model.glb``
-        # and offered a finished tileset no action at all.
-        if status != "done":
-            return None
-        return "open" if "input.png" in (job.get("files") or []) else None
+    # "Open" for a finished tile sheet, which is the answer a tile gets further
+    # down for the same reason: the deliverable *is* the published image, and
+    # Open selects the row and shows the Export tab. Without this arm the ladder
+    # walks past the stage checks, finds no ``model.glb`` and offers a finished
+    # sheet no action at all.
+    #
+    # This kind *is* rerollable -- the whole request is a prompt and a seed, so
+    # "draw me another" is exactly meaningful and ``rerun_job`` allows it. So
+    # the ``status == "error" -> retry`` default below is the right answer here,
+    # and this arm deliberately answers only the one case it owns rather than
+    # returning for the kind. A finished sheet with no ``input.png`` falls
+    # through the rest of the ladder to None, which is the same answer by a
+    # longer road -- ``stage`` is "tilesheet", so neither image arm claims it
+    # and there is no ``model.glb``.
+    if (
+        job.get("kind") == "tile_sheet"
+        and status == "done"
+        and "input.png" in (job.get("files") or [])
+    ):
+        return "open"
     if status == "error":
         return "retry"
     if status != "done":

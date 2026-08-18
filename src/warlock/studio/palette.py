@@ -309,16 +309,13 @@ def commands(ctx: Any) -> list[Command]:
             )
 
     def rerollable(ctx: Any) -> bool:
-        # The same three terms the context menu's own ``rerollable`` applies
-        # (panes/library.py), including the ground-set arm: ``rerun_job``
-        # refuses that kind by name, and the palette must not offer a command
-        # whose only outcome is an error toast. Two spellings of one rule is
-        # how the menu and the palette came to disagree in the first place.
+        # The same terms the context menu's own ``rerollable`` applies
+        # (panes/library.py). Two spellings of one rule is how the menu and the
+        # palette came to disagree in the first place.
         job = _selected(ctx)
         return bool(
             job
             and job["status"] in ("done", "error", "cancelled")
-            and job["kind"] != "ground_set"
             and not (job["kind"] == "image" and job.get("stage") == "reference")
         )
 

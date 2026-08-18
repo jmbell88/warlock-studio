@@ -44,9 +44,9 @@ def test_a_mesh_is_not_offered_a_sprite_of_its_own_input():
 
 
 def test_every_job_can_still_take_away_its_source_image():
-    # "ground" included: its input.png is the finished atlas rather than a
+    # "tilesheet" included: its input.png is the finished sheet rather than a
     # source, which makes taking it away the *whole* point of the row.
-    for stage in ("reference", "model", "ground"):
+    for stage in ("reference", "model", "tilesheet"):
         names = [n for n, _label in widgets.artifacts_for(_job(stage=stage))]
         assert "input.png" in names, stage
 
@@ -58,7 +58,7 @@ def test_every_offered_name_is_servable():
     one ships."""
     from warlock.service import files as svc_files
 
-    for stage in ("reference", "tile", "model", "ground"):
+    for stage in ("reference", "tile", "model", "tilesheet"):
         offered = widgets.artifacts_for(_job(stage=stage))
         assert offered, f"{stage} offers nothing at all"
         for name, _label in offered:
@@ -112,7 +112,7 @@ def test_the_grid_offers_exactly_what_each_stage_can_derive():
     """
     from warlock.service import files as svc_files
 
-    for stage in ("reference", "tile", "ground"):
+    for stage in ("reference", "tile", "tilesheet"):
         offered = {n for n, _label in widgets.artifacts_for(_job(stage=stage))}
         # input.png is the source image every job may take away, and is served
         # rather than derived -- so it is the one name in the grid that is not

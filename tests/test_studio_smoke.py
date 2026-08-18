@@ -152,6 +152,49 @@ def test_the_2d_pane_builds_with_advanced_open_and_a_lora_chosen(app_ctx, imgui_
     _frame(imgui_ctx, lambda: settings_2d.draw(app_ctx))
 
 
+def test_the_2d_pane_builds_every_output_kind(app_ctx, imgui_ctx):
+    """Each of the three draws a different set of sections, and two of them
+    swap the count radios for a bare seed field. Drawn rather than reasoned
+    about because the failure this catches is a layout one: ``same_line`` past
+    the content edge puts a control nowhere, and no pure test sees it."""
+    from warlock.studio.panes import settings_2d
+
+    app_ctx.state.form_2d["prompt"] = "mossy dungeon"
+    for output in ("reference", "tile", "sheet"):
+        app_ctx.state.form_2d["output"] = output
+        _frame(imgui_ctx, lambda: settings_2d.draw(app_ctx))
+
+
+def test_the_2d_pane_builds_both_arms_of_the_sheet_output(app_ctx, imgui_ctx):
+    """The two arms draw different controls off the same form dict, and the
+    sprite arm's are the ones a stale tile-arm value can reach."""
+    from warlock.studio.panes import settings_2d
+
+    app_ctx.state.form_2d["prompt"] = "a hooded ranger"
+    app_ctx.state.form_2d["output"] = "sheet"
+    for sheet_type, projection in (
+        ("tile", "orthogonal"),
+        ("tile", "isometric"),
+        ("sprite", "orthogonal"),
+    ):
+        app_ctx.state.form_2d["sheet_type"] = sheet_type
+        app_ctx.state.form_2d["projection"] = projection
+        _frame(imgui_ctx, lambda: settings_2d.draw(app_ctx))
+
+
+def test_the_sheet_output_pins_the_count_to_one(app_ctx, imgui_ctx):
+    """Both doors refuse a batch, so the radios are not drawn -- and the value
+    is persisted, so a 4 left over from the Object output has to be written
+    back rather than merely ignored."""
+    from warlock.studio.panes import settings_2d
+
+    app_ctx.state.form_2d["prompt"] = "mossy dungeon"
+    app_ctx.state.form_2d["count"] = 4
+    app_ctx.state.form_2d["output"] = "sheet"
+    _frame(imgui_ctx, lambda: settings_2d.draw(app_ctx))
+    assert app_ctx.state.form_2d["count"] == 1
+
+
 def test_the_3d_pane_builds_with_and_without_rigging(app_ctx, imgui_ctx):
     from warlock.studio.panes import settings_3d
 
@@ -3175,8 +3218,8 @@ def test_plotter_builds_empty_and_with_a_map(app_ctx, imgui_ctx):
     assert resolved[ref.firstgid + 1] == 0
 
     # Every tool, twice over: once with no terrain set on the map (the Terrain
-    # tool's empty branch, which offers the generator) and once with one and a
-    # terrain in hand (the swatch grid). Neither branch executes anywhere else.
+    # tool's empty branch) and once with one and a terrain in hand (the swatch
+    # grid). Neither branch executes anywhere else.
     for tool, _label, _letter in plotter_state.TOOLS:
         state.tool = tool
         _frame(imgui_ctx, build)
@@ -3200,10 +3243,11 @@ def test_plotter_builds_empty_and_with_a_map(app_ctx, imgui_ctx):
     _frame(imgui_ctx, build)
     state.select = None
 
-    from warlock.studio.plotter import terrain as terrainlib
-    from warlock.studio.plotter import tilegen
+    from plotter._terrainset import terrain_tileset
 
-    ground = tab.doc.add_tileset(tilegen.generate(tilegen.GenSpec(tile_w=16, tile_h=16)))
+    from warlock.studio.plotter import terrain as terrainlib
+
+    ground = tab.doc.add_tileset(terrain_tileset(tile_w=16, tile_h=16))
     state.terrain = (tab.doc.tilesets.index(ground), 0)
     tab.doc.set_active_layer(layer.uid)
     tab.doc.write_region(
@@ -3213,14 +3257,7 @@ def test_plotter_builds_empty_and_with_a_map(app_ctx, imgui_ctx):
         state.tool = tool
         _frame(imgui_ctx, build)
 
-    # The generator form itself: every control in it rasterises only when the
-    # header is open, and a header remembers being shut.
     from warlock.studio import widgets
-
-    widgets.request_open("plotter/generate")
-    state.tool = "terrain"
-    _frame(imgui_ctx, build)
-    _frame(imgui_ctx, build)
 
     # Both property editors, with a property in each so the value row and the
     # remove button rasterise rather than only the empty new-key form.
@@ -3256,9 +3293,7 @@ def test_plotter_builds_empty_and_with_a_map(app_ctx, imgui_ctx):
     # And an isometric map, which is the only way ``_backdrop``, ``_layers``,
     # ``_grid``, ``_cursor`` and ``_visible_range`` take their diamond branch.
     iso = plotter_mode.new_document(app_ctx, (6, 6, 32, 16))
-    iso_set = tilegen.generate(
-        tilegen.GenSpec(tile_w=32, tile_h=16, projection="isometric")
-    )
+    iso_set = terrain_tileset(tile_w=32, tile_h=16)
     iso.doc.set_projection("isometric", adding=iso_set)
     iso_layer = iso.doc.tile_layers()[0]
     iso.doc.write_region(
@@ -4198,16 +4233,15 @@ def _index_of(labels, needle):
     return -1
 
 
-def test_plotter_tileset_pane_leads_with_the_picker_and_ends_with_the_generator(
-    app_ctx, imgui_ctx
-):
+def test_plotter_tileset_pane_leads_with_the_picker(app_ctx, imgui_ctx):
     """What a map is painted *with* comes before how a tileset gets onto it.
 
-    The pane used to open with "Add from a file..." and the generator header,
-    which put two ways of *acquiring* a tileset above the picker for the one
-    already loaded -- so the control used on every single click sat below two
-    controls used once per map. Generating a ground set is the last resort of
-    the three and is drawn last.
+    The pane used to open with "Add from a file..." and a generator header,
+    which put ways of *acquiring* a tileset above the picker for the one
+    already loaded -- so the control used on every single click sat below
+    controls used once per map. The generators were retired on 2026-08-18 when
+    tile sheets moved to Create; the ordering rule they motivated still holds
+    for the two doors that remain.
     """
     from warlock.studio import plotter_mode
     from warlock.studio.panes import plotter_tileset
@@ -4222,55 +4256,18 @@ def test_plotter_tileset_pane_leads_with_the_picker_and_ends_with_the_generator(
 
     picker = _index_of(labels, "Tileset")
     add = _index_of(labels, "Add from a file")
-    generate = _index_of(labels, "Generate a ground set")
-    assert picker >= 0 and add >= 0 and generate >= 0, labels
+    assert picker >= 0 and add >= 0, labels
     assert picker < add, f"the tileset picker must precede Add from a file: {labels}"
-    assert add < generate, f"the generator must come last: {labels}"
-    assert generate == max(
-        generate, _index_of(labels, "Polish in Inker")
-    ), f"the generator must sit below the Inker row: {labels}"
+    assert add < _index_of(
+        labels, "Polish in Inker"
+    ), f"the Inker row comes after the file door: {labels}"
+    # Nothing in Plotter generates a tileset any more.
+    assert _index_of(labels, "Generate a ground set") == -1, labels
 
 
-def test_the_ai_ground_block_draws_in_both_of_its_states(app_ctx, imgui_ctx):
-    """The generator header is collapsed by default, so nothing else in this
-    file ever executes what is inside it -- and the AI sub-block is the half
-    with a progress bar, a model gate and eight text fields in a loop.
-
-    Both states, because they are different widget trees: the form when the tab
-    is idle, and the progress-and-cancel row that replaces it while a paint is
-    in flight.
-    """
-    from warlock.studio import plotter_mode, widgets
-    from warlock.studio.panes import plotter_tileset
-
-    imgui, _renderer = imgui_ctx
-    tab = plotter_mode.new_document(app_ctx, (8, 8, 16, 16))
-    tab.doc.add_tileset(_tileset())
-
-    previous = widgets.FORCE_SECTIONS_OPEN
-    widgets.FORCE_SECTIONS_OPEN = True
-    try:
-        title = "##tileset-ai"
-        _drawn_labels(imgui, lambda: plotter_tileset.draw(app_ctx), title)
-        labels = _drawn_labels(imgui, lambda: plotter_tileset.draw(app_ctx), title)
-        assert _index_of(labels, "Paint with AI") >= 0, labels
-
-        tab.ground_job = "deadbeefcafe"
-        pending = _drawn_labels(imgui, lambda: plotter_tileset.draw(app_ctx), title)
-        assert _index_of(pending, "Cancel") >= 0, pending
-    finally:
-        widgets.FORCE_SECTIONS_OPEN = previous
-        tab.ground_job = None
-
-
-def test_plotter_tileset_pane_still_leads_with_the_generator_when_empty(app_ctx, imgui_ctx):
-    """The one branch where generating is *not* a last resort.
-
-    With no tileset attached there is nothing to pick, so the two ways of
-    getting one are the whole pane -- burying the generator under a picker that
-    cannot draw would leave a new map's most useful control at the bottom of an
-    otherwise empty panel.
-    """
+def test_plotter_tileset_pane_is_only_the_file_door_when_empty(app_ctx, imgui_ctx):
+    """With no tileset attached there is nothing to pick and nothing to polish,
+    so the one way of getting one is the whole pane."""
     from warlock.studio import plotter_mode
     from warlock.studio.panes import plotter_tileset
 
@@ -4281,8 +4278,6 @@ def test_plotter_tileset_pane_still_leads_with_the_generator_when_empty(app_ctx,
     _drawn_labels(imgui, lambda: plotter_tileset.draw(app_ctx), title)
     labels = _drawn_labels(imgui, lambda: plotter_tileset.draw(app_ctx), title)
 
-    add = _index_of(labels, "Add from a file")
-    generate = _index_of(labels, "Generate a ground set")
-    assert add >= 0 and generate >= 0, labels
-    assert add < generate, labels
+    assert _index_of(labels, "Add from a file") >= 0, labels
     assert _index_of(labels, "Polish in Inker") == -1, "nothing to polish with no tileset"
+    assert _index_of(labels, "Generate a ground set") == -1, labels

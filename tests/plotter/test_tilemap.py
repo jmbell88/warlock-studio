@@ -446,10 +446,10 @@ def test_a_document_built_by_construction_starts_clean():
 
 
 def _terrain_doc():
-    from warlock.studio.plotter import tilegen
+    from ._terrainset import terrain_tileset
 
     doc = MapDoc(8, 8, 8, 8)
-    ref = doc.add_tileset(tilegen.generate(tilegen.GenSpec(tile_w=8, tile_h=8)))
+    ref = doc.add_tileset(terrain_tileset(tile_w=8, tile_h=8))
     layer = doc.add_tile_layer("Ground")
     return doc, ref, layer
 
@@ -561,7 +561,8 @@ def test_a_stroke_covers_only_the_cells_that_moved():
 
 
 def test_replacing_a_tileset_keeps_every_painted_cell():
-    from warlock.studio.plotter import terrain, tilegen
+    from warlock.studio.plotter import terrain
+    from warlock.studio.plotter.tileset import repolish
 
     doc, ref, layer = _terrain_doc()
     region = terrain.paint_terrain(layer.data, 3, 3, 2, ref)
@@ -569,7 +570,7 @@ def test_replacing_a_tileset_keeps_every_painted_cell():
     before = layer.data.copy()
     painted = np.array(ref.tileset.pixels)
     painted[..., 0] = 200
-    doc.replace_tileset(0, tilegen.repolish(ref.tileset, painted))
+    doc.replace_tileset(0, repolish(ref.tileset, painted))
     assert np.array_equal(layer.data, before)
     assert int(doc.tilesets[0].tileset.pixels[..., 0].max()) == 200
     assert doc.tilesets[0].firstgid == ref.firstgid
@@ -578,24 +579,22 @@ def test_replacing_a_tileset_keeps_every_painted_cell():
 def test_replacing_a_tileset_of_a_different_size_is_refused():
     """The one case that would renumber, and so the one that is named rather
     than accepted."""
-    from warlock.studio.plotter import tilegen
+    from ._terrainset import terrain_tileset
 
     doc, _ref, _layer = _terrain_doc()
-    smaller = tilegen.generate(
-        tilegen.GenSpec(terrains=tilegen.DEFAULT_TERRAINS[:2], tile_w=8, tile_h=8)
-    )
+    smaller = terrain_tileset(count=2, tile_w=8, tile_h=8)
     with pytest.raises(ValueError, match="renumber"):
         doc.replace_tileset(0, smaller)
 
 
 def test_a_replace_undoes_back_to_the_original_art():
-    from warlock.studio.plotter import tilegen
+    from warlock.studio.plotter.tileset import repolish
 
     doc, ref, _layer = _terrain_doc()
     original = np.array(ref.tileset.pixels)
     painted = np.array(ref.tileset.pixels)
     painted[..., 0] = 200
-    doc.replace_tileset(0, tilegen.repolish(ref.tileset, painted))
+    doc.replace_tileset(0, repolish(ref.tileset, painted))
     doc.undo()
     assert np.array_equal(doc.tilesets[0].tileset.pixels, original)
 
@@ -731,7 +730,7 @@ def test_an_object_layer_locks_the_same_way():
 def test_the_tileset_epoch_moves_for_every_way_the_list_changes():
     """The three hooks are the tileset list's only mutators, which is the whole
     licence for a cache keyed on this number."""
-    from warlock.studio.plotter import tilegen
+    from ._terrainset import terrain_tileset
 
     doc = MapDoc(6, 6, 16, 16)
     start = doc.tileset_epoch
@@ -746,7 +745,7 @@ def test_the_tileset_epoch_moves_for_every_way_the_list_changes():
 
     # A projection change alone must *not* move it: it changes where a cell is
     # drawn, never which tileset owns an id.
-    iso = tilegen.generate(tilegen.GenSpec(tile_w=32, tile_h=16, projection="isometric"))
+    iso = terrain_tileset(tile_w=32, tile_h=16)
     doc.set_projection("orthogonal")
     assert doc.tileset_epoch == after_swap
 
@@ -788,13 +787,11 @@ def test_a_failed_detach_leaves_the_epoch_alone():
 def test_a_projection_and_its_tileset_arrive_as_one_step():
     """Two steps would leave a Ctrl+Z on a map whose only tileset is drawn for
     the lattice it is no longer on."""
-    from warlock.studio.plotter import tilegen
+    from ._terrainset import terrain_tileset
 
     doc = MapDoc(6, 6, 32, 16)
     depth = len(doc.history)
-    iso = tilegen.generate(
-        tilegen.GenSpec(tile_w=32, tile_h=16, projection="isometric")
-    )
+    iso = terrain_tileset(tile_w=32, tile_h=16)
     doc.set_projection("isometric", adding=iso)
     assert len(doc.history) == depth + 1
     assert doc.projection == "isometric" and len(doc.tilesets) == 1

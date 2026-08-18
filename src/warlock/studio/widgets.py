@@ -73,13 +73,16 @@ ARTIFACTS_TILE = (
     ("manifest.json", "Manifest"),
 )
 
-# And what a finished *ground set* can: its own atlas and nothing else. Every
+# And what a finished *tile sheet* can: its own sheet and nothing else. Every
 # cutout above is the operation of lifting a subject off a background and a
-# terrain sheet has no subject; every material map is a claim about a surface
-# and this is forty-seven of them. The atlas is the asset, so it is the whole
-# list -- an empty grid would read as broken and the mesh list would read as
-# eight buttons that produce nothing.
-ARTIFACTS_GROUND = (("input.png", "Tileset PNG"),)
+# grid of tiles has sixty-four; every material map is a claim about one
+# surface and this is sixty-four of them. The sheet is the asset, so it is the
+# whole list -- an empty grid would read as broken and the mesh list would read
+# as eight buttons that produce nothing. Cutting the sheet *into* tiles is a
+# real operation and deliberately is not here: it belongs to Packwright's
+# tileset import, which takes the sheet as a file and asks what size the tiles
+# are.
+ARTIFACTS_TILESHEET = (("input.png", "Tile sheet PNG"),)
 
 
 def artifacts_for(job: dict[str, Any]) -> tuple[tuple[str, str], ...]:
@@ -105,8 +108,8 @@ def artifacts_for(job: dict[str, Any]) -> tuple[tuple[str, str], ...]:
         return ARTIFACTS_TILE
     if stage == "reference":
         return ARTIFACTS_2D
-    if stage == "ground":
-        return ARTIFACTS_GROUND
+    if stage == "tilesheet":
+        return ARTIFACTS_TILESHEET
     return ARTIFACTS
 
 
@@ -491,10 +494,13 @@ STAGE_BADGES: dict[str, tuple[str, str]] = {
     "model": (icons.BOX, "model"),
     "rig": (icons.BONE, "rig"),
     "sheet": (icons.FILM, "sheet"),
-    # An image stage, so an image glyph -- but its own word, because "a
-    # reference" and "a forty-seven-case terrain atlas" are not the same answer
-    # to "what is this row".
-    "ground": (icons.PAINT_BUCKET, "ground set"),
+    # Deliberately *not* the grid glyph a tile wears: the badges are told apart
+    # by icon before they are read, and "one seamless surface" and "a sheet of
+    # sixty-four different tiles" are the two things a user most needs to tell
+    # apart in a list. LAYERS is already this app's word for a sheet of cells --
+    # it is Packwright's mode glyph and a sprite draft's thumbnail -- so the
+    # picture is borrowed rather than invented.
+    "tilesheet": (icons.LAYERS, "tile sheet"),
 }
 
 

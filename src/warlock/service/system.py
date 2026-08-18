@@ -145,7 +145,12 @@ def guidance_catalog(svc: WarlockService) -> dict[str, Any]:
 
 
 def prompt_preview(
-    svc: WarlockService, raw: dict[str, Any], prompt: str = "", *, tile: bool = False
+    svc: WarlockService,
+    raw: dict[str, Any],
+    prompt: str = "",
+    *,
+    tile: bool = False,
+    tilesheet: bool = False,
 ) -> dict[str, Any]:
     """The composed prompt and its token/chunk cost, before submission.
 
@@ -156,7 +161,13 @@ def prompt_preview(
     ``tile`` has to be threaded through rather than inferred from ``raw``: the
     output kind is not a guidance field, and without it the preview of a tile
     would show the single-centred-object framing the job will not use, which
-    is worse than no preview at all.
+    is worse than no preview at all. ``tilesheet`` is the same argument for the
+    grid template, and shares ``tile``'s exemption from expansion: the
+    enrichment describes one subject and a sheet is sixty-four.
+
+    The caller sends the *subject* for a sheet -- the projection clause and the
+    detail clause are ``pipelines.tilesheet``'s and are appended before this is
+    called -- so what comes back is the whole prompt the worker will compose.
     """
     from ..pipelines import prompt as prompt_pipeline
     from ..pipelines.text2image import Text2Image
@@ -194,7 +205,7 @@ def prompt_preview(
     # roll -- which is what a preview of a stochastic step can honestly say.
     scene = params.get("expand") == "scene"
     expanded = None
-    if params.get("expand") and not tile:
+    if params.get("expand") and not (tile or tilesheet):
         try:
             from ..pipelines import expand as expand_pipeline
 
@@ -212,6 +223,7 @@ def prompt_preview(
         trigger=trigger,
         tile=tile,
         scene=scene,
+        tilesheet=tilesheet,
     )
 
     tokens = chunks = None

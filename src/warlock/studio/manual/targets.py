@@ -8,6 +8,11 @@ from __future__ import annotations
 
 HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "settings-2d": ("03-generating-references", None),
+    # The Sheet output's own block. Its own entry rather than sharing
+    # ``settings-2d``: the chapter is long and the two settings it explains --
+    # why the grid is not a control, and why the sprite arm makes two rows --
+    # are the questions a user has while looking at that section.
+    "settings-sheet": ("03-generating-references", "sheets"),
     "settings-3d": ("04-generating-meshes", None),
     # The Rig stage's own column (the UI redesign, wave 5). Rigging was three
     # buttons in three places and no pane of its own, so it had no (?) either.
@@ -36,7 +41,6 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "clay-bridge": ("10-clay", "the-two-ways-out"),
     "plotter-tools": ("11-plotter", "tools"),
     "plotter-tileset": ("11-plotter", "tilesets"),
-    "plotter-terrain": ("11-plotter", "generating-a-ground-set"),
     "plotter-layers": ("11-plotter", "layers"),
     "plotter-bridge": ("11-plotter", "files"),
     "packwright-sources": ("12-packwright", "sources"),

@@ -313,7 +313,6 @@ def _setup_body(ctx: Any, form: dict, key: str) -> None:
     widgets.field_label("Then")
     for label, value in (
         (f"{icons.PLUS} Add a tileset from a file", plotter_setup.NEXT_FILE),
-        (f"{icons.WAND} Generate a ground set", plotter_setup.NEXT_GENERATE),
         ("Nothing yet", plotter_setup.NEXT_EMPTY),
     ):
         # Through ``controls`` rather than imgui: an AST guard rejects a pane
@@ -333,11 +332,11 @@ def _setup_body(ctx: Any, form: dict, key: str) -> None:
 
 
 def _create(ctx: Any, form: dict) -> None:
-    """Make the map, then open whichever tileset door was chosen.
+    """Make the map, then open the tileset picker if that was chosen.
 
-    The routing is here rather than in ``plotter_setup`` because both doors are
-    UI: one opens an OS picker on a task thread and the other asks a *section*
-    to unfold, and neither is something a pure form module should know.
+    The routing is here rather than in ``plotter_setup`` because the door is
+    UI: it opens an OS picker on a task thread, which is not something a pure
+    form module should know about.
     """
     plotter_mode.new_document(
         ctx, plotter_setup.size_of(form), projection=form["projection"]
@@ -345,8 +344,6 @@ def _create(ctx: Any, form: dict) -> None:
     choice = form.get("next")
     if choice == plotter_setup.NEXT_FILE:
         plotter_mode.ask_add_tileset(ctx)
-    elif choice == plotter_setup.NEXT_GENERATE:
-        widgets.request_open("plotter/generate")
 
 
 def _status(ctx: Any, state: Any, tab: Any) -> None:

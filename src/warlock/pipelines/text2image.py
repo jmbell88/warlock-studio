@@ -32,6 +32,7 @@ from .prompt import (
     SCENE_TEMPLATE,
     SHEET_TEMPLATE,
     TILE_TEMPLATE,
+    TILESHEET_TEMPLATE,
     chunk,
     pad_pair,
 )
@@ -852,6 +853,8 @@ class Text2Image:
         tile: bool = False,
         sheet: bool = False,
         scene: bool = False,
+        tilesheet: bool = False,
+        size: tuple[int, int] | None = None,
     ) -> Path:
         """Generate a reference image and save it to ``output_path``.
 
@@ -872,6 +875,13 @@ class Text2Image:
         convolution wraps. It is a property of one job, never of the pipe: the
         same resident pipeline serves ordinary references, so the patch is
         applied here and reverted before this method returns.
+
+        ``size`` overrides the spec's square frame for this one call, as
+        ``(width, height)``. It exists for the isometric tile sheet, whose grid
+        is 2:1 by definition of the projection -- generated square and squashed
+        afterwards, every diamond would come back an ellipse. ``None`` is the
+        only value any other caller passes, and it takes the byte-for-byte path
+        the spec's own ``image_size`` always took.
         """
         # One lease for the whole call, taken here rather than around each
         # piece: the load, the conditioning attach, the sample and the teardown
@@ -894,6 +904,8 @@ class Text2Image:
                 tile=tile,
                 sheet=sheet,
                 scene=scene,
+                tilesheet=tilesheet,
+                size=size,
             )
 
     def _generate(
@@ -912,6 +924,8 @@ class Text2Image:
         tile: bool = False,
         sheet: bool = False,
         scene: bool = False,
+        tilesheet: bool = False,
+        size: tuple[int, int] | None = None,
     ) -> Path:
         self.load(on_state)
         assert self._pipe is not None
@@ -993,13 +1007,25 @@ class Text2Image:
             # ``scene`` is last in the chain and loses to all three job-shaped
             # flags: sheet and tile describe what the pixels are *for*, and a
             # prompt mode must never override that.
+            #
+            # ``tilesheet`` sits beside ``sheet`` and shares its no-wrap rule
+            # for the same reason spelled a different way: its cells are
+            # sixty-four different tiles, so making the frame's edges
+            # continuous would bleed the leftmost column into the rightmost.
+            # The individual tiles are not seamless either, and are not meant
+            # to be -- a grid sheet is a library to place from, not a surface
+            # to repeat.
             template = (
-                SHEET_TEMPLATE
-                if sheet
+                TILESHEET_TEMPLATE
+                if tilesheet
                 else (
-                    TILE_TEMPLATE
-                    if tile
-                    else (SCENE_TEMPLATE if scene else PROMPT_TEMPLATE)
+                    SHEET_TEMPLATE
+                    if sheet
+                    else (
+                        TILE_TEMPLATE
+                        if tile
+                        else (SCENE_TEMPLATE if scene else PROMPT_TEMPLATE)
+                    )
                 )
             )
             text = template.format(prompt=prompt)
@@ -1012,7 +1038,9 @@ class Text2Image:
                 if self.spec.family == models.FAMILY_FLUX2_KLEIN
                 else self._sample_sdxl
             )
-            image, chunks = sample(target, extra, text, negative_prompt, seed, step_cb)
+            image, chunks = sample(
+                target, extra, text, negative_prompt, seed, step_cb, self._frame(size)
+            )
         finally:
             stack.close()
             teardown()
@@ -1037,10 +1065,34 @@ class Text2Image:
                 tmp.unlink(missing_ok=True)
         self.last_used = time.monotonic()
         self.last_recipe = self._recipe(seed, text, negative_prompt, lora, lora_weight,
-                                        conditioning, chunks, tile)
+                                        conditioning, chunks, tile, size)
         return output_path
 
-    def _sample_sdxl(self, target, extra, text, negative_prompt, seed, step_cb):
+    def _frame(self, size: tuple[int, int] | None) -> tuple[int, int]:
+        """``(width, height)`` for this call: the spec's square frame unless a
+        caller asked for another.
+
+        Validated here rather than at the diffusers boundary because the
+        failure it prevents is expensive and silent: a latent side that is not
+        a multiple of 8 is rounded *by the VAE*, so the returned image is a few
+        pixels off the size the caller is about to slice on its own grid --
+        sixty-four tiles each carrying a sliver of its neighbour, with nothing
+        anywhere saying why.
+        """
+        if size is None:
+            return (self.spec.image_size, self.spec.image_size)
+        width, height = int(size[0]), int(size[1])
+        if width < 8 or height < 8:
+            raise ValueError(f"a generated frame is at least 8x8; got {width}x{height}")
+        if width % 8 or height % 8:
+            raise ValueError(
+                f"a generated frame's sides must be multiples of 8; got {width}x{height}"
+            )
+        return (width, height)
+
+    def _sample_sdxl(
+        self, target, extra, text, negative_prompt, seed, step_cb, frame=None
+    ):
         """The SDXL sample: chunked CLIP encoding, then the pipeline call.
 
         Lifted out of generate() without a single expression moving. The
@@ -1051,6 +1103,10 @@ class Text2Image:
         import torch
 
         assert self._pipe is not None
+        # Defaulted here as well as in ``_frame``, so the two callers that hand
+        # this method its arguments directly (the tests) still take the spec's
+        # square frame without knowing the override exists.
+        width, height = frame or (self.spec.image_size, self.spec.image_size)
         tokenizers = [self._pipe.tokenizer, self._pipe.tokenizer_2]
         positive_chunks = chunk(text, tokenizers)
         # Only playground (guidance_scale > 1) runs classifier-free
@@ -1094,8 +1150,8 @@ class Text2Image:
             negative_pooled_prompt_embeds=negative_pooled,
             num_inference_steps=self.spec.steps,
             guidance_scale=self.spec.guidance_scale,
-            width=self.spec.image_size,
-            height=self.spec.image_size,
+            width=width,
+            height=height,
             generator=torch.Generator("cuda").manual_seed(seed),
             callback_on_step_end=step_cb,
             **upgrades,
@@ -1103,7 +1159,9 @@ class Text2Image:
         ).images[0]
         return image, len(positive_chunks)
 
-    def _sample_flux2(self, target, extra, text, negative_prompt, seed, step_cb):
+    def _sample_flux2(
+        self, target, extra, text, negative_prompt, seed, step_cb, frame=None
+    ):
         """The FLUX.2 klein sample. Four things differ, all forced by the
         pipeline's real signature rather than chosen:
 
@@ -1131,6 +1189,7 @@ class Text2Image:
         import torch
 
         assert not extra, f"conditioning kwargs on a {self.spec.family} sample: {sorted(extra)}"
+        width, height = frame or (self.spec.image_size, self.spec.image_size)
         negative_embeds = None
         if self.spec.guidance_scale > 1.0:
             negative_embeds = target.encode_prompt(
@@ -1143,8 +1202,8 @@ class Text2Image:
             negative_prompt_embeds=negative_embeds,
             num_inference_steps=self.spec.steps,
             guidance_scale=self.spec.guidance_scale,
-            width=self.spec.image_size,
-            height=self.spec.image_size,
+            width=width,
+            height=height,
             max_sequence_length=FLUX2_MAX_SEQUENCE,
             generator=torch.Generator("cuda").manual_seed(seed),
             callback_on_step_end=step_cb,
@@ -1153,7 +1212,7 @@ class Text2Image:
 
     def _recipe(
         self, seed, text, negative_prompt, lora, lora_weight, conditioning, chunks,
-        tile,
+        tile, size=None,
     ) -> dict[str, Any]:
         """Everything that decided this image, assembled the same way (and at
         the same point) last_prompt is -- so a job can record what produced it
@@ -1174,6 +1233,11 @@ class Text2Image:
             "negative_prompt": negative_prompt or "",
             "prompt_chunks": chunks,
             "tile": bool(tile),
+            # Present only when a caller overrode the spec's square frame, the
+            # same absence rule the two upgrade keys below follow: a recipe
+            # without it says "this ran at ``image_size`` in both directions",
+            # which is what every recipe recorded before the override existed.
+            **({"frame": [int(size[0]), int(size[1])]} if size is not None else {}),
             # Present only when the spec sets them, mirroring how they are
             # sampled: a recipe key that is absent says "this upgrade did not
             # run", which no recorded 0.0 could say as plainly.

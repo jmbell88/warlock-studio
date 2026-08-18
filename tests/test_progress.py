@@ -475,16 +475,19 @@ def test_the_worker_never_hands_the_sprite_bar_a_t2i_phase():
 # --- pixel sheets and re-textures --------------------------------------------
 
 
-@pytest.mark.parametrize("kind", ["pixel_sheet", "retexture", "ground_set"])
+@pytest.mark.parametrize("kind", ["pixel_sheet", "retexture", "tile_sheet"])
 def test_the_multi_pass_kinds_have_their_own_contiguous_tables(kind):
     """CON-02: none of these kinds had a table, and ``phases_for`` falls back
     to ``PHASES_IMAGE`` -- whose only real phase is ``trellis``.
 
     Named for what the three have in common rather than for how many there
     are: this said "the two img2img kinds" while carrying three parameters, and
-    ``ground_set`` is txt2img anyway. What actually binds them is that each
-    runs *many* generations through one resident pipe, which is the shape that
-    trips the fallback.
+    ``tile_sheet`` is txt2img anyway. What actually binds them is that none of
+    them is the plain text path -- each has a tail the fallback knows nothing
+    about, which is the shape that trips it. ``tile_sheet`` is the sharpest
+    case: with a single generation there is nothing to average the fallback's
+    errors out, so an unregistered table finishes the bar before the reduction
+    has started.
 
     An unknown phase maps onto the *whole* bar, so the last sampling step of the
     **first** band (or view) emitted 100%, and the never-regress creep then
@@ -510,7 +513,7 @@ def test_the_multi_pass_kinds_have_their_own_contiguous_tables(kind):
             "retexture",
             ("views", "restyle", "t2i_load", "t2i_sample", "project", "assemble"),
         ),
-        ("ground_set", ("paint", "t2i_load", "t2i_sample", "compose", "quantize")),
+        ("tile_sheet", ("guide", "t2i_load", "t2i_sample", "slice", "quantize")),
     ],
 )
 def test_every_phase_these_kinds_emit_is_declared(kind, emitted):
@@ -524,7 +527,7 @@ def test_every_phase_these_kinds_emit_is_declared(kind, emitted):
         assert phase in table, phase
 
 
-@pytest.mark.parametrize("kind", ["pixel_sheet", "retexture", "ground_set"])
+@pytest.mark.parametrize("kind", ["pixel_sheet", "retexture", "tile_sheet"])
 def test_the_first_sampling_pass_does_not_reach_the_end_of_the_bar(kind):
     """The failure in its own terms: finishing the first pass's last step must
     leave room for the passes after it."""

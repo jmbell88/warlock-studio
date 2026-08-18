@@ -93,8 +93,8 @@ BLOB_INDEX: np.ndarray = np.array(
 BLOB_INDEX.setflags(write=False)
 
 #: The interior fill -- every neighbour present, so no edge and no corner is
-#: open. Named because the generator, the tests and any caller wanting "just the
-#: middle of a field" all reach for it.
+#: open. Named because the tests and any caller wanting "just the middle of a
+#: field" reach for it.
 FULL: int = int(BLOB_INDEX[0xFF])
 #: The isolated cell -- no neighbour at all, so every edge is open.
 LONE: int = int(BLOB_INDEX[0])
@@ -105,7 +105,13 @@ def open_edges(blob_index: int) -> tuple[bool, bool, bool, bool]:
 
     Exposed means the neighbour is *not* a member, which is the side that gets
     an outline drawn on it. Phrased as "open" rather than "has a neighbour"
-    because every caller is asking the drawing question.
+    because the question a caller asks of a blob index is a drawing one.
+
+    This and :func:`open_corners` are the index's *decoders*, and since the
+    procedural generator that drew from them was deleted on 2026-08-18 the
+    tests are what read them. They stay because they are the readable half of
+    ``BLOB_MASKS``: the packing is a table, and these two are what say what the
+    table means.
     """
     mask = BLOB_MASKS[int(blob_index)]
     return tuple(not mask & bit for bit in EDGE_BITS)  # type: ignore[return-value]

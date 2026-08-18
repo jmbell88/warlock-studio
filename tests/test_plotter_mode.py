@@ -1377,10 +1377,18 @@ def test_clearing_a_drag_keeps_the_line_origin():
 
 
 def _terrain_tab(ctx: FakeCtx):
-    """A tab with a generated terrain set adopted and that terrain in hand."""
+    """A tab with a terrain set adopted and that terrain in hand."""
+    from plotter._terrainset import terrain_tileset
+
     tab = _tab(ctx, tileset=False)
-    plotter_mode.generate_terrain_set(ctx, _spec())
-    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+    plotter_mode.on_task_done(
+        ctx,
+        _Done(f"plotter-tileset:{tab.uid}", {
+            "tileset": terrain_tileset(tile_w=8, tile_h=8),
+            "source": "",
+            "uid": tab.uid,
+        }),
+    )
     return tab, plotter_mode.ensure(ctx), tab.doc.tilesets[-1]
 
 
@@ -1849,39 +1857,39 @@ def test_an_object_round_trips_through_a_save(tmp_path):
 
 
 # --- terrain sets -------------------------------------------------------------
+#
+# Plotter no longer *makes* one -- the procedural and AI generators were both
+# retired on 2026-08-18 when tile sheets moved to Create. What is still
+# Plotter's and is still tested here is the *arrival*: a terrain-carrying
+# tileset landing on the shared ``plotter-tileset:`` key, and everything
+# ``on_task_done`` does with one.
 
 
-def _spec(**kwargs):
-    from warlock.studio.plotter import tilegen
+def _arrive(ctx, tab, *, projection=None, **kwargs):
+    """Land a terrain set on ``tab`` the way every door here lands one."""
+    from plotter._terrainset import terrain_tileset
 
-    return tilegen.GenSpec(**{"tile_w": 8, "tile_h": 8, **kwargs})
-
-
-def test_generating_with_nothing_open_says_so():
-    ctx = FakeCtx()
-    plotter_mode.generate_terrain_set(ctx, _spec())
-    assert ctx.toasts and ctx.toasts[-1][1] == "error"
-    assert not ctx.submitted
-
-
-def test_generating_a_set_goes_through_the_tileset_key_so_nothing_new_routes_it():
-    """The result *is* a tileset for this tab and ``on_task_done`` already
-    adopts one; a key of its own would be a second copy of that branch."""
-    ctx = FakeCtx()
-    tab = _tab(ctx)
-    plotter_mode.generate_terrain_set(ctx, _spec())
-    assert ctx.submitted[-1] == f"plotter-tileset:{tab.uid}"
+    kwargs.setdefault("tile_w", 8)
+    kwargs.setdefault("tile_h", 8)
+    result = {
+        "tileset": terrain_tileset(**kwargs),
+        "source": "",
+        "uid": tab.uid,
+    }
+    if projection is not None:
+        result["projection"] = projection
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", result))
+    return tab.doc.tilesets[-1]
 
 
-def test_a_generated_set_arrives_as_one_tileset_and_one_undo_step():
+def test_an_arriving_set_is_one_tileset_and_one_undo_step():
     from warlock.studio.plotter import blob
 
     ctx = FakeCtx()
     tab = _tab(ctx)
     depth = len(tab.doc.history)
     before = len(tab.doc.tilesets)
-    plotter_mode.generate_terrain_set(ctx, _spec())
-    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+    _arrive(ctx, tab)
     assert len(tab.doc.tilesets) == before + 1
     assert len(tab.doc.history) == depth + 1
     assert tab.doc.tilesets[-1].tileset.columns == blob.TILE_COUNT
@@ -1894,20 +1902,18 @@ def test_a_terrain_set_puts_its_first_terrain_in_your_hand():
     setting the palette index already says for an ordinary tileset."""
     ctx = FakeCtx()
     tab = _tab(ctx)
-    plotter_mode.generate_terrain_set(ctx, _spec())
-    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+    _arrive(ctx, tab)
     assert plotter_mode.ensure(ctx).terrain == (len(tab.doc.tilesets) - 1, 0)
 
 
-def test_generating_an_isometric_set_makes_the_map_isometric_in_the_same_step():
+def test_a_set_and_its_projection_arrive_in_the_same_step():
     """Two steps would leave a Ctrl+Z on a map whose only tileset is drawn for
     the lattice it is no longer on."""
     ctx = FakeCtx()
     tab = _tab(ctx)
     depth = len(tab.doc.history)
     before = len(tab.doc.tilesets)
-    plotter_mode.generate_terrain_set(ctx, _spec(projection="isometric"))
-    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+    _arrive(ctx, tab, projection="isometric", tile_w=32, tile_h=16)
     assert tab.doc.projection == "isometric"
     assert len(tab.doc.history) == depth + 1
     tab.doc.undo()
@@ -1921,8 +1927,7 @@ def test_an_arriving_tileset_refits_the_view():
     ctx = FakeCtx()
     tab = _tab(ctx)
     tab.view.fitted = True
-    plotter_mode.generate_terrain_set(ctx, _spec(projection="isometric"))
-    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+    _arrive(ctx, tab, projection="isometric", tile_w=32, tile_h=16)
     assert tab.view.fitted is False
 
 
@@ -1931,8 +1936,7 @@ def test_sending_an_atlas_back_from_inker_keeps_every_painted_cell():
 
     ctx = FakeCtx()
     tab = _tab(ctx)
-    plotter_mode.generate_terrain_set(ctx, _spec())
-    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+    _arrive(ctx, tab)
     index = len(tab.doc.tilesets) - 1
     ref = tab.doc.tilesets[index]
     layer = tab.doc.tile_layers()[0]
@@ -1952,8 +1956,7 @@ def test_sending_an_atlas_back_from_inker_keeps_every_painted_cell():
 def test_an_atlas_of_a_different_size_is_refused_rather_than_renumbering_the_map():
     ctx = FakeCtx()
     tab = _tab(ctx)
-    plotter_mode.generate_terrain_set(ctx, _spec())
-    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+    _arrive(ctx, tab)
     index = len(tab.doc.tilesets) - 1
     before = tab.doc.tilesets[index].tileset.pixels
     plotter_mode.tileset_from_inker(
@@ -2120,7 +2123,6 @@ def test_create_opens_the_tileset_door_the_form_chose(monkeypatch):
 
     for choice, expected in (
         (plotter_setup.NEXT_FILE, "file"),
-        (plotter_setup.NEXT_GENERATE, "plotter/generate"),
         (plotter_setup.NEXT_EMPTY, None),
     ):
         asked.clear()

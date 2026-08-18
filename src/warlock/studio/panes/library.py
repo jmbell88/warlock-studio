@@ -340,7 +340,7 @@ KIND_OPTIONS = [
     ("rig", "rigs"),
     ("sheet", "sheets"),
     ("sprite", "sprite sheets"),
-    ("ground", "ground sets"),
+    ("tilesheet", "tile sheets"),
 ]
 
 
@@ -780,20 +780,14 @@ def _overflow(ctx: Any, job: Any) -> None:
                 ),
             )
         )
-    # A ground set's params are a *document description* -- terrains, geometry,
-    # a band -- and the 2D form has no control for any of it, so copying them
-    # would fill the form with a seed and a base model and silently drop the
-    # rest. Its recipe is re-entered in Plotter, where the map it is for is.
-    copyable = bool(job.get("params")) and job["kind"] != "ground_set"
+    copyable = bool(job.get("params"))
     if copyable and controls.menu_item("Copy settings to form", "", False)[0]:
         _copy_settings(ctx, job)
     if job["status"] in ("done", "error", "cancelled"):
         # A hand-made reference has no generator behind it, so there is nothing
         # a new seed could change; the service refuses it, and offering the
-        # menu item anyway only buys the user an error toast. A ground set is
-        # refused for its own reason (``rerun_job`` says it in words): a reroll
-        # would skip the weights admission its door holds.
-        rerollable = job["kind"] != "ground_set" and not (
+        # menu item anyway only buys the user an error toast.
+        rerollable = not (
             job["kind"] == "image" and job.get("stage") == "reference"
         )
         if rerollable and controls.menu_item("Reroll", "", False)[0]:
@@ -1029,7 +1023,7 @@ def _remeshable(job: Any) -> bool:
     above the menu item states in prose: never offer an action the service will
     refuse. Stated once, it cannot be honoured in one place and not the other.
 
-    The ground-set arm is the same lesson a second time. A ground set publishes
+    The tile-sheet arm is the same lesson a second time. A tile sheet publishes
     an ``input.png`` and is not staged "tile", so it satisfied both terms above
     and the exclusion list quietly grew a hole the day the kind was added:
     ``rerun_job`` refuses it by *kind*, in both modes, so Remesh offered it an
@@ -1042,7 +1036,7 @@ def _remeshable(job: Any) -> bool:
     return (
         "input.png" in (job.get("files") or [])
         and job.get("stage") != "tile"
-        and job.get("kind") != "ground_set"
+        and job.get("kind") != "tile_sheet"
     )
 
 

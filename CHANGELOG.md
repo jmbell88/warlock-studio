@@ -6,8 +6,29 @@ record of what a version actually changed. The top heading's version must
 match `pyproject.toml` — a test asserts it, so a release bump cannot leave this
 file behind.
 
-## 0.0.24 — 2026-08-17
+## 0.0.24 — 2026-08-18
 
+- **Create makes sheets.** The **Output** switch is now *Object*, *Seamless
+  tile* or **Sheet**, and a sheet is one of two things. A **tile grid** is 64
+  tiles in an 8×8 arrangement — grass, path, water, cliffs, props — drawn as a
+  single generation and cut up, so every tile shares one palette, one light
+  direction and one style. Two settings and no more: the tile size (16/32/48/64)
+  and the projection (orthogonal squares or 2:1 isometric diamonds); the line
+  under them says what the finished sheet comes to. The grid is *imposed* rather
+  than asked for — the cell boundaries go to the structure control as a guide,
+  so the tiles land where the app is about to cut. A **sprite sheet** turns the
+  same prompt into a character and then into a sheet of it: it draws the
+  character first and keeps it as its own asset, then imagines two candidate
+  sheets from it, so a sheet you dislike still leaves you the drawing it was
+  made from. Neither can be made into a mesh. A tile grid reaches a map through
+  the library like any other asset — Plotter to paint with, Packwright to cut up.
+- **Plotter no longer generates tilesets, and the ground set is gone.** Both
+  generators in the tileset pane — the flat procedural one and *Paint with AI* —
+  were retired along with the `ground_set` job kind, the new-map dialog's
+  *Generate a ground set* option and their two manual sections. A map gets its
+  tiles from a file, from Tiled, from Inker or from the library, and making them
+  now happens in Create. The **Terrain** tool is untouched: a tileset that
+  carries terrain rows still autotiles exactly as before.
 - **The manual navigates to sections, not just chapters.** The contents list
   expands the chapter you are reading to show its own headings, indented;
   clicking one scrolls to it, and the heading you are inside stays lit as you

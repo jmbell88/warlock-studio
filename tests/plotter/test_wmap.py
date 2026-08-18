@@ -430,25 +430,28 @@ def test_a_version_one_file_still_reads_as_orthogonal():
 
 
 def test_a_terrain_set_survives_a_save():
-    from warlock.studio.plotter import tilegen
+    from warlock.studio.plotter.terrain import DEFAULT_TERRAINS
+
+    from ._terrainset import terrain_tileset
 
     doc = MapDoc(4, 4, 8, 8)
-    doc.add_tileset(tilegen.generate(tilegen.GenSpec(tile_w=8, tile_h=8)))
+    doc.add_tileset(terrain_tileset(tile_w=8, tile_h=8))
     back = wmap.read_wmap(wmap.wmap_bytes(doc))
     terrains = back.tilesets[0].tileset.terrains
     assert [entry.name for entry in terrains] == [
-        entry.name for entry in tilegen.DEFAULT_TERRAINS
+        entry.name for entry in DEFAULT_TERRAINS
     ]
     # Order is precedence, so it is a list in the manifest and must not be
     # reordered by the manifest's own sorted keys.
-    assert terrains == tilegen.DEFAULT_TERRAINS
+    assert terrains == DEFAULT_TERRAINS
 
 
 def test_a_map_with_terrains_still_saves_byte_identically_twice():
-    from warlock.studio.plotter import tilegen
+
+    from ._terrainset import terrain_tileset
 
     doc = MapDoc(4, 4, 8, 8, projection="isometric")
-    doc.add_tileset(tilegen.generate(tilegen.GenSpec(tile_w=8, tile_h=8)))
+    doc.add_tileset(terrain_tileset(tile_w=8, tile_h=8))
     doc.add_tile_layer("Ground")
     once = wmap.wmap_bytes(doc)
     assert wmap.wmap_bytes(wmap.read_wmap(once)) == once

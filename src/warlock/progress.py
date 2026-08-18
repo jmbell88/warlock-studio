@@ -116,24 +116,20 @@ PHASES_RETEXTURE: dict[str, tuple[float, float]] = {
     "assemble": (0.95, 1.00),
 }
 
-# A ground set is one txt2img pass per *texture* -- two per terrain, up to
-# sixteen -- through the resident pipe, followed by a CPU tail that composites
-# the forty-seven cases and quantizes the sheet to one palette. Same shape as
-# the pixel sheet above and for the same reason: "paint" carries the k-of-2N
-# handover, the load and sampling slices are where the minutes actually go, and
-# the tail gets narrow but non-zero slices because a 47-tile composite plus a
-# median cut is seconds rather than milliseconds.
-#
-# Registered here rather than left to the ``PHASES_IMAGE`` fallback, which is
-# the trap CON-02 documents: an unknown phase maps onto the whole bar, so the
-# last sampling step of the *first* texture would emit 100% and the never-regress
-# creep would pin it there for the rest of the job.
-PHASES_GROUND_SET: dict[str, tuple[float, float]] = {
-    "paint": (0.00, 0.06),
-    "t2i_load": (0.06, 0.14),
-    "t2i_sample": (0.14, 0.88),
-    "compose": (0.88, 0.95),
-    "quantize": (0.95, 1.00),
+# A tile sheet is *one* txt2img pass, followed by a CPU tail that reduces
+# sixty-four cells and quantizes them to one palette. The simplest table here,
+# and the one that most needs writing down: with a single generation there is
+# nothing to average the fallback's errors out, so an unregistered kind would
+# put the whole bar under ``trellis`` and finish at 100% before the reduction
+# had started. "guide" is the grid render, which is milliseconds -- it gets a
+# slice at all only so the bar moves before the checkpoint load, which is the
+# longest silent stretch of the job.
+PHASES_TILE_SHEET: dict[str, tuple[float, float]] = {
+    "guide": (0.00, 0.04),
+    "t2i_load": (0.04, 0.14),
+    "t2i_sample": (0.14, 0.86),
+    "slice": (0.86, 0.94),
+    "quantize": (0.94, 1.00),
 }
 
 _PHASES_BY_KIND: dict[str, dict[str, tuple[float, float]]] = {
@@ -144,7 +140,7 @@ _PHASES_BY_KIND: dict[str, dict[str, tuple[float, float]]] = {
     "sprite_synthesis": PHASES_SPRITE,
     "pixel_sheet": PHASES_PIXEL_SHEET,
     "retexture": PHASES_RETEXTURE,
-    "ground_set": PHASES_GROUND_SET,
+    "tile_sheet": PHASES_TILE_SHEET,
 }
 
 

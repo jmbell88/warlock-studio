@@ -692,6 +692,15 @@ def derived_2d_for(stage: str | None) -> tuple[str, ...]:
         return TILE_2D
     if stage == "reference":
         return REFERENCE_2D
+    # Everything else -- a mesh, a tile sheet -- derives nothing here, and for
+    # one reason stated two ways. Every entry in the two sets
+    # above is a whole-frame transform of *one picture*: a cutout lifts a single
+    # subject off its background, a wrapped view claims the frame repeats, and
+    # the material set reads the frame as one surface. A sheet is sixty-four
+    # pictures in a grid, so each of those would be answering about the grid as
+    # though it were a subject. Cutting a sheet up is a real operation and it
+    # already has a home -- Packwright's tileset import -- which takes the sheet
+    # as a file rather than as a derivation.
     return ()
 
 # Which pixel-art size each artifact name means. The names are literals for the
@@ -785,17 +794,18 @@ def ready(job: dict[str, Any], job_dir: Path, name: str) -> bool:
         # and the worker writes rig.json last, which makes it the completion
         # marker for the pair.
         return (job_dir / "rig.json").exists() and path.exists()
-    if name == "input.png" and job.get("stage") == "ground":
+    if name == "input.png" and job.get("stage") == "tilesheet":
         # The one stage where input.png is *output*. Everywhere else it is the
         # picture the run was given, complete before the run began, which is why
-        # the fallthrough below serves it on existence alone. A ground set
-        # publishes its own atlas under that name and then writes ground.json
+        # the fallthrough below serves it on existence alone. A tile sheet
+        # publishes its own grid under that name and then writes ``sheet.json``
         # last as the completion marker -- so existence alone hands a reader the
-        # atlas of a job that errored between the two writes, and the library
-        # lists, exports and *adopts* it as a finished tileset. Gated on the
-        # sidecar for rig.glb's reason, not on status: the row is marked failed
-        # after the artifacts are already on disk.
-        return (job_dir / "ground.json").exists() and path.exists()
+        # sheet of a job that errored between the two writes, sixty-four tiles
+        # of which the last rows may be blank, and the library lists and exports
+        # it as finished. Gated on the sidecar for rig.glb's reason, not on
+        # status: the row is marked failed after the artifacts are already on
+        # disk.
+        return (job_dir / "sheet.json").exists() and path.exists()
     if name in DERIVED_2D:
         # A reference's or a tile's pixels, and only those: a mesh job's
         # input.png is the picture it was reconstructed *from*, so an icon
@@ -846,10 +856,10 @@ def unready_reason(job: dict[str, Any], job_dir: Path, name: str) -> str:
         return "The deformation sheet is only made when a rig is."
     if (
         name == "input.png"
-        and job.get("stage") == "ground"
-        and not (job_dir / "ground.json").exists()
+        and job.get("stage") == "tilesheet"
+        and not (job_dir / "sheet.json").exists()
     ):
-        return "This ground set did not finish painting, so its tileset is incomplete."
+        return "This tile sheet did not finish drawing, so some of its tiles are blank."
     if name in DERIVED_2D and name not in derived_2d_for(job.get("stage")):
         return f"{name} is only offered for a reference or a tile, not for a mesh."
     if name in DERIVED_2D and not (job_dir / "input.png").exists():

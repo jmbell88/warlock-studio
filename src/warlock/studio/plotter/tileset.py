@@ -21,7 +21,7 @@ index into its grid.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import numpy as np
@@ -340,3 +340,35 @@ class TilesetRef:
 
     def local(self, tile_id: int) -> int:
         return int(tile_id) - self.firstgid
+
+
+def repolish(original: Tileset, pixels: np.ndarray) -> Tileset:
+    """The same terrain set wearing new art.
+
+    The Inker round-trip's other half: a tileset's atlas is opened as an
+    ordinary document, painted over, and handed back through
+    ``plotter_tilesets.tileset_from_inker``. Lives here rather than in a
+    generator because it *makes no pixels* -- it only re-wraps somebody else's,
+    keeping the terrain roles the map's gids already point at. (It arrived with
+    the procedural ground generator, which was retired with the AI one; this
+    survived because editing an atlas is not generating one.)
+
+    Refused by name when the image size changed, because **the roles are
+    positional**: an atlas cropped or padded in a paint program is a set whose
+    tile ninety-three is no longer sand's interior, and accepting it would
+    repaint an entire map wrong while every gid in it stayed valid. The message
+    says the size to come back with, because a refusal that does not is a
+    refusal that sends someone to a forum.
+    """
+    array = np.asarray(pixels)
+    if array.ndim != 3 or array.shape[:2] != original.pixels.shape[:2]:
+        got = "x".join(str(part) for part in array.shape[1::-1]) if array.ndim >= 2 else "?"
+        raise ValueError(
+            f"this atlas is {got}, and the tileset it replaces is "
+            f"{original.image_w}x{original.image_h}; resize it and try again"
+        )
+    # ``replace`` rather than mutation because ``Tileset`` is frozen: the
+    # result goes back in through ``replace_tileset``, whose epoch bump is what
+    # tells the pane's texture cache to re-upload -- an in-place edit would
+    # move no counter and redraw nothing.
+    return replace(original, pixels=array)

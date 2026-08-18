@@ -1,14 +1,20 @@
 """Getting a tileset onto the open map, from wherever it came from.
 
-Five doors, one destination. A ``.tsx`` or an image from a picker, an image from
-a path (a drop), a procedurally generated ground set, a document coming back
-from Inker, and a library asset's own reference image -- and every one of them
-ends as ``{"tileset": ..., "source": ..., "uid": ...}`` on the same
+Four doors, one destination. A ``.tsx`` or an image from a picker, an image from
+a path (a drop), a document coming back from Inker, and a library asset's own
+reference image -- and every one of them ends as
+``{"tileset": ..., "source": ..., "uid": ...}`` on the same
 ``plotter-tileset:`` task key, because ``plotter_mode.on_task_done`` already
 routes and adopts one and a second key would be a second copy of that branch.
 The duplicate-key refusal that comes with sharing the key is the right rule too:
-a generate and an "Add from a file..." both mean "a tileset is arriving on this
+a drop and an "Add from a file..." both mean "a tileset is arriving on this
 tab".
+
+Nothing here *generates* a tileset any more. The procedural ground set and the
+AI-painted one were both retired on 2026-08-18 when tile sheets moved to Create:
+a sheet is made there, lands in the library, and reaches a map through
+:func:`use_as_tileset` like any other asset -- which is the fourth door above
+and was always the one that scaled past a single map.
 
 Split out of ``plotter_mode`` on the seam the file layer left behind: what is
 here is *about a tileset*, what is in :mod:`.plotter_io` is about a document's
@@ -88,37 +94,6 @@ def add_tileset_path(
     ctx.submit(f"plotter-tileset:{tab.uid}", run)
 
 
-def generate_terrain_set(ctx: Any, spec: Any) -> None:
-    """A procedural ground set, built on a task thread and added like any other.
-
-    Deliberately on the existing ``plotter-tileset:`` key rather than one of its
-    own: the result *is* a tileset for this tab, ``on_task_done`` already routes
-    and adopts one, and a second key would be a second copy of that branch. The
-    duplicate-key refusal it inherits is the right rule too -- a generate and an
-    "Add from a file..." both end in "a tileset is arriving on this tab".
-
-    The pane builds the spec, which is plain frozen data, and nothing about a
-    numpy raster happens on the frame thread.
-    """
-    tab = active(ctx)
-    if tab is None:
-        ctx.toast("Open or start a map first.", "error")
-        return
-    uid = tab.uid
-
-    def run() -> dict[str, Any]:
-        from .plotter import tilegen
-
-        return {
-            "tileset": tilegen.generate(spec),
-            "source": "",
-            "projection": spec.projection,
-            "uid": uid,
-        }
-
-    ctx.submit(f"plotter-tileset:{uid}", run)
-
-
 def polish_in_inker(ctx: Any, tab: Any, index: int) -> None:
     """Open a tileset's atlas as an ordinary Inker document.
 
@@ -152,8 +127,7 @@ def tileset_from_inker(ctx: Any, doc: Any, *, index: int | None = None) -> None:
     ``index`` names the tileset to repaint. Without one this is an ordinary
     append, which is what an unrelated drawing should be.
     """
-    from .plotter import tilegen
-    from .plotter.tileset import Tileset
+    from .plotter.tileset import Tileset, repolish
 
     tab = active(ctx)
     if tab is None:
@@ -174,7 +148,7 @@ def tileset_from_inker(ctx: Any, doc: Any, *, index: int | None = None) -> None:
         return
     ref = tab.doc.tilesets[index]
     try:
-        tab.doc.replace_tileset(index, tilegen.repolish(ref.tileset, pixels))
+        tab.doc.replace_tileset(index, repolish(ref.tileset, pixels))
     except ValueError as exc:
         ctx.toast(f"The tileset was not replaced: {exc}.", "error")
         return
@@ -246,133 +220,3 @@ def use_as_tileset(ctx: Any, job: Any) -> None:
         return {"tileset": tileset, "source": "", "uid": tab.uid}
 
     ctx.submit(f"plotter-tileset:{tab.uid}", run)
-
-
-def paint_ground_set(
-    ctx: Any,
-    *,
-    theme: str,
-    rows: list[dict[str, Any]],
-    colors: int = 64,
-    border: int = 0,
-) -> None:
-    """Queue an AI-painted ground set for the open map.
-
-    The sixth door, and the only one that does not produce a tileset on the spot
-    -- it produces a *job*. The form is read here, on the frame thread, and the
-    submission goes through ``service.grounds`` on the task thread like every
-    other queue door; what comes back is a job id the pane watches, and the
-    adoption is :func:`adopt_ground_set` minutes later.
-
-    The map's geometry is captured now rather than read at adoption, because the
-    set is painted *for* this map at this tile size: a user who resizes the map
-    while it paints gets a named refusal instead of an atlas sliced wrong.
-    """
-    tab = active(ctx)
-    if tab is None:
-        ctx.toast("Open or start a map first.", "error")
-        return
-    uid = tab.uid
-    doc = tab.doc
-    width, height, projection = int(doc.tile_w), int(doc.tile_h), doc.projection
-    payload = [dict(row) for row in rows]
-
-    def run() -> dict[str, Any]:
-        from ..service import grounds as svc_grounds
-
-        made = svc_grounds.create_ground_set(
-            ctx.svc,
-            theme=theme,
-            terrains=payload,
-            tile_w=width,
-            tile_h=height,
-            projection=projection,
-            colors=colors,
-            border=border,
-        )
-        return {"ground_job": made["id"], "uid": uid, "textures": made["textures"]}
-
-    ctx.submit(f"plotter-ground:{uid}", run)
-
-
-def adopt_ground_set(ctx: Any, job: Any) -> None:
-    """A finished ground set's atlas, onto the map that asked for it.
-
-    Shaped exactly like :func:`use_as_tileset` -- a PNG read on the task thread
-    and a ``Tileset`` back on the shared ``plotter-tileset:`` key -- with one
-    thing added: the terrains, read off the job's own params. That is what makes
-    the arriving set a *terrain* set rather than forty-seven anonymous tiles, and
-    it is why this is not simply the library button pointed at a ground job.
-
-    ``Tileset.__post_init__`` is the backstop: a 47-column atlas is its rule, so
-    an image that is not one is refused there by name rather than becoming a
-    tileset whose tile ninety-three is nothing in particular.
-    """
-    tab = active(ctx)
-    if tab is None:
-        return
-    job_id = job["id"] if isinstance(job, dict) else str(job)
-    params = (job.get("params") if isinstance(job, dict) else None) or {}
-    block = dict(params.get("ground") or {})
-    name = (job.get("name") if isinstance(job, dict) else None) or "Ground"
-    doc = tab.doc
-    width, height, projection = int(doc.tile_w), int(doc.tile_h), doc.projection
-
-    painted = (
-        int(block.get("tile_w") or 0),
-        int(block.get("tile_h") or 0),
-        str(block.get("projection") or ""),
-    )
-    if painted != (width, height, projection):
-        # ``tilegen.repolish``'s refusal, in this feature's words: the roles are
-        # positional and the geometry is what makes them line up, so an atlas
-        # painted for another map would repaint every cell wrong while every gid
-        # in it stayed valid. Both sizes named, because a refusal that does not
-        # say what to come back with is one that sends somebody to a forum.
-        ctx.toast(
-            f"That ground set was painted at {painted[0]}x{painted[1]} "
-            f"{painted[2] or 'orthogonal'}, and this map is {width}x{height} "
-            f"{projection}. Paint a new one for this map.",
-            "error",
-        )
-        return
-    terrains = [dict(entry) for entry in block.get("terrains") or []]
-    # 1 for every set painted before phases existed; ``Tileset`` re-validates.
-    phases = int(block.get("phases") or 1)
-    uid = tab.uid
-
-    def run() -> dict[str, Any]:
-        from ..service import files as svc_files
-        from ..service.errors import invalid_from
-        from .plotter.tileset import TerrainSpec, Tileset
-
-        path = svc_files.job_dir_file(ctx.svc, job_id, "input.png")
-        specs = []
-        for entry in terrains:
-            fill = tuple(int(part) for part in (entry.get("color") or (128, 128, 128, 255)))
-            specs.append(
-                TerrainSpec(
-                    name=str(entry.get("name") or "Terrain"),
-                    fill=fill,
-                    # The same derivation the flat generator's form makes: one
-                    # colour is the whole of what a terrain is on the map side,
-                    # and the painted art carries its own edges anyway.
-                    outline=(*(part * 3 // 5 for part in fill[:3]), 255),
-                )
-            )
-        try:
-            tileset = Tileset(
-                name=str(name),
-                pixels=_decode(Path(path)),
-                tile_w=width,
-                tile_h=height,
-                terrains=tuple(specs),
-                phases=phases,
-            )
-        except ValueError as exc:
-            raise invalid_from(
-                exc, "This ground set could not be added", field="file"
-            ) from exc
-        return {"tileset": tileset, "source": "", "projection": projection, "uid": uid}
-
-    ctx.submit(f"plotter-tileset:{uid}", run)

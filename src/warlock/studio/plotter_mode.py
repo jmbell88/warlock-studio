@@ -73,10 +73,7 @@ from .plotter_state import (  # noqa: F401
 from .plotter_tilesets import (  # noqa: F401
     TILESET_FILTER,
     add_tileset_path,
-    adopt_ground_set,
     ask_add_tileset,
-    generate_terrain_set,
-    paint_ground_set,
     polish_in_inker,
     tileset_from_inker,
     use_as_tileset,
@@ -292,20 +289,6 @@ def on_task_done(ctx: Any, done: Any) -> None:
     if tab is None:
         return
 
-    if name == "plotter-ground":
-        # The submission landed, not the paint: what came back is a queued job
-        # id, and the atlas is minutes away. The tab holds the id and the
-        # tileset pane watches it -- deliberately, since the adoption mutates
-        # the document and pushes an undo step, which is only meaningful while
-        # the user is looking at the map. A failure raised at the door arrives
-        # through ``on_task_failed`` like every other refusal.
-        if isinstance(result, dict) and result.get("ground_job"):
-            tab.ground_job = str(result["ground_job"])
-            ctx.cache.invalidate()
-            count = int(result.get("textures") or 0)
-            ctx.toast(f"Painting a ground set -- {count} textures queued.")
-        return
-
     if name == "plotter-tileset":
         # Not a save, so ``saving`` was never set and must not be cleared here.
         if isinstance(result, dict) and result.get("tileset") is not None:
@@ -315,6 +298,13 @@ def on_task_done(ctx: Any, done: Any) -> None:
                 # One step, not two. A tileset that arrived while the projection
                 # did not would leave a map painting the wrong lattice, one
                 # Ctrl+Z away from a state nobody asked for.
+                #
+                # No door has set ``projection`` since the ground generator was
+                # deleted on 2026-08-18 -- the new-map dialog owns the lattice
+                # now -- so this arm is currently reached only from tests. Kept
+                # for ``set_projection``'s own reason: it is the correct shape
+                # for a door that carries a lattice with its art, and re-adding
+                # it later would mean re-deriving the one-undo-step argument.
                 tab.doc.set_projection(want, adding=tileset, source=result.get("source", ""))
             else:
                 tab.doc.add_tileset(tileset, source=result.get("source", ""))

@@ -110,20 +110,6 @@ class PlotterDoc:
     journal_head: int | None = None
     journal_at: float = 0.0
 
-    # The queued ``ground_set`` job this tab is waiting on, if any. Frame-thread
-    # only, never serialised, and it dies with the tab: it is a *watch*, not a
-    # property of the map, and the job finishes into the library either way.
-    # Deliberately not part of ``busy`` -- painting a ground set takes minutes
-    # of GPU and there is no reason the map cannot be edited meanwhile; the
-    # adoption at the end is one ordinary undo step like any other.
-    ground_job: str | None = None
-    #: Consecutive frames ``ground_watch`` has looked for ``ground_job`` in the
-    #: jobs cache and not found it. The cache is one page of the newest jobs, so
-    #: a set that painted for minutes while enough newer rows were submitted
-    #: falls off the page -- and a watch with no bound would then poll for a row
-    #: that can never come back, silently, for the life of the tab.
-    ground_misses: int = 0
-
     @property
     def busy(self) -> bool:
         """Whether the document may be restructured right now.
