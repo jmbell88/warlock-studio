@@ -743,6 +743,47 @@ def _cell_menu(
     imgui.end_popup()
 
 
+#: The cel-wise range verbs, as ``(label, run, needs_square)``.
+#:
+#: A table rather than nine hand-written menu items, for the reason
+#: ``tests/inker/test_ui_tables.py`` exists: every one of these is a pane
+#: offering something the engine implements, and a list the tests can walk is
+#: the only way to assert the two agree in both directions. ``needs_square``
+#: is the *pane's* copy of the engine's refusal -- greyed here so the user is
+#: told before they click, refused there so nothing can get past by another
+#: door. Both, deliberately; neither one alone is enough.
+RANGE_VERBS: tuple[tuple[str, Any, bool], ...] = (
+    ("Flip horizontal", lambda doc, r: doc.flip_range("horizontal", *r), False),
+    ("Flip vertical", lambda doc, r: doc.flip_range("vertical", *r), False),
+    # ``rotate_range`` counts counter-clockwise quarters, as ``np.rot90`` does,
+    # so clockwise is three of them.
+    ("Rotate 90 clockwise", lambda doc, r: doc.rotate_range(3, *r), True),
+    ("Rotate 90 anticlockwise", lambda doc, r: doc.rotate_range(1, *r), True),
+    ("Rotate 180", lambda doc, r: doc.rotate_range(2, *r), False),
+    # Always wrapping. The engine keeps ``wrap=False`` for a caller that wants
+    # it, but a menu verb with no number beside it should not be able to push
+    # a drawing off the edge one press at a time.
+    ("Shift left", lambda doc, r: doc.shift_range(-1, 0, True, *r), False),
+    ("Shift right", lambda doc, r: doc.shift_range(1, 0, True, *r), False),
+    ("Shift up", lambda doc, r: doc.shift_range(0, -1, True, *r), False),
+    ("Shift down", lambda doc, r: doc.shift_range(0, 1, True, *r), False),
+)
+
+
+def _run_range_verb(ctx: Any, doc: Any, run: Any, rect: tuple[int, int, int, int]) -> None:
+    """One verb, with the engine's refusal framed into a sentence.
+
+    Framed rather than forwarded: "a 90-degree rotation of a cel range needs a
+    square canvas" is a statement about the engine, and the user needs one
+    about what they just tried to do. ``test_no_toast_forwards_a_bare_exception``
+    makes that a ratchet.
+    """
+    try:
+        run(doc, rect)
+    except ValueError as exc:
+        ctx.toast(f"That range was not changed: {exc}.", "warn")
+
+
 def _range_menu(ctx: Any, tab: Any) -> None:
     """Everything the range ops offer, as one section of the cell menu.
 
@@ -782,6 +823,17 @@ def _range_menu(ctx: Any, tab: Any) -> None:
         doc.link_range(t0, t1, f0, f1)
     if controls.menu_item_simple("Unlink cels"):
         doc.unlink_range(t0, t1, f0, f1)
+
+    imgui.separator()
+    square = doc.size[0] == doc.size[1]
+    for label, run, needs_square in RANGE_VERBS:
+        # Disabled, never hidden -- this menu's rule, stated at the top.
+        imgui.begin_disabled(needs_square and not square)
+        if controls.menu_item_simple(label):
+            _run_range_verb(ctx, doc, run, (t0, t1, f0, f1))
+        imgui.end_disabled()
+    if controls.menu_item_simple("Fill with foreground"):
+        doc.fill_range(state.fg, t0, t1, f0, f1)
 
     imgui.separator()
     if controls.menu_item_simple("Duplicate frames"):

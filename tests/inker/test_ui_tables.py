@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from warlock.studio import inker, inker_state
@@ -327,3 +328,168 @@ def test_the_resample_combo_offers_every_mode_the_engine_implements():
     from warlock.studio.panes import inker_bridge
 
     assert inker_bridge.transform.RESAMPLES == transform.RESAMPLES
+
+
+# --- the timeline's range verbs (Wave 2) --------------------------------------
+#
+# Nine menu items over one table, so the pane's list and the engine's methods
+# can be asserted against each other. Every verb is run against a real document
+# with the range's four integers, which is the only thing the menu row does that
+# can be wrong: an off-by-one in the rect, or a verb wired to the wrong engine
+# method, both look identical until something moves.
+
+
+def _range_clip(frames: int = 3, size=(4, 4)):
+    doc = inker.Document.blank(*size)
+    for index in range(frames - 1):
+        doc.add_frame()
+        doc.write_colour(
+            (0, 0, 2, 2), (10 * index + 5, 0, 0, 255), np.ones((2, 2), np.float32)
+        )
+    doc.set_current_frame(0)
+    doc.write_colour((0, 0, 2, 2), (255, 0, 0, 255), np.ones((2, 2), np.float32))
+    doc.history.clear()
+    return doc
+
+
+@pytest.mark.parametrize("label", [v[0] for v in inker_timeline.RANGE_VERBS])
+def test_every_range_verb_reaches_the_document_as_one_step(label):
+    doc = _range_clip()
+    run = next(r for name, r, _sq in inker_timeline.RANGE_VERBS if name == label)
+    before = [
+        doc.anim.cels[(doc.anim.tracks[0].uid, f.uid)].pixels.copy()
+        for f in doc.anim.frames
+    ]
+
+    run(doc, (0, 0, 0, 1))
+    assert len(doc.history) == 1
+    cels = [doc.anim.cels[(doc.anim.tracks[0].uid, f.uid)] for f in doc.anim.frames]
+    # The two frames the rect covers moved; the one outside it did not.
+    assert not np.array_equal(cels[0].pixels, before[0])
+    assert not np.array_equal(cels[1].pixels, before[1])
+    assert np.array_equal(cels[2].pixels, before[2])
+
+
+def test_only_the_quarter_turns_are_gated_on_a_square_canvas():
+    """The pane's copy of the engine's refusal, so the row greys before the
+    click. Both exist deliberately: neither the menu nor the engine alone
+    covers every door into the op."""
+    gated = {name for name, _run, square in inker_timeline.RANGE_VERBS if square}
+    assert gated == {"Rotate 90 clockwise", "Rotate 90 anticlockwise"}
+
+
+def test_a_gated_verb_on_a_non_square_canvas_refuses_by_name():
+    doc = _range_clip(size=(4, 6))
+    run = next(r for name, r, sq in inker_timeline.RANGE_VERBS if sq)
+    with pytest.raises(ValueError, match="square"):
+        run(doc, (0, 0, 0, 1))
+
+
+def test_a_refused_verb_is_toasted_as_a_sentence_not_a_bare_exception():
+    doc = _range_clip(size=(4, 6))
+    said: list[tuple] = []
+    ctx = SimpleNamespace(toast=lambda text, kind="info": said.append((text, kind)))
+    run = next(r for name, r, sq in inker_timeline.RANGE_VERBS if sq)
+
+    inker_timeline._run_range_verb(ctx, doc, run, (0, 0, 0, 1))
+    assert len(said) == 1
+    assert said[0][0].startswith("That range was not changed:")
+    assert "square" in said[0][0]
+
+
+def test_the_shift_verbs_all_wrap():
+    """No number beside them, so they must not be able to push a drawing off
+    the edge one press at a time."""
+    doc = _range_clip()
+    before = doc.anim.cels[(doc.anim.tracks[0].uid, doc.anim.frames[0].uid)].pixels.copy()
+    for label in ("Shift left", "Shift right", "Shift up", "Shift down"):
+        run = next(r for name, r, _sq in inker_timeline.RANGE_VERBS if name == label)
+        run(doc, (0, 0, 0, 0))
+    after = doc.anim.cels[(doc.anim.tracks[0].uid, doc.anim.frames[0].uid)].pixels
+    # Left then right then up then down is the identity -- which it can only be
+    # if every one of them wrapped.
+    assert np.array_equal(after, before)
+
+
+# --- the layers panel and the timeline range ----------------------------------
+
+
+def _range_tab(doc, rect=None):
+    return SimpleNamespace(doc=doc, range_sel=rect)
+
+
+def test_the_layers_panel_reads_the_range_track_span():
+    from warlock.studio.panes import inker_layers
+
+    doc = inker.Document.blank(4, 4)
+    doc.add_layer()
+    doc.add_frame()
+    assert inker_layers.track_range(_range_tab(doc), doc) is None
+    assert inker_layers.track_range(_range_tab(doc, (1, 0, 0, 0)), doc) == (0, 1)
+
+
+def test_the_track_span_is_clamped_at_use_like_every_other_reader():
+    from warlock.studio.panes import inker_layers
+
+    doc = inker.Document.blank(4, 4)
+    doc.add_frame()
+    assert inker_layers.track_range(_range_tab(doc, (0, 9, 0, 0)), doc) == (0, 0)
+    assert inker_layers.track_range(_range_tab(doc, (7, 9, 0, 0)), doc) is None
+
+
+def test_a_still_document_has_no_track_span_to_read():
+    from warlock.studio.panes import inker_layers
+
+    doc = inker.Document.blank(4, 4)
+    assert inker_layers.track_range(_range_tab(doc, (0, 0, 0, 0)), doc) is None
+
+
+def test_shift_clicking_a_layer_row_extends_the_range_over_the_whole_clip(monkeypatch):
+    from warlock.studio.panes import inker_layers
+
+    doc = inker.Document.blank(4, 4)
+    doc.add_layer()
+    doc.add_layer()
+    doc.add_frame()
+    doc.set_active_layer(0)
+    tab = _range_tab(doc)
+    monkeypatch.setattr(
+        inker_layers.imgui, "get_io", lambda: SimpleNamespace(key_shift=True)
+    )
+
+    assert inker_layers.extend_range(tab, doc, 2)
+    # Anchored on the row that *was* active, and with no range yet the frame
+    # span is the whole clip.
+    assert tab.range_sel == (0, 2, 0, 1)
+
+
+def test_shift_clicking_keeps_the_frame_span_a_range_already_has(monkeypatch):
+    from warlock.studio.panes import inker_layers
+
+    doc = inker.Document.blank(4, 4)
+    doc.add_layer()
+    doc.add_frame()
+    doc.add_frame()
+    doc.set_active_layer(1)
+    tab = _range_tab(doc, (1, 1, 1, 2))
+    monkeypatch.setattr(
+        inker_layers.imgui, "get_io", lambda: SimpleNamespace(key_shift=True)
+    )
+
+    assert inker_layers.extend_range(tab, doc, 0)
+    assert tab.range_sel == (0, 1, 1, 2)
+
+
+def test_an_unmodified_click_does_not_extend_the_range(monkeypatch):
+    from warlock.studio.panes import inker_layers
+
+    doc = inker.Document.blank(4, 4)
+    doc.add_layer()
+    doc.add_frame()
+    tab = _range_tab(doc)
+    monkeypatch.setattr(
+        inker_layers.imgui, "get_io", lambda: SimpleNamespace(key_shift=False)
+    )
+
+    assert not inker_layers.extend_range(tab, doc, 1)
+    assert tab.range_sel is None

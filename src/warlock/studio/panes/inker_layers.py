@@ -248,6 +248,25 @@ def _header_controls(ctx: Any, doc: Any) -> None:
         "rotate or a crop.",
     ):
         doc.set_layer_props(locked=not layer.locked)
+    imgui.same_line()
+    # Its own label, not a third button under "Lock:". It is a statement about
+    # what a *new cel* starts as, and filing it with the two locks would have
+    # the panel claiming it refuses something -- which is the one thing it does
+    # not do. Disabled, never hidden, on a still document: the engine refuses
+    # it there by name and a greyed button says the setting exists.
+    widgets.muted("  Cels:")
+    imgui.same_line()
+    continuous = doc.anim is not None and doc.anim.tracks[doc.stack.active_index].continuous
+    imgui.begin_disabled(doc.anim is None)
+    if _toggle_icon(
+        f"{icons.COPY}##continuous",
+        continuous,
+        "Continuous: drawing on an empty frame of this layer starts from a "
+        "copy of the last drawing on it rather than from nothing. A copy, not "
+        "a link -- editing it does not change the frame it came from.",
+    ):
+        doc.set_layer_props(continuous=not continuous)
+    imgui.end_disabled()
 
 
 def _toggle_icon(icon: str, engaged: bool, tooltip: str) -> bool:
@@ -311,12 +330,48 @@ def _actions_bar(ctx: Any, doc: Any) -> None:
         widgets.muted("Merge and flatten apply to every frame.")
 
 
+def track_range(tab: Any, doc: Any) -> tuple[int, int] | None:
+    """The timeline range's *track* span, or None. One reader, two panes.
+
+    The range is the timeline's selection and the layers panel is the other
+    view of the same axis, so a row inside it draws highlighted here and its
+    controls act on the whole span. Clamped at use like every other reader of
+    ``range_sel`` -- it is stored unclamped on purpose.
+    """
+    rect = getattr(tab, "range_sel", None)
+    if rect is None or doc.anim is None:
+        return None
+    low, high = sorted((int(rect[0]), int(rect[1])))
+    low, high = max(0, low), min(high, len(doc.anim.tracks) - 1)
+    return None if low > high else (low, high)
+
+
+def extend_range(tab: Any, doc: Any, index: int) -> bool:
+    """Shift-click: stretch the timeline range from the active row to this one.
+
+    The anchor is the row that *was* active, read before the click moves it --
+    which is the same thing the timeline's own drag anchors on, so the two
+    axes of one selection behave the same way. The frame span is left alone
+    when there already is one: the user is widening the track side of an
+    existing range, not starting a new one.
+    """
+    if doc.anim is None or not imgui.get_io().key_shift:
+        return False
+    anchor = doc.stack.active_index
+    rect = getattr(tab, "range_sel", None)
+    frames = (rect[2], rect[3]) if rect is not None else (0, len(doc.anim.frames) - 1)
+    tab.range_sel = (min(anchor, index), max(anchor, index), *frames)
+    return True
+
+
 def _row(ctx: Any, tab: Any, doc: Any, index: int, depth: int = 0) -> None:
     layer = doc.stack[index]
     imgui.push_id(f"layer{layer.uid}")
     if depth:
         imgui.indent(INDENT * depth)
     active = index == doc.stack.active_index
+    span = track_range(tab, doc)
+    in_range = span is not None and span[0] <= index <= span[1]
 
     # The eye, not a checkbox: it is what every layers panel draws there, and
     # the off state is a different glyph rather than an empty box -- an empty
@@ -326,7 +381,13 @@ def _row(ctx: Any, tab: Any, doc: Any, index: int, depth: int = 0) -> None:
         "Hide this layer" if layer.visible else "Show this layer",
         borderless=True,
     ):
-        doc.set_layer_props(index, visible=not layer.visible)
+        # A row inside a multi-track range toggles the whole range, as one
+        # step: the user selected a block and clicked its eye, and hiding one
+        # row of it would be an answer to a question nobody asked.
+        if in_range and span[1] > span[0]:
+            doc.set_range_props(span[0], span[1], visible=not layer.visible)
+        else:
+            doc.set_layer_props(index, visible=not layer.visible)
     imgui.same_line()
 
     texture = inker_textures.layer_thumb(ctx, tab, index)
@@ -340,7 +401,8 @@ def _row(ctx: Any, tab: Any, doc: Any, index: int, depth: int = 0) -> None:
     label = layer.name
     if layer.locked or layer.alpha_lock:
         label += f"  {icons.LOCK}"
-    if controls.selectable(f"{label}##pick", active, 0, (0, THUMB))[0]:
+    if controls.selectable(f"{label}##pick", active or in_range, 0, (0, THUMB))[0]:
+        extend_range(tab, doc, index)
         doc.set_active_layer(index)
     _reorder(doc, index)
     if imgui.is_item_hovered():

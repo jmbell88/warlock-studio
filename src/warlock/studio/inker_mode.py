@@ -1747,16 +1747,33 @@ def _warn_rotsprite(ctx: Any, state: Any, tab: InkerDoc) -> None:
 
 
 def end_transform(ctx: Any, *, commit: bool) -> None:
+    """Enter, or a click outside: land the transform, or take it back.
+
+    **The commit is where a timeline range takes effect.** The preview only
+    ever showed the active cel -- the buffer holds that cel's pixels -- so
+    Aseprite's timeline-target behaviour has to happen here, and the visible
+    range outline is what tells the user how far it will reach.
+    ``commit_floating_range`` falls back to the plain commit whenever a range
+    means nothing (a paste, a still document, a rect off the grid), so this
+    call site does not have to know which case it is in.
+
+    A **cancel** is deliberately not ranged. Nothing but the active cel was
+    ever written, so there is nothing else to put back.
+    """
     state = ensure(ctx)
     tab = state.active
     state.transforming = False
     state.clear_drag()
     if tab is None:
         return
-    if commit:
+    if not commit:
+        tab.doc.cancel_floating()
+        return
+    rect = tab.range_sel
+    if rect is None:
         tab.doc.commit_floating()
     else:
-        tab.doc.cancel_floating()
+        tab.doc.commit_floating_range(*rect)
 
 
 # --- the OS clipboard -------------------------------------------------------

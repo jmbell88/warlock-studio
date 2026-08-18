@@ -1143,3 +1143,62 @@ def test_what_an_import_dropped_is_one_toast_and_every_line_in_the_log():
     message, level, action = ctx.toasts[0]
     assert "colour profile" in message and "+1 more" in message
     assert (level, action) == ("warn", "log")
+
+
+# --- a transform commits over the range (Wave 2) -----------------------------
+#
+# The preview only ever showed the active cel, so the commit is where the
+# timeline's range takes effect -- Aseprite's timeline-target behaviour, and the
+# visible range outline is what tells the user how far it will reach.
+
+
+class _Recorder:
+    """A document that only remembers which commit it was asked for."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+        self.floating = object()
+
+    def commit_floating(self) -> bool:
+        self.calls.append(("plain",))
+        return True
+
+    def commit_floating_range(self, *rect) -> bool:
+        self.calls.append(("range", rect))
+        return True
+
+    def cancel_floating(self) -> bool:
+        self.calls.append(("cancel",))
+        return True
+
+
+def _transform_ctx(monkeypatch, rect):
+    from types import SimpleNamespace
+
+    doc = _Recorder()
+    tab = SimpleNamespace(doc=doc, range_sel=rect)
+    state = SimpleNamespace(
+        active=tab, transforming=True, clear_drag=lambda: None
+    )
+    monkeypatch.setattr(inker_mode, "ensure", lambda ctx: state)
+    return doc
+
+
+def test_ending_a_transform_with_no_range_commits_plain(monkeypatch):
+    doc = _transform_ctx(monkeypatch, None)
+    inker_mode.end_transform(object(), commit=True)
+    assert doc.calls == [("plain",)]
+
+
+def test_ending_a_transform_with_a_range_commits_over_it(monkeypatch):
+    doc = _transform_ctx(monkeypatch, (0, 1, 2, 3))
+    inker_mode.end_transform(object(), commit=True)
+    assert doc.calls == [("range", (0, 1, 2, 3))]
+
+
+def test_cancelling_a_transform_is_never_ranged(monkeypatch):
+    """Nothing but the active cel was ever written, so there is nothing else
+    to put back."""
+    doc = _transform_ctx(monkeypatch, (0, 1, 2, 3))
+    inker_mode.end_transform(object(), commit=False)
+    assert doc.calls == [("cancel",)]
