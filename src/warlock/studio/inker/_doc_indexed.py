@@ -469,7 +469,9 @@ class IndexedOps:
         counts: Sequence[int] | None = None,
         descending: bool = False,
     ) -> bool:
-        """Reorder the table by *key*. No pixel changes, and no undo step.
+        """Reorder the table by *key*. In palette-constrained RGB no pixel
+        changes and no undo step; in indexed mode it moves index data and
+        costs a Ctrl+Z, exactly as ``move_slot`` does.
 
         ``move_slot``'s rule applied to the general case, and the reason it is
         the rule: order is presentation here -- the exported ``.gpl`` and the

@@ -647,8 +647,10 @@ def _card_body(ctx: Any, job: Any, queue_pos: dict[str, int] | None = None) -> N
         widgets.muted(f"{float(rank['score']) * 100:.0f}%")
         if imgui.is_item_hovered():
             imgui.set_tooltip(
-                "How well framed this reference is, and -- when the profile "
-                "has a style anchor -- how close it looks to it. Advisory."
+                "How well framed this reference is, how close it looks to the "
+                "profile's style anchor when there is one, and -- with "
+                "PickScore installed -- how likely a person is to prefer it. "
+                "Advisory."
             )
     if job["status"] == "queued":
         # Where in line it is: the queue used to be invisible past the pill.

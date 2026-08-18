@@ -210,6 +210,44 @@ def _cel_lru(ctx: Any, uid: str) -> list[str]:
     return order
 
 
+def _cel_touched(ctx: Any, uid: str) -> dict[str, int]:
+    """Which imgui frame each cel thumbnail was last drawn on.
+
+    Inside the ``inker_tex:{uid}:`` naming for ``release_doc``'s reason: the
+    prefix sweep drops it with the tab. Not a texture, so the sweep's
+    ``hasattr(value, "release")`` leaves it alone beyond the pop.
+    """
+    key = f"inker_tex:{uid}:cel-touched"
+    touched = ctx.state.preview.get(key)
+    if touched is None:
+        touched = {}
+        ctx.state.preview[key] = touched
+    return touched
+
+
+def _frame_number() -> int | None:
+    """This imgui frame's number, or ``None`` off-context.
+
+    ``None`` means "evict immediately": with no draw list there is nothing to
+    protect, which is the headless answer ``motion._clock`` gives the same way.
+
+    The context check comes *before* the call, not as a ``try`` around it
+    (``widgets._has_context``'s rule, and its exact reason): ``get_frame_count``
+    with no context is not an exception, it is an access violation -- imgui's
+    null check is an assert compiled out of the release build -- so wrapping it
+    catches nothing and the process dies. ``get_current_context`` is the one
+    entry point that is safe to call first.
+    """
+    try:
+        from imgui_bundle import imgui
+
+        if imgui.get_current_context() is None:
+            return None
+        return int(imgui.get_frame_count())
+    except Exception:
+        return None
+
+
 def cel_thumb(ctx: Any, tab: Any, layer: Any, size: int = 36) -> Any:
     """A small preview of one cel, for a timeline cell.
 
@@ -241,7 +279,11 @@ def cel_thumb(ctx: Any, tab: Any, layer: Any, size: int = 36) -> Any:
     if key in order:
         order.remove(key)
     order.append(key)
-    _evict_cel_thumbs(ctx, order)
+    touched = _cel_touched(ctx, tab.uid)
+    frame = _frame_number()
+    if frame is not None:
+        touched[key] = frame
+    _evict_cel_thumbs(ctx, order, touched, frame)
 
     stamp = (doc.layer_stamp(layer.uid), size)
     texture = ctx.state.preview.get(key)
@@ -265,13 +307,27 @@ def cel_thumb(ctx: Any, tab: Any, layer: Any, size: int = 36) -> Any:
     return texture
 
 
-def _evict_cel_thumbs(ctx: Any, order: list[str]) -> None:
-    """Drop the least recently drawn cel thumbnails past the cap."""
-    while len(order) > CEL_THUMB_CAP:
-        oldest = order.pop(0)
-        texture = ctx.state.preview.pop(oldest, None)
-        ctx.state.preview.pop(f"{oldest}:rev", None)
-        ctx.state.preview.pop(f"{oldest}:at", None)
+def _evict_cel_thumbs(
+    ctx: Any, order: list[str], touched: dict[str, int], frame: int | None
+) -> None:
+    """Drop the least recently drawn cel thumbnails past the cap.
+
+    Never one drawn this frame -- ``ThumbnailCache._evict``'s rule: a thumbnail
+    handed out during this frame's UI build already has an ``add_image`` in the
+    live draw list, and releasing it now frees a texture the backend is about
+    to draw. With more cells visible than the cap holds, the overshoot is
+    bounded by what fits on screen and drains as soon as the timeline scrolls.
+    """
+    for key in list(order):
+        if len(order) <= CEL_THUMB_CAP:
+            return
+        if frame is not None and touched.get(key) == frame:
+            continue
+        order.remove(key)
+        touched.pop(key, None)
+        texture = ctx.state.preview.pop(key, None)
+        ctx.state.preview.pop(f"{key}:rev", None)
+        ctx.state.preview.pop(f"{key}:at", None)
         if texture is not None:
             docmodes.forget_texture(texture)
 

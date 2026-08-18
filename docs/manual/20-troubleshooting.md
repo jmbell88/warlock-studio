@@ -52,7 +52,7 @@ raises the other side.
 
 **Fix.** Set `WARLOCK_VRAM_EXCLUSIVE=1` and restart. Text jobs then run sequentially — the engine is
 stopped, the image model loads, generates and unloads, and the engine restarts. It costs seconds per
-job and buys back roughly 7 GB of headroom. See [VRAM modes](16-configuration.md#vram-modes).
+job and buys back roughly 7 GB of headroom. See [VRAM modes](18-configuration.md#vram-modes).
 
 If it still fails, drop the geometry resolution: **Mesh resolution** at the Mesh stage, choosing "2D" rather
 than "3D" — see
@@ -72,7 +72,7 @@ one-time manual download. The app never fetches anything at runtime, by design.
 
 **Fix.** Run `uv run warlock doctor`. Each missing item is listed individually with the exact
 command that fetches it, so you can copy the line and run it. The commands are also collected in
-[Model weights](15-installation.md#model-weights).
+[Model weights](17-installation.md#model-weights).
 
 Two of these rows are **fatal** rather than a note — `trellis-server.exe` and the TRELLIS GGUF
 weights. Nothing degrades gracefully without a reconstruction engine, so those get a red banner and
@@ -235,4 +235,4 @@ profile. When something needs investigating, these are the places to look:
 
 All of those move with `WARLOCK_DATA_DIR` except the note, which sits at the top of `WARLOCK_HOME`,
 and the store, which has its own `WARLOCK_DB`. The full layout, and the one-time move, are in
-[Data locations](16-configuration.md#data-locations).
+[Data locations](18-configuration.md#data-locations).

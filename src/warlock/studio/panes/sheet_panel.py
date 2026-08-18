@@ -138,6 +138,13 @@ def _preview(ctx: Any, form: dict[str, Any]) -> None:
             finished = None
         if finished is not None:
             ctx.state.preview["sheet_strip"] = finished
+            # The upload gate in ``_strip_texture`` compares against this. A
+            # generation counter rather than ``id(finished)``: CPython recycles
+            # ids, so a fresh strip could inherit the old one's id and keep
+            # showing its picture.
+            ctx.state.preview["sheet_strip_gen"] = (
+                int(ctx.state.preview.get("sheet_strip_gen") or 0) + 1
+            )
     strip = ctx.state.preview.get("sheet_strip")
     # No ``ctx.textures`` gate: that is the *thumbnail cache*, and nothing on
     # this path touches it. ``_strip_texture`` allocates through
@@ -153,6 +160,7 @@ def _preview(ctx: Any, form: dict[str, Any]) -> None:
 
 def release_strip_texture(ctx: Any) -> None:
     """Forget-then-release the cached strip texture. Also called at teardown."""
+    ctx.state.preview.pop("sheet_texture:gen", None)
     cached = ctx.state.preview.pop("sheet_texture", None)
     if cached is None:
         return
@@ -167,6 +175,7 @@ def release_strip_texture(ctx: Any) -> None:
 def _strip_texture(ctx: Any, strip: Any) -> Any:
     """One reusable texture for the strip, replaced when its size changes."""
     cached = ctx.state.preview.get("sheet_texture")
+    stamp = ctx.state.preview.get("sheet_strip_gen")
     if cached is not None and cached.size != strip.size:
         # Registered with the imgui backend by texture_ref, so it must be
         # forgotten before the driver can reuse its GL name.
@@ -176,8 +185,13 @@ def _strip_texture(ctx: Any, strip: Any) -> Any:
         cached = ctx.viewer.ctx.texture(strip.size, 4, strip.tobytes())
         cached.filter = (ctx.viewer.ctx.LINEAR, ctx.viewer.ctx.LINEAR)
         ctx.state.preview["sheet_texture"] = cached
-    else:
+    elif ctx.state.preview.get("sheet_texture:gen") != stamp:
+        # Gated on the strip's generation, as ``atlas_texture`` gates on
+        # ``pack_generation``: this wrote every frame the export tab drew,
+        # which is up to 256 KB of PCIe traffic at 60 fps for a strip that
+        # never changes between previews.
         cached.write(strip.tobytes())
+    ctx.state.preview["sheet_texture:gen"] = stamp
     return cached
 
 

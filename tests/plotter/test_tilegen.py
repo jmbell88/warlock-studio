@@ -133,8 +133,9 @@ def test_repolish_keeps_the_roles_and_takes_the_art():
     out = tilegen.repolish(original, painted)
     assert [entry.name for entry in out.terrains] == [e.name for e in original.terrains]
     assert int(out.pixels[..., 1].max()) == 3
-    # A new array identity, which is what makes the pane's texture cache -- keyed
-    # on ``id(pixels)`` -- re-upload with no invalidation call anywhere.
+    # A new array rather than a write into the old one: the result goes back in
+    # through ``replace_tileset``, whose ``tileset_epoch`` bump is what tells the
+    # pane's texture cache to re-upload. An in-place edit would move no counter.
     assert out.pixels is not original.pixels
 
 

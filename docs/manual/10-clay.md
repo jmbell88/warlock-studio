@@ -445,4 +445,4 @@ frozen mesh — and it goes away with the job when the job is deleted.
 Dropping a `.wblk` on the window while Clay is on screen opens it, and dropping a `.glb` imports it
 — see [Importing an asset](#importing-an-asset).
 
-Every binding is listed in [Keyboard shortcuts](14-shortcuts.md).
+Every binding is listed in [Keyboard shortcuts](16-shortcuts.md).

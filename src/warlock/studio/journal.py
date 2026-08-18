@@ -75,6 +75,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -315,6 +316,21 @@ def _same_head(a: Any, b: Any) -> bool:
         return False
 
 
+# Drop tombstones. ``drop`` unlinks on the frame thread while the write it may
+# be racing sits *queued* on a multi-worker pool: ``ctx.submit``'s key-dedupe
+# stops two writes overlapping but sequences nothing against a drop, so a copy
+# submitted a moment before save-and-close would be re-created after drop had
+# deleted it -- and with the mark already reset, the orphaned pair is offered
+# back on the next launch for a properly-saved document. A generation per
+# payload name (the one identity both sides know), bumped by drop under the
+# same lock the task checks it under: a pending write whose generation is
+# stale skips rather than resurrecting the pair. Entries are never removed --
+# a name's queued write can drain arbitrarily late -- and each is a short
+# string and an int, so a session's worth of drops is bytes.
+_drop_lock = threading.Lock()
+_drop_gen: dict[str, int] = {}
+
+
 def write(ctx: Any, provider: Provider, slot: Any, stamp: float | None = None) -> bool:
     """Take one copy now, ignoring the debounce. -> whether it was submitted.
 
@@ -342,8 +358,16 @@ def write(ctx: Any, provider: Provider, slot: Any, stamp: float | None = None) -
         "at": time.time(),
     }
 
+    with _drop_lock:
+        gen = _drop_gen.get(name, 0)
+
     def run() -> None:
-        _write_pair(payload, data, meta)
+        with _drop_lock:
+            if _drop_gen.get(name, 0) != gen:
+                # Dropped between submit and execution: the document was saved
+                # or closed, and writing now would resurrect the deleted pair.
+                return
+            _write_pair(payload, data, meta)
 
     if not ctx.submit(f"journal:{provider.kind}:{provider.uid_of(slot)}", run):
         return False
@@ -391,6 +415,12 @@ def drop(ctx: Any, slot: Any) -> None:
         return
     payload = directory(ctx) / mark.name
     set_mark(slot, Mark())
+    with _drop_lock:
+        # Before the unlinks, and under the write task's lock: a queued write
+        # for this name that has not started yet sees the new generation and
+        # skips; one already inside ``_write_pair`` holds the lock, so the
+        # bump waits for it and the unlinks below remove what it just wrote.
+        _drop_gen[mark.name] = _drop_gen.get(mark.name, 0) + 1
     for path in (meta_path(payload), payload):
         # Sidecar first: it is the completion gate, so removing it first means
         # a crash between the two unlinks leaves an unoffered payload rather

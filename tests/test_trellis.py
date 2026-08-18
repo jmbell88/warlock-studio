@@ -4,6 +4,7 @@ import asyncio
 import struct
 import subprocess
 import sys
+import threading
 import time
 from types import SimpleNamespace
 
@@ -394,6 +395,43 @@ async def test_a_port_held_by_a_stranger_is_never_killed(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="not this Warlock's trellis-server"):
         await srv.ensure_started()
     assert killed == [] and spawned == []
+
+
+@pytest.mark.asyncio
+async def test_a_failed_startup_stops_off_the_event_loop(tmp_path, monkeypatch):
+    """stop() blocks for up to ~25 s, and the not-healthy-in-time path used to
+    be the one caller that ran it inline on the warlock-loop thread. It must
+    dispatch through asyncio.to_thread like every other caller -- and a
+    TrellisStopFailed from that teardown must stay suppressed, so it cannot
+    mask the diagnosis that brought us here."""
+    exe = tmp_path / "trellis-server.exe"
+    exe.write_bytes(b"")
+    models = tmp_path / "models"
+    models.mkdir()
+    srv = TrellisServer(exe, models, 17971)
+
+    monkeypatch.setattr(trellis_mod.subprocess, "Popen", lambda *a, **k: _FakeProc())
+    monkeypatch.setattr(trellis_mod, "_port_in_use", lambda _port: False)
+    monkeypatch.setattr(trellis_mod.winjob, "assign", lambda _pid: True)
+    monkeypatch.setattr(trellis_mod.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(trellis_mod, "STARTUP_TIMEOUT", 0.0)
+
+    loop_thread = threading.current_thread()
+    stopped_on: list[threading.Thread] = []
+
+    def fake_stop() -> None:
+        stopped_on.append(threading.current_thread())
+        raise trellis_mod.TrellisStopFailed("simulated: still alive")
+
+    monkeypatch.setattr(srv, "stop", fake_stop)
+
+    with pytest.raises(RuntimeError, match="did not become healthy in time"):
+        await srv.ensure_started()
+
+    assert stopped_on, "the failure path must still tear the spawn down"
+    assert all(t is not loop_thread for t in stopped_on), (
+        "stop() ran inline on the event-loop thread"
+    )
 
 
 @pytest.mark.asyncio

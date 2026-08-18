@@ -8,6 +8,20 @@ file behind.
 
 ## 0.0.24 — 2026-08-17
 
+- **The manual navigates to sections, not just chapters.** The contents list
+  expands the chapter you are reading to show its own headings, indented;
+  clicking one scrolls to it, and the heading you are inside stays lit as you
+  scroll. Searching now lists the matching *sections* of every matching
+  chapter rather than only the chapters, so a search for `gltfpack` lands on
+  the passage instead of the top of the file. Arriving at a chapter also puts
+  you at the top of it — the page kept the previous chapter's scroll offset,
+  which could open a short chapter at its own footer.
+- **Two new manual chapters.** **Poser** was a section inside Rigging and
+  posing and is now its own chapter, the last workspace mode to get one; the
+  Inker timeline moved out of a chapter that had reached 1110 lines into
+  **Inker: animation**. Everything from the old chapter 06 onward is
+  renumbered, and the manual now names the FLUX.2 klein models, PickScore,
+  DINOv2, the prompt expander and ViTPose with the commands to fetch them.
 - **Inker edits a whole range of the timeline at once.** With a range selected,
   the cell menu's Range section gains flips, quarter turns, wrapping shifts and
   Fill with foreground — each running over every cel in the selection as a
@@ -653,8 +667,8 @@ file behind.
 - The pose guides ship as data (`src/warlock/templates/sprite_guides/*.json`),
   so pose quality is iterable without touching code.
 - Manual: a new **From a single drawing** section in
-  [Sprite sheets](docs/manual/06-sprite-sheets.md), and the layout paragraph in
-  [Inker](docs/manual/07-inker.md).
+  [Sprite sheets](docs/manual/07-sprite-sheets.md), and the layout paragraph in
+  [Inker](docs/manual/08-inker.md).
 
 ## 0.0.17 — 2026-08-10
 

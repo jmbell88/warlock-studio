@@ -163,7 +163,7 @@ direction, so pressing Play loops one direction at a time. The document is unsav
 file — the first `Ctrl+S` asks where to put it, and the draft on disk is left alone. **Export
 sheet** from there writes the atlas back out on the sheet's own fixed grid rather than wrapping it,
 so a walk cycle stays four rows of four and each cell's sidecar entry carries the direction and the
-frame. See [Animation](07-inker.md#animation).
+frame. See [Inker: animation](09-inker-animation.md).
 
 A synthesis is a queued job that runs two full image generations, so it waits its turn behind
 whatever else is generating. **Delete draft** removes a pair; a reference keeps at most 50.

@@ -6,12 +6,13 @@ does not know maps to no moderngl object, and the image comes out as the font
 atlas -- and it is ``forget_texture``d before release, or the backend keeps a
 dead object under a GL name the driver will reuse.
 
-What is different is that nothing here is ever re-uploaded. A tileset's pixels
-are frozen at construction (``plotter.tileset.Tileset`` copies them and clears
-the write flag), so the texture is uploaded once and lives until the tab closes.
-That is also why the cache key is the tileset's *identity*: two maps that opened
-the same ``.tsx`` hold two distinct objects, so they get two textures, and one
-map's close cannot free the other's.
+What is different is that nothing here is ever re-uploaded in place. A
+tileset's pixels are frozen at construction (``plotter.tileset.Tileset`` copies
+them and clears the write flag), so a texture goes stale only when the
+document's tileset *list* changes -- which is what ``tileset_epoch`` counts,
+and why it is the staleness stamp here. The key is per tab: two maps that
+opened the same ``.tsx`` hold two distinct entries, so they get two textures,
+and one map's close cannot free the other's.
 
 The canvas draws one quad per visible cell out of these, which is why the mode
 builds no composited map image in the ordinary case -- see ``plotter/render.py``
@@ -35,8 +36,21 @@ def _slot(uid: str, name: str) -> str:
     return f"{PREFIX}{uid}:{name}"
 
 
-def tileset_texture(ctx: Any, uid: str, index: int, tileset: Any) -> Any:
+def tileset_texture(ctx: Any, uid: str, index: int, tileset: Any, epoch: int) -> Any:
     """The GL texture for one tileset of one tab, uploaded on first ask.
+
+    ``epoch`` is the document's ``tileset_epoch``: adding a tileset shifts no
+    index, but *undoing* an add and adding a different one reuses one, and a
+    stale texture under it would draw the old atlas forever with nothing in the
+    data to say why. The stamp is that counter and not ``id(pixels)`` because
+    CPython recycles an id once the array it named is freed -- a replacement
+    atlas landing on a recycled id would false-match, which is the same
+    forever-stale atlas by another door.
+
+    Document-wide rather than per tileset, so any change to the list re-uploads
+    every atlas in it. That is deliberate: the list changes only on a user
+    action a frame budget never sees, and the alternative -- a counter per
+    entry -- is a second thing to keep in step with the undo hooks.
 
     ``None`` when there is no GL context, which is what the headless smoke
     suite and every state-only test run under -- the callers draw a placeholder
@@ -45,13 +59,9 @@ def tileset_texture(ctx: Any, uid: str, index: int, tileset: Any) -> Any:
     if ctx.viewer is None:
         return None
     key = _slot(uid, f"ts{index}")
-    stamp_key = f"{key}:id"
+    stamp_key = f"{key}:epoch"
     texture = ctx.state.preview.get(key)
-    # Identity, not index: adding a tileset shifts nothing, but *undoing* an
-    # add and adding a different one reuses the index, and a stale texture
-    # under it would draw the old atlas forever with nothing in the data to
-    # say why.
-    if texture is not None and ctx.state.preview.get(stamp_key) != id(tileset.pixels):
+    if texture is not None and ctx.state.preview.get(stamp_key) != int(epoch):
         docmodes.forget_texture(texture)
         texture = None
     if texture is None:
@@ -65,7 +75,7 @@ def tileset_texture(ctx: Any, uid: str, index: int, tileset: Any) -> Any:
         nearest = ctx.viewer.ctx.NEAREST
         texture.filter = (nearest, nearest)
         ctx.state.preview[key] = texture
-        ctx.state.preview[stamp_key] = id(pixels)
+        ctx.state.preview[stamp_key] = int(epoch)
     return texture
 
 

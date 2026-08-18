@@ -84,7 +84,7 @@ def draw(ctx: Any) -> None:
     state.tileset_index = index
     ref = doc.tilesets[index]
     imgui.dummy((0, 4))
-    _picker(ctx, state, ref, index, tab.uid)
+    _picker(ctx, state, ref, index, tab.uid, doc.tileset_epoch)
 
     # Everything below here is about the pane's *contents* rather than about the
     # brush, in the order the questions get asked: which tile (above), then how
@@ -155,11 +155,11 @@ def ground_watch(ctx: Any, tab: Any) -> None:
         ctx.toast(f"The ground set failed: {row.get('error') or 'unknown error'}", "error")
 
 
-def _picker(ctx: Any, state: Any, ref: Any, index: int, uid: str) -> None:
+def _picker(ctx: Any, state: Any, ref: Any, index: int, uid: str, epoch: int) -> None:
     from imgui_bundle import imgui
 
     tileset = ref.tileset
-    texture = plotter_textures.tileset_texture(ctx, uid, index, tileset)
+    texture = plotter_textures.tileset_texture(ctx, uid, index, tileset, epoch)
     avail = max(imgui.get_content_region_avail().x, sp(80))
     # Whole-pixel zoom, at least 1: a tileset drawn at 0.7 of a pixel per pixel
     # is unreadable, and the horizontal scrollbar that a >1 zoom needs is a

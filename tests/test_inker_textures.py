@@ -153,3 +153,109 @@ def test_an_unchanged_floating_buffer_flattens_no_pixels() -> None:
     buf.rev += 1
     inker_textures.floating(ctx, tab, nearest=True)
     assert first.writes, "a revision bump still uploads"
+
+
+# --- cel thumbnail eviction ---------------------------------------------------
+#
+# The cap eviction must never release a texture drawn this frame: a thumbnail
+# handed out during the UI build already has an ``add_image`` in the live draw
+# list, and freeing it before the backend draws is ``ThumbnailCache``'s exact
+# deferred-release hazard. Frame numbers are stubbed rather than taken from
+# imgui -- these tests have no context, and ambient context state elsewhere in
+# a worker must not change their verdict.
+
+
+class _CelDoc:
+    anim = None
+
+    def layer_stamp(self, uid: str) -> int:
+        return 1
+
+
+class _CelLayer:
+    def __init__(self, uid: str) -> None:
+        import numpy as np
+
+        self.uid = uid
+        self.pixels = np.zeros((4, 4, 4), dtype=np.uint8)
+
+
+def _cel(ctx: Any, tab: Any, uid: str) -> Any:
+    return inker_textures.cel_thumb(ctx, tab, _CelLayer(uid), size=4)
+
+
+def test_asking_for_the_frame_number_off_context_is_safe() -> None:
+    """Not a ``try``/``except`` around ``get_frame_count``: with no context that
+    call is an access violation, not an exception -- imgui's null check is an
+    assert compiled out of the release build -- so it takes the process down
+    and no handler ever runs. The context has to be checked first, which is
+    ``widgets._has_context``'s rule.
+
+    (Vacuous in a process that happens to hold a context; the file needs none,
+    and under ``--dist loadfile`` it gets a worker of its own.)
+    """
+    import ast
+    import inspect
+
+    value = inker_textures._frame_number()
+    assert value is None or isinstance(value, int)
+
+    # On the code, not on the source text: the docstring names both calls.
+    tree = ast.parse(inspect.getsource(inker_textures._frame_number).lstrip())
+    at = {
+        node.attr: node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute)
+        and node.attr in ("get_current_context", "get_frame_count")
+    }
+    assert at["get_current_context"] < at["get_frame_count"]
+
+
+def test_off_context_the_cel_cap_evicts_immediately(monkeypatch) -> None:
+    """Headless there is no draw list to protect, so the old behaviour holds:
+    the least recently drawn thumbnail past the cap is released on the spot."""
+    monkeypatch.setattr(inker_textures, "CEL_THUMB_CAP", 2)
+    monkeypatch.setattr(inker_textures, "_frame_number", lambda: None)
+    ctx = _Ctx()
+    tab = _tab(_CelDoc())
+
+    first = _cel(ctx, tab, "a")
+    _cel(ctx, tab, "b")
+    _cel(ctx, tab, "c")
+
+    assert first.released, "the oldest thumbnail past the cap is freed"
+    assert "inker_tex:t1:cela" not in ctx.state.preview
+    assert len(inker_textures._cel_lru(ctx, "t1")) == 2
+
+
+def test_a_cel_drawn_this_frame_is_never_evicted(monkeypatch) -> None:
+    """More cells visible than the cap holds: every one was touched this
+    frame, so the cache overshoots for the frame rather than releasing a
+    texture whose draw command is already queued."""
+    monkeypatch.setattr(inker_textures, "CEL_THUMB_CAP", 2)
+    monkeypatch.setattr(inker_textures, "_frame_number", lambda: 7)
+    ctx = _Ctx()
+    tab = _tab(_CelDoc())
+
+    thumbs = [_cel(ctx, tab, uid) for uid in ("a", "b", "c", "d")]
+
+    assert not any(t.released for t in thumbs), "all were drawn this frame"
+    assert len(inker_textures._cel_lru(ctx, "t1")) == 4, "overshoot, not release"
+
+
+def test_last_frames_cels_drain_once_a_new_frame_touches(monkeypatch) -> None:
+    """The overshoot from a crowded frame drains on the next frame that draws:
+    last frame's draw list has been submitted by then, so its textures are
+    finally safe to free -- and the one drawn *now* is still protected."""
+    monkeypatch.setattr(inker_textures, "CEL_THUMB_CAP", 2)
+    monkeypatch.setattr(inker_textures, "_frame_number", lambda: 7)
+    ctx = _Ctx()
+    tab = _tab(_CelDoc())
+    crowded = {uid: _cel(ctx, tab, uid) for uid in ("a", "b", "c", "d")}
+
+    monkeypatch.setattr(inker_textures, "_frame_number", lambda: 8)
+    again = _cel(ctx, tab, "d")
+
+    assert again is crowded["d"] and not again.released
+    assert crowded["a"].released and crowded["b"].released
+    assert len(inker_textures._cel_lru(ctx, "t1")) == 2

@@ -316,6 +316,15 @@ class SelectionOps:
         src_mask = (
             floating.source_mask if floating.source is not None else floating.mask
         ).copy()
+        # ``flip`` mutates ``source_mask`` in place, so the mask captured here
+        # already carries the live flips -- and the replay runs the recorded
+        # flips itself. Un-flip it back to the mask the lift cut with, or an
+        # odd number of flips over an asymmetric (lasso, wand, feathered)
+        # footprint cuts and lifts a mirrored one on every cel. Flips are
+        # commuting involutions, so applying each once more is the inverse and
+        # the order does not matter.
+        for axis in flips:
+            src_mask = tf.flip(src_mask, axis)
         lift_edit = floating.lift_edit
         active_uid = floating.layer_uid
 
@@ -324,7 +333,19 @@ class SelectionOps:
             self.history.revoke(self, lift_edit)
 
         targets = [cel for _track, cel in self._cels_in(rect)]
-        active = self.stack.by_uid(active_uid)
+        try:
+            active = self.stack.by_uid(active_uid)
+        except KeyError:
+            # The buffer's layer has left the stack entirely; there is no cel
+            # of it to include.
+            active = None
+        if active is not None and self.anim.is_placeholder(active):
+            # ``rect`` came back non-None, so there is an animation.
+            # The revoke above took the autovivified cel back out, and the
+            # placeholder rematerialised in its place wears the *same uid* --
+            # so the lookup finds a stand-in over the shared read-only blank
+            # plane, not a cel. There was nothing there to transform.
+            active = None
         if active is not None and not any(cel is active for cel in targets):
             # The cel the user actually watched transform. In even when the
             # rect excludes it: dropping the one change they could see because

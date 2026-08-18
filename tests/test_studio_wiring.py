@@ -150,6 +150,33 @@ def test_teardown_writes_the_settings_file_exactly_once(fake_pygame):
     assert settings.flushes == 1
 
 
+def test_teardown_releases_every_mode_texture_cache_before_the_viewer(fake_pygame, monkeypatch):
+    """``inker_mode.release_all`` had no caller at all.
+
+    Plotter's and Packwright's sweeps were both wired into teardown; Paint's --
+    the largest of the three, holding a full-canvas composite, a floating
+    buffer, a thumbnail per layer and up to 512 cel thumbnails per tab -- was
+    written and never called.
+
+    The order is asserted, not just the presence: every one of those textures
+    was made from ``ctx.viewer.ctx``, so releasing the viewer first pulls the
+    context out from under the sweep that is supposed to free them.
+    """
+    order: list[str] = []
+    for name, module in (
+        ("inker", inker_mode),
+        ("plotter", plotter_mode),
+        ("packwright", packwright_mode),
+    ):
+        monkeypatch.setattr(module, "release_all", lambda _ctx, _n=name: order.append(_n))
+
+    app = _teardown_app(_ctx(FakeSettings()))
+    app.viewer = SimpleNamespace(release=lambda: order.append("viewer"))
+    app.teardown()
+
+    assert order == ["inker", "plotter", "packwright", "viewer"]
+
+
 def test_no_teardown_step_is_still_called_persist_build():
     """Clay was called Build once. A step labelled for a mode that no longer
     exists is what a log line says when the step fails."""

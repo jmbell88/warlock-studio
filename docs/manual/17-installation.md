@@ -62,7 +62,7 @@ The reconstruction engine is `trellis-server.exe`, a compiled CUDA binary from
 that `vendor/trellis/trellis-server.exe` exists.
 
 The vendored build is **v0.5.4** (2026-07-27). If you keep the binary somewhere else, point
-`WARLOCK_TRELLIS_EXE` at it — see [Environment variables](16-configuration.md#environment-variables).
+`WARLOCK_TRELLIS_EXE` at it — see [Environment variables](18-configuration.md#environment-variables).
 
 A missing binary is one of the **fatal** startup checks: no reconstruction engine means no mesh, and
 there is nothing to degrade to. The other two are the TRELLIS GGUF weights, for the same reason, and
@@ -126,7 +126,7 @@ was fitted to, the weight it was *measured* at, and its trigger words — none o
 carries, and each of which is wrong-by-default rather than merely missing. A LoRA trained with
 `use_rslora` needs a default weight an order of magnitude smaller than an ordinary one; an adapter
 fitted to another architecture raises with the checkpoint already resident in VRAM. Adding a model
-is [an ordinary code change](21-extending.md), and a small one.
+is [an ordinary code change](23-extending.md), and a small one.
 
 Base models are one-resident-at-a-time: a 32 GB card holds the reconstruction engine plus a single
 SDXL-class pipeline, not two, so switching between jobs costs a reload. Style LoRAs are the
@@ -143,6 +143,22 @@ uvx hf download ByteDance/Hyper-SD --revision bc08d970a87c74c71209491d64e3525845
 # Playground v2.5 (~7 GB): highest fidelity, ~25 steps with CFG, correspondingly slower.
 uvx hf download playgroundai/playground-v2.5-1024px-aesthetic --revision 1e032f13f2fe6db2dc49947dbdbd196e753de573 `
   --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir $HOME/.warlock/models/playground-v2.5
+
+# FLUX.2 klein-base 4B (~16 GB): a different architecture entirely -- one Qwen3
+# text encoder at 512 tokens instead of two CLIPs at 77, and a DiT instead of a
+# UNet. Honours a negative prompt, 50 steps at guidance 4. Offloaded rather than
+# resident: ~16 GB stays in host memory and about 10 GB is on the card at peak.
+uvx hf download black-forest-labs/FLUX.2-klein-base-4B --revision a3b4f4849157f664bdbc776fd7453c2783562f4d `
+  --include "*.json" --include "*.txt" --include "*.jinja" --include "*.safetensors" `
+  --exclude "flux-2-klein-base-4b.safetensors" --local-dir $HOME/.warlock/models/flux2-klein-base-4b
+
+# FLUX.2 klein 4B distilled (~16 GB): the 4-step sibling, at guidance 1.0. It
+# registers as distilled, so the negative prompt is inert on it -- pick
+# klein-base when you want one. It exists so the pixel-art klein LoRA below can
+# run at the recipe it was trained on.
+uvx hf download black-forest-labs/FLUX.2-klein-4B --revision e7b7dc27f91deacad38e78976d1f2b499d76a294 `
+  --include "*.json" --include "*.txt" --include "*.jinja" --include "*.safetensors" `
+  --exclude "flux-2-klein-4b.safetensors" --local-dir $HOME/.warlock/models/flux2-klein-4b
 
 # SDXL 1.0 + LCM (pixel art): the same base weights again, run at 8 steps with
 # guidance 1.0 -- the recipe the pixel-art LoRA below was trained against. The
@@ -192,10 +208,63 @@ uvx hf download diffusers/controlnet-canny-sdxl-1.0 --revision eb115a19a10d14909
 See [Conditioning on an image](03-generating-references.md#conditioning-on-an-image) for what these
 actually do.
 
-FLUX is not offered. Both `dev` and `schnell` are click-through gated on Hugging Face, and 12B
-parameters will not coexist with the reconstruction engine on one card. Using a local copy anyway is
-possible but constrained — see
-[Using a different image model](16-configuration.md#using-a-different-image-model).
+### Optional measuring and helper models
+
+These four never make a picture. They measure one, rewrite the prompt that asks for one, or place a
+skeleton — and each is absent-changes-nothing: without it the feature it powers falls back to what
+the app did before it existed, rather than failing.
+
+```powershell
+# DINOv2 base (~0.4 GB): the identity embedding behind style-anchor similarity
+# and the Review judge's probes.
+uvx hf download facebook/dinov2-base --revision f9e44c814b77203eaa57a6bdbbd535f21ede1415 `
+  --include "*.json" --include "*.safetensors" --local-dir $HOME/.warlock/models/dinov2-base
+
+# PickScore v1 (~3.8 GB): a CLIP-H fine-tuned on 500k human A/B preferences,
+# which scores an image *for its prompt*. It is the "would a person pick this"
+# term in candidate ranking. Two commands against one repository and both are
+# needed: `hf download` silently ignores --include when a positional filename
+# is given too, so a single merged command fetches the weights without the
+# processor and the model then cannot load.
+uvx hf download yuvalkirstain/PickScore_v1 --revision a4e4367c6dfa7288a00c550414478f865b875800 model.safetensors `
+  --local-dir $HOME/.warlock/models/pickscore-v1
+uvx hf download yuvalkirstain/PickScore_v1 --revision a4e4367c6dfa7288a00c550414478f865b875800 `
+  --include "*.json" --include "*.txt" --local-dir $HOME/.warlock/models/pickscore-v1
+
+# Prompt expander, Fooocus GPT-2 (~0.7 GB): turns a short prompt into a fuller
+# one. See Prompt enrichment in the references chapter.
+uvx hf download LykosAI/GPT-Prompt-Expansion-Fooocus-v2 --revision a1fa8a394dc4614ec944ed188d8873648df85a10 `
+  --include "*.json" --include "*.txt" --include "*.bin" --local-dir $HOME/.warlock/models/prompt-expander-fooocus
+
+# ViTPose base (~0.4 GB): measures a humanoid subject's joints off the reference
+# image, so a rig starts from where the limbs actually are rather than from the
+# template's proportions.
+uvx hf download usyd-community/vitpose-base-simple --revision a93ac0c67e0b7e2c55287d21d4c460c8f3c54d45 `
+  --include "*.json" --include "*.safetensors" --local-dir $HOME/.warlock/models/vitpose-base
+```
+
+All four run on the **CPU**, deliberately: a measurement must not take VRAM from the models making
+the asset. What each one changes when present:
+
+| Model | Without it | With it |
+| --- | --- | --- |
+| DINOv2 | A style profile has no anchor similarity; the judge has no probes. | [Style profiles](14-profiles.md) and [Review](15-review.md) work fully. |
+| PickScore | Candidates rank on composition and style anchor alone. | A human-preference term joins the ranking — see [Seeds and candidates](03-generating-references.md#seeds-and-candidates). |
+| Prompt expander | The prompt is used as typed. | [Prompt enrichment](03-generating-references.md#prompt-enrichment) can rewrite it. |
+| ViTPose | Skeletons are fitted by bounding box. | Humanoid rigs start from measured joints — see [Where the joints come from](05-rigging-and-posing.md#where-the-joints-come-from). |
+
+**FLUX.1 is not offered; FLUX.2 klein is.** The two `FLUX.1` checkpoints — `dev` and `schnell` —
+are click-through gated on Hugging Face, and 12B parameters will not coexist with the reconstruction
+engine on one card. Using a local copy anyway is possible but constrained — see
+[Using a different image model](18-configuration.md#using-a-different-image-model). The FLUX.2 klein
+pair above is neither gated nor 12B, which is why those two are ordinary entries in the model list.
+
+Because klein is a different architecture, the controls fitted to SDXL do not apply to it, and the
+pane says so rather than letting a submit fail: the style-LoRA picker lists only adapters fitted to
+the architecture you have chosen — for klein, the pixel-art LoRA above and nothing else — and
+structure control explains that it needs a full-CFG model. Changing the base model clears a
+selection the new one cannot run and tells you which one it cleared, so switching to klein and back
+never leaves a stale choice behind.
 
 ## Checking the install
 

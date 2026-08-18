@@ -4792,8 +4792,9 @@ class App:
             from .panes import sheet_panel
 
             _step("release sheet strip", lambda: sheet_panel.release_strip_texture(ctx))
-            from . import packwright_mode, plotter_mode
+            from . import inker_mode, packwright_mode, plotter_mode
 
+            _step("release inker textures", lambda: inker_mode.release_all(ctx))
             _step("release plotter textures", lambda: plotter_mode.release_all(ctx))
             _step("release atlas textures", lambda: packwright_mode.release_all(ctx))
         if self.viewer is not None:

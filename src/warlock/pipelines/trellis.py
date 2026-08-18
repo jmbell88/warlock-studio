@@ -289,9 +289,14 @@ class TrellisServer:
             # cleanup on a failure path, so a stop that cannot confirm death
             # must not mask the error that brought us here -- "did not become
             # healthy in time" is the diagnosis, and the critical log inside
-            # stop() has already recorded the second problem.
+            # stop() has already recorded the second problem. Through
+            # asyncio.to_thread like every other caller: stop() blocks for up
+            # to ~25 s, and inline it parked the whole event loop on a process
+            # that is refusing to die. Holding _lock across the await is
+            # deliberate -- it is what keeps a concurrent ensure_started out
+            # until the teardown has finished, exactly as the inline call did.
             with contextlib.suppress(TrellisStopFailed):
-                self.stop()
+                await asyncio.to_thread(self.stop)
             self._note_start_failure()
             raise RuntimeError("trellis-server did not become healthy in time")
 

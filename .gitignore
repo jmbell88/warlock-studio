@@ -53,3 +53,8 @@ imgui.ini
 # the `WARLOCK_DATA_DIR` each one is pointed at. Written by a suite run, so
 # without this a `git add -A` after `uv run pytest` commits them.
 /.tmp-plotter-review*/
+# Same again, from the whole-studio passes (`--out .tmp-studio-audit`, one
+# subdirectory per theme and UI scale). 12 MB of PNGs the third time this
+# pattern needed a line -- the two above did not cover it, so a `git add -A`
+# would have committed the lot.
+/.tmp-studio-audit/

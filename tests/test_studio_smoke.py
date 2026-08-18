@@ -615,10 +615,25 @@ def test_the_sheet_preview_advances_a_cell_per_frame(app_ctx, imgui_ctx):
         _frame(imgui_ctx, lambda: sheet_panel.draw(app_ctx, job))
         assert strip.steps == 2
         assert app_ctx.viewer.stripping is False, "finished, and let go of"
+        # *Let go of* is not enough: the finished image is a CPU-side PIL
+        # object, but the strip still owns its render target -- a 64-square
+        # texture, two multisample renderbuffers and two framebuffers -- and
+        # the moderngl context sets no ``gc_mode``, so dropping the reference
+        # frees none of it. ``cancel_sheet_strip`` released and the success
+        # path did not, which leaked one viewport per completed preview.
+        assert strip.released, "the finished strip released its render target"
+        assert app_ctx.state.preview["sheet_strip"] is strip.image
+
+        # And the release happens exactly once: the field is cleared first, so
+        # the cancel inside teardown finds nothing left to free.
+        strip.released = False
+        app_ctx.viewer.cancel_sheet_strip()
+        assert strip.released is False, "no second release from the cancel path"
     finally:
         app_ctx.viewer.gpu = None
         app_ctx.viewer._strip = None
         app_ctx.state.preview.pop("sheet_strip", None)
+        sheet_panel.release_strip_texture(app_ctx)
 
 
 def test_the_overlay_builds_with_a_toolbar_and_a_banner(app_ctx, imgui_ctx):
@@ -874,12 +889,54 @@ def test_the_manual_builds_embedded(app_ctx, imgui_ctx):
     from warlock.studio.manual import render
 
     _frame(imgui_ctx, lambda: render.draw_body(app_ctx))
-    # A real chapter key. This said "08-shortcuts", which has never been the
-    # name of anything -- ``open_at`` stores whatever it is given and the drawn
-    # page falls back, so the second frame below was exercising the not-found
-    # path rather than the renderer it exists to smoke.
-    app_ctx.state.manual.open_at("12-shortcuts", None)
+    # A real chapter key, and *asserted* to be one rather than written out.
+    # This said "08-shortcuts", then "12-shortcuts", and neither has ever been
+    # the name of anything -- shortcuts was chapter 14 when the second spelling
+    # was written and is 16 now. ``open_at`` stores whatever it is given and the
+    # drawn page falls back to "could not be loaded", so both spellings smoked
+    # the not-found path rather than the renderer this test exists for, and
+    # neither renumbering that moved the chapter could fail here. Looking the
+    # key up means the next one cannot go stale in silence either.
+    from warlock.studio.manual import loader
+
+    shortcuts = next(c.key for c in loader.chapters() if c.key.endswith("-shortcuts"))
+    app_ctx.state.manual.open_at(shortcuts, None)
     _frame(imgui_ctx, lambda: render.draw_body(app_ctx))
+
+
+def test_the_toc_tree_draws_its_sections_and_follows_the_scroll(app_ctx, imgui_ctx):
+    """The TOC's second level, through a real frame.
+
+    ``tests/manual/test_sections.py`` owns the three decisions behind it, all
+    of them pure. What only a frame can cover is the drawing: the indent /
+    unindent pairing around a row, the id suffix that keeps two chapters'
+    identically-named sections apart, and the scroll read that has to happen
+    inside the page child rather than the host.
+    """
+    from warlock.studio.manual import loader, parser, render
+
+    ms = app_ctx.state.manual
+    inker = next(c.key for c in loader.chapters() if c.key.endswith("-inker"))
+    sections = loader.sections(parser.parse(loader.load(inker)))
+    assert len(sections) > 5, "this test wants a chapter with a real tree"
+
+    # The current chapter expands.
+    ms.open_at(inker)
+    assert ms.anchor is None, "a chapter navigation carries no section"
+    _frame(imgui_ctx, lambda: render.draw_body(app_ctx))
+
+    # A section navigation lights that row on the frame it happens, before the
+    # scroll it asks for has landed anywhere.
+    ms.open_at(inker, sections[-1].anchor)
+    assert ms.anchor == sections[-1].anchor
+    _frame(imgui_ctx, lambda: render.draw_body(app_ctx))
+
+    # And a search expands every matching chapter instead of only the open one.
+    ms.search = "palette"
+    _frame(imgui_ctx, lambda: render.draw_body(app_ctx))
+    ms.search = "zzz-matches-nothing"
+    _frame(imgui_ctx, lambda: render.draw_body(app_ctx))
+    ms.search = ""
 
 
 def test_the_manual_overlay_builds_over_a_mode(app_ctx, imgui_ctx):
@@ -906,7 +963,10 @@ def test_the_manual_overlay_builds_over_a_mode(app_ctx, imgui_ctx):
 
     app_ctx.state.manual.open = False
     frame()
-    render.open_at(app_ctx, ("12-shortcuts", None))
+    from warlock.studio.manual import loader
+
+    shortcuts = next(c.key for c in loader.chapters() if c.key.endswith("-shortcuts"))
+    render.open_at(app_ctx, (shortcuts, None))
     assert app_ctx.state.manual.open
     # Twice: the first is the appearing frame, whose alpha and rise come from
     # ``popover_enter``; the second is the settled one.

@@ -21,7 +21,7 @@ from .anim_edits import (
     TrackPropsEdit,
     TrackRemoveEdit,
 )
-from .animation import Track
+from .animation import TRACK_PROPS, Track
 from .groups import (
     GroupAddEdit,
     GroupDissolveEdit,
@@ -304,8 +304,16 @@ class LayerOps:
         it compares a value against itself: nothing is ever pushed, the change
         is not undoable, and the history head does not move -- which is what
         the tab compares against to decide whether the document is dirty.
+
+        The keys are checked against the allowlist rather than trusted, for
+        ``set_range_props``'s reason: this writes with ``setattr``, and an
+        unknown one would otherwise mint a new attribute on the track,
+        silently, and be lost at the next save.
         """
         index = self.stack.active_index if index is None else index
+        unknown = set(props) - TRACK_PROPS
+        if unknown:
+            raise ValueError(f"unknown track property: {sorted(unknown)[0]}")
         if "continuous" in props and self.anim is None:
             # The one track property a ``Layer`` has no counterpart for: it
             # says what autovivification writes, and a still document has no

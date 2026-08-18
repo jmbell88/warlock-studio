@@ -64,8 +64,9 @@ def test_a_non_rgba_image_is_refused():
 
 
 def test_the_pixels_are_a_private_read_only_copy():
-    """The UI keys a GPU upload on ``id(pixels)``. An in-place edit anywhere
-    would leave the cache holding a live key over stale pixels."""
+    """The UI invalidates its GPU upload only when the document's tileset list
+    changes (``tileset_epoch``). An in-place edit anywhere would move no
+    counter and leave the cache holding a live key over stale pixels."""
     source = _pixels(32, 32)
     ts = Tileset(name="t", pixels=source, tile_w=16, tile_h=16)
     assert ts.pixels is not source

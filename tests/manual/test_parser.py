@@ -99,7 +99,7 @@ def test_error_carries_line_number():
 # --- the search reads the manual, not its table of contents -------------------
 
 
-def _chapter(key: str = "07-inker", title: str = "Inker"):
+def _chapter(key: str = "08-inker", title: str = "Inker"):
     from types import SimpleNamespace
 
     return SimpleNamespace(key=key, title=title, part="Editors")
@@ -111,13 +111,13 @@ def test_a_phrase_that_appears_only_in_prose_finds_its_chapter(monkeypatch):
     "WARLOCK_VRAM_BUDGET" are each named in a paragraph and in no heading
     anywhere, so the three strings a reader is most likely to arrive with found
     nothing at all."""
-    from warlock.studio.manual import render
+    from warlock.studio.manual import loader, render
 
-    blocks = render._blocks("07-inker")
+    blocks = render._blocks("08-inker")
     monkeypatch.setattr(render, "_blocks", lambda key: blocks)
-    prose = " ".join(render._block_text(b) for b in blocks if not _is_heading(b))
+    prose = " ".join(loader.block_text(b) for b in blocks if not _is_heading(b))
     word = next(w for w in prose.split() if len(w) > 9 and w.isalpha())
-    headings = " ".join(render._block_text(b) for b in blocks if _is_heading(b))
+    headings = " ".join(loader.block_text(b) for b in blocks if _is_heading(b))
     assert word.lower() not in headings.lower(), "pick a word the headings do not carry"
     assert render._matches(_chapter(), word.lower()) is True
 
@@ -130,8 +130,12 @@ def _is_heading(block) -> bool:
 
 def test_every_block_type_contributes_its_text():
     """One function over all five, so a block type added later is searchable by
-    having been added rather than by somebody remembering this file."""
-    from warlock.studio.manual import parser, render
+    having been added rather than by somebody remembering this file.
+
+    It lives in ``loader`` rather than ``render`` because the chapter search and
+    the TOC tree's section search both read it -- see ``loader.block_text``.
+    """
+    from warlock.studio.manual import loader, parser
 
     span = parser.Span(kind="text", text="findable")
     cases = [
@@ -142,4 +146,4 @@ def test_every_block_type_contributes_its_text():
         parser.Table(header=((span,),), rows=(((span,),),)),
     ]
     for block in cases:
-        assert "findable" in render._block_text(block), type(block).__name__
+        assert "findable" in loader.block_text(block), type(block).__name__

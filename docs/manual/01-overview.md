@@ -42,10 +42,10 @@ If you already have a picture, you can skip the first stage entirely and upload 
 
 ## The modes
 
-A rail down the left edge of the window chooses between eleven modes, and that rail is the single
+A rail down the left edge of the window chooses between ten modes, and that rail is the single
 thing that decides what the panes show. It is drawn in every mode, so there is no screen you cannot
 leave. There is no per-mode keyboard shortcut — the command palette (`Ctrl+K`) is the keyboard
-route, see [Keyboard shortcuts](14-shortcuts.md).
+route, see [Keyboard shortcuts](16-shortcuts.md).
 
 The rail shows glyphs by default and expands to show the labels beside them; the chevron at its foot
 toggles that, and the choice is remembered. In icon-only form every item names itself in a tooltip.
@@ -53,13 +53,14 @@ A window too narrow to hold the labelled rail *and* three usable columns draws t
 until there is room again — what you chose and what fits are two different facts, so dragging the
 window wider brings the labels back.
 
-It is drawn in three sections. The first is the asset pipeline, the second is the creative
-workspaces, and the third is the footer: the manual, Settings, the collapse toggle, and a badge that
-appears only when something is failing its startup check.
+It is drawn in three sections, and the list below is in that order. The first is the **asset
+pipeline** — start something, take it through its stages, find it again, judge it. The second is the
+**creative workspaces**. The third is the **footer**, drawn against the bottom edge: a badge that
+appears only when something is failing its startup check, then the manual, Settings, and the
+collapse toggle.
 
 - **Home.** What the app opens on: what changed in this build, what the machine is doing, and a
   single list of everything you were recently working on. Returning here is never destructive.
-
 - **Create.** One mode for the whole asset pipeline, drawn as five **stages** on a rail above the
   settings column. **Reference** owns the prompt and every control that composes it — the
   negative prompt, the image model and style LoRA, the seed and the candidate count.
@@ -70,33 +71,36 @@ appears only when something is failing its startup check.
   [Generating references](03-generating-references.md),
   [Generating meshes](04-generating-meshes.md) and
   [Rigging and posing](05-rigging-and-posing.md).
-- **Inker.** A layered raster editor, wired into the pipeline in both directions. Covered in
-  [Inker](07-inker.md).
-- **Clay.** Modelling from primitives: transforms, a material palette, and two ways out —
-  export a `.glb` or import the document as an asset. Covered in [Clay](08-clay.md).
-- **Poser.** Authoring reusable poses against a skeleton template, kept in a global pose library
-  rather than belonging to any one asset. Covered in
-  [Rigging and posing](05-rigging-and-posing.md#the-poser).
+- **Library.** Every asset that has ever been generated, filtered, sorted and searched, with the
+  trash and the prune. Covered in [The library and jobs](13-library-and-jobs.md).
 - **Review.** Judging finished meshes — one at a time or as a parameter sweep — and the "what
-  works" findings the verdicts add up to. Covered in [Review](13-review.md).
+  works" findings the verdicts add up to. Covered in [Review](15-review.md).
+
+Then the five workspaces:
+
+- **Inker.** A layered raster editor, wired into the pipeline in both directions. Covered in
+  [Inker](08-inker.md), with the timeline in [Inker: animation](09-inker-animation.md).
+- **Clay.** Modelling from primitives: transforms, a material palette, and two ways out —
+  export a `.glb` or import the document as an asset. Covered in [Clay](10-clay.md).
+- **Poser.** Authoring reusable poses against a skeleton template, kept in a global pose library
+  rather than belonging to any one asset. Covered in [Poser](06-poser.md).
 - **Plotter.** A tile-map editor: a grid, a layer stack, one or more tilesets, and the objects an
   engine reads as spawn points and trigger volumes — where a sheet of tiles becomes a level. It
-  speaks Tiled's formats in both directions. Covered in [Plotter](09-plotter.md).
+  speaks Tiled's formats in both directions. Covered in [Plotter](11-plotter.md).
 - **Packwright.** A sprite-atlas packer: many images in, one atlas out, with a sidecar that says
-  where everything landed. Covered in [Packwright](10-packwright.md).
+  where everything landed. Covered in [Packwright](12-packwright.md).
 
-- **Library.** Every asset that has ever been generated, filtered, sorted and searched, with the
-  trash and the prune. Covered in [Library and jobs](11-library-and-jobs.md).
+And in the footer:
 
 - **Settings.** The app's own preferences — UI scale, the frame-rate readout, layout resets, and the
   list of models it loaded, from which a missing one can be downloaded. See
-  [In-app settings](16-configuration.md#in-app-settings).
+  [In-app settings](18-configuration.md#in-app-settings).
 
 Two things that used to be modes are not, and both moved for the same reason: they are *about* the
 screen you are on rather than places to go. This documentation opens over the window (`F1`, or any
 pane's (?) button) instead of replacing it, so the control you were asking about is still there when
 you have the answer; and the style-profile manager opens as a sheet from the profile picker at the
-Reference stage — see [Profiles](12-profiles.md).
+Reference stage — see [Profiles](14-profiles.md).
 
 Each generation control belongs to exactly one stage. The one setting both Reference and Mesh need
 is **platform**, and it is deliberately two separate controls: at the Reference stage it is a hint
@@ -131,7 +135,7 @@ Once you are in the workspace, the window is three columns:
   own width is not draggable, only chosen from the three named sizes in Settings.
 
 There is no top bar. The keyboard shortcut list is `Ctrl+/` or **Keyboard shortcuts** in the command
-palette, and it is reproduced in [Keyboard shortcuts](14-shortcuts.md). The **health badge** sits in
+palette, and it is reproduced in [Keyboard shortcuts](16-shortcuts.md). The **health badge** sits in
 the rail's footer and appears only when a startup check is failing — amber for a non-fatal one
 (missing optional weights, no gltfpack, no CUDA), red when something fatal failed or the worker
 died. Hovering it names the failing checks; clicking it opens the full Issues list, which is also

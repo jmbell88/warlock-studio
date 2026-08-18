@@ -28,7 +28,7 @@ Two decisions taken with the user on 2026-08-17:
   refusals that replace it are raised by name.
 - The Aseprite-divergence numbering in `docs/INVARIANTS.md` is citable and
   append-only: amend text in place, never renumber, append new entries at the end.
-- `docs/manual/07-inker.md` and `docs/INVARIANTS.md` are updated in the same wave as
+- `docs/manual/08-inker.md` and `docs/INVARIANTS.md` are updated in the same wave as
   the behavior they describe, never later.
 - One gesture = one Ctrl+Z; an op that changes nothing pushes nothing (or `dirty`
   lies). Edits own their data and are addressed by uid, never index.
@@ -258,7 +258,7 @@ instead of re-snapping; transparent-index alignment with `TRANSPARENT_INDEX`.
   palette; grayscale fixture opens grayscale; GIF slot-stability pin.
 - **1.5 Studio UI + docs**: mode menu via the convert session, transparent-index
   marker + context action on the palette pane, indexed foreground = a palette slot,
-  hard-brush forcing; rewrite `docs/manual/07-inker.md` ~lines 362-373 (the "pixels
+  hard-brush forcing; rewrite `docs/manual/08-inker.md` ~lines 362-373 (the "pixels
   stay full-colour RGBA underneath" paragraph is now only true of palette-constrained
   RGB) + new Indexed/Grayscale sections + the changed undo behavior of slot moves;
   INVARIANTS.md rewrite (below).
@@ -382,7 +382,7 @@ the funnel or `_map_planes`-style index-aware transforms).
 
 Key files: `inker/_doc_ranges.py`, `inker/_doc_selection.py`, `inker/animation.py`,
 `inker/anim_edits.py` (TrackPropsEdit field), `panes/inker_timeline.py`,
-`panes/inker_layers.py`, `inker_mode.py`, `docs/manual/07-inker.md`.
+`panes/inker_layers.py`, `inker_mode.py`, `docs/manual/08-inker.md`.
 
 **Gate:** for every new op — linked-cel-touched-once, one-undo-step,
 no-op-pushes-nothing, indexed-document identity preserved (flip/rotate/shift are
@@ -391,7 +391,8 @@ continuous tracks. **All met.**
 
 ### Deviations from this spec, as executed (Wave 2)
 
-Seven, each argued at its site and recorded here so the spec stays the record:
+Eight, each argued at its site and recorded here so the spec stays the record
+(#8 recorded 2026-08-17, after the wave landed -- the numbering only appends):
 
 1. **A range op does not go through the funnel; it goes through a new sibling.**
    The spec says "they all write through the funnel", which is not possible:
@@ -431,6 +432,19 @@ Seven, each argued at its site and recorded here so the spec stays the record:
    materialised, so both range writes were painting through "preserve
    transparency" on every frame but the one on screen. `filter_range` had the
    same gap and is fixed with it.
+8. **No range op consults the content lock.** A plain fill on a locked layer
+   is refused at `write_colour`; the same fill from the timeline's range menu
+   writes straight onto locked tracks -- and so do the flips, turns and shifts
+   and the ranged transform commit. Nothing in `_doc_ranges.py` reads
+   `track.locked` (only `track.alpha_lock`, per #7), and
+   `commit_floating_range`'s replay writes to every target cel unasked; the
+   one door that still holds in that path is the *lift* that starts the
+   gesture, `float_pixels`' existing refusal on the active layer. This extends
+   `filter_range`'s pre-existing posture rather than introducing it, and the
+   argument is the gesture's shape: a canvas tool needs the lock because a
+   stroke lands on whatever the active layer happens to be, while the range
+   rect is an explicit bulk selection -- the user named those cells, locked
+   ones included. Recorded in the content-lock entry of `docs/INVARIANTS.md`.
 
 Also found in passing and **not** fixed, because it is neither Wave 2's nor a
 regression: running `tests/test_studio_smoke.py` and `tests/test_studio_controls.py`

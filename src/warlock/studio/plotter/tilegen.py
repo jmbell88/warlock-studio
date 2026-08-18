@@ -229,8 +229,8 @@ def repolish(original: Tileset, pixels: np.ndarray) -> Tileset:
             f"this atlas is {got}, and the tileset it replaces is "
             f"{original.image_w}x{original.image_h}; resize it and try again"
         )
-    # ``replace`` rather than mutation because ``Tileset`` is frozen, and the
-    # new array identity is load-bearing: the pane's texture cache is keyed on
-    # ``id(tileset.pixels)``, so a replaced set re-uploads with no invalidation
-    # call anywhere.
+    # ``replace`` rather than mutation because ``Tileset`` is frozen: the
+    # result goes back in through ``replace_tileset``, whose epoch bump is what
+    # tells the pane's texture cache to re-upload -- an in-place edit would
+    # move no counter and redraw nothing.
     return replace(original, pixels=array)

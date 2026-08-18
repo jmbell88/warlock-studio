@@ -177,7 +177,7 @@ class Config:
         default_factory=lambda: _env_path("WARLOCK_DATA_DIR", _home() / "assets")
     )
     # Configurable apart from data_dir on purpose, and documented as such in
-    # docs/manual/16-configuration.md: the library and its index are two
+    # docs/manual/18-configuration.md: the library and its index are two
     # separate choices (an SSD index over a spinning-disk library is the case).
     db_path: Path = field(
         default_factory=lambda: _env_path("WARLOCK_DB", _home() / "assets" / "jobs.sqlite")

@@ -43,11 +43,11 @@ without the UI knowing anything about either.
 
 Only one base model is resident at a time. Selecting a different one unloads the previous pipeline
 before building the next, because the card holds the reconstruction engine plus one SDXL-class
-pipeline and not two. See [VRAM modes](16-configuration.md#vram-modes).
+pipeline and not two. See [VRAM modes](18-configuration.md#vram-modes).
 
 A registry entry is also the right answer when `WARLOCK_T2I_DIR` is not — that variable redirects
 where the built-in `turbo` entry loads from and changes nothing about how it is run. See
-[Using a different image model](16-configuration.md#using-a-different-image-model).
+[Using a different image model](18-configuration.md#using-a-different-image-model).
 
 ## Adding a style LoRA
 
@@ -87,7 +87,7 @@ adapter trained with `use_rslora` declares a much larger one than an ordinary ad
 
 A missing LoRA file is skipped at load time rather than failing the job, and the diagnostics name it.
 See [Models and style LoRAs](03-generating-references.md#models-and-style-loras) and
-[Optional image models and style LoRAs](15-installation.md#optional-image-models-and-style-loras).
+[Optional image models and style LoRAs](17-installation.md#optional-image-models-and-style-loras).
 
 ## Adding a palette
 
@@ -175,7 +175,7 @@ adapter that cannot have run is a lie about provenance.
 Inputs are bounded at the door rather than deep in the pipeline: an upload is size-checked before it
 is decoded and pixel-checked from its header before pixels are allocated, prompts are length-capped,
 and every service entry point that accepts a seed range-checks it. See
-[Rerun and promotion](11-library-and-jobs.md#rerun-and-promotion).
+[Rerun and promotion](13-library-and-jobs.md#rerun-and-promotion).
 
 ## Pure-module boundaries
 
@@ -190,7 +190,7 @@ what makes every rule about pixels assertable headlessly — and there are a lot
 undo is addressed by layer uid rather than index precisely so that an undo issued after a reorder
 still lands on the layer the edit was made to.
 
-**Sheet planning.** As described in [Sheet planning](20-pipelines.md#sheet-planning), the grid is
+**Sheet planning.** As described in [Sheet planning](22-pipelines.md#sheet-planning), the grid is
 decided in a module with no Blender and no GPU, so the layout can be tested exhaustively and the
 preview cannot drift from the render.
 
@@ -236,6 +236,25 @@ renamed is a failing test, not a dead link discovered a year later.
 Anchors follow the GitHub convention, which the parser reproduces: lowercase the heading, drop
 punctuation, turn runs of whitespace into single hyphens. Link within a chapter with `#anchor`,
 across chapters with `file.md#anchor`.
+
+**Your `##` and `###` headings are navigation, not just typography.** The table of contents lists
+chapters, and the chapter being read expands to show its own headings as indented rows; clicking one
+scrolls to it, and the row you are inside stays lit as you scroll. A search lists the matching
+*sections* of every matching chapter rather than only the chapters. Three things follow for an
+author:
+
+- A heading is a destination, so write it as a name for the passage under it rather than as a joke
+  or a continuation of the sentence before it.
+- A long run of prose with no heading is unreachable from the tree. If a passage is worth arriving
+  at, give it a heading.
+- A search hit is attributed to the **innermost** heading above it, and text before the first
+  heading is attributed to no section at all — so the opening paragraphs of a chapter are found by
+  the chapter and not by a section row.
+
+Chapter numbers decide order *and* part (`loader.PARTS`), so a new chapter in the middle is a
+renumbering of everything after it. That is the supported move rather than a risky one: the tests
+below check the chapter list, the index's own sections, every cross-link and every `HELP_TARGETS`
+entry, in both directions.
 
 The one piece of wiring outside the files themselves is `HELP_TARGETS` in
 `studio/manual/targets.py`. It maps a pane's key to the chapter and heading that documents it, which

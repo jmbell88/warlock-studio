@@ -647,6 +647,36 @@ def test_a_ranged_commit_skips_empty_cels_without_autovivifying():
     assert _cel(doc, 0, 2) is None
 
 
+def test_a_ranged_commit_after_a_lift_that_autovivified_skips_the_slot():
+    """A lift on an empty slot autovivifies a cel; the commit revokes that
+    lift, which takes the cel back out -- and the placeholder rematerialised
+    in its place wears the *same uid*, so resolving the active layer by uid
+    finds a stand-in whose shared blank plane is read-only. Replaying onto it
+    raised mid-loop, after the real cels were already mutated with their edits
+    still unpushed. The slot has to be skipped: there was nothing there to
+    transform."""
+    doc = _clip(3)
+    assert doc.clear_range(0, 0, 0, 0)
+    others = [_cel(doc, 0, index).pixels.copy() for index in (1, 2)]
+    doc.set_current_frame(0)
+    _lift_square(doc)
+    doc.move_floating(2, 2)
+    steps = len(doc.history)
+
+    assert doc.commit_floating_range(0, 0, 0, 2)
+    # The empty slot stays empty, and the real cels replayed their own content.
+    assert _cel(doc, 0, 0) is None
+    for index in (1, 2):
+        assert int(_cel(doc, 0, index).pixels[2, 2, 3]) == 255
+    # One step for the gesture (the lift was revoked), and one undo restores
+    # every cel that was touched.
+    assert len(doc.history) == steps
+    assert doc.history.undo(doc)
+    for pixels, index in zip(others, (1, 2), strict=True):
+        assert np.array_equal(_cel(doc, 0, index).pixels, pixels)
+    assert _cel(doc, 0, 0) is None
+
+
 def test_a_flip_then_rotate_replays_in_the_recorded_order():
     """The buffer records its flips as a list and its resample beside them, so
     the replay runs the same gesture. Order matters: a flip after a turn is a
@@ -660,6 +690,34 @@ def test_a_flip_then_rotate_replays_in_the_recorded_order():
         _lift_square(doc, (0, 0, 3, 3))
         assert doc.flip_floating("horizontal")
         assert doc.transform_floating(angle=90.0, resample="nearest")
+
+    assert plain.commit_floating()
+    assert ranged.commit_floating_range(0, 0, 0, 0)
+    assert np.array_equal(_cel(plain, 0, 0).pixels, _cel(ranged, 0, 0).pixels)
+
+
+def test_a_flip_replays_with_the_mask_it_lifted_not_a_mirrored_one():
+    """``FloatingBuffer.flip`` mutates ``source_mask`` in place, so the mask
+    the commit captures already carries the live flips -- and the replay runs
+    the recorded flips itself. Left as it was, an odd number of flips cut and
+    lifted a *mirrored* footprint on every cel. Solid rectangles are
+    flip-symmetric, which is why the other equivalence tests cannot see this;
+    the mask here is an L."""
+    from warlock.studio.inker.selection import SelectionMask
+
+    plain, ranged = _clip(2), _clip(2)
+    mask = np.zeros((4, 4), dtype=np.uint8)
+    mask[0, 0] = mask[0, 1] = mask[1, 0] = 255
+    for doc in (plain, ranged):
+        doc.set_current_frame(0)
+        cel = _cel(doc, 0, 0)
+        cel.pixels[:, :] = (0, 0, 0, 0)
+        cel.pixels[0, 0] = RED
+        cel.pixels[0, 1] = GREEN
+        cel.pixels[1, 0] = BLUE
+        doc.select(SelectionMask(mask.copy()))
+        assert doc.lift()
+        assert doc.flip_floating("horizontal")
 
     assert plain.commit_floating()
     assert ranged.commit_floating_range(0, 0, 0, 0)
@@ -733,6 +791,21 @@ def test_setting_continuous_on_a_still_document_is_refused_by_name():
     doc = Document.blank(4, 4)
     with pytest.raises(ValueError, match="timeline"):
         doc.set_layer_props(0, continuous=True)
+    assert len(doc.history) == 0
+
+
+def test_setting_an_unknown_prop_on_a_layer_is_refused_by_name():
+    """``set_layer_props`` writes with ``setattr``, the same hazard
+    ``set_range_props`` guards with the allowlist: an unknown key would mint a
+    new attribute on the track, silently, and lose it at the next save."""
+    doc = _clip(2)
+    with pytest.raises(ValueError, match="unknown track property"):
+        doc.set_layer_props(0, sparkly=True)
+    assert len(doc.history) == 0
+    # The same door on a still document, where the target is a Layer.
+    doc = Document.blank(4, 4)
+    with pytest.raises(ValueError, match="unknown track property"):
+        doc.set_layer_props(0, sparkly=True)
     assert len(doc.history) == 0
 
 

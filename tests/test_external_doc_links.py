@@ -71,7 +71,7 @@ LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
 # is. It used to be treated as repo-root-relative, which was indistinguishable
 # from correct only while every source lived at the repo root: `docs/LEFTOVERS.md`
 # moved into `docs/` on 2026-08-09 and correctly re-spelled its citation as
-# `manual/16-configuration.md`, which the old root-anchored pattern then stopped
+# `manual/18-configuration.md`, which the old root-anchored pattern then stopped
 # matching altogether -- a silent loss of coverage rather than a failure, which is
 # what the guard-on-the-guard below exists to turn into a failure.
 #
@@ -239,7 +239,7 @@ def test_a_link_into_the_manual_names_a_chapter_that_exists(source: Path, target
     path, _anchor = _resolve(source, target)
     assert path.exists(), (
         f"{source.name} links to {target}, which does not exist. "
-        f"The manual is numbered 00-index..21-extending -- check whether the "
+        f"The manual is numbered 00-index..23-extending -- check whether the "
         f"chapter has been renumbered."
     )
     assert path.parent == MANUAL.resolve(), (

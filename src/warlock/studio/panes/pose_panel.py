@@ -254,18 +254,25 @@ def _pose(ctx: Any, job: Any, viewer: Any) -> None:
         viewer.reset_bone()
     imgui.same_line()
     if controls.button("Reset all"):
-        # Every rotation at once, and there is no undo behind it: the same
-        # discard the preset-apply path already asks about, so it takes the
-        # same guard rather than being the one bare route to the same loss.
+        # Every rotation at once: the same discard the preset-apply path
+        # already asks about, so it takes the same guard rather than being the
+        # one bare route to the same loss.
+        #
+        # The reason used to read "and there is no undo behind it", which
+        # stopped being true when ``docmodes.pose_undo_key`` was wired into
+        # this editor as well as the Poser's (``main.py``'s viewer key
+        # handling) -- one editor with two doors. The guard stays: Ctrl+Z can
+        # recover a misclick, but a confirm is the difference between losing a
+        # pose and being asked about it, and this button rewrites all of it.
         guard(ctx, "reset every joint", viewer.reset_all)
     if viewer.editor.mirror_pairs:
         # Hidden for a serpent or a fish: a skeleton with no mirror pairs has
         # nothing to mirror, and a button that can only no-op is worse than none.
         imgui.same_line()
         if controls.button("Mirror"):
-            # Reset all's reason again: mirroring rewrites every rotation and
-            # nothing here has an undo, so it takes the same confirm rather
-            # than being the one bare route to the same loss.
+            # Reset all's reason again, undo included: mirroring rewrites every
+            # rotation, so it takes the same confirm rather than being the one
+            # bare route to the same loss.
             guard(ctx, "mirror the pose", viewer.mirror)
 
     presets = ctx.state.preview.get("presets") if ctx.state.preview else None

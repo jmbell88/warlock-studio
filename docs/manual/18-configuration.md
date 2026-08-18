@@ -8,7 +8,7 @@ running has no effect until a restart.
 One thing does persist to a file, and it is deliberately not on this page: the app's own UI
 preferences — theme, UI scale, pane layout and the form fields it remembers — live in
 `studio_settings.json` in the data directory, written by the app itself. They are edited in
-[App settings](17-app-settings.md), never by hand, and nothing in the table below is stored there.
+[App settings](19-app-settings.md), never by hand, and nothing in the table below is stored there.
 
 ## Environment variables
 
@@ -29,8 +29,8 @@ Boolean variables accept `1`, `true` or `on`; anything else is off.
 | `WARLOCK_TRELLIS_IDLE` | `600` | Seconds of queue inactivity before resident models are evicted to free VRAM. |
 | `WARLOCK_TRELLIS_WEBP` | `off` | Ask the engine for WebP textures instead of PNG. Off is correct: WebP output declares `EXT_texture_webp` as *required*, which Godot's glTF importer refuses rather than skips. |
 | `WARLOCK_TRELLIS_TEX_RES` | `512` | Texture resolution. Pinned rather than left on the engine's `auto`, which bakes visible per-texel noise into the base colour atlas at 1024 and 1536. |
-| `WARLOCK_TRELLIS_BAND` | unset | Width of the narrow band the mesh extraction runs over. Empty or `auto` omits the flag entirely and lets the engine apply its own heuristic. Measurement says leave it alone — see [Holes or artifacts in a mesh](18-troubleshooting.md#holes-or-artifacts-in-a-mesh). |
-| `WARLOCK_GLTFPACK` | `vendor/gltfpack/gltfpack.exe` | The mesh optimiser binary. Vendored by hand like the engine — `vendor/` is git-ignored, so a fresh clone has neither (see [gltfpack](15-installation.md#gltfpack)). Point this elsewhere to use another copy; without it jobs ship the raw reconstruction rather than failing. |
+| `WARLOCK_TRELLIS_BAND` | unset | Width of the narrow band the mesh extraction runs over. Empty or `auto` omits the flag entirely and lets the engine apply its own heuristic. Measurement says leave it alone — see [Holes or artifacts in a mesh](20-troubleshooting.md#holes-or-artifacts-in-a-mesh). |
+| `WARLOCK_GLTFPACK` | `vendor/gltfpack/gltfpack.exe` | The mesh optimiser binary. Vendored by hand like the engine — `vendor/` is git-ignored, so a fresh clone has neither (see [gltfpack](17-installation.md#gltfpack)). Point this elsewhere to use another copy; without it jobs ship the raw reconstruction rather than failing. |
 | `WARLOCK_MESH_PROFILE` | `raw` | Default triangle profile for a new job. The decimating tiers all run now, but none has been qualified, so `raw` stays the default and the only tier the generate form offers. Set this to try one; the inspector's **Triangle budget** panel is the safer place to. |
 | `WARLOCK_BENCH_DIR` | `~/.warlock/bench` | Where the benchmark writes its runs. Outside the data directory on purpose, so a run survives pruning. |
 | `WARLOCK_T2I_ROOT` | `~/.warlock/models` | Where every image model lives, with style LoRAs under its `loras/` subdirectory. |
@@ -40,7 +40,7 @@ Boolean variables accept `1`, `true` or `on`; anything else is off.
 | `WARLOCK_VRAM_EXCLUSIVE` | auto | Restores the sequential VRAM handoff for text jobs. Unset, the mode is chosen from the card's size; set, it is honoured verbatim. See [VRAM modes](#vram-modes). |
 | `WARLOCK_VRAM_BUDGET` | unset | Overrides the measured VRAM budget (GiB) that admission control checks jobs against. For a card whose free figure reports low, or for pinning tests. |
 | `WARLOCK_VRAM_TOTAL` | unset | Stands in for the device total (GiB) when no GPU is visible — the escape hatch that lets the VRAM planner and `warlock doctor` run on a torch-less install. |
-| `WARLOCK_RANK` | `on` | Whether a finished reference is scored against its composition report (and its style anchor when one exists). |
+| `WARLOCK_RANK` | `on` | Whether a finished reference is scored, for sorting candidates: its composition report, its style anchor when one exists, and a human-preference term when PickScore is installed. |
 | `WARLOCK_REFERENCE_RETRIES` | `2` | Extra redraws a text job may spend when the composition report refuses its reference. It was `0`; the 2026-08-07 sweep refused 17 references in 100 and every one of those was a whole mesh job's GPU time lost to a picture that took four seconds to redraw. Set it to `0` to get the old behaviour. |
 | `WARLOCK_MESH_RETRIES` | `0` | Extra trellis runs when the finished mesh audits worse than `WARLOCK_MESH_HOLE_MAX`. The best attempt is kept, not the last. |
 | `WARLOCK_MESH_HOLE_MAX` | `0.07` | The worst-view see-through fraction past which a mesh is worth redoing. Measured, not guessed — see the hole-rate baseline in `docs/measurements/`. |
@@ -194,7 +194,7 @@ So the variable is the right tool for exactly one case: swapping in another dist
 that wants the same sampler settings. A model that needs different settings wants a registry entry
 in `models.py` instead, which carries its own image size, step count, guidance scale, variant,
 scheduler and always-on step-distillation LoRA — because those are properties of the checkpoint, not
-of the user's preference. [Adding an image model](21-extending.md#adding-an-image-model) is the
+of the user's preference. [Adding an image model](23-extending.md#adding-an-image-model) is the
 procedure.
 
 Every other base model always resolves under `WARLOCK_T2I_ROOT`, by the directory name its registry
@@ -204,4 +204,4 @@ entry declares.
 
 The handful of preferences that are the app's rather than a job's -- UI scale, pane layout, and the
 model list with its Download buttons -- have a chapter of their own: [App
-settings](17-app-settings.md).
+settings](19-app-settings.md).

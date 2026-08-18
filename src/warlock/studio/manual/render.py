@@ -236,7 +236,7 @@ def draw_body(ctx: Any) -> None:
 def _draw_toc(ms: Any) -> None:
     imgui.set_next_item_width(-1)
     changed, ms.search = controls.input_text_with_hint(
-        "##manual-search", "Search chapters...", ms.search
+        "##manual-search", "Search the manual...", ms.search
     )
     needle = ms.search.strip().lower()
     part = None
@@ -251,6 +251,7 @@ def _draw_toc(ms: Any) -> None:
         label = chapter.title if chapter.part else "Contents"
         if controls.selectable(f"{label}##{chapter.key}", ms.chapter == chapter.key)[0]:
             ms.open_at(chapter.key)
+        _draw_sections(ms, chapter, needle)
     if needle and not found:
         # H73. A search that matches nothing used to empty the whole table of
         # contents, which reads as the manual having vanished rather than as a
@@ -261,6 +262,43 @@ def _draw_toc(ms: Any) -> None:
             "No chapter matches.",
             "Titles, headings, body text, tables and commands are all searched.",
         )
+
+
+#: How far a section row is indented per heading level. A ``##`` sits one step
+#: in from its chapter and a ``###`` two, which is the only thing distinguishing
+#: them -- a second type ramp inside a 240px column would be noise, and the
+#: nesting is the whole message.
+_SECTION_INDENT = 12.0
+
+
+def _draw_sections(ms: Any, chapter: loader.Chapter, needle: str) -> None:
+    """The chapter's own headings, as indented rows under it.
+
+    **Only the chapter being read expands**, and that is the design rather than
+    a limitation. Every chapter expanded would be a 300-row column: the manual
+    has twenty-three chapters and Inker alone carries twenty-five headings, so
+    an always-open tree would bury the chapter list it is nested inside. What
+    the reader wants is the shape of where they *are*.
+
+    While a search is running the rule swaps to the matching sections of every
+    matching chapter, because then the reader has told us what they are looking
+    for and the chapter they happen to have open is not it.
+    """
+    if needle:
+        rows = loader.matching_sections(needle, _blocks(chapter.key))
+    elif chapter.key == ms.chapter:
+        rows = loader.sections(_blocks(chapter.key))
+    else:
+        return
+    for section in rows:
+        imgui.indent(sp(_SECTION_INDENT) * (section.level - 1))
+        active = ms.chapter == chapter.key and ms.anchor == section.anchor
+        clicked = controls.selectable(
+            f"{section.title}##{chapter.key}-{section.anchor}", active
+        )[0]
+        imgui.unindent(sp(_SECTION_INDENT) * (section.level - 1))
+        if clicked:
+            ms.open_at(chapter.key, section.anchor)
 
 
 #: How many chapters ``_warm_blocks`` parses per frame. Small enough that the
@@ -295,44 +333,57 @@ def _warm_blocks() -> None:
             warmed += 1
 
 
-def _block_text(block: parser.Block) -> str:
-    """Everything readable in one block, as a flat string.
-
-    Every block type, because the search used to see only headings and a
-    manual searched by heading is a manual searched by its table of contents:
-    "gltfpack", "prompt_hash" and "WARLOCK_VRAM_BUDGET" are each named in one
-    paragraph and in no heading anywhere, so the three things a reader is most
-    likely to arrive with found nothing.
-
-    Code blocks are included deliberately. A command line is exactly the kind
-    of string somebody pastes into a search box, and it is the one kind that
-    never appears in prose.
-    """
-    if isinstance(block, parser.Heading | parser.CodeBlock):
-        return block.text
-    if isinstance(block, parser.Paragraph | parser.ListItem):
-        return " ".join(span.text for span in block.spans)
-    if isinstance(block, parser.Table):
-        cells = [*block.header, *(cell for row in block.rows for cell in row)]
-        return " ".join(span.text for cell in cells for span in cell)
-    return ""
-
-
 def _matches(chapter: loader.Chapter, needle: str) -> bool:
     if needle in chapter.title.lower():
         return True
     # The blocks are already cached and warmed a few chapters per frame, so
     # widening this from headings to every block costs one more pass over
     # structures that are in memory either way.
-    return any(needle in _block_text(b).lower() for b in _blocks(chapter.key))
+    return any(needle in loader.block_text(b).lower() for b in _blocks(chapter.key))
+
+
+#: Where the "you are here" line sits in the page, as a fraction of its height.
+#: It has to be at least the 0.1 ``set_scroll_here_y`` puts a jumped-to heading
+#: at, or clicking a section in the tree would scroll to a heading that then
+#: fails to light itself; the rest is margin, and it doubles as the ordinary
+#: scroll-spy behaviour of handing over slightly before a heading reaches the
+#: top edge.
+_ACTIVE_LINE = 0.15
+
+
+#: The chapter the page child last drew, so a change of chapter can put the
+#: scroll back to the top. Module state for the reason ``_was_open`` is: there
+#: is exactly one manual and it is drawn from exactly one place.
+_last_chapter = [""]
 
 
 def _draw_chapter(ctx: Any, ms: Any) -> None:
     anchor = ms.pending_anchor
+    arrived = loader.needs_scroll_reset(_last_chapter[0], ms.chapter, anchor)
+    _last_chapter[0] = ms.chapter
+    if arrived:
+        imgui.set_scroll_y(0.0)
+    # Content-space y per heading, rebuilt as the page draws. Read *before*
+    # ``_draw_block``, which opens a heading with its own leading dummy: the
+    # space above a heading belongs to it, so a reader who has just brought the
+    # gap into view is already in that section.
+    offsets: list[tuple[str, float]] = []
     for index, block in enumerate(_blocks(ms.chapter)):
+        if isinstance(block, parser.Heading) and 2 <= block.level <= 3:
+            offsets.append((block.anchor, imgui.get_cursor_pos_y()))
         _draw_block(ctx, ms, block, index, anchor)
     if ms.pending_anchor == anchor:
         ms.pending_anchor = None
+    if anchor is None and not arrived:
+        # Only when nothing was navigating this frame. A jump has already said
+        # where the reader is going, and the scroll it asked for does not take
+        # effect until imgui applies it -- so reading the scroll position on
+        # this frame would answer with where they *were* and unlight the row
+        # they just clicked. ``arrived`` is the same argument for the reset
+        # above: the scroll still reads as the old chapter's until next frame.
+        ms.anchor = loader.active_anchor(
+            offsets, imgui.get_scroll_y() + imgui.get_window_size().y * _ACTIVE_LINE
+        )
     imgui.dummy((0, sp(8)))
     imgui.separator()
     toc = _toc()

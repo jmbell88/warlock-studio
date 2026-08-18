@@ -1575,6 +1575,55 @@ def test_closing_a_tab_drops_its_tileset_memo():
     assert tab.uid not in plotter_canvas._TILESET_MEMO
 
 
+class _FakeTexture:
+    def __init__(self) -> None:
+        self.filter = None
+        self.released = False
+
+    def release(self) -> None:
+        self.released = True
+
+
+class _FakeGL:
+    NEAREST = 0x2600
+
+    def texture(self, size: Any, components: int, data: bytes) -> _FakeTexture:
+        return _FakeTexture()
+
+
+class _FakeViewer:
+    def __init__(self) -> None:
+        self.ctx = _FakeGL()
+
+
+def test_a_replaced_tileset_gets_a_fresh_texture_and_a_kept_one_does_not():
+    """The staleness stamp is ``tileset_epoch``, a monotonic counter -- it was
+    ``id(pixels)`` before, and CPython recycles an id after GC, so a
+    replacement atlas landing on a recycled id false-matched and the stale
+    atlas drew forever."""
+    from warlock.studio.panes import plotter_textures
+
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    ctx.viewer = _FakeViewer()
+    doc = tab.doc
+
+    first = plotter_textures.tileset_texture(
+        ctx, tab.uid, 0, doc.tilesets[0].tileset, doc.tileset_epoch
+    )
+    again = plotter_textures.tileset_texture(
+        ctx, tab.uid, 0, doc.tilesets[0].tileset, doc.tileset_epoch
+    )
+    assert again is first and not first.released
+
+    doc.replace_tileset(0, _tileset("repainted"))
+    fresh = plotter_textures.tileset_texture(
+        ctx, tab.uid, 0, doc.tilesets[0].tileset, doc.tileset_epoch
+    )
+    assert fresh is not first
+    assert first.released
+
+
 # --- the guard ----------------------------------------------------------------
 
 

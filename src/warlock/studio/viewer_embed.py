@@ -417,8 +417,15 @@ class Viewer(PoseOps):
             return None
         if not self._strip.step():
             return None
-        image, self._strip = self._strip.image, None
-        return image
+        # Release before returning: the image is a CPU-side PIL object with no
+        # tie to the viewport, but the viewport itself -- texture, MSAA
+        # renderbuffers, framebuffers -- is only freed by ``release``, and the
+        # cancel path was the sole caller. Dropping the finished strip here
+        # unreleased leaked its render target for the life of the context,
+        # once per completed preview.
+        strip, self._strip = self._strip, None
+        strip.release()
+        return strip.image
 
     @property
     def stripping(self) -> bool:

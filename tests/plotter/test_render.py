@@ -276,12 +276,30 @@ def test_a_minimap_composites_bottom_first():
 
 
 def test_the_colour_table_is_memoised_on_the_pixel_array():
-    """Safe because ``Tileset`` freezes its pixels: a matching id is the same
-    art, and a replaced tileset is a new array with a new id."""
+    """``Tileset`` freezes its pixels, so a matching id on a *live* array is the
+    same art, and a replaced tileset is a new array alongside the old one."""
     tileset = _tileset()
     first = render.tile_colours(tileset)
     assert render.tile_colours(tileset) is first
     assert render.tile_colours(_tileset()) is not first
+
+
+def test_the_colour_table_is_dropped_when_its_array_dies():
+    """An id names the same art only for as long as that array is alive.
+    CPython hands a freed block straight back out and ``replace_tileset``
+    refuses a different tile count, so an entry outliving its array would pass
+    both the key and the length check and serve the superseded set's colours to
+    whichever atlas landed on its address."""
+    import gc
+
+    tileset = _tileset()
+    key = id(tileset.pixels)
+    render.tile_colours(tileset)
+    assert key in render._LUT_CACHE
+
+    del tileset
+    gc.collect()
+    assert key not in render._LUT_CACHE
 
 
 def test_a_tile_colour_is_weighted_by_alpha():

@@ -417,6 +417,10 @@ def _document_version(doc: MapDoc) -> int:
         )
         != ("orthogonal", ref.tileset.tile_w, ref.tileset.tile_h)
         or any(ref.tileset.transformations)
+        # The same question the map, layer and object arms ask of theirs:
+        # ``manifest_json`` writes each tileset's properties unconditionally,
+        # and a ``.tsx`` import is a door a list walks in through.
+        or _has_list_property(ref.tileset.properties)
         for ref in doc.tilesets
     ):
         return TILED_ERA_VERSION

@@ -644,7 +644,12 @@ def _layers(ctx: Any, tab: Any, draw_list: Any, origin, region) -> None:
     # holds a given id stayed a linear scan run once per visible cell per layer,
     # which is what ``_TILESET_MEMO`` now answers instead.
     refs = {
-        index: (ref, plotter_textures.tileset_texture(ctx, tab.uid, index, ref.tileset))
+        index: (
+            ref,
+            plotter_textures.tileset_texture(
+                ctx, tab.uid, index, ref.tileset, doc.tileset_epoch
+            ),
+        )
         for index, ref in enumerate(doc.tilesets)
     }
     memo = _index_memo(tab.uid, doc.tileset_epoch)

@@ -17,22 +17,24 @@ EXPECTED_KEYS = [
     "03-generating-references",
     "04-generating-meshes",
     "05-rigging-and-posing",
-    "06-sprite-sheets",
-    "07-inker",
-    "08-clay",
-    "09-plotter",
-    "10-packwright",
-    "11-library-and-jobs",
-    "12-profiles",
-    "13-review",
-    "14-shortcuts",
-    "15-installation",
-    "16-configuration",
-    "17-app-settings",
-    "18-troubleshooting",
-    "19-architecture",
-    "20-pipelines",
-    "21-extending",
+    "06-poser",
+    "07-sprite-sheets",
+    "08-inker",
+    "09-inker-animation",
+    "10-clay",
+    "11-plotter",
+    "12-packwright",
+    "13-library-and-jobs",
+    "14-profiles",
+    "15-review",
+    "16-shortcuts",
+    "17-installation",
+    "18-configuration",
+    "19-app-settings",
+    "20-troubleshooting",
+    "21-architecture",
+    "22-pipelines",
+    "23-extending",
 ]
 
 
@@ -107,7 +109,8 @@ def test_index_sections_match_the_loaders_parts():
             if found:
                 index[section].append(int(found.group(1)))
 
-    expected = {label: [n for n in rng if n <= 21] for label, rng in loader.PARTS}
+    last = max(int(c.key[:2]) for c in loader.chapters())
+    expected = {label: [n for n in rng if n <= last] for label, rng in loader.PARTS}
     assert index == expected, (
         "docs/manual/00-index.md's sections and loader.PARTS disagree about "
         "which part a chapter belongs to. Move the index entry or widen the "

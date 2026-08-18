@@ -18,7 +18,7 @@ Beside the box, a **Recent** button opens your last twenty prompts, most recent 
 deduplicated — it appears once you have generated at least one reference, so there is history to
 show. Picking one replaces what is in the box. The history is per session and per prompt
 text only — if you want a whole recipe back, use **Copy settings to form** from a job's overflow
-menu instead, which is described in [Rerun and promotion](11-library-and-jobs.md#rerun-and-promotion).
+menu instead, which is described in [Rerun and promotion](13-library-and-jobs.md#rerun-and-promotion).
 
 Under **Negative prompt**, further down the pane, is a second box listing what the image must not
 contain. It is pre-filled with the things that most often ruin a reconstruction:
@@ -184,6 +184,29 @@ the same seed and a first Generate would reproduce last week's image.
 The mesh has its own separate seed, at the Mesh stage. See
 [Mesh parameters](04-generating-meshes.md#mesh-parameters).
 
+### Which candidate to look at first
+
+A fan-out of eight arrives in the order the seeds happened to be drawn in, which is no order at all.
+Each finished reference therefore carries a **score**, shown as a percentage on its library card,
+and it exists to answer one question: which of these is worth opening first.
+
+Three things go into it, and each is absent-changes-nothing — a term that could not be measured
+leaves the score exactly what it would have been without it:
+
+- **Composition** — the framing report the reference stage takes anyway. It leads, because it is the
+  one term that predicts whether the mesh stage can succeed at all: a subject cropped at the edge of
+  the frame reconstructs badly however handsome it is.
+- **Style anchor** — how close the image looks to the active profile's anchor, when it has one. See
+  [The style anchor](14-profiles.md#the-style-anchor).
+- **Human preference** — how likely a person is to pick this image for this prompt, from PickScore.
+  Optional; see [Optional measuring and helper
+  models](17-installation.md#optional-measuring-and-helper-models).
+
+**Nothing here rejects anything.** The score sorts, and that is all it does — a low-scoring
+candidate is still generated, still kept, and still promotable to a mesh. Turn the whole thing off
+with `WARLOCK_RANK=off` (see [Configuration](18-configuration.md#environment-variables)) and the
+gallery falls back to submission order.
+
 ## Conditioning on an image
 
 Beyond the prompt, you can steer the image with a picture. In the **References** section, either
@@ -225,7 +248,7 @@ about.
 
 If the image is nearly right, you can fix it by hand: **Open in Inker** on the viewport toolbar
 opens the reference as a layered document, and saving writes it back in place. See
-[Pipeline bridges](07-inker.md#pipeline-bridges).
+[Pipeline bridges](08-inker.md#pipeline-bridges).
 
 When you are happy, press **Make 3D** on the card (or select the reference and step to **Mesh**).
 That carries the reference and everything it recorded into the mesh stage, where you can override
@@ -262,7 +285,7 @@ supplied, and **Dither** (offered only with one) mixes two nearby entries where 
 pick one.
 
 A palette is a file you drop into the palette directory (`~/.warlock/palettes/` by default — see
-[Configuration](16-configuration.md)), in either of the two formats palette sites publish: Lospec's
+[Configuration](18-configuration.md)), in either of the two formats palette sites publish: Lospec's
 `.hex`, one `rrggbb` per line, or GIMP's `.gpl`. Nothing ships with the app, because a palette is
 art direction rather than a default. Colours are matched perceptually (in Oklab) rather than by raw
 RGB arithmetic, which is what stops a dark grey being mapped to black and a whole shadow being

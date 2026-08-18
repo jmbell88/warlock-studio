@@ -207,5 +207,5 @@ Three details are easy to undo by accident:
 - Cells arrive grouped by row, so the worker re-poses once per pose rather than once per frame.
 
 Column zero is the front view. Yaw zero looks along `+Y` in Blender, and every skeleton template
-puts the subject's forward direction at `-Y`. See [The grid](06-sprite-sheets.md#the-grid) and
-[The sidecar](06-sprite-sheets.md#the-sidecar).
+puts the subject's forward direction at `-Y`. See [The grid](07-sprite-sheets.md#the-grid) and
+[The sidecar](07-sprite-sheets.md#the-sidecar).

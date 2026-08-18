@@ -57,7 +57,7 @@ carries its own slicing, spacing and margin. Dropping an image or a `.tsx` on th
 same thing.
 
 You can also send a library asset straight in — right-click any reference card and choose **Use as a
-tileset in Plotter**. A [Packwright](10-packwright.md) grid pack is the natural source: it writes a
+tileset in Plotter**. A [Packwright](12-packwright.md) grid pack is the natural source: it writes a
 `.tsx` beside its atlas precisely so it can be used here with no conversion.
 
 Tilesets are *added*, never removed. Every tile in the map is numbered from the tileset it belongs
@@ -398,5 +398,5 @@ Hidden layers are not rendered. One flag decides both what you see and what come
 | `~/.warlock/assets/<job>/input.png` | The flat render, for a map exported to the library. |
 | `~/.warlock/assets/<job>/map.wmap` | The map behind that render. Not served; reopened by **Edit in Plotter**. |
 
-See [Keyboard shortcuts](14-shortcuts.md) for every binding, and
-[Packwright](10-packwright.md) for building the tilesets this mode consumes.
+See [Keyboard shortcuts](16-shortcuts.md) for every binding, and
+[Packwright](12-packwright.md) for building the tilesets this mode consumes.

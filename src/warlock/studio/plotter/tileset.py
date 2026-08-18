@@ -1,10 +1,11 @@
 """A tileset: one image, sliced into a grid.
 
 Frozen, and its pixels are copied and made read-only on construction, for the
-reason ``clay.mesh.Mesh`` is immutable -- the UI keys a GPU texture upload on
-``id(tileset.pixels)``, so an in-place edit anywhere would leave the cache
-holding a live key over stale pixels and the map would render last week's tiles
-forever with nothing in the data to say why.
+reason ``clay.mesh.Mesh`` is immutable -- the UI invalidates its GPU texture
+upload only when the document's tileset list changes (``tileset_epoch``), so an
+in-place edit anywhere would move no counter, leave the cache holding stale
+pixels, and the map would render last week's tiles forever with nothing in the
+data to say why.
 
 **The slicing is validated here, not at the first draw.** A geometry that does
 not fit the image -- a margin larger than the image, a spacing that leaves a

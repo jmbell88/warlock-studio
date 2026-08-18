@@ -4,6 +4,10 @@ Rigging fits a skeleton to a finished mesh and skins it, so the mesh can be pose
 joint's rotation and saves the result under a name. Both are optional, both need Blender, and both
 are covered here.
 
+This chapter is about posing **an asset** — the mesh in front of you, with its own saved poses.
+Authoring a pose against a bare skeleton instead, so that it applies to every asset sharing that
+skeleton, is the [Poser](06-poser.md).
+
 ## Templates
 
 Warlock Studio does not invent a skeleton for your mesh. It fits one of seven shipped **templates**:
@@ -90,7 +94,7 @@ Two things about it are worth knowing:
 
 `rig.json` records which was used, so a rig can be told apart afterwards. Without the pose model the
 bbox fit is used and nothing about your rigs changes — see
-[Model weights](15-installation.md#model-weights) for the download. Set `WARLOCK_POSE_FIT=off` to
+[Model weights](17-installation.md#model-weights) for the download. Set `WARLOCK_POSE_FIT=off` to
 force the template everywhere, whatever is installed; it is a kill switch rather than an opt-in,
 because the measurement already refuses itself whenever it is unsure.
 
@@ -109,16 +113,23 @@ In pose mode:
 
 - **Click a joint** to select it. A rotation gizmo appears on it; drag the gizmo to rotate.
 - **Reset joint** returns the selected joint to its rest rotation; **Reset all** resets every joint.
-- **Mirror** copies the pose across the body's centre line. Over unsaved edits it asks first —
-  there is no undo, so a mirror is not otherwise recoverable. It is hidden for skeletons with no
-  mirror pairs, such as the serpent and the fish, where it could only do nothing.
+- **Mirror** copies the pose across the body's centre line. Over unsaved edits it asks first,
+  because it rewrites every rotation at once — one press can undo it, but the confirm is there so a
+  whole pose is never replaced by a misclick. It is hidden for skeletons with no mirror pairs, such
+  as the serpent and the fish, where it could only do nothing.
 - A **preset** picker offers the shipped pose library for this skeleton, when one exists. Because
   fitting puts a template's joints in the same relative place on every mesh, a pose authored against
   one humanoid applies to every other humanoid.
 
+`Ctrl+Z` undoes and `Ctrl+Y` — or `Ctrl+Shift+Z` — redoes, here as well as in the
+[Poser](06-poser.md): it is one editor with two doors, so the history behaves identically in both.
+The unit is the **gesture** — one whole gizmo drag is one step, and so is a preset, a mirror or a
+reset. [Undo and redo](06-poser.md#undo-and-redo) has the detail.
+
 Poses are **forward-kinematic only**. A pose is exactly a map of joint names to local rotations —
 there is no inverse kinematics, no translation, and no scaling. That is the whole contract, and it
-is what lets a pose be a small file that applies to any mesh sharing the skeleton.
+is what lets a pose be a small file that applies to any mesh sharing the skeleton. The one exception
+belongs to the Poser: see [Moving the root](06-poser.md#moving-the-root).
 
 **Save pose...** asks for a name and stores it. Saving while a saved pose is loaded **replaces**
 that pose rather than adding a near-duplicate, so refining an "idle" leaves you with one idle rather
@@ -145,69 +156,18 @@ existing rig. **Revert** undoes your unapplied moves; **Back to posing** returns
 mode asks first if you have an unsaved pose, since a leftover rotation would put the markers where
 the posed bones are rather than where the rest skeleton is.
 
-Rigged meshes are also what [Sprite sheets](06-sprite-sheets.md) render rows from.
+Rigged meshes are also what [Sprite sheets](07-sprite-sheets.md) render rows from.
 
-## The Poser
+## Authoring a pose against the skeleton instead
 
-The **Poser** workspace is where a pose is authored once, against a skeleton rather than against any
-particular mesh. Pick a skeleton in the left panel and the viewport shows a preview armature — the
-bare skeleton, built by the same Blender code path as a real rig and exactly one character-height
-tall, so what you pose is precisely what every bake will see.
+Everything above saves a pose **into one asset**. The [Poser](06-poser.md) is the other direction:
+pick a skeleton, pose the bare armature, and the pose is offered on every rigged asset that shares
+it. That is where the global pose library lives, where a pose gets a root offset, and where the
+shipped presets can be adjusted and kept.
 
-Posing works the way the inspector's pose editor does: click a joint, drag the gizmo, **Reset
-joint** / **Reset all** / **Mirror** as usual.
-
-`Ctrl+Z` undoes and `Ctrl+Y` (or `Ctrl+Shift+Z`) redoes, in both places, because both are the same
-editor. The unit is the *gesture*: one whole gizmo drag is one step however many frames it took,
-and so is a preset, a mirror, a reset and a joint move. A drag that ends where it started records
-nothing, and undoing back to the point you last saved from leaves the session clean rather than
-still asking about unsaved changes. The history belongs to the editing session and is dropped when
-you leave it or load a different skeleton — a step holds rotations by bone name, and replaying one
-onto a different armature would find whichever bones happened to share a name.
-
-Two things are Poser-only:
-
-- **Move root.** Select the root joint and tick **Move root** to swap its gizmo for translation
-  arrows. Dragging them offsets the whole pose — a crouch that actually lowers, a leap that leaves
-  the ground. The offset is stored in character heights, so it scales with each asset: a half-height
-  offset lifts a gnome by half a gnome and a giant by half a giant.
-- **Save / Save as** write into the global pose library rather than into any asset. The pose keeps
-  the complete joint map, which is what makes it apply cleanly to any rig on the same skeleton
-  regardless of proportions.
-
-The preview armature is built by Blender once per skeleton and cached, so the first open of a
-template takes a moment and later ones are immediate. The Poser needs Blender for exactly that
-reason; without it the mode says so and offers nothing.
-
-Your editing session survives switching modes — like a document left open in the Inker — and only
-quitting, switching skeletons, or loading another pose over it asks about unsaved changes.
-
-## The pose library
-
-Poses saved in the Poser are stored globally, per skeleton, and offered on every rigged asset: the
-inspector's **Pose** panel grows a **Library poses** section listing the ones that fit the selected
-asset's skeleton. **Apply** copies the pose into that asset's own saved list — a snapshot, marked
-`(library)`, that behaves exactly like a pose you saved by hand.
-
-The snapshot is the point. Editing or deleting the library pose afterwards never changes what an
-asset already carries, so a bake you liked stays reproducible forever. The library itself has no
-trash: deleting a pose from it is permanent, which is why that one asks first.
-
-Two limits worth knowing:
-
-- Applying a snapshot with a root offset previews the **rotations only**; the offset appears in the
-  baked GLB (**Save GLB...**) and in sprite sheet rows, scaled onto that asset's own height.
-- An animated sheet clip cannot interpolate a root offset yet, so a clip whose endpoint poses carry
-  one is refused by name rather than rendered subtly wrong.
-
-Shipped presets appear in the Poser too, read-only: apply one, adjust it, then **Save as** to keep
-your version in the library.
-
-A pose file that has gone wrong on disk — truncated, hand-edited into the wrong shape, or simply
-not JSON any more — costs itself and nothing else. It stays in the list so there is a row to act
-on; applying, renaming or duplicating it says the record could not be read; and **Delete always
-works**, because a pose you cannot read is exactly the one you most need to be able to remove. One
-broken file never takes the library down with it.
+The two meet in the inspector's **Pose** panel, which grows a **Library poses** section on any asset
+whose skeleton has poses in the library. Applying one copies it into that asset's own list as a
+snapshot marked `(library)` — see [The pose library](06-poser.md#the-pose-library).
 
 ## When rigging is unavailable
 

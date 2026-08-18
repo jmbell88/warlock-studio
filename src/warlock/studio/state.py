@@ -650,11 +650,28 @@ class ManualState:
     # heading is drawn -- scrolling needs a cursor position that only exists
     # mid-draw.
     pending_anchor: str | None = None
+    # Which section of ``chapter`` the reader is currently looking at, so the
+    # TOC tree can light that row. **Written by the renderer, not by
+    # navigation** -- it is derived from the scroll position every frame
+    # (``loader.active_anchor``), which is what makes the tree follow a reader
+    # who scrolled rather than only one who clicked. ``pending_anchor`` is the
+    # opposite direction, and the two are deliberately not one field: a
+    # navigation says "put me there" exactly once, and this says "I am here"
+    # continuously.
+    anchor: str | None = None
     search: str = ""
 
     def open_at(self, chapter: str, anchor: str | None = None) -> None:
         self.chapter = chapter
         self.pending_anchor = anchor
+        # Assigned unconditionally, both halves of which matter. A section
+        # navigation lights that row on the frame it is clicked rather than on
+        # the frame the scroll lands, because a highlight one frame behind the
+        # click reads as a click that missed. A *chapter* navigation clears it,
+        # so the section you were reading in the chapter you just left does not
+        # stay lit under the one you arrived at; the renderer recomputes from
+        # the new scroll position on the same frame.
+        self.anchor = anchor
 
 
 @dataclass

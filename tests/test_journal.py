@@ -250,6 +250,50 @@ def test_dropping_a_copy_already_gone_does_not_raise(tmp_path, kind):
     journal.drop(ctx, slot)
 
 
+def test_a_write_still_queued_when_the_copy_is_dropped_does_not_resurrect_it(tmp_path, kind):
+    """``drop`` unlinks on the frame thread, but the write it may be racing
+    sits queued on a multi-worker pool: ``ctx.submit``'s key-dedupe stops two
+    writes overlapping and sequences nothing against a drop. A copy submitted
+    a moment before save-and-close used to be re-created after drop had
+    deleted it -- and with the mark already reset, the orphaned pair was
+    offered back on the next launch for a properly-saved document."""
+    ctx = _Ctx(tmp_path)
+    queued: list[Any] = []
+
+    def defer(key: str, run: Any, *args: Any, **kwargs: Any) -> bool:
+        ctx.submitted.append(key)
+        queued.append(run)
+        return True
+
+    ctx.submit = defer
+    slot = _Slot()
+    kind.slots.append(slot)
+    journal.pump(ctx, now=10_000.0)
+    name = slot.journal_name
+    assert name and len(queued) == 1
+    journal.drop(ctx, slot)
+    for run in queued:  # the pool only gets to the write after the drop
+        run()
+    payload = tmp_path / name
+    assert not payload.exists()
+    assert not journal.meta_path(payload).exists()
+
+
+def test_a_fresh_copy_taken_after_a_drop_still_writes(tmp_path, kind):
+    """The tombstone is a generation, not a flag: it kills exactly the writes
+    submitted before the drop, and the next edit journals normally."""
+    ctx = _Ctx(tmp_path)
+    slot = _Slot()
+    kind.slots.append(slot)
+    journal.pump(ctx, now=10_000.0)
+    journal.drop(ctx, slot)
+    slot.head = 2
+    journal.pump(ctx, now=20_000.0)
+    payload = tmp_path / slot.journal_name
+    assert payload.read_bytes() == b"a"
+    assert journal.meta_path(payload).exists()
+
+
 # --- the offer ----------------------------------------------------------------
 
 

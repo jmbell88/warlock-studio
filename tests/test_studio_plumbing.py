@@ -283,6 +283,122 @@ def test_the_sheet_sidecar_can_be_exported():
     assert "get_sheet" in inspect.getsource(sheet_panel._save_sidecar)
 
 
+# --- the strip preview uploaded a picture that had not changed ----------------
+#
+# ``_strip_texture`` reuses one texture and re-uploaded it on every frame the
+# export tab drew -- up to 256 KB of PCIe traffic at 60 fps for an image that
+# only changes when a *new* preview finishes. Gated now on the same shape
+# ``packwright_textures.atlas_texture`` uses: a generation the producer bumps.
+
+
+class _StripTexture:
+    def __init__(self, size: tuple[int, int]) -> None:
+        self.size = size
+        self.writes = 0
+        self.filter: Any = None
+
+    def write(self, data: bytes) -> None:
+        self.writes += 1
+
+    def release(self) -> None:
+        pass
+
+
+class _StripGL:
+    LINEAR = "linear"
+
+    def __init__(self) -> None:
+        self.created: list[_StripTexture] = []
+
+    def texture(self, size, components, data):
+        made = _StripTexture(size)
+        self.created.append(made)
+        return made
+
+
+class _StripImage:
+    def __init__(self, size: tuple[int, int] = (32, 8)) -> None:
+        self.size = size
+        self.width, self.height = size
+
+    def tobytes(self) -> bytes:
+        return b"\x00" * (self.size[0] * self.size[1] * 4)
+
+
+def _strip_ctx() -> Any:
+    return SimpleNamespace(viewer=SimpleNamespace(ctx=_StripGL()), state=AppState())
+
+
+def test_the_sheet_strip_uploads_once_per_preview_not_once_per_frame():
+    from warlock.studio.panes import sheet_panel
+
+    ctx = _strip_ctx()
+    strip = _StripImage()
+    ctx.state.preview["sheet_strip_gen"] = 1
+
+    texture = sheet_panel._strip_texture(ctx, strip)
+    assert texture.writes == 0, "creation carried the pixels"
+
+    for _ in range(3):
+        assert sheet_panel._strip_texture(ctx, strip) is texture
+    assert texture.writes == 0, "an unchanged strip uploads nothing"
+
+    # A new preview finished: the producer bumps the generation, and that -- not
+    # the frame -- is what re-uploads.
+    ctx.state.preview["sheet_strip_gen"] = 2
+    sheet_panel._strip_texture(ctx, strip)
+    assert texture.writes == 1
+    sheet_panel._strip_texture(ctx, strip)
+    assert texture.writes == 1, "and once, not once per frame after"
+
+
+def test_a_resized_sheet_strip_still_gets_a_new_texture():
+    """The gate must not swallow the size change: a strip rendered at a
+    different yaw count is a different width, and ``write`` cannot resize."""
+    from warlock.studio.panes import sheet_panel
+
+    ctx = _strip_ctx()
+    ctx.state.preview["sheet_strip_gen"] = 1
+    first = sheet_panel._strip_texture(ctx, _StripImage((32, 8)))
+
+    ctx.state.preview["sheet_strip_gen"] = 2
+    second = sheet_panel._strip_texture(ctx, _StripImage((64, 8)))
+
+    assert second is not first and second.size == (64, 8)
+    assert second.writes == 0, "the new texture was created with the new pixels"
+
+
+def test_the_strip_stamp_is_a_generation_rather_than_an_object_id():
+    """``id(strip)`` is not a stamp. CPython recycles ids, so a freed strip's
+    id can land on its replacement and the preview keeps showing the old
+    turnaround -- the exact latent bug this gate exists to avoid, not repeat."""
+    from warlock.studio.panes import sheet_panel
+
+    tree = ast.parse(inspect.getsource(sheet_panel).lstrip())
+    ids = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "id"
+    ]
+    assert ids == [], "the strip stamp must be a value, not an identity"
+    assert "sheet_strip_gen" in inspect.getsource(sheet_panel._preview)
+
+
+def test_releasing_the_strip_texture_drops_its_stamp_too():
+    """A stamp outliving its texture is a stale gate: the next texture is
+    created and then compared against the *previous* one's generation."""
+    from warlock.studio.panes import sheet_panel
+
+    ctx = _strip_ctx()
+    ctx.state.preview["sheet_strip_gen"] = 1
+    sheet_panel._strip_texture(ctx, _StripImage())
+    assert ctx.state.preview["sheet_texture:gen"] == 1
+
+    sheet_panel.release_strip_texture(ctx)
+    assert "sheet_texture" not in ctx.state.preview
+    assert "sheet_texture:gen" not in ctx.state.preview
+
+
 def test_the_composed_prompt_preview_retries_when_its_request_was_refused():
     """``submit`` refuses a key already in flight. Clearing the dirty flag
     regardless dropped the edit made during a slow first preview."""

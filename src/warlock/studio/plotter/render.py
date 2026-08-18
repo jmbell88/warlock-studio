@@ -19,6 +19,7 @@ here, and the blit clips rather than refusing.
 
 from __future__ import annotations
 
+import weakref
 from typing import Any
 
 import numpy as np
@@ -414,9 +415,15 @@ def render_map(doc: MapDoc, *, include_hidden: bool = False) -> np.ndarray:
 
 
 # One mean colour per tile, memoised on the identity of the tileset's pixel
-# array. Safe because ``Tileset.__post_init__`` freezes that array: the object
-# is immutable, so an id that matches is the same art, and a *replaced* tileset
-# is a new array with a new id.
+# array. ``Tileset.__post_init__`` freezes that array, so an id that names a
+# *live* array names the same art -- but an id only names a live array while
+# that array is alive. CPython hands a freed block straight back out, and
+# ``replace_tileset`` refuses a different tile count, so a replacement atlas
+# landing on a dead entry's address would pass both the key and the length
+# check and the minimap would draw the old set's colours forever. Every entry
+# is therefore tied to its array's lifetime by :func:`weakref.finalize` below:
+# the weakref callback runs during the array's deallocation, before the block
+# can be handed out again, so a stale entry never outlives its key.
 _LUT_CACHE: dict[int, np.ndarray] = {}
 
 
@@ -427,7 +434,8 @@ def tile_colours(tileset: Any) -> np.ndarray:
     is dominated by whatever colour happens to be stored under the zero alpha --
     which is routinely black, and would draw a sparse map as a dark smear.
     """
-    key = id(tileset.pixels)
+    pixels = tileset.pixels
+    key = id(pixels)
     cached = _LUT_CACHE.get(key)
     if cached is not None and len(cached) == tileset.tile_count:
         return cached
@@ -443,6 +451,11 @@ def tile_colours(tileset: Any) -> np.ndarray:
         )
         out[local, 3] = int(round(float(alpha.mean())))
     _LUT_CACHE[key] = out
+    # Registered once per entry -- the early return above means a cache hit
+    # never adds a second finaliser for the same array. Holding the array
+    # instead would fix the id just as well and pin every superseded atlas in
+    # memory for the life of the process; this keeps only the small table.
+    weakref.finalize(pixels, _LUT_CACHE.pop, key, None)
     return out
 
 

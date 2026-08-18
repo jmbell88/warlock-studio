@@ -119,7 +119,11 @@ def run(
         )
 
     ratio = max(min(target_triangles / max(source_triangles, 1), 1.0), 0.0)
-    tmp = dest.with_suffix(".glb.opt.tmp")
+    # staged_copy's dotfile spelling, not a visible sibling: a staging file is
+    # a dotfile (the staged-writes rule), and this one spent a while as a bare
+    # model.glb.opt.tmp beside the served model. A dotfile also can never
+    # collide with anything in files.LISTED, which is a list of plain names.
+    tmp = dest.with_name(f".{dest.name}.opt.tmp")
     argv = [
         str(exe),
         "-i", str(source),
@@ -132,7 +136,7 @@ def run(
     try:
         # winjob.run rather than subprocess.run, for the same reason every
         # other child is in the job object: a hard kill of the app must not
-        # leave a gltfpack behind holding a half-written .glb.opt.tmp.
+        # leave a gltfpack behind holding a half-written .opt.tmp staging file.
         proc = winjob.run(
             argv,
             capture_output=True,
@@ -150,7 +154,7 @@ def run(
 
     # Every other exit from this function unlinks the staging file; the tail
     # did not, so a _triangles() that raised (a mesh trimesh cannot parse) left
-    # a .glb.opt.tmp beside the served model for the next reader to find.
+    # an .opt.tmp staging file beside the served model for the next reader to find.
     try:
         achieved = _triangles(tmp)
         if achieved <= 0:

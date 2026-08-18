@@ -211,6 +211,44 @@ def test_tiled_112_fields_select_version_four_and_round_trip():
     assert doc_facts(wmap.read_wmap(wmap.wmap_bytes(doc))) == doc_facts(doc)
 
 
+def test_a_list_property_on_a_tileset_selects_version_four_and_round_trips():
+    """The gate names every version 4 field on every arm, and the tileset arm
+    is an arm: ``manifest_json`` writes each tileset's properties
+    unconditionally, so a ``.tsx``-imported list rode out in a file declaring
+    version 3 -- exactly the ``ObjectLayer.color`` shape the gate's docstring
+    warns about."""
+    doc = _doc()
+    # The same document without the list is the baseline the delta is measured
+    # against: a gate that answered 4 for everything would pass the tail of
+    # this test and mean nothing.
+    assert json.loads(wmap.manifest_json(doc))["version"] == wmap.BASE_VERSION
+
+    doc.tilesets[0].tileset.properties["bag"] = tsx.Prop(
+        "list", [tsx.Prop("int", 1), tsx.Prop("string", "two")]
+    )
+    payload = json.loads(wmap.manifest_json(doc))
+    assert payload["version"] == wmap.TILED_ERA_VERSION == 4
+    back = wmap.read_wmap(wmap.wmap_bytes(doc))
+    assert back.tilesets[0].tileset.properties == doc.tilesets[0].tileset.properties
+
+
+def test_a_list_nested_in_a_class_on_a_tileset_selects_version_four_too():
+    """The gate's recursion is the half that cannot be seen from the outside: a
+    list buried in a class member is still a version 4 construct in the file,
+    and a tileset arm that only looked at the top level would ship it as
+    version 3."""
+    doc = _doc()
+    doc.tilesets[0].tileset.properties["npc"] = tsx.Prop(
+        "class",
+        {"loot": tsx.Prop("list", [tsx.Prop("string", "rope")])},
+        propertytype="NPC",
+    )
+    payload = json.loads(wmap.manifest_json(doc))
+    assert payload["version"] == wmap.TILED_ERA_VERSION == 4
+    back = wmap.read_wmap(wmap.wmap_bytes(doc))
+    assert back.tilesets[0].tileset.properties == doc.tilesets[0].tileset.properties
+
+
 def test_a_png_is_stored_rather_than_deflated():
     """A PNG is already compressed; deflating it again spends time to make it
     marginally bigger."""
