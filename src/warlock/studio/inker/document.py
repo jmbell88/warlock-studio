@@ -648,7 +648,9 @@ class Document(
         self._evict_frames()
         return flat
 
-    def frame_stack(self, frame: Any) -> LayerStack:
+    def frame_stack(
+        self, frame: Any, *, track_uids: set[int] | None = None
+    ) -> LayerStack:
         """One frame's layers as an ordinary stack, with the group fold on it.
 
         Every place that flattens a frame that is *not* the current one goes
@@ -657,9 +659,36 @@ class Document(
         its own bare ``LayerStack`` and each would otherwise show a hidden group
         as visible in exactly one of onion skinning, playback and the saved
         file.
+
+        ``track_uids`` keeps only the named tracks, for a split-by-layer export.
+        ``None`` is the whole frame and is the call this always was, down to the
+        objects handed to ``LayerStack``.
+
+        **The fold is filtered with the rows**, not carried over whole: it is a
+        list *parallel to the stack* (``group_fold`` walks ``member_uids()``,
+        which is one entry per track), so an unfiltered fold on a filtered stack
+        would hang each surviving row's inherited visibility on whichever row
+        happened to land at its index. Filtering it is enough to be *correct*
+        rather than merely convenient, because group compositing here is
+        pass-through: a group contributes nothing but a ``(visible, opacity)``
+        pair per leaf, so the leaves that survive inherit exactly what they
+        inherited in the full stack. If groups ever composite in isolation --
+        the v1 gap ``inker/groups.py`` names -- a subset that cut a group in
+        half would stop being expressible this way, which is why
+        :func:`sheetout.layer_splits` never cuts one.
         """
-        stack = LayerStack(self.anim.layers_for(frame, self.size), 0)
-        stack.group_fold = self.group_fold()
+        layers = self.anim.layers_for(frame, self.size)
+        fold = self.group_fold()
+        if track_uids is not None:
+            keep = [
+                index
+                for index, track in enumerate(self.anim.tracks)
+                if track.uid in track_uids
+            ]
+            layers = [layers[index] for index in keep]
+            fold = None if fold is None else [fold[index] for index in keep]
+        stack = LayerStack(layers, 0)
+        stack.group_fold = fold
         return stack
 
     def _evict_frames(self) -> None:

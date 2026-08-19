@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -964,25 +965,18 @@ def export_pngs(ctx: Any, tab: InkerDoc | None = None) -> None:
 
 
 @dataclass
-class _Export:
-    """One export's frame-by-frame read of the document.
+class _Leg:
+    """One *output file's* worth of an export: which frames, read how.
 
-    Lives on ``InkerState`` rather than on the tab because it is not a property
-    of the document -- it is one in-flight operation, and there is one at a time
-    by construction (both exports share a task key, and the tab is locked while
-    it runs).
+    An ordinary export has exactly one of these and its ``label`` is empty. A
+    split has one per tag or per layer, and the label is what the filename is
+    built from -- see :func:`_split_stems`.
     """
 
-    tab: InkerDoc
-    kind: str  # "sheet" | "gif" | "pngs"
-    suggested: str
     uids: list[str]
-    frames: list[Any] = field(default_factory=list)
-    #: One exact index plane per read frame, or None where the frame's flatten
-    #: is not a cel's own materialisation. Parallel to ``frames`` and appended
-    #: in the same step, so the two cannot come apart. Only a GIF reads it --
-    #: see ``sheetout.index_plane_one``.
-    planes: list[Any] = field(default_factory=list)
+    #: What this output is called after the stem, or "" for the single-file
+    #: export that is named by the dialog alone.
+    label: str = ""
     #: The inclusive frame range being exported, or None for the whole
     #: timeline. Sliced **at begin**, and ``timing`` is sliced at submit with
     #: this same pair -- safe because the tab has been locked (``saving``) for
@@ -991,14 +985,87 @@ class _Export:
     #: What a GIF's loop block should say: True forever, False once, or a
     #: repeat count. See ``gifout.loop_option``.
     loop: bool | int = True
+    #: The tracks this leg composites, or None for the whole stack. A split by
+    #: layer is the only caller that sets it, and it is what sends the flatten
+    #: through ``sheetout.flatten_subset`` -- which stays out of the document's
+    #: frame cache, because that cache is keyed on the frame uid alone.
+    track_uids: tuple[int, ...] | None = None
+    frames: list[Any] = field(default_factory=list)
+    #: One exact index plane per read frame, or None where the frame's flatten
+    #: is not a cel's own materialisation. Parallel to ``frames`` and appended
+    #: in the same step, so the two cannot come apart. Only a GIF reads it --
+    #: see ``sheetout.index_plane_one``.
+    planes: list[Any] = field(default_factory=list)
 
     @property
     def done(self) -> bool:
         return len(self.frames) >= len(self.uids)
 
+
+@dataclass
+class _Export:
+    """One export's frame-by-frame read of the document.
+
+    Lives on ``InkerState`` rather than on the tab because it is not a property
+    of the document -- it is one in-flight operation, and there is one at a time
+    by construction (both exports share a task key, and the tab is locked while
+    it runs).
+
+    **A split is one export, not several.** One lock, one stepper, one flatten
+    per pump, one task at the end -- the legs are read back to back inside the
+    machinery that already guarantees all four. N exports racing each other for
+    the same task key, with the tab locked N times over, is the shape this
+    deliberately does not take.
+
+    ``uids``/``frames``/``planes``/``span``/``loop`` read the leg being flattened
+    now, so every caller written before splits existed still sees the export it
+    always saw.
+    """
+
+    tab: InkerDoc
+    kind: str  # "sheet" | "gif" | "pngs"
+    suggested: str
+    legs: list[_Leg]
+    #: Which leg the stepper is on. Never rewound: a finished leg's frames stay
+    #: on it until the submit reads them.
+    at: int = 0
+
+    @property
+    def leg(self) -> _Leg:
+        return self.legs[self.at]
+
+    @property
+    def uids(self) -> list[str]:
+        return self.leg.uids
+
+    @property
+    def frames(self) -> list[Any]:
+        return self.leg.frames
+
+    @property
+    def planes(self) -> list[Any]:
+        return self.leg.planes
+
+    @property
+    def span(self) -> tuple[int, int] | None:
+        return self.leg.span
+
+    @property
+    def loop(self) -> bool | int:
+        return self.leg.loop
+
+    @property
+    def done(self) -> bool:
+        return self.at >= len(self.legs) - 1 and self.leg.done
+
+    @property
+    def read(self) -> int:
+        """Frames flattened so far, across every leg. One per pump, always."""
+        return sum(len(leg.frames) for leg in self.legs)
+
     @property
     def total(self) -> int:
-        return len(self.uids)
+        return sum(len(leg.uids) for leg in self.legs)
 
 
 def export_range(
@@ -1033,10 +1100,79 @@ def export_tag(ctx: Any, tab: InkerDoc | None, kind: str, index: int) -> None:
     anim = None if tab is None else tab.doc.anim
     if tab is None or anim is None or not 0 <= index < len(anim.tags):
         return
+    from .inker import sheetout
+
     tag = anim.tags[index]
-    last = len(anim.frames) - 1
-    span = (max(0, min(int(tag.start), last)), max(0, min(int(tag.end), last)))
-    _begin_export(ctx, tab, kind, span=span, loop=tag.repeat or tag.loop)
+    _begin_export(
+        ctx,
+        tab,
+        kind,
+        span=sheetout.tag_span(anim, tag),
+        loop=tag.repeat or tag.loop,
+    )
+
+
+def export_per_tag(ctx: Any, tab: InkerDoc | None = None, kind: str = "sheet") -> None:
+    """One file per tag, in one export.
+
+    Each output is exactly what :func:`export_tag` writes for that tag on its
+    own -- same span through ``sheetout.tag_span``, same looping, same rebased
+    tags in the sidecar -- so a batch and a one-at-a-time sweep produce the same
+    files. That is the whole reason the span logic is shared rather than
+    repeated here.
+    """
+    from .inker import sheetout
+
+    tab = tab or active(ctx)
+    anim = None if tab is None else tab.doc.anim
+    if tab is None or anim is None:
+        return
+    if not anim.tags:
+        # Reachable even though the menu item is disabled: the verb is engine
+        # API, and a refusal that says why beats one that does nothing.
+        ctx.toast("This document has no tags to split by.", "warn")
+        return
+    _begin_export(
+        ctx,
+        tab,
+        kind,
+        legs=[
+            _Leg(
+                uids=[],
+                label=tag.name,
+                span=sheetout.tag_span(anim, tag),
+                loop=tag.repeat or tag.loop,
+            )
+            for tag in anim.tags
+        ],
+    )
+
+
+def export_per_layer(ctx: Any, tab: InkerDoc | None = None, kind: str = "sheet") -> None:
+    """One file per top-level layer row, in one export.
+
+    ``sheetout.layer_splits`` decides what a "layer" is here -- a track, or a
+    whole group as the one row the panel shows -- and each leg composites only
+    its own tracks. The frames are the same frames; what differs is how much of
+    the stack goes into each of them.
+    """
+    from .inker import sheetout
+
+    tab = tab or active(ctx)
+    if tab is None or tab.doc.anim is None:
+        return
+    splits = sheetout.layer_splits(tab.doc)
+    if not splits:
+        ctx.toast("Every layer is hidden; there is nothing to split.", "warn")
+        return
+    _begin_export(
+        ctx,
+        tab,
+        kind,
+        legs=[
+            _Leg(uids=[], label=name, track_uids=uids) for name, uids in splits
+        ],
+    )
 
 
 def _begin_export(
@@ -1046,8 +1182,15 @@ def _begin_export(
     *,
     span: tuple[int, int] | None = None,
     loop: bool | int = True,
+    legs: list[_Leg] | None = None,
 ) -> None:
-    """Lock the tab and park the stepper. The click-frame half of an export."""
+    """Lock the tab and park the stepper. The click-frame half of an export.
+
+    ``legs`` is the split form: one entry per output file, each carrying its own
+    span and its own tracks, and ``None`` is the ordinary single-file export
+    (one unlabelled leg over ``span``). Everything after this point -- the
+    stepper, the lock, the submit -- is the same code for both.
+    """
     from .inker import sheetout
 
     tab = tab or active(ctx)
@@ -1057,8 +1200,20 @@ def _begin_export(
     if state.export is not None:
         return
     _settle(ctx, tab)
+    suggested = tab.path.stem if tab.path else "untitled"
+    if legs is None:
+        legs = [_Leg(uids=[], span=span, loop=loop)]
     try:
-        uids = sheetout.frame_uids(tab.doc, span)
+        # The work lists are filled *here* rather than by the callers, so a span
+        # that holds no frames refuses before the lock -- and so "frame 3 of 60"
+        # is read once, for every leg, on the frame the button was pressed.
+        for leg in legs:
+            leg.uids = sheetout.frame_uids(tab.doc, leg.span)
+        # Checked here rather than in the runner, where the stem the user picked
+        # is finally known: a collision is a property of the labels alone, so it
+        # can be refused before the tab is locked and before somebody names a
+        # batch that was never going to be written.
+        _split_stems(suggested, [leg.label for leg in legs])
     except ValueError as exc:
         ctx.toast(f"Cannot export: {exc}.", "warn")
         return
@@ -1067,14 +1222,39 @@ def _begin_export(
     # an edit landing in one of them would put half of two documents in the
     # sheet. ``saving`` is the flag ``busy`` already refuses mutation on.
     tab.saving = True
-    state.export = _Export(
-        tab=tab,
-        kind=kind,
-        suggested=tab.path.stem if tab.path else "untitled",
-        uids=uids,
-        span=span,
-        loop=loop,
-    )
+    state.export = _Export(tab=tab, kind=kind, suggested=suggested, legs=legs)
+
+
+def _split_stems(stem: str, labels: Sequence[str]) -> list[str]:
+    """One filename stem per output: ``{stem}_{label}``, sanitised.
+
+    **The one place a split's filenames are decided**, which is what makes Task
+    5's filename templates a single edit rather than a sweep through three
+    runners. An empty label is the unsplit export and keeps the stem the dialog
+    was given, byte for byte.
+
+    A collision is **refused**, where ``_slice_filenames`` bumps: a slice is a
+    rectangle a person picks off a folder listing, and "Hitbox_2.png" is a name
+    they can live with -- but a tag and a layer are addressed *by name* by
+    whatever consumes the sheet, and a second "walk" quietly becoming
+    "walk_2.png" is a file claiming to be a clip called walk_2. Refusing is the
+    only answer that cannot silently be believed.
+    """
+    out: list[str] = []
+    for label in labels:
+        if not label:
+            out.append(stem)
+            continue
+        safe = _SLICE_SAFE.sub("-", label).strip("-")
+        if not safe:
+            raise ValueError(f"{label!r} is not a name a file can be given")
+        out.append(f"{stem}_{safe}")
+    seen: set[str] = set()
+    for name in out:
+        if name in seen:
+            raise ValueError(f"two outputs would both be called {name}")
+        seen.add(name)
+    return out
 
 
 def pump_export(ctx: Any) -> None:
@@ -1095,24 +1275,58 @@ def pump_export(ctx: Any) -> None:
         # lock goes with the tab, so there is nothing to undo.
         state.export = None
         return
+    leg = export.leg
     try:
-        uid = export.uids[len(export.frames)]
-        plane = sheetout.flatten_one(tab.doc, uid)
-        # Read here, beside the flatten it describes and on the same frame:
-        # taken later it would describe a document the user has since edited,
-        # and the two have to be a matched pair or the GIF is drawn with one
-        # frame's slots and another frame's colours.
-        export.planes.append(sheetout.index_plane_one(tab.doc, uid))
-        export.frames.append(plane)
+        uid = leg.uids[len(leg.frames)]
+        if leg.track_uids is None:
+            plane = sheetout.flatten_one(tab.doc, uid)
+            # Read here, beside the flatten it describes and on the same frame:
+            # taken later it would describe a document the user has since
+            # edited, and the two have to be a matched pair or the GIF is drawn
+            # with one frame's slots and another frame's colours.
+            leg.planes.append(sheetout.index_plane_one(tab.doc, uid))
+        else:
+            plane = sheetout.flatten_subset(tab.doc, uid, leg.track_uids)
+            # None rather than a subset index plane: ``index_plane_one`` decides
+            # by comparing a candidate cel against the *whole* frame's flatten,
+            # which a subset is not. A GIF of one layer therefore quantises from
+            # the colours, as every GIF did before index planes existed --
+            # correct, just not slot-stable.
+            leg.planes.append(None)
+        leg.frames.append(plane)
     except (ValueError, IndexError, KeyError):
         state.export = None
         tab.saving = False
         ctx.toast("Export failed: a frame could not be flattened.", "warn")
         return
-    if not export.done:
+    if not leg.done:
+        return
+    if export.at + 1 < len(export.legs):
+        # Exactly one flatten has happened this pump, so the next leg starts on
+        # the next one: a batch that ran the legs back to back here would be the
+        # freeze the stepper exists to prevent, N times over.
+        export.at += 1
         return
     state.export = None
     _submit_export(ctx, export)
+
+
+@dataclass
+class _Payload:
+    """One output file, as the runners need it: pixels plus what describes them.
+
+    Built on the frame thread by :func:`_submit_export` and read on the task
+    thread, which is why it holds values rather than a document to ask.
+    """
+
+    label: str
+    frames: list[Any]
+    planes: list[Any]
+    durations: list[int]
+    tags: list[Any]
+    layout: Any
+    slices: list[Any]
+    loop: bool | int
 
 
 def _submit_export(ctx: Any, export: _Export) -> None:
@@ -1120,7 +1334,7 @@ def _submit_export(ctx: Any, export: _Export) -> None:
     from .inker import gifout, sheetout
     from .inker.transform import upscale
 
-    tab, frames, suggested = export.tab, export.frames, export.suggested
+    tab, suggested = export.tab, export.suggested
     doc = tab.doc
     state = ctx.state.inker
     # Read here, on the frame thread, with the frames: an app-level setting the
@@ -1133,54 +1347,79 @@ def _submit_export(ctx: Any, export: _Export) -> None:
     wrap = max(1, int(getattr(state, "export_wrap", 1) or 1))
     merge = bool(getattr(state, "export_merge", False))
     skip_empty = bool(getattr(state, "export_skip_empty", False))
-    durations, tags, layout = sheetout.timing(doc, export.span)
-    # Read here, with the timing, and for its reason: it walks the document, so
-    # it belongs on the frame thread beside the flatten rather than inside the
-    # task. Cheap -- a handful of rectangles -- so there is nothing to spread.
-    #
-    # Sliced by the *same* span as the frames and the timing, because
-    # ``slices_block`` keys by cell index: a span export's third cell is the
-    # third frame of the span, and a whole-timeline snapshot here would hang
-    # frame 0's rectangles on it.
-    slices = sheetout.slices_snapshot(doc, export.span)
-    if export.kind == "sheet" and layout is not None and len(frames) != layout.frame_count:
-        # Refused on the frame thread, before the file dialog: the engine raises
-        # the same ValueError as a backstop, but by then the user has picked a
-        # filename and the failure arrives as a task error with no obvious
-        # cause. A frame added to (or removed from) a sprite sheet is an
-        # ordinary edit, so the fix is to say which count is wrong.
-        tab.saving = False
-        ctx.toast(
-            f"This is a {layout.kind} sheet of {layout.frame_count} frames and "
-            f"the document has {len(frames)}.",
-            "warn",
+    # One payload per output file. A single-file export has exactly one and
+    # every line below reads the same as it did before splits existed; a split
+    # has one per tag or per layer, each carrying its own timing and its own
+    # slices, because a sidecar has to be self-consistent with the file it is
+    # beside rather than with the document the batch came from.
+    loads: list[_Payload] = []
+    for leg in export.legs:
+        durations, tags, layout = sheetout.timing(doc, leg.span)
+        # Read here, with the timing, and for its reason: it walks the document,
+        # so it belongs on the frame thread beside the flatten rather than
+        # inside the task. Cheap -- a handful of rectangles -- so there is
+        # nothing to spread.
+        #
+        # Sliced by the *same* span as the frames and the timing, because
+        # ``slices_block`` keys by cell index: a span export's third cell is the
+        # third frame of the span, and a whole-timeline snapshot here would hang
+        # frame 0's rectangles on it.
+        slices = sheetout.slices_snapshot(doc, leg.span)
+        frames = leg.frames
+        if export.kind == "sheet" and layout is not None:
+            if len(frames) != layout.frame_count:
+                # Refused on the frame thread, before the file dialog: the
+                # engine raises the same ValueError as a backstop, but by then
+                # the user has picked a filename and the failure arrives as a
+                # task error with no obvious cause. A frame added to (or removed
+                # from) a sprite sheet is an ordinary edit, so the fix is to say
+                # which count is wrong.
+                tab.saving = False
+                ctx.toast(
+                    f"This is a {layout.kind} sheet of {layout.frame_count} "
+                    f"frames and the document has {len(frames)}.",
+                    "warn",
+                )
+                return
+            if arrange is not None:
+                # The same early-refusal shape as the count mismatch above, for
+                # the same reason: ``plan_frames`` would raise this itself, but
+                # by then the user has already picked a filename and the failure
+                # arrives as an opaque task error. A document with its own
+                # directional grid keeps it -- Grid is the only Arrange choice
+                # such a document has.
+                tab.saving = False
+                ctx.toast(
+                    f"This is a {layout.kind} sheet, which keeps its own fixed "
+                    "grid; set Arrange back to Grid to export it.",
+                    "warn",
+                )
+                return
+            if merge or skip_empty:
+                # Same shape and same reason as the arrange/layout refusal
+                # above: a directional grid's cells are poses by yaws, so there
+                # is nothing for Merge or Skip empty to act on, and letting the
+                # request through would have ``sheetout.compose`` raise it as an
+                # opaque task error instead.
+                tab.saving = False
+                ctx.toast(
+                    f"This is a {layout.kind} sheet, which keeps its own fixed "
+                    "grid; turn Merge and Skip empty off to export it.",
+                    "warn",
+                )
+                return
+        loads.append(
+            _Payload(
+                label=leg.label,
+                frames=frames,
+                planes=leg.planes,
+                durations=durations,
+                tags=tags,
+                layout=layout,
+                slices=slices,
+                loop=leg.loop,
+            )
         )
-        return
-    if export.kind == "sheet" and layout is not None and arrange is not None:
-        # The same early-refusal shape as the count mismatch above, for the
-        # same reason: ``plan_frames`` would raise this itself, but by then the
-        # user has already picked a filename and the failure arrives as an
-        # opaque task error. A document with its own directional grid keeps it
-        # -- Grid is the only Arrange choice such a document has.
-        tab.saving = False
-        ctx.toast(
-            f"This is a {layout.kind} sheet, which keeps its own fixed grid; "
-            "set Arrange back to Grid to export it.",
-            "warn",
-        )
-        return
-    if export.kind == "sheet" and layout is not None and (merge or skip_empty):
-        # Same shape and same reason as the arrange/layout refusal above: a
-        # directional grid's cells are poses by yaws, so there is nothing for
-        # Merge or Skip empty to act on, and letting the request through would
-        # have ``sheetout.compose`` raise it as an opaque task error instead.
-        tab.saving = False
-        ctx.toast(
-            f"This is a {layout.kind} sheet, which keeps its own fixed grid; "
-            "turn Merge and Skip empty off to export it.",
-            "warn",
-        )
-        return
 
     def run_sheet() -> dict[str, Any] | None:
         import json
@@ -1190,45 +1429,56 @@ def _submit_export(ctx: Any, export: _Export) -> None:
             return None
         if dest.suffix.lower() != ".png":
             dest = dest.with_suffix(".png")
-        # Upscaled *before* ``compose``, so the plan is built on the scaled
-        # frame size and the cells, the trims and the sidecar all describe the
-        # atlas that is actually written. Scaling the finished atlas instead
-        # would leave every rectangle in the sidecar naming the wrong pixels.
-        # ``sheet.py`` stays the sole writer of the format; none of this is new
-        # code in it.
-        image, plan, extra = sheetout.compose(
-            [upscale(plane, scale) for plane in frames],
-            durations,
-            tags,
-            layout,
-            # The slice geometry through the same magnification, or the sidecar
-            # describes a canvas that is not the atlas beside it.
-            sheetout.scale_slices(slices, scale),
-            name=suggested,
-            arrange=arrange,
-            wrap=wrap if arrange in ("rows", "columns") else None,
-            merge=merge,
-            skip_empty=skip_empty,
-        )
-        try:
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            image.save(dest, "PNG")
-        finally:
-            image.close()
-        meta = sheetlib.sidecar(
-            plan,
-            sheet_id=dest.stem,
-            source_job=tab.job_id,
-            image=dest.name,
-            created=time.time(),
-            name=suggested,
-            trims=extra["trims"],
-            animation=extra["animation"],
-            pivots=extra["pivots"],
-            slices=extra["slices"],
-        )
-        dest.with_suffix(".json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
-        return {"exported": dest}
+        stems = _split_stems(dest.stem, [load.label for load in loads])
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        first: Path | None = None
+        for stem, load in zip(stems, loads, strict=True):
+            out = dest.with_name(f"{stem}.png")
+            # Upscaled *before* ``compose``, so the plan is built on the scaled
+            # frame size and the cells, the trims and the sidecar all describe
+            # the atlas that is actually written. Scaling the finished atlas
+            # instead would leave every rectangle in the sidecar naming the
+            # wrong pixels. ``sheet.py`` stays the sole writer of the format;
+            # none of this is new code in it.
+            image, plan, extra = sheetout.compose(
+                [upscale(plane, scale) for plane in load.frames],
+                load.durations,
+                load.tags,
+                load.layout,
+                # The slice geometry through the same magnification, or the
+                # sidecar describes a canvas that is not the atlas beside it.
+                sheetout.scale_slices(load.slices, scale),
+                name=suggested,
+                arrange=arrange,
+                wrap=wrap if arrange in ("rows", "columns") else None,
+                merge=merge,
+                skip_empty=skip_empty,
+            )
+            try:
+                image.save(out, "PNG")
+            finally:
+                image.close()
+            meta = sheetlib.sidecar(
+                plan,
+                sheet_id=out.stem,
+                source_job=tab.job_id,
+                image=out.name,
+                created=time.time(),
+                name=suggested,
+                trims=extra["trims"],
+                animation=extra["animation"],
+                pivots=extra["pivots"],
+                slices=extra["slices"],
+            )
+            # ``with_name`` rather than ``with_suffix``: a label may legitimately
+            # hold a dot ("v1.2"), and replacing the last suffix of *that* stem
+            # would write the sidecar beside a file that does not exist.
+            out.with_name(f"{stem}.json").write_text(
+                json.dumps(meta, indent=2), encoding="utf-8"
+            )
+            if first is None:
+                first = out
+        return {"exported": first}
 
     # The document's own table when it has one, so an indexed clip exports the
     # colours that were authored rather than a per-frame quantise of them. Read
@@ -1241,25 +1491,32 @@ def _submit_export(ctx: Any, export: _Export) -> None:
             return None
         if dest.suffix.lower() != ".gif":
             dest = dest.with_suffix(".gif")
+        stems = _split_stems(dest.stem, [load.label for load in loads])
         dest.parent.mkdir(parents=True, exist_ok=True)
-        # Upscaled before the quantiser, not after: a GIF holds palette
-        # indices, so there is no "after" -- magnifying the indexed image would
-        # be magnifying a palette lookup rather than a picture.
-        gifout.write_gif(
-            dest,
-            [upscale(plane, scale) for plane in frames],
-            durations,
-            loop=export.loop,
-            palette=palette,
-            # Magnified by the same whole number as the pixels, which is exact
-            # on an index plane in a way it is on nothing else: ``upscale``
-            # repeats each element, so a magnified slot is still that slot.
-            indices=[
-                None if slots is None else upscale(slots, scale)
-                for slots in export.planes
-            ],
-        )
-        return {"exported": dest}
+        first: Path | None = None
+        for stem, load in zip(stems, loads, strict=True):
+            out = dest.with_name(f"{stem}.gif")
+            # Upscaled before the quantiser, not after: a GIF holds palette
+            # indices, so there is no "after" -- magnifying the indexed image
+            # would be magnifying a palette lookup rather than a picture.
+            gifout.write_gif(
+                out,
+                [upscale(plane, scale) for plane in load.frames],
+                load.durations,
+                loop=load.loop,
+                palette=palette,
+                # Magnified by the same whole number as the pixels, which is
+                # exact on an index plane in a way it is on nothing else:
+                # ``upscale`` repeats each element, so a magnified slot is still
+                # that slot.
+                indices=[
+                    None if slots is None else upscale(slots, scale)
+                    for slots in load.planes
+                ],
+            )
+            if first is None:
+                first = out
+        return {"exported": first}
 
     def run_pngs() -> dict[str, Any] | None:
         """One PNG per frame, numbered. The plainest thing an engine can eat.
@@ -1274,14 +1531,15 @@ def _submit_export(ctx: Any, export: _Export) -> None:
         dest = dialogs.save_file("Export PNG sequence", f"{suggested}.png", PNG_FILTER)
         if dest is None:
             return None
-        stem = dest.stem
+        stems = _split_stems(dest.stem, [load.label for load in loads])
         dest.parent.mkdir(parents=True, exist_ok=True)
         first = dest
-        for index, plane in enumerate(frames):
-            out = dest.parent / f"{stem}_{index:04d}.png"
-            Image.fromarray(upscale(plane, scale), "RGBA").save(out, "PNG")
-            if index == 0:
-                first = out
+        for stem, load in zip(stems, loads, strict=True):
+            for index, plane in enumerate(load.frames):
+                out = dest.parent / f"{stem}_{index:04d}.png"
+                Image.fromarray(upscale(plane, scale), "RGBA").save(out, "PNG")
+                if first is dest:
+                    first = out
         return {"exported": first}
 
     runners = {"sheet": run_sheet, "gif": run_gif, "pngs": run_pngs}

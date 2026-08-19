@@ -208,6 +208,30 @@ In a partial export the tags are renumbered against the exported frames, tags th
 outside it are dropped, and a directional layout is not carried over: half a walk sheet is a clip,
 not a smaller walk sheet.
 
+### Splitting one export into several files
+
+The export row also offers **Export sheet per tag** and **Export sheet per layer**, which write a
+whole set of files from one press. You pick one name and each output is that name plus what it holds:
+`hero_walk.png` and `hero_idle.png` for the tags, `hero_Background.png` and `hero_ink.png` for the
+layers, each with its own sidecar beside it.
+
+Per tag is exactly **Export tag → sheet** run for every tag in turn — same frames, same renumbered
+tags, same looping — so a file from the batch and a file exported on its own are the same file.
+
+Per layer writes one sheet per row of the layers panel, holding only that layer's own pixels. A group
+is one file, not one per layer inside it, because a group is what the panel shows as a single row and
+its layers composite as a unit. Hidden layers and hidden groups are left out entirely rather than
+exported as sheets of nothing.
+
+Both verbs stay available while the document is open and are greyed out rather than hidden when there
+is nothing to split — no tags, or a single visible layer. A name a file cannot hold is cleaned up
+(`A/B` becomes `A-B`), but two tags that would end up sharing a filename are **refused** rather than
+numbered apart: a second `walk` quietly becoming `walk_2.png` is a file claiming to be a clip you
+never named. Rename one and press again.
+
+Splitting by slice is not offered; slices are exported as their own PNGs from the document panel
+instead — see [Slices](08-inker.md#slices).
+
 ## Importing frames
 
 **Import sprite sheet** in the document panel goes the other way: pick any image and give it a cell

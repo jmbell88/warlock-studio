@@ -679,3 +679,168 @@ def test_compose_still_takes_a_snapshot_positionally():
         doc.add_frame()
     _image, plan, _extra = sheetout.compose(*sheetout.snapshot(doc))
     assert (plan.columns, plan.rows) == (2, 2)
+
+
+# --- subsets: one part of the stack, on its own --------------------------------
+#
+# Split-by-layer needs a flatten of *some* of the tracks, and the one rule it
+# must not break is the frame cache: ``frame_flat`` is keyed on the frame uid
+# alone, so a subset that entered it would hand the onion skin (and the next
+# whole-document export) a picture with layers missing.
+
+
+def _tracked() -> Document:
+    """Two tracks over three frames: RED bottom-left, BLUE top-right."""
+    doc = Document.blank(4, 4)
+    ones = np.ones((2, 2), dtype=np.float32)
+    doc.write_colour((0, 0, 2, 2), RED, ones)
+    doc.add_layer("ink")
+    doc.write_colour((2, 2, 4, 4), BLUE, ones)
+    doc.add_frame(link=True)
+    doc.add_frame(link=True)
+    return doc
+
+
+def test_a_subset_flatten_holds_only_the_tracks_it_was_given():
+    doc = _tracked()
+    uid = doc.anim.frames[0].uid
+    plane = sheetout.flatten_subset(doc, uid, {doc.anim.tracks[0].uid})
+    assert tuple(plane[0, 0]) == RED
+    assert tuple(plane[3, 3]) == (0, 0, 0, 0)  # the ink track is not in it
+
+
+def test_a_subset_flatten_equals_the_whole_one_with_the_others_hidden():
+    """The oracle is the path that was already right: hiding every other track
+    and flattening the whole stack has to produce exactly what asking for one
+    track produces, opacity and blend mode included."""
+    doc = _tracked()
+    doc.set_layer_props(1, opacity=0.5, blend="multiply")
+    uid = doc.anim.frames[0].uid
+    subset = sheetout.flatten_subset(doc, uid, {doc.anim.tracks[1].uid})
+
+    doc.set_layer_props(0, visible=False)
+    expected = doc.frame_flat(uid)
+    assert np.array_equal(subset, expected)
+
+
+def test_a_hidden_track_inside_a_subset_still_contributes_nothing():
+    doc = _tracked()
+    doc.set_layer_props(1, visible=False)
+    uid = doc.anim.frames[0].uid
+    both = sheetout.flatten_subset(
+        doc, uid, {doc.anim.tracks[0].uid, doc.anim.tracks[1].uid}
+    )
+    assert np.array_equal(both, sheetout.flatten_subset(doc, uid, {doc.anim.tracks[0].uid}))
+
+
+def test_a_subset_carries_the_group_fold_of_the_rows_it_keeps():
+    """The fold is per stack row, so a filtered stack needs a filtered fold --
+    an unfiltered one would hang row 0's inherited opacity on row 1."""
+    doc = _tracked()
+    node = doc.group_layers([1], name="fx")
+    assert node is not None
+    doc.set_group_props(node.uid, visible=False)
+    uid = doc.anim.frames[0].uid
+
+    inside = sheetout.flatten_subset(doc, uid, {doc.anim.tracks[1].uid})
+    assert not inside.any()  # the group above it is hidden
+    outside = sheetout.flatten_subset(doc, uid, {doc.anim.tracks[0].uid})
+    assert tuple(outside[0, 0]) == RED  # and that fold is not applied to row 0
+
+
+def test_a_subset_flatten_never_enters_the_frame_cache():
+    """The cache is keyed on the frame uid and nothing else. A subset stored
+    under that key is a whole document's flatten with layers missing, handed to
+    the onion skin, to playback and to the next export."""
+    doc = _tracked()
+    uid = doc.anim.frames[0].uid
+    assert doc.frame_cache_bytes() == 0
+    sheetout.flatten_subset(doc, uid, {doc.anim.tracks[0].uid})
+    assert doc.frame_cache_bytes() == 0
+
+    full = doc.frame_flat(uid).copy()
+    filled = doc.frame_cache_bytes()
+    sheetout.flatten_subset(doc, uid, {doc.anim.tracks[1].uid})
+    assert doc.frame_cache_bytes() == filled
+    assert np.array_equal(doc.frame_flat(uid), full)
+    assert tuple(full[0, 0]) == RED and tuple(full[3, 3]) == BLUE
+
+
+def test_a_subset_naming_no_live_track_is_refused():
+    doc = _tracked()
+    with pytest.raises(ValueError):
+        sheetout.flatten_subset(doc, doc.anim.frames[0].uid, {-1})
+
+
+def test_a_subset_of_a_frame_that_is_not_in_the_document_is_refused():
+    doc = _tracked()
+    with pytest.raises(ValueError):
+        sheetout.flatten_subset(doc, 999999, {doc.anim.tracks[0].uid})
+
+
+def test_frame_stack_with_no_subset_is_the_stack_it_always_was():
+    """The pin on the additive parameter: None is today's call, byte for byte."""
+    doc = _tracked()
+    frame = doc.anim.frames[0]
+    plain, again = doc.frame_stack(frame), doc.frame_stack(frame, track_uids=None)
+    assert len(plain) == len(again) == 2
+    assert np.array_equal(plain.flatten(), again.flatten())
+
+
+def test_a_subset_snapshot_reads_every_frame_through_the_subset():
+    doc = _tracked()
+    frames, _durations, _tags, _layout, _slices = sheetout.snapshot(
+        doc, track_uids={doc.anim.tracks[0].uid}
+    )
+    assert len(frames) == 3
+    assert all(tuple(plane[3, 3]) == (0, 0, 0, 0) for plane in frames)
+    assert doc.frame_cache_bytes() == 0
+
+
+# --- what a split is split *into* ----------------------------------------------
+
+
+def test_the_layer_splits_of_a_plain_document_are_its_tracks_bottom_first():
+    doc = _tracked()
+    splits = sheetout.layer_splits(doc)
+    assert [name for name, _uids in splits] == ["Background", "ink"]
+    assert [uids for _name, uids in splits] == [
+        (doc.anim.tracks[0].uid,),
+        (doc.anim.tracks[1].uid,),
+    ]
+
+
+def test_a_group_is_one_split_holding_every_layer_inside_it():
+    """A group is what the outline shows as one row, and its members composite
+    as a unit -- so it is one output, not one per leaf."""
+    doc = _tracked()
+    doc.add_layer("glow")
+    node = doc.group_layers([1, 2], name="fx")
+    assert node is not None
+    splits = sheetout.layer_splits(doc)
+    assert [name for name, _uids in splits] == ["Background", "fx"]
+    assert set(splits[1][1]) == {doc.anim.tracks[1].uid, doc.anim.tracks[2].uid}
+
+
+def test_a_hidden_row_is_not_a_split_of_its_own():
+    doc = _tracked()
+    doc.set_layer_props(1, visible=False)
+    assert [name for name, _uids in sheetout.layer_splits(doc)] == ["Background"]
+
+
+def test_a_hidden_group_is_not_a_split_of_its_own():
+    doc = _tracked()
+    node = doc.group_layers([1], name="fx")
+    assert node is not None
+    doc.set_group_props(node.uid, visible=False)
+    assert [name for name, _uids in sheetout.layer_splits(doc)] == ["Background"]
+
+
+def test_a_still_document_has_no_layer_splits():
+    assert sheetout.layer_splits(Document.blank(4, 4)) == []
+
+
+def test_a_tag_span_is_clamped_onto_the_frames_that_exist():
+    doc = _animated()
+    assert doc.add_tag("walk", 1, 99)
+    assert sheetout.tag_span(doc.anim, doc.anim.tags[0]) == (1, 2)

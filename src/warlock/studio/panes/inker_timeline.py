@@ -33,7 +33,7 @@ from typing import Any
 from imgui_bundle import imgui
 
 from .. import controls, icons, inker_mode, theme, toolbar, widgets
-from ..inker import animation
+from ..inker import animation, sheetout
 from ..manual import render as manual_render
 from ..tokens import sp
 
@@ -256,6 +256,11 @@ def _transport(ctx: Any, tab: Any) -> None:
         trailing=_frame_trailing(ctx, tab, index),
     )
 
+    # What the two split verbs would produce, read once for their enabled
+    # states: both are disabled rather than hidden when they have nothing to
+    # split, so the row does not change shape as tags come and go.
+    tags = anim.tags
+    splits = sheetout.layer_splits(tab.doc)
     toolbar.toolbar(
         "inker-timeline-out",
         [
@@ -278,6 +283,30 @@ def _transport(ctx: Any, tab: Any) -> None:
                 tooltip="Writes one numbered PNG per frame beside the name you "
                 "pick -- name_0000.png, name_0001.png and so on.",
                 enabled=not tab.busy,
+            ),
+            # Priority 1, so the row gives these up to the overflow menu before
+            # it gives up the three exports it exists for -- where they come
+            # back with their full labels rather than as two more glyphs.
+            toolbar.Item(
+                "per-tag", "Export sheet per tag", icons.FLAG,
+                tooltip="Writes one sheet per tag, each exactly what exporting "
+                "that tag on its own would write -- name_walk.png, "
+                "name_idle.png, each with its own sidecar.",
+                enabled=not tab.busy and bool(tags),
+                reason="This document has no tags to split by.",
+                priority=1,
+            ),
+            toolbar.Item(
+                "per-layer", "Export sheet per layer", icons.LAYERS,
+                tooltip="Writes one sheet per layer, or per group as the panel "
+                "shows it -- each holding only that layer's own pixels. Hidden "
+                "layers are left out.",
+                enabled=not tab.busy and len(splits) > 1,
+                reason=(
+                    "There is only one visible layer, so a split would write "
+                    "the sheet Export sheet already writes."
+                ),
+                priority=1,
             ),
         ],
         lambda key: _export_action(ctx, tab, key),
@@ -316,6 +345,10 @@ def _export_action(ctx: Any, tab: Any, key: str) -> None:
         inker_mode.export_gif(ctx, tab)
     elif key == "pngs":
         inker_mode.export_pngs(ctx, tab)
+    elif key == "per-tag":
+        inker_mode.export_per_tag(ctx, tab, "sheet")
+    elif key == "per-layer":
+        inker_mode.export_per_layer(ctx, tab, "sheet")
 
 
 def _frame_trailing(ctx: Any, tab: Any, index: int) -> tuple[float, Any]:

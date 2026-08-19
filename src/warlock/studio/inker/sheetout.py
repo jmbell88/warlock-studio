@@ -35,14 +35,17 @@ __all__ = [
     "build",
     "compose",
     "flatten_one",
+    "flatten_subset",
     "frame_uids",
     "from_document",
+    "layer_splits",
     "plan_frames",
     "rebase_tags",
     "scale_slices",
     "slices_block",
     "slices_snapshot",
     "snapshot",
+    "tag_span",
     "timing",
 ]
 
@@ -558,7 +561,7 @@ def slices_block(
 
 
 def snapshot(
-    doc: Any, span: tuple[int, int] | None = None
+    doc: Any, span: tuple[int, int] | None = None, *, track_uids: set[int] | None = None
 ) -> tuple[
     list[np.ndarray], list[int], list[Any], DirectionalLayout | None, list[dict[str, Any]]
 ]:
@@ -587,9 +590,17 @@ def snapshot(
     and an atlas is not a flattened export: it is composited over whatever is
     behind it in the game, so baking white in would put a white square around
     every cell of a sprite opened from a photo.
+
+    ``track_uids`` is the split-by-layer read: the same frames, composited from
+    part of the stack, through :func:`flatten_subset` -- which deliberately does
+    *not* touch the flatten cache. ``None`` is the whole stack and the call this
+    always was.
     """
     uids = frame_uids(doc, span)
-    frames = [flatten_one(doc, uid) for uid in uids]
+    if track_uids is None:
+        frames = [flatten_one(doc, uid) for uid in uids]
+    else:
+        frames = [flatten_subset(doc, uid, track_uids) for uid in uids]
     return (frames, *timing(doc, span), slices_snapshot(doc, span))
 
 
@@ -648,6 +659,97 @@ def flatten_one(doc: Any, uid: str) -> np.ndarray:
     if plane is None:
         raise ValueError("a frame could not be flattened")
     return plane
+
+
+def flatten_subset(doc: Any, uid: str, track_uids: Any) -> np.ndarray:
+    """One frame, composited from **part** of the stack. Frame thread only.
+
+    The unit of work a split-by-layer export spends per frame, and the one
+    deliberate difference from :func:`flatten_one` beside it: it composites
+    through ``Document.frame_stack`` directly rather than through
+    ``frame_flat``, so it **never enters the flatten cache**. That cache is
+    keyed on the frame uid and nothing else -- a subset stored under that key
+    would be handed straight back to the onion skin, to playback and to the next
+    whole-document export as if it were the whole frame.
+
+    Nor does it read the cache: an entry that happened to be there is the whole
+    frame, which is not what was asked for.
+
+    A subset naming no live track raises rather than returning an empty plane
+    (``LayerStack`` refuses to be empty) -- a sheet of nothing is a file the
+    user has to go and check.
+    """
+    anim = getattr(doc, "anim", None)
+    if anim is None:
+        raise ValueError("this document is not animated")
+    try:
+        frame = anim.frames[anim.frame_index(uid)]
+    except (KeyError, IndexError):
+        raise ValueError("a frame could not be flattened") from None
+    return doc.frame_stack(frame, track_uids=set(track_uids)).flatten()
+
+
+def tag_span(anim: Any, tag: Any) -> tuple[int, int]:
+    """A tag's ``(start, end)`` clamped onto the frames that exist.
+
+    One spelling, because a tag exported on its own and the same tag exported as
+    one of a batch must cover the same frames -- and a tag whose end outran the
+    timeline (a delete leaves one behind) would otherwise clamp in one path and
+    not in the other.
+    """
+    last = len(anim.frames) - 1
+    return (
+        max(0, min(int(tag.start), last)),
+        max(0, min(int(tag.end), last)),
+    )
+
+
+def layer_splits(doc: Any) -> list[tuple[str, tuple[int, ...]]]:
+    """``(name, track uids)`` per output of a split-by-layer export, bottom-first.
+
+    **One output per top-level row, not per track**, and that is the whole
+    decision here. A group is what the layers panel shows as a single row, its
+    leaves are contiguous in stack order by invariant, and its members carry the
+    group's folded visibility and opacity -- so "the fx folder" is a thing a
+    user can point at and a thing this can composite, where "layer 3 of the fx
+    folder" is neither. It also keeps :func:`flatten_subset` inside the one case
+    the pass-through fold is exactly right for: a subset never cuts a group in
+    half, so it never has to answer what half a group composites like.
+
+    Hidden rows are left out entirely rather than exported as empty sheets: a
+    hidden layer contributes no pixels to any export, and a file full of nothing
+    named after it is worse than no file.
+
+    A still document has no splits at all -- there are no tracks to split.
+    """
+    anim = getattr(doc, "anim", None)
+    if anim is None or not anim.frames:
+        return []
+    from . import groups as gp
+
+    group_of = getattr(doc, "group_of", {}) or {}
+    nodes = getattr(doc, "groups", {}) or {}
+    out: list[tuple[str, tuple[int, ...]]] = []
+    seen: set[int] = set()
+    order = [track.uid for track in anim.tracks]
+    for track in anim.tracks:
+        chain = gp.ancestry(group_of, track.uid)
+        root = chain[-1] if chain else track.uid
+        if root in seen:
+            continue
+        seen.add(root)
+        if root == track.uid:
+            if not track.visible or track.opacity <= 0.0:
+                continue
+            out.append((track.name, (track.uid,)))
+            continue
+        node = nodes.get(root)
+        if node is None or not node.visible or node.opacity <= 0.0:
+            continue
+        leaves = tuple(gp.leaves_of(group_of, order, root))
+        if leaves:
+            out.append((node.name, leaves))
+    return out
 
 
 def index_plane_one(doc: Any, uid: str) -> np.ndarray | None:
