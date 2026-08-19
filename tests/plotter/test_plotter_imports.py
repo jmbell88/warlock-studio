@@ -47,6 +47,9 @@ OUTWARD_IMPORTS = {
     ("terrain.py", "warlock.studio.tilegrid.tileset"),
     ("tilemap.py", "warlock.studio.tilegrid.tileset"),
     ("tilemap.py", "warlock.studio.undo"),
+    # The four-connected flood kernel, with the frontier dilation beside it as
+    # the reference and the fallback.
+    ("tools.py", "warlock.native"),
     ("tmx.py", "warlock.studio.tilegrid"),
     ("tmx.py", "warlock.studio.tilegrid.tileset"),
     ("tools.py", "warlock.studio.tilegrid"),

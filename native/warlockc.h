@@ -46,7 +46,7 @@ extern "C" {
  * routinely carries a stale locally-built DLL next to newer sources -- without
  * this guard that DLL would silently compute the old behaviour, which is the
  * one failure mode a fallback path must never have. */
-#define WARLOCKC_ABI 8
+#define WARLOCKC_ABI 9
 
 WARLOCKC_API int32_t warlockc_abi(void);
 
@@ -289,6 +289,57 @@ WARLOCKC_API void warlockc_dither_fs(float *work, int64_t work_stride,
                                      int64_t visible_stride,
                                      const float *entries, int64_t n_entries,
                                      int64_t h, int64_t w);
+
+/* Nearest palette entry per query colour, exact integer squared-Euclidean RGB.
+ *
+ * Three call sites each built an n by p by 3 int32 temporary to find one
+ * argmin: indexed.snap's distinct-colours reduction, the nearest search inside
+ * index_plane.resolve, and *both* searches in dither._ordered. On a
+ * high-entropy image the distinct-colour count is tens of thousands and the
+ * palette is tens, so the temporary is the whole cost -- allocated, written and
+ * thrown away to read one index per row.
+ *
+ * Queries are **int32, not uint8**, and that is a correctness requirement
+ * rather than a convenience. _ordered's second search is over the reflection
+ * `2c - p1`, which spans -255..510 by construction; a uint8 signature would
+ * silently clamp exactly the search that exists to find an entry on the far
+ * side, and would pass every test that only fed in-gamut colours.
+ *
+ * Ties go to the **lowest palette index** -- numpy argmin's first-minimum rule,
+ * which is what makes duplicate palette entries behave the same either way. The
+ * arithmetic is integer throughout, so bit-parity is reachable without any care
+ * about rounding and no SIMD is wanted: the parity bar forbids reassociation
+ * anyway and the scalar loop is already memory-bound on the palette.
+ *
+ * `queries` is n by 3 int32, contiguous; `palette` is p by 3 int32, contiguous;
+ * `out` is n int32. p >= 1 and n >= 0 are the caller's guarantees. */
+WARLOCKC_API void warlockc_palette_nearest_i32(const int32_t *queries,
+                                               const int32_t *palette,
+                                               int32_t *out, int64_t n,
+                                               int64_t n_palette);
+
+/* Four-connected flood from one seed, bounded by a match mask.
+ *
+ * The Python reference (plotter/tools.flood_mask) is *not* a per-cell queue --
+ * the deque was replaced by frontier dilation long ago -- so its cost is not
+ * per-cell dispatch but the number of dilation passes, which is the path
+ * distance to the furthest reachable cell. On an open room that is small; on a
+ * serpentine corridor it approaches the cell count, and the work goes
+ * quadratic. This restores O(cells) with a real queue.
+ *
+ * `match` is h by w uint8: nonzero means "this cell may be entered". `out` is h
+ * by w uint8, written 1 for reached and 0 elsewhere; the caller need not clear
+ * it. `scratch` is h*w int32 of caller-owned queue storage. Four-connected,
+ * bounded by the array -- nothing wraps. A seed outside the array or on a
+ * non-matching cell reaches nothing, which is the reference's own behaviour.
+ *
+ * The parity bar is the exact reached set, which is byte-identical to the
+ * dilation result by construction: both compute the four-connected transitive
+ * closure of the seed within `match`, and that set is unique. */
+WARLOCKC_API void warlockc_flood_u8(const uint8_t *match, int64_t match_stride,
+                                    uint8_t *out, int64_t out_stride,
+                                    int32_t *scratch, int64_t h, int64_t w,
+                                    int64_t seed_x, int64_t seed_y);
 
 #ifdef __cplusplus
 }

@@ -499,13 +499,79 @@ def render_layout(mesh: Mesh) -> RenderLayout:
     )
 
 
+def face_of_every_corner(layout: RenderLayout) -> np.ndarray:
+    """Which face each corner belongs to, for every corner.
+
+    ``layout.face_of_corner`` carries this only on the per-corner (UV) path, so
+    it is derived from ``starts_head`` here rather than stored twice -- the runs
+    between consecutive starts *are* the faces, by construction.
+    """
+    counts = np.diff(np.append(layout.starts_head, len(layout.loops)))
+    return np.repeat(np.arange(len(layout.starts_head), dtype="i8"), counts)
+
+
+def _newell_some(
+    positions: np.ndarray,
+    layout: RenderLayout,
+    previous: np.ndarray,
+    moved: np.ndarray,
+) -> np.ndarray:
+    """``previous`` with the moved vertices' faces recomputed, and nothing else.
+
+    **Bit-identical to a full :func:`_newell` pass, not merely close**, and the
+    unit of reuse is why: a face's raw normal is the reduction over that face's
+    own corners and nothing outside it, so a face no moved vertex touches has an
+    identical input and therefore an identical output. Reusing a *vertex*
+    accumulation would not have this property -- floating-point addition is not
+    associative, so subtracting an old contribution and adding a new one lands
+    somewhere a fresh sum does not -- which is why the accumulation above is
+    still recomputed whole from this array. ``preview_primitives`` promises
+    byte-identity with ``to_primitives`` and that promise is kept exactly.
+    """
+    touched = np.zeros(layout.n_verts, dtype=bool)
+    touched[moved] = True
+    corners = touched[layout.loops]
+    if not corners.any():
+        return previous
+    faces = np.unique(face_of_every_corner(layout)[corners])
+    wanted = np.isin(face_of_every_corner(layout), faces)
+    picked = np.flatnonzero(wanted)
+    # Re-based starts for the gathered corner run: the *first* corner of each
+    # face within the subset. Each face's slice holds the same values in the
+    # same order it does in the full array, so each reduction is the same sum.
+    counts = np.diff(np.append(layout.starts_head, len(layout.loops)))[faces]
+    starts = np.concatenate(([0], np.cumsum(counts)[:-1])).astype("i8")
+    raw = previous.copy()
+    raw[faces] = _newell(
+        positions, layout.loops[picked], layout.loops_next[picked], starts
+    )
+    return raw
+
+
 def render_from_layout(
-    layout: RenderLayout, positions: np.ndarray
+    layout: RenderLayout,
+    positions: np.ndarray,
+    *,
+    moved: np.ndarray | None = None,
+    previous: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray]:
     """:func:`render_arrays`' vertex half, over *positions* and a cached layout.
 
     ``positions`` must be the ``(V, 3)`` array of the mesh the layout was built
     from, with the same length -- moved, not re-indexed.
+
+    ``moved`` and ``previous`` together are the drag optimisation: the vertex
+    indices this call moved, and the raw face normals the last call produced.
+    Given both, only the faces those vertices touch are recomputed -- which on a
+    200k-triangle import dragging a handful of vertices is the difference
+    between the whole mesh and a dozen faces. Given either alone, or neither,
+    every face is recomputed; a caller that is unsure which vertices moved must
+    pass nothing, because a ``moved`` that is missing a vertex leaves that
+    vertex's faces holding last frame's normals with nothing to say so.
+
+    The raw face normals are returned through ``previous``' own array shape, so
+    a caller keeping the optimisation alive holds onto what it got back --
+    see :func:`raw_face_normals` for reading it out.
     """
     if layout.n_faces == 0:
         return (
@@ -515,7 +581,10 @@ def render_from_layout(
             np.zeros(0, dtype="u4"),
         )
 
-    raw = _newell(positions, layout.loops, layout.loops_next, layout.starts_head)
+    if previous is not None and moved is not None and len(previous) == layout.n_faces:
+        raw = _newell_some(positions, layout, previous, np.asarray(moved, dtype="i8"))
+    else:
+        raw = _newell(positions, layout.loops, layout.loops_next, layout.starts_head)
     unit = _normalize(raw)
     accum = _accumulate(layout.smooth_loops, raw[layout.foc_smooth], layout.n_verts)
 
@@ -525,6 +594,7 @@ def render_from_layout(
         assert layout.face_of_corner is not None
         normals = unit[layout.face_of_corner]
         normals[layout.smooth_corner] = _normalize(accum[layout.smooth_loops])
+        _stash(layout, raw)
         return (
             positions[layout.loops].astype("f4"),
             normals.astype("f4"),
@@ -540,7 +610,46 @@ def render_from_layout(
     out_normals = np.concatenate(
         [_normalize(accum[layout.used]), unit[layout.foc_flat]]
     ).astype("f4")
+    _stash(layout, raw)
     return out_positions, out_normals, None, layout.indices
+
+
+#: The last raw face normals each layout produced, so a drag's next frame can
+#: reuse the faces it did not touch.
+#:
+#: Keyed by the layout's own ``id`` and holding a **weak** reference to nothing
+#: -- the value is the array and the key is checked against a stored identity,
+#: so a recycled id cannot serve another layout's normals: the entry records the
+#: layout object itself and is only read back when that same object is passed
+#: in. The layout is rebuilt whenever the mesh changes (it is a pure function of
+#: an immutable ``Mesh``), which is what makes "same layout object" the correct
+#: revision stamp here rather than any array's identity.
+_RAW_CACHE: dict[int, tuple[RenderLayout, np.ndarray]] = {}
+
+
+def _stash(layout: RenderLayout, raw: np.ndarray) -> None:
+    # One entry, not a growing table: a drag touches one layout at a time per
+    # material group, and an unbounded cache of face-normal arrays over a
+    # session of imports is megabytes nobody asked for. Bounded by clearing when
+    # it grows past a handful.
+    if len(_RAW_CACHE) > 8:
+        _RAW_CACHE.clear()
+    _RAW_CACHE[id(layout)] = (layout, raw)
+
+
+def raw_face_normals(layout: RenderLayout) -> np.ndarray | None:
+    """The raw face normals the last :func:`render_from_layout` on this exact
+    layout produced, or ``None``.
+
+    The identity check is against the *layout object*, never against an array's
+    ``id``: a layout is a pure function of an immutable ``Mesh``, so the same
+    object means the same topology, where a recycled array id would mean
+    nothing at all.
+    """
+    found = _RAW_CACHE.get(id(layout))
+    if found is None or found[0] is not layout:
+        return None
+    return found[1]
 
 
 # --- transforms and measurement ---------------------------------------------

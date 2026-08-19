@@ -86,6 +86,10 @@ OUTWARD_IMPORTS = {
     ("aseout.py", "warlock.studio.tilegrid"),
     ("composite.py", "warlock.native"),
     ("dither.py", "warlock.native"),
+    # The shared nearest-palette search: one definition for ``snap``,
+    # ``resolve`` and both of ``_ordered``'s searches, with the numpy fallback
+    # beside it as the kernel's reference.
+    ("index_plane.py", "warlock.native"),
     ("ora.py", "warlock.studio.tilegrid"),
     ("ora.py", "warlock.studio.tilegrid.tileset"),
     ("selection.py", "warlock.native"),

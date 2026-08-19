@@ -355,16 +355,15 @@ def _inset_region(
 # neighbour search finds every pair within ``eps`` of each other, while the
 # grid finds only pairs that quantise into the same cell and therefore misses
 # two vertices a nanometre apart across a cell boundary. On a selection the
-# user made by hand the search costs nothing; on a whole imported mesh it is
-# minutes of Python, and a weld that never returns is worse than a weld that
-# misses the occasional straddling pair.
+# user made by hand the exact search costs nothing; on a whole imported mesh even
+# the SciPy pair query and its connected-components pass are more than the
+# answer is worth, and a weld that takes a visible pause is worse than a weld
+# that misses the occasional straddling pair.
+#
+# The limit predates the SciPy rewrite, which moved the exact arm from minutes
+# of Python to seconds of C -- so it is now a conservative bound rather than a
+# necessary one, and re-measuring it is a reasonable future exercise.
 WELD_SEARCH_LIMIT = 20_000
-
-_NEIGHBOURHOOD = np.array(
-    [(i, j, k) for i in (-1, 0, 1) for j in (-1, 0, 1) for k in (-1, 0, 1)],
-    dtype="i8",
-)
-
 
 def merge_vertices(mesh: Mesh, remap: np.ndarray, positions: np.ndarray) -> Mesh:
     """Rewrite a mesh with vertices identified, and clean up what that breaks.
@@ -432,30 +431,33 @@ def _clusters(points: np.ndarray, eps: float) -> np.ndarray:
     if len(points) > WELD_SEARCH_LIMIT:
         return np.unique(cells, axis=0, return_inverse=True)[1].reshape(-1)
 
-    index: dict[tuple[int, int, int], list[int]] = {}
-    for i, cell in enumerate(map(tuple, cells.tolist())):
-        index.setdefault(cell, []).append(i)
+    # A Python dict spatial hash plus a hand-rolled union-find was the whole of
+    # this, and every part of it -- the 27-cell neighbourhood walk, the pair
+    # test, the path-compressing ``find`` -- ran in Python per vertex. SciPy is
+    # already a **main** dependency, so this invents nothing: ``query_pairs``
+    # is the same "everything within eps" question asked of a KD-tree in C, and
+    # ``connected_components`` is the same union-find in C. The above-limit
+    # cell-grouping arm is untouched, because it answers a different (and
+    # cheaper, and deliberately approximate) question.
+    #
+    # The labels themselves are not the same *numbers* the union-find produced
+    # and nothing depended on them being: ``weld`` puts each cluster's
+    # representative at the centroid precisely so the answer cannot depend on
+    # vertex order, and the tests assert the geometry rather than the labelling.
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    from scipy.spatial import cKDTree
 
-    parent = list(range(len(points)))
-
-    def find(x: int) -> int:
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    eps2 = eps * eps
-    for i in range(len(points)):
-        for offset in _NEIGHBOURHOOD:
-            for j in index.get(tuple((cells[i] + offset).tolist()), ()):
-                if j <= i:
-                    continue
-                if float(((points[i] - points[j]) ** 2).sum()) <= eps2:
-                    ri, rj = find(i), find(j)
-                    if ri != rj:
-                        parent[ri] = rj
-    roots = np.array([find(i) for i in range(len(points))], dtype="i8")
-    return np.unique(roots, return_inverse=True)[1].reshape(-1)
+    pairs = cKDTree(points).query_pairs(eps, output_type="ndarray")
+    count = len(points)
+    if not len(pairs):
+        return np.arange(count, dtype="i8")
+    graph = coo_matrix(
+        (np.ones(len(pairs), dtype=np.int8), (pairs[:, 0], pairs[:, 1])),
+        shape=(count, count),
+    )
+    _n, labels = connected_components(graph, directed=False)
+    return np.unique(labels, return_inverse=True)[1].reshape(-1).astype("i8")
 
 
 def weld(mesh: Mesh, sel: ElementSel, *, eps: float = 1e-4) -> tuple[Mesh, ElementSel]:

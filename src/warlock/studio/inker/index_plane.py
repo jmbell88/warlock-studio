@@ -38,6 +38,8 @@ from collections.abc import Sequence
 
 import numpy as np
 
+from ... import native
+
 __all__ = [
     "MAX_COLOURS",
     "OPAQUE_THRESHOLD",
@@ -125,6 +127,38 @@ def materialize(indices: np.ndarray, table: np.ndarray) -> np.ndarray:
     return np.ascontiguousarray(table[safe])
 
 
+def nearest_entries(queries: np.ndarray, entries: np.ndarray) -> np.ndarray:
+    """For each row of *queries*, the index of the nearest row of *entries*.
+
+    Exact integer squared-Euclidean RGB, lowest index winning a tie -- numpy
+    ``argmin``'s first-minimum rule, which is what makes duplicate palette
+    entries behave identically wherever this is called.
+
+    One definition, three callers: :func:`resolve` below, ``indexed.snap`` and
+    **both** searches in ``dither._ordered``. They each built an ``(n, p, 3)``
+    int32 temporary to read one index per row, which on a high-entropy image is
+    the whole cost -- allocated, written and thrown away.
+
+    ``queries`` is ``(n, 3)`` and must be **int32, not uint8**: ``_ordered``'s
+    second search is over the reflection ``2c - p1``, which spans -255..510, and
+    a uint8 path would silently clamp exactly the search that exists to look at
+    the far side. The numpy fallback below is the reference the kernel is held
+    against bit for bit, and it is never deleted.
+    """
+    query = np.ascontiguousarray(queries, dtype=np.int32)
+    table = np.ascontiguousarray(entries, dtype=np.int32)
+    if query.ndim != 2 or query.shape[1] != 3:
+        raise ValueError("queries are (n, 3)")
+    if table.ndim != 2 or table.shape[1] != 3 or not table.shape[0]:
+        raise ValueError("a palette is (p, 3) with at least one entry")
+    if query.shape[0] and native.available():
+        out = np.empty(query.shape[0], dtype=np.int32)
+        native.palette_nearest(query, table, out)
+        return out.astype(np.intp)
+    delta = query[:, None, :] - table[None, :, :]
+    return np.argmin((delta * delta).sum(axis=2), axis=1)
+
+
 def resolve(
     pixels: np.ndarray,
     table: np.ndarray,
@@ -200,8 +234,7 @@ def resolve(
     colours = np.stack([(keys >> 16) & 0xFF, (keys >> 8) & 0xFF, keys & 0xFF], axis=1).astype(
         np.int32
     )
-    delta = colours[:, None, :] - entries[None, :, :]
-    picks = candidates[np.argmin((delta * delta).sum(axis=2), axis=1)]
+    picks = candidates[nearest_entries(colours, entries)]
 
     if prefer is not None:
         colour, slot = prefer

@@ -465,16 +465,15 @@ def _ordered(out: np.ndarray, table: np.ndarray, matrix: np.ndarray) -> np.ndarr
     ).astype(np.int32)
 
     entries = table.astype(np.int32)
-    first = np.argmin(
-        ((colours[:, None, :] - entries[None, :, :]) ** 2).sum(axis=2), axis=1
-    )
+    first = ixp.nearest_entries(colours, entries)
     low = entries[first]
     # The reflection, clamped into the cube: an unclamped one pulls the search
-    # towards a corner nothing is near and picks the same entry back.
+    # towards a corner nothing is near and picks the same entry back. The clamp
+    # is what keeps this in gamut -- but the *signature* the search goes through
+    # is int32 either way, because an unclamped reflection spans -255..510 and a
+    # uint8 path would silently clamp it back to the entry it started from.
     mirrored = np.clip(2 * colours - low, 0, 255)
-    second = np.argmin(
-        ((mirrored[:, None, :] - entries[None, :, :]) ** 2).sum(axis=2), axis=1
-    )
+    second = ixp.nearest_entries(mirrored, entries)
     high = entries[second]
 
     span = (high - low).astype(np.float64)

@@ -19,6 +19,7 @@ from typing import Any
 
 import numpy as np
 
+from ... import native
 from ..tilegrid import gid as gidlib
 
 Region = tuple[int, int, np.ndarray]
@@ -46,11 +47,26 @@ def flood_mask(match: np.ndarray, x: int, y: int) -> np.ndarray:
 
     Shared by :func:`flood_fill` and :func:`terrain.fill_terrain`, which were a
     verbatim copy of one another differing only in what they compared.
+
+    **The dilation is not free of its own pathology, which is why there is a
+    kernel.** The pass count is the path distance, so a serpentine corridor --
+    where the distance approaches the cell count -- makes the work quadratic in
+    exactly the case the queue handled linearly. ``warlockc_flood_u8`` is a real
+    queue and gets both cases right; the dilation below stays as the reference
+    and the fallback, and the two agree by construction rather than by
+    transcription: both compute the four-connected transitive closure of the
+    seed within ``match``, and that set is unique.
     """
     height, width = match.shape
     seen = np.zeros((height, width), dtype=bool)
     if not (0 <= x < width and 0 <= y < height) or not match[y, x]:
         return seen
+    if native.available() and height * width:
+        wanted = np.ascontiguousarray(match, dtype=np.uint8)
+        out = np.empty((height, width), dtype=np.uint8)
+        scratch = np.empty(height * width, dtype=np.int32)
+        native.flood(wanted, out, scratch, (int(x), int(y)))
+        return out.astype(bool)
     seen[y, x] = True
     while True:
         grown = np.zeros_like(seen)

@@ -59,12 +59,17 @@ class PickOps:
             if not obj.visible:
                 continue
             tris, tri_face = cached_triangulation(obj.mesh)
+            positions = cached_positions_f8(obj.mesh)
             hit = picking.ray_object(
                 origin,
                 direction,
                 self._world(obj),
-                cached_positions_f8(obj.mesh),
+                positions,
                 tris,
+                # Positions and tree both come from the same frozen mesh, so
+                # they cannot disagree about the geometry -- which is the whole
+                # precondition the narrowed sweep rests on.
+                bvh=picking.cached_bvh(obj.mesh, positions, tris),
             )
             if hit is not None and (best is None or hit[0] < best.t):
                 face = int(tri_face[hit[1]]) if len(tri_face) else -1

@@ -46,7 +46,7 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 # Must match WARLOCKC_ABI in native/warlockc.h.
-ABI = 8
+ABI = 9
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_DLL = _PROJECT_ROOT / "vendor" / "warlockc" / "warlockc.dll"
@@ -153,6 +153,22 @@ def _bind(lib: ctypes.CDLL) -> None:
         u8, i64,  # visible, (h, w) uint8, row stride in bytes
         f, i64,  # entries, (n, 3) float32
         i64, i64,  # h, w
+    ]
+
+    lib.warlockc_palette_nearest_i32.restype = None
+    lib.warlockc_palette_nearest_i32.argtypes = [
+        i32, i32,  # queries (n, 3) int32; palette (p, 3) int32
+        i32,  # out, n int32
+        i64, i64,  # n, p
+    ]
+
+    lib.warlockc_flood_u8.restype = None
+    lib.warlockc_flood_u8.argtypes = [
+        u8, i64,  # match, (h, w) uint8, row stride in bytes
+        u8, i64,  # out, (h, w) uint8, row stride in bytes
+        i32,  # scratch, h*w int32 of queue storage
+        i64, i64,  # h, w
+        i64, i64,  # seed x, seed y
     ]
 
     lib.warlockc_contours.restype = i64
@@ -427,6 +443,57 @@ def morph_u8(src: Any, scratch: Any, out: Any, radius: int, op: int) -> None:
         ctypes.c_int64(width),
         ctypes.c_int64(radius),
         ctypes.c_int32(op),
+    )
+
+
+def palette_nearest(queries: Any, palette: Any, out: Any) -> None:
+    """Write into ``out`` the nearest ``palette`` row for each ``queries`` row.
+
+    ``queries`` is (n, 3) **int32** and ``palette`` (p, 3) int32, both
+    C-contiguous; ``out`` is (n,) int32. Int32 queries rather than uint8 is a
+    correctness requirement, not a convenience: ``dither._ordered``'s second
+    search is over the reflection ``2c - p1``, which spans -255..510, and a u8
+    signature would silently clamp exactly the search that exists to look at the
+    far side.
+
+    Ties go to the lowest palette index -- numpy ``argmin``'s first-minimum
+    rule, so duplicate entries behave identically through either path.
+    """
+    handle = lib()
+    if handle is None:  # pragma: no cover - callers check available() first
+        raise RuntimeError("warlockc is not loaded")
+    handle.warlockc_palette_nearest_i32(
+        _ptr(queries, ctypes.c_int32),
+        _ptr(palette, ctypes.c_int32),
+        _ptr(out, ctypes.c_int32),
+        ctypes.c_int64(queries.shape[0]),
+        ctypes.c_int64(palette.shape[0]),
+    )
+
+
+def flood(match: Any, out: Any, scratch: Any, seed: tuple[int, int]) -> None:
+    """Four-connected flood from ``seed`` through ``match``, writing ``out``.
+
+    ``match`` and ``out`` are (h, w) uint8 and C-contiguous; ``scratch`` is a
+    flat int32 array of at least ``h * w`` entries, which is exactly enough
+    because a cell is marked before it is pushed and so is pushed once.
+    ``out`` is cleared by the kernel. A seed outside the array or on a
+    non-matching cell reaches nothing.
+    """
+    handle = lib()
+    if handle is None:  # pragma: no cover - callers check available() first
+        raise RuntimeError("warlockc is not loaded")
+    height, width = match.shape
+    handle.warlockc_flood_u8(
+        _ptr(match, ctypes.c_uint8),
+        ctypes.c_int64(match.strides[0]),
+        _ptr(out, ctypes.c_uint8),
+        ctypes.c_int64(out.strides[0]),
+        _ptr(scratch, ctypes.c_int32),
+        ctypes.c_int64(height),
+        ctypes.c_int64(width),
+        ctypes.c_int64(int(seed[0])),
+        ctypes.c_int64(int(seed[1])),
     )
 
 

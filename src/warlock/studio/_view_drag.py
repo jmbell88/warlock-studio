@@ -590,7 +590,13 @@ class DragOps:
         obj = doc.by_uid(uid)
         drag = self._element_drags.get(uid)
         base = obj.mesh if drag is None else drag.before
-        prims = bd.preview_primitives(base, positions, doc.materials)
+        # ``drag.verts`` is exactly the set written into ``positions`` above,
+        # which is what makes the incremental normals safe; with no element drag
+        # in hand the mover is a gizmo over the whole object and there is no
+        # smaller set to name, so nothing is passed and every face is recomputed.
+        prims = bd.preview_primitives(
+            base, positions, doc.materials, moved=None if drag is None else drag.verts
+        )
         for (_node, gpu), primitive in zip(entry.gpu.draws, prims, strict=False):
             try:
                 gpu.update_vertices(primitive)

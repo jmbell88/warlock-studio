@@ -32,6 +32,8 @@ from collections.abc import Sequence
 
 import numpy as np
 
+from . import index_plane as ixp
+
 __all__ = [
     "SORT_KEYS",
     "grayscale",
@@ -121,8 +123,7 @@ def snap(pixels: np.ndarray, palette: Sequence[RGBA]) -> np.ndarray:
     colours = np.stack(
         [(keys >> 16) & 0xFF, (keys >> 8) & 0xFF, keys & 0xFF], axis=1
     ).astype(np.int16)
-    delta = colours[:, None, :].astype(np.int32) - table[None, :, :].astype(np.int32)
-    picks = np.argmin((delta * delta).sum(axis=2), axis=1)
+    picks = ixp.nearest_entries(colours, table)
     out[..., :3][visible] = table[picks][inverse].astype(np.uint8)
     return out
 

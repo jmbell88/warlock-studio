@@ -112,6 +112,13 @@ def _split(free: Rect, used: Rect) -> list[Rect] | None:
 
 
 def _contains(outer: Rect, inner: Rect) -> bool:
+    """Is *inner* wholly inside *outer*? The readable statement of the rule.
+
+    :func:`_prune` unpacks the bounds and inlines this rather than calling it
+    per pair -- four property reads per comparison over a few hundred
+    rectangles was measurable -- so this stays as the definition the tests
+    check the inlined form against.
+    """
     return (
         inner.x >= outer.x
         and inner.y >= outer.y
@@ -126,20 +133,43 @@ def _prune(free: list[Rect]) -> None:
     Without this the list grows without bound and, worse, the same space is
     offered several times over, so the tie-breaks above stop being a total
     order over *distinct* candidates.
+
+    **Marked and filtered rather than deleted in place, and the result is the
+    same list.** The pairwise walk is unavoidable -- this is a containment
+    relation, not an order -- but the old version's ``del free[i]`` inside it
+    was an O(n) memmove per removal, so a pack that split its free list into a
+    few hundred rectangles paid O(n**3) to prune them. The traversal order and
+    the survivor set are preserved exactly, including the case that decides it:
+    of two *identical* rectangles the earlier is the one dropped, because
+    ``_contains(free[j], free[i])`` fires first. A naive "drop anything another
+    rect contains" would drop both and change the pack.
+
+    The bounds are unpacked once per rectangle instead of through four property
+    reads per comparison, which is the rest of the win and changes nothing.
     """
-    i = 0
-    while i < len(free):
-        j = i + 1
-        while j < len(free):
-            if _contains(free[j], free[i]):
-                del free[i]
-                i -= 1
+    count = len(free)
+    if count < 2:
+        return
+    bounds = [(r.x, r.y, r.x + r.w, r.y + r.h) for r in free]
+    dead = [False] * count
+    dropped = False
+    for i in range(count):
+        if dead[i]:
+            continue
+        ix, iy, ir, ib = bounds[i]
+        for j in range(i + 1, count):
+            if dead[j]:
+                continue
+            jx, jy, jr, jb = bounds[j]
+            if jx <= ix and jy <= iy and jr >= ir and jb >= ib:
+                dead[i] = True
+                dropped = True
                 break
-            if _contains(free[i], free[j]):
-                del free[j]
-            else:
-                j += 1
-        i += 1
+            if ix <= jx and iy <= jy and ir >= jr and ib >= jb:
+                dead[j] = True
+                dropped = True
+    if dropped:
+        free[:] = [rect for rect, gone in zip(free, dead, strict=True) if not gone]
 
 
 def pack(items: list[tuple[str, int, int]], width: int, height: int) -> list[Placement] | None:

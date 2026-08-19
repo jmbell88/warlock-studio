@@ -795,7 +795,11 @@ def render_plan(mesh: bm.Mesh) -> list[tuple[int, bm.RenderLayout]]:
 
 
 def preview_primitives(
-    mesh: bm.Mesh, positions: np.ndarray, materials: Sequence[gltf.Material]
+    mesh: bm.Mesh,
+    positions: np.ndarray,
+    materials: Sequence[gltf.Material],
+    *,
+    moved: np.ndarray | None = None,
 ) -> list[gltf.Primitive]:
     """:func:`to_primitives` for *mesh* with its vertices moved to *positions*.
 
@@ -804,6 +808,14 @@ def preview_primitives(
     ``positions`` must be the same length as ``mesh.positions`` -- a topology
     change is not a drag, and the layout would be answering about the wrong
     mesh.
+
+    ``moved`` names the vertex indices this call changed, and is the *only*
+    thing that makes the normals incremental: given it, a face no moved vertex
+    touches reuses last frame's raw normal, which is bit-identical because a
+    face's normal is the reduction over that face's own corners and nothing
+    else. A caller that is not certain which vertices moved must pass nothing
+    -- a ``moved`` missing a vertex leaves its faces holding stale normals with
+    nothing anywhere to say so.
 
     Output is byte-identical to ``to_primitives`` on the moved mesh **except
     for the index buffer**, which is the layout's -- the triangulation the
@@ -814,7 +826,12 @@ def preview_primitives(
         return []
     prims = []
     for index, layout in render_plan(mesh):
-        emitted, normals, uvs, indices = bm.render_from_layout(layout, positions)
+        emitted, normals, uvs, indices = bm.render_from_layout(
+            layout,
+            positions,
+            moved=moved,
+            previous=None if moved is None else bm.raw_face_normals(layout),
+        )
         prims.append(
             gltf.Primitive(
                 positions=emitted,
