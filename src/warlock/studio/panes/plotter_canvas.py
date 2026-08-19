@@ -1186,6 +1186,18 @@ def _events(ctx: Any, state: Any, tab: Any, origin, hovered: bool, region) -> No
         _select_input(state, tab, cell, hovered)
         return
 
+    if state.tool == "wand":
+        _wand_input(state, tab, cell, hovered)
+        return
+
+    if state.tool == "pick":
+        # Pick's own gesture, because a *drag* means something different from a
+        # click here: press-and-drag captures the marquee as a brush (Tiled's
+        # capture), and a plain click stays today's single-cell pick byte for
+        # byte -- ``_apply`` still runs it, from the release branch below.
+        _pick_input(ctx, state, tab, cell, hovered)
+        return
+
     if hovered and imgui.is_mouse_clicked(0):
         # The drag *kind* stays "rect" whatever the shape tool is filling: the
         # gesture is a corner-to-corner drag either way, and only what lands at
@@ -1275,6 +1287,136 @@ def _normalized(a: tuple[int, int], b: tuple[int, int]) -> tuple[int, int, int, 
     return lo_x, lo_y, hi_x, hi_y
 
 
+def _pick_input(
+    ctx: Any, state: Any, tab: Any, cell: tuple[int, int], hovered: bool
+) -> None:
+    """Pick: a click is one cell, a drag captures a block off the map.
+
+    Tiled's capture. The marquee rectangle is reused for the feedback, so the
+    gesture looks exactly like a selection while it is happening and the brush
+    cursor takes over the moment it ends -- which is the paste precedent
+    (``plotter_mode``'s paste loads the brush and switches to Stamp rather than
+    dropping a block).
+
+    A plain click -- press and release inside one cell -- is today's single-cell
+    pick, byte for byte, and goes through :func:`_apply` exactly as it did.
+    """
+    from imgui_bundle import imgui
+
+    if hovered and imgui.is_mouse_clicked(0):
+        state.drag_kind = "capture"
+        state.drag_anchor = cell
+        return
+    if state.drag_kind != "capture":
+        return
+    if imgui.is_mouse_down(0) and state.drag_anchor is not None:
+        # Drawn with the marquee, so there is one rectangle-feedback path.
+        state.set_selection(_normalized(state.drag_anchor, cell))
+        return
+    if not imgui.is_mouse_released(0):
+        return
+    anchor = state.drag_anchor
+    state.set_selection(None)
+    state.clear_drag()
+    if anchor is None:
+        return
+    if anchor == cell:
+        _apply(ctx, state, tab, cell)
+        return
+    layer = tab.doc.active()
+    if not isinstance(layer, TileLayer):
+        return
+    block = plotter_tools.capture(layer.data, anchor[0], anchor[1], cell[0], cell[1])
+    if block is None:
+        # An all-empty capture would arm a brush that erases everything it
+        # touches while claiming to be a stamp.
+        ctx.toast("There is nothing to capture there.", "warn")
+        return
+    state.brush = block
+    state.tool = "stamp"
+    ctx.toast(f"Captured a {block.shape[1]} x {block.shape[0]} stamp.")
+
+
+def _before_drag(state: Any):
+    found = getattr(state, "select_before", None)
+    return None if found is None else found[0]
+
+
+def _mask_before_drag(state: Any):
+    found = getattr(state, "select_before", None)
+    return None if found is None else found[1]
+
+
+def _selection_algebra(state: Any, doc: Any, wanted, add: bool, subtract: bool) -> None:
+    """Store a new set of cells, combined with what is already selected.
+
+    ``wanted`` is a full-map bool array. Shift adds, Alt subtracts, neither
+    replaces -- the same three-way algebra on the wand and on the marquee, so
+    "hold Shift to add" is one thing to learn rather than two.
+
+    A result that is a solid rectangle is stored **as a rectangle** (mask
+    ``None``): that is what keeps an ordinary marquee at an ordinary cost, and
+    it means the mask only exists once the selection has actually stopped being
+    one.
+    """
+    import numpy as np
+
+    if add or subtract:
+        rect = state.selection_in(doc)
+        current = np.zeros((int(doc.height), int(doc.width)), dtype=bool)
+        if rect is not None:
+            existing = state.selection_mask_in(doc)
+            if existing is not None:
+                current |= existing
+            else:
+                x0, y0, x1, y1 = rect
+                current[y0 : y1 + 1, x0 : x1 + 1] = True
+        wanted = (current & ~wanted) if subtract else (current | wanted)
+    if not wanted.any():
+        state.set_selection(None)
+        return
+    ys, xs = np.nonzero(wanted)
+    x0, x1 = int(xs.min()), int(xs.max())
+    y0, y1 = int(ys.min()), int(ys.max())
+    solid = bool(wanted[y0 : y1 + 1, x0 : x1 + 1].all())
+    state.set_selection((x0, y0, x1, y1), None if solid else wanted)
+
+
+def _wand_input(state: Any, tab: Any, cell: tuple[int, int], hovered: bool) -> None:
+    """Click selects the contiguous run of one gid; Ctrl+click every cell of it.
+
+    The contiguous half goes through the *same* ``flood_mask`` the fill does --
+    one helper, three callers, and the C kernel behind it serves all of them. The
+    Ctrl half is Tiled's Select Same Tile, folded in here because ``S`` is taken
+    by Objects.
+
+    Nothing is written to the document, so none of this is guarded by
+    ``tab.busy``; the selection is view state exactly as the marquee is.
+    """
+    import numpy as np
+    from imgui_bundle import imgui
+
+    if not (hovered and imgui.is_mouse_clicked(0)):
+        return
+    layer = tab.doc.active()
+    if not isinstance(layer, TileLayer):
+        return
+    data = np.asarray(layer.data)
+    height, width = data.shape
+    x, y = int(cell[0]), int(cell[1])
+    if not (0 <= x < width and 0 <= y < height):
+        return
+    same = data == data[y, x]
+    wanted = same if imgui.get_io().key_ctrl else plotter_tools.flood_mask(same, x, y)
+    _selection_algebra(
+        state,
+        tab.doc,
+        np.asarray(wanted, dtype=bool),
+        imgui.get_io().key_shift,
+        imgui.get_io().key_alt,
+    )
+
+
 def _select_input(state: Any, tab: Any, cell: tuple[int, int], hovered: bool) -> None:
     """The marquee gesture: press anchors, drag resizes, a plain click clears.
 
@@ -1288,16 +1430,40 @@ def _select_input(state: Any, tab: Any, cell: tuple[int, int], hovered: bool) ->
     if hovered and imgui.is_mouse_clicked(0):
         state.drag_kind = "select"
         state.drag_anchor = cell
-        state.select = _normalized(cell, cell)
+        # Remembered so a Shift/Alt drag can combine with what was selected
+        # before it started rather than with the rectangle it is drawing.
+        state.select_before = (state.select, state.select_mask)
+        state.set_selection(_normalized(cell, cell))
     elif state.drag_kind == "select" and imgui.is_mouse_down(0):
         if state.drag_anchor is not None:
-            state.select = _normalized(state.drag_anchor, cell)
+            state.set_selection(_normalized(state.drag_anchor, cell))
     elif state.drag_kind == "select" and imgui.is_mouse_released(0):
         # A press and release inside one cell is a click, not a one-cell
         # selection: the marquee is already that rect, so compare rather than
         # tracking whether the pointer moved.
-        if state.select == _normalized(cell, cell):
-            state.select = None
+        if state.select == _normalized(cell, cell) and not (
+            imgui.get_io().key_shift or imgui.get_io().key_alt
+        ):
+            state.set_selection(None)
+        elif state.drag_anchor is not None and (
+            imgui.get_io().key_shift or imgui.get_io().key_alt
+        ):
+            # The same algebra the wand uses, so "hold Shift to add" is one
+            # thing to learn. Applied at release rather than during the drag,
+            # because the rectangle is still being sized until then.
+            import numpy as np
+
+            wanted = np.zeros((int(tab.doc.height), int(tab.doc.width)), dtype=bool)
+            x0, y0, x1, y1 = _normalized(state.drag_anchor, cell)
+            x0, y0 = max(0, x0), max(0, y0)
+            x1 = min(int(tab.doc.width) - 1, x1)
+            y1 = min(int(tab.doc.height) - 1, y1)
+            if x1 >= x0 and y1 >= y0:
+                wanted[y0 : y1 + 1, x0 : x1 + 1] = True
+            state.set_selection(_before_drag(state), _mask_before_drag(state))
+            _selection_algebra(
+                state, tab.doc, wanted, imgui.get_io().key_shift, imgui.get_io().key_alt
+            )
         state.clear_drag()
 
 
@@ -1365,6 +1531,16 @@ def _terrain_cell_ref(doc: Any, data: Any, cell: tuple[int, int]):
     return None
 
 
+def _fill_rng(state: Any):
+    """The generator a fill scatters with, or ``None`` for a pattern/plain fill.
+
+    Random mode applied to Fill and Shape as it already was to Stamp, per landed
+    cell, by ``random_stamp``'s own choice rule. ``None`` off, so the ordinary
+    fill is byte-identical to what it was.
+    """
+    return plotter_tools.fill_rng() if state.random_mode else None
+
+
 def _constrained(state: Any, doc: Any, result):
     """A tool's region cut down to the marquee, if there is one.
 
@@ -1379,7 +1555,14 @@ def _constrained(state: Any, doc: Any, result):
     rect = state.selection_in(doc)
     if rect is None:
         return result
-    return plotter_tools.clip_region(result, rect)
+    layer = doc.active()
+    data = layer.data if isinstance(layer, TileLayer) else None
+    mask = state.selection_mask_in(doc)
+    if mask is None or data is None:
+        return plotter_tools.clip_region(result, rect)
+    # A non-rectangular selection puts the refused cells back to what the layer
+    # already had, so the placement is still one rectangular write.
+    return plotter_tools.clip_region_mask(result, data, rect, mask)
 
 
 def _layer_for_paint(ctx: Any, tab: Any):
@@ -1467,6 +1650,12 @@ def _apply(ctx: Any, state: Any, tab: Any, cell: tuple[int, int]) -> None:
                 cell[1],
                 int(state.brush[0, 0]),
                 bounds=state.selection_in(doc),
+                # The mask is applied to the *match* for the same reason the
+                # bounds are, one step finer: a concave selection a fill could
+                # leave and re-enter is exactly the escape the bounds prevent.
+                mask=state.selection_mask_in(doc),
+                brush=state.brush if state.brush.size > 1 else None,
+                rng=_fill_rng(state),
             )
     elif state.tool == "terrain":
         ref = _terrain_ref(state, doc)
@@ -1507,7 +1696,21 @@ def _apply_shape(ctx: Any, state: Any, tab: Any, a: tuple[int, int], b: tuple[in
         return
     fill = plotter_tools.fill_ellipse if state.shape_mode == "ellipse" else plotter_tools.fill_rect
     result = _constrained(
-        state, tab.doc, fill(layer.data, a[0], a[1], b[0], b[1], int(state.brush[0, 0]))
+        state,
+        tab.doc,
+        fill(
+            layer.data,
+            a[0],
+            a[1],
+            b[0],
+            b[1],
+            int(state.brush[0, 0]),
+            # A multi-tile brush makes this a pattern fill, anchored to map
+            # coordinates so two shapes continue one pattern; a 1x1 brush is
+            # byte-identical to the plain fill it always was.
+            brush=state.brush if state.brush.size > 1 else None,
+            rng=_fill_rng(state),
+        ),
     )
     if result is not None:
         tab.doc.write_region(layer.uid, *result)

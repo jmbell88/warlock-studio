@@ -4477,3 +4477,44 @@ def test_a_rendered_sheet_offers_both_hand_offs(app_ctx, imgui_ctx):
     labels = _drawn_labels(imgui, lambda: sheet_panel.draw(app_ctx, job), "##sheet-hand")
     assert _index_of(labels, "Edit in Inker") >= 0, labels
     assert _index_of(labels, "Add to Packwright") >= 0, labels
+
+
+def test_the_offset_and_autocrop_controls_render(app_ctx, imgui_ctx):
+    from warlock.studio import plotter_mode
+    from warlock.studio.panes import plotter_tools
+
+    imgui, _renderer = imgui_ctx
+    tab = plotter_mode.new_document(app_ctx, (8, 8, 16, 16))
+    tab.doc.add_tileset(_tileset())
+    app_ctx.settings.set("plotter/resize", True)
+
+    _drawn_labels(imgui, lambda: plotter_tools.draw(app_ctx), "##k-geom")
+    labels = _drawn_labels(imgui, lambda: plotter_tools.draw(app_ctx), "##k-geom")
+    assert _index_of(labels, "Move X") >= 0, labels
+    assert _index_of(labels, "Autocrop to content") >= 0, labels
+    assert _index_of(labels, "Scope") >= 0, labels
+
+
+def test_the_wand_row_renders_and_no_dead_generator_route_remains(app_ctx, imgui_ctx):
+    """`plotter/generate` has had no registered owner since the generator was
+    deleted on 2026-08-18 -- a route that was live and did nothing."""
+    import subprocess
+    from pathlib import Path as _Path
+
+    from warlock.studio import plotter_mode
+    from warlock.studio.panes import plotter_tools
+
+    imgui, _renderer = imgui_ctx
+    plotter_mode.new_document(app_ctx, (8, 8, 16, 16))
+    labels = _drawn_labels(imgui, lambda: plotter_tools.draw(app_ctx), "##k-wand")
+    assert _index_of(labels, "W") >= 0, "the Wand tool button is drawn"
+    assert _index_of(labels, "Open the generator") == -1, labels
+
+    root = _Path(__file__).resolve().parents[1] / "src"
+    found = subprocess.run(
+        ["git", "grep", "-n", "plotter/generate", "--", str(root)],
+        capture_output=True,
+        text=True,
+        cwd=str(root.parent),
+    )
+    assert found.stdout.strip() == "", found.stdout

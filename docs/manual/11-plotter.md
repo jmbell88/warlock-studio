@@ -130,11 +130,33 @@ you left it.
 | `T` | Terrain | Paints a terrain and re-fits the eight cells around it |
 | `P` | Shape | Fills a rectangle or an ellipse between press and release |
 | `R` | Select | Drags a rectangular selection; a plain click clears it |
-| `I` | Pick | Takes the tile under the cursor as the brush |
+| `W` | Wand | Selects the connected run of one tile; Ctrl+click selects every cell of it |
+| `I` | Pick | Takes the tile under the cursor as the brush, or drag to capture a block |
 | `S` | Objects | Selects and draws objects (see below) |
 
 The letters are [Tiled](https://www.mapeditor.org/)'s, because that is the editor whose files this
 one reads and writes, and so the one you are most likely arriving from.
+
+**Pick** takes one tile with a click and a whole *block* with a drag — Tiled's capture. Drag a
+rectangle across the map and what was in it becomes the brush, flags and all, and the tool switches
+to Stamp so you can put it straight back down. A drag across empty map is refused rather than arming
+a brush that erases everything it touches.
+
+**Wand** selects by content instead of by rectangle: click and you get the connected run of the tile
+you clicked, Ctrl+click and you get every cell of that tile anywhere on the map. Hold **Shift** to
+add to what is already selected and **Alt** to subtract — on the wand and on the marquee both. A
+selection that is no longer a rectangle still constrains every tool exactly as a rectangle does, and
+a fill inside a concave one cannot escape around the outside and come back in.
+
+**Fill** and **Shape** take the whole brush, not just its first tile. A multi-tile brush lays down a
+*pattern*, anchored to map coordinates so two overlapping fills continue one pattern rather than each
+restarting it. With **Random** on they scatter instead, choosing per cell from the brush's tiles, the
+same way Stamp already does.
+
+**Offset** and **Autocrop to content** live in the *Resize* section. Offset moves cells by whole
+cells — the whole map or just the active layer — and wrapping is an exact permutation, so offsetting
+back puts everything where it was. Autocrop shrinks the grid to the cells that hold something,
+moving objects with them; a map with nothing painted on it is refused.
 
 **Shape** is one tool with two modes rather than two tools — Tiled's Shape Fill. The buttons for
 rectangle and ellipse appear beside the tools while Shape is in hand. Either way the gesture, the

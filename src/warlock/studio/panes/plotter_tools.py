@@ -112,12 +112,16 @@ def _terrain_picker(ctx: Any, state: Any, tab: Any) -> None:
     entries = terrains_of(tab.doc)
     widgets.section("Terrain")
     if not entries:
+        # The old copy sent people to a generator that was deleted on
+        # 2026-08-18, through a section key nothing has registered since -- a
+        # route that was live and did nothing.
         widgets.muted_wrapped(
-            "This map has no terrain sets. Generate one under Tilesets, or add a "
-            "tileset that carries one."
+            "This map has no terrain sets. Add a Tiled .tsx that carries Wang "
+            "sets, or a sheet holding all 47 blob cases, and Plotter will offer "
+            "to turn it into one."
         )
-        if controls.button("Open the generator", (-1, 0)):
-            widgets.request_open("plotter/generate")
+        if controls.button("Add a tileset...", (-1, 0)):
+            plotter_mode.ask_add_tileset(ctx)
         return
     if state.terrain is None:
         state.terrain = (entries[0][0], entries[0][1])
@@ -300,8 +304,67 @@ def _resize_form(ctx: Any, tab: Any) -> None:
         ctx.state.preview.pop(key, None)
         tab.view.fitted = False
 
+    imgui.dummy((0, 8))
+    _offset_form(ctx, tab)
+    imgui.dummy((0, 8))
+    # Tiled's Map -> Autocrop. Delegated to ``resize`` verbatim inside the
+    # document, so objects travel by the rule that already exists.
+    if controls.button("Autocrop to content", (-1, 0)):
+        if tab.doc.autocrop():
+            ctx.state.preview.pop(key, None)
+            tab.view.fitted = False
+        else:
+            ctx.toast("There is nothing painted to crop to.", "warn")
+
     imgui.dummy((0, 10))
     _tile_size_form(ctx, tab)
+
+
+#: Whether an offset moves every tile layer or only the active one, and how the
+#: vacated cells are filled. Data rather than four booleans in the pane, for
+#: ``TOOLS``' reason: the labels and the values cannot drift apart.
+OFFSET_SCOPES = (("map", "Whole map"), ("layer", "This layer"))
+
+
+def _offset_form(ctx: Any, tab: Any) -> None:
+    """Tiled's Map -> Offset Map, inside the section that already owns geometry.
+
+    Its own row rather than its own section: a user reaching for "move
+    everything two cells left" is reaching for the same thing they reach for
+    when they resize, and a second collapsible header for two sliders is a
+    header nobody opens.
+    """
+
+    key = f"plotter_offset:{tab.uid}"
+    form = ctx.state.preview.get(key)
+    if form is None:
+        form = {"dx": 0, "dy": 0, "wrap": True, "scope": "map"}
+        ctx.state.preview[key] = form
+
+    widgets.muted("Offset")
+    _, form["dx"] = widgets.labeled_slider_int("Move X", int(form["dx"]), -64, 64)
+    _, form["dy"] = widgets.labeled_slider_int("Move Y", int(form["dy"]), -64, 64)
+    form["scope"] = widgets.labeled_combo(
+        "Scope", str(form["scope"]), list(OFFSET_SCOPES)
+    )
+    _changed, form["wrap"] = controls.checkbox(
+        "Wrap around the edges",
+        bool(form["wrap"]),
+        tooltip=(
+            "Wrapping is an exact permutation -- nothing is lost, so offsetting "
+            "back puts everything where it was. Without it the vacated cells "
+            "are cleared."
+        ),
+    )
+    if controls.button("Offset##apply", (-1, 0)):
+        moved = tab.doc.offset(
+            int(form["dx"]),
+            int(form["dy"]),
+            wrap=bool(form["wrap"]),
+            scope=str(form["scope"]),
+        )
+        if not moved:
+            ctx.toast("That offset moves nothing.", "warn")
 
 
 def _tile_size_form(ctx: Any, tab: Any) -> None:

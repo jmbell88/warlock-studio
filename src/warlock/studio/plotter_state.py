@@ -71,6 +71,9 @@ TOOLS = (
     ("terrain", "Terrain", "T"),
     ("shape", "Shape", "P"),
     ("select", "Select", "R"),
+    # Tiled's own letter, and unused here. Its Ctrl+click folds in Tiled's
+    # *Select Same Tile* because ``S`` is already Objects.
+    ("wand", "Wand", "W"),
     ("pick", "Pick", "I"),
     ("object", "Objects", "S"),
 )
@@ -204,6 +207,22 @@ class PlotterState:
     # stored -- a resize can shrink the map under it -- so every use clamps
     # against the map's current size instead.
     select: tuple[int, int, int, int] | None = None
+    # The non-rectangular half of the selection: a bool array over the whole map
+    # saying which cells inside ``select`` the selection actually holds.
+    #
+    # **``None`` means "a solid rectangle", not "no selection"**, and that is
+    # what keeps today's marquee at today's cost: the common case allocates
+    # nothing and every door short-circuits on it. ``select`` stays the bounding
+    # rect in both cases, so everything that only needs bounds is unchanged.
+    #
+    # View state beside ``select`` and dropped with it: not undoable, not saved,
+    # and not clamped when stored -- ``selection_mask_in`` clamps at use, exactly
+    # as ``selection_in`` does, and for the same reason.
+    select_mask: Any = None
+    # What the selection was when a Shift/Alt marquee drag began, so the release
+    # can combine with *that* rather than with the rectangle being drawn.
+    # Gesture state, cleared with the rest of the drag.
+    select_before: Any = None
     # The copied block, and the uid of the document it came from.
     #
     # App-level rather than per-tab so the *refusal* can name its source: gids
@@ -316,6 +335,7 @@ class PlotterState:
         # Likewise a rectangle of cells: carried across, it would constrain
         # painting in a map the user never drew it on.
         self.select = None
+        self.select_mask = None
         # A parked sheet is several megabytes held for *one* tab's popup. It
         # names that tab by uid, so once the tab is gone -- or the user has
         # walked away from it -- nothing will ever answer the question, and the
@@ -373,12 +393,51 @@ class PlotterState:
             return None
         return x0, y0, x1, y1
 
+    def selection_mask_in(self, doc: Any) -> Any:
+        """The selection's per-cell mask for one map, or ``None`` for a solid rect.
+
+        ``None`` when there is no selection *and* when the selection is a plain
+        rectangle -- the two are distinguished by :meth:`selection_in`, which is
+        the bounds. Every door pairs the two, so a rectangle costs nothing.
+
+        A mask whose shape no longer matches the map is dropped rather than
+        resized: a resize is undoable and the mask is not, so a mask trimmed to
+        fit could not grow back, and a wrongly-shaped one would mask the wrong
+        cells. Falling back to the bounding rect is the safe direction -- it can
+        only ever allow *more* than the mask did, inside a rect the user drew.
+        """
+        mask = self.select_mask
+        if mask is None or self.select is None:
+            return None
+        if tuple(mask.shape) != (int(doc.height), int(doc.width)):
+            return None
+        return mask
+
+    def set_selection(
+        self, rect: tuple[int, int, int, int] | None, mask: Any = None
+    ) -> None:
+        """The one door onto the selection, so the rect and the mask cannot
+        disagree about which cells are in it.
+
+        A mask is stored only with a rect, and clearing the rect clears both --
+        a mask with no bounds is a selection nothing can draw and nothing can
+        clamp.
+        """
+        if rect is None:
+            self.select, self.select_mask = None, None
+            return
+        self.select = rect
+        self.select_mask = mask
+
     def clear_drag(self) -> None:
         self.drag_kind = ""
         self.drag_anchor = None
         self.drag_object = None
         self.drag_handle = ""
         self.palette_anchor = None
+        # Belongs to the gesture, not the selection: what was selected before a
+        # marquee drag started has no meaning once the drag is over.
+        self.select_before = None
         # Not ``last_paint``: that outlives the gesture on purpose, because the
         # whole point of it is to be there on the *next* click.
         self.drag_last_cell = None

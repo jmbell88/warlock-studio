@@ -74,6 +74,128 @@ class GeometryOps:
         self._apply_resize((width, height), after, after_objects)
         return True
 
+    def offset(
+        self: MapDoc,
+        dx: int,
+        dy: int,
+        *,
+        wrap: bool = True,
+        scope: str = "map",
+    ) -> bool:
+        """Move cells by whole cells. Tiled's Map -> Offset Map.
+
+        ``wrap`` rolls, which is an exact permutation -- no cell is invented and
+        none is lost, so offsetting back is the identity. Without it the vacated
+        cells take gid 0, which is the honest answer for a shift that genuinely
+        pushed content off the edge.
+
+        ``scope`` is ``"map"`` (every tile leaf) or ``"layer"`` (the active one).
+        Whole-map scope moves objects by the pixel equivalent, which is
+        :meth:`resize`'s own rule and for its reason: object coordinates are
+        absolute pixels, and leaving them put silently detaches every trigger
+        volume from the geometry it was drawn around. A single-layer offset moves
+        no objects -- the objects are not on that layer.
+
+        One snapshot edit, ``ResizeEdit``'s shape, because every layer's contents
+        change at once and there is no dirty rect the patch machinery could carry.
+        """
+        dx, dy = int(dx), int(dy)
+        if scope not in ("map", "layer"):
+            raise ValueError("an offset scope is 'map' or 'layer'")
+        if wrap and self.width and self.height:
+            dx, dy = dx % self.width, dy % self.height
+        if (dx, dy) == (0, 0):
+            return False
+
+        if scope == "layer":
+            layer = self.active()
+            targets = [layer] if isinstance(layer, TileLayer) else []
+        else:
+            targets = list(self.tile_layers())
+        if not targets:
+            return False
+
+        before = {layer.uid: layer.data for layer in targets}
+        after: dict[int, np.ndarray] = {}
+        for uid, data in before.items():
+            if wrap:
+                after[uid] = np.ascontiguousarray(np.roll(data, (dy, dx), axis=(0, 1)))
+                continue
+            moved = gidlib.empty_layer(self.width, self.height)
+            sx0, sy0 = max(0, -dx), max(0, -dy)
+            tx0, ty0 = max(0, dx), max(0, dy)
+            span_w = min(data.shape[1] - sx0, self.width - tx0)
+            span_h = min(data.shape[0] - sy0, self.height - ty0)
+            if span_w > 0 and span_h > 0:
+                moved[ty0 : ty0 + span_h, tx0 : tx0 + span_w] = data[
+                    sy0 : sy0 + span_h, sx0 : sx0 + span_w
+                ]
+            after[uid] = moved
+
+        before_objects: dict[int, list[tuple[float, float]]] = {}
+        after_objects: dict[int, list[tuple[float, float]]] = {}
+        if scope == "map":
+            shift_x, shift_y = dx * self.tile_w, dy * self.tile_h
+            for layer in self.all_layers():
+                if not isinstance(layer, ObjectLayer):
+                    continue
+                before_objects[layer.uid] = [(o.x, o.y) for o in layer.objects]
+                after_objects[layer.uid] = [
+                    (o.x + shift_x, o.y + shift_y) for o in layer.objects
+                ]
+
+        self.history.push(
+            ResizeEdit(
+                before_size=(self.width, self.height),
+                after_size=(self.width, self.height),
+                before=before,
+                after=after,
+                before_objects=before_objects,
+                after_objects=after_objects,
+            )
+        )
+        self._apply_resize((self.width, self.height), after, after_objects)
+        return True
+
+    def content_bounds(self: MapDoc) -> tuple[int, int, int, int] | None:
+        """The inclusive cell rect holding every non-empty cell, or ``None``.
+
+        Across *every* tile leaf, not the active one: a map is cropped as a
+        whole, and a background layer that runs wider than the foreground is
+        still content.
+        """
+        lo_x = lo_y = None
+        hi_x = hi_y = None
+        for layer in self.tile_layers():
+            ys, xs = np.nonzero(np.asarray(layer.data) != gidlib.EMPTY)
+            if not xs.size:
+                continue
+            x0, x1 = int(xs.min()), int(xs.max())
+            y0, y1 = int(ys.min()), int(ys.max())
+            lo_x = x0 if lo_x is None else min(lo_x, x0)
+            hi_x = x1 if hi_x is None else max(hi_x, x1)
+            lo_y = y0 if lo_y is None else min(lo_y, y0)
+            hi_y = y1 if hi_y is None else max(hi_y, y1)
+        if lo_x is None:
+            return None
+        return lo_x, lo_y, hi_x, hi_y  # type: ignore[return-value]
+
+    def autocrop(self: MapDoc) -> bool:
+        """Shrink the grid to the cells that hold something.
+
+        Delegated to :meth:`resize` verbatim rather than reimplemented, so the
+        objects travel by the rule that already exists and undo records the step
+        the shape it already records. A wholly empty map is refused: cropping it
+        to nothing is not a map, and there is no size that would be right.
+        """
+        found = self.content_bounds()
+        if found is None:
+            return False
+        x0, y0, x1, y1 = found
+        return self.resize(
+            x1 - x0 + 1, y1 - y0 + 1, offset_x=-x0, offset_y=-y0
+        )
+
     def set_tile_size(self: MapDoc, tile_w: int, tile_h: int) -> bool:
         """Change the size of a cell, keeping every painted tile where it is.
 

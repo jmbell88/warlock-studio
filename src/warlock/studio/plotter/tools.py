@@ -139,6 +139,10 @@ def clip_region(region: Region, bounds: tuple[int, int, int, int]) -> Region | N
     afterwards would be allowed to escape the selection, run around the outside
     and re-enter, and the cells it reached would then be trimmed to look as
     though it had never left.
+
+    A selection that is not a rectangle goes through :func:`clip_region_mask`
+    instead. This one stays exactly the rectangle trim it has always been --
+    byte for byte, and it is what that one is built on.
     """
     x0, y0, block = region
     bx0, by0, bx1, by1 = (int(value) for value in bounds)
@@ -154,6 +158,82 @@ def clip_region(region: Region, bounds: tuple[int, int, int, int]) -> Region | N
             block[lo_y - int(y0) : hi_y - int(y0) + 1, lo_x - int(x0) : hi_x - int(x0) + 1]
         ),
     )
+
+
+def capture(data: np.ndarray, x0: int, y0: int, x1: int, y1: int) -> np.ndarray | None:
+    """The block of cells in an inclusive rect, as a brush.
+
+    Tiled's capture-drag: what is on the map becomes what is in your hand. The
+    gids come out **encoded, verbatim** -- flags included -- which is the
+    standing rule everywhere cells are moved: a captured wall that was mirrored
+    stamps back mirrored, and stripping the flags would silently un-mirror half
+    of anything picked up.
+
+    ``None`` when the rect misses the map entirely, and when every captured cell
+    is empty: an all-empty brush is an eraser wearing a stamp's name, and arming
+    one from a drag across blank map is never what the drag meant.
+    """
+    height, width = data.shape
+    lo_x, hi_x = sorted((int(x0), int(x1)))
+    lo_y, hi_y = sorted((int(y0), int(y1)))
+    lo_x, lo_y = max(0, lo_x), max(0, lo_y)
+    hi_x, hi_y = min(width - 1, hi_x), min(height - 1, hi_y)
+    if hi_x < lo_x or hi_y < lo_y:
+        return None
+    block = np.ascontiguousarray(
+        np.asarray(data, dtype=gidlib.DTYPE)[lo_y : hi_y + 1, lo_x : hi_x + 1]
+    )
+    if not (block != gidlib.EMPTY).any():
+        return None
+    return block
+
+
+def brush_at(brush: np.ndarray, x: int, y: int) -> int:
+    """Which cell of a pattern brush lands at map cell ``(x, y)``.
+
+    ``brush[y % bh, x % bw]``, anchored to **map** coordinates and not to the
+    fill's own origin. That is the "position mod k" rule terrain phases already
+    use (``plotter/terrain.py``), and it is what makes two overlapping fills
+    continue one pattern instead of restarting it at each seed.
+    """
+    block = np.asarray(brush, dtype=gidlib.DTYPE)
+    bh, bw = block.shape
+    return int(block[int(y) % bh, int(x) % bw])
+
+
+def clip_region_mask(
+    region: Region,
+    data: np.ndarray,
+    bounds: tuple[int, int, int, int],
+    mask: np.ndarray | None = None,
+) -> Region | None:
+    """:func:`clip_region`, with the cells a non-rectangular selection refuses
+    put back to what the layer already had.
+
+    The door every tool goes through once a selection can be something other
+    than a rectangle. Writing the refused cells *unchanged* rather than not
+    writing them is what keeps a placement one rectangular ``write_region`` --
+    which is what undo, the tilemap patch and the renderer's dirty rect are all
+    built around.
+
+    ``mask is None`` is the solid-rectangle case and costs nothing extra: it is
+    :func:`clip_region` and no more, which is why today's marquee keeps today's
+    cost.
+    """
+    clipped = clip_region(region, bounds)
+    if clipped is None or mask is None:
+        return clipped
+    lo_x, lo_y, block = clipped
+    height, width = block.shape
+    window = np.asarray(mask, dtype=bool)[lo_y : lo_y + height, lo_x : lo_x + width]
+    if not window.any():
+        return None
+    out = np.array(
+        np.asarray(data, dtype=gidlib.DTYPE)[lo_y : lo_y + height, lo_x : lo_x + width],
+        dtype=gidlib.DTYPE,
+    )
+    out[window] = block[window]
+    return lo_x, lo_y, out
 
 
 def stamp(data: np.ndarray, x: int, y: int, brush: np.ndarray) -> Region | None:
@@ -196,6 +276,17 @@ def _default_rng() -> Any:
     return _RNG
 
 
+def fill_rng() -> Any:
+    """The module's shared generator, for a caller that wants a random *area*.
+
+    The same object :func:`random_stamp` reaches for when given none, and shared
+    for its reason: a fresh ``default_rng()`` per call is a seed sequence and an
+    OS entropy read, and a scatter fill would pay one per fill. A test passes its
+    own generator instead and is exactly deterministic.
+    """
+    return _default_rng()
+
+
 def random_stamp(
     data: np.ndarray,
     x: int,
@@ -214,10 +305,55 @@ def random_stamp(
     return stamp(data, x, y, np.asarray([[chosen]], dtype=gidlib.DTYPE))
 
 
+def _painted(
+    x0: int, y0: int, shape: tuple[int, int], value: int, brush: np.ndarray | None,
+    rng: Any = None,
+) -> np.ndarray:
+    """The block a fill lays down: one gid, a tiled pattern, or a random pick.
+
+    One definition for all three fills, because "what does a fill write" is one
+    question and three copies of it is three chances for the pattern anchor to
+    drift. The anchor is *map* coordinates -- see :func:`brush_at`.
+
+    ``rng`` turns the brush into a per-cell random choice rather than a pattern,
+    which is ``random_stamp``'s rule (``tools.random_stamp``) applied to an area:
+    every landed cell picks independently from the brush's non-empty members.
+    """
+    height, width = shape
+    if brush is None:
+        return np.full((height, width), gidlib.DTYPE(value), gidlib.DTYPE)
+    block = np.asarray(brush, dtype=gidlib.DTYPE)
+    if rng is not None:
+        choices = block.reshape(-1)
+        choices = choices[choices != gidlib.EMPTY]
+        if not choices.size:
+            return np.full((height, width), gidlib.DTYPE(value), gidlib.DTYPE)
+        picks = rng.integers(0, len(choices), size=(height, width))
+        return choices[picks].astype(gidlib.DTYPE)
+    bh, bw = block.shape
+    ys = (np.arange(y0, y0 + height) % bh)[:, None]
+    xs = (np.arange(x0, x0 + width) % bw)[None, :]
+    return block[ys, xs].astype(gidlib.DTYPE)
+
+
 def fill_rect(
-    data: np.ndarray, x0: int, y0: int, x1: int, y1: int, value: int
+    data: np.ndarray,
+    x0: int,
+    y0: int,
+    x1: int,
+    y1: int,
+    value: int,
+    *,
+    brush: np.ndarray | None = None,
+    rng: Any = None,
 ) -> Region | None:
-    """One gid across a rectangle given by any two opposite corners."""
+    """One gid across a rectangle given by any two opposite corners.
+
+    ``brush`` makes it a *pattern* fill instead: the cell written at ``(x, y)``
+    is ``brush[y % bh, x % bw]``, anchored to map coordinates, so two overlapping
+    fills continue one pattern. A 1x1 brush is byte-identical to the plain fill,
+    which is the regression pin. ``rng`` makes it a random fill, per landed cell.
+    """
     height, width = data.shape
     lo_x, hi_x = sorted((int(x0), int(x1)))
     lo_y, hi_y = sorted((int(y0), int(y1)))
@@ -225,12 +361,22 @@ def fill_rect(
     hi_x, hi_y = min(width - 1, hi_x), min(height - 1, hi_y)
     if hi_x < lo_x or hi_y < lo_y:
         return None
-    region = np.full((hi_y - lo_y + 1, hi_x - lo_x + 1), gidlib.DTYPE(value), gidlib.DTYPE)
+    region = _painted(
+        lo_x, lo_y, (hi_y - lo_y + 1, hi_x - lo_x + 1), value, brush, rng
+    )
     return lo_x, lo_y, region
 
 
 def fill_ellipse(
-    data: np.ndarray, x0: int, y0: int, x1: int, y1: int, value: int
+    data: np.ndarray,
+    x0: int,
+    y0: int,
+    x1: int,
+    y1: int,
+    value: int,
+    *,
+    brush: np.ndarray | None = None,
+    rng: Any = None,
 ) -> Region | None:
     """One gid across the ellipse inscribed in the box those corners give.
 
@@ -273,7 +419,8 @@ def fill_ellipse(
     region = np.array(
         data[clip_y0 : clip_y1 + 1, clip_x0 : clip_x1 + 1], dtype=gidlib.DTYPE
     )
-    region[inside] = gidlib.DTYPE(value)
+    painted = _painted(clip_x0, clip_y0, region.shape, value, brush, rng)
+    region[inside] = painted[inside]
     return clip_x0, clip_y0, region
 
 
@@ -290,6 +437,9 @@ def flood_fill(
     value: int,
     *,
     bounds: tuple[int, int, int, int] | None = None,
+    mask: np.ndarray | None = None,
+    brush: np.ndarray | None = None,
+    rng: Any = None,
 ) -> Region | None:
     """Four-connected fill of the contiguous run under ``(x, y)``.
 
@@ -311,6 +461,16 @@ def flood_fill(
     have crossed a wall the user drew a marquee to stop it at. Masking the match
     makes the boundary real: there is nothing to spread through. A seed outside
     the bounds fills nothing, which is what a click outside a selection means.
+
+    ``mask`` is the same rule one step finer: a bool array over the whole map
+    saying which cells the selection actually holds, for a selection that is not
+    a rectangle. It is ANDed into the match for the identical reason and **never
+    applied to the result** -- trimming afterwards is what lets a fill escape
+    around the outside and come back in with the trip hidden.
+
+    ``brush`` and ``rng`` decide what is *written*, never what bounds the fill:
+    the match is still the single target cell's encoded gid. A pattern fill of a
+    room fills exactly the room.
     """
     height, width = data.shape
     x, y = int(x), int(y)
@@ -331,6 +491,8 @@ def flood_fill(
             return None
         allowed[by0 : by1 + 1, bx0 : bx1 + 1] = True
         match &= allowed
+    if mask is not None:
+        match &= np.asarray(mask, dtype=bool)
     seen = flood_mask(match, x, y)
     if not seen.any():
         return None
@@ -342,7 +504,9 @@ def flood_fill(
     # left exactly as they were -- a fill of an L-shaped room must not
     # rectangle over the wall in its notch.
     region = np.array(data[y0:y1, x0:x1], dtype=gidlib.DTYPE)
-    region[seen[y0:y1, x0:x1]] = fill
+    reached = seen[y0:y1, x0:x1]
+    painted = _painted(x0, y0, region.shape, value, brush, rng)
+    region[reached] = painted[reached] if brush is not None else fill
     return x0, y0, region
 
 
