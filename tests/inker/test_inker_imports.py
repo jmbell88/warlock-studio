@@ -52,11 +52,20 @@ PACKAGE = "warlock.studio.inker"
 #: narrower half of it: the funnel's tilemap branch decodes a cell's transform
 #: flags (``gid.GID_MASK``/``FLAG_MASK``) to edit a flipped placement in
 #: canonical orientation, and the gid word is where those live.
+#:
+#: ``ora.py``'s two entries are Wave 3 chunk 3.4: ``tiles.json``'s reader
+#: rebuilds each ``TilesetSlot`` straight from the shared ``Tileset`` type
+#: rather than through ``tiles.py``'s own constructors (there is no strip
+#: image on disk to hand ``strip()``, only the decoded PNG), and decodes a
+#: cel's refs plane through the same ``gid`` word ``_doc_tiles.py`` already
+#: reaches for.
 OUTWARD_IMPORTS = {
     ("_doc_tiles.py", "warlock.studio.tilegrid"),
     ("anim_edits.py", "warlock.studio.undo"),
     ("composite.py", "warlock.native"),
     ("dither.py", "warlock.native"),
+    ("ora.py", "warlock.studio.tilegrid"),
+    ("ora.py", "warlock.studio.tilegrid.tileset"),
     ("selection.py", "warlock.native"),
     ("sheetout.py", "warlock.pipelines"),
     ("tile_edits.py", "warlock.studio.undo"),

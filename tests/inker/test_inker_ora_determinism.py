@@ -26,9 +26,11 @@ import numpy as np
 
 from warlock.studio.inker import ora
 from warlock.studio.inker.document import Document
+from warlock.studio.inker.tiles import strip
 
 RED = (255, 0, 0, 255)
 BLUE = (0, 0, 255, 255)
+GREEN = (0, 255, 0, 255)
 
 
 def _doc() -> Document:
@@ -39,10 +41,27 @@ def _doc() -> Document:
     return doc
 
 
+def _tile(colour: tuple[int, int, int, int], w: int = 4, h: int = 4) -> np.ndarray:
+    tile = np.zeros((h, w, 4), dtype=np.uint8)
+    tile[..., 0], tile[..., 1], tile[..., 2], tile[..., 3] = colour
+    return tile
+
+
+def _blank_tile(w: int = 4, h: int = 4) -> np.ndarray:
+    return np.zeros((h, w, 4), dtype=np.uint8)
+
+
 def _animated() -> Document:
     doc = _doc()
     doc.add_frame(copy=True)
     doc.stack.active.pixels[4:8, 4:8] = BLUE
+    # Wave 3 chunk 3.4: a tilemap track too, so the determinism pin also
+    # covers ``tiles.json`` and its two auxiliary member kinds -- every
+    # member epoch-stamped, two saves byte-identical.
+    tileset = strip(np.stack([_blank_tile(), _tile(GREEN)], axis=0))
+    slot = doc.add_tileset(tileset)
+    layer = doc.add_tilemap_layer(slot.uid, name="Tiles")
+    doc.place_tiles(layer.uid, (0, 0), np.array([[1]], dtype=np.uint32))
     return doc
 
 
@@ -118,3 +137,35 @@ def test_a_changed_document_writes_a_different_file():
     first = ora.ora_bytes(doc)
     doc.stack.active.pixels[7, 7] = RED
     assert ora.ora_bytes(doc) != first
+
+
+def test_a_document_with_no_tilesets_writes_no_tiles_members():
+    """Wave 3 chunk 3.4's own negative control, named explicitly rather than
+    only implied by the byte-identical checks above: a document that has
+    never touched a tileset produces the exact archive this writer wrote
+    before tilesets existed -- no ``tiles.json``, no tileset strip, no refs
+    blob, on either the still or the animated shape."""
+    plain_still = Document.blank(8, 8)
+    plain_still.stack.active.pixels[2:6, 2:6] = RED
+    plain_animated = Document.blank(8, 8)
+    plain_animated.stack.active.pixels[2:6, 2:6] = RED
+    plain_animated.add_frame(copy=True)
+    for doc in (plain_still, plain_animated):
+        with zipfile.ZipFile(BytesIO(ora.ora_bytes(doc))) as zf:
+            names = zf.namelist()
+        assert ora.TILES_MEMBER not in names
+        assert not any(name.startswith("data/tileset") for name in names)
+        assert not any(name.startswith("data/tilerefs") for name in names)
+
+
+def test_a_tilemap_documents_tile_members_are_present_and_epoch_stamped():
+    """The positive half of the same pin: once a document has a tileset,
+    every one of the three new member kinds is in the archive, and every one
+    of them is epoch-stamped like every other member."""
+    with zipfile.ZipFile(BytesIO(ora.ora_bytes(_animated()))) as zf:
+        infos = {info.filename: info for info in zf.infolist()}
+    assert ora.TILES_MEMBER in infos
+    assert "data/tileset0.png" in infos
+    assert "data/tilerefs0.u32" in infos
+    for name in ("data/tileset0.png", "data/tilerefs0.u32", ora.TILES_MEMBER):
+        assert infos[name].date_time == ora._EPOCH, name

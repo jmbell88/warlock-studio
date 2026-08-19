@@ -65,6 +65,8 @@ from xml.etree import ElementTree
 
 import numpy as np
 
+from ..tilegrid import gid
+from ..tilegrid.tileset import Tileset
 from . import composite as cp
 from . import gpl
 from . import index_plane as ixp
@@ -77,6 +79,7 @@ from .animation import (
     Track,
 )
 from .layers import Layer, LayerStack
+from .tiles import TilemapCel, TilesetSlot, materialize
 
 THUMBNAIL_MAX = 256
 
@@ -110,6 +113,18 @@ PALETTE_MEMBER = "palette.gpl"
 #: document its frames.
 WARLOCK_MEMBER = "warlock.json"
 WARLOCK_VERSION = 1
+
+#: A document's tilesets, track bindings and cel refs -- Wave 3 chunk 3.4.
+#: Its own member and its own version, ``WARLOCK_MEMBER``'s reasons restated
+#: one layer further in: tile *structure* is metadata about a picture that is
+#: already fully and honestly on the canvas -- every ``TilemapCel``'s own PNG
+#: is written and read exactly like any other layer's -- so a broken or
+#: unknown member here must cost the structure and never a pixel or a frame.
+#: Written only when ``doc.tilesets`` is non-empty, so a document that has
+#: never touched a tileset produces the exact archive this writer wrote before
+#: tilesets existed.
+TILES_MEMBER = "tiles.json"
+TILES_VERSION = 1
 
 # 1980-01-01, the earliest a zip can express, and the same constant the three
 # younger formats in this repo (``.wblk``, ``.wmap``, ``.wpack``) fix their
@@ -515,6 +530,110 @@ def _animation_json(doc, names: dict[int, str]) -> bytes:
     return json.dumps(payload, indent=2).encode("utf-8")
 
 
+def _tile_refs_names(doc, anim) -> dict[int, str]:
+    """One name per *distinct* tilemap cel: ``data/tilerefs{n}.u32``.
+
+    ``_cel_names``'s pattern, extended: keyed by ``id(layer)`` so a linked cel
+    answers to one name rather than one per slot it occupies, and ``n`` counts
+    only the tilemap cels found walking the very order the cel PNGs themselves
+    use -- ``unique_cel_layers`` on an animated document, stack order on a
+    still one (``_stack_xml``'s own walk, not the reversed one ``write_ora``
+    writes PNGs in -- what matters here is a deterministic, repeatable order,
+    and ``enumerate(doc.stack)`` is the one :func:`_tiles_json`'s ``"layer"``
+    index already commits to).
+    """
+    layers = anim.unique_cel_layers() if anim is not None else list(doc.stack)
+    out: dict[int, str] = {}
+    n = 0
+    for layer in layers:
+        if isinstance(layer, TilemapCel):
+            out[id(layer)] = f"data/tilerefs{n}.u32"
+            n += 1
+    return out
+
+
+def _tiles_json(
+    doc, anim, names: dict[int, str], refs_names: dict[int, str]
+) -> bytes:
+    """The tileset/track/cel record. Indices, not uids -- ``_animation_json``'s
+    convention, restated: a uid is minted per process and means nothing in a
+    file.
+
+    Every tileset in ``doc.tilesets`` is listed, referenced or not -- a user's
+    spare tileset is not garbage, and this is what lets it survive a save it
+    was never drawn with. ``"tracks"`` appears only on an animated document (a
+    still one has no tracks at all); ``"cels"`` keys each entry by the cel's
+    own PNG member name on an animated document -- the stable cross-member key
+    :func:`_animation_json` already uses -- and by stack index on a still one.
+    """
+    tileset_index = {slot.uid: i for i, slot in enumerate(doc.tilesets)}
+    payload: dict = {
+        "version": TILES_VERSION,
+        "tilesets": [
+            {
+                "name": slot.tileset.name,
+                "tile_w": int(slot.tileset.tile_w),
+                "tile_h": int(slot.tileset.tile_h),
+                "data": f"data/tileset{i}.png",
+            }
+            for i, slot in enumerate(doc.tilesets)
+        ],
+    }
+    cels: list[dict] = []
+    if anim is not None:
+        payload["tracks"] = [
+            {"track": ti, "tileset": tileset_index[track.tileset_uid]}
+            for ti, track in enumerate(anim.tracks)
+            if track.tileset_uid is not None and track.tileset_uid in tileset_index
+        ]
+        for layer in anim.unique_cel_layers():
+            if isinstance(layer, TilemapCel) and layer.tileset_uid in tileset_index:
+                grid_h, grid_w = layer.refs.shape
+                cels.append(
+                    {
+                        "cel": names[id(layer)],
+                        "tileset": tileset_index[layer.tileset_uid],
+                        "grid_w": int(grid_w),
+                        "grid_h": int(grid_h),
+                        "refs": refs_names[id(layer)],
+                    }
+                )
+    else:
+        for index, layer in enumerate(doc.stack):
+            if isinstance(layer, TilemapCel) and layer.tileset_uid in tileset_index:
+                grid_h, grid_w = layer.refs.shape
+                cels.append(
+                    {
+                        "layer": index,
+                        "tileset": tileset_index[layer.tileset_uid],
+                        "grid_w": int(grid_w),
+                        "grid_h": int(grid_h),
+                        "refs": refs_names[id(layer)],
+                    }
+                )
+    payload["cels"] = cels
+    return json.dumps(payload, indent=2).encode("utf-8")
+
+
+def _write_tiles(zf: zipfile.ZipFile, doc, anim, names: dict[int, str]) -> None:
+    """The three tile members, in their fixed order: tileset strips, then the
+    refs blobs that name them, then ``tiles.json`` last -- it is what a reader
+    needs the first two members' own names for, so it goes out once they are
+    already in the archive.
+    """
+    for i, slot in enumerate(doc.tilesets):
+        zf.writestr(_member(f"data/tileset{i}.png"), _png(slot.tileset.pixels))
+    refs_names = _tile_refs_names(doc, anim)
+    layers = anim.unique_cel_layers() if anim is not None else list(doc.stack)
+    for layer in layers:
+        if isinstance(layer, TilemapCel):
+            # Raw, little-endian, row-major -- kilobytes at most and trivially
+            # deterministic, so a member of its own buys nothing a JSON string
+            # would not, except that JSON cannot hold binary at all.
+            zf.writestr(_member(refs_names[id(layer)]), layer.refs.astype("<u4").tobytes())
+    zf.writestr(_member(TILES_MEMBER), _tiles_json(doc, anim, names, refs_names))
+
+
 def _rect_json(rect) -> dict[str, int]:
     """A rectangle as ``{x, y, w, h}``.
 
@@ -716,6 +835,11 @@ def write_ora(doc, path: Path) -> None:
             for layer in anim.unique_cel_layers():
                 zf.writestr(_member(names[id(layer)]), encode(layer))
             zf.writestr(_member(ANIMATION_MEMBER), _animation_json(doc, names))
+        # Only when there is a tileset to record -- a document that has never
+        # touched one produces the exact archive this writer wrote before
+        # tilesets existed, which is what the determinism suite pins.
+        if getattr(doc, "tilesets", None):
+            _write_tiles(zf, doc, anim, names)
         if getattr(doc, "palette", None):
             zf.writestr(_member(PALETTE_MEMBER), gpl.dumps(doc.palette).encode("utf-8"))
         # Only when there are slices *or* a colour mode to record. A plain RGB
@@ -1268,6 +1392,145 @@ def _install_groups(doc, tree: tuple[dict, dict], parents: dict[int, int]) -> No
     doc.invalidate_all()
 
 
+def _read_tiles(zf: zipfile.ZipFile, doc, anim: Animation | None) -> None:
+    """Rebuild ``doc.tilesets`` and swap the cels ``tiles.json`` names into
+    :class:`~.tiles.TilemapCel`, or leave the document exactly as the grid or
+    flat read already built it.
+
+    Read after the document and its stack exist -- a still document's layers
+    are already at their final positions and an animated one's cels are
+    already the objects ``anim.cels`` and ``doc.stack`` share, so a name in
+    ``tiles.json`` resolves straight onto them. Its own guard, outside every
+    other member's, for ``_read_slices``'s reason one level further: tile
+    *structure* is metadata about a picture that is already fully and
+    honestly on the canvas -- every tilemap cel's own PNG decoded RGBA,
+    complete -- so a wrong version or any single entry failing on its own
+    terms drops the whole member and costs the structure alone. Nothing is
+    written onto ``doc`` until every entry in the member has validated
+    cleanly, so a failure partway through leaves the document exactly as it
+    already was, never half-swapped.
+
+    On success every named cel is replaced **in place**: the same uid, and
+    the same *object* wherever it is linked, which is what lets a linked cel
+    stay linked. Trusting the file's own pixels would let stale ones survive
+    a hand-edited archive, so every replaced cel is re-materialized from its
+    own refs afterwards -- refs are authoritative once this runs, the
+    funnel's own invariant restated for the one path that does not go through
+    it.
+    """
+    from PIL import Image
+
+    try:
+        raw = zf.read(TILES_MEMBER)
+    except KeyError:
+        return
+    try:
+        payload = json.loads(raw)
+        if int(payload.get("version", 0)) != TILES_VERSION:
+            raise ValueError(f"{TILES_MEMBER} version {payload.get('version')!r}")
+
+        slots: list[TilesetSlot] = []
+        for entry in payload["tilesets"]:
+            with Image.open(io.BytesIO(zf.read(entry["data"]))) as im:
+                im.load()
+                pixels = np.asarray(im.convert("RGBA"), dtype=np.uint8).copy()
+            tileset = Tileset(
+                name=str(entry.get("name") or "tiles"),
+                pixels=pixels,
+                tile_w=int(entry["tile_w"]),
+                tile_h=int(entry["tile_h"]),
+            )
+            slots.append(TilesetSlot(tileset=tileset))
+
+        track_binds: list[tuple[int, int]] = []
+        for entry in payload.get("tracks", []):
+            ti, si = int(entry["track"]), int(entry["tileset"])
+            if anim is None or not (0 <= ti < len(anim.tracks) and 0 <= si < len(slots)):
+                raise ValueError(f"{TILES_MEMBER} track {ti} names tileset {si}")
+            track_binds.append((ti, si))
+
+        def _new_cel(layer: Layer, entry: dict) -> TilemapCel:
+            si = int(entry["tileset"])
+            if not 0 <= si < len(slots):
+                raise ValueError(f"{TILES_MEMBER} cel names tileset {si}")
+            grid_h, grid_w = int(entry["grid_h"]), int(entry["grid_w"])
+            blob = zf.read(entry["refs"])
+            expected = grid_h * grid_w * 4
+            if len(blob) != expected:
+                raise ValueError(
+                    f"{entry['refs']} is {len(blob)} bytes, expected {expected}"
+                )
+            refs = np.frombuffer(blob, dtype="<u4").reshape(grid_h, grid_w).astype(gid.DTYPE)
+            return TilemapCel(
+                pixels=layer.pixels,
+                name=layer.name,
+                opacity=layer.opacity,
+                visible=layer.visible,
+                blend=layer.blend,
+                alpha_lock=layer.alpha_lock,
+                locked=layer.locked,
+                indices=layer.indices,
+                uid=layer.uid,
+                refs=refs,
+                tileset_uid=slots[si].uid,
+            )
+
+        replacements: dict[int, TilemapCel] = {}
+        if anim is not None:
+            # ``_cel_names`` recomputed, not passed in: it is a pure function
+            # of ``anim.unique_cel_layers()``, which walks in frame-then-track
+            # order -- the same deterministic walk that named this exact cel
+            # when the file was written, so the names agree without anything
+            # having to be threaded through the read path to prove it.
+            names = _cel_names(anim)
+            by_name: dict[str, Layer] = {}
+            for cel_layer in anim.unique_cel_layers():
+                by_name[names[id(cel_layer)]] = cel_layer
+            for entry in payload.get("cels", []):
+                layer = by_name.get(entry.get("cel"))
+                if layer is None:
+                    raise ValueError(
+                        f"{TILES_MEMBER} cel names an unknown layer: {entry.get('cel')!r}"
+                    )
+                replacements[id(layer)] = _new_cel(layer, entry)
+        else:
+            stack_layers = list(doc.stack)
+            for entry in payload.get("cels", []):
+                li = int(entry["layer"])
+                if not 0 <= li < len(stack_layers):
+                    raise ValueError(f"{TILES_MEMBER} cel names layer {li}")
+                layer = stack_layers[li]
+                replacements[id(layer)] = _new_cel(layer, entry)
+    except (KeyError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        log.warning("ignoring %s in %s: %s", TILES_MEMBER, getattr(zf, "filename", "?"), exc)
+        return
+
+    # Everything above is read-only against ``doc`` -- what follows is the
+    # atomic apply, safe now that every entry in the member has validated.
+    doc.tilesets.extend(slots)
+    if anim is not None:
+        for ti, si in track_binds:
+            anim.tracks[ti].tileset_uid = slots[si].uid
+        # Every slot a linked cel occupies is re-registered, not just one --
+        # ``id(cel)`` is the same key for all of them, so this is what keeps a
+        # link a link rather than unlinking it into one real cel and one stale
+        # copy.
+        for key, cel in list(anim.cels.items()):
+            new = replacements.get(id(cel))
+            if new is not None:
+                anim.cels[key] = new
+    for i, layer in enumerate(doc.stack.layers):
+        new = replacements.get(id(layer))
+        if new is not None:
+            doc.stack.layers[i] = new
+
+    by_uid = {slot.uid: slot for slot in slots}
+    for new_cel in replacements.values():
+        slot = by_uid[new_cel.tileset_uid]
+        new_cel.pixels = materialize(new_cel.refs, slot.tileset, new_cel.size)
+    doc.invalidate_all()
+
+
 def read_ora(path: Path, *, budget: int | None = None):
     from PIL import Image
 
@@ -1315,6 +1578,9 @@ def read_ora(path: Path, *, budget: int | None = None):
                 doc.set_palette(palette, snap=False)
             else:
                 _finish_colour(doc, mode, transparent, reader, palette)
+            # Last: tile structure is metadata about a picture that is
+            # already fully and correctly built above it.
+            _read_tiles(zf, doc, anim)
             return doc
 
         layers: list[Layer] = []
@@ -1366,26 +1632,31 @@ def read_ora(path: Path, *, budget: int | None = None):
                 # coming back as an empty one.
                 parents[layers[-1].uid] = parent
 
-    if not layers:
-        layers = [Layer.empty(max(1, width), max(1, height), "Background")]
-    layers.reverse()  # file order is top-first; ours is bottom-first
-    doc = Document(
-        stack=LayerStack(layers, len(layers) - 1),
-        history=UndoStack(UNDO_BYTES if budget is None else budget),
-        slices=found_slices,
-    )
-    _install_groups(doc, tree, parents)
-    doc.matte = matte_for(doc.composite)
-    doc.file_format = "ora"
-    doc.path = Path(path)
-    if mode == "rgb":
-        doc.set_palette(palette, snap=False)
-    else:
-        if reader is not None:
-            # Paired after the reverse, not inside the loop: the flat path
-            # reverses its list before building the stack, so attaching in file
-            # order would put every plane on the wrong layer.
-            for layer, data in zip(reversed(layers), planes_data, strict=False):
-                reader.attach(layer, data)
-        _finish_colour(doc, mode, transparent, reader, palette)
-    return doc
+        # Inside the same ``with`` as the animated branch above, rather than
+        # closing it first, ``tiles.json`` needs it -- widened deliberately so
+        # a still document reading it stays on the same footing as an
+        # animated one.
+        if not layers:
+            layers = [Layer.empty(max(1, width), max(1, height), "Background")]
+        layers.reverse()  # file order is top-first; ours is bottom-first
+        doc = Document(
+            stack=LayerStack(layers, len(layers) - 1),
+            history=UndoStack(UNDO_BYTES if budget is None else budget),
+            slices=found_slices,
+        )
+        _install_groups(doc, tree, parents)
+        doc.matte = matte_for(doc.composite)
+        doc.file_format = "ora"
+        doc.path = Path(path)
+        if mode == "rgb":
+            doc.set_palette(palette, snap=False)
+        else:
+            if reader is not None:
+                # Paired after the reverse, not inside the loop: the flat path
+                # reverses its list before building the stack, so attaching in
+                # file order would put every plane on the wrong layer.
+                for layer, data in zip(reversed(layers), planes_data, strict=False):
+                    reader.attach(layer, data)
+            _finish_colour(doc, mode, transparent, reader, palette)
+        _read_tiles(zf, doc, None)
+        return doc
