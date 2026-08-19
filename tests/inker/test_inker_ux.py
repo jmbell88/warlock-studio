@@ -28,7 +28,7 @@ PANES = sorted((STUDIO / "panes").glob("*.py"))
 #: The controls that draw at the full width of the content region. imgui puts a
 #: slider's or a combo's own label *outside* the widget, to its right, so at
 #: ``-1`` there is nothing left of the line for anything to follow on.
-FULL_WIDTH = {"labeled_combo", "labeled_slider_int", "labeled_slider_float"}
+FULL_WIDTH = {"labeled_combo", "labeled_slider_int", "labeled_slider_float", "labeled_drag_int"}
 
 #: Modules whose calls *draw*. A statement calling one of these ends the run
 #: begun by a full-width control; a statement that only writes a value back

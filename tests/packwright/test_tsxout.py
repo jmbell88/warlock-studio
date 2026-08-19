@@ -90,3 +90,48 @@ def test_two_writes_of_one_pack_are_byte_identical():
     a = tsxout.grid_tsx(result, atlas, name="pack", image_name="atlas.png")
     b = tsxout.grid_tsx(result, atlas, name="pack", image_name="atlas.png")
     assert a == b
+
+
+# --- power-of-two geometry -------------------------------------------------
+
+
+def test_a_power_of_two_auto_grid_still_round_trips():
+    """The auto column search re-derives after rounding precisely so this
+    stays true: :func:`~.layout.grid_layout`'s pow2 branch and Tiled's own
+    formula must never disagree about how many columns an image holds."""
+    sprites = [_sprite(f"s{i:02d}", (10 * i + 10, 40, 60, 255)) for i in range(9)]
+    result = layout(sprites, PackSettings(padding=2, power_of_two=True))
+    atlas = compose(sprites, result)
+    data = tsxout.grid_tsx(result, atlas, name="pack", image_name="atlas.png")
+    back = tsxmod.read_tsx(data, atlas)
+    assert back.columns == result.columns
+    assert back.rows == result.rows
+    tileset = tsxout.grid_tileset(result, atlas, name="pack")
+    for index, frame in enumerate(result.frames):
+        x, y, _w, _h = tileset.tile_rect(index)
+        assert (x, y) == (frame.x, frame.y)
+
+
+def test_an_explicit_columns_grid_that_pow2_rounding_widens_refuses_a_tsx():
+    """Honouring an explicit column count means the grid does *not* follow
+    power-of-two rounding the way the auto search does -- so the rounded
+    image can carry room Tiled would read as extra columns/rows the pack
+    never placed. Writing a ``.tsx`` from that would slice tiles onto the
+    wrong sprites past the first row, so it is refused by name instead."""
+    sprites = [_sprite(f"s{i:02d}", (10 * i + 10, 40, 60, 255)) for i in range(4)]
+    result = layout(sprites, PackSettings(padding=2, power_of_two=True, columns=2))
+    atlas = compose(sprites, result)
+    with pytest.raises(ValueError, match="power-of-two rounding leaves Tiled reading"):
+        tsxout.grid_tileset(result, atlas, name="pack")
+
+
+def test_an_explicit_columns_grid_that_pow2_rounding_does_not_widen_still_exports():
+    """The refusal is about the mismatch, not about ``columns`` or
+    ``power_of_two`` being set at all -- when the pre-rounding width already
+    sits on a power of two, rounding buys no spare room, the two stay in
+    agreement, and the export proceeds."""
+    sprites = [_sprite(f"s{i:02d}", (10 * i + 10, 40, 60, 255)) for i in range(9)]
+    result = layout(sprites, PackSettings(padding=2, power_of_two=True, columns=3))
+    atlas = compose(sprites, result)
+    tileset = tsxout.grid_tileset(result, atlas, name="pack")
+    assert (tileset.columns, tileset.rows) == (result.columns, result.rows)

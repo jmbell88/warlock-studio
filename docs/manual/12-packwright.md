@@ -82,6 +82,14 @@ free space. A fully transparent sprite is packed as a single pixel and marked bl
 dropped — a blank frame in the middle of a clip is a real frame, it is the pause, and removing it
 would renumber everything after it.
 
+**Columns** (grid mode only) fixes how many cells wide the grid is, for a tileset you index by column
+— an animation strip cut at a known width, say. Zero is auto: the packer searches for a near-square
+grid that fits the sprite count. An explicit count is honoured exactly, including through
+power-of-two rounding — the atlas may still round up, but the grid does not follow it there, so a
+rounded atlas can carry dead space past the last column rather than a column nothing placed. That is
+also why an explicit count occasionally refuses a `.tsx` export (see Exporting): Tiled derives its
+own column count from the image, and this pack will not let the two disagree.
+
 **Padding** is the gap between neighbours and around the edge. Two is enough for most things.
 
 **Extrude** repeats each sprite's border pixels outward into that gap, so a filtered texture
@@ -97,6 +105,9 @@ some engines require it; leaving it off gives a tighter atlas.
 **Max size** is the ceiling the packer grows to. Past 8192 pixels engines start refusing a texture
 outright, so that is the hard limit whatever this says.
 
+**Sidecar schema** picks TexturePacker's *Array* or *Hash* shape for the exported JSON — see
+Exporting.
+
 ## The preview
 
 The middle pane shows the packed atlas over a checkerboard, so transparency is visible rather than
@@ -106,6 +117,13 @@ placement is outlined; the selected one is highlighted. Clicking a sprite select
 Packing happens automatically whenever something changes and runs off the frame thread, so a
 hundred-sprite atlas does not stall the window. `R` forces a repack.
 
+Below the atlas size, a line compares the packed area to the pile of source pixels it came from —
+"Packed to 41% of the source pixels' area", say. It says shrink or growth honestly rather than
+implying one: a *sparse* source (mostly empty, from a tile-set import that dropped its blank cells)
+reliably packs smaller, but power-of-two rounding can round a tightly-fitting grid up past its
+source, and this is where that shows up rather than being discovered at export. Turning
+power-of-two off, or switching to MaxRects, is the fix either line points at.
+
 ## When it does not fit
 
 A pack that cannot fit says so in the placement list, with the number and the remedy — raise the max
@@ -114,9 +132,15 @@ atlas is much harder to notice than none of one, because it looks like success.
 
 ## Exporting
 
-**Atlas + JSON** (`Ctrl+Shift+E`) writes the atlas PNG and a sidecar beside it in TexturePacker's
-*JSON (Array)* schema, which nearly every 2D engine and framework already has a loader for. When the
-pack is a grid it writes a `.tsx` as well.
+**Atlas + JSON** (`Ctrl+Shift+E`) writes the atlas PNG and a sidecar beside it in one of
+TexturePacker's two JSON schemas — the Settings pane's **Sidecar schema** picks which. *Array*
+(the default, and what every export wrote before there was a choice) lists frames in the packer's
+own order; *Hash* keys the same frames by filename instead, for a loader that looks one up by name
+rather than scanning for it. Two sources sharing a name pack fine under Array; Hash refuses instead
+of silently keeping only one of them, since a dict has room for only one key of that name. When the
+pack is a grid it writes a `.tsx` as well — unless an explicit **Columns** count and power-of-two
+rounding have put the grid and the image geometry out of agreement (see Settings), in which case the
+`.tsx` is refused by name rather than written wrong; the PNG and JSON still export.
 
 The sidecar is engine-neutral: pixel rectangles and nothing else. Each frame records where it landed
 in the atlas, whether it was trimmed, where the trimmed rectangle sat inside the original image, and
@@ -143,8 +167,8 @@ reopen the real document rather than a flat picture. It follows the same precede
 | --- | --- |
 | `<name>.wpack` | The document: sources and settings. The atlas is derived, not stored. |
 | `<name>.png` | An exported atlas. |
-| `<name>.json` | Its sidecar, in TexturePacker's JSON (Array) schema. |
-| `<name>.tsx` | A Tiled tileset, written only for a grid pack. |
+| `<name>.json` | Its sidecar, in TexturePacker's Array or Hash JSON schema. |
+| `<name>.tsx` | A Tiled tileset, written for a grid pack whose geometry agrees with Tiled's own. |
 | `~/.warlock/assets/<job>/input.png` | The atlas, for one exported to the library. |
 | `~/.warlock/assets/<job>/pack.wpack` | The document behind it. Not served; reopened by **Edit in Packwright**. |
 

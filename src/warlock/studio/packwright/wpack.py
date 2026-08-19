@@ -101,6 +101,17 @@ def manifest_json(doc: PackDoc) -> str:
             "trim": settings.trim,
             "max_size": settings.max_size,
             "power_of_two": settings.power_of_two,
+            # Written only away from their defaults, the ``_meta_json`` rule:
+            # a document that never touched either keeps producing the exact
+            # bytes it always did, VERSION unchanged, and an older build's
+            # ``.get``-based read of a *newer* file falls back to the default
+            # it already knows.
+            **({"columns": settings.columns} if settings.columns is not None else {}),
+            **(
+                {"json_schema": settings.json_schema}
+                if settings.json_schema != PackSettings().json_schema
+                else {}
+            ),
         },
         "sources": [
             {
@@ -320,6 +331,10 @@ def _settings_from(entry: Any) -> PackSettings:
             "trim": bool(values.get("trim", default.trim)),
             "max_size": int(values.get("max_size", default.max_size)),
             "power_of_two": bool(values.get("power_of_two", default.power_of_two)),
+            "columns": (
+                None if values.get("columns") is None else int(values.get("columns"))
+            ),
+            "json_schema": str(values.get("json_schema", default.json_schema)),
         }
     except (TypeError, ValueError) as exc:
         raise ValueError("this atlas document's settings are malformed") from exc

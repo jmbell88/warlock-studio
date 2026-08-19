@@ -22,11 +22,30 @@ from ..packwright.layout import MODES
 
 SIZES = (256, 512, 1024, 2048, 4096, 8192)
 
+# The drag's own ceiling. Not ``MAX_SPRITES``: a tileset author picking a
+# column count is choosing a *shape*, and a shape past a few dozen columns
+# wide is not one anybody is choosing on purpose -- ``PackSettings`` itself
+# stays the real limit for a hand-edited manifest past this.
+MAX_COLUMNS = 256
+
 _MODE_NOTES = {
     "grid": "Uniform cells, sized to the largest sprite. Exports a .tsx as well, "
     "so the result can be used as a tileset in Plotter or Tiled.",
     "maxrects": "Packs tightly and irregularly. Smaller atlas, but the cells are "
     "not a grid -- an importer has to read the JSON.",
+}
+
+_SCHEMA_OPTIONS = [
+    ("array", "Array"),
+    ("hash", "Hash"),
+]
+
+_SCHEMA_NOTES = {
+    "array": "TexturePacker's JSON (Array) schema. Every engine and framework "
+    "that reads this format already has a loader for it.",
+    "hash": "TexturePacker's JSON (Hash) schema: the same frames, keyed by "
+    "filename instead of listed in order, for a loader that looks one up by "
+    "name. Two sprites sharing a name refuse this schema rather than lose one.",
 }
 
 
@@ -58,6 +77,20 @@ def draw(ctx: Any) -> None:
         packwright_mode.set_settings(ctx, tab, mode=mode)
     widgets.muted_wrapped(_MODE_NOTES.get(settings.mode, ""))
 
+    if settings.mode == "grid":
+        imgui.dummy((0, 6))
+        changed, columns = widgets.labeled_drag_int(
+            "Columns", settings.columns or 0, 0, MAX_COLUMNS, speed=0.1
+        )
+        if changed and editable:
+            packwright_mode.set_settings(ctx, tab, columns=int(columns) or None)
+        widgets.muted_wrapped(
+            "Zero packs the near-square grid the sprite count fits best. Set "
+            "one to fix the column count for a tileset you index by it -- a "
+            "power-of-two atlas may then carry dead space past the last "
+            "column, and a .tsx export refuses rather than misread it."
+        )
+
     imgui.dummy((0, 6))
     changed, trim = widgets.toggle("Trim transparent edges", settings.trim)
     if changed and editable:
@@ -86,6 +119,12 @@ def draw(ctx: Any) -> None:
     picked = widgets.labeled_combo("Max size", str(settings.max_size), sizes)
     if editable and picked != str(settings.max_size):
         packwright_mode.set_settings(ctx, tab, max_size=int(picked))
+
+    imgui.dummy((0, 6))
+    schema = widgets.labeled_combo("Sidecar schema", settings.json_schema, _SCHEMA_OPTIONS)
+    if editable and schema != settings.json_schema:
+        packwright_mode.set_settings(ctx, tab, json_schema=schema)
+    widgets.muted_wrapped(_SCHEMA_NOTES.get(settings.json_schema, ""))
 
     imgui.end_disabled()
 

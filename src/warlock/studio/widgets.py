@@ -2215,6 +2215,27 @@ def labeled_slider_int(
     return imgui.slider_int(f"##{label}", value, low, high)
 
 
+def labeled_drag_int(
+    label: str,
+    value: int,
+    low: int,
+    high: int,
+    *,
+    speed: float = 1.0,
+    fmt: str = "%d",
+    help_text: str | None = None,
+) -> tuple[bool, int]:
+    """``labeled_slider_int``'s rule for a value whose useful range is too
+    wide for a track to be the right control -- a column count that is
+    meaningful from 1 to a few dozen but not bounded there, say. Click-drag
+    still moves it in ``speed``-sized steps; ctrl-click still opens exact text
+    entry, which is how a slider's own range would otherwise be typed around.
+    """
+    field_label(label, help_text)
+    imgui.set_next_item_width(-1)
+    return imgui.drag_int(f"##{label}", value, speed, low, high, fmt)
+
+
 def float_format(low: float, high: float, step: float | None = None) -> str:
     """The printf format a slider over ``low..high`` should draw itself with.
 

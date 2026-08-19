@@ -129,6 +129,25 @@ def test_a_renamed_sprite_reaches_the_exported_sidecar(tmp_path, monkeypatch):
     assert "hero" in json.dumps(sidecar)
 
 
+def test_the_json_schema_setting_reaches_the_exported_sidecar(tmp_path, monkeypatch):
+    """Settings-level, the same seam ``mode``/``trim`` already use: a schema
+    picked before packing is the schema the export writes, with no separate
+    export-time argument to forget."""
+    import json
+
+    from warlock.studio import dialogs
+
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    packwright_mode.set_settings(ctx, tab, json_schema="hash")
+    _pack(ctx, tab)
+    monkeypatch.setattr(dialogs, "save_file", lambda *a, **k: tmp_path / "out.png")
+    packwright_mode.export_files(ctx, tab)
+
+    sidecar = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert isinstance(sidecar["frames"], dict)
+
+
 def test_a_whole_set_lands_together(tmp_path):
     written = {
         tmp_path / "a.png": b"one",

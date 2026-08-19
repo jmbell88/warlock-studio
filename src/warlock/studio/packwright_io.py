@@ -246,6 +246,11 @@ def export_files(ctx: Any, tab: PackTab | None = None) -> None:
         ctx.toast("Nothing packed yet.", "error")
         return
     layout, atlas = tab.layout, tab.atlas
+    # Snapshotted here, with ``layout``/``atlas`` above, for the same reason
+    # ``request_pack`` snapshots settings before its own task closure: a
+    # setting read at run time reflects whatever the user changed while the
+    # save dialog was open (unbounded, modal), not what was packed.
+    schema = tab.doc.settings.json_schema
     stem = Path(tab.title).stem or "atlas"
 
     def run() -> dict[str, Any] | None:
@@ -255,7 +260,9 @@ def export_files(ctx: Any, tab: PackTab | None = None) -> None:
         path = path.with_suffix(".png")
         files = {
             path: composelib.png_bytes(atlas),
-            path.with_suffix(".json"): texturepacker.tp_bytes(layout, image_name=path.name),
+            path.with_suffix(".json"): texturepacker.tp_bytes(
+                layout, image_name=path.name, schema=schema
+            ),
         }
         if layout.is_grid:
             files[path.with_suffix(".tsx")] = tsxout.grid_tsx(

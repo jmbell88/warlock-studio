@@ -76,6 +76,36 @@ def draw(ctx: Any) -> None:
         f"{size_px[0]} x {size_px[1]} px  --  {int(view.zoom * 100)}%  --  "
         f"{len(tab.layout.frames) if tab.layout else 0} sprite(s)"
     )
+    note = _area_note(tab, size_px)
+    if note:
+        widgets.muted(note)
+
+
+def _area_note(tab: Any, size_px: tuple[int, int]) -> str | None:
+    """The shrink-to-fit line: what the packed atlas' area is next to the pile
+    of source pixels it came from, in words rather than left for the user to
+    do the division themselves.
+
+    A pure function of the tab -- no imgui in it -- so it is worth testing on
+    its own rather than only through the smoke suite that draws it. ``None``
+    with nothing packed yet, or with every source at zero area (an empty
+    document has neither), so the caller draws nothing rather than a
+    percentage of zero.
+    """
+    if not tab.doc.sources:
+        return None
+    source_area = sum(source.sprite.width * source.sprite.height for source in tab.doc.sources)
+    if source_area <= 0:
+        return None
+    ratio = (size_px[0] * size_px[1]) / source_area
+    if ratio <= 0.995:
+        return f"Packed to {ratio:.0%} of the source pixels' area."
+    if ratio >= 1.005:
+        return (
+            f"Packed to {ratio:.0%} of the source pixels' area -- turn off "
+            "power-of-two, or MaxRects, for a tighter fit."
+        )
+    return "Packed to the same area as the source pixels."
 
 
 def _tabs(ctx: Any, state: Any) -> None:

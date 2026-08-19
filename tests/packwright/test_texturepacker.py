@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from warlock.studio.packwright import texturepacker
 from warlock.studio.packwright.layout import PackSettings, layout
@@ -107,6 +108,59 @@ def test_a_name_that_already_ends_in_png_is_not_doubled():
     result = layout(sprites, PackSettings(power_of_two=False))
     entry = texturepacker.tp_json(result, image_name="a.png")["frames"][0]
     assert entry["filename"] == "hero.png"
+
+
+# --- schema choice ---------------------------------------------------------
+
+
+def test_the_array_schema_is_untouched_by_the_schema_parameter():
+    """The additive contract: a caller passing nothing, and one passing
+    ``schema="array"`` explicitly, both get exactly what this module always
+    wrote."""
+    _sprites, result = _layout()
+    implicit = texturepacker.tp_bytes(result, image_name="atlas.png")
+    explicit = texturepacker.tp_bytes(result, image_name="atlas.png", schema="array")
+    assert implicit == explicit
+    assert isinstance(json.loads(implicit)["frames"], list)
+
+
+def test_the_hash_schema_keys_frames_by_filename():
+    sprites, result = _layout()
+    payload = texturepacker.tp_json(result, image_name="atlas.png", schema="hash")
+    assert isinstance(payload["frames"], dict)
+    array = texturepacker.tp_json(result, image_name="atlas.png", schema="array")["frames"]
+    by_name = {entry["filename"]: entry for entry in array}
+    assert payload["frames"] == by_name
+    assert set(payload["frames"]) == {f"{sprite.name}.png" for sprite in sprites}
+    # ``meta`` is unaffected by the schema: it describes the atlas.
+    assert payload["meta"] == texturepacker.tp_json(result, image_name="atlas.png")["meta"]
+
+
+def test_a_duplicate_filename_is_refused_under_the_hash_schema():
+    """Two sources may legitimately share a display name (``PackDoc`` allows
+    it); the array schema tolerates that, the hash schema cannot, and
+    silently keeping only the last one would describe an atlas with fewer
+    sprites than it has."""
+    sprites = [Sprite(key="a", name="hero", pixels=np.ones((4, 4, 4), np.uint8) * 255)]
+    sprites.append(Sprite(key="b", name="hero", pixels=np.ones((4, 4, 4), np.uint8) * 255))
+    result = layout(sprites, PackSettings(power_of_two=False))
+    with pytest.raises(ValueError, match="names more than one sprite"):
+        texturepacker.tp_json(result, image_name="atlas.png", schema="hash")
+
+
+def test_an_unknown_schema_is_refused():
+    _sprites, result = _layout()
+    with pytest.raises(ValueError, match="schema must be one of"):
+        texturepacker.tp_json(result, image_name="atlas.png", schema="xml")
+    with pytest.raises(ValueError, match="schema must be one of"):
+        texturepacker.tp_bytes(result, image_name="atlas.png", schema="xml")
+
+
+def test_two_hash_serializations_of_one_layout_are_byte_identical():
+    _sprites, result = _layout()
+    first = texturepacker.tp_bytes(result, image_name="atlas.png", schema="hash")
+    second = texturepacker.tp_bytes(result, image_name="atlas.png", schema="hash")
+    assert first == second
 
 
 def test_this_module_never_reaches_for_the_warlock_sheet_sidecar():

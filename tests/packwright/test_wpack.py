@@ -216,6 +216,44 @@ def test_the_manifest_holds_no_atlas_and_no_layout():
     assert list(payload) == sorted(payload)
 
 
+# --- columns / json_schema: additive settings fields ---------------------
+
+
+def test_default_columns_and_schema_are_absent_from_the_manifest():
+    """The ``_meta_json`` rule, applied to settings: a document that never
+    touched either field produces exactly the bytes it always did, so an
+    older build's ``.get``-based read of a file this build wrote still opens
+    it as the document it already knows how to describe."""
+    payload = json.loads(wpack.manifest_json(_doc()))
+    assert "columns" not in payload["settings"]
+    assert "json_schema" not in payload["settings"]
+
+
+def test_an_explicit_columns_and_schema_round_trip():
+    doc = PackDoc()
+    for i in range(4):
+        doc.add_source(_sprite(f"s{i}"))
+    doc.set_settings(columns=2, json_schema="hash")
+    doc.mark_saved()
+    payload = json.loads(wpack.manifest_json(doc))
+    assert payload["settings"]["columns"] == 2
+    assert payload["settings"]["json_schema"] == "hash"
+    back = wpack.read_wpack(wpack.wpack_bytes(doc))
+    assert back.settings.columns == 2
+    assert back.settings.json_schema == "hash"
+
+
+def test_a_manifest_that_never_heard_of_columns_or_schema_opens_at_the_defaults():
+    """A ``.wpack`` written before this task -- or by hand -- has neither key
+    at all, not even ``null``; the reader's ``.get`` default is what a
+    genuinely older file needs, not just a value round-tripped through this
+    build."""
+    data = _rewrite(_doc(), lambda m: m["settings"].pop("columns", None))
+    back = wpack.read_wpack(data)
+    assert back.settings.columns is None
+    assert back.settings.json_schema == "array"
+
+
 # --- refusals -----------------------------------------------------------------
 
 

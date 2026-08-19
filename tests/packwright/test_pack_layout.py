@@ -146,6 +146,84 @@ def test_a_grid_too_large_for_the_ceiling_is_refused():
         lay.grid_layout(_sprites(40, 200, 200), PackSettings(max_size=256))
 
 
+# --- explicit columns -----------------------------------------------------
+
+
+def test_an_explicit_columns_count_drives_the_grid_instead_of_the_isqrt_search():
+    result = lay.grid_layout(
+        _sprites(9, 10, 10), PackSettings(padding=2, power_of_two=False, columns=2)
+    )
+    assert result.columns == 2
+    assert result.rows == 5  # ceil(9 / 2)
+    step = 10 + 2
+    assert result.width == 2 + 2 * step
+    assert result.height == 2 + 5 * step
+    for index, frame in enumerate(result.frames):
+        assert frame.x == 2 + (index % 2) * step
+        assert frame.y == 2 + (index // 2) * step
+
+
+def test_columns_must_be_at_least_one():
+    with pytest.raises(ValueError, match="columns must be at least 1"):
+        PackSettings(columns=0)
+    with pytest.raises(ValueError, match="columns must be at least 1"):
+        PackSettings(columns=-1)
+
+
+def test_columns_on_a_maxrects_pack_is_refused_rather_than_ignored():
+    """MaxRects has no uniform cell for a column count to describe -- silently
+    dropping it would look like the setting worked."""
+    with pytest.raises(ValueError, match="columns only applies to a grid pack"):
+        PackSettings(mode="maxrects", columns=4)
+
+
+def test_explicit_columns_is_not_widened_by_power_of_two_rounding():
+    """The point of setting columns is exact control: a rounding-bought column
+    is not a column the user asked for. Contrast with the auto search, which
+    *does* re-derive (below) -- this is the "backwards for tileset authoring"
+    case the setting exists to fix."""
+    result = lay.grid_layout(
+        _sprites(9, 10, 10), PackSettings(padding=2, power_of_two=True, columns=3)
+    )
+    assert result.columns == 3
+    assert result.rows == 3
+    assert lay.next_pot(result.width) == result.width
+    assert lay.next_pot(result.height) == result.height
+
+
+# --- json schema -----------------------------------------------------------
+
+
+def test_json_schema_defaults_to_array():
+    assert PackSettings().json_schema == "array"
+
+
+def test_an_unknown_json_schema_is_refused():
+    with pytest.raises(ValueError, match="json_schema must be one of"):
+        PackSettings(json_schema="xml")
+
+
+def test_json_schema_is_a_settings_field_a_repack_does_not_disturb():
+    """It travels with ``.set_settings`` exactly like ``mode``/``trim`` --
+    proven here by the dataclass round trip ``document.py`` uses."""
+    from dataclasses import replace
+
+    settings = PackSettings()
+    after = replace(settings, json_schema="hash")
+    assert after.json_schema == "hash"
+    assert after.mode == settings.mode  # untouched fields survive replace()
+
+
+def test_auto_columns_still_re_derives_from_the_rounded_width():
+    """The existing, tsx-safe behaviour: unset ``columns`` is unaffected by the
+    explicit-columns fix and stays byte-for-byte what it always was."""
+    result = lay.grid_layout(_sprites(9, 10, 10), PackSettings(padding=2, power_of_two=True))
+    step = 10 + 2
+    assert result.columns == (result.width - 2) // step
+    assert result.rows == (result.height - 2) // step
+    assert result.columns == 5 and result.rows == 2
+
+
 # --- trim inside a layout -----------------------------------------------------
 
 

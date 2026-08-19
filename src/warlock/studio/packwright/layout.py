@@ -35,6 +35,13 @@ from .trim import trim_rect
 
 MODES = ("grid", "maxrects")
 
+#: The two TexturePacker JSON shapes :mod:`.texturepacker` can write. Named
+#: here rather than in that module because :class:`PackSettings` validates
+#: against it and :mod:`.texturepacker` already imports from this module, not
+#: the other way round -- a second copy of the tuple there would be the two
+#: places one of them is free to drift from the other.
+JSON_SCHEMAS = ("array", "hash")
+
 DEFAULT_PADDING = 2
 DEFAULT_MAX_SIZE = 2048
 
@@ -65,6 +72,20 @@ class PackSettings:
     trim: bool = True
     max_size: int = DEFAULT_MAX_SIZE
     power_of_two: bool = True
+    #: Trailing and defaulted, so an older ``.wpack`` -- or a caller that never
+    #: heard of it -- keeps auto behaviour. Grid mode only: a MaxRects pack has
+    #: no uniform cell for a column count to describe, so setting one there is
+    #: refused by name rather than silently ignored -- the same taste every
+    #: other combination on this dataclass is held to (``padding``/``extrude``,
+    #: ``max_size``). ``None`` is auto -- the near-square search below.
+    columns: int | None = None
+    #: Which TexturePacker JSON shape :func:`export_files` writes. Settings-
+    #: level rather than an argument to the export call, the same seam
+    #: ``mode``/``trim``/``power_of_two`` already use: it is a per-document
+    #: choice that belongs beside them in the ``.wpack`` and in undo, not a
+    #: one-off passed at the moment of export and forgotten. ``"array"`` is
+    #: what every export wrote before this field existed, so it stays default.
+    json_schema: str = "array"
 
     def __post_init__(self) -> None:
         if self.mode not in MODES:
@@ -88,6 +109,16 @@ class PackSettings:
                 f"max size must be at most {sheetlib.MAX_ATLAS_PX}px, "
                 "which is where engines start refusing a texture outright"
             )
+        if self.columns is not None:
+            if self.columns < 1:
+                raise ValueError("columns must be at least 1")
+            if self.mode != "grid":
+                raise ValueError(
+                    "columns only applies to a grid pack -- a MaxRects pack has "
+                    "no uniform cell for a column count to describe"
+                )
+        if self.json_schema not in JSON_SCHEMAS:
+            raise ValueError(f"json_schema must be one of {list(JSON_SCHEMAS)}")
 
 
 @dataclass(frozen=True)
@@ -217,6 +248,26 @@ def grid_layout(sprites: list[Sprite], settings: PackSettings) -> Layout:
     border and every gutter are one ``padding`` -- which is exactly
     ``margin == spacing == padding`` in a ``.tsx``. That equivalence is the
     whole reason grid mode can emit a tileset at all.
+
+    **Auto** (``settings.columns is None``) picks a near-square column count
+    and, when ``power_of_two`` rounds the width up, *re-derives* columns from
+    the rounded width -- the same span Tiled's own formula would compute from
+    the finished image -- and rows from the rounded height the same way. That
+    keeps this layout and :func:`~.tsxout.grid_tileset`'s independent read of
+    the exported PNG in permanent agreement, at the cost of leaving the exact
+    column count up to wherever the rounding lands.
+
+    **Explicit** (``settings.columns`` set) is the opposite trade: a tileset
+    author who asked for a specific column count -- to match an existing tile
+    index, say -- gets exactly that count, never silently widened because
+    rounding bought room for one more. The atlas may still round up for
+    ``power_of_two``; the grid does not follow it there, so the rounded
+    atlas can carry dead margin past the last column/row. That margin is
+    honest padding-contract territory (the *content* area is still exactly
+    ``padding + columns * (cell + padding)``) but it is no longer what Tiled's
+    own formula would derive from the full image, so :func:`~.tsxout.grid_tileset`
+    checks the two agree before it will write a ``.tsx`` -- and refuses,
+    naming the mismatch, rather than emit one that slices wrong.
     """
     entries = _measure(sprites, settings)
     if not entries:
@@ -227,26 +278,36 @@ def grid_layout(sprites: list[Sprite], settings: PackSettings) -> Layout:
     cell_h = max(entry.h for entry in entries)
     step_w, step_h = cell_w + pad, cell_h + pad
 
-    columns = max(1, math.isqrt(len(entries) - 1) + 1)
-    width = pad + columns * step_w
-    if settings.power_of_two:
-        width = next_pot(width)
-    # Re-derive the column count from the *final* width, so a power-of-two
-    # rounding that bought room for another column is a column the .tsx and
-    # this layout agree about -- rather than a strip of the atlas that a
-    # tileset reader slices into tiles nothing here knows exist.
-    columns = max(1, (width - pad) // step_w)
-    rows = -(-len(entries) // columns)
-    height = pad + rows * step_h
-    if settings.power_of_two:
-        height = next_pot(height)
-    # And rows from the final height, for the same reason columns came from the
-    # final width: ``columns``/``rows`` here have to be the grid a ``.tsx``
-    # reader derives from the image, not the number of cells that happen to be
-    # occupied. Trailing cells are legitimately empty -- a tileset with blank
-    # tiles at the end is ordinary -- but a layout and its own tileset
-    # disagreeing about the shape of the grid is not.
-    rows = max(1, (height - pad) // step_h)
+    if settings.columns is not None:
+        columns = settings.columns
+        width = pad + columns * step_w
+        if settings.power_of_two:
+            width = next_pot(width)
+        rows = -(-len(entries) // columns)
+        height = pad + rows * step_h
+        if settings.power_of_two:
+            height = next_pot(height)
+    else:
+        columns = max(1, math.isqrt(len(entries) - 1) + 1)
+        width = pad + columns * step_w
+        if settings.power_of_two:
+            width = next_pot(width)
+        # Re-derive the column count from the *final* width, so a power-of-two
+        # rounding that bought room for another column is a column the .tsx and
+        # this layout agree about -- rather than a strip of the atlas that a
+        # tileset reader slices into tiles nothing here knows exist.
+        columns = max(1, (width - pad) // step_w)
+        rows = -(-len(entries) // columns)
+        height = pad + rows * step_h
+        if settings.power_of_two:
+            height = next_pot(height)
+        # And rows from the final height, for the same reason columns came from
+        # the final width: ``columns``/``rows`` here have to be the grid a
+        # ``.tsx`` reader derives from the image, not the number of cells that
+        # happen to be occupied. Trailing cells are legitimately empty -- a
+        # tileset with blank tiles at the end is ordinary -- but a layout and
+        # its own tileset disagreeing about the shape of the grid is not.
+        rows = max(1, (height - pad) // step_h)
 
     _check_size(width, height, settings)
     frames = tuple(

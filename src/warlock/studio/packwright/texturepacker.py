@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from .layout import JSON_SCHEMAS as SCHEMAS
 from .layout import Layout
 
 FORMAT = "RGBA8888"
@@ -104,10 +105,50 @@ def _frame_entry(frame: Any) -> dict[str, Any]:
     return entry
 
 
-def tp_json(layout: Layout, *, image_name: str, scale: float = 1.0) -> dict[str, Any]:
-    """The sidecar as a plain dict, in the layout's own canonical frame order."""
+#: The two TexturePacker JSON shapes, imported from :mod:`.layout` so
+#: ``PackSettings.json_schema`` validates against the same tuple this writes.
+#: ``"array"`` is what this module always wrote and stays the default -- an
+#: existing caller that never heard of ``schema`` gets exactly the bytes it
+#: always did. ``"hash"`` is TexturePacker's other published shape: the same
+#: nine-key frame entries, keyed by filename in a dict instead of listed in
+#: an array, for the loaders that expect to look a frame up by name rather
+#: than scan for it.
+
+
+def tp_json(
+    layout: Layout, *, image_name: str, scale: float = 1.0, schema: str = "array"
+) -> dict[str, Any]:
+    """The sidecar as a plain dict, in the layout's own canonical frame order.
+
+    ``schema`` picks the shape of ``frames`` alone; ``meta`` is identical
+    either way, because it describes the atlas, not how the frames are
+    addressed. Refused by name rather than falling back to the default: a
+    caller that misspells a schema silently getting the array it did not ask
+    for is a worse failure than one that stops it.
+    """
+    if schema not in SCHEMAS:
+        raise ValueError(f"schema must be one of {list(SCHEMAS)}")
+    entries = [_frame_entry(frame) for frame in layout.frames]
+    frames: Any = entries
+    if schema == "hash":
+        frames = {}
+        for entry in entries:
+            # Two sources are allowed to share a display name -- see
+            # ``PackDoc``'s own rule -- and the array schema is fine with
+            # that, since every frame gets its own slot regardless of what it
+            # is called. A hash schema is not: a second frame under the same
+            # ``filename`` key would silently overwrite the first rather than
+            # sit beside it, and the sidecar would describe fewer sprites
+            # than the atlas actually has. Refused rather than losing one.
+            if entry["filename"] in frames:
+                raise ValueError(
+                    f"the hash schema keys frames by filename, and {entry['filename']!r} "
+                    "names more than one sprite in this pack -- rename one, or export "
+                    "the array schema instead"
+                )
+            frames[entry["filename"]] = entry
     return {
-        "frames": [_frame_entry(frame) for frame in layout.frames],
+        "frames": frames,
         "meta": {
             "app": APP,
             "version": SCHEMA_VERSION,
@@ -121,8 +162,10 @@ def tp_json(layout: Layout, *, image_name: str, scale: float = 1.0) -> dict[str,
     }
 
 
-def tp_bytes(layout: Layout, *, image_name: str, scale: float = 1.0) -> bytes:
+def tp_bytes(
+    layout: Layout, *, image_name: str, scale: float = 1.0, schema: str = "array"
+) -> bytes:
     """The same, serialized. Stable for a given layout, which is what makes a
     re-export of an unchanged document byte-identical."""
-    payload = tp_json(layout, image_name=image_name, scale=scale)
+    payload = tp_json(layout, image_name=image_name, scale=scale, schema=schema)
     return (json.dumps(payload, indent=2) + "\n").encode()
