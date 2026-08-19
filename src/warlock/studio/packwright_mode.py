@@ -206,7 +206,7 @@ def import_tileset(ctx: Any) -> bool:
     sheet cut differently adds a different set rather than being skipped as
     duplicates of the first cut.
     """
-    from .packwright.sources import sprites_from_tileset
+    from .packwright.sources import dedup_tiles, sprites_from_tileset
 
     state = ensure(ctx)
     tab = active(ctx)
@@ -221,6 +221,10 @@ def import_tileset(ctx: Any) -> bool:
     except ValueError as exc:
         ctx.toast(f"That tile set was not imported: {exc}", "error")
         return False
+    if state.tileset_dedup:
+        sprites, _dropped = dedup_tiles(
+            sprites, orientations=state.tileset_dedup_flips
+        )
     state.tileset_import = None
     state.tileset_import_open = False
     added = _add_sprites(ctx, tab, sprites)

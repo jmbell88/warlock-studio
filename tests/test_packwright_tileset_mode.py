@@ -151,3 +151,90 @@ def test_import_with_nothing_parked_is_a_no_op() -> None:
     ctx = FakeCtx()
     packwright_mode.new_document(ctx)
     assert packwright_mode.import_tileset(ctx) is False
+
+
+# --- dedup at the import door (Part I) ----------------------------------------
+
+
+def _dup_sheet(size: int = 4) -> np.ndarray:
+    """Four cells: two identical, one their mirror, one genuinely different."""
+    one = np.zeros((size, size, 4), dtype=np.uint8)
+    one[..., :3] = (30, 30, 30)
+    one[..., 3] = 255
+    one[0, 0, :3] = (200, 40, 40)
+    other = one.copy()
+    other[size - 1, size - 1, :3] = (40, 200, 40)
+    flipped = np.ascontiguousarray(one[:, ::-1])
+    top = np.concatenate([one, one.copy()], axis=1)
+    bottom = np.concatenate([flipped, other], axis=1)
+    return np.concatenate([top, bottom], axis=0)
+
+
+def _park_dups(ctx: FakeCtx, pixels: np.ndarray, cell: int = 4) -> Any:
+    tab = packwright_mode.new_document(ctx)
+    state = packwright_mode.ensure(ctx)
+    state.tileset_import = ("sheet.png", "sheet", pixels)
+    state.tileset_cell = (cell, cell)
+    return tab
+
+
+def test_dedup_is_off_by_default_and_the_import_stays_byte_faithful():
+    """A repack is a faithful repack unless somebody asks otherwise: an atlas
+    quietly missing four tiles that happened to be rotations of each other is a
+    bug report nobody can reproduce."""
+    ctx = FakeCtx()
+    tab = _park_dups(ctx, _dup_sheet())
+    state = packwright_mode.ensure(ctx)
+    assert state.tileset_dedup is False
+
+    assert packwright_mode.import_tileset(ctx) is True
+    assert len(tab.doc.sources) == 4
+
+
+def test_exact_duplicates_drop_when_the_flag_is_set():
+    ctx = FakeCtx()
+    tab = _park_dups(ctx, _dup_sheet())
+    state = packwright_mode.ensure(ctx)
+    state.tileset_dedup = True
+
+    assert packwright_mode.import_tileset(ctx) is True
+    # The two identical cells become one; the mirror and the odd one survive.
+    assert len(tab.doc.sources) == 3
+
+
+def test_the_orientation_toggle_also_drops_the_mirror():
+    ctx = FakeCtx()
+    tab = _park_dups(ctx, _dup_sheet())
+    state = packwright_mode.ensure(ctx)
+    state.tileset_dedup = True
+    state.tileset_dedup_flips = True
+
+    assert packwright_mode.import_tileset(ctx) is True
+    assert len(tab.doc.sources) == 2
+
+
+def test_the_popup_preview_and_the_import_agree_on_the_dropped_count():
+    """The popup-promise contract ``tileset_occupancy`` already enforces for
+    emptiness, applied to the dedup the popup now also promises: both sides run
+    the same ``dedup_tiles`` call over the same sprites."""
+    from warlock.studio.packwright.sources import dedup_tiles, sprites_from_tileset
+
+    ctx = FakeCtx()
+    tab = _park_dups(ctx, _dup_sheet())
+    state = packwright_mode.ensure(ctx)
+    state.tileset_dedup = True
+    state.tileset_dedup_flips = True
+
+    tile = state.tileset_cell
+    promised, dropped = dedup_tiles(
+        sprites_from_tileset(
+            state.tileset_import[2],
+            tile=tile,
+            prefix=f"sheet.png@{tile[0]}x{tile[1]}",
+            name="sheet",
+        ),
+        orientations=True,
+    )
+    packwright_mode.import_tileset(ctx)
+    assert len(tab.doc.sources) == len(promised)
+    assert dropped == 2

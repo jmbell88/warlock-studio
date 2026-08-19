@@ -90,7 +90,7 @@ def _tileset_popup(ctx: Any, state: Any) -> None:
 
     from .. import theme
     from ..packwright.layout import MAX_SPRITES
-    from ..packwright.sources import tileset_occupancy
+    from ..packwright.sources import dedup_tiles, sprites_from_tileset, tileset_occupancy
     from ..tokens import sp
 
     if not imgui.begin_popup(TILESET_POPUP):
@@ -105,11 +105,20 @@ def _tileset_popup(ctx: Any, state: Any) -> None:
     if state.tileset_import is None:
         imgui.end_popup()
         return
-    _path, stem, pixels = state.tileset_import
+    path, stem, pixels = state.tileset_import
     height, width = pixels.shape[:2]
     widgets.muted(f"{stem} - {width} x {height}")
 
     state.tileset_cell = _cell_pair(state.tileset_cell)
+    state.tileset_dedup = controls.checkbox(
+        "Drop duplicate tiles", state.tileset_dedup
+    )[1]
+    if state.tileset_dedup:
+        imgui.indent()
+        state.tileset_dedup_flips = controls.checkbox(
+            "match flipped / rotated", state.tileset_dedup_flips
+        )[1]
+        imgui.unindent()
 
     # The counts the numbers above actually produce, computed from the same
     # occupancy grid the import slices by -- so what the popup promises and
@@ -118,6 +127,19 @@ def _tileset_popup(ctx: Any, state: Any) -> None:
     rows, columns = occupied.shape
     kept = int(occupied.sum())
     dropped = rows * columns - kept
+    duplicates = 0
+    if state.tileset_dedup and kept and kept <= MAX_SPRITES:
+        # **The same call the import runs**, not a second count of its own: the
+        # popup-promise contract ``tileset_occupancy`` already enforces for
+        # emptiness, applied to the dedup it now also promises.
+        tile = state.tileset_cell
+        _kept, duplicates = dedup_tiles(
+            sprites_from_tileset(
+                pixels, tile=tile, prefix=f"{path}@{tile[0]}x{tile[1]}", name=stem
+            ),
+            orientations=state.tileset_dedup_flips,
+        )
+        kept -= duplicates
     problem = ""
     if kept == 0:
         problem = "No occupied cells at that tile size."
@@ -125,6 +147,11 @@ def _tileset_popup(ctx: Any, state: Any) -> None:
         problem = f"{kept} tiles; the packer's ceiling is {MAX_SPRITES}."
     if problem:
         widgets.text_colored(theme.WARN, problem)
+    elif duplicates:
+        widgets.muted(
+            f"{kept} unique of {kept + duplicates} tiles "
+            f"({duplicates} duplicate(s) dropped), {dropped} empty dropped"
+        )
     else:
         widgets.muted(f"{columns} x {rows} cells - {kept} tile(s), {dropped} empty dropped")
 

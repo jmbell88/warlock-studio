@@ -242,6 +242,72 @@ def sprite_from_image(pixels: Any, *, key: str, name: str = "") -> Sprite:
 # --- already-made tile sheets -------------------------------------------------
 
 
+#: The eight square symmetries, as ``(transpose, mirror x, mirror y)`` in the
+#: order ``inker/tiles.py::oriented`` composes them -- transpose then mirror,
+#: which is also ``plotter/render.py``'s order and ``tilegrid.gid``'s flag
+#: vocabulary (``FLIP_D``, ``FLIP_H``, ``FLIP_V``).
+#:
+#: **Written out here rather than imported**, because packwright may not import
+#: inker: this is now the third copy of D4 in the tree and the comment is the
+#: only thing keeping them from drifting silently. If the composition order ever
+#: changes in one, it changes in all three.
+_DIHEDRAL: tuple[tuple[bool, bool, bool], ...] = tuple(
+    (bool(d), bool(h), bool(v))
+    for d in (0, 1)
+    for h in (0, 1)
+    for v in (0, 1)
+)
+
+
+def _variant(tile: np.ndarray, transpose: bool, mirror_x: bool, mirror_y: bool) -> np.ndarray:
+    if transpose:
+        tile = np.transpose(tile, (1, 0, 2))
+    if mirror_x:
+        tile = tile[:, ::-1]
+    if mirror_y:
+        tile = tile[::-1, :]
+    return tile
+
+
+def dedup_tiles(
+    sprites: list[Sprite], *, orientations: bool = False
+) -> tuple[list[Sprite], int]:
+    """Drop tiles whose content another tile already carries.
+
+    Returns ``(kept, dropped)``. The key is the tile's exact bytes --
+    ``inker/tiles.py::content_key``'s rule, and exact for its reason: two tiles
+    that differ by one pixel are two tiles, and any tolerance here would be a
+    second, quieter idea of what "the same tile" means.
+
+    **First in reading order wins.** ``tile_key``'s zero-padding already makes
+    the lexical order the reading order of the sheet, and ``sprites_from_tileset``
+    emits in that order, so "first" needs no sort -- but it does need saying,
+    because which duplicate survives decides which cell's name the pack carries.
+
+    With ``orientations``, the key is the lexicographic minimum over the eight
+    dihedral variants, so a tile that is another tile flipped or turned is a
+    duplicate. A non-square tile transposes to a different shape, whose bytes
+    simply never collide with the untransposed ones -- so the four transposing
+    variants cost nothing and refuse nothing there.
+    """
+    seen: dict[bytes, int] = {}
+    kept: list[Sprite] = []
+    for sprite in sprites:
+        tile = np.asarray(sprite.pixels)
+        if orientations:
+            key = min(
+                np.ascontiguousarray(_variant(tile, *flags)).tobytes()
+                for flags in _DIHEDRAL
+            )
+        else:
+            key = tile.tobytes()
+        if key in seen:
+            continue
+        seen[key] = len(kept)
+        kept.append(sprite)
+    return kept, len(sprites) - len(kept)
+
+
 def tile_key(prefix: str, column: int, row: int) -> str:
     """One grid cell's key. Row-major and zero-padded, so the lexical order the
     packer sorts into is the reading order of the sheet it came from."""

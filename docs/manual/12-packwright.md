@@ -43,7 +43,11 @@ together, a sparse sheet re-packs into a genuinely smaller one, not because fewe
 round to the same size. A strip left over where the sheet's size is not a multiple of the tile is
 outside the grid and ignored, which is what Tiled does with the same sheet, and a sheet with no
 transparency at all simply keeps every cell. Re-importing the same file cut at a different tile size
-adds a second set rather than being skipped as duplicates of the first cut.
+adds a second set rather than being skipped as duplicates of the first cut. **Drop duplicate
+tiles** keeps only the first of any tiles with identical content, in the sheet's reading order, and
+its nested **match flipped / rotated** counts a tile that is another one turned or mirrored as the
+same tile; the count line says how many that removes before you commit to it. It is off by default,
+because a repack should be faithful unless you ask otherwise.
 
 **From Inker** is the reason this mode sits beside the raster editor. Every document open in
 [Inker](08-inker.md) gets a button here: an animated document contributes one sprite per frame, and

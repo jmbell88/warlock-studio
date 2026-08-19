@@ -126,6 +126,14 @@ class PackwrightState:
     tileset_import: tuple[str, str, np.ndarray] | None = None
     tileset_import_open: bool = False
     tileset_cell: tuple[int, int] = (32, 32)
+    # Whether to drop tiles whose content another tile already carries, and
+    # whether a flipped or turned copy counts as the same content.
+    #
+    # **Default off, both.** A repack is a faithful repack unless somebody asks
+    # otherwise: an atlas quietly missing the four tiles that happened to be
+    # rotations of each other is a bug report nobody can reproduce.
+    tileset_dedup: bool = False
+    tileset_dedup_flips: bool = False
 
     @property
     def active(self) -> PackTab | None:
