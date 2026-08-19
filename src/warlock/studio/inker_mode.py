@@ -435,9 +435,44 @@ def ask_import_sheet(ctx: Any) -> None:
         with Image.open(path) as opened:
             opened.load()
             atlas = np.asarray(opened.convert("RGBA"), dtype=np.uint8).copy()
-        return {"atlas": atlas, "title": Path(path).stem}
+        return {"atlas": atlas, "title": Path(path).stem, "suggest": _suggest_grid(atlas)}
 
     ctx.submit("inker-sheetin", run)
+
+
+def _suggest_grid(atlas: Any) -> tuple[tuple[int, int], tuple[int, int], tuple[int, int]] | None:
+    """``(cell, offset, padding)`` for a sheet with visible separator lines.
+
+    Task thread. The Inker has the same blind-grid problem the Plotter's
+    add-tileset door has, and the same detector answers it -- ``tilegrid`` is a
+    shared leaf and is deliberately importable from here. What differs is what
+    is *done* with the answer: the Plotter recomposes irregular cells onto a
+    uniform atlas, and this door cannot, because the popup's model is one cell
+    size plus one offset plus one padding and an irregular grid has no such
+    spelling. So a detection is used only when its segments really are uniform
+    on both axes, and anything else is left to the user exactly as today.
+
+    ``None`` for "nothing to suggest", and the caller must treat that as *keep
+    what is there*: the three fields deliberately persist across imports as a
+    convenience, so resetting them on a failed detection would throw away a
+    number the user typed for the previous sheet.
+    """
+    from .tilegrid import slicing
+
+    grid = slicing.detect_grid(atlas)
+    if grid is None:
+        return None
+    heights = {end - start + 1 for start, end in grid.rows}
+    widths = {end - start + 1 for start, end in grid.cols}
+    if len(heights) != 1 or len(widths) != 1:
+        return None
+    cell = (int(next(iter(widths))), int(next(iter(heights))))
+    offset = (int(grid.cols[0][0]), int(grid.rows[0][0]))
+    # The gap between one segment's end and the next one's start: the rule the
+    # cells are separated by, which is exactly what the popup calls padding.
+    pad_x = int(grid.cols[1][0] - grid.cols[0][1] - 1) if len(grid.cols) > 1 else 0
+    pad_y = int(grid.rows[1][0] - grid.rows[0][1] - 1) if len(grid.rows) > 1 else 0
+    return cell, offset, (max(0, pad_x), max(0, pad_y))
 
 
 def import_sheet(ctx: Any) -> bool:
@@ -2052,6 +2087,13 @@ def on_task_done(ctx: Any, done: Any) -> None:
         if isinstance(result, dict):
             state.sheet_import = (result["atlas"], result.get("title") or "Sheet")
             state.sheet_import_open = False
+            suggested = result.get("suggest")
+            if suggested is not None:
+                # Only when a suggestion actually fired. The three fields persist
+                # across imports on purpose -- a folder of sheets cut the same way
+                # is typed once -- so a ``None`` detection must keep the last
+                # values rather than resetting them to the defaults.
+                state.sheet_cell, state.sheet_offset, state.sheet_padding = suggested
             set_mode(ctx.state, "inker")
         return
 

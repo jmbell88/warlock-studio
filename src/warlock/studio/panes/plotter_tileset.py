@@ -58,15 +58,29 @@ def _sheet_popup(ctx: Any, state: Any, tab: Any) -> None:
     height, width = pixels.shape[:2]
     doc = tab.doc
     widgets.muted(f"{name} - {width} x {height}")
-    rows, cols = grid.shape
-    imgui.text(
-        f"Detected a {cols} x {rows} tile grid with separator lines "
-        f"(threshold {grid.threshold})."
-    )
-    widgets.muted_wrapped(
-        f"Import strips the separator lines and redraws each cell at "
-        f"{doc.tile_w} x {doc.tile_h}, so the tiles line up with the map."
-    )
+    if isinstance(grid, plotter_mode.SheetMismatch):
+        # The second variant: no rules were found, but the sheet's own sidecar
+        # records a cell size the map does not share. A blind slice here cuts
+        # every tile in half, which is exactly the failure this popup exists to
+        # put in front of somebody.
+        imgui.text(
+            f"This sheet was generated at {grid.tile_w} x {grid.tile_h}; "
+            f"this map's tiles are {doc.tile_w} x {doc.tile_h}."
+        )
+        widgets.muted_wrapped(
+            f"Import cuts the sheet on its own grid and redraws each tile at "
+            f"{doc.tile_w} x {doc.tile_h}."
+        )
+    else:
+        rows, cols = grid.shape
+        imgui.text(
+            f"Detected a {cols} x {rows} tile grid with separator lines "
+            f"(threshold {grid.threshold})."
+        )
+        widgets.muted_wrapped(
+            f"Import strips the separator lines and redraws each cell at "
+            f"{doc.tile_w} x {doc.tile_h}, so the tiles line up with the map."
+        )
     imgui.dummy((0, 4))
     if controls.button("Import", (sp(90), 0)) and plotter_mode.import_detected_sheet(ctx):
         imgui.close_current_popup()

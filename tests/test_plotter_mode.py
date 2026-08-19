@@ -2315,3 +2315,104 @@ def test_a_tsx_never_parks(tmp_path):
 
     assert plotter_mode.ensure(ctx).sheet_import is None
     assert len(tab.doc.tilesets) == 1
+
+
+# --- tile-size mismatch at the library door (Part E2) --------------------------
+
+
+def _library(monkeypatch, tmp_path, pixels: np.ndarray, sidecar: dict | None):
+    """A fake job directory holding an input.png and maybe a sheet.json."""
+    import json
+
+    _save_png(tmp_path / "input.png", pixels)
+    if sidecar is not None:
+        (tmp_path / "sheet.json").write_text(json.dumps(sidecar), encoding="utf-8")
+
+    def job_dir_file(svc, job_id, name):
+        return tmp_path / name
+
+    monkeypatch.setattr("warlock.service.files.job_dir_file", job_dir_file)
+
+
+def _flat(size: int = 64) -> np.ndarray:
+    out = np.full((size, size, 4), 200, dtype=np.uint8)
+    out[:, :, 3] = 255
+    # A little variation so the image is not uniformly one colour.
+    out[::2, ::2, :3] = 210
+    return out
+
+
+def test_a_sheet_generated_at_another_size_parks(tmp_path, monkeypatch):
+    ctx = FakeCtx()
+    tab = _tab(ctx, tileset=False)
+    _library(monkeypatch, tmp_path, _flat(), {"tile_w": 32, "tile_h": 32})
+
+    plotter_mode.use_as_tileset(ctx, {"id": "j1", "name": "sheet"})
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+
+    state = plotter_mode.ensure(ctx)
+    assert state.sheet_import is not None
+    assert state.sheet_import[4] == plotter_mode.SheetMismatch(32, 32)
+    assert len(tab.doc.tilesets) == 0
+
+
+def test_a_sheet_generated_at_the_map_size_parks_nothing(tmp_path, monkeypatch):
+    ctx = FakeCtx()
+    tab = _tab(ctx, tileset=False)
+    _library(monkeypatch, tmp_path, _flat(), {"tile_w": 16, "tile_h": 16})
+
+    plotter_mode.use_as_tileset(ctx, {"id": "j1", "name": "sheet"})
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+
+    assert plotter_mode.ensure(ctx).sheet_import is None
+    assert len(tab.doc.tilesets) == 1
+
+
+def test_a_job_without_a_sidecar_never_parks(tmp_path, monkeypatch):
+    ctx = FakeCtx()
+    tab = _tab(ctx, tileset=False)
+    _library(monkeypatch, tmp_path, _flat(), None)
+
+    plotter_mode.use_as_tileset(ctx, {"id": "j1", "name": "sheet"})
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+
+    assert plotter_mode.ensure(ctx).sheet_import is None
+    assert len(tab.doc.tilesets) == 1
+
+
+def test_importing_a_mismatched_sheet_recomposes_onto_the_map_grid(tmp_path, monkeypatch):
+    ctx = FakeCtx()
+    tab = _tab(ctx, tileset=False)
+    # 64 px sheet, four 32 px cells, each a flat distinguishable colour.
+    sheet = np.zeros((64, 64, 4), dtype=np.uint8)
+    sheet[:, :, 3] = 255
+    for r in range(2):
+        for c in range(2):
+            sheet[r * 32:(r + 1) * 32, c * 32:(c + 1) * 32, :3] = 100 + r * 40 + c * 20
+    _library(monkeypatch, tmp_path, sheet, {"tile_w": 32, "tile_h": 32})
+
+    plotter_mode.use_as_tileset(ctx, {"id": "j1", "name": "sheet"})
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+    assert plotter_mode.import_detected_sheet(ctx) is True
+
+    ref = tab.doc.tilesets[0]
+    assert ref.tileset.tile_w == 16
+    # Four cells, each redrawn at 16 -- a 32x32 atlas, not the blind 4x4 cut.
+    assert ref.tileset.tile_count == 4
+    assert np.asarray(ref.tileset.pixels).shape == (32, 32, 4)
+    assert ref.source == ""
+
+
+def test_the_alternate_button_matches_todays_blind_slice(tmp_path, monkeypatch):
+    ctx = FakeCtx()
+    tab = _tab(ctx, tileset=False)
+    sheet = _flat()
+    _library(monkeypatch, tmp_path, sheet, {"tile_w": 32, "tile_h": 32})
+
+    plotter_mode.use_as_tileset(ctx, {"id": "j1", "name": "sheet"})
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+    assert plotter_mode.import_sheet_blind(ctx) is True
+
+    ref = tab.doc.tilesets[0]
+    assert np.array_equal(np.asarray(ref.tileset.pixels), sheet)
+    assert ref.tileset.tile_w == 16

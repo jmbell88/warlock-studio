@@ -1207,3 +1207,130 @@ def test_cancelling_a_transform_is_never_ranged(monkeypatch):
     doc = _transform_ctx(monkeypatch, (0, 1, 2, 3))
     inker_mode.end_transform(object(), commit=False)
     assert doc.calls == [("cancel",)]
+
+
+# --- the sheet door's grid suggestion (Part E1) -------------------------------
+
+
+def _ruled(rows=3, cols=4, cell=16, sep=2, offset=0):
+    """A sheet ruled off by dark separator lines, optionally inset."""
+    import numpy as np
+
+    height = offset * 2 + rows * cell + sep * (rows - 1)
+    width = offset * 2 + cols * cell + sep * (cols - 1)
+    out = np.zeros((height, width, 4), dtype=np.uint8)
+    out[:, :, 3] = 255
+    for r in range(rows):
+        for c in range(cols):
+            y = offset + r * (cell + sep)
+            x = offset + c * (cell + sep)
+            out[y:y + cell, x:x + cell, :3] = 200 + r * 5 + c
+    return out
+
+
+def test_a_uniform_detection_seeds_the_three_sheet_fields():
+    assert inker_mode._suggest_grid(_ruled(cell=16, sep=2)) == ((16, 16), (0, 0), (2, 2))
+
+
+def test_the_suggestion_carries_a_border_offset():
+    cell, offset, padding = inker_mode._suggest_grid(_ruled(cell=16, sep=2, offset=3))
+    assert cell == (16, 16)
+    assert offset == (3, 3)
+    assert padding == (2, 2)
+
+
+def test_an_irregular_grid_seeds_nothing():
+    """The popup's model is one cell size plus one offset plus one padding, and
+    an irregular grid has no such spelling -- recomposing it is the Plotter
+    door's move, not this one's."""
+    import numpy as np
+
+    sheet = np.zeros((49, 50, 4), dtype=np.uint8)
+    sheet[:, :, 3] = 255
+    # Rows of 15, 16, 17 -- within the CV gate, so the detector finds a grid,
+    # but the segments are not one size.
+    y = 0
+    for height in (15, 16, 17):
+        x = 0
+        for width in (16, 16):
+            sheet[y:y + height, x:x + width, :3] = 200
+            x += width + 2
+        y += height + 1
+    from warlock.studio.tilegrid import slicing
+
+    assert slicing.detect_grid(sheet) is not None
+    assert inker_mode._suggest_grid(sheet) is None
+
+
+def test_no_detection_suggests_nothing():
+    import numpy as np
+
+    flat = np.full((64, 64, 4), 200, dtype=np.uint8)
+    flat[:, :, 3] = 255
+    assert inker_mode._suggest_grid(flat) is None
+
+
+class _Done:
+    def __init__(self, key, result):
+        self.key, self.result, self.message = key, result, ""
+
+
+class _Settings:
+    def __init__(self):
+        self.store = {}
+
+    def get(self, key):
+        return self.store.get(key)
+
+    def set(self, key, value):
+        self.store[key] = value
+
+
+class _Ctx:
+    def __init__(self):
+        self.state = type("S", (), {"inker": None, "mode": "home",
+                                    "previous_mode": "home", "mode_observed": "home",
+                                    "preview": {}})()
+        self.settings = _Settings()
+
+    def toast(self, message, kind="info"):
+        pass
+
+
+def test_a_none_detection_keeps_the_previous_field_values():
+    """The three fields persist across imports on purpose -- a folder of sheets
+    cut the same way is typed once -- so a failed detection must keep the last
+    values rather than resetting them to the defaults."""
+    import numpy as np
+
+    ctx = _Ctx()
+    state = inker_mode.ensure(ctx)
+    state.sheet_cell = (24, 24)
+    state.sheet_offset = (1, 1)
+    state.sheet_padding = (3, 3)
+
+    flat = np.full((64, 64, 4), 200, dtype=np.uint8)
+    flat[:, :, 3] = 255
+    inker_mode.on_task_done(
+        ctx, _Done("inker-sheetin", {"atlas": flat, "title": "s", "suggest": None})
+    )
+
+    assert state.sheet_cell == (24, 24)
+    assert state.sheet_offset == (1, 1)
+    assert state.sheet_padding == (3, 3)
+
+
+def test_a_detection_overwrites_the_field_values():
+    ctx = _Ctx()
+    state = inker_mode.ensure(ctx)
+    state.sheet_cell = (24, 24)
+    sheet = _ruled(cell=16, sep=2)
+    inker_mode.on_task_done(
+        ctx,
+        _Done(
+            "inker-sheetin",
+            {"atlas": sheet, "title": "s", "suggest": inker_mode._suggest_grid(sheet)},
+        ),
+    )
+    assert state.sheet_cell == (16, 16)
+    assert state.sheet_padding == (2, 2)

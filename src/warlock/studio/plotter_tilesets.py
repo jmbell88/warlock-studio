@@ -26,6 +26,7 @@ image the same way a ``.tmx`` does.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -93,6 +94,26 @@ def add_tileset_path(
     ctx.submit(f"plotter-tileset:{tab.uid}", run)
 
 
+@dataclass(frozen=True)
+class SheetMismatch:
+    """A sheet whose own recorded cell size is not the map's.
+
+    The second thing that can be wrong at an import door, and the detector
+    cannot see it: a sheet generated in Create is drawn on imposed rectangles
+    with no separator lines, so it detects nothing and is sliced blind at the
+    map's tile size -- silently mis-cutting a 32 px sheet onto a 16 px map. What
+    catches it is not a measurement but a *record*: the job's ``sheet.json``
+    says what the sheet was generated at.
+
+    Parked as the third variant of the confirm popup rather than fixed silently,
+    for the same reason the first one is: the user may genuinely want the blind
+    slice, and only they know.
+    """
+
+    tile_w: int
+    tile_h: int
+
+
 def _sheet_or_tileset(
     name: str,
     source: str,
@@ -100,6 +121,8 @@ def _sheet_or_tileset(
     uid: str,
     tile_w: int,
     tile_h: int,
+    *,
+    recorded: tuple[int, int] | None = None,
 ) -> dict[str, Any]:
     """Task-thread: is this image a ruled sheet, or is it already a tileset?
 
@@ -110,6 +133,12 @@ def _sheet_or_tileset(
     decided. No grid found is today's behaviour byte-for-byte: the blind slice
     at the map's tile size, which is also the right fallback for a sheet that
     was generated on imposed rectangles and has no rules to find.
+
+    ``recorded`` is the cell size the sheet's own sidecar declares, which only
+    the library door has. Equal to the map's, it changes nothing at all --
+    today's path exactly. Different, it parks a :class:`SheetMismatch` instead,
+    because a blind slice at the map's size would cut every tile in half with
+    nothing anywhere to say so.
     """
     from .tilegrid import slicing
     from .tilegrid.tileset import Tileset
@@ -117,6 +146,9 @@ def _sheet_or_tileset(
     grid = slicing.detect_grid(pixels)
     if grid is not None:
         return {"sheet": (uid, name, source, pixels, grid), "uid": uid}
+    if recorded is not None and (int(recorded[0]), int(recorded[1])) != (tile_w, tile_h):
+        mismatch = SheetMismatch(int(recorded[0]), int(recorded[1]))
+        return {"sheet": (uid, name, source, pixels, mismatch), "uid": uid}
     tileset = Tileset(name=name, pixels=pixels, tile_w=tile_w, tile_h=tile_h)
     return {"tileset": tileset, "source": source, "uid": uid}
 
@@ -200,6 +232,15 @@ def import_detected_sheet(ctx: Any) -> bool:
     if found is None:
         return False
     state, tab, (_uid, name, _source, pixels, grid) = found
+    if isinstance(grid, SheetMismatch):
+        # No rules to find, but the sheet's own recorded grid is known: cut on
+        # *that* and redraw each cell at the map's size. Same machinery, a grid
+        # that came from a record rather than from a measurement.
+        grid = slicing.uniform_grid(pixels.shape[:2], grid.tile_w, grid.tile_h)
+        if grid is None:
+            ctx.toast("That sheet holds no whole tile at its own size.", "error")
+            clear_sheet_import(ctx)
+            return False
     try:
         atlas = slicing.recompose(pixels, grid, tab.doc.tile_w, tab.doc.tile_h)
         tileset = Tileset(
@@ -380,6 +421,28 @@ def ask_add_tileset(ctx: Any) -> None:
     ctx.submit(f"plotter-tileset:{uid}", run)
 
 
+def _recorded_cell(ctx: Any, job_id: str) -> tuple[int, int] | None:
+    """The tile size a generated sheet's ``sheet.json`` declares, or ``None``.
+
+    ``None`` for every job that has no sidecar -- an ordinary reference image,
+    a render, anything not a tile sheet -- and those doors are untouched by
+    design: absence of a record is not evidence of a mismatch.
+    """
+    import json
+
+    from ..service import files as svc_files
+
+    try:
+        path = svc_files.job_dir_file(ctx.svc, job_id, "sheet.json")
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    try:
+        return int(data["tile_w"]), int(data["tile_h"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def use_as_tileset(ctx: Any, job: Any) -> None:
     """A library asset's reference image, sliced as a tileset.
 
@@ -405,9 +468,16 @@ def use_as_tileset(ctx: Any, job: Any) -> None:
         # separator lines, so detection finds nothing here and this is today's
         # blind slice. The call is made anyway because a *user's* image can
         # reach the library too, and the door should not depend on where the
-        # bytes came from.
+        # bytes came from. What this door *does* have that the others do not is
+        # the sheet's own sidecar, which records the size it was generated at.
         return _sheet_or_tileset(
-            str(name), "", _decode(Path(path)), uid, width, height
+            str(name),
+            "",
+            _decode(Path(path)),
+            uid,
+            width,
+            height,
+            recorded=_recorded_cell(ctx, job_id),
         )
 
     ctx.submit(f"plotter-tileset:{tab.uid}", run)

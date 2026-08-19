@@ -172,6 +172,31 @@ def detect_grid(
     return best
 
 
+def uniform_grid(shape: tuple[int, int], tile_w: int, tile_h: int) -> SheetGrid | None:
+    """The grid of a sheet that was *drawn* on a known cell size, not ruled.
+
+    A generated sheet has no separator lines to find -- it was composed on
+    imposed rectangles -- but its sidecar records what those rectangles were, and
+    when that size differs from the map's the cells still have to be cut on the
+    sheet's own grid before they can be redrawn on the map's. This builds that
+    grid so :func:`recompose` can do the redrawing, rather than a second cropping
+    loop existing beside it.
+
+    ``threshold`` is 0: no darkness found this grid and none is claimed. A
+    partial trailing cell is dropped, the way an atlas's slicing already refuses
+    one. ``None`` when the image holds no whole cell.
+    """
+    height, width = int(shape[0]), int(shape[1])
+    tile_w, tile_h = int(tile_w), int(tile_h)
+    if tile_w < 1 or tile_h < 1:
+        raise ValueError("a tile must be at least one pixel across")
+    rows = [(y, y + tile_h - 1) for y in range(0, height - tile_h + 1, tile_h)]
+    cols = [(x, x + tile_w - 1) for x in range(0, width - tile_w + 1, tile_w)]
+    if not rows or not cols:
+        return None
+    return SheetGrid(tuple(rows), tuple(cols), 0)
+
+
 def _nearest_index(src: int, dst: int) -> np.ndarray:
     """Centre-sampled nearest-neighbour index map, matching PIL's NEAREST.
 
