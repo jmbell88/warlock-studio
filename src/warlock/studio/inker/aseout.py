@@ -37,29 +37,51 @@ exists to read back. The plane is the record; it is written as the record.
 model's spelling of a linked cel, so the first frame holding an object gets the
 pixels and every later slot gets a type-1 cel naming that *frame index*. Sharing
 survives the trip in both directions and an edit in Aseprite still shows on
-every frame the cel occupies.
+every frame the cel occupies. A tilemap cel links the same way and for free:
+it is a ``Layer`` too, so one object in two slots is one chunk and one link.
+
+**A tilemap layer is written as a tilemap layer, never as its picture.** A
+:class:`~.tiles.TilemapCel`'s ``pixels`` are a *materialisation* of its refs
+over a tileset, so flattening them at the door would hand back a file that
+draws correctly and can never be edited as tiles again. So the tilesets go out
+as 0x2023 chunks (embedded strips, ids in ``doc.tilesets`` order), the layer as
+kind 2 carrying its tileset id, and the cel as a type-3 grid of references
+under **explicitly declared** masks -- see :func:`_tilemap_cel_chunk` for why
+declaring them is the part that matters. The one place the two models genuinely
+disagree is an *indexed* document: this package keeps every strip RGBA (the
+Wave 3 divergence) where the format stores tileset pixels at the sprite's own
+depth, so an indexed document's strips are resolved back through its palette on
+the way out -- exact match or a refusal by name, never a nearest match.
 
 **What is lost is lost silently, and written down elsewhere.** There is no
 warning channel out of a function that returns bytes, and inventing one would
-put a toast on a save that did exactly what the user asked. Three things drop:
+put a toast on a save that did exactly what the user asked. Five things drop:
 ``alpha_lock`` (Aseprite has no bit for it -- an editing aid, not picture data),
 a group's opacity (Aseprite's UI offers a group none, and ``asein._group_tree``
 reads one back as 1.0 whatever byte is stored, so writing anything but 255 would
-be a number nobody could ever read), and an empty group (a group is a *run* of
-the layer list here, so one with no members has no run to write). Each is a line
-in ``docs/ASEPRITE_INTEROP.md``.
+be a number nobody could ever read), an empty group (a group is a *run* of
+the layer list here, so one with no members has no run to write), a slice
+pivot's fractional part (the format's field is a signed DWORD), and a slice
+key's *disagreement* about whether it carries a pivot or a nine-patch centre --
+the format stores that presence once per slice, so the union declares it and a
+key that carries neither inherits the slice's own (:func:`_slice_chunk`). Each
+is a line in ``docs/ASEPRITE_INTEROP.md``.
 
 Refusals are by name and are the format's own limits, not this build's: more
 frames or layers than a 16-bit count can hold, a palette past 256, a canvas past
-65535 on a side, a tag repeating more times than its own WORD can say, a colour
-mode with no depth to write it at, and -- the one that is about a *broken*
-document rather than a big one -- a grayscale document holding a **visible**
-pixel where ``r != g != b``. The write funnel enforces greyness on every stroke,
-so a violation is the constraint having been bypassed, and the alternative to
-refusing is throwing two channels away without a word. Visible, because the
-funnel deliberately leaves the dead RGB under alpha 0 alone -- see
-:func:`_plane`, which is where an unmasked version of that check would have
-refused to save an ordinary erased drawing.
+65535 on a side, a tile past 65535 on a side, a tag repeating more times than
+its own WORD can say, a colour mode with no depth to write it at, and -- the
+ones that are about a *broken* document rather than a big one -- a grayscale
+document holding a **visible** pixel where ``r != g != b``, a tileset strip
+holding a colour an indexed document's palette has no slot for, and a tilemap
+layer whose binding or whose cel disagrees with itself (a tileset the document
+does not have, a cel with no refs, a cel bound to a different atlas than its
+layer). The write funnel enforces greyness on every stroke, so a violation is
+the constraint having been bypassed, and the alternative to refusing is throwing
+two channels away without a word. Visible, because the funnel deliberately
+leaves the dead RGB under alpha 0 alone -- see :func:`_plane`, which is where an
+unmasked version of that check would have refused to save an ordinary erased
+drawing.
 """
 
 from __future__ import annotations
@@ -71,12 +93,14 @@ from pathlib import Path
 
 import numpy as np
 
+from ..tilegrid import gid
 from .animation import DEFAULT_DURATION_MS
 from .asein import (
     _BLEND_BY_INDEX,
     _CEL,
     _CEL_COMPRESSED,
     _CEL_LINKED,
+    _CEL_TILEMAP,
     _FRAME_MAGIC,
     _GRAYSCALE,
     _INDEXED,
@@ -85,13 +109,16 @@ from .asein import (
     _LAYER_EDITABLE,
     _LAYER_GROUP,
     _LAYER_IMAGE,
+    _LAYER_TILEMAP,
     _LAYER_VISIBLE,
     _MAGIC,
     _OLD_PALETTE_256,
     _PALETTE,
     _RGBA,
+    _SLICE,
     _TAG_DIRECTIONS,
     _TAGS,
+    _TILESET,
 )
 from .index_plane import MAX_COLOURS
 
@@ -128,6 +155,27 @@ _BLEND_INDEX = {name: index for index, name in enumerate(_BLEND_BY_INDEX)}
 _DIRECTION_INDEX: dict[str, int] = {}
 for _index, _name in enumerate(_TAG_DIRECTIONS):
     _DIRECTION_INDEX.setdefault(_name, _index)
+
+#: The 0x2023 flag this writer sets: the tileset's pixels are **in this file**.
+#: Bit 0 is the external-file link :func:`asein._read_tileset` refuses by name,
+#: and nothing here can produce one -- a ``TilesetSlot`` holds a whole frozen
+#: atlas, not a path.
+_TILESET_EMBEDDED = 2
+
+#: Aseprite's own tile numbering in its tileset panel starts at 1. It changes
+#: no id either half of this pair stores, and the reader *warns* about any
+#: other value, so this is both the honest number and the one that keeps a
+#: round trip's warning list empty.
+_TILESET_BASE_INDEX = 1
+
+#: A tilemap cel's bits per tile. The only width this build reads
+#: (:func:`asein._read_cel` refuses the rest by name) and the only one
+#: :data:`gid.DTYPE` has room for.
+_TILE_BITS = 32
+
+#: The slice chunk's two flags, in the spec's own order.
+_SLICE_NINE_PATCH = 1
+_SLICE_PIVOT = 2
 
 
 # --- the format, as primitives -----------------------------------------------
@@ -284,6 +332,33 @@ class _Row:
     opacity: float = 1.0
     blend: str = "normal"
     continuous: bool = False
+    #: The ``doc.tilesets`` uid this row is bound to, or ``None`` for an
+    #: ordinary raster row. Kept beside :attr:`tileset` -- the *file's* id for
+    #: the same slot -- because the two answer different questions: the file id
+    #: goes in the chunk, and the uid is what a cel's own binding is compared
+    #: against before its refs are written under this row's tileset.
+    tileset_uid: int | None = None
+    tileset: int | None = None
+
+
+def _tileset_uid_of(doc, track) -> int | None:
+    """Which tileset a track draws through, or ``None`` if it is raster.
+
+    ``Track.tileset_uid`` is the authority -- ``add_tilemap_layer`` sets it
+    before any cel exists, and ``_ensure_cel_for`` reads it to decide what to
+    autovivify -- but a track carrying tilemap cels with the field unset would
+    otherwise have its whole grid written out as flattened pixels and reopen
+    as a raster layer. So the cels are the fallback, not the source.
+    """
+    if track.tileset_uid is not None:
+        return int(track.tileset_uid)
+    anim = doc.anim
+    for frame in anim.frames:
+        cel = anim.cels.get((track.uid, frame.uid))
+        found = getattr(cel, "tileset_uid", None)
+        if cel is not None and getattr(cel, "refs", None) is not None and found:
+            return int(found)
+    return None
 
 
 def _members(doc) -> list[tuple[int, _Row]]:
@@ -306,6 +381,11 @@ def _members(doc) -> list[tuple[int, _Row]]:
                     locked=bool(layer.locked),
                     opacity=float(layer.opacity),
                     blend=str(layer.blend),
+                    tileset_uid=(
+                        int(layer.tileset_uid)
+                        if getattr(layer, "refs", None) is not None
+                        else None
+                    ),
                 ),
             )
             for layer in doc.stack
@@ -320,13 +400,14 @@ def _members(doc) -> list[tuple[int, _Row]]:
                 opacity=float(track.opacity),
                 blend=str(track.blend),
                 continuous=bool(track.continuous),
+                tileset_uid=_tileset_uid_of(doc, track),
             ),
         )
         for track in anim.tracks
     ]
 
 
-def _rows(doc) -> tuple[list[_Row], list[int]]:
+def _rows(doc, tileset_ids: dict[int, int]) -> tuple[list[_Row], list[int]]:
     """The layer list in file order, and where each stack row landed in it.
 
     Aseprite nests by *indentation*: a group is a row, and its members are the
@@ -342,6 +423,12 @@ def _rows(doc) -> tuple[list[_Row], list[int]]:
     A member naming a group that is not in ``doc.groups`` is flattened rather
     than refused -- ``resolve`` skips a dangling parent the same way, and a
     layer with a broken ancestry is still a layer.
+
+    ``tileset_ids`` maps a slot uid onto the id its 0x2023 chunk was written
+    under, and a binding it has no entry for is refused **by name** rather
+    than flattened: a dangling group parent costs a layer its folder, where a
+    dangling tileset would write a layer whose whole picture is a lookup into
+    a table the file does not contain.
     """
     from . import groups as gp
 
@@ -374,6 +461,14 @@ def _rows(doc) -> tuple[list[_Row], list[int]]:
                 )
             )
             open_uids.append(guid)
+        if row.tileset_uid is not None:
+            found = tileset_ids.get(row.tileset_uid)
+            if found is None:
+                raise ValueError(
+                    f"the tilemap layer {row.name!r} draws through a tileset"
+                    " this document does not have"
+                )
+            row.tileset = found
         index_of.append(len(rows))
         row.child_level = len(open_uids)
         rows.append(row)
@@ -394,6 +489,12 @@ def _layer_chunk(row: _Row) -> bytes:
     one. And a group's opacity byte is written as 255 on purpose: the reader
     hands every group 1.0 whatever is stored, so any other value would be a
     number nobody can ever read back.
+
+    A tilemap row is the same chunk with a different kind and **one trailing
+    DWORD after the name** -- the tileset it draws through. After, because
+    that is exactly where the format puts it and where :func:`asein._read_layer`
+    looks for it; a byte earlier and every later chunk in the frame is read at
+    the wrong offset.
     """
     flags = (
         (_LAYER_VISIBLE if row.visible else 0)
@@ -409,10 +510,16 @@ def _layer_chunk(row: _Row) -> bytes:
                 " this format has no number for"
             )
         blend, opacity = _BLEND_INDEX[row.blend], _opacity_byte(row.opacity)
+    if row.group:
+        kind = _LAYER_GROUP
+    elif row.tileset is None:
+        kind = _LAYER_IMAGE
+    else:
+        kind = _LAYER_TILEMAP
     body = struct.pack(
         "<HHHHHHB3s",
         flags,
-        _LAYER_GROUP if row.group else _LAYER_IMAGE,
+        kind,
         row.child_level,
         0,  # the default width and height, ignored by the format's own account
         0,
@@ -420,7 +527,124 @@ def _layer_chunk(row: _Row) -> bytes:
         opacity,
         b"\0\0\0",
     )
-    return _chunk(_LAYER, body + _string(row.name))
+    body += _string(row.name)
+    if kind == _LAYER_TILEMAP:
+        body += struct.pack("<I", row.tileset)
+    return _chunk(_LAYER, body)
+
+
+# --- pixels, at the sprite's own depth ---------------------------------------
+
+
+def _grey_pair(pixels: np.ndarray, what: str) -> bytes:
+    """RGBA pixels as a grayscale file's ``(value, alpha)`` pairs.
+
+    Shared by a cel's plane and a tileset's strip, because the sprite's depth
+    says the same thing about every byte in either one -- and because the
+    refusal below must read the same either way, differing only in what it
+    names. ``what`` is the whole subject phrase ("the layer 'Ink'"), so the
+    sentence is built once here rather than twice at the call sites.
+    """
+    grey = pixels[..., 0]
+    visible = pixels[..., 3] > 0
+    if not (
+        np.array_equal(grey[visible], pixels[..., 1][visible])
+        and np.array_equal(grey[visible], pixels[..., 2][visible])
+    ):
+        raise ValueError(
+            f"{what} holds a visible pixel that is not grey, which a grayscale"
+            " .aseprite has nowhere to put"
+        )
+    pair = np.empty(pixels.shape[:2] + (2,), dtype=np.uint8)
+    pair[..., 0] = grey
+    pair[..., 1] = pixels[..., 3]
+    return pair.tobytes()
+
+
+def _packed(values) -> np.ndarray:
+    """RGBA rows as one uint32 each, ``r | g<<8 | b<<16 | a<<24``.
+
+    Arithmetic rather than ``ndarray.view``, so the number a colour packs to is
+    the same on any machine: a ``view`` would spell it the host's way round and
+    make the lookup table below agree with the pixels only by luck of endianness.
+    """
+    array = np.asarray(values, dtype=np.uint8).reshape(-1, 4).astype(np.uint32)
+    return (
+        array[:, 0]
+        | (array[:, 1] << np.uint32(8))
+        | (array[:, 2] << np.uint32(16))
+        | (array[:, 3] << np.uint32(24))
+    )
+
+
+def _palette_lookup(palette: list[tuple[int, ...]], transparent: int) -> dict[int, int]:
+    """``{packed colour: slot}`` -- :func:`asein._lut`, inverted.
+
+    Built from the *decoded* colour of each slot and not from the table
+    verbatim, which is the whole of the correctness here: the transparent slot
+    decodes to ``(0, 0, 0, 0)`` however it is stored, so a strip's blank tile
+    resolves to it, and a slot holding the same colour as the transparent one
+    is not mistaken for it.
+
+    The lowest slot wins a duplicate colour. Deterministic (two saves of an
+    unchanged document are byte-identical, ``_slice_json``'s reason) and
+    lossless either way: both slots decode to the same pixel, so the picture is
+    the same whichever is written -- which is exactly why a *cel* is written
+    from its index plane instead, where the choice of slot is the record.
+    """
+    table: dict[int, int] = {}
+    for index, entry in enumerate(palette):
+        colour = (0, 0, 0, 0) if index == transparent else tuple(int(v) for v in entry)
+        table.setdefault(int(_packed([colour])[0]), index)
+    return table
+
+
+def _resolved_indices(pixels: np.ndarray, table: dict[int, int], what: str) -> bytes:
+    """RGBA pixels as the palette slots an indexed sprite stores them in.
+
+    **Exact match or refuse, never nearest.** This runs on tileset strips
+    alone -- a cel is written from the index plane it already carries -- and a
+    strip's pixels are RGBA in this model whatever the document's mode is
+    (the Wave 3 divergence), so the file's 8-bit strip has to be resolved.
+    Everything a user paints into a strip goes through the funnel, which has
+    already resolved it; what has not is a strip that arrived from *outside*
+    the document -- a ``.tsx``, Plotter, a tile sheet -- and a nearest match
+    there would silently repaint somebody else's atlas in this document's
+    colours. So an off-palette pixel is named, with the colour that has no slot.
+    """
+    packed = _packed(pixels)
+    unique = np.unique(packed)
+    missing = [int(value) for value in unique if int(value) not in table]
+    if missing:
+        value = missing[0]
+        red, green, blue, alpha = (
+            value & 0xFF,
+            (value >> 8) & 0xFF,
+            (value >> 16) & 0xFF,
+            (value >> 24) & 0xFF,
+        )
+        raise ValueError(
+            f"{what} holds the colour #{red:02x}{green:02x}{blue:02x}{alpha:02x},"
+            " which this indexed document's palette has no slot for"
+        )
+    slots = np.array([table[int(value)] for value in unique], dtype=np.uint8)
+    return slots[np.searchsorted(unique, packed)].tobytes()
+
+
+def _at_depth(
+    pixels: np.ndarray, mode: str, what: str, table: dict[int, int] | None
+) -> bytes:
+    """``pixels`` at the sprite's colour depth. :func:`asein._decode_plane`'s
+    inverse, and the one used for a *tileset strip* -- a cel goes through
+    :func:`_plane`, which writes an indexed layer's index plane rather than
+    re-resolving its pixels."""
+    if mode == "rgb":
+        return np.ascontiguousarray(pixels, dtype=np.uint8).tobytes()
+    if mode == "grayscale":
+        return _grey_pair(pixels, what)
+    if table is None:  # pragma: no cover - refused far sooner
+        raise ValueError(f"{what} has no palette to write its pixels through")
+    return _resolved_indices(pixels, table, what)
 
 
 # --- cels --------------------------------------------------------------------
@@ -458,20 +682,7 @@ def _plane(layer, mode: str, size: tuple[int, int]) -> bytes:
     if mode == "rgb":
         return np.ascontiguousarray(pixels, dtype=np.uint8).tobytes()
     if mode == "grayscale":
-        grey = pixels[..., 0]
-        visible = pixels[..., 3] > 0
-        if not (
-            np.array_equal(grey[visible], pixels[..., 1][visible])
-            and np.array_equal(grey[visible], pixels[..., 2][visible])
-        ):
-            raise ValueError(
-                f"the layer {layer.name!r} holds a visible pixel that is not grey,"
-                " which a grayscale .aseprite has nowhere to put"
-            )
-        pair = np.empty((height, width, 2), dtype=np.uint8)
-        pair[..., 0] = grey
-        pair[..., 1] = pixels[..., 3]
-        return pair.tobytes()
+        return _grey_pair(pixels, f"the layer {layer.name!r}")
     indices = getattr(layer, "indices", None)
     if indices is None:
         raise ValueError(
@@ -507,6 +718,196 @@ def _link_chunk(layer_index: int, frame_index: int) -> bytes:
     """
     body = struct.pack("<HhhBHh5s", layer_index, 0, 0, 255, _CEL_LINKED, 0, b"\0" * 5)
     return _chunk(_CEL, body + struct.pack("<H", frame_index))
+
+
+def _tilemap_cel_chunk(layer_index: int, refs: np.ndarray) -> bytes:
+    """A type-3 cel: a grid of tile references, not pixels.
+
+    Whole-canvas at the origin, for :func:`_cel_chunk`'s reason one level up --
+    :attr:`~.tiles.TilemapCel.refs` *is* the canvas's grid here, so there is no
+    tight rectangle to crop to and a tile offset invented at the door would
+    have ``_build_tilemap_cel``'s "not a multiple of its tile size" refusal
+    waiting on the other side of it.
+
+    **The four masks are written out rather than assumed**, and that is the
+    field this chunk exists to get right. ``asein._remap_tile_refs`` maps a
+    stored word onto our bits using the masks *the chunk itself declares*, so a
+    writer that left them zero would have every flipped tile read back as a
+    plain one -- and one that wrote a different layout than it packed would
+    turn a mirrored tile into a tile id of two billion. Ours are
+    :mod:`..tilegrid.gid`'s own four, which are also Aseprite's defaults, so
+    the remap is the identity in both directions and the file is one real
+    Aseprite reads unchanged.
+    """
+    grid_h, grid_w = int(refs.shape[0]), int(refs.shape[1])
+    body = struct.pack("<HhhBHh5s", layer_index, 0, 0, 255, _CEL_TILEMAP, 0, b"\0" * 5)
+    body += struct.pack("<HHH", grid_w, grid_h, _TILE_BITS)
+    body += struct.pack("<IIII", gid.GID_MASK, gid.FLIP_H, gid.FLIP_V, gid.FLIP_D)
+    body += b"\0" * 10
+    # ``<u4`` and not ``gid.DTYPE``: the grid is stored little-endian whatever
+    # the machine writing it is, which is the one place the two spellings of
+    # uint32 are not the same bytes.
+    grid = np.ascontiguousarray(refs, dtype="<u4")
+    return _chunk(_CEL, body + zlib.compress(grid.tobytes()))
+
+
+def _drawn_cel(
+    layer_index: int, row: _Row, layer, mode: str, size: tuple[int, int]
+) -> bytes:
+    """The chunk one occupied slot writes -- pixels, or tile references.
+
+    A raster cel on a row declared ``_LAYER_TILEMAP`` is refused **by name**
+    rather than written as pixels: the layer chunk has already said this layer
+    draws through a tileset, so ``_build_cels`` would route the cel through
+    ``_build_tilemap_cel``, find no refs on it and hand back an empty grid --
+    a drawing that opens blank. The pair of them disagreeing is a broken
+    document, and this is the cheapest place to say so.
+    """
+    if row.tileset is None:
+        return _cel_chunk(layer_index, _plane(layer, mode, size), size)
+    refs = getattr(layer, "refs", None)
+    if refs is None:
+        raise ValueError(
+            f"the tilemap layer {row.name!r} holds a cel with no tile grid,"
+            " and a tilemap layer's cels are tilemap cels"
+        )
+    bound = getattr(layer, "tileset_uid", None)
+    if bound is not None and int(bound) != row.tileset_uid:
+        # One layer, one tileset: the format has a single DWORD for it, so a
+        # cel bound elsewhere would silently redraw through this row's atlas.
+        raise ValueError(
+            f"the tilemap layer {row.name!r} holds a cel bound to a different"
+            " tileset, and an .aseprite layer draws through exactly one"
+        )
+    return _tilemap_cel_chunk(layer_index, refs)
+
+
+# --- tilesets ----------------------------------------------------------------
+
+
+def _strip_bytes(ts, mode: str, table: dict[int, int] | None) -> bytes:
+    """One tileset's tiles as the vertical strip the format stores.
+
+    Rebuilt tile by tile through ``Tileset.tile_pixels`` rather than handed
+    straight off ``ts.pixels``, and the copy is worth its cost: an atlas that
+    came from a ``.tsx`` may have several columns, a margin and a spacing,
+    where an ``.aseprite`` tileset is *always* one column with neither -- so
+    writing the image verbatim would put a file's own layout into a field that
+    declares a different one, and every tile after the first would be read
+    from the wrong pixels. For an inker-native strip this is the identity.
+    """
+    count = int(ts.tile_count)
+    stack = np.concatenate(
+        [np.asarray(ts.tile_pixels(index)) for index in range(count)], axis=0
+    )
+    return _at_depth(stack, mode, f"the tileset {ts.name!r}", table)
+
+
+def _tileset_chunk(
+    tileset_id: int, ts, mode: str, table: dict[int, int] | None
+) -> bytes:
+    """The 0x2023 chunk: one embedded vertical-strip atlas.
+
+    The pixels are stored at the **sprite's** depth, not at the model's: an
+    8-bit sprite carries an 8-bit strip. Every strip is RGBA in this package
+    (the Wave 3 divergence), so an indexed document's strips are resolved back
+    through its palette here -- :func:`asein._decode_tileset` reads them out
+    through the same table, so the round trip is exact and an off-palette
+    pixel is refused by name rather than nearest-matched (see
+    :func:`_resolved_indices`).
+    """
+    tile_w, tile_h = int(ts.tile_w), int(ts.tile_h)
+    if tile_w > _MAX_U16 or tile_h > _MAX_U16:
+        raise ValueError(
+            f"the tileset {ts.name!r} has {tile_w}x{tile_h} tiles and an"
+            f" .aseprite stores at most {_MAX_U16} on a side"
+        )
+    raw = _strip_bytes(ts, mode, table)
+    compressed = zlib.compress(raw)
+    body = struct.pack(
+        "<IIIHHh",
+        tileset_id,
+        _TILESET_EMBEDDED,
+        int(ts.tile_count),
+        tile_w,
+        tile_h,
+        _TILESET_BASE_INDEX,
+    ) + b"\0" * 14
+    body += _string(ts.name)
+    body += struct.pack("<I", len(compressed)) + compressed
+    return _chunk(_TILESET, body)
+
+
+# --- slices ------------------------------------------------------------------
+
+
+def _slice_runs(entry, frames) -> list[tuple[int, object]]:
+    """``(frame index, key)`` wherever this slice's rectangle *changes*.
+
+    The two models key differently and this is the whole of the conversion. A
+    key in this format is valid **from** its frame until the next one; a key
+    here overrides exactly one frame. So the emission is run-length over the
+    resolved key: frame 0 always, and any later frame whose ``Slice.at``
+    differs from the one before it.
+
+    The near miss is the frame that goes *back* to the base. Emitting only the
+    frames this model holds an override for would leave that frame inside the
+    override's run, and the rectangle would stay changed to the end of the
+    clip -- so a return is a run of its own and gets its own key, which is
+    what makes ``asein._slices_for`` rebuild the same picture frame for frame.
+    """
+    runs: list[tuple[int, object]] = []
+    previous = None
+    for index, frame in enumerate(frames):
+        key = entry.at(frame.uid)
+        if previous is None or key != previous:
+            runs.append((index, key))
+        previous = key
+    return runs
+
+
+def _slice_chunk(entry, runs: list[tuple[int, object]]) -> bytes:
+    """The 0x2022 chunk, one per slice. Inverts :func:`asein._read_slice`.
+
+    The bounds are re-derived on the way out: this package stores a rectangle
+    as ``x0 y0 x1 y1`` with the far edge exclusive (``slices.py``'s stated
+    convention) and the format stores an origin and a size, so the width is a
+    subtraction here and an addition on the way back in.
+
+    **The two flags are a property of the slice, not of a key**, which is the
+    one place the models genuinely disagree: ``SliceKey`` carries its pivot and
+    its nine-patch centre per frame and may hold neither. The union decides the
+    flags -- a slice that carries a pivot anywhere declares one -- and a key
+    that lacks what the chunk declares is written with *the slice's own* value.
+    Never a zero: a zero pivot is a real pivot as far as the reader is
+    concerned, so filling with one would move a sprite's anchor to its corner
+    on the frames nobody keyed. What is lost is the distinction between "this
+    frame has no pivot of its own" and "this frame has the slice's pivot",
+    which resolve to the same rectangle through ``Slice.at`` either way.
+    """
+    nine_patch = any(key.center is not None for _, key in runs)
+    pivot = any(key.pivot is not None for _, key in runs)
+    flags = (_SLICE_NINE_PATCH if nine_patch else 0) | (_SLICE_PIVOT if pivot else 0)
+    body = struct.pack("<III", len(runs), flags, 0) + _string(entry.name)
+    for index, key in runs:
+        x0, y0, x1, y1 = key.bounds
+        body += struct.pack(
+            "<IiiII", index, x0, y0, max(0, x1 - x0), max(0, y1 - y0)
+        )
+        if nine_patch:
+            centre = key.center if key.center is not None else entry.center
+            cx0, cy0, cx1, cy1 = centre if centre is not None else (0, 0, 0, 0)
+            body += struct.pack(
+                "<iiII", cx0, cy0, max(0, cx1 - cx0), max(0, cy1 - cy0)
+            )
+        if pivot:
+            point = key.pivot if key.pivot is not None else entry.pivot
+            px, py = point if point is not None else (0.0, 0.0)
+            # Rounded, because the format's field is a signed DWORD and this
+            # model's pivot is a float. A fractional pivot is the one thing a
+            # slice loses here, and it loses at most half a pixel.
+            body += struct.pack("<ii", round(px), round(py))
+    return _chunk(_SLICE, body)
 
 
 # --- tags and palettes -------------------------------------------------------
@@ -606,7 +1007,14 @@ def aseprite_bytes(doc) -> bytes:
         raise ValueError(
             f"an .aseprite holds at most {_MAX_U16} frames, not {frames}"
         )
-    rows, index_of = _rows(doc)
+    tilesets = list(getattr(doc, "tilesets", None) or ())
+    # Ids are slot *positions*: the reader keys its own table on the id a
+    # chunk declares and hands the slots back in that table's insertion order,
+    # so numbering them 0..N-1 in list order is what makes ``doc.tilesets``
+    # come back in the order it went out -- and makes a second save of a
+    # re-imported document byte-identical.
+    tileset_ids = {slot.uid: index for index, slot in enumerate(tilesets)}
+    rows, index_of = _rows(doc, tileset_ids)
     if len(rows) > _MAX_U16:
         raise ValueError(
             f"an .aseprite holds at most {_MAX_U16} layers, not {len(rows)}"
@@ -630,6 +1038,10 @@ def aseprite_bytes(doc) -> bytes:
             " header can name"
         )
 
+    # The one table an indexed document's *tileset strips* are resolved
+    # through. None at every other depth, where a strip's bytes are its own.
+    table = _palette_lookup(palette, transparent) if depth == _INDEXED else None
+
     size = (width, height)
     per_frame: list[list[bytes]] = [[] for _ in range(frames)]
     head = per_frame[0]
@@ -639,20 +1051,36 @@ def aseprite_bytes(doc) -> bytes:
         # after because ours -- and Aseprite's -- lets the later chunk win.
         head.append(_old_palette_chunk(palette))
         head.append(_palette_chunk(palette))
+    # Before the layer chunks that name them, which is not a requirement --
+    # the reader resolves a layer's tileset id after the whole file is parsed
+    # -- but is the order the file reads in.
+    head.extend(
+        _tileset_chunk(index, slot.tileset, mode, table)
+        for index, slot in enumerate(tilesets)
+    )
     head.extend(_layer_chunk(row) for row in rows)
     if anim is not None and anim.tags:
         head.append(_tags_chunk(anim.tags, frames))
+    for entry in getattr(doc, "slices", None) or ():
+        runs = (
+            [(0, entry.at(None))] if anim is None else _slice_runs(entry, anim.frames)
+        )
+        if runs:
+            head.append(_slice_chunk(entry, runs))
 
     if anim is None:
         for position, layer in enumerate(doc.stack):
             per_frame[0].append(
-                _cel_chunk(index_of[position], _plane(layer, mode, size), size)
+                _drawn_cel(
+                    index_of[position], rows[index_of[position]], layer, mode, size
+                )
             )
     else:
         for position, track in enumerate(anim.tracks):
             # Per track, because a link names a frame on *this* layer: the same
             # object standing in two tracks (which nothing in the editor
             # produces) has to be written twice rather than linked across.
+            row = rows[index_of[position]]
             first: dict[int, int] = {}
             for index, frame in enumerate(anim.frames):
                 layer = anim.cels.get((track.uid, frame.uid))
@@ -665,7 +1093,7 @@ def aseprite_bytes(doc) -> bytes:
                 if at is None:
                     first[id(layer)] = index
                     per_frame[index].append(
-                        _cel_chunk(index_of[position], _plane(layer, mode, size), size)
+                        _drawn_cel(index_of[position], row, layer, mode, size)
                     )
                 else:
                     per_frame[index].append(_link_chunk(index_of[position], at))

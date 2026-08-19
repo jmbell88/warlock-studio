@@ -17,6 +17,8 @@ copies of one idea agree.
 
 from __future__ import annotations
 
+import struct
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -27,8 +29,12 @@ from warlock.studio.inker import groups as gp
 from warlock.studio.inker.animation import DIRECTIONS, Frame, Tag, Track
 from warlock.studio.inker.composite import BLEND_MODES
 from warlock.studio.inker.document import Document
+from warlock.studio.inker.slices import SliceKey
+from warlock.studio.inker.tiles import TilemapCel, materialize, strip
+from warlock.studio.tilegrid import gid
 
 RED = (255, 0, 0, 255)
+GREEN = (0, 255, 0, 255)
 BLUE = (0, 0, 255, 255)
 
 
@@ -656,3 +662,362 @@ def test_a_canvas_too_big_for_the_format_is_refused_by_name():
     doc.stack.layers[1].pixels = np.zeros((4, 70_000, 4), dtype=np.uint8)
     with pytest.raises(ValueError, match="65535"):
         aseout.aseprite_bytes(doc)
+
+
+# --- tilesets, tilemap layers and tilemap cels --------------------------------
+
+
+def _tile(colour: tuple[int, int, int, int], w: int = 4, h: int = 4) -> np.ndarray:
+    tile = np.zeros((h, w, 4), dtype=np.uint8)
+    tile[..., 0], tile[..., 1], tile[..., 2], tile[..., 3] = colour
+    return tile
+
+
+def _tileset(*colours: tuple[int, int, int, int], name: str = "tiles"):
+    """A vertical strip whose local id 0 is the required blank tile."""
+    blank = np.zeros((4, 4, 4), dtype=np.uint8)
+    built = strip(np.stack([blank, *[_tile(c) for c in colours]], axis=0))
+    return replace(built, name=name)
+
+
+def _tilemap_still() -> Document:
+    """8x8 at 4x4 tiles (a 2x2 grid): a raster Background under a tilemap
+    layer holding one plain and one horizontally flipped placement."""
+    doc = Document.blank(8, 8)
+    doc.stack[0].name = "Background"
+    doc.stack[0].pixels[:, :] = RED
+    doc.invalidate_all()
+    slot = doc.add_tileset(_tileset(RED, GREEN))
+    cel = doc.add_tilemap_layer(slot.uid, name="Tiles")
+    doc.place_tiles(
+        cel.uid, (0, 0), np.array([[1, gid.compose(2, flip_h=True)]], dtype=np.uint32)
+    )
+    return doc
+
+
+def _tilemap_animated() -> Document:
+    """The same shape over two frames, the tilemap cel linked into both."""
+    doc = Document.blank(8, 8)
+    doc.stack[0].name = "Background"
+    doc.stack[0].pixels[:, :] = RED
+    doc.invalidate_all()
+    doc.ensure_animation()
+    slot = doc.add_tileset(_tileset(RED, GREEN))
+    cel = doc.add_tilemap_layer(slot.uid, name="Tiles")
+    doc.place_tiles(
+        cel.uid,
+        (0, 0),
+        np.array([[gid.compose(2, flip_v=True), 1]], dtype=np.uint32),
+    )
+    doc.add_frame(link=True)
+    return doc
+
+
+def _synced(doc: Document) -> None:
+    """Every tilemap cel's pixels still agree with ``materialize(refs, ts)``."""
+    layers = doc.stack if doc.anim is None else doc.anim.unique_cel_layers()
+    for layer in layers:
+        if isinstance(layer, TilemapCel):
+            slot = doc.tileset_slot(layer.tileset_uid)
+            assert np.array_equal(
+                layer.pixels, materialize(layer.refs, slot.tileset, layer.size)
+            )
+
+
+def test_a_still_tilemap_document_round_trips_refs_bit_exact():
+    doc = _tilemap_still()
+    back, warnings = _round_trip(doc)
+
+    assert warnings == []
+    assert [layer.name for layer in back.stack] == ["Background", "Tiles"]
+    cel = back.stack[1]
+    assert isinstance(cel, TilemapCel)
+    assert np.array_equal(cel.refs, doc.stack[1].refs)
+    assert cel.tileset_uid == back.tilesets[0].uid
+    _synced(back)
+
+
+def test_a_tilemap_cels_flag_bits_survive_the_declared_masks():
+    """The flags ride the same uint32 as the id, so a writer that dropped them
+    -- or declared masks that did not match the bits it wrote -- would land a
+    mirrored tile the right way round and nothing else would notice."""
+    doc = _tilemap_still()
+    flipped = int(doc.stack[1].refs[0, 1])
+    assert flipped & gid.FLIP_H
+
+    back, _ = _round_trip(doc)
+    assert int(back.stack[1].refs[0, 1]) == flipped
+
+
+def test_the_tilemap_cel_declares_our_own_gid_masks():
+    """Declared, not assumed: ``asein._remap_tile_refs`` remaps onto our bits
+    using the masks *the chunk itself carries*, so writing the bits without
+    saying which they are reads back as a tile id of two billion."""
+    data = aseout.aseprite_bytes(_tilemap_still())
+    declared = struct.pack("<IIII", gid.GID_MASK, gid.FLIP_H, gid.FLIP_V, gid.FLIP_D)
+    assert declared in data
+
+
+def test_a_tileset_strip_is_bit_exact():
+    doc = _tilemap_still()
+    back, _ = _round_trip(doc)
+    assert len(back.tilesets) == 1
+    before = doc.tilesets[0].tileset
+    after = back.tilesets[0].tileset
+    assert (after.tile_w, after.tile_h) == (before.tile_w, before.tile_h)
+    assert after.tile_count == before.tile_count
+    assert np.array_equal(after.pixels, before.pixels)
+    assert after.name == before.name
+
+
+def test_an_animated_tilemap_document_keeps_its_binding_and_its_link():
+    doc = _tilemap_animated()
+    back, warnings = _round_trip(doc)
+
+    assert warnings == []
+    track = back.anim.tracks[1]
+    assert track.tileset_uid == back.tilesets[0].uid
+    first = back.anim.cels[(track.uid, back.anim.frames[0].uid)]
+    second = back.anim.cels[(track.uid, back.anim.frames[1].uid)]
+    assert isinstance(first, TilemapCel)
+    assert second is first, "a linked tilemap cel must come back as one object"
+    original = doc.anim.cels[(doc.anim.tracks[1].uid, doc.anim.frames[0].uid)]
+    assert np.array_equal(first.refs, original.refs)
+    _synced(back)
+
+
+def test_a_spare_tileset_survives_with_no_tilemap_layer_at_all():
+    """``ora``'s "not garbage" rule, restated for this writer: a tileset the
+    user has built but not placed yet is document state, and a save that
+    dropped it would lose the work at the moment it is most likely to exist."""
+    doc = _still()
+    doc.add_tileset(_tileset(GREEN, name="spare"))
+
+    back, warnings = _round_trip(doc)
+    assert warnings == []
+    assert len(back.tilesets) == 1
+    assert back.tilesets[0].tileset.name == "spare"
+    assert np.array_equal(
+        back.tilesets[0].tileset.pixels, doc.tilesets[0].tileset.pixels
+    )
+    assert not [layer for layer in back.stack if isinstance(layer, TilemapCel)]
+
+
+def test_two_tilesets_come_back_in_the_order_they_were_written():
+    doc = _tilemap_still()
+    doc.add_tileset(_tileset(BLUE, name="second"))
+    back, _ = _round_trip(doc)
+    assert [slot.tileset.name for slot in back.tilesets] == ["tiles", "second"]
+    assert back.stack[1].tileset_uid == back.tilesets[0].uid
+
+
+def _indexed_tilemap() -> Document:
+    """An indexed document that then grew a tilemap layer.
+
+    The only order that reaches this state: ``_refuse_tilemap_convert`` closes
+    the other one, because converting a document whose picture is *derived*
+    would convert the materialisation and leave the tileset behind it.
+    """
+    doc = Document.blank(8, 8)
+    doc.stack[0].name = "Background"
+    doc.stack[0].pixels[:, :] = RED
+    doc.invalidate_all()
+    doc.convert_to_indexed([(0, 0, 0, 0), RED, GREEN], transparent=0)
+    slot = doc.add_tileset(_tileset(RED, GREEN))
+    cel = doc.add_tilemap_layer(slot.uid, name="Tiles")
+    doc.place_tiles(
+        cel.uid, (0, 0), np.array([[1, gid.compose(2, flip_h=True)]], dtype=np.uint32)
+    )
+    return doc
+
+
+def test_an_indexed_tilemap_document_round_trips_exact():
+    """The decision this task turned on: the format stores a tileset's pixels
+    at the *sprite's* depth, so an 8-bit sprite carries an 8-bit strip, while
+    this model keeps every strip RGBA (the Wave 3 divergence). The strip is
+    resolved back through the palette on the way out -- the exact inverse of
+    ``asein._decode_tileset`` -- so what comes back is the same picture."""
+    doc = _indexed_tilemap()
+    back, warnings = _round_trip(doc)
+
+    assert warnings == []
+    assert back.color_mode == "indexed"
+    assert np.array_equal(
+        back.tilesets[0].tileset.pixels, doc.tilesets[0].tileset.pixels
+    )
+    assert np.array_equal(back.stack[1].refs, doc.stack[1].refs)
+    _synced(back)
+
+
+def test_a_tilemap_cel_in_an_indexed_document_never_needs_an_index_plane():
+    """A tilemap cel carries no ``indices`` in any colour mode -- its picture
+    is derived -- so the cel chunk that would have demanded one is never the
+    chunk this layer writes."""
+    doc = _indexed_tilemap()
+    assert doc.stack[1].indices is None
+    back, _ = _round_trip(doc)
+    assert back.stack[1].indices is None
+
+
+def test_an_off_palette_tileset_strip_is_refused_by_name():
+    """The one hole in resolving strips through the palette, and it is named:
+    a strip *imported* into an indexed document (from a ``.tsx``, from
+    Plotter) can hold a colour the document's table has no slot for. The
+    funnel resolves everything a user paints, so this is the import case
+    alone -- and the alternative to refusing is a nearest match that would
+    silently repaint somebody else's atlas."""
+    doc = _indexed_tilemap()
+    doc.add_tileset(_tileset(BLUE, name="stray"))
+    with pytest.raises(ValueError, match="stray"):
+        aseout.aseprite_bytes(doc)
+
+
+def test_a_grayscale_tileset_strip_holding_a_visible_colour_is_refused_by_name():
+    doc = Document.blank(8, 8)
+    doc.invalidate_all()
+    doc.convert_to_grayscale()
+    doc.add_tileset(_tileset(BLUE, name="colourful"))
+    with pytest.raises(ValueError, match="colourful"):
+        aseout.aseprite_bytes(doc)
+
+
+def test_a_tilemap_track_whose_cel_holds_no_refs_is_refused_by_name():
+    """A layer declared kind 2 whose cel is an ordinary raster one would be
+    read back through ``_build_tilemap_cel`` with no refs at all -- an empty
+    grid where a drawing was. Refused rather than emptied."""
+    from warlock.studio.inker.layers import Layer
+
+    doc = _tilemap_animated()
+    anim = doc.anim
+    key = (anim.tracks[1].uid, anim.frames[0].uid)
+    anim.cels[key] = Layer.empty(8, 8, "Tiles")
+    with pytest.raises(ValueError, match="Tiles"):
+        aseout.aseprite_bytes(doc)
+
+
+def test_a_tilemap_document_is_byte_stable():
+    doc = _tilemap_animated()
+    once, _ = asein.document_from_aseprite(aseout.aseprite_bytes(doc))
+    first = aseout.aseprite_bytes(once)
+    twice, _ = asein.document_from_aseprite(first)
+    assert aseout.aseprite_bytes(twice) == first
+
+
+# --- slices -------------------------------------------------------------------
+
+
+def test_a_slice_round_trips_with_its_pivot_and_its_nine_patch():
+    doc = _still()
+    entry = doc.add_slice(
+        (1, 1, 4, 4), name="Button", pivot=(1.0, 2.0), center=(1, 1, 2, 2)
+    )
+    back, warnings = _round_trip(doc)
+
+    assert warnings == []
+    assert len(back.slices) == 1
+    got = back.slices[0]
+    assert got.name == "Button"
+    assert got.bounds == entry.bounds
+    assert got.pivot == entry.pivot
+    assert got.center == entry.center
+
+
+def test_a_plain_slice_comes_back_with_neither_flag_set():
+    """The two flags are written only when the slice carries the thing, so a
+    plain rectangle reads back as one -- a zero centre is a real nine-patch as
+    far as the reader is concerned, and inventing one would put a stretch box
+    on every slice in the document."""
+    doc = _still()
+    doc.add_slice((0, 0, 2, 2), name="Plain")
+    back, _ = _round_trip(doc)
+    got = back.slices[0]
+    assert got.pivot is None
+    assert got.center is None
+
+
+def test_several_slices_keep_their_order_and_their_names():
+    doc = _still()
+    doc.add_slice((0, 0, 2, 2), name="One")
+    doc.add_slice((1, 1, 3, 3), name="Two")
+    back, _ = _round_trip(doc)
+    assert [entry.name for entry in back.slices] == ["One", "Two"]
+
+
+def test_a_slice_keyed_per_frame_round_trips_frame_for_frame():
+    doc = _animated()
+    doc.add_frame()
+    entry = doc.add_slice((0, 0, 2, 2), name="Head")
+    doc.set_slice_key(
+        entry.uid, doc.anim.frames[1].uid, key=SliceKey(bounds=(1, 1, 3, 3))
+    )
+    doc.set_slice_key(
+        entry.uid, doc.anim.frames[2].uid, key=SliceKey(bounds=(1, 1, 3, 3))
+    )
+    back, warnings = _round_trip(doc)
+
+    assert warnings == []
+    got = back.slices[0]
+    seen = [got.at(frame.uid).bounds for frame in back.anim.frames]
+    want = [entry.at(frame.uid).bounds for frame in doc.anim.frames]
+    assert seen == want == [(0, 0, 2, 2), (1, 1, 3, 3), (1, 1, 3, 3)]
+
+
+def test_a_key_that_returns_to_the_base_is_written_as_its_own_run():
+    """Aseprite's keys run to the *end* of the timeline, this model's override
+    one frame -- so the emission is run-length: a key wherever the resolved
+    rectangle changes. A frame that goes back to the base needs one of its
+    own, or the middle frame's rectangle would run to the end of the clip."""
+    doc = _animated()
+    doc.add_frame()
+    entry = doc.add_slice((0, 0, 2, 2), name="Head")
+    doc.set_slice_key(
+        entry.uid, doc.anim.frames[1].uid, key=SliceKey(bounds=(1, 1, 3, 3))
+    )
+    back, _ = _round_trip(doc)
+    got = back.slices[0]
+    assert [got.at(frame.uid).bounds for frame in back.anim.frames] == [
+        (0, 0, 2, 2),
+        (1, 1, 3, 3),
+        (0, 0, 2, 2),
+    ]
+
+
+def test_a_key_carrying_no_pivot_inherits_the_slices_own():
+    """The format stores pivot and nine-patch *presence* once per slice, not
+    per key, so a document whose keys disagree is one the file cannot spell.
+    The union decides the two flags and a key missing what the chunk declares
+    is written with the slice's own value -- never a zero, which the reader
+    could not tell from a rectangle somebody meant."""
+    doc = _animated()
+    entry = doc.add_slice((0, 0, 2, 2), name="Head", pivot=(1.0, 1.0))
+    doc.set_slice_key(
+        entry.uid, doc.anim.frames[1].uid, key=SliceKey(bounds=(1, 1, 3, 3))
+    )
+    assert entry.keys[doc.anim.frames[1].uid].pivot is None
+
+    back, _ = _round_trip(doc)
+    got = back.slices[0]
+    assert got.at(back.anim.frames[0].uid).pivot == (1.0, 1.0)
+    assert got.at(back.anim.frames[1].uid).pivot == (1.0, 1.0)
+
+
+def test_a_slice_on_a_still_document_round_trips():
+    doc = _still()
+    doc.add_slice((0, 0, 3, 3), name="Whole", center=(1, 1, 2, 2))
+    back, _ = _round_trip(doc)
+    assert back.anim is None
+    assert back.slices[0].center == doc.slices[0].center
+
+
+def test_a_document_with_slices_is_byte_stable():
+    doc = _animated()
+    entry = doc.add_slice(
+        (0, 0, 2, 2), name="Head", pivot=(1.0, 1.0), center=(0, 0, 1, 1)
+    )
+    doc.set_slice_key(
+        entry.uid, doc.anim.frames[1].uid, key=SliceKey(bounds=(1, 1, 3, 3))
+    )
+    once, _ = asein.document_from_aseprite(aseout.aseprite_bytes(doc))
+    first = aseout.aseprite_bytes(once)
+    twice, _ = asein.document_from_aseprite(first)
+    assert aseout.aseprite_bytes(twice) == first

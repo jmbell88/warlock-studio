@@ -68,11 +68,22 @@ PACKAGE = "warlock.studio.inker"
 #: *their declared* tile-id/flip masks onto ``gid.GID_MASK``/``FLIP_H``/
 #: ``FLIP_V``/``FLIP_D`` with the same word ``_doc_tiles.py`` and ``ora.py``
 #: already reach for.
+#:
+#: ``aseout.py``'s entry is Wave 5, and it is ``asein.py``'s first entry read
+#: backwards: a tilemap cel chunk has to **declare** the tile-id and flip masks
+#: it packed its words under, and the masks it packed them under are
+#: ``gid.GID_MASK``/``FLIP_H``/``FLIP_V``/``FLIP_D``. Restating those four
+#: numbers locally would be four literals that could drift from the word every
+#: other module in this list shares -- and a drifted flip mask is a mirrored
+#: tile read back as a tile id of two billion. No ``tileset`` entry beside it:
+#: this half only ever *reads* a ``Tileset`` the document already holds, tile
+#: by tile through its own accessors, and never constructs one.
 OUTWARD_IMPORTS = {
     ("_doc_tiles.py", "warlock.studio.tilegrid"),
     ("anim_edits.py", "warlock.studio.undo"),
     ("asein.py", "warlock.studio.tilegrid"),
     ("asein.py", "warlock.studio.tilegrid.tileset"),
+    ("aseout.py", "warlock.studio.tilegrid"),
     ("composite.py", "warlock.native"),
     ("dither.py", "warlock.native"),
     ("ora.py", "warlock.studio.tilegrid"),

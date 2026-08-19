@@ -25,7 +25,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from warlock.studio.inker import asein, ora
+from warlock.studio.inker import asein, aseout, ora
 from warlock.studio.inker.document import Document
 from warlock.studio.inker.layers import Layer
 from warlock.studio.inker.tiles import TilemapCel, materialize, strip
@@ -472,6 +472,70 @@ def test_an_imported_tilemap_document_round_trips_through_ora_bit_exact(tmp_path
     assert int(back_first.refs[0, 0]) == ref_value
     assert np.array_equal(back_first.pixels, orig_first.pixels)
 
+
+def test_the_import_edit_export_chain_comes_back_through_aseout(tmp_path: Path):
+    """Wave 5's extension of the chain above, all the way round: the same
+    ``.aseprite`` opened, saved to ``.ora``, reopened, written back **out** as
+    an ``.aseprite`` by :mod:`~warlock.studio.inker.aseout` and imported once
+    more. Refs, flag bits, strip pixels and the track binding are identical at
+    every stop, and the linked cel is still one object at the end of it.
+
+    The ORA leg is deliberately in the middle rather than skipped: it is the
+    format the editor actually saves in, so a tileset id or a refs plane that
+    only survives an ``.aseprite``-to-``.aseprite`` hop would still be lost by
+    the ordinary way a user works.
+    """
+    blank = _ase_rgba(2, 2, (0, 0, 0, 0))
+    art = _ase_rgba(2, 2, (11, 22, 33, 255))
+    ref_value = gid.compose(1, flip_h=True)
+    data = _ase_file(
+        _ase_header(2, 4, 2),
+        [
+            _ase_frame(
+                [
+                    _ase_tileset(5, 2, 2, [blank, art]),
+                    _ase_layer("Tiles", kind=2, tileset=5),
+                    _ase_tilemap_cel(0, np.array([[ref_value, 0]], dtype=np.uint32)),
+                ]
+            ),
+            _ase_frame([_ase_linked_cel(0, 0)]),
+        ],
+    )
+    opened, warnings = asein.document_from_aseprite(data)
+    assert warnings == []
+
+    path = tmp_path / "chain.ora"
+    ora.write_ora(opened, path)
+    reopened = ora.read_ora(path)
+
+    exported = aseout.aseprite_bytes(reopened)
+    back, out_warnings = asein.document_from_aseprite(exported)
+    assert out_warnings == []
+    _assert_synced(back)
+
+    # The tileset, pixel for pixel -- the strip is what a lost id or a
+    # re-encoded atlas would show up in first.
+    assert len(back.tilesets) == 1
+    assert np.array_equal(
+        back.tilesets[0].tileset.pixels, opened.tilesets[0].tileset.pixels
+    )
+    assert (back.tilesets[0].tileset.tile_w, back.tilesets[0].tileset.tile_h) == (2, 2)
+
+    track = back.anim.tracks[0]
+    assert track.tileset_uid == back.tilesets[0].uid
+
+    first = back.anim.cels[(track.uid, back.anim.frames[0].uid)]
+    second = back.anim.cels[(track.uid, back.anim.frames[1].uid)]
+    assert second is first, "the link must survive the whole chain"
+
+    source = opened.anim.cels[(opened.anim.tracks[0].uid, opened.anim.frames[0].uid)]
+    assert np.array_equal(first.refs, source.refs)
+    assert int(first.refs[0, 0]) == ref_value
+    assert np.array_equal(first.pixels, source.pixels)
+
+    # And once more round: the exported bytes are a fixed point, so nothing in
+    # the chain depends on a uid or a dictionary order that changed on the way.
+    assert aseout.aseprite_bytes(back) == exported
 
 # -- the ORA half of the end-to-end chain -------------------------------------
 
