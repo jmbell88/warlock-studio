@@ -4308,3 +4308,66 @@ def test_plotter_tileset_pane_is_only_the_file_door_when_empty(app_ctx, imgui_ct
     assert _index_of(labels, "Add from a file") >= 0, labels
     assert _index_of(labels, "Polish in Inker") == -1, "nothing to polish with no tileset"
     assert _index_of(labels, "Generate a ground set") == -1, labels
+
+
+def test_the_sheet_popup_pump_runs_before_the_empty_map_return(app_ctx, imgui_ctx):
+    """A ruled sheet arriving onto a map with *no* tilesets is the commonest
+    way this feature is reached -- it is how a map gets its first tileset -- so
+    a pump placed after the pane's empty-map early return would park megabytes
+    that no popup ever asks about."""
+    import numpy as np
+
+    from warlock.studio import plotter_mode
+    from warlock.studio.panes import plotter_tileset
+    from warlock.studio.tilegrid import slicing
+
+    imgui, _renderer = imgui_ctx
+    tab = plotter_mode.new_document(app_ctx, (8, 8, 16, 16))
+    assert not tab.doc.tilesets
+
+    sheet = np.zeros((50, 50, 4), dtype=np.uint8)
+    sheet[:, :, 3] = 255
+    for r in range(3):
+        for c in range(3):
+            y, x = r * 17, c * 17
+            sheet[y:y + 16, x:x + 16, :3] = 200
+    grid = slicing.detect_grid(sheet)
+    assert grid is not None
+
+    state = plotter_mode.ensure(app_ctx)
+    state.sheet_import = (tab.uid, "sheet", "", sheet, grid)
+    state.sheet_import_open = False
+
+    _drawn_labels(imgui, lambda: plotter_tileset.draw(app_ctx), "##sheet-pump")
+    assert state.sheet_import_open is True, "the pump must precede the empty-map return"
+
+
+def test_a_frame_without_the_sheet_popup_drops_the_pixels(app_ctx, imgui_ctx):
+    """imgui closes a popup on a click outside, and the parked sheet is
+    megabytes: the frame that finds the popup gone is what releases them."""
+    import numpy as np
+
+    from warlock.studio import plotter_mode
+    from warlock.studio.panes import plotter_tileset
+    from warlock.studio.tilegrid import slicing
+
+    imgui, _renderer = imgui_ctx
+    tab = plotter_mode.new_document(app_ctx, (8, 8, 16, 16))
+
+    sheet = np.zeros((50, 50, 4), dtype=np.uint8)
+    sheet[:, :, 3] = 255
+    for r in range(3):
+        for c in range(3):
+            y, x = r * 17, c * 17
+            sheet[y:y + 16, x:x + 16, :3] = 200
+    grid = slicing.detect_grid(sheet)
+
+    state = plotter_mode.ensure(app_ctx)
+    state.sheet_import = (tab.uid, "sheet", "", sheet, grid)
+    # Already flagged open, so the pump does not re-open it; the popup itself
+    # was never begun, which is exactly the click-outside shape.
+    state.sheet_import_open = True
+
+    _drawn_labels(imgui, lambda: plotter_tileset.draw(app_ctx), "##sheet-gone")
+    assert state.sheet_import is None
+    assert state.sheet_import_open is False

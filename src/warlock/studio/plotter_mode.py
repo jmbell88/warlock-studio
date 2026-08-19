@@ -74,6 +74,10 @@ from .plotter_tilesets import (  # noqa: F401
     TILESET_FILTER,
     add_tileset_path,
     ask_add_tileset,
+    clear_sheet_import,
+    import_detected_sheet,
+    import_sheet_blind,
+    land_tileset,
     polish_in_inker,
     tileset_from_inker,
     use_as_tileset,
@@ -292,33 +296,15 @@ def on_task_done(ctx: Any, done: Any) -> None:
 
     if name == "plotter-tileset":
         # Not a save, so ``saving`` was never set and must not be cleared here.
+        if isinstance(result, dict) and result.get("sheet") is not None:
+            # A ruled sheet: park it and let the popup ask. Nothing is added to
+            # the document here -- ``slicing``'s rule is that the detection is a
+            # suggestion, so the only thing that has happened is a measurement.
+            state.sheet_import = result["sheet"]
+            state.sheet_import_open = False
+            return
         if isinstance(result, dict) and result.get("tileset") is not None:
-            tileset = result["tileset"]
-            want = result.get("projection")
-            if want and want != tab.doc.projection:
-                # One step, not two. A tileset that arrived while the projection
-                # did not would leave a map painting the wrong lattice, one
-                # Ctrl+Z away from a state nobody asked for.
-                #
-                # No door has set ``projection`` since the ground generator was
-                # deleted on 2026-08-18 -- the new-map dialog owns the lattice
-                # now -- so this arm is currently reached only from tests. Kept
-                # for ``set_projection``'s own reason: it is the correct shape
-                # for a door that carries a lattice with its art, and re-adding
-                # it later would mean re-deriving the one-undo-step argument.
-                tab.doc.set_projection(want, adding=tileset, source=result.get("source", ""))
-            else:
-                tab.doc.add_tileset(tileset, source=result.get("source", ""))
-            state.tileset_index = len(tab.doc.tilesets) - 1
-            state.brush = None
-            if tileset.terrains:
-                # The thing that just arrived is the thing in your hand, which
-                # is exactly what setting ``tileset_index`` says for a palette.
-                state.terrain = (state.tileset_index, 0)
-            # An isometric map's pixel extent is not width times tile width, so
-            # a fit computed against the old projection is the wrong frame.
-            tab.view.fitted = False
-            ctx.toast("Tileset added.")
+            land_tileset(ctx, state, tab, result)
         return
 
     tab.saving = False

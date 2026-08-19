@@ -215,6 +215,18 @@ class PlotterState:
     clipboard: Any = None
     clipboard_doc: str = ""
 
+    # A sheet parked at the add-tileset door, waiting for the user to confirm
+    # what to do with it: ``(uid, name, source, pixels, grid)``, where ``uid``
+    # names the tab the import is *for* and ``grid`` is what the detector found
+    # (a ``slicing.SheetGrid``, a mismatch record, or a ``roles.SheetRoles``,
+    # depending on which door parked it).
+    #
+    # There is no size field here on purpose: the target is always the map's own
+    # tile size, which the tab already knows. Adding one would let the popup and
+    # the document disagree about what the answer means.
+    sheet_import: tuple[str, str, str, np.ndarray, Any] | None = None
+    sheet_import_open: bool = False
+
     # Canvas drag state, decided on press because several tools start the same
     # way. ``drag_anchor`` is in *tile* coordinates -- the rectangle tool needs
     # the cell the drag began in, not the pixel.
@@ -304,6 +316,12 @@ class PlotterState:
         # Likewise a rectangle of cells: carried across, it would constrain
         # painting in a map the user never drew it on.
         self.select = None
+        # A parked sheet is several megabytes held for *one* tab's popup. It
+        # names that tab by uid, so once the tab is gone -- or the user has
+        # walked away from it -- nothing will ever answer the question, and the
+        # pixels would sit in memory until the app closed.
+        self.sheet_import = None
+        self.sheet_import_open = False
 
     def cycle(self, step: int = 1) -> None:
         if len(self.docs) < 2:

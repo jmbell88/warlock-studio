@@ -61,6 +61,14 @@ You can also send a library asset straight in — right-click any reference card
 tileset in Plotter**. A [Packwright](12-packwright.md) grid pack is the natural source: it writes a
 `.tsx` beside its atlas precisely so it can be used here with no conversion.
 
+A generated tilesheet — the kind an image model produces when you ask it for a tileset — usually
+comes back as one image with dark lines ruled between its cells, and cells that are not quite the
+same size. Add one and Plotter says so: **Detected a 6 × 6 tile grid with separator lines**, with
+**Import** to strip the rules and redraw every cell at the map's tile size, and **Slice at 16 × 16
+instead** to do what it would have done without the detector. It is always a question, never an
+answer applied for you — dark art can rule itself off convincingly, and the second button is there
+for exactly that. Nothing is added to the map until you pick one.
+
 Tilesets are *added*, never removed. Every tile in the map is numbered from the tileset it belongs
 to, so dropping one from the middle would either renumber everything above it — invalidating every
 cell already painted — or leave a hole. Undo takes back a tileset you have only just added.

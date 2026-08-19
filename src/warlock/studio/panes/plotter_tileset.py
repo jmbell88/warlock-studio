@@ -23,11 +23,64 @@ from typing import Any
 
 import numpy as np
 
-from .. import icons, plotter_mode, widgets
+from .. import controls, icons, plotter_mode, widgets
 from ..manual import render as manual_render
 from ..tilegrid import gid as gidlib
 from ..tokens import sp
 from . import plotter_textures
+
+SHEET_POPUP = "plotter-sheet-import"
+
+
+def _sheet_popup(ctx: Any, state: Any, tab: Any) -> None:
+    """Confirm what to do with a sheet the detector found rules in.
+
+    The whole reason this is a popup and not an automatic slice: a genuinely
+    dark drawing -- a night scene, a silhouette set -- can rule itself off
+    convincingly, and the user is the only one who can tell that from a real
+    tilesheet. So the detector's answer is *shown*, and the second button does
+    exactly what the editor did before the detector existed.
+    """
+    from imgui_bundle import imgui
+
+    if not imgui.begin_popup(SHEET_POPUP):
+        # imgui closes a popup on a click outside, and a parked 1024 sheet is
+        # megabytes: dropping it here is what keeps a dismissed import from
+        # pinning the pixels for the rest of the session.
+        if state.sheet_import_open:
+            plotter_mode.clear_sheet_import(ctx)
+        return
+    widgets.popup_chrome(_imgui=imgui)
+    if state.sheet_import is None:
+        imgui.end_popup()
+        return
+    _uid, name, _source, pixels, grid = state.sheet_import
+    height, width = pixels.shape[:2]
+    doc = tab.doc
+    widgets.muted(f"{name} - {width} x {height}")
+    rows, cols = grid.shape
+    imgui.text(
+        f"Detected a {cols} x {rows} tile grid with separator lines "
+        f"(threshold {grid.threshold})."
+    )
+    widgets.muted_wrapped(
+        f"Import strips the separator lines and redraws each cell at "
+        f"{doc.tile_w} x {doc.tile_h}, so the tiles line up with the map."
+    )
+    imgui.dummy((0, 4))
+    if controls.button("Import", (sp(90), 0)) and plotter_mode.import_detected_sheet(ctx):
+        imgui.close_current_popup()
+    imgui.same_line()
+    label = f"Slice at {doc.tile_w} x {doc.tile_h} instead"
+    if controls.button(f"{label}##sheet-blind", (sp(190), 0)) and (
+        plotter_mode.import_sheet_blind(ctx)
+    ):
+        imgui.close_current_popup()
+    imgui.same_line()
+    if controls.button("Cancel##sheet", (sp(90), 0)):
+        plotter_mode.clear_sheet_import(ctx)
+        imgui.close_current_popup()
+    imgui.end_popup()
 
 
 def draw(ctx: Any) -> None:
@@ -48,6 +101,17 @@ def draw(ctx: Any) -> None:
     def add_button() -> None:
         if widgets.disabled_button(f"{icons.PLUS} Add from a file...", not disabled, (-1, 0)):
             plotter_mode.ask_add_tileset(ctx)
+
+    # **Above the empty-map early return, deliberately.** A ruled sheet arriving
+    # onto a map with no tilesets yet is the single most common way this feature
+    # is reached -- it is how a map gets its first tileset -- and a pump placed
+    # after the return would leave that case parking pixels that no popup ever
+    # asks about.
+    parked = state.sheet_import
+    if parked is not None and parked[0] == tab.uid and not state.sheet_import_open:
+        state.sheet_import_open = True
+        imgui.open_popup(SHEET_POPUP)
+    _sheet_popup(ctx, state, tab)
 
     if not doc.tilesets:
         # The one branch where *acquiring* a tileset is the whole pane. There is

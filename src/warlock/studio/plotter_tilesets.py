@@ -31,7 +31,7 @@ from typing import Any
 
 from . import dialogs, filetypes
 from .plotter_io import _decode, _resolve_source, _within_ceiling
-from .plotter_state import active
+from .plotter_state import active, ensure
 
 # A ``.tsx`` carries its own slicing; anything else is an image sliced at the
 # map's tile size. Both halves of every entry are derived, because the label
@@ -76,7 +76,6 @@ def add_tileset_path(
     def run() -> dict[str, Any]:
         from ..service.errors import invalid_from
         from .plotter import tsx as tsxlib
-        from .tilegrid.tileset import Tileset
 
         try:
             if path.suffix.lower() == ".tsx":
@@ -84,14 +83,167 @@ def add_tileset_path(
                 image = tsxlib.tsx_source(data)
                 tileset = tsxlib.read_tsx(data, _decode(_resolve_source(path.parent, image)))
             else:
-                tileset = Tileset(
-                    name=path.stem, pixels=_decode(path), tile_w=width, tile_h=height
+                return _sheet_or_tileset(
+                    path.stem, str(path), _decode(path), tab.uid, width, height
                 )
         except ValueError as exc:
             raise invalid_from(exc, "This tileset could not be added", field="file") from exc
         return {"tileset": tileset, "source": str(path), "uid": tab.uid}
 
     ctx.submit(f"plotter-tileset:{tab.uid}", run)
+
+
+def _sheet_or_tileset(
+    name: str,
+    source: str,
+    pixels: Any,
+    uid: str,
+    tile_w: int,
+    tile_h: int,
+) -> dict[str, Any]:
+    """Task-thread: is this image a ruled sheet, or is it already a tileset?
+
+    The three image doors share this so that "a file the user picked" gets the
+    same answer wherever it was picked from. A ruled sheet is *parked* rather
+    than sliced -- :mod:`.tilegrid.slicing`'s own rule is that detection is a
+    suggestion, so the popup asks and this returns nothing that has been
+    decided. No grid found is today's behaviour byte-for-byte: the blind slice
+    at the map's tile size, which is also the right fallback for a sheet that
+    was generated on imposed rectangles and has no rules to find.
+    """
+    from .tilegrid import slicing
+    from .tilegrid.tileset import Tileset
+
+    grid = slicing.detect_grid(pixels)
+    if grid is not None:
+        return {"sheet": (uid, name, source, pixels, grid), "uid": uid}
+    tileset = Tileset(name=name, pixels=pixels, tile_w=tile_w, tile_h=tile_h)
+    return {"tileset": tileset, "source": source, "uid": uid}
+
+
+def land_tileset(ctx: Any, state: Any, tab: Any, result: dict[str, Any]) -> None:
+    """Adopt an arrived tileset onto ``tab``: the whole tail of the arrival.
+
+    Extracted from ``plotter_mode.on_task_done``'s ``plotter-tileset`` arm so
+    the confirm popup's Import button reaches the *same* code rather than a hand
+    copy of it. The terrain hand-off in particular is easy to leave out of a
+    copy, and leaving it out produces a terrain set that is in the map, is
+    selected in the palette, and cannot be painted with.
+    """
+    tileset = result["tileset"]
+    want = result.get("projection")
+    if want and want != tab.doc.projection:
+        # One step, not two. A tileset that arrived while the projection
+        # did not would leave a map painting the wrong lattice, one
+        # Ctrl+Z away from a state nobody asked for.
+        #
+        # No door has set ``projection`` since the ground generator was
+        # deleted on 2026-08-18 -- the new-map dialog owns the lattice
+        # now -- so this arm is currently reached only from tests. Kept
+        # for ``set_projection``'s own reason: it is the correct shape
+        # for a door that carries a lattice with its art, and re-adding
+        # it later would mean re-deriving the one-undo-step argument.
+        tab.doc.set_projection(want, adding=tileset, source=result.get("source", ""))
+    else:
+        tab.doc.add_tileset(tileset, source=result.get("source", ""))
+    state.tileset_index = len(tab.doc.tilesets) - 1
+    state.brush = None
+    if tileset.terrains:
+        # The thing that just arrived is the thing in your hand, which
+        # is exactly what setting ``tileset_index`` says for a palette.
+        state.terrain = (state.tileset_index, 0)
+    # An isometric map's pixel extent is not width times tile width, so
+    # a fit computed against the old projection is the wrong frame.
+    tab.view.fitted = False
+    ctx.toast("Tileset added.")
+
+
+def _parked(ctx: Any) -> tuple[Any, Any, tuple[Any, ...]] | None:
+    """The parked sheet and the tab it names, or ``None`` (clearing as it goes).
+
+    **By parked uid, never by the active tab.** The popup belongs to the tab the
+    sheet arrived for; answering it after switching tabs -- which the frame
+    thread cannot rule out -- would otherwise add the sheet to whichever map
+    happens to be in front.
+    """
+    state = ensure(ctx)
+    parked = state.sheet_import
+    if parked is None:
+        return None
+    tab = state.get(parked[0])
+    if tab is None:
+        clear_sheet_import(ctx)
+        return None
+    return state, tab, parked
+
+
+def clear_sheet_import(ctx: Any) -> None:
+    """Drop the parked sheet and close its popup. Cancel, and the escape hatch
+    for every path below that decides there is nothing to import."""
+    state = ensure(ctx)
+    state.sheet_import = None
+    state.sheet_import_open = False
+
+
+def import_detected_sheet(ctx: Any) -> bool:
+    """Recompose the parked sheet on its detected grid and land it.
+
+    Frame thread, like Packwright's ``import_tileset`` and for the same reason:
+    the work is a handful of index gathers over an already-decoded array --
+    milliseconds -- and routing it through a task would put a second popup-shaped
+    round trip between the button and the tiles.
+    """
+    from .tilegrid import slicing
+    from .tilegrid.tileset import Tileset
+
+    found = _parked(ctx)
+    if found is None:
+        return False
+    state, tab, (_uid, name, _source, pixels, grid) = found
+    try:
+        atlas = slicing.recompose(pixels, grid, tab.doc.tile_w, tab.doc.tile_h)
+        tileset = Tileset(
+            name=name, pixels=atlas, tile_w=tab.doc.tile_w, tile_h=tab.doc.tile_h
+        )
+    except ValueError as exc:
+        ctx.toast(f"That sheet was not imported: {exc}.", "error")
+        clear_sheet_import(ctx)
+        return False
+    clear_sheet_import(ctx)
+    # ``source=""`` deliberately, and this is the rule every recomposing door
+    # inherits: ``TilesetRef.source`` is what a ``.tmx`` export writes as its
+    # external-file reference, and the recomposed atlas is no longer the file on
+    # disk -- the rules are gone and every cell has moved. Keeping the path
+    # would export a map pointing at art it is not drawing.
+    land_tileset(ctx, state, tab, {"tileset": tileset, "source": ""})
+    return True
+
+
+def import_sheet_blind(ctx: Any) -> bool:
+    """Land the parked sheet the way it would have landed with no detector:
+    sliced whole at the map's tile size, source kept.
+
+    This is the mitigation for a false positive. Genuinely dark art -- a night
+    scene, a silhouette sheet -- can rule itself off convincingly, and the answer
+    to that is a button that does exactly what yesterday's build did.
+    """
+    from .tilegrid.tileset import Tileset
+
+    found = _parked(ctx)
+    if found is None:
+        return False
+    state, tab, (_uid, name, source, pixels, _grid) = found
+    try:
+        tileset = Tileset(
+            name=name, pixels=pixels, tile_w=tab.doc.tile_w, tile_h=tab.doc.tile_h
+        )
+    except ValueError as exc:
+        ctx.toast(f"That sheet was not imported: {exc}.", "error")
+        clear_sheet_import(ctx)
+        return False
+    clear_sheet_import(ctx)
+    land_tileset(ctx, state, tab, {"tileset": tileset, "source": source})
+    return True
 
 
 def polish_in_inker(ctx: Any, tab: Any, index: int) -> None:
@@ -208,7 +360,6 @@ def ask_add_tileset(ctx: Any) -> None:
     def run() -> dict[str, Any] | None:
         from ..service.errors import invalid_from
         from .plotter import tsx as tsxlib
-        from .tilegrid.tileset import Tileset
 
         path = dialogs.open_file("Add a tileset", TILESET_FILTER)
         if path is None:
@@ -219,8 +370,8 @@ def ask_add_tileset(ctx: Any) -> None:
                 image = tsxlib.tsx_source(data)
                 tileset = tsxlib.read_tsx(data, _decode(_resolve_source(path.parent, image)))
             else:
-                tileset = Tileset(
-                    name=path.stem, pixels=_decode(path), tile_w=width, tile_h=height
+                return _sheet_or_tileset(
+                    path.stem, str(path), _decode(path), uid, width, height
                 )
         except ValueError as exc:
             raise invalid_from(exc, "This tileset could not be added", field="file") from exc
@@ -244,14 +395,19 @@ def use_as_tileset(ctx: Any, job: Any) -> None:
     name = (job.get("name") or job_id) if isinstance(job, dict) else job_id
     width, height = int(tab.doc.tile_w), int(tab.doc.tile_h)
 
+    uid = tab.uid
+
     def run() -> dict[str, Any]:
         from ..service import files as svc_files
-        from .tilegrid.tileset import Tileset
 
         path = svc_files.job_dir_file(ctx.svc, job_id, "input.png")
-        tileset = Tileset(
-            name=str(name), pixels=_decode(Path(path)), tile_w=width, tile_h=height
+        # Create's own sheets are drawn on imposed rectangles and carry no
+        # separator lines, so detection finds nothing here and this is today's
+        # blind slice. The call is made anyway because a *user's* image can
+        # reach the library too, and the door should not depend on where the
+        # bytes came from.
+        return _sheet_or_tileset(
+            str(name), "", _decode(Path(path)), uid, width, height
         )
-        return {"tileset": tileset, "source": "", "uid": tab.uid}
 
     ctx.submit(f"plotter-tileset:{tab.uid}", run)

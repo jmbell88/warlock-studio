@@ -2144,3 +2144,174 @@ def test_create_clamps_a_number_the_field_would_have_accepted(monkeypatch):
     form.update(width=99999, next=plotter_setup.NEXT_EMPTY)
     plotter_canvas._create(ctx, form)
     assert plotter_mode.ensure(ctx).active.doc.width == plotter_setup.MAX_TILES
+
+
+# --- ruled tilesheets (Part A) -------------------------------------------------
+
+
+def _ruled_sheet(
+    rows: int = 3, cols: int = 3, cell: int = 16, sep: int = 2, fill: int = 200
+) -> np.ndarray:
+    """A sheet whose cells are ruled off by dark separator lines."""
+    height = rows * cell + sep * (rows - 1)
+    width = cols * cell + sep * (cols - 1)
+    out = np.zeros((height, width, 4), dtype=np.uint8)
+    out[:, :, 3] = 255
+    for r in range(rows):
+        for c in range(cols):
+            y, x = r * (cell + sep), c * (cell + sep)
+            out[y:y + cell, x:x + cell, :3] = fill + r * 5 + c
+    return out
+
+
+def _save_png(path: Path, pixels: np.ndarray) -> Path:
+    from PIL import Image
+
+    Image.fromarray(pixels, "RGBA").save(path)
+    return path
+
+
+def test_a_ruled_sheet_parks_for_confirmation(tmp_path):
+    ctx = FakeCtx()
+    tab = _tab(ctx, tileset=False)
+    png = _save_png(tmp_path / "sheet.png", _ruled_sheet())
+
+    plotter_mode.add_tileset_path(ctx, png)
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+
+    state = plotter_mode.ensure(ctx)
+    # Nothing has been decided: the detection is a suggestion, so the document
+    # is untouched until the popup is answered.
+    assert len(tab.doc.tilesets) == 0
+    assert state.sheet_import is not None
+    assert state.sheet_import[0] == tab.uid
+    assert state.sheet_import[4].shape == (3, 3)
+    assert state.sheet_import_open is False
+
+
+def test_a_plain_image_still_slices_blind(tmp_path):
+    ctx = FakeCtx()
+    tab = _tab(ctx, tileset=False)
+    flat = np.full((32, 32, 4), 200, dtype=np.uint8)
+    flat[:, :, 3] = 255
+    png = _save_png(tmp_path / "flat.png", flat)
+
+    plotter_mode.add_tileset_path(ctx, png)
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+
+    assert plotter_mode.ensure(ctx).sheet_import is None
+    assert len(tab.doc.tilesets) == 1
+    assert tab.doc.tilesets[0].tileset.tile_w == tab.doc.tile_w
+
+
+def test_importing_a_detected_sheet_recomposes_at_map_tile_size(tmp_path):
+    ctx = FakeCtx()
+    tab = _tab(ctx, tileset=False)
+    png = _save_png(tmp_path / "sheet.png", _ruled_sheet())
+    plotter_mode.add_tileset_path(ctx, png)
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+
+    assert plotter_mode.import_detected_sheet(ctx) is True
+
+    state = plotter_mode.ensure(ctx)
+    assert state.sheet_import is None
+    assert state.sheet_import_open is False
+    ref = tab.doc.tilesets[0]
+    assert ref.tileset.tile_w == tab.doc.tile_w
+    assert ref.tileset.tile_count == 9
+    # A recomposed atlas is no longer the file on disk, so a ``.tmx`` export
+    # must not reference it.
+    assert ref.source == ""
+    # Every separator pixel is gone: the darkest cell fill is 200.
+    assert ref.tileset.pixels[:, :, :3].min() >= 200
+
+
+def test_the_blind_answer_matches_todays_slice(tmp_path):
+    ctx = FakeCtx()
+    tab = _tab(ctx, tileset=False)
+    sheet = _ruled_sheet()
+    png = _save_png(tmp_path / "sheet.png", sheet)
+    plotter_mode.add_tileset_path(ctx, png)
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+
+    assert plotter_mode.import_sheet_blind(ctx) is True
+
+    ref = tab.doc.tilesets[0]
+    assert np.array_equal(np.asarray(ref.tileset.pixels), sheet)
+    assert ref.source == str(png)
+    assert plotter_mode.ensure(ctx).sheet_import is None
+
+
+def test_a_parked_sheet_for_a_closed_tab_is_dropped(tmp_path):
+    ctx = FakeCtx()
+    tab = _tab(ctx, tileset=False)
+    png = _save_png(tmp_path / "sheet.png", _ruled_sheet())
+    plotter_mode.add_tileset_path(ctx, png)
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+
+    state = plotter_mode.ensure(ctx)
+    state.close(tab.uid)
+    assert plotter_mode.import_detected_sheet(ctx) is False
+    assert state.sheet_import is None
+
+
+def test_switching_tabs_drops_the_parked_sheet(tmp_path):
+    ctx = FakeCtx()
+    tab = _tab(ctx, tileset=False)
+    png = _save_png(tmp_path / "sheet.png", _ruled_sheet())
+    plotter_mode.add_tileset_path(ctx, png)
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+
+    state = plotter_mode.ensure(ctx)
+    other = plotter_mode.new_document(ctx, (4, 4, 16, 16))
+    state.activate(other.uid)
+    assert state.sheet_import is None
+    assert state.sheet_import_open is False
+
+
+def test_importing_with_nothing_parked_is_a_no_op():
+    ctx = FakeCtx()
+    _tab(ctx, tileset=False)
+    assert plotter_mode.import_detected_sheet(ctx) is False
+    assert plotter_mode.import_sheet_blind(ctx) is False
+
+
+def test_use_as_tileset_routes_through_detection(tmp_path, monkeypatch):
+    from warlock.studio import plotter_tilesets
+
+    ctx = FakeCtx()
+    tab = _tab(ctx, tileset=False)
+    png = _save_png(tmp_path / "input.png", _ruled_sheet())
+    monkeypatch.setattr(
+        "warlock.service.files.job_dir_file", lambda svc, job_id, name: png
+    )
+    assert plotter_tilesets is not None
+
+    plotter_mode.use_as_tileset(ctx, {"id": "j1", "name": "sheet"})
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+
+    state = plotter_mode.ensure(ctx)
+    assert state.sheet_import is not None
+    assert state.sheet_import[1] == "sheet"
+
+
+def test_a_tsx_never_parks(tmp_path):
+    from PIL import Image
+
+    ctx = FakeCtx()
+    tab = _tab(ctx, tileset=False)
+    Image.fromarray(_ruled_sheet(), "RGBA").save(tmp_path / "t.png")
+    sheet = _ruled_sheet()
+    tsx_path = tmp_path / "t.tsx"
+    tsx_path.write_text(
+        f'<tileset name="t" tilewidth="16" tileheight="16">'
+        f'<image source="t.png" width="{sheet.shape[1]}" height="{sheet.shape[0]}"/>'
+        f"</tileset>",
+        encoding="utf-8",
+    )
+
+    plotter_mode.add_tileset_path(ctx, tsx_path)
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+
+    assert plotter_mode.ensure(ctx).sheet_import is None
+    assert len(tab.doc.tilesets) == 1
