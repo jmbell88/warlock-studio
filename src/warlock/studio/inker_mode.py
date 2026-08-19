@@ -1347,6 +1347,21 @@ def _submit_export(ctx: Any, export: _Export) -> None:
     wrap = max(1, int(getattr(state, "export_wrap", 1) or 1))
     merge = bool(getattr(state, "export_merge", False))
     skip_empty = bool(getattr(state, "export_skip_empty", False))
+    trim = bool(getattr(state, "export_trim", False))
+    padding = max(0, int(getattr(state, "export_padding", 0) or 0))
+    extrude = max(0, int(getattr(state, "export_extrude", 0) or 0))
+    if export.kind == "sheet" and padding < extrude * 2:
+        # Refused here, before the file dialog, for the same reason the
+        # arrange/layout and merge/layout conflicts below are: ``sheetout.build``
+        # would raise this itself, but by then the user has already picked a
+        # filename and the failure arrives as an opaque task error.
+        tab.saving = False
+        ctx.toast(
+            f"Padding must be at least twice Extrude to give every sprite "
+            f"room ({extrude} x 2 = {extrude * 2}, padding is {padding}).",
+            "warn",
+        )
+        return
     # One payload per output file. A single-file export has exactly one and
     # every line below reads the same as it did before splits existed; a split
     # has one per tag or per layer, each carrying its own timing and its own
@@ -1453,6 +1468,9 @@ def _submit_export(ctx: Any, export: _Export) -> None:
                 wrap=wrap if arrange in ("rows", "columns") else None,
                 merge=merge,
                 skip_empty=skip_empty,
+                trim=trim,
+                padding=padding,
+                extrude=extrude,
             )
             try:
                 image.save(out, "PNG")

@@ -1184,6 +1184,23 @@ class InkerState:
     # for the same reason ``export_merge`` is, and refused together with a
     # directional layout for the same reason too.
     export_skip_empty: bool = False
+    # Each cell shrinks to the largest trimmed frame's size instead of the
+    # full canvas, every frame's own trimmed pixels placed flush at the
+    # cell's corner. Off by default for the same reason ``export_merge`` is --
+    # the byte pin over the whole default sheet export needs the untouched
+    # full-cell path.
+    export_trim: bool = False
+    # A uniform border round the atlas and gutter between every cell, in
+    # pixels; app-level like the switches above it. Zero is the sheet this
+    # always packed.
+    export_padding: int = 0
+    # Replicates each placed rectangle's own border pixels outward into
+    # whatever gutter ``export_padding`` left, so a filtered texture sampling
+    # just past a sprite's edge finds that sprite's own colour. Refused at
+    # export (by name, before the file dialog) whenever it exceeds half of
+    # ``export_padding`` -- the same room guarantee ``packwright.PackSettings``
+    # enforces at construction.
+    export_extrude: int = 0
 
     # -- importing a sprite sheet ------------------------------------------
     #

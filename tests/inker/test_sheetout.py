@@ -844,3 +844,225 @@ def test_a_tag_span_is_clamped_onto_the_frames_that_exist():
     doc = _animated()
     assert doc.add_tag("walk", 1, 99)
     assert sheetout.tag_span(doc.anim, doc.anim.tags[0]) == (1, 2)
+
+
+# --- trim, padding, extrude ----------------------------------------------------
+#
+# All three off by default, which is what ``test_a_default_inker_sidecar_is_
+# byte_for_byte_what_it_always_was`` above already proves: the untouched path
+# is byte-for-byte the sheet this always packed. On, they compose in the order
+# packwright's own grid mode established -- trim decides the cell size,
+# padding spaces the grid out, extrude replicates each placed rectangle's own
+# border into whatever gutter padding left.
+
+
+def _box(width: int, height: int, rect: tuple[int, int, int, int], colour=RED) -> np.ndarray:
+    """An otherwise-transparent frame with a solid filled rectangle in it."""
+    plane = np.zeros((height, width, 4), dtype=np.uint8)
+    x, y, w, h = rect
+    plane[y : y + h, x : x + w] = colour
+    return plane
+
+
+def test_trim_shrinks_the_cell_to_the_largest_trimmed_frame():
+    frames = [_box(8, 8, (1, 2, 3, 2)), _box(8, 8, (0, 0, 5, 1))]
+    image, plan, trims, _frame_cells = sheetout.build(frames, [10, 10], trim=True)
+    try:
+        # cell size is the max across surviving frames: w=max(3,5)=5, h=max(2,1)=2.
+        assert (plan.cell_w, plan.cell_h) == (5, 2)
+        assert (plan.columns, plan.rows) == (2, 1)
+        assert (plan.width, plan.height) == (10, 2)
+        # Each frame's own trim rectangle is unchanged in meaning: the source
+        # offset and size within the *original* (untrimmed) frame.
+        assert trims[0] == {"x": 1, "y": 2, "w": 3, "h": 2}
+        assert trims[1] == {"x": 0, "y": 0, "w": 5, "h": 1}
+        # And each frame's own (possibly smaller) trimmed pixels are placed
+        # flush at its cell's corner -- not centred, not stretched to the
+        # uniform cell size.
+        assert image.getpixel((0, 0)) == RED
+        assert image.getpixel((2, 1)) == RED
+        assert image.getpixel((3, 0)) == (0, 0, 0, 0)  # inside cell 0, past frame 0's 3px width
+        assert image.getpixel((5, 0)) == RED  # cell 1 starts at x=5
+        assert image.getpixel((9, 0)) == RED  # cell 1's frame is 5px wide, flush left
+        assert image.getpixel((5, 1)) == (0, 0, 0, 0)  # cell 1's frame is 1px tall
+    finally:
+        image.close()
+
+
+def test_a_frame_trimming_to_nothing_stays_a_blank_cell():
+    """``skip_empty`` is off, so the empty frame still gets a cell -- just an
+    empty one, sized by whatever the other frames need."""
+    frames = [_box(8, 8, (0, 0, 4, 4)), np.zeros((8, 8, 4), dtype=np.uint8)]
+    image, plan, trims, _frame_cells = sheetout.build(frames, [10, 10], trim=True)
+    try:
+        assert len(plan.cells) == 2
+        assert trims[0] == {"x": 0, "y": 0, "w": 4, "h": 4}
+        assert trims[1] is None
+        cell1 = plan.cells[1]
+        block = image.crop((cell1.x, cell1.y, cell1.x + plan.cell_w, cell1.y + plan.cell_h))
+        assert block.getbbox() is None, "an empty trim pastes nothing into its cell"
+    finally:
+        image.close()
+
+
+def test_a_wholly_empty_clip_falls_back_to_a_one_by_one_cell():
+    """No ``skip_empty``, so nothing is dropped -- and no frame is non-empty to
+    measure a cell size from, so the cell floors at 1x1 rather than claiming a
+    size nothing here ever measured."""
+    frames = [np.zeros((8, 8, 4), dtype=np.uint8), np.zeros((8, 8, 4), dtype=np.uint8)]
+    image, plan, trims, _frame_cells = sheetout.build(frames, [10, 10], trim=True)
+    try:
+        assert (plan.cell_w, plan.cell_h) == (1, 1)
+        assert trims == {0: None, 1: None}
+    finally:
+        image.close()
+
+
+def test_padding_borders_the_atlas_and_gutters_every_cell():
+    frames = [_box(4, 4, (0, 0, 4, 4)), _box(4, 4, (0, 0, 4, 4))]
+    image, plan, _trims, _frame_cells = sheetout.build(
+        frames, [10, 10], arrange="horizontal", padding=3
+    )
+    try:
+        # padding + columns * (cell + padding) == 3 + 2 * (4 + 3) == 17
+        assert (plan.width, plan.height) == (17, 3 + 1 * 7)
+        assert [(c.x, c.y) for c in plan.cells] == [(3, 3), (10, 3)]
+        assert image.size == (plan.width, plan.height)
+        # The border and the gutter are transparent -- nothing was asked to
+        # extrude into them.
+        assert image.getpixel((0, 0)) == (0, 0, 0, 0)
+        assert image.getpixel((7, 3)) == (0, 0, 0, 0)  # the gutter between cells
+        assert image.getpixel((3, 3)) == RED
+        assert image.getpixel((13, 3)) == RED
+    finally:
+        image.close()
+
+
+def test_extrude_replicates_the_placed_rectangles_border_into_the_padding():
+    frames = [_box(4, 4, (0, 0, 4, 4))]
+    image, plan, _trims, _frame_cells = sheetout.build(
+        frames, [10], padding=4, extrude=2
+    )
+    try:
+        cell = plan.cells[0]
+        grown = image.crop(
+            (cell.x - 2, cell.y - 2, cell.x + plan.cell_w + 2, cell.y + plan.cell_h + 2)
+        )
+        assert grown.size == (8, 8)
+        assert grown.getbbox() == (0, 0, 8, 8)
+        assert (np.asarray(grown) == np.array(RED, np.uint8)).all(), (
+            "extrude must fill every pixel, corners included"
+        )
+    finally:
+        image.close()
+
+
+def test_extrude_replicates_only_the_trimmed_frames_own_box():
+    """With trim on, a smaller-than-cell frame's border is what gets
+    replicated -- not the (mostly blank) uniform cell around it."""
+    frames = [_box(8, 8, (0, 0, 2, 2))]
+    image, plan, trims, _frame_cells = sheetout.build(
+        frames, [10], trim=True, padding=4, extrude=2
+    )
+    try:
+        assert trims[0]["w"] == trims[0]["h"] == 2
+        cell = plan.cells[0]
+        grown = image.crop((cell.x - 2, cell.y - 2, cell.x + 2 + 2, cell.y + 2 + 2))
+        assert grown.size == (6, 6)
+        assert (np.asarray(grown) == np.array(RED, np.uint8)).all()
+        # Nothing bled past the extruded box into the rest of the (bigger,
+        # uniform) cell.
+        assert image.getpixel((cell.x + 4, cell.y)) == (0, 0, 0, 0)
+    finally:
+        image.close()
+
+
+def test_padding_less_than_twice_extrude_is_refused_by_name():
+    frames = [_box(4, 4, (0, 0, 4, 4))]
+    with pytest.raises(ValueError, match="twice extrude"):
+        sheetout.build(frames, [10], padding=1, extrude=1)
+    with pytest.raises(ValueError, match="twice extrude"):
+        sheetout.compose(frames, [10], padding=3, extrude=2)
+
+
+def test_negative_padding_or_extrude_is_refused_by_name():
+    frames = [_box(4, 4, (0, 0, 4, 4))]
+    with pytest.raises(ValueError, match="negative"):
+        sheetout.build(frames, [10], padding=-1)
+    with pytest.raises(ValueError, match="negative"):
+        sheetout.build(frames, [10], extrude=-1)
+
+
+def test_merge_hashes_the_full_untrimmed_frame_not_the_trimmed_content():
+    """Two frames whose *trimmed* content would be pixel-identical, but whose
+    full frames differ (the content sits in a different place), must not
+    merge: ``merge`` dedupes on the frame it was actually handed, before any
+    trim runs."""
+    frames = [_box(8, 8, (0, 0, 2, 2)), _box(8, 8, (4, 4, 2, 2))]
+    image, plan, _trims, frame_cells = sheetout.build(
+        frames, [10, 10], merge=True, trim=True
+    )
+    try:
+        assert len(plan.cells) == 2
+        assert frame_cells == [0, 1]
+    finally:
+        image.close()
+
+
+def test_trim_shrinks_the_cell_before_arrange_packs_it():
+    frames = [_box(8, 8, (0, 0, 3, 3)) for _ in range(3)]
+    image, plan, _trims, _frame_cells = sheetout.build(
+        frames, [10, 10, 10], trim=True, arrange="horizontal"
+    )
+    try:
+        assert (plan.columns, plan.rows) == (3, 1)
+        assert (plan.cell_w, plan.cell_h) == (3, 3)
+        assert plan.width == 9
+    finally:
+        image.close()
+
+
+def test_an_ordinary_export_has_no_trim_padding_or_extrude_keys():
+    plan = sheetout.plan_frames(3, 10, 10)
+    block = sheetout.animation_block(plan, [100] * 3, ())
+    assert "trimmed" not in block
+    assert "padding" not in block
+    assert "extrude" not in block
+
+
+def test_trim_padding_extrude_ride_the_animation_block_which_stays_last():
+    frames = [_box(8, 8, (0, 0, 4, 4)) for _ in range(2)]
+    _image, plan, extra = sheetout.compose(
+        frames, [100, 100], (), None, None, trim=True, padding=3, extrude=1
+    )
+    meta = sheetlib.sidecar(
+        plan, sheet_id="s", source_job=None, image="s.png", created=1.0,
+        trims=extra["trims"], animation=extra["animation"],
+    )
+    assert list(meta)[-1] == "animation"
+    assert meta["animation"]["trimmed"] is True
+    assert meta["animation"]["padding"] == 3
+    assert meta["animation"]["extrude"] == 1
+    # The per-cell trim rectangle beside it is unchanged in meaning: the
+    # source offset and size within the untrimmed frame.
+    assert all(cell["trim"] == {"x": 0, "y": 0, "w": 4, "h": 4} for cell in meta["cells"])
+
+
+def test_the_default_inker_sidecar_pin_is_untouched_by_the_new_keyword_args():
+    """The byte pin above passes none of ``trim``/``padding``/``extrude`` --
+    this confirms explicitly setting them to their defaults is the same call."""
+    frames = [_box(6, 4, (1, 1, 1, 1)) for _ in range(3)]
+    durations = [80, 80, 120]
+    tags = [Tag(name="idle", start=0, end=2, loop=True)]
+    a_image, a_plan, a_extra = sheetout.compose(frames, durations, tags, None, None, name="pin")
+    b_image, b_plan, b_extra = sheetout.compose(
+        frames, durations, tags, None, None, name="pin",
+        trim=False, padding=0, extrude=0,
+    )
+    try:
+        assert a_plan == b_plan
+        assert a_extra == b_extra
+        assert np.array_equal(np.asarray(a_image), np.asarray(b_image))
+    finally:
+        a_image.close()
+        b_image.close()

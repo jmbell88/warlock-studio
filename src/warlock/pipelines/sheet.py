@@ -100,6 +100,14 @@ class Plan:
     # dataclass whose earlier fields have no defaults.
     frame_w: int = 0
     frame_h: int = 0
+    # A uniform border around the atlas and gutter between cells, in pixels --
+    # Tiled's own margin-and-spacing geometry, restated: ``margin == spacing ==
+    # padding``. Zero for every 3D sheet and every Inker export before this
+    # field existed, which is what keeps ``width``/``height`` below computing
+    # the exact number they always did (the formula collapses to the old one
+    # at ``padding == 0``). Trailing and defaulted for the same reason
+    # ``frame_w``/``frame_h`` are.
+    padding: int = 0
 
     @property
     def cell_w(self) -> int:
@@ -111,11 +119,11 @@ class Plan:
 
     @property
     def width(self) -> int:
-        return self.columns * self.cell_w
+        return self.padding + self.columns * (self.cell_w + self.padding)
 
     @property
     def height(self) -> int:
-        return self.rows * self.cell_h
+        return self.padding + self.rows * (self.cell_h + self.padding)
 
 
 def yaw_angles(count: int = DEFAULT_YAWS) -> tuple[float, ...]:
@@ -307,6 +315,37 @@ def measure_trim(image: Any) -> dict[str, int] | None:
         return None
     x0, y0, x1, y1 = box
     return {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0}
+
+
+def extrude_edges(atlas: Any, x: int, y: int, w: int, h: int, margin: int) -> None:
+    """Replicate one placed rectangle's border pixels outward into its gutter,
+    in place -- so a filtered texture sampling just past the sprite's edge
+    finds that sprite's own colour rather than its neighbour's.
+
+    Ported byte-for-byte, ordering included, from
+    ``studio.packwright.compose._extrude``: sides first, one-pixel-wide slices
+    broadcast across the gutter's width, then top and bottom across the
+    *widened* span -- which is what carries the columns just written into the
+    four corners with no separate corner case, and is why the order here
+    matters rather than being tidiness.
+
+    Written against plain slice assignment rather than importing numpy, so
+    this module's only import stays Pillow, lazily -- ``atlas`` need only
+    support numpy-style ``__getitem__``/``__setitem__``, which is what every
+    caller already hands it.
+
+    The room this needs -- ``margin`` no more than half of whatever gutter
+    surrounds ``(x, y, w, h)`` -- is guaranteed upstream, not here: the same
+    division of labour as ``packwright.layout.PackSettings``, which refuses
+    ``padding < extrude * 2`` at construction rather than clamping silently.
+    """
+    if margin <= 0:
+        return
+    atlas[y : y + h, x - margin : x] = atlas[y : y + h, x : x + 1]
+    atlas[y : y + h, x + w : x + w + margin] = atlas[y : y + h, x + w - 1 : x + w]
+    span = slice(x - margin, x + w + margin)
+    atlas[y - margin : y, span] = atlas[y : y + 1, span]
+    atlas[y + h : y + h + margin, span] = atlas[y + h - 1 : y + h, span]
 
 
 def pack(

@@ -387,19 +387,22 @@ def _frame_trailing(ctx: Any, tab: Any, index: int) -> tuple[float, Any]:
 
 
 def _output_trailing(ctx: Any, state: Any) -> tuple[float, Any]:
-    """The two view toggles, the export magnification, the sheet arrange, and
-    the (?)."""
+    """The two view toggles, the export magnification, the sheet arrange,
+    trim/padding/extrude, and the (?)."""
     gap = imgui.get_style().item_spacing.x
     switch = sp(32) + sp(6)
     width = (
-        switch * 2
+        switch * 3
         + imgui.calc_text_size("Onion").x
         + imgui.calc_text_size("Thumbs").x
+        + imgui.calc_text_size("Trim").x
         + sp(64)
         + sp(96)
         + sp(48)
+        + sp(40)
+        + sp(40)
         + sp(26)
-        + gap * 6
+        + gap * 9
     )
 
     def draw_it() -> None:
@@ -479,6 +482,43 @@ def _output_trailing(ctx: Any, state: Any) -> tuple[float, Any]:
                 "sidecar names which frames it dropped. Ignored for a "
                 "document with its own directional layout, for the same "
                 "reason Merge is."
+            )
+        imgui.same_line()
+        changed, value = widgets.toggle(
+            "Trim", state.export_trim, tag="inker-export-trim"
+        )
+        if changed:
+            state.export_trim = value
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Each cell shrinks to the largest trimmed frame's size, with "
+                "every frame's own trimmed pixels placed flush in its "
+                "corner. The sidecar's per-cell trim rectangle still names "
+                "where that came from in the full frame, for an importer "
+                "that wants to put it back."
+            )
+        imgui.same_line()
+        imgui.set_next_item_width(sp(40))
+        changed, value = controls.drag_int("Pad", state.export_padding, 1, 0, 64)
+        if changed:
+            state.export_padding = max(0, int(value))
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "A border around the atlas and a gutter between every cell, "
+                "in pixels. Zero is the sheet this always packed."
+            )
+        imgui.same_line()
+        imgui.set_next_item_width(sp(40))
+        changed, value = controls.drag_int("Ext", state.export_extrude, 1, 0, 32)
+        if changed:
+            state.export_extrude = max(0, int(value))
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Repeats each cell's own border pixels outward into its "
+                "gutter, so a filtered texture sampling just past a "
+                "sprite's edge finds that sprite's own colour rather than "
+                "its neighbour's. Padding must be at least twice this, so "
+                "two neighbours extruding into one gutter cannot meet."
             )
         manual_render.help_button(ctx, "inker-timeline")
 

@@ -302,6 +302,80 @@ def test_sidecar_is_plain_json():
     assert json.loads(json.dumps(meta)) == meta
 
 
+# --- padding geometry ---------------------------------------------------------
+#
+# ``Plan.padding`` is additive and defaults to 0, which is what keeps every 3D
+# sheet -- none of whose callers ever set it -- computing the exact width and
+# height it always did: the formula below collapses to the old ``columns *
+# cell_w`` at ``padding == 0``.
+
+
+def test_zero_padding_is_the_old_width_and_height_formula():
+    plan = sheetlib.plan([], frame_size=64, yaws=4)
+    assert plan.padding == 0
+    assert plan.width == plan.columns * plan.cell_w
+    assert plan.height == plan.rows * plan.cell_h
+
+
+def test_padding_adds_a_border_and_a_gutter_per_cell():
+    """The packwright grid contract, restated: ``padding + columns * (cell +
+    padding)`` -- one border round the outside, one gutter between cells."""
+    from dataclasses import replace
+
+    plan = sheetlib.plan([], frame_size=64, yaws=4)
+    padded = replace(plan, padding=5)
+    assert padded.width == 5 + padded.columns * (padded.cell_w + 5)
+    assert padded.height == 5 + padded.rows * (padded.cell_h + 5)
+    assert padded.width == 5 + 4 * 69
+    assert padded.height == 5 + 1 * 69
+
+
+# --- extrude_edges --------------------------------------------------------------
+#
+# Ported from ``studio.packwright.compose._extrude``; asserted the same way
+# that module's own tests assert it, pixel by pixel, because the ordering
+# (sides, then top/bottom across the widened span) is what makes the corners
+# come free rather than being a separate case -- and is exactly the kind of
+# thing that only shows wrong on a filtered GPU sample.
+
+RED = (255, 0, 0, 255)
+
+
+def _solid_atlas(size: int, x: int, y: int, w: int, h: int, colour=RED) -> np.ndarray:
+    atlas = np.zeros((size, size, 4), dtype=np.uint8)
+    atlas[y : y + h, x : x + w] = colour
+    return atlas
+
+
+def test_extrude_edges_replicates_the_border_including_the_corners():
+    atlas = _solid_atlas(12, 4, 4, 4, 4)
+    sheetlib.extrude_edges(atlas, 4, 4, 4, 4, 2)
+    grown = atlas[2:10, 2:10]
+    assert grown.shape == (8, 8, 4)
+    assert (grown == np.array(RED, np.uint8)).all()
+
+
+def test_extrude_edges_stays_inside_the_gutter_a_neighbour_left():
+    """Two 4x4 sprites with a 4px gutter (``padding == extrude * 2``) must not
+    bleed into each other -- the whole reason that guarantee exists -- and
+    each one has exactly ``extrude`` room against the atlas edge too."""
+    atlas = np.zeros((8, 16, 4), dtype=np.uint8)
+    BLUE = (0, 0, 255, 255)
+    atlas[2:6, 2:6] = RED
+    atlas[2:6, 10:14] = BLUE
+    sheetlib.extrude_edges(atlas, 2, 2, 4, 4, 2)  # room to the atlas edge too
+    sheetlib.extrude_edges(atlas, 10, 2, 4, 4, 2)
+    assert (atlas[2:6, 0:8] == np.array(RED, np.uint8)).all()
+    assert (atlas[2:6, 8:16] == np.array(BLUE, np.uint8)).all()
+
+
+def test_extrude_edges_zero_margin_is_a_no_op():
+    atlas = _solid_atlas(8, 2, 2, 2, 2)
+    before = atlas.copy()
+    sheetlib.extrude_edges(atlas, 2, 2, 2, 2, 0)
+    assert np.array_equal(atlas, before)
+
+
 # --- storage ----------------------------------------------------------------
 
 

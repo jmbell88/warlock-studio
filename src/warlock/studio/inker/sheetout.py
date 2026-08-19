@@ -227,6 +227,9 @@ def animation_block(
     arrange: str | None = None,
     wrap: int | None = None,
     frame_cells: Sequence[int | None] | None = None,
+    trim: bool = False,
+    padding: int = 0,
+    extrude: int = 0,
 ) -> dict[str, Any]:
     """The ``animation`` key: which cell is which frame, and for how long.
 
@@ -317,6 +320,25 @@ def animation_block(
         block["arrange"] = arrange
         if wrap is not None:
             block["wrap"] = int(wrap)
+    # Same placement and the same reason as ``arrange``/``wrap`` above: these
+    # three describe how the sheet was *packed*, not what it depicts, so they
+    # ride the ``animation`` mapping rather than growing ``sheet.py``'s
+    # top-level, fixed-order sidecar -- which is also what keeps them costing
+    # the byte pin nothing. A cell-driven importer needs none of them: every
+    # cell already carries its own atlas ``x``/``y``/``w``/``h``, padding and
+    # extrude baked in, which is the same reason ``sidecar()``'s own docstring
+    # gives for why ``frame_size``/``columns``/``rows`` are a convenience and
+    # not a requirement.
+    if trim:
+        # True rather than the trim rectangles themselves -- those already
+        # live per cell in the sidecar's ``trims`` (the sibling of this dict),
+        # unchanged in meaning: this is only the flag that says the cells were
+        # packed to them instead of to the full frame.
+        block["trimmed"] = True
+    if padding:
+        block["padding"] = int(padding)
+    if extrude:
+        block["extrude"] = int(extrude)
     return block
 
 
@@ -331,6 +353,9 @@ def build(
     wrap: int | None = None,
     merge: bool = False,
     skip_empty: bool = False,
+    trim: bool = False,
+    padding: int = 0,
+    extrude: int = 0,
 ) -> tuple[Any, sheetlib.Plan, dict[int, dict[str, int] | None], list[int | None] | None]:
     """Composite the frames into one atlas.
 
@@ -344,9 +369,34 @@ def build(
     from ``Path``s on disk -- these are already in memory, and writing sixteen
     PNGs to a scratch directory to read them straight back would be the slowest
     part of the export by a wide margin.
+
+    ``trim``, ``padding`` and ``extrude`` are the three all off by default, so
+    the untouched path below (``cell_w, cell_h = width, height``, no offset, no
+    replicated border) is byte-for-byte the sheet this always packed -- which is
+    what the default byte pin over the whole export proves. On, they compose in
+    the order packwright's own grid mode already established: trim decides the
+    *cell* size (the largest trimmed frame's, uniform across every surviving
+    cell, each frame's own -- possibly smaller -- trimmed pixels placed flush
+    at the cell's own corner rather than centred or stretched, so a frame with
+    nothing in it stays a blank cell), padding then spaces that grid out
+    (Tiled's own margin-and-spacing: one gutter between cells, one border round
+    the outside), and extrude replicates each *placed rectangle's* own border
+    -- the frame's trimmed size when trimming, the whole cell otherwise -- into
+    whatever gutter padding left it. The same room guarantee packwright's
+    ``PackSettings`` enforces at construction is enforced here at the door:
+    ``padding`` has to be at least twice ``extrude``, or two neighbours
+    extruding into one shared gutter would meet.
     """
     from PIL import Image
 
+    if padding < 0 or extrude < 0:
+        raise ValueError("padding and extrude cannot be negative")
+    if padding < extrude * 2:
+        raise ValueError(
+            f"padding must be at least twice extrude "
+            f"({extrude} x 2 = {extrude * 2}, padding is {padding}) "
+            "-- two neighbours extrude into one gutter"
+        )
     if len(frames) != len(durations_ms):
         raise ValueError("every frame needs a duration")
     if (merge or skip_empty) and layout is not None:
@@ -398,24 +448,100 @@ def build(
         frame_cells = assigned
         cell_frames = representative
 
+    # Trim decides the cell size before ``plan_frames`` ever runs, the same
+    # order merge/skip_empty already established: the grid is packed from
+    # whatever the surviving cells actually need, not from the source frame
+    # size. Measured on ``cell_frames`` -- already deduplicated and filtered
+    # above -- so a merge's hash and a trim's bounding box never disagree about
+    # which pixels a cell holds: the hash saw the full, untrimmed frame.
+    trim_rects: dict[int, dict[str, int] | None] | None = None
+    if trim:
+        trim_rects = {}
+        max_w = max_h = 0
+        for index, pixels in enumerate(cell_frames):
+            tile = Image.fromarray(pixels, "RGBA")
+            rect = sheetlib.measure_trim(tile)
+            tile.close()
+            trim_rects[index] = rect
+            if rect is not None:
+                max_w = max(max_w, rect["w"])
+                max_h = max(max_h, rect["h"])
+        # A wholly transparent clip (every rect None) falls back to a 1x1 cell
+        # rather than the full frame: a cell sized to content that does not
+        # exist would be reporting a size nothing here ever measured.
+        cell_w, cell_h = max(1, max_w), max(1, max_h)
+    else:
+        cell_w, cell_h = int(width), int(height)
+
     plan = plan_frames(
         len(cell_frames),
-        int(width),
-        int(height),
+        cell_w,
+        cell_h,
         name=name,
         layout=layout,
         arrange=arrange,
         wrap=wrap,
     )
 
+    if padding:
+        # Every cell moves out to the packwright grid's own pitch --
+        # ``padding + column * (cell + padding)`` -- which is exactly what
+        # ``Plan.width``/``.height`` now compute from ``columns``/``cell_w``
+        # and this same ``padding`` field, so setting it here is the whole of
+        # the atlas-size change; nothing below has to compute a size by hand.
+        step_w, step_h = plan.cell_w + padding, plan.cell_h + padding
+        plan = replace(
+            plan,
+            padding=padding,
+            cells=tuple(
+                replace(
+                    cell,
+                    x=padding + cell.column * step_w,
+                    y=padding + cell.row * step_h,
+                )
+                for cell in plan.cells
+            ),
+        )
+    # Re-checked here regardless of ``padding``: ``plan_frames`` already
+    # checked the *unpadded* size against the same ceiling, but padding grows
+    # the atlas past what that call could have known about.
+    sheetlib.check_atlas_size(plan.width, plan.height)
+
     atlas = Image.new("RGBA", (plan.width, plan.height), (0, 0, 0, 0))
     trims: dict[int, dict[str, int] | None] = {}
+    # Each cell's own placed rectangle -- the whole cell ordinarily, or (when
+    # trimming) that frame's own possibly-smaller box -- fed to extrude after
+    # every cell is painted, so a neighbour column already on the atlas cannot
+    # be read as the source of a border that has not been drawn yet.
+    placed: list[tuple[int, int, int, int]] = []
     for cell in plan.cells:
         pixels = cell_frames[cell.index]
-        tile = Image.fromarray(pixels, "RGBA")
-        trims[cell.index] = sheetlib.measure_trim(tile)
-        atlas.paste(tile, (cell.x, cell.y))
-        tile.close()
+        if trim:
+            rect = trim_rects[cell.index]  # type: ignore[index]
+            trims[cell.index] = rect
+            if rect is not None:
+                x0, y0, w0, h0 = rect["x"], rect["y"], rect["w"], rect["h"]
+                cropped = np.ascontiguousarray(pixels[y0 : y0 + h0, x0 : x0 + w0])
+                tile = Image.fromarray(cropped, "RGBA")
+                atlas.paste(tile, (cell.x, cell.y))
+                tile.close()
+                placed.append((cell.x, cell.y, w0, h0))
+            # ``rect is None``: nothing to paste -- the cell stays the blank,
+            # fully transparent square ``Image.new`` already made it.
+        else:
+            tile = Image.fromarray(pixels, "RGBA")
+            trims[cell.index] = sheetlib.measure_trim(tile)
+            atlas.paste(tile, (cell.x, cell.y))
+            tile.close()
+            placed.append((cell.x, cell.y, plan.cell_w, plan.cell_h))
+
+    if extrude:
+        pixels_arr = np.array(atlas)
+        for x, y, w, h in placed:
+            sheetlib.extrude_edges(pixels_arr, x, y, w, h, extrude)
+        atlas.close()
+        atlas = Image.fromarray(pixels_arr, "RGBA")
+
     return atlas, plan, trims, frame_cells
 
 
@@ -845,16 +971,19 @@ def compose(
     wrap: int | None = None,
     merge: bool = False,
     skip_empty: bool = False,
+    trim: bool = False,
+    padding: int = 0,
+    extrude: int = 0,
 ) -> tuple[Any, sheetlib.Plan, dict[str, Any]]:
     """``(image, plan, sidecar-without-identity)`` from a snapshot. Off-thread.
 
     ``layout`` and ``slices`` are positional rather than keyword-only so
     ``compose(*snapshot(doc))`` still holds: each is paired with the frames it
     describes, and a keyword-only element would have made that spelling drop it
-    silently. ``arrange``/``wrap``/``merge``/``skip_empty`` are keyword-only and
-    default to the export this always was -- there is nothing in ``snapshot``'s
-    five-tuple for them to collide with, because they are an export-time
-    choice, not a document fact.
+    silently. ``arrange``/``wrap``/``merge``/``skip_empty``/``trim``/
+    ``padding``/``extrude`` are keyword-only and default to the export this
+    always was -- there is nothing in ``snapshot``'s five-tuple for them to
+    collide with, because they are an export-time choice, not a document fact.
     """
     image, plan, trims, frame_cells = build(
         frames,
@@ -866,6 +995,9 @@ def compose(
         wrap=wrap,
         merge=merge,
         skip_empty=skip_empty,
+        trim=trim,
+        padding=padding,
+        extrude=extrude,
     )
     # ``slices_block`` keys by cell index and reads ``snap[cell.index]`` --
     # true by construction when merge/skip_empty are off, since a cell *is* a
@@ -893,6 +1025,9 @@ def compose(
                 arrange=arrange,
                 wrap=wrap,
                 frame_cells=frame_cells,
+                trim=trim,
+                padding=padding,
+                extrude=extrude,
             ),
             "pivots": block["pivots"],
             "slices": block["slices"],
@@ -908,6 +1043,9 @@ def from_document(
     wrap: int | None = None,
     merge: bool = False,
     skip_empty: bool = False,
+    trim: bool = False,
+    padding: int = 0,
+    extrude: int = 0,
 ) -> tuple[Any, sheetlib.Plan, dict[str, Any]]:
     """The two halves back to back, for a caller that is already on one thread.
 
@@ -915,5 +1053,13 @@ def from_document(
     frame thread and composes on a task thread, which is the point of the split.
     """
     return compose(
-        *snapshot(doc), name=name, arrange=arrange, wrap=wrap, merge=merge, skip_empty=skip_empty
+        *snapshot(doc),
+        name=name,
+        arrange=arrange,
+        wrap=wrap,
+        merge=merge,
+        skip_empty=skip_empty,
+        trim=trim,
+        padding=padding,
+        extrude=extrude,
     )
