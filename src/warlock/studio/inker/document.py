@@ -54,6 +54,7 @@ from ._doc_paint import (
 from ._doc_ranges import RangeOps
 from ._doc_selection import SelectionOps
 from ._doc_slices import SliceOps
+from ._doc_tiles import TileOps
 from .anim_edits import CelSetEdit
 from .animation import Animation
 from .brush import StrokeState
@@ -121,6 +122,7 @@ def matte_for(pixels: np.ndarray) -> RGBA | None:
 class Document(
     AnimOps, PaintOps, HistoryOps, SelectionOps, LayerOps, GeometryOps, IndexedOps,
     SliceOps,
+    TileOps,
     RangeOps,
 ):
     stack: LayerStack
@@ -1135,7 +1137,17 @@ class Document(
         ``None`` is "the mode resolved this write to nothing" -- the caller
         skips the cel, and the materialisation has already been put back, so
         the document is left exactly as it was found.
+
+        Refused by name on a :class:`~.tiles.TilemapCel`. This funnel writes
+        RGBA pixels; a tilemap cel's pixels are a *materialization* of
+        ``refs``, and a range op landing here means a caller is writing pixels
+        into one directly, which would leave the two disagreeing the moment
+        the write commits. There is no version of this write to make yet --
+        that is :meth:`~._doc_tiles.TileOps.place_tiles`'s door, which takes
+        refs, not pixels.
         """
+        if isinstance(layer, TilemapCel):
+            raise ValueError("a pixel patch of a tilemap layer is not yet modeled")
         x0, y0, x1, y1 = rect
         if self.color_mode == "indexed" and layer.indices is not None:
             # The RGBA ``before`` is deliberately unused on this path, for

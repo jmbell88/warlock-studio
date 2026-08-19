@@ -25,8 +25,9 @@ The modules, bottom up:
 composite and flatten caches, and the cross-cutting write paths every concern
 goes through. Its concern blocks are method-only mixins it inherits, one per
 sibling module: ``_doc_anim``, ``_doc_paint``, ``_doc_history``,
-``_doc_selection``, ``_doc_layers``, ``_doc_geometry``, ``_doc_indexed``. They
-are private to the package and nothing outside it names them.
+``_doc_selection``, ``_doc_layers``, ``_doc_geometry``, ``_doc_indexed``,
+``_doc_tiles``. They are private to the package and nothing outside it names
+them.
 
 Everything a caller needs is re-exported here, so ``from .. import inker`` and
 ``inker.Document`` keep working exactly as they did when this was one file.
@@ -82,6 +83,7 @@ from .indexed import shade_ramp
 from .layers import Layer, LayerStack
 from .ora import ora_bytes, read_ora, write_ora
 from .selection import COMBINE_OPS, Clipboard, FloatingBuffer, SelectionMask, magic_wand
+from .tiles import TilemapCel, TilesetSlot
 from .undo import UNDO_BYTES, UNDO_MAX_DEPTH, UNDO_MIN_DEPTH, UndoStack
 
 __all__ = [
@@ -120,6 +122,8 @@ __all__ = [
     "StrokeState",
     "TRANSPARENT",
     "Tag",
+    "TilemapCel",
+    "TilesetSlot",
     "Track",
     "UNDO_BYTES",
     "UNDO_MAX_DEPTH",

@@ -47,6 +47,7 @@ from .anim_edits import (
     TrackPropsEdit,
 )
 from .animation import TRACK_PROPS, Frame, clamp_duration
+from .tiles import TilemapCel
 from .undo import CompoundEdit, IndexPatchEdit, PatchEdit
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -712,7 +713,11 @@ class RangeOps:
         return cels
 
     def _permute_range(
-        self: Document, rect: tuple[int, int, int, int] | None, pix_fn: Any, index_fn: Any
+        self: Document,
+        rect: tuple[int, int, int, int] | None,
+        pix_fn: Any,
+        index_fn: Any,
+        verb: str,
     ) -> bool:
         """One exact, shape-preserving permutation over every cel of a rect.
 
@@ -744,6 +749,12 @@ class RangeOps:
         targets = self._cels_in(rect)
         if not targets:
             return False
+        # Refused by name, before anything is written: refs-aware permutation
+        # is Chunk 3.7 (the eight-symmetry algebra the tileset flags already
+        # carry), and permuting only ``pixels`` here would leave a tilemap
+        # cel's refs describing a picture that is no longer on screen.
+        if any(isinstance(layer, TilemapCel) for _track, layer in targets):
+            raise ValueError(f"a {verb} of a tilemap layer is not yet modeled")
         width, height = self.size
         box = (0, 0, width, height)
         edits: list[Any] = []
@@ -780,7 +791,7 @@ class RangeOps:
         axis cannot be offered by a menu and refused by the function.
         """
         fn = lambda plane: tf.flip(plane, axis)  # noqa: E731
-        return self._permute_range(self._range(t0, t1, f0, f1), fn, fn)
+        return self._permute_range(self._range(t0, t1, f0, f1), fn, fn, "flip")
 
     def rotate_range(
         self: Document, quarters: int, t0: int, t1: int, f0: int, f1: int
@@ -802,7 +813,7 @@ class RangeOps:
         if quarters % 2 == 1 and width != height:
             raise ValueError("a 90-degree rotation of a cel range needs a square canvas")
         fn = lambda plane: tf.rotate90(plane, quarters)  # noqa: E731
-        return self._permute_range(self._range(t0, t1, f0, f1), fn, fn)
+        return self._permute_range(self._range(t0, t1, f0, f1), fn, fn, "rotation")
 
     def shift_range(
         self: Document, dx: int, dy: int, wrap: bool, t0: int, t1: int, f0: int, f1: int
@@ -824,6 +835,7 @@ class RangeOps:
             lambda plane: tf.translate(
                 plane, dx, dy, wrap=wrap, fill=self.transparent_index
             ),
+            "shift",
         )
 
     # -- fill -----------------------------------------------------------------
@@ -862,6 +874,11 @@ class RangeOps:
         targets = self._cels_in(rect)
         if not targets:
             return False
+        # Refused by name, before anything is written -- ``_permute_range``'s
+        # own reason: a fill would rewrite ``pixels`` with no matching change
+        # to ``refs``, and there is no tile-flood-fill door yet for it to mean.
+        if any(isinstance(layer, TilemapCel) for _track, layer in targets):
+            raise ValueError("a fill of a tilemap layer is not yet modeled")
         # Minted once and never written into: ``masked_apply`` may hand this
         # very array back when there is no weight and no lock, and the
         # assignment below copies out of it.

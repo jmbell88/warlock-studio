@@ -37,6 +37,7 @@ class GeometryOps:
     # ``restore_snapshot`` has already put back.
 
     def flip(self: Document, axis: str) -> None:
+        self._refuse_tilemaps("flip")
         self.commit_floating()
 
         def run() -> None:
@@ -49,6 +50,7 @@ class GeometryOps:
         self._replay(run)
 
     def rotate90(self: Document, quarters: int = 1) -> None:
+        self._refuse_tilemaps("rotation")
         self.commit_floating()
 
         def run() -> None:
@@ -61,6 +63,7 @@ class GeometryOps:
         self._replay(run)
 
     def scale(self: Document, size: tuple[int, int], *, resample: str = "smooth") -> None:
+        self._refuse_tilemaps("scale")
         self.commit_floating()
 
         def run() -> None:
@@ -70,6 +73,7 @@ class GeometryOps:
         self._replay(run)
 
     def crop(self: Document, rect: tuple[int, int, int, int]) -> bool:
+        self._refuse_tilemaps("crop")
         box = self.clip(rect)
         if box is None:
             return False
@@ -102,6 +106,7 @@ class GeometryOps:
         the anchor is a name for nine of its values -- and because every caller
         that already computed one should keep working unchanged.
         """
+        self._refuse_tilemaps("canvas resize")
         self.commit_floating()
         if offset is None:
             offset = tf.anchor_offset(self.size, size, anchor)

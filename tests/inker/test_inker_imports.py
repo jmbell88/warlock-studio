@@ -44,12 +44,16 @@ PACKAGE = "warlock.studio.inker"
 #: type. Same reasoning as ``undo.py``'s entry above: a shared leaf is not a
 #: sibling engine (``SIBLING_PACKAGES`` says so explicitly), so this is a
 #: deliberate, permanent addition rather than a drift to chase down later.
+#:
+#: ``tile_edits.py``'s entry is ``anim_edits.py``'s own: the tile undo types
+#: are built on the shared ``Edit`` base the same way the grid's are.
 OUTWARD_IMPORTS = {
     ("anim_edits.py", "warlock.studio.undo"),
     ("composite.py", "warlock.native"),
     ("dither.py", "warlock.native"),
     ("selection.py", "warlock.native"),
     ("sheetout.py", "warlock.pipelines"),
+    ("tile_edits.py", "warlock.studio.undo"),
     ("tiles.py", "warlock.studio.tilegrid"),
     ("tiles.py", "warlock.studio.tilegrid.tileset"),
     ("undo.py", "warlock.studio.undo"),
@@ -191,6 +195,7 @@ def test_the_package_imports_with_no_optional_dependency_present():
     from warlock.studio.inker import (  # noqa: F401
         _doc_ranges,
         _doc_slices,
+        _doc_tiles,
         anim_edits,
         animation,
         asein,
@@ -212,6 +217,7 @@ def test_the_package_imports_with_no_optional_dependency_present():
         sheetout,
         slices,
         textstamp,
+        tile_edits,
         tiles,
         tiling,
         transform,
