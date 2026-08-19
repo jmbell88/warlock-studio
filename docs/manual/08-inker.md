@@ -929,6 +929,9 @@ The sidecar names each cell, its duration and any tags, in the same format the 3
 A document with a directional layout skips the wrapping entirely and uses that sheet's own fixed
 grid, with each cell's direction and frame number in the fields a rendered sheet puts a pose and a
 frame in.
+The Arrange combo beside the export scale picks how an ordinary clip packs instead of that default
+row-wrap — Grid, Horizontal strip, Vertical strip, or Rows.../Columns... with a count field for how
+many rows or columns to fix.
 Two things about it are worth knowing. A cel linked across three frames becomes three identical
 cells, because the engine playing it back knows nothing about links. And the cells keep their
 transparency rather than being flattened onto the document's matte, which is what a sheet wants

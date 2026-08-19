@@ -63,6 +63,20 @@ GROUP_INDENT = 8.0
 #: which is exactly what ``transform.upscale`` exists not to do.
 EXPORT_SCALES = (("1", "1x"), ("2", "2x"), ("3", "3x"), ("4", "4x"), ("8", "8x"))
 
+#: How a sheet export packs its cells. "grid" is the combo's spelling of
+#: ``InkerState.export_arrange is None`` -- the row-wrap this always did --
+#: since ``widgets.combo`` needs a real key for every option and ``None``
+#: cannot be one.
+ARRANGE_OPTIONS = (
+    ("grid", "Grid"),
+    ("horizontal", "Horizontal strip"),
+    ("vertical", "Vertical strip"),
+    ("rows", "Rows..."),
+    ("columns", "Columns..."),
+)
+#: Which of the above take the N field beside them.
+_COUNTED_ARRANGES = ("rows", "columns")
+
 
 def _u32(value: int, alpha: float = 1.0) -> int:
     return imgui.color_convert_float4_to_u32(theme.rgba(value, alpha))
@@ -340,7 +354,8 @@ def _frame_trailing(ctx: Any, tab: Any, index: int) -> tuple[float, Any]:
 
 
 def _output_trailing(ctx: Any, state: Any) -> tuple[float, Any]:
-    """The two view toggles, the export magnification, and the (?)."""
+    """The two view toggles, the export magnification, the sheet arrange, and
+    the (?)."""
     gap = imgui.get_style().item_spacing.x
     switch = sp(32) + sp(6)
     width = (
@@ -348,8 +363,10 @@ def _output_trailing(ctx: Any, state: Any) -> tuple[float, Any]:
         + imgui.calc_text_size("Onion").x
         + imgui.calc_text_size("Thumbs").x
         + sp(64)
+        + sp(96)
+        + sp(48)
         + sp(26)
-        + gap * 4
+        + gap * 6
     )
 
     def draw_it() -> None:
@@ -381,6 +398,28 @@ def _output_trailing(ctx: Any, state: Any) -> tuple[float, Any]:
                 "describe the file that is written; sidecars bound for "
                 "Packwright are not scaled."
             )
+        imgui.same_line()
+        arrange_key = state.export_arrange or "grid"
+        chosen = widgets.combo(
+            "##inkerarrange", arrange_key, list(ARRANGE_OPTIONS), sp(96)
+        )
+        state.export_arrange = None if chosen == "grid" else chosen
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "How frames pack into the sheet. Grid wraps at the atlas "
+                "ceiling, same as it always has. Horizontal/Vertical strip is "
+                "one row or column. Rows.../Columns... fixes that side's count "
+                "and wraps the rest. A document with its own directional "
+                "layout (turnaround, walk) keeps that fixed grid instead."
+            )
+        if state.export_arrange in _COUNTED_ARRANGES:
+            imgui.same_line()
+            imgui.set_next_item_width(sp(48))
+            changed, value = controls.input_int(
+                "##inkerwrap", state.export_wrap, 1, 1
+            )
+            if changed:
+                state.export_wrap = max(1, int(value))
         manual_render.help_button(ctx, "inker-timeline")
 
     return (width, draw_it)

@@ -1127,6 +1127,10 @@ def _submit_export(ctx: Any, export: _Export) -> None:
     # user could change while the encode is in flight would otherwise decide
     # the file's size halfway through writing it.
     scale = max(1, int(getattr(state, "export_scale", 1) or 1))
+    # Same reason as ``scale`` beside it: a setting the user could change
+    # mid-encode must not decide, halfway through, how this file is packed.
+    arrange = getattr(state, "export_arrange", None)
+    wrap = max(1, int(getattr(state, "export_wrap", 1) or 1))
     durations, tags, layout = sheetout.timing(doc, export.span)
     # Read here, with the timing, and for its reason: it walks the document, so
     # it belongs on the frame thread beside the flatten rather than inside the
@@ -1147,6 +1151,19 @@ def _submit_export(ctx: Any, export: _Export) -> None:
         ctx.toast(
             f"This is a {layout.kind} sheet of {layout.frame_count} frames and "
             f"the document has {len(frames)}.",
+            "warn",
+        )
+        return
+    if export.kind == "sheet" and layout is not None and arrange is not None:
+        # The same early-refusal shape as the count mismatch above, for the
+        # same reason: ``plan_frames`` would raise this itself, but by then the
+        # user has already picked a filename and the failure arrives as an
+        # opaque task error. A document with its own directional grid keeps it
+        # -- Grid is the only Arrange choice such a document has.
+        tab.saving = False
+        ctx.toast(
+            f"This is a {layout.kind} sheet, which keeps its own fixed grid; "
+            "set Arrange back to Grid to export it.",
             "warn",
         )
         return
@@ -1174,6 +1191,8 @@ def _submit_export(ctx: Any, export: _Export) -> None:
             # describes a canvas that is not the atlas beside it.
             sheetout.scale_slices(slices, scale),
             name=suggested,
+            arrange=arrange,
+            wrap=wrap if arrange in ("rows", "columns") else None,
         )
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)

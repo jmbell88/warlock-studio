@@ -1161,6 +1161,17 @@ class InkerState:
     timeline_thumbs: bool = False
     # Nearest-neighbour multiplier applied to sheet, GIF and PNG exports.
     export_scale: int = 1
+    # How a sheet export packs its cells: None is the plain row-wrap this
+    # always used; "horizontal"/"vertical" force one row/column; "rows"/
+    # "columns" fix that side's count from ``export_wrap``. App-level like
+    # ``export_scale`` -- remembered across documents, unused by GIF and PNG
+    # exports, and ignored (the export refuses the combination by name)
+    # whenever the document itself carries a directional layout.
+    export_arrange: str | None = None
+    # The N for ``export_arrange in ("rows", "columns")``. Kept even while
+    # ``export_arrange`` names neither, so switching back to Rows/Columns does
+    # not forget what the user last typed.
+    export_wrap: int = 4
 
     # -- importing a sprite sheet ------------------------------------------
     #

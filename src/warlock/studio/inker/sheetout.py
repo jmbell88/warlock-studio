@@ -67,6 +67,14 @@ def rebase_tags(tags: Sequence[Any], f0: int, f1: int) -> list[Any]:
     return out
 
 
+#: The named packings ``arrange`` accepts, beside the plain row-wrap (``None``).
+#: ``"rows"`` and ``"columns"`` are the *counted* forms -- the two that take a
+#: ``wrap`` -- and the set is checked against by name rather than inferred, so
+#: a typo refuses loudly instead of silently falling through to the row-wrap.
+ARRANGES = (None, "horizontal", "vertical", "rows", "columns")
+_COUNTED_ARRANGES = ("rows", "columns")
+
+
 def plan_frames(
     count: int,
     frame_w: int,
@@ -74,6 +82,8 @@ def plan_frames(
     *,
     name: str = "",
     layout: DirectionalLayout | None = None,
+    arrange: str | None = None,
+    wrap: int | None = None,
 ) -> sheetlib.Plan:
     """The grid for ``count`` frames of a ``frame_w`` x ``frame_h`` canvas.
 
@@ -89,6 +99,19 @@ def plan_frames(
     A count that no longer fills the grid is refused rather than padded --
     silently emitting a sheet with a hole where "back, frame 3" should be is the
     one outcome a game would not notice until it played the animation.
+
+    ``arrange`` is a third, user-chosen way to pick ``columns`` (and hence
+    ``rows``), which is otherwise the row-wrap's job: ``"horizontal"`` is one
+    row, ``"vertical"`` is one column, and the counted forms fix a side from
+    ``wrap`` -- ``"rows"`` picks how many rows there should be (``columns`` is
+    derived from it), ``"columns"`` picks ``columns`` directly. Every one of
+    them still ends by deriving ``rows`` from ``columns`` the same way the
+    plain row-wrap always did, so none of them can leave a dead trailing row
+    the way asking for the count verbatim could. ``None`` is the row-wrap
+    unchanged -- the byte pin above this module's tests proves it -- and it is
+    refused together with ``layout``: a directional grid already fixes the
+    columns for its own reason, and the two disagreeing about which reason
+    wins would be a silent coin flip.
     """
     if count < 1:
         raise ValueError("a sheet needs at least one frame")
@@ -99,16 +122,39 @@ def plan_frames(
             f"a {frame_w}x{frame_h} frame does not fit in a "
             f"{sheetlib.MAX_ATLAS_PX}px atlas at all"
         )
-    if layout is None:
-        columns = max(1, min(count, sheetlib.MAX_ATLAS_PX // frame_w))
-        rows = -(-count // columns)  # ceil
-    else:
+    if arrange not in ARRANGES:
+        raise ValueError(
+            f"unknown arrange {arrange!r}; must be one of "
+            f"{[a for a in ARRANGES if a is not None]}"
+        )
+    if arrange is not None and layout is not None:
+        raise ValueError("a directional layout and an arrange cannot both be set")
+    if wrap is not None and arrange not in _COUNTED_ARRANGES:
+        raise ValueError('wrap only applies to arrange="rows" or arrange="columns"')
+    if arrange in _COUNTED_ARRANGES:
+        if wrap is None:
+            raise ValueError(f'arrange="{arrange}" needs a wrap count')
+        if wrap < 1:
+            raise ValueError("wrap must be at least 1")
+    if layout is not None:
         if count != layout.frame_count:
             raise ValueError(
                 f"a {layout.kind} sheet is {layout.frame_count} frames and this "
                 f"document has {count}"
             )
         columns, rows = layout.columns, layout.rows
+    else:
+        if arrange is None:
+            columns = max(1, min(count, sheetlib.MAX_ATLAS_PX // frame_w))
+        elif arrange == "horizontal":
+            columns = count
+        elif arrange == "vertical":
+            columns = 1
+        elif arrange == "rows":
+            columns = -(-count // wrap)  # ceil
+        else:  # "columns"
+            columns = wrap
+        rows = -(-count // columns)  # ceil
     sheetlib.check_atlas_size(columns * frame_w, rows * frame_h)
 
     pose_name = name or sheetlib.REST_POSE_NAME
@@ -175,6 +221,8 @@ def animation_block(
     tags: Sequence[Any],
     *,
     layout: DirectionalLayout | None = None,
+    arrange: str | None = None,
+    wrap: int | None = None,
 ) -> dict[str, Any]:
     """The ``animation`` key: which cell is which frame, and for how long."""
     block: dict[str, Any] = {
@@ -213,6 +261,15 @@ def animation_block(
         # are unpinned, so a reader that has never heard of the key is still
         # correct about the file.
         block["layout"] = {"kind": layout.kind, "directions": list(DIRECTION_ORDER)}
+    if arrange is not None:
+        # Same placement as ``layout`` above and for the same reason: this
+        # says how the sheet was packed, which is what the ``animation`` key is
+        # for, and it is unreached by the pinned square path so it costs that
+        # pin nothing. ``wrap`` only when set, so ``"horizontal"``/``"vertical"``
+        # (which have none) do not grow a null nobody would read.
+        block["arrange"] = arrange
+        if wrap is not None:
+            block["wrap"] = int(wrap)
     return block
 
 
@@ -223,6 +280,8 @@ def build(
     *,
     name: str = "",
     layout: DirectionalLayout | None = None,
+    arrange: str | None = None,
+    wrap: int | None = None,
 ) -> tuple[Any, sheetlib.Plan, dict[int, dict[str, int] | None]]:
     """Composite the frames into one atlas. Returns ``(image, plan, trims)``.
 
@@ -237,7 +296,13 @@ def build(
         raise ValueError("every frame needs a duration")
     height, width = frames[0].shape[:2]
     plan = plan_frames(
-        len(frames), int(width), int(height), name=name, layout=layout
+        len(frames),
+        int(width),
+        int(height),
+        name=name,
+        layout=layout,
+        arrange=arrange,
+        wrap=wrap,
     )
 
     atlas = Image.new("RGBA", (plan.width, plan.height), (0, 0, 0, 0))
@@ -559,32 +624,46 @@ def compose(
     slices: Sequence[dict[str, Any]] | None = None,
     *,
     name: str = "",
+    arrange: str | None = None,
+    wrap: int | None = None,
 ) -> tuple[Any, sheetlib.Plan, dict[str, Any]]:
     """``(image, plan, sidecar-without-identity)`` from a snapshot. Off-thread.
 
     ``layout`` and ``slices`` are positional rather than keyword-only so
     ``compose(*snapshot(doc))`` still holds: each is paired with the frames it
     describes, and a keyword-only element would have made that spelling drop it
-    silently.
+    silently. ``arrange``/``wrap`` are keyword-only and default to the row-wrap
+    unchanged -- there is nothing in ``snapshot``'s five-tuple for them to
+    collide with, because they are an export-time choice, not a document fact.
     """
-    image, plan, trims = build(frames, durations_ms, tags, name=name, layout=layout)
+    image, plan, trims = build(
+        frames, durations_ms, tags, name=name, layout=layout, arrange=arrange, wrap=wrap
+    )
     block = slices_block(plan, slices or ())
     return (
         image,
         plan,
         {
             "trims": trims,
-            "animation": animation_block(plan, durations_ms, tags, layout=layout),
+            "animation": animation_block(
+                plan, durations_ms, tags, layout=layout, arrange=arrange, wrap=wrap
+            ),
             "pivots": block["pivots"],
             "slices": block["slices"],
         },
     )
 
 
-def from_document(doc: Any, *, name: str = "") -> tuple[Any, sheetlib.Plan, dict[str, Any]]:
+def from_document(
+    doc: Any,
+    *,
+    name: str = "",
+    arrange: str | None = None,
+    wrap: int | None = None,
+) -> tuple[Any, sheetlib.Plan, dict[str, Any]]:
     """The two halves back to back, for a caller that is already on one thread.
 
     The app is not such a caller -- ``inker_mode.export_sheet`` snapshots on the
     frame thread and composes on a task thread, which is the point of the split.
     """
-    return compose(*snapshot(doc), name=name)
+    return compose(*snapshot(doc), name=name, arrange=arrange, wrap=wrap)

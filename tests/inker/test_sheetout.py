@@ -266,6 +266,182 @@ def test_a_snapshot_survives_the_document_recompositing_underneath_it():
     assert all(np.array_equal(a, b) for a, b in zip(frames, taken, strict=True))
 
 
+# --- the arrange choice -------------------------------------------------------
+#
+# ``arrange`` is the row-wrap's sibling, not its replacement: ``None`` is
+# unchanged (the byte pin below and ``test_no_layout_is_byte_for_byte_the_
+# grid_it_always_was``'s twin prove it), and the four named forms are new ways
+# to pick ``columns``/``rows`` before the same cell-placement arithmetic runs.
+
+
+def test_horizontal_arrange_is_one_row():
+    plan = sheetout.plan_frames(5, 10, 10, arrange="horizontal")
+    assert (plan.columns, plan.rows) == (5, 1)
+    assert [(c.row, c.column, c.x, c.y) for c in plan.cells] == [
+        (0, 0, 0, 0),
+        (0, 1, 10, 0),
+        (0, 2, 20, 0),
+        (0, 3, 30, 0),
+        (0, 4, 40, 0),
+    ]
+
+
+def test_vertical_arrange_is_one_column():
+    plan = sheetout.plan_frames(5, 10, 10, arrange="vertical")
+    assert (plan.columns, plan.rows) == (1, 5)
+    assert [(c.row, c.column, c.x, c.y) for c in plan.cells] == [
+        (0, 0, 0, 0),
+        (1, 0, 0, 10),
+        (2, 0, 0, 20),
+        (3, 0, 0, 30),
+        (4, 0, 0, 40),
+    ]
+
+
+def test_rows_arrange_fixes_the_column_count_from_wrap():
+    """10 frames wrapped at 3 rows: columns = ceil(10/3) = 4, and the actual
+    row count is derived from that the same way the plain row-wrap derives it
+    -- so there is no dead trailing row when 3 does not divide 10 evenly."""
+    plan = sheetout.plan_frames(10, 10, 10, arrange="rows", wrap=3)
+    assert (plan.columns, plan.rows) == (4, 3)
+    assert [c.index for c in plan.cells] == list(range(10))
+
+
+def test_columns_arrange_fixes_the_column_count_directly():
+    plan = sheetout.plan_frames(10, 10, 10, arrange="columns", wrap=3)
+    assert (plan.columns, plan.rows) == (3, 4)
+
+
+def test_arrange_none_is_byte_for_byte_the_grid_it_always_was():
+    a = sheetout.plan_frames(7, 32, 32)
+    b = sheetout.plan_frames(7, 32, 32, arrange=None)
+    assert a == b
+
+
+def test_an_arrange_the_atlas_ceiling_cannot_hold_is_refused_by_the_shared_guard():
+    with pytest.raises(ValueError, match="8192"):
+        sheetout.plan_frames(4000, sheetlib.MAX_ATLAS_PX, 100, arrange="horizontal")
+
+
+def test_a_directional_layout_and_an_arrange_together_are_refused_by_name():
+    with pytest.raises(ValueError, match="layout"):
+        sheetout.plan_frames(4, 10, 10, layout=_layout("turnaround"), arrange="horizontal")
+
+
+def test_a_wrap_without_a_counted_arrange_is_refused_by_name():
+    with pytest.raises(ValueError, match="wrap"):
+        sheetout.plan_frames(5, 10, 10, arrange="horizontal", wrap=2)
+    with pytest.raises(ValueError, match="wrap"):
+        sheetout.plan_frames(5, 10, 10, wrap=2)
+
+
+def test_a_sub_one_wrap_is_refused_by_name():
+    with pytest.raises(ValueError, match="wrap"):
+        sheetout.plan_frames(5, 10, 10, arrange="rows", wrap=0)
+
+
+def test_a_counted_arrange_with_no_wrap_is_refused_by_name():
+    with pytest.raises(ValueError, match="wrap"):
+        sheetout.plan_frames(5, 10, 10, arrange="rows")
+    with pytest.raises(ValueError, match="wrap"):
+        sheetout.plan_frames(5, 10, 10, arrange="columns")
+
+
+def test_an_unknown_arrange_is_refused_by_name():
+    with pytest.raises(ValueError, match="arrange"):
+        sheetout.plan_frames(5, 10, 10, arrange="diagonal")
+
+
+def test_the_arrange_rides_the_sidecars_animation_block():
+    plan = sheetout.plan_frames(10, 10, 10, arrange="rows", wrap=3)
+    block = sheetout.animation_block(plan, [100] * 10, (), arrange="rows", wrap=3)
+    assert block["arrange"] == "rows"
+    assert block["wrap"] == 3
+    assert [f["cell_index"] for f in block["frames"]] == list(range(10))
+
+
+def test_an_arrange_with_no_wrap_records_no_wrap_key():
+    plan = sheetout.plan_frames(5, 10, 10, arrange="horizontal")
+    block = sheetout.animation_block(plan, [100] * 5, (), arrange="horizontal")
+    assert block["arrange"] == "horizontal"
+    assert "wrap" not in block
+
+
+def test_an_ordinary_export_has_no_arrange_key():
+    plan = sheetout.plan_frames(3, 10, 10)
+    assert "arrange" not in sheetout.animation_block(plan, [100] * 3, ())
+
+
+def test_arrange_stays_inside_the_animation_block_which_stays_last():
+    """``pipelines.sheet``'s square path is pinned byte-for-byte with the
+    animation block last; a new key inside it must not move it, and
+    ``sheet.py`` must not need to know the word "arrange" at all."""
+    frames = [_frame(10, 10, RED) for _ in range(5)]
+    _image, plan, extra = sheetout.compose(
+        frames, [100] * 5, (), None, None, arrange="horizontal"
+    )
+    meta = sheetlib.sidecar(
+        plan, sheet_id="s", source_job=None, image="s.png", created=1.0,
+        trims=extra["trims"], animation=extra["animation"],
+    )
+    assert list(meta)[-1] == "animation"
+    assert meta["animation"]["arrange"] == "horizontal"
+
+
+# --- the default-byte-identity pin over the whole Inker export path ----------
+#
+# Guards every remaining Wave 4 task over this path: captured from HEAD before
+# ``arrange`` existed, with ``json.dumps(sidecar(...))`` on a small non-square
+# export -- the values, the key order, and (what a field-by-field check would
+# miss) the absence of any new key.
+
+DEFAULT_INKER_SIDECAR = (
+    '{"version": 1, "id": "eeeeeeeeeeee", "name": "pin", "source_job": "ffffffffffff",'
+    ' "created": 2.5, "image": "e.png", "frame_size": 0, "columns": 3, "rows": 1,'
+    ' "width": 18, "height": 4, "elevation": 0.0, "lighting": "flat", "yaws": [0.0],'
+    ' "poses": [{"id": null, "name": "pin"}], "cells": [{"index": 0, "row": 0,'
+    ' "column": 0, "x": 0, "y": 0, "w": 6, "h": 4, "pose": null, "pose_name": "pin",'
+    ' "yaw": 0.0, "frame": 0, "pivot_x": 3.0, "pivot_y": 4.0, "trim": {"x": 1, "y": 1,'
+    ' "w": 1, "h": 1}}, {"index": 1, "row": 0, "column": 1, "x": 6, "y": 0, "w": 6,'
+    ' "h": 4, "pose": null, "pose_name": "pin", "yaw": 0.0, "frame": 1, "pivot_x": 3.0,'
+    ' "pivot_y": 4.0, "trim": {"x": 1, "y": 1, "w": 1, "h": 1}}, {"index": 2, "row": 0,'
+    ' "column": 2, "x": 12, "y": 0, "w": 6, "h": 4, "pose": null, "pose_name": "pin",'
+    ' "yaw": 0.0, "frame": 2, "pivot_x": 3.0, "pivot_y": 4.0, "trim": {"x": 1, "y": 1,'
+    ' "w": 1, "h": 1}}], "frame_w": 6, "frame_h": 4, "animation": {"frames": [{"cell_index":'
+    ' 0, "duration_ms": 80}, {"cell_index": 1, "duration_ms": 80}, {"cell_index": 2,'
+    ' "duration_ms": 120}], "tags": [{"name": "idle", "start": 0, "end": 2, "loop": true,'
+    ' "direction": "forward"}]}}'
+)
+
+
+def test_a_default_inker_sidecar_is_byte_for_byte_what_it_always_was():
+    import json
+
+    def _mark(width, height, mark, at=(0, 0)):
+        plane = np.zeros((height, width, 4), dtype=np.uint8)
+        plane[at[1], at[0]] = mark
+        return plane
+
+    frames = [_mark(6, 4, RED, (1, 1)) for _ in range(3)]
+    durations = [80, 80, 120]
+    tags = [Tag(name="idle", start=0, end=2, loop=True)]
+    image, plan, extra = sheetout.compose(frames, durations, tags, None, None, name="pin")
+    image.close()
+    meta = sheetlib.sidecar(
+        plan,
+        sheet_id="eeeeeeeeeeee",
+        source_job="ffffffffffff",
+        image="e.png",
+        created=2.5,
+        name="pin",
+        trims=extra["trims"],
+        animation=extra["animation"],
+        pivots=extra["pivots"],
+        slices=extra["slices"],
+    )
+    assert json.dumps(meta) == DEFAULT_INKER_SIDECAR
+
+
 # --- the directional grid ---------------------------------------------------
 
 
