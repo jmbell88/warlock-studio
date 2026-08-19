@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<map version="1.10" tiledversion="1.12.2" orientation="orthogonal" renderorder="right-down" width="2" height="2" tilewidth="16" tileheight="16" infinite="0" nextlayerid="2" nextobjectid="1">
+ <tileset firstgid="1" name="props" tilewidth="16" tileheight="16" tilecount="3" columns="0">
+  <grid orientation="orthogonal" width="16" height="16"/>
+  <tile id="0">
+   <image source="prop-rock.png" width="16" height="16"/>
+  </tile>
+  <tile id="5">
+   <image source="prop-tree.png" width="16" height="32"/>
+  </tile>
+  <tile id="9">
+   <image source="prop-sign.png" width="16" height="16"/>
+  </tile>
+ </tileset>
+ <layer id="1" name="Ground" width="2" height="2">
+  <data encoding="csv">
+1,6,
+10,0
+</data>
+ </layer>
+</map>

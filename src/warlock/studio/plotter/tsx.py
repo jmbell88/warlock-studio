@@ -42,6 +42,7 @@ from ..tilegrid.tileset import (
     TilePolygon,
     TileRect,
     Tileset,
+    compose_collection,
 )
 from ..tilegrid.wang import WANG_KINDS, WangColour, WangSet
 from .props import (
@@ -142,12 +143,11 @@ def check_tileset_features(root: ET.Element) -> None:
     # offset are all modelled now -- see the presentation block on
     # :class:`~..tilegrid.tileset.Tileset`. What remains refused is a tileset
     # with no single atlas at all.
-    image = root.find("image")
-    if image is None:
-        raise TiledUnsupported(
-            "an image-collection tileset",
-            "every tile is its own file; Plotter needs one sliced atlas",
-        )
+    # A tileset with no top-level ``<image>`` is an image collection, and it is
+    # modelled now (:class:`~..tilegrid.tileset.Collection`) rather than refused.
+    # What the reader still needs is *pixels*, which only the host can fetch --
+    # so the collection path goes through ``collection_sources`` and the loader,
+    # and this check has nothing left to refuse.
     for tile in root.findall("tile"):
         where = f"tile {tile.get('id', '?')}"
         # Class, probability, animation, collision and custom properties are
@@ -157,8 +157,6 @@ def check_tileset_features(root: ET.Element) -> None:
             # Tiled's own pre-Wang terrain types, which Tiled itself is
             # retiring. A refusal is the honest state.
             raise TiledUnsupported("per-tile terrain assignment", where)
-        if tile.find("image") is not None:
-            raise TiledUnsupported("an image-collection tileset", where)
 
 
 def check_tileset_features_json(entry: dict[str, Any]) -> None:
@@ -181,8 +179,6 @@ def check_tileset_features_json(entry: dict[str, Any]) -> None:
         where = f"tile {tile.get('id', '?')}"
         if "terrain" in tile:
             raise TiledUnsupported("per-tile terrain assignment", where)
-        if tile.get("image"):
-            raise TiledUnsupported("an image-collection tileset", where)
 
 
 def tsx_source(data: bytes) -> str:
@@ -716,6 +712,61 @@ def write_presentation(root: ET.Element, ts: Tileset) -> None:
         )
 
 
+def collection_sources(root: ET.Element) -> dict[int, str]:
+    """``{local id: image path}`` for an image-collection ``<tileset>``.
+
+    Empty for an ordinary sliced atlas, which is how every caller tells the two
+    apart without asking twice. The paths are relative to the tileset file and
+    are **not** resolved here: this package never touches a filesystem, so the
+    host resolves and decodes them and hands the pixels back.
+    """
+    if root.find("image") is not None:
+        return {}
+    out: dict[int, str] = {}
+    for tile in root.findall("tile"):
+        image = tile.find("image")
+        source = (image.get("source") or "").strip() if image is not None else ""
+        if source:
+            out[int(tile.get("id", 0) or 0)] = source
+    return out
+
+
+def collection_sources_json(entry: dict[str, Any]) -> dict[int, str]:
+    """:func:`collection_sources` over Tiled's JSON tileset spelling."""
+    if entry.get("image"):
+        return {}
+    out: dict[int, str] = {}
+    for tile in entry.get("tiles") or ():
+        if isinstance(tile, dict) and tile.get("image"):
+            out[int(tile.get("id", 0) or 0)] = str(tile["image"])
+    return out
+
+
+def write_collection(root: ET.Element, ts: Tileset, names: dict[int, str]) -> None:
+    """Per-tile ``<image>`` elements for a collection, by local id.
+
+    ``names`` is what the host is writing each tile's pixels *as*; the codec
+    cannot invent them for the reason it cannot read them.
+    """
+    if ts.collection is None:
+        return
+    by_id = {tile.get("id"): tile for tile in root.findall("tile")}
+    for slot, local in enumerate(ts.collection.ids):
+        source = names.get(local)
+        if not source:
+            continue
+        tile = by_id.get(str(local))
+        if tile is None:
+            tile = ET.SubElement(root, "tile", {"id": str(local)})
+        width, height = ts.collection.sizes[slot]
+        ET.SubElement(
+            tile,
+            "image",
+            {"source": source, "width": str(width), "height": str(height)},
+        )
+
+
+
 def read_tile_meta(root: ET.Element) -> dict[int, TileMeta]:
     """Every ``<tile>`` block's metadata, by local id. Sparse."""
     out: dict[int, TileMeta] = {}
@@ -832,8 +883,15 @@ def read_tile_meta_json(entry: dict[str, Any]) -> dict[int, TileMeta]:
     return out
 
 
-def read_tsx(data: bytes, image: np.ndarray) -> Tileset:
-    """A ``.tsx``'s bytes plus its decoded image, as a :class:`Tileset`."""
+def read_tsx(data: bytes, image: Any) -> Tileset:
+    """A ``.tsx``'s bytes plus its decoded image, as a :class:`Tileset`.
+
+    ``image`` is the atlas for an ordinary tileset and a **mapping of local id
+    to decoded pixels** for an image collection -- which is what
+    :func:`collection_sources` told the host to fetch. One parameter rather than
+    two because a tileset is one or the other and never both, and a second
+    parameter would be a second thing every caller has to decide about.
+    """
     root = xml_root(data, "tileset")
     check_tileset_features(root)
     grid = root.find("grid")
@@ -845,10 +903,18 @@ def read_tsx(data: bytes, image: np.ndarray) -> Tileset:
     # else "phases" is somebody's ordinary custom property and travels intact.
     phases = declared if terrains else 1
     picture = root.find("image")
+    if isinstance(image, dict):
+        atlas, collection = compose_collection(image)
+    else:
+        atlas, collection = (
+            colour_key(image, None if picture is None else picture.get("trans")),
+            None,
+        )
     return Tileset(
         name=root.get("name") or "tileset",
         class_name=root.get("class") or root.get("type") or "",
-        pixels=colour_key(image, None if picture is None else picture.get("trans")),
+        pixels=atlas,
+        collection=collection,
         **presentation_of(root),
         tile_w=int(root.get("tilewidth", 0) or 0),
         tile_h=int(root.get("tileheight", 0) or 0),
@@ -917,9 +983,12 @@ def tsj_source(data: bytes) -> str:
         raise ValueError("a .tsj holds a tileset object")
     source = str(entry.get("image", "") or "")
     if not source:
+        # Only reached for a tileset with no per-tile images either -- the host
+        # asks :func:`collection_sources_json` first and never gets here for a
+        # real collection. So this is "no pixels at all", which is the same
+        # sentence the XML side gives.
         raise TiledUnsupported(
-            "an image-collection tileset",
-            "every tile is its own file; Plotter needs one sliced atlas",
+            "an embedded tileset image", "Plotter needs an image path"
         )
     return source
 
@@ -942,10 +1011,15 @@ def tileset_from_json(entry: dict[str, Any], image: np.ndarray) -> Tileset:
     declared, remaining = phases_from_properties(props)
     wangsets = entry.get("wangsets")
     terrains = () if not wangsets else (read_wangsets_json(wangsets, declared) or ())
+    if isinstance(image, dict):
+        atlas, collection = compose_collection(image)
+    else:
+        atlas, collection = colour_key(image, entry.get("transparentcolor")), None
     return Tileset(
         name=str(entry.get("name", "tileset")),
         class_name=str(entry.get("class") or entry.get("type") or ""),
-        pixels=colour_key(image, entry.get("transparentcolor")),
+        pixels=atlas,
+        collection=collection,
         tile_w=int(entry.get("tilewidth", 0) or 0),
         tile_h=int(entry.get("tileheight", 0) or 0),
         spacing=int(entry.get("spacing", 0) or 0),
@@ -972,7 +1046,9 @@ def tileset_from_json(entry: dict[str, Any], image: np.ndarray) -> Tileset:
 # --- writing ------------------------------------------------------------------
 
 
-def tsx_element(ts: Tileset, *, image_name: str) -> ET.Element:
+def tsx_element(
+    ts: Tileset, *, image_name: str, collection_names: dict[int, str] | None = None
+) -> ET.Element:
     """The ``<tileset>`` element, for embedding in a ``.tmx`` or writing alone."""
     root = ET.Element(
         "tileset",
@@ -1020,16 +1096,19 @@ def tsx_element(ts: Tileset, *, image_name: str) -> ET.Element:
             },
         )
     root.set("tilecount", str(ts.tile_count))
-    root.set("columns", str(ts.columns))
-    ET.SubElement(
-        root,
-        "image",
-        {
-            "source": image_name,
-            "width": str(ts.image_w),
-            "height": str(ts.image_h),
-        },
-    )
+    # Tiled writes ``columns="0"`` for a collection, because it has no atlas to
+    # count across -- and a reader that saw a real number would slice one.
+    root.set("columns", "0" if ts.is_collection else str(ts.columns))
+    if not ts.is_collection:
+        ET.SubElement(
+            root,
+            "image",
+            {
+                "source": image_name,
+                "width": str(ts.image_w),
+                "height": str(ts.image_h),
+            },
+        )
     props = ts.properties
     if ts.terrains and ts.phases > 1:
         # Re-derived from the field on every write -- the reader popped it out
@@ -1044,6 +1123,9 @@ def tsx_element(ts: Tileset, *, image_name: str) -> ET.Element:
     # After the wang sets, matching Tiled's own element order -- the writer is
     # held to producing a file that diffs cleanly against one Tiled wrote.
     write_tile_meta(root, ts.tiles)
+    # After the per-tile metadata, so a tile that carries both gets one element
+    # holding both -- which is what Tiled writes and what a diff expects.
+    write_collection(root, ts, collection_names or {})
     return root
 
 
@@ -1058,6 +1140,15 @@ def to_bytes(root: ET.Element) -> bytes:
     return f'<?xml version="1.0" encoding="UTF-8"?>\n{body}\n'.encode()
 
 
-def tsx_bytes(ts: Tileset, *, image_name: str) -> bytes:
-    """A standalone ``.tsx`` file."""
-    return to_bytes(tsx_element(ts, image_name=image_name))
+def tsx_bytes(
+    ts: Tileset, *, image_name: str, collection_names: dict[int, str] | None = None
+) -> bytes:
+    """A standalone ``.tsx`` file.
+
+    ``collection_names`` is what the host is writing each tile's pixels as, and
+    is required for a collection: the codec cannot invent a filename for the
+    same reason it cannot read one.
+    """
+    return to_bytes(
+        tsx_element(ts, image_name=image_name, collection_names=collection_names)
+    )

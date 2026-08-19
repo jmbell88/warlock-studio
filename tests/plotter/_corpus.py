@@ -11,6 +11,7 @@ an in-memory mapping of what that export produced.
 from __future__ import annotations
 
 import io
+import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,7 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures" / "tiled"
 # or nothing tests it.
 MANIFEST: tuple[str, ...] = (
     "basic-iso",
+    "collection-112",
     "core-112",
     "hex-112",
     "oblique-112",
@@ -92,10 +94,19 @@ def loaders_for(
 
     def tsx_loader(source: str) -> Tileset:
         raw = _read(source, directory, files)
-        # The *host* decides which spelling this is, because the host is what
-        # read the bytes -- the same split ``plotter_io._loaders`` makes.
-        if str(source).lower().endswith(".tsj"):
-            return tsx.read_tsj(raw, image_loader(tsx.tsj_source(raw)))
-        return tsx.read_tsx(raw, image_loader(tsx.tsx_source(raw)))
+        # The *host* decides which spelling this is, and whether it is a
+        # collection, because the host is what read the bytes -- the same split
+        # ``plotter_io._loaders`` makes.
+        json_tileset = str(source).lower().endswith(".tsj")
+        read = tsx.read_tsj if json_tileset else tsx.read_tsx
+        sources = (
+            tsx.collection_sources_json(json.loads(raw.decode("utf-8")))
+            if json_tileset
+            else tsx.collection_sources(tsx.xml_root(raw, "tileset"))
+        )
+        if sources:
+            return read(raw, {local: image_loader(s) for local, s in sources.items()})
+        image = (tsx.tsj_source if json_tileset else tsx.tsx_source)(raw)
+        return read(raw, image_loader(image))
 
     return {"image_loader": image_loader, "tsx_loader": tsx_loader}

@@ -80,6 +80,13 @@ and leave a tileset that paints as plain tiles while the map around it is full
 of cells only that set explains. A tileset with no foreign set keeps its old
 version, so every blob-terrain document re-saves byte-stable.
 
+**Version 9 is image collections**: a tileset's ``collection`` record -- the
+sparse local ids, each tile's own size, and the packing of the backing atlas the
+``tilesets/N.png`` member holds. This gate is the least optional of all of them:
+without the record the atlas is just an image, so an old reader would slice it
+on the grid size and hand every cell of the map a different tile. A tileset that
+is an ordinary sliced atlas keeps its old version.
+
 Versions 1 and 2 are still read, through tolerant defaults rather than a branch
 per version -- the ``locked`` precedent. A version 1 file predates projections
 and is orthogonal by definition; a version 2 file has no tint, offset, parallax
@@ -109,6 +116,7 @@ import numpy as np
 
 from ..tilegrid import gid as gidlib
 from ..tilegrid.tileset import (
+    Collection,
     TerrainSpec,
     TileEllipse,
     TileFrame,
@@ -140,7 +148,10 @@ from .tilemap import (
     shape_kind,
 )
 
-VERSION = 8
+VERSION = 9
+#: Foreign Wang sets; written when a tileset carries one and none is an
+#: image collection.
+WANGSET_VERSION = 8
 #: The tileset presentation fields; written when one is non-default and no
 #: tileset carries a foreign Wang set.
 PRESENTATION_VERSION = 7
@@ -546,6 +557,36 @@ def _wangsets_from(entries: Any) -> tuple[Any, ...]:
 
 
 
+# --- image collections ----------------------------------------------------------
+
+
+def _collection_entry(collection: Any) -> Any:
+    if collection is None:
+        return None
+    return {
+        "ids": [int(value) for value in collection.ids],
+        "sizes": [[int(w), int(h)] for w, h in collection.sizes],
+        "columns": int(collection.columns),
+        "cell": [int(collection.cell_w), int(collection.cell_h)],
+    }
+
+
+def _collection_from(entry: Any) -> Any:
+    if not entry:
+        return None
+    if not isinstance(entry, dict):
+        _malformed("a tileset's collection record is not an object")
+    cell = entry.get("cell") or (1, 1)
+    return Collection(
+        ids=tuple(int(value) for value in (entry.get("ids") or ())),
+        sizes=tuple((int(w), int(h)) for w, h in (entry.get("sizes") or ())),
+        columns=int(entry.get("columns", 1) or 1),
+        cell_w=int(cell[0]),
+        cell_h=int(cell[1]),
+    )
+
+
+
 def _document_version(doc: MapDoc) -> int:
     """The oldest version emitted by this writer that represents ``doc``.
 
@@ -565,10 +606,15 @@ def _document_version(doc: MapDoc) -> int:
         raise WmapUnstorable(
             f"the version {VERSION} .wmap format has no sparse chunk entry for an infinite map"
         )
-    # Foreign Wang sets first: 8 is the ceiling, so nothing below can override
-    # it.
-    if any(ref.tileset.wangsets for ref in doc.tilesets):
+    # Image collections first: 9 is the ceiling, so nothing below can override
+    # it. The least optional gate here -- without the record the atlas is just
+    # an image, and an old reader would slice it on the grid size and hand every
+    # cell a different tile.
+    if any(ref.tileset.is_collection for ref in doc.tilesets):
         return VERSION
+    # Then foreign Wang sets.
+    if any(ref.tileset.wangsets for ref in doc.tilesets):
+        return WANGSET_VERSION
     # Then the presentation fields.
     if any(
         ref.tileset.offset_x
@@ -689,6 +735,9 @@ def manifest_json(doc: MapDoc) -> str:
                 # A list, because a tileset may declare several and their order
                 # is the order Tiled shows them in.
                 "wangsets": [_wangset_entry(entry) for entry in ts.wangsets],
+                # ``None`` for an ordinary sliced atlas, which is the common
+                # case and costs one key.
+                "collection": _collection_entry(ts.collection),
             }
         )
 
@@ -1203,6 +1252,9 @@ def read_wmap(data: bytes) -> MapDoc:
                         # Absent before version 8, where the absence meant a
                         # tileset with no foreign set.
                         wangsets=_wangsets_from(entry.get("wangsets")),
+                        # Absent before version 9, where the absence meant an
+                        # ordinary sliced atlas.
+                        collection=_collection_from(entry.get("collection")),
                     ),
                     source=str(entry.get("source", "")),
                 )

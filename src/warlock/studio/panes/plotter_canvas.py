@@ -630,7 +630,10 @@ def _layers(
     doc = tab.doc
     view = tab.view
     zoom = view.zoom
-    tile_w, tile_h = doc.tile_w, doc.tile_h
+    # Only the height: a tile's own width is read per tile now (a collection's
+    # tiles differ), and the grid height is what the bottom-left anchor is
+    # measured from.
+    tile_h = doc.tile_h
     resolved = plotter_scene.resolve(doc)
     # ImGui's draw list can tint a texture but has no per-quad blend-mode
     # switch, so the only way to show a non-normal mode is the flat renderer's
@@ -744,7 +747,8 @@ def _layers(
             ref, texture = refs[index]
             if texture is None:
                 continue
-            uv = ref.tileset.uv(ref.local(tile_id))
+            local = ref.local(tile_id)
+            uv = ref.tileset.uv(local)
             mask = int(flags[row, column])
             corners = _corner_uvs(
                 uv,
@@ -753,8 +757,20 @@ def _layers(
                 bool(mask & gidlib.FLIP_D),
             )
             px, py = doc.cell_origin(c0 + column, r0 + row)
-            p0 = inker_state.to_screen(view, origin, px + shift[0], py + shift[1])
-            p2 = (p0[0] + tile_w * zoom, p0[1] + tile_h * zoom)
+            # **The tile's own size, anchored bottom-left**, which is what
+            # ``render.py`` has always done and this loop did not: a tileset
+            # whose tiles are larger than the map's grid is ordinary -- a 32px
+            # map with 48px trees -- and Tiled grows such a tile *upward* out of
+            # its cell. Identical to the old arithmetic whenever the tile is the
+            # grid size, which is every sliced atlas.
+            own_w, own_h = ref.tileset.tile_size(local)
+            p0 = inker_state.to_screen(
+                view,
+                origin,
+                px + shift[0],
+                py + shift[1] + (tile_h - own_h),
+            )
+            p2 = (p0[0] + own_w * zoom, p0[1] + own_h * zoom)
             draw_list.add_image_quad(
                 widgets.texture_ref(texture),
                 p0,

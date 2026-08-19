@@ -328,7 +328,7 @@ def _picker(ctx: Any, state: Any, ref: Any, index: int, uid: str, epoch: int) ->
             return None
         column = int((mx - origin.x - margin) // step_w)
         row = int((my - origin.y - margin) // step_h)
-        if 0 <= column < tileset.columns and 0 <= row < tileset.rows:
+        if tileset.local_at(column, row) is not None:
             return column, row
         return None
 
@@ -378,7 +378,13 @@ def _block(ref: Any, a: tuple[int, int], b: tuple[int, int]) -> np.ndarray:
     out = np.zeros((r1 - r0 + 1, c1 - c0 + 1), gidlib.DTYPE)
     for row in range(r0, r1 + 1):
         for column in range(c0, c1 + 1):
-            out[row - r0, column - c0] = ref.firstgid + row * tileset.columns + column
+            # Through ``local_at`` rather than the row-major arithmetic: a
+            # collection's ids are sparse and its last palette row is routinely
+            # short, so the product would hand out gids that answer to nothing.
+            # ``None`` leaves the cell empty, which a stamp already means.
+            local = tileset.local_at(column, row)
+            if local is not None:
+                out[row - r0, column - c0] = ref.firstgid + local
     return out
 
 
@@ -398,12 +404,25 @@ def _brush_span(
     last = int(brush[-1, -1]) & gidlib.GID_MASK
     if not ref.holds(first) or not ref.holds(last):
         return None
-    a = ref.local(first)
-    b = ref.local(last)
     return (
-        (a % tileset.columns, a // tileset.columns),
-        (b % tileset.columns, b // tileset.columns),
+        _palette_cell(tileset, ref.local(first)),
+        _palette_cell(tileset, ref.local(last)),
     )
+
+
+def _palette_cell(tileset: Any, local: int) -> tuple[int, int]:
+    """Where one local id sits in the palette grid.
+
+    The inverse of :meth:`Tileset.local_at`, and it has to go through the
+    collection's own slot for the same reason that one does: sparse ids are not
+    their own positions.
+    """
+    if tileset.collection is not None:
+        slot = tileset.collection.slot_of(local)
+        if slot is None:
+            return (0, 0)
+        return (slot % tileset.columns, slot // tileset.columns)
+    return (local % tileset.columns, local // tileset.columns)
 
 
 # --- generating ---------------------------------------------------------------

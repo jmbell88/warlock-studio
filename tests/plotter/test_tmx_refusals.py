@@ -309,14 +309,25 @@ def test_a_tile_object_with_the_hex_rotation_bit_is_refused_by_name():
 # --- tilesets -----------------------------------------------------------------
 
 
-def test_an_embedded_image_collection_tileset_is_refused():
+def test_an_embedded_image_collection_tileset_is_read():
+    """Modelled rather than refused: the host fetches each tile's image and the
+    engine composes them into one backing atlas."""
     data = (
         b'<map version="1.10" orientation="orthogonal" width="2" height="2" '
         b'tilewidth="16" tileheight="16">'
         b'<tileset firstgid="1" name="c" tilewidth="16" tileheight="16">'
-        b'<tile id="0"><image source="a.png"/></tile></tileset></map>'
+        b'<tile id="0"><image source="a.png"/></tile>'
+        b'<tile id="3"><image source="a.png"/></tile></tileset>'
+        b'<layer id="1" name="L" width="2" height="2">'
+        b'<data encoding="csv">1,4,0,0</data></layer></map>'
     )
-    _refuses(data, "image-collection")
+    doc = tmx.read_tmx(data, **LOADERS)
+    ts = doc.tilesets[0].tileset
+    assert ts.is_collection
+    assert ts.collection.ids == (0, 3)
+    # The sparse id is reachable: gid 4 is local 3, which a count-derived range
+    # would have refused.
+    assert doc.tilesets[0].holds(4)
 
 
 def test_an_embedded_tileset_with_an_empty_wangsets_block_is_read():
@@ -493,18 +504,26 @@ def test_a_tmj_embedded_tileset_with_per_tile_animation_is_read():
     assert [(f.local_id, f.duration_ms) for f in frames] == [(1, 120)]
 
 
-def test_a_tmj_embedded_tileset_with_a_per_tile_image_is_refused_as_a_collection():
+def test_a_tmj_embedded_image_collection_is_read():
     data = _tmj(
         {
             "name": "g",
             "tilewidth": 16,
             "tileheight": 16,
-            "tiles": [{"id": 0, "image": "0.png"}],
+            "tiles": [{"id": 0, "image": "0.png"}, {"id": 7, "image": "0.png"}],
         }
     )
+    doc = tmx.read_tmj(data, **LOADERS)
+    ts = doc.tilesets[0].tileset
+    assert ts.is_collection
+    assert ts.collection.ids == (0, 7)
+
+
+def test_a_tmj_tileset_with_no_pixels_at_all_is_still_refused():
+    data = _tmj({"name": "g", "tilewidth": 16, "tileheight": 16})
     with pytest.raises(tsx.TiledUnsupported) as exc:
         tmx.read_tmj(data, **LOADERS)
-    assert "image-collection" in str(exc.value)
+    assert "embedded tileset image" in str(exc.value)
 
 
 def test_a_tmj_embedded_tileset_with_per_tile_collision_is_read():

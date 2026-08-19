@@ -1287,7 +1287,7 @@ def test_foreign_wangsets_gate_version_eight_and_round_trip():
     doc.replace_tileset(0, dataclasses.replace(ts, wangsets=(wangset,)))
 
     payload = json.loads(wmap.manifest_json(doc))
-    assert payload["version"] == wmap.VERSION == 8
+    assert payload["version"] == wmap.WANGSET_VERSION == 8
 
     back = wmap.read_wmap(wmap.wmap_bytes(doc)).tilesets[0].tileset
     assert len(back.wangsets) == 1

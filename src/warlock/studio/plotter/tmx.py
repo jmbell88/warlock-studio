@@ -51,7 +51,7 @@ from typing import Any
 import numpy as np
 
 from ..tilegrid import gid as gidlib
-from ..tilegrid.tileset import Tileset, TilesetRef, colour_text
+from ..tilegrid.tileset import Tileset, TilesetRef, colour_text, compose_collection
 from . import project
 from .pngio import png_bytes
 from .props import (
@@ -84,6 +84,8 @@ from .tsx import (
     TSX_VERSION,
     check_tileset_features,
     check_tileset_features_json,
+    collection_sources,
+    collection_sources_json,
     phases_from_properties,
     read_tile_meta,
     read_wangsets,
@@ -442,7 +444,11 @@ def _read_tmx_tilesets(
         check_tileset_features(node)
         image = node.find("image")
         path = (image.get("source") or "").strip() if image is not None else ""
-        if not path:
+        sources = collection_sources(node)
+        if not path and not sources:
+            # No atlas and no per-tile images either: a tileset with no pixels
+            # at all, which is a file this reader cannot draw rather than a
+            # feature it does not have.
             raise TiledUnsupported(
                 "an embedded tileset image", "Plotter needs an <image source=...> path"
             )
@@ -452,13 +458,20 @@ def _read_tmx_tilesets(
         props = read_properties(node)
         declared, remaining = phases_from_properties(props)
         terrains = () if wangsets is None else (read_wangsets(wangsets, declared) or ())
+        if sources:
+            atlas, collection = compose_collection(
+                {local: image_loader(src) for local, src in sources.items()}
+            )
+        else:
+            atlas, collection = image_loader(path), None
         refs.append(
             TilesetRef(
                 firstgid=firstgid,
                 tileset=Tileset(
                     name=node.get("name") or "tileset",
                     class_name=node.get("class") or node.get("type") or "",
-                    pixels=image_loader(path),
+                    pixels=atlas,
+                    collection=collection,
                     tile_w=int(node.get("tilewidth", 0) or 0),
                     tile_h=int(node.get("tileheight", 0) or 0),
                     spacing=int(node.get("spacing", 0) or 0),
@@ -829,15 +842,18 @@ def _read_tmj_tilesets(
         # image" for a file whose actual problem is that it is a collection.
         check_tileset_features_json(entry)
         image = str(entry.get("image", ""))
-        if not image:
+        sources = collection_sources_json(entry)
+        if not image and not sources:
             raise TiledUnsupported(
                 "an embedded tileset image", "Plotter needs an image path"
             )
+        pixels = (
+            {local: image_loader(source) for local, source in sources.items()}
+            if sources
+            else image_loader(image)
+        )
         refs.append(
-            TilesetRef(
-                firstgid=firstgid,
-                tileset=tileset_from_json(entry, image_loader(image)),
-            )
+            TilesetRef(firstgid=firstgid, tileset=tileset_from_json(entry, pixels))
         )
     return refs
 
@@ -1129,12 +1145,28 @@ def _tileset_files(doc: MapDoc) -> tuple[dict[str, bytes], list[str]]:
     files: dict[str, bytes] = {}
     paths: list[str] = []
     for index, ref in enumerate(doc.tilesets):
-        stem = _stem(index, ref.tileset.name)
+        tileset = ref.tileset
+        stem = _stem(index, tileset.name)
         tsx_path = f"tilesets/{stem}.tsx"
-        files[f"tilesets/{stem}.png"] = png_bytes(ref.tileset.pixels)
+        names: dict[int, str] = {}
+        if tileset.is_collection:
+            # **One file per tile, and the composed atlas is not written at
+            # all.** Writing it too would put a second copy of every tile in the
+            # bundle, and a reader that found both would have to decide which is
+            # the truth. The names are relative to the ``.tsx``, which sits
+            # beside them.
+            for local in tileset.collection.ids:
+                names[local] = f"{stem}-{local}.png"
+                files[f"tilesets/{stem}-{local}.png"] = png_bytes(
+                    np.ascontiguousarray(tileset.tile_pixels(local))
+                )
+        else:
+            files[f"tilesets/{stem}.png"] = png_bytes(tileset.pixels)
         # The image name inside the .tsx is relative to the .tsx, which sits
         # beside it -- not to the map.
-        files[tsx_path] = tsx_bytes(ref.tileset, image_name=f"{stem}.png")
+        files[tsx_path] = tsx_bytes(
+            tileset, image_name=f"{stem}.png", collection_names=names
+        )
         paths.append(tsx_path)
     return files, paths
 

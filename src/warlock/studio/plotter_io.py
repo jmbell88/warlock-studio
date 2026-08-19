@@ -115,6 +115,21 @@ def _resolve_source(base: Path, source: str) -> Path:
     return base / text
 
 
+def _json(data: bytes) -> dict:
+    """One tileset file's JSON body, for the collection probe.
+
+    Parsed twice on that path -- once here and once inside ``read_tsj`` -- which
+    is a few microseconds against a decode per tile, and buys the engine not
+    having to hand back a "what do you need" answer before it can be asked for
+    the tileset itself.
+    """
+    import json as jsonlib
+
+    entry = jsonlib.loads(data.decode("utf-8"))
+    return entry if isinstance(entry, dict) else {}
+
+
+
 def _loaders(base: Path):
     """The two callbacks :mod:`~warlock.studio.plotter.tmx` needs.
 
@@ -136,12 +151,28 @@ def _loaders(base: Path):
         # has no way to tell a ``.tsj`` from a ``.tsx`` that is not the very
         # extension it is passing.
         json_tileset = target.suffix.lower() == ".tsj"
-        image = (tsxlib.tsj_source if json_tileset else tsxlib.tsx_source)(data)
+        read = tsxlib.read_tsj if json_tileset else tsxlib.read_tsx
         # Relative to the tileset file, not to the map: a tileset folder is the
         # normal Tiled layout and resolving from the map would miss by one
         # directory.
-        pixels = _decode(_resolve_source(target.parent, image))
-        return (tsxlib.read_tsj if json_tileset else tsxlib.read_tsx)(data, pixels)
+        sources = (
+            tsxlib.collection_sources_json(_json(data))
+            if json_tileset
+            else tsxlib.collection_sources(tsxlib.xml_root(data, "tileset"))
+        )
+        if sources:
+            # An image collection: every tile is its own file, so the host
+            # fetches each and the engine composes. One decode per tile is the
+            # whole cost, and it is what the format asks for.
+            return read(
+                data,
+                {
+                    local: _decode(_resolve_source(target.parent, source))
+                    for local, source in sources.items()
+                },
+            )
+        image = (tsxlib.tsj_source if json_tileset else tsxlib.tsx_source)(data)
+        return read(data, _decode(_resolve_source(target.parent, image)))
 
     return {"image_loader": image_loader, "tsx_loader": tsx_loader}
 

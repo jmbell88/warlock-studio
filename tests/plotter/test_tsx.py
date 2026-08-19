@@ -184,7 +184,6 @@ def test_a_property_type_outside_tileds_nine_is_refused_by_name():
     ("body", "feature"),
     [
         ("<terraintypes/>", "terrain types"),
-        ('<tile id="0"><image source="x.png"/></tile>', "image-collection"),
         # Deprecated pre-Wang terrain indices. Tiled itself is retiring them and
         # a refusal is the honest state; everything else a ``<tile>`` can carry
         # is modelled now and has an acceptance case below.
@@ -201,10 +200,132 @@ def test_an_unsupported_tileset_feature_is_refused_and_named(body, feature):
     assert feature in str(exc.value)
 
 
-def test_an_image_collection_with_no_atlas_at_all_is_refused():
+def test_a_tileset_with_no_pixels_at_all_is_still_refused():
+    """A collection is modelled now, but a tileset with neither an atlas nor
+    per-tile images has no pixels at all -- a file this reader cannot draw."""
     data = b'<tileset name="t" tilewidth="16" tileheight="16"><grid/></tileset>'
-    with pytest.raises(tsx.TiledUnsupported, match="image-collection"):
+    with pytest.raises(tsx.TiledUnsupported, match="embedded tileset image"):
         tsx.tsx_source(data)
+
+
+# --- image collections ------------------------------------------------------------
+
+
+COLLECTION = b'''<tileset name="props" tilewidth="16" tileheight="16" tilecount="3" columns="0">
+ <tile id="0"><image source="rock.png" width="16" height="16"/></tile>
+ <tile id="5"><image source="tree.png" width="16" height="32"/></tile>
+ <tile id="9"><image source="sign.png" width="16" height="16"/></tile>
+</tileset>'''
+
+
+def _tile_image(width: int, height: int, value: int) -> np.ndarray:
+    out = np.zeros((height, width, 4), dtype=np.uint8)
+    out[..., :3] = value
+    out[..., 3] = 255
+    return out
+
+
+def _collection_pixels() -> dict:
+    return {
+        0: _tile_image(16, 16, 10),
+        5: _tile_image(16, 32, 20),
+        9: _tile_image(16, 16, 30),
+    }
+
+
+def test_the_sources_of_a_collection_are_reported_for_the_host_to_fetch():
+    """This package never touches a filesystem, so the host resolves and decodes
+    and hands the pixels back."""
+    root = tsx.xml_root(COLLECTION, "tileset")
+    assert tsx.collection_sources(root) == {0: "rock.png", 5: "tree.png", 9: "sign.png"}
+
+
+def test_a_sliced_atlas_reports_no_collection_sources():
+    """Which is how every caller tells the two apart without asking twice."""
+    root = tsx.xml_root(
+        b'<tileset name="t" tilewidth="16" tileheight="16">'
+        b'<image source="a.png" width="32" height="32"/></tileset>',
+        "tileset",
+    )
+    assert tsx.collection_sources(root) == {}
+
+
+def test_a_collection_keeps_its_sparse_ids():
+    ts = tsx.read_tsx(COLLECTION, _collection_pixels())
+    assert ts.is_collection
+    assert ts.tile_count == 3
+    assert ts.collection.ids == (0, 5, 9)
+    # The highest *id*, not the count: a range from the count would refuse a gid
+    # the file legitimately carries.
+    assert ts.max_local_id == 9
+
+
+def test_each_collection_tile_keeps_its_own_size_and_pixels():
+    ts = tsx.read_tsx(COLLECTION, _collection_pixels())
+    assert ts.tile_size(0) == (16, 16)
+    assert ts.tile_size(5) == (16, 32), "an oversized tile keeps its own height"
+    assert ts.tile_pixels(5).shape == (32, 16, 4)
+    assert int(ts.tile_pixels(0)[0, 0, 0]) == 10
+    assert int(ts.tile_pixels(9)[0, 0, 0]) == 30
+
+
+def test_the_packing_padding_is_outside_every_tiles_own_rectangle():
+    """Which is what lets ``uv`` and ``tile_pixels`` ignore the packing."""
+    ts = tsx.read_tsx(COLLECTION, _collection_pixels())
+    for local in (0, 5, 9):
+        assert (ts.tile_pixels(local)[..., 3] == 255).all(), local
+
+
+def test_a_tile_the_collection_lacks_is_refused_rather_than_wrapped():
+    ts = tsx.read_tsx(COLLECTION, _collection_pixels())
+    with pytest.raises(IndexError):
+        ts.tile_rect(4)
+
+
+def test_the_palette_grid_hands_out_only_real_tiles():
+    """A cell past the end of the last row is padding, and handing it out as a
+    brush would give the map a gid that answers to nothing."""
+    ts = tsx.read_tsx(COLLECTION, _collection_pixels())
+    found = [
+        ts.local_at(column, row)
+        for row in range(ts.rows)
+        for column in range(ts.columns)
+    ]
+    assert sorted(v for v in found if v is not None) == [0, 5, 9]
+    assert found.count(None) == ts.columns * ts.rows - 3
+
+
+def test_a_collection_writes_no_atlas_image_and_zero_columns():
+    """Tiled's own spelling: a collection has no atlas to count across, and a
+    reader that saw a real column count would slice one."""
+    ts = tsx.read_tsx(COLLECTION, _collection_pixels())
+    written = tsx.tsx_bytes(ts, image_name="unused.png")
+    assert b'columns="0"' in written
+    assert b"<image source=\"unused.png\"" not in written
+
+
+def test_a_collection_cannot_be_a_terrain_set():
+    """Terrain roles are positional over a 47-column atlas; a collection has no
+    positions to read them off."""
+    from warlock.studio.tilegrid.tileset import TerrainSpec, compose_collection
+
+    atlas, collection = compose_collection(_collection_pixels())
+    with pytest.raises(ValueError, match="cannot be a terrain set"):
+        Tileset(
+            name="x",
+            pixels=atlas,
+            tile_w=16,
+            tile_h=16,
+            collection=collection,
+            terrains=(TerrainSpec(name="a", fill=(1, 1, 1, 255), outline=(0, 0, 0, 255)),),
+        )
+
+
+def test_composing_an_empty_collection_is_refused():
+    from warlock.studio.tilegrid.tileset import compose_collection
+
+    with pytest.raises(ValueError, match="at least one tile"):
+        compose_collection({})
 
 
 @pytest.mark.parametrize(

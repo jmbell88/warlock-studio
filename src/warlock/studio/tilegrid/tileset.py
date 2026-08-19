@@ -21,6 +21,7 @@ index into its grid.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -261,6 +262,99 @@ FILL_MODES = ("stretch", "preserve-aspect-fit")
 
 
 @dataclass(frozen=True)
+class Collection:
+    """A tileset whose tiles are separate images rather than one sliced atlas.
+
+    Tiled's "collection of images": every tile is its own file, ids may be
+    **sparse** (a collection permits gaps), and a tile's own size need not be
+    the tileset's grid size -- a 32px map with 48px trees is the ordinary case.
+
+    The pixels are still composed into one backing atlas on the way in, and that
+    is the design decision worth stating. It is not an approximation: ``ids``
+    and ``sizes`` keep every fact the composition could otherwise lose, and
+    every accessor answers about the *tile* rather than about the cell it was
+    packed into. What it buys is that the texture upload, ``uv``, ``tile_pixels``
+    and both renderers go on working on one array -- a tileset that was a list of
+    textures would need a second upload path, a second cache key and a second
+    answer to "which tile is under the cursor", and those are exactly the places
+    an atlas and a collection would come to disagree.
+
+    ``ids`` is ascending and parallel to ``sizes``; ``columns`` and the cell
+    size describe the composed atlas and nothing else.
+    """
+
+    ids: tuple[int, ...] = ()
+    sizes: tuple[tuple[int, int], ...] = ()
+    columns: int = 1
+    cell_w: int = 1
+    cell_h: int = 1
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "ids", tuple(int(value) for value in self.ids))
+        object.__setattr__(
+            self, "sizes", tuple((int(w), int(h)) for w, h in self.sizes)
+        )
+        for name in ("columns", "cell_w", "cell_h"):
+            object.__setattr__(self, name, int(getattr(self, name)))
+        if len(self.ids) != len(self.sizes):
+            raise ValueError("a collection's ids and sizes are parallel")
+        if len(set(self.ids)) != len(self.ids):
+            raise ValueError("a collection names a tile id twice")
+        if self.ids and list(self.ids) != sorted(self.ids):
+            raise ValueError("a collection's ids are ascending")
+        if self.columns < 1 or self.cell_w < 1 or self.cell_h < 1:
+            raise ValueError("a collection's atlas is at least one cell across")
+
+    @property
+    def rows(self) -> int:
+        return -(-len(self.ids) // self.columns) if self.ids else 0
+
+    def slot_of(self, local_id: int) -> int | None:
+        """Where a local id sits in the composed atlas, or ``None``.
+
+        A linear scan, deliberately: a collection is tens of tiles, the callers
+        are a draw loop that already memoises per tile id and a click, and a
+        parallel dict would be a second thing to keep in step with ``ids``.
+        """
+        try:
+            return self.ids.index(int(local_id))
+        except ValueError:
+            return None
+
+
+def compose_collection(
+    images: dict[int, Any], *, columns: int | None = None
+) -> tuple[np.ndarray, Collection]:
+    """Pack per-tile images into one atlas, with the record that describes it.
+
+    Cells are the largest tile's size and each tile sits at its cell's
+    **top-left**, so the padding is to the right and below and never inside a
+    tile's own rectangle -- which is what lets ``tile_rect`` return the tile and
+    ``uv`` exclude the padding without either of them knowing the packing.
+
+    Roughly square by default rather than one long row: a hundred 48px tiles in
+    a row is a 4800px texture, and a GL implementation is entitled to refuse one
+    twice that.
+    """
+    ids = tuple(sorted(int(key) for key in images))
+    if not ids:
+        raise ValueError("an image collection needs at least one tile")
+    frames = [frozen_rgba(images[local], "a collection tile") for local in ids]
+    sizes = tuple((int(f.shape[1]), int(f.shape[0])) for f in frames)
+    cell_w = max(w for w, _ in sizes)
+    cell_h = max(h for _, h in sizes)
+    across = int(columns) if columns else max(1, math.ceil(math.sqrt(len(ids))))
+    down = -(-len(ids) // across)
+    atlas = np.zeros((down * cell_h, across * cell_w, 4), dtype=np.uint8)
+    for slot, frame in enumerate(frames):
+        y, x = (slot // across) * cell_h, (slot % across) * cell_w
+        atlas[y : y + frame.shape[0], x : x + frame.shape[1]] = frame
+    return atlas, Collection(
+        ids=ids, sizes=sizes, columns=across, cell_w=cell_w, cell_h=cell_h
+    )
+
+
+@dataclass(frozen=True)
 class Tileset:
     """One sliced atlas. ``name`` is what the map calls it and what a ``.tsx``
     is written under; it is not an identity -- two tilesets may share a name and
@@ -294,6 +388,11 @@ class Tileset:
     phases: int = 1
     # Per-tile metadata by local id, sparse: most tiles carry nothing.
     tiles: dict[int, TileMeta] = field(default_factory=dict)
+    # Set when this tileset's tiles were separate images rather than one sliced
+    # atlas. ``pixels`` is then the composed backing atlas and this record is
+    # every fact the composition would otherwise have lost -- see
+    # :class:`Collection`.
+    collection: Collection | None = None
     # Foreign Wang sets, kept as data.
     #
     # **Beside ``terrains``, not instead of it.** ``terrains`` is the *blob
@@ -379,7 +478,20 @@ class Tileset:
         object.__setattr__(self, "transformations", transforms)
         if self.spacing < 0 or self.margin < 0:
             raise ValueError("spacing and margin cannot be negative")
-        if self.columns < 1 or self.rows < 1:
+        if self.collection is not None:
+            # A collection's slicing is its own record rather than arithmetic
+            # over the image, so the atlas question below does not apply -- but
+            # the record still has to fit the atlas it describes.
+            needed_w = self.collection.columns * self.collection.cell_w
+            needed_h = self.collection.rows * self.collection.cell_h
+            if self.image_w < needed_w or self.image_h < needed_h:
+                raise ValueError(
+                    f"this collection needs a {needed_w}x{needed_h} atlas and its "
+                    f"image is {self.image_w}x{self.image_h}"
+                )
+            if self.terrains:
+                raise ValueError("a collection cannot be a terrain set")
+        elif self.columns < 1 or self.rows < 1:
             raise ValueError(
                 f"a {self.image_w}x{self.image_h} image holds no "
                 f"{self.tile_w}x{self.tile_h} tiles at margin {self.margin}, "
@@ -416,36 +528,112 @@ class Tileset:
         return int(self.pixels.shape[0])
 
     @property
+    def is_collection(self) -> bool:
+        """Whether the tiles were separate images rather than one sliced atlas."""
+        return self.collection is not None
+
+    @property
     def columns(self) -> int:
         """How many whole tiles fit across.
 
         Tiled's own formula: the margin is taken off both edges, and each tile
         after the first costs its own width plus one spacing. A partial tile at
         the end is not counted -- it is not a tile.
+
+        For a collection this is the composed atlas's own column count, which is
+        what the palette lays out on: a collection has no slicing to derive one
+        from.
         """
+        if self.collection is not None:
+            return self.collection.columns
         span = self.image_w - 2 * self.margin + self.spacing
         step = self.tile_w + self.spacing
         return max(0, span // step) if step else 0
 
     @property
     def rows(self) -> int:
+        if self.collection is not None:
+            return self.collection.rows
         span = self.image_h - 2 * self.margin + self.spacing
         step = self.tile_h + self.spacing
         return max(0, span // step) if step else 0
 
     @property
     def tile_count(self) -> int:
+        """How many tiles this set has.
+
+        **Not ``columns * rows`` for a collection**: the last row of the
+        composed atlas is routinely short, and counting its padding would give
+        the map gids that answer to nothing.
+        """
+        if self.collection is not None:
+            return len(self.collection.ids)
         return self.columns * self.rows
+
+    @property
+    def max_local_id(self) -> int:
+        """The highest local id this set answers for.
+
+        The same as ``tile_count - 1`` for a sliced atlas, and **not** for a
+        collection: ids there may be sparse, so the highest is a fact about the
+        ids rather than about how many there are.
+        """
+        if self.collection is not None:
+            return max(self.collection.ids) if self.collection.ids else -1
+        return self.tile_count - 1
+
+    def local_at(self, column: int, row: int) -> int | None:
+        """Which tile the palette cell at ``(column, row)`` holds, or ``None``.
+
+        ``None`` for a cell past the end of a collection's last row -- padding
+        the palette must not hand out as a brush.
+        """
+        if column < 0 or row < 0 or column >= self.columns or row >= self.rows:
+            return None
+        slot = row * self.columns + column
+        if self.collection is not None:
+            ids = self.collection.ids
+            return ids[slot] if slot < len(ids) else None
+        return slot if slot < self.tile_count else None
+
+    def tile_size(self, local_id: int) -> tuple[int, int]:
+        """One tile's own drawn size, which is the grid size for a sliced atlas.
+
+        A collection's tile may be larger than the grid -- a 32px map with 48px
+        trees is the ordinary case -- and both renderers anchor such a tile by
+        its *bottom* left so it grows upward out of its cell.
+        """
+        if self.collection is None:
+            return (self.tile_w, self.tile_h)
+        slot = self.collection.slot_of(local_id)
+        if slot is None:
+            raise IndexError(f"tile {local_id} is not in this collection")
+        return self.collection.sizes[slot]
 
     def tile_rect(self, local_id: int) -> tuple[int, int, int, int]:
         """``(x, y, w, h)`` of one tile within the image, by local id.
 
-        Local ids run row-major from zero, which is what ``firstgid`` is added
-        to. Out of range raises: a caller asking for a tile this set does not
-        have is a bug upstream, and returning the first tile would draw a
-        plausible wrong picture.
+        Local ids run row-major from zero on a sliced atlas, which is what
+        ``firstgid`` is added to. Out of range raises: a caller asking for a
+        tile this set does not have is a bug upstream, and returning the first
+        tile would draw a plausible wrong picture.
+
+        For a collection the rect is the tile's **own** rectangle inside its
+        cell of the composed atlas, so the packing's padding is outside it and
+        neither ``uv`` nor ``tile_pixels`` has to know the packing exists.
         """
         index = int(local_id)
+        if self.collection is not None:
+            slot = self.collection.slot_of(index)
+            if slot is None:
+                raise IndexError(f"tile {index} is not in this collection")
+            width, height = self.collection.sizes[slot]
+            return (
+                (slot % self.collection.columns) * self.collection.cell_w,
+                (slot // self.collection.columns) * self.collection.cell_h,
+                width,
+                height,
+            )
         if index < 0 or index >= self.tile_count:
             raise IndexError(f"tile {index} is outside this tileset (0..{self.tile_count - 1})")
         column, row = index % self.columns, index // self.columns
@@ -564,8 +752,14 @@ class TilesetRef:
 
     @property
     def last_gid(self) -> int:
-        """The highest gid this reference answers for."""
-        return self.firstgid + self.tileset.tile_count - 1
+        """The highest gid this reference answers for.
+
+        **The highest *id*, not the count.** A collection's ids may be sparse,
+        so a set of three tiles numbered 0, 5 and 9 answers up to firstgid + 9 --
+        and a range computed from the count would refuse a gid the file
+        legitimately carries as "a tile no tileset accounts for".
+        """
+        return self.firstgid + self.tileset.max_local_id
 
     def holds(self, tile_id: int) -> bool:
         return self.firstgid <= int(tile_id) <= self.last_gid

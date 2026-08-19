@@ -129,7 +129,7 @@ frame thread as a crash.
 | `tileset class` | round-trips | Custom class names on external and embedded atlases; fixture: `core-112`. |
 | `tileset object grid` | round-trips | Orthogonal/isometric collision-authoring grid metadata; fixture: `basic-iso`. |
 | `tileset transformations` | round-trips | Allowed flips/rotation and untransformed preference; fixture: `core-112`. |
-| `an image-collection tileset` | refused | One-image-per-tile sources are not represented yet. |
+| `an image-collection tileset` | round-trips | Per-tile images with sparse ids, composed into one backing atlas on the way in -- `ids` and `sizes` keep every fact the composition could lose, and an oversized tile draws at its own size anchored bottom-left in **both** renderers. fixture: `collection-112`. |
 | `an embedded tileset image` | refused | Embedded image payloads or missing source paths are not decoded. |
 | `tileset image transparent colour` | round-trips | Applied at decode, so nothing downstream sees the key colour. The deprecated image-layer twin stays refused. fixture: `presentation-112`. |
 | `an external .tsj tileset` | round-trips | Read through the same JSON tileset definition an embedded one uses; which spelling a reference names is the host's question. fixture: `tsj-112`. |
