@@ -409,13 +409,21 @@ Plotter does not model is **refused by name** rather than loaded with half of it
 because the drop is invisible right up to the moment you save, at which point the other half is
 gone. The message says which feature and what to do about it.
 
-Refused: infinite (chunked) maps; the hexagonal 120° tile-rotation flag; object templates; image-collection
-tilesets and embedded tileset images; external `.tsj` tilesets; Wang sets that are not one of
-Plotter's own terrain sets, and Tiled's older terrain types; per-tile terrain assignment (Tiled's
-own deprecated one, which Tiled is retiring); tileset object alignment, render size, fill mode,
-background colour and tile offset; zstd-compressed layer data; deprecated tile-space layer
-coordinates and image-layer transparent colours; and custom properties of a type outside the set
-Plotter models.
+Refused: infinite (chunked) maps; the hexagonal 120° tile-rotation flag; object templates; a tileset
+with no pixels at all; an orientation or a compression Plotter has no name for; Tiled's older
+terrain types and its deprecated per-tile terrain assignment, both of which Tiled is itself
+retiring; deprecated tile-space layer coordinates and image-layer transparent colours; and custom
+properties of a type outside the set Plotter models.
+
+Several things that were on that list have left it, each in the change that taught the editor to
+model them: staggered and hexagonal maps, image-collection tilesets, external `.tsj` tilesets,
+generic Wang sets, everything a tile can carry (class, properties, probability, animation,
+collision), the tileset presentation fields, colour-key transparency, and zstd-compressed layer data
+(read; writes stay zlib, because every Tiled reads zlib).
+
+An **image-collection tileset** — one where every tile is its own file — opens like any other. Its
+ids may have gaps, and a tile larger than the map's grid draws at its own size anchored by its
+bottom-left, so a 32 px map full of 48 px trees looks the way it does in Tiled.
 
 Group layers, image layers, layer offsets, tints, parallax and classes, every one of the eight
 object shapes, object rotation and object templates' *contents* all load — several of those were on
