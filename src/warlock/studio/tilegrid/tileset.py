@@ -236,6 +236,30 @@ def frozen_rgba(pixels: Any, what: str = "a tileset image") -> np.ndarray:
     return array
 
 
+#: Tiled's nine anchors plus its "let the projection decide" default. Written
+#: out rather than derived, for ``TOOLS``' reason: the validator and every
+#: writer read one list, so a tenth value cannot be accepted by one and refused
+#: by the other.
+OBJECT_ALIGNMENTS = (
+    "unspecified",
+    "topleft",
+    "top",
+    "topright",
+    "left",
+    "center",
+    "right",
+    "bottomleft",
+    "bottom",
+    "bottomright",
+)
+
+#: Whether an oversized tile draws at its own size or is fitted to the cell.
+RENDER_SIZES = ("tile", "grid")
+
+#: How a fitted tile fills the cell it was fitted to.
+FILL_MODES = ("stretch", "preserve-aspect-fit")
+
+
 @dataclass(frozen=True)
 class Tileset:
     """One sliced atlas. ``name`` is what the map calls it and what a ``.tsx``
@@ -270,6 +294,31 @@ class Tileset:
     phases: int = 1
     # Per-tile metadata by local id, sparse: most tiles carry nothing.
     tiles: dict[int, TileMeta] = field(default_factory=dict)
+    # --- presentation ---------------------------------------------------------
+    #
+    # Four fields that change how a tile is *drawn* and nothing about which tile
+    # it is. Every one of them is Tiled's, read, written, stored and rendered.
+    #
+    # ``offset`` is a draw displacement in pixels, which is how a tall tree tile
+    # is anchored to the cell its trunk stands in. The **minimap ignores it**, by
+    # the one-pixel-per-cell rule already stated for layer offsets: at that scale
+    # a sub-cell displacement has nowhere to go.
+    offset_x: int = 0
+    offset_y: int = 0
+    # Where a *tile object* is anchored to its own position. "unspecified" is
+    # Tiled's own default and means the map's projection decides -- bottom-left
+    # for orthogonal, bottom-centre for isometric -- which is what
+    # ``project.object_to_pixels`` already computes.
+    object_alignment: str = "unspecified"
+    # How an oversized tile is fitted to the grid: "tile" draws it at its own
+    # size (so a 48px tree on a 32px map overhangs, anchored by the rule above),
+    # "grid" fits it to the cell. ``fill_mode`` decides whether that fit
+    # stretches or preserves the aspect.
+    render_size: str = "tile"
+    fill_mode: str = "stretch"
+    # The palette's own backdrop, as Tiled's ``#RRGGBB`` text. Presentation
+    # only, and preserved on the trip.
+    background: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "pixels", frozen_rgba(self.pixels))
@@ -295,6 +344,22 @@ class Tileset:
         object.__setattr__(self, "grid_height", int(self.grid_height or self.tile_h))
         if self.grid_orientation not in ("orthogonal", "isometric"):
             raise ValueError("a tileset object grid is orthogonal or isometric")
+        for name in ("offset_x", "offset_y"):
+            object.__setattr__(self, name, int(getattr(self, name)))
+        object.__setattr__(self, "object_alignment", str(self.object_alignment))
+        object.__setattr__(self, "render_size", str(self.render_size))
+        object.__setattr__(self, "fill_mode", str(self.fill_mode))
+        object.__setattr__(
+            self, "background", colour_text(self.background, "a tileset background")
+        )
+        if self.object_alignment not in OBJECT_ALIGNMENTS:
+            raise ValueError(
+                f"a tileset object alignment is one of {list(OBJECT_ALIGNMENTS)}"
+            )
+        if self.render_size not in RENDER_SIZES:
+            raise ValueError(f"a tileset render size is one of {list(RENDER_SIZES)}")
+        if self.fill_mode not in FILL_MODES:
+            raise ValueError(f"a tileset fill mode is one of {list(FILL_MODES)}")
         if self.grid_width < 1 or self.grid_height < 1:
             raise ValueError("a tileset object grid must be at least one pixel across")
         transforms = tuple(bool(value) for value in self.transformations)

@@ -103,7 +103,7 @@ frame thread as a crash.
 | `layer tile coordinates` | refused | Deprecated nonzero tile-space layer x/y cannot be confused with pixel offsets. |
 | `an image layer transparent colour` | refused | Deprecated color-key transparency is named instead of discarded. |
 | `layer data encoded as {}` | refused | XML, CSV and base64 read; unknown encodings stop. |
-| `{}-compressed layer data` | refused | Raw, zlib and gzip read; unsupported compression stops. |
+| `{}-compressed layer data` | refused | Raw, zlib, gzip and **zstd** read; anything else stops. zstd is read-only -- every Tiled reads zlib, so writing it would buy nothing and cost a reader. |
 | `{} layers` | refused | Unknown JSON layer kinds stop by their Tiled type name. |
 
 ## Objects
@@ -130,8 +130,8 @@ frame thread as a crash.
 | `tileset transformations` | round-trips | Allowed flips/rotation and untransformed preference; fixture: `core-112`. |
 | `an image-collection tileset` | refused | One-image-per-tile sources are not represented yet. |
 | `an embedded tileset image` | refused | Embedded image payloads or missing source paths are not decoded. |
-| `tileset image transparent colour` | refused | Atlas color-key transparency is not applied to decoded pixels. |
-| `an external .tsj tileset` | refused | Re-save as TSX; external JSON tilesets are not resolved yet. |
+| `tileset image transparent colour` | round-trips | Applied at decode, so nothing downstream sees the key colour. The deprecated image-layer twin stays refused. fixture: `presentation-112`. |
+| `an external .tsj tileset` | round-trips | Read through the same JSON tileset definition an embedded one uses; which spelling a reference names is the host's question. fixture: `tsj-112`. |
 | `Wang sets / terrain brushes` | refused | Generic corner/edge/mixed Wang sets stop unless they match the blob preset. A blob set exported with phase variants (`phases > 1`, declared by an int `phases` tileset property) writes every phase sub-row with the same wangid per case: Tiled's terrain brush treats equal wangids as random alternatives and keeps working, at the accepted cost that it *randomises* phases where Plotter derives them from cell coordinates. Exported layers carry concrete gids per cell, so position-baked phases travel exactly. |
 | `terrain types` | refused | Deprecated pre-Wang terrain syntax. |
 | `per-tile animation` | round-trips | Ordered frames of local ids and durations; the canvas plays them and every export draws frame 1. fixture: `tilemeta-112`. |
@@ -140,11 +140,11 @@ frame thread as a crash.
 | `per-tile class` | round-trips | Read, written and editable under the tileset palette. fixture: `tilemeta-112`. |
 | `per-tile probability` | round-trips | Weights a random brush; 0 is never chosen at random and always placeable by hand (Tiled's rule). fixture: `tilemeta-112`. |
 | `per-tile terrain assignment` | refused | Deprecated terrain indices are not inferred as Wang data. |
-| `tileset object alignment` | refused | Non-default tile-object anchors are not rendered yet. |
-| `tileset render size` | refused | Grid-sized tile rendering is not modeled yet. |
-| `tileset fill mode` | refused | Preserve-aspect tile rendering is not modeled yet. |
-| `tileset background colour` | refused | Tileset-editor presentation metadata is named rather than dropped. |
-| `tileset tile offset` | refused | Atlas-wide draw offsets are not rendered yet. |
+| `tileset object alignment` | round-trips | The tile-object anchor, through `project.object_to_pixels`; fixture: `presentation-112`. |
+| `tileset render size` | round-trips | Grid-sized or own-size drawing of an oversized tile; fixture: `presentation-112`. |
+| `tileset fill mode` | round-trips | How a grid-fitted tile fills its cell; fixture: `presentation-112`. |
+| `tileset background colour` | round-trips | Palette presentation, preserved on the trip; fixture: `presentation-112`. |
+| `tileset tile offset` | round-trips | A draw offset in the canvas and the flat renderer; the minimap ignores it by its one-pixel-per-cell rule, as it does layer offsets. fixture: `presentation-112`. |
 
 ## Properties
 

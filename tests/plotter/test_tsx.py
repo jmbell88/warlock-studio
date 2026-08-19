@@ -190,7 +190,6 @@ def test_a_property_type_outside_tileds_nine_is_refused_by_name():
         # a refusal is the honest state; everything else a ``<tile>`` can carry
         # is modelled now and has an acceptance case below.
         ('<tile id="0" terrain="0,,,"/>', "per-tile terrain assignment"),
-        ('<tileoffset x="1" y="0"/>', "tileset tile offset"),
     ],
 )
 def test_an_unsupported_tileset_feature_is_refused_and_named(body, feature):
@@ -210,27 +209,78 @@ def test_an_image_collection_with_no_atlas_at_all_is_refused():
 
 
 @pytest.mark.parametrize(
-    ("attribute", "feature"),
+    ("attribute", "field", "value"),
     [
-        ('objectalignment="center"', "tileset object alignment"),
-        ('tilerendersize="grid"', "tileset render size"),
-        ('fillmode="preserve-aspect-fit"', "tileset fill mode"),
-        ('backgroundcolor="#ff00ff"', "tileset background colour"),
+        ('objectalignment="center"', "object_alignment", "center"),
+        ('tilerendersize="grid"', "render_size", "grid"),
+        ('fillmode="preserve-aspect-fit"', "fill_mode", "preserve-aspect-fit"),
+        ('backgroundcolor="#ff00ff"', "background", "#ff00ff"),
     ],
 )
-def test_an_unsupported_tileset_attribute_is_refused_and_named(attribute, feature):
-    data = f'''<tileset name="t" tilewidth="16" tileheight="16" {attribute}>
+def test_a_presentation_attribute_round_trips(attribute, field, value):
+    """The ledger rule's acceptance half for four rows that moved together:
+    read, written and back, with the writer omitting every default so the
+    output still diffs cleanly against a file Tiled wrote."""
+    data = f"""<tileset name="t" tilewidth="16" tileheight="16" {attribute}>
  <image source="a.png" width="64" height="64"/>
-</tileset>'''.encode()
-    with pytest.raises(tsx.TiledUnsupported, match=feature):
+</tileset>""".encode()
+    ts = tsx.read_tsx(data, _pixels())
+    assert getattr(ts, field) == value
+    again = tsx.read_tsx(tsx.tsx_bytes(ts, image_name="a.png"), _pixels())
+    assert getattr(again, field) == value
+
+
+def test_a_tile_offset_round_trips():
+    data = b"""<tileset name="t" tilewidth="16" tileheight="16">
+ <image source="a.png" width="64" height="64"/>
+ <tileoffset x="3" y="-5"/>
+</tileset>"""
+    ts = tsx.read_tsx(data, _pixels())
+    assert (ts.offset_x, ts.offset_y) == (3, -5)
+    again = tsx.read_tsx(tsx.tsx_bytes(ts, image_name="a.png"), _pixels())
+    assert (again.offset_x, again.offset_y) == (3, -5)
+
+
+def test_a_tileset_with_default_presentation_writes_none_of_it():
+    data = b"""<tileset name="t" tilewidth="16" tileheight="16">
+ <image source="a.png" width="64" height="64"/>
+</tileset>"""
+    written = tsx.tsx_bytes(tsx.read_tsx(data, _pixels()), image_name="a.png")
+    for absent in (b"objectalignment", b"tilerendersize", b"fillmode", b"tileoffset"):
+        assert absent not in written
+
+
+def test_an_invalid_presentation_value_is_refused():
+    data = b"""<tileset name="t" tilewidth="16" tileheight="16" tilerendersize="huge">
+ <image source="a.png" width="64" height="64"/>
+</tileset>"""
+    with pytest.raises(ValueError, match="render size"):
         tsx.read_tsx(data, _pixels())
 
 
-def test_a_tileset_image_transparent_colour_is_refused():
+def test_a_tileset_image_transparent_colour_becomes_alpha():
+    """Applied at *decode*, so nothing downstream ever sees the key colour and
+    no renderer needs to know the tileset had one."""
+    import numpy as np
+
     data = b'''<tileset name="t" tilewidth="16" tileheight="16">
  <image source="a.png" width="64" height="64" trans="ff00ff"/>
 </tileset>'''
-    with pytest.raises(tsx.TiledUnsupported, match="transparent colour"):
+    pixels = _pixels()
+    keyed = np.array(pixels)
+    keyed[0, 0, :3] = (255, 0, 255)
+    ts = tsx.read_tsx(data, keyed)
+    assert int(ts.pixels[0, 0, 3]) == 0, "the key colour became a hole"
+    assert int(ts.pixels[1, 1, 3]) == 255, "and nothing else moved"
+
+
+def test_a_transparent_colour_that_is_not_a_colour_is_refused():
+    data = b'''<tileset name="t" tilewidth="16" tileheight="16">
+ <image source="a.png" width="64" height="64" trans="nonsense"/>
+</tileset>'''
+    # A plain ValueError rather than a named refusal: the feature is supported
+    # and it is the *value* that is wrong, so there is no compat row to name.
+    with pytest.raises(ValueError, match="transparent colour is"):
         tsx.read_tsx(data, _pixels())
 
 

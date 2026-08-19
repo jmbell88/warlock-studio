@@ -1215,7 +1215,7 @@ def test_per_tile_metadata_gates_version_six_and_round_trips():
         ),
     )
     payload = json.loads(wmap.manifest_json(doc))
-    assert payload["version"] == wmap.VERSION == 6
+    assert payload["version"] == wmap.TILE_META_VERSION == 6
 
     back = wmap.read_wmap(wmap.wmap_bytes(doc))
     tiles = back.tilesets[0].tileset.tiles
@@ -1230,6 +1230,41 @@ def test_per_tile_metadata_gates_version_six_and_round_trips():
 
 
 def test_a_tileset_with_no_tile_metadata_keeps_its_old_version():
+    doc = _doc()
+    payload = json.loads(wmap.manifest_json(doc))
+    assert payload["version"] < wmap.VERSION
+
+
+def test_presentation_fields_gate_version_seven_and_round_trip():
+    """Written unconditionally like every stored field, so a version 6 reader
+    would draw a tall tree tile in the wrong place while believing it had the
+    whole file."""
+    doc = _doc()
+    ts = doc.tilesets[0].tileset
+    doc.replace_tileset(
+        0,
+        dataclasses.replace(
+            ts,
+            offset_x=3,
+            offset_y=-5,
+            object_alignment="bottomleft",
+            render_size="grid",
+            fill_mode="preserve-aspect-fit",
+            background="#182030",
+        ),
+    )
+    payload = json.loads(wmap.manifest_json(doc))
+    assert payload["version"] == wmap.VERSION == 7
+
+    back = wmap.read_wmap(wmap.wmap_bytes(doc)).tilesets[0].tileset
+    assert (back.offset_x, back.offset_y) == (3, -5)
+    assert back.object_alignment == "bottomleft"
+    assert back.render_size == "grid"
+    assert back.fill_mode == "preserve-aspect-fit"
+    assert back.background == "#182030"
+
+
+def test_default_presentation_keeps_its_old_version():
     doc = _doc()
     payload = json.loads(wmap.manifest_json(doc))
     assert payload["version"] < wmap.VERSION

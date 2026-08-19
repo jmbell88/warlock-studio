@@ -131,10 +131,17 @@ def _loaders(base: Path):
     def tsx_loader(source: str) -> Any:
         target = _within_ceiling(_resolve_source(base, source))
         data = target.read_bytes()
-        image = tsxlib.tsx_source(data)
-        # Relative to the .tsx, not to the map: a tileset folder is the normal
-        # Tiled layout and resolving from the map would miss by one directory.
-        return tsxlib.read_tsx(data, _decode(_resolve_source(target.parent, image)))
+        # **The host decides which spelling this is**, because the host is the
+        # only thing that read the bytes. The engine hands over a reference and
+        # has no way to tell a ``.tsj`` from a ``.tsx`` that is not the very
+        # extension it is passing.
+        json_tileset = target.suffix.lower() == ".tsj"
+        image = (tsxlib.tsj_source if json_tileset else tsxlib.tsx_source)(data)
+        # Relative to the tileset file, not to the map: a tileset folder is the
+        # normal Tiled layout and resolving from the map would miss by one
+        # directory.
+        pixels = _decode(_resolve_source(target.parent, image))
+        return (tsxlib.read_tsj if json_tileset else tsxlib.read_tsx)(data, pixels)
 
     return {"image_loader": image_loader, "tsx_loader": tsx_loader}
 

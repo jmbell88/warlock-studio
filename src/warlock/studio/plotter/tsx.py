@@ -141,27 +141,16 @@ def check_tileset_features(root: ET.Element) -> None:
         )
     if root.find("terraintypes") is not None:
         raise TiledUnsupported("terrain types")
-    if root.get("objectalignment", "unspecified") != "unspecified":
-        raise TiledUnsupported("tileset object alignment")
-    if root.get("tilerendersize", "tile") != "tile":
-        raise TiledUnsupported("tileset render size")
-    if root.get("fillmode", "stretch") != "stretch":
-        raise TiledUnsupported("tileset fill mode")
-    if root.get("backgroundcolor"):
-        raise TiledUnsupported("tileset background colour")
-    offset = root.find("tileoffset")
-    if offset is not None and (
-        int(offset.get("x", 0) or 0) or int(offset.get("y", 0) or 0)
-    ):
-        raise TiledUnsupported("tileset tile offset")
+    # Object alignment, render size, fill mode, background colour and the tile
+    # offset are all modelled now -- see the presentation block on
+    # :class:`~..tilegrid.tileset.Tileset`. What remains refused is a tileset
+    # with no single atlas at all.
     image = root.find("image")
     if image is None:
         raise TiledUnsupported(
             "an image-collection tileset",
             "every tile is its own file; Plotter needs one sliced atlas",
         )
-    if image.get("trans"):
-        raise TiledUnsupported("tileset image transparent colour")
     for tile in root.findall("tile"):
         where = f"tile {tile.get('id', '?')}"
         # Class, probability, animation, collision and custom properties are
@@ -189,21 +178,6 @@ def check_tileset_features_json(entry: dict[str, Any]) -> None:
     """
     if entry.get("terrains"):
         raise TiledUnsupported("terrain types")
-    if str(entry.get("objectalignment", "unspecified")) != "unspecified":
-        raise TiledUnsupported("tileset object alignment")
-    if str(entry.get("tilerendersize", "tile")) != "tile":
-        raise TiledUnsupported("tileset render size")
-    if str(entry.get("fillmode", "stretch")) != "stretch":
-        raise TiledUnsupported("tileset fill mode")
-    if entry.get("backgroundcolor"):
-        raise TiledUnsupported("tileset background colour")
-    offset = entry.get("tileoffset") or {}
-    if isinstance(offset, dict) and (
-        int(offset.get("x", 0) or 0) or int(offset.get("y", 0) or 0)
-    ):
-        raise TiledUnsupported("tileset tile offset")
-    if entry.get("transparentcolor"):
-        raise TiledUnsupported("tileset image transparent colour")
     for tile in entry.get("tiles") or ():
         if not isinstance(tile, dict):
             continue
@@ -522,6 +496,94 @@ def _number(value: float) -> str:
     return str(int(number)) if number.is_integer() else repr(number)
 
 
+def colour_key(pixels: np.ndarray, colour: str | None) -> np.ndarray:
+    """``pixels`` with every occurrence of ``colour`` made fully transparent.
+
+    Tiled's ``trans``/``transparentcolor``: a tileset drawn on a solid backdrop
+    says which colour that backdrop is rather than carrying an alpha channel.
+    Applied **at decode**, so nothing downstream ever sees the key colour and no
+    renderer needs to know a tileset had one.
+
+    The *tileset* row only. Tiled's image-layer twin is deprecated and stays
+    refused, which is the honest state for something Tiled is retiring.
+    """
+    if not colour:
+        return pixels
+    text = str(colour).lstrip("#")
+    if len(text) == 8:  # #AARRGGBB -- the alpha is not part of the match
+        text = text[2:]
+    try:
+        if len(text) != 6:
+            raise ValueError(text)
+        key = tuple(int(text[i : i + 2], 16) for i in (0, 2, 4))
+    except ValueError as exc:
+        # A plain ``ValueError`` and deliberately **not** ``TiledUnsupported``:
+        # the feature is supported, and what is wrong is the *value*. A
+        # refusal-by-name would put a name in the source that the compat ledger
+        # has no refused row for, which is exactly the drift that gate exists to
+        # catch. Framed rather than raised bare, so the message says what.
+        raise ValueError(
+            f"a tileset transparent colour is #RRGGBB, not {colour!r}"
+        ) from exc
+    out = np.array(pixels, dtype=np.uint8)
+    if out.ndim != 3 or out.shape[2] != 4:
+        return out
+    matched = (
+        (out[:, :, 0] == key[0]) & (out[:, :, 1] == key[1]) & (out[:, :, 2] == key[2])
+    )
+    out[matched, 3] = 0
+    return out
+
+
+def presentation_of(root: ET.Element) -> dict[str, Any]:
+    """The five presentation fields off a ``<tileset>`` element."""
+    offset = root.find("tileoffset")
+    return {
+        "offset_x": 0 if offset is None else int(offset.get("x", 0) or 0),
+        "offset_y": 0 if offset is None else int(offset.get("y", 0) or 0),
+        "object_alignment": root.get("objectalignment", "unspecified"),
+        "render_size": root.get("tilerendersize", "tile"),
+        "fill_mode": root.get("fillmode", "stretch"),
+        "background": root.get("backgroundcolor") or None,
+    }
+
+
+def presentation_of_json(entry: dict[str, Any]) -> dict[str, Any]:
+    """:func:`presentation_of` over Tiled's JSON tileset spelling."""
+    offset = entry.get("tileoffset") or {}
+    if not isinstance(offset, dict):
+        offset = {}
+    return {
+        "offset_x": int(offset.get("x", 0) or 0),
+        "offset_y": int(offset.get("y", 0) or 0),
+        "object_alignment": str(entry.get("objectalignment", "unspecified")),
+        "render_size": str(entry.get("tilerendersize", "tile")),
+        "fill_mode": str(entry.get("fillmode", "stretch")),
+        "background": entry.get("backgroundcolor") or None,
+    }
+
+
+def write_presentation(root: ET.Element, ts: Tileset) -> None:
+    """The five fields back onto a ``<tileset>``, omitting every default.
+
+    Omitting the defaults is not cosmetic: the writer is held to producing a
+    file that diffs cleanly against one Tiled wrote for the same tileset, and
+    Tiled omits them.
+    """
+    if ts.object_alignment != "unspecified":
+        root.set("objectalignment", ts.object_alignment)
+    if ts.render_size != "tile":
+        root.set("tilerendersize", ts.render_size)
+    if ts.fill_mode != "stretch":
+        root.set("fillmode", ts.fill_mode)
+    if ts.background:
+        root.set("backgroundcolor", ts.background)
+    if ts.offset_x or ts.offset_y:
+        ET.SubElement(
+            root, "tileoffset", {"x": str(ts.offset_x), "y": str(ts.offset_y)}
+        )
+
+
 def read_tile_meta(root: ET.Element) -> dict[int, TileMeta]:
     """Every ``<tile>`` block's metadata, by local id. Sparse."""
     out: dict[int, TileMeta] = {}
@@ -650,10 +712,12 @@ def read_tsx(data: bytes, image: np.ndarray) -> Tileset:
     # The property is structural only on a recognised terrain set; anywhere
     # else "phases" is somebody's ordinary custom property and travels intact.
     phases = declared if terrains else 1
+    picture = root.find("image")
     return Tileset(
         name=root.get("name") or "tileset",
         class_name=root.get("class") or root.get("type") or "",
-        pixels=image,
+        pixels=colour_key(image, None if picture is None else picture.get("trans")),
+        **presentation_of(root),
         tile_w=int(root.get("tilewidth", 0) or 0),
         tile_h=int(root.get("tileheight", 0) or 0),
         spacing=int(root.get("spacing", 0) or 0),
@@ -691,6 +755,84 @@ def read_tsx(data: bytes, image: np.ndarray) -> Tileset:
     )
 
 
+def read_tsj(data: bytes, image: np.ndarray) -> Tileset:
+    """A ``.tsj``'s bytes plus its decoded image, as a :class:`Tileset`.
+
+    :func:`read_tsx`'s JSON twin, and deliberately built out of the *same*
+    pieces the embedded-JSON-tileset path in :mod:`.tmx` already uses --
+    ``check_tileset_features_json``, ``read_json_properties``,
+    ``read_wangsets_json``, ``read_tile_meta_json``, ``presentation_of_json``.
+    A second opinion about what a JSON tileset means is exactly how the external
+    and embedded spellings of one file come to load differently.
+    """
+    import json
+
+    entry = json.loads(data.decode("utf-8"))
+    if not isinstance(entry, dict):
+        raise ValueError("a .tsj holds a tileset object")
+    return tileset_from_json(entry, image)
+
+
+def tsj_source(data: bytes) -> str:
+    """The image path a ``.tsj`` names, relative to the ``.tsj`` itself."""
+    import json
+
+    entry = json.loads(data.decode("utf-8"))
+    if not isinstance(entry, dict):
+        raise ValueError("a .tsj holds a tileset object")
+    source = str(entry.get("image", "") or "")
+    if not source:
+        raise TiledUnsupported(
+            "an image-collection tileset",
+            "every tile is its own file; Plotter needs one sliced atlas",
+        )
+    return source
+
+
+def tileset_from_json(entry: dict[str, Any], image: np.ndarray) -> Tileset:
+    """One JSON tileset object, external or embedded, as a :class:`Tileset`.
+
+    The single definition both spellings go through. ``image`` is already
+    decoded, because resolving a path means touching a filesystem and this
+    package deliberately cannot.
+    """
+    check_tileset_features_json(entry)
+    grid = entry.get("grid") or {}
+    if not isinstance(grid, dict):
+        raise ValueError("a tileset object grid is not an object")
+    transformations = entry.get("transformations") or {}
+    if not isinstance(transformations, dict):
+        raise ValueError("tileset transformations are not an object")
+    props = read_json_properties(entry.get("properties"))
+    declared, remaining = phases_from_properties(props)
+    wangsets = entry.get("wangsets")
+    terrains = () if not wangsets else (read_wangsets_json(wangsets, declared) or ())
+    return Tileset(
+        name=str(entry.get("name", "tileset")),
+        class_name=str(entry.get("class") or entry.get("type") or ""),
+        pixels=colour_key(image, entry.get("transparentcolor")),
+        tile_w=int(entry.get("tilewidth", 0) or 0),
+        tile_h=int(entry.get("tileheight", 0) or 0),
+        spacing=int(entry.get("spacing", 0) or 0),
+        margin=int(entry.get("margin", 0) or 0),
+        grid_orientation=str(grid.get("orientation", "orthogonal")),
+        grid_width=int(grid.get("width", entry.get("tilewidth", 0)) or 0),
+        grid_height=int(grid.get("height", entry.get("tileheight", 0)) or 0),
+        transformations=(
+            bool(transformations.get("hflip", False)),
+            bool(transformations.get("vflip", False)),
+            bool(transformations.get("rotate", False)),
+            bool(transformations.get("preferuntransformed", False)),
+        ),
+        properties=remaining if terrains else props,
+        terrains=terrains,
+        phases=declared if terrains else 1,
+        tiles=read_tile_meta_json(entry),
+        **presentation_of_json(entry),
+    )
+
+
+
 # --- writing ------------------------------------------------------------------
 
 
@@ -708,6 +850,7 @@ def tsx_element(ts: Tileset, *, image_name: str) -> ET.Element:
     )
     if ts.class_name:
         root.set("class", ts.class_name)
+    write_presentation(root, ts)
     # Tiled omits both when they are zero; matching that keeps our output
     # diff-clean against a file Tiled wrote for the same tileset.
     if ts.spacing:

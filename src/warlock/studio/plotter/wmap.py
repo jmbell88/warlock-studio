@@ -66,6 +66,13 @@ written unconditionally, so a document carrying one while declaring version 5
 would hand an old reader a file it drops half of in silence. A tileset with no
 per-tile metadata keeps writing its old version.
 
+**Version 7 is the tileset presentation fields**: the draw offset, the
+tile-object anchor, the render size, the fill mode and the palette background.
+Same argument again -- each is written unconditionally, and a version 6 reader
+would draw a tall tree tile in the wrong place while believing it had the whole
+file. A tileset whose presentation is entirely default keeps writing its old
+version.
+
 Versions 1 and 2 are still read, through tolerant defaults rather than a branch
 per version -- the ``locked`` precedent. A version 1 file predates projections
 and is orthogonal by definition; a version 2 file has no tint, offset, parallax
@@ -125,7 +132,10 @@ from .tilemap import (
     shape_kind,
 )
 
-VERSION = 6
+VERSION = 7
+#: Per-tile metadata; written when a tileset carries some and no tileset
+#: carries a non-default presentation field.
+TILE_META_VERSION = 6
 #: Phase variants; written when a tileset carries them and no tile carries
 #: metadata.
 PHASES_VERSION = 5
@@ -490,12 +500,23 @@ def _document_version(doc: MapDoc) -> int:
         raise WmapUnstorable(
             f"the version {VERSION} .wmap format has no sparse chunk entry for an infinite map"
         )
-    # Per-tile metadata first: 6 is the ceiling, so nothing below can override
-    # it. Mandatory rather than tolerant for the reason every gate here is --
-    # ``tiles`` is written unconditionally, and a version 5 reader would drop the
-    # whole record without a word.
-    if any(ref.tileset.tiles for ref in doc.tilesets):
+    # The presentation fields first: 7 is the ceiling, so nothing below can
+    # override it.
+    if any(
+        ref.tileset.offset_x
+        or ref.tileset.offset_y
+        or ref.tileset.object_alignment != "unspecified"
+        or ref.tileset.render_size != "tile"
+        or ref.tileset.fill_mode != "stretch"
+        or ref.tileset.background
+        for ref in doc.tilesets
+    ):
         return VERSION
+    # Then per-tile metadata. Mandatory rather than tolerant for the reason
+    # every gate here is -- ``tiles`` is written unconditionally, and a version
+    # 5 reader would drop the whole record without a word.
+    if any(ref.tileset.tiles for ref in doc.tilesets):
+        return TILE_META_VERSION
     # Then phase variants. Same argument: ``phases`` is written unconditionally,
     # and an old reader that dropped it would divide every local id by the wrong
     # row count and misattribute the terrain of every painted cell, silently.
@@ -591,6 +612,12 @@ def manifest_json(doc: MapDoc) -> str:
                     str(local): _tile_meta_entry(ts.tiles[local])
                     for local in sorted(ts.tiles)
                 },
+                # Presentation: how a tile is *drawn*, never which tile it is.
+                "offset": [int(ts.offset_x), int(ts.offset_y)],
+                "object_alignment": ts.object_alignment,
+                "render_size": ts.render_size,
+                "fill_mode": ts.fill_mode,
+                "background": ts.background,
             }
         )
 
@@ -1092,6 +1119,16 @@ def read_wmap(data: bytes) -> MapDoc:
                         # Absent before version 6, where the absence meant
                         # "no tile carries anything".
                         tiles=_tile_meta_from(entry.get("tiles")),
+                        # Absent before version 7, where the absence meant the
+                        # defaults each of these already carries.
+                        offset_x=int((entry.get("offset") or (0, 0))[0]),
+                        offset_y=int((entry.get("offset") or (0, 0))[1]),
+                        object_alignment=str(
+                            entry.get("object_alignment", "unspecified")
+                        ),
+                        render_size=str(entry.get("render_size", "tile")),
+                        fill_mode=str(entry.get("fill_mode", "stretch")),
+                        background=entry.get("background") or None,
                     ),
                     source=str(entry.get("source", "")),
                 )

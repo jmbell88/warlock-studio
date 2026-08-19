@@ -23,8 +23,10 @@ base64+zlib, base64+gzip and Tiled's older ``<tile>``-element form all read;
 everything written from here is CSV (or, for ``.tmj``, a plain JSON array).
 Round-tripping the compression a file happened to arrive in would make the
 output depend on the input in a way nothing needs, and CSV is the form a diff
-can show. ``zstd`` is refused rather than supported, which is what keeps this
-package's dependency set to numpy and the standard library.
+can show. ``zstd`` is **read but never written**: every Tiled reads zlib, so
+writing zstd would buy nothing and cost a reader, and its decoder is imported
+lazily at the one call site so this module still imports where the studio extra
+is absent.
 
 **Loading is split so this module stays pure.** Resolving a relative image or
 ``.tsx`` path means touching a filesystem, so the two loaders are callbacks the
@@ -116,10 +118,16 @@ MAP_VERSION = TSX_VERSION
 TilesetLoader = Callable[[str], Tileset]
 ImageLoader = Callable[[str], Any]
 
-# What a compression attribute may say. ``zstd`` is a real Tiled option and is
-# deliberately absent: supporting it means a third-party wheel in a package
-# whose whole claim is numpy and the standard library.
-_COMPRESSIONS = ("", "zlib", "gzip")
+# What a compression attribute may say.
+#
+# **``zstd`` reads but is never written.** Every Tiled reads zlib, so writing
+# zstd would buy nothing and cost a reader; the claim this row makes is
+# read-without-loss. ``zstandard`` is a wheel in the studio extra rather than a
+# download, so the offline invariant is untouched -- and it is imported lazily,
+# at the one call site, so this module still imports where the extra is absent.
+_COMPRESSIONS = ("", "zlib", "gzip", "zstd")
+#: What the *writer* may emit, which is a smaller set and deliberately so.
+_WRITE_COMPRESSIONS = ("", "zlib", "gzip")
 _ENCODINGS = ("", "csv", "base64")
 
 _SAFE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -241,6 +249,31 @@ def _decompress(raw: bytes, compression: str, expected: int) -> bytes:
                 f"a layer's compressed data unpacks past the {expected} bytes its size declares"
             )
         return out
+    if compression == "zstd":
+        try:
+            import zstandard
+        except ImportError as exc:  # pragma: no cover - the extra is installed
+            # A plain ``ValueError`` and deliberately **not** a named refusal:
+            # zstd is supported, and what is missing is an install. A refusal
+            # name here would be a name the compat ledger has no refused row
+            # for, which is the drift that gate exists to catch.
+            raise ValueError(
+                "reading zstd layer data needs the studio extra's decoder"
+            ) from exc
+        # ``max_output_size`` is the same bound the two above use and for the
+        # same reason: a few hundred bytes of archive can declare gigabytes, and
+        # the read that discovers it is the one that already exhausted memory.
+        try:
+            out = zstandard.ZstdDecompressor().decompress(
+                raw, max_output_size=expected + 1
+            )
+        except zstandard.ZstdError as exc:
+            raise ValueError(f"a layer's zstd data could not be read: {exc}") from exc
+        if len(out) > expected:
+            raise ValueError(
+                f"a layer's compressed data unpacks past the {expected} bytes its size declares"
+            )
+        return out
     return raw
 
 
@@ -251,12 +284,7 @@ def _decode_payload(
     if encoding not in _ENCODINGS:
         raise TiledUnsupported(f"layer data encoded as {encoding!r}")
     if compression not in _COMPRESSIONS:
-        detail = (
-            "zstd needs a third-party decoder; re-save the map with zlib, gzip or CSV"
-            if compression == "zstd"
-            else ""
-        )
-        raise TiledUnsupported(f"{compression}-compressed layer data", detail)
+        raise TiledUnsupported(f"{compression}-compressed layer data")
 
     if encoding == "csv":
         pieces = [piece for piece in text.replace("\n", "").split(",") if piece.strip()]
@@ -381,14 +409,10 @@ def _read_tmx_tilesets(
         firstgid = int(node.get("firstgid", 1) or 1)
         source = node.get("source")
         if source:
-            # Same refusal the JSON path raises for a ``.tsj`` reference: the
-            # right outcome either way is refusal, but falling through to
-            # ``tsx_loader`` here would die on the host's generic "not a
-            # readable tileset" instead of naming the actual problem.
-            if str(source).lower().endswith(".tsj"):
-                raise TiledUnsupported(
-                    "an external .tsj tileset", "re-save the tileset as .tsx in Tiled"
-                )
+            # ``.tsx`` and ``.tsj`` both go straight to the loader now: which
+            # spelling a reference names is the *host*'s question, because only
+            # the host reads bytes, and the engine has no way to tell them apart
+            # that is not the extension it just handed over.
             refs.append(
                 TilesetRef(firstgid=firstgid, tileset=tsx_loader(source), source=source)
             )
@@ -768,10 +792,6 @@ def _read_tmj_tilesets(
         firstgid = int(entry.get("firstgid", 1) or 1)
         source = entry.get("source")
         if source:
-            if str(source).lower().endswith(".tsj"):
-                raise TiledUnsupported(
-                    "an external .tsj tileset", "re-save the tileset as .tsx in Tiled"
-                )
             refs.append(
                 TilesetRef(firstgid=firstgid, tileset=tsx_loader(source), source=source)
             )

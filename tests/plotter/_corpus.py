@@ -29,7 +29,9 @@ MANIFEST: tuple[str, ...] = (
     "basic-iso",
     "core-112",
     "oblique-112",
+    "presentation-112",
     "tilemeta-112",
+    "tsj-112",
     "typed-embedded-112",
 )
 
@@ -88,6 +90,10 @@ def loaders_for(
 
     def tsx_loader(source: str) -> Tileset:
         raw = _read(source, directory, files)
+        # The *host* decides which spelling this is, because the host is what
+        # read the bytes -- the same split ``plotter_io._loaders`` makes.
+        if str(source).lower().endswith(".tsj"):
+            return tsx.read_tsj(raw, image_loader(tsx.tsj_source(raw)))
         return tsx.read_tsx(raw, image_loader(tsx.tsx_source(raw)))
 
     return {"image_loader": image_loader, "tsx_loader": tsx_loader}

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<map version="1.10" tiledversion="1.12.2" orientation="orthogonal" renderorder="right-down" width="2" height="2" tilewidth="16" tileheight="16" infinite="0" nextlayerid="2" nextobjectid="1">
+ <tileset firstgid="1" name="present" tilewidth="16" tileheight="16" tilecount="16" columns="4" objectalignment="bottomleft" tilerendersize="grid" fillmode="preserve-aspect-fit" backgroundcolor="#182030">
+  <image source="big.png" width="64" height="64"/>
+  <tileoffset x="3" y="-5"/>
+ </tileset>
+ <layer id="1" name="Ground" width="2" height="2">
+  <data encoding="csv">
+1,2,
+3,4
+</data>
+ </layer>
+</map>

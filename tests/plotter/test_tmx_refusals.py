@@ -122,16 +122,46 @@ def test_a_layer_with_a_pixel_offset_is_modelled(attr):
     assert getattr(layer, "offset_x" if attr == "offsetx" else "offset_y") == 8.0
 
 
-def test_zstd_layer_data_is_refused_with_the_remedy_named():
-    """Refused rather than supported, which is what keeps this package's
-    dependency set to numpy and the standard library."""
+def test_zstd_layer_data_reads_the_same_cells_as_its_zlib_twin():
+    """Read but never written: every Tiled reads zlib, so writing zstd would
+    buy nothing and cost a reader. The claim the row makes is read-without-loss,
+    and this is that claim."""
+    import base64
+    import zlib
+
+    import numpy as np
+    import zstandard
+
+    from warlock.studio.tilegrid import gid
+
+    cells = np.array([[1, 2], [3, 4]], gid.DTYPE)
+    raw = cells.astype("<u4").tobytes()
+
+    def _map_with(payload: bytes, compression: str) -> bytes:
+        return _map(
+            body=(
+                '<layer id="1" name="L" width="2" height="2">'
+                f'<data encoding="base64" compression="{compression}">'
+                f"{base64.b64encode(payload).decode()}</data></layer>"
+            )
+        )
+
+    zlibbed = tmx.read_tmx(_map_with(zlib.compress(raw), "zlib"), **LOADERS)
+    zstdded = tmx.read_tmx(
+        _map_with(zstandard.ZstdCompressor().compress(raw), "zstd"), **LOADERS
+    )
+    assert np.array_equal(
+        zstdded.tile_layers()[0].data, zlibbed.tile_layers()[0].data
+    )
+
+
+def test_an_unknown_compression_is_still_refused():
     body = (
         '<layer id="1" name="L" width="2" height="2">'
-        '<data encoding="base64" compression="zstd">AAAA</data></layer>'
+        '<data encoding="base64" compression="brotli">AAAA</data></layer>'
     )
-    with pytest.raises(tsx.TiledUnsupported) as exc:
+    with pytest.raises(tsx.TiledUnsupported, match="brotli"):
         tmx.read_tmx(_map(body=body), **LOADERS)
-    assert "zstd" in str(exc.value) and "zlib" in str(exc.value)
 
 
 def test_an_unknown_encoding_is_refused():
@@ -383,7 +413,10 @@ def test_a_foreign_tmj_wangset_is_refused_and_says_what_is_modelled():
     assert str(bloblib.TILE_COUNT) in str(exc.value)
 
 
-def test_an_external_tsj_tileset_is_refused_with_the_remedy():
+def test_an_external_tsj_tileset_goes_to_the_loader_like_a_tsx():
+    """Which spelling a reference names is the *host*'s question -- only the
+    host reads bytes, and the engine has no way to tell them apart that is not
+    the extension it is passing over."""
     payload = {
         "type": "map",
         "orientation": "orthogonal",
@@ -394,20 +427,16 @@ def test_an_external_tsj_tileset_is_refused_with_the_remedy():
         "tilesets": [{"firstgid": 1, "source": "t.tsj"}],
         "layers": [],
     }
-    with pytest.raises(tsx.TiledUnsupported) as exc:
-        tmx.read_tmj(json.dumps(payload).encode(), **LOADERS)
-    assert ".tsj" in str(exc.value) and ".tsx" in str(exc.value)
+    doc = tmx.read_tmj(json.dumps(payload).encode(), **LOADERS)
+    assert doc.tilesets[0].source == "t.tsj"
 
 
-def test_an_external_tsj_tileset_on_the_xml_path_is_refused_with_the_remedy():
-    """The TMX spelling of the same file: ``<tileset source="x.tsj"/>``. Before
-    this refusal existed, the XML path fell through to ``tsx_loader`` and died
-    with the host's generic "not a readable tileset" -- the right outcome, but
-    the wrong sentence, and one that does not say to re-save as ``.tsx``."""
+def test_an_external_tsj_tileset_on_the_xml_path_goes_to_the_loader_too():
+    """The TMX spelling of the same file: ``<tileset source="x.tsj"/>``. Both
+    spellings hand the reference straight over, and both remember it."""
     data = _map().replace(b'source="t.tsx"', b'source="t.tsj"')
-    with pytest.raises(tsx.TiledUnsupported) as exc:
-        tmx.read_tmx(data, **LOADERS)
-    assert ".tsj" in str(exc.value) and ".tsx" in str(exc.value)
+    doc = tmx.read_tmx(data, **LOADERS)
+    assert doc.tilesets[0].source == "t.tsj"
 
 
 # --- embedded-JSON tileset feature checks --------------------------------------

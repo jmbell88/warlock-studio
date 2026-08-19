@@ -1784,6 +1784,7 @@ studio = [
     { name = "imgui-bundle" },
     { name = "moderngl" },
     { name = "pygame-ce" },
+    { name = "zstandard" },
 ]
 text2image = [
     { name = "accelerate" },
@@ -1833,6 +1834,7 @@ requires-dist = [
     { name = "torchvision", marker = "extra == 'text2image'", specifier = ">=0.20", index = "https://download.pytorch.org/whl/cu128" },
     { name = "transformers", marker = "extra == 'text2image'", specifier = ">=4.44" },
     { name = "trimesh", specifier = ">=4.4" },
+    { name = "zstandard", marker = "extra == 'studio'", specifier = ">=0.22" },
 ]
 provides-extras = ["text2image", "studio", "rig"]
 

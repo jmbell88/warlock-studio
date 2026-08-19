@@ -67,6 +67,10 @@ studio = [
     "moderngl>=5.10",
     "pygame-ce>=2.5",
     "imgui-bundle>=1.6",
+    # Reading zstd-compressed Tiled layer data. A wheel, not a download, so the
+    # offline invariant is untouched -- and imported lazily at the one call
+    # site, so a checkout without the studio extra still imports the plotter.
+    "zstandard>=0.22",
 ]
 # Skeleton fitting and skinning. bpy ships cp313 wheels only, so this extra
 # effectively requires Python 3.13 even though the project floor stays 3.12 --
