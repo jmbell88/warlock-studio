@@ -80,14 +80,32 @@ overlapping spans with different `direction`s (`pingpong`, `reverse`) and one
 carries a finite `repeat`. Exercises the frame grid, the link chunk, and the
 tag chunk's direction/repeat byte together.
 
-### `grayscale-animated` — **aseout-synthesized**
-8x8, two frames, converted to grayscale *after* an eraser stroke was drawn on
-each frame. The eraser cuts alpha and leaves the colour it was drawn in
-behind it, so both frames carry the funnel-painted shape this corpus exists
-to pin: dead RGB sitting under alpha 0, which a grayscale cel's two-channel
-storage (`value`, `alpha`) can only preserve on the visible half of the
-picture. The other half of this same construct is `tilemap-indexed`, below,
-where the same shape shows up in a tileset strip instead of a raster cel.
+### `grayscale-animated` — **aseout-synthesized, builder-backed**
+8x8, two frames, each independently filled blue and then eraser-stroked
+*before* the whole document is converted to grayscale. The eraser cuts alpha
+and leaves the colour it was drawn in behind it, so both frames carry the
+funnel-painted shape this corpus exists to pin: dead RGB sitting under alpha
+0, which a grayscale cel's two-channel storage (`value`, `alpha`) can only
+preserve on the visible half of the picture — the committed bytes lose it on
+both frames the moment they are decoded, same as any other grayscale
+document's invisible half. The other half of this same construct is
+`tilemap-indexed`, below, where the same shape shows up in a tileset strip
+instead of a raster cel.
+
+**Builder-backed, not just committed bytes.** The fixture file alone cannot
+prove the pre-write document ever carried this shape — a fully-normalised
+committed file round-trips identically whether or not the funnel-painted
+construct was ever reached, which is exactly what let a first generation
+pass through with a second frame that held *no cel at all* (the paint-then-
+erase for that frame was missing, so `add_frame`'s blank default shipped
+instead) without the byte-level gate noticing. `_asecorpus.py`'s
+`build_grayscale_animated` is the checked-in builder this file's bytes come
+from; `test_aseprite_corpus.py` asserts both that the builder's own output
+still carries non-grey colour under alpha 0 on each of its two cels, and
+that `aseprite_bytes(build_grayscale_animated())` equals this file exactly —
+here that *is* the writer's raw output: unlike `palette-constrained-rgb`
+below, nothing about this construct changes on a second write, so no extra
+round trip stands between the builder and the committed bytes.
 
 ### `indexed-duplicate-colours` — **aseout-synthesized**
 4x4, indexed. The palette holds **two identical browns** in different slots
@@ -124,14 +142,25 @@ adds a diagonally- *and* vertically-flipped placement on a second row — so
 the fixture carries a link, a flip combination, and a grid grown past its
 first placement all at once.
 
-### `tilemap-indexed` — **aseout-synthesized**
-8x8 at 4x4 tiles, indexed, one frame. The strip is painted with a soft
-(0.2-hardness) eraser stroke in **auto** tile-behaviour, which is what
-reaches the tileset with the funnel-painted alpha shapes this corpus pins:
-the fixture asserts its own strip carries a partially-erased, sub-255-alpha
-pixel before it is written, so the committed file is guaranteed to exercise
-`index_plane.resolve`'s alpha-first placement rather than an incidentally
-clean strip.
+### `tilemap-indexed` — **aseout-synthesized, builder-backed**
+8x8 at 4x4 tiles, indexed, one frame. A 50%-coverage paint dab lands on the
+tileset strip in **auto** tile-behaviour, which is what reaches the tileset
+with the funnel-painted alpha shape this corpus pins: a strip pixel at alpha
+128, neither fully in the picture nor fully out of it, which one byte per
+pixel cannot hold — `index_plane.resolve`'s alpha-first placement decides it
+on the way out, and the committed file's decoded strip is `{0, 255}` only,
+same loss the interop report already names.
+
+**Builder-backed, not just committed bytes**, for the reason `grayscale-
+animated` above states in full: a fixed-point fixture proves the writer is
+stable, not that the shape it is supposed to be stabilising was ever
+present, and a first generation pass produced a `tilemap-indexed` file with
+no soft alpha in its pre-write strip at all without the byte-level gate
+noticing. `_asecorpus.py`'s `build_tilemap_indexed` is the checked-in
+builder; `test_aseprite_corpus.py` asserts its raw strip carries a
+sub-255, non-zero alpha pixel before any bytes are written, and that
+`aseprite_bytes(build_tilemap_indexed())` equals this file exactly — no
+second round trip needed, the same as `grayscale-animated`.
 
 ### `spare-tileset` — **aseout-synthesized**
 `rgb-still` plus one tileset (`spare`, two colours) that no tilemap layer

@@ -25,14 +25,19 @@ two reads of the same bytes is a weaker claim than comparing against an
 originally-built document, but the stronger claim (bytes equal a specific
 builder's output) is exactly what a checked-in generator would have to pin
 and immediately duplicates the fixed-point property above. See
-``FIXTURES.md`` for why the files are committed rather than regenerated.
+``FIXTURES.md`` for why the files are committed rather than regenerated --
+**except** for the two fixtures below whose whole reason to exist is a shape
+the writer itself normalises away: ``grayscale-animated`` and
+``tilemap-indexed`` are the ones checked-in builders back, and for those two
+the stronger claim is exactly the point (see the "pinned constructs" section
+at the bottom of this file).
 """
 
 from __future__ import annotations
 
 import numpy as np
 import pytest
-from _asecorpus import EXPECTED_WARNINGS, FIXTURE_DIR, MANIFEST, available, read
+from _asecorpus import BUILDERS, EXPECTED_WARNINGS, FIXTURE_DIR, MANIFEST, available, read
 
 from warlock.studio.inker import asein, aseout
 from warlock.studio.inker.document import Document
@@ -240,3 +245,68 @@ def test_fixture_pixels_are_never_all_zero(stem: str):
             any_ink = True
             break
     assert any_ink, f"{stem}: every cel is fully transparent"
+
+
+# --- pinned constructs: the two fixtures a builder backs ---------------------
+#
+# ``grayscale-animated`` and ``tilemap-indexed`` exist to pin a shape the
+# *writer* itself normalises away -- a fully transparent pixel carrying a
+# colour that was never grey, and a strip pixel at an alpha the palette
+# cannot represent as fully in or fully out. A fixture file cannot prove by
+# itself that either shape was ever actually reached before the bytes were
+# written: the file-level gate above only sees what the *format* can still
+# hold, which for both of these is strictly less than what the funnel
+# produced (grayscale storage is one value channel plus alpha; an indexed
+# strip is one palette index per pixel). So the proof has to reach back past
+# the writer, to the document the writer was handed -- which means keeping
+# the builder, not just its output.
+#
+# This was the gap a review caught: a first generation pass silently
+# produced a ``grayscale-animated`` fixture with only one populated frame
+# (the second frame's paint-then-erase never reached a cel at all) and a
+# ``tilemap-indexed`` fixture with no soft alpha in its pre-write strip --
+# both fixtures still round-tripped byte-for-byte, because a fixed point
+# says nothing about what was *supposed* to be there. These two tests are
+# what closes that gap: they run the builder fresh every suite invocation,
+# assert the construct is present in its raw output, and assert that output
+# is the committed file precisely -- so a regenerated fixture that quietly
+# lost the construct again fails here immediately, rather than only being
+# discoverable by decoding the committed bytes by hand.
+
+
+def test_the_grayscale_animated_builder_carries_dead_rgb_on_both_frames():
+    doc = BUILDERS["grayscale-animated"]()
+    assert doc.anim is not None
+    assert len(doc.anim.cels) == 2, "both frames must hold their own cel"
+    for key, cel in doc.anim.cels.items():
+        px = cel.pixels
+        dead = px[..., 3] == 0
+        nongrey = dead & ((px[..., 0] != px[..., 1]) | (px[..., 1] != px[..., 2]))
+        assert dead.any(), f"cel {key}: no fully transparent pixel at all"
+        assert nongrey.any(), (
+            f"cel {key}: every transparent pixel is already grey -- "
+            "this cel does not exercise the pin"
+        )
+
+
+def test_the_grayscale_animated_fixture_is_the_builders_own_bytes():
+    doc = BUILDERS["grayscale-animated"]()
+    assert aseout.aseprite_bytes(doc) == read("grayscale-animated"), (
+        "the committed file has drifted from what the builder produces -- "
+        "regenerate it from build_grayscale_animated()"
+    )
+
+
+def test_the_tilemap_indexed_builder_carries_soft_strip_alpha():
+    doc = BUILDERS["tilemap-indexed"]()
+    strip_px = doc.tilesets[0].tileset.pixels
+    soft = (strip_px[..., 3] > 0) & (strip_px[..., 3] < 255)
+    assert soft.any(), "the pre-write strip carries no soft-alpha pixel"
+
+
+def test_the_tilemap_indexed_fixture_is_the_builders_own_bytes():
+    doc = BUILDERS["tilemap-indexed"]()
+    assert aseout.aseprite_bytes(doc) == read("tilemap-indexed"), (
+        "the committed file has drifted from what the builder produces -- "
+        "regenerate it from build_tilemap_indexed()"
+    )
