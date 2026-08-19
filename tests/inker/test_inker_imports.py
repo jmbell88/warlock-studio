@@ -47,7 +47,13 @@ PACKAGE = "warlock.studio.inker"
 #:
 #: ``tile_edits.py``'s entry is ``anim_edits.py``'s own: the tile undo types
 #: are built on the shared ``Edit`` base the same way the grid's are.
+#:
+#: ``_doc_tiles.py`` reaches for the same leaf as ``tiles.py`` and for the
+#: narrower half of it: the funnel's tilemap branch decodes a cell's transform
+#: flags (``gid.GID_MASK``/``FLAG_MASK``) to edit a flipped placement in
+#: canonical orientation, and the gid word is where those live.
 OUTWARD_IMPORTS = {
+    ("_doc_tiles.py", "warlock.studio.tilegrid"),
     ("anim_edits.py", "warlock.studio.undo"),
     ("composite.py", "warlock.native"),
     ("dither.py", "warlock.native"),

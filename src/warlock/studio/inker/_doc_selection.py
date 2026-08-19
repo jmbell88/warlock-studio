@@ -20,6 +20,7 @@ from .animation import Track
 from .brush import MAX_STAMP, Stamp
 from .layers import Layer
 from .selection import FloatingBuffer, SelectionMask, magic_wand, render_transform
+from .tiles import TilemapCel
 from .undo import CompoundEdit, LayerAddEdit, SelectionEdit
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -175,6 +176,10 @@ class SelectionOps:
         """
         if self.write_locked():
             return False
+        # A lift cuts a hole in ``pixels`` and only then reaches
+        # ``_patch_edit_for``, so the funnel's own tilemap refusal would land
+        # with the hole already cut. Refused here, by name, before anything.
+        self._refuse_tilemap_layer(self.stack.active.uid, "lifting pixels off")
         self.commit_floating()
         mask = mask or self.mask
         if mask is None:
@@ -321,7 +326,21 @@ class SelectionOps:
             return False
         rect = self._range(t0, t1, f0, f1)
         if rect is None or floating.source_box is None:
+            # The *plain* commit is deliberately not refused on a tilemap cel:
+            # it ends at ``_commit_patch``, so it earns the Manual/Auto/Stack
+            # routing for free like every other pixel write.
             return self.commit_floating()
+        # The ranged one cannot: it writes each cel and then goes through
+        # ``_patch_edit_for``, and it tears the buffer down and revokes the lift
+        # before the first of those. Refused here, while nothing has moved.
+        # A track *bound* to a tileset counts even before any cel has been
+        # drawn on it, ``_holds_tilemap``'s rule: the replay autovivifies, and
+        # what it would autovivify is a ``TilemapCel``.
+        tracks = self.anim.tracks[rect[0] : rect[1] + 1]
+        if any(track.tileset_uid is not None for track in tracks) or any(
+            isinstance(cel, TilemapCel) for _track, cel in self._cels_in(rect)
+        ):
+            raise ValueError("a ranged transform onto a tilemap layer is not yet modeled")
         # The whole recipe, captured before the buffer is torn down.
         flips = list(floating.flips)
         angle, scale, shear = floating.angle, floating.scale, floating.shear
@@ -510,6 +529,9 @@ class SelectionOps:
         box = self.clip(bounds) if bounds else None
         if box is None:
             return None
+        # ``lift``'s reason exactly: the alpha is cut below and the funnel's
+        # sibling is reached afterwards, so the refusal belongs at the door.
+        self._refuse_tilemap_layer(self.stack.active.uid, "cutting out of")
         self._ensure_active_cel()
         layer = self.stack.active
         x0, y0, x1, y1 = box

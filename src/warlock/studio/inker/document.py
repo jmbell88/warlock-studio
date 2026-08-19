@@ -192,6 +192,14 @@ class Document(
     #: serialized and never undoable -- ``repr=False`` for ``paint_slot``'s
     #: reason, it is not part of what the document *is*.
     tile_behavior: str = field(default="manual", repr=False)
+    #: tileset uid -> (the strip image the index was built from, content_key ->
+    #: local id). A derived cache, never serialized, keyed on the *identity* of
+    #: the strip -- a tileset is edited by frozen-replace, so a changed atlas is
+    #: always a changed array. See
+    #: :meth:`~._doc_tiles.TileOps._tile_hash_index`.
+    _tile_hashes: dict[int, tuple[np.ndarray, dict[bytes, int]]] = field(
+        init=False, default_factory=dict, repr=False
+    )
 
     _composite: np.ndarray = field(init=False, repr=False)
     #: Per-frame change counters, keyed by frame uid, for the flatten cache.
@@ -1054,6 +1062,14 @@ class Document(
         luma. Tools go on painting RGBA in all three, which is what keeps this
         the *only* place any of them has to be known.
         """
+        if isinstance(layer, TilemapCel):
+            # Before the colour modes, and taking the whole method with it: a
+            # tilemap cel's pixels are a *materialization*, so the write has to
+            # become a tileset edit or be reverted, and there is no version of
+            # it that also lands in an index plane. See
+            # :meth:`~._doc_tiles.TileOps._commit_tilemap_patch`.
+            self._commit_tilemap_patch(layer, rect, before)
+            return
         if self.color_mode == "indexed" and layer.indices is not None:
             self._commit_indexed_patch(layer, rect)
             return

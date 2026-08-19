@@ -220,6 +220,7 @@ class IndexedOps:
         """
         if not colours:
             raise ValueError("a conversion needs at least one colour")
+        self._refuse_tilemap_convert("snapped onto a palette")
         wanted = [tuple(c) for c in colours]
         if self.is_indexed:
             # The indexed document's version of this operation is
@@ -722,6 +723,7 @@ class IndexedOps:
         that converted only the marquee would leave the pixels outside it in a
         state the mode cannot describe.
         """
+        self._refuse_tilemap_convert("converted to indexed")
         wanted = [tuple(c) for c in (colours or self.built_palette(max_colours))]
         if not wanted:
             raise ValueError("a conversion needs at least one colour")
@@ -778,6 +780,7 @@ class IndexedOps:
         """
         if self.color_mode == "grayscale":
             return False
+        self._refuse_tilemap_convert("converted to grayscale")
         self.commit_floating()
         state = self._color_state()
         # Read before the mode is assigned, or it is always False and the planes

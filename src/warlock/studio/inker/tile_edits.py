@@ -27,10 +27,12 @@ import numpy as np
 from ..undo import Edit
 
 __all__ = [
+    "LayerSwapEdit",
     "TileRefsEdit",
     "TilesetGrowEdit",
     "TilesetListEdit",
     "TilesetPatchEdit",
+    "TrackTilesetEdit",
 ]
 
 
@@ -92,7 +94,19 @@ class TilesetGrowEdit(Edit):
         # were there before the grow are already the tileset's own, and the
         # hook rebuilds the strip by ``shrink`` rather than by any copy held
         # here.
-        doc._apply_tileset_grow(self.tileset_uid, self.added.shape[0])
+        #
+        # **Derived from the tileset as it stands, not recorded.** An undo can
+        # only run with this grow's own tiles still on the end of the strip
+        # (anything appended after it is a later step, undone first), so the
+        # count before the grow is exactly "what is there now, minus what this
+        # step added". Handing ``added.shape[0]`` straight through -- as this
+        # did -- truncated to the number of tiles *appended* instead: a
+        # one-tile Stack-mode grow onto a two-tile set undid to a *one*-tile
+        # set, silently destroying the tileset's only real tile.
+        slot = doc.tileset_slot(self.tileset_uid)
+        doc._apply_tileset_grow(
+            self.tileset_uid, int(slot.tileset.tile_count) - int(self.added.shape[0])
+        )
 
     def redo(self, doc: Any) -> None:
         doc._apply_tileset_grow(self.tileset_uid, self.added)
@@ -167,3 +181,61 @@ class TilesetListEdit(Edit):
 
     def redo(self, doc: Any) -> None:
         doc._apply_tileset_slot(self.index, self.after)
+
+
+@dataclass
+class TrackTilesetEdit(Edit):
+    """One track's ``tileset_uid``, before and after: bind or unbind.
+
+    Its own type rather than a ``TrackPropsEdit`` entry, because the binding is
+    not a display property: it decides what ``_ensure_cel_for`` autovivifies on
+    that track, which is a *structural* fact the conversions
+    (``convert_layer_to_tilemap``/``_to_raster``) fold into their compound
+    beside the cel replacements. Animated documents only -- a still document
+    has no tracks, and its tilemap layer carries ``tileset_uid`` on the cel
+    itself, which a :class:`LayerSwapEdit` moves whole.
+
+    ``None`` is "bound to nothing", both as a before and as an after.
+    """
+
+    track_uid: int
+    before: int | None
+    after: int | None
+
+    def undo(self, doc: Any) -> None:
+        doc._apply_track_tileset(self.track_uid, self.before)
+
+    def redo(self, doc: Any) -> None:
+        doc._apply_track_tileset(self.track_uid, self.after)
+
+
+@dataclass
+class LayerSwapEdit(Edit):
+    """One still document's layer replaced by another wearing the same uid.
+
+    The conversions' still-document half. A ``CelSetEdit`` cannot serve here --
+    there is no grid to set a slot of -- and add+remove cannot either: the two
+    objects share a uid, so a compound of ``LayerRemoveEdit`` and
+    ``LayerAddEdit`` would have both halves addressing the same name and would
+    depend on the order they happen to resolve in.
+
+    Both objects are *held*, ``LayerAddEdit``'s rule: the replacement is minted
+    once, at op time, so a patch recorded against it survives an undo and a
+    redo. Charged for both, since whichever is off the stack is pinned by this
+    step alone.
+    """
+
+    layer_uid: int
+    before: Any
+    after: Any
+
+    def __post_init__(self) -> None:
+        self.cost = sum(
+            int(layer.plane_bytes) for layer in (self.before, self.after) if layer is not None
+        )
+
+    def undo(self, doc: Any) -> None:
+        doc._apply_layer_swap(self.layer_uid, self.before)
+
+    def redo(self, doc: Any) -> None:
+        doc._apply_layer_swap(self.layer_uid, self.after)

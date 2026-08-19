@@ -389,6 +389,12 @@ class LayerOps:
         # rather than a merge of half of it.
         if self.write_locked(self.stack[index]) or self.write_locked(self.stack[index - 1]):
             return False
+        # Either participant again, and *before* the merge is computed: the
+        # write lands in the lower layer's ``pixels`` a dozen lines below and
+        # only then reaches ``_patch_edit_for``, whose own tilemap refusal
+        # would fire with the merge already half-applied.
+        self._refuse_tilemap_layer(self.stack[index].uid, "merging onto")
+        self._refuse_tilemap_layer(self.stack[index - 1].uid, "merging onto")
         self.commit_floating()
         # The *upper* row stops existing, so its membership goes with it and
         # may empty a group; the lower keeps its own, which is what "a merge
@@ -672,6 +678,11 @@ class LayerOps:
         width, height = self.size
         if alpha.shape[:2] != (height, width):
             return False
+        # Every distinct cel is multiplied below, so one tilemap cel anywhere in
+        # the document is enough -- and the refusal has to be here rather than
+        # at ``_patch_edit_for``, which is reached only after that cel's alpha
+        # channel has already been written.
+        self._refuse_tilemaps("matte")
         self.commit_floating()
         rect = (0, 0, width, height)
         edits: list[Any] = []

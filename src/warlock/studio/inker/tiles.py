@@ -42,10 +42,12 @@ __all__ = [
     "TilemapCel",
     "TilesetSlot",
     "blank_strip",
+    "canonical",
     "content_key",
     "grid_shape",
     "grow",
     "materialize",
+    "oriented",
     "shrink",
     "strip",
     "with_tiles",
@@ -212,6 +214,43 @@ def with_tiles(ts: Tileset, tiles: list[tuple[int, np.ndarray]]) -> Tileset:
     return replace(ts, pixels=pixels)
 
 
+def oriented(tile: np.ndarray, raw: int) -> np.ndarray:
+    """One tile turned the way a cell holding ``raw`` draws it.
+
+    Transpose-then-mirror, ``plotter/render.py``'s own order and the reason
+    the two engines agree bit-for-bit on every one of the eight square
+    symmetries. A *view* wherever numpy can give one -- :func:`materialize`
+    copies out of it into the canvas and never writes through it.
+    """
+    if raw & gid.FLIP_D:
+        tile = np.transpose(tile, (1, 0, 2))
+    if raw & gid.FLIP_H:
+        tile = tile[:, ::-1]
+    if raw & gid.FLIP_V:
+        tile = tile[::-1, :]
+    return tile
+
+
+def canonical(tile: np.ndarray, raw: int) -> np.ndarray:
+    """The exact inverse of :func:`oriented`: a drawn tile back to atlas order.
+
+    This is what makes a pixel edit on a *flipped* placement land on the
+    tileset in canonical orientation, which is the only orientation the atlas
+    stores. Each of the three flags is an involution, so the inverse of
+    "D then H then V" is the same three applied in the opposite order -- and
+    the two functions are written as a mirrored pair, next to each other,
+    because the failure mode of getting this wrong is a mirrored tile silently
+    replacing a correct one everywhere it is placed.
+    """
+    if raw & gid.FLIP_V:
+        tile = tile[::-1, :]
+    if raw & gid.FLIP_H:
+        tile = tile[:, ::-1]
+    if raw & gid.FLIP_D:
+        tile = np.transpose(tile, (1, 0, 2))
+    return tile
+
+
 def materialize(refs: np.ndarray, ts: Tileset, size: tuple[int, int]) -> np.ndarray:
     """The canvas ``refs`` and ``ts`` describe, as ``(H, W, 4)`` uint8.
 
@@ -219,10 +258,10 @@ def materialize(refs: np.ndarray, ts: Tileset, size: tuple[int, int]) -> np.ndar
     local id this tileset does not have is treated as 0 -- blank -- rather
     than raising out of the middle of a draw (a stale ref surviving a
     tileset shrink is exactly this case, and it should draw as absent tile,
-    not crash the frame). The three transform flags are applied
-    transpose-then-mirror, ``plotter/render.py``'s own order and the reason
-    the two engines agree bit-for-bit on every one of the eight square
-    symmetries. Each tile is pasted at ``(col * tile_w, row * tile_h)`` and
+    not crash the frame). The three transform flags are applied by
+    :func:`oriented`, whose exact inverse :func:`canonical` is what a pixel
+    edit on a flipped placement goes back through. Each tile is pasted at
+    ``(col * tile_w, row * tile_h)`` and
     cropped wherever that runs past the canvas edge -- the ordinary case
     whenever ``size`` is not an exact multiple of the tile size, since
     :func:`grid_shape` always rounds up.
@@ -243,13 +282,7 @@ def materialize(refs: np.ndarray, ts: Tileset, size: tuple[int, int]) -> np.ndar
             local = raw & gid.GID_MASK
             if local < 0 or local >= ts.tile_count:
                 local = 0
-            tile = ts.tile_pixels(local)
-            if raw & gid.FLIP_D:
-                tile = np.transpose(tile, (1, 0, 2))
-            if raw & gid.FLIP_H:
-                tile = tile[:, ::-1]
-            if raw & gid.FLIP_V:
-                tile = tile[::-1, :]
+            tile = oriented(ts.tile_pixels(local), raw)
             h = min(tile.shape[0], height - y0)
             w = min(tile.shape[1], width - x0)
             canvas[y0 : y0 + h, x0 : x0 + w] = tile[:h, :w]

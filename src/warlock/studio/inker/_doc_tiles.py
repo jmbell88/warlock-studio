@@ -32,11 +32,32 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from ..tilegrid import gid
 from . import composite as cp
-from .anim_edits import TrackAddEdit
+from .anim_edits import CelSetEdit, TrackAddEdit
 from .animation import Track
-from .tile_edits import TileRefsEdit, TilesetListEdit
-from .tiles import TilemapCel, TilesetSlot, grid_shape, grow, materialize, shrink, with_tiles
+from .layers import Layer
+from .tile_edits import (
+    LayerSwapEdit,
+    TileRefsEdit,
+    TilesetGrowEdit,
+    TilesetListEdit,
+    TilesetPatchEdit,
+    TrackTilesetEdit,
+)
+from .tiles import (
+    TilemapCel,
+    TilesetSlot,
+    canonical,
+    content_key,
+    grid_shape,
+    grow,
+    materialize,
+    oriented,
+    shrink,
+    strip,
+    with_tiles,
+)
 from .undo import CompoundEdit, LayerAddEdit
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -226,6 +247,380 @@ class TileOps:
         self.history.push(edit if not pending else CompoundEdit([*pending, edit]))
         return True
 
+    # -- the funnel's tilemap branch ---------------------------------------------
+
+    def _tile_hash_index(self: Document, tileset_uid: int) -> dict[bytes, int]:
+        """``content_key -> lowest local id`` for one tileset. A derived cache.
+
+        Keyed on the *identity* of the strip image, which is exactly right
+        because a tileset is edited by frozen-replace: ``grow``, ``shrink`` and
+        ``with_tiles`` all hand back a new ``Tileset`` over a new array, so a
+        changed atlas is always a changed array.
+
+        The array itself is held beside the index rather than its ``id()``,
+        which is the whole difference between this and the recycled-id bug
+        class: a freed array's address is reused, so a stamp that outlived its
+        array could answer "unchanged" for a completely different atlas. Holding
+        the array makes that impossible by construction and costs one strip per
+        tileset -- a few dozen KiB.
+
+        Never serialized, and rebuilt on demand: the lowest id wins a tie, so a
+        tileset that holds a tile twice always dedups onto the earlier one.
+        """
+        slot = self.tileset_slot(tileset_uid)
+        pixels = slot.tileset.pixels
+        hit = self._tile_hashes.get(tileset_uid)
+        if hit is not None and hit[0] is pixels:
+            return hit[1]
+        index: dict[bytes, int] = {}
+        for local in range(slot.tileset.tile_count):
+            index.setdefault(content_key(slot.tileset.tile_pixels(local)), local)
+        self._tile_hashes[tileset_uid] = (pixels, index)
+        return index
+
+    def _tile_span(
+        self: Document, layer: Any, rect: tuple[int, int, int, int], tile_w: int, tile_h: int
+    ) -> tuple[int, int, int, int] | None:
+        """The tile-unit rectangle a pixel rectangle touches, clipped to the grid."""
+        grid_h, grid_w = layer.refs.shape
+        x0, y0, x1, y1 = rect
+        tx0, ty0 = max(0, x0 // tile_w), max(0, y0 // tile_h)
+        tx1 = min(grid_w, -(-x1 // tile_w))
+        ty1 = min(grid_h, -(-y1 // tile_h))
+        if tx1 <= tx0 or ty1 <= ty0:
+            return None
+        return (tx0, ty0, tx1, ty1)
+
+    def _commit_tilemap_patch(
+        self: Document, layer: Any, rect: tuple[int, int, int, int], before: np.ndarray
+    ) -> None:
+        """Route a committed pixel write on a tilemap cel back onto its tileset.
+
+        ``_commit_patch``'s tilemap branch, and the whole of the mode handling
+        for a tilemap layer -- including on an *indexed* document, where the
+        cel carries no index plane and the strip stays RGBA (the recorded
+        divergence: a tilemap layer materializes RGBA, and an index plane over
+        a picture that is itself derived would be a third description of the
+        same pixels).
+
+        The tool has already written RGBA over ``rect``. Per touched cell, the
+        drawn tile is reconstructed -- the current atlas tile turned by the
+        placement's flags, with the *visible* part of the canvas laid over it,
+        so a partial cell at the canvas edge keeps the tile content the crop
+        never showed -- and then put back into canonical orientation by
+        :func:`~.tiles.canonical`. What happens to that content is the
+        behaviour:
+
+        * **manual** never modifies the tileset, so the write is simply
+          re-derived away and nothing is pushed. The invalidate still happens,
+          ``_commit_indexed_patch``'s no-op branch's reason: the tool's raw
+          write is on screen and has just been rolled back.
+        * **auto** edits the tile in place -- every placement of it, on every
+          frame and every layer, follows through ``_rematerialize_tileset``.
+          Two exceptions re-point instead: content that already exists
+          elsewhere in the atlas (the dedup check, first), and an edit to local
+          id 0, which is the required-blank slot and cannot be written.
+        * **stack** only ever appends: unseen content becomes a new tile and
+          the touched refs move to it; no existing tile is modified.
+
+        ``before`` is deliberately unused, ``_commit_indexed_patch``'s reason
+        one level along: the *tileset* is the record here, and each tile's
+        before-state is still sitting in the atlas at this moment because
+        nothing but this method writes one.
+
+        Two cells of one gesture that resolve to the same tile in Auto mode are
+        resolved last-writer-wins, and then reconciled: the re-materialisation
+        walk repaints every placement from the tileset, so the cel is left
+        agreeing with its refs whichever cell won.
+        """
+        slot = self.tileset_slot(layer.tileset_uid)
+        ts = slot.tileset
+        tile_w, tile_h = ts.tile_w, ts.tile_h
+        span = self._tile_span(layer, rect, tile_w, tile_h)
+        if span is None:  # pragma: no cover - defensive: a clipped rect is on-grid
+            self._discard_pending_cel()
+            return
+        tx0, ty0, tx1, ty1 = span
+        behavior = str(self.tile_behavior)
+        if behavior not in ("auto", "stack"):
+            # Manual -- and anything else the field has been set to. Never
+            # touching the tileset is the safe reading of a behaviour this
+            # method does not know, and it is the field's own default.
+            self._repaint_tiles(layer, span)
+            self._discard_pending_cel()
+            return
+        stacking = behavior == "stack"
+        width, height = layer.size
+        lookup = dict(self._tile_hash_index(layer.tileset_uid))
+        count = ts.tile_count
+        refs_before = layer.refs[ty0:ty1, tx0:tx1].copy()
+        refs_after = refs_before.copy()
+        patches: dict[int, np.ndarray] = {}
+        added: list[np.ndarray] = []
+        for ty in range(ty0, ty1):
+            for tx in range(tx0, tx1):
+                raw = int(layer.refs[ty, tx])
+                local = raw & gid.GID_MASK
+                if local >= ts.tile_count:
+                    # A stale ref draws as blank, so that is what it edits from
+                    # -- ``materialize``'s own rule, restated on the way back.
+                    local = 0
+                current = ts.tile_pixels(local)
+                drawn = oriented(current, raw).copy()
+                px, py = tx * tile_w, ty * tile_h
+                rows = min(drawn.shape[0], height - py)
+                cols = min(drawn.shape[1], width - px)
+                if rows <= 0 or cols <= 0:  # pragma: no cover - grid_shape ceils
+                    continue
+                drawn[:rows, :cols] = layer.pixels[py : py + rows, px : px + cols]
+                tile = np.ascontiguousarray(canonical(drawn, raw))
+                if np.array_equal(tile, current):
+                    continue
+                key = content_key(tile)
+                target = lookup.get(key)
+                if target is None and (stacking or local == 0):
+                    target = count
+                    count += 1
+                    added.append(tile)
+                    lookup[key] = target
+                if target is None:
+                    patches[local] = tile
+                    # The atlas entry this id answers to has moved; keep the
+                    # working index honest for the rest of the gesture.
+                    lookup.pop(content_key(current), None)
+                    lookup[key] = local
+                    continue
+                # The flags stay on. The content that matched is the *canonical*
+                # tile, so the cell still has to be turned the same way to draw
+                # what the user just painted. Local id 0 is the exception only
+                # because every orientation of blank is blank.
+                refs_after[ty - ty0, tx - tx0] = np.uint32(
+                    0 if target == 0 else target | (raw & gid.FLAG_MASK)
+                )
+        edits: list[Any] = []
+        if added:
+            edits.append(TilesetGrowEdit(slot.uid, np.stack(added, axis=0)))
+        if patches:
+            edits.append(
+                TilesetPatchEdit(
+                    slot.uid,
+                    [(lid, ts.tile_pixels(lid), tile) for lid, tile in sorted(patches.items())],
+                )
+            )
+        if not np.array_equal(refs_before, refs_after):
+            edits.append(TileRefsEdit(layer.uid, span, refs_before, refs_after))
+        if not edits:
+            # Nothing the model can record: put the raw write back and say so,
+            # exactly as manual mode does.
+            self._repaint_tiles(layer, span)
+            self._discard_pending_cel()
+            return
+        # Applied through the steps themselves rather than beside them -- the
+        # grow must land before the refs that name the appended ids, and every
+        # hook ends in the re-materialisation walk that leaves ``pixels``
+        # agreeing with ``refs`` again.
+        for edit in edits:
+            edit.redo(self)
+        pending, self._pending_cels = self._pending_cels, []
+        step: Any = (
+            edits[0] if len(edits) == 1 and not pending else CompoundEdit([*pending, *edits])
+        )
+        self.history.push(step)
+
+    # -- conversions -------------------------------------------------------------
+
+    def _track_of_row(self: Document, layer_uid: int) -> Any:
+        """The track a stack row belongs to, or ``None`` on a still document."""
+        if self.anim is None:
+            return None
+        return self.anim.tracks[self.stack.index_of(layer_uid)]
+
+    def _slots_of_track(self: Document, track: Any) -> list[tuple[Any, Any]]:
+        """``(frame, cel)`` for every frame this track actually holds a cel on.
+
+        Every *slot*, not every distinct cel: a linked cel appears in several
+        and each one has to be re-registered, or the conversion would unlink
+        the frames it replaced.
+        """
+        anim = self.anim
+        assert anim is not None
+        return [
+            (frame, anim.cels[(track.uid, frame.uid)])
+            for frame in anim.frames
+            if (track.uid, frame.uid) in anim.cels
+        ]
+
+    def convert_layer_to_tilemap(
+        self: Document, layer_uid: int, tile_w: int, tile_h: int
+    ) -> bool:
+        """Turn a raster layer into a tilemap one, cutting its own art into the
+        tileset it is then bound to.
+
+        The whole track, not the visible cel: a tilemap layer is a *track*
+        property on an animated document, so every cel of it is cut and every
+        cut dedups against the same growing atlas -- two frames drawing the same
+        16x16 chunk share one tile, which is the point of the mode. Local id 0
+        is reserved blank and every transparent cell maps onto it, so an empty
+        area of the drawing costs one ref and no tile.
+
+        Replacement cels keep their **uid** and every layer property, so a patch
+        recorded before the conversion still addresses the same row afterwards;
+        and a cel linked across frames is replaced *once* and re-registered in
+        every slot it occupied, so the link survives.
+
+        A canvas that is not a whole number of tiles across is covered by
+        ``grid_shape``'s ceil, and the partial cut is padded transparent -- the
+        materialisation crops the overhang straight back off, which is what
+        makes the round trip through :meth:`convert_layer_to_raster` bit-exact.
+
+        ``False`` rather than a raise for the three ordinary "nothing to do"
+        answers: an unknown uid, a layer that is already a tilemap, and a
+        content-locked one (``write_locked``'s door, the same refusal every
+        other write earns).
+        """
+        tile_w, tile_h = int(tile_w), int(tile_h)
+        if tile_w < 1 or tile_h < 1:
+            raise ValueError("a tile size is at least 1x1")
+        try:
+            index = self.stack.index_of(layer_uid)
+        except KeyError:
+            return False
+        if self._will_be_tilemap(layer_uid) or self.write_locked(self.stack[index]):
+            return False
+        self.commit_floating()
+        width, height = self.size
+        grid_h, grid_w = grid_shape((width, height), tile_w, tile_h)
+        track = self._track_of_row(layer_uid)
+        slots = (
+            [(None, self.stack[self.stack.index_of(layer_uid)])]
+            if track is None
+            else self._slots_of_track(track)
+        )
+        blank = np.zeros((tile_h, tile_w, 4), dtype=np.uint8)
+        tiles: list[np.ndarray] = [blank]
+        lookup: dict[bytes, int] = {content_key(blank): 0}
+        refs_for: dict[int, np.ndarray] = {}
+        for _frame, cel in slots:
+            if id(cel) in refs_for:
+                continue
+            refs = np.zeros((grid_h, grid_w), dtype=gid.DTYPE)
+            for row in range(grid_h):
+                for col in range(grid_w):
+                    cut = blank.copy()
+                    py, px = row * tile_h, col * tile_w
+                    rows, cols = min(tile_h, height - py), min(tile_w, width - px)
+                    cut[:rows, :cols] = cel.pixels[py : py + rows, px : px + cols]
+                    key = content_key(cut)
+                    local = lookup.get(key)
+                    if local is None:
+                        local = len(tiles)
+                        tiles.append(cut)
+                        lookup[key] = local
+                    refs[row, col] = local
+            refs_for[id(cel)] = refs
+        tileset = strip(np.stack(tiles, axis=0))
+        slot = TilesetSlot(tileset=tileset)
+        edits: list[Any] = [TilesetListEdit(len(self.tilesets), None, slot)]
+        if track is not None:
+            edits.append(TrackTilesetEdit(track.uid, track.tileset_uid, slot.uid))
+        replacements: dict[int, Any] = {}
+        for frame, cel in slots:
+            new = replacements.get(id(cel))
+            if new is None:
+                refs = refs_for[id(cel)]
+                new = TilemapCel(
+                    pixels=materialize(refs, tileset, (width, height)),
+                    refs=refs,
+                    tileset_uid=slot.uid,
+                    name=cel.name,
+                    opacity=cel.opacity,
+                    visible=cel.visible,
+                    blend=cel.blend,
+                    alpha_lock=cel.alpha_lock,
+                    locked=cel.locked,
+                    uid=cel.uid,
+                )
+                replacements[id(cel)] = new
+                first = True
+            else:
+                first = False
+            edits.append(
+                CelSetEdit(track.uid, frame.uid, cel, new, pinned=first)
+                if track is not None
+                else LayerSwapEdit(cel.uid, cel, new)
+            )
+        for edit in edits:
+            edit.redo(self)
+        self.history.push(CompoundEdit(edits))
+        self.invalidate_all()
+        return True
+
+    def convert_layer_to_raster(self: Document, layer_uid: int) -> bool:
+        """Turn a tilemap layer back into an ordinary one. Lossless by
+        construction: ``pixels`` is already the materialisation, so the
+        replacement copies it and there is nothing to re-render.
+
+        The tileset is *left in the document* rather than removed with the
+        layer: nothing binds it afterwards, so ``remove_tileset`` will now take
+        it, and a user converting back and forth to reach the pixel tools does
+        not lose the atlas they authored in between.
+        """
+        try:
+            index = self.stack.index_of(layer_uid)
+        except KeyError:
+            return False
+        if not self._will_be_tilemap(layer_uid) or self.write_locked(self.stack[index]):
+            return False
+        self.commit_floating()
+        track = self._track_of_row(layer_uid)
+        slots = (
+            [(None, self.stack[self.stack.index_of(layer_uid)])]
+            if track is None
+            else self._slots_of_track(track)
+        )
+        edits: list[Any] = []
+        replacements: dict[int, Any] = {}
+        for frame, cel in slots:
+            if not isinstance(cel, TilemapCel):  # pragma: no cover - defensive
+                continue
+            new = replacements.get(id(cel))
+            if new is None:
+                pixels = cel.pixels.copy()
+                new = Layer(
+                    pixels=pixels,
+                    # ``_resolved_plane``: a layer minted inside an indexed
+                    # document is born with its plane, or the save records RGBA
+                    # under a mode that promises slots. It rewrites ``pixels``
+                    # in place to the materialisation, so the two agree from
+                    # the moment the layer exists.
+                    indices=self._resolved_plane(pixels),
+                    name=cel.name,
+                    opacity=cel.opacity,
+                    visible=cel.visible,
+                    blend=cel.blend,
+                    alpha_lock=cel.alpha_lock,
+                    locked=cel.locked,
+                    uid=cel.uid,
+                )
+                replacements[id(cel)] = new
+                first = True
+            else:
+                first = False
+            edits.append(
+                CelSetEdit(track.uid, frame.uid, cel, new, pinned=first)
+                if track is not None
+                else LayerSwapEdit(cel.uid, cel, new)
+            )
+        if track is not None and track.tileset_uid is not None:
+            edits.append(TrackTilesetEdit(track.uid, track.tileset_uid, None))
+        if not edits:
+            return False
+        for edit in edits:
+            edit.redo(self)
+        self.history.push(CompoundEdit(edits))
+        self.invalidate_all()
+        return True
+
     # -- undo/redo re-entry -----------------------------------------------------
 
     def _apply_tileset_tiles(
@@ -275,6 +670,26 @@ class TileOps:
             self.tilesets.insert(index, slot)
         self.rev += 1
 
+    def _apply_track_tileset(self: Document, track_uid: int, value: int | None) -> None:
+        """Bind or unbind one track's tileset. The ``TrackTilesetEdit`` hook.
+
+        Ends in ``_anim_changed`` rather than a bare ``rev`` bump: the binding
+        is what ``_ensure_cel_for`` reads to decide a placeholder's eventual
+        type, so the current frame's view has to be rebuilt from it.
+        """
+        anim = self.anim
+        assert anim is not None
+        for track in anim.tracks:
+            if track.uid == track_uid:
+                track.tileset_uid = value
+                break
+        self._anim_changed()
+
+    def _apply_layer_swap(self: Document, layer_uid: int, layer: Any) -> None:
+        """Replace one still document's layer by uid. The ``LayerSwapEdit`` hook."""
+        self.stack.layers[self.stack.index_of(layer_uid)] = layer
+        self.invalidate_all()
+
     def _rematerialize_tileset(self: Document, tileset_uid: int) -> None:
         """THE one invalidation walk: every ``TilemapCel`` bound to this
         tileset, across every distinct cel in the document -- not the current
@@ -317,20 +732,61 @@ class TileOps:
 
     # -- geometry refusal ---------------------------------------------------
 
+    def _holds_tilemap(self: Document) -> bool:
+        """Whether anything in this document is, or would autovivify into, a
+        tilemap cel.
+
+        A track bound to a tileset counts even before any cel has been drawn on
+        it -- the structural binding is what a later autovivify would turn into
+        a ``TilemapCel``, and an op that ran before that happened would leave
+        nothing wrong *yet*, but would be one autovivify away from it.
+        """
+        layers = self.stack if self.anim is None else self.anim.unique_cel_layers()
+        if any(isinstance(layer, TilemapCel) for layer in layers):
+            return True
+        return self.anim is not None and any(
+            track.tileset_uid is not None for track in self.anim.tracks
+        )
+
     def _refuse_tilemaps(self: Document, verb: str) -> None:
         """Refuse *verb* outright when the document holds a tilemap layer.
 
         Called by every whole-canvas geometry op that has not yet been taught
-        refs-aware permutation (Chunk 3.7). A track bound to a tileset counts
-        even before any cel has been drawn on it -- the structural binding is
-        what a later autovivify would turn into a ``TilemapCel``, and a flip
-        that ran before that happened would leave nothing wrong *yet*, but
-        would be one autovivify away from it.
+        refs-aware permutation (Chunk 3.7).
         """
-        layers = self.stack if self.anim is None else self.anim.unique_cel_layers()
-        has_tilemap = any(isinstance(layer, TilemapCel) for layer in layers)
-        has_bound_track = self.anim is not None and any(
-            track.tileset_uid is not None for track in self.anim.tracks
-        )
-        if has_tilemap or has_bound_track:
+        if self._holds_tilemap():
             raise ValueError(f"a {verb} of a tilemap layer is not yet modeled")
+
+    def _refuse_tilemap_convert(self: Document, verb: str) -> None:
+        """Refuse a whole-document colour-mode conversion beside a tilemap layer.
+
+        The three that rewrite every plane -- to indexed, to grayscale, onto a
+        palette -- would leave a tilemap cel's ``pixels`` saying something its
+        ``refs`` do not, because the picture is *derived* and the tileset is
+        what a conversion would have to convert. Refused at the door and not
+        after the first plane, which is what the ``_replay`` snapshot would
+        otherwise have already half-written.
+
+        ``convert_to_rgb`` is deliberately not among them: it drops index
+        planes and rewrites no pixel, and a document that could not leave the
+        mode it was in when the layer was added would simply be wedged.
+        """
+        if self._holds_tilemap():
+            raise ValueError(
+                f"a tilemap layer cannot be {verb} with the document; "
+                "convert it to a raster layer first"
+            )
+
+    def _refuse_tilemap_layer(self: Document, layer_uid: int, verb: str) -> None:
+        """Refuse *verb* on one layer that is (or would autovivify into) a
+        tilemap cel.
+
+        The per-layer sibling of :meth:`_refuse_tilemaps`, for the ops that
+        write **one** layer's pixels and then reach ``_patch_edit_for``: merging
+        onto it, lifting or cutting out of it. Each of those writes ``pixels``
+        *before* the funnel's refusal can fire, so a guard there alone leaves a
+        half-written layer behind an exception. A document merely holding a
+        tilemap layer somewhere else is no reason to refuse any of them.
+        """
+        if self._will_be_tilemap(layer_uid):
+            raise ValueError(f"{verb} a tilemap layer is not yet modeled")
