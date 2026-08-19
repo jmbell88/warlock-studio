@@ -248,6 +248,34 @@ def test_place_tiles_autovivify_and_write_is_one_compound_step():
     _assert_synced(doc)
 
 
+def test_place_tiles_on_a_plain_tracks_placeholder_refuses_before_autovivifying():
+    """The regression this guards: on an animated document, a placeholder
+    behind a *plain* (non-tileset) track must be refused without ever
+    autovivifying a real ``Layer`` for it -- a refusal that fired only after
+    ``_ensure_cel_for`` ran would leave a materialized cel with no undo step
+    and a dangling ``CelSetEdit`` in ``_pending_cels`` that would wrongly
+    attach itself to whatever the next successful commit happened to be.
+    """
+    doc = _doc()
+    doc.ensure_animation()  # track 0 is an ordinary raster track
+    doc.add_frame()  # frame 2: track 0 is a placeholder
+    placeholder_uid = doc.stack[0].uid
+    doc.history.clear()
+
+    with pytest.raises(ValueError):
+        doc.place_tiles(placeholder_uid, (0, 0), np.array([[1]], dtype=np.uint32))
+
+    assert doc.anim.is_placeholder(doc.stack[0])
+    assert doc._pending_cels == []
+    assert not doc.history.can_undo
+
+    # A subsequent legitimate op still pushes exactly one step -- nothing
+    # orphaned by the refusal rides along with it.
+    doc.add_layer(name="Fresh")
+    assert len(doc.history) == 1
+    assert not isinstance(doc.history.top, CompoundEdit)
+
+
 def test_place_tiles_after_reordering_the_stack_still_lands_by_uid():
     doc = _doc()
     slot, cel = _still_tilemap(doc, RED)

@@ -142,6 +142,39 @@ class TileOps:
         self._push_with_inheritance(LayerAddEdit(index, cel), parent)
         return cel
 
+    def _will_be_tilemap(self: Document, layer_uid: int) -> bool:
+        """Whether *layer_uid* already is, or would autovivify into, a
+        ``TilemapCel`` -- decided without materializing anything.
+
+        The funnel discipline every sibling door follows: validate first,
+        autovivify second. On an animated document a placeholder's eventual
+        type is a property of the *track* underneath it (``tileset_uid`` set
+        or not), which ``_ensure_cel_for`` already reads without needing a
+        real cel to exist first -- so this asks the same question the same
+        way, rather than calling ``_ensure_cel_for`` to find out and having to
+        undo the autovivify on a refusal.
+        """
+        if self.anim is None:
+            try:
+                return isinstance(self.stack.by_uid(layer_uid), TilemapCel)
+            except KeyError:
+                return False
+        try:
+            index = self.stack.index_of(layer_uid)
+        except KeyError:
+            # Not on the current frame at all -- an off-frame cel, addressed
+            # the way undo re-entry does. ``_ensure_cel_for`` never touches
+            # this case either (it only acts on the current stack), so the
+            # type check alone is the whole answer.
+            try:
+                return isinstance(self.layer_by_uid(layer_uid), TilemapCel)
+            except KeyError:
+                return False
+        existing = self.stack[index]
+        if not self.anim.is_placeholder(existing):
+            return isinstance(existing, TilemapCel)
+        return index < len(self.anim.tracks) and self.anim.tracks[index].tileset_uid is not None
+
     def place_tiles(
         self: Document, layer_uid: int, origin: tuple[int, int], patch: np.ndarray
     ) -> bool:
@@ -151,19 +184,26 @@ class TileOps:
 
         ``origin`` is ``(tx, ty)`` in *tile* units; ``patch`` is a 2-D uint32
         refs plane, clipped to the cel's grid wherever it runs past an edge.
-        Autovivifies the cel first (``_ensure_cel_for``), exactly as a stroke
-        does, so drawing tiles on an empty frame is legal. A write that lands
-        entirely off-grid or changes nothing pushes no step and discards the
-        cel it may have just autovivified -- the funnel's own no-op rule,
-        applied to refs instead of pixels.
+        Both validations below run **before** ``_ensure_cel_for`` -- a plain
+        track's placeholder must be refused without ever materializing a
+        ``Layer`` for it, or the refusal would leave a real cel behind with no
+        undo step to take it back out, and a ``CelSetEdit`` sitting orphaned
+        in ``_pending_cels`` ready to attach itself to whatever the *next*
+        successful write happens to be. Once both checks pass, the cel is
+        autovivified exactly as a stroke's is, so drawing tiles on an empty
+        frame is legal; a write that then lands entirely off-grid or changes
+        nothing pushes no step and discards the cel it just autovivified --
+        the funnel's own no-op rule, applied to refs instead of pixels.
         """
-        self._ensure_cel_for(layer_uid)
-        layer = self.layer_by_uid(layer_uid)
-        if not isinstance(layer, TilemapCel):
+        if not self._will_be_tilemap(layer_uid):
             raise ValueError("place_tiles targets a tilemap layer")
         patch = np.asarray(patch, dtype=np.uint32)
         if patch.ndim != 2:
             raise ValueError("a tile patch is a 2-D refs plane")
+        self._ensure_cel_for(layer_uid)
+        layer = self.layer_by_uid(layer_uid)
+        if not isinstance(layer, TilemapCel):  # pragma: no cover - defensive
+            raise ValueError("place_tiles targets a tilemap layer")
         tx, ty = int(origin[0]), int(origin[1])
         grid_h, grid_w = layer.refs.shape
         x0, y0 = max(0, tx), max(0, ty)
