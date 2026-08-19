@@ -44,6 +44,7 @@ from .animation import (
     Tag,
     Track,
 )
+from .aseout import aseprite_bytes, write_aseprite
 from .brush import (
     DEFAULT_SPACING,
     MAX_BRUSH,
@@ -129,6 +130,7 @@ __all__ = [
     "UNDO_MAX_DEPTH",
     "UNDO_MIN_DEPTH",
     "UndoStack",
+    "aseprite_bytes",
     "clamp_brush",
     "magic_wand",
     "make_stamp",
@@ -137,6 +139,7 @@ __all__ = [
     "ora_bytes",
     "read_ora",
     "shade_ramp",
+    "write_aseprite",
     "write_ora",
     "PATH_SHAPES",
     "catmull_rom",

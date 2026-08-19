@@ -804,7 +804,7 @@ is the citable list.
 
 ---
 
-## Wave 4 — Production sprite-sheet export (P0 item 6) — **DONE 2026-08-19** (ten commits, `57d347a..e4c3785`)
+## Wave 4 — Production sprite-sheet export (P0 item 6) — **DONE 2026-08-19** (ten commits, `57d347a..c0dc334`)
 
 Two tracks: Inker's own exporter grows the Aseprite-parity options; Packwright grows
 the atlas-grade options; the existing "send frames to Packwright" bridge remains the

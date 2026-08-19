@@ -225,6 +225,7 @@ def test_the_package_imports_with_no_optional_dependency_present():
         anim_edits,
         animation,
         asein,
+        aseout,
         brush,
         composite,
         dither,
