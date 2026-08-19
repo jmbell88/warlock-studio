@@ -85,6 +85,59 @@ def test_re_applying_the_same_settings_pushes_nothing():
     assert doc.history.head == head
 
 
+# --- power-of-two re-baselines on a bare mode switch ------------------------
+
+
+def test_a_mode_switch_alone_re_resolves_power_of_two_to_the_new_modes_default():
+    doc = PackDoc()
+    assert doc.settings.mode == "grid" and doc.settings.power_of_two is False
+    doc.set_settings(mode="maxrects")
+    assert doc.settings.power_of_two is True
+
+
+def test_switching_back_to_grid_re_resolves_to_false():
+    doc = PackDoc()
+    doc.set_settings(mode="maxrects")
+    assert doc.settings.power_of_two is True
+    doc.set_settings(mode="grid")
+    assert doc.settings.power_of_two is False
+
+
+def test_an_explicit_power_of_two_in_the_same_call_as_a_mode_change_wins():
+    """The re-baseline only fires when the caller left ``power_of_two``
+    unsaid -- naming it in the same call is exactly as authoritative as it
+    always was."""
+    doc = PackDoc()
+    doc.set_settings(mode="maxrects", power_of_two=False)
+    assert doc.settings.power_of_two is False
+
+
+def test_a_toggle_after_a_mode_switch_still_sticks():
+    """The re-baseline is a one-time reset at the moment of the switch, not
+    a standing rule that fights every edit after it."""
+    doc = PackDoc()
+    doc.set_settings(mode="maxrects")
+    assert doc.settings.power_of_two is True
+    doc.set_settings(power_of_two=False)
+    assert doc.settings.power_of_two is False
+    # And a second, unrelated settings edit does not re-baseline it again --
+    # only a change to ``mode`` itself does.
+    doc.set_settings(padding=6)
+    assert doc.settings.power_of_two is False
+
+
+def test_a_mode_no_op_does_not_re_baseline_power_of_two():
+    """Passing the *current* mode is not a switch -- ``set_settings``
+    already pushes nothing for a no-op edit, and a stray re-baseline would
+    have made this one look like a change when it is not."""
+    doc = PackDoc()
+    doc.set_settings(power_of_two=True)
+    head = doc.history.head
+    doc.set_settings(mode="grid")  # already grid
+    assert doc.settings.power_of_two is True
+    assert doc.history.head == head
+
+
 def test_dirty_is_a_comparison_and_undo_can_clear_it():
     doc = PackDoc()
     doc.add_source(_sprite("s0"))

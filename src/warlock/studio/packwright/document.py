@@ -252,6 +252,33 @@ class PackDoc:
         self._apply_name(uid, after)
 
     def set_settings(self, **values: Any) -> None:
+        """Apply a settings change, with one adjustment: a mode change that
+        does not also name ``power_of_two`` re-baselines it to the new
+        mode's default rather than carrying the old mode's resolved value
+        across.
+
+        ``PackSettings.power_of_two``'s ``None`` sentinel only resolves in
+        ``__post_init__``, at construction -- and by the time a document
+        holds a settings object, the field is already a concrete bool.
+        ``dataclasses.replace`` copies that concrete value onto the new mode
+        verbatim, which is how a grid pack's resolved ``False`` used to
+        survive a switch to MaxRects and contradict MaxRects's own
+        documented ``True`` default. Passing ``None`` back through
+        ``replace`` re-triggers the resolution the same way a fresh
+        ``PackSettings()`` does. This does drop an earlier explicit choice
+        across the switch -- the honest outcome, since the settings pane's
+        checkbox only ever shows the *resolved* value and there is nothing
+        left to say "the user picked this one on purpose" once ``__post_init__``
+        has already turned it into a plain bool. An explicit ``power_of_two``
+        passed in the *same* call always wins; this only fires when the
+        caller left it unsaid.
+        """
+        if (
+            "mode" in values
+            and values["mode"] != self.settings.mode
+            and "power_of_two" not in values
+        ):
+            values = {**values, "power_of_two": None}
         after = replace(self.settings, **values)
         if after == self.settings:
             return

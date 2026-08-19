@@ -90,7 +90,12 @@ class PackSettings:
     #: because its whole atlas is used corner to corner and pow2 is what an
     #: engine loading it into a non-addressed texture slot usually still
     #: wants. Passing an explicit ``True``/``False`` always wins -- this is a
-    #: default, not a per-mode override that fights the user.
+    #: default, not a per-mode override that fights the user. The sentinel
+    #: only resolves *once*, at construction: once a document holds a
+    #: settings object the field is a plain bool, and ``dataclasses.replace``
+    #: would otherwise carry a grid pack's resolved ``False`` straight onto
+    #: a MaxRects switch. ``document.py::set_settings`` is what re-arms the
+    #: sentinel on a bare mode change -- see it for the mode-switch case.
     power_of_two: bool | None = None
     #: Trailing and defaulted, so an older ``.wpack`` -- or a caller that never
     #: heard of it -- keeps auto behaviour. Grid mode only: a MaxRects pack has
