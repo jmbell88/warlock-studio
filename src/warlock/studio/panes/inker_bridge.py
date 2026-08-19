@@ -254,6 +254,7 @@ def _canvas_ops(ctx: Any, tab: Any) -> None:
     if controls.button("Rotate"):
         doc.rotate90()
     if controls.button("Resize..."):
+        _measure_pixel_grid(ctx, tab)
         imgui.open_popup("inker-resize")
     imgui.same_line()
     if controls.button("Fit view"):
@@ -281,6 +282,46 @@ def _canvas_ops(ctx: Any, tab: Any) -> None:
     # popup already open when a save starts would otherwise still fire them.
     _resize_popup(ctx, tab)
     _filter_popup(ctx, tab)
+
+
+def _measure_pixel_grid(ctx: Any, tab: Any) -> None:
+    """Measure the document's pixel lattice, once, as the Resize popup opens.
+
+    **Once, and not per frame.** The measurement is a gradient sweep over the
+    whole flattened document at every candidate scale; on a 2048-square drawing
+    that is a frame-thread stall, and the answer cannot change while a modal
+    popup owns the frame. Parked in ``ctx.state.preview`` beside the popup's own
+    ``inker_resize:`` entry, keyed the same way.
+    """
+    key = f"inker_grid:{tab.uid}"
+    try:
+        found = transform.detect_pixel_grid(tab.doc.flatten(matte=False))
+    except ValueError:
+        found = {"scale": None}
+    ctx.state.preview[key] = found
+
+
+def _descale_row(ctx: Any, tab: Any) -> bool:
+    """The detected-lattice line and its button, or nothing at all.
+
+    Nothing at all is the common case and the important one: an ordinary
+    drawing has no lattice, and the popup must then be exactly what it was
+    before this existed. Never applied silently -- the same rule the tilesheet
+    detector follows at the import doors.
+    """
+    found = ctx.state.preview.get(f"inker_grid:{tab.uid}") or {}
+    scale = found.get("scale")
+    if not scale:
+        return False
+    width, height = transform.descale_size(tab.doc.size, scale, found["phase"])
+    if not width or not height:
+        return False
+    widgets.muted(f"Detected a {scale} px pixel grid - true size {width} x {height}")
+    if controls.button("Descale", (sp(180), 0)):
+        tab.doc.descale_to_grid(scale, found["phase"])
+        tab.view.fitted = False
+        return True
+    return False
 
 
 def _resize_popup(ctx: Any, tab: Any) -> None:
@@ -320,6 +361,8 @@ def _resize_popup(ctx: Any, tab: Any) -> None:
     if controls.button("Resize canvas", (sp(180), 0)):
         tab.doc.resize_canvas((max(1, width), max(1, height)), anchor=anchor)
         tab.view.fitted = False
+        imgui.close_current_popup()
+    if _descale_row(ctx, tab):
         imgui.close_current_popup()
     imgui.end_disabled()
     imgui.end_popup()

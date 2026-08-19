@@ -674,6 +674,13 @@ finer lattice. Nothing is interpolated at any stage. It only affects turning, so
 it behaves as Nearest, and above roughly 512×512 pixels a rotate falls back to Nearest and says so,
 because the eight-times upscale costs sixty-four times the memory on every frame of a drag.
 
+When the drawing you opened is really a small picture blown up — an AI render at 1024² whose art
+is 64² — the popup notices and says so: *Detected an 8 px pixel grid — true size 128 × 128*, with
+a **Descale** button that takes one pixel from the centre of each cell. That is not the same as
+scaling down by nearest: this measures the *phase* the lattice was drawn on, so the reduction is
+exact and no authored pixel comes back as its neighbour's edge. An ordinary drawing detects
+nothing and the popup is exactly as it was.
+
 The 3×3 **anchor** grid says where the old image sits in the new canvas, and it belongs to Resize
 canvas only: scaling has no slack to put anywhere. Growing a canvas anchored centre adds room on
 all four sides; anchored top-left it adds room right and below, which is what the button did before

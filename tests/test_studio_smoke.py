@@ -4371,3 +4371,43 @@ def test_a_frame_without_the_sheet_popup_drops_the_pixels(app_ctx, imgui_ctx):
     _drawn_labels(imgui, lambda: plotter_tileset.draw(app_ctx), "##sheet-gone")
     assert state.sheet_import is None
     assert state.sheet_import_open is False
+
+
+def test_the_resize_popup_shows_a_detected_pixel_grid(app_ctx):
+    """An SDXL "pixel art" render at 1024 squared whose real art is 64 squared
+    is the commonest AI artefact after a ragged tilesheet, and the measurement
+    already existed on the export path -- this is the editor reaching it."""
+    import numpy as np
+
+    from warlock.studio import inker_mode
+    from warlock.studio.inker.document import Document as _Doc
+    from warlock.studio.panes import inker_bridge
+
+    rng = np.random.default_rng(5)
+    palette = np.array(
+        [[20, 20, 30], [200, 60, 40], [40, 160, 90], [230, 220, 190]], dtype=np.uint8
+    )
+    cells = np.zeros((12, 12, 4), dtype=np.uint8)
+    cells[..., :3] = palette[rng.integers(0, len(palette), (12, 12))]
+    cells[..., 3] = 255
+    art = np.repeat(np.repeat(cells, 8, axis=0), 8, axis=1)
+
+    state = inker_mode.ensure(app_ctx)
+    tab = inker_mode._adopt(app_ctx, state, _Doc.blank(96, 96), path=None, title="render")
+    tab.doc.stack.active.pixels[:] = art
+    tab.doc.invalidate_all()
+
+    inker_bridge._measure_pixel_grid(app_ctx, tab)
+    found = app_ctx.state.preview[f"inker_grid:{tab.uid}"]
+    assert found["scale"] == 8, found
+
+    # And an ordinary drawing measures nothing, so the popup is unchanged for it.
+    plain = inker_mode._adopt(
+        app_ctx, state, _Doc.blank(96, 96), path=None, title="plain"
+    )
+    ramp = np.linspace(0, 255, 96).astype(np.uint8)
+    plain.doc.stack.active.pixels[..., :3] = ramp[None, :, None]
+    plain.doc.stack.active.pixels[..., 3] = 255
+    plain.doc.invalidate_all()
+    inker_bridge._measure_pixel_grid(app_ctx, plain)
+    assert app_ctx.state.preview[f"inker_grid:{plain.uid}"]["scale"] is None

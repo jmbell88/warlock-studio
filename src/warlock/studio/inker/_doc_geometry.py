@@ -79,6 +79,36 @@ class GeometryOps:
 
         self._replay(run)
 
+    def descale_to_grid(self: Document, scale: int, phase: tuple[int, int]) -> None:
+        """Reduce the document onto its own pixel lattice, one pixel per cell.
+
+        The remedy for an SDXL "pixel art" render at 1024 squared whose real art
+        is 64 squared. A plain smooth scale to that size gives a small
+        photograph of pixel art; a nearest scale ignores the *phase* and samples
+        wherever the arithmetic happens to land, so half the authored pixels
+        come back as their neighbours' edges. This samples each cell's centre on
+        the measured lattice, which is what makes it exact.
+
+        Shaped like :meth:`scale` and for the same reason: one selection applies
+        to the pixels, the index planes and the mask alike, because the sampling
+        is pure element selection and knows nothing about what a plane means.
+        One undo step.
+        """
+        self._refuse_tilemaps("descale")
+        size = tf.descale_size(self.size, scale, phase)
+        if not size[0] or not size[1]:
+            raise ValueError("that grid leaves no cells in this document")
+        self.commit_floating()
+
+        def run() -> None:
+            self._slices_scale(size)
+            self._map_planes(
+                lambda plane: tf.descale(plane, scale, phase),
+                index_fn=lambda plane: tf.descale(plane, scale, phase),
+            )
+
+        self._replay(run)
+
     def crop(self: Document, rect: tuple[int, int, int, int]) -> bool:
         self._refuse_tilemaps("crop")
         box = self.clip(rect)

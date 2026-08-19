@@ -1,4 +1,4 @@
-"""Whole-plane geometry: flip, rotate, scale, crop, canvas resize.
+"""Whole-plane geometry: flip, rotate, scale, crop, canvas resize, descale.
 
 Pure array functions, one plane at a time. The document applies each of them to
 every layer and to the selection mask, which is the only way the three can
@@ -9,6 +9,23 @@ filter on straight alpha bleeds the colour of fully transparent pixels into the
 edge. Every function here that resamples premultiplies first and unpremultiplies
 after -- the one place in the codebase that touches premultiplied alpha, and it
 is confined to these few lines.
+
+**The descale trio at the foot of this file is a fourth grid measurement in the
+tree, and the four must not be merged.** They ask different questions at
+different doors:
+
+* :mod:`warlock.pipelines.pixel` -- the luma *lattice* period and phase of an
+  upscaled render, PIL, on the export path. This is a numpy port of exactly that
+  measure, sharing its constants and its provisional threshold.
+* :func:`detect_pixel_grid` here -- the same lattice measure, inside the editor,
+  on the open document, offered as a button rather than applied on export.
+* :mod:`warlock.studio.tilegrid.slicing` -- dark separator *bands* between the
+  cells of a ruled tilesheet, at the import doors.
+* :mod:`warlock.studio.tilegrid.roles` -- which blob role each cell of an
+  already-gridded sheet plays.
+
+A future reader who sees "grid detection" in two of them should read this list
+before unifying anything.
 """
 
 from __future__ import annotations
@@ -640,3 +657,172 @@ def map_rect(
     a = point(float(rect[0]), float(rect[1]))
     b = point(float(rect[2]), float(rect[3]))
     return clamp_rect(rect_from_points(a, b), box)
+
+
+# --------------------------------------------------------------------------
+# The pixel lattice: measuring it, and reducing onto it
+# --------------------------------------------------------------------------
+#
+# Copied verbatim from ``pipelines/pixel.py``, which owns the same three
+# constants and the measurement they parametrize. A copy rather than an import
+# because this package is headless and pinned against reaching into
+# ``pipelines`` (which imports PIL at module scope); the numbers are identical
+# so the two detectors give one answer on one image.
+
+#: Cell sizes a generator plausibly draws on a 1024 canvas. Integers only: a
+#: fractional period would need sub-pixel resampling to reduce, which is exactly
+#: the blending a descale exists to avoid.
+GRID_SCALES: tuple[int, ...] = (4, 5, 6, 8, 10, 12, 16)
+
+#: Normalized within-cell gradient ratio below which the lattice is real.
+#: **Provisional** in the sibling too, and governed by the same document:
+#: ``docs/measurements/2026-08-06-pixel-art-xl.md`` (procedure pre-registered).
+#: Copying it to a second surface moves nothing -- one document governs both.
+GRID_RESIDUAL_MAX = 0.05
+
+#: Below this a "grid" is a handful of cells and the statistic is noise.
+_MIN_CELLS = 4
+
+#: Rec. 601 luma coefficients, deliberately **not** :func:`dither.luma`, which
+#: is Rec. 709 and a per-colour helper. The sibling detector uses these, and two
+#: lattice detectors that disagreed about brightness would disagree about the
+#: phase of the same image.
+_GRID_LUMA = np.array([0.299, 0.587, 0.114], dtype=np.float64)
+
+
+def _grid_luma(pixels: np.ndarray) -> np.ndarray:
+    return np.asarray(pixels, dtype=np.float64)[:, :, :3] @ _GRID_LUMA
+
+
+def _axis_phase(luma: np.ndarray, scale: int, axis: int) -> int:
+    """Where the cell boundaries sit along one axis.
+
+    A block lattice puts all of its change *at* the boundaries, so the mean
+    absolute gradient summed by position-modulo-period peaks at the boundary
+    offset. One argmax rather than a search over reconstructions.
+    """
+    grad = np.abs(np.diff(luma, axis=axis)).mean(axis=1 - axis)
+    if not grad.size:
+        return 0
+    # ``grad[i]`` is the change between index i and i+1, i.e. a boundary
+    # *before* index i+1; the phase is where a cell starts.
+    positions = np.arange(grad.size) % scale
+    totals = np.bincount(positions, weights=grad, minlength=scale)
+    return int((int(np.argmax(totals)) + 1) % scale)
+
+
+def grid_residual(pixels: np.ndarray, scale: int, phase: tuple[int, int]) -> float:
+    """How much of this image's change happens *between* cells, not inside them.
+
+    Mean absolute gradient at non-boundary positions over the mean absolute
+    gradient everywhere -- the same ratio shape ``seam.py`` uses, and for the
+    same reason: an absolute number of levels means nothing without the
+    picture's own contrast to divide by. A block lattice scores 0.0; a smooth
+    gradient scores about 1.0, because a gradient changes as much mid-cell as it
+    does at a boundary. Comparing within-cell variance to total variance instead
+    would call every smooth image a grid, since a small patch of a gradient is
+    always flatter than the whole frame.
+
+    **The worse of the two axes decides.** A lattice holds in both directions;
+    an image with horizontal banding and nothing vertical is not pixel art.
+    """
+    luma = _grid_luma(pixels)
+    py, px = phase
+    if min(luma.shape) < scale * _MIN_CELLS:
+        return 1.0
+
+    def axis_ratio(plane: np.ndarray, offset: int) -> float:
+        grad = np.abs(np.diff(plane, axis=1))
+        if not grad.size:
+            return 1.0
+        positions = np.arange(grad.shape[1])
+        boundary = ((positions + 1 - offset) % scale) == 0
+        total = float(grad.mean())
+        if total <= 0.0:
+            # Nothing changes anywhere: a flat image is not evidence of a
+            # lattice, however trivially constant each of its cells is.
+            return 1.0
+        interior = grad[:, ~boundary]
+        return float(interior.mean()) / total if interior.size else 1.0
+
+    return max(axis_ratio(luma, px), axis_ratio(luma.T, py))
+
+
+def detect_pixel_grid(pixels: np.ndarray) -> dict:
+    """The cell size and phase this drawing was made on, if any.
+
+    Measured on the whole plane and on luminance: the lattice is a property of
+    the generation, not of the subject, and a crop would move the phase before
+    it was ever measured. ``scale`` is ``None`` when nothing beats
+    :data:`GRID_RESIDUAL_MAX` -- an ordinary drawing, which is the common case
+    and must see no change at all.
+    """
+    array = np.asarray(pixels)
+    if array.ndim != 3 or array.shape[2] not in (3, 4):
+        raise ValueError("detect_pixel_grid takes (H, W, 3|4)")
+    luma = _grid_luma(array)
+    measured: list[tuple[int, tuple[int, int], float]] = []
+    for scale in GRID_SCALES:
+        if min(luma.shape) < scale * _MIN_CELLS:
+            continue
+        phase = (_axis_phase(luma, scale, 0), _axis_phase(luma, scale, 1))
+        measured.append((scale, phase, grid_residual(array, scale, phase)))
+    if not measured:
+        return {"scale": None, "phase": (0, 0), "residual": 1.0, "candidate": None}
+    passing = [m for m in measured if m[2] < GRID_RESIDUAL_MAX]
+    # The *largest* passing scale, not the best-scoring one. Every divisor of a
+    # true period passes just as cleanly -- an image of 8px blocks is trivially
+    # also an image of 4px blocks -- and taking the smallest would halve the
+    # size of every authored pixel.
+    scale, phase, residual = (
+        max(passing, key=lambda m: m[0]) if passing else min(measured, key=lambda m: m[2])
+    )
+    return {
+        "scale": scale if passing else None,
+        "phase": phase,
+        "residual": float(residual),
+        "candidate": scale,
+    }
+
+
+def descale_size(
+    size: tuple[int, int], scale: int, phase: tuple[int, int]
+) -> tuple[int, int]:
+    """The ``(width, height)`` :func:`descale` will produce, without doing it.
+
+    The document needs it to move its slices before the planes are touched, and
+    deriving it from the same ``arange`` the sampler uses is what keeps the two
+    from disagreeing by one cell at the edge.
+    """
+    width, height = int(size[0]), int(size[1])
+    scale = int(scale)
+    if scale < 2:
+        raise ValueError("a descale reduces by at least two")
+    ys = np.arange(int(phase[0]) + scale // 2, height, scale)
+    xs = np.arange(int(phase[1]) + scale // 2, width, scale)
+    return int(xs.size), int(ys.size)
+
+
+def descale(pixels: np.ndarray, scale: int, phase: tuple[int, int]) -> np.ndarray:
+    """One output pixel per lattice cell, sampled at the cell's centre.
+
+    The centre and not a corner: a corner sample sits on the boundary the
+    generator drew, where a half-pixel of the neighbouring cell routinely
+    bleeds. Whole-plane, because the phase is only meaningful against the plane
+    the lattice was drawn on.
+
+    Pure element *selection* -- ``arr[np.ix_(ys, xs)]``, no arithmetic anywhere
+    -- so it can never mint a colour that was not already there, and it is
+    exact on an index plane by construction rather than by a special case.
+    """
+    array = np.asarray(pixels)
+    scale = int(scale)
+    if scale < 2:
+        raise ValueError("a descale reduces by at least two")
+    py, px = int(phase[0]), int(phase[1])
+    height, width = array.shape[:2]
+    ys = np.arange(py + scale // 2, height, scale)
+    xs = np.arange(px + scale // 2, width, scale)
+    if not ys.size or not xs.size:
+        raise ValueError("that grid leaves no cells in this image")
+    return np.ascontiguousarray(array[np.ix_(ys, xs)])
