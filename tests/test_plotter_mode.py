@@ -2416,3 +2416,120 @@ def test_the_alternate_button_matches_todays_blind_slice(tmp_path, monkeypatch):
     ref = tab.doc.tilesets[0]
     assert np.array_equal(np.asarray(ref.tileset.pixels), sheet)
     assert ref.tileset.tile_w == 16
+
+
+# --- terrain-set inference (Part F) --------------------------------------------
+
+
+def _blob_sheet(tile: int = 16, cols: int = 47) -> np.ndarray:
+    """A 47-case blob sheet, drawn from ``blob`` itself.
+
+    Derived rather than typed for ``tests/tilegrid/test_roles.py``'s reason: the
+    fixture and the analyzer then agree about what a role looks like by
+    construction.
+    """
+    from warlock.studio.tilegrid import blob
+
+    depth = max(1, tile // 8) + 1
+    rows = -(-blob.TILE_COUNT // cols)
+    out = np.zeros((rows * tile, cols * tile, 4), dtype=np.uint8)
+    for case in range(blob.TILE_COUNT):
+        y, x = (case // cols) * tile, (case % cols) * tile
+        cell = out[y:y + tile, x:x + tile]
+        cell[:, :] = (60, 140, 70, 255)
+        north, east, south, west = blob.open_edges(case)
+        if north:
+            cell[:depth, :] = 0
+        if south:
+            cell[tile - depth:, :] = 0
+        if west:
+            cell[:, :depth] = 0
+        if east:
+            cell[:, tile - depth:] = 0
+        ne, se, sw, nw = blob.open_corners(case)
+        if ne:
+            cell[:depth, tile - depth:] = 0
+        if se:
+            cell[tile - depth:, tile - depth:] = 0
+        if sw:
+            cell[tile - depth:, :depth] = 0
+        if nw:
+            cell[:depth, :depth] = 0
+    return out
+
+
+def test_a_blob_sheet_parks_as_a_terrain_set(tmp_path):
+    ctx = FakeCtx()
+    tab = _tab(ctx, tileset=False)
+    png = _save_png(tmp_path / "blob.png", _blob_sheet())
+
+    plotter_mode.add_tileset_path(ctx, png)
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+
+    state = plotter_mode.ensure(ctx)
+    assert state.sheet_import is not None
+    parked = state.sheet_import[4]
+    assert isinstance(parked, plotter_mode.SheetTerrain)
+    assert parked.tile == (16, 16)
+    assert parked.roles.tile_count == 47
+    assert len(tab.doc.tilesets) == 0
+
+
+def test_importing_a_terrain_set_reorders_and_enables_painting(tmp_path):
+    from warlock.studio.plotter import terrain as terrainlib
+
+    ctx = FakeCtx()
+    tab = _tab(ctx, tileset=False)
+    png = _save_png(tmp_path / "blob.png", _blob_sheet())
+    plotter_mode.add_tileset_path(ctx, png)
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+
+    assert plotter_mode.import_sheet_terrain(ctx) is True
+
+    ref = tab.doc.tilesets[0]
+    assert len(ref.tileset.terrains) == 1
+    # The reorder *is* the role assignment: 47 columns, one row.
+    assert ref.tileset.columns == 47
+    assert ref.tileset.rows == 1
+    # A reordered atlas no longer matches any file.
+    assert ref.source == ""
+    # And the palette has it in hand, which is what the terrain hand-off does.
+    state = plotter_mode.ensure(ctx)
+    assert state.terrain == (0, 0)
+
+    layer = tab.doc.tile_layers()[0]
+    region = terrainlib.paint_terrain(layer.data, 1, 1, 0, ref)
+    assert region is not None, "the imported set can actually be painted with"
+    x0, y0, block = region
+    tab.doc.write_region(layer.uid, x0, y0, block)
+    assert int(tab.doc.tile_layers()[0].data[1, 1]) != 0
+
+
+def test_the_plain_button_slices_the_terrain_sheet_as_ordinary_tiles(tmp_path):
+    ctx = FakeCtx()
+    tab = _tab(ctx, tileset=False)
+    sheet = _blob_sheet()
+    png = _save_png(tmp_path / "blob.png", sheet)
+    plotter_mode.add_tileset_path(ctx, png)
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+
+    assert plotter_mode.import_sheet_blind(ctx) is True
+
+    ref = tab.doc.tilesets[0]
+    assert ref.tileset.terrains == ()
+    assert np.array_equal(np.asarray(ref.tileset.pixels), sheet)
+    assert ref.source == str(png)
+
+
+def test_a_sheet_with_too_few_cells_never_parks_as_terrain(tmp_path):
+    ctx = FakeCtx()
+    tab = _tab(ctx, tileset=False)
+    small = _blob_sheet()[:, : 20 * 16]
+    png = _save_png(tmp_path / "few.png", small)
+
+    plotter_mode.add_tileset_path(ctx, png)
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+
+    assert plotter_mode.ensure(ctx).sheet_import is None
+    assert len(tab.doc.tilesets) == 1
+    assert tab.doc.tilesets[0].tileset.terrains == ()

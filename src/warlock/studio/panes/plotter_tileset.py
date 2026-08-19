@@ -58,6 +58,35 @@ def _sheet_popup(ctx: Any, state: Any, tab: Any) -> None:
     height, width = pixels.shape[:2]
     doc = tab.doc
     widgets.muted(f"{name} - {width} x {height}")
+    if isinstance(grid, plotter_mode.SheetTerrain):
+        # The third variant. "Import as plain tiles" is the false-positive
+        # mitigation here, exactly as the blind slice is for a dark sheet: a
+        # sprite set whose cells happen to cover all 47 silhouettes is a
+        # coincidence only the user can rule out.
+        imgui.text(
+            f"These {grid.roles.tile_count} tiles look like a complete "
+            f"47-case terrain set."
+        )
+        widgets.muted_wrapped(
+            "Import reorders them into the canonical blob layout and turns on "
+            "terrain painting for this tileset."
+        )
+        imgui.dummy((0, 4))
+        if controls.button("Import as terrain set", (sp(170), 0)) and (
+            plotter_mode.import_sheet_terrain(ctx)
+        ):
+            imgui.close_current_popup()
+        imgui.same_line()
+        if controls.button("Import as plain tiles##sheet-plain", (sp(170), 0)) and (
+            plotter_mode.import_sheet_blind(ctx)
+        ):
+            imgui.close_current_popup()
+        imgui.same_line()
+        if controls.button("Cancel##sheet", (sp(90), 0)):
+            plotter_mode.clear_sheet_import(ctx)
+            imgui.close_current_popup()
+        imgui.end_popup()
+        return
     if isinstance(grid, plotter_mode.SheetMismatch):
         # The second variant: no rules were found, but the sheet's own sidecar
         # records a cell size the map does not share. A blind slice here cuts

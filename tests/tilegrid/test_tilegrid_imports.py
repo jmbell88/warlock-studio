@@ -70,6 +70,7 @@ def test_the_public_names_are_present() -> None:
         "gid",
         "repolish",
         "rgba_colour",
+        "roles",
         "slicing",
     ):
         assert hasattr(tilegrid, name), name

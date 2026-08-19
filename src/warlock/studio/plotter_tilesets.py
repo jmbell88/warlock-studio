@@ -114,6 +114,39 @@ class SheetMismatch:
     tile_h: int
 
 
+@dataclass(frozen=True)
+class SheetTerrain:
+    """A sheet whose cells look like a complete 47-case blob terrain set.
+
+    ``roles`` is the inference; ``tile`` is the cell size the grid was read on,
+    which the import needs and the popup says out loud. Parked rather than
+    applied for :class:`SheetMismatch`'s reason and one more: a silhouette
+    coincidence -- a sprite sheet whose cells happen to cover every blob case --
+    would otherwise be reordered into a terrain set nobody asked for.
+    """
+
+    tile: tuple[int, int]
+    roles: Any
+
+
+def _terrain_from(pixels: Any, tile_w: int, tile_h: int) -> Any:
+    """A :class:`SheetTerrain` for this sheet, or ``None``. Task thread.
+
+    Runs only when the grid holds at least the 47 cells a complete set needs;
+    below that there is nothing to find and the analysis is pure cost.
+    """
+    from .tilegrid import blob
+    from .tilegrid import roles as rolelib
+
+    array = pixels
+    rows = array.shape[0] // int(tile_h)
+    cols = array.shape[1] // int(tile_w)
+    if rows * cols < blob.TILE_COUNT:
+        return None
+    found = rolelib.infer_roles(array, tile_w, tile_h)
+    return None if found is None else SheetTerrain((int(tile_w), int(tile_h)), found)
+
+
 def _sheet_or_tileset(
     name: str,
     source: str,
@@ -145,10 +178,17 @@ def _sheet_or_tileset(
 
     grid = slicing.detect_grid(pixels)
     if grid is not None:
+        # Rules found: the cells are where the detector says, so a terrain guess
+        # has to be made against the *recomposed* atlas rather than the ragged
+        # original -- and that is the popup's Import, not this. So the separator
+        # arm wins and the terrain question is asked at the plain-grid door only.
         return {"sheet": (uid, name, source, pixels, grid), "uid": uid}
     if recorded is not None and (int(recorded[0]), int(recorded[1])) != (tile_w, tile_h):
         mismatch = SheetMismatch(int(recorded[0]), int(recorded[1]))
         return {"sheet": (uid, name, source, pixels, mismatch), "uid": uid}
+    terrain = _terrain_from(pixels, tile_w, tile_h)
+    if terrain is not None:
+        return {"sheet": (uid, name, source, pixels, terrain), "uid": uid}
     tileset = Tileset(name=name, pixels=pixels, tile_w=tile_w, tile_h=tile_h)
     return {"tileset": tileset, "source": source, "uid": uid}
 
@@ -232,6 +272,10 @@ def import_detected_sheet(ctx: Any) -> bool:
     if found is None:
         return False
     state, tab, (_uid, name, _source, pixels, grid) = found
+    if isinstance(grid, SheetTerrain):
+        # Its own door: reordering is not recomposing, and mixing the two would
+        # slice a terrain sheet on a grid nobody measured.
+        return import_sheet_terrain(ctx)
     if isinstance(grid, SheetMismatch):
         # No rules to find, but the sheet's own recorded grid is known: cut on
         # *that* and redraw each cell at the map's size. Same machinery, a grid
@@ -260,6 +304,57 @@ def import_detected_sheet(ctx: Any) -> bool:
     return True
 
 
+#: The swatch colours an inferred terrain gets. A default rather than a
+#: measurement: they name the terrain in the palette list and on the minimap and
+#: nothing is stored keyed on them, so the user renaming or recolouring the
+#: terrain later changes only what they see.
+TERRAIN_FILL = (110, 170, 90, 255)
+TERRAIN_OUTLINE = (40, 80, 40, 255)
+
+
+def import_sheet_terrain(ctx: Any) -> bool:
+    """Reorder the parked sheet into the canonical blob layout and land it.
+
+    **The reorder *is* the role assignment.** A terrain set's layout is
+    positional -- ``Tileset.terrain_of`` and ``local_for`` are the only source of
+    a cell's role, and exactly 47 columns are enforced at construction -- so
+    importing without reordering would give every tile a wrong role, silently,
+    and every stroke would draw the wrong picture.
+
+    ``source=""`` for the recomposing doors' reason: a reordered atlas is no
+    longer the file on disk, and a ``.tmx`` export must not reference art it is
+    not drawing.
+    """
+    from .tilegrid import roles as rolelib
+    from .tilegrid.tileset import TerrainSpec, Tileset
+
+    found = _parked(ctx)
+    if found is None:
+        return False
+    state, tab, (_uid, name, _source, pixels, parked) = found
+    if not isinstance(parked, SheetTerrain):
+        return False
+    tile_w, tile_h = parked.tile
+    try:
+        atlas = rolelib.reorder(pixels, parked.roles, tile_w, tile_h)
+        tileset = Tileset(
+            name=name,
+            pixels=atlas,
+            tile_w=tile_w,
+            tile_h=tile_h,
+            terrains=(TerrainSpec(name=name or "Terrain", fill=TERRAIN_FILL,
+                                  outline=TERRAIN_OUTLINE),),
+        )
+    except ValueError as exc:
+        ctx.toast(f"That terrain set was not imported: {exc}.", "error")
+        clear_sheet_import(ctx)
+        return False
+    clear_sheet_import(ctx)
+    land_tileset(ctx, state, tab, {"tileset": tileset, "source": ""})
+    return True
+
+
+
 def import_sheet_blind(ctx: Any) -> bool:
     """Land the parked sheet the way it would have landed with no detector:
     sliced whole at the map's tile size, source kept.
@@ -273,7 +368,10 @@ def import_sheet_blind(ctx: Any) -> bool:
     found = _parked(ctx)
     if found is None:
         return False
-    state, tab, (_uid, name, source, pixels, _grid) = found
+    state, tab, (_uid, name, source, pixels, parked) = found
+    # A terrain parking was read on the map's own grid already, so "plain tiles"
+    # here is the very slice that would have happened without the analyzer.
+    del parked
     try:
         tileset = Tileset(
             name=name, pixels=pixels, tile_w=tab.doc.tile_w, tile_h=tab.doc.tile_h

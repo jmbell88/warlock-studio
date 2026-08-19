@@ -73,11 +73,13 @@ from .plotter_state import (  # noqa: F401
 from .plotter_tilesets import (  # noqa: F401
     TILESET_FILTER,
     SheetMismatch,
+    SheetTerrain,
     add_tileset_path,
     ask_add_tileset,
     clear_sheet_import,
     import_detected_sheet,
     import_sheet_blind,
+    import_sheet_terrain,
     land_tileset,
     polish_in_inker,
     tileset_from_inker,

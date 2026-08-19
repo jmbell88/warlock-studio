@@ -5,7 +5,7 @@ all import it, none owns it, and it imports nothing under ``warlock``.
 """
 from __future__ import annotations
 
-from . import blob, gid, slicing
+from . import blob, gid, roles, slicing
 from .tileset import (
     RGBA,
     TerrainSpec,
@@ -18,4 +18,4 @@ from .tileset import (
 )
 
 __all__ = ["RGBA", "TerrainSpec", "Tileset", "TilesetRef", "blob", "colour_text",
-           "frozen_rgba", "gid", "repolish", "rgba_colour", "slicing"]
+           "frozen_rgba", "gid", "repolish", "rgba_colour", "roles", "slicing"]

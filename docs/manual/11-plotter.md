@@ -162,6 +162,14 @@ Tiled `.tsx` with Wang sets does and a plain image does not. It sets the cell yo
 re-fits that cell and its eight neighbours, so edges, outer corners and inner corners follow as you
 draw rather than being placed one at a time.
 
+A plain image can become one. Add a sheet holding all forty-seven blob cases — drawn by hand, or
+asked of a model — and Plotter says so: *These 47 tiles look like a complete 47-case terrain set*,
+with **Import as terrain set** to reorder them into the canonical layout and turn terrain painting
+on. The reorder is not cosmetic: a terrain set's roles are decided by *position*, so the tiles have
+to be put in the right order for any of them to mean anything. **Import as plain tiles** is there
+for the coincidence — a sprite sheet whose silhouettes happen to cover every case — and nothing is
+added to the map until you choose.
+
 Two other tools know about terrains, and both decide per cell rather than per map. **Erase** clears
 a plain tile as a plain tile, and clears a terrain cell by cutting a hole and re-fitting everything
 that now borders it — otherwise the ring around the hole keeps the edge art of a neighbour that is
