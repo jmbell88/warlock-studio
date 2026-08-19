@@ -20,6 +20,19 @@ ring is by construction drawn where the shape is not, so a version that could
 not add alpha would draw nothing. Placed inside it touches no alpha at all, and
 :func:`invert` and :func:`replace_colour` never do.
 
+Two of the matte-cleanup four are alpha exceptions as well, and both are the
+point rather than a side effect. :func:`alpha_threshold` exists *to* make
+coverage binary, and :func:`matte_grow` exists *to* move the silhouette in or
+out. :func:`defringe` deliberately is **not** one -- it recolours the
+semi-transparent rim and leaves every alpha exactly where it was, so it is an
+ordinary colour filter -- and :func:`remove_orphans` leaves transparent pixels
+alone in both roles.
+
+**The matte pack copies colours; it never averages them.** Averaging is
+precisely the halo being removed, and on a palette-locked document a copied
+colour is already a palette member where a blended one would fight the
+write-path snap on the very next stroke.
+
 **Blur and sharpen premultiply first.** A straight-alpha buffer stores an
 arbitrary colour under a transparent pixel -- ``paint_colour`` leaves the paint
 there and the alpha at zero, which is invisible and correct -- so a blur that
@@ -42,9 +55,10 @@ import numpy as np
 
 from . import composite as cp
 
-__all__ = ["FILTERS", "apply_named", "blur", "brightness_contrast", "despeckle",
-           "hue_saturation", "invert", "levels", "outline", "popup_values",
-           "replace_colour", "sharpen"]
+__all__ = ["FILTERS", "alpha_threshold", "apply_named", "blur",
+           "brightness_contrast", "defringe", "despeckle", "hue_saturation",
+           "invert", "levels", "matte_grow", "outline", "popup_values",
+           "remove_orphans", "replace_colour", "sharpen"]
 
 RGBA = tuple[int, int, int, int]
 
@@ -503,6 +517,213 @@ def despeckle(pixels: np.ndarray, *, speck: float = 0.0) -> np.ndarray:
     )
 
 
+# --- the matte-cleanup pack -------------------------------------------------
+#
+# A BiRefNet cutout lands with a halo and a semi-transparent fringe
+# (``service/matte.py`` hands the raw mask to ``apply_matte``), and the remedy
+# until now was the eraser. These four are the ones that actually fix it, and
+# they are entries in the registry below rather than a new pane -- which is
+# exactly what the registry is for: live preview, feathered selection weighting,
+# alpha-lock respect, one-undo commit and Apply-to-range all arrive for free.
+
+
+def alpha_threshold(pixels: np.ndarray, *, threshold: float = 0.0) -> np.ndarray:
+    """Alpha becomes 255 at or above *threshold* and 0 below it.
+
+    ``pipelines/pixel.snap_alpha``'s rule, at the editor. A partial-alpha pixel
+    in a 32px sprite reads as a smudge in every engine that does not blend the
+    way the preview did, and a matte's rim is nothing but partial alpha.
+
+    0.0 is the identity, so the live preview is safe on the frame the popup
+    opens; the popup itself seeds 128, because nobody opens this to snap nothing
+    (``invert``'s precedent, and the second entry in :data:`POPUP_VALUES`).
+
+    An alpha exception by design -- see the module head.
+    """
+    out = pixels.copy()
+    level = float(threshold)
+    if level <= 0.0:
+        return out
+    out[..., 3] = np.where(out[..., 3] >= level, 255, 0).astype(np.uint8)
+    return out
+
+
+def _opaque_source(pixels: np.ndarray, steps: int) -> tuple[np.ndarray, np.ndarray]:
+    """For every pixel, the RGB of the nearest fully-opaque pixel within
+    *steps* 8-neighbour hops, and a mask of which pixels found one.
+
+    Iterative propagation rather than a distance transform: *steps* is at most
+    eight (both callers give it a small span for despeckle's stated reason), so
+    this is at most eight full-image maximum-filter passes, and a distance
+    transform would be a dependency and a second definition of "nearest" for no
+    measurable gain at that size.
+
+    Colours are **copied**, never blended -- the module head says why.
+    """
+    height, width = pixels.shape[:2]
+    filled = pixels[..., 3] == 255
+    colour = pixels[..., :3].copy()
+    for _ in range(max(0, int(steps))):
+        if filled.all():
+            break
+        # One 8-neighbour dilation: each unfilled pixel takes the first filled
+        # neighbour found in a fixed order, so the result is deterministic.
+        grew = filled.copy()
+        picked = colour.copy()
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                if dy == 0 and dx == 0:
+                    continue
+                src_y = slice(max(0, -dy), height - max(0, dy))
+                src_x = slice(max(0, -dx), width - max(0, dx))
+                dst_y = slice(max(0, dy), height - max(0, -dy))
+                dst_x = slice(max(0, dx), width - max(0, -dx))
+                donor = filled[src_y, src_x]
+                target = ~grew[dst_y, dst_x] & donor
+                if not target.any():
+                    continue
+                window = picked[dst_y, dst_x]
+                window[target] = colour[src_y, src_x][target]
+                picked[dst_y, dst_x] = window
+                grown = grew[dst_y, dst_x]
+                grown[target] = True
+                grew[dst_y, dst_x] = grown
+        if not grew.any() or np.array_equal(grew, filled):
+            break
+        filled, colour = grew, picked
+    return colour, filled
+
+
+def defringe(pixels: np.ndarray, *, fringe: float = 0.0) -> np.ndarray:
+    """Semi-transparent pixels take the colour of the nearest opaque one.
+
+    The halo a matte leaves is a rim of pixels whose *colour* is a blend of the
+    subject and whatever was behind it, at partial coverage. Replacing that
+    colour with the subject's own -- copied whole, from the nearest fully-opaque
+    pixel within ``fringe`` steps -- removes the halo and leaves the coverage
+    exactly as the matte decided it. So this is a colour filter, not an alpha
+    exception: every alpha comes through untouched.
+
+    **Its own parameter with a small span** rather than the shared ``radius``,
+    for :func:`despeckle`'s stated reason: each step is a full-image pass and
+    this runs on the frame thread under a live preview, where ``radius`` tops
+    out at 32.
+    """
+    out = pixels.copy()
+    steps = int(round(float(fringe)))
+    if steps <= 0:
+        return out
+    rim = (out[..., 3] > 0) & (out[..., 3] < 255)
+    if not rim.any():
+        return out
+    colour, filled = _opaque_source(out, steps)
+    take = rim & filled
+    out[..., :3][take] = colour[take]
+    return out
+
+
+def matte_grow(pixels: np.ndarray, *, grow: float = 0.0) -> np.ndarray:
+    """Move the silhouette out (positive) or in (negative), in whole pixels.
+
+    Positive dilates: a new rim pixel takes the nearest opaque neighbour's
+    colour -- :func:`defringe`'s propagation, with the coverage following the
+    colour -- and full alpha. Negative erodes: any opaque pixel with a
+    non-opaque 8-neighbour loses its coverage, once per step.
+
+    An alpha exception on purpose; coverage is the whole point.
+
+    Grow-then-shrink is deliberately **not** an identity and is not asserted as
+    one: a dilation rounds a corner off and no erosion puts it back. What holds
+    is monotonicity per sign, which is what the tests pin.
+    """
+    out = pixels.copy()
+    steps = int(round(float(grow)))
+    if steps == 0:
+        return out
+    height, width = out.shape[:2]
+    if steps > 0:
+        colour, filled = _opaque_source(out, steps)
+        added = filled & (out[..., 3] != 255)
+        out[..., :3][added] = colour[added]
+        out[..., 3][added] = 255
+        return out
+    for _ in range(-steps):
+        opaque = out[..., 3] == 255
+        if not opaque.any():
+            break
+        # An opaque pixel on the rim: some 8-neighbour is not opaque. Outside
+        # the array counts as not opaque, so the border erodes like an edge.
+        exposed = np.zeros((height, width), dtype=bool)
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                if dy == 0 and dx == 0:
+                    continue
+                shifted = np.zeros((height, width), dtype=bool)
+                src_y = slice(max(0, -dy), height - max(0, dy))
+                src_x = slice(max(0, -dx), width - max(0, dx))
+                dst_y = slice(max(0, dy), height - max(0, -dy))
+                dst_x = slice(max(0, dx), width - max(0, -dx))
+                shifted[dst_y, dst_x] = opaque[src_y, src_x]
+                exposed |= opaque & ~shifted
+        out[..., 3][exposed] = 0
+    return out
+
+
+def remove_orphans(pixels: np.ndarray, *, orphans: float = 0.0) -> np.ndarray:
+    """An opaque pixel with no same-coloured 8-neighbour takes their commonest.
+
+    ``pipelines/pixel.clean_orphans``'s rule at the editor. A pixel none of
+    whose neighbours shares its colour is, at sprite sizes, an artefact of a
+    reduction rather than a decision.
+
+    The contrast with :func:`despeckle` is the reason both exist: a median
+    deletes one-pixel *detail* wholesale, wherever it is; this deletes only
+    friendless pixels, so a deliberate two-pixel highlight survives -- each of
+    the pair has the other.
+
+    Transparent pixels are left alone in **both** roles: an isolated hole is a
+    silhouette decision, not an artefact.
+
+    A toggle rather than a slider: there is no size to choose.
+
+    The per-lonely-pixel loop at the end is fine and the vectorised test above
+    it is load-bearing -- lonely pixels are few by definition, but the *test*
+    runs on every pixel and a Python loop over that under a live preview is not
+    acceptable.
+    """
+    out = pixels.copy()
+    if float(orphans) <= 0.0:
+        return out
+    height, width = out.shape[:2]
+    if height < 3 or width < 3:
+        return out
+    opaque = out[..., 3] > 0
+    # One integer per distinct colour, so "same colour" is one comparison.
+    rgb = out[..., :3].astype(np.int64)
+    code = (rgb[..., 0] << 16) | (rgb[..., 1] << 8) | rgb[..., 2]
+    code = np.where(opaque, code, -1)
+    padded = np.pad(code, 1, constant_values=-1)
+    stack = np.stack(
+        [
+            padded[1 + dy: 1 + dy + height, 1 + dx: 1 + dx + width]
+            for dy in (-1, 0, 1)
+            for dx in (-1, 0, 1)
+            if (dy, dx) != (0, 0)
+        ],
+        axis=-1,
+    )
+    lonely = opaque & ~(stack == code[..., None]).any(axis=-1)
+    if not lonely.any():
+        return out
+    for y, x in zip(*(a.tolist() for a in np.nonzero(lonely)), strict=True):
+        values = [v for v in stack[y, x].tolist() if v >= 0]
+        if not values:
+            continue
+        winner = max(set(values), key=values.count)
+        out[y, x, :3] = ((winner >> 16) & 0xFF, (winner >> 8) & 0xFF, winner & 0xFF)
+    return out
+
+
 # --- the registry -----------------------------------------------------------
 
 # name -> (defaults, function). The defaults are a complete call and every value
@@ -537,6 +758,10 @@ FILTERS: dict[str, tuple[dict[str, Any], Callable[..., np.ndarray]]] = {
         outline,
     ),
     "despeckle": ({"speck": 0.0}, despeckle),
+    "alpha threshold": ({"threshold": 0.0}, alpha_threshold),
+    "defringe": ({"fringe": 0.0}, defringe),
+    "grow / shrink matte": ({"grow": 0.0}, matte_grow),
+    "remove orphans": ({"orphans": 0.0}, remove_orphans),
 }
 
 # The three parameter kinds the panel draws with something other than a slider.
@@ -544,7 +769,9 @@ FILTERS: dict[str, tuple[dict[str, Any], Callable[..., np.ndarray]]] = {
 # entry in one file, and a pane that had to know which of "colour" and "size"
 # was a colour would be a second place to keep in step.
 COLOUR_PARAMS: frozenset[str] = frozenset({"old", "new", "colour"})
-TOGGLE_PARAMS: frozenset[str] = frozenset({"red", "green", "blue", "wrap"})
+TOGGLE_PARAMS: frozenset[str] = frozenset(
+    {"red", "green", "blue", "wrap", "orphans"}
+)
 CHOICE_PARAMS: dict[str, tuple[Any, ...]] = {
     "place": ("outside", "inside"),
     # 4-connected is a diamond step and 8-connected is a square one; there is
@@ -562,6 +789,12 @@ CHOICE_PARAMS: dict[str, tuple[Any, ...]] = {
 # to invert no channels.
 POPUP_VALUES: dict[str, dict[str, Any]] = {
     "invert": {"red": 1.0, "green": 1.0, "blue": 1.0},
+    # Same argument as invert's, three more times: nobody opens "alpha
+    # threshold" to snap nothing, "defringe" to clean a nought-pixel rim, or
+    # "remove orphans" to remove none.
+    "alpha threshold": {"threshold": 128.0},
+    "defringe": {"fringe": 2.0},
+    "remove orphans": {"orphans": 1.0},
 }
 
 
@@ -595,6 +828,12 @@ RANGES: dict[str, tuple[float, float]] = {
     # Deliberately *not* the shared ``radius`` span: the top of that one is a
     # 65x65 sort per pixel on the frame thread. See :func:`despeckle`.
     "speck": (0.0, (DESPECKLE_MAX - 1) / 2),
+    "threshold": (0.0, 255.0),
+    # Deliberately *not* the shared ``radius`` span, for ``speck``'s reason:
+    # each step is a full-image pass on the frame thread under a live preview.
+    "fringe": (0.0, 8.0),
+    # Signed: negative erodes the silhouette, positive dilates it.
+    "grow": (-8.0, 8.0),
 }
 
 

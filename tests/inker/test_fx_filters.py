@@ -81,10 +81,23 @@ def test_the_defaults_are_the_identity_and_the_popup_seeds_all_three():
     assert np.array_equal(filters.apply_named("invert", pixels), pixels)
 
 
-def test_popup_values_is_the_defaults_for_every_other_filter():
+def test_popup_values_is_the_defaults_wherever_nothing_is_seeded():
+    """The general rule invert was the first case of, and the matte pack the
+    next three: a filter nobody opens to do nothing gets a popup seed, and every
+    other filter's popup opens exactly on its identity defaults."""
     for name in filters.FILTERS:
-        if name != "invert":
+        if name not in filters.POPUP_VALUES:
             assert filters.popup_values(name) == filters.FILTERS[name][0], name
+
+
+def test_every_seeded_popup_still_has_identity_defaults():
+    """The half that would be a real bug if it slipped: a defaults table that
+    was not the identity makes the live preview change the drawing on the frame
+    the popup opens, before the user has chosen anything."""
+    pixels = _flat((10, 20, 30, 128))
+    for name in filters.POPUP_VALUES:
+        assert filters.popup_values(name) != filters.FILTERS[name][0], name
+        assert np.array_equal(filters.apply_named(name, pixels), pixels), name
 
 
 # --- replace colour ---------------------------------------------------------

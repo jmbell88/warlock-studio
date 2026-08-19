@@ -758,8 +758,9 @@ tileset exported as a `.tsx` behaves the same way and for the same reason — se
 
 ## Filters
 
-**Filter…** in the document panel opens nine whole-layer adjustments: brightness/contrast,
-hue/saturation, levels, blur, sharpen, invert, replace colour, outline and despeckle. Every one
+**Filter…** in the document panel opens thirteen whole-layer adjustments: brightness/contrast,
+hue/saturation, levels, blur, sharpen, invert, replace colour, outline, despeckle, alpha threshold,
+defringe, grow/shrink matte and remove orphans. Every one
 previews live on the canvas as you drag, and the whole session — however many sliders you moved and
 however many times — records as a single undo step when you press Apply. Cancel, or clicking away
 from the popup, puts the pixels back and records nothing at all.
@@ -776,15 +777,37 @@ filter — it deletes stray pixels outright and leaves hard lines hard, which is
 do; its **speck** slider is how big a stray thing it removes, and it stops at 4 because past that a
 median takes out detail rather than specks — and takes long enough doing it to stall the preview.
 
+The last four are for cutouts. A background removal leaves a rim of half-transparent pixels whose
+colour is a blend of the subject and whatever was behind it, which is the halo you see when the
+cutout is placed on anything else.
+
+- **alpha threshold** makes coverage binary: at or above the threshold a pixel is solid, below it
+  is a hole. A partial-alpha pixel in a 32×32 sprite reads as a smudge in every engine that does
+  not blend the way the preview did.
+- **defringe** gives every half-transparent pixel the colour of the nearest solid one, out to
+  **fringe** steps. It *copies* that colour rather than averaging — averaging is the halo — and it
+  leaves every alpha exactly where the cutout put it, so it changes the colour of the edge and not
+  its shape.
+- **grow / shrink matte** moves the silhouette itself: positive dilates it (new pixels take a
+  neighbour's colour and become solid), negative erodes it. Growing then shrinking is not a round
+  trip — a dilation rounds a corner off and no erosion puts it back.
+- **remove orphans** recolours any solid pixel that has no same-coloured neighbour at all, taking
+  the commonest colour around it. Unlike despeckle it deletes only *friendless* pixels, so a
+  deliberate two-pixel highlight survives; and it never touches transparency, because an isolated
+  hole is a silhouette decision rather than an artefact.
+
 Three things about what they do to a layer. They apply to the **selection** if there is one, faded
 by a feathered edge exactly as a brush would be, and to the whole layer if there is not. The colour
 filters never change transparency; blur and despeckle do, because softening a layer's edge is most
 of the reason to blur one, and an outline placed *outside* does, because it draws where the drawing
-is not. And a layer with **Lock alpha** on keeps its transparency under all of them.
+is not. Alpha threshold and grow/shrink matte are the other two deliberate exceptions — coverage is
+what they are *for* — while defringe and remove orphans change colour only. And a layer with **Lock
+alpha** on keeps its transparency under all of them.
 
 Every filter opens at settings that change nothing — except Invert, whose three channel boxes open
-ticked, because inverting no channels is not a thing anybody wants. So the preview is safe to start
-immediately, and the picture only moves once you move a slider.
+ticked, and alpha threshold, defringe and remove orphans, which open one step in, because nobody
+opens those to invert no channels, snap nothing, clean a nought-pixel rim or remove no orphans. So
+the preview is safe to start immediately, and the picture only moves once you move a slider.
 
 ## Selections and transform
 
