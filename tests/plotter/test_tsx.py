@@ -183,7 +183,6 @@ def test_a_property_type_outside_tileds_nine_is_refused_by_name():
 @pytest.mark.parametrize(
     ("body", "feature"),
     [
-        ("<wangsets/>", "Wang sets"),
         ("<terraintypes/>", "terrain types"),
         ('<tile id="0"><image source="x.png"/></tile>', "image-collection"),
         # Deprecated pre-Wang terrain indices. Tiled itself is retiring them and
@@ -341,13 +340,17 @@ def test_the_phases_property_is_written_only_when_it_says_something():
     assert b'name="phases"' in data4
 
 
-def test_a_wangset_whose_count_disagrees_with_its_phases_is_refused():
-    """A phases property over a classic-count wangset is a foreign file."""
+def test_a_wangset_whose_count_disagrees_with_its_phases_is_not_the_preset():
+    """A phases property over a classic-count wangset is a foreign file. It is
+    no longer *refused* -- the general model reads it as data -- but it is
+    emphatically not recognised as this editor's blob preset, which is the part
+    that would have been wrong to accept."""
     data = tsx.tsx_bytes(_terrain_tileset(2), image_name="g.png")
     text = data.decode()
     hacked = text.replace('value="2"', 'value="4"').encode()
-    with pytest.raises(tsx.TiledUnsupported):
-        tsx.read_tsx(hacked, _pixels())
+    back = tsx.read_tsx(hacked, _pixels())
+    assert back.terrains == (), "not adopted as a terrain set"
+    assert back.wangsets, "but read as data rather than dropped"
 
 
 def test_a_phases_property_on_an_ordinary_tileset_is_just_a_property():
@@ -443,3 +446,53 @@ def test_a_tileset_with_no_tile_metadata_writes_no_tile_elements() -> None:
     ts = tsx.read_tsx(_with_tiles("").encode(), _pixels())
     assert ts.tiles == {}
     assert b"<tile " not in tsx.tsx_bytes(ts, image_name="a.png")
+
+
+def test_a_foreign_wangset_round_trips_as_data():
+    """The ledger rule's acceptance half: read, written and back, with the set
+    intact. A blob preset takes the other path and its export is unchanged."""
+    source = b'''<tileset name="t" tilewidth="16" tileheight="16">
+ <image source="a.png" width="64" height="64"/>
+ <wangsets>
+  <wangset name="Edges" type="edge" tile="-1">
+   <wangcolor name="road" color="#808080" tile="-1" probability="3"/>
+   <wangtile tileid="0" wangid="1,0,1,0,0,0,0,0"/>
+   <wangtile tileid="5" wangid="0,0,1,0,1,0,0,0"/>
+  </wangset>
+ </wangsets>
+</tileset>'''
+    first = tsx.read_tsx(source, _pixels())
+    assert first.terrains == ()
+    assert len(first.wangsets) == 1
+
+    again = tsx.read_tsx(tsx.tsx_bytes(first, image_name="a.png"), _pixels())
+    assert again.wangsets == first.wangsets
+
+
+def test_a_blob_preset_still_writes_the_wangset_it_always_did():
+    """The determinism pin: the preset's export is byte-identical, which is what
+    lets the general model land beside it rather than on top of it."""
+    source = _terrain_tileset(1)
+    first = tsx.tsx_bytes(source, image_name="g.png")
+    back = tsx.read_tsx(first, _pixels(w=source.image_w, h=source.image_h))
+    assert back.terrains, "still recognised as the preset"
+    assert back.wangsets == (), "and not held twice"
+    assert tsx.tsx_bytes(back, image_name="g.png") == first
+
+
+def test_a_malformed_wangid_is_skipped_rather_than_refusing_the_file():
+    """One tile of one set; losing a whole map over it would be the half-read
+    trade run backwards."""
+    source = b'''<tileset name="t" tilewidth="16" tileheight="16">
+ <image source="a.png" width="64" height="64"/>
+ <wangsets>
+  <wangset name="Broken" type="corner" tile="-1">
+   <wangcolor name="a" color="#ff0000" tile="-1" probability="1"/>
+   <wangtile tileid="0" wangid="0,1,0,1,0,1,0,1"/>
+   <wangtile tileid="1" wangid="nonsense"/>
+   <wangtile tileid="2" wangid="0,9,0,0,0,0,0,0"/>
+  </wangset>
+ </wangsets>
+</tileset>'''
+    ts = tsx.read_tsx(source, _pixels())
+    assert set(ts.wangsets[0].tiles) == {0}

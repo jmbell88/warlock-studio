@@ -45,6 +45,7 @@ a computation that changed nothing is ``None`` rather than an empty write.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import Any
 
 import numpy as np
 
@@ -320,3 +321,108 @@ def fill_terrain(
     return paint_terrain_cells(
         data, zip(xs.tolist(), ys.tolist(), strict=True), terrain, ref, outside=outside
     )
+
+
+# --- the general case: a data-driven Wang set --------------------------------
+#
+# Everything above is the **blob preset**: a two-value collapse laid out
+# positionally in 47 columns, whose bar is byte-identity on the whole existing
+# terrain corpus. Nothing below touches it. A tileset that carries a foreign
+# Wang set -- corner-only, edge-only, or mixed with more than one colour per
+# slot -- is painted here instead, by constraint matching rather than by a
+# collapse, and the two never meet.
+#
+# **The invariant is unchanged and is the reason this is a separate path rather
+# than a replacement**: membership is still derived from the gid and never
+# stored per cell. The wangid is looked up by tile id and the map goes on
+# storing gids alone, so a hand-stamped cell joins a field for free here exactly
+# as it does there.
+
+
+def wang_field(data: np.ndarray, ref: TilesetRef, wangset: Any) -> Any:
+    """``field_of(x, y)`` over one layer: a cell's wangid, or ``None``.
+
+    ``None`` for off the map, for an empty cell, and for a tile this set says
+    nothing about -- all three mean "nothing here has an opinion", which is what
+    :func:`~..tilegrid.wang.constraints_from` needs them to mean.
+    """
+    height, width = data.shape
+
+    def field_of(x: int, y: int) -> Any:
+        if not (0 <= x < width and 0 <= y < height):
+            return None
+        value = int(data[y, x]) & gidlib.GID_MASK
+        if not value or not ref.holds(value):
+            return None
+        local = value - ref.firstgid
+        return wangset.tiles.get(local)
+
+    return field_of
+
+
+def _wang_cell(
+    work: np.ndarray, ref: TilesetRef, wangset: Any, x: int, y: int
+) -> bool:
+    """Re-choose one cell's tile from what its neighbours say. Wrote anything?
+
+    **No match leaves the cell untouched** rather than writing a near-miss: a
+    wrong tile is the silent half-read in picture form, and a field with a hole
+    in it is a thing the user can see and fix.
+    """
+    from ..tilegrid import wang as wanglib
+
+    wanted = wanglib.constraints_from(wang_field(work, ref, wangset), x, y, wangset)
+    if not wanted:
+        return False
+    found = wangset.matching(wanted)
+    if not found:
+        return False
+    value = gidlib.DTYPE(ref.firstgid + found[0])
+    if work[y, x] == value:
+        return False
+    work[y, x] = value
+    return True
+
+
+def paint_wang(
+    data: np.ndarray,
+    x: int,
+    y: int,
+    colour: int,
+    ref: TilesetRef,
+    wangset: Any,
+) -> Region | None:
+    """Paint one cell a Wang colour and re-fit the ring around it.
+
+    ``colour`` is 1-based into the set's colours, matching a wangid slot.
+
+    The touched cell is set to a tile whose *used* slots are all that colour --
+    the set's own "interior" for that colour -- and then its eight neighbours are
+    re-chosen against it. That is Tiled's terrain brush: the painted cell asserts
+    a colour, and the ring reconciles.
+
+    One region covering the touched cell and its ring, so a stroke is one write
+    and one undo step -- ``paint_terrain_cells``' rule, for its reason.
+    """
+    height, width = data.shape
+    x, y = int(x), int(y)
+    if not (0 <= x < width and 0 <= y < height):
+        return None
+    wanted = dict.fromkeys(wangset.slots, int(colour))
+    found = wangset.matching(wanted)
+    if not found:
+        return None
+
+    work = np.array(data, dtype=gidlib.DTYPE)
+    work[y, x] = gidlib.DTYPE(ref.firstgid + found[0])
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            if (dx, dy) == (0, 0):
+                continue
+            nx, ny = x + dx, y + dy
+            if 0 <= nx < width and 0 <= ny < height:
+                _wang_cell(work, ref, wangset, nx, ny)
+
+    box = (max(0, x - 1), max(0, y - 1), min(width, x + 2), min(height, y + 2))
+    return _finish(data, work, box)
+

@@ -96,7 +96,53 @@ def terrains_of(doc: Any) -> list[tuple[int, int, Any]]:
     for index, ref in enumerate(doc.tilesets):
         for rank, spec in enumerate(ref.tileset.terrains):
             out.append((index, rank, spec))
+        # A foreign Wang set contributes **one row per colour**, which is the
+        # same thing a terrain row is from the user's side: a thing the Terrain
+        # tool lays down. The two paint by different machinery -- the preset by
+        # its positional collapse, a Wang colour by constraint matching -- and
+        # the pane deliberately does not say which, because to the person
+        # holding the tool there is no difference.
+        for wangset in ref.tileset.wangsets:
+            for colour_index, colour in enumerate(wangset.colours):
+                out.append((index, -1 - colour_index, _wang_swatch(wangset, colour)))
     return out
+
+
+def _wang_swatch(wangset: Any, colour: Any) -> Any:
+    """A Wang colour dressed as a terrain spec, for the row that draws it.
+
+    The outline is derived rather than carried, exactly as it is for a terrain
+    read out of a ``.tsx``: the format does not store one and the swatch is the
+    only thing that reads it.
+    """
+    from ..tilegrid.tileset import TerrainSpec
+
+    fill = _hex_rgba(colour.colour)
+    return TerrainSpec(
+        name=colour.name or wangset.name,
+        fill=fill,
+        outline=(*(part * 3 // 5 for part in fill[:3]), fill[3]),
+    )
+
+
+def _hex_rgba(text: str) -> tuple[int, int, int, int]:
+    """``#rrggbb`` or ``#aarrggbb`` as four channels; opaque white on nonsense.
+
+    Tolerant rather than refusing, because this is a *swatch*: a colour nobody
+    can parse is a row drawn in the wrong colour, and refusing the map over it
+    would be the half-read trade run backwards.
+    """
+    raw = str(text or "").lstrip("#")
+    try:
+        if len(raw) == 8:
+            a, r, g, b = (int(raw[i : i + 2], 16) for i in (0, 2, 4, 6))
+            return (r, g, b, a)
+        if len(raw) == 6:
+            r, g, b = (int(raw[i : i + 2], 16) for i in (0, 2, 4))
+            return (r, g, b, 255)
+    except ValueError:
+        pass
+    return (255, 255, 255, 255)
 
 
 def _terrain_picker(ctx: Any, state: Any, tab: Any) -> None:

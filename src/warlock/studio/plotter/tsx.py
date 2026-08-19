@@ -43,6 +43,7 @@ from ..tilegrid.tileset import (
     TileRect,
     Tileset,
 )
+from ..tilegrid.wang import WANG_KINDS, WangColour, WangSet
 from .props import (
     PROPERTY_TYPES,
     Prop,
@@ -130,15 +131,11 @@ def check_tileset_features(root: ET.Element) -> None:
     element without a file around it -- and a second copy of the list is how the
     embedded and external paths come to accept different files.
     """
-    node = root.find("wangsets")
-    if node is not None and read_wangsets(
-        node, phases_from_properties(read_properties(root))[0]
-    ) is None:
-        raise TiledUnsupported(
-            "Wang sets / terrain brushes",
-            f"Plotter models one blob set: {blob.TILE_COUNT} tiles per terrain colour, "
-            "in mask order",
-        )
+    # A Wang set that is *not* this editor's blob preset used to be refused
+    # here. It is now read as data (:func:`read_wang_model`) and painted by
+    # constraint matching, so the recognise-or-refuse asymmetry is over -- see
+    # ``tilegrid/wang.py``. The preset is still recognised first and still keeps
+    # its positional terrain rows and its byte-identical export.
     if root.find("terraintypes") is not None:
         raise TiledUnsupported("terrain types")
     # Object alignment, render size, fill mode, background colour and the tile
@@ -418,6 +415,141 @@ def write_wangsets(
         )
     for tileid, wangid in sorted(_expected_wangids(len(terrains), phases).items()):
         ET.SubElement(wangset, "wangtile", {"tileid": str(tileid), "wangid": wangid})
+
+
+def _wang_model_of(
+    root: ET.Element, terrains: tuple[TerrainSpec, ...]
+) -> tuple[WangSet, ...]:
+    """Foreign Wang sets, or nothing when the blob preset was recognised."""
+    if terrains:
+        return ()
+    node = root.find("wangsets")
+    return () if node is None else read_wang_model(node)
+
+
+
+def read_wang_model(node: ET.Element) -> tuple[WangSet, ...]:
+    """Every ``<wangset>`` under a ``<wangsets>``, as data.
+
+    **Recognise-or-refuse ends here, deliberately.** Until now a Wang set was
+    accepted only when it matched this editor's own blob table exactly and
+    refused otherwise, which meant a Tiled user's corner set could not be opened
+    at all. Now every set is read; :func:`read_wangsets` still runs first and
+    still recognises the preset, so a set this editor generated keeps its
+    positional terrain rows and its byte-identical export.
+
+    A malformed wangid is skipped rather than refused: it is one tile of one set,
+    and losing a whole map over it would be the half-read trade run backwards.
+    """
+    out: list[WangSet] = []
+    for wangset in node.findall("wangset"):
+        colours = [
+            WangColour(
+                name=colour.get("name") or "",
+                colour=colour.get("color") or "#ffffff",
+                probability=float(colour.get("probability", 1.0) or 1.0),
+            )
+            for colour in wangset.findall("wangcolor")
+        ]
+        tiles: dict[int, tuple[int, ...]] = {}
+        for tile in wangset.findall("wangtile"):
+            try:
+                local = int(tile.get("tileid", ""))
+                slots = tuple(
+                    int(part)
+                    for part in (tile.get("wangid") or "").replace(" ", "").split(",")
+                )
+            except ValueError:
+                continue
+            if len(slots) != 8 or any(s < 0 or s > len(colours) for s in slots):
+                continue
+            tiles[local] = slots
+        kind = wangset.get("type", "mixed")
+        out.append(
+            WangSet(
+                name=wangset.get("name") or "Terrain",
+                kind=kind if kind in WANG_KINDS else "mixed",
+                colours=tuple(colours),
+                tiles=tiles,
+            )
+        )
+    return tuple(out)
+
+
+def read_wang_model_json(entries: Any) -> tuple[WangSet, ...]:
+    """:func:`read_wang_model` over Tiled's JSON spelling."""
+    if not isinstance(entries, list):
+        return ()
+    out: list[WangSet] = []
+    for wangset in entries:
+        if not isinstance(wangset, dict):
+            continue
+        colours = [
+            WangColour(
+                name=str(colour.get("name") or ""),
+                colour=str(colour.get("color") or "#ffffff"),
+                probability=float(colour.get("probability", 1.0) or 1.0),
+            )
+            for colour in (wangset.get("colors") or ())
+            if isinstance(colour, dict)
+        ]
+        tiles: dict[int, tuple[int, ...]] = {}
+        for tile in wangset.get("wangtiles") or ():
+            if not isinstance(tile, dict):
+                continue
+            slots = tuple(int(part) for part in (tile.get("wangid") or ()))
+            if len(slots) != 8 or any(s < 0 or s > len(colours) for s in slots):
+                continue
+            tiles[int(tile.get("tileid", 0) or 0)] = slots
+        kind = str(wangset.get("type", "mixed"))
+        out.append(
+            WangSet(
+                name=str(wangset.get("name") or "Terrain"),
+                kind=kind if kind in WANG_KINDS else "mixed",
+                colours=tuple(colours),
+                tiles=tiles,
+            )
+        )
+    return tuple(out)
+
+
+def write_wang_model(parent: ET.Element, wangsets: tuple[WangSet, ...]) -> None:
+    """Data-driven sets back out, sorted so two writes are byte identical.
+
+    Only reached for a tileset that has no blob preset: :func:`write_wangsets`
+    handles that one and its output must stay byte-identical, which is the
+    determinism pin the whole exporter is held to.
+    """
+    if not wangsets:
+        return
+    node = ET.SubElement(parent, "wangsets")
+    for wangset in wangsets:
+        element = ET.SubElement(
+            node,
+            "wangset",
+            {"name": wangset.name, "type": wangset.kind, "tile": "-1"},
+        )
+        for colour in wangset.colours:
+            ET.SubElement(
+                element,
+                "wangcolor",
+                {
+                    "name": colour.name,
+                    "color": colour.colour,
+                    "tile": "-1",
+                    "probability": _number(colour.probability),
+                },
+            )
+        for local in sorted(wangset.tiles):
+            ET.SubElement(
+                element,
+                "wangtile",
+                {
+                    "tileid": str(local),
+                    "wangid": ",".join(str(slot) for slot in wangset.tiles[local]),
+                },
+            )
+
 
 
 def _terrains_of(root: ET.Element, phases: int = 1) -> tuple[TerrainSpec, ...]:
@@ -752,6 +884,9 @@ def read_tsx(data: bytes, image: np.ndarray) -> Tileset:
         terrains=terrains,
         phases=phases,
         tiles=read_tile_meta(root),
+        # Only when the preset was *not* recognised: a blob set is already
+        # modelled by ``terrains`` and holding it twice would let the two drift.
+        wangsets=_wang_model_of(root, terrains),
     )
 
 
@@ -828,6 +963,7 @@ def tileset_from_json(entry: dict[str, Any], image: np.ndarray) -> Tileset:
         terrains=terrains,
         phases=declared if terrains else 1,
         tiles=read_tile_meta_json(entry),
+        wangsets=() if terrains else read_wang_model_json(wangsets),
         **presentation_of_json(entry),
     )
 
@@ -901,6 +1037,10 @@ def tsx_element(ts: Tileset, *, image_name: str) -> ET.Element:
         props = {**props, "phases": Prop("int", ts.phases)}
     write_properties(root, props)
     write_wangsets(root, ts.terrains, ts.phases if ts.terrains else 1)
+    # Mutually exclusive by construction (see ``_wang_model_of``), so a tileset
+    # never writes two ``<wangsets>`` blocks and the blob preset's output is
+    # byte-identical to what it always was.
+    write_wang_model(root, ts.wangsets)
     # After the wang sets, matching Tiled's own element order -- the writer is
     # held to producing a file that diffs cleanly against one Tiled wrote.
     write_tile_meta(root, ts.tiles)

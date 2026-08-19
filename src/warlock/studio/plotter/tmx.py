@@ -50,9 +50,8 @@ from typing import Any
 
 import numpy as np
 
-from ..tilegrid import blob
 from ..tilegrid import gid as gidlib
-from ..tilegrid.tileset import TerrainSpec, Tileset, TilesetRef, colour_text
+from ..tilegrid.tileset import Tileset, TilesetRef, colour_text
 from . import project
 from .pngio import png_bytes
 from .props import (
@@ -87,9 +86,8 @@ from .tsx import (
     check_tileset_features_json,
     phases_from_properties,
     read_tile_meta,
-    read_tile_meta_json,
     read_wangsets,
-    read_wangsets_json,
+    tileset_from_json,
     to_bytes,
     tsx_bytes,
     xml_root,
@@ -146,30 +144,6 @@ def _refuse_infinite(infinite: bool) -> None:
         raise TiledUnsupported(
             "an infinite map", "save it with a fixed size in Tiled's map properties"
         )
-
-
-def _refuse_wangsets(recognised: tuple[TerrainSpec, ...] | None) -> tuple[TerrainSpec, ...]:
-    """**Recognise or refuse**, and the asymmetry is the point.
-
-    Tiled's Wang model is strictly larger than this one -- corner-only and
-    edge-only sets, up to 255 colours, tile assignments that need not form a
-    blob at all -- so adopting a foreign one would be the silent half-read the
-    whole reader exists to prevent. What is recognised is exactly what
-    ``tsx.write_wangsets`` emits, which keeps the reader and the writer
-    symmetric: every file this writes, this reads.
-
-    Shared by the XML and JSON tileset readers because the *decision* is one
-    decision. The JSON side used to refuse every wangset outright, so a ``.tmj``
-    carrying a set this build had itself written was turned away by a sentence
-    that did not say what about it was wrong.
-    """
-    if recognised is None:
-        raise TiledUnsupported(
-            "Wang sets / terrain brushes",
-            f"Plotter models one blob set: {blob.TILE_COUNT} tiles per terrain colour, "
-            "in mask order",
-        )
-    return recognised
 
 
 # --- XML reading --------------------------------------------------------------
@@ -430,9 +404,7 @@ def _read_tmx_tilesets(
         transformations = node.find("transformations")
         props = read_properties(node)
         declared, remaining = phases_from_properties(props)
-        terrains = () if wangsets is None else _refuse_wangsets(
-            read_wangsets(wangsets, declared)
-        )
+        terrains = () if wangsets is None else (read_wangsets(wangsets, declared) or ())
         refs.append(
             TilesetRef(
                 firstgid=firstgid,
@@ -796,57 +768,26 @@ def _read_tmj_tilesets(
                 TilesetRef(firstgid=firstgid, tileset=tsx_loader(source), source=source)
             )
             continue
-        # ``check_tileset_features`` over the JSON spelling: terrain types and
-        # the four per-tile refusals (animation, per-tile image -- a true
-        # image collection, collision, custom properties), read off ``tiles``
-        # tile by tile rather than guessed from its mere presence. Kept ahead
-        # of the wangset question because a refused tileset never needs one
-        # decided.
+        # **One definition**, shared with the external ``.tsj`` reader: a second
+        # opinion about what a JSON tileset means is exactly how the external and
+        # embedded spellings of one file come to load differently. Everything
+        # this used to spell out inline -- the feature check, the grid, the
+        # transformations, the wang model, the per-tile metadata, the
+        # presentation -- lives in ``tsx.tileset_from_json`` now.
+        # **The feature check runs first**, and the order is load-bearing: a
+        # true image-collection tileset has per-tile images and *no* top-level
+        # one, so checking the image first would report "an embedded tileset
+        # image" for a file whose actual problem is that it is a collection.
         check_tileset_features_json(entry)
-        grid = entry.get("grid") or {}
-        if not isinstance(grid, dict):
-            raise ValueError("a tileset object grid is not an object")
-        transformations = entry.get("transformations") or {}
-        if not isinstance(transformations, dict):
-            raise ValueError("tileset transformations are not an object")
-        wangsets = entry.get("wangsets")
-        props = read_json_properties(entry.get("properties"))
-        declared, remaining = phases_from_properties(props)
-        terrains: tuple[TerrainSpec, ...] = (
-            () if not wangsets else _refuse_wangsets(read_wangsets_json(wangsets, declared))
-        )
         image = str(entry.get("image", ""))
         if not image:
-            raise TiledUnsupported("an embedded tileset image", "Plotter needs an image path")
+            raise TiledUnsupported(
+                "an embedded tileset image", "Plotter needs an image path"
+            )
         refs.append(
             TilesetRef(
                 firstgid=firstgid,
-                tileset=Tileset(
-                    name=str(entry.get("name", "tileset")),
-                    class_name=str(entry.get("class") or entry.get("type") or ""),
-                    pixels=image_loader(image),
-                    tile_w=int(entry.get("tilewidth", 0) or 0),
-                    tile_h=int(entry.get("tileheight", 0) or 0),
-                    spacing=int(entry.get("spacing", 0) or 0),
-                    margin=int(entry.get("margin", 0) or 0),
-                    grid_orientation=str(grid.get("orientation", "orthogonal")),
-                    grid_width=int(
-                        grid.get("width", entry.get("tilewidth", 0)) or 0
-                    ),
-                    grid_height=int(
-                        grid.get("height", entry.get("tileheight", 0)) or 0
-                    ),
-                    transformations=(
-                        bool(transformations.get("hflip", False)),
-                        bool(transformations.get("vflip", False)),
-                        bool(transformations.get("rotate", False)),
-                        bool(transformations.get("preferuntransformed", False)),
-                    ),
-                    properties=remaining if terrains else props,
-                    terrains=terrains,
-                    phases=declared if terrains else 1,
-                    tiles=read_tile_meta_json(entry),
-                ),
+                tileset=tileset_from_json(entry, image_loader(image)),
             )
         )
     return refs

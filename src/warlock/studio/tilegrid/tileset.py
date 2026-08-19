@@ -294,6 +294,16 @@ class Tileset:
     phases: int = 1
     # Per-tile metadata by local id, sparse: most tiles carry nothing.
     tiles: dict[int, TileMeta] = field(default_factory=dict)
+    # Foreign Wang sets, kept as data.
+    #
+    # **Beside ``terrains``, not instead of it.** ``terrains`` is the *blob
+    # preset*: a positional 47-column layout whose bar is byte-identity on the
+    # whole existing corpus, and which ``terrain_of``/``local_for`` read a cell's
+    # role off directly. A set that is not that preset -- corner-only,
+    # edge-only, or mixed with a table of its own -- is recognised as data and
+    # painted by constraint matching instead. A tileset carrying one is not
+    # thereby a terrain set: ``is_terrain_set`` still means the preset.
+    wangsets: tuple[Any, ...] = ()
     # --- presentation ---------------------------------------------------------
     #
     # Four fields that change how a tile is *drawn* and nothing about which tile
@@ -326,6 +336,7 @@ class Tileset:
         for name in ("tile_w", "tile_h", "spacing", "margin"):
             object.__setattr__(self, name, int(getattr(self, name)))
         object.__setattr__(self, "terrains", tuple(self.terrains))
+        object.__setattr__(self, "wangsets", tuple(self.wangsets))
         # Empty records dropped on the way in, so "is there metadata on tile 7"
         # has one answer and a round trip cannot grow elements nobody authored.
         object.__setattr__(

@@ -203,6 +203,14 @@ Tiled `.tsx` with Wang sets does and a plain image does not. It sets the cell yo
 re-fits that cell and its eight neighbours, so edges, outer corners and inner corners follow as you
 draw rather than being placed one at a time.
 
+A **Tiled Wang set** works too, and no longer has to be one of Plotter's own.
+A corner set, an edge set, or a mixed one with a table of its own opens and
+paints: each of its colours gets a row in the Terrain list, and a stroke picks the
+tile whose wangid matches what its neighbours already say — ties broken by the
+colour's probability and then by the lowest tile id. Where nothing matches, the
+cell is **left alone** rather than given the closest tile: a wrong tile is a
+silent mistake you have to notice, and a hole is one you can see.
+
 A plain image can become one. Add a sheet holding all forty-seven blob cases — drawn by hand, or
 asked of a model — and Plotter says so: *These 47 tiles look like a complete 47-case terrain set*,
 with **Import as terrain set** to reorder them into the canonical layout and turn terrain painting

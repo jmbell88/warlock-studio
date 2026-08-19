@@ -73,6 +73,13 @@ would draw a tall tree tile in the wrong place while believing it had the whole
 file. A tileset whose presentation is entirely default keeps writing its old
 version.
 
+**Version 8 is foreign Wang sets**: a tileset's ``wangsets`` record, the general
+model beside the blob preset's positional ``terrains``. Gated for the standing
+reason, and with an extra one of its own: a version 7 reader would drop the set
+and leave a tileset that paints as plain tiles while the map around it is full
+of cells only that set explains. A tileset with no foreign set keeps its old
+version, so every blob-terrain document re-saves byte-stable.
+
 Versions 1 and 2 are still read, through tolerant defaults rather than a branch
 per version -- the ``locked`` precedent. A version 1 file predates projections
 and is orthogonal by definition; a version 2 file has no tint, offset, parallax
@@ -111,6 +118,7 @@ from ..tilegrid.tileset import (
     Tileset,
     TilesetRef,
 )
+from ..tilegrid.wang import WangColour, WangSet
 from . import project
 from .pngio import png_bytes
 from .props import read_wmap_properties, write_wmap_properties
@@ -132,7 +140,10 @@ from .tilemap import (
     shape_kind,
 )
 
-VERSION = 7
+VERSION = 8
+#: The tileset presentation fields; written when one is non-default and no
+#: tileset carries a foreign Wang set.
+PRESENTATION_VERSION = 7
 #: Per-tile metadata; written when a tileset carries some and no tileset
 #: carries a non-default presentation field.
 TILE_META_VERSION = 6
@@ -481,6 +492,60 @@ def _tile_meta_from(entries: Any) -> dict[int, TileMeta]:
     return out
 
 
+# --- Wang sets ----------------------------------------------------------------
+
+
+def _wangset_entry(wangset: Any) -> dict[str, Any]:
+    return {
+        "name": wangset.name,
+        "kind": wangset.kind,
+        "colours": [
+            {
+                "name": colour.name,
+                "colour": colour.colour,
+                "probability": float(colour.probability),
+            }
+            for colour in wangset.colours
+        ],
+        # Sorted, so two saves of one document are byte identical: a dict's
+        # insertion order is a property of how the set was read.
+        "tiles": {
+            str(local): list(wangset.tiles[local]) for local in sorted(wangset.tiles)
+        },
+    }
+
+
+def _wangsets_from(entries: Any) -> tuple[Any, ...]:
+    if not entries:
+        return ()
+    if not isinstance(entries, list):
+        _malformed("a tileset's wang sets are not an array")
+    out = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            _malformed("a wang set is not an object")
+        out.append(
+            WangSet(
+                name=str(entry.get("name", "Terrain")),
+                kind=str(entry.get("kind", "mixed")),
+                colours=tuple(
+                    WangColour(
+                        name=str(colour.get("name", "")),
+                        colour=str(colour.get("colour", "#ffffff")),
+                        probability=float(colour.get("probability", 1.0)),
+                    )
+                    for colour in (entry.get("colours") or ())
+                ),
+                tiles={
+                    int(local): tuple(int(slot) for slot in slots)
+                    for local, slots in (entry.get("tiles") or {}).items()
+                },
+            )
+        )
+    return tuple(out)
+
+
+
 def _document_version(doc: MapDoc) -> int:
     """The oldest version emitted by this writer that represents ``doc``.
 
@@ -500,8 +565,11 @@ def _document_version(doc: MapDoc) -> int:
         raise WmapUnstorable(
             f"the version {VERSION} .wmap format has no sparse chunk entry for an infinite map"
         )
-    # The presentation fields first: 7 is the ceiling, so nothing below can
-    # override it.
+    # Foreign Wang sets first: 8 is the ceiling, so nothing below can override
+    # it.
+    if any(ref.tileset.wangsets for ref in doc.tilesets):
+        return VERSION
+    # Then the presentation fields.
     if any(
         ref.tileset.offset_x
         or ref.tileset.offset_y
@@ -511,7 +579,7 @@ def _document_version(doc: MapDoc) -> int:
         or ref.tileset.background
         for ref in doc.tilesets
     ):
-        return VERSION
+        return PRESENTATION_VERSION
     # Then per-tile metadata. Mandatory rather than tolerant for the reason
     # every gate here is -- ``tiles`` is written unconditionally, and a version
     # 5 reader would drop the whole record without a word.
@@ -618,6 +686,9 @@ def manifest_json(doc: MapDoc) -> str:
                 "render_size": ts.render_size,
                 "fill_mode": ts.fill_mode,
                 "background": ts.background,
+                # A list, because a tileset may declare several and their order
+                # is the order Tiled shows them in.
+                "wangsets": [_wangset_entry(entry) for entry in ts.wangsets],
             }
         )
 
@@ -1129,6 +1200,9 @@ def read_wmap(data: bytes) -> MapDoc:
                         render_size=str(entry.get("render_size", "tile")),
                         fill_mode=str(entry.get("fill_mode", "stretch")),
                         background=entry.get("background") or None,
+                        # Absent before version 8, where the absence meant a
+                        # tileset with no foreign set.
+                        wangsets=_wangsets_from(entry.get("wangsets")),
                     ),
                     source=str(entry.get("source", "")),
                 )

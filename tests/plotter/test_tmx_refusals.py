@@ -313,14 +313,20 @@ def test_an_embedded_image_collection_tileset_is_refused():
     _refuses(data, "image-collection")
 
 
-def test_an_embedded_tileset_with_wangsets_is_refused():
+def test_an_embedded_tileset_with_an_empty_wangsets_block_is_read():
+    """Recognise-or-refuse ended with the general model: a set that is not this
+    editor's blob preset is read as data rather than turned away, and an empty
+    block is simply no sets at all."""
     data = (
         b'<map version="1.10" orientation="orthogonal" width="2" height="2" '
         b'tilewidth="16" tileheight="16">'
         b'<tileset firstgid="1" name="c" tilewidth="16" tileheight="16">'
         b'<image source="a.png" width="32" height="32"/><wangsets/></tileset></map>'
     )
-    _refuses(data, "Wang sets")
+    doc = tmx.read_tmx(data, **LOADERS)
+    ts = doc.tilesets[0].tileset
+    assert ts.terrains == ()
+    assert ts.wangsets == ()
 
 
 def _tmj(tileset: dict) -> bytes:
@@ -394,23 +400,35 @@ def test_a_tmj_wangset_this_build_wrote_is_recognised_rather_than_refused():
     assert doc.tilesets[0].tileset.is_terrain_set
 
 
-def test_a_foreign_tmj_wangset_is_refused_and_says_what_is_modelled():
-    """Corner-only sets, 255 colours, tiles that form no blob: adopting one
-    would be the silent half-read the reader exists to prevent."""
-    from warlock.studio.tilegrid import blob as bloblib
-
+def test_a_foreign_tmj_wangset_is_read_as_data():
+    """Corner-only sets, 255 colours, tiles that form no blob -- all of it is
+    modelled now, and painted by constraint matching rather than by the blob
+    collapse. The preset keeps its own positional path untouched."""
     foreign = {
         "name": "Corners",
         "type": "corner",
-        "colors": [{"name": "Grass", "color": "#6a994e"}],
-        "wangtiles": [{"tileid": 0, "wangid": [1, 0, 0, 0, 0, 0, 0, 0]}],
+        "colors": [{"name": "Grass", "color": "#6a994e", "probability": 2}],
+        "wangtiles": [{"tileid": 0, "wangid": [0, 1, 0, 1, 0, 1, 0, 1]}],
     }
-    with pytest.raises(tsx.TiledUnsupported) as exc:
-        tmx.read_tmj(
-            _tmj({"name": "g", "image": "a.png", "wangsets": [foreign]}), **LOADERS
-        )
-    assert "Wang sets" in str(exc.value)
-    assert str(bloblib.TILE_COUNT) in str(exc.value)
+    doc = tmx.read_tmj(
+        _tmj(
+            {
+                "name": "g",
+                "image": "a.png",
+                "tilewidth": 16,
+                "tileheight": 16,
+                "wangsets": [foreign],
+            }
+        ),
+        **LOADERS,
+    )
+    ts = doc.tilesets[0].tileset
+    assert ts.terrains == (), "a foreign set is not the blob preset"
+    assert len(ts.wangsets) == 1
+    got = ts.wangsets[0]
+    assert (got.name, got.kind) == ("Corners", "corner")
+    assert got.colours[0].probability == 2.0
+    assert got.tiles == {0: (0, 1, 0, 1, 0, 1, 0, 1)}
 
 
 def test_an_external_tsj_tileset_goes_to_the_loader_like_a_tsx():

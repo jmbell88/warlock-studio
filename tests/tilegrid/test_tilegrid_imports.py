@@ -78,5 +78,6 @@ def test_the_public_names_are_present() -> None:
         "rgba_colour",
         "roles",
         "slicing",
+        "wang",
     ):
         assert hasattr(tilegrid, name), name

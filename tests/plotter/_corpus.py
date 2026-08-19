@@ -33,6 +33,7 @@ MANIFEST: tuple[str, ...] = (
     "tilemeta-112",
     "tsj-112",
     "typed-embedded-112",
+    "wang-112",
 )
 
 

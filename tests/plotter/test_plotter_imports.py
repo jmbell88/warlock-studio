@@ -51,6 +51,8 @@ OUTWARD_IMPORTS = {
     # the reference and the fallback.
     ("tools.py", "warlock.native"),
     ("tmx.py", "warlock.studio.tilegrid"),
+    ("tsx.py", "warlock.studio.tilegrid.wang"),
+    ("wmap.py", "warlock.studio.tilegrid.wang"),
     ("tmx.py", "warlock.studio.tilegrid.tileset"),
     ("tools.py", "warlock.studio.tilegrid"),
     ("tsx.py", "warlock.studio.tilegrid"),

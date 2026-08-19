@@ -1254,7 +1254,7 @@ def test_presentation_fields_gate_version_seven_and_round_trip():
         ),
     )
     payload = json.loads(wmap.manifest_json(doc))
-    assert payload["version"] == wmap.VERSION == 7
+    assert payload["version"] == wmap.PRESENTATION_VERSION == 7
 
     back = wmap.read_wmap(wmap.wmap_bytes(doc)).tilesets[0].tileset
     assert (back.offset_x, back.offset_y) == (3, -5)
@@ -1265,6 +1265,41 @@ def test_presentation_fields_gate_version_seven_and_round_trip():
 
 
 def test_default_presentation_keeps_its_old_version():
+    doc = _doc()
+    payload = json.loads(wmap.manifest_json(doc))
+    assert payload["version"] < wmap.VERSION
+
+
+def test_foreign_wangsets_gate_version_eight_and_round_trip():
+    """A version 7 reader would drop the set and leave a tileset that paints as
+    plain tiles while the map around it is full of cells only that set
+    explains."""
+    from warlock.studio.tilegrid.wang import WangColour, WangSet
+
+    doc = _doc()
+    ts = doc.tilesets[0].tileset
+    wangset = WangSet(
+        name="Corners",
+        kind="corner",
+        colours=(WangColour("grass", "#00ff00", 2.0), WangColour("sand", "#ffff00")),
+        tiles={0: (0, 1, 0, 1, 0, 1, 0, 1), 1: (0, 2, 0, 2, 0, 2, 0, 2)},
+    )
+    doc.replace_tileset(0, dataclasses.replace(ts, wangsets=(wangset,)))
+
+    payload = json.loads(wmap.manifest_json(doc))
+    assert payload["version"] == wmap.VERSION == 8
+
+    back = wmap.read_wmap(wmap.wmap_bytes(doc)).tilesets[0].tileset
+    assert len(back.wangsets) == 1
+    got = back.wangsets[0]
+    assert got.name == "Corners"
+    assert got.kind == "corner"
+    assert [c.name for c in got.colours] == ["grass", "sand"]
+    assert got.colours[0].probability == 2.0
+    assert got.tiles == wangset.tiles
+
+
+def test_a_tileset_with_no_foreign_wangset_keeps_its_old_version():
     doc = _doc()
     payload = json.loads(wmap.manifest_json(doc))
     assert payload["version"] < wmap.VERSION
