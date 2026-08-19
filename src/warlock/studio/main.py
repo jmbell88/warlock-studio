@@ -4552,6 +4552,8 @@ class App:
                 ("Shift / Alt", "Add to / subtract from the selection (Wand and marquee)"),
                 ("Ctrl+A / Ctrl+D", "Select all / deselect (Ctrl+Shift+A also)"),
                 ("Ctrl+C / Ctrl+X / Ctrl+V", "Copy / cut / paste as the brush"),
+                ("Ctrl+J", "Duplicate the selected object"),
+                ("Ctrl+click / Alt+click", "Insert / remove a polygon vertex"),
                 ("Delete", "Clear the selection, or remove the object"),
                 ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
                 ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),

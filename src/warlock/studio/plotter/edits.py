@@ -193,6 +193,34 @@ class LayerPropsEdit(Edit):
 
 
 @dataclass
+class ImagePixelsEdit(Edit):
+    """An image layer's picture, before and after.
+
+    **Its own edit rather than a key in ``LayerPropsEdit``**, and the reason is
+    mechanical rather than stylistic: that edit decides whether anything changed
+    by comparing two snapshot *dicts* with ``==``, and a dict holding a numpy
+    array raises "truth value of an array is ambiguous" out of the middle of the
+    comparison. Pixels are also the one layer field big enough to need its own
+    line in the byte budget.
+    """
+
+    layer_uid: int
+    before: Any
+    after: Any
+
+    def __post_init__(self) -> None:
+        self.before = _own(self.before)
+        self.after = _own(self.after)
+        self.cost = int(self.before.nbytes + self.after.nbytes)
+
+    def undo(self, doc: Any) -> None:
+        doc._apply_image_pixels(self.layer_uid, self.before)
+
+    def redo(self, doc: Any) -> None:
+        doc._apply_image_pixels(self.layer_uid, self.after)
+
+
+@dataclass
 class MapPropsEdit(Edit):
     """The map's own custom properties.
 

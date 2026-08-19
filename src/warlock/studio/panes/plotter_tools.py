@@ -188,6 +188,9 @@ def draw(ctx: Any) -> None:
     _, state.grid = widgets.toggle("Grid (Ctrl+G)", state.grid)
     _, state.show_objects = widgets.toggle("Show objects", state.show_objects)
     _, state.minimap = widgets.toggle("Minimap", state.minimap)
+    _, state.highlight = widgets.toggle(
+        "Highlight current layer", state.highlight
+    )
 
     imgui.dummy((0, 6))
     widgets.section("Map")

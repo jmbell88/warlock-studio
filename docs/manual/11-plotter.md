@@ -278,6 +278,32 @@ all. Delete removes the selected object.
 Handles appear only on the selected rectangle, and not at all on a locked layer, where the drag
 would be refused anyway.
 
+A **polygon** or **polyline** gets a handle per point instead. Drag one to move it — computed in the
+object's own frame, so a vertex on a rotated shape lands where the outline says rather than where the
+maths would put it if the rotation were ignored. Ctrl+click a segment to insert a point on it, and
+Alt+click a point to remove it; a polygon floors at three points and a polyline at two, and the floor
+is refused by name rather than silently.
+
+**Ctrl+J** duplicates the selected object one cell down and right. Ctrl+C and Ctrl+V with the Objects
+tool in hand copy and paste one, and pasting into another map is refused whole — a tile object carries
+a gid and an object property may name an id, and both mean something else elsewhere. (Ctrl+D stays
+deselect here, unlike Tiled, because every other editor in this app deselects on it.) Selecting
+several objects at once is deliberately not offered yet.
+
+An **image layer** created here starts empty, and **Choose image…** on its row attaches a picture.
+`.wmap` already stores an image layer's pixels, so the file needs nothing new to hold it.
+
+Right-click a layer for **Duplicate** and **Merge down** beside Delete. A duplicate copies the whole
+subtree with fresh identities — nothing is shared with the original, so painting on one does not paint
+the other. Merge down folds the layer onto the tile layer directly below it, cell by cell, with a
+painted cell above winning; it is a merge of the *data* rather than a picture, so opacity, tint and
+blend stay where they were and the result is what the renderer was already drawing. Merging onto
+anything that is not a tile layer is refused by name.
+
+**Highlight current layer**, beside Grid and Minimap, dims everything but the layer you are painting
+on. It changes the canvas only — an export is unaffected, because exports composite from the same
+resolver and a dim living there would export dimmed.
+
 ### Locking a layer
 
 The padlock beside the eye locks a layer. A locked layer cannot be painted on, erased, cut from,
@@ -312,8 +338,10 @@ they are how a map says "this door needs the brass key" to code that has never h
 A **file** property is a path Plotter carries verbatim and never resolves; an **object** property is
 a Tiled object id, where 0 means none; and a **class** property holds a block of properties of its
 own, under a type name declared in a Tiled project. All three arrive from Tiled and survive the trip
-back. The new-property row offers the seven you can fill in on one line — a class arriving from a
-file is shown as a read-only summary until the recursive editor lands.
+back. The new-property row offers the seven you can fill in on one line, and a class or a list opens
+an **Edit** disclosure holding an editor of its own — nested classes and lists included, each member
+edited by its stored type. One editor serves the map's properties, a layer's and an object's, because
+all three are the same model.
 
 ## Files
 

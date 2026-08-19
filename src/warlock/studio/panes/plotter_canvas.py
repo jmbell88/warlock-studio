@@ -27,6 +27,7 @@ one of the three panes around this, and this one turns a click into a call.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from typing import Any
 
@@ -47,7 +48,13 @@ from ..plotter import render as plotter_render
 from ..plotter import scene as plotter_scene
 from ..plotter import terrain as plotter_terrain
 from ..plotter import tools as plotter_tools
-from ..plotter.tilemap import ImageLayer, ObjectLayer, TileLayer
+from ..plotter.tilemap import (
+    ImageLayer,
+    ObjectLayer,
+    Polygon,
+    Polyline,
+    TileLayer,
+)
 from ..tilegrid import gid as gidlib
 from ..tokens import sp
 from . import plotter_layers, plotter_textures
@@ -146,7 +153,7 @@ def draw(ctx: Any) -> None:
         (origin.x, origin.y), (origin.x + region[0], origin.y + region[1]), True
     )
     _backdrop(draw_list, doc, view, (origin.x, origin.y))
-    _layers(ctx, tab, draw_list, (origin.x, origin.y), region)
+    _layers(ctx, state, tab, draw_list, (origin.x, origin.y), region)
     if state.grid:
         _grid(draw_list, doc, view, (origin.x, origin.y))
     if state.show_objects:
@@ -600,7 +607,7 @@ def _blended(ctx: Any, tab: Any, doc: Any, draw_list: Any, origin, view) -> bool
     return True
 
 
-def _layers(ctx: Any, tab: Any, draw_list: Any, origin, region) -> None:
+def _layers(ctx: Any, state: Any, tab: Any, draw_list: Any, origin, region) -> None:
     """Every drawable layer, through the resolver both renderers share.
 
     ``scene.resolve`` is what decides visibility, opacity, tint, offset and
@@ -650,6 +657,18 @@ def _layers(ctx: Any, tab: Any, draw_list: Any, origin, region) -> None:
         for index, ref in enumerate(doc.tilesets)
     }
     memo = _index_memo(tab.uid, doc.tileset_epoch)
+
+    # **In this pane only, never in ``scene.resolve``.** ``render.py`` composites
+    # every export off the same resolver, so a dim living there would export
+    # dimmed -- which is why the entry is replaced here, on the way to the draw
+    # list, and the document is not touched at all.
+    if state.highlight and doc.active_layer is not None:
+        resolved = [
+            entry
+            if entry.layer.uid == doc.active_layer
+            else dataclasses.replace(entry, opacity=entry.opacity * 0.3)
+            for entry in resolved
+        ]
 
     for entry in resolved:
         if entry.opacity <= 0.0:
@@ -1764,6 +1783,32 @@ def _object_input(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None
         # empty space. Handles win because they sit *on* the outline and so
         # overlap the body -- checking the body first would make them unreachable.
         selected = next((o for o in layer.objects if o.uid == state.selected_object), None)
+        vertex = (
+            _vertex_at(tab.view, origin, selected, (mouse.x, mouse.y), (dx, dy))
+            if selected is not None and not locked
+            else None
+        )
+        if vertex is not None:
+            if imgui.get_io().key_alt:
+                _remove_vertex(ctx, doc, layer, selected, vertex)
+                return
+            doc.begin_object_edit(layer.uid, selected.uid)
+            state.drag_kind = "object-vertex"
+            state.drag_vertex = vertex
+            return
+        if (
+            selected is not None
+            and not locked
+            and imgui.get_io().key_ctrl
+            and _vertex_points(selected) is not None
+        ):
+            found = _segment_at(tab.view, origin, selected, (mouse.x, mouse.y), (dx, dy))
+            if found is not None:
+                index, at = found
+                points = list(_vertex_points(selected))
+                points.insert(index + 1, at)
+                _with_points(ctx, doc, layer, selected, tuple(points))
+                return
         handle = (
             _handle_at(tab.view, origin, selected, (mouse.x, mouse.y), (dx, dy))
             if selected is not None and not locked
@@ -1807,6 +1852,28 @@ def _object_input(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None
                 at = doc.cell_corner(*doc.cell_at(*point))
             x, y, w, h = _resized(target, fixed, at)
             doc.place_object(x=float(x), y=float(y), w=float(w), h=float(h))
+    elif state.drag_kind == "object-vertex" and imgui.is_mouse_down(0):
+        target = next((o for o in layer.objects if o.uid == state.selected_object), None)
+        points = None if target is None else _vertex_points(target)
+        if points is not None and state.drag_vertex is not None:
+            at = point
+            if imgui.get_io().key_ctrl:
+                at = doc.cell_corner(*doc.cell_at(*point))
+            # **Into the object's own frame**, which is the ``_resized`` trap by
+            # name: the outline is drawn by rotating each point about the
+            # object's origin, so taking the map point straight would put the
+            # vertex somewhere the outline does not go.
+            local = _unrotated_about(
+                (at[0] - target.x, at[1] - target.y), target.rotation
+            )
+            moved = list(points)
+            moved[state.drag_vertex] = local
+            kind = Polygon if isinstance(target.shape, Polygon) else Polyline
+            doc.place_object(shape=kind(tuple(moved)))
+    elif state.drag_kind == "object-vertex" and imgui.is_mouse_released(0):
+        # One undo step for the whole drag, exactly as a move or a resize is.
+        doc.end_object_edit()
+        state.clear_drag()
     elif state.drag_kind in ("object-move", "object-resize") and imgui.is_mouse_released(0):
         # One step for the whole gesture, and none at all for a click that never
         # moved anything -- the session finds no diff and pushes nothing.
@@ -1859,6 +1926,166 @@ def _handle_corners(obj: Any) -> dict[str, tuple[float, float]]:
 def _opposite(handle: str, obj: Any) -> tuple[float, float]:
     """The corner a resize keeps still."""
     return _handle_corners(obj)[{"nw": "se", "ne": "sw", "se": "nw", "sw": "ne"}[handle]]
+
+
+# --- polygon and polyline vertices -------------------------------------------
+#
+# Everything here works in the object's **own unrotated frame** and converts on
+# the way in and out -- ``_resized``'s trap by name. The outline is drawn by
+# rotating each point about the object's origin, so a vertex on a rotated
+# polygon is nowhere near where its stored coordinates say; taking a map point
+# straight as a vertex would move it somewhere the outline does not go, and the
+# error grows with the rotation angle rather than announcing itself at zero.
+
+
+def _vertex_points(obj: Any) -> tuple[tuple[float, float], ...] | None:
+    """The stored points of a polygon or polyline, or ``None`` for anything else."""
+    shape = getattr(obj, "shape", None)
+    if isinstance(shape, (Polygon, Polyline)):
+        return tuple(shape.points)
+    return None
+
+
+def _rotated_about(point: tuple[float, float], degrees: float) -> tuple[float, float]:
+    angle = math.radians(float(degrees))
+    cos, sin = math.cos(angle), math.sin(angle)
+    return (
+        point[0] * cos - point[1] * sin,
+        point[0] * sin + point[1] * cos,
+    )
+
+
+def _unrotated_about(point: tuple[float, float], degrees: float) -> tuple[float, float]:
+    return _rotated_about(point, -float(degrees))
+
+
+def _vertex_at(
+    view: Any,
+    origin,
+    obj: Any,
+    mouse: tuple[float, float],
+    shift: tuple[float, float] = (0.0, 0.0),
+) -> int | None:
+    """Which vertex the pointer is over, or ``None``.
+
+    Screen space, ``_handle_at``'s rule and for its reason: the handles are
+    drawn at a fixed ``sp()`` size, so a map-space radius would shrink to
+    nothing at low zoom exactly where they are hardest to hit.
+    """
+    points = _vertex_points(obj)
+    if points is None:
+        return None
+    for index, point in enumerate(points):
+        turned = _rotated_about(point, obj.rotation)
+        sx, sy = inker_state.to_screen(
+            view, origin, obj.x + turned[0] + shift[0], obj.y + turned[1] + shift[1]
+        )
+        if abs(sx - mouse[0]) <= sp(6) and abs(sy - mouse[1]) <= sp(6):
+            return index
+    return None
+
+
+def _segment_at(
+    view: Any,
+    origin,
+    obj: Any,
+    mouse: tuple[float, float],
+    shift: tuple[float, float] = (0.0, 0.0),
+) -> tuple[int, tuple[float, float]] | None:
+    """The segment the pointer is on and where on it, for an insert.
+
+    Returns ``(index after which to insert, the point in the object's frame)``.
+    A polygon's last segment closes back to its first point; a polyline's does
+    not, which is the whole difference between the two shapes here.
+    """
+    points = _vertex_points(obj)
+    if points is None or len(points) < 2:
+        return None
+    closed = isinstance(obj.shape, Polygon)
+    count = len(points) if closed else len(points) - 1
+    best: tuple[float, int, tuple[float, float]] | None = None
+    for index in range(count):
+        a = points[index]
+        b = points[(index + 1) % len(points)]
+        sa = inker_state.to_screen(
+            view,
+            origin,
+            *(v + s for v, s in zip(_offset_point(obj, a), shift, strict=True)),
+        )
+        sb = inker_state.to_screen(
+            view,
+            origin,
+            *(v + s for v, s in zip(_offset_point(obj, b), shift, strict=True)),
+        )
+        along = _projection(sa, sb, mouse)
+        if along is None:
+            continue
+        distance, fraction = along
+        if distance > sp(6):
+            continue
+        at = (a[0] + (b[0] - a[0]) * fraction, a[1] + (b[1] - a[1]) * fraction)
+        if best is None or distance < best[0]:
+            best = (distance, index, at)
+    return None if best is None else (best[1], best[2])
+
+
+def _offset_point(obj: Any, point: tuple[float, float]) -> tuple[float, float]:
+    turned = _rotated_about(point, obj.rotation)
+    return (obj.x + turned[0], obj.y + turned[1])
+
+
+def _projection(
+    a: tuple[float, float], b: tuple[float, float], p: tuple[float, float]
+) -> tuple[float, float] | None:
+    """``(distance, fraction along)`` of ``p`` onto segment ``a``-``b``."""
+    ax, ay = a
+    bx, by = b
+    dx, dy = bx - ax, by - ay
+    length = dx * dx + dy * dy
+    if length <= 0.0:
+        return None
+    fraction = ((p[0] - ax) * dx + (p[1] - ay) * dy) / length
+    fraction = max(0.0, min(1.0, fraction))
+    nx, ny = ax + dx * fraction, ay + dy * fraction
+    return math.hypot(p[0] - nx, p[1] - ny), fraction
+
+
+def _with_points(
+    ctx: Any, doc: Any, layer: Any, obj: Any, points: tuple[tuple[float, float], ...]
+) -> bool:
+    """Replace an object's shape with the same kind holding new points.
+
+    Shapes are frozen records, so a moved vertex is a *new* ``Polygon`` or
+    ``Polyline`` through ``set_object`` -- ``merged_object_values`` is the one
+    reconciliation door and there is no writing through a shape.
+    """
+    kind = Polygon if isinstance(obj.shape, Polygon) else Polyline
+    try:
+        shape = kind(tuple(points))
+    except ValueError as exc:
+        ctx.toast(f"{exc}.", "error")
+        return False
+    doc.set_object(layer.uid, obj.uid, shape=shape)
+    return True
+
+
+def _remove_vertex(ctx: Any, doc: Any, layer: Any, obj: Any, index: int) -> None:
+    """Alt+click a vertex to delete it, floored at the shape's minimum.
+
+    Refused by toast at the floor rather than silently: a polygon with two
+    points and a polyline with one are not shapes, and the frozen record would
+    raise out of the middle of the click.
+    """
+    points = _vertex_points(obj)
+    if points is None:
+        return
+    floor = 3 if isinstance(obj.shape, Polygon) else 2
+    if len(points) <= floor:
+        what = "polygon" if floor == 3 else "polyline"
+        ctx.toast(f"A {what} needs at least {floor} points.", "warn")
+        return
+    remaining = [p for i, p in enumerate(points) if i != index]
+    _with_points(ctx, doc, layer, obj, tuple(remaining))
 
 
 def _handle_at(

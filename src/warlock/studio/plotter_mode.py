@@ -32,10 +32,12 @@ by prefix: a key without one is a result delivered nowhere.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from . import dialogs, docmodes, journal, plotter_state, recents
+from .plotter._map_model import ObjectLayer
 
 # ``ensure`` and ``active`` live in :mod:`.plotter_state` -- they touch nothing
 # but ``ctx.state.plotter`` -- and the file layer lives in :mod:`.plotter_io`.
@@ -76,10 +78,12 @@ from .plotter_tilesets import (  # noqa: F401
     SheetTerrain,
     add_tileset_path,
     ask_add_tileset,
+    choose_layer_image,
     clear_sheet_import,
     import_detected_sheet,
     import_sheet_blind,
     import_sheet_terrain,
+    land_layer_image,
     land_tileset,
     polish_in_inker,
     tileset_from_inker,
@@ -295,6 +299,11 @@ def on_task_done(ctx: Any, done: Any) -> None:
 
     tab = state.get(key.split(":", 1)[1]) if ":" in key else None
     if tab is None:
+        return
+
+    if name == "plotter-layer-image":
+        if isinstance(result, dict) and result.get("image") is not None:
+            land_layer_image(ctx, tab, result)
         return
 
     if name == "plotter-tileset":
@@ -559,6 +568,12 @@ def _copy(ctx: Any, state: PlotterState, tab: PlotterDoc, *, cut: bool) -> None:
 
     from .tilegrid import gid as gidlib
 
+    if state.tool == "object" and state.selected_object is not None:
+        # With Objects in hand, Ctrl+C is about the object -- a marquee left
+        # over from earlier must not quietly copy tiles instead, which is the
+        # rule ``_delete`` already follows.
+        _copy_object(ctx, state, tab, cut=cut)
+        return
     layer, rect = _selected_tiles(ctx, state, tab, writing=cut)
     if layer is None:
         return
@@ -588,6 +603,9 @@ def _paste(ctx: Any, state: PlotterState, tab: PlotterDoc) -> None:
     if state.clipboard is None:
         ctx.toast("Nothing has been copied.", "error")
         return
+    if isinstance(state.clipboard, ObjectClip):
+        _paste_object(ctx, state, tab)
+        return
     if state.clipboard_doc != tab.uid:
         # Named rather than attempted. Gids are numbered against a map's own
         # firstgids, so the same number is a different tile here -- the paste
@@ -598,6 +616,115 @@ def _paste(ctx: Any, state: PlotterState, tab: PlotterDoc) -> None:
         return
     state.brush = state.clipboard.copy()
     state.tool = "stamp"
+
+
+@dataclass(frozen=True)
+class ObjectClip:
+    """A copied object, tagged so the one clipboard can hold two kinds.
+
+    Kind-tagged rather than a second field beside ``clipboard``, because "what
+    does Ctrl+V do" then has one answer read off one value -- two clipboards
+    would need a rule for which wins, and that rule is exactly what a user
+    cannot see.
+    """
+
+    obj: Any
+
+
+def _copy_object(
+    ctx: Any, state: PlotterState, tab: PlotterDoc, *, cut: bool
+) -> None:
+    """Ctrl+C / Ctrl+X with Objects in hand.
+
+    The object is stored by reference in an :class:`ObjectClip`; the paste makes
+    the copy. Storing the live object is safe because every edit to one replaces
+    it wholesale rather than writing through -- and a cut has already taken it
+    out of the layer, so there is nothing left to write through to.
+    """
+    layer = tab.doc.active()
+    if not isinstance(layer, ObjectLayer):
+        return
+    found = next((o for o in layer.objects if o.uid == state.selected_object), None)
+    if found is None:
+        return
+    state.clipboard = ObjectClip(obj=found)
+    state.clipboard_doc = tab.uid
+    if cut:
+        tab.doc.remove_object(layer.uid, found.uid)
+        state.selected_object = None
+
+
+def _paste_object(ctx: Any, state: PlotterState, tab: PlotterDoc) -> None:
+    """Paste a copied object onto the active object layer.
+
+    **Cross-map paste is refused whole**, by the same rule the tile clipboard's
+    is and for two reasons rather than one: a tile object carries a gid, which
+    is numbered against a map's own firstgids, and an object property may name
+    an object id, which means something else in another map. Neither can be
+    fixed up without guessing.
+    """
+    import dataclasses
+
+    from .plotter.tilemap import new_uid
+
+    if state.clipboard_doc != tab.uid:
+        source = state.get(state.clipboard_doc)
+        where = f" from {source.title}" if source is not None else ""
+        ctx.toast(f"That object{where} belongs to another map.", "error")
+        return
+    layer = tab.doc.active()
+    if not isinstance(layer, ObjectLayer):
+        ctx.toast("Pick an object layer to paste onto.", "error")
+        return
+    copy = dataclasses.replace(
+        state.clipboard.obj,
+        uid=new_uid(),
+        id=0,
+        x=state.clipboard.obj.x + tab.doc.tile_w,
+        y=state.clipboard.obj.y + tab.doc.tile_h,
+    )
+    tab.doc.add_object(layer.uid, copy)
+    state.selected_object = copy.uid
+
+
+def _duplicate_object(ctx: Any, state: PlotterState, tab: PlotterDoc) -> None:
+    """Ctrl+J: copy the selected object one cell down-right.
+
+    Down-right by one cell rather than in place, for the reason every editor
+    that offsets a duplicate has: a copy exactly on top of its original is
+    indistinguishable from nothing having happened, and the next click selects
+    whichever one the hit test reaches first.
+
+    The copy takes a **fresh persistent id** from the monotone counter -- ids are
+    never reused -- and its object-typed properties keep pointing where the
+    original's pointed, which is Tiled's rule and the only one that does not
+    silently rewrite somebody's reference.
+    """
+    import dataclasses
+
+    from .plotter.tilemap import new_uid
+
+    if state.tool != "object" or state.selected_object is None:
+        ctx.toast("Select an object first.", "error")
+        return
+    layer = tab.doc.active()
+    if not isinstance(layer, ObjectLayer):
+        return
+    found = next((o for o in layer.objects if o.uid == state.selected_object), None)
+    if found is None:
+        return
+    copy = dataclasses.replace(
+        found,
+        uid=new_uid(),
+        # ``0`` makes ``add_object`` mint the next one; setting it here would be
+        # a second place that knows how ids are assigned.
+        id=0,
+        x=found.x + tab.doc.tile_w,
+        y=found.y + tab.doc.tile_h,
+    )
+    tab.doc.add_object(layer.uid, copy)
+    state.selected_object = copy.uid
+    ctx.toast(f"Duplicated {found.name or 'the object'}.")
 
 
 def _delete(ctx: Any, state: PlotterState, tab: PlotterDoc) -> None:
@@ -672,7 +799,14 @@ def _ctrl_key(
         state.select = None if shift else (0, 0, tab.doc.width - 1, tab.doc.height - 1)
         return True
     if name == "d":
+        # **Ctrl+D stays deselect here**, a kept divergence from Tiled, where it
+        # duplicates. Every other editor in this app deselects on it and the
+        # duplicate moves to Ctrl+J instead -- which is where the raster editor
+        # already puts "copy this to its own layer".
         state.select = None
+        return True
+    if name == "j":
+        _duplicate_object(ctx, state, tab)
         return True
     if name in ("c", "x"):
         _copy(ctx, state, tab, cut=name == "x")

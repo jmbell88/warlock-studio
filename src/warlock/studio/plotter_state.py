@@ -165,6 +165,13 @@ class PlotterState:
     # palette is a view of a list -- and because index 0 is a meaningful
     # default where a firstgid of 0 is not a tileset at all.
     tileset_index: int = 0
+    # Dim every layer but the active one on the canvas.
+    #
+    # **A canvas setting and nothing more.** ``render.py`` composites exports off
+    # the same resolver the canvas draws from, so a dim living in
+    # ``scene.resolve`` would export dimmed -- which is the one way this can be
+    # wrong and the reason it is a pane concern.
+    highlight: bool = False
     # The block the palette last selected, as encoded gids. ``None`` means
     # nothing is picked, which is what an empty document starts as.
     brush: np.ndarray | None = None
@@ -259,6 +266,9 @@ class PlotterState:
     # Which corner a resize is pulling ("nw" / "ne" / "se" / "sw"), or "". The
     # *opposite* corner is what stays pinned, so this names the moving end.
     drag_handle: str = ""
+    # Which vertex of a polygon or polyline a drag is moving, or ``None``.
+    # Gesture state beside ``drag_handle``, and cleared with it.
+    drag_vertex: int | None = None
     space_held: bool = False
     # The last cell a stamp actually landed on, which is where Shift+click draws
     # a line *from* -- Tiled's model. Document-scoped view state: it names a cell
@@ -434,6 +444,7 @@ class PlotterState:
         self.drag_anchor = None
         self.drag_object = None
         self.drag_handle = ""
+        self.drag_vertex = None
         self.palette_anchor = None
         # Belongs to the gesture, not the selection: what was selected before a
         # marquee drag started has no meaning once the drag is over.

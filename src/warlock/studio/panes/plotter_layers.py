@@ -191,6 +191,15 @@ def _row(ctx: Any, doc: Any, state: Any, layer: Any, editable: bool) -> None:
                 imgui.pop_id()
             imgui.end_menu()
         imgui.separator()
+        if controls.menu_item_simple("Duplicate"):
+            doc.duplicate_layer(layer.uid)
+        if controls.menu_item_simple("Merge down"):
+            try:
+                doc.merge_down(layer.uid)
+            except ValueError as exc:
+                # Framed rather than forwarded: the engine's sentence says what
+                # was wrong and nothing about what was being attempted.
+                ctx.toast(f"Not merged: {exc}.", "error")
         if controls.menu_item_simple("Delete"):
             _delete_layer(ctx, doc, layer)
         imgui.end_disabled()
@@ -271,15 +280,13 @@ def _row(ctx: Any, doc: Any, state: Any, layer: Any, editable: bool) -> None:
                 doc.set_layer_props(layer.uid, color=color or None)
         elif isinstance(layer, ImageLayer):
             if layer.pixels is None:
-                # Said rather than left as a layer that draws nothing for no
-                # visible reason. An image layer's pixels arrive with the file
-                # it was imported from; there is no picker here yet, so one
-                # added with the **Image** button above is an empty layer until
-                # the map is round-tripped through something that can fill it.
                 widgets.muted_wrapped(
-                    "This image layer has no picture. Pictures arrive with an "
-                    "imported map; Plotter cannot attach one yet."
+                    "This image layer has no picture yet."
                 )
+            if widgets.disabled_button(
+                f"{icons.PLUS} Choose image...##img-{layer.uid}", editable, (-1, 0)
+            ):
+                plotter_mode.choose_layer_image(ctx, layer.uid)
             changed_x, repeat_x = widgets.toggle("Repeat X", layer.repeat_x)
             changed_y, repeat_y = widgets.toggle("Repeat Y", layer.repeat_y)
             if changed_x or changed_y:

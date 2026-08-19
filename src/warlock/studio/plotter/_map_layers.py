@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from ..tilegrid import gid as gidlib
-from ..tilegrid.tileset import colour_text, rgba_colour
+from ..tilegrid.tileset import colour_text, frozen_rgba, rgba_colour
 from ._map_model import (
     DRAW_ORDERS,
     GroupLayer,
@@ -44,7 +44,14 @@ from ._map_model import (
     new_uid,
     normalize_layer_values,
 )
-from .edits import LayerAddEdit, LayerMoveEdit, LayerPropsEdit, LayerRemoveEdit
+from .edits import (
+    ImagePixelsEdit,
+    LayerAddEdit,
+    LayerMoveEdit,
+    LayerPropsEdit,
+    LayerRemoveEdit,
+    TilePatchEdit,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .tilemap import MapDoc
@@ -245,6 +252,108 @@ class LayerOps:
         self.history.push(LayerRemoveEdit(layer=layer, index=index, parent_uid=parent_uid))
         self._detach_layer(layer)
 
+    def duplicate_layer(self: MapDoc, uid: int) -> Any:
+        """Copy a layer -- or a whole group -- in above itself, as one step.
+
+        Fresh uids **and** fresh persistent ids throughout the subtree: a uid is
+        how every recorded patch addresses a layer, and a persistent id is what a
+        ``.tmx`` writes, so a copy sharing either would be the original as far as
+        undo or a round trip is concerned. Arrays are copied too -- nothing is
+        shared with the original, or painting on one would paint on both.
+
+        One ``LayerAddEdit``, because the subtree travels whole: that edit holds
+        the layer object and the layer holds its children.
+        """
+        found = self._locate(uid)
+        if found is None:
+            raise KeyError(f"no layer {uid}")
+        layer, parent_uid, index = found
+        copy = self._copied_subtree(layer)
+        copy.name = f"{layer.name} copy"
+        # At the original's own index, not one past it: ``children_of`` is
+        # top-first, so inserting here puts the copy *above* and pushes the
+        # original down -- which is what "duplicate" means everywhere else.
+        return self._add_layer(copy, index, parent_uid)
+
+    def _copied_subtree(self: MapDoc, layer: Any) -> Any:
+        """One layer deep-copied with new identities. Recursive over groups."""
+        import copy as copylib
+
+        made = copylib.deepcopy(layer)
+        made.uid = new_uid()
+        made.id = self._mint_layer_id()
+        if isinstance(made, ObjectLayer):
+            for obj in made.objects:
+                obj.uid = new_uid()
+                # Ids are never reused, so a duplicate takes the next one --
+                # and an object-typed property pointing at the *original* goes on
+                # pointing there, which is what Tiled does and the only answer
+                # that does not silently rewrite somebody's reference.
+                obj.id = self.next_object_id
+                self.next_object_id += 1
+        if isinstance(made, GroupLayer):
+            made.children = [self._copied_subtree(child) for child in made.children]
+        return made
+
+    def merge_down(self: MapDoc, uid: int) -> bool:
+        """Merge a tile layer onto the tile layer directly below it in paint order.
+
+        **Gid-level, nonzero-above-wins per cell -- a data merge, deliberately
+        not a pixel composite.** Opacity, tint and blend are *presentation*: a
+        merge that baked them would produce cells whose stored gids disagree with
+        what the renderer draws the first time a tint changed, and there is no
+        gid that means "this tile at 40%".
+
+        Refused by name when there is nothing below, or when what is below is
+        not a tile layer: merging a tile layer onto an object layer has no
+        meaning that could be undone into.
+
+        One snapshot edit for the write plus the removal, so a merge is one
+        Ctrl+Z.
+        """
+        found = self._locate(uid)
+        if found is None:
+            raise KeyError(f"no layer {uid}")
+        layer, parent_uid, index = found
+        if not isinstance(layer, TileLayer):
+            raise ValueError(f"{layer.name} is not a tile layer")
+        siblings = self.children_of(parent_uid)
+        if index + 1 >= len(siblings):
+            raise ValueError(f"there is no layer below {layer.name} to merge into")
+        below = siblings[index + 1]
+        if not isinstance(below, TileLayer):
+            raise ValueError(f"{below.name} is not a tile layer")
+
+        merged = np.array(below.data, dtype=gidlib.DTYPE)
+        above = np.asarray(layer.data, dtype=gidlib.DTYPE)
+        keep = above != gidlib.EMPTY
+        merged[keep] = above[keep]
+
+        # Built and pushed as one ``CompoundEdit`` rather than through
+        # ``write_region`` and ``remove_layer``: those push a step each, and a
+        # merge that took two Ctrl+Z presses would show the user a state in
+        # between -- the merged layer *and* the layer it merged -- that never
+        # existed.
+        steps: list[Any] = []
+        if not np.array_equal(below.data, merged):
+            steps.append(
+                TilePatchEdit(
+                    layer_uid=int(below.uid),
+                    x0=0,
+                    y0=0,
+                    before=np.array(below.data, dtype=gidlib.DTYPE),
+                    after=merged,
+                )
+            )
+            self._blit(below.uid, 0, 0, merged)
+        steps.append(
+            LayerRemoveEdit(layer=layer, index=index, parent_uid=parent_uid)
+        )
+        self._detach_layer(layer)
+        self.compound(steps)
+        self.active_layer = below.uid
+        return True
+
     def move_layer(
         self: MapDoc, uid: int, to_index: int, *, parent_uid: Any = _KEEP
     ) -> None:
@@ -289,6 +398,43 @@ class LayerOps:
             )
         )
         self._relocate(uid, (after_parent, after_index))
+
+    def set_image_pixels(
+        self: MapDoc, uid: int, pixels: np.ndarray, *, source: str = ""
+    ) -> bool:
+        """Attach (or replace) an image layer's picture, undoably.
+
+        The pixels are frozen on the way in, the :class:`~.tileset.Tileset` rule
+        for its reason: the UI keys a texture upload on the array's identity, so
+        an in-place edit would leave the cache holding a live key over stale
+        pixels.
+
+        ``source`` is carried verbatim and never resolved -- the host's problem,
+        exactly as it is for a picture that arrived with an imported map -- and
+        it is what a ``.tmx`` export writes as the layer's external reference.
+        """
+        layer = self.layer(uid)
+        if not isinstance(layer, ImageLayer):
+            raise KeyError(f"no image layer {uid}")
+        wanted = frozen_rgba(pixels, "an image layer's picture")
+        if layer.pixels is not None and np.array_equal(layer.pixels, wanted):
+            if str(source) != layer.source:
+                self.set_layer_props(uid, source=str(source))
+            return False
+        self.history.push(
+            ImagePixelsEdit(layer_uid=int(uid), before=layer.pixels, after=wanted)
+        )
+        self._apply_image_pixels(uid, wanted)
+        if str(source) != layer.source:
+            self.set_layer_props(uid, source=str(source))
+        return True
+
+    def _apply_image_pixels(self: MapDoc, uid: int, pixels: np.ndarray) -> None:
+        """The hook :class:`~.edits.ImagePixelsEdit` calls back into."""
+        layer = self.layer(uid)
+        if isinstance(layer, ImageLayer):
+            layer.pixels = pixels
+            self.tileset_epoch += 1
 
     def set_layer_props(self: MapDoc, uid: int, **values: Any) -> None:
         """Rename, hide, fade, offset, tint or re-key a layer.

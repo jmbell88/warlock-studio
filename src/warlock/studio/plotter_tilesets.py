@@ -385,6 +385,57 @@ def import_sheet_blind(ctx: Any) -> bool:
     return True
 
 
+def choose_layer_image(ctx: Any, layer_uid: int) -> None:
+    """Pick a picture for an image layer, decode it, attach it.
+
+    The picker and the decode on one task thread, ``ask_add_tileset``'s shape and
+    for its reason: routing a bare path back through the frame thread only to
+    submit a second job with it gives the intermediate result nowhere sensible to
+    live while it waits.
+
+    ``.wmap`` already stores an image layer's pixels (as ``images/N.png``), so
+    nothing about the container changes and this needs no version bump.
+    """
+    tab = active(ctx)
+    if tab is None:
+        ctx.toast("Open or start a map first.", "error")
+        return
+    uid = tab.uid
+
+    def run() -> dict[str, Any] | None:
+        from ..service.errors import invalid_from
+
+        # ``(label, patterns)`` pairs, and the pairing is the whole of it --
+        # portable-file-dialogs reads a filter list two at a time, so a label
+        # followed by a splatted glob list advertises formats it then filters
+        # out. ``filetypes`` builds both halves from one suffix list.
+        path = dialogs.open_file(
+            "Choose an image",
+            [filetypes.describe("Images"), filetypes.pattern()],
+        )
+        if path is None:
+            return None
+        try:
+            pixels = _decode(path)
+        except ValueError as exc:
+            raise invalid_from(exc, "That image could not be opened", field="file") from exc
+        return {"image": (int(layer_uid), str(path), pixels), "uid": uid}
+
+    ctx.submit(f"plotter-layer-image:{uid}", run)
+
+
+def land_layer_image(ctx: Any, tab: Any, result: dict[str, Any]) -> None:
+    """Adopt a chosen picture onto its image layer. Frame thread."""
+    layer_uid, source, pixels = result["image"]
+    try:
+        tab.doc.set_image_pixels(layer_uid, pixels, source=source)
+    except (KeyError, ValueError) as exc:
+        ctx.toast(f"That image was not attached: {exc}.", "error")
+        return
+    tab.view.fitted = False
+    ctx.toast("Image attached.")
+
+
 def polish_in_inker(ctx: Any, tab: Any, index: int) -> None:
     """Open a tileset's atlas as an ordinary Inker document.
 
