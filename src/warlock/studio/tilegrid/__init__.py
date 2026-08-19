@@ -7,8 +7,14 @@ from __future__ import annotations
 
 from . import blob, gid, roles, slicing
 from .tileset import (
+    COLLISION_SHAPES,
     RGBA,
     TerrainSpec,
+    TileEllipse,
+    TileFrame,
+    TileMeta,
+    TilePolygon,
+    TileRect,
     Tileset,
     TilesetRef,
     colour_text,
@@ -17,5 +23,7 @@ from .tileset import (
     rgba_colour,
 )
 
-__all__ = ["RGBA", "TerrainSpec", "Tileset", "TilesetRef", "blob", "colour_text",
-           "frozen_rgba", "gid", "repolish", "rgba_colour", "roles", "slicing"]
+__all__ = ["COLLISION_SHAPES", "RGBA", "TerrainSpec", "TileEllipse", "TileFrame",
+           "TileMeta", "TilePolygon", "TileRect", "Tileset", "TilesetRef", "blob",
+           "colour_text", "frozen_rgba", "gid", "repolish", "rgba_colour", "roles",
+           "slicing"]

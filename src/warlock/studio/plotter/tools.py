@@ -287,6 +287,33 @@ def fill_rng() -> Any:
     return _default_rng()
 
 
+def random_choices(
+    brush: np.ndarray, weights: Any = None
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """The non-empty members of a brush, and their weights.
+
+    ``weights`` is a callable from an encoded gid to a per-tile probability --
+    the caller's, because a brush is gids and only the *map* knows which tileset
+    each one belongs to. ``None`` means every member is equally likely, which is
+    what a map with no per-tile metadata gets and is byte-identical to the
+    behaviour before weights existed.
+
+    **Probability 0 is never chosen at random.** Tiled's rule, and the useful
+    one: it is how a set marks a tile that belongs to the palette but not to the
+    scatter. A brush whose every member is weighted 0 falls back to uniform --
+    refusing to place anything would be a scatter brush that silently does
+    nothing.
+    """
+    choices = np.asarray(brush, dtype=gidlib.DTYPE).reshape(-1)
+    choices = choices[choices != gidlib.EMPTY]
+    if not choices.size or weights is None:
+        return choices, None
+    values = np.array([max(0.0, float(weights(int(gid)))) for gid in choices])
+    if values.sum() <= 0.0:
+        return choices, None
+    return choices, values / values.sum()
+
+
 def random_stamp(
     data: np.ndarray,
     x: int,
@@ -294,20 +321,24 @@ def random_stamp(
     brush: np.ndarray,
     *,
     rng: Any = None,
+    weights: Any = None,
 ) -> Region | None:
     """Choose one non-empty encoded gid from a stamp and place it at a cell."""
-    choices = np.asarray(brush, dtype=gidlib.DTYPE).reshape(-1)
-    choices = choices[choices != gidlib.EMPTY]
+    choices, probabilities = random_choices(brush, weights)
     if not choices.size:
         return None
     generator = _default_rng() if rng is None else rng
-    chosen = choices[int(generator.integers(0, len(choices)))]
+    if probabilities is None:
+        chosen = choices[int(generator.integers(0, len(choices)))]
+    else:
+        chosen = choices[int(generator.choice(len(choices), p=probabilities))]
     return stamp(data, x, y, np.asarray([[chosen]], dtype=gidlib.DTYPE))
 
 
 def _painted(
     x0: int, y0: int, shape: tuple[int, int], value: int, brush: np.ndarray | None,
     rng: Any = None,
+    weights: Any = None,
 ) -> np.ndarray:
     """The block a fill lays down: one gid, a tiled pattern, or a random pick.
 
@@ -324,11 +355,13 @@ def _painted(
         return np.full((height, width), gidlib.DTYPE(value), gidlib.DTYPE)
     block = np.asarray(brush, dtype=gidlib.DTYPE)
     if rng is not None:
-        choices = block.reshape(-1)
-        choices = choices[choices != gidlib.EMPTY]
+        choices, probabilities = random_choices(block, weights)
         if not choices.size:
             return np.full((height, width), gidlib.DTYPE(value), gidlib.DTYPE)
-        picks = rng.integers(0, len(choices), size=(height, width))
+        if probabilities is None:
+            picks = rng.integers(0, len(choices), size=(height, width))
+        else:
+            picks = rng.choice(len(choices), size=(height, width), p=probabilities)
         return choices[picks].astype(gidlib.DTYPE)
     bh, bw = block.shape
     ys = (np.arange(y0, y0 + height) % bh)[:, None]
@@ -346,6 +379,7 @@ def fill_rect(
     *,
     brush: np.ndarray | None = None,
     rng: Any = None,
+    weights: Any = None,
 ) -> Region | None:
     """One gid across a rectangle given by any two opposite corners.
 
@@ -362,7 +396,7 @@ def fill_rect(
     if hi_x < lo_x or hi_y < lo_y:
         return None
     region = _painted(
-        lo_x, lo_y, (hi_y - lo_y + 1, hi_x - lo_x + 1), value, brush, rng
+        lo_x, lo_y, (hi_y - lo_y + 1, hi_x - lo_x + 1), value, brush, rng, weights
     )
     return lo_x, lo_y, region
 
@@ -377,6 +411,7 @@ def fill_ellipse(
     *,
     brush: np.ndarray | None = None,
     rng: Any = None,
+    weights: Any = None,
 ) -> Region | None:
     """One gid across the ellipse inscribed in the box those corners give.
 
@@ -419,7 +454,7 @@ def fill_ellipse(
     region = np.array(
         data[clip_y0 : clip_y1 + 1, clip_x0 : clip_x1 + 1], dtype=gidlib.DTYPE
     )
-    painted = _painted(clip_x0, clip_y0, region.shape, value, brush, rng)
+    painted = _painted(clip_x0, clip_y0, region.shape, value, brush, rng, weights)
     region[inside] = painted[inside]
     return clip_x0, clip_y0, region
 
@@ -440,6 +475,7 @@ def flood_fill(
     mask: np.ndarray | None = None,
     brush: np.ndarray | None = None,
     rng: Any = None,
+    weights: Any = None,
 ) -> Region | None:
     """Four-connected fill of the contiguous run under ``(x, y)``.
 
@@ -505,7 +541,7 @@ def flood_fill(
     # rectangle over the wall in its notch.
     region = np.array(data[y0:y1, x0:x1], dtype=gidlib.DTYPE)
     reached = seen[y0:y1, x0:x1]
-    painted = _painted(x0, y0, region.shape, value, brush, rng)
+    painted = _painted(x0, y0, region.shape, value, brush, rng, weights)
     region[reached] = painted[reached] if brush is not None else fill
     return x0, y0, region
 

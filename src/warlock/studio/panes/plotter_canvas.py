@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
+import time
 from typing import Any
 
 import numpy as np
@@ -607,7 +608,15 @@ def _blended(ctx: Any, tab: Any, doc: Any, draw_list: Any, origin, view) -> bool
     return True
 
 
-def _layers(ctx: Any, state: Any, tab: Any, draw_list: Any, origin, region) -> None:
+def _layers(
+    ctx: Any,
+    state: Any,
+    tab: Any,
+    draw_list: Any,
+    origin,
+    region,
+    clock: Any = time.monotonic,
+) -> None:
     """Every drawable layer, through the resolver both renderers share.
 
     ``scene.resolve`` is what decides visibility, opacity, tint, offset and
@@ -657,6 +666,15 @@ def _layers(ctx: Any, state: Any, tab: Any, draw_list: Any, origin, region) -> N
         for index, ref in enumerate(doc.tilesets)
     }
     memo = _index_memo(tab.uid, doc.tileset_epoch)
+    # Whether any tileset carries an animation at all, decided once per frame
+    # rather than per cell: on the overwhelmingly common map this is one `any`
+    # over a handful of tilesets and the substitution below never runs.
+    animating = any(
+        meta.animation
+        for ref in doc.tilesets
+        for meta in ref.tileset.tiles.values()
+    )
+    clock_ms = int(clock() * 1000.0)
 
     # **In this pane only, never in ``scene.resolve``.** ``render.py`` composites
     # every export off the same resolver, so a dim living there would export
@@ -685,6 +703,16 @@ def _layers(ctx: Any, state: Any, tab: Any, draw_list: Any, origin, region) -> N
             continue
         tint = _layer_tint(imgui, entry)
         block = layer.data[r0 : r1 + 1, c0 : c1 + 1]
+        if animating:
+            # **Draw-time only.** The document's arrays are untouched: a clock
+            # that wrote gids would dirty a saved map sixty times a second.
+            # ``render.py``, the minimap and every export draw frame 1 -- an
+            # export is a still, which is the parallax precedent (canvas and
+            # export deliberately disagree, and the disagreement is stated).
+            block = np.vectorize(
+                lambda value: animated_gid(doc, int(value), clock_ms),
+                otypes=[gidlib.DTYPE],
+            )(block)
         ids = gidlib.tile_ids(block)
         flags = gidlib.flags(block)
         # Back to front. For an orthogonal map that is row-major and this is
@@ -1550,6 +1578,62 @@ def _terrain_cell_ref(doc: Any, data: Any, cell: tuple[int, int]):
     return None
 
 
+def _tile_weights(doc: Any) -> Any:
+    """A callable from an encoded gid to that tile's random-paint probability.
+
+    The *map*'s job rather than the brush's: a brush is gids and only the map
+    knows which tileset each one belongs to. ``None`` when no tileset carries any
+    per-tile metadata, which short-circuits the whole thing to the uniform pick
+    it always was.
+    """
+    if not any(ref.tileset.tiles for ref in doc.tilesets):
+        return None
+
+    def weight(value: int) -> float:
+        tile = int(value) & gidlib.GID_MASK
+        ref = doc.ref_for(tile)
+        if ref is None:
+            return 1.0
+        return ref.tileset.meta_of(tile - ref.firstgid).probability
+
+    return weight
+
+
+def animated_gid(doc: Any, value: int, clock_ms: int) -> int:
+    """``value`` with an animated tile's current frame substituted in.
+
+    **Draw-time only, and the document arrays never move.** A clock that wrote
+    gids would dirty a saved map sixty times a second, which is why this is a
+    function the canvas calls on its way to the draw list rather than anything
+    the document knows about.
+
+    The cell's flip flags are preserved: a mirrored animated tile animates
+    mirrored, exactly as a mirrored still one draws mirrored.
+    """
+    tile = int(value) & gidlib.GID_MASK
+    if not tile:
+        return value
+    ref = doc.ref_for(tile)
+    if ref is None:
+        return value
+    frames = ref.tileset.meta_of(tile - ref.firstgid).animation
+    if not frames:
+        return value
+    total = sum(frame.duration_ms for frame in frames)
+    if total <= 0:
+        return value
+    at = int(clock_ms) % total
+    for frame in frames:
+        if at < frame.duration_ms:
+            # The flags live in the top bits and the id in the rest, so the
+            # substitution is a masked write rather than a re-encode.
+            return int(
+                (int(value) & ~gidlib.GID_MASK) | (ref.firstgid + frame.local_id)
+            )
+        at -= frame.duration_ms
+    return value
+
+
 def _fill_rng(state: Any):
     """The generator a fill scatters with, or ``None`` for a pattern/plain fill.
 
@@ -1629,7 +1713,13 @@ def _apply(ctx: Any, state: Any, tab: Any, cell: tuple[int, int]) -> None:
             ctx.toast("Pick a tile from the tileset first.", "error")
             return
         result = (
-            plotter_tools.random_stamp(layer.data, cell[0], cell[1], state.brush)
+            plotter_tools.random_stamp(
+                layer.data,
+                cell[0],
+                cell[1],
+                state.brush,
+                weights=_tile_weights(doc),
+            )
             if state.random_mode
             else plotter_tools.stamp(layer.data, cell[0], cell[1], state.brush)
         )
@@ -1675,6 +1765,7 @@ def _apply(ctx: Any, state: Any, tab: Any, cell: tuple[int, int]) -> None:
                 mask=state.selection_mask_in(doc),
                 brush=state.brush if state.brush.size > 1 else None,
                 rng=_fill_rng(state),
+                weights=_tile_weights(doc),
             )
     elif state.tool == "terrain":
         ref = _terrain_ref(state, doc)
@@ -1729,6 +1820,7 @@ def _apply_shape(ctx: Any, state: Any, tab: Any, a: tuple[int, int], b: tuple[in
             # byte-identical to the plain fill it always was.
             brush=state.brush if state.brush.size > 1 else None,
             rng=_fill_rng(state),
+            weights=_tile_weights(tab.doc),
         ),
     )
     if result is not None:

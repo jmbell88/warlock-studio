@@ -29,6 +29,7 @@ MANIFEST: tuple[str, ...] = (
     "basic-iso",
     "core-112",
     "oblique-112",
+    "tilemeta-112",
     "typed-embedded-112",
 )
 

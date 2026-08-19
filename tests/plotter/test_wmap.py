@@ -10,6 +10,7 @@ with the user saving it back over the original.
 
 from __future__ import annotations
 
+import dataclasses
 import io
 import json
 import zipfile
@@ -1139,7 +1140,7 @@ def test_phases_gate_version_five_and_round_trip():
     of every painted cell, silently."""
     doc = _terrain_doc(4)
     payload = json.loads(wmap.manifest_json(doc))
-    assert payload["version"] == wmap.VERSION == 5
+    assert payload["version"] == wmap.PHASES_VERSION == 5
     back = wmap.read_wmap(wmap.wmap_bytes(doc))
     assert back.tilesets[0].tileset.phases == 4
     assert len(back.tilesets[0].tileset.terrains) == 1
@@ -1180,3 +1181,55 @@ def test_a_tile_object_carrying_the_hexagonal_rotation_bit_is_refused_by_name():
 
     with pytest.raises(ValueError, match="hexagonal 120-degree tile rotation"):
         wmap.read_wmap(_rewrite(_gate_doc(), spin))
+
+
+def test_per_tile_metadata_gates_version_six_and_round_trips():
+    """The same argument one version up: ``tiles`` is written unconditionally,
+    so a document carrying it while declaring version 5 would hand an old reader
+    a file it drops half of without a word."""
+    from warlock.studio.tilegrid.tileset import (
+        TileEllipse,
+        TileFrame,
+        TileMeta,
+        TilePolygon,
+        TileRect,
+    )
+
+    doc = _doc()
+    ts = doc.tilesets[0].tileset
+    doc.replace_tileset(
+        0,
+        dataclasses.replace(
+            ts,
+            tiles={
+                0: TileMeta(class_name="Water", probability=0.25),
+                1: TileMeta(animation=(TileFrame(1, 120), TileFrame(2, 80))),
+                2: TileMeta(
+                    collision=(
+                        TileRect(1.0, 2.0, 8.0, 9.0),
+                        TileEllipse(0.0, 0.0, 4.0, 4.0),
+                        TilePolygon(2.0, 2.0, ((0.0, 0.0), (4.0, 0.0))),
+                    )
+                ),
+            },
+        ),
+    )
+    payload = json.loads(wmap.manifest_json(doc))
+    assert payload["version"] == wmap.VERSION == 6
+
+    back = wmap.read_wmap(wmap.wmap_bytes(doc))
+    tiles = back.tilesets[0].tileset.tiles
+    assert tiles[0].class_name == "Water"
+    assert tiles[0].probability == 0.25
+    assert [(f.local_id, f.duration_ms) for f in tiles[1].animation] == [(1, 120), (2, 80)]
+    assert [type(s).__name__ for s in tiles[2].collision] == [
+        "TileRect",
+        "TileEllipse",
+        "TilePolygon",
+    ]
+
+
+def test_a_tileset_with_no_tile_metadata_keeps_its_old_version():
+    doc = _doc()
+    payload = json.loads(wmap.manifest_json(doc))
+    assert payload["version"] < wmap.VERSION

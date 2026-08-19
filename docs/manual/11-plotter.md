@@ -73,6 +73,25 @@ Tilesets are *added*, never removed. Every tile in the map is numbered from the 
 to, so dropping one from the middle would either renumber everything above it — invalidating every
 cell already painted — or leave a hole. Undo takes back a tileset you have only just added.
 
+### What one tile carries
+
+Pick a single tile and a **Tile** header appears under the palette. A tile can carry a class, custom
+properties of the same typed kind everything else here does, a **probability** that weights it for a
+random brush, an **animation** and a set of **collision shapes** — all of it Tiled's own model, read
+from and written to `.tsx`, `.tmx`, `.tmj` and `.wmap`.
+
+Probability 0 is worth stating on its own: such a tile is never chosen by a random brush and is
+always placeable by hand. It is how a set marks a tile that belongs to the palette but not to the
+scatter, and it is Tiled's rule rather than ours.
+
+An animated tile **plays on the canvas** and is drawn as its first frame in every export, on the
+minimap, and by anything that composites the map flat. That disagreement is deliberate: an export is
+a still. The document's own cells never move while it plays — a clock that wrote tile numbers would
+mark a saved map dirty sixty times a second.
+
+Collision shapes are drawn as outlines and are **never** hit-tested against the map. They are
+metadata an engine reads, exactly as an object layer is.
+
 ### Picking a tile
 
 The palette under the tileset combo is the atlas itself. Click a tile to pick it; drag across
@@ -378,11 +397,11 @@ gone. The message says which feature and what to do about it.
 
 Refused: staggered and hexagonal maps; infinite (chunked) maps; object templates; image-collection
 tilesets and embedded tileset images; external `.tsj` tilesets; Wang sets that are not one of
-Plotter's own terrain sets, and Tiled's older terrain types; per-tile animation, properties,
-collision shapes, class, probability and terrain assignment; tileset object alignment, render size,
-fill mode, background colour and tile offset; zstd-compressed layer data; deprecated tile-space
-layer coordinates and image-layer transparent colours; and custom properties of a type outside the
-set Plotter models.
+Plotter's own terrain sets, and Tiled's older terrain types; per-tile terrain assignment (Tiled's
+own deprecated one, which Tiled is retiring); tileset object alignment, render size, fill mode,
+background colour and tile offset; zstd-compressed layer data; deprecated tile-space layer
+coordinates and image-layer transparent colours; and custom properties of a type outside the set
+Plotter models.
 
 Group layers, image layers, layer offsets, tints, parallax and classes, every one of the eight
 object shapes, object rotation and object templates' *contents* all load — several of those were on

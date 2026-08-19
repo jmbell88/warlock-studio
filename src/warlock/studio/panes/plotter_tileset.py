@@ -27,7 +27,7 @@ from .. import controls, icons, plotter_mode, widgets
 from ..manual import render as manual_render
 from ..tilegrid import gid as gidlib
 from ..tokens import sp
-from . import plotter_textures
+from . import plotter_layers, plotter_textures
 
 SHEET_POPUP = "plotter-sheet-import"
 
@@ -183,6 +183,7 @@ def draw(ctx: Any) -> None:
     ref = doc.tilesets[index]
     imgui.dummy((0, 4))
     _picker(ctx, state, ref, index, tab.uid, doc.tileset_epoch)
+    _tile_form(ctx, state, tab, ref, index)
 
     # Everything below here is about the pane's *contents* rather than about the
     # brush, in the order the questions get asked: which tile (above), then how
@@ -191,6 +192,108 @@ def draw(ctx: Any) -> None:
     add_button()
     imgui.dummy((0, 4))
     _inker_row(ctx, state, tab, index)
+
+
+def _picked_local(state: Any, ref: Any) -> int | None:
+    """The one tile the palette selection names, or ``None`` for a block.
+
+    A block selection has no single tile to attach metadata to, and offering the
+    form for it would make "which tile did that class land on" a question the
+    user has to guess the answer to.
+    """
+    brush = state.brush
+    if brush is None or brush.size != 1:
+        return None
+    value = int(brush.reshape(-1)[0])
+    tile = value & gidlib.GID_MASK
+    if not ref.holds(tile):
+        return None
+    return tile - ref.firstgid
+
+
+def _tile_form(ctx: Any, state: Any, tab: Any, ref: Any, index: int) -> None:
+    """The **Tile** header: what one tile carries beyond its picture.
+
+    Under the palette rather than beside it, and shown only when the selection
+    is a single tile -- see :func:`_picked_local`.
+    """
+    from imgui_bundle import imgui
+
+    local = _picked_local(state, ref)
+    if local is None:
+        return
+    imgui.dummy((0, 6))
+    if not widgets.header("Tile", default_open=False, persist_key="plotter/tilemeta"):
+        return
+    meta = ref.tileset.meta_of(local)
+    widgets.muted(f"local id {local}")
+
+    class_name = widgets.input_text(
+        "##tile-class", meta.class_name, max_length=64, hint="class"
+    )
+    changed, probability = controls.input_float("Probability", float(meta.probability))
+    if class_name != meta.class_name or changed:
+        tab.doc.set_tile_meta(
+            index,
+            local,
+            _replaced(meta, class_name=class_name, probability=max(0.0, probability)),
+        )
+    if meta.probability == 0.0:
+        widgets.muted_wrapped(
+            "Never chosen by a random brush, and always placeable by hand."
+        )
+
+    imgui.dummy((0, 4))
+    widgets.muted(
+        f"{len(meta.animation)} animation frame(s), "
+        f"{len(meta.collision)} collision shape(s)"
+    )
+    if controls.button("Add frame from selection", (-1, 0)):
+        # The palette pick *is* the frame picker -- there is no second control
+        # for choosing a tile, because the one above it already is one.
+        tab.doc.set_tile_meta(
+            index,
+            local,
+            _replaced(
+                meta,
+                animation=(*meta.animation, _frame(local)),
+            ),
+        )
+    if meta.animation and controls.button("Remove last frame", (-1, 0)):
+        tab.doc.set_tile_meta(
+            index, local, _replaced(meta, animation=meta.animation[:-1])
+        )
+    if meta.collision and controls.button("Clear collision", (-1, 0)):
+        tab.doc.set_tile_meta(index, local, _replaced(meta, collision=()))
+
+    imgui.dummy((0, 4))
+    widgets.muted("Properties")
+    plotter_layers.property_editor(
+        ctx,
+        f"tilemeta:{tab.uid}:{index}:{local}",
+        meta.properties,
+        lambda values: tab.doc.set_tile_meta(
+            index, local, _replaced(meta, properties=values)
+        ),
+    )
+
+
+def _frame(local: int) -> Any:
+    from ..tilegrid.tileset import TileFrame
+
+    return TileFrame(local_id=int(local), duration_ms=100)
+
+
+def _replaced(meta: Any, **values: Any) -> Any:
+    """A ``TileMeta`` with some fields changed.
+
+    ``dataclasses.replace`` rather than a constructor call listing every field:
+    a seventh field added to the record must not need an edit here to survive
+    a class being typed into the form.
+    """
+    import dataclasses
+
+    return dataclasses.replace(meta, **values)
 
 
 def _picker(ctx: Any, state: Any, ref: Any, index: int, uid: str, epoch: int) -> None:

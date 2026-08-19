@@ -59,6 +59,13 @@ by the wrong row count and misattribute the terrain of every painted cell. A
 map whose tilesets are all ``phases == 1`` keeps writing its old version, so
 existing documents re-save byte-stable.
 
+**Version 6 is per-tile metadata**: a tileset's ``tiles`` record, holding a
+class, custom properties, a random-paint probability, an animation and collision
+shapes per local id. Gated for the reason every stored field here is: the key is
+written unconditionally, so a document carrying one while declaring version 5
+would hand an old reader a file it drops half of in silence. A tileset with no
+per-tile metadata keeps writing its old version.
+
 Versions 1 and 2 are still read, through tolerant defaults rather than a branch
 per version -- the ``locked`` precedent. A version 1 file predates projections
 and is orthogonal by definition; a version 2 file has no tint, offset, parallax
@@ -87,7 +94,16 @@ from typing import Any, NoReturn
 import numpy as np
 
 from ..tilegrid import gid as gidlib
-from ..tilegrid.tileset import TerrainSpec, Tileset, TilesetRef
+from ..tilegrid.tileset import (
+    TerrainSpec,
+    TileEllipse,
+    TileFrame,
+    TileMeta,
+    TilePolygon,
+    TileRect,
+    Tileset,
+    TilesetRef,
+)
 from . import project
 from .pngio import png_bytes
 from .props import read_wmap_properties, write_wmap_properties
@@ -109,7 +125,10 @@ from .tilemap import (
     shape_kind,
 )
 
-VERSION = 5
+VERSION = 6
+#: Phase variants; written when a tileset carries them and no tile carries
+#: metadata.
+PHASES_VERSION = 5
 #: The 1.12-era additions (see the module docstring); written when one of them
 #: is present and no tileset carries phase variants.
 TILED_ERA_VERSION = 4
@@ -371,6 +390,87 @@ def _has_list_property(props: Any) -> bool:
     return False
 
 
+# --- per-tile metadata --------------------------------------------------------
+#
+# The collision shapes are :mod:`..tilegrid.tileset`'s own records, converted
+# here and at the Tiled codec and nowhere else: the shared leaf imports nothing
+# under ``warlock`` and cannot know what a plotter ``Polygon`` is.
+
+
+def _tile_meta_entry(meta: TileMeta) -> dict[str, Any]:
+    return {
+        "class": meta.class_name,
+        "properties": write_wmap_properties(meta.properties),
+        "probability": float(meta.probability),
+        # Lists, because both are ordered: an animation's frames are a sequence
+        # and a collision outline's shapes are drawn in the order they were
+        # authored.
+        "animation": [
+            [int(frame.local_id), int(frame.duration_ms)] for frame in meta.animation
+        ],
+        "collision": [_collision_entry(shape) for shape in meta.collision],
+    }
+
+
+def _collision_entry(shape: Any) -> dict[str, Any]:
+    if isinstance(shape, TilePolygon):
+        return {
+            "kind": "polygon",
+            "x": float(shape.x),
+            "y": float(shape.y),
+            "points": [[float(px), float(py)] for px, py in shape.points],
+        }
+    return {
+        "kind": "ellipse" if isinstance(shape, TileEllipse) else "rect",
+        "x": float(shape.x),
+        "y": float(shape.y),
+        "w": float(shape.w),
+        "h": float(shape.h),
+    }
+
+
+def _collision_from(entry: Any) -> Any:
+    if not isinstance(entry, dict):
+        _malformed("a tile collision shape is not an object")
+    kind = str(entry.get("kind", "rect"))
+    x, y = float(entry.get("x", 0.0)), float(entry.get("y", 0.0))
+    if kind == "polygon":
+        return TilePolygon(
+            x=x,
+            y=y,
+            points=tuple(
+                (float(point[0]), float(point[1]))
+                for point in (entry.get("points") or ())
+            ),
+        )
+    made = TileEllipse if kind == "ellipse" else TileRect
+    return made(x=x, y=y, w=float(entry.get("w", 0.0)), h=float(entry.get("h", 0.0)))
+
+
+def _tile_meta_from(entries: Any) -> dict[int, TileMeta]:
+    if not entries:
+        return {}
+    if not isinstance(entries, dict):
+        _malformed("a tileset's per-tile metadata is not an object")
+    out: dict[int, TileMeta] = {}
+    for local, entry in entries.items():
+        if not isinstance(entry, dict):
+            _malformed("a tile's metadata is not an object")
+        out[int(local)] = TileMeta(
+            class_name=str(entry.get("class", "")),
+            properties=read_wmap_properties(entry.get("properties")),
+            probability=float(entry.get("probability", 1.0)),
+            animation=tuple(
+                TileFrame(local_id=int(pair[0]), duration_ms=int(pair[1]))
+                for pair in (entry.get("animation") or ())
+            ),
+            collision=tuple(
+                _collision_from(shape) for shape in (entry.get("collision") or ())
+            ),
+        )
+    return out
+
+
 def _document_version(doc: MapDoc) -> int:
     """The oldest version emitted by this writer that represents ``doc``.
 
@@ -390,13 +490,17 @@ def _document_version(doc: MapDoc) -> int:
         raise WmapUnstorable(
             f"the version {VERSION} .wmap format has no sparse chunk entry for an infinite map"
         )
-    # Phase variants first: 5 is the ceiling, so nothing below can override it.
-    # The gate is mandatory rather than tolerant -- ``phases`` is written
-    # unconditionally, and an old reader that dropped it would divide every
-    # local id by the wrong row count and misattribute the terrain of every
-    # painted cell, silently.
-    if any(ref.tileset.phases > 1 for ref in doc.tilesets):
+    # Per-tile metadata first: 6 is the ceiling, so nothing below can override
+    # it. Mandatory rather than tolerant for the reason every gate here is --
+    # ``tiles`` is written unconditionally, and a version 5 reader would drop the
+    # whole record without a word.
+    if any(ref.tileset.tiles for ref in doc.tilesets):
         return VERSION
+    # Then phase variants. Same argument: ``phases`` is written unconditionally,
+    # and an old reader that dropped it would divide every local id by the wrong
+    # row count and misattribute the terrain of every painted cell, silently.
+    if any(ref.tileset.phases > 1 for ref in doc.tilesets):
+        return PHASES_VERSION
     if (
         doc.class_name
         or tuple(doc.parallax_origin) != (0.0, 0.0)
@@ -480,6 +584,13 @@ def manifest_json(doc: MapDoc) -> str:
                 # Written unconditionally like every key here; the version gate
                 # above is what keeps an old reader from ever seeing k > 1.
                 "phases": int(ts.phases),
+                # Sparse, and sorted so two saves of one document are byte
+                # identical -- a dict's insertion order is a property of how the
+                # tileset was built rather than of what it holds.
+                "tiles": {
+                    str(local): _tile_meta_entry(ts.tiles[local])
+                    for local in sorted(ts.tiles)
+                },
             }
         )
 
@@ -978,6 +1089,9 @@ def read_wmap(data: bytes) -> MapDoc:
                         # Absent in every file before version 5, where 1 is
                         # what the absence meant.
                         phases=int(entry.get("phases", 1) or 1),
+                        # Absent before version 6, where the absence meant
+                        # "no tile carries anything".
+                        tiles=_tile_meta_from(entry.get("tiles")),
                     ),
                     source=str(entry.get("source", "")),
                 )

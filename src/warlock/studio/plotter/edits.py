@@ -307,6 +307,29 @@ class ProjectionEdit(Edit):
 
 
 @dataclass
+class TileMetaEdit(Edit):
+    """One tile's metadata, before and after.
+
+    Addressed the way :class:`TilesetReplaceEdit` addresses its tileset -- by
+    *index* into the map's tileset list, which is stable because tilesets are
+    add-only -- and snapshotting one tile's record rather than the tileset.
+    Kilobytes at most, so this needs no document snapshot and no atlas copy: the
+    pixels are untouched by anything this edit describes.
+    """
+
+    index: int
+    local_id: int
+    before: Any
+    after: Any
+
+    def undo(self, doc: Any) -> None:
+        doc._apply_tile_meta(self.index, self.local_id, self.before)
+
+    def redo(self, doc: Any) -> None:
+        doc._apply_tile_meta(self.index, self.local_id, self.after)
+
+
+@dataclass
 class TilesetReplaceEdit(Edit):
     """Swapping one tileset's art for another of the same shape.
 

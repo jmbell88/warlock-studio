@@ -185,12 +185,10 @@ def test_a_property_type_outside_tileds_nine_is_refused_by_name():
     [
         ("<wangsets/>", "Wang sets"),
         ("<terraintypes/>", "terrain types"),
-        ('<tile id="0"><animation/></tile>', "per-tile animation"),
         ('<tile id="0"><image source="x.png"/></tile>', "image-collection"),
-        ('<tile id="0"><objectgroup/></tile>', "per-tile collision"),
-        ('<tile id="0"><properties/></tile>', "per-tile custom properties"),
-        ('<tile id="0" class="Water"/>', "per-tile class"),
-        ('<tile id="0" probability="0.5"/>', "per-tile probability"),
+        # Deprecated pre-Wang terrain indices. Tiled itself is retiring them and
+        # a refusal is the honest state; everything else a ``<tile>`` can carry
+        # is modelled now and has an acceptance case below.
         ('<tile id="0" terrain="0,,,"/>', "per-tile terrain assignment"),
         ('<tileoffset x="1" y="0"/>', "tileset tile offset"),
     ],
@@ -308,3 +306,90 @@ def test_a_phases_property_on_an_ordinary_tileset_is_just_a_property():
     back = tsx.read_tsx(data, _pixels())
     assert back.phases == 1
     assert back.properties == {"phases": tsx.Prop("int", 3)}
+
+
+# --- per-tile metadata (the six rows that moved) ------------------------------
+
+
+def _with_tiles(body: str) -> str:
+    return f"""<tileset name="t" tilewidth="16" tileheight="16">
+ <image source="a.png" width="64" height="64"/>
+ {body}
+</tileset>"""
+
+
+def test_a_tile_class_and_probability_are_read() -> None:
+    ts = tsx.read_tsx(
+        _with_tiles('<tile id="3" class="Water" probability="0.25"/>').encode(),
+        _pixels(),
+    )
+    meta = ts.meta_of(3)
+    assert meta.class_name == "Water"
+    assert meta.probability == 0.25
+    assert ts.meta_of(0).is_empty, "the store is sparse"
+
+
+def test_a_tile_animation_is_read_in_order() -> None:
+    ts = tsx.read_tsx(
+        _with_tiles(
+            '<tile id="1"><animation>'
+            '<frame tileid="1" duration="120"/>'
+            '<frame tileid="2" duration="80"/>'
+            "</animation></tile>"
+        ).encode(),
+        _pixels(),
+    )
+    frames = ts.meta_of(1).animation
+    assert [(f.local_id, f.duration_ms) for f in frames] == [(1, 120), (2, 80)]
+
+
+def test_tile_collision_shapes_are_read() -> None:
+    ts = tsx.read_tsx(
+        _with_tiles(
+            '<tile id="2"><objectgroup>'
+            '<object id="1" x="1" y="2" width="8" height="9"/>'
+            '<object id="2" x="0" y="0" width="4" height="4"><ellipse/></object>'
+            '<object id="3" x="2" y="2"><polygon points="0,0 4,0 4,4"/></object>'
+            "</objectgroup></tile>"
+        ).encode(),
+        _pixels(),
+    )
+    shapes = ts.meta_of(2).collision
+    assert [type(s).__name__ for s in shapes] == ["TileRect", "TileEllipse", "TilePolygon"]
+    assert shapes[0].w == 8.0
+    assert shapes[2].points == ((0.0, 0.0), (4.0, 0.0), (4.0, 4.0))
+
+
+def test_tile_custom_properties_are_read() -> None:
+    ts = tsx.read_tsx(
+        _with_tiles(
+            '<tile id="4"><properties>'
+            '<property name="hp" type="int" value="7"/>'
+            "</properties></tile>"
+        ).encode(),
+        _pixels(),
+    )
+    assert ts.meta_of(4).properties["hp"].value == 7
+
+
+def test_per_tile_metadata_round_trips_through_the_writer() -> None:
+    """The ledger rule's acceptance half: read, write, read, and the model is
+    the same on both sides."""
+    source = _with_tiles(
+        '<tile id="2" class="Water" probability="0.5">'
+        '<properties><property name="hp" type="int" value="7"/></properties>'
+        '<animation><frame tileid="2" duration="120"/></animation>'
+        '<objectgroup><object id="1" x="1" y="2" width="8" height="9"/></objectgroup>'
+        "</tile>"
+    )
+    first = tsx.read_tsx(source.encode(), _pixels())
+    again = tsx.read_tsx(tsx.tsx_bytes(first, image_name="a.png"), _pixels())
+    assert again.meta_of(2) == first.meta_of(2)
+
+
+def test_a_tileset_with_no_tile_metadata_writes_no_tile_elements() -> None:
+    """The sparse store's own rule -- a round trip must not grow elements
+    nobody authored."""
+    ts = tsx.read_tsx(_with_tiles("").encode(), _pixels())
+    assert ts.tiles == {}
+    assert b"<tile " not in tsx.tsx_bytes(ts, image_name="a.png")

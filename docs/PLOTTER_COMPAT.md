@@ -134,11 +134,11 @@ frame thread as a crash.
 | `an external .tsj tileset` | refused | Re-save as TSX; external JSON tilesets are not resolved yet. |
 | `Wang sets / terrain brushes` | refused | Generic corner/edge/mixed Wang sets stop unless they match the blob preset. A blob set exported with phase variants (`phases > 1`, declared by an int `phases` tileset property) writes every phase sub-row with the same wangid per case: Tiled's terrain brush treats equal wangids as random alternatives and keeps working, at the accepted cost that it *randomises* phases where Plotter derives them from cell coordinates. Exported layers carry concrete gids per cell, so position-baked phases travel exactly. |
 | `terrain types` | refused | Deprecated pre-Wang terrain syntax. |
-| `per-tile animation` | refused | Tile animation metadata is not modeled yet. |
-| `per-tile collision shapes` | refused | Tile collision object groups are not modeled yet. |
-| `per-tile custom properties` | refused | Per-tile metadata is not modeled yet. |
-| `per-tile class` | refused | Tile classes require the per-tile metadata model. |
-| `per-tile probability` | refused | Random-paint weights require the per-tile metadata model. |
+| `per-tile animation` | round-trips | Ordered frames of local ids and durations; the canvas plays them and every export draws frame 1. fixture: `tilemeta-112`. |
+| `per-tile collision shapes` | round-trips | Rect, ellipse and polygon outlines, stored on the tile and drawn in the collision editor. Never hit-tested against the map: collision is metadata an engine reads. fixture: `tilemeta-112`. |
+| `per-tile custom properties` | round-trips | The same typed property model layers, objects and the map use. fixture: `tilemeta-112`. |
+| `per-tile class` | round-trips | Read, written and editable under the tileset palette. fixture: `tilemeta-112`. |
+| `per-tile probability` | round-trips | Weights a random brush; 0 is never chosen at random and always placeable by hand (Tiled's rule). fixture: `tilemeta-112`. |
 | `per-tile terrain assignment` | refused | Deprecated terrain indices are not inferred as Wang data. |
 | `tileset object alignment` | refused | Non-default tile-object anchors are not rendered yet. |
 | `tileset render size` | refused | Grid-sized tile rendering is not modeled yet. |

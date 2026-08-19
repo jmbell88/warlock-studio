@@ -15,12 +15,18 @@ record, so an undone step never pushes a step of its own.
 from __future__ import annotations
 
 import dataclasses
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..tilegrid import gid as gidlib
 from ..tilegrid.tileset import Tileset, TilesetRef
 from . import project
-from .edits import Edit, ProjectionEdit, TilesetAddEdit, TilesetReplaceEdit
+from .edits import (
+    Edit,
+    ProjectionEdit,
+    TileMetaEdit,
+    TilesetAddEdit,
+    TilesetReplaceEdit,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .tilemap import MapDoc
@@ -69,6 +75,45 @@ class TilesetOps:
         self.history.push(TilesetAddEdit(ref=ref))
         self._attach_tileset(ref)
         return ref
+
+    def set_tile_meta(self: MapDoc, index: int, local_id: int, meta: Any) -> bool:
+        """Set (or clear) one tile's metadata on one tileset, undoably.
+
+        ``None`` -- or an empty record -- removes the entry, which is the sparse
+        store's own rule: a tile whose metadata is all defaults is a tile with
+        no metadata, and keeping the record would grow a ``<tile>`` element every
+        time somebody opened a class field and closed it again.
+
+        The tileset is rebuilt rather than written through, which is
+        :class:`~..tilegrid.tileset.Tileset`'s standing rule: it is frozen
+        because the UI keys its texture upload on identity.
+        """
+        if index < 0 or index >= len(self.tilesets):
+            raise IndexError(f"no tileset {index}")
+        current = self.tilesets[index].tileset.tiles.get(int(local_id))
+        wanted = None if meta is None or meta.is_empty else meta
+        if current == wanted:
+            return False
+        self.history.push(
+            TileMetaEdit(
+                index=int(index),
+                local_id=int(local_id),
+                before=current,
+                after=wanted,
+            )
+        )
+        self._apply_tile_meta(index, local_id, wanted)
+        return True
+
+    def _apply_tile_meta(self: MapDoc, index: int, local_id: int, meta: Any) -> None:
+        """The hook :class:`~.edits.TileMetaEdit` calls back into."""
+        ref = self.tilesets[int(index)]
+        self.tilesets[int(index)] = dataclasses.replace(
+            ref, tileset=ref.tileset.with_meta(int(local_id), meta)
+        )
+        # The palette draws from the tileset object, so the epoch has to move or
+        # a class typed into the form would not appear until something else did.
+        self.tileset_epoch += 1
 
     def replace_tileset(self: MapDoc, index: int, tileset: Tileset) -> TilesetRef:
         """Swap one tileset's art, keeping its ids and its declared terrains.

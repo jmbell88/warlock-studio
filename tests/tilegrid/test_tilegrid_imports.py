@@ -60,7 +60,13 @@ def test_the_leaf_lives_at_its_new_home() -> None:
 
 def test_the_public_names_are_present() -> None:
     for name in (
+        "COLLISION_SHAPES",
         "RGBA",
+        "TileEllipse",
+        "TileFrame",
+        "TileMeta",
+        "TilePolygon",
+        "TileRect",
         "TerrainSpec",
         "Tileset",
         "TilesetRef",

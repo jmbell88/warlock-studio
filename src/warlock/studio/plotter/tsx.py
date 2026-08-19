@@ -34,11 +34,20 @@ from typing import Any
 import numpy as np
 
 from ..tilegrid import blob
-from ..tilegrid.tileset import TerrainSpec, Tileset
+from ..tilegrid.tileset import (
+    TerrainSpec,
+    TileEllipse,
+    TileFrame,
+    TileMeta,
+    TilePolygon,
+    TileRect,
+    Tileset,
+)
 from .props import (
     PROPERTY_TYPES,
     Prop,
     TiledUnsupported,
+    read_json_properties,
     read_properties,
     write_properties,
 )
@@ -155,20 +164,15 @@ def check_tileset_features(root: ET.Element) -> None:
         raise TiledUnsupported("tileset image transparent colour")
     for tile in root.findall("tile"):
         where = f"tile {tile.get('id', '?')}"
-        if tile.get("class") or tile.get("type"):
-            raise TiledUnsupported("per-tile class", where)
-        if tile.get("probability") is not None:
-            raise TiledUnsupported("per-tile probability", where)
+        # Class, probability, animation, collision and custom properties are
+        # all modelled now (:class:`~..tilegrid.tileset.TileMeta`); what remains
+        # refused here is what this editor genuinely cannot hold.
         if tile.get("terrain") is not None:
+            # Tiled's own pre-Wang terrain types, which Tiled itself is
+            # retiring. A refusal is the honest state.
             raise TiledUnsupported("per-tile terrain assignment", where)
-        if tile.find("animation") is not None:
-            raise TiledUnsupported("per-tile animation", where)
         if tile.find("image") is not None:
             raise TiledUnsupported("an image-collection tileset", where)
-        if tile.find("objectgroup") is not None:
-            raise TiledUnsupported("per-tile collision shapes", where)
-        if tile.find("properties") is not None:
-            raise TiledUnsupported("per-tile custom properties", where)
 
 
 def check_tileset_features_json(entry: dict[str, Any]) -> None:
@@ -204,20 +208,10 @@ def check_tileset_features_json(entry: dict[str, Any]) -> None:
         if not isinstance(tile, dict):
             continue
         where = f"tile {tile.get('id', '?')}"
-        if tile.get("class") or tile.get("type"):
-            raise TiledUnsupported("per-tile class", where)
-        if "probability" in tile:
-            raise TiledUnsupported("per-tile probability", where)
         if "terrain" in tile:
             raise TiledUnsupported("per-tile terrain assignment", where)
-        if tile.get("animation"):
-            raise TiledUnsupported("per-tile animation", where)
         if tile.get("image"):
             raise TiledUnsupported("an image-collection tileset", where)
-        if tile.get("objectgroup"):
-            raise TiledUnsupported("per-tile collision shapes", where)
-        if tile.get("properties"):
-            raise TiledUnsupported("per-tile custom properties", where)
 
 
 def tsx_source(data: bytes) -> str:
@@ -457,6 +451,193 @@ def _terrains_of(root: ET.Element, phases: int = 1) -> tuple[TerrainSpec, ...]:
     return () if node is None else (read_wangsets(node, phases) or ())
 
 
+# --- per-tile metadata --------------------------------------------------------
+#
+# The plotter's own object shapes and tilegrid's collision records are converted
+# into each other **here**, at the codec, and nowhere else: the shared leaf
+# imports nothing under ``warlock``, so it cannot know what a ``Polygon`` is,
+# and the plotter should not grow a second vocabulary for the same rectangle.
+
+
+def _collision_from(group: ET.Element) -> tuple[Any, ...]:
+    """A ``<objectgroup>`` inside a ``<tile>`` as tilegrid collision records.
+
+    Only the three shapes a collision outline can be. Anything else in the
+    group -- a text object, a tile object -- is skipped rather than refused: it
+    is not collision, and a file that carries one is not a file this editor
+    cannot open.
+    """
+    out: list[Any] = []
+    for obj in group.findall("object"):
+        x = float(obj.get("x", 0) or 0)
+        y = float(obj.get("y", 0) or 0)
+        w = float(obj.get("width", 0) or 0)
+        h = float(obj.get("height", 0) or 0)
+        polygon = obj.find("polygon")
+        if polygon is not None:
+            points = tuple(
+                (float(px), float(py))
+                for px, py in (
+                    pair.split(",") for pair in (polygon.get("points") or "").split()
+                )
+            )
+            out.append(TilePolygon(x=x, y=y, points=points))
+        elif obj.find("ellipse") is not None:
+            out.append(TileEllipse(x=x, y=y, w=w, h=h))
+        elif obj.find("point") is None and obj.find("polyline") is None:
+            out.append(TileRect(x=x, y=y, w=w, h=h))
+    return tuple(out)
+
+
+def _collision_element(parent: ET.Element, shapes: tuple[Any, ...]) -> None:
+    group = ET.SubElement(parent, "objectgroup", {"draworder": "index", "id": "1"})
+    for index, shape in enumerate(shapes, start=1):
+        attrs = {"id": str(index), "x": _number(shape.x), "y": _number(shape.y)}
+        if isinstance(shape, TilePolygon):
+            obj = ET.SubElement(group, "object", attrs)
+            ET.SubElement(
+                obj,
+                "polygon",
+                {
+                    "points": " ".join(
+                        f"{_number(px)},{_number(py)}" for px, py in shape.points
+                    )
+                },
+            )
+            continue
+        attrs["width"] = _number(shape.w)
+        attrs["height"] = _number(shape.h)
+        obj = ET.SubElement(group, "object", attrs)
+        if isinstance(shape, TileEllipse):
+            ET.SubElement(obj, "ellipse")
+
+
+def _number(value: float) -> str:
+    """Tiled's own spelling: an integral value has no decimal point.
+
+    Not cosmetic -- it is what keeps our output diff-clean against a file Tiled
+    wrote for the same tileset, which is the bar the whole writer is held to.
+    """
+    number = float(value)
+    return str(int(number)) if number.is_integer() else repr(number)
+
+
+def read_tile_meta(root: ET.Element) -> dict[int, TileMeta]:
+    """Every ``<tile>`` block's metadata, by local id. Sparse."""
+    out: dict[int, TileMeta] = {}
+    for tile in root.findall("tile"):
+        local = int(tile.get("id", 0) or 0)
+        animation = tile.find("animation")
+        group = tile.find("objectgroup")
+        meta = TileMeta(
+            class_name=tile.get("class") or tile.get("type") or "",
+            properties=read_properties(tile),
+            probability=float(tile.get("probability", 1.0) or 1.0),
+            animation=()
+            if animation is None
+            else tuple(
+                TileFrame(
+                    local_id=int(frame.get("tileid", 0) or 0),
+                    duration_ms=int(frame.get("duration", 100) or 100),
+                )
+                for frame in animation.findall("frame")
+            ),
+            collision=() if group is None else _collision_from(group),
+        )
+        if not meta.is_empty:
+            out[local] = meta
+    return out
+
+
+def write_tile_meta(root: ET.Element, tiles: dict[int, TileMeta]) -> None:
+    """One ``<tile>`` block per tile that carries anything, in id order.
+
+    Sorted, because the writer's determinism pin compares bytes: a dict's
+    insertion order is a property of how the tileset was built, not of what it
+    holds.
+    """
+    for local in sorted(tiles):
+        meta = tiles[local]
+        if meta.is_empty:
+            continue
+        tile = ET.SubElement(root, "tile", {"id": str(local)})
+        if meta.class_name:
+            tile.set("class", meta.class_name)
+        if meta.probability != 1.0:
+            tile.set("probability", _number(meta.probability))
+        write_properties(tile, meta.properties)
+        if meta.animation:
+            animation = ET.SubElement(tile, "animation")
+            for frame in meta.animation:
+                ET.SubElement(
+                    animation,
+                    "frame",
+                    {
+                        "tileid": str(frame.local_id),
+                        "duration": str(frame.duration_ms),
+                    },
+                )
+        if meta.collision:
+            _collision_element(tile, meta.collision)
+
+
+def read_tile_meta_json(entry: dict[str, Any]) -> dict[int, TileMeta]:
+    """:func:`read_tile_meta` over Tiled's JSON tileset spelling."""
+    out: dict[int, TileMeta] = {}
+    for tile in entry.get("tiles") or ():
+        local = int(tile.get("id", 0) or 0)
+        group = tile.get("objectgroup") or {}
+        shapes: list[Any] = []
+        for obj in group.get("objects") or ():
+            x = float(obj.get("x", 0) or 0)
+            y = float(obj.get("y", 0) or 0)
+            if obj.get("polygon"):
+                shapes.append(
+                    TilePolygon(
+                        x=x,
+                        y=y,
+                        points=tuple(
+                            (float(point["x"]), float(point["y"]))
+                            for point in obj["polygon"]
+                        ),
+                    )
+                )
+            elif obj.get("ellipse"):
+                shapes.append(
+                    TileEllipse(
+                        x=x,
+                        y=y,
+                        w=float(obj.get("width", 0) or 0),
+                        h=float(obj.get("height", 0) or 0),
+                    )
+                )
+            elif not obj.get("point") and not obj.get("polyline"):
+                shapes.append(
+                    TileRect(
+                        x=x,
+                        y=y,
+                        w=float(obj.get("width", 0) or 0),
+                        h=float(obj.get("height", 0) or 0),
+                    )
+                )
+        meta = TileMeta(
+            class_name=tile.get("class") or tile.get("type") or "",
+            properties=read_json_properties(tile.get("properties")),
+            probability=float(tile.get("probability", 1.0) or 1.0),
+            animation=tuple(
+                TileFrame(
+                    local_id=int(frame.get("tileid", 0) or 0),
+                    duration_ms=int(frame.get("duration", 100) or 100),
+                )
+                for frame in (tile.get("animation") or ())
+            ),
+            collision=tuple(shapes),
+        )
+        if not meta.is_empty:
+            out[local] = meta
+    return out
+
+
 def read_tsx(data: bytes, image: np.ndarray) -> Tileset:
     """A ``.tsx``'s bytes plus its decoded image, as a :class:`Tileset`."""
     root = xml_root(data, "tileset")
@@ -506,6 +687,7 @@ def read_tsx(data: bytes, image: np.ndarray) -> Tileset:
         properties=remaining if terrains else props,
         terrains=terrains,
         phases=phases,
+        tiles=read_tile_meta(root),
     )
 
 
@@ -576,6 +758,9 @@ def tsx_element(ts: Tileset, *, image_name: str) -> ET.Element:
         props = {**props, "phases": Prop("int", ts.phases)}
     write_properties(root, props)
     write_wangsets(root, ts.terrains, ts.phases if ts.terrains else 1)
+    # After the wang sets, matching Tiled's own element order -- the writer is
+    # held to producing a file that diffs cleanly against one Tiled wrote.
+    write_tile_meta(root, ts.tiles)
     return root
 
 

@@ -84,6 +84,8 @@ from .tsx import (
     check_tileset_features,
     check_tileset_features_json,
     phases_from_properties,
+    read_tile_meta,
+    read_tile_meta_json,
     read_wangsets,
     read_wangsets_json,
     to_bytes,
@@ -458,6 +460,7 @@ def _read_tmx_tilesets(
                     # tool greyed out on a map whose atlas plainly declares it.
                     terrains=terrains,
                     phases=declared if terrains else 1,
+                    tiles=read_tile_meta(node),
                 ),
             )
         )
@@ -822,6 +825,7 @@ def _read_tmj_tilesets(
                     properties=remaining if terrains else props,
                     terrains=terrains,
                     phases=declared if terrains else 1,
+                    tiles=read_tile_meta_json(entry),
                 ),
             )
         )

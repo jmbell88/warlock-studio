@@ -72,6 +72,124 @@ def colour_text(value: Any, what: str) -> str | None:
     return text
 
 
+# --- per-tile metadata -------------------------------------------------------
+#
+# Six of ``docs/PLOTTER_COMPAT.md``'s refused rows fall to one model: a tile can
+# carry a class, custom properties, a random-pick probability, an animation and
+# a set of collision shapes. Stored **sparsely** -- Tiled's own shape, and the
+# right one here because most tiles in an atlas carry nothing at all and a dense
+# table would be one empty record per tile per tileset.
+#
+# The collision shapes are **tilegrid's own frozen records**, small and dumb, and
+# not ``plotter._map_model``'s. This package imports nothing under ``warlock``
+# and a shared leaf that reached into one of the engines it serves would turn
+# "shared vocabulary" into a dependency cycle; the plotter converts to and from
+# its own shapes at the codec instead. Packwright and Inker see only additive
+# fields and never these types.
+
+
+@dataclass(frozen=True)
+class TileRect:
+    """A rectangle of collision, in pixels within the tile."""
+
+    x: float = 0.0
+    y: float = 0.0
+    w: float = 0.0
+    h: float = 0.0
+
+
+@dataclass(frozen=True)
+class TileEllipse:
+    """An ellipse inscribed in the same box a :class:`TileRect` describes."""
+
+    x: float = 0.0
+    y: float = 0.0
+    w: float = 0.0
+    h: float = 0.0
+
+
+@dataclass(frozen=True)
+class TilePolygon:
+    """A closed outline, as points relative to ``(x, y)``."""
+
+    x: float = 0.0
+    y: float = 0.0
+    points: tuple[tuple[float, float], ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "points",
+            tuple((float(px), float(py)) for px, py in self.points),
+        )
+
+
+#: Every collision shape, for an ``isinstance`` that cannot go stale.
+COLLISION_SHAPES = (TileRect, TileEllipse, TilePolygon)
+
+
+@dataclass(frozen=True)
+class TileFrame:
+    """One frame of a tile's animation: which local id, and for how long."""
+
+    local_id: int = 0
+    duration_ms: int = 100
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "local_id", int(self.local_id))
+        object.__setattr__(self, "duration_ms", max(1, int(self.duration_ms)))
+
+
+@dataclass(frozen=True)
+class TileMeta:
+    """Everything one tile carries beyond its picture.
+
+    ``probability`` is the weight a *random* brush gives this tile, Tiled's own
+    field. **Zero means never chosen at random and always placeable by hand** --
+    Tiled's rule, and the useful one: it is how a set marks a tile that belongs
+    to the palette but not to the scatter.
+
+    ``animation`` is ordered and its frames name *local* ids within this
+    tileset, which is what makes a tileset self-contained: a firstgid is a
+    property of the map that loaded it, not of the atlas.
+    """
+
+    class_name: str = ""
+    properties: dict[str, Any] = field(default_factory=dict)
+    probability: float = 1.0
+    animation: tuple[TileFrame, ...] = ()
+    collision: tuple[Any, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "class_name", str(self.class_name))
+        object.__setattr__(self, "properties", dict(self.properties))
+        object.__setattr__(self, "probability", float(self.probability))
+        object.__setattr__(self, "animation", tuple(self.animation))
+        object.__setattr__(self, "collision", tuple(self.collision))
+        if self.probability < 0.0:
+            raise ValueError("a tile probability cannot be negative")
+        for shape in self.collision:
+            if not isinstance(shape, COLLISION_SHAPES):
+                raise ValueError(f"{shape!r} is not a tile collision shape")
+
+    @property
+    def is_empty(self) -> bool:
+        """Whether this record says nothing, so a writer can drop it.
+
+        The sparse store's own rule: a tile whose metadata is all defaults is a
+        tile with no metadata, and keeping the record would make a round trip
+        grow a ``<tile>`` element every time somebody opened a class field and
+        closed it again.
+        """
+        return (
+            not self.class_name
+            and not self.properties
+            and self.probability == 1.0
+            and not self.animation
+            and not self.collision
+        )
+
+
 @dataclass(frozen=True)
 class TerrainSpec:
     """One terrain a tileset declares: what it is called and what it is made of.
@@ -150,6 +268,8 @@ class Tileset:
     # consecutive sub-rows, row-major by phase, and the painter places phase
     # (x mod k, y mod k) at cell (x, y). 1 is the classic single-row set.
     phases: int = 1
+    # Per-tile metadata by local id, sparse: most tiles carry nothing.
+    tiles: dict[int, TileMeta] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "pixels", frozen_rgba(self.pixels))
@@ -157,6 +277,17 @@ class Tileset:
         for name in ("tile_w", "tile_h", "spacing", "margin"):
             object.__setattr__(self, name, int(getattr(self, name)))
         object.__setattr__(self, "terrains", tuple(self.terrains))
+        # Empty records dropped on the way in, so "is there metadata on tile 7"
+        # has one answer and a round trip cannot grow elements nobody authored.
+        object.__setattr__(
+            self,
+            "tiles",
+            {
+                int(local): meta
+                for local, meta in dict(self.tiles).items()
+                if not meta.is_empty
+            },
+        )
         if self.tile_w < 1 or self.tile_h < 1:
             raise ValueError("a tile must be at least one pixel across")
         object.__setattr__(self, "grid_orientation", str(self.grid_orientation))
@@ -261,6 +392,31 @@ class Tileset:
     @property
     def is_terrain_set(self) -> bool:
         return bool(self.terrains)
+
+    def meta_of(self, local_id: int) -> TileMeta:
+        """One tile's metadata, or an empty record.
+
+        Never ``None``: every caller wants to read a field off it, and an
+        ``if meta is not None`` at each of them is one place for the check to be
+        forgotten. The empty record is a fresh default rather than a shared
+        singleton, because it is frozen but its ``properties`` dict is not.
+        """
+        return self.tiles.get(int(local_id)) or TileMeta()
+
+    def with_meta(self, local_id: int, meta: TileMeta | None) -> Tileset:
+        """A copy of this tileset with one tile's metadata replaced.
+
+        A copy, because a ``Tileset`` is frozen for :func:`frozen_rgba`'s
+        reason: the UI keys its texture upload on identity, and an in-place edit
+        anywhere would move no counter. ``None`` -- or an empty record -- removes
+        the entry.
+        """
+        tiles = dict(self.tiles)
+        if meta is None or meta.is_empty:
+            tiles.pop(int(local_id), None)
+        else:
+            tiles[int(local_id)] = meta
+        return replace(self, tiles=tiles)
 
     def terrain_of(self, local_id: int) -> int | None:
         """Which terrain a tile belongs to, or ``None`` if it is not one.
