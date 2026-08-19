@@ -788,11 +788,22 @@ def save(ctx: Any, tab: InkerDoc | None = None) -> None:
     # saved in place.
     suffix = tab.path.suffix.lower()
     if suffix not in WRITABLE_SUFFIXES:
-        ctx.toast(
-            f"This drawing came from a {suffix.lstrip('.').upper()} file, which "
-            "Inker cannot write. Choose where to save the layered copy.",
-            "info",
-        )
+        if suffix in ASEPRITE_SUFFIXES:
+            # This file did not arrive from outside -- it was *written* here,
+            # by an explicit Save As -- so "came from a {SUFFIX} file" would
+            # be backwards as well as ungrammatical. The remedy is the same
+            # (Save As again), but the reason is its own.
+            ctx.toast(
+                "This file was written by Save As; Inker does not overwrite"
+                " .aseprite in place. Save a copy or an .ora.",
+                "info",
+            )
+        else:
+            ctx.toast(
+                f"This drawing came from a {suffix.lstrip('.').upper()} file, which "
+                "Inker cannot write. Choose where to save the layered copy.",
+                "info",
+            )
         save_as(ctx, tab)
         return
     _submit_write(ctx, tab, f"inker-save:{tab.uid}", tab.path, tab.file_format)

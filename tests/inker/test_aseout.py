@@ -897,6 +897,36 @@ def test_a_tilemap_track_whose_cel_holds_no_refs_is_refused_by_name():
         aseout.aseprite_bytes(doc)
 
 
+def test_a_still_tilemap_cel_with_no_tileset_binding_is_refused_by_name():
+    """``TilemapCel.tileset_uid`` defaults to ``0``, and every real
+    construction site sets it to a real slot uid -- but a layer built by hand
+    with ``refs`` set and ``tileset_uid=None`` used to hit ``int(None)``, a
+    bare ``TypeError`` naming nothing. This is the still-document half of
+    ``_rows``' dangling-track refusal, one layer earlier."""
+    doc = _tilemap_still()
+    doc.stack[1].tileset_uid = None
+    with pytest.raises(ValueError, match="Tiles"):
+        aseout.aseprite_bytes(doc)
+
+
+def test_a_zero_tile_tileset_is_refused_by_name():
+    """Defensive: a real ``Tileset`` cannot actually hold zero tiles (its own
+    validation requires at least one column and one row), so this exercises
+    ``_strip_bytes`` directly against a stand-in that lies about it, the way a
+    future caller of the private function might. Without the guard,
+    ``np.concatenate([])`` raises a bare, unnamed ``ValueError``."""
+
+    class _EmptyTileset:
+        name = "hollow"
+        tile_count = 0
+
+        def tile_pixels(self, index):  # pragma: no cover - must not be called
+            raise AssertionError("a zero-tile strip has no tile to ask for")
+
+    with pytest.raises(ValueError, match="hollow"):
+        aseout._strip_bytes(_EmptyTileset(), "rgb", None, 0)
+
+
 def test_a_tilemap_document_is_byte_stable():
     doc = _tilemap_animated()
     once, _ = asein.document_from_aseprite(aseout.aseprite_bytes(doc))

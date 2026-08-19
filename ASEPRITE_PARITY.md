@@ -1,6 +1,6 @@
 # ASEPRITE_PARITY.md — the Aseprite-parity master program
 
-**Status: Waves 0-3 DONE (0-2 on 2026-08-17, 3 on 2026-08-18). Waves 4-5 not started.**
+**Status: Waves 0-5 DONE** (0-2 on 2026-08-17, 3 on 2026-08-18, 4 and 5 on 2026-08-19) — **the program's waves are complete.** The P1 backlog remains unscheduled by design (see "P1 backlog" below); items there are pulled into sessions individually, never waved.
 **Progress is tracked by editing the wave status lines below (the PLOTTER_PLAN.md precedent). Each wave (or chunk) is a future session: its detailed implementation plan is written at execution time, arguing from this spec.**
 
 Goal: make Inker a genuine Aseprite alternative. Six P0 gaps from the 2026-08-17 gap
@@ -952,7 +952,7 @@ is the citable list.
 
 ---
 
-## Wave 5 — `.aseprite` writer + interop report (P0 item 2, deferred half) — **NOT STARTED**
+## Wave 5 — `.aseprite` writer + interop report (P0 item 2, deferred half) — **DONE 2026-08-19** (`c0dc334..HEAD`)
 
 - **`inker/aseout.py`** (new, sibling of `asein.py`; pin: no new outward imports —
   pure struct packing + zlib): writes RGB, indexed and grayscale sprites — header,
@@ -977,7 +977,164 @@ is the citable list.
 
 **Gate:** corpus round-trips bit-exact through our reader; suite green; manual §07
 documents Save As → `.aseprite`; the interop report exists and is linked from the
-manual.
+manual. **All met** — `docs/ASEPRITE_INTEROP.md` is linked from both
+`docs/manual/08-inker.md#saving` and `docs/manual/09-inker-animation.md#from-an-aseprite-file`.
+
+### Deviations from this spec, as executed (Wave 5)
+
+Five tasks (`aseout.py` core; tilesets/tilemaps/slices; the round-trip corpus; Save
+As wiring; this interop report + manual + close-out sweep), each with its own fix
+round after review. What follows is gathered from all five task reports
+(`.superpowers/sdd/2026-08-18-aseprite-wave5-writer/task-*-report.md`), argued at
+its own site in each and recorded here so the spec stays the record.
+
+1. **The grayscale-violation check is masked to visible pixels, not a raw plane
+   compare.** `_plane`'s greyness check first compared every channel unmasked,
+   which refused an ordinary funnel-legal document (paint → erase → convert to
+   grayscale leaves dead, non-grey RGB under alpha 0 — `indexed.grayscale`'s own
+   documented behaviour). Fixed to mask on `pixels[..., 3] > 0` before comparing,
+   so only a *visible* non-grey pixel refuses; a full, unstrided compare rather
+   than a sampled one, because the correctness argument (a bypassed funnel's
+   failure mode is exactly one stray coloured pixel) outweighs the ~8 MB extra
+   compare against a strip that is about to be handed to zlib anyway.
+2. **Palette-constrained RGB's loss is pinned, not fixed — a controller ruling,
+   not a writer defect.** The 0x2019/0x0004 chunks are still written for an
+   RGB-depth document carrying a constraint palette (a file Aseprite opens has its
+   colour table), but `document_from_aseprite` only *installs* a palette as a
+   constraint at indexed depth — adopting one at RGB depth would put the whole
+   editor into palette-locked mode over a table nobody asked to be limited by.
+   Divergence #19. `tests/inker/fixtures/aseprite/palette-constrained-rgb.aseprite`
+   pins the loss in the corpus rather than treating it as a bug to close.
+3. **The legacy WORD chunk-count field saturates rather than sentinels.**
+   `_frame` originally wrote an unconditional `0xFFFF` sentinel whenever the
+   modern DWORD count applied, which broke on a frame with **zero** chunks (every
+   track's slot empty legally rounds to a frame with nothing in it): the DWORD
+   correctly said 0, and the sentinel then made a reader falling back to the
+   legacy WORD see sixty-five thousand chunks that were not there.
+   `min(len(chunks), 0xFFFF)` dissolves the special case at the root instead of
+   working around it, and is readable by anything that only knows the legacy
+   field.
+4. **Indexed tileset strips are resolved through the palette by
+   `index_plane.resolve`'s own rule, exact match only — not option (b), refusing
+   the whole feature.** The first pass built its own RGBA-equality lookup, which
+   only placed a strip pixel that was already exactly one slot's full RGBA — so an
+   ordinary funnel-painted strip (a half-coverage dab, an erased tile, alpha that
+   is neither 0 nor 255) refused real documents outright. `_visible_lookup` now
+   mirrors `resolve`'s alpha-first placement: below the opacity threshold goes to
+   the transparent index regardless of the dead colour left under it, at or above
+   it is placed by RGB alone among the visible slots. What still refuses, by name,
+   is the one case `snap` and `resolve` genuinely disagree about — a visible
+   colour that only the *transparent* slot holds — because there is no honest
+   answer to write there.
+5. **A slice's pivot and nine-patch centre are widened by `_first_set`, never
+   invented.** The format declares their *presence* once per whole 0x2022 chunk,
+   not per key, which is a constraint Aseprite's own file format shares, not a gap
+   between the two document models — so this is an interop-report line, not a
+   divergence: a key lacking what the chunk declares inherits the *first* value
+   the slice carries anywhere (its own where it has one), and the zero branch that
+   would otherwise invent a corner pivot on every unkeyed frame does not exist.
+   Judged, per this task's own brief, **not** to warrant a new numbered
+   divergence — see the note on divergence numbering below.
+6. **The corpus's two funnel-painted fixtures are checked-in builders, not
+   one-off generation scripts.** A first pass generated `grayscale-animated` and
+   `tilemap-indexed` with scripts that were never committed, and both silently
+   failed to reach the shape they were named for (a missing second frame; an
+   eraser-only stroke that painted nothing) without the byte-level gate noticing,
+   because a fully-normalised committed file round-trips identically whether or
+   not the funnel-painted construct was ever present. `_asecorpus.py` now carries
+   `build_grayscale_animated`/`build_tilemap_indexed` in a `BUILDERS` dict, and
+   the corpus gate asserts the builder's own pre-write output carries the
+   construct *and* that `aseprite_bytes(builder())` equals the committed file —
+   so a regression in the shape itself, not just in the bytes, fails the suite.
+7. **The corpus's committed fixtures are post-normalisation fixed points, not raw
+   builder output, except where a fixture's whole point is that the two agree.**
+   `palette-constrained-rgb` is the one fixture where this is load-bearing: its
+   committed bytes are a *second*-pass write (build → write → read → write),
+   because a freshly built palette-constrained document is not its own fixed
+   point (divergence #19's read-side drop). Every other fixture's committed bytes
+   equal its builder's first-pass output directly.
+8. **`aseout` reaches into `..tilegrid.gid` for the four flip/rotate masks a
+   tilemap cel chunk declares.** A new `OUTWARD_IMPORTS` entry,
+   `("aseout.py", "warlock.studio.tilegrid")`, beyond the letter of "no new
+   outward imports" the spec's own bullet stated for this module — argued in the
+   pin test itself: the alternative was four literals restated locally, free to
+   drift from the word every other tilegrid consumer shares, and a drifted flip
+   mask silently reads a mirrored tile as a tile id in the billions.
+9. **The reused Ctrl+S toast for an `.aseprite`-backed tab is its own sentence,
+   not the shared "came from a {SUFFIX} file" one.** Fixed in this task's sweep:
+   the shared sentence read "This drawing came from a ASEPRITE file" for a
+   document that was *written* by Save As a moment ago, not imported —
+   ungrammatical and backwards about how the document got there. It now reads
+   "This file was written by Save As; Inker does not overwrite .aseprite in
+   place. Save a copy or an .ora."
+10. **Two defensive refusals added in this task's sweep, neither reachable through
+    the studio today, both cheap insurance against a future relaxation of an
+    invariant that currently prevents them.** A still-document `TilemapCel` whose
+    `tileset_uid` is `None` used to hit `int(None)` — a bare, unnamed
+    `TypeError` — because every real construction site sets a real slot uid;
+    `_still_tileset_uid` now refuses it by name, `_rows`' own dangling-track
+    refusal one layer earlier. A zero-tile tileset used to hit
+    `np.concatenate([])` — a bare, unnamed `ValueError` — because a real
+    `Tileset` cannot actually validate with fewer than one tile (its own
+    `__post_init__` requires at least one column and one row); `_strip_bytes` now
+    refuses it by name, exercised against a duck-typed stand-in since no real
+    `Tileset` can reach the branch.
+11. **`_slice_chunk`'s `max(0, ...)` on a bound's width/height is left as
+    written, not clamped to 1×1.** Judged and documented rather than changed: the
+    one way this package's own `Slice`/`SliceKey` genuinely holds a zero-size
+    rectangle is `document_from_aseprite` reading a *hidden* key straight out of
+    a foreign file (`asein._read_slice`'s own "no hidden state here" choice, which
+    keeps the rectangle rather than inventing one). Writing that rectangle back
+    as zero reproduces Aseprite's own "hidden" semantics faithfully on the next
+    read; clamping to 1×1 would fabricate a visible box the source file never
+    declared. Every rectangle this package's *own* editing funnel produces is
+    already at least 1×1 (`transform.clamp_rect`'s floor), so an ordinary
+    drawing never reaches the branch either way.
+12. **One new numbered divergence, #22, not two.** A single-frame `.aseprite`
+    opens as a still document (`Document.anim is None` has no room for a
+    one-frame animation, where Aseprite's own document is always a timeline), and
+    a tag declared over that lone frame is dropped with a warning — this is a
+    genuine document-model divergence, cited in `asein.py` at the point it fires,
+    and the INVARIANTS.md count word is updated to match. `_first_set`'s slice
+    widening (item 5 above) was weighed against the same test and judged **not**
+    to qualify: it is a mapping detail of the writer alone, mirroring a
+    constraint Aseprite's own file format already imposes on itself, not a place
+    the two *document models* disagree — so it stays an interop-report line with
+    no number.
+
+### Left open / owed by Wave 5 (and by the program as a whole)
+
+- **The real-Aseprite manual pass, front and center.** Every gate above proves
+  `aseout` and `asein` agree with each other; none of it proves real Aseprite
+  agrees with either. `tests/inker/fixtures/aseprite/FIXTURES.md`'s "What is
+  owed" section names the four fixtures worth authoring first, in priority
+  order, and states plainly that every file in the corpus today is
+  aseout-synthesized. `docs/ASEPRITE_INTEROP.md`'s closing paragraph states the
+  same rule `docs/PLOTTER_COMPAT.md`'s `TILED_VERSION` gate does: the claim only
+  strengthens once a human with the app installed has looked.
+- **Wave 4's Tiled `.tsx` re-verification is still open**, carried forward
+  unchanged from Wave 4's own "Left open / owed" section: a grid pack's `.tsx`
+  geometry moved (pow2-rounding off by default) and needs a fresh look with real
+  Tiled installed before the standing "no fixture is Tiled-authored" caveat in
+  `docs/PLOTTER_COMPAT.md` can shrink. Unrelated to Aseprite; named here only
+  because this is where the program's waves close out.
+- **No palette chunk is written for an ordinary RGB document with no palette at
+  all.** Noted as a concern in Task 1's report and never revisited: Aseprite
+  writes a palette into every file it saves, and this writer omits the chunk
+  entirely when the document has none. Tolerated by this reader and, by reading
+  of the format, by Aseprite's own pre-1.0 fallback — but it is exactly the kind
+  of detail only the manual pass above can actually confirm.
+- **Tilemap/tileset chunks are the highest-risk part of the untested-against-real-
+  Aseprite surface**, per Task 1's own concern: their field order was inverted
+  from the *reader*, never checked against a file Aseprite itself wrote.
+- **The mode-level submit-test gap** named in Wave 4's own "Left open" section
+  (arrange/merge/skip_empty/trim/padding/extrude refusals have no dedicated
+  UI-level test) is unrelated to this wave and remains exactly as open as Wave 4
+  left it.
+
+**Program status: Waves 0–5 are all DONE.** The P0 gap analysis this file opened
+against is closed; the P1 backlog below remains unscheduled by design, pulled
+into sessions individually rather than waved.
 
 ---
 

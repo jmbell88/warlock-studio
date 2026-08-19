@@ -371,6 +371,31 @@ def _tileset_uid_of(doc, track) -> int | None:
     return None
 
 
+def _still_tileset_uid(layer) -> int | None:
+    """A still layer's own tileset binding, or ``None`` for an ordinary raster
+    layer -- refused **by name** rather than left to crash.
+
+    ``TilemapCel.tileset_uid`` defaults to ``0`` and every construction site in
+    this package (``ora.py``, ``asein.py``, ``document.py``, ``_doc_tiles.py``)
+    sets it to a real slot uid before the object is ever reachable, so this is
+    belt-and-suspenders against a layer built by hand -- a test, a future
+    caller -- carrying ``refs`` with no binding at all. Without the check,
+    ``int(None)`` raises a bare ``TypeError`` naming nothing; this is
+    ``_rows``' own refusal for a *track's* dangling tileset binding, one layer
+    earlier, for a still document's layers instead of an animated document's
+    tracks.
+    """
+    if getattr(layer, "refs", None) is None:
+        return None
+    uid = layer.tileset_uid
+    if uid is None:
+        raise ValueError(
+            f"the tilemap layer {layer.name!r} holds a cel with no tileset"
+            " binding at all"
+        )
+    return int(uid)
+
+
 def _members(doc) -> list[tuple[int, _Row]]:
     """``(member uid, row)`` bottom-first -- the stack, or the track list.
 
@@ -391,11 +416,7 @@ def _members(doc) -> list[tuple[int, _Row]]:
                     locked=bool(layer.locked),
                     opacity=float(layer.opacity),
                     blend=str(layer.blend),
-                    tileset_uid=(
-                        int(layer.tileset_uid)
-                        if getattr(layer, "refs", None) is not None
-                        else None
-                    ),
+                    tileset_uid=_still_tileset_uid(layer),
                 ),
             )
             for layer in doc.stack
@@ -843,8 +864,19 @@ def _strip_bytes(
     writing the image verbatim would put a file's own layout into a field that
     declares a different one, and every tile after the first would be read
     from the wrong pixels. For an inker-native strip this is the identity.
+
+    ``count < 1`` is refused by name before ``np.concatenate`` is reached: a
+    real :class:`~..tilegrid.tileset.Tileset` cannot actually hold zero tiles
+    (its own ``__post_init__`` requires at least one column and one row, and
+    ``tiles.blank_strip``/``.strip`` both start a tileset at its required blank
+    tile 0), so this is defensive rather than reachable through the studio --
+    the alternative, an empty ``np.concatenate([])``, is a bare ``ValueError``
+    naming nothing, which is exactly the failure mode a refusal here exists to
+    replace.
     """
     count = int(ts.tile_count)
+    if count < 1:
+        raise ValueError(f"the tileset {ts.name!r} holds no tiles to write")
     stack = np.concatenate(
         [np.asarray(ts.tile_pixels(index)) for index in range(count)], axis=0
     )
@@ -958,6 +990,20 @@ def _slice_chunk(entry, runs: list[tuple[int, object]]) -> bytes:
     the user explicitly set, where this keeps every value and only widens where
     it applies. One coherent rule -- *a slice's pivot is the first one it
     carries, and every key without one inherits it* -- and no invented number.
+
+    **A zero-size rectangle is written as zero, deliberately, not clamped to
+    one pixel.** ``max(0, ...)`` only ever bites when a bound this package
+    stores is genuinely empty, and the one way that happens is a slice
+    ``document_from_aseprite`` built straight from a *hidden* key in a foreign
+    file (``asein._read_slice`` -- a zero-size key is Aseprite's own way of
+    keying a slice to nothing, and this reader keeps the rectangle rather than
+    inventing a hidden state, with a warning). Clamping to 1x1 here would turn
+    that faithfully-carried "nothing" into a fabricated one-pixel box the next
+    reader has no reason to think is meaningful; writing zero instead makes
+    Aseprite's own reader treat the key exactly as hidden again, which is the
+    state the source file actually declared. Every rectangle this package's own
+    editing funnel produces is at least 1x1 (``transform.clamp_rect``'s own
+    floor), so an ordinary drawing never reaches this branch at all.
     """
     fallback_centre = _first_set(entry.center, [key.center for _, key in runs])
     fallback_pivot = _first_set(entry.pivot, [key.pivot for _, key in runs])

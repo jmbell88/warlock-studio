@@ -265,20 +265,28 @@ duration, the tags with their spans, directions and repeat counts, and the slice
 and nine-slice centres. A cel that Aseprite shares between frames arrives shared here too, so
 editing it changes every frame it appears on — the same *linked cel* it was in the file it came
 from. An indexed file brings its palette across and the document opens indexed; a greyscale one is
-converted exactly, since grey is only a colour with its three channels equal.
+converted exactly, since grey is only a colour with its three channels equal. Tilemap layers and
+their tilesets open too, as tilemap layers here — a tile you paint still edits the shared tileset
+strip rather than becoming ordinary pixels.
 
-Reading only, and it shows in one place: the import opens as an **unsaved** document, so the first
-`Ctrl+S` asks where to put it and writes an `.ora`. Nothing this app does can write back over the
-`.aseprite`, which is deliberate — a format read by one program and written by another is how a
-day's work goes missing.
+The import itself is still **reading only** — it does not decide where a save goes, only what the
+document is — so it opens as an **unsaved** document and the first `Ctrl+S` asks where to put it,
+the same as any import. What has changed is the answer that dialog can give: Save As can now write
+`.aseprite` itself, deliberately made from the save dialog once you have looked at the document,
+never assumed by the door that read the file in. See [Saving](08-inker.md#saving) for that half.
 
 Two kinds of thing do not come across, and they are told apart on purpose. Anything that would
-change what the pixels *mean* is a refusal that names itself and opens nothing: a tilemap layer,
-whose pixels live in a tileset; a colour depth this build cannot read; a cel linked to a frame that
-holds none. Anything cosmetic is a message and the file still opens: colour profiles (this app
-assumes sRGB throughout), user data and timeline colours, a per-cel opacity (opacity is a layer
-property here), a cel's z-index (layer order is stacking order). A reference layer opens hidden,
-which is what exporting from Aseprite would do with it.
+change what the pixels *mean* is a refusal that names itself and opens nothing: a colour depth this
+build cannot read, a canvas too small to draw on, a cel that will not decompress, a tilemap cel this
+build cannot align to its own tile grid, a cel type nobody here knows, a tileset that links an
+external file rather than carrying its own pixels, or a cel linked to a frame that holds none.
+Anything cosmetic is a message and the file still opens: colour profiles (this app assumes sRGB
+throughout), user data and timeline colours, a per-cel opacity (opacity is a layer property here), a
+cel's z-index (layer order is stacking order), per-frame palettes (the final table is used). A
+reference layer opens hidden, which is what exporting from Aseprite would do with it.
+
+The full list of what comes across, what is only a message, and what a save back out to `.aseprite`
+drops in turn, is kept in `docs/ASEPRITE_INTEROP.md`.
 
 ## Slices on an animated document
 

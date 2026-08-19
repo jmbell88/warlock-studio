@@ -1435,6 +1435,11 @@ def document_from_aseprite(
         )
         member_uids = {index: tracks[index].uid for index in image_rows}
     else:
+        # Divergence 22: a one-frame file has nowhere to be animated in this
+        # model (``Document.anim is None`` for a still document), where
+        # Aseprite's own document is always a timeline and a "still" sprite is
+        # simply one with a single frame in it. A tag declared over that lone
+        # frame is dropped -- there is nothing here for it to play across.
         if sprite.tags:
             warn("a tag over a single frame was dropped; there is nothing to play")
         layers: list[Layer] = []

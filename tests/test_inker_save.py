@@ -599,13 +599,15 @@ def test_save_as_still_defaults_to_ora_for_an_unrelated_flow(tmp_path, monkeypat
     assert dest.read_bytes() == inker.ora_bytes(tab.doc)
 
 
-def test_ctrl_s_on_an_aseprite_backed_tab_forces_save_as_with_a_naming_toast(
+def test_ctrl_s_on_an_aseprite_backed_tab_forces_save_as_with_its_own_toast(
     tmp_path, monkeypatch
 ):
-    """The spec's own behaviour: an aseprite-format tab's *next* Ctrl+S still
-    cannot write in place -- ``WRITABLE_SUFFIXES`` never grew this suffix --
-    so it is routed back through Save As with the same explanatory toast a
-    JPG-backed tab gets."""
+    """An aseprite-format tab's *next* Ctrl+S still cannot write in place --
+    ``WRITABLE_SUFFIXES`` never grew this suffix -- so it is routed back
+    through Save As. Its toast is its own, not the generic "came from a
+    {SUFFIX} file" sentence every other excluded format reuses: this file was
+    *written* by Save As a moment ago, not imported, so "came from" would be
+    backwards and ungrammatical to boot ("a ASEPRITE file")."""
     src = tmp_path / "sprite.aseprite"
     doc = inker.Document.blank(8, 8)
     inker.write_aseprite(doc, src)
@@ -620,7 +622,11 @@ def test_ctrl_s_on_an_aseprite_backed_tab_forces_save_as_with_a_naming_toast(
 
     assert any(key.startswith("inker-saveas:") for key in ctx.submitted)
     assert not any(key.startswith("inker-save:") for key in ctx.submitted)
-    assert ctx.toasts and "ASEPRITE" in ctx.toasts[0][0]
+    assert ctx.toasts
+    message = ctx.toasts[0][0]
+    assert "came from a" not in message.lower()
+    assert "save as" in message.lower()
+    assert ".aseprite" in message.lower()
     assert dest.exists()
 
 

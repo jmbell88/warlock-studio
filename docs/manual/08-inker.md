@@ -897,17 +897,28 @@ Inker saves natively as **OpenRaster** (`.ora`) — a zip of layer PNGs that bot
 and write. That is the format that keeps your layers, their blend modes and their opacities.
 
 - `Ctrl+S` saves. A document that has never been written anywhere asks where to put it first.
-- `Ctrl+Shift+S` is Save As.
+- `Ctrl+Shift+S` is Save As, and its dialog now offers **`.aseprite`** alongside `.ora`: type or pick
+  an `.aseprite`/`.ase` name and Inker writes the native Aseprite format — layers, groups, links,
+  tags, slices, tilesets and tilemap layers, field for field. `.ora` stays the suggested name and the
+  default filter row; only choosing an Aseprite suffix opts out of it.
 - A drawing you opened from a **JPG, WebP or BMP** also asks where to put it, every time. Inker can
   read those formats but cannot write them, so `Ctrl+S` offers you an `.ora` beside the original
   rather than either putting PNG bytes into a file named `.jpg` — unreadable by its own extension —
   or re-encoding your original to JPEG and losing pixels on a keystroke that means "keep what I
   have". The original file is never touched. `.png` and `.ora` save in place.
+- The same rule covers **`.aseprite`**: once Save As has written one, the *next* `Ctrl+S` still asks
+  where to put it rather than overwriting it in place, because writing that format is lossy — a
+  handful of things Aseprite models have no home here (see below) — and a silent lossy save is worse
+  than one more click. `Ctrl+Shift+S` again, or an `.ora` copy, are both one dialog away.
 - `Ctrl+E` adds the drawing to the library as a finished reference, which is what plain `Ctrl+E`
   does in Clay, Plotter and Packwright too. It does nothing for a document you opened *from* the
   library — that one is already there, and `Ctrl+S` is the write it wants.
 - `Ctrl+Shift+E` exports a **flattened PNG**. This is an export, not a save: it does not change what
   the tab points at, so the document stays unsaved against its own file.
+
+What Save As keeps and drops going out to `.aseprite`, and what **Import Aseprite file** drops coming
+in (see [Importing an Aseprite file](09-inker-animation.md#from-an-aseprite-file)), is kept in full in
+`docs/ASEPRITE_INTEROP.md`.
 
 Saving is a background operation, and it shows: while a save is in flight the layer panel and the
 structural shortcuts are disabled, because a save is encoding the layer stack on another thread and
