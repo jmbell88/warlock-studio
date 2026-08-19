@@ -29,7 +29,13 @@ from typing import Any
 
 import numpy as np
 
-from ..undo import Edit
+from ..undo import CompoundEdit, Edit
+
+# Re-exported on purpose. This module is where the rest of the package takes its
+# edit types from, and a sibling that needed ``CompoundEdit`` would otherwise
+# have to name ``studio.undo`` itself -- a second outward import in a pinned
+# package, for a dependency the package already has through this line.
+__all__ = ["CompoundEdit", "Edit"]
 
 
 def _own(array: np.ndarray) -> np.ndarray:
@@ -442,6 +448,13 @@ class ResizeEdit(Edit):
     after: dict[int, np.ndarray] = field(default_factory=dict)
     before_objects: dict[int, list[tuple[float, float]]] = field(default_factory=dict)
     after_objects: dict[int, list[tuple[float, float]]] = field(default_factory=dict)
+    #: An infinite map's window origin on each side, or ``None`` on a finite
+    #: map. It rides this edit rather than being set beside it because a resize
+    #: on an infinite map *is* the window sliding: undoing the shape without
+    #: undoing the origin would leave every cell at a different true coordinate
+    #: than it was painted at, and the next save would write the wrong chunks.
+    before_origin: tuple[int, int] | None = None
+    after_origin: tuple[int, int] | None = None
 
     def __post_init__(self) -> None:
         self.before = {uid: _own(a) for uid, a in self.before.items()}
@@ -452,10 +465,41 @@ class ResizeEdit(Edit):
         )
 
     def undo(self, doc: Any) -> None:
-        doc._apply_resize(self.before_size, self.before, self.before_objects)
+        doc._apply_resize(
+            self.before_size, self.before, self.before_objects, self.before_origin
+        )
 
     def redo(self, doc: Any) -> None:
-        doc._apply_resize(self.after_size, self.after, self.after_objects)
+        doc._apply_resize(
+            self.after_size, self.after, self.after_objects, self.after_origin
+        )
+
+
+@dataclass
+class InfiniteEdit(Edit):
+    """Whether the map has an edge, before and after.
+
+    A flag and a pair of coordinates, and it is on the undo stack for the reason
+    every document field is: the conversion changes what the size fields mean,
+    what the grid is drawn over and what a save writes, and a state you cannot
+    take back is not one to reach by ticking a box.
+
+    The crop that an infinite-to-finite conversion runs first is a separate
+    :class:`ResizeEdit`, composed with this one into a single
+    :class:`~..undo.CompoundEdit` -- two Ctrl+Z presses to undo one action would
+    show a cropped map that is still infinite, a state that never existed.
+    """
+
+    before: bool
+    after: bool
+    before_origin: tuple[int, int] = (0, 0)
+    after_origin: tuple[int, int] = (0, 0)
+
+    def undo(self, doc: Any) -> None:
+        doc._apply_infinite(self.before, self.before_origin)
+
+    def redo(self, doc: Any) -> None:
+        doc._apply_infinite(self.after, self.after_origin)
 
 
 @dataclass

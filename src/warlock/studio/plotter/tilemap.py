@@ -157,10 +157,35 @@ class MapDoc(ProjectionOps, TilesetOps, LayerOps, PaintOps, GeometryOps, ObjectO
         # Refused by name here rather than at the first draw, for ``_dimension``'s
         # reason: a map placed by arithmetic nothing implements is not a map.
         self.projection = project.check(projection)
-        # Kept on the public document even while dense tile layers remain the
-        # implementation boundary. File doors refuse ``True`` by name rather
-        # than silently writing a finite map.
+        # An infinite map has no fixed rectangle: painting past its edge grows
+        # it, and cells may sit at negative coordinates.
+        #
+        # **Stored as a dense window over the populated extent plus an origin,
+        # not as sparse chunks -- and the deviation is a decision.** The format
+        # is chunked and the codecs read and write chunks; what differs is only
+        # how the *editor* holds them between the two. A dense window means
+        # every tool, both renderers, the terrain and wang engines, the stroke
+        # session and ``TilePatchEdit`` go on working on the array they already
+        # work on, and the growth is an ordinary ``resize`` -- which is already
+        # undoable, already moves objects by the right rule, and already has a
+        # test corpus. Sparse chunks would have re-answered all of that at once.
+        # What it costs is memory on a map painted in two clusters a thousand
+        # cells apart, and :data:`MAX_DIMENSION` caps the populated extent for
+        # exactly that reason -- the engine's own cap, not the new-map form's
+        # ``plotter_setup.MAX_TILES``, because this package may not reach into
+        # ``studio`` and the argument is the same either way.
+        #
+        # It also buys the one property Q's flood needs: a flood is bounded to
+        # the window, and the window *is* the populated extent, so "bounded to
+        # content bounds" is what the storage says rather than something the
+        # tool has to remember to do.
         self.infinite = bool(infinite)
+        # Where the stored grid's cell (0, 0) sits in *true* map coordinates.
+        # Always (0, 0) on a finite map; on an infinite one it goes negative as
+        # the map grows left or up, and it is what the codecs write chunk
+        # coordinates against.
+        self.origin_x = 0
+        self.origin_y = 0
         self.layers: list[Layer] = list(layers or [])
         self.tilesets: list[TilesetRef] = list(tilesets or [])
         # Bumped by every hook that mutates the tileset list, so a cache keyed

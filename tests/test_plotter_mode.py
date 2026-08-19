@@ -444,19 +444,22 @@ def test_an_engine_refusal_reaches_the_user_inside_a_sentence(tmp_path):
     which is the only part that says which feature."""
     from warlock.service.errors import Invalid
 
-    # ``infinite`` rather than ``hexagonal``: the two offset lattices left the
-    # refusal list when the editor learned to project them, which is the only
-    # reason a refusal ever moves -- and this test is about the *framing*, so it
-    # needs any feature that is still genuinely refused.
+    # An unrecognised orientation, and it is the *third* feature this test has
+    # asked about: hexagonal left the refusal list when the editor learned to
+    # project it, and infinite left when it learned to chunk. That is the only
+    # reason a refusal ever moves, and this test is about the *framing* rather
+    # than about any one feature -- so it wants whatever is still genuinely
+    # refused, and an orientation outside ``project.PROJECTIONS`` is a refusal
+    # by construction rather than one waiting on effort.
     path = tmp_path / "hostile.tmx"
     path.write_bytes(
-        b'<map version="1.10" orientation="orthogonal" infinite="1" width="1" '
+        b'<map version="1.10" orientation="spiral" width="1" '
         b'height="1" tilewidth="16" tileheight="16"/>'
     )
     with pytest.raises(Invalid) as exc:
         plotter_io._load(path)
     assert "This map could not be opened" in str(exc.value)
-    assert "infinite" in str(exc.value)
+    assert "spiral" in str(exc.value)
     assert exc.value.field == "file"
 
 
@@ -2537,3 +2540,121 @@ def test_a_sheet_with_too_few_cells_never_parks_as_terrain(tmp_path):
     assert plotter_mode.ensure(ctx).sheet_import is None
     assert len(tab.doc.tilesets) == 1
     assert tab.doc.tilesets[0].tileset.terrains == ()
+
+
+# --- painting an infinite map -------------------------------------------------
+
+
+def _infinite(ctx: FakeCtx):
+    """A stamping tab whose map has no edge."""
+    tab = plotter_mode.new_document(ctx, (4, 4, 16, 16), infinite=True)
+    tab.doc.add_tileset(_tileset())
+    tab.doc.mark_saved()
+    state = plotter_mode.ensure(ctx)
+    state.tool = "stamp"
+    state.brush = np.array([[tab.doc.tilesets[0].firstgid]], gid.DTYPE)
+    return tab, state
+
+
+def test_painting_past_the_edge_of_an_infinite_map_grows_it():
+    """The gesture the whole feature is for. The cell keeps its *true*
+    coordinate; it is the window that moved under it."""
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab, state = _infinite(ctx)
+    plotter_canvas._apply(ctx, state, tab, (-2, -1))
+    assert (tab.doc.origin_x, tab.doc.origin_y) == (-2, -1)
+    layer = tab.doc.tile_layers()[0]
+    assert int(layer.data[0, 0]) != 0
+    assert not ctx.toasts
+
+
+def test_a_stamp_at_the_edge_makes_room_for_its_whole_footprint():
+    """The brush's footprint, not the cell under the cursor: growing by one
+    cell would clip the rest of a 3x3 stamp."""
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab, state = _infinite(ctx)
+    state.brush = np.full((3, 3), tab.doc.tilesets[0].firstgid, gid.DTYPE)
+    plotter_canvas._apply(ctx, state, tab, (3, 3))
+    assert (tab.doc.width, tab.doc.height) == (6, 6)
+    assert int((tab.doc.tile_layers()[0].data != 0).sum()) == 9
+
+
+def test_painting_past_a_finite_map_still_clips():
+    """The flag is the only thing that decides it, and a finite map is exactly
+    as it was."""
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab, state, _layer = _stamping(ctx)
+    plotter_canvas._apply(ctx, state, tab, (-2, -1))
+    assert (tab.doc.width, tab.doc.height) == (4, 4)
+    assert int((tab.doc.tile_layers()[0].data != 0).sum()) == 0
+
+
+def test_a_refused_growth_says_so_instead_of_stopping_silently():
+    """The extent cap reaching the user. A stroke that quietly stopped at an
+    invisible edge is the failure this toast exists to prevent."""
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab, state = _infinite(ctx)
+    plotter_canvas._apply(ctx, state, tab, (100_000, 0))
+    assert len(ctx.toasts) == 1
+    assert "extent" in ctx.toasts[0][0]
+    assert int((tab.doc.tile_layers()[0].data != 0).sum()) == 0
+
+
+def test_a_growth_carries_the_selection_and_the_line_anchor_with_it():
+    """Every cell-space view field is an *index* into the window, and a growth
+    slides the window. Left alone they all point one growth to the left of
+    where the user put them."""
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab, state = _infinite(ctx)
+    mask = np.zeros((4, 4), dtype=bool)
+    mask[1, 1] = True
+    state.set_selection((1, 1, 2, 2), mask)
+    state.last_paint = (1, 1)
+    plotter_canvas._apply(ctx, state, tab, (-2, -1))
+    assert state.select == (3, 2, 4, 3)
+    assert state.last_paint == (3, 2)
+    assert bool(state.select_mask[2, 3])
+    assert state.select_mask.shape == (tab.doc.height, tab.doc.width)
+
+
+def test_a_drag_that_grows_the_map_interpolates_in_the_new_window():
+    """The line is drawn from ``drag_last_cell``, which the growth moved. Drawn
+    before the growth it would start one growth to the left of the cell the
+    pointer was actually in."""
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab, state = _infinite(ctx)
+    tab.doc.begin_stroke(tab.doc.tile_layers()[0].uid)
+    plotter_canvas._apply_drag(ctx, state, tab, (1, 0))
+    plotter_canvas._apply_drag(ctx, state, tab, (-2, 0))  # off the left edge
+    tab.doc.end_stroke()
+    data = tab.doc.tile_layers()[0].data
+    # Four cells in one unbroken run: true coordinates -2..1 on row 0.
+    assert [int(value != 0) for value in data[0, :4].tolist()] == [1, 1, 1, 1]
+
+
+def test_a_shift_click_line_survives_the_growth_it_causes():
+    """``last_paint`` is the anchor and the growth moves it, so the line lands
+    between the two cells the user actually clicked."""
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab, state = _infinite(ctx)
+    # Through the drag path, because that is what sets ``last_paint`` -- the
+    # anchor a Shift+click draws from, and what ``_line_pending`` requires
+    # before the pane ever calls ``_apply_line``.
+    plotter_canvas._apply_drag(ctx, state, tab, (1, 0))
+    plotter_canvas._apply_line(ctx, state, tab, state.last_paint, (-2, 0))
+    data = tab.doc.tile_layers()[0].data
+    assert [int(value != 0) for value in data[0, :4].tolist()] == [1, 1, 1, 1]

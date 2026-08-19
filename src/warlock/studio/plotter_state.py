@@ -439,6 +439,53 @@ class PlotterState:
         self.select = rect
         self.select_mask = mask
 
+    def shift_cells(self, dx: int, dy: int, size: tuple[int, int]) -> None:
+        """Move every cell-space view field, after an infinite map grew.
+
+        A growth slides the stored window under content that did not move, so a
+        cell's *index* changes while its true coordinate does not -- and every
+        number this class holds in cell space is an index. Left alone they all
+        point one growth to the left of where the user put them: a marquee jumps
+        off the selection, a Shift+click draws its line from the wrong cell, and
+        an open drag interpolates from a cell the pointer was never in.
+
+        One door for the same reason :meth:`set_selection` is one: these fields
+        have to move together or they disagree about which cell is which.
+
+        The mask is *padded* rather than dropped, unlike the resize case
+        :meth:`selection_mask_in` guards against. A growth is not a user resize
+        -- nothing was cropped and nothing has to grow back -- so the mask can
+        be placed into the new window exactly, and dropping it would silently
+        widen the selection to its bounding rect mid-stroke.
+        """
+        if not (dx or dy):
+            return
+        for name in ("hover_cell", "drag_anchor", "last_paint", "drag_last_cell"):
+            cell = getattr(self, name)
+            if cell is not None:
+                setattr(self, name, (cell[0] + dx, cell[1] + dy))
+        for name in ("select", "select_before"):
+            rect = getattr(self, name)
+            if rect is not None:
+                setattr(
+                    self,
+                    name,
+                    (rect[0] + dx, rect[1] + dy, rect[2] + dx, rect[3] + dy),
+                )
+        if self.select_mask is not None:
+            import numpy as np
+
+            width, height = int(size[0]), int(size[1])
+            rows, columns = self.select_mask.shape
+            if dy + rows <= height and dx + columns <= width and dx >= 0 and dy >= 0:
+                grown = np.zeros((height, width), dtype=bool)
+                grown[dy : dy + rows, dx : dx + columns] = self.select_mask
+                self.select_mask = grown
+            else:
+                # Cannot be placed, so the rect stands alone -- the same safe
+                # direction ``selection_mask_in`` takes.
+                self.select_mask = None
+
     def clear_drag(self) -> None:
         self.drag_kind = ""
         self.drag_anchor = None

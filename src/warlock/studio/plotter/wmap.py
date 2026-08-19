@@ -148,7 +148,9 @@ from .tilemap import (
     shape_kind,
 )
 
-VERSION = 9
+VERSION = 10
+#: Image collections; written when a tileset is one and the map is finite.
+COLLECTION_VERSION = 9
 #: Foreign Wang sets; written when a tileset carries one and none is an
 #: image collection.
 WANGSET_VERSION = 8
@@ -250,10 +252,11 @@ class WmapUnstorable(ValueError):
     (``studio/plotter_io._encoded``, ``studio/plotter_mode.export_library``),
     stay exactly where they are. The remaining raise is the unknown-layer-kind
     fallthrough below, and the milestones ahead put more behind it: a document
-    that becomes infinite (chunked storage, M5) or gains a layer kind before the
-    container learns to hold it lands here first. Removing the plumbing in order
-    to re-add it next wave is churn, and the intervening builds would crash the
-    frame thread rather than toast.
+    that gains a layer kind before the
+    container learns to hold it lands here first. (Infinite maps were one of
+    them and are stored now, at version 10; a new layer kind is the live case.)
+    Removing the plumbing in order to re-add it next wave is churn, and the
+    intervening builds would crash the frame thread rather than toast.
     """
 
 
@@ -330,11 +333,12 @@ def _layer_entries(
         # be missing -- a defect's traceback where a writer-door refusal
         # belongs.
         if isinstance(layer, TileLayer):
-            # ``chunks`` is reserved beside ``data`` and deliberately absent:
-            # an infinite map stores a tile layer as a sparse list of chunks
-            # rather than as one dense rectangle (M5). Named here and at the
-            # top level so that the day it arrives it is an addition to an
-            # entry rather than a rearrangement of the container.
+            # ``chunks`` is reserved beside ``data`` and stays deliberately
+            # absent even now that infinite maps are stored: the document holds
+            # a dense window plus an origin, so an infinite map's tile layer is
+            # the same one array as any other's, and chunking is a thing the
+            # Tiled codec does at its own door. Kept reserved because a future
+            # sparse form would want the name.
             specific = {"type": "tile", "data": f"{LAYER_DIR}/{next(tiles)}.npy"}
         elif isinstance(layer, ObjectLayer):
             specific = {
@@ -602,16 +606,17 @@ def _document_version(doc: MapDoc) -> int:
     ``ObjectLayer.color`` was exactly that: the one decoration on the object
     arm below that nothing looked at.
     """
+    # An infinite map first: 10 is the ceiling, so nothing below can override
+    # it. The ``infinite``/``chunks`` keys were **reserved** from version 3 and
+    # written ``false`` precisely so this day would be an addition to the
+    # container rather than a rearrangement of it -- and this is that day.
     if doc.infinite:
-        raise WmapUnstorable(
-            f"the version {VERSION} .wmap format has no sparse chunk entry for an infinite map"
-        )
-    # Image collections first: 9 is the ceiling, so nothing below can override
-    # it. The least optional gate here -- without the record the atlas is just
-    # an image, and an old reader would slice it on the grid size and hand every
-    # cell a different tile.
-    if any(ref.tileset.is_collection for ref in doc.tilesets):
         return VERSION
+    # Then image collections. The least optional of the rest -- without the
+    # record the atlas is just an image, and an old reader would slice it on the
+    # grid size and hand every cell a different tile.
+    if any(ref.tileset.is_collection for ref in doc.tilesets):
+        return COLLECTION_VERSION
     # Then foreign Wang sets.
     if any(ref.tileset.wangsets for ref in doc.tilesets):
         return WANGSET_VERSION
@@ -747,14 +752,19 @@ def manifest_json(doc: MapDoc) -> str:
         "height": doc.height,
         "tile_w": doc.tile_w,
         "tile_h": doc.tile_h,
-        # Reserved for M5 and written now, false, on purpose. An infinite map
-        # has no fixed ``width``/``height`` rectangle at all: its tile layers
-        # are sparse ``chunks`` (see the per-layer note in ``_layer_entries``),
-        # and the two keys have to be *reserved* rather than invented later, or
-        # every reader between now and then treats their absence as a fact.
-        # ``read_wmap`` refuses a file that sets it, for the same reason it
-        # refuses a newer version: this build cannot draw one.
-        "infinite": False,
+        # Reserved from version 3, written ``false`` until version 10, and now
+        # a fact. ``width``/``height`` stay meaningful on an infinite map:
+        # ``MapDoc`` holds a **dense window over the populated extent plus an
+        # origin** rather than sparse chunks (the decision, and its cost, are
+        # argued at ``MapDoc.infinite``), so the array half of this container
+        # needs no new shape at all -- only the origin has to be recorded, or a
+        # reopened map forgets where its cells were and slides to (0, 0).
+        #
+        # This is why the reserved ``chunks`` key stays absent: chunks are the
+        # *Tiled* format's shape, translated at that codec's door
+        # (``tmx.chunks_of``/``chunks_from``), and never the document's.
+        "infinite": bool(doc.infinite),
+        "origin": [int(doc.origin_x), int(doc.origin_y)],
         "projection": doc.projection,
         "class": str(doc.class_name),
         "parallax_origin": [float(value) for value in doc.parallax_origin],
@@ -1164,18 +1174,6 @@ def read_wmap(data: bytes) -> MapDoc:
                 f"this map was written by a newer version of Warlock "
                 f"(format {version}, this build reads {VERSION})"
             )
-        if manifest.get("infinite", False):
-            # The key is reserved and written ``false``; a file that sets it
-            # stores its tile layers as sparse chunks and has no dense
-            # rectangle for ``_read_layer_array`` to check against, so reading
-            # one as if it were dense is the half-read this format refuses.
-            # M5 turns this into an acceptance, the way isometric turned the
-            # projection refusal into one.
-            raise ValueError(
-                "this map is infinite, which this build cannot open "
-                "(chunked tile storage is not implemented yet)"
-            )
-
         doc = MapDoc(
             width=int(manifest.get("width", 1)),
             height=int(manifest.get("height", 1)),
@@ -1184,7 +1182,13 @@ def read_wmap(data: bytes) -> MapDoc:
             # A version 1 file predates projections and is orthogonal by
             # definition, which is what the default says without a branch.
             projection=str(manifest.get("projection", project.ORTHOGONAL)),
+            infinite=bool(manifest.get("infinite", False)),
         )
+        # Only meaningful when ``infinite``; a finite map's origin is (0, 0) by
+        # definition and reading a stray pair on one would move every cell.
+        if doc.infinite:
+            origin = _two(manifest, "origin", (0, 0))
+            doc.origin_x, doc.origin_y = int(origin[0]), int(origin[1])
         doc.renderorder = str(manifest.get("renderorder", "right-down"))
         doc.backgroundcolor = manifest.get("backgroundcolor")
         doc.class_name = str(manifest.get("class", ""))

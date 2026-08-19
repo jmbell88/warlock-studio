@@ -30,6 +30,12 @@ says what that comes to in pixels overall, because a map is authored in tiles an
 and the two numbers are easy to be surprised by. Choosing *Isometric* with a cell that is not twice
 as wide as it is tall says so, and still lets you do it.
 
+**Infinite** is the one other answer on that dialog. An infinite map has no fixed edge: painting past
+the side you can see grows it, cells can sit at negative coordinates, and the size you typed above
+becomes the window it starts with rather than a rectangle it is stuck inside. Leave it off for a
+level with a known shape — most maps — and turn it on when you are laying out a world and do not yet
+know how far it goes. It is not a decision you are stuck with either way; see *Resize* below.
+
 Two of those answers are worth getting right at this point. The **projection** is fixed once anything
 is painted, because a tileset drawn for one lattice paints the wrong shape into every cell drawn for
 the other. The **tile size** is what a plain image is sliced at when you add it, so a tileset added
@@ -45,7 +51,13 @@ Every new map arrives with one tile layer called *Ground* already on it. Both si
 later, under **Resize** in the tools pane. The grid fields grow or crop the map and move every object
 with the content, so a trigger volume drawn around a doorway stays around that doorway; the
 **Offset** fields decide where the old content lands, which is how you add rows at the *top* rather
-than the bottom. Below them, **Tile size** redraws every cell at a new size and scales the objects
+than the bottom. On an infinite map that section is called **Size** instead and has no width and
+height to type: the rectangle is whatever you have painted, so what it offers is moving the content,
+**Shrink to content** — which throws away the empty space an erase left behind — and **Give the map
+a fixed size**, which crops to what is painted and asks first, because the cells outside that
+rectangle are gone. A finite map's section offers **Make infinite**, which asks nothing: nothing is
+lost going that way, and every cell stays exactly where it is. Either conversion is one undo step.
+Below them, **Tile size** redraws every cell at a new size and scales the objects
 with it — nothing painted is lost, because a tile keeps its identity whatever size the cell under it
 is. Tilesets already on the map keep the slicing they arrived with, which is why the size you start
 with still matters.
@@ -409,7 +421,7 @@ Plotter does not model is **refused by name** rather than loaded with half of it
 because the drop is invisible right up to the moment you save, at which point the other half is
 gone. The message says which feature and what to do about it.
 
-Refused: infinite (chunked) maps; the hexagonal 120° tile-rotation flag; object templates; a tileset
+Refused: the hexagonal 120° tile-rotation flag; object templates; a tileset
 with no pixels at all; an orientation or a compression Plotter has no name for; Tiled's older
 terrain types and its deprecated per-tile terrain assignment, both of which Tiled is itself
 retiring; deprecated tile-space layer coordinates and image-layer transparent colours; and custom
@@ -418,8 +430,13 @@ properties of a type outside the set Plotter models.
 Several things that were on that list have left it, each in the change that taught the editor to
 model them: staggered and hexagonal maps, image-collection tilesets, external `.tsj` tilesets,
 generic Wang sets, everything a tile can carry (class, properties, probability, animation,
-collision), the tileset presentation fields, colour-key transparency, and zstd-compressed layer data
-(read; writes stay zlib, because every Tiled reads zlib).
+collision), the tileset presentation fields, colour-key transparency, infinite maps, and
+zstd-compressed layer data (read; writes stay zlib, because every Tiled reads zlib).
+
+An **infinite map** opens with its chunks assembled into one window and its corner remembered, so a
+map authored in Tiled at negative coordinates comes back out at the same coordinates it went in at.
+Empty chunks are not written, which is the format's own shape: a map painted in two clusters saves
+two clusters, not the rectangle between them, and erasing an area shrinks the file.
 
 An **image-collection tileset** — one where every tile is its own file — opens like any other. Its
 ids may have gaps, and a tile larger than the map's grid draws at its own size anchored by its

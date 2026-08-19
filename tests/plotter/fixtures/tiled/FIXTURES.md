@@ -16,7 +16,7 @@ does with the file. Useful — a regression in our own encoder still fails — b
 it must never be quoted as compatibility.
 
 > **Every map fixture in this directory is currently synthesized.** The
-> corpus was empty before Wave 2; these four pairs were produced by this
+> corpus was empty before Wave 2, and every pair since was produced by this
 > editor. The rule this file used to state — "never synthesize a file here" —
 > was the right rule and was overtaken rather than repealed. It now reads:
 > *never synthesize a file here and label it Tiled-authored*, and the
@@ -47,11 +47,14 @@ tests key on the stem.
 
 `_corpus.py` carries `MANIFEST`, the stems the gate requires. Adding a fixture
 means adding its stem there in the same commit — a file in this directory that
-nothing lists is a file nothing tests. `MANIFEST` currently holds `basic-iso`,
-`core-112`, `oblique-112` and `typed-embedded-112`.
+nothing lists is a file nothing tests. **`_corpus.py` is the list**; this
+document deliberately does not repeat it, because a second copy went stale
+twice while fixtures were being added.
 
-`basic.png`, `big.png`, `blob.png` and `iso.png` are atlases the fixtures and
-several unit tests load directly; they are not stems and are not in `MANIFEST`.
+`basic.png`, `big.png`, `blob.png`, `iso.png` and the three `prop-*.png` are
+atlases and collection images the fixtures and several unit tests load
+directly; they are not stems and are not in `MANIFEST`. `core-1.12.tsx`,
+`iso.tsx` and `t-1.12.tsj` are external tilesets, and are not stems either.
 
 ## The fixtures
 
@@ -91,6 +94,45 @@ tileset and object levels. Carries every scalar kind, an object reference, a
 file path, a class value, and a recursively nested typed list — the last of
 which is dialect. The JSON class deliberately has no custom type name, because
 such names live in a Tiled project schema this corpus does not use.
+
+### `tilemeta-112` — **synthesized**
+Orthogonal, 2×2, whose external tileset carries per-tile metadata: a tile
+class, per-tile properties, collision shapes in an `objectgroup`, a probability
+and an animation. The metadata is the point; the map itself is minimal.
+
+### `presentation-112` — **synthesized**
+Orthogonal, 2×2, whose tileset carries the presentation fields — object
+alignment, tile render size, fill mode, a tile offset, a grid orientation and a
+transparent colour key. None of it changes a gid; all of it changes how a tile
+is drawn.
+
+### `tsj-112` — **synthesized**
+The same shape as `core-112`'s tileset half, written as a **JSON external
+tileset** (`t-1.12.tsj`) rather than a `.tsx`. Tiled writes both, and the two
+had different readers before this fixture existed.
+
+### `wang-112` — **synthesized**
+Orthogonal, with a tileset carrying a **foreign** Wang set — corner-only, with
+a colour table of its own, rather than the 47-case blob preset this editor
+generates. It is the fixture for the general wangid matcher.
+
+### `hex-112` — **synthesized**
+Hexagonal, 3×3 at 32×32 with `hexsidelength=16`, `staggeraxis=y`,
+`staggerindex=odd`. The offset lattices were a refusal until the editor learned
+to place and hit-test them.
+
+### `collection-112` — **synthesized**
+Orthogonal, with an **image-collection** tileset: three separate images
+(`prop-rock.png`, `prop-tree.png`, `prop-sign.png`) with per-tile ids and sizes
+rather than one sliced atlas.
+
+### `infinite-112` — **synthesized**
+Orthogonal, **infinite**, with two `<chunk>`s sixteen cells apart — one at
+`(-16, -16)` and one at `(0, 0)` — and an object at `(-64, -64)`. Negative
+coordinates in three places at once, which is the whole point of it: the chunk
+origins, the object position, and the window the reader has to derive from
+their union. The empty rectangle between the two chunks is what a chunked file
+does *not* store, and re-exporting this fixture must not invent it.
 
 ## What is owed
 

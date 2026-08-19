@@ -20,12 +20,10 @@ everywhere. That claim is scoped to :data:`ORTHOGONAL` and :data:`ISOMETRIC`:
 staggered and hexagonal ``cell_at`` is Tiled's reference-point-plus-nearest-
 centre test instead, which is not an affine inverse and is not implemented here.
 
-**M5 seam.** :class:`Lattice` carries ``stagger_axis``, ``stagger_index`` and
-``hex_side`` so every call site already threads one object instead of five
-loose numbers, but the fields are reserved -- nothing in this module reads
-them, and staggered/hexagonal maps are still refused at the door by
-:mod:`.tmx`. This lands the wide signature migration on a quiet tree so the
-staggered/hexagonal math has one seam to land into rather than one per caller.
+The offset lattices arrived into that seam: :class:`Lattice` had carried
+``stagger_axis``, ``stagger_index`` and ``hex_side`` as reserved fields, so
+every call site already threaded one object instead of five loose numbers and
+the math had a single place to land rather than one per caller.
 """
 
 from __future__ import annotations

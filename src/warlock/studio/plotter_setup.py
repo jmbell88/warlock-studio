@@ -74,6 +74,10 @@ def blank_form() -> dict[str, Any]:
         "projection": projection,
         "next": NEXT_FILE,
         "preset": label,
+        # Off by default: a fixed rectangle is what most maps want, it is what
+        # every preset above describes, and an infinite map's size fields say
+        # something different from what they say here.
+        "infinite": False,
     }
 
 
@@ -108,6 +112,7 @@ def clamp(form: dict[str, Any]) -> dict[str, Any]:
     form["tile_h"] = max(1, min(int(form.get("tile_h", 1) or 1), MAX_TILE_PX))
     if form.get("projection") not in project.PROJECTIONS:
         form["projection"] = project.ORTHOGONAL
+    form["infinite"] = bool(form.get("infinite", False))
     return form
 
 
@@ -125,6 +130,14 @@ def summary(form: dict[str, Any]) -> str:
     difference between a sentence and a surprise.
     """
     width, height, tile_w, tile_h = size_of(form)
+    if form.get("infinite"):
+        # The numbers still mean something -- they are the starting window --
+        # but "overall" does not, so the sentence says what they are instead of
+        # multiplying out a total the map does not have.
+        return (
+            f"Infinite, starting at {width} x {height} tiles of "
+            f"{tile_w} x {tile_h} px. It grows as you paint past the edge."
+        )
     return (
         f"{width} x {height} tiles at {tile_w} x {tile_h} px "
         f"-- {width * tile_w} x {height * tile_h} px overall"

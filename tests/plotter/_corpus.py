@@ -31,6 +31,7 @@ MANIFEST: tuple[str, ...] = (
     "collection-112",
     "core-112",
     "hex-112",
+    "infinite-112",
     "oblique-112",
     "presentation-112",
     "tilemeta-112",

@@ -57,23 +57,26 @@ inventing a `1.12` format-version value.
 
 ## The `M{n}` citations
 
-Seven comments under `src/warlock/studio/plotter/` and one line of
-`docs/INVARIANTS.md` cite a milestone as `M5`, and the table above used to as
-well. **They refer to `docs/PLOTTER_PLAN.md`, which was deleted in `09c64b4`**
-— chase it with `git log --all --diff-filter=D -- '*PLOTTER_PLAN.md'`, the
-same way a `TODO.md §N` citation is chased. This is the plotter's instance of
-the rule `CLAUDE.md` already states for the deleted roadmap: the numbering was
-a citable API while the file existed, so the existing citations are left
-pointing at history rather than renumbered, and **no new `M{n}` citation is
-minted**. Write what the deferred work is instead of a number for it.
+A milestone number used to be cited as `M{n}` from comments under
+`src/warlock/studio/plotter/`, from `docs/INVARIANTS.md` and from the table
+below. **They referred to `docs/PLOTTER_PLAN.md`, which was deleted in
+`09c64b4`** — chase it with `git log --all --diff-filter=D --
+'*PLOTTER_PLAN.md'`, the same way a `TODO.md §N` citation is chased. This is the
+plotter's instance of the rule `CLAUDE.md` already states for the deleted
+roadmap: the numbering was a citable API while the file existed, so a citation
+is left pointing at history rather than renumbered, and **no new `M{n}` citation
+is minted**. Write what the deferred work is instead of a number for it.
 
-`M5` is the only one still cited from code. It is infinite (chunked) map
-storage, and the citations mark the seams held open for it: `project.Lattice`'s
-`stagger_axis`/`stagger_index`/`hex_side` fields, `.wmap`'s reserved
-`infinite`/`chunks` keys and its `chunks`-beside-`data` layer entry,
-`scene.resolve` never asking a layer for a dense `(h, w)` rectangle, and the
-two `WmapUnstorable` handlers that keep a writer-door refusal from reaching the
-frame thread as a crash.
+**No `M{n}` is cited from code any more.** The last one was `M5`, infinite
+(chunked) map storage, and it shipped: those comments now say what arrived
+rather than what was owed. The seams it had held open are worth naming because
+each did its job — `project.Lattice`'s `stagger_axis`/`stagger_index`/`hex_side`
+fields, `.wmap`'s reserved `infinite` key, `scene.resolve` never asking a layer
+for a dense `(h, w)` rectangle, and the two `WmapUnstorable` handlers that keep
+a writer-door refusal from reaching the frame thread as a crash. The one
+reservation deliberately left unused is `.wmap`'s `chunks`-beside-`data` layer
+entry: the document holds a dense window plus an origin, so an infinite map's
+tile layer is the same one array as any other's.
 
 ## Maps
 
@@ -87,8 +90,8 @@ frame thread as a crash.
 | `backgroundcolor` | round-trips | Preserved and painted by the flat renderer; fixture: `core-112`. |
 | `a {} map` | refused | An orientation outside the five this places. The list is `project.PROJECTIONS` itself, so the reader and the placement arithmetic cannot disagree about it. |
 | `staggered and hexagonal maps` | round-trips | Both offset lattices place cells, and resolve a click by **exact containment** rather than by an affine inverse -- which is what the refusal they replaced demanded ("named rather than projected approximately"). `staggeraxis`, `staggerindex` and `hexsidelength` are read, written and stored. fixture: `hex-112`. |
-| `an infinite map` | refused | Dense finite storage remains the current map boundary. |
-| `chunked (infinite) layer data` | refused | The JSON spelling of infinite tile storage. |
+| `an infinite map` | round-trips | No fixed rectangle: painting past the edge grows the map, cells may sit at negative coordinates, and both spellings read and write `<chunk>`/`chunks` in CSV and base64 with every compression. **The editor holds a dense window plus an origin rather than sparse chunks** -- chunking is translated at this codec's door and never leaks into the document, which is why every tool, both renderers and the terrain engine were untouched by this. Growth is an ordinary undoable `resize`; the origin rides that same step. fixture: `infinite-112`. |
+| `chunked (infinite) layer data` | round-trips | The JSON spelling of the row above, and read and written by the same two functions (`tmx.chunks_from`/`chunks_of`). Empty chunks are dropped on write, which is the format's own shape and what makes an erase shrink a file. fixture: `infinite-112`. |
 | `hexagonal 120-degree tile rotation` | refused | The hex-only fourth gid transform bit, and the one refusal on this page that is **not** waiting on effort. Two things block it. First, `gid.GID_MASK` is `0x1FFFFFFF` because that is *Aseprite's* default tile-id mask and the Inker writes it verbatim into `.aseprite` files (`aseout.py`), where the identity remap is what makes the output a file real Aseprite reads -- so Tiled's narrower `0x0FFFFFFF` cannot simply replace it; the plotter would need its own mask. That part is solvable. The second is not: **a 120° rotation of a square raster is not a permutation of the pixel grid.** `render.orient` is slices and transposes only, deliberately -- the standing bar for a tile transform is that it invents no colour -- and drawing the rotation faithfully in an export would mean resampling there. A canvas that rotated while the export did not would be a far larger lie than the parallax and animation-frame disagreements this editor already states. Re-open it if the flat renderer ever gains a resampler, or if Tiled's own hex tiles move to a lattice a permutation can turn. |
 
 ## Layers

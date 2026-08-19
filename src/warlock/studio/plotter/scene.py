@@ -28,10 +28,10 @@ was applied -- so this says what the studio should refuse and refuses nothing.
 
 **Nothing here assumes ``(h, w)`` dense storage.** A :class:`Resolved` carries a
 layer and six numbers; it never reads ``data``, never asks a layer for its
-shape, and never indexes a cell. That is deliberate and load-bearing for
-Milestone 5: an infinite (chunked) map has no dense rectangle at all, and the
-resolver is the one piece of the drawing path that must not have to change when
-one arrives.
+shape, and never indexes a cell. Infinite maps arrived and this module did not
+have to move -- it is the one piece of the drawing path that a change of tile
+storage must not reach, and the property is worth keeping whatever the storage
+does next.
 """
 
 from __future__ import annotations

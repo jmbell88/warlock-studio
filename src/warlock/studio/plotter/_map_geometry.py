@@ -15,8 +15,15 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from ..tilegrid import gid as gidlib
-from ._map_model import ObjectLayer, Shape, TileLayer, _dimension, scaled_shape
-from .edits import ResizeEdit, TileSizeEdit
+from ._map_model import (
+    MAX_DIMENSION,
+    ObjectLayer,
+    Shape,
+    TileLayer,
+    _dimension,
+    scaled_shape,
+)
+from .edits import CompoundEdit, Edit, InfiniteEdit, ResizeEdit, TileSizeEdit
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .tilemap import MapDoc
@@ -28,11 +35,26 @@ class GeometryOps:
     def resize(
         self: MapDoc, width: int, height: int, *, offset_x: int = 0, offset_y: int = 0
     ) -> bool:
-        """Change the grid, anchoring the old content at ``(offset_x, offset_y)``."""
+        """Change the grid, anchoring the old content at ``(offset_x, offset_y)``.
+
+        **On an infinite map the origin slides by the same offset**, and it does
+        so here rather than at the two call sites that need it. The offset moves
+        the content within the window; an infinite map's cells have a *true*
+        coordinate that a window change must not move, so the window's own
+        corner absorbs it. One rule in one place: growth
+        (:meth:`grow_to_hold`), a crop (:meth:`autocrop`) and any future caller
+        all get it, and it rides the same undo step as the shape.
+        """
         width, height = _dimension(width, "width"), _dimension(height, "height")
         dx, dy = int(offset_x), int(offset_y)
         if (width, height) == (self.width, self.height) and (dx, dy) == (0, 0):
             return False
+        before_origin = (int(self.origin_x), int(self.origin_y))
+        after_origin = (
+            (before_origin[0] - dx, before_origin[1] - dy)
+            if self.infinite
+            else before_origin
+        )
 
         before = {layer.uid: layer.data for layer in self.tile_layers()}
         after: dict[int, np.ndarray] = {}
@@ -69,9 +91,11 @@ class GeometryOps:
                 after=after,
                 before_objects=before_objects,
                 after_objects=after_objects,
+                before_origin=before_origin,
+                after_origin=after_origin,
             )
         )
-        self._apply_resize((width, height), after, after_objects)
+        self._apply_resize((width, height), after, after_objects, after_origin)
         return True
 
     def offset(
@@ -157,6 +181,42 @@ class GeometryOps:
         self._apply_resize((self.width, self.height), after, after_objects)
         return True
 
+    def grow_to_hold(self: MapDoc, x0: int, y0: int, x1: int, y1: int) -> bool:
+        """Make room for an inclusive cell rect on an infinite map. Grew?
+
+        Painting past the edge of an infinite map grows it, and the growth is an
+        ordinary :meth:`resize` -- which is already one undoable step, already
+        moves objects by the pixel equivalent, and already has a corpus. The
+        origin absorbs the shift so a cell's *true* coordinate never moves: the
+        stored grid slides under it.
+
+        A finite map never grows; painting past its edge is clipped by every
+        tool exactly as it always was.
+        """
+        if not self.infinite:
+            return False
+        x0, y0, x1, y1 = int(x0), int(y0), int(x1), int(y1)
+        left = max(0, -min(x0, 0))
+        top = max(0, -min(y0, 0))
+        right = max(0, x1 - self.width + 1)
+        bottom = max(0, y1 - self.height + 1)
+        if not (left or top or right or bottom):
+            return False
+        width = self.width + left + right
+        height = self.height + top + bottom
+        if width > MAX_DIMENSION or height > MAX_DIMENSION:
+            # The extent cap, and it is the *engine's* own ``MAX_DIMENSION``
+            # rather than the new-map form's cap: this package is pinned against
+            # reaching into ``studio``, and the argument is the same one
+            # ``_dimension`` already makes -- an infinite map does not mean an
+            # unbounded allocation.
+            raise ValueError(
+                f"an infinite map's painted extent stops at {MAX_DIMENSION} cells a side"
+            )
+        # ``resize`` slides the origin itself on an infinite map, so this is a
+        # plain resize and the growth is one undoable step.
+        return self.resize(width, height, offset_x=left, offset_y=top)
+
     def content_bounds(self: MapDoc) -> tuple[int, int, int, int] | None:
         """The inclusive cell rect holding every non-empty cell, or ``None``.
 
@@ -195,6 +255,53 @@ class GeometryOps:
         return self.resize(
             x1 - x0 + 1, y1 - y0 + 1, offset_x=-x0, offset_y=-y0
         )
+
+    def set_infinite(self: MapDoc, infinite: bool, *, crop: bool = True) -> bool:
+        """Convert the map between fixed-size and infinite. Changed?
+
+        **Finite to infinite is a flag.** The document already holds its cells
+        as one dense window (see ``MapDoc.infinite``), so there is nothing to
+        re-chunk: the rectangle it has becomes the window it starts with, its
+        origin is (0, 0) because that is where a finite map's cells already are,
+        and the first stroke past the edge grows it.
+
+        **Infinite to finite crops to content**, because that is the only
+        honest fixed rectangle to pick: the window may carry slack an erase left
+        behind, and the cells sit at true coordinates that a finite map has no
+        way to express. ``crop=False`` keeps the window as-is, for a caller that
+        has already chosen the rectangle. A map with nothing painted is not
+        cropped either way -- there is no content to crop to, and a 1x1 map is
+        not what "make this finite" meant.
+
+        One undo step whichever way it goes.
+        """
+        infinite = bool(infinite)
+        if infinite == bool(self.infinite):
+            return False
+        before_origin = (int(self.origin_x), int(self.origin_y))
+        cropped: Edit | None = None
+        if not infinite and crop and self.content_bounds() is not None and self.autocrop():
+            # Taken off the stack and carried inside the compound below, rather
+            # than left as a step of its own.
+            cropped = self.history.top
+            self.history.drop()
+        flag = InfiniteEdit(
+            before=not infinite,
+            after=infinite,
+            before_origin=before_origin,
+            # A finite map's origin is (0, 0) by definition; going the other way
+            # the crop has already put the origin where it belongs.
+            after_origin=(int(self.origin_x), int(self.origin_y)) if infinite else (0, 0),
+        )
+        self.history.push(
+            CompoundEdit(edits=[cropped, flag]) if cropped is not None else flag
+        )
+        self._apply_infinite(infinite, flag.after_origin)
+        return True
+
+    def _apply_infinite(self: MapDoc, infinite: bool, origin: tuple[int, int]) -> None:
+        self.infinite = bool(infinite)
+        self.origin_x, self.origin_y = int(origin[0]), int(origin[1])
 
     def set_tile_size(self: MapDoc, tile_w: int, tile_h: int) -> bool:
         """Change the size of a cell, keeping every painted tile where it is.
@@ -268,8 +375,11 @@ class GeometryOps:
         size: tuple[int, int],
         data: dict[int, np.ndarray],
         objects: dict[int, list[tuple[float, float]]],
+        origin: tuple[int, int] | None = None,
     ) -> None:
         self.width, self.height = int(size[0]), int(size[1])
+        if origin is not None:
+            self.origin_x, self.origin_y = int(origin[0]), int(origin[1])
         for uid, array in data.items():
             layer = self.layer(uid)
             if isinstance(layer, TileLayer):

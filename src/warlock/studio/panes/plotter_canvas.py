@@ -156,7 +156,7 @@ def draw(ctx: Any) -> None:
     _backdrop(draw_list, doc, view, (origin.x, origin.y))
     _layers(ctx, state, tab, draw_list, (origin.x, origin.y), region)
     if state.grid:
-        _grid(draw_list, doc, view, (origin.x, origin.y))
+        _grid(draw_list, doc, view, (origin.x, origin.y), region)
     if state.show_objects:
         _objects(state, doc, draw_list, view, (origin.x, origin.y))
     # Above the grid so its edge reads against one, below the cursor so the
@@ -312,6 +312,20 @@ def _setup_body(ctx: Any, form: dict, key: str) -> None:
     # showing a number Create will not honour.
     plotter_setup.clamp(form)
 
+    # The control's own tooltip rather than a ``help_marker`` beside it: a
+    # marker after a control wraps onto the next label's line often enough that
+    # the widget carrying its own is the safer of the two shapes.
+    changed, infinite = controls.checkbox(
+        "Infinite",
+        bool(form.get("infinite")),
+        tooltip=(
+            "An infinite map has no fixed edge: painting past the side you can "
+            "see grows it, and cells may sit at negative coordinates. The size "
+            "above becomes its starting window."
+        ),
+    )
+    if changed:
+        form["infinite"] = infinite
     widgets.muted(plotter_setup.summary(form))
     warning = plotter_setup.isometric_warning(form)
     if warning:
@@ -347,7 +361,10 @@ def _create(ctx: Any, form: dict) -> None:
     form module should know about.
     """
     plotter_mode.new_document(
-        ctx, plotter_setup.size_of(form), projection=form["projection"]
+        ctx,
+        plotter_setup.size_of(form),
+        projection=form["projection"],
+        infinite=bool(form.get("infinite")),
     )
     choice = form.get("next")
     if choice == plotter_setup.NEXT_FILE:
@@ -829,7 +846,44 @@ def _image_layer(
             )
 
 
-def _grid(draw_list: Any, doc: Any, view: Any, origin) -> None:
+def _grid_span(doc: Any, view: Any, origin, region) -> tuple[int, int, int, int]:
+    """The half-open cell rect the grid is drawn over.
+
+    A finite map's grid stops at its edge, because that edge is the map. An
+    infinite map has no edge: the grid runs over **the viewport**, so the empty
+    space you are about to paint into reads as paintable rather than as off the
+    map. The span is the union of the two, so the window stays outlined even
+    when the view is looking away from it.
+
+    Bounded by construction rather than by a cap: :func:`_grid` has already
+    refused a step under :data:`MIN_GRID_PX`, so a viewport holds at most
+    ``region / MIN_GRID_PX`` lines a side however far out the map goes.
+    """
+    if not doc.infinite:
+        return 0, 0, doc.width, doc.height
+    xs: list[int] = []
+    ys: list[int] = []
+    for sx, sy in (
+        (origin[0], origin[1]),
+        (origin[0] + region[0], origin[1]),
+        (origin[0], origin[1] + region[1]),
+        (origin[0] + region[0], origin[1] + region[1]),
+    ):
+        ix, iy = inker_state.to_image(view, origin, sx, sy)
+        cell = doc.cell_at(ix, iy)
+        xs.append(cell[0])
+        ys.append(cell[1])
+    # One cell of margin on each side: a corner lands inside a cell, and without
+    # it the partly-visible cell along each edge is left unbounded.
+    return (
+        min(min(xs) - 1, 0),
+        min(min(ys) - 1, 0),
+        max(max(xs) + 2, doc.width),
+        max(max(ys) + 2, doc.height),
+    )
+
+
+def _grid(draw_list: Any, doc: Any, view: Any, origin, region) -> None:
     from imgui_bundle import imgui
 
     # The *projected* step, not the tile size: an isometric cell advances only
@@ -841,6 +895,7 @@ def _grid(draw_list: Any, doc: Any, view: Any, origin) -> None:
     if step_x < MIN_GRID_PX or step_y < MIN_GRID_PX:
         return
     colour = imgui.get_color_u32(theme.rgba(theme.EDGE, 0.6))
+    x0, y0, x1, y1 = _grid_span(doc, view, origin, region)
 
     def node(column: float, row: float):
         return inker_state.to_screen(view, origin, *doc.cell_corner(column, row))
@@ -851,8 +906,8 @@ def _grid(draw_list: Any, doc: Any, view: Any, origin) -> None:
         # sideways, so a line from (0, r) to (width, r) crosses cells rather
         # than bounding them. One closed outline per cell is the only honest
         # drawing, and it is what makes a hexagonal map look like one.
-        for row in range(doc.height):
-            for column in range(doc.width):
+        for row in range(y0, y1):
+            for column in range(x0, x1):
                 points = [
                     inker_state.to_screen(view, origin, px, py)
                     for px, py in doc.cell_outline(column, row)
@@ -863,10 +918,10 @@ def _grid(draw_list: Any, doc: Any, view: Any, origin) -> None:
     # Lines along the two *lattice* directions rather than the screen axes.
     # For an orthogonal map this reproduces the old lines exactly; for an
     # isometric one it draws the diamond mesh.
-    for column in range(doc.width + 1):
-        draw_list.add_line(node(column, 0), node(column, doc.height), colour)
-    for row in range(doc.height + 1):
-        draw_list.add_line(node(0, row), node(doc.width, row), colour)
+    for column in range(x0, x1 + 1):
+        draw_list.add_line(node(column, y0), node(column, y1), colour)
+    for row in range(y0, y1 + 1):
+        draw_list.add_line(node(x0, row), node(x1, row), colour)
 
 
 def _objects(state: Any, doc: Any, draw_list: Any, view: Any, origin) -> None:
@@ -990,6 +1045,14 @@ def _minimap_rect(tab: Any, region) -> tuple[float, float, float, float]:
 
 def _minimap(ctx: Any, state: Any, tab: Any, draw_list: Any, origin, region) -> None:
     """The whole map in the corner, one pixel per cell.
+
+    **On an infinite map that is the content**, without a special case: the
+    window is the populated extent, so drawing the window and drawing the
+    content bounding box are the same picture. The one way they part is slack a
+    growth left and an erase never reclaimed, which is exactly what "Shrink to
+    content" is for -- and keeping the two the same is what lets the view
+    rectangle below stay plain ``doc.width``/``doc.height`` arithmetic rather
+    than a second coordinate space to keep honest.
 
     Cached on ``(history.head, tree_shape())`` rather than recomputed per frame:
     the head moves for every edit, which is exactly when the picture changes,
@@ -1553,7 +1616,25 @@ def _apply_drag(ctx: Any, state: Any, tab: Any, cell: tuple[int, int]) -> None:
     leaves a dotted line. Every write goes into the session already open, so the
     interpolation costs no extra undo steps.
     """
+    # **Room first, then interpolate.** On an infinite map the growth this frame
+    # needs can slide the window, and the cell the pointer was in last frame is
+    # an index into the window as it was -- so a line drawn from it before the
+    # growth starts one growth to the left of where the user drew. ``_room_for``
+    # moves ``drag_last_cell`` with everything else, which is why it is re-read
+    # rather than captured above. Nothing is grown twice: ``_apply`` asks again
+    # per step, and every interpolated cell is inside the box the two endpoints
+    # already fit in.
     previous = state.drag_last_cell
+    grown = _room_for(ctx, tab, state, cell)
+    if grown is None:
+        return
+    if previous is not None:
+        # The same slide, applied to the argument rather than re-read from the
+        # state ``_room_for`` also moved: this function's answer then depends on
+        # its own inputs and not on which fields ``shift_cells`` happens to
+        # cover today.
+        previous = (previous[0] + grown[0] - cell[0], previous[1] + grown[1] - cell[1])
+    cell = grown
     if previous is None:
         _apply(ctx, state, tab, cell)
     else:
@@ -1572,6 +1653,14 @@ def _apply_line(ctx: Any, state: Any, tab: Any, a: tuple[int, int], b: tuple[int
         # empty hand, and a forty-cell line would raise forty of them.
         ctx.toast("Pick a tile from the tileset first.", "error")
         return
+    # ``_apply_drag``'s rule, and for its reason: ``a`` is the cell a previous
+    # click landed on, an index into the window as it was, and growing to hold
+    # ``b`` can slide that window. The anchor moves by the same delta.
+    grown = _room_for(ctx, tab, state, b)
+    if grown is None:
+        return
+    a = (a[0] + grown[0] - b[0], a[1] + grown[1] - b[1])
+    b = grown
     for cell in plotter_tools.line(a[0], a[1], b[0], b[1]):
         _apply(ctx, state, tab, cell)
 
@@ -1714,11 +1803,57 @@ def _layer_for_paint(ctx: Any, tab: Any):
     return layer
 
 
+def _room_for(
+    ctx: Any, tab: Any, state: Any, cell: tuple[int, int]
+) -> tuple[int, int] | None:
+    """Grow an infinite map to hold what is about to be painted.
+
+    Returns the cell to paint, **which is not always the one passed in**: a
+    growth to the left or upwards slides the stored window under content that
+    did not move, so every index a frame ago is one growth out of date. The
+    shifted cell comes back from here and the view state moves with it
+    (``PlotterState.shift_cells``), which is what keeps an open drag, a marquee
+    and a Shift+click line pointing at the cells the user chose.
+
+    The brush's whole footprint, not just the cell under the cursor: a 3x3 stamp
+    at the edge needs the room its bottom-right corner lands in, and growing by
+    one cell at a time would clip the rest.
+
+    ``None`` only when the growth was refused, which is the extent cap -- said
+    out loud rather than leaving a stroke that silently stops at an edge the
+    user cannot see.
+    """
+    doc = tab.doc
+    if not doc.infinite:
+        return cell
+    width, height = 1, 1
+    if state.tool == "stamp" and state.brush is not None:
+        height, width = state.brush.shape
+    before = (doc.origin_x, doc.origin_y)
+    try:
+        doc.grow_to_hold(cell[0], cell[1], cell[0] + width - 1, cell[1] + height - 1)
+    except ValueError as exc:
+        ctx.toast(f"{exc}.", "error")
+        return None
+    dx, dy = before[0] - doc.origin_x, before[1] - doc.origin_y
+    state.shift_cells(dx, dy, (doc.width, doc.height))
+    return (cell[0] + dx, cell[1] + dy)
+
+
+
 def _apply(ctx: Any, state: Any, tab: Any, cell: tuple[int, int]) -> None:
     layer = _layer_for_paint(ctx, tab)
     if layer is None:
         return
     doc = tab.doc
+    grown = _room_for(ctx, tab, state, cell)
+    if grown is None:
+        return
+    cell = grown
+    # ``grow_to_hold`` reallocates every tile layer, so the one fetched above is
+    # a stale object the moment it grew. Re-fetched rather than moved earlier,
+    # because the lock and kind checks belong before any document change.
+    layer = doc.layer(layer.uid)
     if state.tool == "pick":
         value = plotter_tools.pick(layer.data, *cell)
         if value:

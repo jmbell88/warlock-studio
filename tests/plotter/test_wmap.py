@@ -963,15 +963,29 @@ def test_the_infinite_key_is_reserved_and_written_false():
     assert manifest["infinite"] is False
 
 
-def test_a_file_claiming_to_be_infinite_is_refused():
-    """An infinite map has no dense rectangle for the layer-shape check to
-    compare against, so reading one as if it had is exactly the half-read this
-    format refuses. M5 turns this into an acceptance."""
-    def claim(manifest):
-        manifest["infinite"] = True
+def test_an_infinite_map_round_trips_with_its_origin():
+    """The acceptance the refusal above became. The origin is the half worth
+    asserting: the window is an ordinary dense rectangle either way, and a file
+    that forgot where its corner sat would reopen with every cell at a
+    different true coordinate than it was painted at."""
+    doc = _gate_doc()
+    doc.set_infinite(True)
+    doc.grow_to_hold(-4, -3, 0, 0)
+    before = (doc.width, doc.height, doc.origin_x, doc.origin_y)
+    back = wmap.read_wmap(wmap.wmap_bytes(doc))
+    assert back.infinite is True
+    assert (back.width, back.height, back.origin_x, back.origin_y) == before
 
-    with pytest.raises(ValueError, match="infinite"):
-        wmap.read_wmap(_rewrite(_gate_doc(), claim))
+
+def test_a_finite_map_ignores_a_stray_origin():
+    """``origin`` is only meaningful on an infinite map. A finite one's corner
+    is (0, 0) by definition, and honouring a stray pair would move every cell
+    on a file some other tool decorated."""
+    def stray(manifest):
+        manifest["origin"] = [7, 9]
+
+    back = wmap.read_wmap(_rewrite(_gate_doc(), stray))
+    assert (back.origin_x, back.origin_y) == (0, 0)
 
 
 def test_a_malformed_offset_pair_is_refused_while_an_absent_one_defaults():

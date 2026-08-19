@@ -238,6 +238,9 @@ def doc_facts(doc: Any) -> dict[str, Any]:
     return {
         "projection": doc.projection,
         "infinite": bool(doc.infinite),
+        # Only on an infinite map. A finite one's corner is (0, 0) by
+        # definition, so including it there would compare a constant.
+        "origin": [int(doc.origin_x), int(doc.origin_y)] if doc.infinite else None,
         "width": int(doc.width),
         "height": int(doc.height),
         "tile_w": int(doc.tile_w),

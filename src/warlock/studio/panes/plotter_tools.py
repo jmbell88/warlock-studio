@@ -9,7 +9,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import controls, icons, plotter_mode, plotter_setup, plotter_state, widgets
+from .. import (
+    controls,
+    dialogs,
+    icons,
+    plotter_mode,
+    plotter_setup,
+    plotter_state,
+    widgets,
+)
 from ..manual import render as manual_render
 from ..plotter import project
 from ..tokens import sp
@@ -304,7 +312,10 @@ def draw(ctx: Any) -> None:
         )
 
     imgui.dummy((0, 6))
-    if widgets.header("Resize", default_open=False, persist_key="plotter/resize"):
+    # The header says which map this is, because the section under it is a
+    # different section on each: an infinite map has no width and height to set.
+    label = "Size" if doc.infinite else "Resize"
+    if widgets.header(label, default_open=False, persist_key="plotter/resize"):
         _resize_form(ctx, tab)
 
 
@@ -318,6 +329,32 @@ def _resize_form(ctx: Any, tab: Any) -> None:
     from imgui_bundle import imgui
 
     key = f"plotter_resize:{tab.uid}"
+    if tab.doc.infinite:
+        # **No width/height fields.** An infinite map's rectangle is not
+        # something the user sets: it is the window over what has been painted,
+        # and typing a number into it would either clip content or grow a
+        # rectangle the next stroke re-derives anyway. What is left is the two
+        # things that still mean something -- moving the content, and giving the
+        # map an edge again.
+        widgets.muted(
+            f"Infinite. {tab.doc.width} x {tab.doc.height} tiles painted so far, "
+            f"growing as you paint past the edge."
+        )
+        imgui.dummy((0, 8))
+        _offset_form(ctx, tab)
+        imgui.dummy((0, 8))
+        if controls.button("Shrink to content", (-1, 0)):
+            if tab.doc.autocrop():
+                ctx.state.preview.pop(key, None)
+                tab.view.fitted = False
+            else:
+                ctx.toast("There is nothing painted to shrink to.", "warn")
+        imgui.dummy((0, 8))
+        _infinite_form(ctx, tab)
+        imgui.dummy((0, 10))
+        _tile_size_form(ctx, tab)
+        return
+
     form = ctx.state.preview.get(key)
     if form is None or form.get("for") != (tab.doc.width, tab.doc.height):
         form = {
@@ -365,8 +402,54 @@ def _resize_form(ctx: Any, tab: Any) -> None:
         else:
             ctx.toast("There is nothing painted to crop to.", "warn")
 
+    imgui.dummy((0, 8))
+    _infinite_form(ctx, tab)
+
     imgui.dummy((0, 10))
     _tile_size_form(ctx, tab)
+
+
+def _infinite_form(ctx: Any, tab: Any) -> None:
+    """The conversion, both ways, behind the confirm the destructive way needs.
+
+    Only one of the two directions loses anything, and only that one asks: going
+    infinite keeps every cell where it is, while coming back has to pick a fixed
+    rectangle and the cells outside it are gone. The button says which it is.
+    """
+    doc = tab.doc
+    if not doc.infinite:
+        if controls.button("Make infinite", (-1, 0)):
+            doc.set_infinite(True)
+            tab.view.fitted = False
+        widgets.muted("The map grows as you paint past its edge. Nothing is lost.")
+        return
+    if controls.button("Give the map a fixed size", (-1, 0)):
+        bounds = doc.content_bounds()
+        if bounds is None:
+            # Nothing painted, so nothing to lose and nothing to say: the
+            # rectangle it keeps is the one already on screen.
+            doc.set_infinite(False)
+            tab.view.fitted = False
+            return
+        x0, y0, x1, y1 = bounds
+        dialogs.ask_delete(
+            ctx,
+            title="Give the map a fixed size",
+            message=(
+                f"The map will be cropped to the {x1 - x0 + 1} x {y1 - y0 + 1} "
+                "tiles that hold something, and will stop growing when you "
+                "paint past the edge."
+                "\n\nThis is one undo step."
+            ),
+            on_confirm=lambda: _make_finite(tab),
+        )
+
+
+def _make_finite(tab: Any) -> None:
+    """The confirm's other half. Named rather than inlined as a lambda so the
+    view reset travels with the conversion into every future caller."""
+    tab.doc.set_infinite(False)
+    tab.view.fitted = False
 
 
 #: Whether an offset moves every tile layer or only the active one, and how the

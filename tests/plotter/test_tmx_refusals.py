@@ -84,23 +84,42 @@ def test_an_isometric_map_loads_now_that_plotter_draws_one():
     assert b'orientation="isometric"' in tmx.tmx_export(doc)["map.tmx"]
 
 
-def test_an_infinite_map_is_refused():
-    _refuses(_map(attrs='infinite="1"'), "infinite map")
+def test_an_infinite_map_is_read_rather_than_refused():
+    """The refusal these two replaced. Kept here, in the refusals file, because
+    that is where the swap is legible: the feature was named and turned away,
+    and now it is named and read."""
+    body = (
+        '<layer id="1" name="L"><data encoding="csv">'
+        '<chunk x="-16" y="-16" width="1" height="1">3</chunk>'
+        "</data></layer>"
+    )
+    doc = tmx.read_tmx(_map(attrs='infinite="1"', body=body), **LOADERS)
+    assert doc.infinite is True
+    assert (doc.origin_x, doc.origin_y) == (-16, -16)
 
 
-def test_a_chunked_json_layer_is_refused():
+def test_a_chunked_json_layer_is_read_rather_than_refused():
     payload = {
         "type": "map",
         "orientation": "orthogonal",
+        "infinite": True,
         "width": 2,
         "height": 2,
         "tilewidth": 16,
         "tileheight": 16,
         "tilesets": [{"firstgid": 1, "source": "t.tsx"}],
-        "layers": [{"type": "tilelayer", "name": "L", "chunks": [{"data": [0]}]}],
+        "layers": [
+            {
+                "type": "tilelayer",
+                "name": "L",
+                "chunks": [{"x": 3, "y": 4, "width": 1, "height": 1, "data": [3]}],
+            }
+        ],
     }
-    with pytest.raises(tsx.TiledUnsupported, match="chunked"):
-        tmx.read_tmj(json.dumps(payload).encode(), **LOADERS)
+    doc = tmx.read_tmj(json.dumps(payload).encode(), **LOADERS)
+    assert doc.infinite is True
+    assert (doc.origin_x, doc.origin_y) == (3, 4)
+    assert int(doc.tile_layers()[0].data[0, 0]) == 3
 
 
 # --- layers -------------------------------------------------------------------
@@ -799,17 +818,21 @@ def test_a_default_object_layer_still_exports():
     assert tmx.tmx_export(doc) and tmx.tmj_export(doc)
 
 
-def test_an_infinite_document_cannot_be_silently_exported_as_finite():
+def test_an_infinite_document_is_exported_as_infinite():
+    """The writer half of the swap above, and the half that mattered: an
+    infinite document used to be refused at three doors rather than written as
+    a finite map, and all three now say infinite in their own spelling."""
     doc = tilemap.MapDoc(2, 2, 16, 16, infinite=True)
     doc.add_tile_layer()
-    assert doc.infinite is True
-    for export in (tmx.tmx_export, tmx.tmj_export):
-        with pytest.raises(tmx.TiledUnsupported) as exc:
-            export(doc)
-        assert exc.value.feature == "an infinite map"
-        assert exc.value.exporting is True
-    with pytest.raises(wmap.WmapUnstorable, match="infinite map"):
-        wmap.wmap_bytes(doc)
+    doc.tile_layers()[0].data[1, 1] = 3
+    assert b'infinite="1"' in tmx.tmx_export(doc)["map.tmx"]
+    assert json.loads(tmj_bytes(doc))["infinite"] is True
+    stored = json.loads(wmap.manifest_json(doc))
+    assert stored["infinite"] is True and stored["origin"] == [0, 0]
+
+
+def tmj_bytes(doc) -> bytes:
+    return tmx.tmj_export(doc)["map.tmj"]
 
 
 # --- what is *not* refused ----------------------------------------------------

@@ -271,15 +271,13 @@ def _encoded(ctx: Any, doc: Any, file_format: str) -> dict[str, bytes] | None:
     exception raised on the frame thread takes the window with it.
 
     ``.wmap``'s own door is quieter than it was and is still named here: its
-    version 3 container stores everything version 2 refused, and version 4 adds
-    the 1.12-era fields on top, so nothing an ordinary document holds reaches
-    ``WmapUnstorable`` today. The handler stays because the door does -- a layer
-    kind the container has no entry for lands there now, and an infinite map
-    does too (the ``M5`` citation those comments carry points at the deleted
-    ``docs/PLOTTER_PLAN.md``; see the ``M{n}`` section of
-    ``docs/PLOTTER_COMPAT.md``) -- and removing the plumbing in order to re-add
-    it next wave would leave the intervening builds crashing the frame thread
-    instead of toasting.
+    version 3 container stores everything version 2 refused, version 4 adds the
+    1.12-era fields on top, and version 10 stores an infinite map, so nothing an
+    ordinary document holds reaches ``WmapUnstorable`` today. The handler stays
+    because the door does -- a layer kind the container has no entry for lands
+    there -- and removing the plumbing in order to re-add it next wave would
+    leave the intervening builds crashing the frame thread instead of
+    toasting.
 
     **Both refusal types by name, and nothing wider.** ``TiledUnsupported``
     covers the two exporters and ``WmapUnstorable`` covers ours -- a door that

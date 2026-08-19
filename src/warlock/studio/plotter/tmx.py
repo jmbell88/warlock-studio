@@ -140,12 +140,6 @@ _HEX_ROTATE = gidlib.DTYPE(0x10000000)
 # --- shared refusals ----------------------------------------------------------
 
 
-def _refuse_infinite(infinite: bool) -> None:
-    """Keep finite-only storage explicit at both Tiled reader doors."""
-    if infinite:
-        raise TiledUnsupported(
-            "an infinite map", "save it with a fixed size in Tiled's map properties"
-        )
 
 
 # --- XML reading --------------------------------------------------------------
@@ -217,7 +211,6 @@ def write_offset_fields(root: ET.Element, doc: MapDoc) -> None:
 
 def _check_map(root: ET.Element) -> None:
     _check_orientation(root.get("orientation", "orthogonal"))
-    _refuse_infinite(root.get("infinite", "0") not in ("0", "false"))
 
 
 def _gid_array(values: Any, width: int, height: int) -> np.ndarray:
@@ -298,6 +291,73 @@ def _decompress(raw: bytes, compression: str, expected: int) -> bytes:
             )
         return out
     return raw
+
+
+# --- chunked (infinite) layer data ----------------------------------------------
+#
+# An infinite map's layers are stored as chunks: a sparse set of fixed-size
+# blocks at signed coordinates. The *editor* holds a dense window plus an origin
+# (see ``MapDoc.infinite``), so these two functions are the whole of the
+# translation, and the format's own shape never leaks past them.
+
+#: What Tiled writes. Its reader takes any size, so this is a choice about our
+#: output rather than a constraint on our input.
+CHUNK = 16
+
+
+def chunks_from(pieces: list[tuple[int, int, np.ndarray]]) -> tuple[np.ndarray, int, int]:
+    """Sparse chunks as one dense array plus the true coordinate of its (0, 0).
+
+    The bounding box of the *populated* chunks, which is what an infinite map
+    means by its extent. A layer with no chunks at all is a 1x1 empty grid
+    rather than a zero-sized one: every array here has a shape, and a map with
+    no cells painted yet still has to open.
+    """
+    if not pieces:
+        return gidlib.empty_layer(1, 1), 0, 0
+    x0 = min(x for x, _y, _b in pieces)
+    y0 = min(y for _x, y, _b in pieces)
+    x1 = max(x + block.shape[1] for x, _y, block in pieces)
+    y1 = max(y + block.shape[0] for _x, y, block in pieces)
+    out = gidlib.empty_layer(x1 - x0, y1 - y0)
+    for x, y, block in pieces:
+        out[y - y0 : y - y0 + block.shape[0], x - x0 : x - x0 + block.shape[1]] = block
+    return out, x0, y0
+
+
+def chunks_of(
+    data: np.ndarray, origin_x: int, origin_y: int, size: int = CHUNK
+) -> list[tuple[int, int, np.ndarray]]:
+    """One dense layer as chunks at true coordinates, **empty ones dropped**.
+
+    Dropping them is Tiled's own shape and the point of the format: a map
+    painted in two clusters writes two clusters' worth of chunks and not the
+    rectangle between them. It is also what makes an erase shrink a file, which
+    a dense write never would.
+
+    Chunks are aligned to a multiple of ``size`` in *true* coordinates rather
+    than to the window's own corner, so the same content saved from two windows
+    -- before and after a growth -- writes the same chunks.
+    """
+    height, width = data.shape
+    out: list[tuple[int, int, np.ndarray]] = []
+    first_x = (origin_x // size) * size
+    first_y = (origin_y // size) * size
+    for cy in range(first_y, origin_y + height, size):
+        for cx in range(first_x, origin_x + width, size):
+            block = gidlib.empty_layer(size, size)
+            sx0, sy0 = max(cx, origin_x), max(cy, origin_y)
+            sx1 = min(cx + size, origin_x + width)
+            sy1 = min(cy + size, origin_y + height)
+            if sx1 <= sx0 or sy1 <= sy0:
+                continue
+            block[sy0 - cy : sy1 - cy, sx0 - cx : sx1 - cx] = data[
+                sy0 - origin_y : sy1 - origin_y, sx0 - origin_x : sx1 - origin_x
+            ]
+            if (block != gidlib.EMPTY).any():
+                out.append((cx, cy, block))
+    return out
+
 
 
 def _decode_payload(
@@ -597,28 +657,59 @@ def _read_tmx_object(node: ET.Element) -> MapObject:
 def _adopt_object_space(doc: MapDoc) -> None:
     """Move every object from Tiled's coordinate space into this map's.
 
-    A no-op for an orthogonal map, where the two spaces are the same. Applied to
-    the whole document at once, after the layers are on it, rather than inside
-    the two object readers -- they are handed one element and know nothing about
-    the map's size, and the conversion needs its height.
+    A no-op for a finite orthogonal map, where the two spaces are the same.
+    Applied to the whole document at once, after the layers are on it, rather
+    than inside the two object readers -- they are handed one element and know
+    nothing about the map's size, and both conversions need it.
+
+    **The origin shift is what keeps an object sitting on its cell.** An
+    infinite map's file gives object positions in *true* pixels, which is the
+    space its chunk coordinates are in; the document is window-relative
+    throughout, because that is what lets a cell index address the array
+    directly and lets ``resize`` carry objects by the same rule it always did.
+    Converting here and in :func:`_object_xy` is the whole of the difference --
+    neither renderer, neither tool nor ``.wmap`` has to know.
     """
-    if not doc.isometric:
+    dx, dy = _origin_pixels(doc)
+    if not doc.isometric and not (dx or dy):
         return
     for layer in doc.all_layers():
         if isinstance(layer, ObjectLayer):
             for obj in layer.objects:
-                obj.x, obj.y = project.object_to_pixels(doc._lattice(), obj.x, obj.y)
+                x, y = obj.x - dx, obj.y - dy
+                obj.x, obj.y = (
+                    project.object_to_pixels(doc._lattice(), x, y)
+                    if doc.isometric
+                    else (x, y)
+                )
+
+
+def _origin_pixels(doc: MapDoc) -> tuple[float, float]:
+    """The window's corner in pixels. ``(0.0, 0.0)`` on a finite map."""
+    if not doc.infinite:
+        return 0.0, 0.0
+    return float(doc.origin_x * doc.tile_w), float(doc.origin_y * doc.tile_h)
 
 
 def _object_xy(doc: MapDoc, obj: MapObject) -> tuple[float, float]:
     """One object's position in Tiled's space, for the two writers."""
-    return project.object_from_pixels(doc._lattice(), obj.x, obj.y)
+    x, y = project.object_from_pixels(doc._lattice(), obj.x, obj.y)
+    dx, dy = _origin_pixels(doc)
+    return x + dx, y + dy
 
 
 def _read_tmx_layers(
-    nodes: Any, doc: MapDoc, *, image_loader: ImageLoader
+    nodes: Any,
+    doc: MapDoc,
+    *,
+    image_loader: ImageLoader,
+    placed: list[tuple[Any, int, int]],
 ) -> list[Any]:
-    """Read one XML layer list recursively, preserving paint order."""
+    """Read one XML layer list recursively, preserving paint order.
+
+    ``placed`` is the one accumulator the whole recursion shares -- see
+    :func:`_settle_infinite` for why the window cannot be decided here.
+    """
     layers: list[Any] = []
     for node in nodes:
         if node.tag not in ("layer", "objectgroup", "imagelayer", "group"):
@@ -630,6 +721,31 @@ def _read_tmx_layers(
         ):
             raise TiledUnsupported("layer tile coordinates", f"layer {name!r}")
         if node.tag == "layer":
+            payload = node.find("data")
+            if payload is None:
+                raise ValueError(f"tile layer {name!r} carries no <data>")
+            encoding = payload.get("encoding", "")
+            compression = payload.get("compression", "")
+            if doc.infinite:
+                pieces = []
+                for chunk in payload.findall("chunk"):
+                    cw = int(chunk.get("width", CHUNK) or CHUNK)
+                    ch = int(chunk.get("height", CHUNK) or CHUNK)
+                    block = (
+                        _xml_tile_elements(chunk, cw, ch)
+                        if not encoding and chunk.find("tile") is not None
+                        else _decode_payload(
+                            chunk.text or "", encoding, compression, cw, ch
+                        )
+                    )
+                    pieces.append(
+                        (int(chunk.get("x", 0) or 0), int(chunk.get("y", 0) or 0), block)
+                    )
+                cells, ox, oy = chunks_from(pieces)
+                chunked = TileLayer(**common, data=cells)
+                placed.append((chunked, ox, oy))
+                layers.append(chunked)
+                continue
             width = int(node.get("width", doc.width) or doc.width)
             height = int(node.get("height", doc.height) or doc.height)
             if (width, height) != (doc.width, doc.height):
@@ -637,19 +753,11 @@ def _read_tmx_layers(
                     f"tile layer {name!r} is {width}x{height}, but the fixed map is "
                     f"{doc.width}x{doc.height}"
                 )
-            payload = node.find("data")
-            if payload is None:
-                raise ValueError(f"tile layer {name!r} carries no <data>")
-            encoding = payload.get("encoding", "")
             if not encoding and payload.find("tile") is not None:
                 cells = _xml_tile_elements(payload, width, height)
             else:
                 cells = _decode_payload(
-                    payload.text or "",
-                    encoding,
-                    payload.get("compression", ""),
-                    width,
-                    height,
+                    payload.text or "", encoding, compression, width, height
                 )
             layers.append(TileLayer(**common, data=cells))
         elif node.tag == "objectgroup":
@@ -694,7 +802,9 @@ def _read_tmx_layers(
             layers.append(
                 GroupLayer(
                     **common,
-                    children=_read_tmx_layers(node, doc, image_loader=image_loader),
+                    children=_read_tmx_layers(
+                        node, doc, image_loader=image_loader, placed=placed
+                    ),
                 )
             )
     return layers
@@ -711,12 +821,18 @@ def read_tmx(
     root = xml_root(data, "map")
     _check_map(root)
 
+    infinite = root.get("infinite", "0") not in ("0", "false")
     doc = MapDoc(
-        width=int(root.get("width", 1) or 1),
-        height=int(root.get("height", 1) or 1),
+        # An infinite map's declared size is nominal -- Tiled writes whatever
+        # the properties dialog last held, and a hand-written one may say 0 --
+        # so it is floored here and then replaced by the chunk extent as each
+        # layer is read.
+        width=max(1, int(root.get("width", 1) or 1)),
+        height=max(1, int(root.get("height", 1) or 1)),
         tile_w=int(root.get("tilewidth", 1) or 1),
         tile_h=int(root.get("tileheight", 1) or 1),
         projection=root.get("orientation", "orthogonal"),
+        infinite=infinite,
     )
     doc.renderorder = root.get("renderorder", "right-down")
     doc.backgroundcolor = root.get("backgroundcolor")
@@ -734,7 +850,11 @@ def read_tmx(
         root, image_loader=image_loader, tsx_loader=tsx_loader
     )
 
-    doc.layers.extend(_read_tmx_layers(root, doc, image_loader=image_loader))
+    placed: list[tuple[Any, int, int]] = []
+    doc.layers.extend(
+        _read_tmx_layers(root, doc, image_loader=image_loader, placed=placed)
+    )
+    _settle_infinite(doc, placed)
 
     _finish(
         doc,
@@ -858,10 +978,57 @@ def _read_tmj_tilesets(
     return refs
 
 
+def _settle_infinite(doc: MapDoc, placed: list[tuple[Any, int, int]]) -> None:
+    """Give every chunked layer read from a file one shared window.
+
+    Each layer carries its own chunk extent, so the document's window is their
+    **union**, and every layer is then placed into it at its own offset.
+
+    **One pass after the whole tree is read, rather than a growth per layer.**
+    Layers arrive in tree order and a group's children are read by a recursive
+    call of their own, so an incremental version has to be correct under every
+    nesting and every order -- and the first one was not: it asked the document
+    what it already held, and nothing is on the document until the tree is
+    finished, so each layer silently overwrote the window the one before it had
+    established. Deciding the window once, when there is nothing left to arrive,
+    has no such ordering to get wrong.
+
+    A read is not an edit: the arrays are placed directly and the undo stack is
+    never touched.
+    """
+    if not placed:
+        return
+    x0 = min(ox for _layer, ox, _oy in placed)
+    y0 = min(oy for _layer, _ox, oy in placed)
+    x1 = max(ox + layer.data.shape[1] for layer, ox, _oy in placed)
+    y1 = max(oy + layer.data.shape[0] for layer, _ox, oy in placed)
+    doc.width, doc.height = max(1, x1 - x0), max(1, y1 - y0)
+    doc.origin_x, doc.origin_y = x0, y0
+    for layer, ox, oy in placed:
+        if (layer.data.shape[1], layer.data.shape[0]) == (doc.width, doc.height) and (
+            ox,
+            oy,
+        ) == (x0, y0):
+            continue
+        grown = gidlib.empty_layer(doc.width, doc.height)
+        rows, columns = layer.data.shape
+        grown[oy - y0 : oy - y0 + rows, ox - x0 : ox - x0 + columns] = layer.data
+        layer.data = grown
+
+
+
 def _read_tmj_layer_list(
-    entries: Any, doc: MapDoc, *, image_loader: ImageLoader
+    entries: Any,
+    doc: MapDoc,
+    *,
+    image_loader: ImageLoader,
+    placed: list[tuple[Any, int, int]],
 ) -> list[Any]:
-    """One JSON layer list recursively, preserving paint order."""
+    """One JSON layer list recursively, preserving paint order.
+
+    ``placed`` is the XML reader's accumulator by the same name and for the same
+    reason; see :func:`_settle_infinite`.
+    """
     if not isinstance(entries, list):
         raise ValueError("a Tiled JSON layer list is not an array")
     layers: list[Any] = []
@@ -876,8 +1043,31 @@ def _read_tmj_layer_list(
         ):
             raise TiledUnsupported("layer tile coordinates", f"layer {name!r}")
         if kind == "tilelayer":
-            if entry.get("chunks"):
-                raise TiledUnsupported("chunked (infinite) layer data", f"layer {name!r}")
+            if doc.infinite:
+                pieces = []
+                for chunk in entry.get("chunks") or ():
+                    cw = int(chunk.get("width", CHUNK) or CHUNK)
+                    ch = int(chunk.get("height", CHUNK) or CHUNK)
+                    raw = chunk.get("data")
+                    block = (
+                        _decode_payload(
+                            raw,
+                            "base64",
+                            str(entry.get("compression", "")),
+                            cw,
+                            ch,
+                        )
+                        if isinstance(raw, str)
+                        else _gid_array(raw or (), cw, ch)
+                    )
+                    pieces.append(
+                        (int(chunk.get("x", 0) or 0), int(chunk.get("y", 0) or 0), block)
+                    )
+                cells, ox, oy = chunks_from(pieces)
+                chunked = TileLayer(**common, data=cells)
+                placed.append((chunked, ox, oy))
+                layers.append(chunked)
+                continue
             width = int(entry.get("width", doc.width) or doc.width)
             height = int(entry.get("height", doc.height) or doc.height)
             if (width, height) != (doc.width, doc.height):
@@ -933,7 +1123,10 @@ def _read_tmj_layer_list(
                 GroupLayer(
                     **common,
                     children=_read_tmj_layer_list(
-                        entry.get("layers", []), doc, image_loader=image_loader
+                        entry.get("layers", []),
+                        doc,
+                        image_loader=image_loader,
+                        placed=placed,
                     ),
                 )
             )
@@ -947,9 +1140,13 @@ def _read_tmj_layer_list(
 def _read_tmj_layers(
     payload: dict[str, Any], doc: MapDoc, *, image_loader: ImageLoader
 ) -> None:
+    placed: list[tuple[Any, int, int]] = []
     doc.layers.extend(
-        _read_tmj_layer_list(payload.get("layers", []), doc, image_loader=image_loader)
+        _read_tmj_layer_list(
+            payload.get("layers", []), doc, image_loader=image_loader, placed=placed
+        )
     )
+    _settle_infinite(doc, placed)
 
 
 def read_tmj(
@@ -969,14 +1166,14 @@ def read_tmj(
         raise ValueError("a Tiled JSON map is an object")
 
     orientation = _check_orientation(str(payload.get("orientation", "orthogonal")))
-    _refuse_infinite(bool(payload.get("infinite")))
 
     doc = MapDoc(
-        width=int(payload.get("width", 1) or 1),
-        height=int(payload.get("height", 1) or 1),
+        width=max(1, int(payload.get("width", 1) or 1)),
+        height=max(1, int(payload.get("height", 1) or 1)),
         tile_w=int(payload.get("tilewidth", 1) or 1),
         tile_h=int(payload.get("tileheight", 1) or 1),
         projection=orientation,
+        infinite=bool(payload.get("infinite")),
     )
     doc.renderorder = str(payload.get("renderorder", "right-down"))
     doc.backgroundcolor = payload.get("backgroundcolor")
@@ -1030,16 +1227,6 @@ def _finish(
     collide with an id already in the document, which is the one thing this
     counter exists to make impossible.
     """
-    if doc.infinite:
-        # A *reader's* sentence. Both callers of this function are readers
-        # (``read_tmx`` and ``read_tmj``), so ``exporting=True`` -- which swaps
-        # in "this map uses ..., which Plotter cannot write" and drops the
-        # remedy -- was the wrong half of the pair. ``_check_exportable_map``
-        # below is the writer door and keeps the flag. Unreachable today, since
-        # an infinite map is refused before a document is built at all; kept
-        # because the check is cheap and the day it is reachable is the day the
-        # sentence matters.
-        raise TiledUnsupported("an infinite map")
     all_layers = doc.all_layers()
     for layer in doc.tile_layers():
         if layer.data.shape != (doc.height, doc.width):
@@ -1117,9 +1304,13 @@ def _finish(
 
 
 def _check_exportable_map(doc: MapDoc) -> None:
-    """Map-level writer doors shared by XML and JSON exporters."""
-    if doc.infinite:
-        raise TiledUnsupported("an infinite map", exporting=True)
+    """Map-level writer doors shared by XML and JSON exporters.
+
+    Empty now that an infinite map writes chunks. Kept rather than deleted for
+    the reason the reader's twin was kept: it is the *place* map-level writer
+    refusals go, both exporters already call it, and a future one that had to
+    re-derive where to live would be a refusal in two files.
+    """
 
 
 def _stem(index: int, name: str) -> str:
@@ -1374,7 +1565,23 @@ def _write_tmx_layers(
         _xml_common_layer(node, layer, layer_ids[layer.uid])
         if isinstance(layer, TileLayer):
             data = ET.SubElement(node, "data", {"encoding": "csv"})
-            data.text = _csv(layer.data)
+            if doc.infinite:
+                # Chunks at true coordinates, empty ones dropped -- which is the
+                # point of the format and what makes an erase shrink a file.
+                for cx, cy, block in chunks_of(layer.data, doc.origin_x, doc.origin_y):
+                    chunk = ET.SubElement(
+                        data,
+                        "chunk",
+                        {
+                            "x": str(cx),
+                            "y": str(cy),
+                            "width": str(block.shape[1]),
+                            "height": str(block.shape[0]),
+                        },
+                    )
+                    chunk.text = _csv(block)
+            else:
+                data.text = _csv(layer.data)
         elif isinstance(layer, ObjectLayer):
             for obj in layer.objects:
                 _write_tmx_object(node, doc, obj, object_ids[obj.uid])
@@ -1417,7 +1624,7 @@ def tmx_export(doc: MapDoc) -> dict[str, bytes]:
             "height": str(doc.height),
             "tilewidth": str(doc.tile_w),
             "tileheight": str(doc.tile_h),
-            "infinite": "0",
+            "infinite": "1" if doc.infinite else "0",
         },
     )
     if doc.backgroundcolor:
@@ -1548,7 +1755,24 @@ def _write_tmj_layers(
                     "height": doc.height,
                     "x": 0,
                     "y": 0,
-                    "data": [int(value) for value in layer.data.reshape(-1)],
+                    **(
+                        {
+                            "chunks": [
+                                {
+                                    "x": cx,
+                                    "y": cy,
+                                    "width": int(block.shape[1]),
+                                    "height": int(block.shape[0]),
+                                    "data": [int(v) for v in block.reshape(-1)],
+                                }
+                                for cx, cy, block in chunks_of(
+                                    layer.data, doc.origin_x, doc.origin_y
+                                )
+                            ]
+                        }
+                        if doc.infinite
+                        else {"data": [int(value) for value in layer.data.reshape(-1)]}
+                    ),
                 }
             )
         elif isinstance(layer, ObjectLayer):
@@ -1610,7 +1834,7 @@ def tmj_export(doc: MapDoc) -> dict[str, bytes]:
         "tiledversion": TILED_VERSION,
         "orientation": doc.projection,
         "renderorder": doc.renderorder,
-        "infinite": False,
+        "infinite": bool(doc.infinite),
         "width": doc.width,
         "height": doc.height,
         "tilewidth": doc.tile_w,

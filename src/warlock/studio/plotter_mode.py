@@ -174,16 +174,22 @@ def new_document(
     size: tuple[int, int, int, int] = DEFAULT_MAP,
     *,
     projection: str | None = None,
+    infinite: bool = False,
 ) -> PlotterDoc:
     """A blank map. ``projection`` defaults to whatever ``MapDoc`` defaults to.
 
-    Keyword-only and defaulted rather than a fifth member of ``size``, because
-    ``size`` is four numbers in two units and a string is neither -- and because
-    every existing caller passes the tuple positionally.
+    Keyword-only and defaulted rather than members of ``size``, because ``size``
+    is four numbers in two units and neither a string nor a flag is one -- and
+    because every existing caller passes the tuple positionally.
     """
     from .plotter.tilemap import MapDoc
 
-    doc = MapDoc(*size) if projection is None else MapDoc(*size, projection=projection)
+    extra: dict[str, Any] = {"infinite": True} if infinite else {}
+    doc = (
+        MapDoc(*size, **extra)
+        if projection is None
+        else MapDoc(*size, projection=projection, **extra)
+    )
     doc.add_tile_layer("Ground")
     # A blank document with no layer has nothing to paint into and no row in the
     # layers panel, which reads as broken rather than as empty. The layer is
@@ -228,9 +234,9 @@ def export_library(ctx: Any, tab: PlotterDoc | None = None) -> None:
         source = wmaplib.wmap_bytes(doc)
     except wmaplib.WmapUnstorable as exc:
         # The ``.wmap`` writer door, on the frame thread. Version 3 stores the
-        # tree, the pictures and the decorations version 2 refused, so what is
-        # left behind this door is a layer kind the container has no entry for
-        # -- and chunked storage (M5) joins it. An unguarded raise here would
+        # tree, the pictures and the decorations version 2 refused and version
+        # 10 stores an infinite map, so what is left behind this door is a layer
+        # kind the container has no entry for. An unguarded raise here would
         # take the window down: ``plotter_io._encoded`` already guards the save
         # path for the same reason, and this is the one other frame-thread
         # encode.
