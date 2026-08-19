@@ -12,6 +12,15 @@ individually-addressed sprites wants. Its size search is deterministic and
 stated: the smallest power-of-two square whose area covers the total, then
 double the shorter side until it fits or the ceiling is reached.
 
+**Power-of-two defaults to off for a grid pack, on for MaxRects.** A grid's
+cells are a fixed size regardless of the atlas around them, so rounding the
+atlas up buys nothing but dead space past the last column/row -- and near a
+size boundary that dead space is the whole atlas again: measured over a sweep
+of sprite counts and cell sizes, 1.61x the tight area on average, 3.65x worst
+case. MaxRects keeps rounding up by default because its atlas has no unused
+margin to speak of and pow2 is still what most engines expect loading a
+non-tileset texture. See :class:`PackSettings.power_of_two`.
+
 ``padding >= extrude * 2`` is validated here and it is not arbitrary. Extrude
 replicates each sprite's border pixels outward into the gutter so a filtered
 texture cannot sample its neighbour; two adjacent sprites each extruding into a
@@ -71,7 +80,18 @@ class PackSettings:
     extrude: int = 0
     trim: bool = True
     max_size: int = DEFAULT_MAX_SIZE
-    power_of_two: bool = True
+    #: ``None`` is the mode-resolved default, applied in ``__post_init__``:
+    #: ``False`` for a grid pack, ``True`` for MaxRects (unchanged). A grid's
+    #: cells are already a fixed size -- there is nothing "tighter" about
+    #: rounding one up, only dead space past the last column/row, and it is
+    #: what silently doubles a grid atlas near a size boundary (measured:
+    #: 1.61x mean, 3.65x worst case, over the same (count, cell) sweep
+    #: :func:`grid_layout` documents). MaxRects keeps rounding up by default
+    #: because its whole atlas is used corner to corner and pow2 is what an
+    #: engine loading it into a non-addressed texture slot usually still
+    #: wants. Passing an explicit ``True``/``False`` always wins -- this is a
+    #: default, not a per-mode override that fights the user.
+    power_of_two: bool | None = None
     #: Trailing and defaulted, so an older ``.wpack`` -- or a caller that never
     #: heard of it -- keeps auto behaviour. Grid mode only: a MaxRects pack has
     #: no uniform cell for a column count to describe, so setting one there is
@@ -90,6 +110,14 @@ class PackSettings:
     def __post_init__(self) -> None:
         if self.mode not in MODES:
             raise ValueError(f"mode must be one of {list(MODES)}")
+        if self.power_of_two is None:
+            # Resolved once, here, rather than read as ``None`` downstream:
+            # every consumer of ``power_of_two`` -- ``grid_layout``,
+            # ``maxrects_layout``, the settings pane's toggle -- wants a
+            # plain bool, and a sentinel that leaked past construction would
+            # be a second "is it set" question every one of them would have
+            # to ask.
+            object.__setattr__(self, "power_of_two", self.mode != "grid")
         if self.padding < 0 or self.extrude < 0:
             raise ValueError("padding and extrude cannot be negative")
         if self.padding > MAX_PADDING:

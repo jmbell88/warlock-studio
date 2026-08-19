@@ -254,6 +254,18 @@ def test_a_manifest_that_never_heard_of_columns_or_schema_opens_at_the_defaults(
     assert back.settings.json_schema == "array"
 
 
+def test_an_old_grid_document_keeps_its_stored_power_of_two_true():
+    """``power_of_two`` has always been written unconditionally (unlike the
+    additive ``columns``/``json_schema``), so every file this app has ever
+    produced carries an explicit value -- including one saved as a grid pack
+    before a grid's default flipped to off. Reading it back uses the stored
+    value, not the new mode-resolved default."""
+    data = _rewrite(_doc(), lambda m: m["settings"].update(mode="grid", power_of_two=True))
+    back = wpack.read_wpack(data)
+    assert back.settings.mode == "grid"
+    assert back.settings.power_of_two is True
+
+
 # --- refusals -----------------------------------------------------------------
 
 

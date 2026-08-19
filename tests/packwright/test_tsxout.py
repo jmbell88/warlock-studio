@@ -135,3 +135,20 @@ def test_an_explicit_columns_grid_that_pow2_rounding_does_not_widen_still_export
     atlas = compose(sprites, result)
     tileset = tsxout.grid_tileset(result, atlas, name="pack")
     assert (tileset.columns, tileset.rows) == (result.columns, result.rows)
+
+
+def test_explicit_columns_at_default_settings_always_exports_a_tsx():
+    """The 86% mismatch rate measured for explicit columns + power-of-two=True
+    is a rate for a setting nothing defaults to any more: a grid pack's
+    power-of-two now defaults off, so an explicit columns count -- any count,
+    any sprite count -- makes an exact, unrounded width and never disagrees
+    with what Tiled would derive."""
+    for count in (2, 4, 9, 10, 16, 17, 25):
+        for columns in (1, 2, 3, 5, 7):
+            sprites = [_sprite(f"s{i:02d}", (10 * i + 10, 40, 60, 255)) for i in range(count)]
+            settings = PackSettings(padding=2, columns=columns)
+            assert settings.power_of_two is False
+            result = layout(sprites, settings)
+            atlas = compose(sprites, result)
+            tileset = tsxout.grid_tileset(result, atlas, name="pack")
+            assert (tileset.columns, tileset.rows) == (result.columns, result.rows)

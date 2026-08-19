@@ -233,8 +233,18 @@ def export_files(ctx: Any, tab: PackTab | None = None) -> None:
 
     One picker for the PNG; the others take its stem and sit beside it, which is
     the layout every consumer expects and the only one where the sidecar's
-    ``meta.image`` resolves. All of them are encoded before any is written, so
-    the set lands together or not at all.
+    ``meta.image`` resolves. The PNG and the JSON sidecar are encoded before
+    either is written, so *that* pair lands together or not at all.
+
+    **The ``.tsx`` is the one encode step that does not abort the export.**
+    ``tsxout.grid_tileset`` refuses by name when an explicit ``columns``
+    count's power-of-two rounding has left the image geometry disagreeing
+    with what Tiled would derive (see ``layout.grid_layout``) -- and that is
+    a statement about the *tileset*, not about the PNG or the JSON, which
+    describe exactly what was packed regardless. Aborting the whole export
+    over a file that was never going to be trustworthy would throw away two
+    files that are; instead the ``.tsx`` is skipped and the result carries
+    why, for :func:`~.packwright_mode.on_task_done` to toast.
     """
     from .packwright import compose as composelib
     from .packwright import texturepacker, tsxout
@@ -264,12 +274,19 @@ def export_files(ctx: Any, tab: PackTab | None = None) -> None:
                 layout, image_name=path.name, schema=schema
             ),
         }
+        tsx_skipped = None
         if layout.is_grid:
-            files[path.with_suffix(".tsx")] = tsxout.grid_tsx(
-                layout, atlas, name=stem, image_name=path.name
-            )
+            try:
+                files[path.with_suffix(".tsx")] = tsxout.grid_tsx(
+                    layout, atlas, name=stem, image_name=path.name
+                )
+            except ValueError as exc:
+                tsx_skipped = str(exc)
         _write(files)
-        return {"exported": str(path), "files": len(files)}
+        result: dict[str, Any] = {"exported": str(path), "files": len(files)}
+        if tsx_skipped is not None:
+            result["tsx_skipped"] = tsx_skipped
+        return result
 
     _start(ctx, tab, f"packwright-export:{tab.uid}", run)
 

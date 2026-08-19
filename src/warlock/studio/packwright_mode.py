@@ -444,6 +444,13 @@ def on_task_done(ctx: Any, done: Any) -> None:
         return
     if result.get("exported"):
         ctx.toast(f"Exported {result.get('files', 2)} file(s) to {result['exported']}")
+        if result.get("tsx_skipped"):
+            # A second toast rather than folded into the first: "Exported 2
+            # file(s)" is a success sentence, and burying "the .tsx was not
+            # one of them, because ..." inside it reads as one long message
+            # nobody finishes. The PNG and JSON still exported -- only the
+            # tileset that would have sliced wrong did not.
+            ctx.toast(f"No .tsx written: {result['tsx_skipped']}", "warn")
         return
 
     tab.mark_saved(result.get("head"))

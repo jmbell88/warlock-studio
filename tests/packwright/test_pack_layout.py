@@ -146,6 +146,36 @@ def test_a_grid_too_large_for_the_ceiling_is_refused():
         lay.grid_layout(_sprites(40, 200, 200), PackSettings(max_size=256))
 
 
+# --- power-of-two default (mode-resolved) -----------------------------------
+
+
+def test_a_grid_pack_defaults_power_of_two_off():
+    """Measured over the same sweep the module docstring cites: rounding a
+    grid up buys nothing (its cells are already a fixed size) and costs a
+    mean 1.61x, worst 3.65x atlas area near a size boundary -- so a fresh
+    grid pack starts tight."""
+    assert PackSettings().power_of_two is False
+    assert PackSettings(mode="grid").power_of_two is False
+
+
+def test_a_maxrects_pack_keeps_power_of_two_on_by_default():
+    """Unchanged: MaxRects has no unused margin to speak of, and pow2 is
+    still what most engines expect loading a non-tileset texture."""
+    assert PackSettings(mode="maxrects").power_of_two is True
+
+
+def test_an_explicit_power_of_two_always_wins_over_the_mode_default():
+    assert PackSettings(mode="grid", power_of_two=True).power_of_two is True
+    assert PackSettings(mode="maxrects", power_of_two=False).power_of_two is False
+
+
+def test_a_grid_default_is_tight_not_rounded():
+    result = lay.grid_layout(_sprites(9, 10, 10), PackSettings(padding=2))
+    step = result.cell_w + result.padding
+    assert result.width == result.padding + result.columns * step
+    assert (result.width, result.height) == (38, 38)  # 9 sprites -> 3x3, no rounding
+
+
 # --- explicit columns -----------------------------------------------------
 
 

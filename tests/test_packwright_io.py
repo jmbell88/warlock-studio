@@ -148,6 +148,34 @@ def test_the_json_schema_setting_reaches_the_exported_sidecar(tmp_path, monkeypa
     assert isinstance(sidecar["frames"], dict)
 
 
+def test_a_tsx_mismatch_still_exports_the_png_and_json(tmp_path, monkeypatch):
+    """The ``.tsx`` is the one file this export can drop -- an explicit
+    ``columns`` count whose power-of-two rounding disagrees with what Tiled
+    would derive (see ``tsxout.grid_tileset``) -- and dropping it must not
+    take the PNG and JSON down with it: those describe exactly what was
+    packed, refusal or not."""
+    from warlock.studio import dialogs
+
+    ctx = FakeCtx()
+    tab = _tab(ctx, sources=3)
+    packwright_mode.set_settings(ctx, tab, mode="grid", columns=2, power_of_two=True)
+    _pack(ctx, tab)
+    monkeypatch.setattr(dialogs, "save_file", lambda *a, **k: tmp_path / "out.png")
+    packwright_mode.export_files(ctx, tab)
+
+    assert (tmp_path / "out.png").exists()
+    assert (tmp_path / "out.json").exists()
+    assert not (tmp_path / "out.tsx").exists()
+
+    result = ctx.result
+    assert result["files"] == 2
+    assert "power-of-two rounding leaves Tiled reading" in result["tsx_skipped"]
+
+    packwright_mode.on_task_done(ctx, _Done(f"packwright-export:{tab.uid}", result))
+    warnings = [text for text, level in ctx.toasts if level == "warn"]
+    assert any("No .tsx written" in text for text in warnings)
+
+
 def test_a_whole_set_lands_together(tmp_path):
     written = {
         tmp_path / "a.png": b"one",

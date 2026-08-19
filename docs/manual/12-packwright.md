@@ -38,11 +38,12 @@ and one that is already in the atlas is skipped rather than refusing the whole b
 **Add a tile set...** takes a sheet that is already a tileset and slices it back into tiles. You
 give the tile size — 32×32 until you change it — and the popup answers with the grid it makes and
 how many cells that keeps, live as you type. A cell with no opaque pixel anywhere in it is dropped,
-which is the point: a sparse sheet re-packs into a smaller one. A strip left over where the sheet's
-size is not a multiple of the tile is outside the grid and ignored, which is what Tiled does with
-the same sheet, and a sheet with no transparency at all simply keeps every cell. Re-importing the
-same file cut at a different tile size adds a second set rather than being skipped as duplicates of
-the first cut.
+and a grid pack's atlas is tight by default (see **Power-of-two** below) rather than rounded up —
+together, a sparse sheet re-packs into a genuinely smaller one, not because fewer cells happen to
+round to the same size. A strip left over where the sheet's size is not a multiple of the tile is
+outside the grid and ignored, which is what Tiled does with the same sheet, and a sheet with no
+transparency at all simply keeps every cell. Re-importing the same file cut at a different tile size
+adds a second set rather than being skipped as duplicates of the first cut.
 
 **From Inker** is the reason this mode sits beside the raster editor. Every document open in
 [Inker](08-inker.md) gets a button here: an animated document contributes one sprite per frame, and
@@ -85,10 +86,12 @@ would renumber everything after it.
 **Columns** (grid mode only) fixes how many cells wide the grid is, for a tileset you index by column
 — an animation strip cut at a known width, say. Zero is auto: the packer searches for a near-square
 grid that fits the sprite count. An explicit count is honoured exactly, including through
-power-of-two rounding — the atlas may still round up, but the grid does not follow it there, so a
-rounded atlas can carry dead space past the last column rather than a column nothing placed. That is
-also why an explicit count occasionally refuses a `.tsx` export (see Exporting): Tiled derives its
-own column count from the image, and this pack will not let the two disagree.
+power-of-two rounding, if you turn that back on — the atlas may still round up, but the grid does
+not follow it there, so a rounded atlas can carry dead space past the last column rather than a
+column nothing placed. At the power-of-two default (off, for a grid pack) that never happens: the
+width is exactly what the columns and padding say, with nothing left to disagree about. Turn
+power-of-two back on with an explicit column count and it can, occasionally, refuse a `.tsx` export
+(see Exporting) rather than write one Tiled would slice wrong.
 
 **Padding** is the gap between neighbours and around the edge. Two is enough for most things.
 
@@ -99,8 +102,15 @@ extrude, because two neighbours extrude into one shared gutter; a combination th
 refused with the numbers rather than quietly clamped. Both are capped at 256 — past that a gutter
 is not padding, and the only thing the arithmetic could compute is a refusal.
 
-**Power-of-two** rounds the atlas up to the next power of two in each direction. Older hardware and
-some engines require it; leaving it off gives a tighter atlas.
+**Power-of-two** rounds the atlas up to the next power of two in each direction. It defaults to
+**off** for a grid pack and **on** for MaxRects. A grid's cells are a fixed size regardless of the
+atlas around them, so rounding one up buys nothing but dead space past the last column/row — and
+near a size boundary that dead space is the whole atlas again: measured over a range of sprite
+counts and cell sizes, a mean 1.61× and a worst case 3.65× the tight area, for a rounding that never
+helped a grid pack fit anything. MaxRects keeps rounding up by default because its atlas is used
+corner to corner and pow2 is still what older hardware and some engines expect loading a
+non-tileset texture. Either default is a starting point, not a rule — pass or toggle the opposite
+explicitly and it wins.
 
 **Max size** is the ceiling the packer grows to. Past 8192 pixels engines start refusing a texture
 outright, so that is the hard limit whatever this says.
@@ -119,10 +129,11 @@ hundred-sprite atlas does not stall the window. `R` forces a repack.
 
 Below the atlas size, a line compares the packed area to the pile of source pixels it came from —
 "Packed to 41% of the source pixels' area", say. It says shrink or growth honestly rather than
-implying one: a *sparse* source (mostly empty, from a tile-set import that dropped its blank cells)
-reliably packs smaller, but power-of-two rounding can round a tightly-fitting grid up past its
-source, and this is where that shows up rather than being discovered at export. Turning
-power-of-two off, or switching to MaxRects, is the fix either line points at.
+implying one: at the power-of-two default, a grid pack's atlas is exactly the padding-and-cells math
+says and reliably comes out smaller than an even modestly overlapping or padded source, sparse or
+not; turning power-of-two back on is what can grow it past the source instead, and this is where
+that shows up rather than being discovered at export. Turning power-of-two off, or switching to
+MaxRects, is the fix either line points at.
 
 ## When it does not fit
 
@@ -138,9 +149,10 @@ TexturePacker's two JSON schemas — the Settings pane's **Sidecar schema** pick
 own order; *Hash* keys the same frames by filename instead, for a loader that looks one up by name
 rather than scanning for it. Two sources sharing a name pack fine under Array; Hash refuses instead
 of silently keeping only one of them, since a dict has room for only one key of that name. When the
-pack is a grid it writes a `.tsx` as well — unless an explicit **Columns** count and power-of-two
-rounding have put the grid and the image geometry out of agreement (see Settings), in which case the
-`.tsx` is refused by name rather than written wrong; the PNG and JSON still export.
+pack is a grid it writes a `.tsx` as well — unless an explicit **Columns** count with power-of-two
+turned back on has put the grid and the image geometry out of agreement (see Settings). That case
+skips only the `.tsx`, with a toast saying why; the PNG and the sidecar JSON still write, because
+both describe exactly what was packed regardless of whether Tiled would agree on the tileset shape.
 
 The sidecar is engine-neutral: pixel rectangles and nothing else. Each frame records where it landed
 in the atlas, whether it was trimmed, where the trimmed rectangle sat inside the original image, and
