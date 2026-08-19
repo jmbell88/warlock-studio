@@ -1172,6 +1172,18 @@ class InkerState:
     # ``export_arrange`` names neither, so switching back to Rows/Columns does
     # not forget what the user last typed.
     export_wrap: int = 4
+    # Duplicate flattened frames (byte-identical, which a linked cel is for
+    # free) share one cell instead of one each. Off by default -- the byte pin
+    # over the whole default sheet export needs the untouched cell-per-frame
+    # path, and a sheet an engine slices by fixed geometry would otherwise
+    # break if a repeat silently vanished. Ignored, like ``export_arrange``,
+    # whenever the document carries a directional layout: that grid's cells
+    # are poses by yaws, not frames, so there is nothing here to merge.
+    export_merge: bool = False
+    # A fully-transparent flattened frame gets no cell at all. Off by default
+    # for the same reason ``export_merge`` is, and refused together with a
+    # directional layout for the same reason too.
+    export_skip_empty: bool = False
 
     # -- importing a sprite sheet ------------------------------------------
     #

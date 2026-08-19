@@ -96,13 +96,17 @@ def test_an_empty_clip_is_refused():
 
 def test_frame_i_lands_in_cell_i():
     frames = [_frame(4, 4, RED, (0, 0)), _frame(4, 4, BLUE, (1, 1))]
-    image, plan, _trims = sheetout.build(frames, [100, 100])
+    image, plan, _trims, frame_cells = sheetout.build(frames, [100, 100])
     try:
         assert image.size == (plan.width, plan.height)
         assert image.getpixel((0, 0)) == RED
         assert image.getpixel((5, 1)) == BLUE
     finally:
         image.close()
+    # Neither merge nor skip_empty was asked for, so there is nothing for a
+    # caller to remap -- the frame/cell identity ``animation_block`` already
+    # assumes by default.
+    assert frame_cells is None
 
 
 def test_every_frame_must_be_the_same_size():
@@ -117,9 +121,136 @@ def test_every_frame_needs_a_duration():
 
 def test_trims_are_measured_per_frame():
     frames = [_frame(4, 4, RED, (2, 3)), np.zeros((4, 4, 4), dtype=np.uint8)]
-    _image, _plan, trims = sheetout.build(frames, [10, 10])
+    _image, _plan, trims, _frame_cells = sheetout.build(frames, [10, 10])
     assert trims[0] == {"x": 2, "y": 3, "w": 1, "h": 1}
     assert trims[1] is None
+
+
+# --- merge duplicates + skip empty frames -------------------------------------
+#
+# Both default off, and both are decided before ``plan_frames`` ever runs: the
+# grid is packed from however many cells *survive* merging/skipping, not from
+# the frame count the document has -- which is also why arrange interacts with
+# them (a reduced cell count is what arrange's math packs).
+
+
+def test_duplicate_frames_share_a_cell_only_when_merge_is_on():
+    frames = [_frame(4, 4, RED, (0, 0)), _frame(4, 4, RED, (0, 0)), _frame(4, 4, BLUE, (1, 1))]
+
+    image, plan, _trims, frame_cells = sheetout.build(frames, [10, 10, 10])
+    image.close()
+    assert len(plan.cells) == 3
+    assert frame_cells is None
+
+    image, plan, _trims, frame_cells = sheetout.build(frames, [10, 10, 10], merge=True)
+    image.close()
+    assert len(plan.cells) == 2
+    assert frame_cells == [0, 0, 1]
+
+
+def test_empty_frames_get_no_cell_only_when_skip_empty_is_on():
+    frames = [_frame(4, 4, RED, (0, 0)), np.zeros((4, 4, 4), dtype=np.uint8)]
+
+    image, plan, _trims, frame_cells = sheetout.build(frames, [10, 10])
+    image.close()
+    assert len(plan.cells) == 2
+    assert frame_cells is None
+
+    image, plan, _trims, frame_cells = sheetout.build(frames, [10, 10], skip_empty=True)
+    image.close()
+    assert len(plan.cells) == 1
+    assert frame_cells == [0, None]
+
+
+def test_merge_and_skip_empty_compose_together():
+    frames = [
+        _frame(4, 4, RED, (0, 0)),
+        np.zeros((4, 4, 4), dtype=np.uint8),
+        _frame(4, 4, RED, (0, 0)),
+        _frame(4, 4, BLUE, (1, 1)),
+    ]
+    image, plan, _trims, frame_cells = sheetout.build(
+        frames, [10, 10, 10, 10], merge=True, skip_empty=True
+    )
+    image.close()
+    assert len(plan.cells) == 2
+    assert frame_cells == [0, None, 0, 1]
+
+
+def test_a_wholly_empty_clip_with_skip_empty_is_refused_by_name():
+    frames = [np.zeros((4, 4, 4), dtype=np.uint8), np.zeros((4, 4, 4), dtype=np.uint8)]
+    with pytest.raises(ValueError, match="empty"):
+        sheetout.build(frames, [10, 10], skip_empty=True)
+
+
+def test_merge_or_skip_empty_with_a_directional_layout_is_refused_by_name():
+    frames = [_frame(10, 10, RED, (0, 0)) for _ in range(4)]
+    with pytest.raises(ValueError, match="directional layout"):
+        sheetout.build(frames, [10] * 4, layout=_layout("turnaround"), merge=True)
+    with pytest.raises(ValueError, match="directional layout"):
+        sheetout.build(frames, [10] * 4, layout=_layout("turnaround"), skip_empty=True)
+
+
+def test_merge_shrinks_the_cell_count_before_arrange_packs_it():
+    """The grid packs the *surviving* cells: two duplicates and a unique frame
+    merge down to two cells, and a horizontal arrange lays out two, not three."""
+    frames = [_frame(4, 4, RED, (0, 0)), _frame(4, 4, RED, (0, 0)), _frame(4, 4, BLUE, (1, 1))]
+    image, plan, _trims, _frame_cells = sheetout.build(
+        frames, [10, 10, 10], merge=True, arrange="horizontal"
+    )
+    image.close()
+    assert (plan.columns, plan.rows) == (2, 1)
+
+
+def test_merged_frames_keep_their_own_durations_in_the_animation_block():
+    plan = sheetout.plan_frames(1, 4, 4)
+    block = sheetout.animation_block(
+        plan, [40, 120], (), frame_cells=[0, 0]
+    )
+    assert block["frames"] == [
+        {"cell_index": 0, "duration_ms": 40},
+        {"cell_index": 0, "duration_ms": 120},
+    ]
+    assert block["merged"] is True
+    assert "skipped" not in block
+
+
+def test_skipped_frames_are_named_in_the_animation_block():
+    plan = sheetout.plan_frames(1, 4, 4)
+    block = sheetout.animation_block(
+        plan, [40, 120], (), frame_cells=[0, None]
+    )
+    assert block["frames"] == [{"cell_index": 0, "duration_ms": 40}]
+    assert block["skipped"] == [1]
+    assert "merged" not in block
+
+
+def test_an_ordinary_export_has_no_merged_or_skipped_keys():
+    plan = sheetout.plan_frames(3, 10, 10)
+    block = sheetout.animation_block(plan, [100] * 3, ())
+    assert "merged" not in block
+    assert "skipped" not in block
+
+
+def test_merged_and_skipped_keys_ride_the_animation_block_after_tags():
+    plan = sheetout.plan_frames(1, 4, 4)
+    block = sheetout.animation_block(plan, [40, 120, 10], (), frame_cells=[0, 0, None])
+    assert list(block) == ["frames", "tags", "merged", "skipped"]
+
+
+def test_a_merged_cells_slices_are_its_representative_frames():
+    """A merged cell has no single owner frame once the pixels agree, so its
+    slice geometry is the *first* original frame's -- the same tie-break
+    ``build`` already makes when it picks which frame's pixels become the
+    cell."""
+    frames = [_frame(4, 4, RED, (0, 0)), _frame(4, 4, RED, (0, 0))]
+    slices = [
+        {"pivot": (1.0, 1.0), "slices": []},
+        {"pivot": (9.0, 9.0), "slices": []},
+    ]
+    _image, _plan, extra = sheetout.compose(frames, [10, 10], (), None, slices, merge=True)
+    _image.close()
+    assert extra["pivots"] == {0: (1.0, 1.0)}
 
 
 # --- the animation block -----------------------------------------------------
@@ -168,8 +299,10 @@ def test_a_still_document_is_refused():
 
 
 def test_a_linked_cel_becomes_one_identical_cell_per_frame():
-    """Right, not a bug: an engine playing this back knows nothing about links,
-    so the frames have to be there."""
+    """Right, not a bug **with merge off** (the default): an engine playing
+    this back knows nothing about links, so the frames have to be there.
+    ``test_linked_cels_merge_for_free_when_merge_is_on`` below is the same
+    document with the option on, where the premise flips on purpose."""
     image, plan, extra = sheetout.from_document(_animated())
     try:
         assert len(plan.cells) == 3
@@ -182,6 +315,20 @@ def test_a_linked_cel_becomes_one_identical_cell_per_frame():
     finally:
         image.close()
     assert len(extra["animation"]["frames"]) == 3
+
+
+def test_linked_cels_merge_for_free_when_merge_is_on():
+    """A linked cel is the same object in every frame it appears in -- same
+    bytes, so it merges for free: no special-casing links, just the ordinary
+    duplicate-frame path finding what a link already guaranteed."""
+    image, plan, extra = sheetout.from_document(_animated(), merge=True)
+    try:
+        assert len(plan.cells) == 1
+    finally:
+        image.close()
+    assert len(extra["animation"]["frames"]) == 3
+    assert {f["cell_index"] for f in extra["animation"]["frames"]} == {0}
+    assert extra["animation"]["merged"] is True
 
 
 def test_the_sidecar_carries_the_animation_and_the_real_frame_size():

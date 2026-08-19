@@ -1131,6 +1131,8 @@ def _submit_export(ctx: Any, export: _Export) -> None:
     # mid-encode must not decide, halfway through, how this file is packed.
     arrange = getattr(state, "export_arrange", None)
     wrap = max(1, int(getattr(state, "export_wrap", 1) or 1))
+    merge = bool(getattr(state, "export_merge", False))
+    skip_empty = bool(getattr(state, "export_skip_empty", False))
     durations, tags, layout = sheetout.timing(doc, export.span)
     # Read here, with the timing, and for its reason: it walks the document, so
     # it belongs on the frame thread beside the flatten rather than inside the
@@ -1167,6 +1169,18 @@ def _submit_export(ctx: Any, export: _Export) -> None:
             "warn",
         )
         return
+    if export.kind == "sheet" and layout is not None and (merge or skip_empty):
+        # Same shape and same reason as the arrange/layout refusal above: a
+        # directional grid's cells are poses by yaws, so there is nothing for
+        # Merge or Skip empty to act on, and letting the request through would
+        # have ``sheetout.compose`` raise it as an opaque task error instead.
+        tab.saving = False
+        ctx.toast(
+            f"This is a {layout.kind} sheet, which keeps its own fixed grid; "
+            "turn Merge and Skip empty off to export it.",
+            "warn",
+        )
+        return
 
     def run_sheet() -> dict[str, Any] | None:
         import json
@@ -1193,6 +1207,8 @@ def _submit_export(ctx: Any, export: _Export) -> None:
             name=suggested,
             arrange=arrange,
             wrap=wrap if arrange in ("rows", "columns") else None,
+            merge=merge,
+            skip_empty=skip_empty,
         )
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)

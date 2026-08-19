@@ -420,6 +420,33 @@ def _output_trailing(ctx: Any, state: Any) -> tuple[float, Any]:
             )
             if changed:
                 state.export_wrap = max(1, int(value))
+        imgui.same_line()
+        changed, value = widgets.toggle(
+            "Merge", state.export_merge, tag="inker-export-merge"
+        )
+        if changed:
+            state.export_merge = value
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Duplicate frames -- byte-identical, which a linked cel is for "
+                "free -- share one cell instead of one each. Each frame still "
+                "gets its own duration in the sidecar; only the pixels are "
+                "shared. Ignored for a document with its own directional "
+                "layout, whose cells are poses by yaws rather than frames."
+            )
+        imgui.same_line()
+        changed, value = widgets.toggle(
+            "Skip empty", state.export_skip_empty, tag="inker-export-skip-empty"
+        )
+        if changed:
+            state.export_skip_empty = value
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "A fully-transparent frame gets no cell at all, and the "
+                "sidecar names which frames it dropped. Ignored for a "
+                "document with its own directional layout, for the same "
+                "reason Merge is."
+            )
         manual_render.help_button(ctx, "inker-timeline")
 
     return (width, draw_it)

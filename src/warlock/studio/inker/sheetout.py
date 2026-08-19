@@ -223,13 +223,46 @@ def animation_block(
     layout: DirectionalLayout | None = None,
     arrange: str | None = None,
     wrap: int | None = None,
+    frame_cells: Sequence[int | None] | None = None,
 ) -> dict[str, Any]:
-    """The ``animation`` key: which cell is which frame, and for how long."""
-    block: dict[str, Any] = {
-        "frames": [
+    """The ``animation`` key: which cell is which frame, and for how long.
+
+    ``frame_cells`` is ``None`` for every caller before merge/skip-empty
+    existed, and for a merge-off, skip-empty-off export today: ``plan.cells``
+    is then one cell per frame in frame order, so ``cell.index`` doubles as
+    the frame index into ``durations_ms`` -- the identity this function always
+    assumed. When it is given, it is ``build``'s own record of which original
+    frame landed on which surviving cell (``None`` for one ``skip_empty``
+    dropped), and ``durations_ms`` is then indexed by *frame*, not by cell --
+    so a 100ms and a 200ms frame sharing a cell still each get their own
+    ``duration_ms`` entry: ``frames`` is a timeline, not a cell list, and two
+    frames sharing a cell are still two frames.
+    """
+    if frame_cells is None:
+        frames_out = [
             {"cell_index": cell.index, "duration_ms": int(durations_ms[cell.index])}
             for cell in plan.cells
-        ],
+        ]
+        merged = False
+        skipped: list[int] = []
+    else:
+        frames_out = []
+        skipped = []
+        seen: set[int] = set()
+        merged = False
+        for i, cell_index in enumerate(frame_cells):
+            if cell_index is None:
+                skipped.append(i)
+                continue
+            if cell_index in seen:
+                merged = True
+            else:
+                seen.add(cell_index)
+            frames_out.append(
+                {"cell_index": cell_index, "duration_ms": int(durations_ms[i])}
+            )
+    block: dict[str, Any] = {
+        "frames": frames_out,
         "tags": [
             {
                 "name": tag.name,
@@ -254,6 +287,17 @@ def animation_block(
             for tag in tags
         ],
     }
+    if merged:
+        # True only when a cell actually got reused, not merely when the
+        # option was asked for: a merge with no duplicates in it must read
+        # exactly like an ordinary export, which is what keeps this key an
+        # honest report of what happened rather than an echo of the request.
+        block["merged"] = True
+    if skipped:
+        # Original frame indices, in ``skip_empty``'s own order -- the cell
+        # list has already shrunk by the time this is called, so there is
+        # nothing left in ``plan.cells`` to say which frame went missing.
+        block["skipped"] = skipped
     if layout is not None:
         # Inside the ``animation`` mapping rather than beside it: this says how
         # to *play* the sheet, which is what that key is for. The sidecar's
@@ -282,8 +326,16 @@ def build(
     layout: DirectionalLayout | None = None,
     arrange: str | None = None,
     wrap: int | None = None,
-) -> tuple[Any, sheetlib.Plan, dict[int, dict[str, int] | None]]:
-    """Composite the frames into one atlas. Returns ``(image, plan, trims)``.
+    merge: bool = False,
+    skip_empty: bool = False,
+) -> tuple[Any, sheetlib.Plan, dict[int, dict[str, int] | None], list[int | None] | None]:
+    """Composite the frames into one atlas.
+
+    Returns ``(image, plan, trims, frame_cells)``. ``frame_cells`` is ``None``
+    when neither option is on -- the identity ``animation_block`` already
+    assumed, and the byte pin over the whole default export path never has to
+    know this parameter exists. On, it is one entry per element of ``frames``:
+    the cell index it landed on, or ``None`` where ``skip_empty`` dropped it.
 
     It composites here rather than through ``sheet.pack``, which reads frames
     from ``Path``s on disk -- these are already in memory, and writing sixteen
@@ -294,9 +346,57 @@ def build(
 
     if len(frames) != len(durations_ms):
         raise ValueError("every frame needs a duration")
+    if (merge or skip_empty) and layout is not None:
+        # A directional layout is a claim about the *whole* timeline -- these
+        # frames are four directions of a walk, in this fixed grid -- and a
+        # merge or an omission changes which cells exist, which is exactly the
+        # claim the grid is fixed on. Refused by name, the same shape as the
+        # arrange/layout conflict ``plan_frames`` already refuses: a directional
+        # grid already fixes the cells for its own reason, and a second reason
+        # disagreeing about which cells there are would be a silent coin flip.
+        raise ValueError(
+            "a directional layout keeps its own fixed grid; merge and "
+            "skip-empty cannot be combined with one"
+        )
     height, width = frames[0].shape[:2]
+    for pixels in frames:
+        if pixels.shape[:2] != (height, width):
+            raise ValueError("every frame of a sheet is the same size")
+
+    frame_cells: list[int | None] | None = None
+    cell_frames: Sequence[np.ndarray] = frames
+    if merge or skip_empty:
+        assigned: list[int | None] = []
+        representative: list[np.ndarray] = []
+        seen: dict[bytes, int] = {}
+        for pixels in frames:
+            if skip_empty:
+                tile = Image.fromarray(pixels, "RGBA")
+                empty = sheetlib.measure_trim(tile) is None
+                tile.close()
+                if empty:
+                    assigned.append(None)
+                    continue
+            if merge:
+                key = pixels.tobytes()
+                existing = seen.get(key)
+                if existing is not None:
+                    assigned.append(existing)
+                    continue
+                index = len(representative)
+                seen[key] = index
+                representative.append(pixels)
+                assigned.append(index)
+            else:
+                assigned.append(len(representative))
+                representative.append(pixels)
+        if not representative:
+            raise ValueError("every frame is empty; there is nothing to export")
+        frame_cells = assigned
+        cell_frames = representative
+
     plan = plan_frames(
-        len(frames),
+        len(cell_frames),
         int(width),
         int(height),
         name=name,
@@ -308,14 +408,12 @@ def build(
     atlas = Image.new("RGBA", (plan.width, plan.height), (0, 0, 0, 0))
     trims: dict[int, dict[str, int] | None] = {}
     for cell in plan.cells:
-        pixels = frames[cell.index]
-        if pixels.shape[:2] != (height, width):
-            raise ValueError("every frame of a sheet is the same size")
+        pixels = cell_frames[cell.index]
         tile = Image.fromarray(pixels, "RGBA")
         trims[cell.index] = sheetlib.measure_trim(tile)
         atlas.paste(tile, (cell.x, cell.y))
         tile.close()
-    return atlas, plan, trims
+    return atlas, plan, trims, frame_cells
 
 
 def slices_snapshot(
@@ -616,6 +714,23 @@ def timing(
     )
 
 
+def _cell_representatives(frame_cells: Sequence[int | None]) -> list[int]:
+    """For each surviving cell, the first original frame index that landed on
+    it -- in cell order.
+
+    Slices are authored per frame, and a merged cell has no single frame that
+    owns it once the pixels agree; the first occurrence is the same tie-break
+    ``build`` itself already makes (it is the frame that *becomes* the cell's
+    representative pixels), so the slice geometry and the pixels this function
+    is called beside always describe the same frame.
+    """
+    reps: dict[int, int] = {}
+    for i, cell in enumerate(frame_cells):
+        if cell is not None and cell not in reps:
+            reps[cell] = i
+    return [reps[i] for i in range(len(reps))]
+
+
 def compose(
     frames: Sequence[np.ndarray],
     durations_ms: Sequence[int],
@@ -626,27 +741,56 @@ def compose(
     name: str = "",
     arrange: str | None = None,
     wrap: int | None = None,
+    merge: bool = False,
+    skip_empty: bool = False,
 ) -> tuple[Any, sheetlib.Plan, dict[str, Any]]:
     """``(image, plan, sidecar-without-identity)`` from a snapshot. Off-thread.
 
     ``layout`` and ``slices`` are positional rather than keyword-only so
     ``compose(*snapshot(doc))`` still holds: each is paired with the frames it
     describes, and a keyword-only element would have made that spelling drop it
-    silently. ``arrange``/``wrap`` are keyword-only and default to the row-wrap
-    unchanged -- there is nothing in ``snapshot``'s five-tuple for them to
-    collide with, because they are an export-time choice, not a document fact.
+    silently. ``arrange``/``wrap``/``merge``/``skip_empty`` are keyword-only and
+    default to the export this always was -- there is nothing in ``snapshot``'s
+    five-tuple for them to collide with, because they are an export-time
+    choice, not a document fact.
     """
-    image, plan, trims = build(
-        frames, durations_ms, tags, name=name, layout=layout, arrange=arrange, wrap=wrap
+    image, plan, trims, frame_cells = build(
+        frames,
+        durations_ms,
+        tags,
+        name=name,
+        layout=layout,
+        arrange=arrange,
+        wrap=wrap,
+        merge=merge,
+        skip_empty=skip_empty,
     )
-    block = slices_block(plan, slices or ())
+    # ``slices_block`` keys by cell index and reads ``snap[cell.index]`` --
+    # true by construction when merge/skip_empty are off, since a cell *is* a
+    # frame then. Once cells and frames diverge, the cell's slices are its
+    # representative frame's, found the same way ``build`` picked the pixels.
+    if frame_cells is None:
+        cell_slices = slices or ()
+    else:
+        src = list(slices or ())
+        cell_slices = [
+            src[i] if 0 <= i < len(src) else None
+            for i in _cell_representatives(frame_cells)
+        ]
+    block = slices_block(plan, cell_slices)
     return (
         image,
         plan,
         {
             "trims": trims,
             "animation": animation_block(
-                plan, durations_ms, tags, layout=layout, arrange=arrange, wrap=wrap
+                plan,
+                durations_ms,
+                tags,
+                layout=layout,
+                arrange=arrange,
+                wrap=wrap,
+                frame_cells=frame_cells,
             ),
             "pivots": block["pivots"],
             "slices": block["slices"],
@@ -660,10 +804,14 @@ def from_document(
     name: str = "",
     arrange: str | None = None,
     wrap: int | None = None,
+    merge: bool = False,
+    skip_empty: bool = False,
 ) -> tuple[Any, sheetlib.Plan, dict[str, Any]]:
     """The two halves back to back, for a caller that is already on one thread.
 
     The app is not such a caller -- ``inker_mode.export_sheet`` snapshots on the
     frame thread and composes on a task thread, which is the point of the split.
     """
-    return compose(*snapshot(doc), name=name, arrange=arrange, wrap=wrap)
+    return compose(
+        *snapshot(doc), name=name, arrange=arrange, wrap=wrap, merge=merge, skip_empty=skip_empty
+    )

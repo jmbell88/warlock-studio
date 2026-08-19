@@ -937,6 +937,14 @@ cells, because the engine playing it back knows nothing about links. And the cel
 transparency rather than being flattened onto the document's matte, which is what a sheet wants
 almost always — a matte is what a *flattened* export puts behind transparency, and an atlas is
 composited over whatever is behind it in the game.
+The **Merge** and **Skip empty** switches beside Arrange are both off by default, so an export with
+neither on is the one-cell-per-frame sheet this has always written. Merge turns that linked-cel
+repeat into an actual saving: any two frames that are pixel-identical — not just a link, any repeat —
+share one cell, and the sidecar still lists every frame with its own duration, only pointing two of
+them at the same cell. Skip empty leaves a fully-transparent frame out of the atlas altogether and
+names which frames it dropped in the sidecar, for a clip with holds where nothing is drawn. Both are
+ignored for a document with its own directional layout, whose cells are poses by yaws rather than
+frames — the same reason Arrange is.
 
 **Export PNGs** writes one numbered PNG per frame — `name_0000.png`, `name_0001.png` and so on,
 beside whatever name you pick. No atlas to slice and no sidecar to read, which is what an engine
