@@ -50,6 +50,7 @@ __all__ = [
     "layer_splits",
     "plan_frames",
     "rebase_tags",
+    "remap_tags",
     "require_distinct_names",
     "sanitize_stem",
     "scale_slices",
@@ -225,6 +226,54 @@ def rebase_tags(tags: Sequence[Any], f0: int, f1: int) -> list[Any]:
         if start > end:
             continue
         out.append(replace(tag, start=start - f0, end=end - f0))
+    return out
+
+
+def remap_tags(tags: Sequence[Any], frame_cells: Sequence[int | None]) -> list[Any]:
+    """The tags, renumbered onto a frame list ``skip_empty`` has shrunk. Pure.
+
+    A sidecar's ``animation.tags`` are positions **in ``animation.frames``** to
+    everyone who reads the file -- that is what a consumer indexing
+    ``frames[start..end]`` is doing. ``skip_empty`` drops entries from that
+    list, so a tag still carrying its original timeline indices names the wrong
+    cells the moment anything before or inside it was dropped.
+
+    ``frame_cells`` is ``build``'s own record, one entry per original frame:
+    the cell it landed on, or ``None`` where it was skipped. The map this
+    builds is therefore *original frame index -> surviving position*, and it is
+    a **remap over a sparse survivor set**, not the span clamp
+    :func:`rebase_tags` performs on a contiguous slice -- which is why it is a
+    second function rather than a fourth argument to that one. The three rules
+    are the same rules, though, and deliberately so: a tag whose whole span was
+    skipped is **dropped** (it would name nothing), a tag that keeps only part
+    of its span is **clamped** onto the survivors it does keep, and every
+    survivor is renumbered because the shrunk list starts at 0.
+
+    A tag reaching past the last frame is clamped there first -- deleting a
+    frame can leave one behind -- so a span that only overhangs still names the
+    frames it genuinely covers.
+    """
+    positions: list[int | None] = []
+    at = 0
+    for cell in frame_cells:
+        if cell is None:
+            positions.append(None)
+        else:
+            positions.append(at)
+            at += 1
+    last = len(positions) - 1
+    out = []
+    for tag in tags:
+        start, end = int(tag.start), int(tag.end)
+        if start > end:
+            start, end = end, start
+        start, end = max(0, start), min(end, last)
+        kept = [
+            positions[i] for i in range(start, end + 1) if positions[i] is not None
+        ]
+        if not kept:
+            continue
+        out.append(replace(tag, start=kept[0], end=kept[-1]))
     return out
 
 
@@ -405,6 +454,10 @@ def animation_block(
     so a 100ms and a 200ms frame sharing a cell still each get their own
     ``duration_ms`` entry: ``frames`` is a timeline, not a cell list, and two
     frames sharing a cell are still two frames.
+
+    When ``skip_empty`` actually dropped something, the tags go through
+    :func:`remap_tags` on the way out -- ``frames`` has shrunk and a tag's
+    ``start``/``end`` are positions in it.
     """
     if frame_cells is None:
         frames_out = [
@@ -429,6 +482,13 @@ def animation_block(
             frames_out.append(
                 {"cell_index": cell_index, "duration_ms": int(durations_ms[i])}
             )
+    if skipped:
+        # ``frames`` just lost entries, and a tag's ``start``/``end`` are
+        # positions *in that list*. Only when something was actually dropped:
+        # a merge leaves one entry per frame, so the map would be the identity
+        # and running it anyway would put a second opinion about tag clamping
+        # on a path that has never had one.
+        tags = remap_tags(tags, frame_cells or ())
     block: dict[str, Any] = {
         "frames": frames_out,
         "tags": [

@@ -238,6 +238,72 @@ def test_merged_and_skipped_keys_ride_the_animation_block_after_tags():
     assert list(block) == ["frames", "tags", "merged", "skipped"]
 
 
+# --- tags against a shrunk frame list ----------------------------------------
+#
+# ``skip_empty`` drops entries from ``animation.frames``, so a tag's ``start``/
+# ``end`` -- which are positions *in that list* to everyone who reads the file --
+# have to be renumbered onto the survivors or a consumer indexing
+# ``frames[start..end]`` plays the wrong cells.
+
+
+def _skipping_block(tags):
+    """Six frames, 1 and 3 dropped: positions 0,-,1,-,2,3."""
+    plan = sheetout.plan_frames(4, 4, 4)
+    return sheetout.animation_block(
+        plan, [10] * 6, tags, frame_cells=[0, None, 1, None, 2, 3]
+    )
+
+
+def test_a_tag_spanning_skipped_frames_lands_on_the_surviving_entries():
+    # Frames 0..2, of which 1 was dropped: the survivors are frames 0 and 2,
+    # which are entries 0 and 1 of the shrunk list.
+    block = _skipping_block([Tag(name="a", start=0, end=2)])
+    assert block["tags"] == [
+        {"name": "a", "start": 0, "end": 1, "loop": True, "direction": "forward"}
+    ]
+    assert block["skipped"] == [1, 3]
+
+
+def test_a_tag_starting_on_a_skipped_frame_clamps_to_its_first_survivor():
+    # Frames 3..5, of which 3 was dropped: frames 4 and 5 are entries 2 and 3.
+    block = _skipping_block([Tag(name="c", start=3, end=5)])
+    assert [(t["name"], t["start"], t["end"]) for t in block["tags"]] == [("c", 2, 3)]
+
+
+def test_a_tag_wholly_inside_skipped_frames_is_dropped():
+    # "b" covers frame 1 alone, which got no cell: naming it would name nothing.
+    block = _skipping_block(
+        [Tag(name="a", start=0, end=2), Tag(name="b", start=1, end=1)]
+    )
+    assert [t["name"] for t in block["tags"]] == ["a"]
+
+
+def test_merge_alone_leaves_every_tag_exactly_where_it_was():
+    """Nothing was dropped, so ``frames`` is still one entry per frame and the
+    tags already index it correctly -- the renumbering must not fire."""
+    plan = sheetout.plan_frames(1, 4, 4)
+    block = sheetout.animation_block(
+        plan, [10] * 3, [Tag(name="a", start=0, end=2)], frame_cells=[0, 0, 0]
+    )
+    assert [(t["name"], t["start"], t["end"]) for t in block["tags"]] == [("a", 0, 2)]
+
+
+def test_an_ordinary_export_leaves_every_tag_exactly_where_it_was():
+    plan = sheetout.plan_frames(3, 4, 4)
+    block = sheetout.animation_block(
+        plan, [10] * 3, [Tag(name="a", start=1, end=2)]
+    )
+    assert [(t["name"], t["start"], t["end"]) for t in block["tags"]] == [("a", 1, 2)]
+
+
+def test_remap_tags_is_pure_and_drops_a_wholly_skipped_span():
+    out = sheetout.remap_tags(
+        [Tag(name="a", start=0, end=1), Tag(name="b", start=2, end=2)],
+        [0, None, None, 1],
+    )
+    assert [(t.name, t.start, t.end) for t in out] == [("a", 0, 0)]
+
+
 def test_a_merged_cells_slices_are_its_representative_frames():
     """A merged cell has no single owner frame once the pixels agree, so its
     slice geometry is the *first* original frame's -- the same tie-break

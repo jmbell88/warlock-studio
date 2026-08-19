@@ -474,8 +474,9 @@ def _output_trailing(ctx: Any, state: Any) -> tuple[float, Any]:
                 "Duplicate frames -- byte-identical, which a linked cel is for "
                 "free -- share one cell instead of one each. Each frame still "
                 "gets its own duration in the sidecar; only the pixels are "
-                "shared. Ignored for a document with its own directional "
-                "layout, whose cells are poses by yaws rather than frames."
+                "shared. Refused for a document with its own directional "
+                "layout, whose cells are poses by yaws rather than frames -- "
+                "turn it off to export one."
             )
         imgui.same_line()
         changed, value = widgets.toggle(
@@ -486,9 +487,9 @@ def _output_trailing(ctx: Any, state: Any) -> tuple[float, Any]:
         if imgui.is_item_hovered():
             imgui.set_tooltip(
                 "A fully-transparent frame gets no cell at all, and the "
-                "sidecar names which frames it dropped. Ignored for a "
-                "document with its own directional layout, for the same "
-                "reason Merge is."
+                "sidecar names which frames it dropped -- and renumbers the "
+                "tags onto what survived. Refused for a document with its own "
+                "directional layout, for the same reason Merge is."
             )
         imgui.same_line()
         changed, value = widgets.toggle(

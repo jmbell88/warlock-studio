@@ -945,8 +945,8 @@ them at the same cell. Skip empty leaves a fully-transparent frame out of the at
 names which frames it dropped in the sidecar, for a clip with holds where nothing is drawn. A dropped
 frame's duration leaves with it — it is not folded into a neighbouring cell's duration, so the sum of
 the surviving durations is shorter than the clip's own length by however long the holds ran. Both are
-ignored for a document with its own directional layout, whose cells are poses by yaws rather than
-frames — the same reason Arrange is.
+*refused* for a document with its own directional layout, whose cells are poses by yaws rather than
+frames — turn them off to export one, the same way Arrange has to go back to Grid.
 **Trim**, **Pad** and **Ext** pack a tighter atlas the same way Packwright already does. Trim shrinks
 every cell to the largest trimmed frame's size instead of the full canvas, placing each frame's own
 — possibly smaller — trimmed pixels flush in the cell's corner; the sidecar's per-cell `trim`
@@ -970,9 +970,13 @@ accepting the default numbering. `{title}` is the name you gave the dialog, `{fr
 number (always four digits — `0007`, never `7`), `{tag}` and `{layer}` are the split name a per-tag
 or per-layer batch gives each of its files. Leave it empty for the default: a plain PNG sequence
 numbers `{title}_{frame}`, and a split names each output `{title}_{tag}` or `{title}_{layer}` — the
-same names both already wrote before this field existed. A template that asks for a key this export
-does not have (`{tag}` on a PNG sequence that was never split, `{frame}` on a sheet or a GIF) is
-refused by name, and so is one that would give two of the export's own files the same name.
+same names both already wrote before this field existed. The template only applies where an export
+has more than one name to decide — the frames inside a PNG sequence, and the files a per-tag or
+per-layer split writes. An unsplit sheet or GIF is a single file that keeps the name you typed into
+the dialog exactly, so the template is left unused there rather than read. Where it does apply, one
+that asks for a key that export does not have (`{tag}` on a PNG sequence that was never split,
+`{frame}` on a per-tag or per-layer split) is refused by name, and so is one that would give two of
+the export's own files the same name.
 
 Inker remembers your export settings. Scale, Arrange, Merge, Skip empty, Trim, Pad, Ext and the
 filename template all carry over to your next export in this session — and each document remembers

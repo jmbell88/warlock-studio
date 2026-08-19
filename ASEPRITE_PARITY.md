@@ -804,7 +804,7 @@ is the citable list.
 
 ---
 
-## Wave 4 — Production sprite-sheet export (P0 item 6) — **DONE 2026-08-19** (ten commits, `57d347a`..)
+## Wave 4 — Production sprite-sheet export (P0 item 6) — **DONE 2026-08-19** (ten commits, `57d347a..e4c3785`)
 
 Two tracks: Inker's own exporter grows the Aseprite-parity options; Packwright grows
 the atlas-grade options; the existing "send frames to Packwright" bridge remains the
@@ -943,6 +943,12 @@ is the citable list.
   policies** (bump vs. refuse) in the same module, each argued at its own
   site. Noted in Task 3's report, not reconciled; revisit if a third naming
   helper is ever added.
+- **The `{frame}`-in-split refusal has no wiring-level test (Task 5).**
+  `filename_for` refuses `{frame}` on an export that has no frame, and
+  `_split_stems` is the call that reaches it for a per-tag or per-layer batch
+  — but the pin is at the `sheetout` layer only, so nothing proves the split
+  runners actually pass the user's template down that path. Same shape as the
+  mode-level submit-test gap above.
 
 ---
 

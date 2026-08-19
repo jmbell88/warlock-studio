@@ -392,6 +392,70 @@ def test_a_cancelled_dialog_writes_no_files_at_all(monkeypatch, tmp_path):
     assert list(tmp_path.glob("*")) == []
 
 
+# --- a batch is all-or-nothing ------------------------------------------------
+#
+# The runner composes every leg before it writes any of them, so a refusal that
+# only the Nth leg can reach -- ``skip_empty`` over a tag with nothing drawn in
+# it -- leaves the folder as it found it rather than half a batch on disk under
+# names a user will believe.
+
+
+def _half_empty() -> Any:
+    """Four frames: 0 and 1 drawn, 2 and 3 blank, one tag over each pair."""
+    doc = _clip(2)
+    doc.add_frame()
+    doc.add_frame()
+    assert doc.add_tag("intro", 0, 1)
+    assert doc.add_tag("walk", 2, 3)
+    return doc
+
+
+def test_a_leg_with_only_empty_frames_refuses_by_name_and_writes_nothing(
+    monkeypatch, tmp_path
+):
+    ctx, state, tab = _open(_half_empty())
+    state.export_skip_empty = True
+    _saved(monkeypatch, tmp_path / "walk.png")
+
+    inker_mode.export_per_tag(ctx, tab, "sheet")
+    with pytest.raises(ValueError, match="walk"):
+        _finish(ctx, state)
+    # Not one file, not even the healthy first leg's: the batch is atomic.
+    assert list(tmp_path.glob("*")) == []
+
+
+def test_the_leg_refusal_says_which_kind_of_split_and_what_went_wrong(
+    monkeypatch, tmp_path
+):
+    ctx, state, tab = _open(_half_empty())
+    state.export_skip_empty = True
+    _saved(monkeypatch, tmp_path / "walk.png")
+
+    inker_mode.export_per_tag(ctx, tab, "sheet")
+    with pytest.raises(ValueError) as caught:
+        _finish(ctx, state)
+    assert "tag" in str(caught.value)
+    assert "every frame is empty" in str(caught.value)
+
+
+def test_a_healthy_split_with_skip_empty_still_writes_every_leg(
+    monkeypatch, tmp_path
+):
+    ctx, state, tab = _open(_tagged())
+    state.export_skip_empty = True
+    _saved(monkeypatch, tmp_path / "walk.png")
+
+    inker_mode.export_per_tag(ctx, tab, "sheet")
+    _finish(ctx, state)
+
+    assert sorted(p.name for p in tmp_path.glob("*")) == [
+        "walk_intro.json",
+        "walk_intro.png",
+        "walk_walk.json",
+        "walk_walk.png",
+    ]
+
+
 # --- the naming, which Task 5's templates will replace ------------------------
 
 

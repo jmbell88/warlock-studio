@@ -1521,6 +1521,33 @@ def _submit_export(ctx: Any, export: _Export) -> None:
         )
 
     def run_sheet() -> dict[str, Any] | None:
+        """Every leg composed, then every file written. Task thread.
+
+        **Two loops rather than one, and that is the whole point.** A split is
+        one export producing N files, and ``compose`` can refuse a leg the
+        others are fine with -- ``skip_empty`` over a tag with nothing drawn in
+        it is the reachable case, and the atlas ceiling and the padding rule are
+        two more. Written inside a single loop, a refusal on leg k left legs
+        0..k-1 on disk under names the user has every reason to believe, with
+        the rest missing and only a toast to say so.
+
+        The seam is the *runner's* own start rather than a pre-dialog check on
+        the frame thread, deliberately. The all-empty case alone could be
+        checked from the flattens ``_submit_export`` already holds -- but only
+        that one: the ceiling and the padding refusals need the plan, which
+        needs the compose, so a frame-thread door would leave the same
+        half-written batch reachable two other ways while carrying a *second*
+        copy of the emptiness rule (a second opinion about what "empty" means is
+        exactly the drift ``sheetout`` centralises to avoid). Composing first
+        catches every refusal ``compose`` has, present and future, with no rule
+        duplicated. The precedent is ``packwright_io._write(files: dict[Path,
+        bytes])`` -- encode all, then write all -- for the same reason.
+
+        The cost is honest and bounded: N atlases live at once instead of one.
+        A split is per tag or per top-level layer, so N is single digits on any
+        real document, and each atlas is the sheet that leg was going to write
+        anyway.
+        """
         import json
 
         dest = dialogs.save_file(
@@ -1533,49 +1560,76 @@ def _submit_export(ctx: Any, export: _Export) -> None:
         stems = _split_stems(
             dest.stem, [load.label for load in loads], kind=split_kind, template=template
         )
+        composed: list[tuple[str, Any, dict[str, Any]]] = []
+        try:
+            for stem, load in zip(stems, loads, strict=True):
+                # Upscaled *before* ``compose``, so the plan is built on the
+                # scaled frame size and the cells, the trims and the sidecar all
+                # describe the atlas that is actually written. Scaling the
+                # finished atlas instead would leave every rectangle in the
+                # sidecar naming the wrong pixels. ``sheet.py`` stays the sole
+                # writer of the format; none of this is new code in it.
+                try:
+                    image, plan, extra = sheetout.compose(
+                        [upscale(plane, scale) for plane in load.frames],
+                        load.durations,
+                        load.tags,
+                        load.layout,
+                        # The slice geometry through the same magnification, or
+                        # the sidecar describes a canvas that is not the atlas
+                        # beside it.
+                        sheetout.scale_slices(load.slices, scale),
+                        name=suggested,
+                        arrange=arrange,
+                        wrap=wrap if arrange in ("rows", "columns") else None,
+                        merge=merge,
+                        skip_empty=skip_empty,
+                        trim=trim,
+                        padding=padding,
+                        extrude=extrude,
+                    )
+                except ValueError as exc:
+                    if not split_kind:
+                        raise
+                    # Which leg, by name. One file's refusal arriving as the
+                    # batch's bare reason ("every frame is empty") says nothing
+                    # about *which* tag or layer the user has to go and look at,
+                    # and a split is exactly the export where that is the whole
+                    # question.
+                    raise ValueError(
+                        f"{split_kind} {load.label or split_kind!r}: {exc}"
+                    ) from exc
+                composed.append(
+                    (
+                        stem,
+                        image,
+                        sheetlib.sidecar(
+                            plan,
+                            sheet_id=stem,
+                            source_job=tab.job_id,
+                            image=f"{stem}.png",
+                            created=time.time(),
+                            name=suggested,
+                            trims=extra["trims"],
+                            animation=extra["animation"],
+                            pivots=extra["pivots"],
+                            slices=extra["slices"],
+                        ),
+                    )
+                )
+        except BaseException:
+            for _stem, image, _meta in composed:
+                image.close()
+            raise
+
         dest.parent.mkdir(parents=True, exist_ok=True)
         first: Path | None = None
-        for stem, load in zip(stems, loads, strict=True):
+        for stem, image, meta in composed:
             out = dest.with_name(f"{stem}.png")
-            # Upscaled *before* ``compose``, so the plan is built on the scaled
-            # frame size and the cells, the trims and the sidecar all describe
-            # the atlas that is actually written. Scaling the finished atlas
-            # instead would leave every rectangle in the sidecar naming the
-            # wrong pixels. ``sheet.py`` stays the sole writer of the format;
-            # none of this is new code in it.
-            image, plan, extra = sheetout.compose(
-                [upscale(plane, scale) for plane in load.frames],
-                load.durations,
-                load.tags,
-                load.layout,
-                # The slice geometry through the same magnification, or the
-                # sidecar describes a canvas that is not the atlas beside it.
-                sheetout.scale_slices(load.slices, scale),
-                name=suggested,
-                arrange=arrange,
-                wrap=wrap if arrange in ("rows", "columns") else None,
-                merge=merge,
-                skip_empty=skip_empty,
-                trim=trim,
-                padding=padding,
-                extrude=extrude,
-            )
             try:
                 image.save(out, "PNG")
             finally:
                 image.close()
-            meta = sheetlib.sidecar(
-                plan,
-                sheet_id=out.stem,
-                source_job=tab.job_id,
-                image=out.name,
-                created=time.time(),
-                name=suggested,
-                trims=extra["trims"],
-                animation=extra["animation"],
-                pivots=extra["pivots"],
-                slices=extra["slices"],
-            )
             # ``with_name`` rather than ``with_suffix``: it spells the sidecar's
             # filename directly from ``stem``, the same way ``out`` itself was
             # just built two lines up, rather than leaning on ``with_suffix`` to
