@@ -403,7 +403,7 @@ Plotter does not model is **refused by name** rather than loaded with half of it
 because the drop is invisible right up to the moment you save, at which point the other half is
 gone. The message says which feature and what to do about it.
 
-Refused: staggered and hexagonal maps; infinite (chunked) maps; object templates; image-collection
+Refused: infinite (chunked) maps; the hexagonal 120° tile-rotation flag; object templates; image-collection
 tilesets and embedded tileset images; external `.tsj` tilesets; Wang sets that are not one of
 Plotter's own terrain sets, and Tiled's older terrain types; per-tile terrain assignment (Tiled's
 own deprecated one, which Tiled is retiring); tileset object alignment, render size, fill mode,

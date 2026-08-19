@@ -70,6 +70,14 @@ class ProjectionOps:
         """A lattice node -- where four cells meet. What a grid line joins."""
         return project.cell_corner(self._lattice(), column, row)
 
+    def cell_outline(self: MapDoc, column: int, row: int) -> list[tuple[float, float]]:
+        """One cell's own closed outline, in map pixels.
+
+        What the grid pass draws on an offset lattice, where there are no
+        straight lines running the width of the map to draw instead.
+        """
+        return project.cell_outline(self._lattice(), column, row)
+
     def cell_at(self: MapDoc, x: float, y: float) -> tuple[int, int]:
         """Which cell a map-pixel point lands in. Unclamped; every tool clips."""
         return project.cell_at(self._lattice(), x, y)

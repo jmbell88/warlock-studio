@@ -60,11 +60,17 @@ def _refuses(data: bytes, feature: str) -> None:
 
 
 @pytest.mark.parametrize("orientation", ["staggered", "hexagonal"])
-def test_a_staggered_or_hexagonal_map_is_refused(orientation):
-    """The two grids left in the list, and the reason ``gid`` carries no
-    hexagonal rotation bit: a file that could set one never gets past here."""
-    data = _map().replace(b'orientation="orthogonal"', f'orientation="{orientation}"'.encode())
-    _refuses(data, orientation)
+def test_a_staggered_or_hexagonal_map_loads_now_that_plotter_projects_one(
+    orientation,
+):
+    """Both left the refusal list the only way a refusal is ever allowed to
+    move: the editor learned to place their cells. Asserted here, where the
+    refusal used to be, so the removal reads as a decision."""
+    data = _map().replace(
+        b'orientation="orthogonal"', f'orientation="{orientation}"'.encode()
+    )
+    doc = tmx.read_tmx(data, **LOADERS)
+    assert doc.projection == orientation
 
 
 def test_an_isometric_map_loads_now_that_plotter_draws_one():

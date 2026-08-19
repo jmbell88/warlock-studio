@@ -85,7 +85,8 @@ frame thread as a crash.
 | `map class and parallax origin` | round-trips | Map class plus both parallax-origin components; fixture: `core-112`. |
 | `renderorder` | round-trips | All four orthogonal/oblique orders are modeled and rendered; fixture: `oblique-112`. |
 | `backgroundcolor` | round-trips | Preserved and painted by the flat renderer; fixture: `core-112`. |
-| `a {} map` | refused | Staggered and hexagonal maps are named rather than projected approximately. |
+| `a {} map` | refused | An orientation outside the five this places. The list is `project.PROJECTIONS` itself, so the reader and the placement arithmetic cannot disagree about it. |
+| `staggered and hexagonal maps` | round-trips | Both offset lattices place cells, and resolve a click by **exact containment** rather than by an affine inverse -- which is what the refusal they replaced demanded ("named rather than projected approximately"). `staggeraxis`, `staggerindex` and `hexsidelength` are read, written and stored. fixture: `hex-112`. |
 | `an infinite map` | refused | Dense finite storage remains the current map boundary. |
 | `chunked (infinite) layer data` | refused | The JSON spelling of infinite tile storage. |
 | `hexagonal 120-degree tile rotation` | refused | The hex-only fourth gid transform bit. |

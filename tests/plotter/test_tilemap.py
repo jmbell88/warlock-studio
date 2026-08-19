@@ -800,8 +800,13 @@ def test_a_projection_and_its_tileset_arrive_as_one_step():
 
 
 def test_an_unknown_projection_is_refused_by_name():
-    with pytest.raises(ValueError, match="staggered"):
-        MapDoc(4, 4, 16, 16, projection="staggered")
+    with pytest.raises(ValueError, match="spiral"):
+        MapDoc(4, 4, 16, 16, projection="spiral")
+
+
+def test_a_staggered_map_is_accepted_now_that_plotter_projects_one():
+    doc = MapDoc(4, 4, 32, 32, projection="staggered")
+    assert doc.projection == "staggered"
 
 
 def test_an_isometric_map_is_taller_and_narrower_than_the_grid_suggests():

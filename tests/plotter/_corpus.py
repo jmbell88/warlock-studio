@@ -28,6 +28,7 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures" / "tiled"
 MANIFEST: tuple[str, ...] = (
     "basic-iso",
     "core-112",
+    "hex-112",
     "oblique-112",
     "presentation-112",
     "tilemeta-112",

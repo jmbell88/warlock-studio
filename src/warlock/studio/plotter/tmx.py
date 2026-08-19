@@ -152,11 +152,12 @@ def _refuse_infinite(infinite: bool) -> None:
 def _check_orientation(orientation: str) -> str:
     """Accept what this draws, refuse the rest by name.
 
-    Isometric left this list when the editor learned to draw one -- the refusal
-    was never about the word, it was about not silently half-reading a map whose
-    cells this could not place. Staggered and hexagonal stay, which is also what
-    keeps ``gid``'s missing hex-rotation bit honest: a file that could set it
-    never gets past here.
+    Isometric left this list when the editor learned to draw one, and staggered
+    and hexagonal left it the same way -- the refusal was never about the word,
+    it was about not silently half-reading a map whose cells this could not
+    place. What is accepted is exactly what :data:`project.PROJECTIONS` says,
+    which is what keeps the reader and the placement arithmetic from ever
+    disagreeing about the list.
     """
     if orientation not in project.PROJECTIONS:
         raise TiledUnsupported(
@@ -164,6 +165,52 @@ def _check_orientation(orientation: str) -> str:
             f"Plotter draws {' and '.join(project.PROJECTIONS)} maps",
         )
     return orientation
+
+
+def _offset_fields(root: ET.Element) -> dict[str, Any]:
+    """Tiled's three offset-lattice attributes, with its own defaults.
+
+    Read for every map rather than only for the two projections that use them,
+    exactly as Tiled writes them: a file that carries a stagger axis on an
+    orthogonal map is not wrong, it is a map somebody changed the projection of,
+    and dropping the value would lose the setting they would get back on
+    changing it again.
+    """
+    axis = root.get("staggeraxis", "y")
+    index = root.get("staggerindex", "odd")
+    return {
+        "stagger_axis": axis if axis in project.STAGGER_AXES else "y",
+        "stagger_index": index if index in project.STAGGER_INDICES else "odd",
+        "hex_side": int(root.get("hexsidelength", 0) or 0),
+    }
+
+
+def _offset_fields_json(payload: dict[str, Any]) -> dict[str, Any]:
+    """:func:`_offset_fields` over Tiled's JSON spelling."""
+    axis = str(payload.get("staggeraxis", "y"))
+    index = str(payload.get("staggerindex", "odd"))
+    return {
+        "stagger_axis": axis if axis in project.STAGGER_AXES else "y",
+        "stagger_index": index if index in project.STAGGER_INDICES else "odd",
+        "hex_side": int(payload.get("hexsidelength", 0) or 0),
+    }
+
+
+def write_offset_fields(root: ET.Element, doc: MapDoc) -> None:
+    """The three attributes back onto a ``<map>``, only where they mean anything.
+
+    Written only for the two projections that read them, which is what Tiled
+    does -- an orthogonal map carrying a ``staggeraxis`` is noise in a diff, and
+    the writer is held to producing a file that diffs cleanly against one Tiled
+    wrote for the same map.
+    """
+    if doc.projection not in project.OFFSET_PROJECTIONS:
+        return
+    root.set("staggeraxis", doc.stagger_axis)
+    root.set("staggerindex", doc.stagger_index)
+    if doc.projection == project.HEXAGONAL:
+        root.set("hexsidelength", str(int(doc.hex_side)))
+
 
 
 def _check_map(root: ET.Element) -> None:
@@ -667,6 +714,8 @@ def read_tmx(
     )
     doc.skew_x = int(root.get("skewx", 0) or 0)
     doc.skew_y = int(root.get("skewy", 0) or 0)
+    for name, value in _offset_fields(root).items():
+        setattr(doc, name, value)
     doc.properties = read_properties(root)
     doc.tilesets = _read_tmx_tilesets(
         root, image_loader=image_loader, tsx_loader=tsx_loader
@@ -922,6 +971,8 @@ def read_tmj(
     )
     doc.skew_x = int(payload.get("skewx", 0) or 0)
     doc.skew_y = int(payload.get("skewy", 0) or 0)
+    for name, value in _offset_fields_json(payload).items():
+        setattr(doc, name, value)
     doc.properties = read_json_properties(payload.get("properties"))
     doc.tilesets = _read_tmj_tilesets(
         payload, image_loader=image_loader, tsx_loader=tsx_loader
@@ -1348,6 +1399,7 @@ def tmx_export(doc: MapDoc) -> dict[str, bytes]:
     if doc.projection == project.OBLIQUE:
         root.set("skewx", str(int(doc.skew_x)))
         root.set("skewy", str(int(doc.skew_y)))
+    write_offset_fields(root, doc)
     layer_ids, object_ids, next_layer_id, next_object_id = _export_ids(doc)
     root.set("nextlayerid", str(next_layer_id))
     root.set("nextobjectid", str(next_object_id))
@@ -1550,6 +1602,13 @@ def tmj_export(doc: MapDoc) -> dict[str, bytes]:
     if doc.projection == project.OBLIQUE:
         payload["skewx"] = int(doc.skew_x)
         payload["skewy"] = int(doc.skew_y)
+    if doc.projection in project.OFFSET_PROJECTIONS:
+        # Only for the projections that read them, which is what Tiled does --
+        # an orthogonal map carrying a ``staggeraxis`` is noise in a diff.
+        payload["staggeraxis"] = doc.stagger_axis
+        payload["staggerindex"] = doc.stagger_index
+        if doc.projection == project.HEXAGONAL:
+            payload["hexsidelength"] = int(doc.hex_side)
     if doc.properties:
         payload["properties"] = write_json_properties(doc.properties)
 

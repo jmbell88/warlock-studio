@@ -829,6 +829,21 @@ def _grid(draw_list: Any, doc: Any, view: Any, origin) -> None:
     def node(column: float, row: float):
         return inker_state.to_screen(view, origin, *doc.cell_corner(column, row))
 
+    if doc.projection in project.OFFSET_PROJECTIONS:
+        # **Outlines, not lines.** On an offset lattice there are no straight
+        # lines running the width of the map: every other row is pushed
+        # sideways, so a line from (0, r) to (width, r) crosses cells rather
+        # than bounding them. One closed outline per cell is the only honest
+        # drawing, and it is what makes a hexagonal map look like one.
+        for row in range(doc.height):
+            for column in range(doc.width):
+                points = [
+                    inker_state.to_screen(view, origin, px, py)
+                    for px, py in doc.cell_outline(column, row)
+                ]
+                draw_list.add_polyline(points, colour, imgui.ImDrawFlags_.closed, 1.0)
+        return
+
     # Lines along the two *lattice* directions rather than the screen axes.
     # For an orthogonal map this reproduces the old lines exactly; for an
     # isometric one it draws the diamond mesh.

@@ -107,9 +107,21 @@ def test_an_unknown_projection_falls_back_rather_than_raising():
     """The form is typed into and restored from ``state.preview``; a stale key
     from an older session must not be able to stop the dialog drawing."""
     form = plotter_setup.blank_form()
-    form["projection"] = "hexagonal"
+    # A projection this build genuinely does not have. "hexagonal" used to be
+    # the example and stopped being one when the editor learned to place it --
+    # this test is about a *stale key*, so it needs a word that is not a
+    # projection rather than one that merely was not yet.
+    form["projection"] = "spiral"
     plotter_setup.clamp(form)
     assert form["projection"] == project.ORTHOGONAL
+
+
+def test_the_offset_projections_survive_the_clamp():
+    for projection in project.OFFSET_PROJECTIONS:
+        form = plotter_setup.blank_form()
+        form["projection"] = projection
+        plotter_setup.clamp(form)
+        assert form["projection"] == projection
 
 
 def test_the_summary_states_both_units():

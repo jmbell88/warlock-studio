@@ -33,7 +33,17 @@ PRESETS: tuple[tuple[str, int, int, int, int, str], ...] = (
     # 2:1 is the isometric convention, and the generator already warns when a
     # map departs from it -- so the preset that exists to be correct is 2:1.
     ("Isometric, 64 x 32", 32, 32, 64, 32, project.ISOMETRIC),
+    # The offset lattices, one each. A staggered map is the hexagonal one with
+    # no flat run, so the two presets differ by exactly the hex side -- which is
+    # the clearest way to say what the relationship between them is.
+    ("Staggered, 32 px", 32, 32, 32, 32, project.STAGGERED),
+    ("Hexagonal, 32 px", 32, 32, 32, 32, project.HEXAGONAL),
 )
+
+#: What a hexagonal preset's flat run is, when the form has not been told
+#: otherwise. Half the tile is the regular hexagon, which is the shape somebody
+#: choosing "hexagonal" almost always means.
+DEFAULT_HEX_SIDE = 16
 
 #: The preset Create starts on.
 DEFAULT = PRESETS[1]

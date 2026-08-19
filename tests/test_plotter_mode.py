@@ -444,15 +444,19 @@ def test_an_engine_refusal_reaches_the_user_inside_a_sentence(tmp_path):
     which is the only part that says which feature."""
     from warlock.service.errors import Invalid
 
+    # ``infinite`` rather than ``hexagonal``: the two offset lattices left the
+    # refusal list when the editor learned to project them, which is the only
+    # reason a refusal ever moves -- and this test is about the *framing*, so it
+    # needs any feature that is still genuinely refused.
     path = tmp_path / "hostile.tmx"
     path.write_bytes(
-        b'<map version="1.10" orientation="hexagonal" width="1" height="1" '
-        b'tilewidth="16" tileheight="16"/>'
+        b'<map version="1.10" orientation="orthogonal" infinite="1" width="1" '
+        b'height="1" tilewidth="16" tileheight="16"/>'
     )
     with pytest.raises(Invalid) as exc:
         plotter_io._load(path)
     assert "This map could not be opened" in str(exc.value)
-    assert "hexagonal" in str(exc.value)
+    assert "infinite" in str(exc.value)
     assert exc.value.field == "file"
 
 

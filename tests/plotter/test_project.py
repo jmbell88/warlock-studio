@@ -76,7 +76,15 @@ def test_an_oblique_map_round_trips_and_has_a_zero_based_bounding_box(skew):
     )
 
 
-@pytest.mark.parametrize("projection", project.PROJECTIONS)
+#: The projections whose inverse is affine, so flooring a transformed point *is*
+#: the cell. The two offset lattices are deliberately not among them -- their
+#: inverse is a candidate check, which is what the refusal they replaced demanded
+#: ("named rather than projected approximately") -- and they have their own hit
+#: tests below.
+AFFINE = (project.ORTHOGONAL, project.ISOMETRIC, project.OBLIQUE)
+
+
+@pytest.mark.parametrize("projection", AFFINE)
 def test_the_four_cells_meeting_at_a_node_each_own_their_own_side(projection):
     """``floor`` breaks the tie the same way everywhere, which is the whole
     reason the inverse is arithmetic rather than a polygon test.
@@ -152,8 +160,96 @@ def test_orthogonal_and_oblique_render_orders_are_honoured(order, expected):
 
 
 def test_an_unknown_projection_is_refused_by_name():
-    with pytest.raises(ValueError, match="staggered"):
-        project.check("staggered")
+    with pytest.raises(ValueError, match="spiral"):
+        project.check("spiral")
+
+
+def test_the_offset_projections_are_now_accepted():
+    """Staggered and hexagonal left the refusal list *because the editor
+    learned to project them*, which is the only reason a refusal is ever
+    allowed to move."""
+    assert project.check(project.STAGGERED) == project.STAGGERED
+    assert project.check(project.HEXAGONAL) == project.HEXAGONAL
+
+
+# --- the offset lattices ----------------------------------------------------------
+
+
+@pytest.mark.parametrize("projection", project.OFFSET_PROJECTIONS)
+@pytest.mark.parametrize("axis", project.STAGGER_AXES)
+@pytest.mark.parametrize("index", project.STAGGER_INDICES)
+def test_every_offset_cell_round_trips_from_its_own_centre(projection, axis, index):
+    """The bar the refusal's own wording set: an exact hit test rather than a
+    nearest-centre guess."""
+    lat = project.Lattice(
+        projection,
+        6,
+        6,
+        32,
+        32,
+        stagger_axis=axis,
+        stagger_index=index,
+        hex_side=12 if projection == project.HEXAGONAL else 0,
+    )
+    for column in range(6):
+        for row in range(6):
+            x, y = project.cell_origin(lat, column, row)
+            centre = (x + lat.tile_w / 2.0, y + lat.tile_h / 2.0)
+            assert project.cell_at(lat, *centre) == (column, row)
+
+
+def test_a_staggered_row_is_pushed_half_a_tile() -> None:
+    lat = project.Lattice(project.STAGGERED, 4, 4, 32, 32, stagger_index="odd")
+    even = project.cell_origin(lat, 0, 0)
+    odd = project.cell_origin(lat, 0, 1)
+    assert odd[0] - even[0] == 16.0
+
+
+def test_the_stagger_index_decides_which_line_moves() -> None:
+    odd = project.Lattice(project.STAGGERED, 4, 4, 32, 32, stagger_index="odd")
+    even = project.Lattice(project.STAGGERED, 4, 4, 32, 32, stagger_index="even")
+    assert project.cell_origin(odd, 0, 0)[0] == 0.0
+    assert project.cell_origin(even, 0, 0)[0] == 16.0
+
+
+def test_a_hex_side_of_zero_is_exactly_the_staggered_lattice() -> None:
+    """One set of formulas serves both, which is why a bug in one cannot be
+    fixed in the other."""
+    staggered = project.Lattice(project.STAGGERED, 5, 5, 32, 32)
+    flat = project.Lattice(project.HEXAGONAL, 5, 5, 32, 32, hex_side=0)
+    for column in range(5):
+        for row in range(5):
+            assert project.cell_origin(staggered, column, row) == project.cell_origin(
+                flat, column, row
+            )
+    assert project.map_size(staggered) == project.map_size(flat)
+
+
+def test_a_hex_side_lengthens_the_stagger_axis() -> None:
+    without = project.Lattice(project.HEXAGONAL, 5, 5, 32, 32, hex_side=0)
+    with_side = project.Lattice(project.HEXAGONAL, 5, 5, 32, 32, hex_side=16)
+    assert project.map_size(with_side)[1] > project.map_size(without)[1]
+
+
+def test_a_point_on_a_shared_hex_corner_lands_in_exactly_one_cell() -> None:
+    """The isometric standard, restated for a lattice where three hexagons meet
+    at a vertex rather than four squares."""
+    lat = project.Lattice(project.HEXAGONAL, 6, 6, 32, 32, hex_side=12)
+    seen = set()
+    for column in range(1, 5):
+        for row in range(1, 5):
+            x, y = project.cell_origin(lat, column, row)
+            # The hexagon's own left vertex, where three cells meet.
+            probe = (x + 0.5, y + lat.tile_h / 2.0)
+            seen.add(project.cell_at(lat, *probe))
+    assert len(seen) == 16, "every probe found its own cell"
+
+
+def test_an_offset_cell_off_the_map_is_not_clamped() -> None:
+    """A drag off the edge is a legitimate stroke whose visible part lands."""
+    lat = project.Lattice(project.STAGGERED, 4, 4, 32, 32)
+    column, row = project.cell_at(lat, -100.0, -100.0)
+    assert column < 0 and row < 0
 
 
 @pytest.mark.parametrize("projection", project.PROJECTIONS)
