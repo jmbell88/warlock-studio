@@ -105,6 +105,14 @@ middle one is still the document. Everything that lays down colour wraps with it
 eraser, the spray, the fill (a region that runs off one edge and continues on the other is one
 region, so a tile's background is a single click), the shape tools, and the magic wand.
 
+Two controls appear beside the combo while it is on. **Wrap ½** rolls the active layer half a
+canvas in both directions, which puts the wrap seam in the middle where you can paint over it —
+press it twice on even dimensions and you are exactly back where you started, so it is a way of
+looking rather than an edit you have to undo. Beside it is **seam ×N**: how hard the join is
+against the picture's own grain, worse axis first, turning amber above 3.5, where it stops reading
+as texture and starts reading as an edge. It is measured on the whole document and only recomputed
+when you change something.
+
 Three things deliberately do not. **Smudge** falls back to stopping at the edge, because its pickup
 trails the brush and "the pixels it just passed over" has no answer when the brush is in two places
 at once. **Blur** wraps, but each piece blurs its own side of the seam rather than reading across

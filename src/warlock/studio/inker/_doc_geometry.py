@@ -79,6 +79,45 @@ class GeometryOps:
 
         self._replay(run)
 
+    def offset_layer(self: Document, dx: int, dy: int) -> bool:
+        """Roll the active layer's contents, wrapping at every edge.
+
+        The seamless-tile move: put the seam in the middle of the canvas, look
+        at it, paint over it. :func:`transform.translate` already does the whole
+        job -- ``wrap=True`` is an exact permutation, so no pixel is invented and
+        none is lost, and its docstring already argues the index-plane case --
+        so what was missing was the funnel and the button.
+
+        **Wrap is always on.** An un-wrapped offset is the move tool, which
+        exists; this is the tiling operation, and an offset that dropped content
+        off one edge would be a different thing wearing the same name.
+
+        The selection mask is deliberately **not** moved: this offsets the
+        *layer*, not the selection, and a marquee that travelled with it would
+        make "offset, then paint inside the selection" mean something nobody
+        asked for. Content-lock refusal like every structural op, and one undo
+        step through the standard patch funnel -- so the colour mode is applied,
+        an indexed document records an index patch, and a zero offset pushes
+        nothing at all.
+        """
+        layer = self.stack.active
+        if layer is None or self.write_locked(layer):
+            return False
+        width, height = self.size
+        dx, dy = int(dx) % width if width else 0, int(dy) % height if height else 0
+        if not dx and not dy:
+            return False
+        self.commit_floating()
+        box = (0, 0, width, height)
+        before = layer.pixels.copy()
+        layer.pixels[:, :] = tf.translate(layer.pixels, dx, dy, wrap=True)
+        if layer.indices is not None:
+            # The permutation, applied to the plane rather than re-inferred
+            # from the colours: two slots holding one colour stay two slots.
+            layer.indices[:, :] = tf.translate(layer.indices, dx, dy, wrap=True)
+        self._commit_patch(layer, box, before)
+        return True
+
     def descale_to_grid(self: Document, scale: int, phase: tuple[int, int]) -> None:
         """Reduce the document onto its own pixel lattice, one pixel per cell.
 

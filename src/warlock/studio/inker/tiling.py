@@ -212,3 +212,59 @@ def seam_seeds(
             cols = np.flatnonzero(reached[src, :] & open_now[dst, :])
             seeds.extend((int(x), dst) for x in cols.tolist())
     return seeds
+
+
+# --- the numeric truth about a seam -----------------------------------------
+
+#: Above this the wrap seam is a visible edge rather than part of the texture.
+#:
+#: Copied from ``pipelines/seam.py`` with its citation:
+#: ``docs/measurements/2026-08-08-seam-threshold.md``. 72 units on sdxl-turbo put
+#: the highest legitimately seamless tile at 2.50 and the lowest visible seam at
+#: 5.52, an empty band whose geometric centre is 3.72; 3.5 is the round value
+#: inside it. A copy at a second surface moves nothing -- **the same document
+#: governs both**, and re-measuring before moving it applies here exactly as it
+#: does there. A copy rather than an import because this package is headless and
+#: pinned against reaching into ``pipelines`` (which imports PIL at module
+#: scope), the same reason ``dither`` keeps its own conversion.
+SEAM_MAX = 3.5
+
+#: Below this many pixels on a side there is no interior to compare against.
+SEAM_MIN_SIDE = 8
+
+
+def seam_ratio(pixels: np.ndarray) -> tuple[float, float]:
+    """``(horizontal, vertical)`` -- how hard the wrap join is, as a ratio.
+
+    A numpy port of ``pipelines/seam.py::_ratios``, and the same statistic for
+    the same reason: the edge difference divided by the *interior* difference,
+    because an absolute number of levels means nothing without the picture's own
+    grain to divide it by. ``horizontal`` compares the first column against the
+    last, ``vertical`` the first row against the last.
+
+    **A flat image is 0.0, and the mean is why.** ``interior`` is a mean of
+    absolute adjacent differences, so a mean of zero means every adjacent pair
+    is identical -- which makes the first column equal the last and the edge
+    zero too, so the ``inf`` arm below cannot fire while the statistic is a mean.
+    It stays because that implication is a property of the statistic and not of
+    the idea: swap the mean for a median (tempting, to stop one bright speck
+    dominating a flat texture) and a mostly-flat image with one hard join lands
+    there with a real seam, where returning 0.0 would call it seamless.
+    """
+    array = np.asarray(pixels)
+    if array.ndim != 3 or array.shape[2] not in (3, 4):
+        raise ValueError("a seam is measured on (H, W, 3|4)")
+    rgb = array[:, :, :3].astype(np.float64)
+    if min(rgb.shape[:2]) < SEAM_MIN_SIDE:
+        return (0.0, 0.0)
+
+    def axis_ratio(plane: np.ndarray) -> float:
+        # ``plane`` is (rows, columns, channels); the wrap seam is the first
+        # column against the last, the interior every adjacent pair.
+        edge = float(np.abs(plane[:, 0] - plane[:, -1]).mean())
+        interior = float(np.abs(np.diff(plane, axis=1)).mean())
+        if interior <= 0.0:
+            return 0.0 if edge <= 0.0 else float("inf")
+        return edge / interior
+
+    return (axis_ratio(rgb), axis_ratio(rgb.transpose(1, 0, 2)))

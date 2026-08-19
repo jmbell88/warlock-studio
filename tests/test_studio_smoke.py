@@ -4411,3 +4411,44 @@ def test_the_resize_popup_shows_a_detected_pixel_grid(app_ctx):
     plain.doc.invalidate_all()
     inker_bridge._measure_pixel_grid(app_ctx, plain)
     assert app_ctx.state.preview[f"inker_grid:{plain.uid}"]["scale"] is None
+
+
+def test_the_seam_readout_and_wrap_button_appear_only_in_tiled_mode(app_ctx):
+    """Both belong to the wrap, so neither exists on a drawing nobody is
+    tiling -- and the readout is cached against the undo serial, because a
+    full-image diff per frame is the frame-thread stall the task layer exists
+    to avoid."""
+    import numpy as np
+
+    from warlock.studio import inker_mode
+    from warlock.studio.inker.document import Document as _Doc
+    from warlock.studio.panes import inker_canvas
+
+    state = inker_mode.ensure(app_ctx)
+    tab = inker_mode._adopt(app_ctx, state, _Doc.blank(32, 32), path=None, title="tile")
+    rng = np.random.default_rng(2)
+    tab.doc.stack.active.pixels[..., :3] = rng.integers(
+        0, 256, (32, 32, 3), dtype=np.uint8
+    )
+    tab.doc.stack.active.pixels[..., 3] = 255
+    tab.doc.invalidate_all()
+
+    tab.tiled = "off"
+    assert inker_canvas.seam_text(app_ctx, tab) is None
+
+    tab.tiled = "both"
+    first = inker_canvas.seam_text(app_ctx, tab)
+    assert first is not None and first[1].startswith("seam x")
+
+    # Cached: a second call at the same undo serial does not recompute, and the
+    # entry is keyed on that serial.
+    serial, worst = app_ctx.state.preview[f"inker_seam:{tab.uid}"]
+    assert serial == tab.doc.history.head
+    assert inker_canvas.seam_text(app_ctx, tab) == first
+
+    # An edit moves the serial, so the next call measures again.
+    tab.doc.offset_layer(16, 16)
+    assert app_ctx.state.preview[f"inker_seam:{tab.uid}"][0] == serial
+    inker_canvas.seam_text(app_ctx, tab)
+    assert app_ctx.state.preview[f"inker_seam:{tab.uid}"][0] == tab.doc.history.head
+    assert worst is not None

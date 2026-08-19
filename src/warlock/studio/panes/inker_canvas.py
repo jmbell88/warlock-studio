@@ -40,7 +40,7 @@ from ..inker import textstamp
 from ..inker.document import catmull_rom, curve_points, curve_spans
 from ..inker.indexed import shade_ramp
 from ..inker.slices import SliceKey, slice_props
-from ..inker.tiling import axes_of, canonical, tile_offset
+from ..inker.tiling import SEAM_MAX, axes_of, canonical, seam_ratio, tile_offset
 from ..inker_state import (
     BG_BUTTON_TOOLS,
     PAINT_TOOLS,
@@ -245,7 +245,7 @@ def _file_row(ctx: Any, state: Any) -> None:
         "inker-canvas",
         items,
         lambda key: _view_action(ctx, tab, key),
-        trailing=_view_trailing(tab),
+        trailing=_view_trailing(ctx, tab),
     )
     imgui.separator()
     if state.transforming:
@@ -284,15 +284,47 @@ def _status(tab: Any) -> tuple[int, str] | None:
     return None
 
 
-def _view_trailing(tab: Any) -> tuple[float, Any]:
+def seam_text(ctx: Any, tab: Any) -> tuple[int, str] | None:
+    """The worst wrap-seam ratio for this document, as a coloured word.
+
+    ``None`` when the tab is not tiled -- there is no seam to report on a
+    drawing nobody is wrapping.
+
+    **Cached against the undo serial** (``UndoStack.head``, a monotone serial
+    rather than a depth). The measurement is a full-image diff, and computing
+    one per frame is exactly the frame-thread stall the whole task layer exists
+    to avoid; the answer cannot change unless the document has, and the serial
+    is what says so.
+    """
+    if tab.tiled == "off":
+        return None
+    key = f"inker_seam:{tab.uid}"
+    serial = tab.doc.history.head
+    cached = ctx.state.preview.get(key)
+    if cached is None or cached[0] != serial:
+        try:
+            worst = max(seam_ratio(tab.doc.flatten(matte=False)))
+        except ValueError:
+            return None
+        cached = (serial, worst)
+        ctx.state.preview[key] = cached
+    worst = cached[1]
+    colour = theme.WARN if worst > SEAM_MAX else theme.MUTED
+    return (colour, f"seam x{worst:.1f}")
+
+
+def _view_trailing(ctx: Any, tab: Any) -> tuple[float, Any]:
     """The tiling combo and the status word, as one non-collapsible block.
 
     ``toolbar`` subtracts this before it chooses tiers, which is what stops the
     combo being measured after the row has already claimed the space.
     """
     status = _status(tab)
+    seam = seam_text(ctx, tab)
     gap = imgui.get_style().item_spacing.x
     width = sp(104) + (imgui.calc_text_size(status[1]).x + gap if status else 0.0)
+    if seam is not None:
+        width += sp(74) + gap + imgui.calc_text_size(seam[1]).x + gap
 
     def draw_it() -> None:
         # One control driving the view *and* the writes, deliberately: a canvas
@@ -304,6 +336,26 @@ def _view_trailing(tab: Any) -> tuple[float, Any]:
                 "Draws the eight neighbouring tiles around this one, and wraps "
                 "every stroke, fill and shape across the seams it shows."
             )
+        if seam is not None:
+            imgui.same_line()
+            # The classic put-the-seam-in-the-middle move, and the reason it is
+            # half rather than any amount: pressing it twice on even dimensions
+            # is the identity, so it is a look rather than an edit you undo.
+            if widgets.disabled_button("Wrap 1/2##inkerwrap", not tab.busy, (sp(74), 0)):
+                width_px, height_px = tab.doc.size
+                tab.doc.offset_layer(width_px // 2, height_px // 2)
+            if imgui.is_item_hovered():
+                imgui.set_tooltip(
+                    "Rolls this layer half a canvas in both directions, putting "
+                    "the wrap seam in the middle where you can paint over it."
+                )
+            imgui.same_line()
+            widgets.text_colored(seam[0], seam[1])
+            if imgui.is_item_hovered():
+                imgui.set_tooltip(
+                    "How hard the wrap join is against the picture's own grain. "
+                    f"Above {SEAM_MAX:.1f} it reads as a visible edge."
+                )
         if status is not None:
             imgui.same_line()
             widgets.text_colored(status[0], status[1])
