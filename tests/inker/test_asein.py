@@ -1112,11 +1112,13 @@ def test_a_tileset_base_index_other_than_one_warns_rather_than_refuses():
     assert any("start somewhere other than 1" in line for line in warnings)
 
 
-def test_per_tile_user_data_warns_that_the_tiles_are_kept():
-    """A user-data chunk decorates the chunk immediately before it -- the
-    format's own convention -- so one following a tileset chunk is per-tile
-    properties, which Wave 3 does not model but the tiles themselves still
-    open correctly."""
+def test_a_tilesets_own_user_data_warns_generically_not_per_tile():
+    """The spec's own convention: "After the Tileset chunk, it could be
+    followed by a user data chunk (empty or not) and then all the user data
+    chunks of the tiles ordered by tile index" -- so the *first* ``USER_DATA``
+    chunk in a run after a tileset chunk belongs to the tileset itself, an
+    ordinary owner, and earns the ordinary warning rather than the per-tile
+    one."""
     blank = _rgba(1, 1, (0, 0, 0, 0))
     user = _chunk(0x2020, struct.pack("<I", 1) + _string("notes"))
     data = _file(
@@ -1125,8 +1127,36 @@ def test_per_tile_user_data_warns_that_the_tiles_are_kept():
     )
     doc, warnings = asein.document_from_aseprite(data)
     assert len(doc.tilesets) == 1
-    assert any("per-tile properties are not kept; the tiles are" in line for line in warnings)
-    assert not any("user data and timeline colours" in line for line in warnings)
+    assert any("user data and timeline colours" in line for line in warnings)
+    assert not any("per-tile properties" in line for line in warnings)
+
+
+def test_per_tile_user_data_warns_that_the_tiles_are_kept():
+    """The tileset's own user-data chunk (the first in the run) is followed
+    by two per-tile ones (the second and third) -- only those earn the
+    per-tile warning, and however many tiles carry one, it is one line."""
+    blank = _rgba(1, 1, (0, 0, 0, 0))
+    tileset_own = _chunk(0x2020, struct.pack("<I", 1) + _string("tileset notes"))
+    tile_a = _chunk(0x2020, struct.pack("<I", 1) + _string("tile 0 notes"))
+    tile_b = _chunk(0x2020, struct.pack("<I", 1) + _string("tile 1 notes"))
+    data = _file(
+        _header(1, 1, 1),
+        [
+            _frame(
+                [
+                    _layer("Art"),
+                    _tileset_chunk(1, 1, 1, [blank]),
+                    tileset_own,
+                    tile_a,
+                    tile_b,
+                ]
+            )
+        ],
+    )
+    doc, warnings = asein.document_from_aseprite(data)
+    assert len(doc.tilesets) == 1
+    assert warnings.count("per-tile properties are not kept; the tiles are") == 1
+    assert any("user data and timeline colours" in line for line in warnings)
 
 
 def test_an_empty_user_data_chunk_says_nothing():

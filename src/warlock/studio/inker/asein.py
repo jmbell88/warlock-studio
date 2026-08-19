@@ -327,13 +327,18 @@ class _Parse:
         self.palette_size = 0
         self.old_palette: list[RGBA] | None = None
         self.frame = 0
-        #: The previous chunk's kind, in this frame or the one before it --
-        #: what tells a ``_USER_DATA`` chunk which of the format's several
-        #: owners it decorates. A tileset's own per-tile properties are the
-        #: one owner this reader gives a different warning to; every other
-        #: owner (layer, cel, tag, slice) already says its own piece through
-        #: the divergence warnings at the chunk that names it.
-        self.last_chunk: int | None = None
+        #: ``None`` outside a run of ``USER_DATA`` chunks following a
+        #: ``_TILESET`` chunk; otherwise how many of that run have already
+        #: been consumed. The spec's own convention: "After the Tileset
+        #: chunk, it could be followed by a user data chunk (empty or not)
+        #: and then all the user data chunks of the tiles ordered by tile
+        #: index" -- so the *first* ``USER_DATA`` chunk in the run is the
+        #: tileset's own (an ordinary owner, the generic warning), and only
+        #: the *second and later* ones are per-tile. Every other owner
+        #: (layer, cel, tag, slice) already says its own piece through the
+        #: divergence warnings at the chunk that names it, so this state
+        #: exists only to tell those two tileset-run cases apart.
+        self.tileset_ud_run: int | None = None
 
     def warn(self, text: str) -> None:
         """One line per *kind* of thing dropped, not one per occurrence.
@@ -460,17 +465,20 @@ def _read_chunk(state: _Parse, kind: int, payload: bytes, opacity_valid: bool) -
         # ignore the one that matters. Divergence 14 is about the ones with
         # content in them.
         if r.u32():
-            if state.last_chunk == _TILESET:
-                # A user-data chunk decorates the chunk immediately before
-                # it, the format's own convention for layers, cels, tags and
-                # slices alike -- so one following a tileset chunk is a
-                # per-tile property, which Wave 3 deliberately does not
-                # model (Deferred, ASEPRITE_PARITY.md). Named separately from
-                # the ordinary user-data warning because "the tiles are kept"
-                # is true here and is not the generic sentence's claim.
+            if state.tileset_ud_run is not None and state.tileset_ud_run > 0:
+                # The spec's own convention (see ``tileset_ud_run``'s
+                # docstring): the tileset's own user data, if any, is the
+                # *first* chunk in the run, so only the second and later
+                # consecutive ones are per-tile -- which Wave 3 deliberately
+                # does not model (Deferred, ASEPRITE_PARITY.md). Named
+                # separately from the ordinary user-data warning because "the
+                # tiles are kept" is true here and is not the generic
+                # sentence's claim.
                 state.warn("per-tile properties are not kept; the tiles are")
             else:
                 state.warn("user data and timeline colours are not kept; the drawing is")
+        if state.tileset_ud_run is not None:
+            state.tileset_ud_run += 1
     elif kind == _CEL_EXTRA:
         state.warn("a cel's precise bounds were dropped; its pixels were not")
     elif kind == _EXTERNAL_FILES:
@@ -479,7 +487,13 @@ def _read_chunk(state: _Parse, kind: int, payload: bytes, opacity_valid: bool) -
         state.warn("a saved mask or path was dropped; selections do not travel")
     else:
         state.warn(f"a chunk of type 0x{kind:04x} is not one this build reads")
-    state.last_chunk = kind
+    # The run tracked by ``tileset_ud_run`` starts fresh at every tileset
+    # chunk, continues silently through the ``USER_DATA`` branch above (which
+    # already advanced it), and ends at anything else.
+    if kind == _TILESET:
+        state.tileset_ud_run = 0
+    elif kind != _USER_DATA:
+        state.tileset_ud_run = None
 
 
 def _read_tileset(state: _Parse, r: _Reader) -> None:
