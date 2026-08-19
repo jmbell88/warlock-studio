@@ -1507,6 +1507,30 @@ class InkerState:
             flags |= gid.FLIP_D
         return local | flags
 
+    def clamp_tile_pick(self, uid: int, tile_count: int) -> None:
+        """Keep the picked tile inside the tileset it is a local id into.
+
+        Two ways the pick goes stale, and both land here because both have the
+        same answer -- go back to the first real tile:
+
+        * **The tileset changed.** A local id means nothing next to a different
+          atlas, so carrying 12 across from a 40-tile tileset to a 3-tile one
+          is not a preserved choice, it is a wrong one.
+        * **The tileset shrank under it.** Undoing a Stack-mode append is
+          exactly this: the tile the user is holding stops existing.
+
+        Tile 1 rather than 0 wherever there is one, for the field's own reason:
+        0 is the required blank and a real choice (it is the tile eraser), but
+        not the one a panel should land on. The engine refuses an over-range id
+        at the door regardless (``place_tiles``); this is what stops the user
+        ever meeting that refusal.
+        """
+        tile_count = max(1, int(tile_count))
+        if uid == self.tileset_uid and 0 <= self.tile_local < tile_count:
+            return
+        self.tileset_uid = int(uid)
+        self.tile_local = min(1, tile_count - 1)
+
     def picked_tileset(self, doc: Any) -> int | None:
         """Which tileset the panel shows and the stamp writes into.
 

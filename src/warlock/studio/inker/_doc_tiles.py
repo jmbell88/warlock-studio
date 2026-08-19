@@ -201,6 +201,41 @@ class TileOps:
             return isinstance(existing, TilemapCel)
         return index < len(self.anim.tracks) and self.anim.tracks[index].tileset_uid is not None
 
+    def _refuse_stale_ids(self: Document, layer_uid: int, patch: np.ndarray) -> None:
+        """Refuse a patch naming a tile the bound tileset does not have.
+
+        **Blank today, a different tile tomorrow.** :func:`~.tiles.materialize`
+        draws an out-of-range ref as blank rather than raising -- which is the
+        right answer for a ref that has *become* stale (a tileset shrank under
+        one, and a frame must not crash for it) and exactly the wrong thing to
+        allow at the door: a write that stores an id past the end looks correct
+        until the tileset grows past it, at which point every one of those
+        cells silently starts drawing whatever tile landed on that number, with
+        nothing in the document to say it was ever wrong.
+
+        Read through ``GID_MASK``, because the flag bits are not part of the
+        id, and run **before** :meth:`_ensure_cel_for`, the funnel discipline
+        every sibling check here follows: a refusal must not leave an
+        autovivified cel behind with no undo step to take it back out.
+
+        Silent when the binding cannot be resolved -- an impossible state that
+        :meth:`_will_be_tilemap` has already answered for, and one this method
+        has no better answer to invent for than the layer's own.
+        """
+        tileset_uid = self.tileset_uid_of(layer_uid)
+        if tileset_uid is None or not patch.size:
+            return
+        try:
+            count = self.tileset_slot(tileset_uid).tileset.tile_count
+        except KeyError:  # pragma: no cover - a dangling binding
+            return
+        worst = int((patch & gid.GID_MASK).max())
+        if worst >= count:
+            raise ValueError(
+                f"tile {worst} is outside this layer's tileset, which holds "
+                f"0..{count - 1}"
+            )
+
     def place_tiles(
         self: Document, layer_uid: int, origin: tuple[int, int], patch: np.ndarray
     ) -> bool:
@@ -210,12 +245,12 @@ class TileOps:
 
         ``origin`` is ``(tx, ty)`` in *tile* units; ``patch`` is a 2-D uint32
         refs plane, clipped to the cel's grid wherever it runs past an edge.
-        Both validations below run **before** ``_ensure_cel_for`` -- a plain
-        track's placeholder must be refused without ever materializing a
+        All three validations below run **before** ``_ensure_cel_for`` -- a
+        plain track's placeholder must be refused without ever materializing a
         ``Layer`` for it, or the refusal would leave a real cel behind with no
         undo step to take it back out, and a ``CelSetEdit`` sitting orphaned
         in ``_pending_cels`` ready to attach itself to whatever the *next*
-        successful write happens to be. Once both checks pass, the cel is
+        successful write happens to be. Once all three pass, the cel is
         autovivified exactly as a stroke's is, so drawing tiles on an empty
         frame is legal; a write that then lands entirely off-grid or changes
         nothing pushes no step and discards the cel it just autovivified --
@@ -226,6 +261,7 @@ class TileOps:
         patch = np.asarray(patch, dtype=np.uint32)
         if patch.ndim != 2:
             raise ValueError("a tile patch is a 2-D refs plane")
+        self._refuse_stale_ids(layer_uid, patch)
         self._ensure_cel_for(layer_uid)
         layer = self.layer_by_uid(layer_uid)
         if not isinstance(layer, TilemapCel):  # pragma: no cover - defensive
@@ -792,24 +828,33 @@ class TileOps:
         uid = self.stack.active.uid
         return uid if self._will_be_tilemap(uid) else None
 
-    def active_tileset_uid(self: Document) -> int | None:
-        """Which tileset the active row is bound to, or ``None``.
+    def tileset_uid_of(self: Document, layer_uid: int) -> int | None:
+        """Which tileset one row is (or would autovivify) bound to, or ``None``.
 
         Read off the *cel* when there is one and off the track otherwise, for
-        :meth:`active_tilemap_uid`'s reason: a placeholder carries no binding
-        of its own and the track under it is where the answer lives.
+        :meth:`_will_be_tilemap`'s reason: a placeholder carries no binding of
+        its own and the track under it is where the answer lives. One
+        implementation, because three callers ask it -- the panes through
+        :meth:`active_tileset_uid`, and :meth:`place_tiles`, which has to know
+        *before* it autovivifies anything.
         """
-        uid = self.active_tilemap_uid()
-        if uid is None:
-            return None
         try:
-            layer = self.layer_by_uid(uid)
+            layer = self.layer_by_uid(layer_uid)
         except KeyError:  # pragma: no cover - defensive
             layer = None
         if isinstance(layer, TilemapCel):
             return int(layer.tileset_uid)
-        track = self._track_of_row(uid)
+        try:
+            track = self._track_of_row(layer_uid)
+        except KeyError:  # pragma: no cover - off-frame rows have no track row
+            return None
         return None if track is None else track.tileset_uid
+
+    def active_tileset_uid(self: Document) -> int | None:
+        """Which tileset the active row is bound to, or ``None``. The panes'
+        question, which is :meth:`tileset_uid_of` about the active row."""
+        uid = self.active_tilemap_uid()
+        return None if uid is None else self.tileset_uid_of(uid)
 
     # -- geometry: the canvas resize, and the refusals that remain ----------
 

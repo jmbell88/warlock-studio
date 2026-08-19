@@ -760,6 +760,35 @@ is the citable list.
     channel, so `panes/inker_canvas` banks `history.head` at the press and
     raises the sentence once per gesture when the head has not moved. See the
     INVARIANTS entry.
+13. **Two `.aseprite` tileset refusals beyond the spec's list**, both in
+    `asein.py` and both by name. A tileset chunk with *neither* the
+    external-file flag nor the embedded-tiles flag set — "holds no embedded
+    pixel data this build can read" — and a tileset declaring **zero tiles** —
+    "holds no tiles". The spec's list named only the external-file case. The
+    first is a deliberate reading of a gap in the format documentation (bit 2's
+    exact meaning when bit 1 is also clear could not be verified against the
+    published spec, and real Aseprite always sets bit 2 for an embedded
+    tileset), resolved on `asein.py`'s own doctrine — anything that would
+    change what the pixels mean is a refusal, not a warning and a
+    tileset-shaped hole. Revisit if a real file ever exercises it.
+14. **Indexed x tilemap read order is stated, not fixed.** `ora._finish_colour`
+    runs *before* `_read_tiles`, so on an indexed document the index planes are
+    resolved on the old plain-`Layer` cels and the `TilemapCel` that replaces
+    one copies `indices` through unchanged. That matches the model's own
+    position — `TilemapCel.copy()` does the same, and the recorded divergence
+    is that a tilemap cel materializes RGBA while its strip stays RGBA too — so
+    it is recorded here rather than papered over, and indexed x tilemap
+    composition remains explicitly out of Wave 3's test list.
+15. **The picked tile is clamped at the panel *and* refused at the door.**
+    `place_tiles` raises by name on a local id past the end of the bound
+    tileset (masked through `GID_MASK`, checked before `_ensure_cel_for`),
+    because `materialize` draws an out-of-range ref as blank — right for a ref
+    that *became* stale, and silently wrong for one written that way, since the
+    cell starts drawing a real tile the moment the tileset grows past that
+    number. `InkerState.clamp_tile_pick` is what stops a user ever meeting the
+    refusal: the panel applies it every frame and the stamp applies it again at
+    the write, because a raise out of a press would be a window down rather
+    than a refusal anyone can act on.
 
 ### Left open by Wave 3
 

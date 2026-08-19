@@ -80,8 +80,14 @@ def draw(ctx: Any) -> None:
         return
 
     uid = state.picked_tileset(doc)
-    _chooser(ctx, state, tab, uid)
     slot = doc.tileset_slot(uid)
+    # Every frame, before anything reads the pick: the tileset under it can
+    # change (another layer selected) or shrink (an undone Stack append) with
+    # nothing to tell this pane it happened, and a pick past the end is a ref
+    # that draws blank now and draws the wrong tile the moment the tileset
+    # grows past it again. See ``InkerState.clamp_tile_pick``.
+    state.clamp_tile_pick(uid, slot.tileset.tile_count)
+    _chooser(ctx, state, tab, uid)
     _picker(ctx, state, tab, slot)
     imgui.dummy((0, 4))
     _flips(state)
@@ -247,6 +253,14 @@ def _picker(ctx: Any, state: Any, tab: Any, slot: Any) -> None:
     Tile 0 is drawn like every other tile and *labelled*: it is the required
     blank, so it looks like an empty cell and would otherwise read as a gap in
     the atlas rather than as the tile eraser it is.
+
+    **The UVs come from ``Tileset.uv``, which exists for exactly this.** They
+    were sliced here as horizontal bands -- ``local / tile_count`` down a
+    one-column strip -- which is right for a tileset this editor cut and wrong
+    for every other shape the same type can hold: an imported grid ``.tsx`` is
+    kept as it arrives (chunk 3.6), so it has columns, and it may have a margin
+    and spacing too. Asking the class that owns the slicing is the same rule
+    ``tile_pixels`` and the two renderers already follow.
     """
     tileset = slot.tileset
     texture = inker_textures.tileset_texture(ctx, tab, slot)
@@ -256,7 +270,6 @@ def _picker(ctx: Any, state: Any, tab: Any, slot: Any) -> None:
     spacing = imgui.get_style().item_spacing.x
     draw_list = imgui.get_window_draw_list()
     count = min(tileset.tile_count, MAX_DRAWN)
-    rows = max(tileset.tile_count, 1)
 
     for local in range(count):
         top_left = imgui.get_cursor_screen_pos()
@@ -266,11 +279,9 @@ def _picker(ctx: Any, state: Any, tab: Any, slot: Any) -> None:
             # pass still exercises the layout around it.
             widgets.thumb_placeholder(cell_w, icons.GRID)
         else:
+            u0, v0, u1, v1 = tileset.uv(local)
             imgui.image(
-                widgets.texture_ref(texture),
-                (cell_w, cell_h),
-                (0.0, local / rows),
-                (1.0, (local + 1) / rows),
+                widgets.texture_ref(texture), (cell_w, cell_h), (u0, v0), (u1, v1)
             )
         if imgui.is_item_hovered():
             imgui.set_tooltip(

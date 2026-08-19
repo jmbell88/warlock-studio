@@ -1140,8 +1140,16 @@ def _tile_stamp(state: Any, tab: Any, point) -> bool:
         return False
     state.tile_cell = cell
     uid = doc.active_tilemap_uid()
-    if uid is None:  # pragma: no cover - tile_cell already answered this
+    tileset_uid = doc.active_tileset_uid()
+    if uid is None or tileset_uid is None:  # pragma: no cover - tile_cell said so
         return False
+    # The same clamp the panel applies every frame, applied again at the write.
+    # ``place_tiles`` refuses an id past the end of the tileset **by raising**,
+    # and a raise out of a press is a window down rather than a refusal a user
+    # can meet -- so the last line of defence is not allowed to be the first
+    # one. The panel is drawn whenever a document has a tileset, so this is
+    # belt to its braces rather than the only guard.
+    state.clamp_tile_pick(tileset_uid, doc.tileset_slot(tileset_uid).tileset.tile_count)
     patch = np.array([[state.tile_gid()]], dtype=np.uint32)
     return bool(doc.place_tiles(uid, cell, patch))
 

@@ -223,6 +223,53 @@ def test_place_tiles_refuses_a_non_tilemap_layer():
         doc.place_tiles(layer.uid, (0, 0), np.array([[1]], dtype=np.uint32))
 
 
+def test_place_tiles_refuses_a_local_id_the_tileset_does_not_have():
+    """Blank *today* and a different tile tomorrow.
+
+    ``materialize`` draws an out-of-range ref as blank, so an over-range id
+    writes something that looks right until the tileset grows past it -- at
+    which point every one of those cells silently starts drawing whatever tile
+    landed on that number. The door is where that has to be caught, because by
+    the time it draws there is nothing left to say it was ever wrong.
+    """
+    doc = _doc()
+    _slot, cel = _still_tilemap(doc, RED)  # tiles 0 and 1
+    with pytest.raises(ValueError, match="outside"):
+        doc.place_tiles(cel.uid, (0, 0), np.array([[2]], dtype=np.uint32))
+    assert not cel.refs.any()
+    _assert_synced(doc)
+
+
+def test_place_tiles_reads_the_id_through_the_gid_mask():
+    """The flag bits are not part of the id, so a flipped tile 1 is in range
+    and a flipped tile 9 is not."""
+    doc = _doc()
+    _slot, cel = _still_tilemap(doc, RED)
+    from warlock.studio.tilegrid import gid
+
+    assert doc.place_tiles(cel.uid, (0, 0), np.array([[1 | gid.FLIP_D]], dtype=np.uint32))
+    with pytest.raises(ValueError, match="outside"):
+        doc.place_tiles(cel.uid, (1, 0), np.array([[9 | gid.FLIP_D]], dtype=np.uint32))
+    _assert_synced(doc)
+
+
+def test_place_tiles_range_check_runs_before_any_autovivify():
+    """The funnel discipline: a refused write must not leave a cel behind with
+    no undo step to take it back out."""
+    doc = _doc()
+    anim = doc.ensure_animation()
+    slot = doc.add_tileset(_tileset(RED))
+    anim.tracks[0].tileset_uid = slot.uid
+    doc.add_frame()
+    placeholder_uid = doc.stack[0].uid
+    head = doc.history.head
+    with pytest.raises(ValueError, match="outside"):
+        doc.place_tiles(placeholder_uid, (0, 0), np.array([[5]], dtype=np.uint32))
+    assert doc.history.head == head
+    assert doc._pending_cels == []
+    assert not isinstance(doc.stack[0], TilemapCel)
+
+
 def test_place_tiles_autovivify_and_write_is_one_compound_step():
     doc = _doc()
     anim = doc.ensure_animation()

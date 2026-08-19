@@ -130,8 +130,11 @@ def test_a_stamp_writes_refs_and_never_a_pixel(scene) -> None:
 
 def test_the_flip_toggles_ride_into_the_cell(scene) -> None:
     ctx, state, tab, app = scene
-    _slot, cel = _tilemap(tab)
-    state.tile_local = 2
+    slot, cel = _tilemap(tab)
+    # Both fields, which is what a click in the picker sets: a local id is an
+    # id *into a tileset*, so the pick carries which one (and the clamp resets
+    # it when that changes -- see the clamp tests below).
+    state.tileset_uid, state.tile_local = slot.uid, 2
     state.tile_flip_h = True
     state.tile_flip_d = True
 
@@ -423,3 +426,68 @@ def test_convert_to_raster_on_an_ordinary_layer_says_why(scene) -> None:
     ctx, state, tab, app = scene
     inker_mode.convert_to_raster(ctx, tab)
     assert _sent(app)[-1][1] == "warn"
+
+
+# --- the picker's slicing and the pick's range --------------------------------
+
+
+def test_the_picker_slices_the_atlas_through_the_tileset_not_by_hand() -> None:
+    """It sliced horizontal bands -- ``local / tile_count`` down a one-column
+    strip -- which is right for a tileset this editor cut and wrong for an
+    imported grid ``.tsx``, which is kept exactly as it arrives and therefore
+    has columns, and may have a margin and spacing too."""
+    source = inspect.getsource(inker_tiles._picker)
+    assert "tileset.uv(local)" in source
+    assert "local / rows" not in source
+
+
+def test_a_two_column_atlas_gives_tile_one_the_right_half_of_the_top_row() -> None:
+    """The arithmetic the picker now delegates to, pinned on the shape that
+    broke it: one column is the case that made the hand-rolled slice look
+    correct."""
+    from warlock.studio.tilegrid.tileset import Tileset
+
+    grid = Tileset(
+        name="grid", pixels=np.zeros((16, 16, 4), dtype=np.uint8), tile_w=8, tile_h=8
+    )
+    assert (grid.columns, grid.rows, grid.tile_count) == (2, 2, 4)
+    assert grid.uv(1) == (0.5, 0.0, 1.0, 0.5)
+    assert grid.uv(2) == (0.0, 0.5, 0.5, 1.0)
+
+
+def test_the_pick_resets_when_the_tileset_under_it_changes(scene) -> None:
+    ctx, state, tab, app = scene
+    state.tileset_uid, state.tile_local = 7, 12
+    state.clamp_tile_pick(9, 40)
+    assert (state.tileset_uid, state.tile_local) == (9, 1)
+
+
+def test_the_pick_resets_when_the_tileset_shrinks_under_it(scene) -> None:
+    """Undoing a Stack-mode append is exactly this: the tile the user is
+    holding stops existing."""
+    ctx, state, tab, app = scene
+    state.tileset_uid, state.tile_local = 9, 12
+    state.clamp_tile_pick(9, 4)
+    assert state.tile_local == 1
+    # A one-tile tileset has nothing but the blank.
+    state.clamp_tile_pick(9, 1)
+    assert state.tile_local == 0
+
+
+def test_a_pick_that_is_still_in_range_is_left_alone(scene) -> None:
+    ctx, state, tab, app = scene
+    state.tileset_uid, state.tile_local = 9, 12
+    state.clamp_tile_pick(9, 40)
+    assert state.tile_local == 12
+
+
+def test_the_stamp_clamps_a_stale_pick_instead_of_raising(scene) -> None:
+    """``place_tiles`` refuses an over-range id **by raising**, and a raise out
+    of a press is a window down rather than a refusal a user can meet -- so the
+    tool applies the panel's own clamp at the write as well."""
+    ctx, state, tab, app = scene
+    _slot, cel = _tilemap(tab)  # tiles 0, 1, 2
+    state.tile_local = 9
+    inker_canvas._press(ctx, state, tab, (0.0, 0.0))
+    assert state.tile_local == 1
+    assert int(cel.refs[0, 0]) == 1
