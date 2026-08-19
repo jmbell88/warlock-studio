@@ -26,6 +26,7 @@ import pytest
 
 from warlock.studio.inker import asein, aseout
 from warlock.studio.inker import groups as gp
+from warlock.studio.inker import index_plane as ixp
 from warlock.studio.inker.animation import DIRECTIONS, Frame, Tag, Track
 from warlock.studio.inker.composite import BLEND_MODES
 from warlock.studio.inker.document import Document
@@ -36,6 +37,7 @@ from warlock.studio.tilegrid import gid
 RED = (255, 0, 0, 255)
 GREEN = (0, 255, 0, 255)
 BLUE = (0, 0, 255, 255)
+MAGENTA = (255, 0, 255, 255)
 
 
 def _round_trip(doc) -> tuple[Document, list[str]]:
@@ -1016,6 +1018,205 @@ def test_a_document_with_slices_is_byte_stable():
     )
     doc.set_slice_key(
         entry.uid, doc.anim.frames[1].uid, key=SliceKey(bounds=(1, 1, 3, 3))
+    )
+    once, _ = asein.document_from_aseprite(aseout.aseprite_bytes(doc))
+    first = aseout.aseprite_bytes(once)
+    twice, _ = asein.document_from_aseprite(first)
+    assert aseout.aseprite_bytes(twice) == first
+
+
+# --- an indexed strip is resolved the way every other plane is ---------------
+#
+# The tile funnel constrains a strip with ``indexed.snap``, which -- unlike the
+# ``index_plane.resolve`` every *raster* plane goes through -- leaves alpha
+# untouched and returns a fully transparent pixel verbatim. So an ordinary
+# gesture leaves strip pixels no RGBA equality can place, and a writer that
+# demanded one refused to save documents the editor itself had just produced.
+# These are those documents.
+
+
+def _indexed_tile_doc(palette, transparent=0, behavior="stack") -> Document:
+    """An indexed 8x8 document with a tilemap layer over a two-colour strip,
+    with the tile behaviour set so a paint reaches the tileset at all (Manual
+    -- the field's default -- re-derives every write away)."""
+    doc = Document.blank(8, 8)
+    doc.stack[0].name = "Background"
+    doc.stack[0].pixels[:, :] = RED
+    doc.invalidate_all()
+    doc.convert_to_indexed(palette, transparent=transparent)
+    slot = doc.add_tileset(_tileset(RED, GREEN))
+    cel = doc.add_tilemap_layer(slot.uid, name="Tiles")
+    doc.place_tiles(cel.uid, (0, 0), np.array([[1, 2]], dtype=np.uint32))
+    doc.set_active_layer(doc.stack.index_of(cel.uid))
+    doc.tile_behavior = behavior
+    return doc
+
+
+def _as_stored_indexed(pixels: np.ndarray, doc: Document) -> np.ndarray:
+    """``pixels`` as an 8-bit sprite can hold them.
+
+    Written through ``index_plane`` and not through ``aseout``'s own helper on
+    purpose: the claim being asserted is that a strip normalises **the way
+    every other plane in an indexed document already did**, so the comparison
+    has to be built from the document's own machinery rather than from the
+    writer's -- otherwise it would only assert that two copies of one idea
+    agree. There is no per-pixel alpha at one byte per pixel, so a
+    sub-threshold pixel is the hole and a visible one takes its slot's alpha.
+    """
+    table = ixp.lut(doc.palette, doc.transparent_index)
+    plane = ixp.resolve(pixels, table, doc.transparent_index)
+    return ixp.materialize(plane, table)
+
+
+def test_a_half_coverage_dab_on_a_tile_still_saves():
+    """The reproduction. A soft dab onto a blank cell leaves ``(0, 255, 0,
+    128)`` in the strip -- a *visible* pixel whose RGB is a palette colour and
+    whose alpha is nothing the table can hold. Alpha decides first, exactly as
+    ``resolve`` decides it, so the pixel is placed and the document saves."""
+    doc = _indexed_tile_doc([(0, 0, 0, 0), RED, GREEN])
+    doc.write_colour((0, 4, 4, 8), GREEN, np.full((4, 4), 0.5, dtype=np.float32))
+    strip_px = doc.tilesets[0].tileset.pixels
+    assert (strip_px[..., 3] == 128).any(), "the fixture must produce a soft pixel"
+
+    back, warnings = _round_trip(doc)
+    assert warnings == []
+    assert np.array_equal(
+        back.tilesets[0].tileset.pixels, _as_stored_indexed(strip_px, doc)
+    )
+
+
+def test_an_erased_tile_still_saves():
+    """The eraser cuts alpha and leaves the colour it was drawn in behind, so
+    the strip carries ``(255, 0, 0, 0)`` -- invisible, and refused by an RGBA
+    equality that had no entry for it. It writes the transparent index and
+    comes back as the hole, which is the grayscale path's own bargain."""
+    doc = _indexed_tile_doc([(0, 0, 0, 0), RED, GREEN], behavior="auto")
+    doc.begin_stroke((1, 1), RED, size=3, hardness=1.0, mode="erase")
+    doc.stroke_to((2, 2))
+    doc.end_stroke()
+    strip_px = doc.tilesets[0].tileset.pixels
+    dead = (strip_px[..., 3] == 0) & (strip_px[..., 0] != 0)
+    assert dead.any(), "the fixture must leave dead colour under alpha 0"
+
+    back, warnings = _round_trip(doc)
+    assert warnings == []
+    assert np.array_equal(
+        back.tilesets[0].tileset.pixels, _as_stored_indexed(strip_px, doc)
+    )
+    assert not back.tilesets[0].tileset.pixels[dead].any()
+
+
+def test_a_partly_erased_pixel_takes_its_slots_alpha():
+    """The third shape the eraser leaves: alpha 235, above the threshold, on a
+    palette colour. It is visible, so it takes the slot -- and the slot's own
+    alpha with it, which is what one byte per pixel means."""
+    doc = _indexed_tile_doc([(0, 0, 0, 0), RED, GREEN], behavior="auto")
+    doc.begin_stroke((1, 1), RED, size=3, hardness=0.2, mode="erase")
+    doc.stroke_to((2, 2))
+    doc.end_stroke()
+    strip_px = doc.tilesets[0].tileset.pixels
+    soft = (strip_px[..., 3] >= 128) & (strip_px[..., 3] < 255)
+    assert soft.any(), "the fixture must leave a partly erased pixel"
+
+    back, _ = _round_trip(doc)
+    assert np.array_equal(
+        back.tilesets[0].tileset.pixels, _as_stored_indexed(strip_px, doc)
+    )
+    assert (back.tilesets[0].tileset.pixels[soft][:, 3] == 255).all()
+
+
+def test_an_off_palette_visible_colour_still_refuses_by_name():
+    """The refusal that must survive the fix: an *imported* atlas holding a
+    visible colour this document has no slot for. Nothing a user paints can
+    reach it, which is exactly why nearest-matching it would be repainting
+    somebody else's tiles."""
+    doc = _indexed_tile_doc([(0, 0, 0, 0), RED, GREEN])
+    doc.add_tileset(_tileset(BLUE, name="stray"))
+    with pytest.raises(ValueError, match="stray"):
+        aseout.aseprite_bytes(doc)
+
+
+def test_a_visible_pixel_in_the_transparent_slots_colour_is_refused_by_name():
+    """The one state ``indexed.snap`` and ``index_plane.resolve`` disagree
+    about: ``snap`` matches against every slot, so a paint near the transparent
+    slot's *stored* colour lands on it, where ``resolve`` would have excluded
+    it and no raster plane in the same document can hold it. There is no honest
+    answer -- writing that slot turns a pixel the user just painted into a hole
+    -- so it is named as its own case rather than folded into "off palette"."""
+    doc = _indexed_tile_doc([MAGENTA, RED, GREEN], transparent=0)
+    doc.write_colour(
+        (0, 4, 4, 8), (250, 0, 250, 255), np.ones((4, 4), dtype=np.float32)
+    )
+    assert (doc.tilesets[0].tileset.pixels[..., :3] == MAGENTA[:3]).all(axis=-1).any()
+
+    with pytest.raises(ValueError, match="transparent slot"):
+        aseout.aseprite_bytes(doc)
+
+
+def test_a_palette_of_one_transparent_colour_still_saves():
+    """``index_plane.resolve``'s own allowance for the degenerate document,
+    mirrored: with nothing but the transparent slot there is no candidate set,
+    so the whole table becomes one and every pixel lands on slot 0. A refusal
+    here would be a refusal over a picture with one colour and one meaning."""
+    doc = Document.blank(8, 8)
+    doc.invalidate_all()
+    doc.convert_to_indexed([(0, 0, 0, 0)], transparent=0)
+    doc.add_tileset(_tileset(name="flat"))
+    back, warnings = _round_trip(doc)
+    assert warnings == []
+    assert not back.tilesets[0].tileset.pixels.any()
+
+
+def test_a_key_only_pivot_becomes_the_slices_own():
+    """The base carries no pivot and a key does. The format stores that
+    presence once per slice, so there is no writing it per key -- and the
+    fallback must not be a zero, which the reader cannot tell from a pivot
+    somebody set. The first value the slice carries becomes every frame's."""
+    doc = _animated()
+    entry = doc.add_slice((0, 0, 2, 2), name="Head")
+    doc.set_slice_key(
+        entry.uid,
+        doc.anim.frames[1].uid,
+        key=SliceKey(bounds=(1, 1, 3, 3), pivot=(2.0, 3.0)),
+    )
+    assert entry.pivot is None
+
+    back, warnings = _round_trip(doc)
+    assert warnings == []
+    got = back.slices[0]
+    assert got.pivot == (2.0, 3.0)
+    assert [got.at(frame.uid).pivot for frame in back.anim.frames] == [
+        (2.0, 3.0),
+        (2.0, 3.0),
+    ]
+
+
+def test_a_key_only_nine_patch_becomes_the_slices_own():
+    """The centre's half of the same rule, and the one a zero fallback would
+    have shown most plainly: ``(0, 0, 0, 0)`` is an empty stretch box, which a
+    nine-slice panel draws quite differently from the one that was set."""
+    doc = _animated()
+    entry = doc.add_slice((0, 0, 4, 4), name="Panel")
+    doc.set_slice_key(
+        entry.uid,
+        doc.anim.frames[1].uid,
+        key=SliceKey(bounds=(0, 0, 4, 4), center=(1, 1, 3, 3)),
+    )
+    assert entry.center is None
+
+    back, _ = _round_trip(doc)
+    got = back.slices[0]
+    assert got.center == (1, 1, 3, 3)
+    assert all(got.at(frame.uid).center == (1, 1, 3, 3) for frame in back.anim.frames)
+
+
+def test_a_key_only_pivot_document_is_byte_stable():
+    doc = _animated()
+    entry = doc.add_slice((0, 0, 2, 2), name="Head")
+    doc.set_slice_key(
+        entry.uid,
+        doc.anim.frames[1].uid,
+        key=SliceKey(bounds=(1, 1, 3, 3), pivot=(2.0, 3.0)),
     )
     once, _ = asein.document_from_aseprite(aseout.aseprite_bytes(doc))
     first = aseout.aseprite_bytes(once)

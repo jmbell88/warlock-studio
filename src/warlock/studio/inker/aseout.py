@@ -51,7 +51,11 @@ declaring them is the part that matters. The one place the two models genuinely
 disagree is an *indexed* document: this package keeps every strip RGBA (the
 Wave 3 divergence) where the format stores tileset pixels at the sprite's own
 depth, so an indexed document's strips are resolved back through its palette on
-the way out -- exact match or a refusal by name, never a nearest match.
+the way out. That resolution is ``index_plane.resolve``'s own rule -- alpha
+decides first, a visible pixel is placed by its RGB among the slots that are
+not the transparent one -- with the nearest match replaced by an exact one, so
+a strip authored here always places and one that arrived from outside the
+document is refused by name rather than silently repainted.
 
 **What is lost is lost silently, and written down elsewhere.** There is no
 warning channel out of a function that returns bytes, and inventing one would
@@ -63,9 +67,13 @@ be a number nobody could ever read), an empty group (a group is a *run* of
 the layer list here, so one with no members has no run to write), a slice
 pivot's fractional part (the format's field is a signed DWORD), and a slice
 key's *disagreement* about whether it carries a pivot or a nine-patch centre --
-the format stores that presence once per slice, so the union declares it and a
-key that carries neither inherits the slice's own (:func:`_slice_chunk`). Each
-is a line in ``docs/ASEPRITE_INTEROP.md``.
+the format stores that presence once per slice, so the first value the slice
+carries becomes every unkeyed frame's (:func:`_slice_chunk`; no zero is ever
+invented for one). A sixth is not a loss of this writer's making but is worth
+the same line: an indexed document's tileset strip is stored one byte per
+pixel, so a strip pixel's own alpha becomes its palette slot's -- the same
+normalisation every other plane in an indexed document already went through.
+Each is a line in ``docs/ASEPRITE_INTEROP.md``.
 
 Refusals are by name and are the format's own limits, not this build's: more
 frames or layers than a 16-bit count can hold, a palette past 256, a canvas past
@@ -73,7 +81,9 @@ frames or layers than a 16-bit count can hold, a palette past 256, a canvas past
 its own WORD can say, a colour mode with no depth to write it at, and -- the
 ones that are about a *broken* document rather than a big one -- a grayscale
 document holding a **visible** pixel where ``r != g != b``, a tileset strip
-holding a colour an indexed document's palette has no slot for, and a tilemap
+holding a *visible* colour an indexed document's palette has no drawable slot
+for (either none at all, or only its transparent slot -- the one state
+``indexed.snap`` and ``index_plane.resolve`` disagree about), and a tilemap
 layer whose binding or whose cel disagrees with itself (a tileset the document
 does not have, a cel with no refs, a cel bound to a different atlas than its
 layer). The write funnel enforces greyness on every stroke, so a violation is
@@ -120,7 +130,7 @@ from .asein import (
     _TAGS,
     _TILESET,
 )
-from .index_plane import MAX_COLOURS
+from .index_plane import MAX_COLOURS, OPAQUE_THRESHOLD
 
 __all__ = ["ASEPRITE_SUFFIX", "aseprite_bytes", "write_aseprite"]
 
@@ -561,78 +571,114 @@ def _grey_pair(pixels: np.ndarray, what: str) -> bytes:
     return pair.tobytes()
 
 
-def _packed(values) -> np.ndarray:
-    """RGBA rows as one uint32 each, ``r | g<<8 | b<<16 | a<<24``.
+def _visible_lookup(palette: list[tuple[int, ...]], transparent: int) -> dict[int, int]:
+    """``{packed RGB: slot}`` over the slots a **visible** pixel can land in.
 
-    Arithmetic rather than ``ndarray.view``, so the number a colour packs to is
-    the same on any machine: a ``view`` would spell it the host's way round and
-    make the lookup table below agree with the pixels only by luck of endianness.
-    """
-    array = np.asarray(values, dtype=np.uint8).reshape(-1, 4).astype(np.uint32)
-    return (
-        array[:, 0]
-        | (array[:, 1] << np.uint32(8))
-        | (array[:, 2] << np.uint32(16))
-        | (array[:, 3] << np.uint32(24))
-    )
-
-
-def _palette_lookup(palette: list[tuple[int, ...]], transparent: int) -> dict[int, int]:
-    """``{packed colour: slot}`` -- :func:`asein._lut`, inverted.
-
-    Built from the *decoded* colour of each slot and not from the table
-    verbatim, which is the whole of the correctness here: the transparent slot
-    decodes to ``(0, 0, 0, 0)`` however it is stored, so a strip's blank tile
-    resolves to it, and a slot holding the same colour as the transparent one
-    is not mistaken for it.
+    RGB and not RGBA, and every slot but the transparent one -- which is
+    :func:`index_plane.resolve`'s own candidate set, deliberately, because that
+    function is what every other plane in an indexed document is resolved
+    through and a strip must not be resolved through a different rule. Alpha is
+    left out because an indexed sprite has no per-pixel alpha at all: a slot's
+    alpha is the slot's, so a pixel's own is not something to match on (it is
+    :func:`_resolved_indices`' threshold instead).
 
     The lowest slot wins a duplicate colour. Deterministic (two saves of an
     unchanged document are byte-identical, ``_slice_json``'s reason) and
-    lossless either way: both slots decode to the same pixel, so the picture is
-    the same whichever is written -- which is exactly why a *cel* is written
-    from its index plane instead, where the choice of slot is the record.
+    lossless either way: both slots materialise to the same pixel, so the
+    picture is the same whichever is written -- which is exactly why a *cel* is
+    written from its index plane instead, where the slot is the record.
+
+    A palette whose only colour *is* the transparent slot leaves nothing to
+    match against, so the whole table becomes the candidate set:
+    :func:`index_plane.resolve` makes the same allowance for the same
+    degenerate document, and refusing to save one would be a refusal over a
+    picture that has one colour and one meaning for it.
     """
     table: dict[int, int] = {}
     for index, entry in enumerate(palette):
-        colour = (0, 0, 0, 0) if index == transparent else tuple(int(v) for v in entry)
-        table.setdefault(int(_packed([colour])[0]), index)
+        if index == transparent and len(palette) > 1:
+            continue
+        red, green, blue = (int(value) for value in tuple(entry)[:3])
+        table.setdefault(red | (green << 8) | (blue << 16), index)
     return table
 
 
-def _resolved_indices(pixels: np.ndarray, table: dict[int, int], what: str) -> bytes:
+def _resolved_indices(
+    pixels: np.ndarray, palette: list[tuple[int, ...]], transparent: int, what: str
+) -> bytes:
     """RGBA pixels as the palette slots an indexed sprite stores them in.
 
-    **Exact match or refuse, never nearest.** This runs on tileset strips
-    alone -- a cel is written from the index plane it already carries -- and a
-    strip's pixels are RGBA in this model whatever the document's mode is
-    (the Wave 3 divergence), so the file's 8-bit strip has to be resolved.
-    Everything a user paints into a strip goes through the funnel, which has
-    already resolved it; what has not is a strip that arrived from *outside*
-    the document -- a ``.tsx``, Plotter, a tile sheet -- and a nearest match
-    there would silently repaint somebody else's atlas in this document's
-    colours. So an off-palette pixel is named, with the colour that has no slot.
+    **This is ``index_plane.resolve``'s rule, with its nearest match replaced
+    by an exact one**, and both halves of that sentence are load-bearing.
+
+    *Its rule*, because the strip is the one plane in an indexed document that
+    is still RGBA (the Wave 3 divergence) and it is constrained by
+    ``indexed.snap``, which -- unlike ``resolve`` -- leaves alpha alone and
+    returns a fully transparent pixel verbatim. So an ordinary gesture leaves
+    real pixels a naive RGBA equality cannot place: a half-coverage dab is
+    ``(0, 255, 0, 128)``, and an eraser leaves the colour it cut behind at
+    ``(255, 0, 0, 0)``. Both are funnel-legal, and demanding exact RGBA made
+    an ordinary document unsaveable over a pixel nobody can see. Alpha decides
+    first, at :data:`index_plane.OPAQUE_THRESHOLD` -- below it the pixel *is*
+    the hole, whatever colour is left under it -- and a visible pixel is placed
+    by its RGB alone. That is precisely what a raster plane in the same
+    document does, so the strip normalises the way every other plane does:
+    ``lut[resolve(strip)]``, which the round-trip tests compare through.
+
+    *Exact*, because a nearest match is only right where the pixels were
+    authored here. A strip that arrived from **outside** the document -- a
+    ``.tsx``, Plotter, a tile sheet -- can hold a visible colour this palette
+    has no slot for, and snapping it would silently repaint somebody else's
+    atlas in this document's colours. So that one case is named, with the
+    colour that could not be placed.
+
+    The second refusal is narrower and says so: a visible colour that only the
+    **transparent** slot holds. ``indexed.snap`` matches against every slot
+    including that one, where ``resolve`` excludes it, so this is the one state
+    the two constraints disagree about -- and there is no honest answer to
+    give, since writing that slot would turn a pixel the user just painted into
+    a hole on the way back in.
     """
-    packed = _packed(pixels)
+    hole = transparent if 0 <= transparent < len(palette) else 0
+    out = np.full(pixels.shape[:2], hole, dtype=np.uint8)
+    visible = pixels[..., 3] >= OPAQUE_THRESHOLD
+    if not visible.any():
+        return out.tobytes()
+
+    table = _visible_lookup(palette, hole)
+    rgb = pixels[..., :3][visible]
+    packed = (
+        rgb[:, 0].astype(np.uint32)
+        | (rgb[:, 1].astype(np.uint32) << np.uint32(8))
+        | (rgb[:, 2].astype(np.uint32) << np.uint32(16))
+    )
     unique = np.unique(packed)
     missing = [int(value) for value in unique if int(value) not in table]
     if missing:
         value = missing[0]
-        red, green, blue, alpha = (
-            value & 0xFF,
-            (value >> 8) & 0xFF,
-            (value >> 16) & 0xFF,
-            (value >> 24) & 0xFF,
-        )
+        red, green, blue = value & 0xFF, (value >> 8) & 0xFF, (value >> 16) & 0xFF
+        shown = f"#{red:02x}{green:02x}{blue:02x}"
+        if tuple(int(v) for v in palette[hole][:3]) == (red, green, blue):
+            raise ValueError(
+                f"{what} holds the visible colour {shown}, which is this"
+                " document's transparent slot's own and so has no slot that"
+                " draws"
+            )
         raise ValueError(
-            f"{what} holds the colour #{red:02x}{green:02x}{blue:02x}{alpha:02x},"
-            " which this indexed document's palette has no slot for"
+            f"{what} holds the visible colour {shown}, which this indexed"
+            " document's palette has no slot for"
         )
     slots = np.array([table[int(value)] for value in unique], dtype=np.uint8)
-    return slots[np.searchsorted(unique, packed)].tobytes()
+    out[visible] = slots[np.searchsorted(unique, packed)]
+    return out.tobytes()
 
 
 def _at_depth(
-    pixels: np.ndarray, mode: str, what: str, table: dict[int, int] | None
+    pixels: np.ndarray,
+    mode: str,
+    what: str,
+    palette: list[tuple[int, ...]] | None,
+    transparent: int,
 ) -> bytes:
     """``pixels`` at the sprite's colour depth. :func:`asein._decode_plane`'s
     inverse, and the one used for a *tileset strip* -- a cel goes through
@@ -642,9 +688,9 @@ def _at_depth(
         return np.ascontiguousarray(pixels, dtype=np.uint8).tobytes()
     if mode == "grayscale":
         return _grey_pair(pixels, what)
-    if table is None:  # pragma: no cover - refused far sooner
+    if not palette:  # pragma: no cover - refused far sooner
         raise ValueError(f"{what} has no palette to write its pixels through")
-    return _resolved_indices(pixels, table, what)
+    return _resolved_indices(pixels, palette, transparent, what)
 
 
 # --- cels --------------------------------------------------------------------
@@ -785,7 +831,9 @@ def _drawn_cel(
 # --- tilesets ----------------------------------------------------------------
 
 
-def _strip_bytes(ts, mode: str, table: dict[int, int] | None) -> bytes:
+def _strip_bytes(
+    ts, mode: str, palette: list[tuple[int, ...]] | None, transparent: int
+) -> bytes:
     """One tileset's tiles as the vertical strip the format stores.
 
     Rebuilt tile by tile through ``Tileset.tile_pixels`` rather than handed
@@ -800,11 +848,12 @@ def _strip_bytes(ts, mode: str, table: dict[int, int] | None) -> bytes:
     stack = np.concatenate(
         [np.asarray(ts.tile_pixels(index)) for index in range(count)], axis=0
     )
-    return _at_depth(stack, mode, f"the tileset {ts.name!r}", table)
+    return _at_depth(stack, mode, f"the tileset {ts.name!r}", palette, transparent)
 
 
 def _tileset_chunk(
-    tileset_id: int, ts, mode: str, table: dict[int, int] | None
+    tileset_id: int, ts, mode: str, palette: list[tuple[int, ...]] | None,
+    transparent: int,
 ) -> bytes:
     """The 0x2023 chunk: one embedded vertical-strip atlas.
 
@@ -822,7 +871,7 @@ def _tileset_chunk(
             f"the tileset {ts.name!r} has {tile_w}x{tile_h} tiles and an"
             f" .aseprite stores at most {_MAX_U16} on a side"
         )
-    raw = _strip_bytes(ts, mode, table)
+    raw = _strip_bytes(ts, mode, palette, transparent)
     compressed = zlib.compress(raw)
     body = struct.pack(
         "<IIIHHh",
@@ -866,6 +915,18 @@ def _slice_runs(entry, frames) -> list[tuple[int, object]]:
     return runs
 
 
+def _first_set(base, keyed: list):
+    """The first value that is not ``None`` -- the slice's own, then its keys'.
+
+    Both the flag test and the per-key fallback in :func:`_slice_chunk`, said
+    once: they must be the *same* question, or the flag can be set with nothing
+    to write under it.
+    """
+    if base is not None:
+        return base
+    return next((value for value in keyed if value is not None), None)
+
+
 def _slice_chunk(entry, runs: list[tuple[int, object]]) -> bytes:
     """The 0x2022 chunk, one per slice. Inverts :func:`asein._read_slice`.
 
@@ -878,31 +939,46 @@ def _slice_chunk(entry, runs: list[tuple[int, object]]) -> bytes:
     one place the models genuinely disagree: ``SliceKey`` carries its pivot and
     its nine-patch centre per frame and may hold neither. The union decides the
     flags -- a slice that carries a pivot anywhere declares one -- and a key
-    that lacks what the chunk declares is written with *the slice's own* value.
-    Never a zero: a zero pivot is a real pivot as far as the reader is
-    concerned, so filling with one would move a sprite's anchor to its corner
-    on the frames nobody keyed. What is lost is the distinction between "this
-    frame has no pivot of its own" and "this frame has the slice's pivot",
-    which resolve to the same rectangle through ``Slice.at`` either way.
+    that lacks what the chunk declares is written with **the first value the
+    slice carries** -- its own where it has one, and otherwise the first key's.
+
+    *Never a zero*, and that is the rule rather than a preference: a zero pivot
+    is a real pivot as far as the reader is concerned, so filling with one
+    would move a sprite's anchor to its corner on every frame nobody keyed --
+    metadata invented at the door, which is the thing this docstring is here to
+    forbid. Because the flag is set only when *something* carries the datum,
+    a fallback always exists and the zero branch does not need to exist.
+
+    What is lost is the *distinction* between "this frame has no pivot of its
+    own" and "this frame has the slice's pivot" -- they resolve to the same
+    answer through ``Slice.at`` either way -- and, in the base-lacks-key-has
+    direction, the base gains the pivot the key set. Losing it the other way
+    (declaring the flag only when the base carries it, and dropping a key-only
+    pivot entirely) was the alternative and is worse: it throws away a value
+    the user explicitly set, where this keeps every value and only widens where
+    it applies. One coherent rule -- *a slice's pivot is the first one it
+    carries, and every key without one inherits it* -- and no invented number.
     """
-    nine_patch = any(key.center is not None for _, key in runs)
-    pivot = any(key.pivot is not None for _, key in runs)
-    flags = (_SLICE_NINE_PATCH if nine_patch else 0) | (_SLICE_PIVOT if pivot else 0)
+    fallback_centre = _first_set(entry.center, [key.center for _, key in runs])
+    fallback_pivot = _first_set(entry.pivot, [key.pivot for _, key in runs])
+    flags = (_SLICE_NINE_PATCH if fallback_centre is not None else 0) | (
+        _SLICE_PIVOT if fallback_pivot is not None else 0
+    )
     body = struct.pack("<III", len(runs), flags, 0) + _string(entry.name)
     for index, key in runs:
         x0, y0, x1, y1 = key.bounds
         body += struct.pack(
             "<IiiII", index, x0, y0, max(0, x1 - x0), max(0, y1 - y0)
         )
-        if nine_patch:
-            centre = key.center if key.center is not None else entry.center
-            cx0, cy0, cx1, cy1 = centre if centre is not None else (0, 0, 0, 0)
+        if fallback_centre is not None:
+            cx0, cy0, cx1, cy1 = (
+                key.center if key.center is not None else fallback_centre
+            )
             body += struct.pack(
                 "<iiII", cx0, cy0, max(0, cx1 - cx0), max(0, cy1 - cy0)
             )
-        if pivot:
-            point = key.pivot if key.pivot is not None else entry.pivot
-            px, py = point if point is not None else (0.0, 0.0)
+        if fallback_pivot is not None:
+            px, py = key.pivot if key.pivot is not None else fallback_pivot
             # Rounded, because the format's field is a signed DWORD and this
             # model's pivot is a float. A fractional pivot is the one thing a
             # slice loses here, and it loses at most half a pixel.
@@ -1038,10 +1114,6 @@ def aseprite_bytes(doc) -> bytes:
             " header can name"
         )
 
-    # The one table an indexed document's *tileset strips* are resolved
-    # through. None at every other depth, where a strip's bytes are its own.
-    table = _palette_lookup(palette, transparent) if depth == _INDEXED else None
-
     size = (width, height)
     per_frame: list[list[bytes]] = [[] for _ in range(frames)]
     head = per_frame[0]
@@ -1055,7 +1127,13 @@ def aseprite_bytes(doc) -> bytes:
     # the reader resolves a layer's tileset id after the whole file is parsed
     # -- but is the order the file reads in.
     head.extend(
-        _tileset_chunk(index, slot.tileset, mode, table)
+        _tileset_chunk(
+            index,
+            slot.tileset,
+            mode,
+            palette if depth == _INDEXED else None,
+            transparent,
+        )
         for index, slot in enumerate(tilesets)
     )
     head.extend(_layer_chunk(row) for row in rows)
