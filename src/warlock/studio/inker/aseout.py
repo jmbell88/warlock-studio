@@ -52,11 +52,14 @@ in ``docs/ASEPRITE_INTEROP.md``.
 Refusals are by name and are the format's own limits, not this build's: more
 frames or layers than a 16-bit count can hold, a palette past 256, a canvas past
 65535 on a side, a tag repeating more times than its own WORD can say, a colour
-mode with no depth to write it at, and -- the one that is about a *corrupted*
-document rather than a big one -- a grayscale document holding a pixel where
-``r != g != b``. The write funnel enforces greyness on every stroke, so a
-violation means the constraint was bypassed, and the alternative to refusing is
-throwing two channels away without a word.
+mode with no depth to write it at, and -- the one that is about a *broken*
+document rather than a big one -- a grayscale document holding a **visible**
+pixel where ``r != g != b``. The write funnel enforces greyness on every stroke,
+so a violation is the constraint having been bypassed, and the alternative to
+refusing is throwing two channels away without a word. Visible, because the
+funnel deliberately leaves the dead RGB under alpha 0 alone -- see
+:func:`_plane`, which is where an unmasked version of that check would have
+refused to save an ordinary erased drawing.
 """
 
 from __future__ import annotations
@@ -190,16 +193,19 @@ def _chunk(kind: int, payload: bytes) -> bytes:
 def _frame(chunks: list[bytes], duration: int) -> bytes:
     """One frame header and its chunks. The size counts the 16-byte header.
 
-    Both chunk-count fields are filled the way Aseprite 1.3 fills them: the
-    legacy WORD gets ``0xFFFF`` (its "read the other one" value) and the DWORD
-    carries the number. The reader takes ``new_count or old_count``, so this is
-    the shape that exercises the modern field.
+    **Both count fields carry the number**, which is Aseprite's own practice:
+    the DWORD always, and the legacy WORD saturated at ``0xFFFF`` -- its "read
+    the other one" value, and the only thing it can say about a count it cannot
+    hold. The reader takes ``new_count or old_count``, so the modern field is
+    still the one that decides.
 
-    **An empty frame is the exception and it is not cosmetic.** A frame with no
-    chunks -- every track's slot on it empty, which the sparse grid allows --
-    would write 0 into the DWORD, and ``new_count or old_count`` would then fall
-    through to the legacy field and read 0xFFFF as sixty-five thousand chunks
-    that are not there. So a frame with nothing in it says zero in both.
+    Writing ``0xFFFF`` into the WORD unconditionally is the near miss, and it is
+    a real one: a frame with **no chunks at all** -- every track's slot on it
+    empty, which the sparse grid allows -- puts 0 in the DWORD, and
+    ``new_count or old_count`` then falls through to the legacy field and reads
+    the sentinel as sixty-five thousand chunks that are not there. Saturating
+    rather than sentinelling makes that case correct at the root instead of by a
+    special case, and leaves the WORD readable by anything that only knows it.
     """
     body = b"".join(chunks)
     return (
@@ -207,7 +213,7 @@ def _frame(chunks: list[bytes], duration: int) -> bytes:
             "<IHHHHI",
             len(body) + 16,
             _FRAME_MAGIC,
-            _MAX_U16 if chunks else 0,
+            min(len(chunks), _MAX_U16),
             int(duration),
             0,
             len(chunks),
@@ -428,7 +434,19 @@ def _plane(layer, mode: str, size: tuple[int, int]) -> bytes:
     a plane that is about to be handed to zlib, which costs an order of
     magnitude more. A sample would turn a refusal into a coin flip on exactly
     the document that needs it -- one stray coloured pixel out of a million is
-    the shape a bypassed funnel leaves behind.
+    the shape a violation has.
+
+    **It is masked to the visible pixels, and that is not a softening of it.**
+    ``indexed.grayscale`` returns a fully transparent pixel *verbatim* (its own
+    docstring says why: there is no colour under alpha 0 to convert, and
+    rewriting it would make a no-op write look like an edit), and the eraser
+    cuts alpha while leaving the RGB it was drawn in behind. So paint blue,
+    erase it, convert to grayscale, and the document is entirely funnel-legal
+    while carrying blue under alpha 0 -- an ordinary document an unmasked check
+    would refuse to save. What the mask costs is stated at the write: the two
+    stored channels are ``(value, alpha)``, so that dead blue is written as its
+    red channel alone and reads back as ``(v, v, v, 0)``. Invisible either way,
+    and the round-trip tests compare through exactly that normalisation.
     """
     width, height = size
     pixels = layer.pixels
@@ -441,12 +459,14 @@ def _plane(layer, mode: str, size: tuple[int, int]) -> bytes:
         return np.ascontiguousarray(pixels, dtype=np.uint8).tobytes()
     if mode == "grayscale":
         grey = pixels[..., 0]
+        visible = pixels[..., 3] > 0
         if not (
-            np.array_equal(grey, pixels[..., 1]) and np.array_equal(grey, pixels[..., 2])
+            np.array_equal(grey[visible], pixels[..., 1][visible])
+            and np.array_equal(grey[visible], pixels[..., 2][visible])
         ):
             raise ValueError(
-                f"the layer {layer.name!r} holds a pixel that is not grey, which a"
-                " grayscale .aseprite has nowhere to put"
+                f"the layer {layer.name!r} holds a visible pixel that is not grey,"
+                " which a grayscale .aseprite has nowhere to put"
             )
         pair = np.empty((height, width, 2), dtype=np.uint8)
         pair[..., 0] = grey

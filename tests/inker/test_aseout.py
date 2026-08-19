@@ -158,6 +158,24 @@ def test_an_empty_slot_stays_empty():
     assert back.anim.cels.get((back.anim.tracks[1].uid, back.anim.frames[1].uid)) is None
 
 
+def test_a_frame_holding_nothing_at_all_round_trips():
+    """A frame with **no chunks**, which the sparse grid allows and which the
+    two chunk-count fields disagree about most cheaply: 0 in the modern DWORD
+    falls through to the legacy WORD, so a WORD carrying the "read the other
+    one" sentinel would be read as sixty-five thousand chunks that are not
+    there. Both fields carry the count, saturated, and this is the frame that
+    proves it."""
+    doc = _animated()
+    empty = doc.add_frame()
+    assert not [key for key in doc.anim.cels if key[1] == empty.uid]
+
+    back, warnings = _round_trip(doc)
+    assert warnings == []
+    assert len(back.anim.frames) == 3
+    last = back.anim.frames[2].uid
+    assert not [key for key in back.anim.cels if key[1] == last]
+
+
 def test_alpha_lock_is_dropped_and_the_read_is_clean():
     """The one track property Aseprite has no bit for. It is an *editing aid*,
     not picture data, so it goes silently -- the interop report is where the
@@ -170,6 +188,21 @@ def test_alpha_lock_is_dropped_and_the_read_is_clean():
 
 
 # --- grayscale ---------------------------------------------------------------
+
+
+def _as_stored(pixels: np.ndarray) -> np.ndarray:
+    """``pixels`` as a grayscale file can hold them: ``(value, alpha)``.
+
+    A grayscale cel stores two channels, so the *dead* RGB a fully transparent
+    pixel carries survives only as its red. On a visible pixel this is the
+    identity -- ``r == g == b`` is the mode's whole constraint -- so one helper
+    covers both halves of the comparison and the assertions below say which
+    half they mean.
+    """
+    out = pixels.copy()
+    out[..., 1] = out[..., 0]
+    out[..., 2] = out[..., 0]
+    return out
 
 
 def test_a_grayscale_document_round_trips_as_grayscale():
@@ -185,10 +218,39 @@ def test_a_grayscale_document_round_trips_as_grayscale():
     assert np.array_equal(back.stack[0].pixels, doc.stack[0].pixels)
 
 
-def test_a_grayscale_document_holding_a_colour_is_refused_by_name():
-    """Only reachable on a corrupted document -- the write funnel enforces
-    ``r == g == b`` -- so the check is what stops two of the three channels
-    being thrown away without a word."""
+def test_erasing_before_converting_to_grayscale_still_saves():
+    """The regression. The eraser cuts alpha and leaves the colour it was drawn
+    in behind it, and ``indexed.grayscale`` returns a fully transparent pixel
+    *verbatim* -- so this document is entirely funnel-legal and carries blue
+    under alpha 0. A greyness check that did not mask itself to the visible
+    pixels would refuse to save it, which is a drawing the user cannot get out
+    of the app over pixels nobody can see.
+    """
+    doc = Document.blank(8, 8)
+    doc.stack[0].pixels[:, :] = BLUE
+    doc.invalidate_all()
+    doc.begin_stroke((0, 0), BLUE, size=4, hardness=1.0, mode="erase")
+    doc.stroke_to((7, 7))
+    doc.end_stroke()
+    doc.convert_to_grayscale()
+    erased = doc.stack[0].pixels[..., 3] == 0
+    assert erased.any()
+    assert (doc.stack[0].pixels[..., 2][erased] != doc.stack[0].pixels[..., 0][erased]).any()
+
+    back, warnings = _round_trip(doc)
+    assert warnings == []
+    assert back.color_mode == "grayscale"
+    # The visible half is bit-exact; the invisible half keeps its alpha and
+    # loses two channels of colour that were never drawn.
+    visible = ~erased
+    assert np.array_equal(back.stack[0].pixels[visible], doc.stack[0].pixels[visible])
+    assert np.array_equal(back.stack[0].pixels, _as_stored(doc.stack[0].pixels))
+
+
+def test_a_grayscale_document_holding_a_visible_colour_is_refused_by_name():
+    """Reachable only past the funnel, which enforces ``r == g == b`` on every
+    write -- so the check is what stops two of the three channels being thrown
+    away without a word."""
     doc = Document.blank(4, 4)
     doc.invalidate_all()
     doc.convert_to_grayscale()
@@ -196,6 +258,17 @@ def test_a_grayscale_document_holding_a_colour_is_refused_by_name():
 
     with pytest.raises(ValueError, match="Background"):
         aseout.aseprite_bytes(doc)
+
+
+def test_an_invisible_colour_is_not_a_grayscale_violation():
+    """The mask's other side, said directly: the same blue at alpha 0 saves."""
+    doc = Document.blank(4, 4)
+    doc.invalidate_all()
+    doc.convert_to_grayscale()
+    doc.stack[0].pixels[1, 1] = (0, 0, 255, 0)
+
+    back, _ = _round_trip(doc)
+    assert tuple(back.stack[0].pixels[1, 1]) == (0, 0, 0, 0)
 
 
 # --- indexed -----------------------------------------------------------------
@@ -243,6 +316,31 @@ def test_an_indexed_palette_keeps_its_alpha():
     assert tuple(back.palette[3]) == (200, 10, 10, 128)
 
 
+def test_a_palette_constrained_rgb_document_loses_its_palette():
+    """**A pinned loss, not a defect** (divergence 19, and Task 5's interop
+    report is where it is written down).
+
+    The chunks are written -- a file Aseprite reads has its colour table, which
+    is what the second half of this test asserts against the parse. What does
+    not come back is the *constraint*: ``document_from_aseprite`` installs a
+    palette only at indexed depth, and it must keep doing so, because a real
+    RGB ``.aseprite`` legitimately carries a palette chunk and adopting it would
+    silently put the whole editor into palette-constrained mode over a table
+    nobody asked to be limited by.
+    """
+    doc = _still()
+    doc.set_palette([(0, 0, 0, 255), RED, BLUE])
+    assert doc.color_mode == "rgb" and doc.palette
+
+    sprite = asein.parse(aseout.aseprite_bytes(doc))
+    assert sprite.palette == [(0, 0, 0, 255), RED, BLUE]
+
+    back, warnings = _round_trip(doc)
+    assert warnings == []
+    assert back.color_mode == "rgb"
+    assert not back.palette
+
+
 def test_an_indexed_animated_document_round_trips():
     doc = _animated()
     doc.convert_to_indexed([(0, 0, 0, 0), RED, BLUE], transparent=0)
@@ -263,11 +361,18 @@ def _grouped() -> Document:
     The second ``group_layers`` over the same rows nests **inward**: the new
     group takes the run's existing parent, so ``Art`` ends up inside ``Ink``
     rather than around it. Two levels either way, which is what this file needs.
+
+    Each layer is painted a *different* colour on purpose. Two group rows sit
+    between L0 and L1 in the emitted layer list, so every cel index below them
+    is shifted by two -- and an off-by-two there puts each layer's pixels on the
+    row above or below, which names alone cannot see (they come from the layer
+    chunks, which are not the thing being shifted).
     """
     doc = Document.blank(4, 4)
     doc.stack[0].name = "L0"
+    doc.stack[0].pixels[:, :] = (10, 0, 0, 255)
     for i in (1, 2):
-        doc.add_layer(f"L{i}")
+        doc.add_layer(f"L{i}").pixels[:, :] = (0, 10 * i, 0, 255)
     doc.invalidate_all()
     outer = doc.group_layers([1, 2], name="Ink")
     assert outer is not None
@@ -286,6 +391,11 @@ def test_nested_groups_survive_the_round_trip():
     names = sorted(node.name for node in back.groups.values())
     assert names == ["Art", "Ink"]
     gp.check(back.groups, back.group_of, back.member_uids())
+    # The pixels, not just the names: two group rows shift every cel index
+    # below them, and only distinct colours per layer can see that landing
+    # wrong.
+    for before, after in zip(doc.stack, back.stack, strict=True):
+        assert np.array_equal(before.pixels, after.pixels)
 
 
 def test_a_nested_group_is_still_inside_its_parent():
@@ -491,6 +601,52 @@ def test_an_indexed_layer_with_no_index_plane_is_refused_by_name():
     doc = _indexed()
     doc.stack[0].indices = None
     with pytest.raises(ValueError, match="Background"):
+        aseout.aseprite_bytes(doc)
+
+
+def test_an_indexed_document_with_no_palette_is_refused_by_name():
+    doc = _still()
+    doc.color_mode = "indexed"
+    doc.palette = None
+    with pytest.raises(ValueError, match="nothing to write its pixels through"):
+        aseout.aseprite_bytes(doc)
+
+
+def test_a_transparent_index_no_header_byte_can_name_is_refused_by_name():
+    doc = _indexed()
+    doc.transparent_index = 300
+    with pytest.raises(ValueError, match="300"):
+        aseout.aseprite_bytes(doc)
+
+
+def test_a_cel_that_is_not_canvas_sized_is_refused_by_name():
+    """Layers are canvas-sized here (``layers.py``'s first decision), so this
+    is a broken document rather than a small cel -- and a writer that shrugged
+    would put a plane on the file whose declared size was the canvas's."""
+    doc = _animated()
+    cel = doc.anim.cels[(doc.anim.tracks[1].uid, doc.anim.frames[1].uid)]
+    cel.pixels = np.zeros((2, 2, 4), dtype=np.uint8)
+    with pytest.raises(ValueError, match="canvas-sized"):
+        aseout.aseprite_bytes(doc)
+
+
+def test_a_tag_repeating_past_a_word_is_refused_by_name():
+    """A count that wrapped would silently stop a clip that was set to run, and
+    a function returning bytes has no warning to raise instead."""
+    doc = _animated()
+    doc.anim.tags.append(Tag(name="walk", start=0, end=1, repeat=70_000))
+    with pytest.raises(ValueError, match="walk"):
+        aseout.aseprite_bytes(doc)
+
+
+def test_a_blend_mode_the_format_has_no_number_for_is_refused_by_name():
+    """Dead code while the two tables hold the same nineteen modes -- and the
+    point of it is the day they do not, since the alternative is writing the
+    layer out as ``normal`` in silence. ``Track.blend`` is unvalidated, which is
+    how a mode gets this far."""
+    doc = _animated()
+    doc.anim.tracks[1].blend = "glow"
+    with pytest.raises(ValueError, match="glow"):
         aseout.aseprite_bytes(doc)
 
 
