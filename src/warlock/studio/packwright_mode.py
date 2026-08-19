@@ -160,6 +160,45 @@ def ask_add_tileset(ctx: Any) -> None:
     ctx.submit(f"packwright-tileset:{uid}", run)
 
 
+def add_rendered_sheet(ctx: Any, job_id: str, sheet_id: str, *, pixel: bool = False) -> None:
+    """A rendered 8-direction sheet onto the open atlas, through the usual door.
+
+    The house pattern is confirm-at-the-door, so this parks the sheet on the
+    existing ``tileset_import``/``tileset_import_open``/``tileset_cell`` trio
+    rather than importing anything: the popup opens with the cell size the
+    sidecar recorded already filled in, shows what that answer keeps and drops,
+    and the existing occupancy/import path does the rest. Nothing new is
+    imported and nothing new is refused.
+    """
+    tab = active(ctx)
+    if tab is None:
+        ctx.toast("Start or open an atlas first.", "error")
+        return
+    uid = tab.uid
+
+    def run() -> dict[str, Any] | None:
+        import numpy as np
+        from PIL import Image
+
+        from ..service import sheets as svc_sheets
+        from .inker_mode import sheet_grid
+
+        if pixel:
+            record = svc_sheets.get_pixel_sheet(ctx.svc, job_id, sheet_id)
+            png = svc_sheets.sheet_pixel_png(ctx.svc, job_id, sheet_id)
+        else:
+            record = svc_sheets.get_sheet(ctx.svc, job_id, sheet_id)
+            png = svc_sheets.sheet_png(ctx.svc, job_id, sheet_id)
+        cell, _count = sheet_grid(record)
+        with Image.open(png) as opened:
+            opened.load()
+            pixels = np.asarray(opened.convert("RGBA"), dtype=np.uint8).copy()
+        name = str(record.get("name") or sheet_id)
+        return {"tileset": (str(png), name, pixels), "cell": cell, "uid": uid}
+
+    ctx.submit(f"packwright-tileset:{uid}", run)
+
+
 def import_tileset(ctx: Any) -> bool:
     """Slice the pending sheet with the popup's cell size and add the tiles.
 
@@ -417,6 +456,12 @@ def on_task_done(ctx: Any, done: Any) -> None:
         if isinstance(result, dict):
             state.tileset_import = result["tileset"]
             state.tileset_import_open = False
+            cell = result.get("cell")
+            if cell is not None:
+                # Only when the door knew the answer. A picked file does not,
+                # and overwriting the last typed cell size for it would throw
+                # away the number the user is cutting a folder of sheets with.
+                state.tileset_cell = (int(cell[0]), int(cell[1]))
         return
 
     if name == "packwright-add":

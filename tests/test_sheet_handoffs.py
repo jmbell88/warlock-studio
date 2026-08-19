@@ -1,0 +1,215 @@
+"""The two ways out of the sheet panel that are not a file on disk.
+
+A rendered 8-direction sheet and its pixel restyle both dead-ended at Save PNG,
+though everything needed to open them already existed. Neither door below
+carries a new algorithm; what is worth testing is the *geometry* they read off
+the sidecar and the fact that each lands in the machinery its editor already
+has -- unlinked in the Inker, parked behind Packwright's confirm popup.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+import numpy as np
+import pytest
+from PIL import Image
+
+from warlock.studio import inker_mode, packwright_mode
+
+
+class _Ctx:
+    """Runs a submitted callable inline, as the plotter suite's FakeCtx does."""
+
+    def __init__(self) -> None:
+        self.svc = object()
+        self.state = _AppState()
+        self.settings = _Settings()
+        self.submitted: list[str] = []
+        self.toasts: list[tuple[str, str]] = []
+        self.result: Any = None
+
+    def submit(self, key: str, run: Any, *args: Any) -> bool:
+        self.submitted.append(key)
+        self.result = run(*args)
+        return True
+
+    def toast(self, message: str, kind: str = "info") -> None:
+        self.toasts.append((message, kind))
+
+
+class _AppState:
+    def __init__(self) -> None:
+        self.inker = None
+        self.packwright = None
+        self.mode = "home"
+        self.previous_mode = "home"
+        self.mode_observed = "home"
+        self.preview: dict[str, Any] = {}
+
+
+class _Settings:
+    def __init__(self) -> None:
+        self.store: dict[str, Any] = {}
+
+    def get(self, key: str) -> Any:
+        return self.store.get(key)
+
+    def set(self, key: str, value: Any) -> None:
+        self.store[key] = value
+
+
+# --- sheet_grid ---------------------------------------------------------------
+
+
+def test_a_square_sidecar_gives_its_frame_size() -> None:
+    cell, count = inker_mode.sheet_grid(
+        {"frame_size": 64, "columns": 4, "rows": 2, "cells": [{}] * 8}
+    )
+    assert cell == (64, 64)
+    assert count == 8
+
+
+def test_a_non_square_sidecar_reads_the_pair_not_the_zero() -> None:
+    """``frame_size`` is written as 0 on a non-square plan -- a loud wrong
+    answer rather than a quiet one -- and the truth is in ``frame_w``/``h``."""
+    cell, count = inker_mode.sheet_grid(
+        {"frame_size": 0, "frame_w": 48, "frame_h": 64, "cells": [{}] * 3}
+    )
+    assert cell == (48, 64)
+    assert count == 3
+
+
+def test_the_cell_list_beats_columns_times_rows() -> None:
+    """A padded final row would make the product overcount."""
+    _cell, count = inker_mode.sheet_grid(
+        {"frame_size": 32, "columns": 4, "rows": 2, "cells": [{}] * 7}
+    )
+    assert count == 7
+
+
+def test_a_sidecar_with_no_geometry_is_refused() -> None:
+    with pytest.raises(ValueError, match="frame size"):
+        inker_mode.sheet_grid({"cells": [{}]})
+    with pytest.raises(ValueError, match="cells"):
+        inker_mode.sheet_grid({"frame_size": 16})
+
+
+# --- the two doors ------------------------------------------------------------
+
+
+def _sheet(tmp_path, columns: int = 4, rows: int = 2, size: int = 16) -> dict[str, Any]:
+    """A rendered sheet on disk: a PNG plus the sidecar that describes it."""
+    atlas = np.zeros((rows * size, columns * size, 4), dtype=np.uint8)
+    atlas[..., 3] = 255
+    for r in range(rows):
+        for c in range(columns):
+            atlas[r * size:(r + 1) * size, c * size:(c + 1) * size, :3] = 40 + r * 20 + c
+    Image.fromarray(atlas, "RGBA").save(tmp_path / "sheet.png")
+    record = {
+        "name": "turnaround",
+        "columns": columns,
+        "rows": rows,
+        "frame_size": size,
+        "cells": [{"index": i} for i in range(columns * rows)],
+    }
+    (tmp_path / "sheet.json").write_text(json.dumps(record), encoding="utf-8")
+    return record
+
+
+def _serve(monkeypatch, tmp_path, record: dict[str, Any]) -> None:
+    monkeypatch.setattr(
+        "warlock.service.sheets.get_sheet", lambda svc, job, sid: record
+    )
+    monkeypatch.setattr(
+        "warlock.service.sheets.sheet_png", lambda svc, job, sid: tmp_path / "sheet.png"
+    )
+    monkeypatch.setattr(
+        "warlock.service.sheets.get_pixel_sheet", lambda svc, job, sid: record
+    )
+    monkeypatch.setattr(
+        "warlock.service.sheets.sheet_pixel_png",
+        lambda svc, job, sid: tmp_path / "sheet.png",
+    )
+
+
+def test_editing_a_rendered_sheet_opens_rows_times_columns_frames(tmp_path, monkeypatch):
+    ctx = _Ctx()
+    _serve(monkeypatch, tmp_path, _sheet(tmp_path))
+
+    inker_mode.open_rendered_sheet(ctx, "j1", "s1")
+
+    assert ctx.submitted == ["inker-open:sheet:s1:render"]
+    result = ctx.result
+    doc = result["doc"]
+    assert len(doc.anim.frames) == 8
+    assert doc.size == (16, 16)
+    # Unlinked: the sheet on disk is where the document came from, not its file,
+    # so the first Ctrl+S must be a Save As.
+    assert result["path"] is None
+    assert result["format"] == "ora"
+    assert result["title"] == "turnaround"
+
+
+def test_the_pixel_restyle_opens_through_its_own_sidecar(tmp_path, monkeypatch):
+    ctx = _Ctx()
+    _serve(monkeypatch, tmp_path, _sheet(tmp_path))
+
+    inker_mode.open_rendered_sheet(ctx, "j1", "s1", pixel=True)
+
+    assert ctx.submitted == ["inker-open:sheet:s1:pixel"]
+    assert ctx.result["title"] == "turnaround (pixel)"
+    assert len(ctx.result["doc"].anim.frames) == 8
+
+
+def test_a_rendered_sheet_is_sliced_as_a_plain_grid_not_a_directional_layout(
+    tmp_path, monkeypatch
+):
+    """``animation.SHEET_KINDS`` is turnaround/walk only, so
+    ``DirectionalLayout.of()`` would return ``None`` for a render's sidecar and
+    ``document_from_atlas`` would refuse the whole door."""
+    ctx = _Ctx()
+    _serve(monkeypatch, tmp_path, _sheet(tmp_path))
+    inker_mode.open_rendered_sheet(ctx, "j1", "s1")
+    assert ctx.result["doc"].anim.layout is None
+
+
+def test_adding_a_rendered_sheet_parks_it_with_the_cell_prefilled(tmp_path, monkeypatch):
+    ctx = _Ctx()
+    _serve(monkeypatch, tmp_path, _sheet(tmp_path, size=24))
+    packwright_mode.new_document(ctx)
+    tab = packwright_mode.active(ctx)
+
+    packwright_mode.add_rendered_sheet(ctx, "j1", "s1")
+    packwright_mode.on_task_done(
+        ctx, type("D", (), {"key": f"packwright-tileset:{tab.uid}",
+                            "result": ctx.result, "message": ""})()
+    )
+
+    state = packwright_mode.ensure(ctx)
+    assert state.tileset_import is not None
+    assert state.tileset_import[1] == "turnaround"
+    assert state.tileset_cell == (24, 24)
+    assert state.tileset_import_open is False
+
+
+def test_a_picked_file_still_keeps_the_last_typed_cell_size(tmp_path, monkeypatch):
+    """The cell size persists across imports on purpose, and a door that does
+    not know the answer must not overwrite it."""
+    ctx = _Ctx()
+    packwright_mode.new_document(ctx)
+    tab = packwright_mode.active(ctx)
+    state = packwright_mode.ensure(ctx)
+    state.tileset_cell = (48, 48)
+
+    pixels = np.zeros((8, 8, 4), dtype=np.uint8)
+    packwright_mode.on_task_done(
+        ctx,
+        type("D", (), {
+            "key": f"packwright-tileset:{tab.uid}",
+            "result": {"tileset": ("p.png", "p", pixels), "uid": tab.uid},
+            "message": "",
+        })(),
+    )
+    assert state.tileset_cell == (48, 48)

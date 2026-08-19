@@ -81,7 +81,10 @@ A reader that walks the flat list handles both without knowing which it has.
 
 Rendered sheets are listed under **Rendered sheets** with their cell count and frame size. Each
 offers **Save PNG...**, **Save JSON...** and **Delete**. Save both: the PNG without its sidecar is
-just a picture.
+just a picture. **Edit in Inker** opens the sheet as an animation — one frame per cell, cut on the
+grid the sidecar records — as an *unlinked* document, so the first Ctrl+S asks where to put it and
+the render on disk is never overwritten. **Add to Packwright** sends it to the atlas packer with
+the cell size already filled in, and the pixel restyle below offers the same two.
 
 ## Pixel art from the sheet
 

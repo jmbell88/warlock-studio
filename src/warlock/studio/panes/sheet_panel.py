@@ -394,6 +394,7 @@ def _saved(ctx: Any, job: Any) -> None:
         widgets.same_line_or_wrap(widgets.button_width("Delete"))
         if controls.small_button("Delete"):
             _ask_delete(ctx, job_id, sheet)
+        _handoffs(ctx, job_id, sheet_id)
         _pixelate(ctx, job_id, sheet)
         imgui.pop_id()
 
@@ -612,6 +613,25 @@ def _pixel_result(ctx: Any, job_id: str, sheet_id: str) -> None:
     imgui.same_line()
     if controls.small_button("Save pixel JSON..."):
         _save_pixel_sidecar(ctx, job_id, sheet_id)
+    _handoffs(ctx, job_id, sheet_id, pixel=True)
+
+
+def _handoffs(ctx: Any, job_id: str, sheet_id: str, *, pixel: bool = False) -> None:
+    """The two ways out of this panel that are not a file on disk.
+
+    A rendered sheet dead-ended at Save PNG, though everything needed to open it
+    already existed: the sidecar describes a uniform grid, the Inker can slice
+    one, and Packwright's tileset popup already asks for a cell size. Neither
+    button carries a new algorithm -- both are wiring.
+    """
+    from .. import inker_mode, packwright_mode
+
+    suffix = "pixel" if pixel else "render"
+    if controls.small_button(f"Edit in Inker##ink-{suffix}"):
+        inker_mode.open_rendered_sheet(ctx, job_id, sheet_id, pixel=pixel)
+    widgets.same_line_or_wrap(widgets.button_width("Add to Packwright"))
+    if controls.small_button(f"Add to Packwright##pw-{suffix}"):
+        packwright_mode.add_rendered_sheet(ctx, job_id, sheet_id, pixel=pixel)
 
 
 def _save_pixel(ctx: Any, job_id: str, sheet_id: str) -> None:

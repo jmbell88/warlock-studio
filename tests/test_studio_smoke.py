@@ -4452,3 +4452,28 @@ def test_the_seam_readout_and_wrap_button_appear_only_in_tiled_mode(app_ctx):
     inker_canvas.seam_text(app_ctx, tab)
     assert app_ctx.state.preview[f"inker_seam:{tab.uid}"][0] == tab.doc.history.head
     assert worst is not None
+
+
+def test_a_rendered_sheet_offers_both_hand_offs(app_ctx, imgui_ctx):
+    """The sheet used to dead-end at Save PNG, though everything needed to open
+    it in either editor already existed."""
+    from warlock.studio.panes import sheet_panel
+
+    imgui, _renderer = imgui_ctx
+    job_id = _seeded(app_ctx)
+    job = app_ctx.cache.get(job_id)
+    job["files"] = ["model.glb"]
+    app_ctx.state.preview["sheets"] = [
+        {
+            "id": "s1",
+            "name": "turnaround",
+            "columns": 4,
+            "rows": 2,
+            "frame_size": 16,
+            "cells": [{"index": i} for i in range(8)],
+        }
+    ]
+
+    labels = _drawn_labels(imgui, lambda: sheet_panel.draw(app_ctx, job), "##sheet-hand")
+    assert _index_of(labels, "Edit in Inker") >= 0, labels
+    assert _index_of(labels, "Add to Packwright") >= 0, labels

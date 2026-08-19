@@ -642,6 +642,89 @@ def _load_sprite_draft(
     }
 
 
+def open_rendered_sheet(
+    ctx: Any, job_id: str, sheet_id: str, *, pixel: bool = False
+) -> None:
+    """Open a rendered 8-direction sheet (or its pixel restyle) in the Inker.
+
+    :func:`open_sprite_draft`'s shape, and unlinked for exactly its reason: it
+    carries no ``job_id`` and no ``link_kind``, so the first Ctrl+S is a Save
+    As. The sheet on disk is where the document *came from*, not its file --
+    saving over the render would destroy the thing the document is derived from.
+
+    **Sliced by** :func:`sheetin.document_from_grid`, **not**
+    ``document_from_atlas``. The render's sidecar fully describes a uniform grid
+    -- columns, rows, frame size, cells -- but it is not a
+    ``DirectionalLayout`` *kind*: ``animation.SHEET_KINDS`` is ``turnaround``
+    and ``walk`` only, so ``DirectionalLayout.of()`` would return ``None`` and
+    the whole door would refuse. The grid slicer wants only the geometry, which
+    the sidecar has.
+    """
+    ensure(ctx)
+    set_mode(ctx.state, "inker")
+    ctx.submit(
+        f"inker-open:sheet:{sheet_id}:{'pixel' if pixel else 'render'}",
+        _load_rendered_sheet,
+        ctx.svc,
+        job_id,
+        sheet_id,
+        pixel,
+    )
+
+
+def sheet_grid(record: dict[str, Any]) -> tuple[tuple[int, int], int]:
+    """``(cell, count)`` from a rendered sheet's sidecar.
+
+    ``frame_size`` is the square case and is written as **0** on a non-square
+    plan, where ``frame_w``/``frame_h`` carry the truth -- so this reads the
+    pair first and falls back to the square. ``cells`` is the authority on how
+    many there are; ``columns * rows`` would count a padded final row.
+    """
+    width = int(record.get("frame_w") or 0)
+    height = int(record.get("frame_h") or 0)
+    if not width or not height:
+        square = int(record.get("frame_size") or 0)
+        width = height = square
+    if width < 1 or height < 1:
+        raise ValueError("that sheet's sidecar records no frame size")
+    count = len(record.get("cells") or []) or int(
+        int(record.get("columns") or 0) * int(record.get("rows") or 0)
+    )
+    if count < 1:
+        raise ValueError("that sheet's sidecar records no cells")
+    return (width, height), count
+
+
+def _load_rendered_sheet(
+    svc: Any, job_id: str, sheet_id: str, pixel: bool
+) -> dict[str, Any]:
+    """Blocking; task thread only."""
+    import numpy as np
+    from PIL import Image
+
+    from ..service import sheets as svc_sheets
+    from .inker import sheetin
+
+    if pixel:
+        record = svc_sheets.get_pixel_sheet(svc, job_id, sheet_id)
+        png = svc_sheets.sheet_pixel_png(svc, job_id, sheet_id)
+    else:
+        record = svc_sheets.get_sheet(svc, job_id, sheet_id)
+        png = svc_sheets.sheet_png(svc, job_id, sheet_id)
+    cell, count = sheet_grid(record)
+    with Image.open(png) as opened:
+        opened.load()
+        atlas = np.asarray(opened.convert("RGBA"), dtype=np.uint8).copy()
+    doc = sheetin.document_from_grid(atlas, cell, count=count)
+    name = str(record.get("name") or sheet_id)
+    return {
+        "doc": doc,
+        "path": None,
+        "format": "ora",
+        "title": f"{name} (pixel)" if pixel else name,
+    }
+
+
 # --- the job bridge ---------------------------------------------------------
 
 
