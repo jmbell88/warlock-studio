@@ -82,6 +82,18 @@ cell keeps its tile and simply redraws with the new art, because the numbering i
 atlas whose size changed is refused by name rather than accepted — the roles are positional, so a
 cropped atlas is one whose tile 93 is no longer the tile the map thinks it is.
 
+### Tilesets from Inker
+
+Inker has tilesets and tilemap layers of its own, and they are the *same type* — no conversion
+happens in either direction. **Use in Plotter** in Inker's Tiles panel hands the tileset it is
+showing to the open map, and a `.tsx` exported there is a `.tsx` **Add from a file...** reads here.
+
+Either way it is a **snapshot, not a link**. The map holds the tileset as it stood when it arrived;
+painting on it back in Inker afterwards mints a new one there and leaves the map's copy exactly as
+it was, and you send it across again to bring the changes over. That is deliberate: a live link
+between two documents with two undo stacks is a synchronisation feature, and a snapshot is the
+honest thing without it. [Tilemap layers](08-inker.md#tilemap-layers) is the Inker side of this.
+
 ## Isometric and oblique maps
 
 A map is drawn on one of three lattices, and which one is a property of the map. On an **isometric**

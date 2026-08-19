@@ -312,11 +312,14 @@ def test_the_tool_is_refused_with_a_reason_until_the_document_is_indexed():
 
 
 def test_no_other_tool_is_gated_and_no_document_gates_nothing():
+    """The two gated tools are shading and the tile stamp; nothing else has a
+    document-shaped reason to be out, and no document gates either of them."""
     doc = inker.Document.blank(*SIZE)
     for tool, _label, _key in inker_state.TOOLS:
-        if tool != "shade":
+        if tool not in ("shade", "tile"):
             assert inker_state.tool_reason(tool, doc) == ""
     assert inker_state.tool_reason("shade", None) == ""
+    assert inker_state.tool_reason("tile", None) == ""
 
 
 def test_the_direction_is_a_per_tool_option_at_the_declared_default():

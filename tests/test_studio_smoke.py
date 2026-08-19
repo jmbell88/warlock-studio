@@ -1335,6 +1335,7 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
         inker_canvas,
         inker_colors,
         inker_layers,
+        inker_tiles,
         inker_tools,
     )
     from warlock.studio.tokens import sp
@@ -1355,6 +1356,10 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
         """
         if imgui.begin_child("##paint-left", (sp(300), 0)):
             inker_tools.draw(app_ctx)
+            # Between the two, as the workspace lays it out: the panel appears
+            # with the document's first tileset, so most of this walk draws its
+            # "nothing yet" branch and the block at the end draws the picker.
+            inker_tiles.draw(app_ctx)
             inker_colors.draw(app_ctx)
             # The conversion popup is opened *and* begun from the colours pane,
             # so its opener belongs here rather than in the right column: imgui
@@ -1558,6 +1563,28 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
     _frame(imgui_ctx, build)
     assert app_ctx.state.preview.get(f"inker_tex:{tab.uid}:composite") is not None
     assert app_ctx.state.preview.get(f"inker_tex:{tab.uid}:floating") is not None
+
+    # A tileset and a tilemap layer, last because a document holding one
+    # refuses the whole-document colour conversions above by name. This is the
+    # only state where the tile panel draws its picker rather than its "nothing
+    # yet" branch -- and the only one that uploads an atlas texture, which the
+    # close below has to give back with the rest.
+    from warlock.studio.inker.tiles import strip as _strip
+
+    tiles = np.zeros((3, 8, 8, 4), dtype=np.uint8)
+    tiles[1, ..., 0] = tiles[1, ..., 3] = 255
+    tiles[2, ..., 2] = tiles[2, ..., 3] = 255
+    slot = tab.doc.add_tileset(_strip(tiles))
+    tab.doc.add_tilemap_layer(slot.uid)
+    state.tool = "tile"
+    _frame(imgui_ctx, build)
+    # Each behaviour once: the toggle's selected button is a pushed style
+    # colour and the note under it is a different sentence per mode.
+    for behavior in ("auto", "stack", "manual"):
+        tab.doc.tile_behavior = behavior
+        _frame(imgui_ctx, build)
+    assert app_ctx.state.preview.get(f"inker_tex:{tab.uid}:tileset{slot.uid}") is not None
+    state.tool = "brush"
 
     # Dirty, so closing asks first -- and the question is what stops a stray
     # click on the tab's x from losing an unsaved painting.

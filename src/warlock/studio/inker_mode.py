@@ -2810,6 +2810,73 @@ def export_document_palette(ctx: Any) -> None:
 # sits above the engine pin.
 
 
+def new_tilemap_layer(ctx: Any, tab: InkerDoc, tileset_uid: int | None) -> None:
+    """A new tilemap layer bound to *tileset_uid*, above the active row.
+
+    Synchronous, ``add_layer``'s own shape: it is one history step over data
+    already in memory, so a task thread would only add a frame of latency to a
+    button press. The three verbs here are the panel's doors and the *engine*
+    owns every refusal; what this adds is the sentence, which is the half a
+    ``bool`` return cannot carry.
+    """
+    if tileset_uid is None:
+        ctx.toast("This document has no tileset yet.", "error")
+        return
+    try:
+        layer = tab.doc.add_tilemap_layer(int(tileset_uid))
+    except (KeyError, ValueError) as exc:
+        ctx.toast(f"The layer was not added: {exc}.", "error")
+        return
+    ctx.toast(f"{layer.name} added.", "success")
+
+
+def convert_to_tilemap(ctx: Any, tab: InkerDoc, tile_w: int, tile_h: int) -> None:
+    """Cut the active layer into tiles and bind it to the new tileset.
+
+    The whole *track* on an animated document -- see
+    ``Document.convert_layer_to_tilemap``, whose ``False`` covers the three
+    ordinary "nothing to do" answers this turns into one sentence each.
+    """
+    doc = tab.doc
+    if not len(doc.stack):
+        ctx.toast("There is no layer to convert.", "error")
+        return
+    layer_uid = doc.stack.active.uid
+    try:
+        done = doc.convert_layer_to_tilemap(layer_uid, int(tile_w), int(tile_h))
+    except ValueError as exc:
+        ctx.toast(f"The layer was not converted: {exc}.", "error")
+        return
+    if not done:
+        ctx.toast(
+            "That layer was not converted -- it is already a tilemap, or it is "
+            "locked.",
+            "warn",
+        )
+        return
+    ctx.toast(f"Cut into {tile_w} x {tile_h} tiles.", "success")
+
+
+def convert_to_raster(ctx: Any, tab: InkerDoc) -> None:
+    """Turn the active tilemap layer back into an ordinary one.
+
+    Lossless by construction -- the picture is already the materialization --
+    and the tileset stays in the document, which is what makes converting back
+    and forth to reach the pixel tools free.
+    """
+    doc = tab.doc
+    if not len(doc.stack):
+        ctx.toast("There is no layer to convert.", "error")
+        return
+    if not doc.convert_layer_to_raster(doc.stack.active.uid):
+        ctx.toast(
+            "That layer was not converted -- it is not a tilemap, or it is locked.",
+            "warn",
+        )
+        return
+    ctx.toast("Converted to a plain layer.", "success")
+
+
 def export_tileset(ctx: Any, tab: InkerDoc | None = None, *, index: int) -> None:
     """One tileset's atlas as a Tiled ``.tsx`` plus its PNG, side by side.
 

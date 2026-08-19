@@ -110,7 +110,7 @@ def _file(ctx: Any, state: Any, tab: Any) -> None:
     """
     from pathlib import Path
 
-    from . import inker_canvas
+    from . import inker_canvas, inker_tiles
 
     width = widgets.grid_width(2)
     if controls.button(f"{icons.PLUS} New", (width, 0)):
@@ -138,23 +138,19 @@ def _file(ctx: Any, state: Any, tab: Any) -> None:
         ):
             inker_mode.export_png(ctx, tab)
 
-        # Minimal tileset doors -- Task 8 owns the picker pane that shows the
-        # list itself; until then, "Export tileset..." reaches the first one
-        # a document has, the same way every button above reaches the one
-        # document a tab holds.
-        has_tileset = bool(tab.doc.tilesets)
+        # **The two ways a drawing acquires its first tileset**, and the reason
+        # they are here rather than in the tile panel: that panel is drawn only
+        # once the document has one, so a door into it that lived there would
+        # be a door only reachable from inside the room. Everything *else*
+        # about tiles -- the picker, the layer verbs, the export, the handoff
+        # to Plotter -- is in ``inker_tiles``, which supersedes the index-0
+        # "Export tileset..." button that stood here before there was a
+        # selection to address.
         if widgets.disabled_button(
-            "Export tileset...",
-            ready and has_tileset,
-            (width, 0),
-            reason=why if not ready else "This document has no tileset yet.",
-        ):
-            inker_mode.export_tileset(ctx, tab, index=0)
-        imgui.same_line()
-        if widgets.disabled_button(
-            "Import tileset (.tsx)...", ready, (width, 0), reason=why
+            "Import tileset (.tsx)...", ready, (-1, 0), reason=why
         ):
             inker_mode.import_tileset(ctx, tab)
+        inker_tiles.convert_row(ctx, state, tab)
 
     widgets.recent_files(
         inker_mode.recent_paths(ctx),

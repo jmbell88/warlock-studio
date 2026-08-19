@@ -674,6 +674,76 @@ canvas only: scaling has no slack to put anywhere. Growing a canvas anchored cen
 all four sides; anchored top-left it adds room right and below, which is what the button did before
 there was a grid. Shrinking works the same way and crops from the opposite sides.
 
+## Tilemap layers
+
+A **tilemap layer** is a layer whose cells name tiles out of a **tileset** instead of holding
+pixels of their own. Paint a wall once, put it down two hundred times, then repaint that one tile
+and every wall in the drawing changes with it. It is the same idea Plotter's maps are built on —
+and the same tileset type, so a tileset made here opens there and the other way round.
+
+**Getting one.** Two doors, both in the document panel's File block, and both reachable whether or
+not the drawing already has a tileset:
+
+- **Convert to tilemap…** cuts the active layer into tiles at the size you choose and binds it to
+  the tileset it just made. Cells holding the same picture share one tile, so a wall drawn twenty
+  times costs one tile, and an empty cell costs none at all — tile 0 is a required blank that every
+  transparent cell points at. On an animated document the whole *track* is cut, and every frame
+  dedupes against the same growing tileset.
+- **Import tileset (.tsx)…** brings in a Tiled tileset and its image. Any grid geometry is handled;
+  terrain sets ride along in the file even though Inker does not paint with them.
+
+Once a document has a tileset, the **Tiles** panel appears under the toolbox. It lists the tileset,
+draws every tile in it, and is where the rest of this lives: **New tilemap layer** adds an empty
+one, **To a plain layer** turns the active one back into ordinary pixels — losslessly, since the
+picture you see already *is* the tiles — and the tileset stays in the document either way, so
+converting back and forth to reach the pixel tools costs nothing.
+
+**Putting tiles down.** Pick a tile in the Tiles panel, take the **Tile stamp** (`Y`), and click or
+drag on the canvas. A tile-sized outline follows the cursor so you can see which cell you are about
+to write, and a drag stamps each cell it enters exactly once — one history step per cell, not one
+per frame of the drag. Tile 0 is the eraser: stamping it clears a cell.
+
+The three **flip** boxes — H, V and D — turn the tile as it goes down. D is the diagonal, a
+transpose, and the three together give all eight orientations of a square. The flags ride in the
+cell rather than in the tileset, so a tile you have placed eight ways is still one tile.
+
+**Manual, Auto and Stack** decide what happens when you paint *pixels* on a tilemap layer with an
+ordinary brush. The three buttons are in the tool panel and appear only while a tilemap layer is
+active, because there is nothing for them to describe otherwise:
+
+- **Manual** never changes the tileset. The paint is thrown away and the cell is redrawn from the
+  tile it already names, and a message says so once per stroke. This is the default, and it is the
+  safe one: the tile stamp is how you change a tilemap layer in this mode.
+- **Auto** edits the tile itself. Every placement of it, on every frame and every layer bound to
+  that tileset, changes with it — which is the whole point of the mode and also the thing to be
+  careful of.
+- **Stack** only ever appends. Paint that the tileset has never seen becomes a new tile and the
+  cell you painted points at it; no existing tile is ever modified.
+
+Which of the three is selected is *view state*: it is not saved with the document, and switching it
+never marks the document unsaved.
+
+**What geometry can and cannot do.** Resize canvas works on a tilemap document and re-grids the
+cells — padding with blanks or cropping, following the same 3×3 anchor everything else does. An
+anchor that lands the old image at an offset that is not a whole number of tiles is refused by
+name rather than rounded, because rounding would move your drawing somewhere you did not ask for.
+Flip, rotate, scale and crop are refused outright while a tilemap layer is in the document: each
+would have to turn every cell's flip flags as well as move it, and that is not modelled yet.
+Convert the layer to a plain layer first if you need one of them.
+
+**Saving.** Tilemap layers ride in the same `.ora` as everything else. The picture is written as
+ordinary layer PNGs, so Krita, GIMP and anything else that reads OpenRaster open the file and see
+exactly what you see; the cells, the flip flags and the tilesets themselves ride in a member those
+editors ignore. Opening such a file in anything that does not understand that member, **including
+an older build of Warlock**, and then saving it, writes the file back with the picture intact and
+the tile structure gone — the same trade the animation timeline makes, for the same reason.
+
+**Sending a tileset to Plotter.** **Use in Plotter** in the Tiles panel hands the tileset to the
+open map exactly as it stands. It is a **snapshot, not a link**: painting on the tileset here
+afterwards leaves the map's copy alone, and you send it again to bring the changes across. A
+tileset exported as a `.tsx` behaves the same way and for the same reason — see
+[Tilesets](11-plotter.md#tilesets) for the map side of it.
+
 ## Filters
 
 **Filter…** in the document panel opens nine whole-layer adjustments: brightness/contrast,

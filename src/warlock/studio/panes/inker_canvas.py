@@ -1096,6 +1096,78 @@ def _locked_out(ctx: Any, state: Any, tab: Any) -> bool:
     return True
 
 
+def tile_cell(doc: Any, point) -> tuple[int, int] | None:
+    """The grid cell of the active tilemap layer a canvas point falls in.
+
+    ``None`` when the active row is not a tilemap, when it is bound to nothing,
+    or when the point is off the canvas -- the three answers the cursor and the
+    stamp both need, asked once so the outline drawn under the mouse and the
+    cell a press writes to can never be two different cells.
+
+    Floor division on a *floored* coordinate rather than on the float: a point
+    at -0.5 belongs to no cell, and ``int(-0.5) // 4`` would put it in the last
+    row of the grid above.
+    """
+    uid = doc.active_tilemap_uid()
+    if uid is None:
+        return None
+    tileset_uid = doc.active_tileset_uid()
+    if tileset_uid is None:
+        return None
+    try:
+        tileset = doc.tileset_slot(tileset_uid).tileset
+    except KeyError:  # pragma: no cover - a dangling binding
+        return None
+    x, y = int(math.floor(point[0])), int(math.floor(point[1]))
+    width, height = doc.size
+    if x < 0 or y < 0 or x >= width or y >= height:
+        return None
+    return (x // tileset.tile_w, y // tileset.tile_h)
+
+
+def _tile_stamp(state: Any, tab: Any, point) -> bool:
+    """Put the picked tile down in the cell under *point*. -> whether it wrote.
+
+    **Once per cell entered**, which is what ``tile_cell`` is remembered for: a
+    drag inside one cell sends a mouse-move per frame, and one history step per
+    frame would make a single stamp forty steps deep. Straight through
+    ``place_tiles`` -- the refs door -- so this tool never writes a pixel; the
+    picture it produces is the materialization the engine derives.
+    """
+    doc = tab.doc
+    cell = tile_cell(doc, point)
+    if cell is None or cell == state.tile_cell:
+        return False
+    state.tile_cell = cell
+    uid = doc.active_tilemap_uid()
+    if uid is None:  # pragma: no cover - tile_cell already answered this
+        return False
+    patch = np.array([[state.tile_gid()]], dtype=np.uint32)
+    return bool(doc.place_tiles(uid, cell, patch))
+
+
+def _manual_note(ctx: Any, state: Any, doc: Any) -> None:
+    """The Manual-mode revert sentence, once per gesture that earned it.
+
+    Derived at the pane from view state and the history serial, which is the
+    standing ruling: ``_commit_tilemap_patch`` reverts *silently* -- it has no
+    channel to report through and gains none, because "a gesture happened" is
+    not something the document knows. What it does know is that a reverted
+    commit pushes no step, so a head that has not moved across a paint gesture
+    on a Manual tilemap cel is exactly the case, and the pane is the only place
+    holding both ends of that comparison.
+
+    Through ``toast_once`` for ``_locked_out``'s reason: a user painting on a
+    Manual layer earns this sentence on every stroke, and one copy on screen is
+    the message.
+    """
+    if state.tile_head is None:
+        return
+    head, state.tile_head = state.tile_head, None
+    if doc.history.head == head:
+        ctx.state.toast_once(inker_state.TILE_MANUAL_REVERTED, "warn")
+
+
 def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
     doc = tab.doc
     tool = state.tool
@@ -1106,6 +1178,14 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
     # paint the foreground and all deserve the slot the user clicked. Setting it
     # per tool would be five places to forget.
     doc.paint_slot = getattr(state, "fg_slot", None)
+    # Where the Manual-mode revert notice is measured from, banked at the same
+    # moment and for the same reason ``paint_slot`` is: this is the one place
+    # that runs at the top of every gesture, whatever tool it belongs to.
+    state.tile_head = (
+        doc.history.head
+        if str(doc.tile_behavior) == "manual" and doc.active_tilemap_uid() is not None
+        else None
+    )
     state.drag_anchor = point
     state.last_point = point
     state.combine = _combine_op()
@@ -1165,6 +1245,21 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
     # not toast about a lock it was never going to reach.
     if _locked_out(ctx, state, tab):
         return
+    if tool == "tile":
+        # Before the paint branches and returning, the slice tool's shape: this
+        # tool writes *refs* and must never leave a dab behind. The refusal is
+        # the toolbox's own sentence, said here because a shortcut key selects
+        # a tool without asking the panel anything.
+        refusal = inker_state.tool_reason(tool, doc)
+        if refusal:
+            ctx.toast(refusal, "warn")
+            state.drag_kind = ""
+            return
+        doc.commit_floating()
+        state.tile_cell = None
+        state.drag_kind = "tile"
+        _tile_stamp(state, tab, point)
+        return
     colour = state.bg if state.drag_button == 1 else state.fg
     if tool == "fill":
         doc.commit_floating()
@@ -1175,6 +1270,9 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
             contiguous=state.wand_contiguous,
             wrap=tab.tiled,
         )
+        # The one paint gesture that never reaches ``_release``: a fill is a
+        # click, so its Manual-mode notice is due here.
+        _manual_note(ctx, state, doc)
         state.drag_kind = ""
         return
     if tool == "wand":
@@ -1943,6 +2041,10 @@ def _drag(state: Any, tab: Any, point) -> None:
         _slice_drag(state, tab, point)
         state.last_point = point
         return
+    if state.drag_kind == "tile":
+        _tile_stamp(state, tab, point)
+        state.last_point = point
+        return
     if state.drag_kind == "paint":
         doc.stroke_to(point)
     elif state.drag_kind == "spray":
@@ -2085,6 +2187,13 @@ def _release(ctx: Any, state: Any, tab: Any, point) -> None:
             # is what makes the undithered arithmetic byte-identical.
             dither=None if state.gradient_dither == "none" else state.gradient_dither,
         )
+    # Only the kinds that actually paint. A marquee drag pushes no history step
+    # either, and reading a still head after one would announce a revert that
+    # never happened; ``clear_drag`` below drops the banked head for every other
+    # gesture. The tile stamp is excluded by construction -- it writes refs and
+    # never reaches the tileset at all.
+    if kind in ("paint", "spray", "shape", "gradient"):
+        _manual_note(ctx, state, doc)
     state.clear_drag()
 
 
@@ -2204,6 +2313,8 @@ def _paint(ctx: Any, state: Any, tab: Any, origin, *, hovered: bool) -> None:
         if state.tool in _RINGED_TOOLS:
             _cursor(state, draw_list, view)
         _pixel_cell(state, tab, draw_list, origin)
+        if state.tool == "tile":
+            _tile_cursor(state, tab, draw_list, origin)
 
 
 def _tiled_extent(tab: Any, size) -> tuple[float, float, float, float]:
@@ -2682,6 +2793,39 @@ def _pixel_cell(state: Any, tab: Any, draw_list: Any, origin) -> None:
     lo = (min(a[0], b[0]), min(a[1], b[1]))
     hi = (max(a[0], b[0]), max(a[1], b[1]))
     draw_list.add_rect(lo, hi, _u32(theme.TEXT, 0.85))
+
+
+def _tile_cursor(state: Any, tab: Any, draw_list: Any, origin) -> None:
+    """Outline the whole cell the tile stamp would land in.
+
+    ``_pixel_cell``'s shape at the grid's scale, and drawn for the same reason:
+    the stamp writes a *cell*, so a one-pixel cursor would be a picture of the
+    wrong unit. Nothing at all on a layer the tool refuses -- ``tile_cell``
+    answers ``None`` there, which is the same question the press asks, so the
+    outline is on screen exactly when a click would write.
+
+    Two corners describe it because the view's turns are quarter turns and keep
+    the cell axis-aligned; a free rotation would not, and the view deliberately
+    does not have one.
+    """
+    if origin is None:
+        return
+    mouse = imgui.get_mouse_pos()
+    point = inker_state.to_image(tab.view, origin, mouse.x, mouse.y)
+    cell = tile_cell(tab.doc, point)
+    if cell is None:
+        return
+    tileset = tab.doc.tileset_slot(tab.doc.active_tileset_uid()).tileset
+    x0, y0 = cell[0] * tileset.tile_w, cell[1] * tileset.tile_h
+    a = inker_state.to_screen(tab.view, origin, float(x0), float(y0))
+    b = inker_state.to_screen(
+        tab.view, origin, float(x0 + tileset.tile_w), float(y0 + tileset.tile_h)
+    )
+    lo = (min(a[0], b[0]), min(a[1], b[1]))
+    hi = (max(a[0], b[0]), max(a[1], b[1]))
+    # Thickness is the **fifth** positional in this binding, not the sixth --
+    # ``plotter_tileset``'s selection outline is the same call.
+    draw_list.add_rect(lo, hi, _u32(theme.ACCENT, 0.9), 0.0, sp(2))
 
 
 def _cursor(state: Any, draw_list: Any, view: Any) -> None:

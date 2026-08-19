@@ -120,6 +120,10 @@ TOOL_ICONS = {
     "polyline": icons.WAYPOINTS,
     "polygon": icons.PENTAGON,
     "curve": icons.SPLINE,
+    # The tile stamp. Lucide's ``grid-3x3`` is the lattice a tilemap layer
+    # *is*, and it is the same glyph Plotter's tileset panel already carries --
+    # deliberately, because the two panels are the same idea in two modes.
+    "tile": icons.GRID,
 }
 
 #: The shading tool's direction, as a radio pair for ``_ink``'s reason: two
@@ -425,6 +429,15 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
         )
         _gradient_stops(state)
 
+    if tool == "tile":
+        widgets.section("Tile stamp")
+        widgets.muted_wrapped(
+            "Click or drag on the canvas to put the picked tile down. The stamp "
+            "writes cells, never pixels -- there is nothing here to size."
+        )
+
+    _tile_behavior(state, doc)
+
     if tool == "slice":
         _slices(ctx, state, tab)
 
@@ -459,6 +472,52 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
         _selection_actions(state, doc)
     _transform_entry(ctx, state, doc)
     imgui.end_disabled()
+
+
+def _tile_behavior(state: Any, doc: Any) -> None:
+    """Manual / Auto / Stack: what a *pixel* edit on a tilemap layer does to
+    the tileset under it.
+
+    Shown only while a tilemap layer is active, which is the one case where the
+    three words mean anything -- hidden rather than greyed, unlike the toolbox's
+    own rule, because this is not a control the user is looking for and failing
+    to find: on an ordinary layer there is no tileset for it to describe, so a
+    disabled radio row would be a promise about a feature the document does not
+    have. (Aseprite does the same: the selector appears with the mode.)
+
+    It writes ``doc.tile_behavior`` **directly**, and that is the whole point:
+    the field is view state, never serialized, and a toggle here must not push
+    a history step or move the document's saved head. A radio row rather than a
+    combo, for ``_ink``'s reason -- three options a user switches between
+    constantly want to be one click apart.
+    """
+    if doc is None or doc.active_tilemap_uid() is None:
+        return
+    imgui.dummy((0, 6))
+    widgets.section("Tiles")
+    current = str(doc.tile_behavior)
+    width = widgets.grid_width(len(inker_state.TILE_BEHAVIORS))
+    for index, (key, label, why) in enumerate(inker_state.TILE_BEHAVIORS):
+        selected = current == key
+        if selected:
+            imgui.push_style_color(
+                imgui.Col_.button.value,
+                imgui.get_style().color_(imgui.Col_.button_active.value),
+            )
+        if controls.button(f"{label}##tilebehav{key}", (width, 0)):
+            doc.tile_behavior = key
+        if selected:
+            imgui.pop_style_color()
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(f"{label}\n{why}")
+        if index != len(inker_state.TILE_BEHAVIORS) - 1:
+            imgui.same_line()
+    imgui.new_line()
+    note = next(
+        (why for key, _label, why in inker_state.TILE_BEHAVIORS if key == current),
+        "",
+    )
+    widgets.muted_wrapped(note)
 
 
 #: The pane's own ceiling on a slice name. A slice's name lands in a sprite

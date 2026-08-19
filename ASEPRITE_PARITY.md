@@ -1,6 +1,6 @@
 # ASEPRITE_PARITY.md — the Aseprite-parity master program
 
-**Status: Waves 0-2 DONE 2026-08-17. Waves 3-5 not started.**
+**Status: Waves 0-3 DONE (0-2 on 2026-08-17, 3 on 2026-08-18). Waves 4-5 not started.**
 **Progress is tracked by editing the wave status lines below (the PLOTTER_PLAN.md precedent). Each wave (or chunk) is a future session: its detailed implementation plan is written at execution time, arguing from this spec.**
 
 Goal: make Inker a genuine Aseprite alternative. Six P0 gaps from the 2026-08-17 gap
@@ -475,7 +475,7 @@ to be worth its own session.
 
 ---
 
-## Wave 3 — Tilemap layers + tilesets (P0 item 3) — **NOT STARTED**
+## Wave 3 — Tilemap layers + tilesets (P0 item 3) — **DONE 2026-08-18** (twelve commits, `da94828`..)
 
 ### The architecture
 
@@ -631,8 +631,12 @@ own invariant load; the frozen-snapshot model is honest without it.
 **Chunk 3.7 — UI panes + deferred geometry.** Tile picker pane, placement tool +
 tile cursor in `panes/inker_canvas.py`, Manual/Auto/Stack toggle in
 `panes/inker_tools.py`, canvas-resize re-gridding, optionally the flip refusal →
-refs flag algebra. Manual §07 tilemap section (no new chapter — no renumbering);
-cross-reference in §09 (Plotter).
+refs flag algebra. Manual tilemap section (no new chapter — no renumbering);
+cross-reference in the Plotter chapter. *As executed:* the picker is
+`panes/inker_tiles.py` (drawn in the left column once the document has a
+tileset), the manual section is `docs/manual/08-inker.md#tilemap-layers` with the
+cross-reference in `11-plotter.md#tilesets-from-inker`, and the flag algebra was
+deferred (deviation 6 below).
 
 **Indexed × tilemap composition** (Wave 1 landed first): a tilemap layer in an
 indexed document materializes RGBA then resolves at the funnel like any cel; tileset
@@ -676,6 +680,98 @@ cels.
 **Gate per chunk** as listed; overall: an `.aseprite` file with tilemaps opens,
 edits, saves to ORA, reopens bit-exact (refs and flags), and exports a
 Tiled-openable `.tsx`.
+
+### Deviations from this spec, as executed (Wave 3)
+
+Recorded here so the spec stays the record. Each is argued at its own site; this
+is the citable list.
+
+1. **`TilemapCel.plane_bytes` overrides the hook, instead of the spec's
+   `charged()` + `getattr(layer, "extra_nbytes", 0)`.** `undo._plane_bytes`'s
+   docstring already pre-argues exactly this: it asks a layer for its own
+   `plane_bytes` precisely so a subclass with a third plane can answer for
+   itself, and every cost site that charges a layer already goes through it. A
+   parallel `extra_nbytes` protocol would have been a second spelling of one
+   fact.
+2. **The tile hash index holds the strip array and compares it with `is`,
+   rather than keying on `id(pixels)`.** CPython recycles an id once the array
+   it named is freed — the documented 2026-08-17 bug class — so a stamp that
+   outlived its array could answer "unchanged" for a completely different
+   atlas. Holding the array makes that impossible by construction and costs one
+   strip per tileset. `panes/inker_textures.tileset_texture` uses the same
+   stamp for the same reason.
+3. **A dangling `Track.tileset_uid` is an early return, not a fallback.** The
+   first cut of `_ensure_cel_for` synthesised a canvas-sized single-cell tileset
+   when a track's binding named nothing; a dangling binding is an impossible
+   state, and the honest answer is no cel, which is the idiom every sibling
+   door in `document.py` already uses.
+4. **The grayscale constraint and the palette snap are applied inside
+   `_commit_tilemap_patch`.** The funnel's tilemap divert returns *before* the
+   funnel's own two, so without this a blue stroke on a grayscale document put
+   `[0, 0, 255, 255]` into the **tileset** and every placement of that tile drew
+   it. Applied per touched cell, scoped to the funnel's own `rect` and before
+   the dedup key, so the key, the no-op test and the recorded before/after all
+   describe the pixels the document actually ends up with.
+5. **Range ops on a tilemap track are refused this wave.** `flip_range`,
+   `rotate_range`, `shift_range` and `fill_range` all raise by name rather than
+   growing a refs-aware path; they are the same eight-symmetry problem the
+   whole-document geometry has, one scope down.
+6. **The whole-document flip/rotate/scale/crop refusals are retained; the
+   spec's optional "flip refusal → refs flag algebra" is explicitly deferred.**
+   Only `resize_canvas` was taught (`_tile_regrid`: pad/crop in tile units,
+   honouring the nine-way anchor, refusing a non-tile-aligned offset by name),
+   because a resize translates by whole cells and needs no flag permutation at
+   all. Turning `refs` by the eight-symmetry algebra is a Wave 4+ item.
+7. **Door-level refusals beyond the spec's list.** `merge_down`, `apply_matte`,
+   `lift`, cut, `_patch_edit_for` and the three whole-document colour
+   conversions (`convert_to_indexed`, `convert_to_grayscale`,
+   `convert_to_palette`) each refuse a tilemap layer *at the door*. Each writes
+   pixels before the funnel's refusal could fire, so a guard at the funnel
+   alone would leave a half-written layer behind an exception. `convert_to_rgb`
+   is deliberately not among them: it drops index planes and rewrites no pixel,
+   and a document that could not leave the mode it was in would simply be
+   wedged.
+8. **Two new edit types were minted**: `TrackTilesetEdit` (bind/unbind a
+   track's tileset, ending in `_anim_changed` rather than a bare `rev` bump,
+   because the binding is what `_ensure_cel_for` reads) and `LayerSwapEdit`
+   (replace one still document's layer by uid — the conversions' still-document
+   arm, where an animated document uses `CelSetEdit`).
+9. **`.aseprite` per-tile user data is detected by a run counter.** The spec's
+   own text says a tileset chunk "could be followed by a user data chunk (empty
+   or not) and then all the user data chunks of the tiles": the *first*
+   `USER_DATA` after a tileset belongs to the tileset, and only the second and
+   later ones are per-tile. `_Parse.tileset_ud_run` tracks that, where the first
+   cut had the detection inverted.
+10. **Task 7's index-0 "Export tileset..." is superseded by the picker.** It
+    reached `doc.tilesets[0]` because nothing yet had a selection to offer it;
+    `panes/inker_tiles.py` now owns the export and addresses the picked
+    tileset. What stayed in the bridge panel is the two doors that *acquire* a
+    first tileset — the `.tsx` import and "Convert to tilemap..." — because the
+    tile panel is only drawn once the document has one.
+11. **The tile stamp's letter is `Y`, and it is arbitrary by elimination.**
+    Every mnemonic in "tile", "stamp" and "tilemap" was taken; of the three
+    letters no tool held, `X` swaps the colours and `Z` sits under Ctrl+Z where
+    a slipped modifier would swap a tool for an undo. Aseprite has no letter to
+    borrow: it has no tile *tool* at all, it puts the whole editor into a
+    tilemap mode instead. No `SHIFT_TOOL_KEYS` entry was added, because that
+    table's docstring claims its contents are Aseprite's own slot-mates.
+12. **Manual mode reports through the pane, not the document.** The standing
+    ruling from Task 4: `_commit_tilemap_patch` reverts silently and gains no
+    channel, so `panes/inker_canvas` banks `history.head` at the press and
+    raises the sentence once per gesture when the head has not moved. See the
+    INVARIANTS entry.
+
+### Left open by Wave 3
+
+- Refs-aware flip/rotate (the flag algebra) and the range ops that depend on
+  it; the refusals name themselves and are the ledger.
+- Terrains/Wang in Inker, per-tile properties, tile animation, external-file
+  tilesets, non-32-bit tilemap cels — all deferred by the spec above and all
+  still deferred.
+- `_tile_hashes` entries for removed tilesets are never evicted (bounded by the
+  tilesets ever created in a session, one strip each).
+- `convert_layer_to_tilemap` is O(cells x cels) with a tile copy per cell —
+  fine at Inker canvas sizes, would want vectorising for a large clip.
 
 ---
 

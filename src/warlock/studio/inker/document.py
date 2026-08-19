@@ -1263,7 +1263,12 @@ class Document(
         }
 
     def _map_planes(
-        self, fn: Any, *, mask_fn: Any = _SAME_AS_PIXELS, index_fn: Any = None
+        self,
+        fn: Any,
+        *,
+        mask_fn: Any = _SAME_AS_PIXELS,
+        index_fn: Any = None,
+        refs_fn: Any = None,
     ) -> None:
         """Apply *fn* to every distinct pixel plane, and *mask_fn* to the mask.
 
@@ -1293,6 +1298,16 @@ class Document(
         and forgot to say so loses duplicate identity and stays correct; the
         reverse default would hand a 2-D array to ``indexed.snap`` and raise out
         of the middle of a rotate.
+
+        ``refs_fn`` is the fourth kind, and the canvas resize is the only op
+        that passes one (``_doc_tiles._tile_regrid``). It is called with each
+        *distinct layer*, after that layer's pixels have been mapped, and
+        ignores anything that is not a tilemap cel -- so an op that never
+        learned about refs simply never passes one, and a document holding no
+        tilemap pays nothing at all. Handed the layer rather than the plane,
+        unlike the other three, because a re-grid must re-derive ``pixels``
+        from the refs it just wrote: a tilemap cel's picture is a
+        materialization, never a second copy kept in step.
         """
         if self.mask is not None:
             apply = fn if mask_fn is _SAME_AS_PIXELS else mask_fn
@@ -1303,12 +1318,16 @@ class Document(
             for layer in self.stack:
                 layer.pixels = fn(layer.pixels)
                 self._map_index_plane(layer, index_fn)
+                if refs_fn is not None:
+                    refs_fn(layer)
             return
         # Each *distinct* cel exactly once. Walking the stack, or the slots,
         # would rotate a background linked across three frames three times.
         for layer in anim.unique_cel_layers():
             layer.pixels = fn(layer.pixels)
             self._map_index_plane(layer, index_fn)
+            if refs_fn is not None:
+                refs_fn(layer)
         self._stamp_all()
         anim._blank = None
         probe = next(anim.unique_cel_layers(), None)

@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from . import docmodes
+from .tilegrid import gid
 
 MIN_ZOOM = 0.05
 MAX_ZOOM = 32.0
@@ -148,6 +149,16 @@ TOOLS = (
     ("eyedropper", "Pick", "I"),
     ("text", "Text", "T"),
     ("slice", "Slice", "C"),
+    # The tile stamp (Wave 3). **``Y`` because it is the only letter left that
+    # is bound to nothing at all.** Every mnemonic in "tile", "stamp" and
+    # "tilemap" was already spoken for -- T is the text tool, I the
+    # eyedropper, L the line, E the eraser, S the elliptical marquee, M the
+    # marquee, A the spray, P the polyline -- and of the three letters no tool
+    # holds, ``X`` already swaps the colours and ``Z`` sits under Ctrl+Z, where
+    # a slipped modifier would swap a tool for an undo. Aseprite has no letter
+    # to borrow here: it has no tile *tool*, it puts the whole editor into a
+    # tilemap mode instead.
+    ("tile", "Tile stamp", "Y"),
 )
 
 def tool_label(key: str) -> str:
@@ -221,6 +232,45 @@ SHADE_REASONS = {
     "one": "Shading needs at least two colours in the palette to step between.",
 }
 
+#: Why the tile stamp is out. One sentence with the way forward in it, because
+#: the answer is a verb the user has -- the Tiles panel's own buttons.
+TILE_REASON = (
+    "The tile stamp needs a tilemap layer. Make one in the Tiles panel, or "
+    "convert this layer to a tilemap there."
+)
+
+#: The three ways a pixel edit on a tilemap layer may reach the tileset under
+#: it -- Aseprite's own names, and its own meanings. View state: see
+#: ``Document.tile_behavior``, which is never serialized.
+TILE_BEHAVIORS = (
+    (
+        "manual",
+        "Manual",
+        "Paint is thrown away: the tileset is never changed and the cell is "
+        "re-drawn from the tile it already names. Place tiles with the tile "
+        "stamp instead.",
+    ),
+    (
+        "auto",
+        "Auto",
+        "Paint edits the tile itself -- every placement of it, on every frame "
+        "and every layer, changes with it.",
+    ),
+    (
+        "stack",
+        "Stack",
+        "Paint appends a new tile and points this cell at it. No existing tile "
+        "is ever modified.",
+    ),
+)
+
+#: The revert sentence the canvas raises once per gesture, when a paint stroke
+#: on a Manual-mode tilemap cel came back with nothing recorded. Derived from
+#: view state at the pane -- the document has no channel for it, deliberately:
+#: ``_commit_tilemap_patch`` reverts silently and the UI, which is the only
+#: thing that knows a *gesture* happened, is where the sentence belongs.
+TILE_MANUAL_REVERTED = "Manual mode: the tileset was not changed."
+
 
 def tool_reason(tool: str, doc: Any = None) -> str:
     """Why *tool* cannot be used on *doc* right now, or ``""``.
@@ -235,7 +285,15 @@ def tool_reason(tool: str, doc: Any = None) -> str:
     every tool is equally useless, and greying the whole toolbox to say so
     would be noise rather than information.
     """
-    if tool != "shade" or doc is None:
+    if doc is None:
+        return ""
+    if tool == "tile":
+        # Asked of the *active row* rather than of the document: a drawing may
+        # well hold a tilemap layer and have an ordinary one selected, and the
+        # stamp writes refs onto whichever row is active or onto nothing.
+        probe = getattr(doc, "active_tilemap_uid", None)
+        return "" if probe is not None and probe() is not None else TILE_REASON
+    if tool != "shade":
         return ""
     palette = getattr(doc, "palette", None)
     if not palette:
@@ -951,6 +1009,39 @@ class InkerState:
     #: itself.
     slice_drag: Any = None
 
+    # -- tiles, all of it view state ---------------------------------------
+    #
+    # The tilesets and the refs live on the *document*; what is here is the
+    # brush -- which tileset, which tile out of it, and how it is turned. The
+    # same split the palette block below makes, for the same reason: none of
+    # this is picture data and none of it may push an undo step.
+    #
+    # ``tileset_uid`` is 0 for "whatever the active layer is bound to", which
+    # is what a user reaching for the panel means every time but the one where
+    # they are looking at another tileset on purpose. A stale uid is tolerated
+    # rather than policed, ``slice_uid``'s rule: an undone add leaves it naming
+    # a tileset the document does not have, the picker falls back to the bound
+    # one, and hunting the value down on every history move would be a second
+    # place for it to be wrong.
+    tileset_uid: int = 0
+    #: The local id the stamp puts down. 1 rather than 0 because local id 0 is
+    #: the required-blank tile -- a real, useful choice (it is the tile eraser),
+    #: but not the one a panel should open on.
+    tile_local: int = 1
+    #: The three flag bits, as three toggles. Held apart rather than as one
+    #: encoded word so the panel's checkboxes are the state rather than a view
+    #: of it; ``tile_gid`` is the one place they are folded together.
+    tile_flip_h: bool = False
+    tile_flip_v: bool = False
+    tile_flip_d: bool = False
+    #: The last cell a drag stamped, so a drag across a cell's interior costs
+    #: one write and not one per mouse-move. Cleared with the drag.
+    tile_cell: tuple[int, int] | None = None
+    #: ``doc.history.head`` at the press of a paint gesture on a tilemap cel,
+    #: or None. What the Manual-mode revert toast is derived from: a commit
+    #: that reverted pushed no step, so the head is where it was.
+    tile_head: int | None = None
+
     # -- indexed colour, all of it view state ------------------------------
     #
     # The palette itself lives on the *document* (``Document.palette``), which
@@ -1356,6 +1447,11 @@ class InkerState:
         self.slice_drag = None
         self.drag_button = 0
         self.tile_offset = (0.0, 0.0)
+        # The stamp's per-drag memory, and the head a Manual-mode revert is
+        # measured against. Both belong to one gesture and neither may survive
+        # a tab switch, which is what brings every other field here.
+        self.tile_cell = None
+        self.tile_head = None
         self.spray_carry = 0.0
         self.transform_grab = ""
         # An open multi-click gesture goes with it, which is what makes a tab
@@ -1387,6 +1483,52 @@ class InkerState:
         if tool != self.tool:
             self.clear_gesture()
         self.tool = tool
+
+    # -- tiles --------------------------------------------------------------
+
+    def tile_gid(self) -> int:
+        """The stamp's picked tile as one encoded ref word.
+
+        The single place the three flip toggles are folded into the gid the
+        engine takes, so the panel's checkboxes and what a press actually
+        writes cannot come to disagree. Local id 0 keeps its flags stripped:
+        every orientation of blank is blank, and a flagged zero would read back
+        out of an ORA as a different word for the same picture.
+        """
+        local = max(0, int(self.tile_local)) & gid.GID_MASK
+        if local == 0:
+            return 0
+        flags = 0
+        if self.tile_flip_h:
+            flags |= gid.FLIP_H
+        if self.tile_flip_v:
+            flags |= gid.FLIP_V
+        if self.tile_flip_d:
+            flags |= gid.FLIP_D
+        return local | flags
+
+    def picked_tileset(self, doc: Any) -> int | None:
+        """Which tileset the panel shows and the stamp writes into.
+
+        **The active layer's binding wins whenever there is one.** A stamp
+        writes a *local* id into the layer's own tileset, so a panel showing a
+        different atlas while a tilemap layer is selected would hand the engine
+        an id naming a completely different tile -- a mismatch with no honest
+        recovery, and the reason this is derived rather than remembered. The
+        remembered ``tileset_uid`` only decides when the active row is bound to
+        nothing, which is the browsing case: looking at a tileset to export it
+        or to send it to Plotter.
+        """
+        uids = [slot.uid for slot in getattr(doc, "tilesets", [])]
+        if not uids:
+            return None
+        probe = getattr(doc, "active_tileset_uid", None)
+        bound = probe() if probe is not None else None
+        if bound in uids:
+            return bound
+        if self.tileset_uid in uids:
+            return self.tileset_uid
+        return uids[0]
 
     # -- colours ------------------------------------------------------------
 

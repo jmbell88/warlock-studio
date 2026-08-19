@@ -33,6 +33,12 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     # Found by the O118 coverage sweep: two panes a user reads and neither had
     # a way into the chapter that describes it.
     "inker-colors": ("08-inker", "colour"),
+    # The tile panel (Wave 3). Its own anchor rather than sharing
+    # ``inker-tools``: a tilemap layer is a different *kind* of layer, and the
+    # questions asked in front of this panel -- what Manual/Auto/Stack do, what
+    # a flag bit is, why an old build drops the tiles -- are all in that one
+    # section.
+    "inker-tiles": ("08-inker", "tilemap-layers"),
     "inker-preview": ("09-inker-animation", "preview"),
     "candidates": ("04-generating-meshes", "candidates"),
     "clay-tools": ("10-clay", "transforming"),

@@ -15,6 +15,13 @@ other side still two slots. ``scale`` is the exception and cannot be anything
 else: a smooth resample produces colours that were never in the table, so its
 indices are re-resolved from the result. That is the one stated place in the
 whole indexed design where indices are inferred rather than permuted.
+
+**A tilemap layer survives exactly one of the five.** ``resize_canvas`` moves
+the picture by whole cells, so it re-grids ``refs`` (``_doc_tiles._tile_regrid``,
+passed down as ``_map_planes``' ``refs_fn``) and refuses a non-tile-aligned
+offset by name. The other four still refuse the document outright, because
+each would have to permute every cell's *flag bits* as well as its position
+and no such algebra is written yet.
 """
 
 from __future__ import annotations
@@ -105,12 +112,20 @@ class GeometryOps:
         An explicit ``offset`` still wins, because it is the general form and
         the anchor is a name for nine of its values -- and because every caller
         that already computed one should keep working unchanged.
+
+        **The one geometry op a tilemap layer survives.** Every other method
+        here still refuses one outright, because a flip or a turn would have to
+        permute each cell's flag bits as well as its position; a resize
+        translates by whole cells and pads or crops, so ``_tile_regrid`` is a
+        pure pad/crop of the refs plane. It refuses by name when the offset is
+        not a whole number of tiles -- before ``commit_floating``, so a refused
+        resize has changed nothing at all.
         """
-        self._refuse_tilemaps("canvas resize")
-        self.commit_floating()
         if offset is None:
             offset = tf.anchor_offset(self.size, size, anchor)
         where = offset
+        regrid = self._tile_regrid(size, where)
+        self.commit_floating()
 
         def run() -> None:
             self._slices_offset(where, size)
@@ -121,6 +136,7 @@ class GeometryOps:
                 index_fn=lambda plane: tf.resize_canvas(
                     plane, size, where, self.transparent_index
                 ),
+                refs_fn=regrid,
             )
 
         self._replay(run)

@@ -3071,6 +3071,7 @@ class App:
             inker_colors,
             inker_layers,
             inker_preview,
+            inker_tiles,
             inker_timeline,
             inker_tools,
         )
@@ -3081,6 +3082,14 @@ class App:
         sidebar_w = layout_mod.sidebar_width()
         tab = None if ctx.state.inker is None else ctx.state.inker.active
         animated = tab is not None and tab.doc.anim is not None
+        # The tile panel appears with the tilesets, the way the timeline strip
+        # and the preview appear with the frames: a drawing that has never seen
+        # a tilemap layer is byte-for-byte the workspace it always was, and a
+        # fixed-height palette taken out of every Inker session for a feature
+        # most of them do not use is a cost with no matching benefit. The
+        # *verbs* that make the first tileset are not hidden with it -- they are
+        # in the bridge panel, which is always drawn.
+        tiled_doc = tab is not None and bool(tab.doc.tilesets)
         imgui.begin_group()
         # **A drag handle, at last.** The two shares in this workspace have
         # always been ``lay.settings_share``, and this workspace has never had a
@@ -3105,11 +3114,17 @@ class App:
         # colour panel below keeps a floor of its own so this cannot swallow it
         # on a short window. Same shape as the sidebar/centre give-way rule in
         # INVARIANTS.md, applied down a column instead of across a row.
+        # The tile panel's fixed height joins the *floor* the toolbox has to
+        # give way to rather than being carved out of the colour panel: it sits
+        # between the two, so without this the give-way arithmetic would hand
+        # the toolbox room the tile panel then took, and the colour panel would
+        # end up below its own floor on a short window.
+        below_floor = inker_colors.PANEL_FLOOR + (inker_tiles.PANEL_H if tiled_doc else 0.0)
         tools_height = layout_mod.give_way(
             avail_y,
             lay.settings_share,
             sp(inker_tools.grid_height() + inker_tools.OPTIONS_FLOOR),
-            sp(inker_colors.PANEL_FLOOR),
+            sp(below_floor),
         )
         with layout_mod.pane(
             "inker-tools",
@@ -3132,12 +3147,21 @@ class App:
                 avail_y,
                 lay.settings_share,
                 sp(inker_tools.grid_height() + inker_tools.OPTIONS_FLOOR),
-                sp(inker_colors.PANEL_FLOOR),
+                sp(below_floor),
                 drag * tokens_mod.SCALE,
             )
             if share != lay.settings_share:
                 lay.settings_share = share
                 lay.save()
+        if tiled_doc:
+            with layout_mod.pane(
+                "inker-tiles",
+                (sidebar_w, sp(inker_tiles.PANEL_H)),
+                layout_mod.PaneRole.SIDEBAR,
+                edge=layout_mod.PaneEdge.RIGHT,
+            ) as visible:
+                if visible:
+                    inker_tiles.draw(ctx)
         with layout_mod.pane(
             "inker-colors",
             (sidebar_w, 0),

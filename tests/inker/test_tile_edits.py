@@ -390,10 +390,101 @@ def test_crop_to_selection_refuses_a_document_with_a_tilemap_layer():
         doc.crop_to_selection()
 
 
-def test_resize_canvas_refuses_a_document_with_a_tilemap_layer():
+# -- canvas resize: the one geometry op that re-grids rather than refusing ------
+#
+# Chunk 3.7's half of the deferral. A resize moves no pixel *within* a tile, so
+# a tile-aligned offset is a pure pad/crop of the refs plane -- which is why
+# this one is modelled and the flips, the rotations, the scale and the crop are
+# still refused (their permutation would have to turn every cell's flag bits by
+# the eight-symmetry algebra, which nothing here does yet).
+
+
+def test_resize_canvas_pads_the_refs_grid_at_the_top_left_anchor():
     doc = _still_tilemap_doc()
-    with pytest.raises(ValueError):
-        doc.resize_canvas((16, 16))
+    cel = doc.stack.active
+    doc.place_tiles(cel.uid, (0, 0), np.array([[1, 1], [1, 1]], dtype=np.uint32))
+    doc.resize_canvas((16, 16))
+    assert doc.size == (16, 16)
+    assert cel.refs.shape == (4, 4)
+    assert np.array_equal(cel.refs[:2, :2], np.ones((2, 2), dtype=np.uint32))
+    # The new room is blank, not a repeat of the old grid.
+    assert not cel.refs[2:, :].any()
+    assert not cel.refs[:, 2:].any()
+    _assert_synced(doc)
+
+
+def test_resize_canvas_honours_the_anchor_in_tile_units():
+    doc = _still_tilemap_doc()
+    cel = doc.stack.active
+    doc.place_tiles(cel.uid, (0, 0), np.array([[1]], dtype=np.uint32))
+    doc.resize_canvas((16, 16), anchor="bottom-right")
+    # An 8px offset at a 4px tile is two whole cells.
+    assert cel.refs.shape == (4, 4)
+    assert int(cel.refs[2, 2]) == 1
+    assert not cel.refs[:2, :].any()
+    _assert_synced(doc)
+
+
+def test_resize_canvas_crops_the_refs_grid():
+    doc = _still_tilemap_doc()
+    cel = doc.stack.active
+    doc.place_tiles(cel.uid, (1, 1), np.array([[1]], dtype=np.uint32))
+    doc.resize_canvas((4, 4))
+    assert cel.refs.shape == (1, 1)
+    assert int(cel.refs[0, 0]) == 0
+    _assert_synced(doc)
+
+
+def test_resize_canvas_refuses_an_offset_that_is_not_tile_aligned():
+    doc = _still_tilemap_doc()
+    with pytest.raises(ValueError, match="tile-aligned"):
+        doc.resize_canvas((16, 16), offset=(2, 0))
+    # Refused at the door: nothing moved.
+    assert doc.size == (8, 8)
+    assert doc.stack.active.refs.shape == (2, 2)
+    _assert_synced(doc)
+
+
+def test_resize_canvas_refuses_a_non_aligned_anchor_offset_by_name():
+    doc = _still_tilemap_doc()
+    with pytest.raises(ValueError, match="tile-aligned"):
+        doc.resize_canvas((14, 14), anchor="bottom-right")
+    assert doc.size == (8, 8)
+
+
+def test_undoing_a_resize_puts_the_refs_grid_back():
+    doc = _still_tilemap_doc()
+    cel = doc.stack.active
+    doc.place_tiles(cel.uid, (0, 0), np.array([[1, 1], [1, 1]], dtype=np.uint32))
+    doc.resize_canvas((16, 16))
+    doc.undo()
+    assert doc.size == (8, 8)
+    back = doc.stack.active
+    assert back.refs.shape == (2, 2)
+    assert np.array_equal(back.refs, np.ones((2, 2), dtype=np.uint32))
+    _assert_synced(doc)
+
+
+def test_resize_canvas_regrids_every_cel_of_an_animated_document():
+    doc = _animated_tilemap_doc()
+    cel = doc.stack[0]
+    doc.place_tiles(cel.uid, (0, 0), np.array([[1]], dtype=np.uint32))
+    doc.resize_canvas((16, 16))
+    for layer in doc.anim.unique_cel_layers():
+        if isinstance(layer, TilemapCel):
+            assert layer.refs.shape == (4, 4)
+    _assert_synced(doc)
+
+
+def test_resize_canvas_still_checks_alignment_for_a_bound_but_empty_track():
+    """A track bound to a tileset with no cel drawn on it yet is one
+    autovivify away from a grid, so its tile size still decides the answer."""
+    doc = _doc()
+    anim = doc.ensure_animation()
+    slot = doc.add_tileset(_tileset(RED))
+    anim.tracks[0].tileset_uid = slot.uid
+    with pytest.raises(ValueError, match="tile-aligned"):
+        doc.resize_canvas((16, 16), offset=(1, 1))
 
 
 def test_geometry_refuses_a_track_bound_to_a_tileset_even_before_any_cel():

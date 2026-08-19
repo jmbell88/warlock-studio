@@ -347,6 +347,52 @@ def _evict_cel_thumbs(
             docmodes.forget_texture(texture)
 
 
+def tileset_texture(ctx: Any, tab: Any, slot: Any) -> Any:
+    """One tileset's strip atlas, uploaded on first ask and re-uploaded when
+    the tileset behind it is replaced.
+
+    **The staleness stamp is the pixel array itself, held and compared by
+    ``is``.** A tileset is edited by frozen-replace -- ``grow``, ``shrink`` and
+    ``with_tiles`` each hand back a new ``Tileset`` over a new array -- so a
+    changed atlas is always a changed array, and holding the array makes a
+    false match impossible by construction. Not ``id(pixels)``, which is the
+    recycled-address bug class this repo has already been bitten by: a freed
+    array's id is handed to the next one, and a stamp that outlived its array
+    would answer "unchanged" for a completely different atlas. Not ``doc.rev``
+    either, which moves on every dab and would re-upload the atlas per frame of
+    a stroke.
+
+    Keyed per tab *and* per tileset uid, so two documents holding the same
+    imported ``.tsx`` get two textures and one tab's close cannot free the
+    other's (``release_doc``'s prefix sweep covers this key).
+
+    ``None`` when there is no GL context, which is what the headless smoke
+    suite and every state-only test run under -- the pane draws a placeholder
+    rather than branching on a viewer.
+    """
+    if ctx.viewer is None:
+        return None
+    pixels = slot.tileset.pixels
+    key = _slot(tab.uid, f"tileset{slot.uid}")
+    held_key = f"{key}:pixels"
+    texture = ctx.state.preview.get(key)
+    if texture is not None and ctx.state.preview.get(held_key) is not pixels:
+        docmodes.forget_texture(texture)
+        ctx.state.preview.pop(key, None)
+        texture = None
+    if texture is None:
+        texture = ctx.viewer.ctx.texture(
+            (int(pixels.shape[1]), int(pixels.shape[0])), 4, pixels.tobytes()
+        )
+        # Nearest, always: a tileset is pixel art far more often than not, and
+        # a linear filter samples the neighbouring tile across the strip seam.
+        nearest = ctx.viewer.ctx.NEAREST
+        texture.filter = (nearest, nearest)
+        ctx.state.preview[key] = texture
+        ctx.state.preview[held_key] = pixels
+    return texture
+
+
 def checker(ctx: Any) -> Any:
     """A two-square-by-two-square tile, drawn repeated under the canvas."""
     if ctx.viewer is None:

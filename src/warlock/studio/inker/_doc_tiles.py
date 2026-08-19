@@ -18,12 +18,16 @@ that walk and a single ``place_tiles`` call share: given one cel and a
 tile-unit rectangle, re-derive exactly that rectangle of pixels from refs and
 say so.
 
-**Geometry has no refs-aware permutation yet.** A flip or a rotation would
-have to turn ``refs`` by the same eight-symmetry algebra the tileset flags
-already carry (Chunk 3.7); until it does, ``_refuse_tilemaps`` is what every
-whole-canvas ``_replay`` op that has not been taught calls before it touches
-anything -- refuse by name rather than let ``pixels`` and ``refs`` quietly
-disagree, the Wave 3 risk the whole tile suite exists to catch.
+**Geometry is taught one op and refuses the rest.** A canvas resize
+translates the picture by whole cells and pads or crops, which is a pure
+pad/crop of ``refs`` with every flag bit left alone -- so ``_tile_regrid``
+models it, and refuses by name when the offset is not a whole number of tiles.
+A flip or a rotation would instead have to turn ``refs`` by the same
+eight-symmetry algebra the tileset flags already carry, which nothing here
+does; until something does, ``_refuse_tilemaps`` is what every whole-canvas
+``_replay`` op that has not been taught calls before it touches anything --
+refuse by name rather than let ``pixels`` and ``refs`` quietly disagree, the
+Wave 3 risk the whole tile suite exists to catch.
 """
 
 from __future__ import annotations
@@ -768,6 +772,113 @@ class TileOps:
             refs_crop, slot.tileset, (px1 - px0, py1 - py0)
         )
         self.invalidate((px0, py0, px1, py1), layer_uid=layer.uid)
+
+    # -- what the UI asks about the active row ------------------------------
+
+    def active_tilemap_uid(self: Document) -> int | None:
+        """The active row's uid when it is (or would autovivify into) a tilemap
+        cel, else ``None``.
+
+        The panes' one question, asked once here rather than three times in
+        three files: the toolbox greys the tile tool by it, the tools pane
+        shows the behaviour toggle by it, and the canvas decides whether a
+        press stamps or refuses by it. Through :meth:`_will_be_tilemap` rather
+        than an ``isinstance``, so a bound track whose current frame still
+        holds a placeholder answers the same as one that has been drawn on --
+        which is what :meth:`place_tiles` will do with it.
+        """
+        if not len(self.stack):
+            return None
+        uid = self.stack.active.uid
+        return uid if self._will_be_tilemap(uid) else None
+
+    def active_tileset_uid(self: Document) -> int | None:
+        """Which tileset the active row is bound to, or ``None``.
+
+        Read off the *cel* when there is one and off the track otherwise, for
+        :meth:`active_tilemap_uid`'s reason: a placeholder carries no binding
+        of its own and the track under it is where the answer lives.
+        """
+        uid = self.active_tilemap_uid()
+        if uid is None:
+            return None
+        try:
+            layer = self.layer_by_uid(uid)
+        except KeyError:  # pragma: no cover - defensive
+            layer = None
+        if isinstance(layer, TilemapCel):
+            return int(layer.tileset_uid)
+        track = self._track_of_row(uid)
+        return None if track is None else track.tileset_uid
+
+    # -- geometry: the canvas resize, and the refusals that remain ----------
+
+    def _bound_tile_sizes(self: Document) -> list[tuple[int, int]]:
+        """``(tile_w, tile_h)`` for every tileset something in this document is
+        bound to. Empty when nothing is."""
+        return [
+            (slot.tileset.tile_w, slot.tileset.tile_h)
+            for slot in self.tilesets
+            if self._tileset_bound(slot.uid)
+        ]
+
+    def _tile_regrid(
+        self: Document, size: tuple[int, int], offset: tuple[int, int]
+    ) -> Any:
+        """The per-cel refs re-grid a canvas resize needs, or ``None``.
+
+        **The one geometry op that is modelled rather than refused.** A resize
+        moves no pixel *within* a tile: the picture is translated by whole
+        cells and padded or cropped at the edges, which is exactly a pad/crop
+        of ``refs`` and leaves every cell's flag bits alone. The flips, the
+        quarter turns, the scale and the crop are still refused by
+        :meth:`_refuse_tilemaps` because their permutation would have to turn
+        those flags by the eight-symmetry algebra, and nothing here does that
+        yet.
+
+        A **non-tile-aligned offset** is refused by name rather than rounded:
+        rounding it would move the picture somewhere the user did not ask for,
+        and the alternative -- re-cutting every cell at the new phase -- is a
+        different operation (it rewrites the tileset) wearing a resize's name.
+        Checked against *every* bound tileset, and before anything is written,
+        so a document with two tile sizes cannot be half-resized.
+
+        Returns a callable taking one layer, which
+        :meth:`~.document.Document._map_planes` applies to each distinct cel
+        after the pixels have been mapped; it ignores anything that is not a
+        tilemap cel, so the whole tilemap case costs the ordinary path one
+        ``isinstance``.
+        """
+        if not self._holds_tilemap():
+            return None
+        ox, oy = int(offset[0]), int(offset[1])
+        for tile_w, tile_h in self._bound_tile_sizes():
+            if ox % tile_w or oy % tile_h:
+                raise ValueError(
+                    "a canvas resize of a tilemap layer needs a tile-aligned "
+                    f"offset; ({ox}, {oy}) is not a whole number of "
+                    f"{tile_w}x{tile_h} tiles"
+                )
+
+        def regrid(layer: Any) -> None:
+            if not isinstance(layer, TilemapCel):
+                return
+            ts = self.tileset_slot(layer.tileset_uid).tileset
+            grid_h, grid_w = grid_shape(size, ts.tile_w, ts.tile_h)
+            plane = np.zeros((grid_h, grid_w), dtype=gid.DTYPE)
+            tx, ty = ox // ts.tile_w, oy // ts.tile_h
+            old_h, old_w = layer.refs.shape
+            x0, y0 = max(0, tx), max(0, ty)
+            x1, y1 = min(grid_w, tx + old_w), min(grid_h, ty + old_h)
+            if x1 > x0 and y1 > y0:
+                plane[y0:y1, x0:x1] = layer.refs[y0 - ty : y1 - ty, x0 - tx : x1 - tx]
+            layer.refs = plane
+            # Re-derived rather than kept from the mapped pixels, the module's
+            # own rule: a partial cell at the *old* canvas edge was cropped,
+            # and a grown canvas has room to draw the rest of that tile.
+            layer.pixels = materialize(plane, ts, size)
+
+        return regrid
 
     # -- geometry refusal ---------------------------------------------------
 
