@@ -505,6 +505,86 @@ def test_an_indexed_document_routes_a_tilemap_stroke_through_the_tile_branch():
     _assert_synced(doc)
 
 
+# -- the other two colour modes ------------------------------------------------
+
+
+def test_a_grayscale_document_flattens_the_canonical_tile_to_luma():
+    """The funnel's grayscale branch sits *after* the tilemap divert, so it is
+    applied here or nowhere: without it a blue stroke put ``[0,0,255,255]`` into
+    the tileset and every placement of that tile drew it in colour."""
+    doc = _doc()
+    doc.convert_to_grayscale()
+    slot, cel = _still_tilemap(doc, _tile(RED))
+    doc.place_tiles(cel.uid, (0, 0), np.array([[1]], dtype=np.uint32))
+    doc.tile_behavior = "auto"
+    _activate(doc, cel)
+    doc.history.clear()
+
+    assert _paint(doc, (0, 0, 1, 1), BLUE) is True
+    r, g, b, a = (int(c) for c in slot.tileset.tile_pixels(1)[0, 0])
+    assert r == g == b
+    assert (r, g, b) != (0, 0, 255)
+    assert a == 255
+    _assert_synced(doc)
+
+    # Still one step, and the undo lands on the pre-stroke tile.
+    assert len(doc.history) == 1
+    doc.history.undo(doc)
+    assert np.array_equal(slot.tileset.tile_pixels(1), _tile(RED))
+    _assert_synced(doc)
+
+
+def test_a_palette_constrained_document_snaps_the_canonical_tile():
+    """Reachable exactly as the review found it: an indexed document keeps its
+    table through ``convert_to_rgb`` (which stays legal beside a tilemap layer),
+    so the palette constraint outlives the index planes."""
+    doc = _doc()
+    doc.convert_to_indexed([(0, 0, 0, 0), RED, GREEN], transparent=0)
+    slot, cel = _still_tilemap(doc, _tile(RED))
+    assert doc.convert_to_rgb() is True
+    assert doc.palette  # the table survived the mode change
+    doc.place_tiles(cel.uid, (0, 0), np.array([[1]], dtype=np.uint32))
+    doc.tile_behavior = "stack"
+    _activate(doc, cel)
+    doc.history.clear()
+
+    assert _paint(doc, (0, 0, 1, 1), BLUE) is True
+    painted = tuple(int(c) for c in slot.tileset.tile_pixels(2)[0, 0])
+    assert painted != BLUE  # off-palette blue never reaches the atlas
+    # ``snap`` matches on colour and rides alpha through unchanged, so the
+    # membership test is over the table's RGB and not its RGBA.
+    assert painted[:3] in {tuple(c)[:3] for c in doc.palette}
+    _assert_synced(doc)
+
+    assert len(doc.history) == 1
+    doc.history.undo(doc)
+    assert slot.tileset.tile_count == 2
+    assert int(cel.refs[0, 0]) == 1
+    _assert_synced(doc)
+
+
+def test_a_palette_snap_leaves_the_rest_of_the_tile_alone():
+    """The constraint is scoped to the written rect, as the funnel's is: a tile
+    holding off-palette content an import brought in is not rewritten wholesale
+    because one pixel of one placement was touched."""
+    doc = _doc()
+    off_palette = _tile(RED)
+    off_palette[3, 3] = (7, 9, 11, 255)  # on no table
+    slot = doc.add_tileset(_tileset(off_palette))
+    cel = doc.add_tilemap_layer(slot.uid)
+    doc.palette = [(0, 0, 0, 0), RED, GREEN]
+    doc.place_tiles(cel.uid, (0, 0), np.array([[1]], dtype=np.uint32))
+    doc.tile_behavior = "auto"
+    _activate(doc, cel)
+    doc.history.clear()
+
+    assert _paint(doc, (0, 0, 1, 1), GREEN) is True
+    tile = slot.tileset.tile_pixels(1)
+    assert tuple(int(c) for c in tile[0, 0]) == GREEN
+    assert tuple(int(c) for c in tile[3, 3]) == (7, 9, 11, 255)
+    _assert_synced(doc)
+
+
 # -- door refusals -------------------------------------------------------------
 
 

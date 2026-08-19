@@ -34,6 +34,7 @@ import numpy as np
 
 from ..tilegrid import gid
 from . import composite as cp
+from . import indexed as ix
 from .anim_edits import CelSetEdit, TrackAddEdit
 from .animation import Track
 from .layers import Layer
@@ -297,11 +298,14 @@ class TileOps:
         """Route a committed pixel write on a tilemap cel back onto its tileset.
 
         ``_commit_patch``'s tilemap branch, and the whole of the mode handling
-        for a tilemap layer -- including on an *indexed* document, where the
-        cel carries no index plane and the strip stays RGBA (the recorded
-        divergence: a tilemap layer materializes RGBA, and an index plane over
-        a picture that is itself derived would be a third description of the
-        same pixels).
+        for a tilemap layer -- the divert returns before every one of the
+        funnel's own three, so all three are answered here or nowhere.
+        *Indexed* is answered by construction: the cel carries no index plane
+        and the strip stays RGBA (the recorded divergence -- a tilemap layer
+        materializes RGBA, and an index plane over a picture that is itself
+        derived would be a third description of the same pixels). *Grayscale*
+        and the *palette snap* are applied to the tile below, before the dedup
+        key.
 
         The tool has already written RGBA over ``rect``. Per touched cell, the
         drawn tile is reconstructed -- the current atlas tile turned by the
@@ -351,6 +355,7 @@ class TileOps:
             return
         stacking = behavior == "stack"
         width, height = layer.size
+        wx0, wy0, wx1, wy1 = rect
         lookup = dict(self._tile_hash_index(layer.tileset_uid))
         count = ts.tile_count
         refs_before = layer.refs[ty0:ty1, tx0:tx1].copy()
@@ -373,6 +378,40 @@ class TileOps:
                 if rows <= 0 or cols <= 0:  # pragma: no cover - grid_shape ceils
                     continue
                 drawn[:rows, :cols] = layer.pixels[py : py + rows, px : px + cols]
+                # **The colour modes, applied here.** ``_commit_patch``'s own
+                # two constraints, in its own order (two ``if``s and not an
+                # ``elif``, because a grayscale document with a palette gets
+                # both). The divert at the head of the funnel returns *before*
+                # those branches, so this is the only place either can reach a
+                # tilemap layer -- without it a blue stroke on a grayscale
+                # document put ``[0, 0, 255, 255]`` into the **tileset**, and
+                # every placement of that tile drew it.
+                #
+                # Constrained before the dedup key and before any tileset
+                # write, mirroring the funnel's order for the funnel's reason:
+                # the key, the no-op test and the recorded before/after then
+                # all describe the pixels the document actually ends up with,
+                # and an undo followed by a redo lands on the same colours.
+                #
+                # Scoped to ``rect`` rather than to the whole cell, because
+                # ``rect`` is the funnel's scope too: a tile may legitimately
+                # hold off-palette content an import brought in, and touching
+                # one pixel of one placement is no reason to rewrite the rest
+                # of it everywhere it is placed.
+                #
+                # Applied before :func:`~.tiles.canonical` only for the
+                # coordinates' sake -- both constraints are per-pixel, so they
+                # commute with all eight of the square symmetries.
+                if self.color_mode == "grayscale" or self.palette:
+                    cx0, cy0 = max(wx0, px) - px, max(wy0, py) - py
+                    cx1, cy1 = min(wx1, px + cols) - px, min(wy1, py + rows) - py
+                    if cx1 > cx0 and cy1 > cy0:
+                        region = drawn[cy0:cy1, cx0:cx1]
+                        if self.color_mode == "grayscale":
+                            region = ix.grayscale(region)
+                        if self.palette:
+                            region = ix.snap(region, self.palette)
+                        drawn[cy0:cy1, cx0:cx1] = region
                 tile = np.ascontiguousarray(canonical(drawn, raw))
                 if np.array_equal(tile, current):
                     continue
