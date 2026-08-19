@@ -499,23 +499,29 @@ def _output_trailing(ctx: Any, state: Any) -> tuple[float, Any]:
             )
         imgui.same_line()
         imgui.set_next_item_width(sp(40))
-        changed, value = controls.drag_int("Pad", state.export_padding, 1, 0, 64)
+        # Hidden id, no drawn caption -- the same idiom ``##inkerwrap`` above
+        # already uses: a bare field, its meaning carried by the tooltip
+        # alone. Not ``"Pad"``/``"Ext"`` as the label: imgui draws a widget's
+        # own label as text immediately after it, which ``width``'s estimate
+        # above never counted -- the row under-declared by that much and
+        # clipped Ext and the help button off the end of it.
+        changed, value = controls.drag_int("##inkerpadding", state.export_padding, 1, 0, 64)
         if changed:
             state.export_padding = max(0, int(value))
         if imgui.is_item_hovered():
             imgui.set_tooltip(
-                "A border around the atlas and a gutter between every cell, "
-                "in pixels. Zero is the sheet this always packed."
+                "Padding: a border around the atlas and a gutter between "
+                "every cell, in pixels. Zero is the sheet this always packed."
             )
         imgui.same_line()
         imgui.set_next_item_width(sp(40))
-        changed, value = controls.drag_int("Ext", state.export_extrude, 1, 0, 32)
+        changed, value = controls.drag_int("##inkerextrude", state.export_extrude, 1, 0, 32)
         if changed:
             state.export_extrude = max(0, int(value))
         if imgui.is_item_hovered():
             imgui.set_tooltip(
-                "Repeats each cell's own border pixels outward into its "
-                "gutter, so a filtered texture sampling just past a "
+                "Extrude: repeats each cell's own border pixels outward into "
+                "its gutter, so a filtered texture sampling just past a "
                 "sprite's edge finds that sprite's own colour rather than "
                 "its neighbour's. Padding must be at least twice this, so "
                 "two neighbours extruding into one gutter cannot meet."

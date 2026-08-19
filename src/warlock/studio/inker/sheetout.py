@@ -22,7 +22,7 @@ grid is assertable without one; ``from_document`` is the adapter.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
@@ -658,6 +658,74 @@ def _slice_entry(entry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _trim_shift_slices(
+    cell_slices: Sequence[dict[str, Any] | None],
+    trims: Mapping[int, dict[str, int] | None],
+) -> list[dict[str, Any] | None]:
+    """``cell_slices`` re-expressed in a trimmed cell's own coordinates.
+
+    ``build`` crops each surviving frame to its own trim rectangle and pastes
+    the result flush at its cell's corner -- so a pivot or a slice authored in
+    the *original* (untrimmed) canvas has to move by that same ``(trim.x,
+    trim.y)`` the pixels moved by, or it goes on naming a point the art is no
+    longer under. Precedent: ``scale_slices`` already keeps the sidecar
+    describing "the atlas beside it" rather than the document it came from,
+    for the same reason wearing a different transform.
+
+    A slice's own bounds are also re-clipped to the frame's own placed box
+    (its trimmed ``w``/``h``, not the uniform cell's, since a smaller frame's
+    content does not fill the whole cell): whatever a slice covered outside
+    the trim rectangle was cropped out of the pixels and is not in the atlas
+    to describe. Only the bounds are clipped -- a pivot or a slice's centre is
+    a point, translated like the rest of that slice's geometry and otherwise
+    left alone, the same restraint ``_slices_offset`` already takes on a crop.
+
+    ``trims`` is keyed by cell index, the same order ``cell_slices`` is in.
+    A cell with nothing measured for it (an empty trim, or no entry at all)
+    passes its meta through untouched -- there is no offset to know, because
+    nothing of it was pasted.
+    """
+    out: list[dict[str, Any] | None] = []
+    for index, meta in enumerate(cell_slices):
+        rect = trims.get(index)
+        if meta is None or rect is None:
+            out.append(meta)
+            continue
+        ox, oy, ow, oh = rect["x"], rect["y"], rect["w"], rect["h"]
+        pivot = meta.get("pivot")
+        shifted: list[dict[str, Any]] = []
+        for entry in meta.get("slices") or ():
+            x, y = entry["x"] - ox, entry["y"] - oy
+            x0, y0 = max(0, x), max(0, y)
+            x1, y1 = min(ow, x + entry["w"]), min(oh, y + entry["h"])
+            e_pivot = entry.get("pivot")
+            e_center = entry.get("center")
+            shifted.append(
+                {
+                    **entry,
+                    "x": x0,
+                    "y": y0,
+                    "w": max(0, x1 - x0),
+                    "h": max(0, y1 - y0),
+                    "pivot": (
+                        None if e_pivot is None else (e_pivot[0] - ox, e_pivot[1] - oy)
+                    ),
+                    "center": (
+                        None
+                        if e_center is None
+                        else (e_center[0] - ox, e_center[1] - oy, e_center[2], e_center[3])
+                    ),
+                }
+            )
+        out.append(
+            {
+                "pivot": None if pivot is None else (pivot[0] - ox, pivot[1] - oy),
+                "slices": shifted,
+            }
+        )
+    return out
+
+
 def slices_block(
     plan: sheetlib.Plan, snap: Sequence[dict[str, Any]]
 ) -> dict[str, dict[int, Any]]:
@@ -1011,6 +1079,12 @@ def compose(
             src[i] if 0 <= i < len(src) else None
             for i in _cell_representatives(frame_cells)
         ]
+    if trim:
+        # The pixels moved -- cropped to each frame's own trim rectangle and
+        # pasted flush at its cell's corner -- so the pivots and slices
+        # describing those pixels have to move with them, or the sidecar goes
+        # on naming a point in a canvas the atlas no longer has.
+        cell_slices = _trim_shift_slices(cell_slices, trims)
     block = slices_block(plan, cell_slices)
     return (
         image,

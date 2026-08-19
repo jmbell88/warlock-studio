@@ -232,14 +232,16 @@ def check_atlas_size(width: int, height: int) -> None:
 
     Extracted from ``plan`` so the other builder of a ``Plan`` -- the Inker
     exporter, which cannot use ``plan`` because its job is poses by yaws --
-    applies the same limit rather than its own approximation of it. The message
-    is unchanged, deliberately: it is what the existing test matches on and what
-    a user has seen before.
+    applies the same limit rather than its own approximation of it. The
+    original message's shape is unchanged, deliberately: it is what the
+    existing test matches on and what a user has seen before -- padding is
+    named alongside the other two causes rather than replacing either of
+    them, since Inker's sheet export can hit this ceiling three ways now.
     """
     if max(width, height) > MAX_ATLAS_PX:
         raise ValueError(
             f"that sheet would be {width}x{height}px; the limit is {MAX_ATLAS_PX}px "
-            "-- use a smaller frame size or fewer poses"
+            "-- use a smaller frame size, fewer poses, or less padding"
         )
 
 

@@ -253,6 +253,70 @@ def test_a_merged_cells_slices_are_its_representative_frames():
     assert extra["pivots"] == {0: (1.0, 1.0)}
 
 
+def test_trim_shifts_pivots_and_slices_to_match_the_moved_art():
+    """``build`` crops this frame to its trim rectangle (2, 3, 4, 2) and pastes
+    the result flush at the cell's corner -- so a pivot or a slice authored
+    against the *original* canvas must move by that same (-2, -3), or it names
+    a point in a canvas the atlas no longer has."""
+    frames = [_box(8, 8, (2, 3, 4, 2))]
+    slices = [
+        {
+            "pivot": (3.5, 4.5),
+            "slices": [
+                {
+                    "name": "hit",
+                    "x": 3,
+                    "y": 4,
+                    "w": 2,
+                    "h": 1,
+                    "pivot": (4.0, 4.5),
+                    "center": (3, 4, 2, 1),
+                }
+            ],
+        }
+    ]
+    _image, _plan, extra = sheetout.compose(frames, [10], (), None, slices, trim=True)
+    _image.close()
+    assert extra["trims"][0] == {"x": 2, "y": 3, "w": 4, "h": 2}
+    assert extra["pivots"] == {0: (1.5, 1.5)}
+    assert extra["slices"][0] == [
+        {
+            "name": "hit",
+            "bounds": {"x": 1, "y": 1, "w": 2, "h": 1},
+            "pivot": {"x": 2.0, "y": 1.5},
+            "center": {"x": 1, "y": 1, "w": 2, "h": 1},
+        }
+    ]
+
+
+def test_trim_off_leaves_pivots_and_slices_in_canvas_coordinates():
+    """The untouched path: with ``trim`` off (the default), nothing here
+    changes -- the same numbers a caller handed in come back out."""
+    frames = [_box(8, 8, (2, 3, 4, 2))]
+    slices = [{"pivot": (3.5, 4.5), "slices": [{"name": "hit", "x": 3, "y": 4, "w": 2, "h": 1}]}]
+    _image, _plan, extra = sheetout.compose(frames, [10], (), None, slices)
+    _image.close()
+    assert extra["pivots"] == {0: (3.5, 4.5)}
+    assert extra["slices"][0] == [
+        {
+            "name": "hit",
+            "bounds": {"x": 3, "y": 4, "w": 2, "h": 1},
+            "pivot": None,
+            "center": None,
+        }
+    ]
+
+
+def test_trim_re_clips_a_slice_that_extended_past_the_trim_box():
+    """Whatever a slice covered outside the trim rectangle was cropped out of
+    the pixels themselves and is not in the atlas to describe."""
+    frames = [_box(8, 8, (2, 2, 3, 3))]
+    slices = [{"pivot": None, "slices": [{"name": "big", "x": 0, "y": 0, "w": 10, "h": 10}]}]
+    _image, _plan, extra = sheetout.compose(frames, [10], (), None, slices, trim=True)
+    _image.close()
+    assert extra["slices"][0][0]["bounds"] == {"x": 0, "y": 0, "w": 3, "h": 3}
+
+
 # --- the animation block -----------------------------------------------------
 
 
