@@ -13,6 +13,7 @@ import zipfile
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
 from PIL import Image
 
 from warlock.service import files as svc_files
@@ -573,6 +574,68 @@ def test_an_ase_suffix_also_routes_to_aseprite(tmp_path, monkeypatch):
 
     assert ctx.result["format"] == "aseprite"
     asein.document_from_aseprite(dest.read_bytes())  # does not raise
+
+
+def test_a_reachable_writer_refusal_names_itself_not_the_generic_toast(
+    tmp_path, monkeypatch
+):
+    """The refusal a real user can reach: an indexed document that picked up a
+    tileset strip holding a colour off its own palette (imported from a
+    ``.tsx``, or from Plotter) refuses to write, by name, at
+    ``aseout._resolved_indices``. Before this fix that ``ValueError`` reached
+    ``tasks.py``'s generic branch as a bare exception and the toast the user
+    actually saw was "Something went wrong; see the log for details." --
+    the named sentence landing only in the log.
+
+    ``_write``'s aseprite branch now wraps the writer in ``invalid_from``, the
+    same idiom ``import_tileset`` already uses on the read side of this same
+    format (``inker_mode.py``), so the refusal surfaces as a ``ServiceError``
+    -- which is what ``tasks.py.poll`` and ``main.py``'s toast already know how
+    to carry verbatim. ``_SaveCtx.submit`` runs the task inline, the same seam
+    ``test_an_unsupported_tsx_is_refused_by_name`` (``tests/inker/
+    test_inker_tsx.py``) asserts the import side through, so the raised
+    ``Invalid`` is asserted directly here rather than through a poll loop.
+    """
+    import numpy as np
+
+    from warlock.service.errors import Invalid
+    from warlock.studio.inker.document import Document
+    from warlock.studio.inker.tiles import strip
+
+    def _tile(colour: tuple[int, int, int, int]) -> np.ndarray:
+        return np.full((4, 4, 4), colour, dtype=np.uint8)
+
+    def _tileset(*colours, name="tiles"):
+        blank = np.zeros((4, 4, 4), dtype=np.uint8)
+        built = strip(np.stack([blank, *[_tile(c) for c in colours]], axis=0))
+        from dataclasses import replace
+
+        return replace(built, name=name)
+
+    doc = Document.blank(8, 8)
+    doc.stack[0].name = "Background"
+    doc.stack[0].pixels[:, :] = (200, 30, 30, 255)
+    doc.invalidate_all()
+    doc.convert_to_indexed(
+        [(0, 0, 0, 0), (200, 30, 30, 255), (30, 200, 30, 255)], transparent=0
+    )
+    slot = doc.add_tileset(_tileset((200, 30, 30, 255), (30, 200, 30, 255)))
+    doc.add_tilemap_layer(slot.uid, name="Tiles")
+    # A tileset the document never bound is enough to reach the writer's
+    # refusal, and is simpler to build than a bound one: any tileset the
+    # writer walks and finds an off-palette pixel in triggers the same path.
+    doc.add_tileset(_tileset((10, 10, 10, 255), name="stray"))
+
+    ctx = _SaveCtx()
+    tab = InkerDoc(doc=doc, title="Untitled")
+    ctx.state.inker.add(tab)
+    dest = tmp_path / "stray.aseprite"
+    monkeypatch.setattr(inker_mode.dialogs, "save_file", lambda *a, **k: dest)
+
+    with pytest.raises(Invalid, match="stray"):
+        inker_mode.save_as(ctx, tab)
+
+    assert not dest.exists()
 
 
 def test_save_as_still_defaults_to_ora_for_an_unrelated_flow(tmp_path, monkeypatch):

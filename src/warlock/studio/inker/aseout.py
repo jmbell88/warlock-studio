@@ -1055,6 +1055,17 @@ def _tags_chunk(tags, frames: int) -> bytes:
         start = max(0, min(int(tag.start), last))
         end = max(start, min(int(tag.end), last))
         repeat = int(getattr(tag, "repeat", 0) or 0)
+        if repeat == 0 and not tag.loop:
+            # This model's "loop flag decides, and it says no" has no zero to
+            # hand Aseprite: its own repeat==0 means forever (divergence #16),
+            # and its reader (this package's asein.py) hard-codes loop=True on
+            # the way back in, so a bare 0 here would round-trip a "play once"
+            # tag into one that never stops. Aseprite's own "play once" is
+            # repeat=1, which reads back here as loop=True/repeat=1 -- and
+            # ``animation.advance`` forces ``loop`` True under any positive
+            # repeat anyway, stopping after the count regardless of the flag --
+            # so the two are behaviourally identical on both ends.
+            repeat = 1
         if repeat > _MAX_U16:
             raise ValueError(
                 f"the tag {tag.name!r} repeats {repeat} times and an .aseprite"

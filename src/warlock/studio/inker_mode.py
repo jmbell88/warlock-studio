@@ -1801,13 +1801,28 @@ def _write(doc: Any, path: Path, file_format: str) -> None:
     pixels in place -- so the worst case is that the file catches a stroke that
     was mid-flight, which is precisely why the revision is captured before the
     submit rather than after the write.
+
+    The ``.aseprite`` branch alone is wrapped: ``aseout`` refuses a *broken*
+    document by name -- a tilemap cel bound to a tileset it does not have, a
+    strip pixel an indexed palette has no slot for -- and a bare ``ValueError``
+    from a task lands in ``tasks.py``'s generic branch, whose sentence points
+    at the log rather than at what was actually wrong (the log still gets the
+    traceback either way). ``write_ora`` never refuses by name this way, so it
+    is left alone -- wrapping it would only ever catch a bug, not a named
+    refusal, and ``invalid_from`` exists for the latter. Same idiom as
+    ``import_tileset``'s own wrap, just on the write side of the same format.
     """
     from . import inker
 
     if file_format == "ora":
         inker.write_ora(doc, path)
     elif file_format == "aseprite":
-        inker.write_aseprite(doc, path)
+        from ..service.errors import invalid_from
+
+        try:
+            inker.write_aseprite(doc, path)
+        except ValueError as exc:
+            raise invalid_from(exc, "This drawing could not be saved as .aseprite") from exc
     else:
         path.write_bytes(doc.png_bytes())
 

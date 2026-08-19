@@ -64,6 +64,17 @@ ours is.
 fixture means adding its stem there in the same commit — a file in this
 directory that nothing lists is a file nothing tests.
 
+A deliberate change to the writer's byte layout — a chunk's field order, a
+flag's width, anything `aseout.py` spells differently on purpose — moves the
+fixed point every non-builder-backed fixture is pinned at (`test_aseprite_
+corpus.py`'s gate failure says as much: "is not a fixed point of the writer --
+regenerate it from a doc that has already made one round trip"). That means
+regenerating all **nine** fixtures below that are `aseout-synthesized` but not
+also `builder-backed` — every entry except `grayscale-animated` and
+`tilemap-indexed`, which regenerate themselves from their checked-in builders
+instead — the same read-then-write-the-read-back-doc's-bytes recipe the gate
+message names, one file at a time, and re-committing the result.
+
 ## The fixtures
 
 Each entry is one `.aseprite` file.

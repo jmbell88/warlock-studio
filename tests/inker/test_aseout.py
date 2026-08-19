@@ -505,6 +505,51 @@ def test_a_tags_direction_survives(direction: str):
     assert tag.repeat == 3
 
 
+def test_a_play_once_tag_round_trips_to_the_same_playback():
+    """``loop=False, repeat=0`` is this model's "play once, then stop" -- but
+    ``asein._read_tags`` hard-codes ``loop=True`` on the way back in (a file's
+    own zero is Aseprite's "forever", divergence #16), so a bare 0 written for
+    "the loop flag decides, and it says no" would round-trip into a tag that
+    never stops. The writer instead emits Aseprite's own "play once"
+    (``repeat=1``), which reads back as ``loop=True, repeat=1`` -- a different
+    pair of field values, but ``animation.advance`` forces ``loop`` True under
+    any positive repeat anyway and still stops after the count, so playback is
+    identical to the original ``loop=False, repeat=0`` tag: one pass, then
+    stopped at the span's end.
+    """
+    from warlock.studio.inker import animation
+
+    doc = _animated()
+    doc.anim.tags.append(Tag(name="once", start=0, end=1, loop=False, repeat=0))
+    back, warnings = _round_trip(doc)
+    assert warnings == []
+    tag = back.anim.tags[0]
+    assert (tag.loop, tag.repeat) == (True, 1)
+
+    # Same playback either side of the round trip: one pass through the span,
+    # then stopped -- not looping forever.
+    durations = [40, 40]
+    before_span = (doc.anim.tags[0].start, doc.anim.tags[0].end, doc.anim.tags[0].loop)
+    after_span = (tag.start, tag.end, tag.loop)
+    for span, repeat in ((before_span, doc.anim.tags[0].repeat), (after_span, tag.repeat)):
+        index, _, playing, _, _ = animation.advance(
+            durations, 0, 0.0, 1000.0, span, repeat=repeat, cycles=0,
+        )
+        assert (index, playing) == (1, False)
+
+
+def test_a_looping_tag_keeps_repeat_zero():
+    """The unaffected half of the same branch: a tag that *does* loop keeps
+    its ``repeat=0`` byte untouched, so an existing looping tag's bytes are
+    unchanged by the play-once translation above."""
+    doc = _animated()
+    doc.anim.tags.append(Tag(name="idle", start=0, end=1, loop=True, repeat=0))
+    back, warnings = _round_trip(doc)
+    assert warnings == []
+    tag = back.anim.tags[0]
+    assert (tag.loop, tag.repeat) == (True, 0)
+
+
 def test_several_tags_keep_their_order():
     doc = _animated()
     doc.add_frame()
