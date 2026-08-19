@@ -804,7 +804,7 @@ is the citable list.
 
 ---
 
-## Wave 4 — Production sprite-sheet export (P0 item 6) — **NOT STARTED**
+## Wave 4 — Production sprite-sheet export (P0 item 6) — **DONE 2026-08-19** (ten commits, `57d347a`..)
 
 Two tracks: Inker's own exporter grows the Aseprite-parity options; Packwright grows
 the atlas-grade options; the existing "send frames to Packwright" bridge remains the
@@ -851,6 +851,98 @@ packer).
 (user-verified once, the TILED_VERSION rule); duplicate-merge correctness under
 linked cels; `SHEET_VERSION` sidecar backward-compat pin (pre-feature exports
 byte-identical); manual §07 + §10 updated.
+
+### Deviations from this spec, as executed (Wave 4)
+
+Recorded here so the spec stays the record. Each is argued at its own site; this
+is the citable list.
+
+1. **Three spec-location corrections**, found before implementation began and
+   authoritative for every task that followed: `export_tag` lives in
+   `inker_mode.py`, not `sheetout.py`; `measure_trim` lives in
+   `pipelines/sheet.py`, not `sheetout.py`; and the gate's manual chapters are
+   `08-inker.md`/`09-inker-animation.md`/`12-packwright.md` (post-renumbering),
+   not the spec's `§07`/`§10`.
+2. **Arrange semantics follow plain-English "rows N / columns N"** (N of that
+   thing packed), not Aseprite's own crossed By-Rows/By-Columns labels, and the
+   row count is ceil-derived (`rows = ceil(count/columns)`) rather than the
+   spec's literal N — so a counted arrange never leaves a dead trailing row when
+   N does not divide the frame count evenly.
+3. **Merge and Skip empty are refused, by name, on a document with its own
+   directional layout** — the same refusal Arrange already has. A
+   turnaround/walk grid's cells are poses by yaws, not frames, and neither
+   option has anything coherent to do to it.
+4. **A merged cell's slices and pivot are remapped to its representative
+   frame** (`_cell_representatives`) rather than left to key by cell index into
+   whatever frame happens to share that index — a correctness fix the spec's
+   merge description did not anticipate, since it assumed cells and frames
+   stayed one-to-one.
+5. **Trim delivers both spec readings, through different fields.** The atlas
+   places each frame's trimmed pixels flush at its own cell's corner (a size
+   reduction, not an offset-preserving placement), while the per-cell sidecar
+   `trim` rectangle keeps recording the offset+size within the original,
+   untrimmed frame, unchanged — so a consumer that wants the content back at
+   its original position still can, from the sidecar rather than from the
+   atlas layout.
+6. **The pow2-growth fix landed as the spec's own second option** — off by
+   default for grid packs, mode-resolved through a `None` sentinel that
+   re-baselines whenever `mode` changes without also naming `power_of_two` —
+   after measuring that the spec's literal instruction (delete both re-derives
+   at `layout.py:238/249` unconditionally) breaks the Tiled `.tsx` contract in
+   324 of 378 (86%) swept combinations: pow2 rounding is what keeps
+   `Layout.columns`/`rows` agreeing with what a real Tiled reader independently
+   derives from the finished PNG.
+7. **A grid pack's `.tsx` refusal no longer aborts the whole export.** When an
+   explicit `columns` pack's pow2-rounded geometry disagrees with Tiled's own
+   derivation, the PNG and the TexturePacker JSON still write; only the `.tsx`
+   is skipped, with a `"warn"`-level toast naming why.
+8. **"Split by layer" writes one file per top-level row of the layer tree**
+   (a lone track, or a whole group as one file), not one per leaf track —
+   argued from what the layers panel shows as a single row, from a group being
+   the only stack subset the pass-through opacity/visibility fold is exactly
+   correct for, and from a document with no groups still degenerating to one
+   file per layer, the plain Aseprite meaning.
+9. **One `export_template` field customises either a split's per-file stem or
+   a plain PNG sequence's per-frame numbering, never both at once** for a split
+   PNG sequence — the two default constants the byte-identity pins require
+   (`DEFAULT_TAG_TEMPLATE`/`DEFAULT_LAYER_TEMPLATE` vs. `DEFAULT_FRAME_TEMPLATE`)
+   only reproduce exactly under this two-level scheme.
+10. **Per-tab export memory is seeded once per tab** (`export_seed_uid`), not
+    on every export click — a deliberate usability fix beyond the spec's
+    literal words, so exporting the same tab twice in a row keeps a live edit
+    instead of silently reverting it to what the tab last used.
+11. **Trim/Padding/Extrude are not refused on a directional-layout document**,
+    unlike Merge/Skip empty — a directional layout only fixes a cell's *count*,
+    never its pixel size, so shrinking or padding a cell contradicts nothing
+    the layout claims.
+
+### Left open / owed by Wave 4
+
+- **Tiled-openable `.tsx` from a grid pack, user-verified once** — re-owed.
+  Item 6 above moved the geometry a real Tiled import would see (pow2 off by
+  default for grid), so the standing verification needs a fresh look with the
+  app installed (the TILED_VERSION rule: the constant only moves when a human
+  with Tiled has looked).
+- **Mode-level submit-test gap.** None of the arrange/merge/skip_empty/trim/
+  padding/extrude early refusals in `inker_mode._submit_export` have a
+  dedicated UI-level test; each is covered at the core (`sheetout`) layer
+  only. A pre-existing gap the series has carried since before this wave,
+  named again in the Task 1, 2, 4 and 5 reports.
+- **A `"slices_conflict"` sidecar note was not built.** A merged-away frame's
+  own authored slices, when they differ from its representative's, are
+  silently dropped rather than recorded. Closing it needed comparing every
+  duplicate frame's raw slice metadata against its representative's for every
+  merge — measured past the close-out sweep's own ~20-line budget, so it
+  stays a known gap rather than a rushed fix.
+- **A visible group whose members are all hidden writes a transparent sheet**
+  for a per-layer split. Flagged in Task 3's review but outside this
+  close-out's own sweep list, so left untouched; `skip_empty` on the same
+  export already raises rather than write a blank cell, which is the same
+  failure reachable a different way.
+- **`_slice_filenames` and `_split_stems` hold two different collision
+  policies** (bump vs. refuse) in the same module, each argued at its own
+  site. Noted in Task 3's report, not reconciled; revisit if a third naming
+  helper is ever added.
 
 ---
 

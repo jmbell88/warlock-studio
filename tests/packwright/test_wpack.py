@@ -138,6 +138,43 @@ def test_a_mode_no_op_does_not_re_baseline_power_of_two():
     assert doc.history.head == head
 
 
+# --- a mode switch away from grid clears a stale columns value --------------
+
+
+def test_switching_from_grid_to_maxrects_clears_a_set_columns():
+    doc = PackDoc()
+    doc.set_settings(columns=4)
+    assert doc.settings.columns == 4
+    doc.set_settings(mode="maxrects")
+    assert doc.settings.columns is None
+
+
+def test_an_explicit_columns_in_the_same_call_as_the_switch_still_refuses():
+    """Naming ``columns`` in the same call as the switch always wins over the
+    auto-clear -- but 4 columns is still not a MaxRects setting, so
+    ``PackSettings`` refuses the combination exactly as it always did."""
+    doc = PackDoc()
+    doc.set_settings(columns=4)
+    with pytest.raises(ValueError, match="columns only applies to a grid pack"):
+        doc.set_settings(mode="maxrects", columns=4)
+    assert doc.settings.columns == 4  # the refused edit never applied
+
+
+def test_switching_grid_to_grid_is_a_no_op_that_leaves_columns_alone():
+    doc = PackDoc()
+    doc.set_settings(columns=4)
+    head = doc.history.head
+    doc.set_settings(mode="grid")  # already grid
+    assert doc.settings.columns == 4
+    assert doc.history.head == head
+
+
+def test_a_mode_switch_with_no_columns_set_pushes_nothing_extra():
+    doc = PackDoc()
+    doc.set_settings(mode="maxrects")
+    assert doc.settings.columns is None
+
+
 def test_dirty_is_a_comparison_and_undo_can_clear_it():
     doc = PackDoc()
     doc.add_source(_sprite("s0"))

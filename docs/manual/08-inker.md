@@ -942,7 +942,9 @@ neither on is the one-cell-per-frame sheet this has always written. Merge turns 
 repeat into an actual saving: any two frames that are pixel-identical — not just a link, any repeat —
 share one cell, and the sidecar still lists every frame with its own duration, only pointing two of
 them at the same cell. Skip empty leaves a fully-transparent frame out of the atlas altogether and
-names which frames it dropped in the sidecar, for a clip with holds where nothing is drawn. Both are
+names which frames it dropped in the sidecar, for a clip with holds where nothing is drawn. A dropped
+frame's duration leaves with it — it is not folded into a neighbouring cell's duration, so the sum of
+the surviving durations is shorter than the clip's own length by however long the holds ran. Both are
 ignored for a document with its own directional layout, whose cells are poses by yaws rather than
 frames — the same reason Arrange is.
 **Trim**, **Pad** and **Ext** pack a tighter atlas the same way Packwright already does. Trim shrinks
@@ -954,7 +956,10 @@ gutter between every cell, in pixels, and Ext repeats each placed rectangle's ow
 outward into that gutter, so a filtered texture sampling just past a sprite's edge finds that
 sprite's own colour rather than its neighbour's. Pad must be at least twice Ext, refused by name if
 not — two neighbours extruding into one shared gutter would otherwise meet. All three are off by
-default, so an export with none of them on is the sheet this has always packed.
+default, so an export with none of them on is the sheet this has always packed. Once Pad (or Trim) is
+on, read the sidecar cell-driven — each cell's own `x`/`y`/`w`/`h` — rather than deriving positions
+from the top-level frame size and column count: that arithmetic no longer accounts for the gutters
+or the per-cell trim, and only the cells themselves still say where everything actually landed.
 
 **Export PNGs** writes one numbered PNG per frame — `name_0000.png`, `name_0001.png` and so on,
 beside whatever name you pick. No atlas to slice and no sidecar to read, which is what an engine

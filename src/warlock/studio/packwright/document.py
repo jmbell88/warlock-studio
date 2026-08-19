@@ -252,19 +252,18 @@ class PackDoc:
         self._apply_name(uid, after)
 
     def set_settings(self, **values: Any) -> None:
-        """Apply a settings change, with one adjustment: a mode change that
-        does not also name ``power_of_two`` re-baselines it to the new
-        mode's default rather than carrying the old mode's resolved value
-        across.
+        """Apply a settings change, with two adjustments a bare mode change
+        makes on the caller's behalf.
 
-        ``PackSettings.power_of_two``'s ``None`` sentinel only resolves in
-        ``__post_init__``, at construction -- and by the time a document
-        holds a settings object, the field is already a concrete bool.
-        ``dataclasses.replace`` copies that concrete value onto the new mode
-        verbatim, which is how a grid pack's resolved ``False`` used to
-        survive a switch to MaxRects and contradict MaxRects's own
-        documented ``True`` default. Passing ``None`` back through
-        ``replace`` re-triggers the resolution the same way a fresh
+        **``power_of_two`` re-baselines** to the new mode's default when the
+        call does not also name it. ``PackSettings.power_of_two``'s ``None``
+        sentinel only resolves in ``__post_init__``, at construction -- and
+        by the time a document holds a settings object, the field is already
+        a concrete bool. ``dataclasses.replace`` copies that concrete value
+        onto the new mode verbatim, which is how a grid pack's resolved
+        ``False`` used to survive a switch to MaxRects and contradict
+        MaxRects's own documented ``True`` default. Passing ``None`` back
+        through ``replace`` re-triggers the resolution the same way a fresh
         ``PackSettings()`` does. This does drop an earlier explicit choice
         across the switch -- the honest outcome, since the settings pane's
         checkbox only ever shows the *resolved* value and there is nothing
@@ -272,13 +271,29 @@ class PackDoc:
         has already turned it into a plain bool. An explicit ``power_of_two``
         passed in the *same* call always wins; this only fires when the
         caller left it unsaid.
+
+        **``columns`` clears** when the switch leaves grid (the only mode it
+        means anything for) and the call does not also name it. Without this,
+        a stale ``columns`` from before the switch reaches ``PackSettings``'s
+        own construction check unchanged, which refuses it by name -- so a
+        settings pane that only touched Mode gets a toast blaming Columns, a
+        control it never touched this click. ``columns`` can only be non-None
+        while the current mode is already grid (MaxRects refuses to hold one
+        at construction), so there is nothing to clear when the switch starts
+        from anywhere else. An explicit ``columns`` in the *same* call is left
+        alone, same as ``power_of_two`` above -- it still fails construction
+        if it is incompatible with the new mode, which is the pre-existing,
+        correct refusal for a caller naming both at once.
         """
-        if (
-            "mode" in values
-            and values["mode"] != self.settings.mode
-            and "power_of_two" not in values
-        ):
-            values = {**values, "power_of_two": None}
+        if "mode" in values and values["mode"] != self.settings.mode:
+            if "power_of_two" not in values:
+                values = {**values, "power_of_two": None}
+            if (
+                self.settings.mode == "grid"
+                and "columns" not in values
+                and self.settings.columns is not None
+            ):
+                values = {**values, "columns": None}
         after = replace(self.settings, **values)
         if after == self.settings:
             return

@@ -414,3 +414,21 @@ def test_a_label_that_sanitises_to_nothing_is_refused():
 def test_two_labels_that_collide_after_sanitising_are_refused():
     with pytest.raises(ValueError, match="walk_a-b"):
         inker_mode._split_stems("walk", ["a/b", "a*b"])
+
+
+def test_an_empty_tag_name_falls_back_to_a_placeholder_not_the_bare_stem():
+    """A loaded .ase/ORA can carry a tag or a track with an empty name. An
+    empty *label* only means "unsplit" when ``kind`` is also empty -- a split
+    leg's empty label is a real (if badly named) tag or layer, and must not
+    collapse onto the bare stem, which is what the single-file export writes
+    and would make this split output masquerade as a whole-document export."""
+    assert inker_mode._split_stems("walk", [""], kind="tag") == ["walk_tag"]
+
+
+def test_an_empty_layer_name_falls_back_to_a_placeholder_not_the_bare_stem():
+    assert inker_mode._split_stems("walk", [""], kind="layer") == ["walk_layer"]
+
+
+def test_two_empty_named_tags_still_collide_and_refuse():
+    with pytest.raises(ValueError, match="walk_tag"):
+        inker_mode._split_stems("walk", ["", ""], kind="tag")

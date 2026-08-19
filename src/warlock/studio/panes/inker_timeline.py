@@ -82,8 +82,6 @@ ARRANGE_OPTIONS = (
     ("rows", "Rows..."),
     ("columns", "Columns..."),
 )
-#: Which of the above take the N field beside them.
-_COUNTED_ARRANGES = ("rows", "columns")
 
 
 def _u32(value: int, alpha: float = 1.0) -> int:
@@ -457,7 +455,7 @@ def _output_trailing(ctx: Any, state: Any) -> tuple[float, Any]:
                 "and wraps the rest. A document with its own directional "
                 "layout (turnaround, walk) keeps that fixed grid instead."
             )
-        if state.export_arrange in _COUNTED_ARRANGES:
+        if state.export_arrange in sheetout.COUNTED_ARRANGES:
             imgui.same_line()
             imgui.set_next_item_width(sp(48))
             changed, value = controls.input_int(

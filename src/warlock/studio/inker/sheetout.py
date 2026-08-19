@@ -34,6 +34,8 @@ from ...pipelines import sheet as sheetlib
 from .animation import DIRECTION_ORDER, DirectionalLayout
 
 __all__ = [
+    "ARRANGES",
+    "COUNTED_ARRANGES",
     "DEFAULT_FRAME_TEMPLATE",
     "DEFAULT_LAYER_TEMPLATE",
     "DEFAULT_TAG_TEMPLATE",
@@ -231,7 +233,11 @@ def rebase_tags(tags: Sequence[Any], f0: int, f1: int) -> list[Any]:
 #: ``wrap`` -- and the set is checked against by name rather than inferred, so
 #: a typo refuses loudly instead of silently falling through to the row-wrap.
 ARRANGES = (None, "horizontal", "vertical", "rows", "columns")
-_COUNTED_ARRANGES = ("rows", "columns")
+#: Public (not ``_``-prefixed) because ``panes/inker_timeline.py`` needs the
+#: exact same set to decide when to draw the wrap-count field beside the
+#: Arrange combo -- one tuple, imported, rather than two copies that could
+#: drift the moment a third counted arrange is ever added.
+COUNTED_ARRANGES = ("rows", "columns")
 
 
 def plan_frames(
@@ -288,9 +294,9 @@ def plan_frames(
         )
     if arrange is not None and layout is not None:
         raise ValueError("a directional layout and an arrange cannot both be set")
-    if wrap is not None and arrange not in _COUNTED_ARRANGES:
+    if wrap is not None and arrange not in COUNTED_ARRANGES:
         raise ValueError('wrap only applies to arrange="rows" or arrange="columns"')
-    if arrange in _COUNTED_ARRANGES:
+    if arrange in COUNTED_ARRANGES:
         if wrap is None:
             raise ValueError(f'arrange="{arrange}" needs a wrap count')
         if wrap < 1:

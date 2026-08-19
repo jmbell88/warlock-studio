@@ -1076,17 +1076,9 @@ class _Export:
         return self.leg.loop
 
     @property
-    def done(self) -> bool:
-        return self.at >= len(self.legs) - 1 and self.leg.done
-
-    @property
     def read(self) -> int:
         """Frames flattened so far, across every leg. One per pump, always."""
         return sum(len(leg.frames) for leg in self.legs)
-
-    @property
-    def total(self) -> int:
-        return sum(len(leg.uids) for leg in self.legs)
 
 
 def export_range(
@@ -1287,7 +1279,15 @@ def _split_stems(
     Task 5's filename templates a single edit rather than a sweep through
     three runners. An empty label is the unsplit export and keeps the stem
     the dialog was given, byte for byte -- no template involved, because
-    there is nothing here for one to distinguish.
+    there is nothing here for one to distinguish -- but that shortcut only
+    applies when ``kind`` is also empty. A split leg's label can *itself* be
+    empty (a loaded ``.ase``/ORA may carry a tag or a track with no name),
+    and that empty label is a real, if badly named, split output -- not the
+    unsplit sentinel. Collapsing it onto the bare stem would write a file
+    indistinguishable from a whole-document export, so a falsy label under a
+    non-empty ``kind`` falls back to the literal word ``"tag"``/``"layer"``
+    instead, and still goes through the same template and collision check as
+    every other label.
 
     ``kind`` is ``"tag"`` or ``"layer"``, and it picks both which of
     ``filename_for``'s two keys a non-empty label fills and which default
@@ -1314,8 +1314,10 @@ def _split_stems(
     out: list[str] = []
     for label in labels:
         if not label:
-            out.append(stem)
-            continue
+            if not kind:
+                out.append(stem)
+                continue
+            label = "layer" if kind == "layer" else "tag"
         out.append(
             sheetout.filename_for(
                 tmpl,
@@ -1574,9 +1576,11 @@ def _submit_export(ctx: Any, export: _Export) -> None:
                 pivots=extra["pivots"],
                 slices=extra["slices"],
             )
-            # ``with_name`` rather than ``with_suffix``: a label may legitimately
-            # hold a dot ("v1.2"), and replacing the last suffix of *that* stem
-            # would write the sidecar beside a file that does not exist.
+            # ``with_name`` rather than ``with_suffix``: it spells the sidecar's
+            # filename directly from ``stem``, the same way ``out`` itself was
+            # just built two lines up, rather than leaning on ``with_suffix`` to
+            # rederive that same name by parsing it back out of ``out``'s own
+            # name.
             out.with_name(f"{stem}.json").write_text(
                 json.dumps(meta, indent=2), encoding="utf-8"
             )

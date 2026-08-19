@@ -74,6 +74,10 @@ def draw(ctx: Any) -> None:
 
     mode = widgets.labeled_combo("Mode", settings.mode, [(m, m.title()) for m in MODES])
     if editable and mode != settings.mode:
+        # An explicit ``columns`` only means something for a grid pack.
+        # ``PackDoc.set_settings`` clears a stale one on a mode switch away
+        # from grid (unless this same call also names ``columns``), so this
+        # is the ordinary single-keyword call -- see its docstring for why.
         packwright_mode.set_settings(ctx, tab, mode=mode)
     widgets.muted_wrapped(_MODE_NOTES.get(settings.mode, ""))
 

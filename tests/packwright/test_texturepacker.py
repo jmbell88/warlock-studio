@@ -129,11 +129,34 @@ def test_the_hash_schema_keys_frames_by_filename():
     payload = texturepacker.tp_json(result, image_name="atlas.png", schema="hash")
     assert isinstance(payload["frames"], dict)
     array = texturepacker.tp_json(result, image_name="atlas.png", schema="array")["frames"]
-    by_name = {entry["filename"]: entry for entry in array}
+    by_name = {
+        entry["filename"]: {k: v for k, v in entry.items() if k != "filename"}
+        for entry in array
+    }
     assert payload["frames"] == by_name
     assert set(payload["frames"]) == {f"{sprite.name}.png" for sprite in sprites}
     # ``meta`` is unaffected by the schema: it describes the atlas.
     assert payload["meta"] == texturepacker.tp_json(result, image_name="atlas.png")["meta"]
+
+
+def test_the_hash_schema_does_not_repeat_the_filename_inside_the_value():
+    """Real TexturePacker Hash JSON carries a frame's name only as the dict
+    key. Repeating ``"filename"`` inside the value too is not the published
+    schema, and the array schema keeps it (untouched, own byte pin)."""
+    _sprites, result = _layout()
+    payload = texturepacker.tp_json(result, image_name="atlas.png", schema="hash")
+    for entry in payload["frames"].values():
+        assert "filename" not in entry
+        assert set(entry) == {
+            "frame",
+            "rotated",
+            "trimmed",
+            "spriteSourceSize",
+            "sourceSize",
+            "pivot",
+        }
+    array_entry = texturepacker.tp_json(result, image_name="atlas.png")["frames"][0]
+    assert "filename" in array_entry
 
 
 def test_a_duplicate_filename_is_refused_under_the_hash_schema():
