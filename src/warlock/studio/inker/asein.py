@@ -1,12 +1,20 @@
-"""An Aseprite file as an editable document. Read in, never written back.
+"""An Aseprite file as an editable document. Read in, not written back *here*.
 
 ``sheetin``'s sibling: another door that turns somebody else's file into one of
 these documents, and shaped like that one deliberately -- a pure function from
 bytes to a ``Document``, every refusal named, and the result *unsaved but
-clean* so the first Ctrl+S is a Save As. That last part is not a convenience
-here, it is the whole of what "read-only" means: this module can read a
-``.aseprite`` and cannot write one, so a document that kept its source path
-would let one Ctrl+S write ORA bytes over the file it came from.
+clean* so the first Ctrl+S is a Save As. That last part used to be the whole
+of what "read-only" meant, back when nothing in the package could write this
+format at all; ``aseout.write_aseprite`` retired that half, and Inker's Save
+As can now put an edited drawing back into ``.aseprite`` on purpose (see
+``inker_mode.save_as``). What did **not** change is this module's own
+behaviour: it still only reads, and the document it hands back still drops
+its source path -- not because writing is impossible any more, but because an
+import is not the moment to decide where a save goes. A document that kept
+its source path would let the very next Ctrl+S write over the file it came
+from with whatever the editor's default happens to be, silently, before the
+user has touched a pixel. The path comes back deliberately empty so that
+decision -- ORA, or now Aseprite -- is the Save As dialog's to ask.
 
 The format is a 128-byte header, then one frame after another, each a list of
 length-prefixed chunks. Everything below is stdlib -- ``struct`` and ``zlib``
@@ -1330,10 +1338,12 @@ def document_from_aseprite(
     is headless and has no toast to raise, so whoever opened the file decides
     how to say what happened to it.
 
-    The document is **unsaved but clean** and its format is ``ora``: this
-    reader cannot write the format it just read, so the path is deliberately
-    dropped and the first Ctrl+S is a Save As into a format that can hold what
-    was imported.
+    The document is **unsaved but clean** and its format is ``ora``: an import
+    never arrives pointing at its own source file, so the path is deliberately
+    dropped and the first Ctrl+S is a Save As. ``aseout.write_aseprite`` means
+    that dialog can now choose ``.aseprite`` too, but that is the *save's*
+    choice, made once the user has actually looked at the document -- not
+    this function's, and not the reason ``format="ora"`` is stamped here.
     """
     from .document import Document, matte_for
     from .ora import _install_groups

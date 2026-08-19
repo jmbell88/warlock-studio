@@ -736,7 +736,7 @@ class InkerDoc:
     doc: Any
     title: str = "Untitled"
     path: Path | None = None
-    file_format: str = "png"  # ora | png
+    file_format: str = "png"  # ora | png | aseprite
     uid: str = field(default_factory=lambda: f"pd{next(_uids)}")
     view: PaintView = field(default_factory=PaintView)
     # The history position the file on disk was written from. Dirty is a

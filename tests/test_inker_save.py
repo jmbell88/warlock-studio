@@ -527,3 +527,131 @@ def test_an_ora_still_saves_in_place(tmp_path):
 
     assert ctx.submitted == [f"inker-save:{tab.uid}"]
     assert not ctx.toasts
+
+
+# --- Save As can now write .aseprite ----------------------------------------
+
+
+def _untitled_tab() -> InkerDoc:
+    doc = inker.Document.blank(16, 16)
+    doc.stack.active.pixels[..., :] = (10, 200, 90, 255)
+    return InkerDoc(doc=doc, title="Untitled")
+
+
+def test_save_as_writes_an_aseprite_file_asein_can_read_back(tmp_path, monkeypatch):
+    """The round trip the retirement is for: Save As can now put an edited
+    drawing into ``.aseprite``, and what it writes must be the real format --
+    readable by the same parser an import uses, not a renamed ORA."""
+    from warlock.studio.inker import asein
+
+    ctx = _SaveCtx()
+    tab = _untitled_tab()
+    ctx.state.inker.add(tab)
+    dest = tmp_path / "sprite.aseprite"
+    monkeypatch.setattr(inker_mode.dialogs, "save_file", lambda *a, **k: dest)
+
+    inker_mode.save_as(ctx, tab)
+
+    assert ctx.result == {"path": dest, "rev": 0, "format": "aseprite", "retitle": True}
+    reopened, warnings = asein.document_from_aseprite(dest.read_bytes())
+    assert not warnings
+    assert reopened.stack.size == (16, 16)
+
+
+def test_an_ase_suffix_also_routes_to_aseprite(tmp_path, monkeypatch):
+    """Aseprite's older releases wrote ``.ase``; both suffixes name the one
+    format, so both must route the same way."""
+    from warlock.studio.inker import asein
+
+    ctx = _SaveCtx()
+    tab = _untitled_tab()
+    ctx.state.inker.add(tab)
+    dest = tmp_path / "sprite.ase"
+    monkeypatch.setattr(inker_mode.dialogs, "save_file", lambda *a, **k: dest)
+
+    inker_mode.save_as(ctx, tab)
+
+    assert ctx.result["format"] == "aseprite"
+    asein.document_from_aseprite(dest.read_bytes())  # does not raise
+
+
+def test_save_as_still_defaults_to_ora_for_an_unrelated_flow(tmp_path, monkeypatch):
+    """The default filter row and the suggested name are unchanged: a save
+    dialog cancelled with no suffix chosen, or one given a plain name, still
+    lands on ``.ora`` byte-identically with the pre-Wave-5 writer."""
+    ctx = _SaveCtx()
+    tab = _untitled_tab()
+    ctx.state.inker.add(tab)
+    calls: list[Any] = []
+
+    def fake_save_file(title, default_name, filters):
+        calls.append((title, default_name, filters))
+        return tmp_path / "sprite"  # no suffix at all
+
+    monkeypatch.setattr(inker_mode.dialogs, "save_file", fake_save_file)
+
+    inker_mode.save_as(ctx, tab)
+
+    assert calls[0][1] == "untitled.ora"
+    assert calls[0][2][:2] == inker_mode.ORA_FILTER
+    dest = tmp_path / "sprite.ora"
+    assert ctx.result == {"path": dest, "rev": 0, "format": "ora", "retitle": True}
+    assert dest.read_bytes() == inker.ora_bytes(tab.doc)
+
+
+def test_ctrl_s_on_an_aseprite_backed_tab_forces_save_as_with_a_naming_toast(
+    tmp_path, monkeypatch
+):
+    """The spec's own behaviour: an aseprite-format tab's *next* Ctrl+S still
+    cannot write in place -- ``WRITABLE_SUFFIXES`` never grew this suffix --
+    so it is routed back through Save As with the same explanatory toast a
+    JPG-backed tab gets."""
+    src = tmp_path / "sprite.aseprite"
+    doc = inker.Document.blank(8, 8)
+    inker.write_aseprite(doc, src)
+
+    ctx = _SaveCtx()
+    tab = InkerDoc(doc=doc, title=src.name, path=src, file_format="aseprite")
+    ctx.state.inker.add(tab)
+    dest = tmp_path / "sprite2.aseprite"
+    monkeypatch.setattr(inker_mode.dialogs, "save_file", lambda *a, **k: dest)
+
+    inker_mode.save(ctx, tab)
+
+    assert any(key.startswith("inker-saveas:") for key in ctx.submitted)
+    assert not any(key.startswith("inker-save:") for key in ctx.submitted)
+    assert ctx.toasts and "ASEPRITE" in ctx.toasts[0][0]
+    assert dest.exists()
+
+
+def test_a_still_plain_png_tabs_save_flow_is_untouched(tmp_path):
+    """Negative control for the new branch: an ordinary PNG tab must not be
+    caught by anything added for Aseprite."""
+    src = tmp_path / "art.png"
+    src.write_bytes(_png(size=(8, 8), colour=(4, 5, 6, 255)))
+
+    ctx = _SaveCtx()
+    tab = _file_tab(ctx, src)
+    inker_mode.save(ctx, tab)
+
+    assert ctx.submitted == [f"inker-save:{tab.uid}"]
+    assert not ctx.toasts
+
+
+def test_a_dirty_aseprite_tabs_journal_payload_is_still_ora(tmp_path):
+    """The journal is format-agnostic ORA by doctrine (see
+    ``inker_mode._journal_encode``): a tab whose ``file_format`` is
+    ``"aseprite"`` must still hand the crash-recovery loop bytes that
+    ``ora.read_ora`` can open, not an Aseprite encode."""
+    from warlock.studio.inker import ora
+
+    src = tmp_path / "sprite.aseprite"
+    doc = inker.Document.blank(8, 8)
+    tab = InkerDoc(doc=doc, title=src.name, path=src, file_format="aseprite")
+
+    payload = inker_mode._journal_encode(tab)
+
+    copy = tmp_path / "journal.ora"
+    copy.write_bytes(payload)
+    reopened = ora.read_ora(copy)
+    assert reopened.stack.size == (8, 8)

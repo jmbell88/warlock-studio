@@ -44,15 +44,27 @@ TSX_FILTER = ["Tiled tileset (*.tsx)", "*.tsx"]
 OPENABLE = (".ora", *filetypes.IMAGE_SUFFIXES)
 OPEN_FILTER = ["Images and layered files", filetypes.pattern(OPENABLE)]
 
-# Deliberately **not** in ``OPENABLE``. That tuple is what the app can open
-# *and write back*, and this reader can only read -- so an Aseprite file
-# arrives through an import door of its own, as an unsaved ORA document whose
-# first Ctrl+S is a Save As. Routing it through ``Document.load`` instead would
-# leave a tab pointing at a file the app cannot write, and one Ctrl+S would put
-# ORA bytes over it. Two suffixes, one format: Aseprite's older releases wrote
-# ``.ase``.
+# Deliberately **not** in ``OPENABLE``, still. ``aseout.write_aseprite`` means
+# the app can now write this format -- through an explicit Save As, see
+# ``save_as`` below -- but that is a capability, not a route: ``OPENABLE`` is
+# what a plain *open* or a drop resolves through ``Document.load``, and an
+# Aseprite file still arrives through the import door of its own
+# (``ask_import_aseprite``/``_load_aseprite``) as an unsaved ORA document whose
+# first Ctrl+S asks where to put it. Routing it through ``Document.load``
+# instead would leave a tab pointing at the file it was opened from, and one
+# Ctrl+S would put ORA bytes over it -- the exact overwrite the import door
+# exists to prevent, and the reason ``WRITABLE_SUFFIXES`` below still excludes
+# this format even after a Save As has written one: the export is lossy
+# (alpha_lock, group opacity, matte, palette-constrained mode all fall out of
+# the round trip), and a lossy in-place write on a keystroke that means "keep
+# what I have" is exactly what that gate refuses. Two suffixes, one format:
+# Aseprite's older releases wrote ``.ase``.
 ASEPRITE_SUFFIXES = (".aseprite", ".ase")
 ASEPRITE_FILTER = ["Aseprite files", filetypes.pattern(ASEPRITE_SUFFIXES)]
+# ``save_as``'s picker: ORA first (the default, unsaved suggestion stays
+# ``.ora``) with the Aseprite pair beside it -- one dialog, two writers, and
+# the *suffix the user actually typed or picked* decides which of them runs.
+SAVE_AS_FILTER = ORA_FILTER + ASEPRITE_FILTER
 
 # The two suffixes an in-place save may write, and the reason ``OPENABLE`` is
 # not that list. ``Document.load`` stamps every non-ORA input ``file_format =
@@ -495,11 +507,17 @@ def import_aseprite_path(ctx: Any, path: Path) -> None:
 def _load_aseprite(path: Path) -> dict[str, Any]:
     """Blocking; task thread only.
 
-    ``path=None`` in the result, and that is the whole read-only guarantee
-    rather than a detail: this app reads the format and cannot write it, so the
-    tab must not point at the file it came from. The document is an unsaved ORA
-    -- the format that *can* hold layers, a timeline, links and slices -- and
-    the first Ctrl+S asks where to put it.
+    ``path=None`` in the result, and that stays true even though the app can
+    now *write* this format (``save_as`` -> ``aseout.write_aseprite``): what
+    ``path=None`` guarantees is that an import never points at the file it
+    came from, not that nothing can write it. Pointing the tab at the source
+    would arm the first Ctrl+S to overwrite it -- with ORA bytes if the
+    document is untouched, or silently if a WRITABLE_SUFFIXES-widening ever
+    added this suffix to it -- and an import is exactly the moment nothing has
+    been decided yet. The document is an unsaved ORA -- the format that can
+    hold layers, a timeline, links and slices without asking the user to pick
+    a destination first -- and the first Ctrl+S asks where to put it, Aseprite
+    included if that is what is chosen there.
     """
     from .inker import asein
 
@@ -781,6 +799,14 @@ def save(ctx: Any, tab: InkerDoc | None = None) -> None:
 
 
 def save_as(ctx: Any, tab: InkerDoc | None = None) -> None:
+    """Two writers behind one dialog. The suggested name and the default
+    filter row are still ORA -- nothing about the ordinary flow changes -- but
+    a suffix the user chose or typed as ``.aseprite``/``.ase`` routes to
+    :func:`aseout.write_aseprite` instead, in :func:`_write`. Anything else,
+    including no suffix at all, still lands as ``.ora``: only the two Aseprite
+    suffixes opt out of that default, the same way ``dest.with_suffix`` always
+    corrected a wrong or missing one.
+    """
     tab = tab or active(ctx)
     if tab is None or tab.saving:
         return
@@ -790,9 +816,12 @@ def save_as(ctx: Any, tab: InkerDoc | None = None) -> None:
     suggested = tab.path.stem if tab.path else "untitled"
 
     def run() -> dict[str, Any] | None:
-        dest = dialogs.save_file("Save layered document", f"{suggested}.ora", ORA_FILTER)
+        dest = dialogs.save_file("Save layered document", f"{suggested}.ora", SAVE_AS_FILTER)
         if dest is None:
             return None
+        if dest.suffix.lower() in ASEPRITE_SUFFIXES:
+            _write(doc, dest, "aseprite")
+            return {"path": dest, "rev": rev, "format": "aseprite", "retitle": True}
         if dest.suffix.lower() != ".ora":
             dest = dest.with_suffix(".ora")
         _write(doc, dest, "ora")
@@ -1766,6 +1795,8 @@ def _write(doc: Any, path: Path, file_format: str) -> None:
 
     if file_format == "ora":
         inker.write_ora(doc, path)
+    elif file_format == "aseprite":
+        inker.write_aseprite(doc, path)
     else:
         path.write_bytes(doc.png_bytes())
 
