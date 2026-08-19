@@ -1501,7 +1501,7 @@ def _read_tiles(zf: zipfile.ZipFile, doc, anim: Animation | None) -> None:
                     raise ValueError(f"{TILES_MEMBER} cel names layer {li}")
                 layer = stack_layers[li]
                 replacements[id(layer)] = _new_cel(layer, entry)
-    except (KeyError, ValueError, TypeError, json.JSONDecodeError) as exc:
+    except (AttributeError, KeyError, ValueError, TypeError, json.JSONDecodeError) as exc:
         log.warning("ignoring %s in %s: %s", TILES_MEMBER, getattr(zf, "filename", "?"), exc)
         return
 

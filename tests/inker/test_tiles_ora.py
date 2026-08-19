@@ -258,6 +258,36 @@ def test_wrong_tiles_version_drops_structure_but_keeps_pixels(
     assert any(ora.TILES_MEMBER in record.message for record in caplog.records)
 
 
+# -- containment: a wrong-shaped tiles.json drops structure, keeps pixels ----
+
+
+def test_tiles_json_as_a_list_drops_structure_but_keeps_pixels(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+):
+    """Valid JSON, wrong top-level shape: ``payload.get("version")`` on a
+    list is an ``AttributeError``, not a ``KeyError``/``ValueError`` -- the
+    one member-read exception tuple in this module missing it, unlike
+    ``_read_colour``'s (the in-file precedent). Uncaught, that crashes the
+    whole ORA open instead of costing tile structure alone.
+    """
+    doc = _still_doc()
+    path = tmp_path / "l.ora"
+    ora.write_ora(doc, path)
+
+    _rewrite_member(path, ora.TILES_MEMBER, json.dumps([1, 2, 3]).encode("utf-8"))
+
+    with caplog.at_level(logging.WARNING):
+        back = ora.read_ora(path)
+
+    assert back.tilesets == []
+    assert not isinstance(back.stack[1], TilemapCel)
+    assert isinstance(back.stack[1], Layer)
+    assert np.array_equal(back.stack[1].pixels, doc.stack[1].pixels)
+    assert np.array_equal(back.stack[0].pixels, doc.stack[0].pixels)
+    assert np.array_equal(back.stack[2].pixels, doc.stack[2].pixels)
+    assert any(ora.TILES_MEMBER in record.message for record in caplog.records)
+
+
 # -- containment: a corrupt tilerefs blob drops structure, keeps pixels ------
 
 

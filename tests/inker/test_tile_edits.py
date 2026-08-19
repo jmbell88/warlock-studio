@@ -593,6 +593,46 @@ def test_fill_range_refuses_a_tilemap_track():
         doc.fill_range((255, 0, 0, 255), 0, 0, f, f)
 
 
+def test_filter_range_refuses_a_tilemap_track():
+    doc = _animated_tilemap_doc()
+    f = doc.anim.current
+    with pytest.raises(ValueError):
+        doc.filter_range("invert", {}, 0, 0, f, f)
+
+
+def test_filter_range_refusal_leaves_every_touched_cel_untouched():
+    """The funnel discipline, restated for ``filter_range``: a refused write
+    must not leave the tilemap cel's pixels desynced from its refs, and must
+    not leave an *earlier* cel in the same range filtered with no undo step
+    to take it back out -- ``filter_range`` only pushes its edits after the
+    whole loop, so a raise partway through must not have written anything
+    permanent at all. The raster track is placed at index 0 and the tilemap
+    track at index 1 specifically so the raster cel is the one visited first.
+    """
+    doc = _doc()
+    anim = doc.ensure_animation()  # track 0: an ordinary raster track
+    raster_cel = doc.stack[0]
+    raster_cel.pixels[...] = 255
+    slot = doc.add_tileset(_tileset(RED))
+    tile_track_layer = doc.add_tilemap_layer(slot.uid, name="Ground")  # track 1
+    assert doc.place_tiles(tile_track_layer.uid, (0, 0), np.array([[1]], dtype=np.uint32))
+    tile_cel = doc.layer_by_uid(tile_track_layer.uid)
+    assert isinstance(tile_cel, TilemapCel)
+
+    raster_before = raster_cel.pixels.copy()
+    tile_before = tile_cel.pixels.copy()
+    head = doc.history.head
+
+    f = anim.current
+    with pytest.raises(ValueError):
+        doc.filter_range("invert", {"red": 1.0, "green": 1.0, "blue": 1.0}, 0, 1, f, f)
+
+    assert doc.history.head == head
+    assert np.array_equal(raster_cel.pixels, raster_before)
+    assert np.array_equal(tile_cel.pixels, tile_before)
+    _assert_synced(doc)
+
+
 def test_patch_edit_for_refuses_a_tilemap_cel():
     doc = _animated_tilemap_doc()
     cel = doc.stack[0]

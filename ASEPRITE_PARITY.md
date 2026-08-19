@@ -713,9 +713,9 @@ is the citable list.
    the dedup key, so the key, the no-op test and the recorded before/after all
    describe the pixels the document actually ends up with.
 5. **Range ops on a tilemap track are refused this wave.** `flip_range`,
-   `rotate_range`, `shift_range` and `fill_range` all raise by name rather than
-   growing a refs-aware path; they are the same eight-symmetry problem the
-   whole-document geometry has, one scope down.
+   `rotate_range`, `shift_range`, `fill_range` and `filter_range` all raise by
+   name rather than growing a refs-aware path; they are the same
+   eight-symmetry problem the whole-document geometry has, one scope down.
 6. **The whole-document flip/rotate/scale/crop refusals are retained; the
    spec's optional "flip refusal → refs flag algebra" is explicitly deferred.**
    Only `resize_canvas` was taught (`_tile_regrid`: pad/crop in tile units,

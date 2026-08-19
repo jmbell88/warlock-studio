@@ -950,6 +950,14 @@ class RangeOps:
         targets = self._cels_in(rect)
         if not targets:
             return False
+        # Refused by name, before anything is written -- ``fill_range``'s own
+        # reason: a filter would rewrite ``pixels`` with no matching change to
+        # ``refs``, and ``_patch_edit_for`` would only catch it after an
+        # earlier cel in the same loop had already been filtered for good,
+        # with no undo step to take it back out (edits push only after the
+        # whole loop).
+        if any(isinstance(layer, TilemapCel) for _track, layer in targets):
+            raise ValueError("a filter of a tilemap layer is not yet modeled")
         edits: list[Any] = []
         for track, layer in targets:
             before = layer.pixels[y0:y1, x0:x1].copy()
