@@ -31,6 +31,11 @@ log = logging.getLogger(__name__)
 ORA_FILTER = ["OpenRaster (*.ora)", "*.ora"]
 PNG_FILTER = ["PNG image (*.png)", "*.png"]
 GIF_FILTER = ["Animated GIF (*.gif)", "*.gif"]
+# ``plotter_io.TMX_FILTER``'s own shape, for the one other place a Tiled
+# document is opened or written: a tileset a document holds *is* a
+# ``tilegrid.Tileset`` (Chunk 3.1), so exporting or importing one reaches for
+# ``plotter.tsx`` directly rather than converting through anything.
+TSX_FILTER = ["Tiled tileset (*.tsx)", "*.tsx"]
 
 # The layered format plus every image the app accepts anywhere -- the tuple
 # from ``filetypes``, not a copy of it, so the picker and the suffix check can
@@ -1570,6 +1575,17 @@ def on_task_done(ctx: Any, done: Any) -> None:
                     )
         return
 
+    if name == "inker-tileset-import":
+        # A tileset for a *document*, resolved through the uid rather than
+        # through ``active`` -- ``inker-index``'s reason: a native picker is
+        # unbounded, and the user may well have switched tabs while it was up.
+        if isinstance(result, dict) and result.get("tileset") is not None:
+            target = state.get(key.split(":", 1)[1])
+            if target is not None:
+                slot = target.doc.add_tileset(result["tileset"])
+                ctx.toast(f"{slot.tileset.name} added.", "success")
+        return
+
     if name in ("inker-send", "inker-promote"):
         ctx.cache.invalidate()
         # ``inker-send`` locks its tab while the flatten runs off-thread;
@@ -2780,6 +2796,95 @@ def export_document_palette(ctx: Any) -> None:
             _write_palette(path, colours, stem)
 
     ctx.submit("inker-palette-export", run)
+
+
+# --- tileset export/import (Wave 3, Chunk 3.6) --------------------------------
+#
+# An Inker tileset IS a ``tilegrid.Tileset`` -- ``doc.tilesets`` holds a
+# ``TilesetSlot`` over one, Chunk 3.1's whole point -- so there is no
+# conversion on either side of this door: exporting is the same ``.tsx``/
+# ``.png`` pair Packwright's grid packer already writes through
+# ``plotter.tsx``/``plotter.pngio``, and importing is the same reader
+# Plotter's own tileset-add path (``plotter_tilesets.add_tileset_path``) uses.
+# Legal ground for both, same as every other export in this module: this file
+# sits above the engine pin.
+
+
+def export_tileset(ctx: Any, tab: InkerDoc | None = None, *, index: int) -> None:
+    """One tileset's atlas as a Tiled ``.tsx`` plus its PNG, side by side.
+
+    Not a save -- ``export_png``'s own reason: it does not change what the tab
+    points at, so the document stays dirty against its own file. The tileset
+    is read here, before the picker, the same rule every export in this module
+    follows: serialising after an unbounded modal would write whatever the
+    tileset list looked like when the dialog happened to close.
+    """
+    tab = tab or active(ctx)
+    if tab is None or tab.saving:
+        ctx.toast("Open a drawing first.", "error")
+        return
+    if index < 0 or index >= len(tab.doc.tilesets):
+        return
+    tileset = tab.doc.tilesets[index].tileset
+    suggested = tileset.name or "tileset"
+
+    def run() -> dict[str, Any] | None:
+        from .plotter import pngio
+        from .plotter import tsx as tsxlib
+
+        dest = dialogs.save_file("Export tileset", f"{suggested}.tsx", TSX_FILTER)
+        if dest is None:
+            return None
+        if dest.suffix.lower() != ".tsx":
+            dest = dest.with_suffix(".tsx")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        png_path = dest.with_suffix(".png")
+        # The ``.tsx`` names the PNG by the name it is written under here, so
+        # the pair is consistent by construction rather than by two writers
+        # agreeing on a convention.
+        dest.write_bytes(tsxlib.tsx_bytes(tileset, image_name=png_path.name))
+        png_path.write_bytes(pngio.png_bytes(tileset.pixels))
+        return {"exported": dest}
+
+    _start(ctx, tab, f"inker-export:{tab.uid}", run)
+
+
+def import_tileset(ctx: Any, tab: InkerDoc | None = None) -> None:
+    """A Tiled ``.tsx`` plus its image, added to the document's tileset list.
+
+    Grid geometry and terrain sets travel intact -- ``plotter.tsx.read_tsx``
+    builds the same ``tilegrid.Tileset`` a ``.tsx`` reaches Plotter's map
+    through, and the shared type is what carries ``terrains``/``phases``. The
+    picker and the decode both run on the task thread, ``ask_add_tileset``'s
+    own reason: a native picker is modal to the OS, and the image behind a
+    ``.tsx`` is routinely as large as anything else this module opens.
+    """
+    tab = tab or active(ctx)
+    if tab is None or tab.saving:
+        ctx.toast("Open a drawing first.", "error")
+        return
+    uid = tab.uid
+
+    def run() -> dict[str, Any] | None:
+        from ..service.errors import invalid_from
+        from .plotter import tsx as tsxlib
+        from .plotter_io import _resolve_source, _within_ceiling
+
+        path = dialogs.open_file("Import tileset", TSX_FILTER)
+        if path is None:
+            return None
+        try:
+            data = _within_ceiling(path).read_bytes()
+            image_name = tsxlib.tsx_source(data)
+            image = docmodes.decode_rgba(_resolve_source(path.parent, image_name))
+            tileset = tsxlib.read_tsx(data, image)
+        except ValueError as exc:
+            raise invalid_from(
+                exc, "This tileset could not be imported", field="file"
+            ) from exc
+        return {"tileset": tileset}
+
+    ctx.submit(f"inker-tileset-import:{uid}", run)
 
 
 # --- crash recovery -----------------------------------------------------------

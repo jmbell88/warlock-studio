@@ -77,6 +77,7 @@ from .plotter_tilesets import (  # noqa: F401
     polish_in_inker,
     tileset_from_inker,
     use_as_tileset,
+    use_inker_tileset,
 )
 from .state import set_mode
 

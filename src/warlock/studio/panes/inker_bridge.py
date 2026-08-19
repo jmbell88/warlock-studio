@@ -138,6 +138,24 @@ def _file(ctx: Any, state: Any, tab: Any) -> None:
         ):
             inker_mode.export_png(ctx, tab)
 
+        # Minimal tileset doors -- Task 8 owns the picker pane that shows the
+        # list itself; until then, "Export tileset..." reaches the first one
+        # a document has, the same way every button above reaches the one
+        # document a tab holds.
+        has_tileset = bool(tab.doc.tilesets)
+        if widgets.disabled_button(
+            "Export tileset...",
+            ready and has_tileset,
+            (width, 0),
+            reason=why if not ready else "This document has no tileset yet.",
+        ):
+            inker_mode.export_tileset(ctx, tab, index=0)
+        imgui.same_line()
+        if widgets.disabled_button(
+            "Import tileset (.tsx)...", ready, (width, 0), reason=why
+        ):
+            inker_mode.import_tileset(ctx, tab)
+
     widgets.recent_files(
         inker_mode.recent_paths(ctx),
         lambda path: inker_mode.open_path(ctx, Path(path)),

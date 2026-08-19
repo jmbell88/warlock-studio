@@ -155,6 +155,41 @@ def tileset_from_inker(ctx: Any, doc: Any, *, index: int | None = None) -> None:
     ctx.toast(f"{ref.tileset.name} repainted.")
 
 
+def use_inker_tileset(ctx: Any, doc: Any, uid: int) -> None:
+    """A fifth door onto the tileset-arrival key: an Inker document's tileset,
+    handed to the active Plotter tab exactly as it stands.
+
+    Zero-copy and **snapshot semantics**, both by construction rather than by
+    anything this function does. ``doc.tileset_slot(uid).tileset`` is the very
+    frozen object ``PlotterDoc.add_tileset`` (through ``on_task_done``'s
+    ``plotter-tileset`` branch, shared with the other three doors) puts into
+    the map's ``TilesetRef`` -- no copy is made on the way across. And every
+    ``_apply_tileset_*`` hook on the Inker side replaces ``slot.tileset``
+    wholesale rather than mutating it (``_doc_tiles.py``'s own rule: the
+    frozen tileset is rebuilt, never written through), so a later edit there
+    mints a brand new object and leaves this one -- and the map painting from
+    it -- untouched.
+
+    ``doc`` rather than a uid into some registry of open Inker tabs: the
+    caller (a future tile-picker pane, Task 8) already has the document in
+    hand, and a second uid namespace here would only be one more thing that
+    can point at nothing.
+    """
+    tab = active(ctx)
+    if tab is None:
+        ctx.toast("Open or start a map first.", "error")
+        return
+
+    def run() -> dict[str, Any] | None:
+        try:
+            slot = doc.tileset_slot(uid)
+        except KeyError:
+            return None
+        return {"tileset": slot.tileset, "source": "", "uid": tab.uid}
+
+    ctx.submit(f"plotter-tileset:{tab.uid}", run)
+
+
 def ask_add_tileset(ctx: Any) -> None:
     """The picker and the decode on one task thread.
 
