@@ -1130,3 +1130,134 @@ def test_the_default_inker_sidecar_pin_is_untouched_by_the_new_keyword_args():
     finally:
         a_image.close()
         b_image.close()
+
+
+# --- filename templates --------------------------------------------------------
+
+
+def test_every_known_key_fills_in():
+    assert (
+        sheetout.filename_for(
+            "{title}_{tag}_{frame}_{layer}",
+            title="walk",
+            tag="intro",
+            frame=3,
+            layer="ink",
+        )
+        == "walk_intro_0003_ink"
+    )
+
+
+def test_frame_is_always_zero_padded_to_four():
+    assert sheetout.filename_for("{frame}", title="t", frame=7) == "0007"
+    assert sheetout.filename_for("{frame}", title="t", frame=12345) == "12345"
+
+
+def test_a_template_with_no_keys_is_the_literal_text():
+    assert sheetout.filename_for("static", title="whatever") == "static"
+
+
+def test_an_unknown_key_is_refused_by_name_listing_the_known_ones():
+    with pytest.raises(ValueError) as excinfo:
+        sheetout.filename_for("{title}_{index}", title="walk")
+    message = str(excinfo.value)
+    assert "{index}" in message
+    for key in sheetout.FILENAME_KEYS:
+        assert "{" + key + "}" in message
+
+
+def test_a_tag_key_with_no_tag_is_refused_by_name():
+    with pytest.raises(ValueError, match="no tag"):
+        sheetout.filename_for("{title}_{tag}", title="walk")
+
+
+def test_a_layer_key_with_no_layer_is_refused_by_name():
+    with pytest.raises(ValueError, match="no layer"):
+        sheetout.filename_for("{title}_{layer}", title="walk")
+
+
+def test_a_frame_key_with_no_frame_is_refused_by_name():
+    with pytest.raises(ValueError, match="no frame"):
+        sheetout.filename_for("{frame}", title="walk")
+
+
+def test_no_frame_is_fine_when_the_template_does_not_ask_for_one():
+    assert sheetout.filename_for("{title}", title="walk", frame=None) == "walk"
+
+
+def test_tag_and_layer_are_sanitised_the_same_way_split_stems_always_did():
+    assert (
+        sheetout.filename_for("{title}_{tag}", title="walk", tag="A/B*C? swing")
+        == "walk_A-B-C-swing"
+    )
+
+
+def test_title_is_never_sanitised():
+    assert (
+        sheetout.filename_for("{title}", title="A/B*C? swing") == "A/B*C? swing"
+    )
+
+
+def test_a_tag_that_sanitises_to_nothing_is_refused_even_unused():
+    """The eager check ``_split_stems`` always made -- a label is validated
+    whether or not the template that will be attached to it happens to read
+    it, because the label itself is not a name a file can be given."""
+    with pytest.raises(ValueError, match="not a name a file can be given"):
+        sheetout.filename_for("{title}", title="walk", tag="///")
+
+
+def test_a_template_with_a_stray_brace_is_refused_not_crashed():
+    with pytest.raises(ValueError):
+        sheetout.filename_for("{title", title="walk")
+
+
+def test_sanitize_stem_is_the_rule_filename_for_applies_to_tag_and_layer():
+    assert sheetout.sanitize_stem("A/B*C? swing") == "A-B-C-swing"
+    assert sheetout.sanitize_stem("///") == ""
+
+
+def test_require_distinct_names_passes_a_genuinely_distinct_list():
+    sheetout.require_distinct_names(["a", "b", "c"])  # does not raise
+
+
+def test_require_distinct_names_refuses_a_repeat():
+    with pytest.raises(ValueError, match="b"):
+        sheetout.require_distinct_names(["a", "b", "b"])
+
+
+def test_require_distinct_names_refuses_an_empty_name():
+    with pytest.raises(ValueError, match="empty"):
+        sheetout.require_distinct_names(["a", ""])
+
+
+# --- the default templates, pinned ---------------------------------------------
+
+
+def test_the_default_frame_template_is_title_underscore_frame():
+    assert sheetout.DEFAULT_FRAME_TEMPLATE == "{title}_{frame}"
+
+
+def test_the_default_split_templates_are_title_underscore_tag_or_layer():
+    assert sheetout.DEFAULT_TAG_TEMPLATE == "{title}_{tag}"
+    assert sheetout.DEFAULT_LAYER_TEMPLATE == "{title}_{layer}"
+
+
+def test_the_default_frame_template_reproduces_the_old_index_naming():
+    """``f"{stem}_{index:04d}.png"`` before templates existed."""
+    for index in (0, 1, 9, 42, 4321):
+        assert sheetout.filename_for(
+            sheetout.DEFAULT_FRAME_TEMPLATE, title="walk", frame=index
+        ) == f"walk_{index:04d}"
+
+
+def test_the_default_split_templates_reproduce_the_old_split_stems():
+    assert (
+        sheetout.filename_for(sheetout.DEFAULT_TAG_TEMPLATE, title="walk", tag="run")
+        == "walk_run"
+    )
+    assert (
+        sheetout.filename_for(
+            sheetout.DEFAULT_LAYER_TEMPLATE, title="walk", layer="ink"
+        )
+        == "walk_ink"
+    )

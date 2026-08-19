@@ -111,6 +111,7 @@ def ensure(ctx: Any) -> InkerState:
             ] or list(inker_state.DEFAULT_SWATCHES)
         _restore_presets(state, stored.get("presets"))
         _restore_canvas(state, stored.get("canvas"))
+        _restore_export(state, stored.get("export"))
         ctx.state.inker = state
     return state
 
@@ -168,6 +169,12 @@ def persist(ctx: Any) -> None:
         "grid_snap": bool(state.grid_snap),
         "rulers": bool(state.rulers),
     }
+    # The last-used export controls -- app-level and shared across tabs, like
+    # the canvas furniture beside it, not a per-document ``InkerDoc.
+    # export_options`` (those are session-only and never leave the tab). This
+    # is what seeds a brand-new tab's controls next session, through
+    # ``_restore_export`` below.
+    block["export"] = state.export_options_snapshot()
     ctx.settings.set("inker", block)
 
 
@@ -182,6 +189,14 @@ def _restore_canvas(state: InkerState, stored: Any) -> None:
         state.grid_size = max(2, min(512, size))
     state.grid_snap = bool(stored.get("grid_snap", state.grid_snap))
     state.rulers = bool(stored.get("rulers", state.rulers))
+
+
+def _restore_export(state: InkerState, stored: Any) -> None:
+    """The last-used export controls back off disk, over the built-in
+    defaults, through :meth:`InkerState.apply_export_options` -- the one door
+    that also validates a hand-edited or an older-build settings file, so this
+    is a one-line forward rather than a second copy of that doctrine."""
+    state.apply_export_options(stored)
 
 
 def _restore_presets(state: InkerState, stored: Any) -> None:
@@ -990,6 +1005,12 @@ class _Leg:
     #: through ``sheetout.flatten_subset`` -- which stays out of the document's
     #: frame cache, because that cache is keyed on the frame uid alone.
     track_uids: tuple[int, ...] | None = None
+    #: "" | "tag" | "layer" -- which of ``sheetout.filename_for``'s two keys
+    #: ``label`` fills, so ``_split_stems`` knows whether to build each stem's
+    #: default template from :data:`sheetout.DEFAULT_TAG_TEMPLATE` or
+    #: :data:`sheetout.DEFAULT_LAYER_TEMPLATE`. Empty for the ordinary,
+    #: unsplit leg, whose label is empty too.
+    split_kind: str = ""
     frames: list[Any] = field(default_factory=list)
     #: One exact index plane per read frame, or None where the frame's flatten
     #: is not a cel's own materialisation. Parallel to ``frames`` and appended
@@ -1142,6 +1163,7 @@ def export_per_tag(ctx: Any, tab: InkerDoc | None = None, kind: str = "sheet") -
                 label=tag.name,
                 span=sheetout.tag_span(anim, tag),
                 loop=tag.repeat or tag.loop,
+                split_kind="tag",
             )
             for tag in anim.tags
         ],
@@ -1170,7 +1192,8 @@ def export_per_layer(ctx: Any, tab: InkerDoc | None = None, kind: str = "sheet")
         tab,
         kind,
         legs=[
-            _Leg(uids=[], label=name, track_uids=uids) for name, uids in splits
+            _Leg(uids=[], label=name, track_uids=uids, split_kind="layer")
+            for name, uids in splits
         ],
     )
 
@@ -1199,10 +1222,22 @@ def _begin_export(
         return
     if state.export is not None:
         return
+    # Seeded once per tab, not on every click: a fresh tab's ``export_options``
+    # is empty and this is a no-op, but a tab exported once already restores
+    # what *it* last used -- over whatever the previous tab exporting left on
+    # the shared controls -- the first time it exports again. Guarded on
+    # ``export_seed_uid`` so a user who tweaks a control and clicks Export a
+    # second time for the *same* tab keeps that edit rather than having it
+    # silently put back; only a switch away and back re-suggests.
+    if state.export_seed_uid != tab.uid:
+        state.apply_export_options(tab.export_options)
+        state.export_seed_uid = tab.uid
     _settle(ctx, tab)
     suggested = tab.path.stem if tab.path else "untitled"
     if legs is None:
         legs = [_Leg(uids=[], span=span, loop=loop)]
+    leg_kind = legs[0].split_kind if legs else ""
+    template = str(getattr(state, "export_template", "") or "").strip() or None
     try:
         # The work lists are filled *here* rather than by the callers, so a span
         # that holds no frames refuses before the lock -- and so "frame 3 of 60"
@@ -1213,7 +1248,9 @@ def _begin_export(
         # is finally known: a collision is a property of the labels alone, so it
         # can be refused before the tab is locked and before somebody names a
         # batch that was never going to be written.
-        _split_stems(suggested, [leg.label for leg in legs])
+        _split_stems(
+            suggested, [leg.label for leg in legs], kind=leg_kind, template=template
+        )
     except ValueError as exc:
         ctx.toast(f"Cannot export: {exc}.", "warn")
         return
@@ -1225,35 +1262,69 @@ def _begin_export(
     state.export = _Export(tab=tab, kind=kind, suggested=suggested, legs=legs)
 
 
-def _split_stems(stem: str, labels: Sequence[str]) -> list[str]:
-    """One filename stem per output: ``{stem}_{label}``, sanitised.
+def _suggested_dialog_name(tab: InkerDoc, suggested: str, ext: str) -> str:
+    """The ``default_name`` an export's save dialog opens with.
 
-    **The one place a split's filenames are decided**, which is what makes Task
-    5's filename templates a single edit rather than a sweep through three
-    runners. An empty label is the unsplit export and keeps the stem the dialog
-    was given, byte for byte.
+    A bare filename ordinarily, exactly what every export always passed. Once
+    this tab has exported before, ``export_dest``'s *folder* is folded in
+    too -- a native picker reads a path's directory half as where to open --
+    so picking this tab back up suggests the folder it was last written into
+    rather than wherever the picker happened to be left by the tab exported in
+    between.
+    """
+    dest = tab.export_dest
+    if dest is None:
+        return f"{suggested}{ext}"
+    return str(dest.parent / f"{suggested}{ext}")
+
+
+def _split_stems(
+    stem: str, labels: Sequence[str], *, kind: str = "", template: str | None = None
+) -> list[str]:
+    """One filename stem per output, through :func:`sheetout.filename_for`.
+
+    **The one place a split's filenames are decided**, which is what makes
+    Task 5's filename templates a single edit rather than a sweep through
+    three runners. An empty label is the unsplit export and keeps the stem
+    the dialog was given, byte for byte -- no template involved, because
+    there is nothing here for one to distinguish.
+
+    ``kind`` is ``"tag"`` or ``"layer"``, and it picks both which of
+    ``filename_for``'s two keys a non-empty label fills and which default
+    template applies when ``template`` is None -- :data:`sheetout.
+    DEFAULT_TAG_TEMPLATE` or :data:`sheetout.DEFAULT_LAYER_TEMPLATE`, the
+    exact ``f"{stem}_{safe}"`` this always wrote before templates existed.
 
     A collision is **refused**, where ``_slice_filenames`` bumps: a slice is a
     rectangle a person picks off a folder listing, and "Hitbox_2.png" is a name
     they can live with -- but a tag and a layer are addressed *by name* by
     whatever consumes the sheet, and a second "walk" quietly becoming
     "walk_2.png" is a file claiming to be a clip called walk_2. Refusing is the
-    only answer that cannot silently be believed.
+    only answer that cannot silently be believed. A template that renders two
+    labels the same collides here for the identical reason.
     """
+    from .inker import sheetout
+
+    default = (
+        sheetout.DEFAULT_LAYER_TEMPLATE
+        if kind == "layer"
+        else sheetout.DEFAULT_TAG_TEMPLATE
+    )
+    tmpl = template or default
     out: list[str] = []
     for label in labels:
         if not label:
             out.append(stem)
             continue
-        safe = _SLICE_SAFE.sub("-", label).strip("-")
-        if not safe:
-            raise ValueError(f"{label!r} is not a name a file can be given")
-        out.append(f"{stem}_{safe}")
-    seen: set[str] = set()
-    for name in out:
-        if name in seen:
-            raise ValueError(f"two outputs would both be called {name}")
-        seen.add(name)
+        out.append(
+            sheetout.filename_for(
+                tmpl,
+                title=stem,
+                tag=None if kind == "layer" else label,
+                layer=label if kind == "layer" else None,
+            )
+        )
+    sheetout.require_distinct_names(out)
     return out
 
 
@@ -1350,6 +1421,17 @@ def _submit_export(ctx: Any, export: _Export) -> None:
     trim = bool(getattr(state, "export_trim", False))
     padding = max(0, int(getattr(state, "export_padding", 0) or 0))
     extrude = max(0, int(getattr(state, "export_extrude", 0) or 0))
+    template = str(getattr(state, "export_template", "") or "").strip() or None
+    # Which of ``sheetout``'s two split templates applies -- see ``_Leg.
+    # split_kind``. Every leg of one export shares it, since a batch is either
+    # a tag split, a layer split or the ordinary unsplit export, never a mix.
+    split_kind = export.legs[0].split_kind if export.legs else ""
+    # The whole option set this export is about to run with, captured once
+    # here rather than re-read per runner: what a completed export records
+    # onto its tab (``on_task_done``) has to be the settings that actually
+    # produced the file, not whatever the controls hold by the time the task
+    # finishes.
+    export_options = state.export_options_snapshot()
     if export.kind == "sheet" and padding < extrude * 2:
         # Refused here, before the file dialog, for the same reason the
         # arrange/layout and merge/layout conflicts below are: ``sheetout.build``
@@ -1439,12 +1521,16 @@ def _submit_export(ctx: Any, export: _Export) -> None:
     def run_sheet() -> dict[str, Any] | None:
         import json
 
-        dest = dialogs.save_file("Export sprite sheet", f"{suggested}.png", PNG_FILTER)
+        dest = dialogs.save_file(
+            "Export sprite sheet", _suggested_dialog_name(tab, suggested, ".png"), PNG_FILTER
+        )
         if dest is None:
             return None
         if dest.suffix.lower() != ".png":
             dest = dest.with_suffix(".png")
-        stems = _split_stems(dest.stem, [load.label for load in loads])
+        stems = _split_stems(
+            dest.stem, [load.label for load in loads], kind=split_kind, template=template
+        )
         dest.parent.mkdir(parents=True, exist_ok=True)
         first: Path | None = None
         for stem, load in zip(stems, loads, strict=True):
@@ -1496,7 +1582,7 @@ def _submit_export(ctx: Any, export: _Export) -> None:
             )
             if first is None:
                 first = out
-        return {"exported": first}
+        return {"exported": first, "dest": dest, "options": dict(export_options)}
 
     # The document's own table when it has one, so an indexed clip exports the
     # colours that were authored rather than a per-frame quantise of them. Read
@@ -1504,12 +1590,16 @@ def _submit_export(ctx: Any, export: _Export) -> None:
     palette = list(doc.palette) if doc.palette else None
 
     def run_gif() -> dict[str, Any] | None:
-        dest = dialogs.save_file("Export animated GIF", f"{suggested}.gif", GIF_FILTER)
+        dest = dialogs.save_file(
+            "Export animated GIF", _suggested_dialog_name(tab, suggested, ".gif"), GIF_FILTER
+        )
         if dest is None:
             return None
         if dest.suffix.lower() != ".gif":
             dest = dest.with_suffix(".gif")
-        stems = _split_stems(dest.stem, [load.label for load in loads])
+        stems = _split_stems(
+            dest.stem, [load.label for load in loads], kind=split_kind, template=template
+        )
         dest.parent.mkdir(parents=True, exist_ok=True)
         first: Path | None = None
         for stem, load in zip(stems, loads, strict=True):
@@ -1534,7 +1624,7 @@ def _submit_export(ctx: Any, export: _Export) -> None:
             )
             if first is None:
                 first = out
-        return {"exported": first}
+        return {"exported": first, "dest": dest, "options": dict(export_options)}
 
     def run_pngs() -> dict[str, Any] | None:
         """One PNG per frame, numbered. The plainest thing an engine can eat.
@@ -1543,22 +1633,45 @@ def _submit_export(ctx: Any, export: _Export) -> None:
         directory: every tool that consumes a sequence wants ``name_0000.png``
         beside its siblings, and a save dialog is the one place a user is
         already picking both the folder and the name.
+
+        The per-frame name goes through :func:`sheetout.filename_for` a
+        second time, on top of the stem ``_split_stems`` already built: a
+        split's own template (``{title}_{tag}``/``{title}_{layer}``, or a
+        custom one) decides how the *outputs* of a batch differ from each
+        other, and this decides how the *frames inside one output* differ --
+        two questions, so a split PNG sequence always numbers its frames with
+        :data:`sheetout.DEFAULT_FRAME_TEMPLATE` rather than reading the same
+        custom template twice for two different things.
         """
         from PIL import Image
 
-        dest = dialogs.save_file("Export PNG sequence", f"{suggested}.png", PNG_FILTER)
+        dest = dialogs.save_file(
+            "Export PNG sequence", _suggested_dialog_name(tab, suggested, ".png"), PNG_FILTER
+        )
         if dest is None:
             return None
-        stems = _split_stems(dest.stem, [load.label for load in loads])
+        stems = _split_stems(
+            dest.stem, [load.label for load in loads], kind=split_kind, template=template
+        )
+        frame_template = (
+            sheetout.DEFAULT_FRAME_TEMPLATE
+            if split_kind
+            else (template or sheetout.DEFAULT_FRAME_TEMPLATE)
+        )
         dest.parent.mkdir(parents=True, exist_ok=True)
         first = dest
         for stem, load in zip(stems, loads, strict=True):
-            for index, plane in enumerate(load.frames):
-                out = dest.parent / f"{stem}_{index:04d}.png"
+            names = [
+                sheetout.filename_for(frame_template, title=stem, frame=index)
+                for index in range(len(load.frames))
+            ]
+            sheetout.require_distinct_names(names)
+            for name, plane in zip(names, load.frames, strict=True):
+                out = dest.parent / f"{name}.png"
                 Image.fromarray(upscale(plane, scale), "RGBA").save(out, "PNG")
                 if first is dest:
                     first = out
-        return {"exported": first}
+        return {"exported": first, "dest": dest, "options": dict(export_options)}
 
     runners = {"sheet": run_sheet, "gif": run_gif, "pngs": run_pngs}
     # ``start_save`` rather than a bare submit, so a refused key clears the lock
@@ -1915,6 +2028,17 @@ def on_task_done(ctx: Any, done: Any) -> None:
         return  # a cancelled dialog
 
     if result.get("exported"):
+        # Only the sheet/GIF/PNG-sequence runners hand back "dest"/"options"
+        # (``export_png``'s flat export does not) -- present, this is what
+        # ``InkerState.apply_export_options`` reads back on this tab's next
+        # export, and what ``_suggested_dialog_name`` reads back for its
+        # folder.
+        dest = result.get("dest")
+        if dest is not None:
+            tab.export_dest = dest
+        options = result.get("options")
+        if isinstance(options, dict):
+            tab.export_options = dict(options)
         ctx.toast(f"Exported to {result['exported']}")
         return
     if result.get("reverted"):

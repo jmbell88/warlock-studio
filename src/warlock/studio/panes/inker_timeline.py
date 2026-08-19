@@ -63,6 +63,14 @@ GROUP_INDENT = 8.0
 #: which is exactly what ``transform.upscale`` exists not to do.
 EXPORT_SCALES = (("1", "1x"), ("2", "2x"), ("3", "3x"), ("4", "4x"), ("8", "8x"))
 
+#: The ``##inkertemplate`` field's placeholder -- shown, never typed, so an
+#: empty box still says what "empty" means without a caption stealing width
+#: from the row (the same ``##`` idiom the wrap and padding fields beside it
+#: use). ``sheetout.filename_for``'s own default for a plain PNG sequence;
+#: the tooltip covers the split defaults, which this field cannot show both
+#: of at once.
+EXPORT_TEMPLATE_HINT = "{title}_{frame}"
+
 #: How a sheet export packs its cells. "grid" is the combo's spelling of
 #: ``InkerState.export_arrange is None`` -- the row-wrap this always did --
 #: since ``widgets.combo`` needs a real key for every option and ``None``
@@ -388,7 +396,7 @@ def _frame_trailing(ctx: Any, tab: Any, index: int) -> tuple[float, Any]:
 
 def _output_trailing(ctx: Any, state: Any) -> tuple[float, Any]:
     """The two view toggles, the export magnification, the sheet arrange,
-    trim/padding/extrude, and the (?)."""
+    trim/padding/extrude, the filename template, and the (?)."""
     gap = imgui.get_style().item_spacing.x
     switch = sp(32) + sp(6)
     width = (
@@ -401,8 +409,9 @@ def _output_trailing(ctx: Any, state: Any) -> tuple[float, Any]:
         + sp(48)
         + sp(40)
         + sp(40)
+        + sp(96)
         + sp(26)
-        + gap * 9
+        + gap * 10
     )
 
     def draw_it() -> None:
@@ -525,6 +534,20 @@ def _output_trailing(ctx: Any, state: Any) -> tuple[float, Any]:
                 "sprite's edge finds that sprite's own colour rather than "
                 "its neighbour's. Padding must be at least twice this, so "
                 "two neighbours extruding into one gutter cannot meet."
+            )
+        imgui.same_line()
+        imgui.set_next_item_width(sp(96))
+        state.export_template = widgets.input_text(
+            "##inkertemplate", state.export_template, max_length=80,
+            hint=EXPORT_TEMPLATE_HINT,
+        )
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Filename template. Empty is the plain frame numbering "
+                "(PNG sequence) or the tag/layer name (a split export). "
+                "{title}, {tag}, {frame} (0000) and {layer} are the whole "
+                "vocabulary; a PNG sequence reads {title} and {frame}, a "
+                "per-tag or per-layer split reads {title} and {tag}/{layer}."
             )
         manual_render.help_button(ctx, "inker-timeline")
 

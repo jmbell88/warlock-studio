@@ -22,6 +22,8 @@ grid is assertable without one; ``from_document`` is the adapter.
 
 from __future__ import annotations
 
+import re
+import string
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
@@ -32,8 +34,13 @@ from ...pipelines import sheet as sheetlib
 from .animation import DIRECTION_ORDER, DirectionalLayout
 
 __all__ = [
+    "DEFAULT_FRAME_TEMPLATE",
+    "DEFAULT_LAYER_TEMPLATE",
+    "DEFAULT_TAG_TEMPLATE",
+    "FILENAME_KEYS",
     "build",
     "compose",
+    "filename_for",
     "flatten_one",
     "flatten_subset",
     "frame_uids",
@@ -41,6 +48,8 @@ __all__ = [
     "layer_splits",
     "plan_frames",
     "rebase_tags",
+    "require_distinct_names",
+    "sanitize_stem",
     "scale_slices",
     "slices_block",
     "slices_snapshot",
@@ -48,6 +57,153 @@ __all__ = [
     "tag_span",
     "timing",
 ]
+
+
+# --- filename templates --------------------------------------------------------
+#
+# One small vocabulary, shared by every place Inker turns a document into a
+# filename: the split-stem a per-tag or per-layer export gives each output
+# (``inker_mode._split_stems``), and the per-frame name a PNG sequence gives
+# each file inside one output. Both used to be one hard-coded f-string apiece;
+# both are now one call into :func:`filename_for` with a template that -- left
+# at its default -- produces the exact same bytes, which is what the byte pins
+# beside each call site prove.
+
+#: The whole vocabulary a template may reference. Checked by *name* against
+#: this tuple rather than left to Python's own ``KeyError`` -- the same
+#: doctrine :func:`plan_frames` applies to ``arrange``: a typo in a template a
+#: user typed by hand should say what it does not recognise, not surface an
+#: interpreter's own exception.
+FILENAME_KEYS = ("title", "tag", "frame", "layer")
+
+#: :func:`inker_mode.run_pngs`'s own template, unedited -- ``"{title}_{index:04d}"``
+#: before templates existed, and this is the same bytes with ``index`` renamed.
+#: A byte pin over the whole default PNG-sequence export exists specifically to
+#: keep this constant honest.
+DEFAULT_FRAME_TEMPLATE = "{title}_{frame}"
+
+#: A tag split's default stem -- ``_split_stems``'s ``f"{stem}_{safe}"`` before
+#: templates existed, spelled as a template. Pinned the same way.
+DEFAULT_TAG_TEMPLATE = "{title}_{tag}"
+
+#: A layer split's default stem. Same shape, same reason, ``layer`` instead of
+#: ``tag`` only so a template written for one kind of split reads honestly
+#: when it is reused for the other.
+DEFAULT_LAYER_TEMPLATE = "{title}_{layer}"
+
+#: Characters a filename's dynamic part may keep; everything else becomes a
+#: dash. ``inker_mode._split_stems`` always applied this to a split's label
+#: before templates existed; it is exported so :func:`filename_for` -- which
+#: lives here, one level below :mod:`inker_mode` -- can share the one rule
+#: rather than a second copy of it drifting.
+_SAFE_STEM = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def sanitize_stem(text: str) -> str:
+    """``text``, with everything but letters, digits, dot, dash and underscore
+    turned into a dash and trimmed off the ends. What a tag or a layer name
+    becomes before it can be part of a filename."""
+    return _SAFE_STEM.sub("-", text).strip("-")
+
+
+def _template_keys(template: str) -> set[str]:
+    """Every ``{name}`` :func:`str.format` would read out of ``template``.
+
+    Through :class:`string.Formatter` rather than a regex: it is the same
+    parser ``.format`` itself uses, so ``{{literal}}`` braces and a stray ``{``
+    are read exactly as ``.format`` would read them instead of a second,
+    slightly different opinion about the syntax.
+    """
+    return {
+        field
+        for _literal, field, _spec, _conv in string.Formatter().parse(template)
+        if field
+    }
+
+
+def filename_for(
+    template: str,
+    *,
+    title: str,
+    tag: str | None = None,
+    frame: int | None = None,
+    layer: str | None = None,
+) -> str:
+    """One output's filename, built from a user-chosen template. Pure.
+
+    :data:`FILENAME_KEYS` is the whole vocabulary -- ``{title}``, ``{tag}``,
+    ``{frame}`` (always zero-padded to 4 digits; a template does not get to
+    ask for a different width, the one thing every consumer of a numbered
+    sequence already assumes) and ``{layer}``. A key outside that set is
+    refused **by name**, listing the four this function actually knows,
+    rather than surfacing ``str.format``'s own ``KeyError`` -- the same
+    doctrine :func:`plan_frames` applies to a mistyped ``arrange``.
+
+    A key that names a value *this particular call* was not given -- a plain
+    PNG sequence's template asking for ``{tag}``, a split's asking for
+    ``{frame}`` -- is refused the same way: a template is authored once and
+    reused for whatever export it is next attached to, and a silently
+    rendered ``"None"`` would be a corrupt filename nobody asked to write.
+
+    ``tag`` and ``layer`` are sanitised through :func:`sanitize_stem` --
+    ``inker_mode._split_stems``'s own rule before this function existed --
+    whether or not the template actually reads them, so a tag or a layer that
+    cannot be part of a filename is refused up front rather than only when a
+    template happens to mention it. ``title`` is never touched: it is already
+    a stem a save dialog handed back (or another call to this function
+    already produced), already a legal filename.
+    """
+    keys = _template_keys(template)
+    unknown = keys - set(FILENAME_KEYS)
+    if unknown:
+        bad = sorted(unknown)[0]
+        known = ", ".join("{" + key + "}" for key in FILENAME_KEYS)
+        raise ValueError(f"unknown filename key {{{bad}}}; this export knows {known}")
+
+    values: dict[str, str] = {"title": title}
+    for key, raw in (("tag", tag), ("layer", layer)):
+        if raw is None:
+            if key in keys:
+                raise ValueError(
+                    f"this export has no {key}; remove {{{key}}} from the template"
+                )
+            continue
+        safe = sanitize_stem(raw)
+        if not safe:
+            raise ValueError(f"{raw!r} is not a name a file can be given")
+        values[key] = safe
+    if "frame" in keys:
+        if frame is None:
+            raise ValueError(
+                "this export has no frame; remove {frame} from the template"
+            )
+        values["frame"] = f"{int(frame):04d}"
+
+    try:
+        return template.format(**values)
+    except (KeyError, IndexError, ValueError) as exc:
+        raise ValueError(f"filename template {template!r} could not be filled in") from exc
+
+
+def require_distinct_names(names: Sequence[str]) -> None:
+    """Refuse if any of ``names`` is empty, or two of them are the same.
+
+    The one collision rule every multi-output naming step shares: a split
+    template that sanitises two labels to one name, or a PNG-sequence template
+    that drops ``{frame}`` and so gives every frame of a clip the same name,
+    fail exactly the same way here -- one output silently overwriting another
+    on disk is the one outcome a refusal exists to prevent.  ``_split_stems``
+    refused a split's collision this way before templates existed; this is
+    that same rule, generalised to the frame-numbering step that gained a
+    template beside it.
+    """
+    seen: set[str] = set()
+    for name in names:
+        if not name:
+            raise ValueError("a filename template produced an empty name")
+        if name in seen:
+            raise ValueError(f"two outputs would both be called {name!r}")
+        seen.add(name)
 
 
 def rebase_tags(tags: Sequence[Any], f0: int, f1: int) -> list[Any]:

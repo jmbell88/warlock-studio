@@ -117,7 +117,10 @@ def test_a_split_by_tag_writes_one_sheet_per_tag(monkeypatch, tmp_path):
     # split is named, so an unlabelled one would be a fourth thing on disk
     # nobody asked for.
     assert not (tmp_path / "walk.png").exists()
-    assert result == {"exported": tmp_path / "walk_intro.png"}
+    assert result["exported"] == tmp_path / "walk_intro.png"
+    # The recorded destination is the dialog's own pick, not the split's --
+    # so the tab's next export suggests the folder the *dialog* named.
+    assert result["dest"] == tmp_path / "walk.png"
 
 
 def test_each_per_tag_sheet_holds_only_that_tags_frames(monkeypatch, tmp_path):

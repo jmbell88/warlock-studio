@@ -379,6 +379,35 @@ TOOL_OPTION_DEFAULTS: dict[str, Any] = {
     "stamp_align": "free",
 }
 
+def _safe_int(value: Any, fallback: int, *, minimum: int) -> int:
+    """``value`` as an int no smaller than ``minimum``, or ``fallback`` if it
+    is not a number at all -- a hand-edited settings file's own doctrine,
+    applied to a recorded export option the same way ``clamp_canvas`` applies
+    it to a typed size."""
+    try:
+        return max(minimum, int(value))
+    except (TypeError, ValueError):
+        return fallback
+
+
+#: The nine export controls, and the value each starts at -- ``InkerState``'s
+#: own field defaults, restated here as one dict because both a stored
+#: settings block and a tab's own recorded set need to be applied *over* this
+#: base rather than over whatever the controls currently hold, for
+#: :meth:`InkerState.apply_preset`'s reason: a set saved before a key existed
+#: must leave that key at its default, not at a stranger's leftover value.
+EXPORT_OPTION_DEFAULTS: dict[str, Any] = {
+    "arrange": None,
+    "wrap": 4,
+    "merge": False,
+    "skip_empty": False,
+    "trim": False,
+    "padding": 0,
+    "extrude": 0,
+    "scale": 1,
+    "template": "",
+}
+
 DEFAULT_SWATCHES: tuple[tuple[int, int, int, int], ...] = (
     (0, 0, 0, 255),
     (255, 255, 255, 255),
@@ -800,6 +829,18 @@ class InkerDoc:
     # folder would make ``dirty`` a lie.
     collapsed_groups: set[int] = field(default_factory=set)
 
+    # This tab's own last export: where it was written and the option set
+    # (``InkerState.export_options_snapshot``) it was written with. **Session-
+    # scoped and journal-exempt**, like ``playing``/``range_sel`` above --
+    # neither is read by ``journal.head_of`` (``tab.doc.history.head`` alone)
+    # or by ``dirty`` (``doc.history.head`` against ``saved_head``), so
+    # recording an export mid-session neither dirties the document nor wakes
+    # the crash-recovery copy. ``None``/empty until the first successful
+    # export of this tab; :meth:`InkerState.apply_export_options` treats that
+    # as "nothing to suggest" rather than "suggest nothing".
+    export_dest: Path | None = None
+    export_options: dict[str, Any] = field(default_factory=dict)
+
     @property
     def busy(self) -> bool:
         """Whether the document may be edited right now.
@@ -1201,6 +1242,21 @@ class InkerState:
     # ``export_padding`` -- the same room guarantee ``packwright.PackSettings``
     # enforces at construction.
     export_extrude: int = 0
+    # A user-chosen filename template, or "" for whichever default the export
+    # in question falls back to -- ``sheetout.DEFAULT_FRAME_TEMPLATE`` for a
+    # plain PNG sequence, ``DEFAULT_TAG_TEMPLATE``/``DEFAULT_LAYER_TEMPLATE``
+    # for a split. App-level like every export control above it, and the
+    # ninth key ``export_options_snapshot``/``apply_export_options`` carry.
+    export_template: str = ""
+    # Which tab's own recorded ``export_options`` the controls above were last
+    # seeded from -- ``""`` seeds nothing. Compared by uid, not by identity,
+    # against ``InkerDoc.uid``: a tab closed and never reopened cannot match
+    # again, which is exactly "forget it" without a second field to clear.
+    # Session-only bookkeeping, not a document fact and not persisted: it
+    # exists so exporting the *same* tab twice in a row keeps whatever the
+    # user just typed into the controls, and only a switch away and back
+    # re-suggests that tab's own last settings over it.
+    export_seed_uid: str = ""
 
     # -- importing a sprite sheet ------------------------------------------
     #
@@ -1411,6 +1467,68 @@ class InkerState:
 
     def delete_preset(self, name: str) -> bool:
         return self.presets.pop(str(name), None) is not None
+
+    # -- export options ------------------------------------------------------
+    #
+    # The nine export controls (scale, arrange, wrap, merge, skip empty, trim,
+    # padding, extrude, template) are app-level like the swatches -- one set,
+    # shared by whichever tab is exporting -- but a *document* still has its
+    # own preference: the walk cycle wants Merge on and the icon sheet does
+    # not. ``InkerDoc.export_options`` is that per-tab memory (session-only,
+    # journal-exempt); these two methods are its one door, matching and
+    # inverting each other the way ``save_preset``/``apply_preset`` do.
+
+    def export_options_snapshot(self) -> dict[str, Any]:
+        """The nine export controls' current values, as one dict.
+
+        One spelling for what a completed export records onto its tab
+        (:func:`inker_mode.on_task_done`) and what ``inker_mode.persist``
+        writes cross-session, so the two destinations cannot drift apart by a
+        stray key.
+        """
+        return {
+            "arrange": self.export_arrange,
+            "wrap": int(self.export_wrap),
+            "merge": bool(self.export_merge),
+            "skip_empty": bool(self.export_skip_empty),
+            "trim": bool(self.export_trim),
+            "padding": int(self.export_padding),
+            "extrude": int(self.export_extrude),
+            "scale": int(self.export_scale),
+            "template": str(self.export_template),
+        }
+
+    def apply_export_options(self, options: Any) -> None:
+        """Replace the nine export controls from a recorded set.
+
+        Over :data:`EXPORT_OPTION_DEFAULTS`, never over whatever the controls
+        currently hold -- :meth:`apply_preset`'s reason, restated: a set saved
+        before a key existed must leave that key at its default rather than at
+        a stranger's value, or applying the same recorded set twice gives two
+        different exports.
+
+        A falsy ``options`` -- a tab that has never exported, ``InkerDoc``'s
+        own default -- is a no-op: the shared controls keep whatever they
+        already carry, which is either the cross-session default
+        (``inker_mode._restore_export``) or the previous tab's leftover
+        setting, and there is nothing here to correct that with.
+        """
+        if not options or not isinstance(options, dict):
+            return
+        merged = {
+            **EXPORT_OPTION_DEFAULTS,
+            **{k: v for k, v in options.items() if k in EXPORT_OPTION_DEFAULTS},
+        }
+        arrange = merged["arrange"]
+        self.export_arrange = arrange if arrange is None or isinstance(arrange, str) else None
+        self.export_wrap = _safe_int(merged["wrap"], self.export_wrap, minimum=1)
+        self.export_merge = bool(merged["merge"])
+        self.export_skip_empty = bool(merged["skip_empty"])
+        self.export_trim = bool(merged["trim"])
+        self.export_padding = _safe_int(merged["padding"], self.export_padding, minimum=0)
+        self.export_extrude = _safe_int(merged["extrude"], self.export_extrude, minimum=0)
+        self.export_scale = _safe_int(merged["scale"], self.export_scale, minimum=1)
+        self.export_template = str(merged.get("template") or "")
 
     # -- documents ---------------------------------------------------------
 

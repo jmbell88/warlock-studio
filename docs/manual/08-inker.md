@@ -960,6 +960,22 @@ default, so an export with none of them on is the sheet this has always packed.
 beside whatever name you pick. No atlas to slice and no sidecar to read, which is what an engine
 with its own importer wants.
 
+The **filename template** field beside Ext lets you rename the pieces of an export instead of
+accepting the default numbering. `{title}` is the name you gave the dialog, `{frame}` is the frame
+number (always four digits — `0007`, never `7`), `{tag}` and `{layer}` are the split name a per-tag
+or per-layer batch gives each of its files. Leave it empty for the default: a plain PNG sequence
+numbers `{title}_{frame}`, and a split names each output `{title}_{tag}` or `{title}_{layer}` — the
+same names both already wrote before this field existed. A template that asks for a key this export
+does not have (`{tag}` on a PNG sequence that was never split, `{frame}` on a sheet or a GIF) is
+refused by name, and so is one that would give two of the export's own files the same name.
+
+Inker remembers your export settings. Scale, Arrange, Merge, Skip empty, Trim, Pad, Ext and the
+filename template all carry over to your next export in this session — and each document remembers
+its *own* last destination and settings, so reopening a tab you already exported once suggests the
+same folder and the same options rather than whatever you last used on a different drawing. The
+options themselves — not which folder — also survive closing and reopening Warlock, seeding a fresh
+document's export controls with whatever you used last time.
+
 The **scale** box on the timeline's second row magnifies every export by a whole number, nearest
 neighbour: each pixel is drawn N times and nothing is resampled, so a 32×32 sprite at 8× is the
 artwork at 256×256 rather than a blurred version of it. A sheet's sidecar is built on the scaled
