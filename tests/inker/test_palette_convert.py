@@ -212,3 +212,63 @@ def test_building_a_palette_is_one_undo_step_like_any_other_conversion():
 
     assert doc.palette is None
     assert np.array_equal(doc.stack.active.pixels, before)
+
+
+# --- grouped is a whole-document conversion ----------------------------------
+
+
+def test_grouped_builds_one_table_for_the_whole_document():
+    """Two layers with disjoint grey ranges must be grouped *against each
+    other*: grouped per plane, each would spend the whole palette on its own
+    range and the same grey would land on different swatches in each."""
+    doc = Document.blank(4, 4)
+    doc.stack.active.pixels[..., :3] = 20
+    doc.stack.active.pixels[..., 3] = 255
+    doc.add_layer(name="Light")
+    doc.stack.active.pixels[..., :3] = 230
+    doc.stack.active.pixels[..., 3] = 255
+
+    palette = [(0, 0, 0, 255), (255, 255, 255, 255)]
+    assert doc.convert_to_palette(palette, "grouped") is True
+
+    dark, light = doc.stack[0], doc.stack[1]
+    assert _used(dark.pixels) == {(0, 0, 0)}
+    assert _used(light.pixels) == {(255, 255, 255)}
+
+
+def test_redoing_a_grouped_conversion_lands_on_the_same_pixels():
+    """The table is rebuilt inside the replay closure, so redo recomputes it
+    against the planes as they have just been restored."""
+    doc = _ramp_doc()
+    palette = [(0, 0, 0, 255), (120, 120, 120, 255), (255, 255, 255, 255)]
+    doc.convert_to_palette(palette, "grouped")
+    after = doc.stack.active.pixels.copy()
+    doc.undo()
+    doc.redo()
+    assert np.array_equal(doc.stack.active.pixels, after)
+
+
+def test_a_grouped_conversion_leaves_the_document_snapped():
+    """Final pixels are exact palette members, so ``indexed.snap`` cannot move
+    them -- the hard constraint every method here is held to."""
+    from warlock.studio.inker import indexed as ix
+
+    doc = _ramp_doc()
+    palette = [(0, 0, 0, 255), (120, 120, 120, 255), (255, 255, 255, 255)]
+    doc.convert_to_palette(palette, "grouped")
+    pixels = doc.stack.active.pixels
+    assert np.array_equal(ix.snap(pixels, palette), pixels)
+
+
+def test_a_grouped_conversion_keeps_more_of_a_ramp_than_nearest():
+    """The whole reason grouped exists: a narrow band of greys against a wide
+    palette collapses under nearest and does not under grouped."""
+    doc = Document.blank(15, 1)
+    doc.stack.active.pixels[..., 3] = 255
+    for x in range(15):
+        doc.stack.active.pixels[0, x, :3] = 140 + x * 5
+    band = doc.stack.active.pixels.copy()
+
+    palette = [(0, 0, 0, 255), (255, 255, 255, 255)]
+    assert len(_used(dither.convert(band, palette, "nearest"))) == 1
+    assert len(_used(dither.convert(band, palette, "grouped"))) == 2

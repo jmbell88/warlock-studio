@@ -706,6 +706,14 @@ class PaintOps:
         write nothing can make -- the popup owns the frame, and anything that
         does reach the planes cancels the session through ``_convert_target`` --
         would spend exactly that budget for nothing.
+
+        **Grouped's table is document-wide even though only the frame is shown.**
+        That is not an approximation to be tidied up later: during a preview
+        ``_palette_planes`` yields the current frame's *snapshots* plus the other
+        frames' true planes, which is byte-for-byte what ``commit_convert`` reads
+        after its restore -- so the preview on the visible frame is exactly the
+        commit on the visible frame. A table built from the visible frame alone
+        would look right and then move when committed.
         """
         if self._convert is None:
             return False
@@ -715,9 +723,17 @@ class PaintOps:
         key = (tuple(wanted), method)
         if self._convert_memo is not None and self._convert_memo[0] == key:
             return True  # already on screen, and nothing about it has moved
+        table = (
+            dither.grouped_table(self._palette_planes(), wanted)
+            if method == "grouped"
+            else None
+        )
         self._convert_memo = (
             key,
-            [dither.convert(before, wanted, method) for _uid, before in self._convert],
+            [
+                dither.convert(before, wanted, method, table=table)
+                for _uid, before in self._convert
+            ],
         )
         for (uid, before), converted in zip(
             self._convert, self._convert_memo[1], strict=True

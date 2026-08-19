@@ -22,6 +22,25 @@ in RGB is a document that moves the moment you touch it. The engine also cannot
 import ``pipelines``: this package is headless and pinned to stay that way, and
 ``map_palette`` reaches for PIL and the Oklab tables at module scope.
 
+**Grouped** is the fourth, and it is nearest's answer to nearest's own failure.
+Nearest maps each colour to the absolutely-closest swatch, so a drawing with
+fifteen mid-greys and a palette with two can land all fifteen on one of them and
+lose every distinction the artist drew. Grouped instead clusters the drawing's
+*own* distinct colours -- count-weighted, by the same median cut
+:func:`build_palette` uses -- into at most as many groups as the palette has
+entries, and then assigns groups to entries **one to one**, cheapest total
+first. Dark greys land on the dark target and light greys on the light one
+because that is what a min-distance injective assignment does; there is no hue
+special-casing anywhere, and none is wanted. It is a flat per-colour map like
+nearest, with no dither texture, so flat regions stay flat.
+
+The metric is squared-Euclidean integer RGB throughout -- clustering and
+assignment both. Oklab was considered and rejected *for now*: it would perceptually
+improve the clustering, but this module's one-metric identity with the write-path
+snap is worth more than that, exact integer arithmetic makes the tie-breaks
+decidable rather than float-fragile, and the quality win here comes from the
+clustering and the one-to-one assignment rather than from the space they happen in.
+
 Alpha is never touched and fully transparent pixels are never read, for the
 reasons ``indexed`` gives at length: a palette is a set of colours, not a set of
 opacities, and a transparent pixel has no colour to convert.
@@ -49,6 +68,8 @@ __all__ = [
     "build_palette",
     "convert",
     "convert_indices",
+    "grouped_index_table",
+    "grouped_table",
     "luma",
     "tile_matrix",
 ]
@@ -67,8 +88,11 @@ BAYER_SIZES = {"bayer2": 2, "bayer4": 4, "bayer8": 8}
 ORDERED = tuple(BAYER_SIZES)
 
 #: Every conversion this module performs, in the order a UI should list them:
-#: the two that need no matrix first, then the matrices by size.
-METHODS = ("nearest", "floyd-steinberg", *ORDERED)
+#: the flat per-colour maps first, then error diffusion, then the matrices by
+#: size. Only ``METHODS[0] == "nearest"`` is pinned elsewhere (the UI's default);
+#: "grouped" sits beside it because the two answer the same question -- one
+#: colour in, one colour out, no texture -- and differ only in how they choose.
+METHODS = ("nearest", "grouped", "floyd-steinberg", *ORDERED)
 
 # Rec. 709 luma. Used for the deterministic output ordering of ``build_palette``
 # and by the palette sort, so "sorted by brightness" means one thing in the
@@ -133,15 +157,202 @@ def tile_matrix(matrix: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
     return np.tile(matrix, reps)[:height, :width]
 
 
-def convert(pixels: np.ndarray, palette: Sequence[RGBA], method: str = "nearest") -> np.ndarray:
+def grouped_table(
+    planes: Iterable[np.ndarray], palette: Sequence[RGBA]
+) -> tuple[np.ndarray, np.ndarray]:
+    """The grouped map for a whole conversion scope: ``(keys, targets)``.
+
+    ``keys`` is the sorted packed-uint32 distinct visible RGBs across *planes*;
+    ``targets`` is the exact palette RGB each of them lands on, ``(N, 3) uint8``.
+    A table rather than a per-pixel function because the grouping is a property
+    of the *scope*, not of a plane: two layers with disjoint grey ranges must be
+    grouped against each other or the same grey ends up on different swatches in
+    each, and the document comes apart along its layer boundaries. Building it
+    once and applying it to every plane is what makes that impossible.
+
+    The steps, and why each is the one it is:
+
+    1. Distinct visible colours with pixel counts -- the same reduction
+       :func:`build_palette` runs, so "the drawing's colours" means one thing.
+    2. Clustering. With no more distinct colours than palette entries, every
+       colour is its own group: that is the structure-preserving degenerate case
+       and it makes the map *injective*, which is exactly what you want when a
+       palettized drawing is put on a table it already fits.
+    3. Otherwise :func:`_median_boxes`, count-weighted, so a thousand
+       antialiasing colours do not out-vote the fill behind them. It may return
+       fewer boxes than asked when colours run out; that is fine, since the
+       assignment below only needs boxes <= targets.
+    4. Each box's colour is :func:`_box_colour` -- one definition, shared.
+    5. A box's rank is the lowest sorted-key index in it: distinct across boxes
+       and stable, which is what makes the tie-breaks below deterministic.
+    6. Assignment. Every (box, target) pair scored by exact integer
+       squared-Euclidean distance, sorted by ``(distance, box rank, palette
+       index)``, then walked greedily taking any pair whose box and target are
+       both still free. Distance-zero pairs are first in that order, so a
+       drawing already on the palette maps every colour to itself -- the
+       identity a ``METHODS``-parametrized test forces on every method here.
+       One-to-one is the point: it is what stops fifteen greys collapsing.
+
+    Duplicate palette entries are kept as distinct slots on purpose. Two
+    identical browns are two targets, and a scope with enough groups will use
+    both; collapsing them would silently shrink the palette the user chose.
+    """
+    keys, counts = _distinct(planes)
+    entries = np.asarray([tuple(c)[:3] for c in palette], dtype=np.int64)
+    if keys.size == 0:
+        return keys, np.zeros((0, 3), dtype=np.uint8)
+    colours = np.stack(
+        [(keys >> 16) & 0xFF, (keys >> 8) & 0xFF, keys & 0xFF], axis=1
+    ).astype(np.int64)
+    want = entries.shape[0]
+
+    if keys.size <= want:
+        boxes = [np.array([i], dtype=np.int64) for i in range(keys.size)]
+    else:
+        boxes = _median_boxes(colours, counts, want)
+
+    reps = np.clip(
+        np.asarray([_box_colour(colours, counts, box) for box in boxes], dtype=np.int64),
+        0,
+        255,
+    )
+    ranks = np.asarray([int(box.min()) for box in boxes], dtype=np.int64)
+
+    delta = reps[:, None, :] - entries[None, :, :]
+    d2 = (delta * delta).sum(axis=2)
+    count = len(boxes)
+    box_index = np.repeat(np.arange(count, dtype=np.int64), want)
+    target_index = np.tile(np.arange(want, dtype=np.int64), count)
+    # The last key is ``lexsort``'s primary one, so this is
+    # (distance, box rank, palette index) read top to bottom.
+    order = np.lexsort((target_index, ranks[box_index], d2.reshape(-1)))
+
+    assigned = np.full(count, -1, dtype=np.int64)
+    taken = np.zeros(want, dtype=bool)
+    left = count
+    for pair in order:
+        if left == 0:
+            break
+        box_at = int(box_index[pair])
+        target_at = int(target_index[pair])
+        if assigned[box_at] >= 0 or taken[target_at]:
+            continue
+        assigned[box_at] = target_at
+        taken[target_at] = True
+        left -= 1
+
+    targets = np.zeros((keys.size, 3), dtype=np.uint8)
+    for index, box in enumerate(boxes):
+        targets[box] = entries[assigned[index]].astype(np.uint8)
+    return keys, targets
+
+
+def _candidate_slots(count: int, transparent: int) -> tuple[int, list[int]]:
+    """``(hole, candidate slots)`` for an indexed conversion of ``count`` slots.
+
+    Extracted from :func:`convert_indices` so the rule exists once: the
+    transparent slot is never a candidate, because dithering may pick any
+    candidate for any pixel and a hole left in the running scatters holes through
+    a solid area wherever its colour happens to win. :func:`grouped_index_table`
+    needs the identical answer, and a second copy of the ``or list(range(count))``
+    degenerate case is how the two would come to disagree on a one-entry palette.
+    """
+    hole = int(transparent) if 0 <= int(transparent) < count else 0
+    return hole, [i for i in range(count) if i != hole] or list(range(count))
+
+
+def grouped_index_table(
+    planes: Iterable[np.ndarray],
+    palette: Sequence[RGBA],
+    *,
+    transparent: int = 0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """:func:`grouped_table` over an indexed document's *candidate* slots.
+
+    The transparent slot cannot be a target by construction rather than by a
+    later filter: it is simply not in the table the assignment runs over.
+    """
+    count = len(palette)
+    if not count:
+        raise ValueError("a conversion needs at least one colour")
+    _hole, slots = _candidate_slots(count, transparent)
+    return grouped_table(planes, [tuple(palette[i]) for i in slots])
+
+
+def _grouped(
+    out: np.ndarray, keys: np.ndarray, targets: np.ndarray, entries: np.ndarray
+) -> np.ndarray:
+    """Apply a grouped table to one plane, in place, and return it.
+
+    The visible mask is ``alpha > 0`` -- :func:`_ordered`'s rule exactly, and
+    deliberately so: a semi-transparent pixel has a colour and is converted, a
+    fully transparent one has none and rides through verbatim.
+
+    A colour the table does not carry is snapped to its nearest palette entry
+    rather than left alone. That keeps :func:`convert` *total* for a stale
+    table -- a preview built before a stroke, say -- instead of returning a
+    picture with a few off-palette pixels in it, which is precisely the thing
+    the whole snap identity exists to make impossible.
+    """
+    visible = out[..., 3] > 0
+    if not visible.any():
+        return out
+    rgb = out[..., :3][visible]
+    packed = (
+        rgb[:, 0].astype(np.uint32) << 16 | rgb[:, 1].astype(np.uint32) << 8 | rgb[:, 2]
+    )
+    if keys.size:
+        found = np.searchsorted(keys, packed)
+        np.clip(found, 0, keys.size - 1, out=found)
+        hit = keys[found] == packed
+        mapped = targets[found].copy()
+    else:
+        hit = np.zeros(packed.shape, dtype=bool)
+        mapped = np.zeros((packed.size, 3), dtype=np.uint8)
+    if not hit.all():
+        missing = ~hit
+        colours = np.stack(
+            [
+                (packed[missing] >> 16) & 0xFF,
+                (packed[missing] >> 8) & 0xFF,
+                packed[missing] & 0xFF,
+            ],
+            axis=1,
+        ).astype(np.int32)
+        table = entries.astype(np.int32)
+        delta = colours[:, None, :] - table[None, :, :]
+        mapped[missing] = table[np.argmin((delta * delta).sum(axis=2), axis=1)].astype(
+            np.uint8
+        )
+    out[..., :3][visible] = mapped
+    return out
+
+def convert(
+    pixels: np.ndarray,
+    palette: Sequence[RGBA],
+    method: str = "nearest",
+    *,
+    table: tuple[np.ndarray, np.ndarray] | None = None,
+) -> np.ndarray:
     """*pixels* rewritten onto *palette* by *method*. Returns a new array.
 
     Every output colour is an entry of *palette*, exactly -- that is what makes
     the result stable under the snap every later write goes through. Alpha rides
     through byte-identical and fully transparent pixels are returned verbatim.
+
+    ``table`` is a :func:`grouped_table` result and is only meaningful for the
+    grouped method, where it carries the *scope*: the document-wide grouping the
+    caller wants this plane converted under. Passing one with any other method is
+    a ``ValueError`` rather than an ignored argument, because a caller who thinks
+    it is applying a shared grouping and is silently not would produce a document
+    whose layers disagree, with nothing anywhere to say so. Without a table,
+    grouped builds one from this plane alone, which is the right answer for the
+    single-plane callers (and for the seven ``METHODS``-parametrized suites).
     """
     if method not in METHODS:
         raise ValueError(f"unknown dither method {method!r}")
+    if table is not None and method != "grouped":
+        raise ValueError("a grouped table is only meaningful for the grouped method")
     if pixels.dtype != np.uint8 or pixels.ndim != 3 or pixels.shape[2] != 4:
         raise ValueError("convert takes (H, W, 4) uint8")
     if not palette:
@@ -154,10 +365,13 @@ def convert(pixels: np.ndarray, palette: Sequence[RGBA], method: str = "nearest"
     out = pixels.copy()
     if out.size == 0 or not (out[..., 3] > 0).any():
         return out
-    table = np.asarray([tuple(c)[:3] for c in palette], dtype=np.int16)
+    entries = np.asarray([tuple(c)[:3] for c in palette], dtype=np.int16)
+    if method == "grouped":
+        keys, targets = grouped_table([out], palette) if table is None else table
+        return _grouped(out, keys, targets, entries)
     if method == "floyd-steinberg":
-        return _floyd_steinberg(out, table)
-    return _ordered(out, table, bayer_matrix(BAYER_SIZES[method]))
+        return _floyd_steinberg(out, entries)
+    return _ordered(out, entries, bayer_matrix(BAYER_SIZES[method]))
 
 
 def convert_indices(
@@ -166,6 +380,7 @@ def convert_indices(
     method: str = "nearest",
     *,
     transparent: int = 0,
+    table: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> np.ndarray:
     """*pixels* converted onto *palette* as an ``(H, W) uint8`` **index plane**.
 
@@ -191,6 +406,10 @@ def convert_indices(
     Alpha decides the holes, at ``index_plane.OPAQUE_THRESHOLD``, and it is read
     off the *input* -- ``convert`` passes alpha through byte-identically, so the
     two agree, and reading the input says so.
+
+    ``table`` is :func:`grouped_index_table`'s result and rides straight through
+    to :func:`convert`; it must have been built over the *candidate* slots, which
+    is what that function does.
     """
     if pixels.dtype != np.uint8 or pixels.ndim != 3 or pixels.shape[2] != 4:
         raise ValueError("convert_indices takes (H, W, 4) uint8")
@@ -199,8 +418,7 @@ def convert_indices(
         raise ValueError("a conversion needs at least one colour")
     if count > ixp.MAX_COLOURS:
         raise ValueError(f"an indexed palette holds at most {ixp.MAX_COLOURS} colours")
-    hole = int(transparent) if 0 <= int(transparent) < count else 0
-    slots = [i for i in range(count) if i != hole] or list(range(count))
+    hole, slots = _candidate_slots(count, transparent)
     candidates = [tuple(palette[i]) for i in slots]
 
     out = np.full(pixels.shape[:2], hole, dtype=np.uint8)
@@ -210,7 +428,9 @@ def convert_indices(
     if not visible.any():
         return out
 
-    painted = convert(pixels, candidates, method)
+    # ``table`` rides through to the inner ``convert``, so every parity pin that
+    # already compares this door's answer against that one covers grouped too.
+    painted = convert(pixels, candidates, method, table=table)
     # ``transparent=None``: this sub-table has no hole in it, every entry is a
     # candidate, and the holes were labelled above off the input's alpha.
     local = ixp.resolve(painted, ixp.lut(candidates, transparent=-1), None)
@@ -413,13 +633,20 @@ def _distinct(planes: Iterable[np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
     return keys, counts.astype(np.int64)
 
 
-def _median_cut(colours: np.ndarray, counts: np.ndarray, want: int) -> np.ndarray:
+def _median_boxes(colours: np.ndarray, counts: np.ndarray, want: int) -> list[np.ndarray]:
     """Repeatedly split the widest box at its count-weighted median.
 
     Weighted by pixel count and not by distinct-colour count, which is the whole
     difference between a palette of the picture and a palette of its noise: a
     thousand near-identical antialiasing colours occupying two hundred pixels
     must not out-vote the flat fill behind them.
+
+    Returns the *boxes* -- disjoint index arrays into ``colours`` -- rather than
+    their representatives, because two callers want different halves of this.
+    :func:`_median_cut` wants one colour per box; :func:`grouped_table` wants the
+    membership, since which distinct colours were grouped together is the whole
+    of what it is asking. Fewer than ``want`` boxes come back when the colours
+    run out, and both callers handle that.
     """
     boxes = [np.arange(colours.shape[0])]
     while len(boxes) < want:
@@ -450,12 +677,25 @@ def _median_cut(colours: np.ndarray, counts: np.ndarray, want: int) -> np.ndarra
         cut = max(1, min(cut, box.size - 1))
         boxes.append(box[:cut])
         boxes.append(box[cut:])
+    return boxes
 
-    out = []
-    for box in boxes:
-        weights = counts[box].astype(np.float64)
-        mean = (colours[box].astype(np.float64) * weights[:, None]).sum(axis=0)
-        out.append(np.floor(mean / weights.sum() + 0.5))
+
+def _box_colour(colours: np.ndarray, counts: np.ndarray, box: np.ndarray) -> np.ndarray:
+    """One box's colour: the count-weighted mean, rounded half up and clipped.
+
+    One definition, because :func:`_median_cut` and :func:`grouped_table` must
+    agree about what a box *is* -- a grouped conversion whose representatives
+    were rounded differently from the palette builder's would put a drawing on
+    a table it did not quite come from.
+    """
+    weights = counts[box].astype(np.float64)
+    mean = (colours[box].astype(np.float64) * weights[:, None]).sum(axis=0)
+    return np.floor(mean / weights.sum() + 0.5)
+
+
+def _median_cut(colours: np.ndarray, counts: np.ndarray, want: int) -> np.ndarray:
+    """The colours :func:`_median_boxes`'s boxes stand for, one per box."""
+    out = [_box_colour(colours, counts, box) for box in _median_boxes(colours, counts, want)]
     return np.clip(np.asarray(out, dtype=np.int64), 0, 255)
 
 

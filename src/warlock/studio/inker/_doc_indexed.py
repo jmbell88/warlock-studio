@@ -235,15 +235,43 @@ class IndexedOps:
             # push and nothing for it to hold. The dithers are *not* let through
             # this door: re-running one is a real request (it is how a user
             # compares two matrices) and it does move pixels.
+            #
+            # Grouped is not let through either, and deliberately not for want
+            # of idempotence -- it *is* idempotent on a document already snapped
+            # onto this table, since every distinct colour is a palette member
+            # and the distance-zero assignment maps each to itself. It stays out
+            # because widening this door to a second method would mean deciding,
+            # every time a method is added, whether it belongs here; "nearest is
+            # the snap and the snap is a no-op" is a statement about one method
+            # and stays one.
             return False
         self.commit_floating()
         before, self.palette = self.palette, wanted
-        self._palette_step(
-            before,
-            lambda: self._map_planes(
-                lambda plane: dither.convert(plane, wanted, method), mask_fn=None
-            ),
-        )
+
+        def run() -> None:
+            # **Inside the replay closure, not captured beside it.** Two reasons,
+            # both load-bearing. Redo must recompute the grouping against the
+            # planes as they have just been *restored*, not against a table built
+            # from the planes as they were when the step was first pushed; and a
+            # table for a large document is potentially megabytes, which the undo
+            # stack would then pin for the rest of the session.
+            #
+            # Whole-document scope, through ``_palette_planes`` -- the same
+            # reduction the palette builder uses, so linked cels are counted once
+            # and a plane mid-preview contributes its snapshot. Grouping per plane
+            # instead would group each layer against itself, and two layers with
+            # disjoint ranges would land the same grey on different swatches.
+            table = (
+                dither.grouped_table(self._palette_planes(), wanted)
+                if method == "grouped"
+                else None
+            )
+            self._map_planes(
+                lambda plane: dither.convert(plane, wanted, method, table=table),
+                mask_fn=None,
+            )
+
+        self._palette_step(before, run)
         return True
 
     def palette_from_document(
@@ -678,9 +706,22 @@ class IndexedOps:
         a second step for an operation already on the stack.
         """
         table = ixp.lut(colours, transparent)
-        for layer in self._index_planes():
+        planes = self._index_planes()
+        # **Strictly before the loop.** The loop below writes each layer's
+        # pixels through ``materialize``, so a grouping built inside it would see
+        # the first layers already converted and group the later ones against a
+        # document that no longer exists. Built over the candidate slots, so the
+        # transparent slot is never a target.
+        grouping = (
+            dither.grouped_index_table(
+                [layer.pixels for layer in planes], colours, transparent=transparent
+            )
+            if method == "grouped"
+            else None
+        )
+        for layer in planes:
             layer.indices = dither.convert_indices(
-                layer.pixels, colours, method, transparent=transparent
+                layer.pixels, colours, method, transparent=transparent, table=grouping
             )
             layer.pixels[...] = ixp.materialize(layer.indices, table)
         self._stamp_all()

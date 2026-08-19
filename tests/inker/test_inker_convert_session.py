@@ -171,9 +171,9 @@ def _counting_convert(calls: list[tuple]):
     # wrapper and recurses.
     original = real.convert
 
-    def convert(pixels, palette, method="nearest"):
+    def convert(pixels, palette, method="nearest", *, table=None):
         calls.append((tuple(palette), method))
-        return original(pixels, palette, method)
+        return original(pixels, palette, method, table=table)
 
     return convert
 
@@ -364,3 +364,31 @@ def test_a_placeholder_is_never_written_to_even_wearing_a_recorded_uid():
 
     assert doc._convert_target(placeholder.uid, doc._convert[0][1]) is None
     assert not placeholder.pixels.flags.writeable
+
+
+# --- grouped's table is document-wide ----------------------------------------
+
+
+def test_a_grouped_preview_matches_the_commit_on_the_visible_frame():
+    """Two frames whose *union* changes the visible frame's grouping.
+
+    During the preview ``_palette_planes`` yields the visible frame's snapshots
+    plus the other frame's true planes -- byte-for-byte what the commit reads
+    after its restore -- so the two must agree exactly. A table built from the
+    visible frame alone would look right on screen and then move when committed.
+    """
+    doc = Document.blank(4, 4)
+    doc.stack.active.pixels[:] = (200, 200, 200, 255)
+    doc.add_frame(copy=True)
+    doc.stack.active.pixels[:] = (20, 20, 20, 255)
+    doc.set_current_frame(0)
+
+    palette = [BLACK, WHITE]
+    doc.begin_convert()
+    assert doc.preview_convert(palette, "grouped") is True
+    previewed = doc.stack.active.pixels.copy()
+    assert doc.commit_convert(palette, "grouped") is True
+    assert np.array_equal(doc.stack.active.pixels, previewed)
+    # And the grouping really was document-wide: the light frame took white
+    # rather than spending both targets on itself.
+    assert set(np.unique(previewed[..., 0]).tolist()) == {255}

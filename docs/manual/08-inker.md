@@ -471,6 +471,11 @@ That choice is the **Dither**:
 
 - **nearest** puts every pixel on the closest swatch. Clean, and it bands — a smooth sky becomes
   three stripes.
+- **grouped** clusters the drawing's *own* colours into as many groups as the palette has entries
+  and assigns the groups to the entries one to one. Where nearest collapses fifteen mid-greys onto
+  the one closest gray, grouped keeps a darker and a lighter apart. It is a flat map like nearest —
+  no texture, flat regions stay flat — and it is the one to reach for when a conversion lost
+  distinctions the drawing had.
 - **floyd-steinberg** scatters each pixel's error into its neighbours, which keeps the average tone
   a nearest conversion loses. Best on photographic input; on a sprite at 4× zoom the scattered noise
   reads as dirt.
