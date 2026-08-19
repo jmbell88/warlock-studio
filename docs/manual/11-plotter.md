@@ -203,6 +203,12 @@ Tiled `.tsx` with Wang sets does and a plain image does not. It sets the cell yo
 re-fits that cell and its eight neighbours, so edges, outer corners and inner corners follow as you
 draw rather than being placed one at a time.
 
+Terrain painting is **refused on a staggered or hexagonal map**, by name. Both terrain paths read a
+cell's eight neighbours off a square lattice, and on an offset one those are not the neighbouring
+cells — every other row is pushed sideways, and a hexagon has six neighbours rather than eight.
+Painting anyway would fit every edge against the wrong cell and look almost right, which is exactly
+what this editor refuses by name instead.
+
 A **Tiled Wang set** works too, and no longer has to be one of Plotter's own.
 A corner set, an edge set, or a mixed one with a table of its own opens and
 paints: each of its colours gets a row in the Terrain list, and a stroke picks the

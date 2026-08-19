@@ -1783,6 +1783,20 @@ def _apply(ctx: Any, state: Any, tab: Any, cell: tuple[int, int]) -> None:
                 weights=_tile_weights(doc),
             )
     elif state.tool == "terrain":
+        if doc.projection in project.OFFSET_PROJECTIONS:
+            # **Refused by name rather than painted wrongly.** Both terrain
+            # paths -- the blob collapse and the wangid matcher -- read a cell's
+            # eight neighbours off a *square* lattice, and on a staggered or
+            # hexagonal one those are not the neighbouring cells: every other
+            # row is pushed sideways, and a hexagon has six neighbours rather
+            # than eight. Painting anyway would fit every edge against the wrong
+            # cell and look almost right, which is the failure this whole editor
+            # refuses by name instead.
+            ctx.toast(
+                "Terrain painting does not know this lattice's neighbours yet.",
+                "error",
+            )
+            return
         ref = _terrain_ref(state, doc)
         if ref is None:
             ctx.toast("Pick a terrain first.", "error")

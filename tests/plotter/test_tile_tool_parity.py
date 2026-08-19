@@ -329,3 +329,23 @@ def test_autocrop_refuses_an_empty_map() -> None:
 
 def test_content_bounds_of_an_empty_map_is_none() -> None:
     assert _doc().content_bounds() is None
+
+
+# --- terrain on an offset lattice (Part P4) -----------------------------------
+
+
+def test_the_blob_neighbourhood_is_a_square_lattices() -> None:
+    """Why terrain painting is refused by name on a staggered or hexagonal map
+    rather than done wrongly: ``blob.masks_from`` reads the eight *shifted
+    slices* of an array, and on an offset lattice those are not the
+    neighbouring cells -- every other row is pushed sideways, and a hexagon has
+    six neighbours rather than eight."""
+    from warlock.studio.tilegrid import blob
+
+    field = np.zeros((3, 3), dtype=bool)
+    field[1, 1] = True
+    masks = blob.masks_from(field, outside=False)
+    # The cell up-and-left sees its south-east neighbour, which is only true
+    # because the lattice is square.
+    assert masks[0, 0] & blob.SE
+    assert not masks[0, 0] & blob.N
