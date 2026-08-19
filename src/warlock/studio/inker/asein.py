@@ -15,12 +15,17 @@ dependency on the package that pins itself as headless.
 
 **What is refused and what is warned about is the decision worth reading.**
 Anything that would change what the pixels *mean* is a refusal, by name: a
-colour depth this build cannot read, a tilemap layer (its pixels live in a
-tileset, and importing the layer without one draws nothing), a cel type nobody
-here knows, a link pointing at a cel that is not in the file. A document
-assembled out of any of those is one the user edits for ten minutes before
-finding out, which is the argument ``sheetin`` makes for refusing a
-mis-registered atlas.
+colour depth this build cannot read, a cel type nobody here knows, a link
+pointing at a cel that is not in the file. A document assembled out of any of
+those is one the user edits for ten minutes before finding out, which is the
+argument ``sheetin`` makes for refusing a mis-registered atlas. Tilemap
+layers, tilesets and tilemap cels (Wave 3 chunk 3.5) used to be three more
+refusals in this list -- the invariant that governs the change is that a
+refusal only ever moves because this reader learned to model the thing, and
+the refusals that replaced them are exactly as named: a tileset linking an
+external file (its pixels are not in this file at all), a tilemap cel that is
+not 32 bits per tile, and a tilemap cel sitting at an offset that is not a
+multiple of its own tile size.
 
 Everything *cosmetic* is a warning and the document opens: a colour profile
 (this app is sRGB-assumed end to end), user data and timeline colours, a cel
@@ -49,16 +54,20 @@ from typing import Any
 
 import numpy as np
 
+from ..tilegrid import gid
+from ..tilegrid.tileset import Tileset
 from . import index_plane as ixp
 from .animation import Animation, Frame, Tag, Track
 from .layers import Layer, LayerStack
 from .slices import Slice, SliceKey
+from .tiles import TilemapCel, TilesetSlot, grid_shape, materialize
 
 __all__ = [
     "ASEPRITE_SUFFIXES",
     "AseCel",
     "AseLayer",
     "AseSlice",
+    "AseTileset",
     "Sprite",
     "document_from_aseprite",
     "parse",
@@ -222,6 +231,32 @@ class AseLayer:
     background: bool = False
     continuous: bool = False
     child_level: int = 0
+    #: The tileset chunk id this layer is bound to, or ``None`` for every
+    #: layer kind but a tilemap one -- ``_LAYER_TILEMAP``'s own trailing
+    #: DWORD, kept as the file's own id rather than resolved to anything yet,
+    #: for the reason ``AseCel.data`` stays undecoded: resolving it needs the
+    #: tileset table, which is not final until the whole file has been read.
+    tileset: int | None = None
+
+
+@dataclass
+class AseTileset:
+    """One vertical-strip atlas, still at the sprite's own colour depth.
+
+    The tileset's own ``AseCel.data``: the zlib layer is undone at parse
+    time (a truncated stream is a chunk that lied about its own length, the
+    same refusal a cel's compressed pixels earn), but the *colour* decode --
+    RGBA passthrough, grayscale expansion, or a trip through the palette --
+    waits for :func:`document_from_aseprite`, because an indexed strip's
+    transparent index is not known until the palette chunk, wherever in the
+    file it landed, has been folded into :func:`_final_palette`.
+    """
+
+    name: str = "tiles"
+    tile_w: int = 1
+    tile_h: int = 1
+    count: int = 0
+    data: bytes = b""
 
 
 @dataclass
@@ -237,6 +272,12 @@ class AseCel:
     height: int = 0
     data: bytes = b""
     link: int = 0
+    #: A tilemap cel's ``(height, width)`` grid of already-remapped
+    #: :mod:`..tilegrid.gid` values -- ``width``/``height`` above hold the
+    #: grid's own shape *in tiles* for this one kind, not pixels, since a
+    #: tilemap cel is never routed through :func:`_decode`. ``None`` for
+    #: every other cel kind.
+    refs: np.ndarray | None = None
 
 
 @dataclass
@@ -272,6 +313,9 @@ class Sprite:
     slices: list[AseSlice] = field(default_factory=list)
     palette: list[RGBA] | None = None
     warnings: list[str] = field(default_factory=list)
+    #: Keyed by the file's own tileset chunk id (0x2023's own DWORD, not a
+    #: position) -- an ``AseLayer.tileset`` names one of these.
+    tilesets: dict[int, AseTileset] = field(default_factory=dict)
 
 
 class _Parse:
@@ -283,6 +327,13 @@ class _Parse:
         self.palette_size = 0
         self.old_palette: list[RGBA] | None = None
         self.frame = 0
+        #: The previous chunk's kind, in this frame or the one before it --
+        #: what tells a ``_USER_DATA`` chunk which of the format's several
+        #: owners it decorates. A tileset's own per-tile properties are the
+        #: one owner this reader gives a different warning to; every other
+        #: owner (layer, cel, tag, slice) already says its own piece through
+        #: the divergence warnings at the chunk that names it.
+        self.last_chunk: int | None = None
 
     def warn(self, text: str) -> None:
         """One line per *kind* of thing dropped, not one per occurrence.
@@ -400,11 +451,7 @@ def _read_chunk(state: _Parse, kind: int, payload: bytes, opacity_valid: bool) -
     elif kind == _COLOR_PROFILE:
         _read_color_profile(state, r)
     elif kind == _TILESET:
-        # Refused rather than warned: a tileset is only ever referenced by a
-        # tilemap layer, whose pixels are undrawable without it.
-        raise ValueError(
-            "this .aseprite uses tilesets, which this build cannot open"
-        )
+        _read_tileset(state, r)
     elif kind == _USER_DATA:
         # Aseprite 1.3 writes one of these after the tags chunk for *every*
         # tag, whether or not anything was ever put in it, so an empty one is
@@ -413,7 +460,17 @@ def _read_chunk(state: _Parse, kind: int, payload: bytes, opacity_valid: bool) -
         # ignore the one that matters. Divergence 14 is about the ones with
         # content in them.
         if r.u32():
-            state.warn("user data and timeline colours are not kept; the drawing is")
+            if state.last_chunk == _TILESET:
+                # A user-data chunk decorates the chunk immediately before
+                # it, the format's own convention for layers, cels, tags and
+                # slices alike -- so one following a tileset chunk is a
+                # per-tile property, which Wave 3 deliberately does not
+                # model (Deferred, ASEPRITE_PARITY.md). Named separately from
+                # the ordinary user-data warning because "the tiles are kept"
+                # is true here and is not the generic sentence's claim.
+                state.warn("per-tile properties are not kept; the tiles are")
+            else:
+                state.warn("user data and timeline colours are not kept; the drawing is")
     elif kind == _CEL_EXTRA:
         state.warn("a cel's precise bounds were dropped; its pixels were not")
     elif kind == _EXTERNAL_FILES:
@@ -422,6 +479,56 @@ def _read_chunk(state: _Parse, kind: int, payload: bytes, opacity_valid: bool) -
         state.warn("a saved mask or path was dropped; selections do not travel")
     else:
         state.warn(f"a chunk of type 0x{kind:04x} is not one this build reads")
+    state.last_chunk = kind
+
+
+def _read_tileset(state: _Parse, r: _Reader) -> None:
+    """The 0x2023 chunk: one vertical-strip atlas, still at the sprite's own
+    colour depth.
+
+    An external-file tileset is refused by name rather than warned about --
+    unlike every other divergence in this reader, its pixels are not
+    *somewhere else in this file*, they are not in this file at all, and a
+    tilemap layer bound to it would draw nothing. ``base_index`` is
+    Aseprite's own UI numbering tiles from 1 in its palette-like tileset
+    panel; it changes no id this reader stores, so a value other than 1 is a
+    warning rather than a refusal.
+    """
+    tileset_id = r.u32()
+    flags = r.u32()
+    count = r.u32()
+    tile_w = r.u16()
+    tile_h = r.u16()
+    base_index = r.i16()
+    r.take(14)
+    name = r.string()
+    if flags & 1:
+        raise ValueError(
+            f"the tileset {name!r} links an external file, which this build"
+            " cannot open"
+        )
+    if not flags & 2:
+        raise ValueError(
+            f"the tileset {name!r} holds no embedded pixel data this build"
+            " can read"
+        )
+    if count < 1:
+        raise ValueError(f"the tileset {name!r} holds no tiles")
+    if base_index != 1:
+        state.warn(
+            "a tileset's tile numbers start somewhere other than 1 in"
+            " Aseprite's own panel; this is display-only and every tile id"
+            " this reader stores is unaffected"
+        )
+    length = r.u32()
+    compressed = r.take(length)
+    try:
+        raw = zlib.decompress(compressed)
+    except zlib.error as exc:
+        raise ValueError(f"the tileset {name!r} will not decompress: {exc}") from exc
+    state.sprite.tilesets[tileset_id] = AseTileset(
+        name=name or "tiles", tile_w=tile_w, tile_h=tile_h, count=count, data=raw
+    )
 
 
 def _read_layer(state: _Parse, r: _Reader, opacity_valid: bool) -> None:
@@ -435,12 +542,12 @@ def _read_layer(state: _Parse, r: _Reader, opacity_valid: bool) -> None:
     r.take(3)
     name = r.string()
 
-    if kind == _LAYER_TILEMAP:
-        raise ValueError(
-            f"layer {name!r} is a tilemap, which this build cannot open"
-        )
-    if kind not in (_LAYER_IMAGE, _LAYER_GROUP):
+    if kind not in (_LAYER_IMAGE, _LAYER_GROUP, _LAYER_TILEMAP):
         raise ValueError(f"layer {name!r} is of a kind this build does not know")
+    # A tilemap layer's own trailing field: the tileset it draws through.
+    # Read here, immediately after the name, because that is exactly where
+    # the format puts it -- only for this one layer kind.
+    tileset = r.u32() if kind == _LAYER_TILEMAP else None
     if flags & _LAYER_REFERENCE:
         # A reference layer is an underlay to trace over and Aseprite's own
         # export leaves it out, so opening it *visible* is what would change
@@ -451,7 +558,7 @@ def _read_layer(state: _Parse, r: _Reader, opacity_valid: bool) -> None:
             f"the reference layer {name!r} opens hidden, as an export leaves it out"
         )
     mode = "normal"
-    if kind == _LAYER_IMAGE:
+    if kind in (_LAYER_IMAGE, _LAYER_TILEMAP):
         if blend < len(_BLEND_BY_INDEX):
             mode = _BLEND_BY_INDEX[blend]
         else:
@@ -472,6 +579,7 @@ def _read_layer(state: _Parse, r: _Reader, opacity_valid: bool) -> None:
             background=bool(flags & _LAYER_BACKGROUND),
             continuous=bool(flags & _LAYER_CONTINUOUS),
             child_level=child_level,
+            tileset=tileset,
         )
     )
     if flags & _LAYER_REFERENCE:
@@ -511,12 +619,59 @@ def _read_cel(state: _Parse, r: _Reader) -> None:
                 ) from exc
         cel.data = raw
     elif kind == _CEL_TILEMAP:
-        raise ValueError(
-            "this .aseprite has a tilemap cel, which this build cannot open"
-        )
+        grid_w = r.u16()
+        grid_h = r.u16()
+        bits = r.u16()
+        if bits != 32:
+            raise ValueError(
+                f"a tilemap cel on layer {layer} uses {bits} bits per tile,"
+                " which this build cannot open"
+            )
+        id_mask = r.u32()
+        x_mask = r.u32()
+        y_mask = r.u32()
+        d_mask = r.u32()
+        r.take(10)
+        raw = r.rest()
+        try:
+            decompressed = zlib.decompress(raw)
+        except zlib.error as exc:
+            raise ValueError(
+                f"a tilemap cel on layer {layer} will not decompress: {exc}"
+            ) from exc
+        wanted = grid_w * grid_h * 4
+        if len(decompressed) != wanted:
+            raise ValueError(
+                f"a tilemap cel on layer {layer} holds {len(decompressed)} bytes"
+                f" where its {grid_w}x{grid_h} grid needs {wanted}"
+            )
+        cel.width, cel.height = grid_w, grid_h
+        tiles = np.frombuffer(decompressed, dtype="<u4").reshape(grid_h, grid_w)
+        cel.refs = _remap_tile_refs(tiles, id_mask, x_mask, y_mask, d_mask)
     else:
         raise ValueError(f"cel type {kind} is not one this build knows")
     state.sprite.cels.append(cel)
+
+
+def _remap_tile_refs(
+    tiles: np.ndarray, id_mask: int, x_mask: int, y_mask: int, d_mask: int
+) -> np.ndarray:
+    """A tilemap cel's raw uint32 grid, their declared bit layout onto ours.
+
+    Numerically the identity on every file Aseprite writes today -- its own
+    default masks are :data:`~..tilegrid.gid.GID_MASK`/``FLIP_H``/``FLIP_V``/
+    ``FLIP_D`` bit for bit -- but written as mask arithmetic on the masks
+    *this chunk itself declared* rather than a straight cast, because the
+    masks are a field in the file and not a constant this reader assumes: a
+    future Aseprite laying its flag bits out differently still lands on our
+    encoding correctly, rather than silently scrambling it.
+    """
+    raw = np.asarray(tiles, dtype=gid.DTYPE)
+    out = raw & gid.DTYPE(id_mask)
+    for mask, bit in ((x_mask, gid.FLIP_H), (y_mask, gid.FLIP_V), (d_mask, gid.FLIP_D)):
+        if mask:
+            out = np.where((raw & gid.DTYPE(mask)) != 0, out | gid.DTYPE(bit), out)
+    return out.astype(gid.DTYPE)
 
 
 def _read_tags(state: _Parse, r: _Reader) -> None:
@@ -693,20 +848,23 @@ def _lut(palette: list[RGBA], transparent: int | None) -> np.ndarray:
     return table
 
 
-def _decode(cel: AseCel, sprite: Sprite, lut: np.ndarray | None) -> np.ndarray:
-    """One cel's tight rectangle as ``(h, w, 4)`` uint8."""
-    width, height = cel.width, cel.height
-    if width < 1 or height < 1:
-        return np.zeros((0, 0, 4), dtype=np.uint8)
+def _decode_plane(
+    data: bytes, width: int, height: int, sprite: Sprite, lut: np.ndarray | None
+) -> np.ndarray:
+    """``data`` -- already known to be exactly one plane's worth of bytes at
+    the sprite's own colour depth -- as ``(height, width, 4)`` uint8 RGBA.
+
+    The shared half of :func:`_decode` and :func:`_decode_tileset`: whether
+    the bytes are one cel's tight rectangle or a whole vertical tile strip,
+    the sprite's depth says the same thing about every byte in either one --
+    RGBA passes through, grayscale replicates across three channels, indexed
+    goes through the palette. The *size* check stays with each caller, since
+    "a cel on layer 3" and "the tileset 'ground'" name what came up short
+    differently; this function only ever sees bytes already proven to be the
+    right length.
+    """
     depth = sprite.depth
-    per_pixel = {_RGBA: 4, _GRAYSCALE: 2, _INDEXED: 1}[depth]
-    wanted = width * height * per_pixel
-    if len(cel.data) != wanted:
-        raise ValueError(
-            f"a cel on layer {cel.layer} holds {len(cel.data)} bytes where its"
-            f" {width}x{height} rectangle needs {wanted}"
-        )
-    flat = np.frombuffer(cel.data, dtype=np.uint8)
+    flat = np.frombuffer(data, dtype=np.uint8)
     if depth == _RGBA:
         return flat.reshape(height, width, 4).copy()
     if depth == _GRAYSCALE:
@@ -727,10 +885,45 @@ def _decode(cel: AseCel, sprite: Sprite, lut: np.ndarray | None) -> np.ndarray:
     top = int(indices.max()) if indices.size else 0
     if top >= len(sprite.palette or ()):
         raise ValueError(
-            f"a cel names palette entry {top} and the palette has"
+            f"this plane names palette entry {top} and the palette has"
             f" {len(sprite.palette or ())} colours"
         )
     return lut[indices]
+
+
+def _decode(cel: AseCel, sprite: Sprite, lut: np.ndarray | None) -> np.ndarray:
+    """One cel's tight rectangle as ``(h, w, 4)`` uint8."""
+    width, height = cel.width, cel.height
+    if width < 1 or height < 1:
+        return np.zeros((0, 0, 4), dtype=np.uint8)
+    per_pixel = {_RGBA: 4, _GRAYSCALE: 2, _INDEXED: 1}[sprite.depth]
+    wanted = width * height * per_pixel
+    if len(cel.data) != wanted:
+        raise ValueError(
+            f"a cel on layer {cel.layer} holds {len(cel.data)} bytes where its"
+            f" {width}x{height} rectangle needs {wanted}"
+        )
+    return _decode_plane(cel.data, width, height, sprite, lut)
+
+
+def _decode_tileset(ase: AseTileset, sprite: Sprite, lut: np.ndarray | None) -> np.ndarray:
+    """One tileset's raw strip bytes as its RGBA pixels -- ``_decode``'s own
+    logic, over a whole vertical strip instead of one cel's tight rectangle.
+
+    The transparent index is drawn as transparent here rather than as a
+    background layer's opaque colour: a tileset is not a layer and carries no
+    background flag, so the ordinary (non-background) reading is the only one
+    that applies -- the same ``lut`` an ordinary layer's cel decodes through.
+    """
+    width, height = ase.tile_w, ase.tile_h * ase.count
+    per_pixel = {_RGBA: 4, _GRAYSCALE: 2, _INDEXED: 1}[sprite.depth]
+    wanted = width * height * per_pixel
+    if len(ase.data) != wanted:
+        raise ValueError(
+            f"the tileset {ase.name!r} holds {len(ase.data)} bytes where its"
+            f" {ase.count} {ase.tile_w}x{ase.tile_h} tiles need {wanted}"
+        )
+    return _decode_plane(ase.data, width, height, sprite, lut)
 
 
 def _decode_indices(cel: AseCel, sprite: Sprite) -> np.ndarray | None:
@@ -806,13 +999,75 @@ def _resolve_link(cels: dict[tuple[int, int], AseCel], key: tuple[int, int]) -> 
     return cel
 
 
-def _build_cels(sprite: Sprite, warn: Callable[[str], None]) -> dict[tuple[int, int], Layer]:
+def _tileset_slot_for(
+    layer: AseLayer, tileset_slots: dict[int, TilesetSlot]
+) -> TilesetSlot:
+    """The slot a tilemap layer's declared tileset id resolves to.
+
+    A layer's ``tileset`` field is the file's own id, not an index into
+    anything already built, so this is the one place that lookup happens --
+    for a track's binding and for every one of its cels alike.
+    """
+    slot = tileset_slots.get(layer.tileset)
+    if slot is None:
+        raise ValueError(
+            f"layer {layer.name!r} names a tileset this .aseprite does not define"
+        )
+    return slot
+
+
+def _build_tilemap_cel(
+    cel: AseCel,
+    layer: AseLayer,
+    sprite: Sprite,
+    tileset_slots: dict[int, TilesetSlot],
+    warn: Callable[[str], None],
+) -> TilemapCel:
+    """One tilemap cel's refs, placed at their own tile offset on a
+    canvas-sized grid, and materialized.
+
+    There is no "tight rectangle" for a tile grid the way there is for
+    pixels: :attr:`TilemapCel.refs` is always the whole canvas's grid shape,
+    so placing a cel is pasting its own grid into that one at
+    ``(x // tile_w, y // tile_h)`` -- which is exactly why a non-tile-aligned
+    offset is refused rather than clipped: there is no cell for it to land in
+    partway through.
+    """
+    slot = _tileset_slot_for(layer, tileset_slots)
+    ts = slot.tileset
+    tile_w, tile_h = ts.tile_w, ts.tile_h
+    if cel.x % tile_w or cel.y % tile_h:
+        raise ValueError(
+            f"a tilemap cel on layer {cel.layer} sits at ({cel.x}, {cel.y}),"
+            f" which is not a multiple of its {tile_w}x{tile_h} tile size"
+        )
+    size = (sprite.width, sprite.height)
+    grid_h, grid_w = grid_shape(size, tile_w, tile_h)
+    refs = gid.empty_layer(grid_w, grid_h)
+    src = cel.refs if cel.refs is not None else np.zeros((0, 0), dtype=gid.DTYPE)
+    tx, ty = cel.x // tile_w, cel.y // tile_h
+    src_h, src_w = src.shape
+    x0, y0 = max(0, tx), max(0, ty)
+    x1, y1 = min(grid_w, tx + src_w), min(grid_h, ty + src_h)
+    if x1 > x0 and y1 > y0:
+        refs[y0:y1, x0:x1] = src[y0 - ty : y1 - ty, x0 - tx : x1 - tx]
+    if tx < 0 or ty < 0 or tx + src_w > grid_w or ty + src_h > grid_h:
+        warn("a cel reaching past the canvas was cropped to it")
+    pixels = materialize(refs, ts, size)
+    return TilemapCel(pixels=pixels, refs=refs, tileset_uid=slot.uid, name=layer.name)
+
+
+def _build_cels(
+    sprite: Sprite, warn: Callable[[str], None], tileset_slots: dict[int, TilesetSlot]
+) -> dict[tuple[int, int], Layer]:
     """Every slot's ``Layer``, with linked slots holding **one** object.
 
     That sharing is the whole reason this import is worth more than an export
     of PNGs: ``cels[(t, f1)] is cels[(t, f2)]`` *is* a link in this model, so an
     Aseprite link arrives as a link and an edit to it shows on every frame it
-    occupies with nothing to propagate.
+    occupies with nothing to propagate. A tilemap cel is exactly the same
+    story one level up: it is a :class:`~.tiles.TilemapCel`, still a
+    ``Layer``, so linking it links its ``refs`` for free.
     """
     by_slot = {(cel.layer, cel.frame): cel for cel in sprite.cels}
     size = (sprite.width, sprite.height)
@@ -841,6 +1096,9 @@ def _build_cels(sprite: Sprite, warn: Callable[[str], None]) -> dict[tuple[int, 
         if layer.group:
             warn("a cel on a group layer was dropped; a group holds no pixels")
             continue
+        if layer.tileset is not None:
+            made[key] = _build_tilemap_cel(cel, layer, sprite, tileset_slots, warn)
+            continue
         pixels = _decode(cel, sprite, luts.get(bool(layer.background)))
         tight[key] = pixels
         plane, clipped = _place(pixels, size, (cel.x, cel.y))
@@ -867,6 +1125,17 @@ def _build_cels(sprite: Sprite, warn: Callable[[str], None]) -> dict[tuple[int, 
             # The ordinary case, and the valuable one: one object in two slots.
             made[key] = made[source_key]
             continue
+        if isinstance(made[source_key], TilemapCel):
+            # Aseprite shares a cel's position along with its image the same
+            # way for a tilemap cel as for a raster one, so this combination
+            # is a file no version of it writes -- and unlike a raster cel's
+            # tight rectangle, a tile grid has no pixel-level crop to re-paste
+            # at a different offset, only a re-placement in tile units this
+            # reader does not attempt for something unreachable in practice.
+            raise ValueError(
+                "a linked tilemap cel drawn at its own offset is not something"
+                " this build can place"
+            )
         # A link that moved. Aseprite shares a cel's position along with its
         # image, so this is a file no version of it writes -- but sharing the
         # object would draw the pixels in the wrong place, so the link is what
@@ -1066,9 +1335,31 @@ def document_from_aseprite(
     if sprite.depth == _INDEXED and not sprite.palette:
         raise ValueError("this indexed .aseprite carries no palette to read it with")
 
+    # Wave 3 chunk 3.5: every tileset the file declared, decoded now that the
+    # palette (if this is an indexed file) is final -- ``sprite.tilesets``
+    # preserves the order the 0x2023 chunks arrived in, so a spare, unbound
+    # tileset lands in ``doc.tilesets`` in the same place it would if a
+    # tilemap layer had used it (``ora``'s "not garbage" rule, restated for
+    # the reader that predates it).
+    tileset_lut = (
+        _lut(sprite.palette or [], sprite.transparent_index)
+        if sprite.depth == _INDEXED
+        else None
+    )
+    tileset_slots: dict[int, TilesetSlot] = {}
+    for tileset_id, ase_tileset in sprite.tilesets.items():
+        pixels = _decode_tileset(ase_tileset, sprite, tileset_lut)
+        real = Tileset(
+            name=ase_tileset.name,
+            pixels=pixels,
+            tile_w=ase_tileset.tile_w,
+            tile_h=ase_tileset.tile_h,
+        )
+        tileset_slots[tileset_id] = TilesetSlot(tileset=real)
+
     width, height = sprite.width, sprite.height
     image_rows = [i for i, layer in enumerate(sprite.layers) if not layer.group]
-    made = _build_cels(sprite, warn)
+    made = _build_cels(sprite, warn, tileset_slots)
 
     if not image_rows:
         # Every ORA this package opens has at least one layer and so does every
@@ -1091,6 +1382,11 @@ def document_from_aseprite(
                 blend=sprite.layers[index].blend,
                 locked=sprite.layers[index].locked,
                 continuous=sprite.layers[index].continuous,
+                tileset_uid=(
+                    _tileset_slot_for(sprite.layers[index], tileset_slots).uid
+                    if sprite.layers[index].tileset is not None
+                    else None
+                ),
             )
             for index in image_rows
         }
@@ -1120,7 +1416,25 @@ def document_from_aseprite(
         layers: list[Layer] = []
         for index in image_rows:
             row = sprite.layers[index]
-            layer = made.get((index, 0)) or Layer.empty(width, height, row.name)
+            layer = made.get((index, 0))
+            if layer is None:
+                if row.tileset is not None:
+                    # A tilemap layer with no cel at all -- the same shape
+                    # ``add_tilemap_layer`` builds for a brand-new one, not a
+                    # plain empty ``Layer``.
+                    slot = _tileset_slot_for(row, tileset_slots)
+                    grid_h, grid_w = grid_shape(
+                        (width, height), slot.tileset.tile_w, slot.tileset.tile_h
+                    )
+                    refs = gid.empty_layer(grid_w, grid_h)
+                    layer = TilemapCel(
+                        pixels=materialize(refs, slot.tileset, (width, height)),
+                        refs=refs,
+                        tileset_uid=slot.uid,
+                        name=row.name,
+                    )
+                else:
+                    layer = Layer.empty(width, height, row.name)
             layer.name = row.name
             layer.opacity = row.opacity
             layer.visible = row.visible
@@ -1133,6 +1447,8 @@ def document_from_aseprite(
             slices=_slices_for(sprite, frames, warn),
         )
         member_uids = {index: layers[at].uid for at, index in enumerate(image_rows)}
+
+    doc.tilesets.extend(tileset_slots.values())
 
     nodes, group_of = _group_tree(sprite, member_uids)
     # ``ora``'s installer and not a second one: what it does past assigning the

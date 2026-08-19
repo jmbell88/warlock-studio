@@ -59,9 +59,20 @@ PACKAGE = "warlock.studio.inker"
 #: image on disk to hand ``strip()``, only the decoded PNG), and decodes a
 #: cel's refs plane through the same ``gid`` word ``_doc_tiles.py`` already
 #: reaches for.
+#:
+#: ``asein.py``'s two entries are Wave 3 chunk 3.5, the same shape as
+#: ``ora.py``'s: a tileset chunk's decoded strip becomes a ``Tileset``
+#: directly (their vertical-strip layout is our columns=1 layout,
+#: index-for-index, tile 0 included -- there is no reader-side constructor to
+#: go through instead), and a tilemap cel's raw uint32 grid is remapped from
+#: *their declared* tile-id/flip masks onto ``gid.GID_MASK``/``FLIP_H``/
+#: ``FLIP_V``/``FLIP_D`` with the same word ``_doc_tiles.py`` and ``ora.py``
+#: already reach for.
 OUTWARD_IMPORTS = {
     ("_doc_tiles.py", "warlock.studio.tilegrid"),
     ("anim_edits.py", "warlock.studio.undo"),
+    ("asein.py", "warlock.studio.tilegrid"),
+    ("asein.py", "warlock.studio.tilegrid.tileset"),
     ("composite.py", "warlock.native"),
     ("dither.py", "warlock.native"),
     ("ora.py", "warlock.studio.tilegrid"),

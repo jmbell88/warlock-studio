@@ -22,6 +22,8 @@ import numpy as np
 import pytest
 
 from warlock.studio.inker import asein
+from warlock.studio.inker.tiles import TilemapCel
+from warlock.studio.tilegrid import gid
 
 MAGIC = 0xA5E0
 FRAME_MAGIC = 0xF1FA
@@ -120,6 +122,7 @@ def _layer(
     background: bool = False,
     reference: bool = False,
     continuous: bool = False,
+    tileset: int | None = None,
 ) -> bytes:
     flags = (
         (1 if visible else 0)
@@ -128,11 +131,65 @@ def _layer(
         | (16 if continuous else 0)
         | (64 if reference else 0)
     )
-    return _chunk(
-        0x2004,
+    body = (
         struct.pack("<HHHHHHB3s", flags, kind, child, 0, 0, blend, opacity, b"\0\0\0")
-        + _string(name),
+        + _string(name)
     )
+    if tileset is not None:
+        # The one field a tilemap layer (kind 2) carries past its name: the
+        # tileset chunk id it draws through.
+        body += struct.pack("<I", tileset)
+    return _chunk(0x2004, body)
+
+
+def _tileset_chunk(
+    tileset_id: int,
+    tile_w: int,
+    tile_h: int,
+    tiles: list[bytes],
+    *,
+    name: str = "tiles",
+    flags: int = 2,
+    base_index: int = 1,
+) -> bytes:
+    """The 0x2023 chunk: ``tiles`` is a list of already-flattened RGBA byte
+    strings, one per tile, stacked vertically in local-id order (tile 0
+    first) exactly as this reader's own strip layout expects."""
+    body = (
+        struct.pack("<IIIHHh", tileset_id, flags, len(tiles), tile_w, tile_h, base_index)
+        + b"\0" * 14
+        + _string(name)
+    )
+    if flags & 2:
+        raw = b"".join(tiles)
+        compressed = zlib.compress(raw)
+        body += struct.pack("<I", len(compressed)) + compressed
+    return _chunk(0x2023, body)
+
+
+def _tilemap_cel(
+    layer: int,
+    refs: np.ndarray,
+    *,
+    x: int = 0,
+    y: int = 0,
+    bits: int = 32,
+    id_mask: int = 0x1FFFFFFF,
+    x_mask: int = 0x80000000,
+    y_mask: int = 0x40000000,
+    d_mask: int = 0x20000000,
+) -> bytes:
+    grid_h, grid_w = refs.shape
+    payload = refs.astype("<u4").tobytes()
+    compressed = zlib.compress(payload)
+    body = (
+        struct.pack("<HhhBHh5s", layer, x, y, 255, 3, 0, b"\0" * 5)
+        + struct.pack("<HHH", grid_w, grid_h, bits)
+        + struct.pack("<IIII", id_mask, x_mask, y_mask, d_mask)
+        + b"\0" * 10
+        + compressed
+    )
+    return _chunk(0x2005, body)
 
 
 def _cel(
@@ -777,27 +834,83 @@ def test_a_file_that_ends_mid_structure_is_refused_by_name():
         asein.document_from_aseprite(data[:-6])
 
 
-def test_a_tilemap_layer_is_refused_by_name():
-    """Its pixels live in a tileset, so a document built without one draws
-    nothing where the layer was -- the change in meaning a refusal is for."""
-    data = _file(_header(1, 1, 1), [_frame([_layer("Map", kind=2)])])
-    with pytest.raises(ValueError, match="is a tilemap"):
-        asein.document_from_aseprite(data)
+def test_a_tilemap_layer_opens_bound_to_its_tileset():
+    """Wave 3 chunk 3.5: what was a refusal is now a reader. A tilemap layer
+    opens as a ``TilemapCel`` bound to the tileset its own trailing field
+    names, and the document carries the tileset itself."""
+    blank = _rgba(2, 2, (0, 0, 0, 0))
+    red = _rgba(2, 2, (255, 0, 0, 255))
+    data = _file(
+        _header(1, 2, 2),
+        [
+            _frame(
+                [
+                    _tileset_chunk(7, 2, 2, [blank, red]),
+                    _layer("Map", kind=2, tileset=7),
+                    _tilemap_cel(0, np.array([[1]], dtype=np.uint32)),
+                ]
+            )
+        ],
+    )
+    doc, warnings = asein.document_from_aseprite(data)
+    assert len(doc.tilesets) == 1
+    cel = doc.stack[0]
+    assert isinstance(cel, TilemapCel)
+    assert cel.tileset_uid == doc.tilesets[0].uid
+    assert cel.refs.tolist() == [[1]]
+    assert tuple(cel.pixels[0, 0]) == (255, 0, 0, 255)
+    assert warnings == []
 
 
-def test_a_tileset_chunk_is_refused_by_name():
-    data = _file(_header(1, 1, 1), [_frame([_layer("Art"), _chunk(0x2023, b"\0" * 8)])])
-    with pytest.raises(ValueError, match="uses tilesets"):
-        asein.document_from_aseprite(data)
-
-
-def test_a_tilemap_cel_is_refused_by_name():
+def test_a_tileset_chunk_is_read_into_the_documents_tileset_list():
+    """A tileset survives an import even when nothing draws through it yet --
+    ``ora``'s "not garbage" rule, restated for the reader that predates it."""
+    blank = _rgba(1, 1, (0, 0, 0, 0))
+    green = _rgba(1, 1, (0, 255, 0, 255))
     data = _file(
         _header(1, 1, 1),
-        [_frame([_layer("Art"), _raw_cel(0, 3, struct.pack("<HH", 1, 1) + b"\0" * 4)])],
+        [
+            _frame(
+                [
+                    _layer("Art"),
+                    _cel(0, _rgba(1, 1, (1, 1, 1, 255)), 1, 1),
+                    _tileset_chunk(3, 1, 1, [blank, green], name="ground"),
+                ]
+            )
+        ],
     )
-    with pytest.raises(ValueError, match="tilemap cel"):
-        asein.document_from_aseprite(data)
+    doc, warnings = asein.document_from_aseprite(data)
+    assert len(doc.tilesets) == 1
+    slot = doc.tilesets[0]
+    assert slot.tileset.name == "ground"
+    assert slot.tileset.tile_count == 2
+    assert tuple(slot.tileset.tile_pixels(1)[0, 0]) == (0, 255, 0, 255)
+    assert warnings == []
+
+
+def test_a_tilemap_cel_decodes_its_refs_grid():
+    blank = _rgba(2, 2, (0, 0, 0, 0))
+    art_a = _rgba(2, 2, (10, 20, 30, 255))
+    art_b = _rgba(2, 2, (40, 50, 60, 255))
+    data = _file(
+        _header(1, 4, 2),
+        [
+            _frame(
+                [
+                    _tileset_chunk(1, 2, 2, [blank, art_a, art_b]),
+                    _layer("Map", kind=2, tileset=1),
+                    _tilemap_cel(0, np.array([[1, 2]], dtype=np.uint32)),
+                ]
+            )
+        ],
+    )
+    doc, warnings = asein.document_from_aseprite(data)
+    cel = doc.stack[0]
+    assert isinstance(cel, TilemapCel)
+    assert cel.refs.tolist() == [[1, 2]]
+    assert tuple(cel.pixels[0, 0]) == (10, 20, 30, 255)
+    assert tuple(cel.pixels[0, 2]) == (40, 50, 60, 255)
+    assert warnings == []
 
 
 def test_a_cel_type_this_build_does_not_know_is_refused_by_name():
@@ -890,6 +1003,82 @@ def test_an_index_outside_the_palette_is_refused_by_name():
         asein.document_from_aseprite(data)
 
 
+def test_an_external_file_tileset_is_refused_by_name():
+    """Unlike every other divergence in this reader, an external tileset's
+    pixels are not somewhere else in *this* file -- they are not in it at
+    all, so a tilemap layer bound to it would draw nothing."""
+    blank = _rgba(1, 1, (0, 0, 0, 0))
+    data = _file(
+        _header(1, 1, 1),
+        [
+            _frame(
+                [
+                    _layer("Art"),
+                    _tileset_chunk(1, 1, 1, [blank], flags=1 | 2),
+                ]
+            )
+        ],
+    )
+    with pytest.raises(ValueError, match="links an external file"):
+        asein.document_from_aseprite(data)
+
+
+def test_a_tilemap_cel_at_other_than_32_bits_per_tile_is_refused_by_name():
+    blank = _rgba(1, 1, (0, 0, 0, 0))
+    data = _file(
+        _header(1, 1, 1),
+        [
+            _frame(
+                [
+                    _tileset_chunk(1, 1, 1, [blank]),
+                    _layer("Map", kind=2, tileset=1),
+                    _tilemap_cel(0, np.zeros((1, 1), dtype=np.uint32), bits=16),
+                ]
+            )
+        ],
+    )
+    with pytest.raises(ValueError, match="16 bits per tile"):
+        asein.document_from_aseprite(data)
+
+
+def test_a_non_tile_aligned_tilemap_cel_offset_is_refused_by_name():
+    """Unreachable from Aseprite's own writer, which always places a tilemap
+    cel on a tile boundary -- but somebody else's file is not bound by that,
+    and there is no partial cell for an unaligned offset to land in."""
+    blank = _rgba(2, 2, (0, 0, 0, 0))
+    art = _rgba(2, 2, (1, 2, 3, 255))
+    data = _file(
+        _header(1, 4, 4),
+        [
+            _frame(
+                [
+                    _tileset_chunk(1, 2, 2, [blank, art]),
+                    _layer("Map", kind=2, tileset=1),
+                    _tilemap_cel(0, np.array([[1]], dtype=np.uint32), x=1, y=0),
+                ]
+            )
+        ],
+    )
+    with pytest.raises(ValueError, match="not a multiple of its 2x2 tile size"):
+        asein.document_from_aseprite(data)
+
+
+def test_a_tilemap_cel_naming_an_undefined_tileset_is_refused_by_name():
+    data = _file(
+        _header(1, 1, 1),
+        [
+            _frame(
+                [
+                    _layer("Map", kind=2, tileset=99),
+                    _tilemap_cel(0, np.zeros((1, 1), dtype=np.uint32)),
+                ]
+            )
+        ],
+    )
+    with pytest.raises(ValueError, match="names a tileset this .aseprite does not define"):
+        asein.document_from_aseprite(data)
+
+
 # --- warned about, and the document still opens -------------------------------
 
 
@@ -908,6 +1097,36 @@ def test_user_data_is_a_warning_rather_than_a_refusal():
     user = _chunk(0x2020, struct.pack("<I", 1) + _string("notes"))
     _doc, warnings = asein.document_from_aseprite(_one_layer_file(extra=[user]))
     assert any("user data" in line for line in warnings)
+
+
+def test_a_tileset_base_index_other_than_one_warns_rather_than_refuses():
+    """``base_index`` is Aseprite's own display-only numbering in its tileset
+    panel; it changes no id this reader stores."""
+    blank = _rgba(1, 1, (0, 0, 0, 0))
+    data = _file(
+        _header(1, 1, 1),
+        [_frame([_layer("Art"), _tileset_chunk(1, 1, 1, [blank], base_index=0)])],
+    )
+    doc, warnings = asein.document_from_aseprite(data)
+    assert len(doc.tilesets) == 1
+    assert any("start somewhere other than 1" in line for line in warnings)
+
+
+def test_per_tile_user_data_warns_that_the_tiles_are_kept():
+    """A user-data chunk decorates the chunk immediately before it -- the
+    format's own convention -- so one following a tileset chunk is per-tile
+    properties, which Wave 3 does not model but the tiles themselves still
+    open correctly."""
+    blank = _rgba(1, 1, (0, 0, 0, 0))
+    user = _chunk(0x2020, struct.pack("<I", 1) + _string("notes"))
+    data = _file(
+        _header(1, 1, 1),
+        [_frame([_layer("Art"), _tileset_chunk(1, 1, 1, [blank]), user])],
+    )
+    doc, warnings = asein.document_from_aseprite(data)
+    assert len(doc.tilesets) == 1
+    assert any("per-tile properties are not kept; the tiles are" in line for line in warnings)
+    assert not any("user data and timeline colours" in line for line in warnings)
 
 
 def test_an_empty_user_data_chunk_says_nothing():
@@ -1061,6 +1280,98 @@ def test_a_warning_is_one_line_per_kind_however_many_times_it_happens():
     _doc, warnings = asein.document_from_aseprite(data)
     assert len(warnings) == len(set(warnings))
     assert sum("per-cel opacity" in line for line in warnings) == 1
+
+
+# --- tilemaps: Wave 3 chunk 3.5 -----------------------------------------------
+
+
+def test_flags_remap_under_permuted_declared_masks_lands_on_our_bits():
+    """The masks are a field in the file, not a constant this reader assumes.
+    A straight cast of the raw uint32 would get this wrong: under these
+    (synthetic) masks the tile id lives in the low nibble and the x-flip bit
+    sits where a straight reading of ``gid``'s own layout would call part of
+    the id, so passing without doing the mask arithmetic would be a coincidence
+    that this permutation is built to rule out."""
+    blank = _rgba(1, 1, (0, 0, 0, 0))
+    art = _rgba(1, 1, (9, 9, 9, 255))
+    raw = np.array([[0x11]], dtype=np.uint32)  # id=1 (low nibble), x-flip (bit 4)
+    data = _file(
+        _header(1, 1, 1),
+        [
+            _frame(
+                [
+                    _tileset_chunk(1, 1, 1, [blank, art]),
+                    _layer("Map", kind=2, tileset=1),
+                    _tilemap_cel(
+                        0,
+                        raw,
+                        id_mask=0x0F,
+                        x_mask=0x10,
+                        y_mask=0x20,
+                        d_mask=0x40,
+                    ),
+                ]
+            )
+        ],
+    )
+    doc, _ = asein.document_from_aseprite(data)
+    cel = doc.stack[0]
+    assert int(cel.refs[0, 0]) == gid.compose(1, flip_h=True)
+
+
+def test_refs_match_a_hand_built_grid_including_flip_bits():
+    blank = _rgba(2, 2, (0, 0, 0, 0))
+    tile = np.zeros((2, 2, 4), dtype=np.uint8)
+    tile[0, 0] = (255, 0, 0, 255)
+    tile[0, 1] = (0, 255, 0, 255)
+    ref_value = gid.compose(1, flip_h=True)
+    data = _file(
+        _header(1, 2, 2),
+        [
+            _frame(
+                [
+                    _tileset_chunk(1, 2, 2, [blank, tile.tobytes()]),
+                    _layer("Map", kind=2, tileset=1),
+                    _tilemap_cel(0, np.array([[ref_value]], dtype=np.uint32)),
+                ]
+            )
+        ],
+    )
+    doc, _ = asein.document_from_aseprite(data)
+    cel = doc.stack[0]
+    assert cel.refs.tolist() == [[ref_value]]
+    # Flipped horizontally: the tile's own (0, 0) red lands at canvas (0, 1).
+    assert tuple(cel.pixels[0, 1]) == (255, 0, 0, 255)
+    assert tuple(cel.pixels[0, 0]) == (0, 255, 0, 255)
+
+
+def test_a_linked_tilemap_cel_arrives_as_one_object_in_two_frames():
+    """The mapping that makes this import worth more than exported PNGs,
+    restated for a tilemap cel: linking it links ``refs`` for free, because a
+    ``TilemapCel`` is still a ``Layer``."""
+    blank = _rgba(1, 1, (0, 0, 0, 0))
+    art = _rgba(1, 1, (5, 5, 5, 255))
+    data = _file(
+        _header(2, 1, 1),
+        [
+            _frame(
+                [
+                    _tileset_chunk(1, 1, 1, [blank, art]),
+                    _layer("Map", kind=2, tileset=1),
+                    _tilemap_cel(0, np.array([[1]], dtype=np.uint32)),
+                ]
+            ),
+            _frame([_linked_cel(0, 0)]),
+        ],
+    )
+    doc, _ = asein.document_from_aseprite(data)
+    anim = doc.anim
+    track = anim.tracks[0].uid
+    first = anim.cels[(track, anim.frames[0].uid)]
+    second = anim.cels[(track, anim.frames[1].uid)]
+    assert isinstance(first, TilemapCel)
+    assert second is first
+    assert anim.is_linked(track, anim.frames[1].uid)
 
 
 # --- the parse on its own ------------------------------------------------------

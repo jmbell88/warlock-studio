@@ -17,16 +17,19 @@ from __future__ import annotations
 
 import json
 import logging
+import struct
 import zipfile
+import zlib
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from warlock.studio.inker import ora
+from warlock.studio.inker import asein, ora
 from warlock.studio.inker.document import Document
 from warlock.studio.inker.layers import Layer
 from warlock.studio.inker.tiles import TilemapCel, materialize, strip
+from warlock.studio.tilegrid import gid
 
 RED = (255, 0, 0, 255)
 GREEN = (0, 255, 0, 255)
@@ -293,13 +296,161 @@ def test_unreferenced_tileset_survives(tmp_path: Path):
     assert not any(isinstance(layer, TilemapCel) for layer in back.stack)
 
 
-# -- ORA-side half of the end-to-end chain (Task 6 does the rest) ------------
+# -- a minimal .aseprite fixture, for the Task 6 end-to-end chain ------------
+#
+# A small subset of ``test_asein.py``'s own byte-builders, kept local rather
+# than imported across test modules (``tests/inker`` has no ``__init__.py``,
+# so a cross-module import here would be a path hazard the rest of the suite
+# does not take on) -- just enough to build one animated file with a tileset,
+# a tilemap layer carrying a flipped ref, and a linked tilemap cel.
+
+
+def _ase_string(text: str) -> bytes:
+    raw = text.encode("utf-8")
+    return struct.pack("<H", len(raw)) + raw
+
+
+def _ase_chunk(kind: int, payload: bytes) -> bytes:
+    return struct.pack("<IH", len(payload) + 6, kind) + payload
+
+
+def _ase_frame(chunks: list[bytes], duration: int = 100) -> bytes:
+    body = b"".join(chunks)
+    return (
+        struct.pack("<IHHHHI", len(body) + 16, 0xF1FA, len(chunks), duration, 0, 0)
+        + body
+    )
+
+
+def _ase_header(frames: int, width: int, height: int) -> bytes:
+    head = struct.pack(
+        "<IHHHHHIHIIB3sHBBhhHH",
+        0,
+        0xA5E0,
+        frames,
+        width,
+        height,
+        32,
+        1,
+        100,
+        0,
+        0,
+        0,
+        b"\0\0\0",
+        0,
+        1,
+        1,
+        0,
+        0,
+        0,
+        0,
+    )
+    return head + b"\0" * 84
+
+
+def _ase_file(header: bytes, frames: list[bytes]) -> bytes:
+    body = header + b"".join(frames)
+    return struct.pack("<I", len(body)) + body[4:]
+
+
+def _ase_layer(name: str, *, kind: int = 0, tileset: int | None = None) -> bytes:
+    body = struct.pack("<HHHHHHB3s", 1 | 2, kind, 0, 0, 0, 0, 255, b"\0\0\0") + _ase_string(
+        name
+    )
+    if tileset is not None:
+        body += struct.pack("<I", tileset)
+    return _ase_chunk(0x2004, body)
+
+
+def _ase_tileset(tileset_id: int, tile_w: int, tile_h: int, tiles: list[bytes]) -> bytes:
+    body = struct.pack("<IIIHHh", tileset_id, 2, len(tiles), tile_w, tile_h, 1) + b"\0" * 14
+    body += _ase_string("tiles")
+    raw = b"".join(tiles)
+    compressed = zlib.compress(raw)
+    body += struct.pack("<I", len(compressed)) + compressed
+    return _ase_chunk(0x2023, body)
+
+
+def _ase_tilemap_cel(layer: int, refs: np.ndarray) -> bytes:
+    grid_h, grid_w = refs.shape
+    compressed = zlib.compress(refs.astype("<u4").tobytes())
+    body = (
+        struct.pack("<HhhBHh5s", layer, 0, 0, 255, 3, 0, b"\0" * 5)
+        + struct.pack("<HHH", grid_w, grid_h, 32)
+        + struct.pack("<IIII", 0x1FFFFFFF, 0x80000000, 0x40000000, 0x20000000)
+        + b"\0" * 10
+        + compressed
+    )
+    return _ase_chunk(0x2005, body)
+
+
+def _ase_linked_cel(layer: int, frame: int) -> bytes:
+    body = struct.pack("<HhhBHh5s", layer, 0, 0, 255, 1, 0, b"\0" * 5)
+    body += struct.pack("<H", frame)
+    return _ase_chunk(0x2005, body)
+
+
+def _ase_rgba(w: int, h: int, colour: tuple[int, int, int, int]) -> bytes:
+    return bytes(colour) * (w * h)
+
+
+def test_an_imported_tilemap_document_round_trips_through_ora_bit_exact(tmp_path: Path):
+    """The end-to-end chain this wave's gate is about: an ``.aseprite`` with a
+    tileset, a tilemap layer carrying a flipped ref, and a linked tilemap cel,
+    opened through :func:`asein.document_from_aseprite`, saved to ``.ora`` and
+    reopened -- refs, flags and the tileset binding all bit-exact, and the
+    link still a link."""
+    blank = _ase_rgba(2, 2, (0, 0, 0, 0))
+    art = _ase_rgba(2, 2, (11, 22, 33, 255))
+    ref_value = gid.compose(1, flip_h=True)
+    data = _ase_file(
+        _ase_header(2, 4, 2),
+        [
+            _ase_frame(
+                [
+                    _ase_tileset(5, 2, 2, [blank, art]),
+                    _ase_layer("Tiles", kind=2, tileset=5),
+                    _ase_tilemap_cel(0, np.array([[ref_value, 0]], dtype=np.uint32)),
+                ]
+            ),
+            _ase_frame([_ase_linked_cel(0, 0)]),
+        ],
+    )
+    doc, warnings = asein.document_from_aseprite(data)
+    assert warnings == []
+    _assert_synced(doc)
+
+    path = tmp_path / "chain.aseprite.ora"
+    ora.write_ora(doc, path)
+    back = ora.read_ora(path)
+    _assert_synced(back)
+
+    assert len(back.tilesets) == 1
+    orig_track = doc.anim.tracks[0]
+    back_track = back.anim.tracks[0]
+    assert back_track.tileset_uid == back.tilesets[0].uid
+
+    orig_frames, back_frames = doc.anim.frames, back.anim.frames
+    orig_first = doc.anim.cels[(orig_track.uid, orig_frames[0].uid)]
+    orig_second = doc.anim.cels[(orig_track.uid, orig_frames[1].uid)]
+    back_first = back.anim.cels[(back_track.uid, back_frames[0].uid)]
+    back_second = back.anim.cels[(back_track.uid, back_frames[1].uid)]
+
+    assert orig_second is orig_first, "the source .aseprite link must resolve to one object"
+    assert back_second is back_first, "the link must survive the ORA round trip too"
+    assert np.array_equal(back_first.refs, orig_first.refs)
+    assert int(back_first.refs[0, 0]) == ref_value
+    assert np.array_equal(back_first.pixels, orig_first.pixels)
+
+
+# -- the ORA half of the end-to-end chain -------------------------------------
 
 
 def test_reopened_document_still_supports_tile_edits(tmp_path: Path):
     """What comes back is a live document, not just correct static fields --
-    the funnel keeps working on it. The rest of the chain (``.aseprite``
-    import onto this same model) is Task 6's; this is the ORA half."""
+    the funnel keeps working on it. This is the ORA half of the chain; the
+    other half (``.aseprite`` import onto this same model) is the round trip
+    above."""
     doc = _still_doc()
     path = tmp_path / "chain.ora"
     ora.write_ora(doc, path)
