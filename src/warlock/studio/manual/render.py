@@ -74,6 +74,22 @@ def help_button(ctx: Any, pane: str) -> None:
         open_at(ctx, target)
 
 
+def help_button_inline(ctx: Any, pane: str) -> None:
+    """The same (?), where the cursor already is.
+
+    ``help_button`` right-aligns itself against the content region, which is
+    what a titled section wants and exactly what a *toolbar* does not: the
+    viewport's controls wrap, and a button jumped to the right edge would
+    land under the inspector or off the row entirely. Same key, same target
+    map, same tooltip -- only the placement differs.
+    """
+    target = HELP_TARGETS.get(pane)
+    if target is None:
+        return
+    if widgets.icon_button(f"{icons.INFO}##help-{pane}", "Open the manual section"):
+        open_at(ctx, target)
+
+
 def open_at(ctx: Any, target: tuple[str, str | None]) -> None:
     """Raise the manual over the current screen, at ``target``.
 

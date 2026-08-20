@@ -549,7 +549,13 @@ class FakeGL:
 def cache(monkeypatch, tmp_path):
     gl = FakeGL()
     cache = textures.ThumbnailCache(gl, limit=2)
-    monkeypatch.setattr(cache, "_load", lambda path, nearest=False: gl.texture((8, 8), 4, b""))
+    monkeypatch.setattr(
+        cache,
+        "_load",
+        lambda path, nearest=False, max_side=textures.MAX_SIDE: gl.texture(
+            (8, 8), 4, b""
+        ),
+    )
     return cache
 
 

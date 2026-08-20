@@ -16,25 +16,26 @@ EXPECTED_KEYS = [
     "02-home",
     "03-generating-references",
     "04-generating-meshes",
-    "05-rigging-and-posing",
-    "06-poser",
-    "07-sprite-sheets",
-    "08-inker",
-    "09-inker-animation",
-    "10-clay",
-    "11-plotter",
-    "12-packwright",
-    "13-library-and-jobs",
-    "14-profiles",
-    "15-review",
-    "16-shortcuts",
-    "17-installation",
-    "18-configuration",
-    "19-app-settings",
-    "20-troubleshooting",
-    "21-architecture",
-    "22-pipelines",
-    "23-extending",
+    "05-the-3d-viewport",
+    "06-rigging-and-posing",
+    "07-poser",
+    "08-sprite-sheets",
+    "09-inker",
+    "10-inker-animation",
+    "11-clay",
+    "12-plotter",
+    "13-packwright",
+    "14-library-and-jobs",
+    "15-profiles",
+    "16-review",
+    "17-shortcuts",
+    "18-installation",
+    "19-configuration",
+    "20-app-settings",
+    "21-troubleshooting",
+    "22-architecture",
+    "23-pipelines",
+    "24-extending",
 ]
 
 
@@ -185,7 +186,10 @@ def test_help_button_call_sites_match_help_targets():
     from warlock.studio.manual.targets import HELP_TARGETS
 
     studio_dir = Path(__file__).resolve().parents[2] / "src/warlock/studio"
-    pattern = re.compile(r'help_button\(\s*ctx\s*,\s*"([^"]+)"\s*\)')
+    # ``help_button_inline`` counts too: it is the same button and the same
+    # target map, placed where the cursor is rather than right-aligned, and a
+    # scan that missed it would call the viewport's (?) dead data.
+    pattern = re.compile(r'help_button(?:_inline)?\(\s*ctx\s*,\s*"([^"]+)"\s*\)')
     found: set[str] = set()
     # main.py joins the scan because Review's workspace panes are drawn there
     # rather than in panes/ -- its (?) would otherwise be invisible to this

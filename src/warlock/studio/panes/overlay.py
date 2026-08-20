@@ -16,6 +16,7 @@ from imgui_bundle import imgui
 
 from ...service import jobs as svc_jobs
 from .. import controls, fonts, icons, rail, theme, tokens, widgets
+from ..manual import render as manual_render
 from ..state import format_duration
 
 
@@ -94,6 +95,12 @@ def toolbar(ctx: Any) -> None:
         _wrap(icons.MAXIMIZE)
     if widgets.icon_button(icons.MAXIMIZE, "Frame the model (F)"):
         viewer.frame()
+    # The viewport's own way into its chapter. It had none: this toolbar was
+    # exempt from the coverage gate for having no titled section to hang a (?)
+    # beside, which was true and left the largest thing on screen with no
+    # route into the manual at all.
+    _wrap(icons.INFO)
+    manual_render.help_button_inline(ctx, "overlay")
     _wrap("Wireframe")
     changed, state.wireframe = widgets.toggle("Wireframe", state.wireframe, tag="wireframe")
     if changed:

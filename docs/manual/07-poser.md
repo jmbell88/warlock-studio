@@ -8,7 +8,7 @@ skeleton, pose the bare armature, and what you save is offered on every rigged a
 That is the whole reason the mode exists. Fitting puts a template's joints in the same relative
 place on every mesh it is fitted to, so a rotation authored against the humanoid skeleton means the
 same thing on a gnome and on a giant. A pose is a map of joint names to local rotations and nothing
-else — see [Posing](05-rigging-and-posing.md#posing) for that contract — which is exactly what makes
+else — see [Posing](06-rigging-and-posing.md#posing) for that contract — which is exactly what makes
 it portable.
 
 The Poser needs Blender, for the reason given under [When Blender is missing](#when-blender-is-missing).
@@ -64,7 +64,7 @@ different armature would find whichever bones happened to share a name and silen
 else.
 
 Your editing session itself survives switching modes, the way a document left open in the
-[Inker](08-inker.md) does. Only quitting, switching skeletons, or loading another pose over it asks
+[Inker](09-inker.md) does. Only quitting, switching skeletons, or loading another pose over it asks
 about unsaved changes.
 
 ## Moving the root
@@ -82,7 +82,7 @@ Two limits come with it, both about where the offset shows up:
   appears in the baked GLB and in sprite sheet rows rather than in the inspector's preview.
 - An animated sheet clip cannot interpolate a root offset yet. A clip whose endpoint poses carry one
   is refused by name rather than rendered subtly wrong — see
-  [Sprite sheets](07-sprite-sheets.md).
+  [Sprite sheets](08-sprite-sheets.md).
 
 ## The pose library
 
@@ -139,5 +139,5 @@ that could not do anything.
 
 Blender ships CPython 3.13 wheels only, so on any other Python version the optional extra installs
 nothing at all. See [When rigging is
-unavailable](05-rigging-and-posing.md#when-rigging-is-unavailable) for the full list of what that
-takes with it, and [Installation](17-installation.md) for how to get it.
+unavailable](06-rigging-and-posing.md#when-rigging-is-unavailable) for the full list of what that
+takes with it, and [Installation](18-installation.md) for how to get it.

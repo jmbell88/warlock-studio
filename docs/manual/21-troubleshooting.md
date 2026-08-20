@@ -52,7 +52,7 @@ raises the other side.
 
 **Fix.** Set `WARLOCK_VRAM_EXCLUSIVE=1` and restart. Text jobs then run sequentially — the engine is
 stopped, the image model loads, generates and unloads, and the engine restarts. It costs seconds per
-job and buys back roughly 7 GB of headroom. See [VRAM modes](18-configuration.md#vram-modes).
+job and buys back roughly 7 GB of headroom. See [VRAM modes](19-configuration.md#vram-modes).
 
 If it still fails, drop the geometry resolution: **Mesh resolution** at the Mesh stage, choosing "2D" rather
 than "3D" — see
@@ -77,11 +77,11 @@ does, and that fetch runs in its own process.
 from and whether it is on this card; tick what you need and press *Download selected*, which fetches
 the whole selection as one transaction and shows a rate and an ETA. A download can be cancelled from
 its own row, and cancelling installs nothing — the staging is swept the next time the pane opens.
-See [Models](19-app-settings.md#models).
+See [Models](20-app-settings.md#models).
 
 **Or from a terminal**, which is the only route on a headless box: `uv run warlock doctor` lists each
 missing item individually with the exact command that fetches it, and the same commands are
-collected in [Model weights](17-installation.md#model-weights).
+collected in [Model weights](18-installation.md#model-weights).
 
 Two of these rows are **fatal** rather than a note — `trellis-server.exe` and the TRELLIS GGUF
 weights. Nothing degrades gracefully without a reconstruction engine, so those get a red banner and
@@ -111,7 +111,7 @@ either way: everything except rigging, posing and sheets works exactly as before
 Bone-heat weighting gives up outright on the kind of non-manifold geometry a reconstruction sometimes
 produces; the worker catches that, falls back to envelope weights, and records which was used in
 `rig.json` rather than failing the job. The result is cruder around joints, not broken. See
-[When rigging is unavailable](05-rigging-and-posing.md#when-rigging-is-unavailable).
+[When rigging is unavailable](06-rigging-and-posing.md#when-rigging-is-unavailable).
 
 ## The GPU worker stopped
 
@@ -244,4 +244,4 @@ profile. When something needs investigating, these are the places to look:
 
 All of those move with `WARLOCK_DATA_DIR` except the note, which sits at the top of `WARLOCK_HOME`,
 and the store, which has its own `WARLOCK_DB`. The full layout, and the one-time move, are in
-[Data locations](18-configuration.md#data-locations).
+[Data locations](19-configuration.md#data-locations).

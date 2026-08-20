@@ -134,18 +134,18 @@ class TestScrollReset:
     """
 
     def test_a_new_chapter_starts_at_the_top(self):
-        assert loader.needs_scroll_reset("08-inker", "10-clay", None) is True
+        assert loader.needs_scroll_reset("09-inker", "11-clay", None) is True
 
     def test_staying_in_a_chapter_keeps_your_place(self):
         """Every frame is a redraw of the same chapter, so answering True here
         would pin the page to the top and make it unscrollable."""
-        assert loader.needs_scroll_reset("08-inker", "08-inker", None) is False
+        assert loader.needs_scroll_reset("09-inker", "09-inker", None) is False
 
     def test_an_anchor_does_its_own_scrolling(self):
         """``set_scroll_here_y`` fires on the heading as it draws. Resetting to
         the top as well would fight it for the same frame."""
-        assert loader.needs_scroll_reset("08-inker", "10-clay", "materials") is False
-        assert loader.needs_scroll_reset("08-inker", "08-inker", "layers") is False
+        assert loader.needs_scroll_reset("09-inker", "11-clay", "materials") is False
+        assert loader.needs_scroll_reset("09-inker", "09-inker", "layers") is False
 
     def test_the_first_chapter_of_a_session_starts_at_the_top(self):
         """There is no previous chapter, and the page has no scroll to keep."""

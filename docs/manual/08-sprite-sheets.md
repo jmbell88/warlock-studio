@@ -166,7 +166,7 @@ direction, so pressing Play loops one direction at a time. The document is unsav
 file — the first `Ctrl+S` asks where to put it, and the draft on disk is left alone. **Export
 sheet** from there writes the atlas back out on the sheet's own fixed grid rather than wrapping it,
 so a walk cycle stays four rows of four and each cell's sidecar entry carries the direction and the
-frame. See [Inker: animation](09-inker-animation.md).
+frame. See [Inker: animation](10-inker-animation.md).
 
 A synthesis is a queued job that runs two full image generations, so it waits its turn behind
 whatever else is generating. **Delete draft** removes a pair; a reference keeps at most 50.
@@ -180,4 +180,4 @@ which is exactly what a prop needs for a 2D game.
 Only posed rows and animated clips need a rigged mesh, and the panel says so before the button if
 you ask for one without a rig. Sheets themselves still need Blender, so they live behind the same
 optional extra as rigging — see
-[When rigging is unavailable](05-rigging-and-posing.md#when-rigging-is-unavailable).
+[When rigging is unavailable](06-rigging-and-posing.md#when-rigging-is-unavailable).

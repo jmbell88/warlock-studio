@@ -147,7 +147,7 @@ the pixels). Dark art that false-positives the detector is mitigated by this pop
 
 ### A8. Docs
 
-`docs/manual/11-plotter.md` "Tilesets" section: one paragraph on the confirm-gated split (help
+`docs/manual/12-plotter.md` "Tilesets" section: one paragraph on the confirm-gated split (help
 target unchanged; prose inside an existing section passes `tests/manual/`). `docs/INVARIANTS.md`:
 one sentence in the "studio/tilegrid is the second shared leaf" paragraph noting the leaf owns the
 separator detector and that detection at the import door is confirm-gated — the existing "generated
@@ -247,7 +247,7 @@ The Convert popup combo is built from `dither.METHODS` at the call site (`inker_
 
 ### B6. Docs
 
-`docs/manual/08-inker.md`, "Converting a drawing onto a palette": one bullet after **nearest** —
+`docs/manual/09-inker.md`, "Converting a drawing onto a palette": one bullet after **nearest** —
 grouped clusters the drawing's own colors into as many groups as the palette has entries, one to
 one; where nearest collapses fifteen grays onto the closest gray, grouped keeps a darker and a
 lighter apart; flat regions stay flat.
@@ -310,7 +310,7 @@ layers + mask + index planes together and one undo restores all of them; tiny-im
 
 ### C5. Docs
 
-One sentence in `docs/manual/08-inker.md`'s scale/resize passage (existing section, no new
+One sentence in `docs/manual/09-inker.md`'s scale/resize passage (existing section, no new
 heading).
 
 ## Part D — Matte-cleanup filter pack (Inker)
@@ -364,7 +364,7 @@ identity/shape sweeps pick all four up automatically — verify they do before w
 
 ### D3. Docs
 
-Four bullets in `docs/manual/08-inker.md`'s filter list; the module-head alpha-exception
+Four bullets in `docs/manual/09-inker.md`'s filter list; the module-head alpha-exception
 paragraph names threshold and grow/shrink as the new deliberate exceptions.
 
 ## Part E — Detection at the Inker's sheet door + tile-size mismatch (riders on A)
@@ -473,7 +473,7 @@ on the imported set. Smoke: the popup variant renders.
 
 ### F5. Docs
 
-`docs/manual/11-plotter.md` terrain section paragraph (existing section); `docs/INVARIANTS.md`
+`docs/manual/12-plotter.md` terrain section paragraph (existing section); `docs/INVARIANTS.md`
 tilegrid paragraph — the leaf now owns the blob-role analyzer, confirm-gated at the user-file
 door, same clause as the separator detector.
 
@@ -535,7 +535,7 @@ to open them exists. Two doors, no new algorithms:
   the cell prefilled and the existing occupancy/import path does the rest.
 
 Tests: smoke — both buttons exist and the Inker tab opens with rows × cols frames; a mode test
-for the Packwright parking. Docs: one sentence in `docs/manual/07-sprite-sheets.md`'s existing
+for the Packwright parking. Docs: one sentence in `docs/manual/08-sprite-sheets.md`'s existing
 prose.
 
 ## Part I — Tile dedup in Packwright's sheet import
@@ -565,7 +565,7 @@ door dedups the `sprites_from_tileset` result when the flag is set.
 `tests/packwright/`: exact duplicates dropped, reading-order winner kept; a flipped duplicate
 survives without the toggle and drops with it; rotation variants; an RGB-opaque sheet; popup
 preview and import agree on the dropped count; default-off is byte-identical to today. Docs: one
-sentence in `docs/manual/12-packwright.md`'s sources section.
+sentence in `docs/manual/13-packwright.md`'s sources section.
 
 ## Part J — Performance batch: two C kernels, four algorithmic fixes
 
@@ -663,7 +663,7 @@ citations verified 2026-08-18). Ground rules for the whole program, stated once:
   the existing rule, restated because five of these seven parts touch the container.
 - **`tsx.TILED_VERSION` stays `1.10.2`** whatever lands here: the gate needs a human with a real
   Tiled installed (`PLOTTER_COMPAT.md` head) and nothing in this program can satisfy it.
-- **Docs per part:** prose inside existing `docs/manual/11-plotter.md` sections only (a new
+- **Docs per part:** prose inside existing `docs/manual/12-plotter.md` sections only (a new
   chapter is a renumbering); the "What Plotter refuses" list shrinks as rows move; the shortcut
   table (`main.py:4515`) gains any new binding; `INVARIANTS.md`'s Plotter paragraph gains a
   sentence wherever a stated rule moves (terrain derivation in N, bit 28 in P, the resolver's

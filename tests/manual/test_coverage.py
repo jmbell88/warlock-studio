@@ -28,7 +28,6 @@ NO_HELP_BUTTON = {
     "packwright_preview",  # the atlas itself; its controls are packwright-settings
     "packwright_textures",  # a texture cache, drawn by nobody
     "clay_menu",  # a menu bar
-    "overlay",  # the viewport toolbar and placeholders
     # Not a pane at all: the mtime-cache rule several panes share, kept beside
     # them because inspector already imports sheet_panel and so neither of the
     # two could host it. Nothing on screen, so nothing to document.

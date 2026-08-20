@@ -181,13 +181,13 @@ conditioning strengths, which prompt history alone never did.
 
 A **profile** is a saved house style — the *look* half of the 2D form, stored under a name, with an
 optional anchor image every generation under it is conditioned on. It has a chapter of its own:
-[Style profiles](14-profiles.md).
+[Style profiles](15-profiles.md).
 
 ## Storage and pruning
 
 Every job owns a directory under `~/.warlock/assets/`, named for its job id, and the SQLite job
 store lives at `~/.warlock/assets/jobs.sqlite`. That home directory is outside the source tree on
-purpose; see [Data locations](18-configuration.md#data-locations). A job directory holds:
+purpose; see [Data locations](19-configuration.md#data-locations). A job directory holds:
 
 - `input.png` — the reference image the mesh was made from.
 - `source.glb` — the raw reconstruction, kept forever.
@@ -205,7 +205,7 @@ foot of the library shows a **storage meter**: how many job directories exist an
 they occupy. It is measured on a background thread, so it never stalls the window.
 
 The two ways to make that number smaller live in
-[Settings → Storage](19-app-settings.md#storage), not here: a button under a scrolling list of assets
+[Settings → Storage](20-app-settings.md#storage), not here: a button under a scrolling list of assets
 reads as an action on the assets you can see, and neither of these is.
 
 **Prune...** deletes everything but the newest N jobs, after a confirm — the confirm

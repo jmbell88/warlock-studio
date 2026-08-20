@@ -11,7 +11,7 @@ Wave 5 of `ASEPRITE_PARITY.md` promised alongside them.
 **Two readers, two writers, one ledger.** ORA is this editor's native format
 and the direction Aseprite interop travels *through*: an `.aseprite` file
 opens into the same `Document` an `.ora` does, and Save As can now put that
-document back into either format (`docs/manual/08-inker.md#saving`). The two
+document back into either format (`docs/manual/09-inker.md#saving`). The two
 tables below are therefore about the two directions a document can leave
 Inker's own model — **ORA → aseprite** is what `aseout.py` drops writing a
 document out; **aseprite → ORA** is what `asein.py` drops reading one in —

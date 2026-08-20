@@ -183,7 +183,7 @@ twelve hexadecimal characters. Overwriting a pose deletes its cached GLB, becaus
 the rotations you just replaced. The bake itself is derived on demand under the same per-artifact
 lock as the mesh exports rather than being queued: it is roughly a one-second subprocess, and
 putting it behind the serial GPU queue would make it wait on a reconstruction. See
-[Posing](05-rigging-and-posing.md#posing).
+[Posing](06-rigging-and-posing.md#posing).
 
 ## Sheet planning
 
@@ -207,5 +207,5 @@ Three details are easy to undo by accident:
 - Cells arrive grouped by row, so the worker re-poses once per pose rather than once per frame.
 
 Column zero is the front view. Yaw zero looks along `+Y` in Blender, and every skeleton template
-puts the subject's forward direction at `-Y`. See [The grid](07-sprite-sheets.md#the-grid) and
-[The sidecar](07-sprite-sheets.md#the-sidecar).
+puts the subject's forward direction at `-Y`. See [The grid](08-sprite-sheets.md#the-grid) and
+[The sidecar](08-sprite-sheets.md#the-sidecar).

@@ -28,7 +28,7 @@ Two decisions taken with the user on 2026-08-17:
   refusals that replace it are raised by name.
 - The Aseprite-divergence numbering in `docs/INVARIANTS.md` is citable and
   append-only: amend text in place, never renumber, append new entries at the end.
-- `docs/manual/08-inker.md` and `docs/INVARIANTS.md` are updated in the same wave as
+- `docs/manual/09-inker.md` and `docs/INVARIANTS.md` are updated in the same wave as
   the behavior they describe, never later.
 - One gesture = one Ctrl+Z; an op that changes nothing pushes nothing (or `dirty`
   lies). Edits own their data and are addressed by uid, never index.
@@ -258,7 +258,7 @@ instead of re-snapping; transparent-index alignment with `TRANSPARENT_INDEX`.
   palette; grayscale fixture opens grayscale; GIF slot-stability pin.
 - **1.5 Studio UI + docs**: mode menu via the convert session, transparent-index
   marker + context action on the palette pane, indexed foreground = a palette slot,
-  hard-brush forcing; rewrite `docs/manual/08-inker.md` ~lines 362-373 (the "pixels
+  hard-brush forcing; rewrite `docs/manual/09-inker.md` ~lines 362-373 (the "pixels
   stay full-colour RGBA underneath" paragraph is now only true of palette-constrained
   RGB) + new Indexed/Grayscale sections + the changed undo behavior of slot moves;
   INVARIANTS.md rewrite (below).
@@ -382,7 +382,7 @@ the funnel or `_map_planes`-style index-aware transforms).
 
 Key files: `inker/_doc_ranges.py`, `inker/_doc_selection.py`, `inker/animation.py`,
 `inker/anim_edits.py` (TrackPropsEdit field), `panes/inker_timeline.py`,
-`panes/inker_layers.py`, `inker_mode.py`, `docs/manual/08-inker.md`.
+`panes/inker_layers.py`, `inker_mode.py`, `docs/manual/09-inker.md`.
 
 **Gate:** for every new op — linked-cel-touched-once, one-undo-step,
 no-op-pushes-nothing, indexed-document identity preserved (flip/rotate/shift are
@@ -634,7 +634,7 @@ tile cursor in `panes/inker_canvas.py`, Manual/Auto/Stack toggle in
 refs flag algebra. Manual tilemap section (no new chapter — no renumbering);
 cross-reference in the Plotter chapter. *As executed:* the picker is
 `panes/inker_tiles.py` (drawn in the left column once the document has a
-tileset), the manual section is `docs/manual/08-inker.md#tilemap-layers` with the
+tileset), the manual section is `docs/manual/09-inker.md#tilemap-layers` with the
 cross-reference in `11-plotter.md#tilesets-from-inker`, and the flag algebra was
 deferred (deviation 6 below).
 
@@ -978,7 +978,7 @@ is the citable list.
 **Gate:** corpus round-trips bit-exact through our reader; suite green; manual §07
 documents Save As → `.aseprite`; the interop report exists and is linked from the
 manual. **All met** — `docs/ASEPRITE_INTEROP.md` is linked from both
-`docs/manual/08-inker.md#saving` and `docs/manual/09-inker-animation.md#from-an-aseprite-file`.
+`docs/manual/09-inker.md#saving` and `docs/manual/10-inker-animation.md#from-an-aseprite-file`.
 
 ### Deviations from this spec, as executed (Wave 5)
 

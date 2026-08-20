@@ -39,6 +39,12 @@ from . import parser
 # ``test_index_sections_match_the_loaders_parts``, and the two cannot drift
 # apart again without a failure.
 #
+# The 3D viewport joined Part I as chapter 05 on 2026-08-19, moving everything
+# from the old 05 onward by one. It was the ~5k-LOC subsystem in the middle of
+# the window with no chapter and no (?) -- the camera, the toolbar over it and
+# the skeleton drawn through the mesh were described in passing by four
+# chapters and owned by none.
+#
 # Two chapters joined Part I on 2026-08-17 and both were insertions rather than
 # appends, so everything from the old 06 onward moved by two: Poser (06) was a
 # section inside Rigging and posing, and it is the one *workspace* mode -- the
@@ -48,9 +54,9 @@ from . import parser
 # half times the next largest, of which the timeline was the one self-contained
 # subsystem.
 PARTS: tuple[tuple[str, range], ...] = (
-    ("Using Warlock Studio", range(1, 17)),
-    ("Setup & operations", range(17, 21)),
-    ("Architecture", range(21, 24)),
+    ("Using Warlock Studio", range(1, 18)),
+    ("Setup & operations", range(18, 22)),
+    ("Architecture", range(22, 25)),
 )
 
 _H1 = re.compile(r"^# +(.+)$", re.MULTILINE)

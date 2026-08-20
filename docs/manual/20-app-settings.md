@@ -84,13 +84,13 @@ one repository and exits, into a staging folder beside the destination that is o
 if the fetch succeeded — so a download interrupted halfway leaves nothing behind rather than a model
 directory that looks finished. Free disk is checked against the whole selection first, and the whole
 selection is refused if it will not fit. Everything is still equally installable by hand — see
-[Model weights](17-installation.md#model-weights) and
-[Adding an image model](23-extending.md#adding-an-image-model).
+[Model weights](18-installation.md#model-weights) and
+[Adding an image model](24-extending.md#adding-an-image-model).
 
 ## Storage
 
 Three figures and two buttons. The figures are how many job directories exist and what they occupy,
-what is sitting in the [trash](13-library-and-jobs.md#the-trash) waiting to be emptied, and how much
+what is sitting in the [trash](14-library-and-jobs.md#the-trash) waiting to be emptied, and how much
 disk the downloaded model weights are actually using. All three are measured on a background thread
 and the last answer is drawn until a new one arrives, so none of them walks the disk while you are
 looking at something else. The first two are the same measurements the library reports, not a second
@@ -109,7 +109,7 @@ autosaves and settings are kept, and it refuses outright while anything is queue
 
 Both used to sit at the foot of the library, under the list of assets, which is the one place where
 "clean library" reads as an action on the assets you can see rather than on all of them.
-[Library and jobs](13-library-and-jobs.md#storage-and-pruning) has the longer account of what
+[Library and jobs](14-library-and-jobs.md#storage-and-pruning) has the longer account of what
 each one deletes and why prune removes from disk rather than trashing.
 
 ## Advanced

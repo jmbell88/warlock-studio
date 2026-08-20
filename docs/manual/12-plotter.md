@@ -70,7 +70,7 @@ carries its own slicing, spacing and margin. Dropping an image or a `.tsx` on th
 same thing.
 
 You can also send a library asset straight in — right-click any reference card and choose **Use as a
-tileset in Plotter**. A [Packwright](12-packwright.md) grid pack is the natural source: it writes a
+tileset in Plotter**. A [Packwright](13-packwright.md) grid pack is the natural source: it writes a
 `.tsx` beside its atlas precisely so it can be used here with no conversion.
 
 A generated tilesheet — the kind an image model produces when you ask it for a tileset — usually
@@ -131,7 +131,7 @@ Either way it is a **snapshot, not a link**. The map holds the tileset as it sto
 painting on it back in Inker afterwards mints a new one there and leaves the map's copy exactly as
 it was, and you send it across again to bring the changes over. That is deliberate: a live link
 between two documents with two undo stacks is a synchronisation feature, and a snapshot is the
-honest thing without it. [Tilemap layers](08-inker.md#tilemap-layers) is the Inker side of this.
+honest thing without it. [Tilemap layers](09-inker.md#tilemap-layers) is the Inker side of this.
 
 ## Isometric and oblique maps
 
@@ -484,5 +484,5 @@ Hidden layers are not rendered. One flag decides both what you see and what come
 | `~/.warlock/assets/<job>/input.png` | The flat render, for a map exported to the library. |
 | `~/.warlock/assets/<job>/map.wmap` | The map behind that render. Not served; reopened by **Edit in Plotter**. |
 
-See [Keyboard shortcuts](16-shortcuts.md) for every binding, and
-[Packwright](12-packwright.md) for building the tilesets this mode consumes.
+See [Keyboard shortcuts](17-shortcuts.md) for every binding, and
+[Packwright](13-packwright.md) for building the tilesets this mode consumes.

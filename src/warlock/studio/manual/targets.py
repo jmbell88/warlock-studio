@@ -16,46 +16,51 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "settings-3d": ("04-generating-meshes", None),
     # The Rig stage's own column (the UI redesign, wave 5). Rigging was three
     # buttons in three places and no pane of its own, so it had no (?) either.
-    "settings-rig": ("05-rigging-and-posing", "rigging-a-mesh"),
-    "library": ("13-library-and-jobs", None),
+    "settings-rig": ("06-rigging-and-posing", "rigging-a-mesh"),
+    "library": ("14-library-and-jobs", None),
     "inspector": ("04-generating-meshes", "exports"),
     "retarget": ("04-generating-meshes", "triangle-budget"),
     "retexture": ("04-generating-meshes", "surface-texture"),
-    "pose": ("05-rigging-and-posing", "posing"),
-    "poser-library": ("06-poser", "the-pose-library"),
-    "poser-controls": ("06-poser", "posing-a-skeleton"),
-    "sheet": ("07-sprite-sheets", None),
-    "sprites": ("07-sprite-sheets", "from-a-single-drawing"),
-    "inker-tools": ("08-inker", "tools"),
-    "inker-layers": ("08-inker", "layers"),
-    "inker-bridge": ("08-inker", "pipeline-bridges"),
-    "inker-timeline": ("09-inker-animation", "the-timeline"),
+    "pose": ("06-rigging-and-posing", "posing"),
+    "poser-library": ("07-poser", "the-pose-library"),
+    "poser-controls": ("07-poser", "posing-a-skeleton"),
+    "sheet": ("08-sprite-sheets", None),
+    "sprites": ("08-sprite-sheets", "from-a-single-drawing"),
+    "inker-tools": ("09-inker", "tools"),
+    "inker-layers": ("09-inker", "layers"),
+    "inker-bridge": ("09-inker", "pipeline-bridges"),
+    "inker-timeline": ("10-inker-animation", "the-timeline"),
     # Found by the O118 coverage sweep: two panes a user reads and neither had
     # a way into the chapter that describes it.
-    "inker-colors": ("08-inker", "colour"),
+    "inker-colors": ("09-inker", "colour"),
     # The tile panel (Wave 3). Its own anchor rather than sharing
     # ``inker-tools``: a tilemap layer is a different *kind* of layer, and the
     # questions asked in front of this panel -- what Manual/Auto/Stack do, what
     # a flag bit is, why an old build drops the tiles -- are all in that one
     # section.
-    "inker-tiles": ("08-inker", "tilemap-layers"),
-    "inker-preview": ("09-inker-animation", "preview"),
+    "inker-tiles": ("09-inker", "tilemap-layers"),
+    "inker-preview": ("10-inker-animation", "preview"),
     "candidates": ("04-generating-meshes", "candidates"),
-    "clay-tools": ("10-clay", "transforming"),
-    "clay-props": ("10-clay", "materials"),
-    "clay-outliner": ("10-clay", "adding-a-primitive"),
-    "clay-bridge": ("10-clay", "the-two-ways-out"),
-    "plotter-tools": ("11-plotter", "tools"),
-    "plotter-tileset": ("11-plotter", "tilesets"),
-    "plotter-layers": ("11-plotter", "layers"),
-    "plotter-bridge": ("11-plotter", "files"),
-    "packwright-sources": ("12-packwright", "sources"),
-    "packwright-settings": ("12-packwright", "settings"),
-    "packwright-items": ("12-packwright", "when-it-does-not-fit"),
-    "packwright-bridge": ("12-packwright", "exporting"),
-    "profiles": ("14-profiles", None),
-    "review": ("15-review", None),
-    "app-settings": ("19-app-settings", None),
+    # The viewport toolbar. The ~5k-LOC subsystem in the middle of the window
+    # was chrome as far as this map was concerned -- exempted in
+    # ``tests/manual/test_coverage.py`` for having "no titled section" -- while
+    # being the one thing on screen at every stage of Create and in Review.
+    "overlay": ("05-the-3d-viewport", "the-toolbar"),
+    "clay-tools": ("11-clay", "transforming"),
+    "clay-props": ("11-clay", "materials"),
+    "clay-outliner": ("11-clay", "adding-a-primitive"),
+    "clay-bridge": ("11-clay", "the-two-ways-out"),
+    "plotter-tools": ("12-plotter", "tools"),
+    "plotter-tileset": ("12-plotter", "tilesets"),
+    "plotter-layers": ("12-plotter", "layers"),
+    "plotter-bridge": ("12-plotter", "files"),
+    "packwright-sources": ("13-packwright", "sources"),
+    "packwright-settings": ("13-packwright", "settings"),
+    "packwright-items": ("13-packwright", "when-it-does-not-fit"),
+    "packwright-bridge": ("13-packwright", "exporting"),
+    "profiles": ("15-profiles", None),
+    "review": ("16-review", None),
+    "app-settings": ("20-app-settings", None),
     # The chooser the app opens on (F56/O118): the one pane a first run
     # certainly sees, and the only one that had no way into the manual at all.
     "home": ("02-home", None),
@@ -70,4 +75,4 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
 # are a red banner, a popup and a Home row, none of which is a pane with a (?).
 # Named once rather than spelled at each of the three, so a chapter that moved
 # does not have to be found in three places (F57).
-TROUBLESHOOTING: tuple[str, str | None] = ("20-troubleshooting", None)
+TROUBLESHOOTING: tuple[str, str | None] = ("21-troubleshooting", None)
