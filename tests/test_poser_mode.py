@@ -70,6 +70,8 @@ class FakeViewer:
         self.loaded: list = []
         self.cleared = 0
         self.framed = None
+        # The onion-skin ghosts the clip editor pushes; empty everywhere else.
+        self.onion: list = []
         if model is not None:
             self.editor.bind(model, bones)
             self.pose_mode = True
@@ -556,3 +558,281 @@ def test_a_recovered_pose_restores_joint_corrections(tmp_path):
     assert recovered.mode == "joints"
     assert recovered.moved == moved
     assert recovered.has_unsaved_edits()
+
+
+# --- the clip editor ----------------------------------------------------------
+#
+# ``LPC_ALT.md`` Phase 2's open half. The armature *is* the editor here -- a key
+# is authored by posing the preview and putting it back -- so what these pin is
+# the part that is not the pose editor: the timing model, and the places a clip
+# can be edited into something the renderer would refuse.
+
+
+def _clip_library() -> dict:
+    return {
+        "template": "humanoid",
+        "space": "delta",
+        "edited": False,
+        "poses": [
+            {"name": "A", "bones": {"hips": [0.0, 0.0, 0.0, 1.0]}},
+            {"name": "B", "bones": {"spine": [0.0, 0.0, 0.0, 1.0]}},
+            {"name": "C", "bones": {"head": [0.0, 0.0, 0.0, 1.0]}},
+        ],
+        "clips": [
+            {
+                "name": "walk",
+                "keys": ["A", "B", "C"],
+                "segments": [2, 2, 2],
+                "closed": True,
+                "easing": "linear",
+                "space": "delta",
+            }
+        ],
+    }
+
+
+def _clip_ctx():
+    ctx = FakeCtx()
+    ctx.poser_viewer = _bound_viewer()
+    state = poser_mode.ensure(ctx)
+    state.clips_dirty_flag = False
+    poser_mode.adopt_clips(ctx, _clip_library())
+    return ctx, state
+
+
+def _turned():
+    """A rotation that is not the identity, spelled once."""
+    return [0.0, 0.3894183, 0.0, 0.9210610]
+
+
+def test_adopting_a_library_opens_its_first_clip_and_expands_it():
+    ctx, state = _clip_ctx()
+    assert state.clip == "walk"
+    assert state.clips_unsaved is False
+    # Three closed segments of two frames each.
+    assert len(state.frames) == 6
+
+
+def test_selecting_a_key_puts_its_pose_on_the_armature():
+    """And it goes through ``apply_preset``, so the bones the key does *not*
+    name go back to rest -- otherwise loading a walk key after an attack key
+    leaves the sword arm up."""
+    ctx, state = _clip_ctx()
+    editor = ctx.poser_viewer.editor
+    editor.apply({"head": _turned()}, dirty=True)
+    poser_mode.select_key(ctx, 0)
+    assert state.key_index == 0
+    assert state.frame == -1
+    assert editor.pose()["head"] == pytest.approx([0.0, 0.0, 0.0, 1.0])
+
+
+def test_capturing_writes_the_armature_back_into_the_selected_key():
+    ctx, state = _clip_ctx()
+    editor = ctx.poser_viewer.editor
+    poser_mode.select_key(ctx, 1)
+    editor.apply({"spine": _turned()}, dirty=True)
+    poser_mode.capture_key(ctx)
+
+    assert state.clips_unsaved is True
+    assert state.key_pose("B")["bones"]["spine"] == pytest.approx(_turned())
+
+
+def test_capturing_an_in_between_frame_is_refused_by_name():
+    """The armature shows an interpolated pose while scrubbing, and storing
+    that into a key would silently replace an authored pose with a computed
+    one. Refused rather than snapped to the nearest key, which is the same
+    mistake with the evidence removed."""
+    ctx, state = _clip_ctx()
+    poser_mode.scrub(ctx, 3)
+    before = dict(state.key_pose("A")["bones"])
+    poser_mode.capture_key(ctx)
+    assert state.key_pose("A")["bones"] == before
+    assert state.clips_unsaved is False
+    assert any("in-between" in msg for msg, _kind in ctx.toasts)
+
+
+def test_scrubbing_pushes_no_undo_steps():
+    """It runs once per frame of a slider drag. A step per frame is a stack
+    full of one gesture -- the rule ``rotate_selected`` already follows."""
+    ctx, state = _clip_ctx()
+    editor = ctx.poser_viewer.editor
+    poser_mode.select_key(ctx, 0)
+    head = editor.history.head
+    for frame in range(len(state.frames)):
+        poser_mode.scrub(ctx, frame)
+    assert editor.history.head == head
+
+
+def test_closing_or_opening_a_clip_resizes_its_timing():
+    """An open clip of N keys has N-1 steps and a closed one has N. Resized
+    here rather than left for the save to refuse, because the count is
+    *derived*: there is no other value it could take."""
+    ctx, state = _clip_ctx()
+    poser_mode.set_closed(ctx, False)
+    assert state.open_clip()["segments"] == [2, 2]
+    poser_mode.set_closed(ctx, True)
+    assert state.open_clip()["segments"] == [2, 2, 2]
+
+
+def test_moving_a_key_carries_its_own_segment():
+    """A segment is the step *out of* a key, so reordering without it would
+    move the poses and leave the timing behind -- which reads as the reorder
+    having corrupted the clip."""
+    ctx, state = _clip_ctx()
+    state.open_clip()["segments"] = [1, 5, 9]
+    poser_mode.move_key(ctx, 0, 1)
+    assert state.open_clip()["keys"] == ["B", "A", "C"]
+    assert state.open_clip()["segments"] == [5, 1, 9]
+    assert state.key_index == 1
+
+
+def test_removing_a_key_leaves_the_pose_in_the_library():
+    """Two different things: another clip may use that pose, and a delete that
+    silently reached into the shared list would have a blast radius the button
+    does not describe."""
+    ctx, state = _clip_ctx()
+    poser_mode.remove_key(ctx, 1)
+    assert state.open_clip()["keys"] == ["A", "C"]
+    assert state.key_pose("B") is not None
+
+
+def test_a_clip_cannot_be_cut_below_two_keys():
+    ctx, state = _clip_ctx()
+    poser_mode.remove_key(ctx, 0)
+    poser_mode.remove_key(ctx, 0)
+    assert len(state.open_clip()["keys"]) == 2
+    assert any("at least" in msg for msg, _kind in ctx.toasts)
+
+
+def test_a_new_key_is_authored_from_the_armature_and_inserted():
+    ctx, state = _clip_ctx()
+    editor = ctx.poser_viewer.editor
+    poser_mode.select_key(ctx, 0)
+    editor.apply({"head": _turned()}, dirty=True)
+    poser_mode.new_key(ctx, "A crouch")
+
+    assert state.key_pose("A crouch") is not None
+    assert state.open_clip()["keys"] == ["A", "A crouch", "B", "C"]
+    assert len(state.open_clip()["segments"]) == 4, "a closed clip gains a step"
+
+
+def test_a_duplicate_key_name_is_refused():
+    """Names are what a clip references by, so two of them is an ambiguity
+    rather than a duplicate."""
+    ctx, state = _clip_ctx()
+    poser_mode.new_key(ctx, "B")
+    assert any("already exists" in msg for msg, _kind in ctx.toasts)
+    assert state.open_clip()["keys"] == ["A", "B", "C"]
+
+
+def test_a_clip_that_will_not_expand_empties_the_scrubber_instead_of_raising():
+    """Mid-edit the segments briefly do not match the keys, which is ordinary.
+    The reason is shown; Save is what actually refuses."""
+    ctx, state = _clip_ctx()
+    state.open_clip()["segments"] = [2]
+    poser_mode.rebuild_frames(ctx)
+    assert state.frames == []
+    assert state.clips_error
+
+
+def test_a_pump_never_reloads_over_unsaved_edits():
+    ctx, state = _clip_ctx()
+    state.clips_unsaved = True
+    state.clips_dirty_flag = True
+    poser_mode.clips_pump(ctx)
+    assert poser_mode.CLIPS_KEY not in ctx.submitted
+    assert state.clips_dirty_flag is True
+
+
+def test_unsaved_clears_on_the_landing_and_never_at_submit():
+    """A failed write has to leave the guard standing -- the same rule the pose
+    save follows."""
+    ctx, state = _clip_ctx()
+    state.clips_unsaved = True
+    poser_mode.on_task_failed(
+        ctx, SimpleNamespace(key=poser_mode.CLIPS_SAVE_KEY, message="nope")
+    )
+    assert state.clips_unsaved is True
+
+    poser_mode.on_task_done(
+        ctx,
+        SimpleNamespace(
+            key=poser_mode.CLIPS_SAVE_KEY, result={**_clip_library(), "edited": True}
+        ),
+    )
+    assert state.clips_unsaved is False
+    assert state.clips["edited"] is True
+
+
+def test_a_landing_for_another_template_is_ignored():
+    """The ``viewer.path`` idiom: an answer arriving after the user switched
+    skeletons simply never binds."""
+    ctx, state = _clip_ctx()
+    state.clips_unsaved = True
+    poser_mode.on_task_done(
+        ctx,
+        SimpleNamespace(
+            key=poser_mode.CLIPS_KEY, result={**_clip_library(), "template": "quadruped"}
+        ),
+    )
+    assert state.clips_unsaved is True
+    assert state.clips["template"] == "humanoid"
+
+
+def test_onion_ghosts_are_the_neighbouring_keys_not_the_neighbouring_frames():
+    """A keyframe is judged against the keys it steps *between*; the frames
+    either side of the playhead are what the scrubber is for."""
+    ctx, state = _clip_ctx()
+    ctx.poser_viewer.onion = []
+    poser_mode.select_key(ctx, 1)
+    poser_mode.set_onion(ctx, True)
+    assert ctx.poser_viewer.onion == [
+        {"hips": [0.0, 0.0, 0.0, 1.0]},
+        {"head": [0.0, 0.0, 0.0, 1.0]},
+    ]
+
+
+def test_a_looping_clip_wraps_its_first_and_last_keys():
+    """The comparison a looping walk actually needs, and the one that is
+    easiest to get wrong by hand."""
+    ctx, state = _clip_ctx()
+    ctx.poser_viewer.onion = []
+    poser_mode.set_onion(ctx, True)
+    poser_mode.select_key(ctx, 0)
+    before, after = ctx.poser_viewer.onion
+    assert before == {"head": [0.0, 0.0, 0.0, 1.0]}, "wraps to the last key"
+    assert after == {"spine": [0.0, 0.0, 0.0, 1.0]}
+
+
+def test_an_open_clip_has_no_ghost_before_its_first_key():
+    ctx, state = _clip_ctx()
+    ctx.poser_viewer.onion = []
+    poser_mode.set_closed(ctx, False)
+    poser_mode.set_onion(ctx, True)
+    poser_mode.select_key(ctx, 0)
+    assert ctx.poser_viewer.onion[0] == {}
+
+
+def test_scrubbing_clears_the_ghosts_and_coming_back_restores_them():
+    """The live skeleton is an in-between pose while scrubbing, so ghosts of
+    the neighbouring *keys* around it would be three poses on screen with no
+    stated relationship between them."""
+    ctx, state = _clip_ctx()
+    ctx.poser_viewer.onion = []
+    poser_mode.select_key(ctx, 1)
+    poser_mode.set_onion(ctx, True)
+    assert ctx.poser_viewer.onion
+
+    poser_mode.scrub(ctx, 3)
+    assert ctx.poser_viewer.onion == []
+
+    poser_mode.apply_key(ctx)
+    assert ctx.poser_viewer.onion
+
+
+def test_turning_onion_skin_off_clears_the_viewer():
+    ctx, state = _clip_ctx()
+    poser_mode.set_onion(ctx, True)
+    assert ctx.poser_viewer.onion
+    poser_mode.set_onion(ctx, False)
+    assert ctx.poser_viewer.onion == []

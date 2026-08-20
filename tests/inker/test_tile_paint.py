@@ -827,3 +827,95 @@ def test_auto_retires_the_key_an_earlier_patch_of_the_same_tile_claimed():
         "the cell the user painted green must not come back blue"
     )
     _assert_synced(doc)
+
+
+# --- Wave 3 close-out: the cut's fast path, and the hash cache's eviction -----
+
+
+def test_the_interior_fast_path_and_the_ragged_edge_agree_cell_for_cell():
+    """``convert_layer_to_tilemap`` hashes an interior cell straight off a view
+    (``tobytes`` on a non-contiguous slice already yields the C-order bytes a
+    compacted copy would) and pads only the ragged right and bottom edges. The
+    two paths must produce the *same tile* for the same content, or a drawing
+    would dedup differently depending on where in the grid it happened to sit.
+
+    Built so the answer is knowable by hand: the same 4x4 red block sits at an
+    interior cell and at the bottom-right ragged one, where the pad supplies the
+    missing pixels -- so the ragged cell is deliberately *not* the same tile, and
+    an interior cell repeated elsewhere deliberately *is*. What is pinned is that
+    identity follows content and never which branch cut it."""
+    doc = _doc(10, 10)  # 10x10 at 4x4 -> a 3x3 grid, the last row/col ragged
+    layer = doc.stack.active
+    red = np.array(RED, dtype=np.uint8)
+    layer.pixels[0:4, 0:4] = red  # interior cell (0, 0)
+    layer.pixels[4:8, 0:4] = red  # interior cell (1, 0) -- identical content
+    layer.pixels[8:10, 8:10] = red  # the ragged corner cell (2, 2)
+    doc.history.clear()
+
+    assert doc.convert_layer_to_tilemap(layer.uid, 4, 4) is True
+    cel = doc.stack.by_uid(layer.uid)
+    assert cel.refs.shape == (3, 3)
+    # Two whole-tile cells of identical content share one tile...
+    assert cel.refs[0, 0] == cel.refs[1, 0]
+    assert int(cel.refs[0, 0]) & gid.GID_MASK != 0
+    # ...and the ragged one, whose content is red-plus-padding, is its own.
+    assert cel.refs[2, 2] not in (cel.refs[0, 0], 0)
+    _assert_synced(doc)
+
+
+def test_the_conversion_is_bit_exact_on_a_ragged_canvas_at_several_tile_sizes():
+    """The property the fast path had to preserve: whatever the canvas/tile
+    ratio, converting and converting back returns the original pixels exactly.
+    Several sizes because the fast path is chosen per cell by a division, and an
+    off-by-one in ``whole_rows``/``whole_cols`` would only show at one of them."""
+    for width, height, tile in ((10, 10, 4), (9, 7, 4), (16, 16, 8), (13, 5, 3)):
+        doc = _doc(width, height)
+        layer = doc.stack.active
+        rng = np.random.default_rng(width * height * tile)
+        layer.pixels[:] = rng.integers(0, 3, size=(height, width, 4), dtype=np.uint8) * 90
+        original = layer.pixels.copy()
+        doc.history.clear()
+
+        assert doc.convert_layer_to_tilemap(layer.uid, tile, tile) is True
+        cel = doc.stack.by_uid(layer.uid)
+        assert np.array_equal(cel.pixels, original), f"{width}x{height} @ {tile}"
+        assert doc.convert_layer_to_raster(layer.uid) is True
+        assert np.array_equal(doc.stack.by_uid(layer.uid).pixels, original)
+
+
+def test_removing_a_tileset_evicts_its_hash_index():
+    """The cache is keyed by tileset uid and holds a strip image alive. A removed
+    tileset's entry is dead weight -- nothing can ask for it again -- so it is
+    dropped with the slot. Named in ``ASEPRITE_PARITY.md`` Wave 3's "Left open"
+    section; the eviction landed in ``c15a64e`` without a pin, and this is it."""
+    doc = _doc()
+    layer = doc.stack.active
+    layer.pixels[0:4, 0:4] = np.array(RED, dtype=np.uint8)
+    assert doc.convert_layer_to_tilemap(layer.uid, 4, 4) is True
+    uid = doc.tilesets[0].uid
+    # Fill the cache: any dedup ask builds it.
+    doc._tile_hash_index(uid)
+    assert uid in doc._tile_hashes
+
+    assert doc.convert_layer_to_raster(layer.uid) is True
+    doc.remove_tileset(uid)
+    assert uid not in doc._tile_hashes
+
+
+def test_an_undo_after_a_removal_rebuilds_the_index_on_demand():
+    """Eviction must not make the cache a correctness dependency: an undo that
+    puts the slot back has to work with an empty entry, because the index is
+    rebuilt on the next ask rather than restored."""
+    doc = _doc()
+    layer = doc.stack.active
+    layer.pixels[0:4, 0:4] = np.array(RED, dtype=np.uint8)
+    assert doc.convert_layer_to_tilemap(layer.uid, 4, 4) is True
+    uid = doc.tilesets[0].uid
+    doc._tile_hash_index(uid)
+    assert doc.convert_layer_to_raster(layer.uid) is True
+    doc.remove_tileset(uid)
+    assert uid not in doc._tile_hashes
+
+    doc.history.undo(doc)
+    assert any(slot.uid == uid for slot in doc.tilesets)
+    assert doc._tile_hash_index(uid) is not None

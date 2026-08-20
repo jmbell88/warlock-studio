@@ -792,15 +792,44 @@ is the citable list.
 
 ### Left open by Wave 3
 
-- Refs-aware flip/rotate (the flag algebra) and the range ops that depend on
-  it; the refusals name themselves and are the ledger.
+- ~~Refs-aware flip/rotate (the flag algebra) and the range ops that depend on
+  it~~ **CLOSED 2026-08-20.** The algebra moved out of `plotter/tools.py` into
+  the shared `tilegrid.gid` leaf (divergence **#24**) rather than being copied —
+  two engines needed one table and the Plotter had the only one. `Document.flip`
+  and `Document.rotate90` now carry a tilemap layer, and so do `flip_range`,
+  `rotate_range` and a tile-aligned wrapping `shift_range` (through
+  `_permute_range`'s new `refs_fn`, with `TileRefsEdit` as the undo step so undo
+  restores the *record* and the picture is re-derived from it). The bar is the
+  pixels: a flipped tilemap must draw exactly the flip of what it drew. The
+  refusals moved rather than vanished, by this file's own ledger rule — a canvas
+  that is not a whole number of tiles on the flipped axis, a quarter turn of
+  non-square tiles (a square *canvas* does not imply square *tiles*), and an
+  unwrapped or sub-tile range shift. **Scale and descale stay refused
+  permanently**, which is a correction to the framing this list carried: they
+  resample, so there is no permutation to teach — only a re-cut, which is a
+  different operation.
 - Terrains/Wang in Inker, per-tile properties, tile animation, external-file
   tilesets, non-32-bit tilemap cels — all deferred by the spec above and all
   still deferred.
-- `_tile_hashes` entries for removed tilesets are never evicted (bounded by the
-  tilesets ever created in a session, one strip each).
+- ~~`_tile_hashes` entries for removed tilesets are never evicted~~ **CLOSED**
+  — the eviction actually landed in `c15a64e` (2026-08-19) without a test to
+  hold it there, which is how it came to still be listed here. Pinned now,
+  together with the property that makes eviction safe: the index is *rebuilt on
+  demand*, so an undo that puts the slot back works with no entry at all rather
+  than needing one restored.
 - `convert_layer_to_tilemap` is O(cells x cels) with a tile copy per cell —
-  fine at Inker canvas sizes, would want vectorising for a large clip.
+  **improved 2026-08-20, and the measurement is the interesting part.** An
+  interior cell now hashes a *view* directly (`tobytes` on a non-contiguous
+  slice already yields the C-order bytes a compacted copy would, and
+  `content_key` is `tobytes` and nothing more), so only the ragged right and
+  bottom edges still pay for a blank-and-paste: **1.6x–1.8x** across 512–2048px
+  canvases at 8 and 16px tiles, bit-identical on every one. A full
+  block-transpose vectorisation was written first and **measured worse** — 0.92x
+  at 2048px, because it pays for the whole canvas twice to save the same
+  per-cell copy — and was reverted rather than landed. The loop stays O(cells x
+  cels) and that is now a *finding*, not a deferral: the per-cell work is a dict
+  lookup, and the copy the vectorisation was meant to remove is the part numpy
+  was already doing best.
 
 ---
 
@@ -923,32 +952,50 @@ is the citable list.
   default for grid), so the standing verification needs a fresh look with the
   app installed (the TILED_VERSION rule: the constant only moves when a human
   with Tiled has looked).
-- **Mode-level submit-test gap.** None of the arrange/merge/skip_empty/trim/
-  padding/extrude early refusals in `inker_mode._submit_export` have a
-  dedicated UI-level test; each is covered at the core (`sheetout`) layer
-  only. A pre-existing gap the series has carried since before this wave,
-  named again in the Task 1, 2, 4 and 5 reports.
-- **A `"slices_conflict"` sidecar note was not built.** A merged-away frame's
-  own authored slices, when they differ from its representative's, are
-  silently dropped rather than recorded. Closing it needed comparing every
-  duplicate frame's raw slice metadata against its representative's for every
-  merge — measured past the close-out sweep's own ~20-line budget, so it
-  stays a known gap rather than a rushed fix.
-- **A visible group whose members are all hidden writes a transparent sheet**
-  for a per-layer split. Flagged in Task 3's review but outside this
-  close-out's own sweep list, so left untouched; `skip_empty` on the same
-  export already raises rather than write a blank cell, which is the same
-  failure reachable a different way.
+- ~~**Mode-level submit-test gap.**~~ **CLOSED 2026-08-20.**
+  `tests/test_inker_export_refusals.py` drives every one of them through the
+  mode and asserts the three things the engine layer cannot see: the toast
+  fires and is a `warn`, `tab.saving` is put back, and nothing is submitted (so
+  no save dialog ever opened). `trim` turned out to have no door check *by
+  design* — it changes the cell size, never which cells exist, so it composes
+  with a fixed grid — and is pinned there as the negative control that says so.
+- ~~**A `"slices_conflict"` sidecar note was not built.**~~ **CLOSED
+  2026-08-20.** `sheetout._slices_conflicts` compares each merged-away frame's
+  slice metadata against its representative's — normalised through
+  `_slice_entry`, so only differences the file would actually carry count — and
+  `compose` returns `{cell: [dropped frame indices]}`. `sheet.sidecar` writes it
+  as a top-level key **only when non-empty**, which is what makes it additive
+  with no version bump: an export with nothing to report produces the file it
+  always did, byte for byte, and that emptiness is itself pinned.
+- ~~**A visible group whose members are all hidden writes a transparent
+  sheet**~~ **CLOSED 2026-08-20.** `layer_splits` now judges a group by what it
+  contributes rather than by its own eye, through `groups.resolve` — the same
+  AND/multiply fold the compositor uses, so it cannot drift from what the
+  flatten would produce. That covers the nested case (every leaf's eye open, a
+  subgroup between them hiding the lot) and the zero-opacity one, which a check
+  reading only `visible` one level up would both have missed. The two doors now
+  agree about what an empty output is instead of disagreeing by which one you
+  reached.
 - **`_slice_filenames` and `_split_stems` hold two different collision
-  policies** (bump vs. refuse) in the same module, each argued at its own
-  site. Noted in Task 3's report, not reconciled; revisit if a third naming
-  helper is ever added.
-- **The `{frame}`-in-split refusal has no wiring-level test (Task 5).**
-  `filename_for` refuses `{frame}` on an export that has no frame, and
-  `_split_stems` is the call that reaches it for a per-tag or per-layer batch
-  — but the pin is at the `sheetout` layer only, so nothing proves the split
-  runners actually pass the user's template down that path. Same shape as the
-  mode-level submit-test gap above.
+  policies** (bump vs. refuse) — **resolved as a deliberate divergence,
+  2026-08-20, and pinned rather than reconciled.** The deciding question is
+  whether anything downstream addresses the file *by name*: nothing addresses a
+  slice PNG that way (a human picks it off a folder listing, so `Hitbox_2.png`
+  is livable), a tag or a layer is addressed by name by whatever consumes the
+  sheet (so `walk_2.png` would be a file claiming to be a clip that does not
+  exist). Bumping is friendly where a human disambiguates and dishonest where a
+  machine does. Both docstrings now carry the reciprocal cross-reference, and
+  `tests/inker/test_slice_export.py` asserts the two policies against each
+  other so neither can drift onto the other's unnoticed. A third naming helper
+  answers that same question before it picks a side.
+- ~~**The `{frame}`-in-split refusal has no wiring-level test (Task 5).**~~
+  **CLOSED 2026-08-20**, in the same file as the submit-test gap, for both
+  split kinds — and it pins the part that matters most: the refusal fires in
+  `_begin_export`, *before* `tab.saving` is ever set, because a bad template
+  (like a collision) is a property of the labels alone and needs no lock and no
+  flatten to answer. The positive control beside it shows `{frame}` is still
+  legal in a PNG-sequence template, so the refusal is about the export's shape
+  and not the template's spelling.
 
 ---
 
@@ -1118,19 +1165,38 @@ its own site in each and recorded here so the spec stays the record.
   Tiled installed before the standing "no fixture is Tiled-authored" caveat in
   `docs/PLOTTER_COMPAT.md` can shrink. Unrelated to Aseprite; named here only
   because this is where the program's waves close out.
-- **No palette chunk is written for an ordinary RGB document with no palette at
-  all.** Noted as a concern in Task 1's report and never revisited: Aseprite
-  writes a palette into every file it saves, and this writer omits the chunk
-  entirely when the document has none. Tolerated by this reader and, by reading
-  of the format, by Aseprite's own pre-1.0 fallback — but it is exactly the kind
-  of detail only the manual pass above can actually confirm.
+- ~~**No palette chunk is written for an ordinary RGB document with no palette
+  at all.**~~ **CLOSED 2026-08-20** as `aseout._derived_palette`, and recorded
+  as divergence **#23**. Every file this writer produces now carries a palette
+  chunk. The shape of the fix is the part worth reading: the obvious
+  alternative — writing Aseprite's *own* default table — would mean reciting
+  thirty-two colours from memory into a file format, which is precisely the
+  unmeasured claim the tablet-pressure spike is the standing precedent against.
+  So the table is built from the document's own pixels: every entry a colour
+  actually painted somewhere in the file, ranked by pixel count, capped at 256,
+  emitted in colour order, with the single transparent entry for a document
+  that has no visible pixel at all (so the rule has no exception to remember).
+  Derived **below** the indexed refusal and never for an indexed document,
+  where the palette is what the stored indices *mean*. Because the reader
+  installs a palette only at indexed depth (divergence 19), the table is
+  dropped on the way back in and rebuilt identically on the next save — so the
+  derivation must be deterministic, and that is what keeps the corpus's
+  fixed point intact. Eight of the eleven fixtures were regenerated; the three
+  indexed ones did not move by a byte, which is itself the pin that the
+  derivation stays on its own side of the refusal. What is **not** closed is
+  whether real Aseprite likes the table it finds — see the manual pass.
 - **Tilemap/tileset chunks are the highest-risk part of the untested-against-real-
   Aseprite surface**, per Task 1's own concern: their field order was inverted
-  from the *reader*, never checked against a file Aseprite itself wrote.
-- **The mode-level submit-test gap** named in Wave 4's own "Left open" section
-  (arrange/merge/skip_empty/trim/padding/extrude refusals have no dedicated
-  UI-level test) is unrelated to this wave and remains exactly as open as Wave 4
-  left it.
+  from the *reader*, never checked against a file Aseprite itself wrote. **This
+  one cannot be closed from inside the repository and no attempt was made to.**
+  A round trip through our own two halves cannot catch an order both halves get
+  wrong together, and auditing the writer against a spec recited from memory
+  would be the same unmeasured claim #23 above refuses to make. It is now named
+  first, by fixture, in `docs/ASEPRITE_INTEROP.md`'s "user-owed manual pass"
+  section — `tilemap-rgb`, `tilemap-indexed` and `spare-tileset` — so the pass
+  starts where the risk is instead of at the top of the corpus.
+- ~~**The mode-level submit-test gap** named in Wave 4's own "Left open"
+  section~~ **CLOSED 2026-08-20** — see that section, where the detail lives.
 
 **Program status: Waves 0–5 are all DONE.** The P0 gap analysis this file opened
 against is closed; the P1 backlog below remains unscheduled by design, pulled
@@ -1169,9 +1235,21 @@ From the gap analysis, with foundations noted:
 - **Export presets**: partially land in Wave 4 (per-document destination+options
   memory); the P1 half is cross-format preset recall.
 
-Also carried from exploration, unscheduled: the measured `symmetry="xy"` 16×
+~~Also carried from exploration, unscheduled: the measured `symmetry="xy"` 16×
 per-dab invalidation cliff (union-rect defect, needs its own measurement doc before
-a fix — the constants rule).
+a fix — the constants rule).~~ **CLOSED 2026-08-20**, measurement first as the rule
+asks: `docs/measurements/2026-08-20-stroke-invalidation.md`. The cliff was real and
+was **the smaller half**. One accumulating union was answering both "what does the
+undo patch cover" (once, at release, where one box is right) and "what has to be
+recomposited now" (after every dab, where it grows across the stroke *and* spans a
+mirror's far-apart dabs). A plain `symmetry="none"` stroke — which nothing had
+listed as a defect — was recompositing **33×** more area per dab at its end than at
+its start, and gained the most: **6.6×** wall clock and **64×** less area recomposited.
+`xy` gained 3.9× and 107×. `StrokeState.take_touched` keeps the pieces and collapses
+them to their union only when the union is barely bigger than their sum — one rule
+covering both regimes — while `dirty` is untouched and still backs the single undo
+patch. A count-based cap was tried first and measured wrong; the measurement document
+records that too, because the wrong version *looked* like a large improvement.
 
 ## Non-goals (citable)
 

@@ -13,9 +13,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from warlock.studio.inker import transform as tf
 from warlock.studio.inker.document import Document
 from warlock.studio.inker.selection import SelectionMask
 from warlock.studio.inker.tiles import TilemapCel, materialize, strip
+from warlock.studio.tilegrid import gid
 from warlock.studio.undo import CompoundEdit
 
 RED = (255, 0, 0, 255)
@@ -406,16 +408,149 @@ def _still_tilemap_doc() -> Document:
     return doc
 
 
-def test_flip_refuses_a_document_with_a_tilemap_layer():
-    doc = _still_tilemap_doc()
+# ``ASEPRITE_PARITY.md`` Wave 3 left "refs-aware flip/rotate (the flag algebra)"
+# open, and these two tests pinned the blanket refusal that stood in for it. The
+# refusal has now *moved* rather than been deleted -- the ledger rule at the top
+# of ``asein.py``, applied to geometry: the editor learned to model the thing, so
+# what refuses now are the narrower cases underneath it, raised by name.
+
+
+@pytest.mark.parametrize("axis", ["horizontal", "vertical"])
+def test_flip_mirrors_the_refs_and_turns_every_cells_flags(axis: str):
+    """The arrangement *and* the tiles, or a flipped map is a mirrored layout of
+    unmirrored tiles -- the classic version of this bug.
+
+    The assertion that matters is the last one: the picture a flipped tilemap
+    draws is exactly the flip of the picture it drew before. That is the whole
+    correctness claim of the flag algebra, and it is checked against the
+    *pixels* rather than a hand-derived flag table, because a table is the thing
+    being derived."""
+    doc = _doc(8, 8)
+    _still_tilemap(doc, RED, BLUE)
+    cel = doc.stack[doc.stack.active_index]
+    cel.refs[0, 0] = gid.compose(1)
+    cel.refs[0, 1] = gid.compose(2, flip_h=True)
+    cel.refs[1, 0] = gid.compose(2, flip_d=True)
+    doc._repaint_tiles(cel, (0, 0, 2, 2))
+    before = cel.pixels.copy()
+    doc.history.clear()
+
+    doc.flip(axis)
+    _assert_synced(doc)
+    after = doc.stack[doc.stack.active_index]
+    assert np.array_equal(after.pixels, tf.flip(before, axis))
+
+
+def test_a_quarter_turn_carries_a_tilemap_layer_with_it():
+    """Counter-clockwise, matching ``transform.rotate90``. Same bar: the turned
+    map draws the turn of what it drew."""
+    doc = _doc(8, 8)
+    _still_tilemap(doc, RED, BLUE)
+    cel = doc.stack[doc.stack.active_index]
+    cel.refs[0, 0] = gid.compose(1)
+    cel.refs[0, 1] = gid.compose(2, flip_v=True)
+    doc._repaint_tiles(cel, (0, 0, 2, 2))
+    before = cel.pixels.copy()
+    doc.history.clear()
+
+    doc.rotate90(1)
+    _assert_synced(doc)
+    after = doc.stack[doc.stack.active_index]
+    assert np.array_equal(after.pixels, tf.rotate90(before, 1))
+
+
+def test_four_quarter_turns_and_two_flips_are_the_identity():
+    """The property a permutation owes: applied enough times it comes back.
+    Cheap to state, and it catches a rule that is self-consistent but wrong."""
+    doc = _doc(8, 8)
+    _still_tilemap(doc, RED, BLUE)
+    cel = doc.stack[doc.stack.active_index]
+    cel.refs[0, 0] = gid.compose(1, flip_d=True)
+    cel.refs[1, 1] = gid.compose(2, flip_h=True, flip_v=True)
+    doc._repaint_tiles(cel, (0, 0, 2, 2))
+    refs = cel.refs.copy()
+    doc.history.clear()
+
+    for _ in range(4):
+        doc.rotate90(1)
+    assert np.array_equal(doc.stack[doc.stack.active_index].refs, refs)
+    doc.flip("horizontal")
+    doc.flip("horizontal")
+    assert np.array_equal(doc.stack[doc.stack.active_index].refs, refs)
+    _assert_synced(doc)
+
+
+def test_a_flip_of_a_tilemap_is_one_undo_step():
+    """It goes through ``_replay`` like every other geometry op, so it owes the
+    same one-gesture-one-Ctrl+Z contract -- and undoing it must put the *refs*
+    back, not only the picture."""
+    doc = _doc(8, 8)
+    _still_tilemap(doc, RED, BLUE)
+    cel = doc.stack[doc.stack.active_index]
+    cel.refs[0, 0] = gid.compose(1)
+    doc._repaint_tiles(cel, (0, 0, 2, 2))
+    refs = cel.refs.copy()
+    pixels = cel.pixels.copy()
+    doc.history.clear()
+
+    doc.flip("horizontal")
+    assert not np.array_equal(doc.stack[doc.stack.active_index].refs, refs)
+    doc.history.undo(doc)
+    back = doc.stack[doc.stack.active_index]
+    assert np.array_equal(back.refs, refs)
+    assert np.array_equal(back.pixels, pixels)
+    _assert_synced(doc)
+
+
+def test_a_flip_refuses_a_canvas_that_is_not_a_whole_number_of_tiles():
+    """The one case the algebra genuinely cannot reach, and why: ``materialize``
+    crops the grid to the canvas, so on a ragged canvas the visible pixel a flip
+    wants at x=0 is one the crop threw away. No flag reconciles that, so it is
+    refused by name -- and the message names the thing the user can do about
+    it."""
+    doc = _doc(10, 8)  # 10 wide at 4px tiles: two whole columns and a stub
+    _still_tilemap(doc, RED)
+    with pytest.raises(ValueError, match="tile-aligned canvas"):
+        doc.flip("horizontal")
+    # The *other* axis is fine: 8 tall is two whole rows.
+    doc.flip("vertical")
+    _assert_synced(doc)
+
+
+def test_a_quarter_turn_refuses_non_square_tiles():
+    """A turned 8x4 tile is 4x8 and a tileset stores one tile size, so the
+    rotated art would have nowhere to live. A flip has no such problem, which is
+    why only the rotation asks."""
+    doc = _doc(16, 16)
+    slot = doc.add_tileset(_tileset(RED, w=8, h=4))
+    doc.add_tilemap_layer(slot.uid)
+    with pytest.raises(ValueError, match="square tiles"):
+        doc.rotate90(1)
+    # Mirroring is still fine -- 16 is a whole number of both 8 and 4.
+    doc.flip("horizontal")
+    doc.flip("vertical")
+    _assert_synced(doc)
+
+
+def test_a_refused_flip_has_changed_nothing_at_all():
+    """The refusal is built before ``commit_floating``, so a document that says
+    no is a document that did nothing -- not one that committed a floating
+    buffer on its way to raising."""
+    doc = _doc(10, 8)
+    _still_tilemap(doc, RED)
+    cel = doc.stack[doc.stack.active_index]
+    cel.refs[0, 0] = gid.compose(1)
+    doc._repaint_tiles(cel, (0, 0, 2, 2))
+    doc.history.clear()
+    refs = cel.refs.copy()
+    pixels = cel.pixels.copy()
+    head = doc.history.head
+
     with pytest.raises(ValueError):
         doc.flip("horizontal")
-
-
-def test_rotate90_refuses_a_document_with_a_tilemap_layer():
-    doc = _still_tilemap_doc()
-    with pytest.raises(ValueError):
-        doc.rotate90(1)
+    assert doc.history.head == head
+    assert np.array_equal(doc.stack[doc.stack.active_index].refs, refs)
+    assert np.array_equal(doc.stack[doc.stack.active_index].pixels, pixels)
 
 
 def test_scale_refuses_a_document_with_a_tilemap_layer():
@@ -534,16 +669,28 @@ def test_resize_canvas_still_checks_alignment_for_a_bound_but_empty_track():
         doc.resize_canvas((16, 16), offset=(1, 1))
 
 
-def test_geometry_refuses_a_track_bound_to_a_tileset_even_before_any_cel():
-    """The structural binding alone is enough -- a flip run before the first
-    tile is ever placed would otherwise be one autovivify away from a
-    ``TilemapCel`` whose ``pixels`` disagree with its ``refs``."""
+def test_a_track_bound_to_a_tileset_counts_before_any_cel_exists():
+    """The structural binding alone puts the document on the tilemap path: an op
+    that ran before the first tile was placed would otherwise be one autovivify
+    away from a ``TilemapCel`` whose ``pixels`` disagree with its ``refs``.
+
+    It no longer *refuses* -- a flip is modelled now -- so what this asserts is
+    that the bare binding is still what the alignment check consults. An 8x8
+    canvas at 4px tiles is aligned and passes; a 10-wide one is refused by name,
+    and only ``_holds_tilemap`` seeing the binding makes that happen."""
     doc = _doc()
     anim = doc.ensure_animation()
     slot = doc.add_tileset(_tileset(RED))
     anim.tracks[0].tileset_uid = slot.uid
-    with pytest.raises(ValueError):
-        doc.flip("horizontal")
+    doc.flip("horizontal")
+    _assert_synced(doc)
+
+    ragged = _doc(10, 8)
+    anim = ragged.ensure_animation()
+    slot = ragged.add_tileset(_tileset(RED))
+    anim.tracks[0].tileset_uid = slot.uid
+    with pytest.raises(ValueError, match="tile-aligned canvas"):
+        ragged.flip("horizontal")
 
 
 # -- range-op refusals ----------------------------------------------------------
@@ -565,25 +712,114 @@ def _animated_tilemap_doc() -> Document:
     return doc
 
 
-def test_flip_range_refuses_a_tilemap_track():
-    doc = _animated_tilemap_doc()
-    f = doc.anim.current
-    with pytest.raises(ValueError):
-        doc.flip_range("horizontal", 0, 0, f, f)
+# The range half of the same move. ``_permute_range`` used to refuse a tilemap
+# outright; it now takes a ``refs_fn`` and refuses only where a caller has no
+# refs answer to give -- so flip, rotate and a tile-aligned wrapping shift are
+# modelled, and ``fill_range``/``filter_range`` (which *paint*) still refuse,
+# permanently and for a different reason: painting a tilemap goes through the
+# tile funnel, which is a mechanism rather than a gap.
 
 
-def test_rotate_range_refuses_a_tilemap_track():
+def test_flip_range_carries_a_tilemap_tracks_refs():
+    """The same flag algebra as the whole-canvas flip, one cel at a time -- and
+    the same bar: the range's picture afterwards is the flip of its picture
+    before."""
     doc = _animated_tilemap_doc()
     f = doc.anim.current
-    with pytest.raises(ValueError):
+    cel = doc.layer_by_uid(doc.stack[0].uid)
+    assert isinstance(cel, TilemapCel)
+    cel.refs[0, 0] = gid.compose(1)
+    doc._repaint_tiles(cel, (0, 0, 2, 2))
+    before = cel.pixels.copy()
+    doc.history.clear()
+
+    assert doc.flip_range("horizontal", 0, 0, f, f) is True
+    _assert_synced(doc)
+    after = doc.layer_by_uid(doc.stack[0].uid)
+    assert np.array_equal(after.pixels, tf.flip(before, "horizontal"))
+
+
+def test_rotate_range_carries_a_tilemap_tracks_refs():
+    doc = _animated_tilemap_doc()
+    f = doc.anim.current
+    cel = doc.layer_by_uid(doc.stack[0].uid)
+    cel.refs[0, 0] = gid.compose(1)
+    doc._repaint_tiles(cel, (0, 0, 2, 2))
+    before = cel.pixels.copy()
+    doc.history.clear()
+
+    assert doc.rotate_range(1, 0, 0, f, f) is True
+    _assert_synced(doc)
+    after = doc.layer_by_uid(doc.stack[0].uid)
+    assert np.array_equal(after.pixels, tf.rotate90(before, 1))
+
+
+def test_a_range_permutation_of_a_tilemap_is_one_undo_step():
+    """It goes back through ``TileRefsEdit``, not a pixel patch -- so undo puts
+    the *record* back and the picture is re-derived from it."""
+    doc = _animated_tilemap_doc()
+    f = doc.anim.current
+    cel = doc.layer_by_uid(doc.stack[0].uid)
+    cel.refs[0, 0] = gid.compose(1)
+    doc._repaint_tiles(cel, (0, 0, 2, 2))
+    refs = cel.refs.copy()
+    doc.history.clear()
+
+    assert doc.flip_range("horizontal", 0, 0, f, f) is True
+    doc.history.undo(doc)
+    assert np.array_equal(doc.layer_by_uid(doc.stack[0].uid).refs, refs)
+    _assert_synced(doc)
+
+
+def test_rotate_range_refuses_non_square_tiles_even_on_a_square_canvas():
+    """A square *canvas* does not imply square *tiles*: this one is 16x16 with
+    8x4 tiles, which the canvas check waves through and the turn cannot do."""
+    doc = _doc(16, 16)
+    anim = doc.ensure_animation()
+    slot = doc.add_tileset(_tileset(RED, w=8, h=4))
+    anim.tracks[0].tileset_uid = slot.uid
+    doc.add_frame()
+    doc._ensure_cel_for(doc.stack[0].uid)
+    f = anim.current
+    with pytest.raises(ValueError, match="square tiles"):
         doc.rotate_range(1, 0, 0, f, f)
 
 
-def test_shift_range_refuses_a_tilemap_track():
+def test_shift_range_refuses_a_tilemap_track_that_does_not_wrap():
+    """An unwrapped shift vacates pixels and fills them transparent; on a
+    tilemap that means "these cells now point at no tile", which is a content
+    decision this op has no mandate to make. Refused by name."""
     doc = _animated_tilemap_doc()
     f = doc.anim.current
-    with pytest.raises(ValueError):
-        doc.shift_range(1, 0, False, 0, 0, f, f)
+    with pytest.raises(ValueError, match="must wrap"):
+        doc.shift_range(4, 0, False, 0, 0, f, f)
+
+
+def test_shift_range_refuses_a_distance_that_is_not_whole_tiles():
+    """A sub-tile shift re-cuts every cell against a new phase, which rewrites
+    the tileset -- a different operation wearing a shift's name, exactly the
+    argument ``_tile_regrid`` makes about an unaligned resize offset."""
+    doc = _animated_tilemap_doc()
+    f = doc.anim.current
+    with pytest.raises(ValueError, match="tile-aligned distance"):
+        doc.shift_range(1, 0, True, 0, 0, f, f)
+
+
+def test_a_tile_aligned_wrapping_shift_rolls_the_grid():
+    """No cell's art changes, so no flag moves -- which is why this one needs no
+    algebra where the flip and the turn do. Just a roll."""
+    doc = _animated_tilemap_doc()
+    f = doc.anim.current
+    cel = doc.layer_by_uid(doc.stack[0].uid)
+    cel.refs[0, 0] = gid.compose(1)
+    doc._repaint_tiles(cel, (0, 0, 2, 2))
+    before = cel.pixels.copy()
+    doc.history.clear()
+
+    assert doc.shift_range(4, 0, True, 0, 0, f, f) is True
+    _assert_synced(doc)
+    after = doc.layer_by_uid(doc.stack[0].uid)
+    assert np.array_equal(after.pixels, tf.translate(before, 4, 0, wrap=True))
 
 
 def test_fill_range_refuses_a_tilemap_track():

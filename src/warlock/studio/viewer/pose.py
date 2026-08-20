@@ -559,3 +559,59 @@ def _skin_bones(model: Model) -> list[str]:
             if name and name not in names:
                 names.append(name)
     return names
+
+
+def ghost_handles(
+    model: Model, bones: list[str], rotations: dict[str, Any]
+) -> dict[str, np.ndarray]:
+    """Where *bones* would sit under *rotations*, without moving anything.
+
+    Onion-skinning needs a second skeleton on screen -- the key before this one,
+    or the one after -- and the obvious way to get it is to pose the model, read
+    the handles and pose it back. That is wrong here for two reasons and both
+    bite in the frame loop: it runs every frame while a gizmo is being dragged,
+    and ``_resync_handles`` would drag the *live* markers to the ghost's
+    positions and back again between the read and the draw.
+
+    So this is a **pure** forward-kinematic walk instead. It is deliberately the
+    same walk ``Model.update_world`` makes -- roots down, ``parent @ local()``,
+    with the same cycle and range guards, because a hand-supplied GLB reaches
+    this path too -- with one substitution: a bone named in ``rotations`` uses
+    that rotation in place of its own. Nothing is written back to any node.
+
+    Bones the rotations do not name sit at their **rest** rotation rather than
+    at whatever the live pose has them at, which is what makes a ghost the same
+    thing ``apply_preset`` would show: a key lists only the bones it moves.
+    """
+    by_name = model.by_name
+    override: dict[int, np.ndarray] = {}
+    for name, quat in (rotations or {}).items():
+        index = by_name.get(name)
+        if index is not None:
+            override[index] = np.asarray(quat, dtype="f8")
+    wanted = {by_name[b]: b for b in bones if b in by_name}
+    out: dict[str, np.ndarray] = {}
+    seen: set[int] = set()
+    stack = [(r, m3.identity()) for r in reversed(model.roots)]
+    while stack:
+        index, parent = stack.pop()
+        if index in seen or not 0 <= index < len(model.nodes):
+            continue
+        seen.add(index)
+        node = model.nodes[index]
+        rotation = override.get(index)
+        if rotation is None and index in wanted:
+            # Not posed by this ghost, so it is at rest -- see the docstring.
+            rotation = model.rest_rotations[index]
+        local = (
+            node.local()
+            if rotation is None
+            else m3.compose(node.translation, rotation, node.scale)
+        )
+        world = parent @ local
+        name = wanted.get(index)
+        if name is not None:
+            out[name] = world[:3, 3].copy()
+        for child in reversed(node.children):
+            stack.append((child, world))
+    return out

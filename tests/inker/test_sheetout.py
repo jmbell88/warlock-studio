@@ -319,6 +319,92 @@ def test_a_merged_cells_slices_are_its_representative_frames():
     assert extra["pivots"] == {0: (1.0, 1.0)}
 
 
+def test_a_merged_away_frames_own_slices_are_recorded_rather_than_dropped_silently():
+    """Wave 4's ``slices_conflict`` item, closed.
+
+    Dropping them is right -- a cell is one rectangle set and there is no second
+    place to put another -- but the user authored geometry that is now nowhere
+    in the sidecar, and until now nothing said so. ``{cell: [frames]}`` names
+    exactly which frames to go and look at."""
+    frames = [_frame(4, 4, RED, (0, 0))] * 2
+    slices = [
+        {"pivot": (1.0, 1.0), "slices": []},
+        {"pivot": (9.0, 9.0), "slices": []},
+    ]
+    _image, _plan, extra = sheetout.compose(frames, [10, 10], (), None, slices, merge=True)
+    _image.close()
+    assert extra["slices_conflict"] == {0: [1]}
+
+
+def test_merged_frames_that_agree_report_no_conflict():
+    """The negative control, and the property the whole design rests on: the
+    common case reports nothing, so the key never reaches the sidecar and every
+    sheet this build wrote before it is byte-identical."""
+    frames = [_frame(4, 4, RED, (0, 0))] * 3
+    same = {"pivot": (1.0, 1.0), "slices": [{"name": "hit", "x": 0, "y": 0, "w": 2, "h": 2}]}
+    _image, _plan, extra = sheetout.compose(
+        frames, [10, 10, 10], (), None, [dict(same) for _ in range(3)], merge=True
+    )
+    _image.close()
+    assert extra["slices_conflict"] == {}
+
+
+def test_an_export_that_does_not_merge_never_reports_a_conflict():
+    """With merge and skip-empty off, a cell *is* a frame -- every frame keeps
+    its own slices, so there is nothing to disagree about however different
+    they are."""
+    frames = [_frame(4, 4, RED, (0, 0)), _frame(4, 4, RED, (0, 0))]
+    slices = [{"pivot": (1.0, 1.0), "slices": []}, {"pivot": (9.0, 9.0), "slices": []}]
+    _image, _plan, extra = sheetout.compose(frames, [10, 10], (), None, slices)
+    _image.close()
+    assert extra["slices_conflict"] == {}
+
+
+def test_a_skipped_empty_frame_is_not_a_conflict():
+    """A frame ``skip_empty`` left out has no cell to disagree with, and the
+    user was already told it was empty by its absence. Reporting it would make
+    the note fire on the ordinary use of the option."""
+    frames = [_frame(4, 4, RED, (0, 0)), np.zeros((4, 4, 4), dtype=np.uint8)]
+    slices = [{"pivot": (1.0, 1.0), "slices": []}, {"pivot": (9.0, 9.0), "slices": []}]
+    _image, _plan, extra = sheetout.compose(
+        frames, [10, 10], (), None, slices, skip_empty=True
+    )
+    _image.close()
+    assert extra["slices_conflict"] == {}
+
+
+def test_a_conflict_is_reported_per_cell_with_every_frame_that_lost_geometry():
+    """Three frames onto one cell with two of them differing: both are named,
+    in timeline order, under the cell they landed on."""
+    frames = [_frame(4, 4, RED, (0, 0))] * 4
+    slices = [
+        {"pivot": (1.0, 1.0), "slices": []},
+        {"pivot": (2.0, 2.0), "slices": []},
+        {"pivot": (1.0, 1.0), "slices": []},
+        {"pivot": (3.0, 3.0), "slices": []},
+    ]
+    _image, _plan, extra = sheetout.compose(
+        frames, [10] * 4, (), None, slices, merge=True
+    )
+    _image.close()
+    # Frame 2 agrees with the representative and is not named; 1 and 3 differ.
+    assert extra["slices_conflict"] == {0: [1, 3]}
+
+
+def test_a_conflict_in_the_rectangles_themselves_is_reported_not_only_the_pivot():
+    """The pivot is the easy half. A frame whose *slice list* differs loses just
+    as much geometry, and comparing only pivots would have missed the case the
+    feature is named after."""
+    frames = [_frame(4, 4, RED, (0, 0))] * 2
+    slices = [
+        {"pivot": None, "slices": [{"name": "hit", "x": 0, "y": 0, "w": 2, "h": 2}]},
+        {"pivot": None, "slices": [{"name": "hit", "x": 1, "y": 1, "w": 2, "h": 2}]},
+    ]
+    _image, _plan, extra = sheetout.compose(frames, [10, 10], (), None, slices, merge=True)
+    _image.close()
+    assert extra["slices_conflict"] == {0: [1]}
+
+
 def test_trim_shifts_pivots_and_slices_to_match_the_moved_art():
     """``build`` crops this frame to its trim rectangle (2, 3, 4, 2) and pastes
     the result flush at the cell's corner -- so a pivot or a slice authored
@@ -800,6 +886,55 @@ def test_animation_is_still_the_last_key_of_the_sidecar():
     assert meta["animation"]["layout"]["kind"] == "turnaround"
 
 
+def test_a_sidecar_with_nothing_to_report_carries_no_slices_conflict_key():
+    """The standing negative control, at the layer that actually writes files.
+
+    ``slices_conflict`` is additive with no version bump, and what makes that
+    true is that an export with nothing to say does not write the key at all --
+    so every sheet this build produced before the note existed is byte-identical
+    and no reader has to learn anything."""
+    frames = [_frame(10, 10, RED) for _ in range(4)]
+    _image, plan, extra = sheetout.compose(frames, [100] * 4)
+    _image.close()
+    meta = sheetlib.sidecar(
+        plan, sheet_id="s", source_job=None, image="s.png", created=1.0,
+        trims=extra["trims"], animation=extra["animation"],
+        slices_conflict=extra["slices_conflict"],
+    )
+    assert "slices_conflict" not in meta
+    # And passing nothing at all is the same file, which is what every caller
+    # that has not learned about the key yet is doing.
+    bare = sheetlib.sidecar(
+        plan, sheet_id="s", source_job=None, image="s.png", created=1.0,
+        trims=extra["trims"], animation=extra["animation"],
+    )
+    assert meta == bare
+
+
+def test_a_reported_conflict_reaches_the_sidecar_as_plain_json():
+    """And when there *is* something to say it lands as ints, not numpy scalars
+    or tuples -- the sidecar is written with ``json.dumps`` and a key that
+    cannot serialise would take the whole export down at the last step."""
+    import json
+
+    frames = [_frame(10, 10, RED) for _ in range(2)]
+    slices = [{"pivot": (1.0, 1.0), "slices": []}, {"pivot": (9.0, 9.0), "slices": []}]
+    _image, plan, extra = sheetout.compose(
+        frames, [100, 100], (), None, slices, merge=True
+    )
+    _image.close()
+    meta = sheetlib.sidecar(
+        plan, sheet_id="s", source_job=None, image="s.png", created=1.0,
+        trims=extra["trims"], animation=extra["animation"],
+        slices_conflict=extra["slices_conflict"],
+    )
+    assert meta["slices_conflict"] == {0: [1]}
+    assert json.loads(json.dumps(meta))["slices_conflict"] == {"0": [1]}
+    # ``animation`` stays last: the key is appended after it, so this is the
+    # one pin that would catch it being inserted in the middle instead.
+    assert list(meta)[-1] == "slices_conflict"
+
+
 def test_compose_still_takes_a_snapshot_positionally():
     """``compose(*snapshot(doc))`` has to keep holding: a keyword-only fourth
     element would have made that spelling drop the grid silently."""
@@ -963,6 +1098,66 @@ def test_a_hidden_group_is_not_a_split_of_its_own():
     node = doc.group_layers([1], name="fx")
     assert node is not None
     doc.set_group_props(node.uid, visible=False)
+    assert [name for name, _uids in sheetout.layer_splits(doc)] == ["Background"]
+
+
+def test_a_visible_group_whose_layers_are_all_hidden_is_not_a_split():
+    """Wave 4's own "Left open / owed" item, closed.
+
+    The group's eye is open, so the old check -- which read only the root's
+    flags -- emitted the row and the export wrote a **fully transparent sheet**
+    named "fx". Nothing in it, and nothing saying so. The docstring's rule was
+    always "contributes no pixels", and a group is what its members contribute;
+    ``skip_empty`` on the same export already raises rather than write a blank
+    cell, so the two doors now agree instead of disagreeing by which one you
+    reached."""
+    doc = _tracked()
+    doc.add_layer("glow")
+    node = doc.group_layers([1, 2], name="fx")
+    assert node is not None
+    doc.set_layer_props(1, visible=False)
+    doc.set_layer_props(2, visible=False)
+    assert [name for name, _uids in sheetout.layer_splits(doc)] == ["Background"]
+
+
+def test_a_group_with_one_visible_layer_left_is_still_a_split():
+    """The boundary from the legal side: *any* surviving member keeps the row,
+    and the row still carries every leaf -- a hidden leaf contributes nothing to
+    the composite anyway, so the fix decides whether to emit the output, never
+    what goes into it."""
+    doc = _tracked()
+    doc.add_layer("glow")
+    node = doc.group_layers([1, 2], name="fx")
+    assert node is not None
+    doc.set_layer_props(1, visible=False)
+    splits = sheetout.layer_splits(doc)
+    assert [name for name, _uids in splits] == ["Background", "fx"]
+    assert set(splits[1][1]) == {doc.anim.tracks[1].uid, doc.anim.tracks[2].uid}
+
+
+def test_a_group_whose_layers_are_all_at_zero_opacity_is_not_a_split():
+    """Opacity is the other half of "contributes no pixels", and it is a
+    separate field -- a fix that read only ``visible`` would leave this case
+    writing the same transparent sheet."""
+    doc = _tracked()
+    node = doc.group_layers([1], name="fx")
+    assert node is not None
+    doc.set_layer_props(1, opacity=0.0)
+    assert [name for name, _uids in sheetout.layer_splits(doc)] == ["Background"]
+
+
+def test_a_group_hidden_by_a_nested_subgroup_is_not_a_split():
+    """Effective visibility, not the leaf's own flag. Every leaf's eye is open
+    here; the subgroup between them and the root is what hides them, which is
+    exactly the case a check that looked one level up would miss. ``resolve``
+    is asked instead -- the same AND/multiply fold the compositor uses."""
+    doc = _tracked()
+    doc.add_layer("glow")
+    outer = doc.group_layers([1, 2], name="fx")
+    assert outer is not None
+    inner = doc.group_layers([1, 2], name="inner")
+    assert inner is not None
+    doc.set_group_props(inner.uid, visible=False)
     assert [name for name, _uids in sheetout.layer_splits(doc)] == ["Background"]
 
 

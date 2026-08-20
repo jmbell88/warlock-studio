@@ -67,6 +67,20 @@ class Viewer(PoseOps):
         self.editor = PoseEditor()
         self.markers = markerslib.JointMarkers(ctx, self.renderer.programs)
         self.bonelines = bonelineslib.BoneLines(ctx, self.renderer.programs)
+        # One extra buffer per onion-skin ghost. Separate instances rather than
+        # extra draws off ``bonelines``: a ``DrawItem`` counts vertices from
+        # zero with no offset, so two skeletons cannot share one upload -- and
+        # forty vertices apiece is not a cost worth a format change over.
+        # Two, because onion-skinning here means the key before and the key
+        # after, which is the comparison a keyframe is actually judged in.
+        self.ghostlines = [
+            bonelineslib.BoneLines(ctx, self.renderer.programs) for _ in range(2)
+        ]
+        #: The poses those ghosts show -- ``{bone: quat}`` each, at most two,
+        #: set by the clip editor and empty everywhere else. Held on the viewer
+        #: rather than read out of a mode so the render path stays ignorant of
+        #: what a clip is.
+        self.onion: list[dict[str, Any]] = []
         # Which (parent, bone) pairs the skeleton lines connect; derived once
         # per bind from the node graph, cleared on the way out.
         self._bone_pairs: list[tuple[str, str]] = []
@@ -596,6 +610,8 @@ class Viewer(PoseOps):
         self.exit_compare()
         self.markers.release()
         self.bonelines.release()
+        for ghost in self.ghostlines:
+            ghost.release()
         self.rotate_gizmo.release()
         self.translate_gizmo.release()
         self._forget(self.viewport.texture)

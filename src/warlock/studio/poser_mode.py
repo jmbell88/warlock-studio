@@ -45,6 +45,8 @@ DELETE_KEY = "poser-delete"
 DUPLICATE_KEY = "poser-duplicate"
 RENAME_KEY = "poser-rename"
 PREVIEW_KEY_PREFIX = "poser-preview:"
+CLIPS_KEY = "poser-clips"
+CLIPS_SAVE_KEY = "poser-clips-save"
 
 # What pose_job_id carries in an authoring session. Can never equal a 12-hex
 # job id (a colon fails is_valid_id), belt-and-braces under the separate
@@ -79,6 +81,59 @@ class PoserState:
     preview_path: Any = None
     preview_template: str = ""
     error: str = ""
+
+    # -- the clip editor ------------------------------------------------------
+    #
+    # ``LPC_ALT.md`` Phase 2's open half: a clip was editable only as raw JSON
+    # in the package tree. The library here is the *whole* file -- see
+    # ``service.clips``, which will not save less than one -- held as the
+    # editor's working copy and written back on Save.
+    clips: dict[str, Any] = field(default_factory=dict)
+    clips_loading: bool = False
+    clips_dirty_flag: bool = False
+    #: Which clip is open, by name. Names are a clip's identity here for the
+    #: same reason they are in the file: that is what a clip's keys reference.
+    clip: str = ""
+    #: Which key of the open clip the editor is on, by *position*, because a
+    #: clip may legitimately use one key twice (a contact pose either side of a
+    #: passing one) and a name would not say which.
+    key_index: int = 0
+    #: Where the scrubber is, in expanded frames of the open clip. -1 is "off
+    #: the scrubber, on a key" -- the state the pose gizmos are meaningful in,
+    #: since a scrubbed frame is interpolated and editing it would have nowhere
+    #: to be stored.
+    frame: int = -1
+    #: The expanded frames of the open clip, rebuilt whenever the working copy
+    #: changes. Held rather than recomputed per draw: the scrubber reads it at
+    #: frame rate.
+    frames: list[dict[str, Any]] = field(default_factory=list)
+    #: Whether the working copy differs from what is on disk. Set by every
+    #: mutation, cleared when a save lands -- ``dirty``'s rule everywhere else
+    #: in this app: never at submit, because a failed write has to leave the
+    #: guard standing.
+    clips_unsaved: bool = False
+    clips_error: str = ""
+    #: Whether the neighbouring keys are ghosted in the viewport. Session
+    #: state, not a document fact: it is how the user is *looking* at the
+    #: clip, the same argument Inker's tiled view makes about itself.
+    onion: bool = False
+
+    def open_clip(self) -> dict[str, Any] | None:
+        """The clip record being edited, or None."""
+        for record in self.clips.get("clips") or ():
+            if record.get("name") == self.clip:
+                return record
+        return None
+
+    def key_names(self) -> list[str]:
+        """Every key pose name in the library, for the add/replace pickers."""
+        return [str(p.get("name") or "") for p in self.clips.get("poses") or ()]
+
+    def key_pose(self, name: str) -> dict[str, Any] | None:
+        for pose in self.clips.get("poses") or ():
+            if pose.get("name") == name:
+                return pose
+        return None
 
     def find(self, pose_id: Any) -> dict[str, Any] | None:
         """The library record with this id, or None.
@@ -126,6 +181,7 @@ def enter(ctx: Any) -> None:
     if not state.template:
         return
     refresh(ctx)
+    clips_refresh(ctx)
     request_preview(ctx)
 
 
@@ -536,6 +592,15 @@ def on_task_done(ctx: Any, done: Any) -> None:
     if key in (RENAME_KEY, DUPLICATE_KEY):
         refresh(ctx)
         return
+    if key in (CLIPS_KEY, CLIPS_SAVE_KEY):
+        # Both land the same way: the door hands back the library as it now is
+        # on disk, and that becomes the working copy. Which is also what clears
+        # ``clips_unsaved`` -- on the *landing*, never at submit, so a refused
+        # write leaves the editor holding the edits that were refused.
+        state.clips_loading = False
+        if isinstance(done.result, dict) and done.result.get("template") == state.template:
+            adopt_clips(ctx, done.result)
+        return
 
 
 def on_task_failed(ctx: Any, done: Any) -> None:
@@ -554,6 +619,15 @@ def on_task_failed(ctx: Any, done: Any) -> None:
         # broken Blender is a sentence on screen rather than a toast that
         # scrolled away.
         state.error = str(getattr(done, "message", "") or "Could not build the pose preview.")
+        return
+    if done.key in (CLIPS_KEY, CLIPS_SAVE_KEY):
+        # ``clips_loading`` gates the read, exactly as ``loading`` does above;
+        # ``clips_unsaved`` is deliberately *not* cleared, which is the whole
+        # point of clearing it on the landing instead: a refused save leaves the
+        # editor holding what it refused, with the reason already toasted by the
+        # generic failure path.
+        state.clips_loading = False
+        clips_pump(ctx)
 
 
 # --- crash recovery (UX-05) ---------------------------------------------------
@@ -571,6 +645,508 @@ def on_task_failed(ctx: Any, done: Any) -> None:
 # unchanged pose would be re-encoded after every model adoption. The payload is
 # a few dozen floats and comparing it is cheaper than the encode it prevents.
 
+
+
+# --- the clip editor ---------------------------------------------------------
+#
+# ``LPC_ALT.md`` Phase 2's open half. The clip *format* and its expansion
+# shipped with Troupe; what did not was any way to change a clip that is not
+# editing JSON in the package tree, which the plan calls "the most important art
+# task in the program".
+#
+# **The editor holds a whole library as its working copy**, because
+# ``service.clips`` will not save less than one -- a clip library is internally
+# consistent by construction, and saving a clip alone would let a key rename
+# land while another clip still pointed at the old name. Every mutation below
+# therefore edits ``state.clips`` in place and sets ``clips_unsaved``; nothing
+# touches disk until :func:`save_clips`.
+#
+# **A key is edited by posing the preview armature.** That is the whole design:
+# Poser already has a skeleton, gizmos and a pose editor, so "author a
+# keyframe" is "load the key onto the armature, drag joints, put it back". No
+# second posing surface, and the poses a clip is made of are the same kind of
+# thing the pose library already holds.
+
+
+def clips_refresh(ctx: Any) -> None:
+    """Ask for the clip library to be re-read."""
+    state = ensure(ctx)
+    state.clips_dirty_flag = True
+    clips_pump(ctx)
+
+
+def clips_pump(ctx: Any) -> None:
+    """Submit the wanted clip read. ``pump``'s rule, on its own key.
+
+    Guarded on ``clips_unsaved`` as well as on the flag: a re-read while the
+    user has unsaved keys would silently discard them, and a background refresh
+    is not a thing anybody asked for. The editor is re-read on arrival and after
+    a save, which is when it is safe.
+    """
+    state = ensure(ctx)
+    if not state.clips_dirty_flag or state.clips_loading or not state.template:
+        return
+    if state.clips_unsaved:
+        return
+    state.clips_loading = True
+    if ctx.submit(CLIPS_KEY, _collect_clips, ctx.svc, state.template):
+        state.clips_dirty_flag = False
+    else:
+        state.clips_loading = False
+
+
+def _collect_clips(svc: Any, template: str) -> dict[str, Any]:
+    from ..service import clips as svc_clips
+
+    return svc_clips.library(svc, template)
+
+
+def adopt_clips(ctx: Any, library: dict[str, Any]) -> None:
+    """Install a freshly read library as the working copy.
+
+    Keeps the open clip *by name* when the new library still carries one of
+    that name -- a save-then-reload must not send the user back to the top of
+    the list -- and falls back to the first clip otherwise.
+    """
+    state = ensure(ctx)
+    state.clips = dict(library)
+    state.clips_loading = False
+    state.clips_unsaved = False
+    state.clips_error = ""
+    names = [str(c.get("name") or "") for c in state.clips.get("clips") or ()]
+    if state.clip not in names:
+        state.clip = names[0] if names else ""
+        state.key_index = 0
+    state.frame = -1
+    rebuild_frames(ctx)
+
+
+def rebuild_frames(ctx: Any) -> None:
+    """Re-expand the open clip, for the scrubber.
+
+    Through ``sheet.interpolate_clip`` -- the renderer's own interpolator --
+    rather than a preview-shaped reimplementation, so what the scrubber shows is
+    what the sheet will draw. A clip that cannot be expanded (segments that do
+    not match its keys, mid-edit) leaves the frames empty and says why, rather
+    than raising into a draw.
+    """
+    from ..pipelines import sheet as sheetlib
+
+    state = ensure(ctx)
+    record = state.open_clip()
+    state.frames = []
+    if record is None:
+        return
+    try:
+        keys = [state.key_pose(name) for name in record.get("keys") or ()]
+        if any(k is None for k in keys):
+            raise ValueError("a key pose is missing from the library")
+        state.frames = sheetlib.interpolate_clip(
+            [dict(k) for k in keys],
+            [int(n) for n in record.get("segments") or ()],
+            closed=bool(record.get("closed")),
+            easing=str(record.get("easing") or "linear"),
+            space=str(state.clips.get("space") or "node"),
+            clip_id=str(record.get("name") or ""),
+        )
+        state.clips_error = ""
+    except Exception as exc:
+        # Not a refusal -- the user is mid-edit and the clip is momentarily
+        # inconsistent, which is ordinary. The scrubber empties and the reason
+        # is shown; Save is what actually refuses.
+        state.clips_error = str(exc)
+
+
+def select_clip(ctx: Any, name: str) -> None:
+    state = ensure(ctx)
+    if state.clip == name:
+        return
+    state.clip = str(name)
+    state.key_index = 0
+    state.frame = -1
+    rebuild_frames(ctx)
+    apply_key(ctx)
+
+
+def _viewer_editor(ctx: Any) -> Any:
+    viewer = viewer_of(ctx)
+    if viewer is None or not viewer.pose_mode:
+        return None
+    return viewer.editor
+
+
+def apply_key(ctx: Any) -> None:
+    """Put the selected key's rotations onto the preview armature.
+
+    Straight onto the editor, not through the pose *library*: a clip's keys are
+    not library poses and giving them ids there would put twenty-two rows a
+    user never asked for into the list every asset poses from.
+    """
+    state = ensure(ctx)
+    editor = _viewer_editor(ctx)
+    record = state.open_clip()
+    if editor is None or record is None:
+        return
+    keys = list(record.get("keys") or ())
+    if not 0 <= state.key_index < len(keys):
+        return
+    pose = state.key_pose(keys[state.key_index])
+    if pose is None:
+        return
+    state.frame = -1
+    # ``apply_preset`` and not ``apply``: a key lists only the bones it moves,
+    # so the rest have to go back to rest first, or loading "walk contact"
+    # after "attack strike" leaves the sword arm up. It is one undo step, which
+    # is right for a discrete "go to this key".
+    editor.apply_preset({"bones": dict(pose.get("bones") or {})})
+    root = pose.get("root_translation")
+    if root:
+        editor.set_root_translation([float(v) for v in root])
+    sync_onion(ctx)
+
+
+def select_key(ctx: Any, index: int) -> None:
+    state = ensure(ctx)
+    state.key_index = max(0, int(index))
+    apply_key(ctx)
+
+
+def scrub(ctx: Any, frame: int) -> None:
+    """Put an *interpolated* frame onto the armature.
+
+    ``state.frame`` going non-negative is what tells the pane the gizmos are no
+    longer meaningful: a scrubbed frame is between two keys and has nowhere to
+    store an edit. Judged as motion here and as pixels in the sprite preview --
+    the plan's "judge clips as pixels, not as viewport playback" is about the
+    *verdict*, and this is the fast loop that gets you close enough to render.
+    """
+    state = ensure(ctx)
+    editor = _viewer_editor(ctx)
+    if editor is None or not state.frames:
+        return
+    index = max(0, min(int(frame), len(state.frames) - 1))
+    state.frame = index
+    # Scrubbing puts the live skeleton on an in-between pose, so the key ghosts
+    # stop meaning anything -- see ``sync_onion``.
+    sync_onion(ctx)
+    pose = state.frames[index]
+    # Rest overlaid with the frame's own bones, through the **undecorated**
+    # ``apply``. ``apply_preset`` would be the natural call and is exactly
+    # wrong here: it is ``@_undoable``, and this runs once per frame of a
+    # slider drag -- a step per frame is a stack full of one gesture, which is
+    # the rule ``rotate_selected`` and ``move_root`` already follow. Building
+    # the full map first is what makes one non-undoable call equivalent to
+    # reset-then-apply.
+    full = {name: [float(v) for v in quat] for name, quat in editor.rest.items()}
+    full.update({k: [float(v) for v in q] for k, q in (pose.get("bones") or {}).items()})
+    editor.apply(full, pose_id=None, dirty=False)
+    editor.set_root_translation(
+        [float(v) for v in (pose.get("root_translation") or (0.0, 0.0, 0.0))],
+        dirty=False,
+    )
+
+
+def capture_key(ctx: Any) -> None:
+    """Write the armature's current pose back into the selected key.
+
+    Refused while scrubbing, by name: the armature is showing an interpolated
+    frame then, and storing it into a key would silently replace an authored
+    pose with a computed one. Refused rather than "capture into the nearest
+    key", which is the same act with the mistake hidden.
+    """
+    state = ensure(ctx)
+    editor = _viewer_editor(ctx)
+    record = state.open_clip()
+    if editor is None or record is None:
+        return
+    if state.frame >= 0:
+        ctx.toast(
+            "That is an in-between frame, not a key. Pick a key first.", "warn"
+        )
+        return
+    keys = list(record.get("keys") or ())
+    if not 0 <= state.key_index < len(keys):
+        return
+    pose = state.key_pose(keys[state.key_index])
+    if pose is None:
+        return
+    pose["bones"] = dict(editor.pose())
+    root = editor.root_translation() if editor.root is not None else None
+    if root and any(root):
+        pose["root_translation"] = [float(v) for v in root]
+    else:
+        pose.pop("root_translation", None)
+    _touch(ctx)
+
+
+def set_onion(ctx: Any, on: bool) -> None:
+    state = ensure(ctx)
+    state.onion = bool(on)
+    sync_onion(ctx)
+
+
+def sync_onion(ctx: Any) -> None:
+    """Put the neighbouring keys' poses on the viewer, or clear them.
+
+    The **keys** either side of the selected one, not the frames either side of
+    the playhead: a keyframe is judged against the keys it steps between, and
+    the in-between frames are what the scrubber is for. A closed clip wraps, so
+    the first key's "before" is the last one -- which is exactly the comparison
+    a looping walk needs and the one that is easiest to get wrong by hand.
+
+    Cleared while scrubbing: the live skeleton is then an in-between pose, and
+    ghosts of the neighbouring *keys* around it would be three poses on screen
+    with no stated relationship between them.
+    """
+    viewer = viewer_of(ctx)
+    if viewer is None:
+        return
+    state = ensure(ctx)
+    record = state.open_clip()
+    if not state.onion or record is None or state.frame >= 0:
+        viewer.onion = []
+        return
+    keys = list(record.get("keys") or ())
+    if not keys:
+        viewer.onion = []
+        return
+    closed = bool(record.get("closed"))
+    out: list[dict[str, Any]] = []
+    for step in (-1, 1):
+        index = state.key_index + step
+        if closed:
+            index %= len(keys)
+        elif not 0 <= index < len(keys):
+            out.append({})
+            continue
+        pose = state.key_pose(keys[index])
+        out.append(dict(pose.get("bones") or {}) if pose else {})
+    viewer.onion = out
+
+
+def _touch(ctx: Any) -> None:
+    """Mark the working copy changed and re-expand it. Every mutation ends
+    here, so neither half can be forgotten at one call site."""
+    state = ensure(ctx)
+    state.clips_unsaved = True
+    rebuild_frames(ctx)
+
+
+def set_segment(ctx: Any, index: int, frames: int) -> None:
+    from ..service import clips as svc_clips
+
+    state = ensure(ctx)
+    record = state.open_clip()
+    if record is None:
+        return
+    segments = list(record.get("segments") or ())
+    if not 0 <= index < len(segments):
+        return
+    value = max(svc_clips.MIN_SEGMENT, min(int(frames), svc_clips.MAX_SEGMENT))
+    if segments[index] == value:
+        return
+    segments[index] = value
+    record["segments"] = segments
+    _touch(ctx)
+
+
+def set_easing(ctx: Any, easing: str) -> None:
+    state = ensure(ctx)
+    record = state.open_clip()
+    if record is None or record.get("easing") == easing:
+        return
+    record["easing"] = str(easing)
+    _touch(ctx)
+
+
+def set_closed(ctx: Any, closed: bool) -> None:
+    """Open or close the loop -- which changes how many segments the clip needs.
+
+    An open clip of N keys has N-1 steps and a closed one has N, so the segment
+    list is resized here rather than left for the save to refuse. Growing takes
+    the last segment's length (a new step most like its neighbour); shrinking
+    drops the one that no longer exists. Doing it silently is right *because*
+    the count is derived: there is no other value it could take.
+    """
+    state = ensure(ctx)
+    record = state.open_clip()
+    if record is None or bool(record.get("closed")) == bool(closed):
+        return
+    record["closed"] = bool(closed)
+    keys = list(record.get("keys") or ())
+    segments = list(record.get("segments") or ())
+    wanted = len(keys) if closed else max(0, len(keys) - 1)
+    while len(segments) < wanted:
+        segments.append(segments[-1] if segments else 1)
+    del segments[wanted:]
+    record["segments"] = segments
+    _touch(ctx)
+
+
+def move_key(ctx: Any, index: int, delta: int) -> None:
+    """Reorder one key, carrying the segment that *follows* it.
+
+    A segment is the step out of a key, so moving a key without its segment
+    would reorder the poses and leave the timing where it was -- which reads as
+    the reorder having corrupted the clip.
+    """
+    state = ensure(ctx)
+    record = state.open_clip()
+    if record is None:
+        return
+    keys = list(record.get("keys") or ())
+    segments = list(record.get("segments") or ())
+    target = index + int(delta)
+    if not (0 <= index < len(keys) and 0 <= target < len(keys)):
+        return
+    keys[index], keys[target] = keys[target], keys[index]
+    if index < len(segments) and target < len(segments):
+        segments[index], segments[target] = segments[target], segments[index]
+    record["keys"] = keys
+    record["segments"] = segments
+    state.key_index = target
+    _touch(ctx)
+    apply_key(ctx)
+
+
+def insert_key(ctx: Any, name: str) -> None:
+    """Add an existing key pose to the clip, after the selection.
+
+    From the library's own poses rather than from nothing: a clip references
+    keys by name, so "add a key" is either "use one of these" or "author a new
+    pose first", and :func:`new_key` is the second.
+    """
+    state = ensure(ctx)
+    record = state.open_clip()
+    if record is None or state.key_pose(name) is None:
+        return
+    keys = list(record.get("keys") or ())
+    segments = list(record.get("segments") or ())
+    at = min(state.key_index + 1, len(keys))
+    keys.insert(at, str(name))
+    # One more step exists now, wherever the loop stands: a closed clip gains a
+    # segment at the same index, an open one gains the step out of the new key.
+    segments.insert(min(at, len(segments)), segments[min(at, len(segments)) - 1] if segments else 1)
+    record["keys"] = keys
+    record["segments"] = segments
+    state.key_index = at
+    _touch(ctx)
+    apply_key(ctx)
+
+
+def new_key(ctx: Any, name: str) -> None:
+    """Author a brand-new key pose from the armature and add it to the clip."""
+    from ..service import clips as svc_clips
+
+    state = ensure(ctx)
+    editor = _viewer_editor(ctx)
+    label = str(name or "").strip()
+    if editor is None or not label:
+        return
+    if state.key_pose(label) is not None:
+        ctx.toast(f'a key pose named "{label}" already exists', "warn")
+        return
+    poses = list(state.clips.get("poses") or ())
+    if len(poses) >= svc_clips.MAX_LIBRARY_KEYS:
+        ctx.toast(
+            f"a clip library holds at most {svc_clips.MAX_LIBRARY_KEYS} key poses",
+            "warn",
+        )
+        return
+    record = {"name": label, "bones": dict(editor.pose())}
+    root = editor.root_translation() if editor.root is not None else None
+    if root and any(root):
+        record["root_translation"] = [float(v) for v in root]
+    poses.append(record)
+    state.clips["poses"] = poses
+    insert_key(ctx, label)
+
+
+def remove_key(ctx: Any, index: int) -> None:
+    """Drop one key from the clip. The *pose* stays in the library.
+
+    Two different things, deliberately: another clip may use it, and a delete
+    that silently reached into the shared pose list would be a delete with a
+    blast radius the button does not describe.
+    """
+    from ..service import clips as svc_clips
+
+    state = ensure(ctx)
+    record = state.open_clip()
+    if record is None:
+        return
+    keys = list(record.get("keys") or ())
+    segments = list(record.get("segments") or ())
+    if not 0 <= index < len(keys):
+        return
+    if len(keys) <= svc_clips.MIN_KEYS:
+        ctx.toast(
+            f"a clip needs at least {svc_clips.MIN_KEYS} keys; one key is a pose",
+            "warn",
+        )
+        return
+    del keys[index]
+    if index < len(segments):
+        del segments[index]
+    elif segments:
+        del segments[-1]
+    record["keys"] = keys
+    record["segments"] = segments
+    state.key_index = max(0, min(state.key_index, len(keys) - 1))
+    _touch(ctx)
+    apply_key(ctx)
+
+
+def save_clips(ctx: Any) -> None:
+    """Write the working copy. One task, on its own key.
+
+    ``clips_unsaved`` clears when the save *lands*, never at submit: a refused
+    write has to leave the editor holding the edits that were refused.
+    """
+    from ..service import clips as svc_clips
+
+    state = ensure(ctx)
+    if not state.template or not state.clips:
+        return
+    payload = {
+        "space": state.clips.get("space") or "node",
+        "poses": state.clips.get("poses") or [],
+        "clips": state.clips.get("clips") or [],
+    }
+    if not ctx.submit(CLIPS_SAVE_KEY, svc_clips.save, ctx.svc, state.template, payload):
+        ctx.toast("Still saving the previous clip change.", "info")
+
+
+def revert_clips(ctx: Any) -> None:
+    """Throw the working copy away and go back to the shipped clips.
+
+    Behind the guard for ``reset_all``'s reason: it discards authored work and
+    this mode has no undo.
+    """
+    from ..service import clips as svc_clips
+
+    state = ensure(ctx)
+    if not state.template:
+        return
+
+    def proceed() -> None:
+        if not ctx.submit(CLIPS_SAVE_KEY, svc_clips.revert, ctx.svc, state.template):
+            ctx.toast("Still saving the previous clip change.", "info")
+
+    if state.clips_unsaved or state.clips.get("edited"):
+        ctx.confirms.ask(
+            dialogs.Confirm(
+                title="Revert clips",
+                message=(
+                    "This throws away every change to this skeleton's clips and "
+                    "goes back to the ones the build ships. There is no undo."
+                ),
+                confirm_label="Revert",
+                on_confirm=proceed,
+            )
+        )
+    else:
+        proceed()
 
 def _journal_slot_for(ctx: Any, viewer: Any, key: str) -> Any:
     """One journallable pose session, or None.

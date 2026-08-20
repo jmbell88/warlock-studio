@@ -251,6 +251,49 @@ def deform_battery(template_key: str) -> list[dict[str, Any]]:
 CLIP_DIR = TEMPLATE_DIR / "clips"
 
 _clips: dict[str, dict[str, Any]] | None = None
+#: The same shape, read from ``user_clip_dir()``. A template present here
+#: *replaces* the shipped entry rather than merging with it: a clip library
+#: is internally consistent by construction (every clip names poses the same
+#: file carries), and half of one file's poses under another file's clips is
+#: exactly the hole ``parse_clip_library`` refuses within a single file.
+_user_clips: dict[str, dict[str, Any]] | None = None
+
+
+def parse_clip_library(raw: dict[str, Any]) -> dict[str, Any]:
+    """One clip library file's contents, validated. Raises on a bad one.
+
+    Split out of :func:`_load_clip_library` so the shipped library and a
+    user-authored one go through exactly one parser: the editor writes files
+    this reads back, and a second, laxer parse on the authoring side is how an
+    editor comes to save something the renderer cannot open.
+    """
+    poses = {}
+    for pose in raw["poses"]:
+        row = {"name": str(pose["name"]), "bones": pose["bones"]}
+        if pose.get("root_translation"):
+            row["root_translation"] = [float(v) for v in pose["root_translation"]]
+        poses[row["name"]] = row
+    # The frame every clip in this file is authored in. Per file and not per
+    # clip: a library mixing the two would be one edit away from a clip that
+    # silently means the other thing.
+    space = str(raw.get("space") or "node")
+    clips = []
+    for clip in raw["clips"]:
+        keys = [str(k) for k in clip["keys"]]
+        missing = [k for k in keys if k not in poses]
+        if missing:
+            raise ValueError(f"clip {clip['name']!r} names {missing}")
+        clips.append(
+            {
+                "name": str(clip["name"]),
+                "keys": keys,
+                "segments": [int(n) for n in clip["segments"]],
+                "closed": bool(clip.get("closed", False)),
+                "easing": str(clip.get("easing") or "linear"),
+                "space": space,
+            }
+        )
+    return {"poses": poses, "clips": clips, "space": space}
 
 
 def _load_clip_library(directory: Path) -> dict[str, dict[str, Any]]:
@@ -265,39 +308,67 @@ def _load_clip_library(directory: Path) -> dict[str, dict[str, Any]]:
     found: dict[str, dict[str, Any]] = {}
     for path in sorted(directory.glob("*.json")):
         try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-            poses = {}
-            for pose in raw["poses"]:
-                row = {"name": str(pose["name"]), "bones": pose["bones"]}
-                if pose.get("root_translation"):
-                    row["root_translation"] = [
-                        float(v) for v in pose["root_translation"]
-                    ]
-                poses[row["name"]] = row
-            # The frame every clip in this file is authored in. Per file and
-            # not per clip: a library mixing the two would be one edit away
-            # from a clip that silently means the other thing.
-            space = str(raw.get("space") or "node")
-            clips = []
-            for clip in raw["clips"]:
-                keys = [str(k) for k in clip["keys"]]
-                missing = [k for k in keys if k not in poses]
-                if missing:
-                    raise ValueError(f"clip {clip['name']!r} names {missing}")
-                clips.append(
-                    {
-                        "name": str(clip["name"]),
-                        "keys": keys,
-                        "segments": [int(n) for n in clip["segments"]],
-                        "closed": bool(clip.get("closed", False)),
-                        "easing": str(clip.get("easing") or "linear"),
-                        "space": space,
-                    }
-                )
-            found[path.stem] = {"poses": poses, "clips": clips, "space": space}
+            found[path.stem] = parse_clip_library(
+                json.loads(path.read_text(encoding="utf-8"))
+            )
         except Exception:
             log.exception("skipping unusable clip library %s", path)
     return found
+
+
+#: Where an *edited* clip library lives, or None when nothing has said.
+#:
+#: **Told, never discovered.** This module is the one the host and the worker
+#: share and it has deliberately never depended on the app's configuration --
+#: ``tests/test_poser_imports.py`` pins its whole ``warlock`` import set to
+#: ``{winjob}``, and reaching for ``config`` here (even inside a function body)
+#: would be a real architectural change dressed up as a convenience. So the
+#: layer that *has* a config sets this: ``service.core.WarlockService`` does it
+#: on construction, which is the one object every app process builds before
+#: anything asks for a clip.
+#:
+#: None means "the shipped library and nothing else", which is the correct
+#: answer for a bare import, a test that never built a service, and the worker.
+_user_clip_root: Path | None = None
+
+
+def set_user_clip_dir(path: Any) -> None:
+    """Point the loader at the user's editable clip libraries.
+
+    Drops the caches, because the directory changing means every answer this
+    module has already given about clips may now be the wrong one -- which is
+    exactly what happens in a test suite that builds one service per test.
+    """
+    global _user_clip_root
+    new = None if path is None else Path(path)
+    if new != _user_clip_root:
+        _user_clip_root = new
+        invalidate_clips()
+
+
+def user_clip_dir() -> Path | None:
+    """Where an *edited* clip library lives, or None with no configured home.
+
+    Beside the pose library under ``data_dir/poser/``, because it is the same
+    kind of thing: authored content that belongs to the user rather than to the
+    build. The shipped library under ``templates/clips/`` stays a factory
+    default and is never written to -- which is what keeps an installed build
+    (where the package tree may be read-only, and is replaced wholesale by the
+    next installer) working the same way a checkout does.
+    """
+    return _user_clip_root
+
+
+def invalidate_clips() -> None:
+    """Drop the cached libraries so the next read sees a just-saved edit.
+
+    The cache is a module global filled once, which is right for a library that
+    ships with the build and wrong the moment one can be authored. Called by the
+    save door rather than by a timestamp check: the writer knows.
+    """
+    global _clips, _user_clips
+    _clips = None
+    _user_clips = None
 
 
 def clip_library(template_key: str) -> dict[str, Any]:
@@ -307,11 +378,23 @@ def clip_library(template_key: str) -> dict[str, Any]:
     walk cycle authored for a humanoid means nothing to a fish, and a template
     without one should cost the character sheet, never the rig.
     """
-    global _clips
+    global _clips, _user_clips
     get_template(template_key)
     if _clips is None:
         _clips = _load_clip_library(CLIP_DIR)
-    return _clips.get(template_key) or {"poses": {}, "clips": [], "space": "node"}
+    if _user_clips is None:
+        directory = user_clip_dir()
+        _user_clips = (
+            _load_clip_library(directory)
+            if directory is not None and directory.is_dir()
+            else {}
+        )
+    # The user's file wins whole, never field by field -- see ``_user_clips``.
+    # An unusable one has already been logged and dropped by the loader, so
+    # this falls back to the shipped library rather than to nothing, which is
+    # the same "costs you that library and not the app" rule one level up.
+    library = _user_clips.get(template_key) or _clips.get(template_key)
+    return library or {"poses": {}, "clips": [], "space": "node"}
 
 
 def clip_keys(template_key: str, clip_name: str) -> list[dict[str, Any]]:

@@ -26,6 +26,13 @@ from .render import DrawItem
 # the controls.
 IDLE = 0x55517E
 
+# An onion-skin ghost: the key before or after the one being edited. Quieter
+# again than IDLE, and drawn at a fraction of its alpha, because a ghost that
+# competes with the live skeleton makes the thing you are actually posing
+# harder to read rather than easier.
+GHOST = 0x3A3856
+GHOST_ALPHA = 0.55
+
 
 def bone_segments(model: Any, bones: list[str]) -> list[tuple[str, str]]:
     """``(parent bone, bone)`` name pairs to draw lines between.
@@ -69,6 +76,9 @@ class BoneLines:
         pairs: list[tuple[str, str]],
         selected: str | None,
         placement: np.ndarray | None = None,
+        *,
+        colour: int | None = None,
+        alpha: float = 1.0,
     ) -> list[DrawItem]:
         """At most two DrawItems: every segment muted, then the selected
         bone's *incoming* segment redrawn in the accent over the top.
@@ -81,6 +91,11 @@ class BoneLines:
         lands exactly on them.
         """
         placement = m3.identity() if placement is None else placement
+        # An onion-skin ghost is this same skeleton in a quieter colour, so the
+        # override is a parameter rather than a second class: the geometry, the
+        # pairs and the upload are identical and only the paint differs. A ghost
+        # passes ``selected=None`` too, since a ghost has no selection to show.
+        base = IDLE if colour is None else colour
         idle: list[tuple[Any, Any]] = []
         active: list[tuple[Any, Any]] = []
         for parent, bone in pairs:
@@ -98,7 +113,7 @@ class BoneLines:
         items = [
             DrawItem(
                 vao=self._vao,
-                color=(*_rgb(IDLE), 1.0),
+                color=(*_rgb(base), float(alpha)),
                 model=placement,
                 mode=moderngl.LINES,
                 vertices=len(segments) * 2,
@@ -108,7 +123,7 @@ class BoneLines:
             items.append(
                 DrawItem(
                     vao=self._vao,
-                    color=(*_rgb(ACTIVE), 1.0),
+                    color=(*_rgb(ACTIVE), float(alpha)),
                     model=placement,
                     mode=moderngl.LINES,
                     vertices=len(active) * 2,

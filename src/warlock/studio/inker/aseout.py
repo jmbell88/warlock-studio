@@ -1085,6 +1085,103 @@ def _tags_chunk(tags, frames: int) -> bytes:
     return _chunk(_TAGS, body)
 
 
+def _document_planes(doc, anim) -> list:
+    """Every layer whose pixels this writer is about to encode, once each.
+
+    The same enumeration the cel loops below make -- ``doc.stack`` on a still
+    document, the unique cel objects on an animated one -- so a colour this
+    finds is a colour that is genuinely in the file, and one it misses is one
+    that is not.
+    """
+    if anim is None:
+        return list(doc.stack)
+    seen: dict[int, object] = {}
+    for layer in anim.cels.values():
+        if layer is not None:
+            seen.setdefault(id(layer), layer)
+    return list(seen.values())
+
+
+def _derived_palette(doc, anim) -> list[tuple[int, ...]]:
+    """A swatch table for a document that carries none, from its own pixels.
+
+    **Aseprite writes a palette into every file it saves and this writer did
+    not** -- ``ASEPRITE_PARITY.md`` Wave 5's "Left open / owed" item, and the
+    only part of it this repository can close on its own. A file with no
+    ``0x2019`` chunk is tolerated by this reader and, by reading of the format,
+    by Aseprite's own pre-1.0 fallback; but a third-party importer that expects
+    the chunk every real ``.aseprite`` carries had nothing to read, and that is
+    a parity gap rather than a matter of taste.
+
+    **Nothing is invented.** The obvious alternative -- writing Aseprite's own
+    default table -- would mean reciting thirty-two colours from memory into a
+    file format, which is exactly the kind of unmeasured claim this repository
+    refuses (the tablet-pressure spike is the standing precedent). Every entry
+    here is a colour that is actually painted somewhere in the document, so the
+    file offers the user the art's own colours to paint with and asserts nothing
+    about what Aseprite would have chosen.
+
+    Fully transparent pixels are not colours and are left out; a document with
+    no visible pixel at all gets the single transparent entry instead of an
+    empty table, so that **every** file this writer produces carries a palette
+    chunk rather than every file but one shape of blank.
+
+    Capped at :data:`MAX_COLOURS`, most-used first and ties broken by the colour
+    value, then emitted in colour order. Both halves are deterministic on
+    purpose: this runs on a document with no stored palette, so it is re-derived
+    identically on every save, which is what keeps a re-imported file's second
+    save byte-identical to its first (the corpus's fixed-point property -- the
+    reader drops a palette on a non-indexed file, so the writer has to be able
+    to rebuild the same one from the pixels alone).
+    """
+    packed: list[np.ndarray] = []
+    for layer in _document_planes(doc, anim):
+        pixels = getattr(layer, "pixels", None)
+        if pixels is None or pixels.size == 0:
+            continue
+        flat = np.asarray(pixels, dtype=np.uint8).reshape(-1, 4)
+        flat = flat[flat[:, 3] != 0]
+        if not flat.size:
+            continue
+        # Packed into one uint32 per pixel rather than counted as rows.
+        # ``np.unique(..., axis=0)`` sorts a 2-D array lexicographically and is
+        # the wrong tool at canvas sizes -- 2.0s on a single 1024x1024 layer,
+        # which a save pays per layer. The pack is exact (four bytes into four
+        # byte-lanes, unpacked by the inverse shifts below), so this is a
+        # faster spelling of the same answer rather than an approximation of it.
+        wide = flat.astype(np.uint32)
+        packed.append(
+            (wide[:, 0] << 24) | (wide[:, 1] << 16) | (wide[:, 2] << 8) | wide[:, 3]
+        )
+    if not packed:
+        # Every pixel in this document *is* the transparent one, so it is the
+        # only honest swatch -- and one entry is what keeps the chunk present.
+        return [(0, 0, 0, 0)]
+    # One unique over the whole document, not one per layer and a merge: a
+    # colour's rank is its share of the *file*, and per-layer tables would have
+    # to be summed back together anyway.
+    codes, seen = np.unique(np.concatenate(packed), return_counts=True)
+    if codes.size > MAX_COLOURS:
+        # ``argpartition`` for the cut and a sort only over what survives it --
+        # the ranking is a means to the cap, so ordering all 16 million distinct
+        # colours a photographic import can hold would be work thrown away.
+        # ``-seen`` then ``codes`` reproduces the (count desc, colour asc)
+        # tie-break exactly, and the tie-break has to be total or the table
+        # would differ between two saves of the same document.
+        keep = np.argpartition(-seen, MAX_COLOURS)[: MAX_COLOURS + 1]
+        order = sorted(keep.tolist(), key=lambda i: (-int(seen[i]), int(codes[i])))
+        codes = codes[order[:MAX_COLOURS]]
+    return sorted(
+        (
+            int(code >> 24) & 0xFF,
+            int(code >> 16) & 0xFF,
+            int(code >> 8) & 0xFF,
+            int(code) & 0xFF,
+        )
+        for code in codes.tolist()
+    )
+
+
 def _palette_chunk(palette: list[tuple[int, ...]]) -> bytes:
     """The modern 0x2019 chunk: the whole table, with alpha."""
     body = struct.pack("<III8s", len(palette), 0, len(palette) - 1, b"\0" * 8)
@@ -1165,6 +1262,16 @@ def aseprite_bytes(doc) -> bytes:
             "an indexed document with no palette has nothing to write its"
             " pixels through"
         )
+    #: An RGB or grayscale document need not carry a palette, and until now one
+    #: that did not wrote no palette chunk at all -- see :func:`_derived_palette`
+    #: for why that was a parity gap and why the table is built from the
+    #: document's own pixels rather than from a default recited from memory.
+    #: Below the indexed refusal above, deliberately: an indexed document with
+    #: no palette is refused, never quietly given one derived from its pixels,
+    #: because there its palette is what the *stored* indices mean.
+    derived = not palette
+    if derived:
+        palette = _derived_palette(doc, anim)
     transparent = int(getattr(doc, "transparent_index", 0)) if depth == _INDEXED else 0
     if not 0 <= transparent <= 255:
         raise ValueError(

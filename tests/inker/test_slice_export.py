@@ -212,3 +212,51 @@ def test_a_busy_tab_refuses_the_export():
     tab.saving = True
     inker_mode.export_slices(ctx, tab)
     assert ctx.submitted == []
+
+
+# --- the two collision policies, pinned against each other ---------------------
+
+
+def test_the_two_collision_policies_diverge_deliberately_and_by_the_same_question():
+    """``inker_mode`` holds two naming helpers with opposite answers to the same
+    situation, and Wave 4's "Left open / owed" section named the pair as
+    unreconciled. They are not reconciled here either -- they are *pinned*,
+    because each is right for its own door and collapsing them onto one policy
+    would break whichever door lost.
+
+    The deciding question is whether anything downstream addresses the file
+    **by name**:
+
+    * Nothing addresses a slice PNG by name. A human picks it off a folder
+      listing, so ``Hitbox_2.png`` is a name they can read and live with, and
+      refusing the whole export over it would be obstructive.
+    * A tag or a layer *is* addressed by name by whatever consumes the sheet.
+      A second ``walk`` quietly becoming ``walk_2.png`` is a file claiming to
+      be a clip that does not exist, and refusing is the only answer that
+      cannot silently be believed.
+
+    Bumping is friendly where a human disambiguates and dishonest where a
+    machine does. A third naming helper answers that question before it picks a
+    side; this test is what makes either half drifting onto the other's policy
+    a red test rather than a silent behaviour change."""
+    import pytest
+
+    entries = [SimpleNamespace(name="Hitbox"), SimpleNamespace(name="Hitbox")]
+    # Slices: the second one is bumped, and both files are written.
+    assert inker_mode._slice_filenames(entries) == ["Hitbox", "Hitbox_2"]
+
+    # Tags and layers: the same duplicate is refused outright, by name.
+    for kind in ("tag", "layer"):
+        with pytest.raises(ValueError, match="would both be called"):
+            inker_mode._split_stems("sheet", ["Hitbox", "Hitbox"], kind=kind)
+
+
+def test_the_split_refusal_survives_a_template_that_erases_the_difference():
+    """The refusal is about the *rendered* names, not the labels -- two distinct
+    tags put through a template that mentions neither collide just as hard, and
+    a check that compared labels instead would let that batch overwrite itself
+    one file at a time."""
+    import pytest
+
+    with pytest.raises(ValueError, match="would both be called"):
+        inker_mode._split_stems("sheet", ["walk", "run"], kind="tag", template="{title}")

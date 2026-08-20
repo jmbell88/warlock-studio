@@ -1049,6 +1049,19 @@ def _slice_filenames(entries: list[Any]) -> list[str]:
     third "Hitbox" landing on "Hitbox_2" a second slice already claimed, or a
     literal "a_2" colliding with what a repeated "a" bumps to), which is a
     silent overwrite in ``run()`` rather than a name a user ever sees.
+
+    **This module holds two collision policies and the split is deliberate.**
+    :func:`_split_stems` *refuses* where this bumps, and the deciding question
+    is whether anything downstream addresses the file **by name**. Nothing
+    addresses a slice PNG by name -- a human picks it off a folder listing, and
+    "Hitbox_2.png" is a name they can read and live with. A tag or a layer *is*
+    addressed by name by whatever consumes the sheet, so a second "walk"
+    quietly becoming "walk_2.png" would be a file claiming to be a clip that
+    does not exist. Bumping is friendly where a human disambiguates and
+    dishonest where a machine does. A third naming helper answers that same
+    question before it picks a side, and ``tests/inker/test_slice_export.py``
+    pins both halves against each other so neither can drift onto the other's
+    policy unnoticed.
     """
     taken: set[str] = set()
     out = []
@@ -1813,6 +1826,7 @@ def _submit_export(ctx: Any, export: _Export) -> None:
                             animation=extra["animation"],
                             pivots=extra["pivots"],
                             slices=extra["slices"],
+                            slices_conflict=extra["slices_conflict"],
                         ),
                     )
                 )

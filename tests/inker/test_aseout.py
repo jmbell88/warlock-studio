@@ -349,6 +349,110 @@ def test_a_palette_constrained_rgb_document_loses_its_palette():
     assert not back.palette
 
 
+def test_an_rgb_document_with_no_palette_still_writes_a_palette_chunk():
+    """Wave 5's "Left open / owed" item, closed.
+
+    Aseprite writes a palette into every file it saves; this writer omitted the
+    chunk entirely when the document carried none, so a reader that expects the
+    chunk every real ``.aseprite`` has found nothing there. The table is derived
+    from the document's own pixels rather than from a default recited from
+    memory -- see ``_derived_palette`` -- so the file offers the art's colours
+    and asserts nothing this repository cannot check."""
+    doc = _still()
+    assert not doc.palette
+    sprite = asein.parse(aseout.aseprite_bytes(doc))
+    assert sprite.palette, "an RGB document must still ship a palette chunk"
+    # Exactly the two colours the fixture paints, and nothing else.
+    assert set(sprite.palette) == {RED, BLUE}
+
+
+def test_the_derived_palette_invents_no_colour_the_document_does_not_hold():
+    """The property that makes deriving defensible at all. Every swatch is a
+    colour genuinely painted somewhere in the file, so the chunk is a *record*
+    rather than a claim about what Aseprite would have chosen."""
+    doc = Document.blank(4, 4)
+    doc.stack[0].pixels[:, :] = MAGENTA
+    doc.stack[0].pixels[0, 0] = GREEN
+    doc.invalidate_all()
+    sprite = asein.parse(aseout.aseprite_bytes(doc))
+    assert set(sprite.palette) == {MAGENTA, GREEN}
+
+
+def test_a_hidden_layers_colours_are_in_the_derived_palette():
+    """The writer stores hidden layers' pixels, so their colours are in the
+    file and belong in its table. Deriving from the *composite* instead would
+    have offered the user a palette missing half their own art."""
+    doc = Document.blank(4, 4)
+    doc.stack[0].pixels[:, :] = RED
+    top = doc.add_layer("hidden")
+    top.pixels[:, :] = GREEN
+    top.visible = False
+    doc.invalidate_all()
+    sprite = asein.parse(aseout.aseprite_bytes(doc))
+    assert set(sprite.palette) == {RED, GREEN}
+
+
+def test_fully_transparent_pixels_are_not_swatches():
+    """Transparency is not a colour, and a table whose first entry is the empty
+    canvas is a table with a wasted slot in every file."""
+    doc = Document.blank(4, 4)
+    doc.stack[0].pixels[0:2, 0:2] = RED
+    doc.invalidate_all()
+    sprite = asein.parse(aseout.aseprite_bytes(doc))
+    assert sprite.palette == [RED]
+
+
+def test_a_document_with_no_visible_pixel_gets_the_transparent_entry():
+    """The one shape that has no colours to offer still gets a chunk, because
+    "every file carries a palette" is the whole point and "every file but one
+    shape of blank" would be a rule with an exception nobody could predict.
+    The single entry *is* every pixel in the document, so nothing is invented
+    here either."""
+    doc = Document.blank(4, 4)
+    sprite = asein.parse(aseout.aseprite_bytes(doc))
+    assert sprite.palette == [(0, 0, 0, 0)]
+
+
+def test_the_derived_palette_is_capped_and_keeps_the_most_used_colours():
+    """A photographic RGB import has more than 256 distinct colours and the
+    format's table does not. The cap keeps the colours that cover the most
+    pixels, so what is dropped is what was least there."""
+    doc = Document.blank(32, 32)
+    flat = doc.stack[0].pixels.reshape(-1, 4)
+    for i in range(flat.shape[0]):
+        flat[i] = (i % 256, (i // 256) % 256, 7, 255)
+    # One colour painted over many pixels must survive; a singleton need not.
+    flat[0:400] = MAGENTA
+    doc.invalidate_all()
+    sprite = asein.parse(aseout.aseprite_bytes(doc))
+    assert len(sprite.palette) == ixp.MAX_COLOURS
+    assert MAGENTA in sprite.palette
+
+
+def test_the_derived_palette_is_the_same_table_on_every_save():
+    """The fixed-point property the corpus rests on. The reader drops a palette
+    on a non-indexed file, so the writer has to rebuild an identical one from
+    the pixels alone or a re-imported file's second save would differ from its
+    first."""
+    doc = _still()
+    once = aseout.aseprite_bytes(doc)
+    back, _ = _round_trip(doc)
+    assert not back.palette
+    assert aseout.aseprite_bytes(back) == once
+
+
+def test_an_indexed_document_with_no_palette_is_refused_not_given_one():
+    """The derivation must sit *below* the indexed refusal. An indexed
+    document's palette is what its stored indices **mean**, so quietly deriving
+    one from the materialised pixels would repaint the sprite rather than save
+    it."""
+    doc = _still()
+    doc.color_mode = "indexed"
+    doc.palette = []
+    with pytest.raises(ValueError, match="no palette"):
+        aseout.aseprite_bytes(doc)
+
+
 def test_an_indexed_animated_document_round_trips():
     doc = _animated()
     doc.convert_to_indexed([(0, 0, 0, 0), RED, BLUE], transparent=0)

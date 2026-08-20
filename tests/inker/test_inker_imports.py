@@ -79,6 +79,14 @@ PACKAGE = "warlock.studio.inker"
 #: this half only ever *reads* a ``Tileset`` the document already holds, tile
 #: by tile through its own accessors, and never constructs one.
 OUTWARD_IMPORTS = {
+    # The gid word and, since the Wave 3 close-out, the eight-symmetry flag
+    # algebra: ``_doc_tiles`` for the whole-canvas flip/turn and
+    # ``_doc_ranges`` for the same permutations over a timeline range.
+    # Both reach the *shared leaf*, never the Plotter, which is the whole
+    # reason the algebra moved there rather than being copied: two engines
+    # needed one table, and a second copy of a group-theory rule is the
+    # kind of thing that drifts without either half noticing.
+    ("_doc_ranges.py", "warlock.studio.tilegrid"),
     ("_doc_tiles.py", "warlock.studio.tilegrid"),
     ("anim_edits.py", "warlock.studio.undo"),
     ("asein.py", "warlock.studio.tilegrid"),

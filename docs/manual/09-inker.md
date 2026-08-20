@@ -749,9 +749,31 @@ never marks the document unsaved.
 cells — padding with blanks or cropping, following the same 3×3 anchor everything else does. An
 anchor that lands the old image at an offset that is not a whole number of tiles is refused by
 name rather than rounded, because rounding would move your drawing somewhere you did not ask for.
-Flip, rotate, scale and crop are refused outright while a tilemap layer is in the document: each
-would have to turn every cell's flip flags as well as move it, and that is not modelled yet.
-Convert the layer to a plain layer first if you need one of them.
+
+**Flip and rotate work too**, on the whole canvas and over a timeline range alike. Both mirror the
+arrangement *and* turn every cell's own flip flags with it, so a mirrored map is made of mirrored
+tiles rather than a mirrored layout of unmirrored ones. Two things are refused, by name, and each
+names what you can do about it:
+
+- **A canvas that is not a whole number of tiles**, on the axis you are flipping. The picture is
+  built by laying the grid out from the corner and cropping to the canvas, so on a 10-pixel canvas
+  at 8-pixel tiles the last column is half thrown away — and after a flip the pixels that ought to
+  be on the left are exactly the ones the crop discarded. Resize the canvas to a whole number of
+  tiles and the flip works.
+- **A quarter turn of non-square tiles.** Turning a 16×8 tile gives an 8×16 one, and a tileset
+  holds a single tile size, so there is nowhere for the turned art to live. Flipping is fine at any
+  tile size. Note that a square canvas does not mean square tiles — a 16×16 canvas holds 8×4 tiles
+  perfectly happily, so this is asked separately.
+
+A **timeline-range shift** works on a tilemap when it wraps and moves a whole number of tiles: that
+is a roll of the grid, and no cell's art changes. An unwrapped shift is refused, because on a
+tilemap "fill the vacated pixels with transparent" means "point these cells at no tile", which is a
+decision about your drawing that a shift should not make for you.
+
+**Scale and crop stay refused**, and not because they are waiting their turn: they *resample*, and
+a tileset cannot follow a resample — there is no way to move the cells, only to cut the whole
+tileset again, which is a different operation. Convert the layer to a plain layer first if you need
+one of them.
 
 **Saving.** Tilemap layers ride in the same `.ora` as everything else. The picture is written as
 ordinary layer PNGs, so Krita, GIMP and anything else that reads OpenRaster open the file and see

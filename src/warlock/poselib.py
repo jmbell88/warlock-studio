@@ -91,6 +91,29 @@ def preview_dir(config: Any) -> Path:
     return poser_dir(config) / "previews"
 
 
+def clip_dir(config: Any) -> Path:
+    """Where an edited clip library lives. See ``rigging.user_clip_dir``.
+
+    Spelled here as well as there because the two callers are different: this
+    is the app asking where to write, that is the loader asking where to read,
+    and the loader may not import ``config``. They must agree, and
+    ``tests/test_clip_editing.py`` is what asserts they do.
+    """
+    return poser_dir(config) / "clips"
+
+
+def clip_path(config: Any, template_key: str) -> Path:
+    """The editable clip library for one template.
+
+    Named by template key, which ``rigging._load_clip_library`` reads back as
+    the file *stem* -- so the two halves of that round trip are one expression
+    here rather than a convention two modules each half-remember.
+    """
+    if not template_key or not re.fullmatch(r"[A-Za-z0-9_-]+", template_key):
+        raise RecordError(f"{template_key!r} is not a template key", field="template")
+    return clip_dir(config) / f"{template_key}.json"
+
+
 def pose_path(config: Any, pose_id: str) -> Path:
     """The record for one library pose. Raises on an id that isn't ours.
 

@@ -6,6 +6,48 @@ record of what a version actually changed. The top heading's version must
 match `pyproject.toml` — a test asserts it, so a release bump cannot leave this
 file behind.
 
+## 0.0.25 — 2026-08-20
+
+- **Clip editing in Poser.** The keyframes a Troupe character sheet animates —
+  which keys, in what order, how many frames apart — could only be changed by
+  hand-editing a file inside the app's own installation. Poser now has a
+  **Clips** panel: pick a key and it loads onto the skeleton you already know
+  how to pose, **Update key from pose** puts it back, and everything on top of
+  that is timing. **Onion skin** ghosts the keys either side of the one you are
+  editing, wrapping round on a looping clip so a walk's first key is judged
+  against its last. **Play** scrubs the clip through the same interpolation the
+  renderer uses, so what you see is what it will draw. Your clips are saved
+  into your own data folder and the ones the app ships are left alone, so an
+  update can never overwrite your work and **Revert** is always one click. A
+  save that would produce something a character sheet could not be built from
+  is refused by name, and leaves your previous clips exactly where they were.
+  See the *Editing clips* section of the Poser chapter.
+- **Flip and rotate now work on tilemap layers**, on the whole canvas and over a
+  timeline range alike. Both mirror the arrangement *and* turn each cell's own
+  flip flags, so a mirrored map is made of mirrored tiles rather than a
+  mirrored layout of unmirrored ones. Two cases are refused by name because they
+  genuinely cannot be drawn: a canvas that is not a whole number of tiles on the
+  axis you are flipping, and a quarter turn of non-square tiles. A timeline
+  shift works too when it wraps and moves whole tiles. Scale and crop stay
+  refused — they resample, and a tileset has no way to follow a resample.
+- **Drawing is faster, and ordinary strokes gained the most.** Every dab used to
+  recomposite the bounding box of the whole stroke so far, so a long stroke got
+  slower the further it went — 33× more work per dab at its end than at its
+  start. With mirrored symmetry a single dab landed in four far-apart places and
+  recomposited 95% of the canvas. Measured on a 512×512 canvas: **6.6× faster**
+  for a plain stroke and 3.9× with X+Y symmetry, recompositing 64–107× less.
+- **Every `.aseprite` this build writes now carries a colour palette**, built
+  from the colours the drawing actually contains. Aseprite writes one into every
+  file it saves and this did not, so a reader expecting the chunk found nothing.
+  Nothing is invented — every swatch is a colour painted somewhere in the file.
+- **Fixes.** A sprite-sheet export split per layer wrote a fully transparent
+  sheet for a visible group whose layers were all hidden; a merged-away frame's
+  own slice rectangles were dropped from the sidecar with nothing anywhere
+  recording it, and are now noted per cell; and the export refusals that fire
+  before the save dialog — padding against extrude, a frame count that no longer
+  matches a directional sheet, Arrange or Merge over one — had no test holding
+  them at the door they fire from.
+
 ## 0.0.24 — 2026-08-20
 
 - **Troupe: character sheets from a 3D model.** A tenth mode, and a chain

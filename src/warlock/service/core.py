@@ -15,6 +15,7 @@ from concurrent.futures import Future
 from pathlib import Path
 from typing import Any
 
+from .. import poselib, rigging
 from ..config import Config
 from ..db import JobStore
 from .errors import NotFound
@@ -41,6 +42,14 @@ class WarlockService:
         self.store = store
         self.worker = worker
         self.loop = loop
+        # Tell the shared host/worker module where this process's editable clip
+        # libraries live. ``rigging`` is deliberately configuration-free -- its
+        # whole ``warlock`` import set is pinned to ``{winjob}`` -- so it is
+        # *told* rather than allowed to discover, and this is the one object
+        # every app process builds before anything asks for a clip. Idempotent
+        # and cheap; it only drops the clip caches when the directory actually
+        # moves, which in a test suite is once per service.
+        rigging.set_user_clip_dir(poselib.clip_dir(config))
         # One lock per derived artifact, so the same STL/OBJ/posed GLB is
         # never converted twice concurrently. Created lazily and never
         # evicted: an idle lock is a few dozen bytes and the key space is

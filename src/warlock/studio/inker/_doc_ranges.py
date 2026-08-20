@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from ..tilegrid import gid
 from . import composite as cp
 from . import filters
 from . import transform as tf
@@ -47,6 +48,7 @@ from .anim_edits import (
     TrackPropsEdit,
 )
 from .animation import TRACK_PROPS, Frame, clamp_duration
+from .tile_edits import TileRefsEdit
 from .tiles import TilemapCel
 from .undo import CompoundEdit, IndexPatchEdit, PatchEdit
 
@@ -718,6 +720,8 @@ class RangeOps:
         pix_fn: Any,
         index_fn: Any,
         verb: str,
+        refs_fn: Any = None,
+        refs_guard: Any = None,
     ) -> bool:
         """One exact, shape-preserving permutation over every cel of a rect.
 
@@ -749,16 +753,46 @@ class RangeOps:
         targets = self._cels_in(rect)
         if not targets:
             return False
-        # Refused by name, before anything is written: refs-aware permutation
-        # is Chunk 3.7 (the eight-symmetry algebra the tileset flags already
-        # carry), and permuting only ``pixels`` here would leave a tilemap
-        # cel's refs describing a picture that is no longer on screen.
-        if any(isinstance(layer, TilemapCel) for _track, layer in targets):
-            raise ValueError(f"a {verb} of a tilemap layer is not yet modeled")
+        # ``refs_fn`` is what a caller passes when its permutation has a refs
+        # answer: the flips and the quarter turns turn every cell's flag bits by
+        # ``tilegrid.gid``'s eight-symmetry algebra, and a tile-aligned wrapping
+        # shift is a roll of the grid. Without one -- ``fill_range`` and
+        # ``filter_range``, which *paint* rather than permute -- a tilemap cel is
+        # still refused by name, before anything is written, because writing
+        # only ``pixels`` would leave its refs describing a picture that is no
+        # longer on screen. Painting a tilemap goes through the tile funnel
+        # (Manual/Auto/Stack), which is a different mechanism and not a gap.
+        holds_tilemap = any(isinstance(layer, TilemapCel) for _track, layer in targets)
+        if holds_tilemap:
+            if refs_fn is None:
+                raise ValueError(f"a {verb} of a tilemap layer is not yet modeled")
+            # Same alignment argument as the whole-canvas ops: a materialisation
+            # crops the grid to the canvas, so on a ragged canvas the permuted
+            # picture and the permuted refs disagree about pixels the crop threw
+            # away. Asked before the first write.
+            self._whole_tiles_or_refuse(verb, "xy")
+            if refs_guard is not None:
+                refs_guard()
         width, height = self.size
         box = (0, 0, width, height)
         edits: list[Any] = []
         for _track, layer in targets:
+            if isinstance(layer, TilemapCel):
+                before = layer.refs.copy()
+                after = refs_fn(layer.refs)
+                if np.array_equal(before, after):
+                    continue
+                grid_h, grid_w = after.shape
+                # Through ``_apply_refs``, the one door that writes a cel's refs
+                # and re-derives its picture -- so the pixels this loop's
+                # ``pix_fn`` would have produced are never trusted over the
+                # record. ``TileRefsEdit``'s rect is in *tile* units.
+                self._apply_refs(layer.uid, (0, 0, grid_w, grid_h), after)
+                edits.append(
+                    TileRefsEdit(layer.uid, (0, 0, grid_w, grid_h), before, after)
+                )
+                self._stamp_layer(layer.uid)
+                continue
             if self.color_mode == "indexed" and layer.indices is not None:
                 before = layer.indices.copy()
                 after = index_fn(layer.indices)
@@ -791,7 +825,10 @@ class RangeOps:
         axis cannot be offered by a menu and refused by the function.
         """
         fn = lambda plane: tf.flip(plane, axis)  # noqa: E731
-        return self._permute_range(self._range(t0, t1, f0, f1), fn, fn, "flip")
+        refs = gid.flip_plane_h if axis == "horizontal" else gid.flip_plane_v
+        return self._permute_range(
+            self._range(t0, t1, f0, f1), fn, fn, "flip", refs_fn=refs
+        )
 
     def rotate_range(
         self: Document, quarters: int, t0: int, t1: int, f0: int, f1: int
@@ -813,7 +850,24 @@ class RangeOps:
         if quarters % 2 == 1 and width != height:
             raise ValueError("a 90-degree rotation of a cel range needs a square canvas")
         fn = lambda plane: tf.rotate90(plane, quarters)  # noqa: E731
-        return self._permute_range(self._range(t0, t1, f0, f1), fn, fn, "rotation")
+
+        def refs(plane: np.ndarray) -> np.ndarray:
+            for _ in range(quarters):
+                plane = gid.rotate_plane_ccw(plane)
+            return plane
+
+        # A square *canvas* does not imply square *tiles* -- a 16x16 canvas
+        # holds 8x4 tiles perfectly happily, and turning one would need a 4x8
+        # tile the tileset has nowhere to put. Asked separately, and only when a
+        # tilemap is actually in the range.
+        return self._permute_range(
+            self._range(t0, t1, f0, f1),
+            fn,
+            fn,
+            "rotation",
+            refs_fn=refs,
+            refs_guard=lambda: self._square_tiles_or_refuse("quarter turn"),
+        )
 
     def shift_range(
         self: Document, dx: int, dy: int, wrap: bool, t0: int, t1: int, f0: int, f1: int
@@ -829,6 +883,18 @@ class RangeOps:
         """
         if int(dx) == 0 and int(dy) == 0:
             return False
+
+        def refs(plane: np.ndarray) -> np.ndarray:
+            # A whole-tile shift is a *roll of the grid* and nothing more: no
+            # cell's art changes, so no flag moves either -- which is why this
+            # one needs no algebra where the flip and the turn do. A shift that
+            # is not a whole number of tiles has no refs answer at all (it would
+            # re-cut every cell against a new phase, rewriting the tileset), and
+            # ``_tile_shift_guard`` refuses it by name before anything is
+            # written.
+            tile_w, tile_h = self._one_bound_tile_size()
+            return np.roll(plane, (int(dy) // tile_h, int(dx) // tile_w), axis=(0, 1))
+
         return self._permute_range(
             self._range(t0, t1, f0, f1),
             lambda plane: tf.translate(plane, dx, dy, wrap=wrap),
@@ -836,6 +902,8 @@ class RangeOps:
                 plane, dx, dy, wrap=wrap, fill=self.transparent_index
             ),
             "shift",
+            refs_fn=refs,
+            refs_guard=lambda: self._tile_shift_guard(dx, dy, wrap),
         )
 
     # -- fill -----------------------------------------------------------------

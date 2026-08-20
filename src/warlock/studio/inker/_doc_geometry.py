@@ -44,7 +44,15 @@ class GeometryOps:
     # ``restore_snapshot`` has already put back.
 
     def flip(self: Document, axis: str) -> None:
-        self._refuse_tilemaps("flip")
+        """Mirror the whole canvas. A tilemap layer comes with it.
+
+        The refs permutation is built *before* ``commit_floating``, the shape
+        :meth:`resize_canvas` already uses: ``_tile_flip`` refuses by name on a
+        canvas that is not a whole number of tiles, and a refusal that fires
+        after the floating buffer has been committed would have changed the
+        document on its way to saying no.
+        """
+        reorient = self._tile_flip(axis)
         self.commit_floating()
 
         def run() -> None:
@@ -52,12 +60,18 @@ class GeometryOps:
             self._map_planes(
                 lambda plane: tf.flip(plane, axis),
                 index_fn=lambda plane: tf.flip(plane, axis),
+                refs_fn=reorient,
             )
 
         self._replay(run)
 
     def rotate90(self: Document, quarters: int = 1) -> None:
-        self._refuse_tilemaps("rotation")
+        """Counter-clockwise quarter turns. A tilemap layer comes with them.
+
+        ``_tile_rotate`` refuses non-square tiles and an unaligned canvas, and
+        is built before ``commit_floating`` for :meth:`flip`'s reason.
+        """
+        reorient = self._tile_rotate(quarters)
         self.commit_floating()
 
         def run() -> None:
@@ -65,6 +79,7 @@ class GeometryOps:
             self._map_planes(
                 lambda plane: tf.rotate90(plane, quarters),
                 index_fn=lambda plane: tf.rotate90(plane, quarters),
+                refs_fn=reorient,
             )
 
         self._replay(run)

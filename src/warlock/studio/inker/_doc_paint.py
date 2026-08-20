@@ -898,10 +898,18 @@ class PaintOps:
 
     def _touch_stroke(self: Document) -> None:
         """Recomposite what the last dab touched, without pushing history: the
-        undo step is the whole stroke, and it is pushed once at release."""
+        undo step is the whole stroke, and it is pushed once at release.
+
+        ``take_touched`` and **not** ``dirty``: the latter is the stroke's
+        accumulated union, which is the right answer for the undo patch and the
+        wrong one here twice over -- it grows as the stroke moves, and a mirror
+        puts one dab in two or four places far apart. Both made this call
+        recomposite most of the canvas for a dab the size of the nib; its
+        docstring carries the measurements.
+        """
         assert self._stroke is not None
-        if self._stroke.dirty is not None:
-            self.invalidate(self._stroke.dirty)
+        for rect in self._stroke.take_touched():
+            self.invalidate(rect)
 
     def end_stroke(self: Document) -> bool:
         """Close the stroke and make it exactly one undo step."""

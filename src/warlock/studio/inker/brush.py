@@ -517,7 +517,12 @@ class StrokeState:
     stamp_align: str = "free"
 
     coverage: np.ndarray = field(init=False)
+    #: The whole stroke's union, for the single undo patch pushed at release.
     dirty: tuple[int, int, int, int] | None = field(init=False, default=None)
+    #: What has been marked *since the last recomposite*, as separate
+    #: rectangles. See :meth:`take_touched` for why this is a list where
+    #: ``dirty`` is one box.
+    touched: list[tuple[int, int, int, int]] = field(init=False, default_factory=list)
     _carry: float = field(init=False, default=0.0)
     _last: tuple[float, float] | None = field(init=False, default=None)
     _pickup: np.ndarray | None = field(init=False, default=None)
@@ -1135,7 +1140,68 @@ class StrokeState:
         # clamp already forbids.
         self._shifted[y0:y1, x0:x1][hit] = True
 
+    #: When the union of the touched rectangles is no more than this multiple of
+    #: their combined area, :meth:`take_touched` hands back the union instead of
+    #: the parts. That is exactly the case where one recomposite is the better
+    #: call: the pieces overlap or sit next to each other, so the union costs
+    #: barely more area and saves every per-call cost. Consecutive dabs along a
+    #: stroke are that case; mirrored dabs at opposite corners are emphatically
+    #: not (their union is hundreds of times their area), which is what makes
+    #: this one rule cover both.
+    TOUCH_UNION_RATIO = 2.0
+
+    #: A hard ceiling on the number of separate recomposites one flush can ask
+    #: for, whatever the ratio says. A ``spray`` burst emits its whole count
+    #: before the flush, times the mirrors, so this is the case it exists for.
+    TOUCH_RECTS = 256
+
+    def take_touched(self) -> list[tuple[int, int, int, int]]:
+        """The rectangles marked since the last call, and clear them.
+
+        **Separate from ``dirty``, and the split is the whole point.** The two
+        answer different questions: ``dirty`` is "what does the undo patch have
+        to cover", asked once at release, where one box is right (a multi-rect
+        edit type would need eviction accounting of its own for a saving
+        measured in kilobytes). This is "what has to be recomposited", asked
+        after **every dab**, and there one box is badly wrong twice over:
+
+        * **A stroke's union grows as it moves**, so dab N recomposited the
+          bounding box of dabs 1..N. Measured on a 512x512 canvas with an 8px
+          nib: the last quarter of a 200-move stroke recomposited **33x** the
+          area of the first quarter, for a stroke that never covers more of the
+          canvas per dab than the nib does.
+        * **A mirror puts one dab in two or four places far apart**, so the
+          union of a ``symmetry="xy"`` dab is a box spanning both mirrored
+          positions on both axes -- **95%** of the canvas per dab against 33%
+          with symmetry off, and 611ms against 213ms of wall clock over the
+          same stroke. That is the cliff `ASEPRITE_PARITY.md` carried as "the
+          measured symmetry=xy 16x per-dab invalidation cliff (union-rect
+          defect)".
+
+        Both are the same defect -- a union standing in for a set -- and both go
+        away by keeping the pieces. See
+        ``docs/measurements/2026-08-20-stroke-invalidation.md``.
+        """
+        rects, self.touched = self.touched, []
+        if len(rects) < 2:
+            return rects
+        x0 = min(r[0] for r in rects)
+        y0 = min(r[1] for r in rects)
+        x1 = max(r[2] for r in rects)
+        y1 = max(r[3] for r in rects)
+        union = (x0, y0, x1, y1)
+        if len(rects) > self.TOUCH_RECTS:
+            return [union]
+        area = max(1, (x1 - x0) * (y1 - y0))
+        parts = sum(max(0, r[2] - r[0]) * max(0, r[3] - r[1]) for r in rects)
+        # Consecutive dabs along a stroke overlap heavily, so their union is
+        # barely bigger than their sum and one call is the better answer.
+        # Mirrored dabs at opposite corners have a union hundreds of times
+        # their sum, and there the parts win by the same arithmetic.
+        return [union] if area <= parts * self.TOUCH_UNION_RATIO else rects
+
     def _mark(self, rect: tuple[int, int, int, int]) -> None:
+        self.touched.append(rect)
         if self.dirty is None:
             self.dirty = rect
             return

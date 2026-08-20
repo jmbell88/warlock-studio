@@ -564,6 +564,7 @@ def sidecar(
     animation: Mapping[str, Any] | None = None,
     pivots: Mapping[int, tuple[float, float]] | None = None,
     slices: Mapping[int, list[dict[str, Any]]] | None = None,
+    slices_conflict: Mapping[int, list[int]] | None = None,
 ) -> dict[str, Any]:
     """The engine-neutral description of the atlas next to it.
 
@@ -589,6 +590,15 @@ def sidecar(
     lands as a per-cell ``"slices"`` list, emitted only where there is one --
     which is what keeps every sheet this build wrote before them byte-identical,
     and is pinned by the square-sidecar equality test.
+
+    ``slices_conflict`` is the fourth, and the same additive-with-no-version-bump
+    rule governs it: a top-level ``{cell index: [dropped frame indices]}`` map,
+    written **only when it is non-empty**. Merge and skip-empty collapse frames
+    by pixels while slices are authored per frame, so a merged-away frame's own
+    rectangles are dropped in favour of its representative's -- correctly, since
+    a cell has one geometry, but until now silently. A reader that has never
+    heard of the key sees exactly the file it saw before, because an export with
+    nothing to report does not write it at all.
 
     On a non-square plan ``frame_size`` is emitted as **0** and ``frame_w`` /
     ``frame_h`` carry the truth. Zero is a loud wrong answer rather than a quiet
@@ -643,4 +653,12 @@ def sidecar(
         payload["frame_w"], payload["frame_h"] = sheet.cell_w, sheet.cell_h
     if animation is not None:
         payload["animation"] = dict(animation)
+    # Only when there is something to say -- see the docstring: an empty map
+    # writes no key, which is what makes this additive rather than a format
+    # change every existing sheet would have to be re-checked against.
+    if slices_conflict:
+        payload["slices_conflict"] = {
+            int(cell): [int(frame) for frame in frames]
+            for cell, frames in sorted(slices_conflict.items())
+        }
     return payload

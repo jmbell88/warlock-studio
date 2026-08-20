@@ -1136,6 +1136,19 @@ def layer_splits(doc: Any) -> list[tuple[str, tuple[int, ...]]]:
     hidden layer contributes no pixels to any export, and a file full of nothing
     named after it is worse than no file.
 
+    **A group is judged by what it actually contributes, not by its own eye.**
+    A visible group every one of whose leaves is hidden (or at zero opacity, or
+    hidden by a nested subgroup between them) composites to nothing, so it is
+    left out for the same reason a hidden row is -- the rule above was always
+    "contributes no pixels", and reading only the root's own flags answered a
+    narrower question than it claimed. Before this, such a group wrote a fully
+    transparent sheet named after itself; ``skip_empty`` on the same export
+    already raises rather than write a blank cell, so the two doors now agree
+    about what an empty output is instead of disagreeing by which one you
+    reached. Effective visibility is ``groups.resolve`` -- the same AND/multiply
+    fold the compositor itself uses -- so this cannot drift from what the
+    flatten would have produced.
+
     A still document has no splits at all -- there are no tracks to split.
     """
     anim = getattr(doc, "anim", None)
@@ -1163,9 +1176,29 @@ def layer_splits(doc: Any) -> list[tuple[str, tuple[int, ...]]]:
         if node is None or not node.visible or node.opacity <= 0.0:
             continue
         leaves = tuple(gp.leaves_of(group_of, order, root))
-        if leaves:
+        if leaves and any(_contributes(doc, nodes, group_of, uid) for uid in leaves):
             out.append((node.name, leaves))
     return out
+
+
+def _contributes(
+    doc: Any, nodes: Mapping[int, Any], group_of: Mapping[int, int], uid: int
+) -> bool:
+    """Whether track ``uid`` can put a single pixel into a flatten.
+
+    Its own eye and opacity ANDed with everything it inherits -- which is
+    ``groups.resolve``'s whole job, so it is asked rather than re-derived here.
+    A uid with no track behind it answers False: it cannot contribute pixels it
+    does not have, and a dangling member is a thing an ORA can arrive carrying.
+    """
+    from . import groups as gp
+
+    anim = getattr(doc, "anim", None)
+    track = next((t for t in (anim.tracks if anim else ()) if t.uid == uid), None)
+    if track is None or not track.visible or track.opacity <= 0.0:
+        return False
+    visible, opacity, _locked = gp.resolve(nodes, group_of, uid)
+    return bool(visible) and opacity > 0.0
 
 
 def index_plane_one(doc: Any, uid: str) -> np.ndarray | None:
@@ -1249,6 +1282,67 @@ def _cell_representatives(frame_cells: Sequence[int | None]) -> list[int]:
     return [reps[i] for i in range(len(reps))]
 
 
+def _slice_shape(entry: Any) -> Any:
+    """One frame's slice metadata reduced to a comparable value.
+
+    Normalised through :func:`_slice_entry` -- the sidecar's own spelling --
+    rather than compared as raw snapshot dicts, so two frames whose slices
+    differ only in a spelling the file never carries are *not* reported as a
+    conflict. The pivot rides along because it is the other half of what a
+    merged cell's representative gets to keep.
+
+    Tuples rather than dicts so the result is hashable and an equality test is
+    the whole comparison.
+    """
+    meta = entry or {}
+    pivot = meta.get("pivot")
+    return (
+        None if pivot is None else (float(pivot[0]), float(pivot[1])),
+        tuple(
+            tuple(sorted(_slice_entry(one).items(), key=lambda kv: kv[0]))
+            for one in (meta.get("slices") or ())
+        ),
+    )
+
+
+def _slices_conflicts(
+    frame_cells: Sequence[int | None], slices: Sequence[Any]
+) -> dict[int, list[int]]:
+    """``{cell index: [frame indices whose own slices were dropped]}``.
+
+    Merge and skip-empty collapse frames onto cells by **pixels**, and slices
+    are authored per frame -- so two frames that draw identically can still
+    carry different rectangles, and only the representative's survive
+    (:func:`_cell_representatives` picks it, the same tie-break ``build`` makes
+    for the pixels). Dropping them is the right call: a cell is one rectangle
+    set and there is no second place to put another. Dropping them *silently*
+    was not, because the sidecar then describes geometry the user authored and
+    cannot find, with nothing anywhere saying it went.
+
+    So the drop is recorded instead. A skipped frame (``None``) is not a
+    conflict: it has no cell to disagree with, and ``skip_empty`` already told
+    the user that frame was empty by leaving it out.
+
+    Empty when nothing conflicts -- which is every export that does not merge,
+    and nearly every one that does -- and that emptiness is what keeps the
+    sidecar byte-identical for every sheet this build wrote before the note
+    existed.
+    """
+    reps = _cell_representatives(frame_cells)
+    out: dict[int, list[int]] = {}
+    for i, cell in enumerate(frame_cells):
+        if cell is None or not 0 <= cell < len(reps):
+            continue
+        rep = reps[cell]
+        if i == rep:
+            continue
+        mine = _slice_shape(slices[i] if 0 <= i < len(slices) else None)
+        theirs = _slice_shape(slices[rep] if 0 <= rep < len(slices) else None)
+        if mine != theirs:
+            out.setdefault(cell, []).append(i)
+    return out
+
+
 def compose(
     frames: Sequence[np.ndarray],
     durations_ms: Sequence[int],
@@ -1293,6 +1387,7 @@ def compose(
     # true by construction when merge/skip_empty are off, since a cell *is* a
     # frame then. Once cells and frames diverge, the cell's slices are its
     # representative frame's, found the same way ``build`` picked the pixels.
+    conflicts: dict[int, list[int]] = {}
     if frame_cells is None:
         cell_slices = slices or ()
     else:
@@ -1301,6 +1396,11 @@ def compose(
             src[i] if 0 <= i < len(src) else None
             for i in _cell_representatives(frame_cells)
         ]
+        # Computed from the *untrimmed* snapshot, before ``_trim_shift_slices``
+        # moves anything: trim shifts every cell's geometry by that cell's own
+        # offset, so comparing after it would call two frames different because
+        # of where they were pasted rather than because of what was authored.
+        conflicts = _slices_conflicts(frame_cells, src)
     if trim:
         # The pixels moved -- cropped to each frame's own trim rectangle and
         # pasted flush at its cell's corner -- so the pivots and slices
@@ -1327,6 +1427,7 @@ def compose(
             ),
             "pivots": block["pivots"],
             "slices": block["slices"],
+            "slices_conflict": conflicts,
         },
     )
 

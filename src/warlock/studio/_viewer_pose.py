@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 from .viewer import bonelines as bonelineslib
 from .viewer import math3d as m3
 from .viewer import picking
+from .viewer import pose as poselib_pose
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .viewer_embed import Viewer
@@ -170,9 +171,27 @@ class PoseOps:
         if not self.pose_mode or not self.editor.bound:
             return []
         radius = picking.marker_radius(self.radius)
-        # Lines first, markers over them: the skeleton is context, the joints
-        # are the controls.
-        items = self.bonelines.draws(
+        # Ghosts first of all, so the live skeleton draws over them: an onion
+        # skin that covered the pose being edited would make the thing you are
+        # posing harder to read rather than easier. Positions come from
+        # ``pose.ghost_handles``, a *pure* walk that never touches a node --
+        # posing the model to read it and posing it back would fight
+        # ``_resync_handles`` for the live markers, every frame of a drag.
+        items: list[Any] = []
+        for ghost, rotations in zip(self.ghostlines, self.onion, strict=False):
+            if not rotations:
+                continue
+            items += ghost.draws(
+                poselib_pose.ghost_handles(self.model, self.editor.bones, rotations),
+                self._bone_pairs,
+                None,
+                self.placement,
+                colour=bonelineslib.GHOST,
+                alpha=bonelineslib.GHOST_ALPHA,
+            )
+        # Lines then markers: the skeleton is context, the joints are the
+        # controls.
+        items += self.bonelines.draws(
             self.editor.handles, self._bone_pairs, self.editor.selected, self.placement
         )
         items += self.markers.draws(

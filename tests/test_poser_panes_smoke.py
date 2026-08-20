@@ -184,3 +184,128 @@ def test_drawing_the_library_pane_pumps_the_refresh_flag(app_ctx, imgui_ctx):
     _frame(imgui_ctx, lambda: poser_library.draw(app_ctx))
     assert state.refresh_dirty is False, "cleared because the submit was accepted"
     assert state.loading is True
+
+
+# --- the clip editor ----------------------------------------------------------
+
+
+def _library() -> dict:
+    """A clip library shaped exactly as ``service.clips.library`` returns one."""
+    return {
+        "template": "humanoid",
+        "space": "delta",
+        "edited": False,
+        "poses": [
+            {"name": "contact A", "bones": {"hips": [0.0, 0.0, 0.0, 1.0]}},
+            {"name": "passing", "bones": {"spine": [0.0, 0.0, 0.0, 1.0]}},
+            {"name": "contact B", "bones": {"arm.L": [0.0, 0.0, 0.0, 1.0]}},
+        ],
+        "clips": [
+            {
+                "name": "walk",
+                "keys": ["contact A", "passing", "contact B"],
+                "segments": [2, 2, 2],
+                "closed": True,
+                "easing": "linear",
+                "space": "delta",
+            }
+        ],
+    }
+
+
+def test_the_clip_pane_builds_without_rigging(app_ctx, imgui_ctx):
+    from warlock.studio.panes import poser_clips
+
+    app_ctx.rigging_available = False
+    _frame(imgui_ctx, lambda: poser_clips.draw(app_ctx))
+
+
+def test_the_clip_pane_builds_for_a_skeleton_with_no_clips(app_ctx, imgui_ctx):
+    """The state every template but the humanoid opens in, and the one a
+    collapsed heading would hide."""
+    from warlock.studio import poser_mode
+    from warlock.studio.panes import poser_clips
+
+    app_ctx.rigging_available = True
+    state = poser_mode.ensure(app_ctx)
+    state.clips = {"template": state.template, "clips": [], "poses": [], "edited": False}
+    state.clips_dirty_flag = False
+    _frame(imgui_ctx, lambda: poser_clips.draw(app_ctx))
+
+
+def test_the_clip_pane_builds_over_a_clip_and_a_session(app_ctx, imgui_ctx):
+    from warlock.studio import poser_mode
+    from warlock.studio.panes import poser_clips
+
+    app_ctx.rigging_available = True
+    app_ctx.poser_viewer = _PoserViewer()
+    state = poser_mode.ensure(app_ctx)
+    state.clips_dirty_flag = False
+    poser_mode.adopt_clips(app_ctx, _library())
+    assert state.clip == "walk"
+    _frame(imgui_ctx, lambda: poser_clips.draw(app_ctx))
+
+
+def test_the_clip_pane_builds_while_scrubbing_and_while_unsaved(app_ctx, imgui_ctx):
+    """Three branches that only exist in the middle of a session: the
+    in-between banner, the Back-to-key button and the unsaved marker."""
+    from warlock.studio import poser_mode
+    from warlock.studio.panes import poser_clips
+
+    app_ctx.rigging_available = True
+    app_ctx.poser_viewer = _PoserViewer()
+    state = poser_mode.ensure(app_ctx)
+    state.clips_dirty_flag = False
+    poser_mode.adopt_clips(app_ctx, _library())
+    poser_mode.scrub(app_ctx, 3)
+    assert state.frame == 3
+    _frame(imgui_ctx, lambda: poser_clips.draw(app_ctx))
+
+    state.clips_unsaved = True
+    state.clips["edited"] = True
+    _frame(imgui_ctx, lambda: poser_clips.draw(app_ctx))
+
+
+def test_the_clip_pane_builds_when_the_clip_will_not_expand(app_ctx, imgui_ctx):
+    """Mid-edit inconsistency is ordinary -- the segments briefly do not match
+    the keys -- and it must draw a reason rather than raise into a frame."""
+    from warlock.studio import poser_mode
+    from warlock.studio.panes import poser_clips
+
+    app_ctx.rigging_available = True
+    app_ctx.poser_viewer = _PoserViewer()
+    state = poser_mode.ensure(app_ctx)
+    state.clips_dirty_flag = False
+    poser_mode.adopt_clips(app_ctx, _library())
+    state.open_clip()["segments"] = [2]
+    poser_mode.rebuild_frames(app_ctx)
+    assert state.clips_error and not state.frames
+    _frame(imgui_ctx, lambda: poser_clips.draw(app_ctx))
+
+
+def test_drawing_the_clip_pane_pumps_its_own_refresh_flag(app_ctx, imgui_ctx):
+    from warlock.studio import poser_mode
+    from warlock.studio.panes import poser_clips
+
+    app_ctx.rigging_available = True
+    state = poser_mode.ensure(app_ctx)
+    state.clips_dirty_flag = True
+    _frame(imgui_ctx, lambda: poser_clips.draw(app_ctx))
+    assert state.clips_dirty_flag is False
+    assert state.clips_loading is True
+
+
+def test_an_unsaved_editor_is_never_reloaded_underneath_the_user(app_ctx, imgui_ctx):
+    """A background refresh landing on unsaved keys would discard them without
+    anyone asking, so the pump refuses while there is work in the editor."""
+    from warlock.studio import poser_mode
+    from warlock.studio.panes import poser_clips
+
+    app_ctx.rigging_available = True
+    state = poser_mode.ensure(app_ctx)
+    poser_mode.adopt_clips(app_ctx, _library())
+    state.clips_unsaved = True
+    state.clips_dirty_flag = True
+    _frame(imgui_ctx, lambda: poser_clips.draw(app_ctx))
+    assert state.clips_loading is False
+    assert state.clips_dirty_flag is True, "still wanted, just not now"

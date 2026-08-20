@@ -122,6 +122,50 @@ poses.
 
 The section is absent entirely for a skeleton with no presets, rather than drawn empty.
 
+## Editing clips
+
+Below the presets is **Clips** — the keyframe editor for the animations a Troupe character sheet
+plays. A *clip* is an ordered list of key poses plus how many frames each step between them holds,
+and the humanoid skeleton ships five: idle, walk, run, attack and jump. Until this editor existed
+they could only be changed by hand-editing a file inside the app's own installation.
+
+**The armature is the editor.** Picking a key in the list loads it onto the skeleton in the middle
+of the screen, and you pose it with exactly the controls on the right that you would use for a
+library pose. **Update key from pose** puts it back. There is no second posing surface to learn.
+
+Everything the clip adds on top of that is *timing*:
+
+- **Frames after this key** — how many frames the step out of the selected key holds. Each row in
+  the list shows its own, so reordering a key visibly carries its timing with it.
+- **Loops** — whether the last key steps back round to the first. A looping clip needs one more
+  step than an open one, so switching this resizes the timing list to match; there is no other
+  value it could take.
+- **Easing** — how the frames are spaced inside each step. Note that it needs at least *three*
+  frames in a step to do anything at all: with one or two there is nowhere for it to act, and the
+  panel says so rather than leaving you to conclude the setting is ignored.
+
+**Onion skin** ghosts the keys either side of the selected one in the viewport, dimmed, so a
+contact pose can be judged against the passing poses it sits between. A looping clip wraps — the
+first key's neighbour is the last one, which is exactly the comparison a walk cycle needs.
+
+**Play** scrubs the clip as the renderer will actually build it: the slider runs over the expanded
+frames, through the same interpolation the character sheet uses, so what you see is what it will
+draw. A scrubbed frame is *between* two keys and has nowhere to store an edit, so while you are
+scrubbing the panel says which frame you are on and **Update key from pose** refuses by name.
+**Back to key** returns to the selected key's own pose.
+
+### Your clips and the shipped ones
+
+**Save clips** writes your version into your own data folder and leaves the clips the app ships
+completely alone. That matters twice: an update cannot overwrite your work, and **Revert to shipped
+clips** is simply "delete my copy", so reverting also gets you any improvements a later version
+ships.
+
+A save is refused, by name, if the result is something a character sheet could not be built from —
+a clip whose segments do not add up to the frames the sheet's layout expects, a key that no longer
+exists, two clips with one name. A refused save leaves your previous clips exactly where they were,
+because the alternative is discovering the problem the next time you render a character.
+
 ## When a pose file goes wrong
 
 A pose file that has gone wrong on disk — truncated, hand-edited into the wrong shape, or simply not

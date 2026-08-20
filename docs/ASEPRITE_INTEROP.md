@@ -56,6 +56,7 @@ file's closing paragraph argues for the two Wave 5 introduced.
 | Palette-constrained RGB's own palette | dropped | #19 | The chunks *are* written — a file Aseprite opens carries its colour table — but the constraint itself has nowhere to live in the format; see the aseprite → ORA row below for why re-opening it does not bring the constraint back either. Pinned, not fixed: `tests/inker/fixtures/aseprite/palette-constrained-rgb.aseprite` in the corpus. |
 | Grayscale storage | normalized | #2 | `(v, v, v, a)` writes as the format's own `(value, alpha)` pair — lossless for every *visible* pixel; see the next row for the one place it is not. |
 | Dead colour under a grayscale pixel's alpha 0 | dropped | #2 | The funnel deliberately leaves whatever colour an eraser stroke exposed alone rather than rewriting it (a no-op write should stay a no-op), so an invisible pixel's RGB is real per-channel data this format's two-channel storage cannot carry — it is written as its own red channel alone and reads back `(v, v, v, 0)`. |
+| A document with no palette of its own | derived, not omitted | #23 | Aseprite writes a colour table into every file it saves and this writer used to omit the chunk entirely when `doc.palette` was empty. It now writes one built from the document's own pixels — every entry a colour actually painted somewhere in the file, ranked by pixel count, capped at 256 and emitted in colour order; a document with no visible pixel gets the single transparent entry. **Nothing is invented**: writing Aseprite's own default table instead would mean reciting thirty-two colours from memory, which is the unmeasured claim this repository refuses to make. Indexed documents are unaffected — there a missing palette is a refusal, never a derivation. |
 | RGBA tileset strips in an indexed document | resolved, exact-match | — (Wave 3 divergence, unnumbered) | Every strip this package stores is RGBA regardless of document colour mode; an indexed document's strip is resolved back through its palette on the way out (`index_plane.resolve`'s own rule), exact match only — a strip pixel with no slot to place it in refuses by name rather than being nearest-matched into somebody else's atlas. |
 | A slice key's pivot/nine-patch *presence*, per key | widened, never invented | — | The format declares presence once per slice, not per key (`_slice_chunk`'s `_first_set`): a key that lacks what the chunk declares inherits the *first* value the slice carries anywhere — its own where it has one — and the zero branch is never reached, so nothing is fabricated. What is lost is the distinction between "this key has no pivot" and "this key has the slice's pivot"; both read back to the same rectangle through `Slice.at`. |
 | A slice's fractional pivot | rounded | — | The format's field is a signed DWORD; a fractional pivot loses at most half a pixel. |
@@ -111,3 +112,21 @@ aseout-synthesized — written and read by this package alone, proving the
 code path runs and is stable, and proving nothing about Aseprite itself.
 Until that pass happens, every "round-trips" claim above is a claim about
 this editor's own two halves agreeing with themselves.
+
+**Two parts of the surface are riskier than the rest and are named here so the
+manual pass knows where to look first.**
+
+1. **The tilemap and tileset chunks.** Their field order was written from the
+   *reader*, inverted field for field, and has never been checked against a file
+   Aseprite itself wrote. A round trip through our own two halves cannot catch
+   an order both halves get wrong together, and nothing else in this corpus can
+   either. `tilemap-rgb`, `tilemap-indexed` and `spare-tileset` are the three
+   fixtures that exercise it; opening any one of them in Aseprite settles the
+   question in a minute, and is the single highest-value item on the owed list.
+2. **The derived palette chunk (#23).** New in this pass, and it changes the
+   bytes of every RGB and grayscale file this build writes. The round trip and
+   the corpus both prove it is stable and lossless *here*; what they cannot
+   prove is that Aseprite likes the table it finds — in particular that a
+   1-entry palette on a blank document opens without complaint rather than
+   replacing Aseprite's own default with a single swatch. Worth a look in the
+   same sitting.

@@ -103,3 +103,97 @@ def decompose(gid: int) -> tuple[int, bool, bool, bool]:
 def empty_layer(width: int, height: int) -> np.ndarray:
     """A blank layer of the one shape and dtype everything here agrees on."""
     return np.zeros((int(height), int(width)), dtype=DTYPE)
+
+
+# --- the flag algebra: transforming a *plane* of cells ------------------------
+#
+# Moved here from ``plotter/tools.py``, which had the only copy, when the Inker
+# needed the same rules to flip and rotate a tilemap layer (``ASEPRITE_PARITY.md``
+# Wave 3's "refs-aware flip/rotate (the flag algebra)" item). Neither engine may
+# import the other, and a second copy of a group-theory table is exactly the kind
+# of thing that drifts silently -- so it lives in the shared leaf both already
+# depend on, and ``plotter.tools`` now delegates rather than restating.
+#
+# **The rules are group algebra, not a lookup.** The flags are applied as
+# ``V^v . H^h . D^d`` -- transpose, then mirror columns, then mirror rows -- so
+# transforming the *drawn result* by T means composing T on the left and pushing
+# it back into that normal form. H and V commute with each other but not with D
+# (``D.V = H.D`` and ``D.H = V.D``), which is the whole content of the three
+# rules:
+#
+#   * A horizontal mirror commutes all the way through and lands on H, so it
+#     toggles ``FLIP_H`` and nothing else. Likewise V. Worth stating because the
+#     intuition that a mirror should "swap axes when FLIP_D is set" is wrong:
+#     that describes mirroring the tile *before* its own transform, and what a
+#     user flipping a map means is the mirror of what they can see.
+#   * A 90-degree clockwise rotation is ``H.D``, so composing it gives
+#     ``h' = not v``, ``v' = h``, ``d' = not d`` -- which sends an unflagged tile
+#     to ``FLIP_D | FLIP_H``, exactly what a clockwise quarter turn is above.
+#
+# All three are pinned pixel-for-pixel against the renderer rather than against a
+# hand-derived table, because a table is the thing being derived.
+
+
+def planes(cells: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """``(h, v, d)`` boolean planes for a plane of cells."""
+    arr = np.asarray(cells, dtype=DTYPE)
+    return (
+        (arr & DTYPE(FLIP_H)) != 0,
+        (arr & DTYPE(FLIP_V)) != 0,
+        (arr & DTYPE(FLIP_D)) != 0,
+    )
+
+
+def reflagged(
+    cells: np.ndarray, h: np.ndarray, v: np.ndarray, d: np.ndarray
+) -> np.ndarray:
+    """Rebuild a plane of cells from its ids and three boolean flag planes.
+
+    Empty cells stay empty: gid 0 with a flag set is not an empty cell, it is a
+    tile id nothing accounts for, and it would survive every round trip.
+    """
+    ids = np.asarray(cells, dtype=DTYPE) & DTYPE(GID_MASK)
+    out = ids.copy()
+    for plane, bit in ((h, FLIP_H), (v, FLIP_V), (d, FLIP_D)):
+        out |= np.where(plane, DTYPE(bit), DTYPE(0))
+    return np.where(ids != 0, out, DTYPE(0)).astype(DTYPE)
+
+
+def flip_plane_h(cells: np.ndarray) -> np.ndarray:
+    """Mirror a plane of cells left-to-right, tiles and arrangement together."""
+    arr = np.ascontiguousarray(np.fliplr(np.asarray(cells, dtype=DTYPE)))
+    h, v, d = planes(arr)
+    return reflagged(arr, ~h, v, d)
+
+
+def flip_plane_v(cells: np.ndarray) -> np.ndarray:
+    """Mirror a plane of cells top-to-bottom, tiles and arrangement together."""
+    arr = np.ascontiguousarray(np.flipud(np.asarray(cells, dtype=DTYPE)))
+    h, v, d = planes(arr)
+    return reflagged(arr, h, ~v, d)
+
+
+def rotate_plane_cw(cells: np.ndarray) -> np.ndarray:
+    """A quarter turn clockwise. Non-square planes come back transposed."""
+    arr = np.ascontiguousarray(np.rot90(np.asarray(cells, dtype=DTYPE), k=-1))
+    h, v, d = planes(arr)
+    return reflagged(arr, ~v, h, ~d)
+
+
+def rotate_plane_ccw(cells: np.ndarray) -> np.ndarray:
+    """A quarter turn counter-clockwise -- ``np.rot90``'s own direction.
+
+    The inverse of :func:`rotate_plane_cw`, and derived as one rather than
+    spelled as three of them: applying the clockwise rule ``(h, v, d) ->
+    (~v, h, ~d)`` three times gives ``(h, v, d) -> (v, ~h, ~d)``, which is what
+    is written here. A test pins it against three clockwise turns so the
+    derivation cannot be quietly wrong.
+
+    Wanted because the Inker's geometry ops are counter-clockwise
+    (``transform.rotate90`` is ``np.rot90``) where the Plotter's brush rotation
+    is clockwise, and turning three times to go back one is the kind of thing
+    that reads as a bug six months later.
+    """
+    arr = np.ascontiguousarray(np.rot90(np.asarray(cells, dtype=DTYPE), k=1))
+    h, v, d = planes(arr)
+    return reflagged(arr, v, ~h, ~d)

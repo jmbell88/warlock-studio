@@ -18,16 +18,24 @@ that walk and a single ``place_tiles`` call share: given one cel and a
 tile-unit rectangle, re-derive exactly that rectangle of pixels from refs and
 say so.
 
-**Geometry is taught one op and refuses the rest.** A canvas resize
-translates the picture by whole cells and pads or crops, which is a pure
-pad/crop of ``refs`` with every flag bit left alone -- so ``_tile_regrid``
-models it, and refuses by name when the offset is not a whole number of tiles.
-A flip or a rotation would instead have to turn ``refs`` by the same
-eight-symmetry algebra the tileset flags already carry, which nothing here
-does; until something does, ``_refuse_tilemaps`` is what every whole-canvas
-``_replay`` op that has not been taught calls before it touches anything --
-refuse by name rather than let ``pixels`` and ``refs`` quietly disagree, the
-Wave 3 risk the whole tile suite exists to catch.
+**Geometry is taught three ops and refuses the rest, and the refusals that
+remain are refusals of a different kind.** A canvas resize translates the
+picture by whole cells and pads or crops, which is a pure pad/crop of ``refs``
+with every flag bit left alone -- ``_tile_regrid``. A flip and a quarter turn
+have to turn ``refs`` by the eight-symmetry algebra the tileset flags already
+carry, and that algebra now lives in ``tilegrid.gid`` where the Plotter's brush
+transforms share it -- ``_tile_flip`` and ``_tile_rotate``. Each refuses by
+name where it genuinely cannot model the op rather than where it merely has not
+been taught: a canvas that is not a whole number of tiles on the axis being
+flipped (``_whole_tiles_or_refuse`` argues why no flag reconciles that), and a
+quarter turn of non-square tiles.
+
+What is left refused by ``_refuse_tilemaps`` is the **scale** and the
+**descale**, and those are not waiting for anyone: they resample, and a
+tileset cannot follow a resample -- there is no permutation, only a re-cut,
+which is a different operation wearing a scale's name. The rule the whole tile
+suite exists to enforce is unchanged either way: refuse by name rather than let
+``pixels`` and ``refs`` quietly disagree.
 """
 
 from __future__ import annotations
@@ -39,6 +47,7 @@ import numpy as np
 from ..tilegrid import gid
 from . import composite as cp
 from . import indexed as ix
+from . import transform as tf
 from .anim_edits import CelSetEdit, TrackAddEdit
 from .animation import Track
 from .layers import Layer
@@ -650,21 +659,50 @@ class TileOps:
         tiles: list[np.ndarray] = [blank]
         lookup: dict[bytes, int] = {content_key(blank): 0}
         refs_for: dict[int, np.ndarray] = {}
+        # How much of the grid is whole tiles. Everything inside this is cut
+        # without padding; only the ragged right and bottom edges -- at most one
+        # row and one column of cells -- need the blank-and-paste.
+        whole_rows, whole_cols = height // tile_h, width // tile_w
         for _frame, cel in slots:
             if id(cel) in refs_for:
                 continue
+            pixels = cel.pixels
             refs = np.zeros((grid_h, grid_w), dtype=gid.DTYPE)
             for row in range(grid_h):
+                py = row * tile_h
+                full_row = row < whole_rows
                 for col in range(grid_w):
-                    cut = blank.copy()
-                    py, px = row * tile_h, col * tile_w
-                    rows, cols = min(tile_h, height - py), min(tile_w, width - px)
-                    cut[:rows, :cols] = cel.pixels[py : py + rows, px : px + cols]
-                    key = content_key(cut)
+                    px = col * tile_w
+                    if full_row and col < whole_cols:
+                        # ``content_key`` is ``tobytes()`` and nothing more, and
+                        # ``tobytes`` on a non-contiguous view already produces
+                        # the C-order bytes a compacted copy would -- so an
+                        # interior cell needs no ``blank.copy()`` and no paste,
+                        # just the one copy ``tobytes`` was always going to
+                        # make. Measured 1.6x-1.8x over the copy-per-cell loop
+                        # across 512..2048px canvases at 8 and 16px tiles, and
+                        # bit-identical on every one (the plan's "would want
+                        # vectorising" item; a block-transpose rewrite was tried
+                        # first and *lost* on big canvases, because it pays for
+                        # the whole canvas twice to save the same per-cell copy).
+                        key = pixels[py : py + tile_h, px : px + tile_w].tobytes()
+                    else:
+                        cut = blank.copy()
+                        rows = min(tile_h, height - py)
+                        cols = min(tile_w, width - px)
+                        cut[:rows, :cols] = pixels[py : py + rows, px : px + cols]
+                        key = content_key(cut)
                     local = lookup.get(key)
                     if local is None:
                         local = len(tiles)
-                        tiles.append(cut)
+                        # Rebuilt from the key rather than kept as the slice, so
+                        # the stored tile is always exactly the bytes the id was
+                        # minted for and can never alias the cel it came from.
+                        tiles.append(
+                            np.frombuffer(key, dtype=np.uint8).reshape(
+                                tile_h, tile_w, 4
+                            )
+                        )
                         lookup[key] = local
                     refs[row, col] = local
             refs_for[id(cel)] = refs
@@ -943,19 +981,187 @@ class TileOps:
             if self._tileset_bound(slot.uid)
         ]
 
+    def _whole_tiles_or_refuse(self: Document, verb: str, axes: str) -> None:
+        """Refuse *verb* unless the canvas is a whole number of tiles on *axes*.
+
+        ``axes`` is ``"x"``, ``"y"`` or ``"xy"``.
+
+        **This is a real constraint, not caution.** A tilemap cel's picture is
+        ``materialize(refs, tileset, size)``, which lays the grid out from the
+        origin and then *crops* to the canvas -- so on a 10px canvas at 4px
+        tiles, cell 2 contributes 2 visible pixels and 2 that are cropped away.
+        Flip the picture and the visible pixel at x=0 is what used to be at
+        x=9, which lives in the middle of cell 2; flip the refs and cell 0
+        becomes a mirrored cell 2, whose first pixel is that cell's *last* --
+        the cropped one. The two answers differ, and there is no flag that
+        reconciles them because the mismatch is about which pixels the crop
+        kept, not about how a tile is drawn.
+
+        Refused by name rather than papered over, and **before** anything is
+        written, so a refused flip has changed nothing at all. Resize is the
+        way out: growing the canvas to a whole number of tiles makes the op
+        legal, which is a thing the message can honestly suggest.
+        """
+        width, height = self.size
+        for tile_w, tile_h in self._bound_tile_sizes():
+            bad = []
+            if "x" in axes and width % tile_w:
+                bad.append(f"{width} wide is not a whole number of {tile_w}px tiles")
+            if "y" in axes and height % tile_h:
+                bad.append(f"{height} tall is not a whole number of {tile_h}px tiles")
+            if bad:
+                raise ValueError(
+                    f"a {verb} of a tilemap layer needs a tile-aligned canvas; "
+                    + " and ".join(bad)
+                    + " -- resize the canvas first"
+                )
+
+    def _one_bound_tile_size(self: Document) -> tuple[int, int]:
+        """The single tile size every bound tileset agrees on.
+
+        Callers ask only after :meth:`_tile_shift_guard` (or an equivalent) has
+        established that they all agree, so the first is the answer; a document
+        with none at all cannot have reached here.
+        """
+        sizes = self._bound_tile_sizes()
+        return sizes[0] if sizes else (1, 1)
+
+    def _tile_shift_guard(self: Document, dx: int, dy: int, wrap: bool) -> None:
+        """Refuse a range shift a tilemap layer cannot follow.
+
+        Three separate refusals, each by name, because each is a different
+        thing to go and fix:
+
+        * **Not wrapping.** An unwrapped shift vacates pixels and fills them
+          transparent. On a tilemap that is not a fill, it is "these cells now
+          point at no tile" -- reachable (id 0 is the reserved blank), but it is
+          a *content* decision this op has no mandate to make on the user's
+          behalf, and silently blanking cells is the worst version of it.
+        * **Not a whole number of tiles.** A sub-tile shift re-cuts every cell
+          against a new phase, which rewrites the tileset. That is a different
+          operation wearing a shift's name -- ``_tile_regrid``'s own argument
+          about an unaligned resize offset, restated.
+        * **Two tile sizes in one document.** A single roll cannot be right for
+          both, and doing it per cel would move two layers by different amounts
+          under one gesture.
+        """
+        sizes = self._bound_tile_sizes()
+        if not sizes:
+            return
+        if not wrap:
+            raise ValueError(
+                "a shift of a tilemap layer must wrap; an unwrapped one would "
+                "point the vacated cells at no tile rather than move them"
+            )
+        if len(set(sizes)) > 1:
+            raise ValueError(
+                "a shift of a tilemap layer needs one tile size in the "
+                f"document; this one has {sorted(set(sizes))}"
+            )
+        tile_w, tile_h = sizes[0]
+        if int(dx) % tile_w or int(dy) % tile_h:
+            raise ValueError(
+                "a shift of a tilemap layer needs a tile-aligned distance; "
+                f"({int(dx)}, {int(dy)}) is not a whole number of "
+                f"{tile_w}x{tile_h} tiles"
+            )
+
+    def _square_tiles_or_refuse(self: Document, verb: str) -> None:
+        """Refuse *verb* while any bound tileset holds non-square tiles.
+
+        A quarter turn of a 16x8 tile is an 8x16 tile, and a tileset stores one
+        tile size -- so the turned art would have nowhere to live. Note that a
+        square *canvas* does not imply square tiles: a 16x16 canvas holds 8x4
+        tiles perfectly happily, which is why this is asked separately from
+        every alignment check rather than inferred from one.
+        """
+        for tile_w, tile_h in self._bound_tile_sizes():
+            if tile_w != tile_h:
+                raise ValueError(
+                    f"a {verb} of a tilemap layer needs square tiles; this one "
+                    f"is {tile_w}x{tile_h}, and a turned tile would be "
+                    f"{tile_h}x{tile_w} with no tileset to hold it"
+                )
+
+    def _tile_flip(self: Document, axis: str) -> Any:
+        """The per-cel refs permutation a whole-canvas flip needs, or ``None``.
+
+        The refs plane is mirrored *and* every cell's flag bits are turned with
+        it, by ``tilegrid.gid``'s eight-symmetry algebra -- mirroring the
+        arrangement without re-flagging the tiles would give a mirrored layout
+        of unmirrored tiles, which is the classic version of this bug.
+
+        See :meth:`_whole_tiles_or_refuse` for the one case this cannot model.
+        """
+        if not self._holds_tilemap():
+            return None
+        self._whole_tiles_or_refuse("flip", "x" if axis == "horizontal" else "y")
+        turn = gid.flip_plane_h if axis == "horizontal" else gid.flip_plane_v
+
+        def run(layer: Any) -> None:
+            if not isinstance(layer, TilemapCel):
+                return
+            layer.refs = turn(layer.refs)
+            ts = self.tileset_slot(layer.tileset_uid).tileset
+            # Re-derived from the refs just written, ``_tile_regrid``'s rule and
+            # for the same reason: the picture is a materialisation, never a
+            # second copy kept in step. The mapped pixels ``_map_planes`` left
+            # on the layer *should* be identical -- a test asserts exactly that,
+            # since it is the whole correctness claim of the flag algebra -- but
+            # the refs are the record, so the record is what draws.
+            layer.pixels = materialize(layer.refs, ts, self.size)
+
+        return run
+
+    def _tile_rotate(self: Document, quarters: int) -> Any:
+        """The per-cel refs permutation a quarter turn needs, or ``None``.
+
+        Counter-clockwise, matching ``transform.rotate90``/``np.rot90``, which
+        is why ``gid`` grew a derived ``rotate_plane_ccw`` rather than this
+        turning three times clockwise to go back one.
+
+        **A rotation needs square tiles**, and that is refused by name: a
+        quarter turn of a 16x8 tile is an 8x16 tile, and a tileset stores one
+        tile size -- so the rotated art would have nowhere to live. A flip has
+        no such problem, which is why only this one asks.
+        """
+        if not self._holds_tilemap():
+            return None
+        turns = int(quarters) % 4
+        if turns == 0:
+            return None
+        self._square_tiles_or_refuse("quarter turn")
+        self._whole_tiles_or_refuse("quarter turn", "xy")
+        size = tf.rotate90_size(self.size, turns)
+
+        def run(layer: Any) -> None:
+            if not isinstance(layer, TilemapCel):
+                return
+            plane = layer.refs
+            for _ in range(turns):
+                plane = gid.rotate_plane_ccw(plane)
+            layer.refs = plane
+            ts = self.tileset_slot(layer.tileset_uid).tileset
+            layer.pixels = materialize(plane, ts, size)
+
+        return run
+
     def _tile_regrid(
         self: Document, size: tuple[int, int], offset: tuple[int, int]
     ) -> Any:
         """The per-cel refs re-grid a canvas resize needs, or ``None``.
 
-        **The one geometry op that is modelled rather than refused.** A resize
-        moves no pixel *within* a tile: the picture is translated by whole
-        cells and padded or cropped at the edges, which is exactly a pad/crop
-        of ``refs`` and leaves every cell's flag bits alone. The flips, the
-        quarter turns, the scale and the crop are still refused by
-        :meth:`_refuse_tilemaps` because their permutation would have to turn
-        those flags by the eight-symmetry algebra, and nothing here does that
-        yet.
+        A resize moves no pixel *within* a tile: the picture is translated by
+        whole cells and padded or cropped at the edges, which is exactly a
+        pad/crop of ``refs`` and leaves every cell's flag bits alone. The flips
+        and the quarter turns are modelled too now, by
+        :meth:`_tile_flip`/:meth:`_tile_rotate` -- their permutation *does* have
+        to turn the flag bits, and ``tilegrid.gid`` is where that algebra lives.
+        The scale and the descale are still refused by
+        :meth:`_refuse_tilemaps`, and always will be for a different reason:
+        they **resample**, and a tileset has no way to follow a resample. There
+        is no permutation to apply, only a re-cut, which is a different
+        operation wearing a scale's name.
 
         A **non-tile-aligned offset** is refused by name rather than rounded:
         rounding it would move the picture somewhere the user did not ask for,

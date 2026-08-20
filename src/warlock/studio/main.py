@@ -2969,15 +2969,18 @@ class App:
     def _poser_workspace(self) -> None:
         """The sidebar / centre / sidebar skeleton, Poser's way:
 
-            [ poser_library ]  viewport  [ poser_controls ]
+            [ poser_library + poser_clips ]  viewport  [ poser_controls ]
 
         One pane per side rather than Clay's stacked pairs: the library and the
         controls are each one scroller, and an empty half-pane would be chrome.
+        The clip editor is a *section* inside the left scroller for that same
+        reason -- a skeleton with no clips shows one collapsed heading, where a
+        split pane would show an empty half.
         """
         from imgui_bundle import imgui
 
         from . import layout as layout_mod
-        from .panes import poser_controls, poser_library
+        from .panes import poser_clips, poser_controls, poser_library
 
         ctx = self.app_ctx
         sidebar_w = layout_mod.sidebar_width()
@@ -2989,6 +2992,11 @@ class App:
         ) as visible:
             if visible:
                 poser_library.draw(ctx)
+                # Under the pose library rather than in a mode of its own: a
+                # clip is a *library* of the same kind of thing, and the right
+                # sidebar has to stay free for the joint controls, which are
+                # the actual editing surface for a key.
+                poser_clips.draw(ctx)
 
         imgui.same_line()
         width = layout_mod.centre_width()

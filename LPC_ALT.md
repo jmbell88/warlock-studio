@@ -239,16 +239,51 @@ Four new units, each with one job:
 
 ## Status, 2026-08-20
 
-**Phases 0a, 0b, 0c, 0d, 1, 3, 4 and 5 are implemented and verified.** Phases 0e, 2, 6 and 7 are
+**Phases 0a, 0b, 0c, 0d, 1, 2, 3, 4 and 5 are implemented and verified.** Phases 0e, 6 and 7 are
 open.
 
-**Phase 2 is half open, and the half that is missing is the art half.** The clip *format* and its
-expansion ship — `templates/clips/humanoid.json`, `rigging._load_clip_library`,
-`clips.expand_clips` — and Troupe renders from them. What does not exist is the authoring surface
-the phase specifies: there is no keyframe list, no onion-skinning and no live low-res sprite
-preview in Poser, and `poser_mode.py` was not touched by any of the four commits that built
-Troupe. The 22 keyframes are editable only as raw JSON. Since the phase itself calls this "the most
-important art task in the program", it is listed as open rather than done.
+**Phase 2's authoring surface landed 2026-08-20.** The clip *format* and its expansion already
+shipped; what did not was any way to change a clip that is not editing JSON in the package tree.
+Now:
+
+- `service/clips.py` is the door — read, save, revert, and expand-for-preview. It validates through
+  **the renderer's own parser** and **the renderer's own frame-count check**, so an editor that can
+  write a file the character sheet cannot open is structurally impossible, and a refused save
+  restores the previous bytes rather than leaving a library the next render discovers.
+- **Edits go to `data_dir/poser/clips/<template>.json` and the shipped library becomes a factory
+  default.** `rigging.clip_library` prefers the user's copy. That is what makes Revert "delete my
+  copy" with no stored default to keep in step, and it is what keeps an installed build working
+  (`EXE_PLAN.md`'s package tree is replaced wholesale on upgrade and may not be writable).
+  `rigging` is *told* where that directory is by `WarlockService`, never allowed to discover it —
+  its whole `warlock` import set is pinned to `{winjob}`, and the pin caught the first attempt.
+- The Poser pane (`panes/poser_clips.py`) is the keyframe list, the timing, the easing, the loop
+  toggle, reorder/insert/remove/new-key, capture-from-armature, save and revert.
+- **Onion-skinning** ghosts the keys either side of the selected one, wrapping on a closed clip.
+  It is drawn from `viewer.pose.ghost_handles`, a *pure* forward-kinematic walk that never touches
+  a node — posing the model to read it and posing it back would fight `_resync_handles` for the
+  live markers on every frame of a gizmo drag.
+- **The scrubber** plays the clip through `sheet.interpolate_clip`, the renderer's own
+  interpolator, and does not push undo steps (it runs per slider frame). Capturing while scrubbing
+  is refused by name: an in-between frame has nowhere to store an edit.
+
+**Two findings the plan did not have, and one of them changes the phase's own spec:**
+
+1. **The "live low-res sprite preview" cannot live in Poser, because Poser's preview is a *meshless
+   armature*.** `template_preview` builds an armature-only GLB over the canonical unit box — there
+   is no character to pixelise, so a sprite preview there would show reduced bone lines. Judging
+   clips as pixels needs a rigged mesh, which is Troupe's own path, not Poser's. **This is now an
+   open design question rather than an unbuilt feature**: either Poser learns to load a rigged
+   asset for preview, or the pixel verdict stays where the mesh is. The scrubber is what ships in
+   its place, and it is the right tool for the fast loop regardless.
+2. **Easing does nothing at the shipped segment lengths.** It reshapes *where inside a segment* the
+   frames land, so it needs a segment of at least three frames; every shipped segment is 1 or 2, and
+   `ease` is a smoothstep whose value at the only interior sample (t=0.5) is exactly 0.5. So
+   `idle`'s `"easing": "ease"` renders identically to `linear` today. `ease_in`/`ease_out` do
+   differ. Pinned by a test and stated in the panel, because an author who changes it and sees
+   nothing would reasonably conclude the field is ignored.
+
+**Still owed, and only a human can supply it: the art.** The editor exists; the twenty-two
+keyframes it edits are still the provisional ones. See `MY_TODO.md`.
 
 An earlier revision of this line claimed phase 2 complete and reported "10,700 passing" while
 twelve tests were failing on master. Those twelve are fixed (audit, 2026-08-20); the count is not
@@ -387,7 +422,9 @@ The cheapest high-value work in the program, and it decides whether output looks
   `rigging._load_pose_library` machinery. Cyclic clips (Idle, Walk, Run) close the loop; one-shots
   (Attack, Jump) do not.
 - Clip authoring **in Poser**, not a new mode: keyframe list, onion-skinning, and a **live
-  low-res sprite preview** so clips are judged as pixels, not as viewport playback.
+  low-res sprite preview** so clips are judged as pixels, not as viewport playback. **Built
+  2026-08-20 except the sprite preview**, which the tree refuses: Poser's preview is a meshless
+  armature and there is nothing to pixelise. See the status section above.
 - Author the ~22 keyframes against the base mesh. Five usable poses already ship in
   `templates/poses/humanoid.json`. **This is the most important art task in the program** —
   "stiff posing" was one of the four complaints, and a bad clip reproduces exactly the flaw being

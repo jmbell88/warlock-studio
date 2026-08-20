@@ -200,6 +200,12 @@ def _overlay_stub(editor, model):
         _bone_pairs=[],
         bonelines=SimpleNamespace(draws=lambda *a, **k: ["lines"]),
         markers=SimpleNamespace(draws=lambda *a, **k: ["markers"]),
+        # The onion-skin ghosts. Empty here, which is the state every pose
+        # session outside the clip editor is in -- and the point of listing
+        # them: ``_overlays`` must draw the same two items it always did when
+        # nothing has asked for a ghost.
+        ghostlines=[SimpleNamespace(draws=lambda *a, **k: ["ghost"]) for _ in range(2)],
+        onion=[],
         # Non-None so the gizmo branch is entered at all; never called, because
         # the lookups bail before ``place``.
         _active_gizmo=lambda: object(),
@@ -303,3 +309,55 @@ def test_frame_bounds_frames_the_supplied_box_not_the_models():
     assert stub.radius > 0.5, "a unit-character box frames at a usable radius"
     assert stub.renderer.fitted is not None
     assert stub._render_dirty is True
+
+
+def test_an_onion_ghost_draws_under_the_live_skeleton():
+    """Ghosts first, so the pose being edited draws over them: an onion skin
+    that covered the live skeleton would make the thing you are posing harder
+    to read rather than easier."""
+    model = _armature_model()
+    editor = PoseEditor()
+    editor.bind(model, ["hips", "spine"])
+    stub = _overlay_stub(editor, model)
+    stub._active_gizmo = lambda: None
+    stub.onion = [{"spine": [0.0, 0.0, 0.0, 1.0]}, {}]
+
+    items = Viewer._overlays(stub, 600)
+    assert items == ["ghost", "lines", "markers"], "the empty second ghost draws nothing"
+
+
+def test_ghost_handles_never_move_the_live_model():
+    """The whole reason it is a pure walk: this runs every frame of a gizmo
+    drag, and posing the model to read it would drag the live markers to the
+    ghost's positions and back between the read and the draw."""
+    from warlock.studio.viewer.pose import ghost_handles
+
+    model = _armature_model()
+    editor = PoseEditor()
+    editor.bind(model, ["hips", "spine"])
+    before = {b: editor.handles[b].copy() for b in editor.bones}
+    worlds = [n.world.copy() for n in model.nodes]
+
+    turned = ghost_handles(model, editor.bones, {"hips": [0.0, 0.3894, 0.0, 0.9211]})
+
+    assert set(turned) == set(editor.bones)
+    for name, point in before.items():
+        assert editor.handles[name] == pytest.approx(point)
+    for node, was in zip(model.nodes, worlds, strict=True):
+        assert node.world == pytest.approx(was)
+
+
+def test_a_ghost_puts_unnamed_bones_at_rest_not_at_the_live_pose():
+    """A key lists only the bones it moves, so a ghost of that key is what
+    ``apply_preset`` would show -- everything else back at rest. Reading the
+    live pose for the rest would make the ghost a blend of two poses that
+    exists nowhere in the clip."""
+    from warlock.studio.viewer.pose import ghost_handles
+
+    model = _armature_model()
+    editor = PoseEditor()
+    editor.bind(model, ["hips", "spine"])
+    rest = ghost_handles(model, editor.bones, {})
+    editor.apply({"hips": [0.0, 0.3894, 0.0, 0.9211]}, dirty=True)
+
+    assert ghost_handles(model, editor.bones, {})["spine"] == pytest.approx(rest["spine"])
