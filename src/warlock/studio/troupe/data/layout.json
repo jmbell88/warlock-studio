@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "render_size": 512,
+  "elevation": 30.0,
+  "columns": 8,
+  "sizes": [16, 24, 32, 48, 64, 96, 128],
+  "directions": [
+    {"name": "front", "yaw": 0.0},
+    {"name": "front_left", "yaw": 45.0},
+    {"name": "left", "yaw": 90.0},
+    {"name": "back_left", "yaw": 135.0},
+    {"name": "back", "yaw": 180.0},
+    {"name": "back_right", "yaw": 225.0},
+    {"name": "right", "yaw": 270.0},
+    {"name": "front_right", "yaw": 315.0}
+  ],
+  "animations": [
+    {"name": "idle",   "frames": 4, "loop": true,  "keys": 3, "duration_ms": 150},
+    {"name": "walk",   "frames": 8, "loop": true,  "keys": 4, "duration_ms": 100},
+    {"name": "run",    "frames": 8, "loop": true,  "keys": 4, "duration_ms": 60},
+    {"name": "attack", "frames": 6, "loop": false, "keys": 5, "duration_ms": 80},
+    {"name": "jump",   "frames": 6, "loop": false, "keys": 6, "duration_ms": 100}
+  ]
+}

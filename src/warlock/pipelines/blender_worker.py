@@ -444,7 +444,18 @@ def _scene_bounds(bpy: Any) -> tuple[list[float], list[float]]:
     )
 
 
-def _setup_render(bpy: Any, size: int) -> None:
+def _setup_render(bpy: Any, size: int, *, taa_samples: int | None = None) -> None:
+    """Render settings shared by the sheet and the view-bake paths.
+
+    ``taa_samples`` is the crispness knob. A native low-res render comes back
+    antialiased and soft otherwise, which is a shrunk render rather than pixel
+    art -- and the softness survives the reduction, because a partial-alpha
+    fringe is exactly what the alpha snap then has to guess about. One sample
+    is right wherever the surface emits rather than shades: an emission render
+    has no noise for TAA to average away, which is the argument ``op_views``
+    already makes at its own call. Left alone by default, because a *lit*
+    sheet does have noise and one sample would show it.
+    """
     scene = bpy.context.scene
     # EEVEE was renamed in 4.2 and the old id is gone in 5.x. Assigning an
     # unknown enum raises, so try the current name first and fall back.
@@ -467,6 +478,9 @@ def _setup_render(bpy: Any, size: int) -> None:
     # desaturate every frame relative to the 3D preview beside it.
     with contextlib.suppress(TypeError):
         scene.view_settings.view_transform = "Standard"
+    if taa_samples is not None:
+        with contextlib.suppress(AttributeError):
+            scene.eevee.taa_render_samples = int(taa_samples)
 
 
 def _world(bpy: Any, strength: float) -> None:
@@ -811,7 +825,9 @@ def op_sheet(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
     distance = extent * 2.0
 
     progress(0.10, "Setting up")
-    _setup_render(bpy, size)
+    # Flat is unlit emission, so one sample is the whole answer and antialiasing
+    # is pure loss -- see _setup_render. A lit sheet keeps Blender's default.
+    _setup_render(bpy, size, taa_samples=1 if spec["lighting"] != "lit" else None)
     if spec["lighting"] == "lit":
         _make_lit(bpy, centre, extent / 2.0)
     else:

@@ -582,9 +582,14 @@ def _sheet_root_offsets(
     A pose snapshotted from the global library can carry a root offset, and a
     sheet built from it must not silently disagree with the pose's own bake --
     one meaning per pose. Rows without one gain no keys, so every pre-existing
-    cell dict is byte-identical to what it always was. (Clip records can never
-    reach this: sheetlib.interpolate refuses endpoint poses with root offsets
-    by name.)
+    cell dict is byte-identical to what it always was.
+
+    Clip records *do* reach this now. ``sheetlib.interpolate`` used to refuse an
+    endpoint carrying an offset and interpolates it instead, which is what a
+    walk cycle's vertical bob is made of. Nothing here had to change to allow
+    it: the map is keyed by ``(pose id, frame)`` and every frame of a clip
+    shares an id but has its own frame number, so each frame already gets its
+    own entry.
 
     A rig.json that cannot answer (pre-template, unreadable) costs the offset,
     never the sheet -- and says so, one warning per pose, the same sentence

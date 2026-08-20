@@ -583,22 +583,26 @@ def _offset_pose(job_dir, name, pose_id=None):
     )
 
 
-def test_a_clip_end_with_a_root_offset_rings_the_select_that_chose_it(svc, assets):
-    """A refusal names the control it came from: interpolate's root-offset
-    refusal is about a pose, so the field is that end's own select rather than
-    the frame slider the message never mentions -- which is where this refusal
-    used to point."""
+def test_a_clip_end_with_a_root_offset_is_accepted_and_interpolated(svc, assets):
+    """This used to be a refusal that had to ring one of two selects. Root
+    translation is now interpolated instead -- it is what a vertical bob is --
+    so the door has nothing left to refuse here and the clip is built."""
     job_id = _mesh_job(svc, assets, rigged=True)
     a = rigging.save_pose(assets / job_id, {"name": "A", "bones": {"hips": IDENTITY}})
     b = _offset_pose(assets / job_id, "B")
 
-    with pytest.raises(Invalid, match="root offset") as exc:
-        svc_sheets.create_sheet(svc, job_id, clip_from=a["id"], clip_to=b["id"])
-    assert exc.value.field == "clip_to"
+    assert svc_sheets.create_sheet(svc, job_id, clip_from=a["id"], clip_to=b["id"])["id"]
+    assert svc_sheets.create_sheet(svc, job_id, clip_from=b["id"], clip_to=a["id"])["id"]
 
-    with pytest.raises(Invalid, match="root offset") as exc:
-        svc_sheets.create_sheet(svc, job_id, clip_from=b["id"], clip_to=a["id"])
-    assert exc.value.field == "clip_from"
+    records = sheetlib.interpolate(
+        rigging.read_pose(assets / job_id, a["id"]),
+        rigging.read_pose(assets / job_id, b["id"]),
+        4,
+    )
+    # Every frame of an offset-carrying clip records one -- frame 0 at A's own
+    # zero, the rest climbing toward B's 0.25 without reaching it, which is the
+    # same seam rule the bones follow.
+    assert [r["root_translation"][2] for r in records] == [0.0, 0.0625, 0.125, 0.1875]
 
 
 def test_a_bad_frame_count_rings_the_slider_even_beside_an_offset_pose(svc, assets):

@@ -176,54 +176,179 @@ def slerp(a: Sequence[float], b: Sequence[float], t: float) -> list[float]:
     return [v / norm for v in out]
 
 
+EASINGS = ("linear", "ease", "ease_in", "ease_out")
+
+
+def _ease(t: float, kind: str) -> float:
+    """Reshape a 0..1 segment parameter. Pure arithmetic, no table.
+
+    Easing is a *clip* property, not a renderer one: a jump's rise and fall are
+    the same two poses either way, and what separates a readable jump from a
+    stiff one is how the frames are spaced between them. Doing it here keeps
+    that decision on the host with the rest of the clip, where the preview and
+    the Blender renderer both read it.
+    """
+    if kind == "linear":
+        return t
+    if kind == "ease":            # smoothstep: slow out of A, slow into B
+        return t * t * (3.0 - 2.0 * t)
+    if kind == "ease_in":
+        return t * t
+    if kind == "ease_out":
+        return t * (2.0 - t)
+    raise ValueError(f"easing must be one of {list(EASINGS)}")
+
+
+def _root(pose: Mapping[str, Any]) -> tuple[float, float, float]:
+    values = tuple(float(v) for v in (pose.get("root_translation") or ()))
+    return (values + (0.0, 0.0, 0.0))[:3]
+
+
+def _blend(
+    pose_a: Mapping[str, Any],
+    pose_b: Mapping[str, Any],
+    t: float,
+) -> tuple[dict[str, list[float]], tuple[float, float, float]]:
+    """One frame's bones and root offset, ``t`` of the way from A to B.
+
+    A bone posed in only one of the two ends interpolates from rest, which is
+    what the worker's ``_reset_pose`` already means by an omitted bone.
+    """
+    bones_a = pose_a.get("bones") or {}
+    bones_b = pose_b.get("bones") or {}
+    bones = {
+        bone: slerp(
+            bones_a.get(bone, IDENTITY_QUAT), bones_b.get(bone, IDENTITY_QUAT), t
+        )
+        for bone in sorted(set(bones_a) | set(bones_b))
+    }
+    ra, rb = _root(pose_a), _root(pose_b)
+    root = tuple(a + (b - a) * t for a, b in zip(ra, rb, strict=True))
+    return bones, root  # type: ignore[return-value]
+
+
+def _record(
+    clip_id: str,
+    name: str,
+    index: int,
+    bones: dict[str, list[float]],
+    root: tuple[float, float, float],
+    *,
+    with_root: bool,
+) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        # The row's identity is the clip, not the frame: the worker re-poses
+        # per cell within a clip row, which is the one place the group-by-row
+        # optimisation does not apply.
+        "id": clip_id,
+        "name": f"{name} #{index}",
+        "frame": index,
+        "bones": bones,
+    }
+    # Emitted for every frame of a clip whose *keys* carry an offset, and for
+    # no frame of one whose keys do not. Per clip and not per frame, because a
+    # bob passes through zero at its midpoint and a frame that dropped the key
+    # there would read as "this frame has no opinion" rather than "this frame
+    # is at rest height" -- and because a clip that carried no offset at all
+    # then produces byte-identical records to the ones it always did, which is
+    # what keeps ``_sheet_root_offsets`` short-circuiting on them.
+    if with_root:
+        out["root_translation"] = [float(v) for v in root]
+    return out
+
+
 def interpolate(
     pose_a: Mapping[str, Any], pose_b: Mapping[str, Any], frames: int
 ) -> list[dict[str, Any]]:
     """``frames`` pose records stepping from A toward B.
 
     The last frame stops *short* of B rather than landing on it, so a clip that
-    loops back to A does not hold a duplicate frame at the seam. A bone posed in
-    only one of the two ends interpolates from rest, which is what the worker's
-    _reset_pose already means by an omitted bone.
+    loops back to A does not hold a duplicate frame at the seam.
+
+    **Root translation is interpolated, not refused.** It used to be refused by
+    name, on the correctness argument that a snapshotted library pose carrying
+    a root offset would render a clip disagreeing with the pose's own bake. The
+    machinery to honour it instead was already everywhere else --
+    ``rigging.root_offset_world``, ``queue._sheet_root_offsets`` (keyed by
+    ``(pose id, frame)``, which is per *frame* and so already clip-shaped), and
+    ``op_sheet``'s per-cell ``root_offset`` -- so the guard was costing the one
+    thing a walk cycle needs most, a vertical bob, for a disagreement that no
+    longer exists.
     """
-    if not 1 <= frames <= MAX_CLIP_FRAMES:
+    if not 1 <= int(frames) <= MAX_CLIP_FRAMES:
         raise ValueError(f"a clip must be 1-{MAX_CLIP_FRAMES} frames")
-    # A feature this interpolation does not model is refused by name, never
-    # dropped (the Plotter TMX rule): this lerps bones only, so a snapshotted
-    # library pose carrying a root offset would render a clip that silently
-    # disagrees with the pose's own bake. Refusing here covers both callers --
-    # the submit-time check and the worker's rebuild -- with one spelling.
-    for pose in (pose_a, pose_b):
-        if any(float(v) for v in (pose.get("root_translation") or ())):
-            raise ValueError(
-                f"pose {pose.get('name', '?')!r} carries a root offset, "
-                "which a clip cannot interpolate"
-            )
-    bones_a = pose_a.get("bones") or {}
-    bones_b = pose_b.get("bones") or {}
-    names = sorted(set(bones_a) | set(bones_b))
-    name = f"{pose_a.get('name', 'A')} -> {pose_b.get('name', 'B')}"
-    out: list[dict[str, Any]] = []
-    for i in range(frames):
-        t = i / frames
-        out.append(
-            {
-                # The row's identity is the clip, not the frame: the worker
-                # re-poses per cell within a clip row, which is the one place
-                # the group-by-row optimisation does not apply.
-                "id": f"{pose_a.get('id') or ''}:{pose_b.get('id') or ''}",
-                "name": f"{name} #{i}",
-                "frame": i,
-                "bones": {
-                    bone: slerp(
-                        bones_a.get(bone, IDENTITY_QUAT),
-                        bones_b.get(bone, IDENTITY_QUAT),
-                        t,
-                    )
-                    for bone in names
-                },
-            }
+    return _expand([pose_a, pose_b], [int(frames)], "linear", land=False)
+
+
+def interpolate_clip(
+    keys: Sequence[Mapping[str, Any]],
+    segments: Sequence[int],
+    *,
+    closed: bool = False,
+    easing: str = "linear",
+) -> list[dict[str, Any]]:
+    """An ordered keyframe list expanded into pose records.
+
+    ``segments[i]`` is how many frames the step from ``keys[i]`` onward holds.
+
+    ``closed`` is a cycle -- Idle, Walk, Run: there is one segment per key and
+    the last returns to the first, and no segment lands on its far key because
+    that key is the next segment's frame 0. That is the seam rule ``interpolate``
+    already had, generalised.
+
+    Open is a one-shot -- Attack, Jump: one segment per *gap*, and one extra
+    frame at the end that lands exactly on the last key, because a one-shot's
+    final frame is a pose the animation holds rather than a seam it hides.
+
+    Two keys and one segment, closed, is exactly the old two-key behaviour,
+    which is why ``interpolate`` is now three characters of delegation. Eight
+    frames from contact A to contact B was half a stride played straight; four
+    keys -- contact A, passing A, contact B, passing B -- is a stride.
+    """
+    keys = list(keys)
+    counts = [int(n) for n in segments]
+    if len(keys) < 2:
+        raise ValueError("a clip needs at least two keyframes")
+    wanted = len(keys) if closed else len(keys) - 1
+    if len(counts) != wanted:
+        raise ValueError(
+            f"a {'cyclic' if closed else 'one-shot'} clip over {len(keys)} keys "
+            f"takes {wanted} segment lengths, not {len(counts)}"
         )
+    if any(n < 1 for n in counts):
+        raise ValueError("every segment holds at least one frame")
+    total = sum(counts) + (0 if closed else 1)
+    if not 1 <= total <= MAX_CLIP_FRAMES:
+        raise ValueError(f"a clip must be 1-{MAX_CLIP_FRAMES} frames")
+
+    return _expand(keys, counts, easing, land=not closed)
+
+
+def _expand(
+    keys: Sequence[Mapping[str, Any]],
+    counts: Sequence[int],
+    easing: str,
+    *,
+    land: bool,
+) -> list[dict[str, Any]]:
+    """The expansion itself, shared by the two-key door and the multi-key one.
+
+    ``counts[i]`` steps from ``keys[i]`` toward ``keys[i + 1]``, wrapping, and
+    never lands on that far key. ``land`` appends the one extra frame that
+    finishes a one-shot on its final pose.
+    """
+    clip_id = ":".join(str(k.get("id") or "") for k in keys)
+    name = " -> ".join(str(k.get("name") or "?") for k in keys)
+    with_root = any(any(_root(k)) for k in keys)
+    out: list[dict[str, Any]] = []
+    for i, count in enumerate(counts):
+        a, b = keys[i], keys[(i + 1) % len(keys)]
+        for j in range(count):
+            bones, root = _blend(a, b, _ease(j / count, easing))
+            out.append(_record(clip_id, name, len(out), bones, root, with_root=with_root))
+    if land:
+        bones, root = _blend(keys[-1], keys[-1], 0.0)
+        out.append(_record(clip_id, name, len(out), bones, root, with_root=with_root))
     return out
 
 
@@ -407,9 +532,14 @@ def sidecar(
     second engine anyone tries.
 
     ``animation``, when given, adds one ``"animation"`` key: ``frames``, each a
-    ``{cell_index, duration_ms}``, and ``tags``. It is only ever built by the
-    Inker exporter, and this stays the only writer of the format so ``version:
-    1`` cannot come to mean two subtly different documents.
+    ``{cell_index, duration_ms}``, and ``tags``. It has **two** builders now --
+    the Inker exporter, for a drawn clip, and ``charsheet.animation_block``,
+    for a rendered character sheet, which is what closed the gap where a
+    rendered sheet reached an engine as frame indices with no fps and no loop
+    tags. Two builders, one format: ``charsheet`` deliberately emits the same
+    keys with the same spellings (``repeat: 1`` for a play-once tag, omitted
+    otherwise) so ``version: 1`` cannot come to mean two subtly different
+    documents. A third writer should extend one of those rather than appear.
 
     ``pivots`` and ``slices`` are that exporter's other two, keyed by cell index
     and both **additive with no version bump**. A pivot overrides the constant

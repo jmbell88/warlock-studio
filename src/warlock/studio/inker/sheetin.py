@@ -38,7 +38,51 @@ from .animation import (
 )
 from .layers import Layer, LayerStack
 
-__all__ = ["document_from_atlas", "document_from_grid", "grid_rects", "walk_tags"]
+__all__ = [
+    "document_from_atlas",
+    "document_from_grid",
+    "document_from_sheet",
+    "grid_rects",
+    "span_tags",
+    "walk_tags",
+]
+
+
+def span_tags(spans: Sequence[Mapping[str, Any]]) -> list[Tag]:
+    """Tags for any ``(animation, direction)`` frame table.
+
+    ``walk_tags`` below is the 4x4 spritesynth layout's answer to this; a
+    Troupe character sheet is five animations across eight directions, and a
+    later one may be something else again, so the general form takes the table
+    rather than knowing it. Each entry is the sidecar's own tag shape --
+    ``name``, ``start``, ``end``, ``loop`` and optionally ``direction`` and
+    ``repeat`` -- which is what lets a rendered sheet's ``animation`` block go
+    in one end and a tagged timeline come out the other with nothing in
+    between reinterpreting it.
+
+    Refuses a span that runs backwards or off the front, because a tag whose
+    end precedes its start is a document that draws nothing and plays nothing,
+    and finding out which of five hundred cells was wrong is the user's problem
+    by then.
+    """
+    tags: list[Tag] = []
+    for entry in spans:
+        start, end = int(entry["start"]), int(entry["end"])
+        if start < 0 or end < start:
+            raise ValueError(
+                f"tag {entry.get('name', '?')!r} covers frames {start}-{end}"
+            )
+        tags.append(
+            Tag(
+                name=str(entry.get("name") or "tag"),
+                start=start,
+                end=end,
+                loop=bool(entry.get("loop", True)),
+                direction=str(entry.get("direction") or "forward"),
+                repeat=int(entry.get("repeat") or 0),
+            )
+        )
+    return tags
 
 
 def walk_tags() -> list[Tag]:
@@ -47,17 +91,22 @@ def walk_tags() -> list[Tag]:
     Named with the direction rather than left as bare ``front``/``left``,
     because a document can carry several tagged spans and "left" alone stops
     meaning anything the moment a second cycle is added to it.
+
+    The 4x4 spritesynth layout stated in the general form above, so there is
+    one tag builder rather than two that can drift about what ``loop`` means.
     """
     per = 4
-    return [
-        Tag(
-            name=f"walk_{direction}",
-            start=index * per,
-            end=index * per + per - 1,
-            loop=True,
-        )
-        for index, direction in enumerate(DIRECTION_ORDER)
-    ]
+    return span_tags(
+        [
+            {
+                "name": f"walk_{direction}",
+                "start": index * per,
+                "end": index * per + per - 1,
+                "loop": True,
+            }
+            for index, direction in enumerate(DIRECTION_ORDER)
+        ]
+    )
 
 
 def _cell_rect(cell: Mapping[str, Any]) -> tuple[int, int, int, int]:
@@ -252,3 +301,41 @@ def document_from_grid(
         (int(width), int(height)), cell, offset, padding, count
     )
     return _document_from_rects(atlas_rgba, rects, track_name=track_name)
+
+
+def document_from_sheet(
+    atlas_rgba: np.ndarray,
+    cells: Sequence[Mapping[str, Any]],
+    animation: Mapping[str, Any] | None = None,
+    *,
+    track_name: str = "Sprite",
+) -> Any:
+    """A rendered sheet plus its sidecar's ``animation`` block, as a document.
+
+    ``document_from_atlas``'s sibling for a sheet whose sidecar knows what its
+    own frames mean. That one takes a *kind* and derives the grid and the tags
+    from a table this package holds; this one is handed the table, because a
+    Troupe character sheet is five animations across eight directions and there
+    is no reason for the editor to carry a second copy of that.
+
+    ``layout`` is deliberately **None**, for ``document_from_grid``'s reason: a
+    ``DirectionalLayout`` is the claim that these cells are the four named
+    directions of a fixed grid, and this sheet is not that. The tags carry the
+    directions instead, which is what playback actually reads.
+
+    Durations come from the block's ``frames`` where it has them -- a
+    twelve-frame-per-second run and a six-per-second idle in the same document
+    is the whole point of writing them into the sidecar.
+    """
+    doc = _document_from_rects(
+        atlas_rgba,
+        [_cell_rect(cell) for cell in cells],
+        tags=span_tags((animation or {}).get("tags") or []),
+        track_name=track_name,
+    )
+    for entry in (animation or {}).get("frames") or []:
+        index = int(entry.get("cell_index", -1))
+        duration = int(entry.get("duration_ms") or 0)
+        if 0 <= index < len(doc.anim.frames) and duration > 0:
+            doc.anim.frames[index].duration_ms = duration
+    return doc

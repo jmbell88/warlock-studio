@@ -243,6 +243,81 @@ def deform_battery(template_key: str) -> list[dict[str, Any]]:
     return [dict(p) for p in _batteries.get(template_key, [])]
 
 
+# The Troupe clip library: the same argument as the pose presets one directory
+# up, one level higher. A *clip* is an ordered list of those poses plus how many
+# frames each step holds -- so the thing that is portable across rigs is now a
+# whole walk cycle rather than a single silhouette, and authoring cost moves
+# from 256 frames per character to ~22 keyframes once ever.
+CLIP_DIR = TEMPLATE_DIR / "clips"
+
+_clips: dict[str, dict[str, Any]] | None = None
+
+
+def _load_clip_library(directory: Path) -> dict[str, dict[str, Any]]:
+    """``template key -> {"poses": {name: record}, "clips": [record]}``.
+
+    A malformed library costs you that library and not the app, the rule
+    ``_load_templates`` and ``_load_pose_library`` both follow -- and a clip
+    naming a pose the file does not carry is exactly that: the file is
+    internally inconsistent, and half-loading it would hand the renderer a clip
+    with a hole in it.
+    """
+    found: dict[str, dict[str, Any]] = {}
+    for path in sorted(directory.glob("*.json")):
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            poses = {}
+            for pose in raw["poses"]:
+                row = {"name": str(pose["name"]), "bones": pose["bones"]}
+                if pose.get("root_translation"):
+                    row["root_translation"] = [
+                        float(v) for v in pose["root_translation"]
+                    ]
+                poses[row["name"]] = row
+            clips = []
+            for clip in raw["clips"]:
+                keys = [str(k) for k in clip["keys"]]
+                missing = [k for k in keys if k not in poses]
+                if missing:
+                    raise ValueError(f"clip {clip['name']!r} names {missing}")
+                clips.append(
+                    {
+                        "name": str(clip["name"]),
+                        "keys": keys,
+                        "segments": [int(n) for n in clip["segments"]],
+                        "closed": bool(clip.get("closed", False)),
+                        "easing": str(clip.get("easing") or "linear"),
+                    }
+                )
+            found[path.stem] = {"poses": poses, "clips": clips}
+        except Exception:
+            log.exception("skipping unusable clip library %s", path)
+    return found
+
+
+def clip_library(template_key: str) -> dict[str, Any]:
+    """The shipped clips for a template, or an empty library if it has none.
+
+    Empty is a normal answer for the same reason ``deform_battery``'s is: a
+    walk cycle authored for a humanoid means nothing to a fish, and a template
+    without one should cost the character sheet, never the rig.
+    """
+    global _clips
+    get_template(template_key)
+    if _clips is None:
+        _clips = _load_clip_library(CLIP_DIR)
+    return _clips.get(template_key) or {"poses": {}, "clips": []}
+
+
+def clip_keys(template_key: str, clip_name: str) -> list[dict[str, Any]]:
+    """One clip's key poses, in order. Raises KeyError for an unknown clip."""
+    library = clip_library(template_key)
+    for clip in library["clips"]:
+        if clip["name"] == clip_name:
+            return [dict(library["poses"][k]) for k in clip["keys"]]
+    raise KeyError(f"{clip_name!r} is not a clip of the {template_key} template")
+
+
 # --- fitting ----------------------------------------------------------------
 
 Vec3 = Sequence[float]

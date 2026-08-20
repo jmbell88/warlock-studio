@@ -118,27 +118,13 @@ def create_sheet(
         try:
             records = sheetlib.interpolate(ends[0], ends[1], clip_frames)
         except ValueError as exc:
-            # A refusal names the control it came from, and interpolate can
-            # refuse for two: a bad frame count (the slider), or an endpoint
-            # pose carrying a root offset (one of the two selects). Which one
-            # is decided from the inputs already in hand, on the refusal path
-            # only, in interpolate's own checking order -- the unready_reason
-            # rule: interpolate stays the authority on *whether*, and a field
-            # that disagreed would be a slightly wrong highlight rather than a
-            # wrong permission. Ringing clip_frames for a pose's offset sent
-            # the user to change a slider the message never mentions.
-            offending = "clip_frames"
-            if 1 <= int(clip_frames) <= sheetlib.MAX_CLIP_FRAMES:
-                offending = next(
-                    (
-                        name
-                        for name, end in (("clip_from", ends[0]), ("clip_to", ends[1]))
-                        if any(float(v) for v in (end.get("root_translation") or ()))
-                    ),
-                    "clip_frames",
-                )
+            # One refusal left, and it is the frame slider's: ``interpolate``
+            # used to also refuse an endpoint carrying a root offset, and this
+            # door had to work out which of three controls to ring. It now
+            # interpolates the offset instead, so the only way to get here is a
+            # frame count outside 1..MAX_CLIP_FRAMES.
             raise invalid_from(
-                exc, "That clip cannot be built", field=offending
+                exc, "That clip cannot be built", field="clip_frames"
             ) from exc
 
     try:
@@ -226,7 +212,12 @@ def delete_sheet(svc: WarlockService, job_id: str, sheet_id: str) -> dict[str, A
 # What a pixel restyle may be reduced to. Its own tuple rather than the 2D
 # export's PIXEL_SIZES: those are artifact *names* in an allowlist, while these
 # are logical cell sizes that have to divide a sheet's frame size.
-PIXEL_LOGICAL_SIZES = (16, 24, 32, 48, 64)
+# 128 is Troupe's top rung: the spec commits to 16px minimum and 128px maximum,
+# and a size the sheet spec offers but this tuple refuses would be a form that
+# cannot ask for the sheet it just rendered. ``check_restylable`` still refuses
+# a restyle whose atlas would exceed 1024px across, so adding it here widens the
+# ladder without widening what the AI path will accept.
+PIXEL_LOGICAL_SIZES = (16, 24, 32, 48, 64, 128)
 PIXEL_COLOR_CHOICES = (8, 16, 32, 64)
 
 

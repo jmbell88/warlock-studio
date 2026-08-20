@@ -237,6 +237,28 @@ Four new units, each with one job:
 
 ---
 
+## Status, 2026-08-19
+
+**Phases 0b, 0c, 1, 2 and 3 are implemented and verified.** 10,605 passing, ruff clean;
+`tests/troupe/` is 103 of those. What shipped:
+
+| | |
+|---|---|
+| `studio/troupe/spec.py` + `data/layout.json` | the frame table as versioned data; import-pinned to an empty outward set |
+| `studio/troupe/ulpc.py` | the 352-cell reader; every measurement in this file is now a passing oracle |
+| `pipelines/pixelize.py` | gap 2, the AI-free pixeliser, byte-identical run to run |
+| `blender_worker._setup_render(taa_samples=1)` | gap 3's crispness half, on the flat sheet path only |
+| `sheet.interpolate_clip` + root translation | gap 1; the refusal is lifted and `service.sheets` no longer routes it |
+| `templates/clips/humanoid.json` | the 22 keyframes and five clips, expanding to exactly 4/8/8/6/6 |
+| `pipelines/charsheet.py` | clip x yaw -> `Plan`, and gap 4's `animation` block |
+| `sheetin.span_tags` / `document_from_sheet` | the handoff, generalised off the 4x4 layout |
+
+**Not done, and why:** 0a/0d/0e need the base mesh, which has not been supplied; Phase 1's
+palette and Phase 2's keyframe judgement need the art direction and a render to judge; Phases
+4-8 are downstream of 0d, which the plan calls a real go/no-go gate. The clip library is
+authored to the frame table's *shape* and has never been seen as pixels -- treat it as a
+starting point, not a result.
+
 ## Phases
 
 Phases 0–2 are gates. Everything after is construction.

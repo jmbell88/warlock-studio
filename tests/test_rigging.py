@@ -1025,10 +1025,12 @@ def test_armature_specs_for_different_templates_use_different_result_files(tmp_p
     assert a["result_path"] != b["result_path"]
 
 
-def test_interpolate_refuses_endpoint_poses_with_root_offsets():
-    """The TMX rule: a feature the lerp does not model is refused by name,
-    never dropped -- a clip that silently ignored a root offset would render a
-    sheet disagreeing with the pose's own bake."""
+def test_interpolate_carries_endpoint_root_offsets_through_the_clip():
+    """This was a refusal by name -- the TMX rule, applied to a feature the
+    lerp did not model. It models it now: a root offset is what a walk's
+    vertical bob and a jump's rise are made of, and every consumer downstream
+    (``root_offset_world``, ``_sheet_root_offsets``, ``op_sheet``'s per-cell
+    ``root_offset``) was already keyed per frame and ready for it."""
     from warlock.pipelines import sheet as sheetlib
 
     plain = {"id": "a" * 12, "name": "A", "bones": {"hips": [0, 0, 0, 1]}}
@@ -1038,14 +1040,18 @@ def test_interpolate_refuses_endpoint_poses_with_root_offsets():
         "bones": {"hips": [0, 0, 0, 1]},
         "root_translation": [0.0, 0.0, 0.3],
     }
-    with pytest.raises(ValueError, match="Leap.*root offset"):
-        sheetlib.interpolate(plain, offset, 4)
-    with pytest.raises(ValueError, match="root offset"):
-        sheetlib.interpolate(offset, plain, 4)
-    # A zero offset is no offset: every record written before the field, and
-    # every pose that never touched the root, interpolates exactly as before.
+    out = sheetlib.interpolate(plain, offset, 4)
+    assert [round(r["root_translation"][2], 4) for r in out] == [0.0, 0.075, 0.15, 0.225]
+    assert [round(r["root_translation"][2], 4) for r in sheetlib.interpolate(offset, plain, 4)] == [
+        0.3, 0.225, 0.15, 0.075
+    ]
+    # A zero offset is still no offset: every record written before the field,
+    # and every pose that never touched the root, produces the byte-identical
+    # records it always did, with no ``root_translation`` key at all.
     zeroed = dict(plain, root_translation=[0.0, 0.0, 0.0])
-    assert len(sheetlib.interpolate(zeroed, plain, 4)) == 4
+    records = sheetlib.interpolate(zeroed, plain, 4)
+    assert len(records) == 4
+    assert all("root_translation" not in r for r in records)
 
 
 def _glb_node_rotations(path) -> dict[str, list[float]]:
