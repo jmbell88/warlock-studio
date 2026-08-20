@@ -83,6 +83,20 @@ def rows(svc: WarlockService) -> list[dict[str, Any]]:
         # None in that case, so the pane's ``.get`` reads one way.
         if plan_ is not None and entry.kind == "base":
             row["vram"] = vram.fits(plan_, entry.spec)
+        # What the row is, beyond a label: which repositories it comes from,
+        # what a base model costs on the card as a *number* rather than only
+        # the three-state word, and an adapter's trained trigger words -- all
+        # of it already on the spec, all of it previously reachable only by
+        # reading MODELS.md beside the app.
+        repos = tuple(dict.fromkeys(f.repo_id for f in entry.fetch if f.repo_id))
+        if repos:
+            row["repos"] = repos
+        need = getattr(entry.spec, "vram_gib", None)
+        if entry.kind == "base" and isinstance(need, int | float):
+            row["vram_gib"] = float(need)
+        trigger = str(getattr(entry.spec, "trigger", "") or "")
+        if trigger:
+            row["trigger"] = trigger
         # What removing *this* row alone would free, and whether it would free
         # anything at all. Only for rows that are here -- there is nothing to
         # offer against a model that is not installed -- and computed rather
@@ -258,6 +272,68 @@ def _sweep_staging(jobs: list[fetch_mod.Job], *, spare: set[str] | None = None) 
             log.warning("removing staging left by an interrupted fetch: %s", path)
             with contextlib.suppress(OSError):
                 shutil.rmtree(path, ignore_errors=True) if path.is_dir() else path.unlink()
+
+
+def disk_usage(svc: WarlockService) -> dict[str, Any]:
+    """What the model store is actually holding, measured. Blocking.
+
+    Every figure the Models list shows is the registry's *declared*
+    ``size_gib``, so the one number nobody could see was how much disk the
+    weights are really using -- and Storage measured job directories and the
+    trash and nothing else, which on a full install is the smaller half.
+
+    A walk, so it goes through ``TaskRunner`` like the library's own.
+    """
+    root = Path(svc.config.t2i_model_root)
+    total = 0
+    files = 0
+    for path in root.rglob("*"):
+        try:
+            if path.is_file():
+                total += path.stat().st_size
+                files += 1
+        except OSError:
+            # A file a fetch is mid-way through renaming is the normal state of
+            # a download, not an error -- ``fetch_worker._dir_bytes``'s rule.
+            continue
+    return {"root": str(root), "bytes": total, "files": files}
+
+
+def sweep_staging(svc: WarlockService) -> list[str]:
+    """Remove staging trees no open transaction needs. -> what it removed.
+
+    ``_sweep_staging`` runs at the start of the *next* download, which is a
+    bound on the leak and not a fix for it: a user who cancels a 16 GB fetch
+    and never downloads again keeps 16 GB of invisible ``.fetch.part`` -- it
+    is under no presence probe and shows in no storage view. The pane calls
+    this when it opens, so "cancelled" and "reclaimed" are the same visit.
+
+    Never raises, for ``_sweep_staging``'s reason: clutter must not become a
+    refusal.
+    """
+    from .. import publish
+
+    root = Path(svc.config.t2i_model_root)
+    jobs = fetch_mod.plan(svc.config, list(fetch_mod.entries()))
+    parents = {job.dest.parent for job in jobs} | {root}
+    spared = publish.staged_dirs(root)
+    removed: list[str] = []
+    for parent in parents:
+        try:
+            entries = list(parent.iterdir())
+        except OSError:
+            continue
+        for path in entries:
+            if not path.name.endswith(_STAGING_SUFFIXES) or str(path) in spared:
+                continue
+            log.warning("removing staging left by an interrupted fetch: %s", path)
+            with contextlib.suppress(OSError):
+                if path.is_dir():
+                    shutil.rmtree(path, ignore_errors=True)
+                else:
+                    path.unlink()
+                removed.append(path.name)
+    return removed
 
 
 def recover(config: Any) -> list[str]:

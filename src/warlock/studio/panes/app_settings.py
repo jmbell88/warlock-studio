@@ -386,6 +386,35 @@ def _layout(ctx: Any) -> None:
 # --- storage ----------------------------------------------------------------
 
 
+_MEASURED = False
+
+
+def _reset_measure() -> None:
+    """For tests, for ``_reset_sweep``'s reason."""
+    global _MEASURED
+    _MEASURED = False
+
+
+def _model_storage(ctx: Any) -> None:
+    """The measured size of the model store, asked for once per session."""
+    global _MEASURED
+    from ..state import format_bytes
+
+    if not _MEASURED:
+        _MEASURED = True
+        from ...service import downloads as svc_downloads
+
+        ctx.submit("model-storage", svc_downloads.disk_usage, ctx.svc)
+    found = getattr(ctx, "model_storage", None)
+    if found:
+        noun = "file" if found["files"] == 1 else "files"
+        widgets.muted(
+            f"{found['files']} model {noun} - {format_bytes(int(found['bytes']))}"
+        )
+    else:
+        widgets.muted("Measuring the model store...")
+
+
 def _storage(ctx: Any) -> None:
     """What the library is holding on disk, and the two ways to hold less.
 
@@ -419,6 +448,10 @@ def _storage(ctx: Any) -> None:
         widgets.muted(f"{storage['job_dirs']} jobs - {format_bytes(int(storage['bytes']))}")
     else:
         widgets.muted("Measuring what is on disk...")
+    # The weights, which appeared in no storage view at all: every figure in
+    # Models is the registry's *declared* size, so on a full install the
+    # largest thing on the disk was the one thing this pane never mentioned.
+    _model_storage(ctx)
     # An empty page rather than the loaded one: this pane has no list of
     # trashed jobs to hand over, and the argument is only the stamp that
     # decides *when* to walk the disk again -- so Settings asks under its own
@@ -463,8 +496,39 @@ _GROUPS = fetch.GROUPS
 _UNGROUPED = "Other"
 
 
+# One sweep per session, on the first frame the Models category is drawn. A
+# module flag rather than ctx state: it is a fact about this process's disk,
+# not a preference, and re-sweeping on every visit would walk ~17 directories
+# for a case that only arises after a cancelled fetch.
+_SWEPT = False
+
+
+def _reset_sweep() -> None:
+    """For tests, which get a fresh service per case and not a fresh module."""
+    global _SWEPT
+    _SWEPT = False
+
+
+def _sweep_staging(ctx: Any) -> None:
+    """Reclaim what a cancelled download stranded, and say that it happened.
+
+    ``downloads._sweep_staging`` runs at the start of the next fetch, so a
+    user who cancels once and never downloads again keeps the staging tree
+    forever -- invisible to every presence probe and to Storage. Off the frame
+    thread, because it removes directories.
+    """
+    global _SWEPT
+    if _SWEPT or ctx.tasks.any_busy("download:"):
+        return
+    _SWEPT = True
+    from ...service import downloads as svc_downloads
+
+    ctx.submit("sweep-staging", svc_downloads.sweep_staging, ctx.svc)
+
+
 def _models(ctx: Any) -> None:
     # No heading: the lit segment says "Models". See ``_interface``.
+    _sweep_staging(ctx)
     rows = list(getattr(ctx, "model_rows", None) or [])
     if not rows:
         widgets.muted("No image models registered.")
@@ -536,10 +600,17 @@ def _fit_badge(row: dict[str, Any]) -> None:
     here is exactly the thing worth saying.
     """
     verdict = row.get("vram")
+    # The measured figure beside the word. "tight fit" says a verdict and not
+    # its evidence, and the number is what makes it checkable against a card
+    # the user knows the size of.
+    need = row.get("vram_gib")
+    cost = f" ({float(need):.0f} GB VRAM)" if isinstance(need, int | float) else ""
     if verdict == vram.FIT_TIGHT:
-        widgets.text_colored(theme.WARN, "    tight fit")
+        widgets.text_colored(theme.WARN, f"    tight fit{cost}")
     elif verdict == vram.FIT_NO:
-        widgets.text_colored(theme.ERR, "    won't fit this GPU")
+        widgets.text_colored(theme.ERR, f"    won't fit this GPU{cost}")
+    elif cost:
+        widgets.muted(f"   {cost.strip()}")
 
 
 def _remove_control(ctx: Any, row: dict[str, Any], busy: bool) -> None:
@@ -609,6 +680,22 @@ def _start_removal(ctx: Any, row_key: str) -> None:
         ctx.toast("Removing...")
 
 
+def _detail(row: dict[str, Any]) -> None:
+    """Where the weights come from, and what an adapter answers to.
+
+    Both are on the registry entry and neither was on screen: the list showed
+    a label, a declared size and a tick, so "which pixel-art LoRA is this"
+    and "what do I have to type for it to do anything" were answerable only
+    from MODELS.md, which is a file beside the app rather than in it.
+    """
+    trigger = str(row.get("trigger") or "")
+    if trigger:
+        widgets.muted(f"   triggers: {trigger}")
+    repos = tuple(row.get("repos") or ())
+    if repos:
+        widgets.muted(f"   {', '.join(repos)}")
+
+
 def _row(ctx: Any, row: dict[str, Any], busy: bool) -> None:
     row_key = str(row["row_key"])
     present = bool(row.get("present"))
@@ -616,6 +703,7 @@ def _row(ctx: Any, row: dict[str, Any], busy: bool) -> None:
     if present:
         widgets.text_colored(theme.MUTED, f"{icons.CIRCLE_CHECK} {label}")
         _fit_badge(row)
+        _detail(row)
         _remove_control(ctx, row, busy)
         return
     if not row.get("downloadable"):
@@ -636,6 +724,7 @@ def _row(ctx: Any, row: dict[str, Any], busy: bool) -> None:
     suffix = f" ({size:.1f} GB)" if size else ""
     widgets.text_colored(theme.WARN, f"{icons.CIRCLE} {label}{suffix}")
     _fit_badge(row)
+    _detail(row)
 
     key = app_ctx.download_key(row_key)
     running = ctx.tasks.is_busy(key)
@@ -644,6 +733,10 @@ def _row(ctx: Any, row: dict[str, Any], busy: bool) -> None:
         widgets.progress_bar(float(found.get("percent") or 0.0) if found else 0.0)
         if found and found.get("label"):
             widgets.muted(str(found["label"]))
+        # The bulk bar has had this since MDL-14 and a single row had not,
+        # which made "cancel" depend on which of two identical buttons started
+        # the fetch. Same mechanism, same reasoning -- see ``_cancel``.
+        _cancel(ctx, key)
         return
     # Its own line rather than same_line after full-width text: the label is
     # long and the sidebar is 300 px, and a button drawn past the edge is gone
@@ -660,16 +753,24 @@ def _selection_progress(ctx: Any) -> None:
     widgets.progress_bar(float(found.get("percent") or 0.0) if found else 0.0)
     if found and found.get("label"):
         widgets.muted(str(found["label"]))
-    # Cancel, beside the bar. Every mechanism this needs already existed and
-    # only the button was missing: the fetch child is tracked (``winjob``,
-    # under a reason starting with "fetch") so it can be terminated *by that
-    # prefix* -- killing the whole registry here would take a live Blender bake
-    # or the persistent matting worker with it. The kill-on-close job reaps
-    # it, and publication is staged -- so a cancelled download leaves no
-    # half-installed model, just the staging tree that the next download
-    # sweeps. Without it a mistaken 16 GB fetch on a slow line could be
-    # stopped only by quitting the app, because the timeout is four hours
-    # (MDL-14).
+    _cancel(ctx, key)
+
+
+def _cancel(ctx: Any, key: str) -> None:
+    """Cancel, beside the bar. Every mechanism this needs already existed and
+    only the button was missing: the fetch child is tracked (``winjob``, under
+    a reason starting with "fetch") so it can be terminated *by that prefix* --
+    killing the whole registry here would take a live Blender bake or the
+    persistent matting worker with it. The kill-on-close job reaps it, and
+    publication is staged -- so a cancelled download leaves no half-installed
+    model, just the staging tree the sweep clears. Without it a mistaken 16 GB
+    fetch on a slow line could be stopped only by quitting the app, because
+    the timeout is four hours (MDL-14).
+
+    One fetch runs at a time across the pane, so the prefix kill is
+    unambiguous however this is reached -- which is why a row and the bulk bar
+    can share it.
+    """
     imgui.same_line()
     from ... import winjob
 

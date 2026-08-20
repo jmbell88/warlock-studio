@@ -174,6 +174,9 @@ class Ctx:
     # deliberately not persisted: it is a selection for one action, and a
     # remembered one would offer to re-download something already on disk.
     model_picks: set[str] = field(default_factory=set)
+    # The measured size of the model store, once the walk lands. ``None`` is
+    # "not looked yet" and reads differently from an empty store.
+    model_storage: dict[str, Any] | None = None
     # The label of the best base model this card can actually hold, or "" when
     # no VRAM plan has been resolved. A label rather than a key, and computed by
     # the App rather than by the pane: ``vram.recommended_base`` wants a Plan,

@@ -56,8 +56,12 @@ def test_the_gguf_remedy_is_the_command_from_the_install_instructions(tmp_path):
         c for c in doctor.static_checks(config, probe_slow=False)
         if c.name == "TRELLIS GGUF weights"
     )
-    assert doctor.TRELLIS_GGUF_HINT in row.detail
-    assert "ilintar/trellis2-gguf" in doctor.TRELLIS_GGUF_HINT
+    hint = doctor.trellis_gguf_hint(config)
+    assert hint in row.detail
+    assert "ilintar/trellis2-gguf" in hint
+    # Resolved, never relative: the whole reason the constant became a
+    # function (see its docstring).
+    assert f'--local-dir "{config.trellis_models_dir}"' in hint
 
 
 # --- F55: missing weights are refused at the door ---------------------------

@@ -650,6 +650,12 @@ class AppState:
     # the pane switch on a remembered name. Not persisted: a refusal describes
     # a submit, and a submit does not survive the session that made it.
     field_errors: dict[str, str] = field(default_factory=dict)
+    # ``ServiceError.rows`` for the same refusals, and what installing exactly
+    # those costs. Carried beside the message rather than parsed back out of
+    # it, which is the reason the service field exists at all: the offer under
+    # the ring pre-ticks exact registry rows.
+    field_error_rows: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    field_error_gib: dict[str, float] = field(default_factory=dict)
     # The keyboard focus ring (UX.md Phase 3), per pane: which control the
     # cursor is on, what this frame's tab order is, and whether the cursor just
     # moved -- see :mod:`.focus`, which owns every rule about them. Here rather
@@ -961,7 +967,13 @@ class AppState:
 
     # -- field-level refusals ----------------------------------------------
 
-    def note_field_error(self, field_name: str, message: str) -> bool:
+    def note_field_error(
+        self,
+        field_name: str,
+        message: str,
+        rows: tuple[str, ...] = (),
+        gib: float = 0.0,
+    ) -> bool:
         """Remember that ``field_name`` is why the last submit was refused.
 
         -> whether it was recorded. A refusal that names no control is not one
@@ -971,6 +983,15 @@ class AppState:
         if not field_name or not message:
             return False
         self.field_errors[str(field_name)] = str(message)
+        # Only when there is something to offer: an empty tuple must not
+        # displace rows a previous refusal on the same control recorded and
+        # then leave a button that installs nothing.
+        if rows:
+            self.field_error_rows[str(field_name)] = tuple(rows)
+            self.field_error_gib[str(field_name)] = float(gib)
+        else:
+            self.field_error_rows.pop(str(field_name), None)
+            self.field_error_gib.pop(str(field_name), None)
         return True
 
     def clear_field_error(self, field_name: str) -> None:
@@ -981,10 +1002,14 @@ class AppState:
         about a value that is no longer there.
         """
         self.field_errors.pop(field_name, None)
+        self.field_error_rows.pop(field_name, None)
+        self.field_error_gib.pop(field_name, None)
 
     def clear_field_errors(self) -> None:
         """Forget all of them: a new submit is about to be judged on its own."""
         self.field_errors.clear()
+        self.field_error_rows.clear()
+        self.field_error_gib.clear()
 
     # -- history -----------------------------------------------------------
 

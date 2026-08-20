@@ -513,6 +513,15 @@ class App:
         )
         self.app_ctx.dpi_scale = monitor_scale
         self.app_ctx.layout = self.layout
+        # Every ``widgets.field_error`` call site gets the Install offer at
+        # once, without widgets importing a pane. Bound to this Ctx, so a
+        # second App in one process replaces it rather than stacking.
+        from . import widgets as widgets_mod
+        from .panes import model_gate
+
+        widgets_mod.set_install_offer(
+            lambda field: model_gate.install_offer(self.app_ctx, field)
+        )
         self.app_ctx.load_presets = self.load_presets
         self.app_ctx.refresh_rig_data = self._refresh_rig_side_data
         self.eta = Eta()
@@ -996,7 +1005,23 @@ class App:
                 # navigated away from can draw no ring at all.
                 named = getattr(done.error, "field", None)
                 if isinstance(named, str):
-                    ctx.state.note_field_error(named, done.message or "")
+                    # ``rows`` is the refusal's other half: which registry rows
+                    # would fix it. Written since the class was, and until now
+                    # read by nothing outside the tests -- so "you haven't got
+                    # these weights" arrived as a sentence with no action.
+                    rows = tuple(getattr(done.error, "rows", ()) or ())
+                    gib = 0.0
+                    if rows:
+                        try:
+                            from ..service import downloads as svc_downloads
+
+                            gib = svc_downloads.needed_gib(ctx.svc, list(rows))
+                        except Exception:
+                            # Path arithmetic over ~17 registry entries, but a
+                            # figure is a courtesy: an unknown row must not
+                            # cost the user the button as well as the number.
+                            log.exception("could not size a refusal's install")
+                    ctx.state.note_field_error(named, done.message or "", rows, gib)
                 ctx.toast(done.message or "That did not work.", "error", done.action)
                 # A failed save must not leave the document locked: saving
                 # disables every editing control, so without this one bad
@@ -1073,6 +1098,23 @@ class App:
                     from ..service import rig as svc_rig
 
                     ctx.submit("rig-templates", svc_rig.rig_templates, self.svc)
+            return
+        if key == "model-storage":
+            if isinstance(done.result, dict):
+                ctx.model_storage = done.result
+            return
+        if key == "sweep-staging":
+            # Silent when there was nothing to reclaim, which is every launch
+            # that did not follow a cancelled fetch. Said out loud when there
+            # was: disk quietly reappearing is the kind of thing a user should
+            # be told about rather than discover in a folder listing.
+            removed = done.result if isinstance(done.result, list) else []
+            if removed:
+                noun = "tree" if len(removed) == 1 else "trees"
+                ctx.toast(
+                    f"Reclaimed {len(removed)} staging {noun} left by a "
+                    f"cancelled download."
+                )
             return
         if key == "rig-templates":
             templates = done.result if isinstance(done.result, dict) else {}

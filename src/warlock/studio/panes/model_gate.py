@@ -75,3 +75,28 @@ def draw(ctx: Any, row_keys: tuple[str, ...], *, what: str = "This") -> bool:
     if controls.small_button("Install in Settings"):
         request_install(ctx, row_keys)
     return True
+
+
+def install_offer(ctx: Any, field: str) -> bool:
+    """The Install button under a refusal's ring. -> whether it drew.
+
+    ``draw`` above is the *pre-emptive* gate, shown before anything is
+    submitted. This is the other half: the refusal that actually came back,
+    which carries ``ServiceError.rows`` -- exact registry rows, so the button
+    pre-ticks them rather than sending the user to a list of twenty-four.
+
+    The figure here is deduped (``downloads.needed_gib``, computed once when
+    the refusal arrived), so unlike ``draw``'s sum it does not count a shared
+    checkpoint twice.
+    """
+    rows = (getattr(ctx.state, "field_error_rows", None) or {}).get(field) or ()
+    if not rows:
+        return False
+    gib = float((getattr(ctx.state, "field_error_gib", None) or {}).get(field) or 0.0)
+    noun = "model" if len(rows) == 1 else "models"
+    label = f"Install {len(rows)} {noun}"
+    if gib > 0.0:
+        label += f" (~{gib:.1f} GB)"
+    if controls.small_button(label):
+        request_install(ctx, tuple(rows))
+    return True

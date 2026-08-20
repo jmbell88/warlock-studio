@@ -1265,7 +1265,24 @@ def field_error(state: Any, field: str) -> bool:
     imgui.push_text_wrap_pos(0.0)
     text_colored(theme.ERR, message)
     imgui.pop_text_wrap_pos()
+    copy_command_button(message, f"field-{field}")
+    if _INSTALL_OFFER is not None:
+        _INSTALL_OFFER(field)
     return True
+
+
+# "These weights are not on this host" is the one refusal with an action
+# attached, and it has to be drawn under the ring at every one of these call
+# sites. Injected rather than imported: the offer needs the app Ctx and lives
+# in ``panes.model_gate``, and widgets is below the panes -- an import the
+# other way is the cycle the import-pinning tests exist to prevent.
+_INSTALL_OFFER: Any = None
+
+
+def set_install_offer(fn: Any) -> None:
+    """Register (or clear, with ``None``) the draw hook ``field_error`` calls."""
+    global _INSTALL_OFFER
+    _INSTALL_OFFER = fn
 
 
 def header(label: str, default_open: bool = True, persist_key: str | None = None) -> bool:
@@ -2664,6 +2681,31 @@ TOAST_ACTIONS = {
 TOAST_VISIBLE = 5
 
 
+def copyable_command(text: str) -> str | None:
+    """The shell command inside a refusal, or None.
+
+    ``service.validation.install_remedy`` and doctor's hints both put their
+    command on its own indented line under the sentence, which is the shape
+    this reads. A command the user cannot select (a toast lives eight seconds
+    and is not a text field) is a command they have to retype from memory,
+    so anything carrying one gets a Copy button.
+    """
+    for line in (text or "").splitlines():
+        if line.startswith("  ") and line.strip():
+            return line.strip()
+    return None
+
+
+def copy_command_button(text: str, key: str) -> bool:
+    """Copy button for the command in ``text``. -> whether it drew."""
+    command = copyable_command(text)
+    if command is None:
+        return False
+    if imgui.small_button(f"{icons.COPY} Copy command##copy-cmd{key}"):
+        imgui.set_clipboard_text(command)
+    return True
+
+
 def toast_style(level: str) -> tuple[int, str]:
     """``(background colour, leading glyph)`` for a toast level (H68).
 
@@ -2734,7 +2776,10 @@ def toasts(
             | imgui.WindowFlags_.no_focus_on_appearing.value
         )
         label = TOAST_ACTIONS.get(toast.action or "") if on_action is not None else None
-        if not sticky and not label:
+        # A toast carrying a command has a Copy button, and a button inside a
+        # ``no_inputs`` window is a control the mouse passes through.
+        command = copyable_command(toast.text) is not None
+        if not sticky and not label and not command:
             flags |= imgui.WindowFlags_.no_inputs.value
         if imgui.begin(f"##toast{id(toast)}", None, flags)[0]:
             # Raised, and the alpha rides the toast's own fade: a shadow that
@@ -2757,6 +2802,11 @@ def toasts(
                 text_colored(theme.TEXT, glyph)
                 imgui.same_line()
             imgui.text_wrapped(toast.text)
+            # ``install_remedy`` composes a host-accurate two-line command and
+            # then it went into a 320 dp box for eight seconds with no way to
+            # select it. Only drawn when there is one, and only on a toast that
+            # takes input -- see ``sticky`` above.
+            copy_command_button(toast.text, str(id(toast)))
             # Its own line: the text above it wraps to the toast's full width,
             # so a same_line here would start past the right edge.
             if label and imgui.small_button(f"{label}##toast-action{id(toast)}"):

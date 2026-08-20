@@ -76,6 +76,28 @@ def _dir_bytes(path: Path) -> int:
     return total
 
 
+def _pace(rate: float, remaining: float) -> str:
+    """" at 12 MB/s, ~4m left" -- or nothing, if there is nothing to say.
+
+    A bar with no speed and no ETA is the difference between "this is working"
+    and "this is finished in twenty minutes", which is the only question
+    anyone has of a 16 GB fetch. Silent below 64 KB/s: a stalled or
+    just-started fetch quoting "~9h left" is worse than quoting nothing.
+    """
+    if rate < 64 * 1024:
+        return ""
+    out = f" at {rate / float(1024**2):.0f} MB/s"
+    if remaining > 0:
+        seconds = int(remaining / rate)
+        if seconds >= 3600:
+            out += f", ~{seconds // 3600}h {(seconds % 3600) // 60}m left"
+        elif seconds >= 60:
+            out += f", ~{seconds // 60}m left"
+        else:
+            out += f", ~{max(seconds, 1)}s left"
+    return out
+
+
 class _Sampler(threading.Thread):
     """Reports staging-directory bytes as a fraction of the declared size."""
 
@@ -86,18 +108,32 @@ class _Sampler(threading.Thread):
         self._stop = threading.Event()
 
     def run(self) -> None:
+        # The previous sample, for a rate. An EWMA rather than the raw delta:
+        # a fetch that stages several files reports in bursts, and an
+        # instantaneous rate off one 0.5 s window swings between 0 and 200
+        # MB/s -- which is a number nobody can read and an ETA nobody can use.
+        last_at = time.monotonic()
+        last_got = _dir_bytes(self._staging)
+        rate = 0.0
         while not self._stop.wait(SAMPLE_SECONDS):
             got = _dir_bytes(self._staging)
             gb = got / float(1024**3)
+            now = time.monotonic()
+            span = now - last_at
+            if span > 0:
+                sample = max(got - last_got, 0) / span
+                rate = sample if rate <= 0.0 else rate * 0.7 + sample * 0.3
+            last_at, last_got = now, got
             if self._total > 0:
                 # Capped below 1.0: the declared size is approximate, and a bar
                 # that sits at 100% while the fetch is still running is worse
                 # than one that sits at 99%.
                 percent = min(99.0, 100.0 * got / self._total)
                 label = f"{gb:.1f} of ~{self._total / float(1024**3):.1f} GB"
+                label += _pace(rate, self._total - got)
             else:
                 percent = 0.0
-                label = f"{gb:.1f} GB"
+                label = f"{gb:.1f} GB" + _pace(rate, 0.0)
             _emit(percent=percent, label=label)
 
     def stop(self) -> None:

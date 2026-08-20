@@ -252,17 +252,31 @@ TRELLIS_EXE_HINT = (
     "https://github.com/pwilkin/trellis.cpp/releases and unpack it there "
     "(vendored build: v0.5.4), or point WARLOCK_TRELLIS_EXE at your own copy"
 )
-TRELLIS_GGUF_HINT = (
-    # Pinned like every registry ``Fetch`` (MDL-03), and this one is not a
-    # Fetch: the GGUF weights are one of the two *fatal* doctor rows, declared
-    # as text here because nothing downloads them through the registry. That
-    # makes the pin matter more rather than less -- an unpinned fatal
-    # dependency is the one a fresh install has no choice but to take.
-    "uvx hf download ilintar/trellis2-gguf "
-    "--revision a57397bd3d351599d9729fc144b3f87c3f87d65b "
-    '--include "*.gguf" '
-    '--exclude "q4/*" --exclude "q8/*" --local-dir models/trellis2-gguf'
-)
+# Pinned like every registry ``Fetch`` (MDL-03), and this one is not a Fetch:
+# the GGUF weights are one of the two *fatal* doctor rows, declared as text
+# here because nothing downloads them through the registry. That makes the pin
+# matter more rather than less -- an unpinned fatal dependency is the one a
+# fresh install has no choice but to take.
+TRELLIS_GGUF_REVISION = "a57397bd3d351599d9729fc144b3f87c3f87d65b"
+
+
+def trellis_gguf_hint(config: Config) -> str:
+    """The ``hf download`` line, landing in *this* install's models directory.
+
+    A function rather than a constant because the literal ``models/...`` was a
+    **relative** path, which is the mistake ``fetch``'s module docstring
+    already names: the command is pasted into whatever directory the shell
+    happens to be in, so it put 16 GB somewhere Warlock never inspects and
+    left the fatal row standing. Quoted, because the resolved path contains
+    spaces on any ordinary Windows profile.
+    """
+    return (
+        "uvx hf download ilintar/trellis2-gguf "
+        f"--revision {TRELLIS_GGUF_REVISION} "
+        '--include "*.gguf" '
+        '--exclude "q4/*" --exclude "q8/*" '
+        f'--local-dir "{config.trellis_models_dir}"'
+    )
 
 
 def _exe_check(config: Config) -> Check:
@@ -281,7 +295,7 @@ def _gguf_check(config: Config) -> Check:
         str(config.trellis_models_dir)
         if ok
         else f"no *.gguf found in {config.trellis_models_dir} -- download with:\n"
-        f"  {TRELLIS_GGUF_HINT}"
+        f"  {trellis_gguf_hint(config)}"
     )
     return Check("TRELLIS GGUF weights", ok, detail, fatal=True)
 
