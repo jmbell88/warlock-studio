@@ -108,8 +108,8 @@ def empty_layer(width: int, height: int) -> np.ndarray:
 # --- the flag algebra: transforming a *plane* of cells ------------------------
 #
 # Moved here from ``plotter/tools.py``, which had the only copy, when the Inker
-# needed the same rules to flip and rotate a tilemap layer (``ASEPRITE_PARITY.md``
-# Wave 3's "refs-aware flip/rotate (the flag algebra)" item). Neither engine may
+# needed the same rules to flip and rotate a tilemap layer (the Aseprite
+# parity programme's Wave 3 flag-algebra item). Neither engine may
 # import the other, and a second copy of a group-theory table is exactly the kind
 # of thing that drifts silently -- so it lives in the shared leaf both already
 # depend on, and ``plotter.tools`` now delegates rather than restating.

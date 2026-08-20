@@ -1174,7 +1174,8 @@ class StrokeState:
           union of a ``symmetry="xy"`` dab is a box spanning both mirrored
           positions on both axes -- **95%** of the canvas per dab against 33%
           with symmetry off, and 611ms against 213ms of wall clock over the
-          same stroke. That is the cliff `ASEPRITE_PARITY.md` carried as "the
+          same stroke. That is the cliff the Aseprite parity programme's P1
+          appendix carried as "the
           measured symmetry=xy 16x per-dab invalidation cliff (union-rect
           defect)".
 

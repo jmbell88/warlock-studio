@@ -198,7 +198,7 @@ dropping it because no layer chunk points at it.
 
 ### `palette-constrained-rgb` — **aseout-synthesized**
 `rgb-still` plus a four-colour palette set on an RGB document (not indexed
-mode). **A pinned loss, not a defect** (`ASEPRITE_PARITY.md` divergence 19):
+mode). **A pinned loss, not a defect** (`docs/INVARIANTS.md` divergence 19):
 the chunks are written — a file Aseprite opens has its colour table — but
 `document_from_aseprite` installs a palette only at indexed depth, so the
 read halfway back drops the constraint. That means this fixture's committed

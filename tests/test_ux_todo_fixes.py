@@ -97,10 +97,23 @@ def test_no_studio_module_cites_the_deleted_roadmap():
     assert offenders == []
 
 
-#: The plan files retired on 2026-08-15, named here so the scan below can look
-#: for them without this module's own prose becoming an offender -- which is
-#: also why the scan is scoped to ``src`` and ``scripts`` and never ``tests``.
-RETIRED_PLANS = ("REDESIGN" ".md", "INKER_UPDATE" ".md", "NEXT_SESSION" ".md")
+#: The plan files retired on 2026-08-15 and 2026-08-20, named here so the scan
+#: below can look for them without this module's own prose becoming an offender
+#: -- which is also why the scan is scoped to ``src`` and ``scripts`` and never
+#: ``tests``.
+RETIRED_PLANS = (
+    "REDESIGN" ".md",
+    "INKER_UPDATE" ".md",
+    "NEXT_SESSION" ".md",
+    # Retired 2026-08-20, both finished. ``ASEPRITE_PARITY.md``'s six waves and
+    # every one of their "Left open / owed" items closed; its non-goals, its P1
+    # backlog and its rule of engagement are folded into ``docs/INVARIANTS.md``
+    # and its citations were rewritten to name the *programme*. ``UPDATE_2.md``
+    # had all seventeen parts done and, unusually, not one citation anywhere in
+    # the tree -- so it went with nothing to rewrite at all.
+    "ASEPRITE_PARITY" ".md",
+    "UPDATE_2" ".md",
+)
 
 
 def test_no_module_cites_a_retired_plan_file():

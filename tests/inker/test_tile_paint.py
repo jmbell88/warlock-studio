@@ -886,7 +886,8 @@ def test_the_conversion_is_bit_exact_on_a_ragged_canvas_at_several_tile_sizes():
 def test_removing_a_tileset_evicts_its_hash_index():
     """The cache is keyed by tileset uid and holds a strip image alive. A removed
     tileset's entry is dead weight -- nothing can ask for it again -- so it is
-    dropped with the slot. Named in ``ASEPRITE_PARITY.md`` Wave 3's "Left open"
+    dropped with the slot. Named in the Aseprite parity programme's Wave 3
+    "Left open"
     section; the eviction landed in ``c15a64e`` without a pin, and this is it."""
     doc = _doc()
     layer = doc.stack.active

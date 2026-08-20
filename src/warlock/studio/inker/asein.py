@@ -478,7 +478,8 @@ def _read_chunk(state: _Parse, kind: int, payload: bytes, opacity_valid: bool) -
                 # docstring): the tileset's own user data, if any, is the
                 # *first* chunk in the run, so only the second and later
                 # consecutive ones are per-tile -- which Wave 3 deliberately
-                # does not model (Deferred, ASEPRITE_PARITY.md). Named
+                # does not model (deferred by the Aseprite parity
+                # programme's own non-goals). Named
                 # separately from the ordinary user-data warning because "the
                 # tiles are kept" is true here and is not the generic
                 # sentence's claim.

@@ -12,7 +12,7 @@ shape (see ``FIXTURES.md``'s "What is owed").
 
 **The gate, precisely.** ``aseprite_bytes`` normalises some documents on their
 first trip through it -- a palette-constrained RGB document is the one this
-corpus carries (``ASEPRITE_PARITY.md`` divergence 19) -- so a fixture's
+corpus carries (``docs/INVARIANTS.md`` divergence 19) -- so a fixture's
 committed bytes are not asserted to equal some builder's raw output; they are
 asserted to be a *fixed point*: read them, write what was read, and get the
 same bytes back. That is the write-read-write property ``test_aseout.py``'s

@@ -1,32 +1,97 @@
 # Warlock Studio
 
-A local, fully offline indie art studio for game assets — one desktop window, everything on your own GPU, no provider API, no account, no network. It folds the jobs of several tools into one pipeline-aware app: AI 2D/3D asset generation you would otherwise rent from Meshy.ai, polygon modelling, rigging and posing in the spirit of Blender, layered painting and animation in the spirit of Krita and Aseprite, tile-map editing that speaks Tiled's formats, and atlas packing that speaks TexturePacker's — and because they share one library, a mesh built in one workspace can be rigged, posed, sheeted and packed by the others.
+A local, fully offline indie art studio for game assets — one desktop window, everything on your own GPU, no provider API, no account, no network. It folds the jobs of several tools into one pipeline-aware app: AI 2D/3D asset generation you would otherwise rent from Meshy.ai, polygon modelling, rigging and posing in the spirit of Blender, layered painting and animation in the spirit of Krita and Aseprite, tile-map editing that speaks Tiled's formats, and atlas packing that speaks TexturePacker's — and because they share one library, a mesh built in one workspace can be rigged, posed, sheeted and packed by the others. The newest of those paths runs end to end: a described character becomes a reference, a mesh, a rig, and a directional sprite sheet you can open on a timeline and paint over.
 
 The generation pipeline:
 
 - **Image → 3D**: reference image → textured GLB (base colour plus a combined metallic/roughness texture; surface detail rides on vertex normals, not a normal map), powered by Microsoft **TRELLIS.2-4B** running natively via [trellis.cpp](https://github.com/pwilkin/trellis.cpp) (C++/GGML, CUDA).
 - **Text → 3D**: prompt → reference image via a diffusers pipeline, loaded from a local weights dir. **SDXL 1.0 at full CFG** is the default and the one base download the setup below asks for — 30 steps at 1024 px, with the negative prompt and ControlNet live; the same 7 GB also powers three faster recipes over the same weights, and **SDXL-Turbo** remains the 4-step fast option one install away. Ten base models are registered (`src/warlock/models.py`) from 4-step distillations to full-CFG SDXL, Playground, Juggernaut, DreamShaper and FLUX.2 klein, with per-job style LoRAs, IP-Adapter appearance conditioning, ControlNet silhouette lock, and a seamless-tile mode with seam measurement. See [docs/MODELS.md](docs/MODELS.md).
 - **Text → 2D sheets**: the same prompt as a **tile grid** — 64 tiles in an 8×8 arrangement, drawn as one generation onto a ControlNet grid guide, cut on the rectangles the guide was drawn from, and quantised to one shared palette (16/32/48/64 px tiles, orthogonal or 2:1 isometric) — or as a **sprite sheet**, which draws the character first, keeps it as its own asset, and then imagines two candidate sheets from it. Neither is reconstructed into a mesh; a tile grid goes on to Plotter or Packwright. The grid mechanism is measured (`docs/measurements/2026-08-18-tile-sheet-grid.md`); its art direction is not settled, and that document says so.
-- **Rig → pose → sprite sheet**: fit one of seven template skeletons (humanoid, quadruped, bird, fish, insect, serpent, tailed biped), pose it with 3D gizmos or reusable poses from the Poser's global library, and bake poses into sprite sheets — flat or lit, 4/8/16 directions, optionally restyled into pixel art.
+- **Rig → pose → sprite sheet**: fit one of seven template skeletons (humanoid, quadruped, bird, fish, insect, serpent, tailed biped), pose it with 3D gizmos or reusable poses from the Poser's global library, and bake poses into sprite sheets — flat or lit, 4/8/16 directions, optionally restyled into pixel art. Beyond single poses, **Troupe** renders whole animation clips: keyframes authored in the Poser, interpolated into a 256-cell character sheet of five animations across eight directions.
 - **The approval gate**: text jobs stop at the reference by default — the image is shown full-size for approval (with candidate fan-out and per-stage seeds) before anything pays for a trellis run.
 
 ## The modes
 
-A switch at the top of the window chooses between **thirteen** top-level modes (`src/warlock/studio/modes.py` is the authoritative list) drawn as three groups: the two ways in, the eight workspaces, and the three shelves. There is no per-mode key — the `Ctrl+K` command palette is the keyboard route, and `F1` opens the manual.
+A rail down the left of the window chooses between **eleven** top-level modes
+(`src/warlock/studio/modes.py` is the authoritative list, and `RAIL_GROUPS` is
+the grouping) in three sections: the asset pipeline, the six creative
+workspaces, and Settings in the footer. There is no per-mode key — the `Ctrl+K`
+command palette is the keyboard route, and `F1` opens the manual as an overlay
+over whatever you are looking at.
 
-1. **Home** — what changed in this build, machine status and diagnostics, and everything you were recently working on. The app opens here every launch; no mode is remembered.
-2. **Manual** — the full manual (`docs/manual/`) embedded in the window. `F1`, and every pane's (?) button, come here.
-3. **2D** — the reference stage. Owns the prompt and every control that composes it: guidance selects, model and style LoRA, conditioning, seeds and candidates.
-4. **3D** — the mesh stage. Owns no prompt controls at all: mesh, rig, pose and sprite-sheet decisions, plus surface re-texture of a finished mesh.
-5. **Inker** — a layered raster editor *and* animation workspace: soft/pixel/square brushes with symmetry, 12 blend modes, a full selection suite, filters, gradients — and a timeline with tracks and cels, linked cels, per-frame durations, onion skinning, and tags with forward/reverse/ping-pong playback. Saves native [OpenRaster](https://www.openraster.org/) (`.ora`, Krita/GIMP-compatible; the animation rides inside), exports flattened PNG, animated GIF, or a sprite sheet with JSON sidecar. Autosaves every two minutes with crash recovery, and bridges the pipeline in both directions (edit a reference in place, or send a painting to the mesh stage).
-6. **Clay** — modelling from primitives: vertex/edge/face element modes, extrude/bevel/subdivide/dissolve, UVs, a material palette, GLB import, and a diffable `.wblk` native format. Two ways out: export to the library as an ordinary asset (rigging, posing, sheets and every mesh export then work on it unchanged), or render it flat and send it to 3D.
-7. **Poser** — authoring reusable poses against a skeleton template, kept in a global pose library rather than belonging to any one asset; poses can move their root.
-8. **Review** — judging finished meshes with graded verdicts (−5..+5 plus tags), parameter sweeps over arbitrary setting axes, an advisory DINOv2-probe quality judge taught by in-app labelling, and the "What works" findings the verdicts add up to — which surface as hints beside the generate controls.
-9. **Plotter** — a tile-map editor: grid, layer stack, tilesets and object layers, native `.wmap`, and Tiled interop in both directions (`.tmx`/`.tmj` import and export; unsupported Tiled features are refused explicitly, never partially loaded).
-10. **Packwright** — a sprite-atlas packer: files, drops, Inker documents or library assets in; a deterministic atlas out (Grid or MaxRects, with trim/padding/extrude/power-of-two), as PNG plus TexturePacker JSON, and a `.tsx` for grid packs. Re-export of an unchanged document is byte-identical.
-11. **Settings** — the app's own preferences: theme, UI scale, layout, and the model list, from which a missing one can be downloaded.
-12. **Library** — every job ever generated, with filters, rerun and promotion, the trash and the prune.
-13. **Profiles** — saved style profiles for the 2D form: nine fields (base model, LoRA and strength, negative prompt, platform, genre, era, setting, palette) plus an anchor image.
+**The asset pipeline** — start something, take it through its stages, find it
+again, judge it:
+
+1. **Home** — what changed in this build, machine status and diagnostics, and
+   everything you were recently working on. The app opens here every launch; no
+   mode is remembered.
+2. **Create** — the whole generation pipeline in one mode, staged: the
+   reference (prompt, guidance, base model and style LoRA, conditioning, seeds
+   and candidates), then the mesh, then rig, pose, sprite sheet and surface
+   re-texture. Text jobs stop at the reference for approval by default, before
+   anything pays for a trellis run. Saved **style profiles** for the reference
+   form live here as a sheet rather than as a mode of their own.
+3. **Library** — every job ever generated, with filters, rerun and promotion,
+   the trash and the prune.
+4. **Review** — judging finished meshes with graded verdicts (−5..+5 plus
+   tags), parameter sweeps over arbitrary setting axes, an advisory DINOv2-probe
+   quality judge taught by in-app labelling, and the "What works" findings the
+   verdicts add up to — which surface as hints beside the generate controls.
+
+**The creative workspaces** — each fills the window with its own three-column
+layout:
+
+5. **Inker** — a layered raster editor *and* animation workspace. Soft, pixel
+   and square brushes with symmetry, 12 blend modes, a full selection suite,
+   filters and gradients; true **indexed and grayscale colour modes**; **tilemap
+   layers** over shared tilesets; and a timeline with tracks and cels, linked
+   cels, per-frame durations, onion skinning, and tags with forward/reverse/
+   ping-pong playback. Saves native [OpenRaster](https://www.openraster.org/)
+   (`.ora`, Krita/GIMP-compatible; the animation rides inside), **reads and
+   writes `.aseprite`**, and exports flattened PNG, animated GIF, or a
+   production sprite sheet with a JSON sidecar (arrange, merge duplicate frames,
+   skip empties, trim, padding, extrude, and per-tag or per-layer splits).
+   Autosaves every two minutes with crash recovery, and bridges the pipeline in
+   both directions.
+6. **Clay** — modelling from primitives: vertex/edge/face element modes,
+   extrude/bevel/subdivide/dissolve, UVs, a material palette, GLB import, and a
+   diffable `.wblk` native format. Two ways out: export to the library as an
+   ordinary asset (rigging, posing, sheets and every mesh export then work on it
+   unchanged), or render it flat and send it to Create.
+7. **Poser** — authoring reusable poses against a skeleton template, kept in a
+   global pose library rather than belonging to any one asset; poses can move
+   their root. Also the **clip editor**: the keyframes a character sheet
+   animates — which keys, in what order, how many frames apart — with
+   onion-skinned neighbours, a scrubber that plays the renderer's own
+   interpolation, and your edits saved beside the shipped clips rather than over
+   them.
+8. **Plotter** — a tile-map editor: grid, layer stack, tilesets and object
+   layers, terrain/Wang sets, per-tile metadata, hexagonal and staggered maps,
+   infinite maps, native `.wmap`, and Tiled interop in both directions
+   (`.tmx`/`.tmj` import and export; unsupported Tiled features are refused
+   explicitly, never partially loaded).
+9. **Packwright** — a sprite-atlas packer: files, drops, Inker documents or
+   library assets in; a deterministic atlas out (Grid or MaxRects, with
+   trim/padding/extrude/power-of-two), as PNG plus TexturePacker JSON, and a
+   `.tsx` for grid packs. Re-export of an unchanged document is byte-identical.
+10. **Troupe** — character sprite sheets from a 3D model, as a chain rather than
+    a button: a prompt draws a reference with a T-pose guide, you approve it,
+    and the same asset then goes through reconstruction, the auto-rig and a
+    256-cell render without being asked again. Five animations (idle, walk, run,
+    attack, jump) across eight directions, rendered large and reduced to the
+    pixel size you asked for, quantised against one palette. The sidecar carries
+    a tag per animation and direction, so **Edit in Inker** opens the whole sheet
+    on its own timeline with the spans already set.
+
+**Settings** (11) — the app's own preferences: theme, UI scale, layout, and the
+model list, from which a missing one can be downloaded.
+
+Two things are deliberately *not* modes. The **manual** is an overlay
+(`F1`, and every pane's (?) button) because help is consulted *about* a screen,
+and taking that screen away to show it answers the question by removing it.
+**Profiles** are a sheet over the reference form, because a shelf of saved
+settings sitting beside six creative workspaces would say that "manage my
+styles" is a place you travel to.
 
 ## What comes out
 

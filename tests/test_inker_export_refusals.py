@@ -18,7 +18,7 @@ cannot see:
   until the tab was closed, and
 * **nothing is submitted** -- no task key, so no save dialog ever opened.
 
-Carried from ``ASEPRITE_PARITY.md`` Wave 4's own "Left open / owed" section,
+Carried from the Aseprite parity programme's own Wave 4 owed list,
 where the gap was named ("none of the arrange/merge/skip_empty/trim/padding/
 extrude early refusals have a dedicated UI-level test") and re-named in Wave 5's
 as still open.

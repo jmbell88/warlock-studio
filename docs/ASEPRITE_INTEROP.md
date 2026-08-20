@@ -6,7 +6,7 @@ written against the chunks Aseprite 1.3.x itself writes (old-format palette
 `0x0004` included, for files older than that). This ledger records what each
 direction of the trip drops, not byte spelling — `asein.py` reads the format,
 `aseout.py` writes it, and this file is the explicit lossy-interop report
-Wave 5 of `ASEPRITE_PARITY.md` promised alongside them.
+Wave 5 of the Aseprite parity programme promised alongside them.
 
 **Two readers, two writers, one ledger.** ORA is this editor's native format
 and the direction Aseprite interop travels *through*: an `.aseprite` file

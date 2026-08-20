@@ -1106,7 +1106,7 @@ def _derived_palette(doc, anim) -> list[tuple[int, ...]]:
     """A swatch table for a document that carries none, from its own pixels.
 
     **Aseprite writes a palette into every file it saves and this writer did
-    not** -- ``ASEPRITE_PARITY.md`` Wave 5's "Left open / owed" item, and the
+    not** -- the Aseprite parity programme's Wave 5 owed item, and the
     only part of it this repository can close on its own. A file with no
     ``0x2019`` chunk is tolerated by this reader and, by reading of the format,
     by Aseprite's own pre-1.0 fallback; but a third-party importer that expects

@@ -6,7 +6,8 @@ can be wrong together forever -- where a round trip asserts the one property
 the writer exists for: what ``aseout`` puts on disk is what this build reads
 back, plane for plane and flag for flag. The half a round trip cannot reach --
 whether real Aseprite agrees -- is a user-owed manual pass, the Tiled-fixtures
-precedent, and is named in ``ASEPRITE_PARITY.md``'s Wave 5 gate rather than
+precedent, and is named in the Aseprite parity programme's Wave 5 gate
+rather than
 faked here.
 
 ``test_asein.py`` is the mirror of this file and builds its fixtures by hand

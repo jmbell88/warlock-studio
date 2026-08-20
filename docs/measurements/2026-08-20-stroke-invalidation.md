@@ -1,6 +1,7 @@
 # Stroke invalidation: a union standing in for a set
 
-**2026-08-20.** Closes the item `ASEPRITE_PARITY.md`'s P1 appendix carried as
+**2026-08-20.** Closes the item the Aseprite parity programme's P1 appendix
+carried as
 "the measured `symmetry="xy"` 16× per-dab invalidation cliff (union-rect defect,
 needs its own measurement doc before a fix — the constants rule)".
 

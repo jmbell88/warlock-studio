@@ -565,7 +565,8 @@ def pick(data: np.ndarray, x: int, y: int) -> int | None:
 #
 # The flag half is group algebra rather than a lookup, and **it no longer lives
 # here**: the Inker needed the identical rules to flip and rotate a tilemap
-# layer (``ASEPRITE_PARITY.md`` Wave 3's refs-aware flip/rotate item), the two
+# layer (the Aseprite parity programme's Wave 3 refs-aware flip/rotate
+# item), the two
 # engines may not import each other, and two copies of a group-theory table is
 # precisely the thing that drifts without anyone noticing. So it moved to
 # ``tilegrid.gid`` -- the shared leaf both packages already reach for -- with the

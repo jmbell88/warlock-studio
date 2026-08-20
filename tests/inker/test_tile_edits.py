@@ -408,7 +408,7 @@ def _still_tilemap_doc() -> Document:
     return doc
 
 
-# ``ASEPRITE_PARITY.md`` Wave 3 left "refs-aware flip/rotate (the flag algebra)"
+# The Aseprite parity programme's Wave 3 left "refs-aware flip/rotate (the flag algebra)"
 # open, and these two tests pinned the blanket refusal that stood in for it. The
 # refusal has now *moved* rather than been deleted -- the ledger rule at the top
 # of ``asein.py``, applied to geometry: the editor learned to model the thing, so

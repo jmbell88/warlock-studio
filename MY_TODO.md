@@ -8,7 +8,7 @@ and should start with a design conversation.
 
 Nothing here is blocked on me finding time. Where I could build it, I did.
 
-The suite is green: **10,872 passing**, ruff clean. (`tests/test_inker_textures.py`
+The suite is green: **10,874 passing**, ruff clean. (`tests/test_inker_textures.py`
 and `tests/test_dialogs_prompt.py` still flake under xdist and pass serially —
 that is the known scheduling flake, not a regression.)
 
@@ -116,10 +116,11 @@ with the app installed has looked.*
 
 ## 6. Small, unscheduled, genuinely optional
 
-The Aseprite P1 backlog stays unscheduled *by design* — `ASEPRITE_PARITY.md`
-says items are pulled into sessions individually, never waved. I did not build
-any of it. Three are cheap and sit on machinery that already exists, if you want
-them:
+The Aseprite P1 backlog stays unscheduled *by design* — items are pulled into
+sessions individually, never waved. It now lives in `docs/INVARIANTS.md` (the
+parity programme's own plan file was retired on 2026-08-20, finished). I did not
+build any of it. Three are cheap and sit on machinery that already exists, if
+you want them:
 
 - [ ] Shift-to-line-from-last-point (pure `inker_canvas` press logic + `line_pixels`)
 - [ ] Onion-skin "current layer only" (filter the `frame_stack` fold to one track)
@@ -134,7 +135,9 @@ them:
   to teach, only a re-cut, which is a different operation. This is a decision,
   not a gap.
 - **Pen/tablet pressure, ICC colour, per-frame palettes, per-cel opacity** and
-  the rest of `ASEPRITE_PARITY.md`'s named non-goals.
+  the rest of the Aseprite parity programme's named non-goals, now recorded in
+  `docs/INVARIANTS.md`. Each is a decision with an argument beside it, not a
+  backlog item waiting for time.
 
 ---
 

@@ -6,6 +6,8 @@ Guidance for Claude Code in this repository. See `D:\Projects\CLAUDE.md` for how
 
 Local AI 3D asset generator: text or image prompt → SDXL 1.0 at full CFG (reference PNG; `sdxl_cfg`, with Turbo as the fast option) → `trellis-server.exe` (vendored native binary, not the Python TRELLIS package) → textured GLB, in a single-process desktop app: a pygame window, one ModernGL context, imgui panels drawn through it. No HTTP, no browser.
 
+Eleven modes (`studio/modes.py` is authoritative): the asset pipeline is Home/Create/Library/Review, the six workspaces are Inker, Clay, Poser, Plotter, Packwright and Troupe, and Settings sits in the rail's footer. Manual and Profiles are deliberately *not* modes — an overlay and a sheet respectively. Generation is one staged mode (Create), not the separate 2D/3D pair the older docs describe.
+
 ## Commands
 
 - Install: `uv sync --extra studio --extra text2image --extra rig` — dev tooling is a dependency *group*, not an extra, and a bare `uv sync` prunes the extras (breaking ~10 test files at collection). `rig` needs a Python 3.13 venv or it silently installs nothing.
@@ -33,7 +35,8 @@ That file is the full, authoritative record of this codebase's hard invariants *
 - **The headless packages** — `studio/inker/`, `clay/`, `plotter/`, `packwright/` — import no imgui/moderngl/pygame/`service` (import-pinning tests enforce the outward sets). Undo is addressed by uid, never index.
 - **Crash recovery is `studio/journal.py`, one mechanism for six document kinds** — payload plus a `.meta.json` sidecar written *last* as the completion gate; declining keeps the files and there is no age-out.
 - **A constant the stored corpus is keyed on gets a `docs/measurements/` document before it changes** (`trellis_band`, `SEAM_MAX`, the grade scale…). `hole_worst` is corpus-dependent — never present it as a quality scale.
-- **There is no roadmap file.** `docs/TODO.md` was deleted on 2026-08-11 (commit `de87838`); git history keeps it. A `TODO.md §N` citation in code refers to the *deleted* `docs/LEFTOVERS.md` — chase both through `git log --diff-filter=D`, and do not mint new `§N` citations.
+- **There is no roadmap file, and a finished plan is deleted rather than ticked.** `docs/TODO.md` went on 2026-08-11 (`de87838`); `REDESIGN.md`/`INKER_UPDATE.md`/`NEXT_SESSION.md` on 2026-08-15; `ASEPRITE_PARITY.md` and `UPDATE_2.md` on 2026-08-20, both finished. Git history keeps them all (`git log --diff-filter=D`), sections worth keeping are folded into `docs/INVARIANTS.md`, and citations name the *programme* rather than the file — `tests/test_ux_todo_fixes.py` ratchets the filenames back out of `src/`. A `TODO.md §N` citation in code refers to the *deleted* `docs/LEFTOVERS.md`; do not mint new `§N` citations.
+- **Two plan files are live and neither is a roadmap.** `EXE_PLAN.md` is a written, unstarted installer plan. `LPC_ALT.md` is the Troupe programme, phases 0e/6/7 still open. `MY_TODO.md` is the user's own queue and holds **only** what a human has to do — art direction, keyframe authoring, the real-Aseprite and real-Tiled passes, GPU runs. If an item there could be built, build it and strike it out rather than tracking it.
 - **A manual chapter's number decides its order and part** — adding one is a renumbering; `tests/manual/` gates it in both directions.
 
 See memory (`warlock-stack.md`) for more background on this stack.
