@@ -287,7 +287,7 @@ def draw(app: Any, ctx: Any) -> None:
     footer = list(modes.RAIL_GROUPS[-1])
     badge = _health(ctx)
     # Help and the expand toggle are always there; the badge is not.
-    footer_rows = (["health"] if badge else []) + ["help", *footer, "expand"]
+    footer_rows = (["health"] if badge else []) + ["help", "keys", *footer, "expand"]
     rows = sum(len(g) for g in body_groups) + len(footer_rows)
     avail_h = imgui.get_content_region_avail().y
     # The gaps the column will actually contain: one between each pair of rows,
@@ -384,6 +384,18 @@ def draw(app: Any, ctx: Any) -> None:
         height=item_h,
     ):
         manual_render.toggle(ctx)
+    # The header's ``?`` button was the shortcut sheet's only visible door and
+    # went with the header. Ctrl+/ and the palette still open it, but both are
+    # things you have to already know -- so the sheet gets a door again here.
+    if _item("keys",
+        "Shortcuts",
+        icons.KEYBOARD,
+        item_w,
+        selected=False,
+        tooltip="Keyboard shortcuts (Ctrl+/)",
+        height=item_h,
+    ):
+        ctx.state.shortcuts_requested = True
     for key in footer:
         label, icon = labels[key]
         if _item(key, label, icon, item_w, selected=key == current, height=item_h):

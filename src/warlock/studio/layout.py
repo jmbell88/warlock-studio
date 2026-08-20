@@ -256,7 +256,11 @@ class Layout:
         # size this build does not offer -- and anything unrecognised reads as
         # "icons", which is the state the rail is designed around rather than a
         # degraded version of the other one.
-        self.rail = "labels" if str(stored.get("rail", "icons")) == "labels" else "icons"
+        # A profile that has never expressed a preference gets labels: nine of
+        # ten workspaces are a glyph with no name until you hover one, and the
+        # control that would tell you is itself an unnamed glyph. A *stored*
+        # "icons" still wins -- this moves the default, not anyone's choice.
+        self.rail = "icons" if str(stored.get("rail", "labels")) == "icons" else "labels"
 
     def set_sidebar_width(self, key: str) -> None:
         self.sidebar = set_sidebar(key, animate=True)

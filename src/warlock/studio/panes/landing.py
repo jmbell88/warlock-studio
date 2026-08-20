@@ -466,6 +466,13 @@ def _header(ctx: Any) -> None:
         # question the UI could not answer at all.
         widgets.muted(_version())
     manual_render.help_button(ctx, "home")
+    # One line saying what the app is. The rail names the workspaces and the
+    # manual explains them, but nothing on screen said what any of it was for
+    # -- and Ctrl+K is the only keyboard route to a mode, advertised nowhere.
+    widgets.muted_wrapped(
+        "Local AI asset generation: prompts and drawings into references, "
+        "sprites and 3D models. Press Ctrl+K for the command palette."
+    )
     imgui.dummy((0, sp(tokens.SP_3)))
 
 
@@ -780,7 +787,7 @@ def _resume(ctx: Any) -> None:
     widgets.section("Resume")
     drawn = rows(ctx)
     if not drawn:
-        widgets.muted("Nothing yet. Start something above.")
+        widgets.muted("Nothing yet. Start something above, or press Ctrl+K.")
         return
     style = imgui.get_style()
     pad = style.window_padding

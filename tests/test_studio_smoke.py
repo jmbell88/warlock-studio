@@ -2559,6 +2559,36 @@ def test_the_health_badge_is_drawn_only_when_something_is_failing(app_ctx, imgui
     assert "health" in run()
 
 
+def test_the_rail_carries_a_door_to_the_shortcut_sheet(app_ctx, imgui_ctx):
+    """Ctrl+/ and the palette both open the sheet, and both are things you have
+    to already know. The header's ``?`` button was its only visible door and
+    went with the header, so the footer carries one -- and it sets the same
+    one-shot flag, because a popup opened inside the rail child would be
+    scoped to the child."""
+    imgui, _renderer = imgui_ctx
+    from warlock.studio import rail as rail_mod
+
+    fake = SimpleNamespace(app_ctx=app_ctx, layout=SimpleNamespace(rail="labels"))
+    fake._set_mode = lambda key: None
+    seen: list[str] = []
+    real_item = rail_mod._item
+
+    def spy(key, label, icon, box, **kwargs):
+        seen.append(key)
+        # Report a click on the shortcuts row only, so the handler runs.
+        real_item(key, label, icon, box, **kwargs)
+        return key == "keys"
+
+    app_ctx.state.shortcuts_requested = False
+    rail_mod._item = spy
+    try:
+        _frame(imgui_ctx, lambda: rail_mod.draw(fake, app_ctx))
+    finally:
+        rail_mod._item = real_item
+    assert "keys" in seen
+    assert app_ctx.state.shortcuts_requested
+
+
 def test_the_expanded_rail_gives_way_before_the_columns_do(app_ctx, imgui_ctx):
     """The preference is untouched by the room: a window dragged narrow draws
     the collapsed rail and dragging it back restores the labels, because what

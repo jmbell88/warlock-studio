@@ -94,23 +94,27 @@ def test_a_save_writes_no_width_key_at_all():
         # It has to be written here every time for the reason the whole test
         # exists: the dict is replaced, so a key ``save`` forgets is a
         # preference that silently resets the next time the other one changes.
-        "rail": "icons",
+        "rail": "labels",
     }
 
 
 def test_the_rail_preference_round_trips_and_survives_nonsense():
-    settings = _Settings({"rail": "labels"})
-    assert layout_mod.Layout(settings).rail == "labels"
+    settings = _Settings({"rail": "icons"})
+    assert layout_mod.Layout(settings).rail == "icons"
     # A name, never a width, so a value written by a build that offered a third
     # state cannot become a size this one does not have -- and the fallback is
-    # the state the rail is designed around rather than a degraded other one.
-    assert layout_mod.Layout(_Settings({"rail": "enormous"})).rail == "icons"
-    assert layout_mod.Layout(_Settings({})).rail == "icons"
+    # now *labels*: a rail of unnamed glyphs is not something a first-time user
+    # should have to discover, and only an explicit stored "icons" collapses it.
+    assert layout_mod.Layout(_Settings({"rail": "enormous"})).rail == "labels"
+    assert layout_mod.Layout(_Settings({})).rail == "labels"
 
     layout = layout_mod.Layout(settings)
     layout.set_rail("icons")
     assert settings.store["layout"]["rail"] == "icons"
     assert layout_mod.Layout(settings).rail == "icons"
+    layout.set_rail("labels")
+    assert settings.store["layout"]["rail"] == "labels"
+    assert layout_mod.Layout(settings).rail == "labels"
 
 
 def test_a_nonsense_share_falls_back_rather_than_raising():
