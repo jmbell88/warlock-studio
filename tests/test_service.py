@@ -998,6 +998,92 @@ def test_derived_artifacts_outlive_the_normalize_that_finishes_the_new_mesh(svc,
     assert not (job_dir / derived).exists()
 
 
+def _retarget_ready(svc):
+    """A finished job with a source reconstruction, ready to retarget."""
+    job_id = _finished_job(svc)
+    job_dir = svc.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "source.glb").write_bytes(b"glb")
+    (job_dir / "model.glb").write_bytes(b"glb")
+    return job_id
+
+
+def _fake_optimize(monkeypatch):
+    from warlock.pipelines import optimize
+
+    def fake_run(source, out, **_kwargs):
+        out.write_bytes(b"optimized")
+        return {"ok": True}
+
+    monkeypatch.setattr(optimize, "run", fake_run)
+
+
+def test_a_retarget_whose_grounding_fails_says_so_on_the_row(svc, monkeypatch):
+    """The swallow is deliberate -- the new GLB is on disk and serving it
+    ungrounded beats an error that leaves the caches half-updated -- but the
+    *silence* was not. ``_apply_scale``, ``_audit_mesh`` and ``import_mesh``
+    all record this; this door only logged it, so the job stayed ``done``, the
+    row claimed a grounded asset, and ``export.degraded_ids`` found nothing to
+    warn about.
+    """
+    from warlock.pipelines import postprocess
+    from warlock.service.validation import ARTIFACT_HEALTH
+
+    job_id = _retarget_ready(svc)
+    _fake_optimize(monkeypatch)
+    monkeypatch.setattr(
+        postprocess, "normalize_glb", _raiser(RuntimeError("cannot parse that mesh"))
+    )
+
+    svc_jobs.optimize_job(svc, job_id, profile="raw")
+
+    params = svc.store.get(job_id)["params"]
+    assert "normalize" in params[ARTIFACT_HEALTH]
+    assert "cannot parse" in params[ARTIFACT_HEALTH]["normalize"]
+    # Still done, still served: the record is the only thing that changed.
+    assert svc.store.get(job_id)["status"] == "done"
+
+
+def test_a_successful_retarget_clears_a_stale_degraded_note(svc, monkeypatch):
+    """The other direction, unhandled for the same reason: a note inherited
+    from the original run describes a mesh that no longer exists, so it left
+    the asset flagged after the step that fixed it."""
+    from warlock.pipelines import postprocess
+    from warlock.service.validation import ARTIFACT_HEALTH
+
+    job_id = _retarget_ready(svc)
+    svc.store.merge_params(job_id, {ARTIFACT_HEALTH: {"normalize": "it was broken"}})
+    _fake_optimize(monkeypatch)
+    monkeypatch.setattr(postprocess, "normalize_glb", lambda p, size_m=None: {"scale": 1.0})
+
+    svc_jobs.optimize_job(svc, job_id, profile="raw")
+
+    assert ARTIFACT_HEALTH not in svc.store.get(job_id)["params"]
+
+
+def test_a_successful_retarget_keeps_a_note_about_a_different_step(svc, monkeypatch):
+    """Only ``normalize`` is this step's to clear. A mesh audit that could not
+    run is still true of the geometry a retarget did not change."""
+    from warlock.pipelines import postprocess
+    from warlock.service.validation import ARTIFACT_HEALTH
+
+    job_id = _retarget_ready(svc)
+    svc.store.merge_params(job_id, {ARTIFACT_HEALTH: {"report": "no report"}})
+    _fake_optimize(monkeypatch)
+    monkeypatch.setattr(postprocess, "normalize_glb", lambda p, size_m=None: {"scale": 1.0})
+
+    svc_jobs.optimize_job(svc, job_id, profile="raw")
+
+    assert svc.store.get(job_id)["params"][ARTIFACT_HEALTH] == {"report": "no report"}
+
+
+def _raiser(exc):
+    def _fn(*_a, **_k):
+        raise exc
+
+    return _fn
+
+
 # --- tags -------------------------------------------------------------------
 
 

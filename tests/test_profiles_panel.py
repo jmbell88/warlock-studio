@@ -163,3 +163,45 @@ def test_cancel_goes_through_the_guard_rather_than_closing_outright():
     cancel = source.index('imgui.button("Cancel"')
     after = source[cancel : cancel + 400]
     assert "guard(ctx" in after, "Cancel must ask before discarding a draft"
+
+
+# --- the crash-recovery slot --------------------------------------------------
+
+
+def test_an_untouched_draft_leaves_no_crash_copy(ctx):
+    """``_journal_slots``' own docstring: "An untouched draft is not unsaved
+    work: opening a saved profile to look at it and closing the panel must not
+    leave a crash copy that gets offered back as though something had been
+    typed."
+
+    That guard was dead. It read the saved profiles from
+    ``settings.get("profiles")`` while they are stored under ``profiles.KEY``
+    -- ``"user_profiles"``, named that deliberately "because the app already
+    has another thing by that name" -- so the lookup was always empty, the
+    origin never matched, and every look-but-don't-touch armed the journal.
+    ``journal.py`` has no age-out, so the recovery offer persisted until
+    somebody declined it by hand.
+    """
+    profiles.save_profile(ctx.settings, "Brass", profiles.capture(ctx.state.form_2d))
+    saved = profiles.list_profiles(ctx.settings)["Brass"]
+    profiles_panel._open_draft(ctx, "Brass", saved)
+
+    assert profiles_panel._journal_slots(ctx) == []
+
+
+def test_a_typed_draft_still_gets_a_slot(ctx):
+    """The guard must not have swallowed the case it exists beside: real
+    unsaved work is exactly what the journal is for."""
+    profiles.save_profile(ctx.settings, "Brass", profiles.capture(ctx.state.form_2d))
+    saved = profiles.list_profiles(ctx.settings)["Brass"]
+    profiles_panel._open_draft(ctx, "Brass", saved)
+    ctx.state.profile_draft["negative_prompt"] = "blurry"
+
+    assert len(profiles_panel._journal_slots(ctx)) == 1
+
+
+def test_a_brand_new_draft_gets_a_slot(ctx):
+    """A draft with no origin cannot be identical to one, so it is always
+    unsaved work."""
+    profiles_panel._open_draft(ctx, "", {})
+    assert len(profiles_panel._journal_slots(ctx)) == 1

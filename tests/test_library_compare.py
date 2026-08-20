@@ -161,3 +161,45 @@ def test_a_selection_change_drops_a_comparison_parse_in_flight():
     state.select("cccccccccccc")
     assert state.comparing is None
     assert state.compare_pending is None
+
+
+def test_a_refused_second_compare_leaves_the_first_one_alone(tmp_path):
+    """``COMPARE_KEY`` is a single key, so a second compare started before the
+    first parse lands is refused -- and only the second one should be lost.
+
+    ``comparing`` and ``compare_pending`` *are* the record of the compare in
+    flight, and ``compare()`` overwrites them before it asks the runner. On
+    refusal it used to clear both to None, which cancelled the earlier compare
+    too: ``_adopt_compare`` checks the arriving tag against ``compare_pending``
+    and dropped the result that was already on its way. Neither mesh appeared
+    and nothing was said, so the menu item read as inert and the user clicked
+    it again.
+    """
+    ctx = _Ctx(tmp_path)
+    ctx.state.compare_baseline = "aaaaaaaaaaaa"
+    ctx.state.selected = "aaaaaaaaaaaa"
+    library.compare(ctx, "bbbbbbbbbbbb")
+    first = ctx.state.compare_pending
+    assert first is not None
+
+    ctx.accept = False  # the runner refuses: the first parse is still running
+    library.compare(ctx, "cccccccccccc")
+
+    assert ctx.state.comparing == "bbbbbbbbbbbb", "the first compare was cancelled"
+    assert ctx.state.compare_pending == first
+    assert len(ctx.submitted) == 1
+
+
+def test_a_refused_first_compare_leaves_nothing_behind(tmp_path):
+    """With nothing in flight the fields were already None, so restoring them
+    is the same as clearing them -- the viewer must not be left claiming a
+    comparison that was never parsed."""
+    ctx = _Ctx(tmp_path)
+    ctx.state.compare_baseline = "aaaaaaaaaaaa"
+    ctx.state.selected = "aaaaaaaaaaaa"
+    ctx.accept = False
+
+    library.compare(ctx, "bbbbbbbbbbbb")
+
+    assert ctx.state.comparing is None
+    assert ctx.state.compare_pending is None

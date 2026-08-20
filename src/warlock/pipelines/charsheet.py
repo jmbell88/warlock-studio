@@ -228,3 +228,33 @@ def animation_block() -> dict[str, Any]:
             for animation, direction, start, end, loop in spans()
         ],
     }
+
+
+def pivot_in_cell(
+    pivot: tuple[float, float] | None, frame_size: int
+) -> tuple[float, float] | None:
+    """A pivot the worker projected at ``RENDER_SIZE``, in *cell* pixels.
+
+    The sidecar documents its pivot as pixels within a cell, and every reader
+    of it assumes exactly that -- ``sheet.sidecar`` defaults the field to
+    ``(cell_w / 2, cell_h)`` for the same reason. ``blender_worker.op_sheet``
+    projects the ground origin in the pixels it rendered at, which on every
+    *other* sheet path is the cell size and on this one deliberately is not:
+    Troupe renders at :data:`RENDER_SIZE` and packs at the logical size,
+    because a 256-cell atlas at 512 would be refused at the 8192 ceiling.
+
+    So the number needs converting, and the conversion had been missing: a
+    32px cell recorded a pivot near ``(256, 470)``, sixteen times outside
+    itself, and an engine placing sprites from the sidecar put the character's
+    feet far below the sprite. Placing without drift is the one property the
+    field exists for.
+
+    Here rather than inline in ``_q_troupe`` because this module is the
+    filesystem-free half of the character sheet -- it decides what cell 137
+    depicts and never reads a file -- which is what makes the arithmetic
+    testable at all.
+    """
+    if pivot is None:
+        return None
+    scale = float(frame_size) / float(RENDER_SIZE)
+    return (float(pivot[0]) * scale, float(pivot[1]) * scale)

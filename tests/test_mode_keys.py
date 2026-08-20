@@ -432,3 +432,106 @@ def test_the_confirm_modal_binds_enter_and_escape_and_focuses_confirm():
     assert "set_item_default_focus" in source
     # Focus is claimed once, not every frame, or Tab can never move off it.
     assert "_focused" in source
+
+
+# --- C1: a workspace mode's arm must consume the key -------------------------
+#
+# Every workspace mode replaces the asset viewport and the form column with its
+# own, so the shared 2D/3D block at the foot of ``_shortcut`` -- Delete, the
+# arrows, Ctrl+Enter, F/W/S -- is addressed at panes that mode is not showing.
+# Each arm therefore returns unconditionally, *whether or not* its handle_key
+# consumed the key, and each says so in a comment.
+#
+# Packwright's return was lost when Troupe's branch was spliced in ahead of it
+# (the giveaway was the unreachable second ``return`` left behind after
+# Troupe's own), and pressing Delete in the atlas packer sent the selected
+# *library* asset to the trash -- confirm-free, because the library binding it
+# fell through to is deliberately confirm-free. Nothing caught it: the per-mode
+# key tests call ``<mode>_mode.handle_key`` directly and never route through
+# this dispatcher, so the fall-through is invisible from there. This pins it
+# from the dispatcher's side, which is the only side that can see it.
+
+_WORKSPACE_ARMS = {
+    "clay": "clay_mode",
+    "poser": "poser_mode",
+    "review": "review_mode",
+    "inker": "inker_mode",
+    "plotter": "plotter_mode",
+    "packwright": "packwright_mode",
+    "troupe": "troupe_mode",
+}
+
+# The keys the shared block binds, each with the modifier that arms it. A key
+# added there without being added here is a hole this test cannot see, which is
+# why the two are checked against the source below.
+_SHARED_KEYS = (
+    (pygame.K_DELETE, 0),
+    (pygame.K_RETURN, pygame.KMOD_CTRL),
+    (pygame.K_UP, 0),
+    (pygame.K_DOWN, 0),
+    (pygame.K_f, 0),
+    (pygame.K_w, 0),
+    (pygame.K_s, 0),
+)
+
+
+def test_every_work_mode_is_either_create_or_named_here() -> None:
+    """The list above is exhaustive, and stays that way.
+
+    A tenth mode that reaches ``_shortcut`` without an arm of its own falls
+    through by construction, so the drift this catches is a *new* mode rather
+    than an edited one. ``create`` is the exception on purpose: the shared
+    block is its own keyboard.
+    """
+    assert set(_WORKSPACE_ARMS) | {"create"} == set(modes.WORK_MODES)
+
+
+@pytest.mark.parametrize("mode", sorted(_WORKSPACE_ARMS))
+def test_a_workspace_mode_never_falls_through_to_the_shared_block(mode, monkeypatch):
+    """No key pressed in a workspace mode reaches the 2D/3D bindings.
+
+    ``handle_key`` is stubbed to answer False -- "I did not bind this" -- which
+    is the case the arms exist for: a mode that consumed everything would pass
+    this test even with its return missing.
+    """
+    fired: list[str] = []
+    monkeypatch.setattr(
+        f"warlock.studio.{_WORKSPACE_ARMS[mode]}.handle_key",
+        lambda ctx, event: False,
+    )
+    for target, name in (
+        ("warlock.studio.panes.library.delete_asset", "delete_asset"),
+        ("warlock.studio.panes.library.select_relative", "select_relative"),
+        ("warlock.studio.panes.settings_2d.generate", "generate"),
+        ("warlock.studio.panes.settings_3d.promote", "promote"),
+    ):
+        monkeypatch.setattr(target, (lambda n: lambda *a, **k: fired.append(n))(name))
+
+    app = _app(mode)
+    app.app_ctx.state.selected = "job-1"
+    # Clay's arm frames its own selection on F; it is part of the arm, not of
+    # the block below it, so it is stubbed rather than counted.
+    app._frame_clay_selection = lambda: None
+    app.viewer.frame = lambda: fired.append("frame")
+    app.viewer.set_wireframe = lambda v: fired.append("wireframe")
+    app.viewer.set_turntable = lambda v: fired.append("turntable")
+
+    for key, mod in _SHARED_KEYS:
+        _press(app, key, mod)
+
+    assert fired == [], f"{mode} fell through to the shared 2D/3D block"
+
+
+def test_the_shared_block_binds_nothing_this_test_does_not_press() -> None:
+    """``_SHARED_KEYS`` is the whole of the fall-through, not a sample.
+
+    Read off the source rather than maintained by hand: the block is a chain of
+    ``event.key ==``/``in`` tests, and a binding added to it without a line
+    here would leave a key no arm is proved to consume.
+    """
+    source = inspect.getsource(main.App._shortcut)
+    tail = source[source.index("mods = event.mod") :]
+    pressed = {key for key, _mod in _SHARED_KEYS}
+    for name in ("K_DELETE", "K_RETURN", "K_UP", "K_DOWN", "K_f", "K_w", "K_s"):
+        assert f"pygame.{name}" in tail, f"{name} left the shared block"
+        assert getattr(pygame, name) in pressed

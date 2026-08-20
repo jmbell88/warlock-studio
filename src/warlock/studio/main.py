@@ -1313,6 +1313,15 @@ class App:
                     # Same rule again: ``loading``/``building`` gate the pane
                     # and the viewport's progress row.
                     poser_mode.on_task_failed(ctx, done)
+                elif done.key.startswith("matte-"):
+                    from . import matte_preview
+
+                    # The seventh, and it was missing. ``matte_preview.pump``
+                    # re-submits whenever there is no cached cutout for the
+                    # current stamp, and ``settings_3d.matte_modal`` runs it
+                    # every frame -- so a failure that left no note behind was
+                    # re-submitted, re-failed and re-toasted at the frame rate.
+                    matte_preview.on_task_failed(ctx, done)
                 continue
             self._on_task_done(done)
 
@@ -2388,7 +2397,16 @@ class App:
         if ctx.state.mode == "packwright":
             from . import packwright_mode
 
+            # Unconditional for the reason the four above are: handle_key
+            # returns False for every key it does not bind, and letting that
+            # fall through let the shared 2D/3D block below act on a library
+            # and a viewport Packwright has replaced -- Delete trashed the
+            # selected *library* asset (confirm-free, by that binding's own
+            # design) and Ctrl+Enter queued a generation, from the atlas
+            # packer. The return was lost when Troupe's branch was spliced in
+            # ahead of it; a scan test now pins every workspace mode's arm.
             packwright_mode.handle_key(ctx, event)
+            return
         if ctx.state.mode == "troupe":
             from . import troupe_mode
 
@@ -2397,7 +2415,6 @@ class App:
             # letting that fall through would let F/W/S act on a viewport
             # Troupe has replaced with a sprite.
             troupe_mode.handle_key(ctx, event)
-            return
             return
         # Both edges reach this function, because Inker's space-to-pan is a
         # hold and needs the release. Nothing below is a hold: every one of
@@ -2582,11 +2599,14 @@ class App:
             # the prompt the user is composing. One branch, and it is what
             # makes the feature discoverable at all.
             ctx.state.form_2d["ref_path"] = str(path)
-            # The Reference section is collapsed by default, so without these
-            # two lines the drop is accepted and nothing on screen moves (H70).
-            from . import widgets
-
-            widgets.request_open("2d/reference")
+            # H70's other half -- a ``widgets.request_open`` for the
+            # References block -- is gone, not moved. It was written when that
+            # block was a collapsible header that defaulted shut; it is always
+            # open now, and no ``persist_key`` by that name is registered
+            # anywhere, so the request matched nothing and merely accumulated
+            # in ``widgets._OPEN_REQUESTS`` for the life of the process -- with
+            # a comment beside it claiming it was why the drop was visible.
+            # The flash below is what actually says the drop landed.
             self._flash_drop("2d-ref")
             ctx.toast(f"Using {path.name} as the reference.", "success")
             return
@@ -5489,9 +5509,18 @@ def run() -> int:
         )
         return 1
     try:
-        return _run_locked()
+        code = _run_locked()
     finally:
         lock.release()
+    # The last thing this process does, and deliberately after the ``finally``
+    # above: a worker parked on something that never returns -- the native file
+    # dialogs block until dismissed, and by now the window they belong to is
+    # gone -- is a non-daemon thread, so ``threading._shutdown`` would wait on
+    # it forever with nothing on screen to say why. Everything that must happen
+    # has happened by this line; what a hard exit skips is only the waiting.
+    from .tasks import hard_exit_if_leaked
+
+    return hard_exit_if_leaked(code)
 
 
 def _run_locked() -> int:

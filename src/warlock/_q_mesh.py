@@ -54,11 +54,19 @@ def _note_degraded(params: dict[str, Any], step: str, detail: str) -> None:
     than overwrite, because a mesh can fail more than one of them and the second
     failure is not a correction of the first.
     """
-    health = params.setdefault(ARTIFACT_HEALTH, {})
+    health = params.get(ARTIFACT_HEALTH)
     if not isinstance(health, dict):  # a hand-edited row; start fresh
         health = {}
-        params[ARTIFACT_HEALTH] = health
-    health[step] = detail
+    # **Rebound, never mutated in place**, which is the rule ``_optimize``,
+    # ``_apply_scale`` and ``_audit_mesh`` already follow and the reason
+    # ``_q_generate``'s remesh loop can snapshot the winning attempt with a
+    # shallow ``dict(params)``. That loop's own comment names this exact
+    # hazard -- "a callee that grew an in-place nested mutation would defeat
+    # it" -- and ``setdefault`` plus ``health[step] =`` was that callee: with
+    # ``WARLOCK_MESH_RETRIES`` set, attempt 2's failures wrote straight through
+    # the shared dict into ``best["params"]["degraded"]``, so the job that
+    # shipped attempt 1's mesh carried attempt 2's health record.
+    params[ARTIFACT_HEALTH] = {**health, step: detail}
 
 
 class MeshPostOps:

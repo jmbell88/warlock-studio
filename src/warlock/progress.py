@@ -132,6 +132,32 @@ PHASES_TILE_SHEET: dict[str, tuple[float, float]] = {
     "quantize": (0.94, 1.00),
 }
 
+# A character sheet is ``PHASES_SHEET``'s shape with the pixel-art pass bolted
+# on: one Blender subprocess rendering 256 cells at ``charsheet.RENDER_SIZE``
+# and reporting its own fraction, then a host-side tail of three steps -- reduce
+# every frame to the logical size, pack them, and quantise the packed atlas
+# against one palette.
+#
+# The tail is a fifth of the bar rather than ``PHASES_SHEET``'s twentieth,
+# because it is doing far more here than packing: 256 supersampled reductions
+# and a nearest-search over the whole atlas. ``_q_jobs`` calls the stretch
+# between the pack and the publish "the longest gap in the job" in as many
+# words, and the slices follow the ``nominal`` hints ``_charsheet`` already
+# passes (6 s, 3 s, 8 s).
+#
+# It had no table at all, which is CON-02 for the fourth time and the reason
+# the sweep test below is parametrised rather than hand-written: the Blender
+# render's closing ``on_progress(1.0, ...)`` landed in an undeclared phase,
+# mapped onto the whole bar, and the never-regress creep pinned it at 100% for
+# the entire tail. ``LPC_ALT.md`` lists this table among the nine a new kind
+# must sweep, and Troupe swept eight of them.
+PHASES_CHARSHEET: dict[str, tuple[float, float]] = {
+    "sheet": (0.00, 0.70),
+    "reduce": (0.70, 0.82),
+    "pack": (0.82, 0.88),
+    "pixel": (0.88, 1.00),
+}
+
 _PHASES_BY_KIND: dict[str, dict[str, tuple[float, float]]] = {
     "text": PHASES_TEXT,
     "image": PHASES_IMAGE,
@@ -141,6 +167,7 @@ _PHASES_BY_KIND: dict[str, dict[str, tuple[float, float]]] = {
     "pixel_sheet": PHASES_PIXEL_SHEET,
     "retexture": PHASES_RETEXTURE,
     "tile_sheet": PHASES_TILE_SHEET,
+    "charsheet": PHASES_CHARSHEET,
 }
 
 

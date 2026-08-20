@@ -143,6 +143,16 @@ TILES_VERSION = 1
 # raises on a date below it.
 _EPOCH = (1980, 1, 1, 0, 0, 0)
 
+# A zip's directory declares what each member unpacks to and nothing makes that
+# number honest -- a few kilobytes of archive can claim terabytes, and the read
+# that discovers this is the one that has already exhausted memory. The
+# ``clay/serialize.py`` constant verbatim, as ``packwright/wpack.py`` and
+# ``plotter/wmap.py`` also carry it; ORA was the one container door in the tree
+# without it, which mattered more here than anywhere else because a ``.wblk``
+# is ours and an ORA is explicitly *anyone's*. Read from module globals at call
+# time for their reason too: a test lowers it rather than building a gigabyte.
+MAX_DECOMPRESSED_BYTES = 1 << 30
+
 log = logging.getLogger(__name__)
 
 
@@ -1577,6 +1587,33 @@ def _read_tiles(zf: zipfile.ZipFile, doc, anim: Animation | None) -> None:
     doc.invalidate_all()
 
 
+def _parse_stack(data: bytes):
+    """``stack.xml`` parsed, with a DTD refused before the parser sees it.
+
+    ``plotter/tsx.py``'s rule and its reasoning, applied to the one door that
+    lacked it. ``ExpatParser`` expands internal entities, so the billion-laughs
+    shape -- ten nested entities each referencing the previous one ten times --
+    turns a few hundred bytes into gigabytes of string *inside*
+    ``fromstring``, where the byte ceiling above has already had its turn and
+    every ceiling below has not had one yet. No ORA writer emits a DTD, so
+    nothing legitimate is refused.
+
+    A second copy of that probe rather than a shared one, deliberately: this
+    package imports nothing from ``plotter`` (an import pin enforces the
+    outward set), so the alternative to writing it twice is a new shared leaf
+    for four lines. The two are one answer written twice on purpose, the way
+    ``MAX_SOURCE_PIXELS`` mirrors ``validation.MAX_IMAGE_PIXELS``.
+
+    The probe is a substring of the first 4 KiB rather than a parse, because
+    the declaration is part of the *prolog* -- XML requires it before the root
+    element -- and 4 KiB is far past any prolog and far short of a body.
+    Uppercased, since ``<!doctype`` is equally legal.
+    """
+    if b"<!DOCTYPE" in data[:4096].upper():
+        raise ValueError("this drawing declares a DTD, which Inker does not read")
+    return ElementTree.fromstring(data)
+
+
 def read_ora(path: Path, *, budget: int | None = None):
     from PIL import Image
 
@@ -1584,7 +1621,18 @@ def read_ora(path: Path, *, budget: int | None = None):
     from .undo import UNDO_BYTES, UndoStack
 
     with zipfile.ZipFile(path) as zf:
-        root = ElementTree.fromstring(zf.read("stack.xml"))
+        # Before the first read, which is the only place the refusal is cheap:
+        # the directory says what every member unpacks to, and a read that
+        # discovers the archive lied has already spent the memory. The
+        # ``wpack``/``wmap``/``wblk`` door, fourth instance.
+        claimed = sum(int(info.file_size) for info in zf.infolist())
+        ceiling = MAX_DECOMPRESSED_BYTES
+        if claimed > ceiling:
+            raise ValueError(
+                f"this drawing claims {claimed} bytes unpacked, "
+                f"which is past the {ceiling}-byte ceiling"
+            )
+        root = _parse_stack(zf.read("stack.xml"))
         width = int(root.get("w") or 0)
         height = int(root.get("h") or 0)
 

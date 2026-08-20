@@ -729,7 +729,25 @@ def _load_rendered_sheet(
     with Image.open(png) as opened:
         opened.load()
         atlas = np.asarray(opened.convert("RGBA"), dtype=np.uint8).copy()
-    doc = sheetin.document_from_grid(atlas, cell, count=count)
+    cells = record.get("cells") or []
+    animation = record.get("animation")
+    if cells and animation:
+        # The sidecar knows what its own frames mean, so the document opens
+        # with them: one tag per animation and direction, and each frame at its
+        # own ``duration_ms`` -- a six-per-second idle and a twelve-per-second
+        # run in one timeline, which is the whole reason those were written
+        # into the sidecar.
+        #
+        # ``document_from_sheet`` was added for exactly this and then never
+        # called: this line said ``document_from_grid``, which is geometry
+        # only, so a Troupe sheet opened as 256 untagged frames at one default
+        # duration -- while the button's tooltip and the manual both promised
+        # the tags. ``document_from_grid`` stays as the fallback for the sheets
+        # that have no ``animation`` block: every one written before
+        # ``charsheet.animation_block`` existed.
+        doc = sheetin.document_from_sheet(atlas, cells, animation)
+    else:
+        doc = sheetin.document_from_grid(atlas, cell, count=count)
     name = str(record.get("name") or sheet_id)
     return {
         "doc": doc,

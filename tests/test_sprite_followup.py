@@ -130,7 +130,15 @@ def test_a_batch_of_characters_is_refused(svc):
         ({"sheet_type": "cartwheel"}, "sheet_type"),
         ({"logical_size": 96}, "logical_size"),
         ({"colors": 7}, "colors"),
-        ({"logical_size": "big"}, "sheet_type"),
+        # A *type* error names the field that could not be read, exactly as an
+        # out-of-range one does. That is the convention every sibling door
+        # follows -- ``tilesheets._check_options``, ``troupe._check_options``
+        # and the three ``validation`` helpers all pass ``field=<the field>``
+        # here -- and it is the useful one: the ring goes on the control the
+        # user has to change. This case used to expect ``sheet_type``, which
+        # would have put the ring on the block's own switch and left the bad
+        # row unmarked.
+        ({"logical_size": "big"}, "logical_size"),
     ],
 )
 def test_a_bad_option_is_refused_at_the_references_door(svc, block, field):

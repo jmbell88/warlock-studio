@@ -1094,6 +1094,27 @@ def _build_tilemap_cel(
     return TilemapCel(pixels=pixels, refs=refs, tileset_uid=slot.uid, name=layer.name)
 
 
+def _transparent_slot(sprite: Any) -> int:
+    """The header's transparent index, clamped into the palette. One answer.
+
+    The byte is whatever the writing tool put there, and a file naming a slot
+    past the end of its own palette is a file this reader still has to open.
+    ``_install_indexed`` clamped it and ``_build_cels`` did not, so the index
+    planes were *filled* with a slot the document's table has no row for:
+    ``index_plane.materialize`` clips rather than raises, so the off-cel
+    surround opened as an opaque block of the **last** swatch instead of
+    transparency, ``check_materialized`` passed because both planes agreed,
+    and a save wrote the corruption out.
+
+    One function, called by both, because two clamps are how they came to
+    disagree in the first place.
+    """
+    transparent = int(sprite.transparent_index)
+    if not 0 <= transparent < len(sprite.palette or []):
+        return 0
+    return transparent
+
+
 def _build_cels(
     sprite: Sprite, warn: Callable[[str], None], tileset_slots: dict[int, TilesetSlot]
 ) -> dict[tuple[int, int], Layer]:
@@ -1109,7 +1130,7 @@ def _build_cels(
     by_slot = {(cel.layer, cel.frame): cel for cel in sprite.cels}
     size = (sprite.width, sprite.height)
     palette = sprite.palette or []
-    transparent = sprite.transparent_index
+    transparent = _transparent_slot(sprite)
     luts: dict[bool, np.ndarray] = {}
     if sprite.depth == _INDEXED:
         luts[False] = _lut(palette, transparent)
@@ -1216,9 +1237,7 @@ def _install_indexed(doc, sprite: Sprite, warn: Callable[[str], None]) -> None:
     palette = [tuple(colour) for colour in (sprite.palette or [])]
     if not palette:  # pragma: no cover - refused far earlier
         return
-    transparent = sprite.transparent_index
-    if not 0 <= transparent < len(palette):
-        transparent = 0
+    transparent = _transparent_slot(sprite)
 
     backgrounds = {
         index for index, layer in enumerate(sprite.layers) if layer.background

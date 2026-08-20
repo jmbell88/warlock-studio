@@ -1454,3 +1454,33 @@ def test_a_plain_aseprite_layer_is_not_continuous():
     )
     doc, _ = asein.document_from_aseprite(data)
     assert [t.continuous for t in doc.anim.tracks] == [False]
+
+
+def test_a_transparent_index_past_the_palette_is_clamped_before_the_fill():
+    """The header byte is whatever the writing tool put there, and a file
+    naming a slot past the end of its own palette still has to open.
+
+    ``_install_indexed`` clamped it to 0 and ``_build_cels`` did not, so the
+    canvas *around* a tight cel was filled with an index the document's table
+    has no row for. ``index_plane.materialize`` clips rather than raises, so
+    the surround opened as an opaque block of the **last** swatch instead of
+    transparency -- and ``check_materialized`` passed, because both planes
+    agreed about the wrong answer, so a save wrote it out.
+
+    A 2x2 canvas with a 1x1 cel in the corner is the smallest shape that has a
+    surround at all; real Aseprite writes tight cels by default.
+    """
+    colours = [(0, 0, 0, 255), (255, 0, 0, 255)]
+    data = _file(
+        _header(1, 2, 2, INDEXED_DEPTH, transparent=200),
+        [_frame([_layer("Art"), _palette(colours), _cel(0, bytes([1]), 1, 1)])],
+    )
+    doc, _warnings = asein.document_from_aseprite(data)
+
+    assert doc.transparent_index == 0
+    plane = doc.stack[0].indices
+    # Every cell the cel does not cover holds the clamped slot, not 200.
+    assert plane[0, 1] == 0 and plane[1, 0] == 0 and plane[1, 1] == 0
+    doc.check_materialized()
+    # And it materialises as nothing, rather than as the last swatch.
+    assert tuple(doc.stack[0].pixels[1, 1]) == (0, 0, 0, 0)

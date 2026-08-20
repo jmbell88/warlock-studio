@@ -922,3 +922,43 @@ def test_a_torn_write_leaves_nothing_behind(tmp_path):
         with pytest.raises(OSError, match="disk filled up"):
             retexture.swap_base_colour(glb, atlas, dest)
     assert not dest.exists()
+
+
+# --- the bake targets' colourspace -------------------------------------------
+
+
+def test_every_data_bake_target_is_written_as_non_color():
+    """A scan, because the seam is Blender's ``save()`` and the host's read and
+    nothing in this lane crosses it.
+
+    ``bpy.data.images.new`` defaults an 8-bit image to sRGB, and two of the
+    three bake targets carry *data* rather than colour: ``depthpair`` is the
+    near/far pair the host subtracts, and ``weight`` is ``max(0, N.V)`` times
+    the mask alpha -- a facing ratio. ``weight`` was left on the default while
+    ``assemble`` read it back as linear and thresholded it against
+    ``MIN_FACING``, so a floor meant to drop views past ~81 degrees off-normal
+    dropped only those past ~89 (srgb_encode(0.0196) is about 0.15), and
+    grazing views were inflated toward parity with head-on ones.
+
+    ``bake`` is a colour and stays sRGB, which is why this asserts a set rather
+    than "every target".
+    """
+    import inspect
+
+    from warlock.pipelines import blender_worker
+
+    source = inspect.getsource(blender_worker.op_project)
+    assert 'suffix in ("depthpair", "weight")' in source, (
+        "the data targets must both be Non-Color; see "
+        "docs/measurements/2026-08-20-retexture-weight-colorspace.md"
+    )
+    assert 'colorspace_settings.name = "Non-Color"' in source
+
+
+def test_the_facing_floor_is_still_the_number_it_was():
+    """``MIN_FACING`` was always right and was never what got applied, so the
+    colourspace fix must not be accompanied by a retune of it -- that would be
+    two changes to one behaviour with no way to tell them apart."""
+    from warlock.pipelines.retexture import MIN_FACING
+
+    assert MIN_FACING == 0.15

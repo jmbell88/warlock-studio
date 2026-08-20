@@ -443,10 +443,25 @@ def _download(
     try:
         for job, result in staged:
             staging = Path(result["staged"])
+            # The journal has to be true at every moment of the move, not only
+            # at its ends -- and the move is a file-by-file loop, so the only
+            # entry that is true *throughout* it is the one written before it
+            # starts. ``undo_into`` skips a name that is not at the
+            # destination, so the intended list undoes exactly the prefix that
+            # actually happened, whether that is none of it, all of it, or a
+            # process killed somewhere in between.
+            #
+            # Recorded only afterwards, an entry had no ``published`` list at
+            # all when the process died inside the loop: recovery moved nothing
+            # back out of the destination, restored only the backup tree, and
+            # then deleted the staging tree that held the other copy.
+            publish.note_published(
+                root, str(job.dest), publish.planned_names(staging)
+            )
             names = publish.move_into(staging, job.dest)
-            # Recorded *as it happens*, because the crash this survives happens
-            # during the loop: the journal has to be true at every moment of it
-            # rather than only at the ends.
+            # Narrowed to what actually moved, now that it is known. A
+            # refinement rather than the record: the line above is what a crash
+            # reads.
             publish.note_published(root, str(job.dest), names)
             _write_manifest_for(job, staging, names)
             shutil.rmtree(staging, ignore_errors=True)

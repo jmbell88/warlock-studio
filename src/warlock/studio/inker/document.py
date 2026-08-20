@@ -1161,6 +1161,43 @@ class Document(
         self.history.push(edit if not pending else CompoundEdit([*pending, edit]))
         self.invalidate(rect, layer_uid=layer.uid)
 
+    def _commit_permuted_indices(
+        self, layer: Layer, rect: tuple[int, int, int, int], before: np.ndarray
+    ) -> None:
+        """Record a write that permuted the index plane itself. Indexed only.
+
+        :meth:`_commit_indexed_patch`'s contract is that the caller wrote
+        *pixels* and the plane is still the pre-write one -- which is what lets
+        it read ``before`` off the layer and re-resolve ``after`` from the
+        colours. A permutation breaks both halves at once. It moves the plane
+        deliberately, so re-resolving would collapse exactly the duplicate-slot
+        identity a permutation exists to preserve; and it has *already* moved
+        it, so there is no untouched crop left on the layer to read.
+
+        So the caller takes its own ``before`` crop first and hands it here.
+        The whole-canvas ops in ``_doc_geometry`` do not need this -- they are
+        recorded by snapshot through ``_replay``/``_map_planes`` -- which
+        leaves ``offset_layer``, a single-layer permutation, as the one caller.
+
+        It had none, and went through the funnel instead: that read the rolled
+        plane as *both* sides of the step, found them equal, and pushed
+        nothing. The roll was permanent, the history head never moved, so
+        ``InkerDoc.dirty`` reported the file saved and the next Ctrl+Z undid
+        the *previous* edit while the roll stayed.
+        """
+        x0, y0, x1, y1 = rect
+        after = layer.indices[y0:y1, x0:x1]
+        if np.array_equal(before, after):
+            # A uniform plane rolls onto itself. Nothing changed, so nothing is
+            # pushed and the autovivified cel goes back out -- the same rule
+            # the two funnel paths follow, reached by different arithmetic.
+            self._discard_pending_cel()
+            return
+        pending, self._pending_cels = self._pending_cels, []
+        edit: Any = IndexPatchEdit(layer.uid, rect, before, after)
+        self.history.push(edit if not pending else CompoundEdit([*pending, edit]))
+        self.invalidate(rect, layer_uid=layer.uid)
+
     def _patch_edit_for(
         self, layer: Layer, rect: tuple[int, int, int, int], before: np.ndarray
     ) -> Any:

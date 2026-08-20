@@ -1330,11 +1330,25 @@ def op_project(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
             image = bpy.data.images.new(
                 f"wl_{suffix}_{i}", texture_size, texture_size, alpha=False
             )
-            if suffix == "depthpair":
+            if suffix in ("depthpair", "weight"):
                 # The bake target's colorspace decides how save() encodes the
-                # PNG. Non-Color writes the pair's linear values raw; the
-                # default would sRGB-encode them and the host's subtraction
-                # would compare two bent curves.
+                # PNG. Non-Color writes linear values raw; the default would
+                # sRGB-encode them and the host would read a bent curve as a
+                # straight one.
+                #
+                # Both of these are *data*, not colour. ``depthpair`` is the
+                # near/far pair the host subtracts. ``weight`` is
+                # ``max(0, N.V) * mask_alpha`` -- a facing ratio -- and it was
+                # left on the sRGB default while ``retexture.assemble`` read it
+                # back as linear and thresholded it against ``MIN_FACING``.
+                # Since srgb_encode(0.0196) is about 0.15, a floor meant to
+                # drop views past ~81 degrees off-normal was really dropping
+                # only those past ~89, and the curve's compression handed
+                # grazing views roughly twice their intended share of every
+                # texel. ``bake`` -- the colour target -- stays sRGB, which is
+                # correct for it and is why this is a tuple rather than a flip.
+                #
+                # See docs/measurements/2026-08-20-retexture-weight-colorspace.md.
                 image.colorspace_settings.name = "Non-Color"
             node = tree.nodes.new("ShaderNodeTexImage")
             node.image = image

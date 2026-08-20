@@ -247,10 +247,29 @@ def _probe_blender() -> Check:
 # deliberately not in ``models.FETCHES`` because the app is unusable without
 # them, so they belong in the install instructions rather than behind a button
 # in a pane that cannot be reached until the app starts.
+#
+# The version is pinned in the URL rather than left to "the releases page",
+# for ``TRELLIS_GGUF_REVISION``'s reason one paragraph down: this is a *fatal*
+# row, so the remedy is the only path a fresh install has, and an unpinned one
+# hands the user whatever shipped this week.
+TRELLIS_EXE_VERSION = "v0.5.4"
+TRELLIS_EXE_ASSET = "trellis-cuda-windows-x64.zip"
+TRELLIS_EXE_URL = (
+    f"https://github.com/pwilkin/trellis.cpp/releases/download/"
+    f"{TRELLIS_EXE_VERSION}/{TRELLIS_EXE_ASSET}"
+)
+# The SHA-256 GitHub publishes for that exact asset. This is the one unsigned
+# third-party binary in the whole setup, and a remedy that sent the user to a
+# page with no digest gave them nothing to check a download against -- so the
+# number travels with the URL, and **both move together or neither moves**:
+# bumping ``TRELLIS_EXE_VERSION`` without re-reading the digest is worse than
+# publishing none, because a mismatch then reads as tampering rather than as a
+# stale constant.
+TRELLIS_EXE_SHA256 = "f7d2912b064bf1520f03e025c5eb344df6b347ad04831ac7aa04d847581bd7ad"
 TRELLIS_EXE_HINT = (
-    "download trellis-cuda-windows-x64.zip from "
-    "https://github.com/pwilkin/trellis.cpp/releases and unpack it there "
-    "(vendored build: v0.5.4), or point WARLOCK_TRELLIS_EXE at your own copy"
+    f"download {TRELLIS_EXE_ASSET} from {TRELLIS_EXE_URL} and unpack it there "
+    f"(vendored build: {TRELLIS_EXE_VERSION}; sha256 {TRELLIS_EXE_SHA256}), "
+    "or point WARLOCK_TRELLIS_EXE at your own copy"
 )
 # Pinned like every registry ``Fetch`` (MDL-03), and this one is not a Fetch:
 # the GGUF weights are one of the two *fatal* doctor rows, declared as text

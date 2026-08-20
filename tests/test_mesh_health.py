@@ -111,3 +111,53 @@ def test_an_export_never_truncates_the_file_it_is_replacing(svc, tmp_path, monke
     assert seen == [b"the-previous-export"], "the destination was truncated mid-export"
     assert dest.read_bytes() == b"new-bytes"
     assert not list(out.glob("**/.*.tmp")), "the staging file was left behind"
+
+
+def test_a_health_note_rebinds_rather_than_mutating_in_place():
+    """``_q_generate``'s remesh loop snapshots the winning attempt with a
+    shallow ``dict(params)``, and its own comment says why that is exact: every
+    step *rebinds* its top-level key rather than mutating a nested value, so a
+    shallow copy isolates everything that can change before the restore. It
+    also names the hazard -- "a callee that grew an in-place nested mutation
+    would defeat it".
+
+    ``note_degraded`` was that callee. With ``WARLOCK_MESH_RETRIES`` set,
+    attempt 2's failures wrote through the shared dict into
+    ``best["params"]["degraded"]``, so a job that shipped attempt 1's mesh
+    carried a health record describing attempt 2.
+    """
+    from warlock._q_mesh import _note_degraded
+
+    params: dict = {}
+    _note_degraded(params, "normalize", "attempt one")
+    snapshot = dict(params)
+    _note_degraded(params, "report", "attempt two")
+
+    assert snapshot["degraded"] == {"normalize": "attempt one"}
+    assert snapshot["degraded"] is not params["degraded"]
+
+
+def test_the_service_half_rebinds_too():
+    """Two copies on purpose (the worker may not import ``service``), so the
+    property has to be asserted of both or they drift."""
+    from warlock.service.validation import note_degraded
+
+    params: dict = {}
+    note_degraded(params, "normalize", "attempt one")
+    snapshot = dict(params)
+    note_degraded(params, "report", "attempt two")
+
+    assert snapshot["degraded"] == {"normalize": "attempt one"}
+    assert snapshot["degraded"] is not params["degraded"]
+
+
+def test_steps_still_accumulate():
+    """The rebinding must not have turned accumulation into replacement: a mesh
+    can fail more than one step, and the second is not a correction of the
+    first."""
+    from warlock._q_mesh import _note_degraded
+
+    params: dict = {}
+    _note_degraded(params, "normalize", "a")
+    _note_degraded(params, "report", "b")
+    assert params["degraded"] == {"normalize": "a", "report": "b"}

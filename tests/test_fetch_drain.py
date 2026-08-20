@@ -493,3 +493,100 @@ def test_staging_left_by_a_killed_fetch_is_swept_before_the_next_one(svc, monkey
 
     assert not stranded.exists()
     assert not orphan_backup.exists()
+
+
+def test_the_journal_names_every_file_before_the_first_one_moves(svc, monkeypatch):
+    """The property the recovery rests on, asserted at the one moment it has to
+    hold: ``move_into`` is a file-by-file loop, so an entry written *after* it
+    returns is true at the ends and false throughout the middle.
+
+    A process killed inside that loop then left an entry with no ``published``
+    list at all, and ``undo_into([])`` moves nothing back out of the
+    destination -- it restores only the backup tree, which covers files that
+    were *replaced* and never files that were *added*. Recovery then deleted
+    the staging tree holding the other copy, so the destination kept an
+    arbitrary prefix of a model with no manifest and nothing that would ever
+    clean it up.
+    """
+    from warlock import publish
+    from warlock.service import downloads
+
+    root = svc.config.t2i_model_root
+    seen: list[list[str]] = []
+    real_move = publish.move_into
+
+    def spy(staging, dest):
+        # Read the journal from disk as a later process would, at the moment
+        # the loop is about to start moving files.
+        data = publish.read_json(publish.journal_path(root)) or {}
+        for entry in data.get("entries") or []:
+            if entry.get("dest") == str(dest):
+                seen.append(list(entry.get("published") or []))
+        return real_move(staging, dest)
+
+    monkeypatch.setattr(downloads, "_run_worker", lambda job, **_kw: stage_for(job))
+    monkeypatch.setattr(publish, "move_into", spy)
+    downloads.download(svc, ["base:sdxl"])
+
+    assert seen, "the publish loop never ran"
+    assert "w.safetensors" in seen[0], (
+        "the journal must name the files before any of them moves"
+    )
+
+
+def test_a_kill_before_any_file_moved_undoes_nothing_and_loses_nothing(svc):
+    """The intended list is a superset of what happened, and that is safe:
+    ``undo_into`` skips a name that is not at the destination, so the same
+    entry serves a publish that got nowhere, one that got halfway, and one that
+    finished."""
+    from warlock import publish
+    from warlock.service import downloads
+
+    root = svc.config.t2i_model_root
+    root.mkdir(parents=True, exist_ok=True)
+    dest = root / "sdxl-base-1.0"
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest / "old.safetensors").write_bytes(b"already here")
+    staging = root / ".sdxl-base-1.0.fetch.part"
+    staging.mkdir(parents=True, exist_ok=True)
+    (staging / "a.safetensors").write_bytes(b"a")
+    (staging / "b.safetensors").write_bytes(b"b")
+    publish.begin(
+        root,
+        [
+            {
+                "repo_id": "acme/x",
+                "staging": str(staging),
+                "dest": str(dest),
+                # Named, but none of them moved: the kill landed between the
+                # journal write and the first os.replace.
+                "published": ["a.safetensors", "b.safetensors"],
+            }
+        ],
+    )
+
+    downloads.recover(svc.config)
+
+    assert (dest / "old.safetensors").read_bytes() == b"already here"
+    assert not (dest / "a.safetensors").exists()
+    assert not (dest / "b.safetensors").exists()
+
+
+def test_planned_names_is_what_move_into_actually_publishes(tmp_path):
+    """The plan and the doing are one list or they are two bugs. ``move_into``
+    iterates this function, so the agreement is structural -- this pins that it
+    stays so, including the completion marker's exclusion."""
+    from warlock import publish
+
+    staging = tmp_path / "staged"
+    (staging / "nested").mkdir(parents=True)
+    (staging / "a.safetensors").write_bytes(b"a")
+    (staging / "nested" / "b.json").write_bytes(b"{}")
+    (staging / publish.PUBLISH_NAME).write_bytes(b"marker")
+
+    planned = publish.planned_names(staging)
+    moved = publish.move_into(staging, tmp_path / "dest")
+
+    assert planned == moved
+    assert publish.PUBLISH_NAME not in planned
+    assert "nested/b.json" in planned

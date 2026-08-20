@@ -246,11 +246,34 @@ def test_a_missing_matting_model_is_non_fatal_and_says_what_happens_instead(tmp_
         assert "uv sync --extra text2image" in row.detail
 
 
+
+def _checkpoint(directory):
+    """A directory ``fetch.present`` accepts: a config *and* its weights.
+
+    ``present`` names more than one file wherever more than one matters, and
+    for the metric, pose and matting tables that means ``config.json`` plus a
+    ``*.safetensors``: a config-only directory is a fetch interrupted partway,
+    and reading it as installed is precisely what that door exists to stop --
+    a green row above a checkpoint that fails at load with the job already
+    dispatched.
+
+    These fixtures predate the rule. They wrote the config alone, so six rows
+    here went on asserting green against a directory the app had started
+    calling absent -- and the suite stayed red on master rather than the
+    tightening being finished.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "config.json").write_text("{}", encoding="utf-8")
+    # Existence is the whole test ``present`` applies (``any(rglob)``); the
+    # byte is so nothing downstream is handed a zero-length file.
+    (directory / "model.safetensors").write_bytes(b"x")
+    return directory
+
+
 def _matting_weights(tmp_path):
     root = tmp_path / "t2i"
     for spec in model_registry.MATTING_MODELS.values():
-        (root / spec.dir_name).mkdir(parents=True)
-        (root / spec.dir_name / "config.json").write_text("{}", encoding="utf-8")
+        _checkpoint(root / spec.dir_name)
     return root
 
 
@@ -330,8 +353,7 @@ def test_the_metric_row_says_it_has_not_checked_that_the_model_loads(tmp_path):
     # of the two it checked.
     root = tmp_path / "t2i"
     for spec in model_registry.METRIC_MODELS.values():
-        (root / spec.dir_name).mkdir(parents=True)
-        (root / spec.dir_name / "config.json").write_text("{}", encoding="utf-8")
+        _checkpoint(root / spec.dir_name)
     checks = {c.name: c for c in run_checks(_config(tmp_path, t2i_model_root=root))}
     for spec in model_registry.METRIC_MODELS.values():
         row = checks[f"metric model: {spec.label}"]
@@ -412,9 +434,7 @@ def test_pose_model_row_goes_green_on_weights(tmp_path):
     ``config.json`` containing ``{}`` is not a checkpoint and the row is
     correctly red -- which is the whole of N112 and is pinned below."""
     spec = model_registry.POSE_MODELS[model_registry.DEFAULT_POSE_MODEL]
-    root = tmp_path / "t2i" / spec.dir_name
-    root.mkdir(parents=True)
-    (root / "config.json").write_text("{}", encoding="utf-8")
+    _checkpoint(tmp_path / "t2i" / spec.dir_name)
     checks = {
         c.name: c
         for c in run_checks(
@@ -430,9 +450,7 @@ def test_a_checkpoint_that_will_not_load_is_red_once_the_probe_runs(tmp_path):
     attempted load settles it, so the row attempts one -- off the startup path
     and once per process."""
     spec = model_registry.POSE_MODELS[model_registry.DEFAULT_POSE_MODEL]
-    root = tmp_path / "t2i" / spec.dir_name
-    root.mkdir(parents=True)
-    (root / "config.json").write_text("{}", encoding="utf-8")
+    _checkpoint(tmp_path / "t2i" / spec.dir_name)
     row = {
         c.name: c
         for c in run_checks(_config(tmp_path, t2i_model_root=tmp_path / "t2i"))
@@ -464,8 +482,7 @@ def test_the_load_probe_is_keyed_on_the_weights_directory(tmp_path, monkeypatch)
     spec = model_registry.POSE_MODELS[model_registry.DEFAULT_POSE_MODEL]
     good, bad = tmp_path / "good", tmp_path / "bad"
     for root in (good, bad):
-        (root / spec.dir_name).mkdir(parents=True)
-        (root / spec.dir_name / "config.json").write_text("{}", encoding="utf-8")
+        _checkpoint(root / spec.dir_name)
 
     # The global survives the test that filled it, so it is restored rather
     # than left holding this tmp_path's answers for whatever runs next.

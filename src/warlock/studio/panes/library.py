@@ -1119,14 +1119,23 @@ def compare(ctx: Any, job_id: str) -> None:
     if ctx.viewer is None:
         return
     path = ctx.job_dir(job_id) / "model.glb"
+    # Held so a refusal can put them back. These two fields *are* the record of
+    # the compare already in flight, and the two lines below overwrite it --
+    # so clearing them to None on refusal cancelled the earlier compare as
+    # well as declining this one: ``_adopt_compare`` then saw
+    # ``compare_pending`` was None, failed its own ``!= wanted`` check and
+    # dropped the result that was on its way. Neither mesh appeared and
+    # nothing was said, so the menu item read as inert.
+    was_comparing, was_pending = ctx.state.comparing, ctx.state.compare_pending
     ctx.state.comparing = job_id
     ctx.state.compare_pending = path
     if not ctx.submit(COMPARE_KEY, ctx.viewer.parse_model, path, tag=path):
         # Another compare parse is in flight. Its result is checked against
         # ``compare_pending`` before adoption, so this one is simply dropped
-        # rather than queued -- the same rule ``_sync_viewer`` follows.
-        ctx.state.comparing = None
-        ctx.state.compare_pending = None
+        # rather than queued -- the same rule ``_sync_viewer`` follows. The
+        # one in flight is left exactly as it was.
+        ctx.state.comparing = was_comparing
+        ctx.state.compare_pending = was_pending
 
 
 def delete_asset(ctx: Any, job_id: str) -> None:

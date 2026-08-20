@@ -498,3 +498,69 @@ def test_textures_zip_on_an_untextured_mesh_raises(tmp_path):
     trimesh.Scene(trimesh.creation.box()).export(src)
     with pytest.raises(ValueError):
         postprocess.glb_to_textures_zip(src, tmp_path / "textures.zip")
+
+
+# --- the rename escape, and the one path that may not take it ----------------
+
+
+def test_a_derived_export_accepts_a_lost_rename_race(tmp_path, monkeypatch):
+    """Two threads producing the same STL is a race with no wrong answer: the
+    artifact is a pure function of the GLB, so whoever landed first wrote our
+    bytes. Losing is a success."""
+    from warlock.pipelines import postprocess
+
+    dest = tmp_path / "model.stl"
+    dest.write_bytes(b"theirs")
+    monkeypatch.setattr(postprocess.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(
+        postprocess.os, "replace", _boom(OSError("ERROR_ACCESS_DENIED"))
+    )
+    tmp = tmp_path / "ours.tmp"
+    tmp.write_bytes(b"ours")
+
+    postprocess._replace_or_accept(tmp, dest)  # does not raise
+    assert dest.read_bytes() == b"theirs"
+
+
+def test_an_in_place_rewrite_raises_instead_of_accepting_what_is_there(
+    tmp_path, monkeypatch
+):
+    """``normalize_glb`` stages onto the file it just read, so "something is
+    already at the destination" is never evidence that a concurrent writer
+    produced our bytes -- it is the *un-normalised original*, every time.
+
+    Taking the escape there returned a scale and a translation for a
+    normalisation that had not happened: the job went ``done``, the row claimed
+    a grounded asset, and every derived export was a pure function of the wrong
+    file, with one ``log.debug`` line to show for it. "Grounding always runs"
+    is an invariant, so this one raises.
+    """
+    from warlock.pipelines import postprocess
+
+    dest = tmp_path / "model.glb"
+    dest.write_bytes(b"the original")
+    monkeypatch.setattr(postprocess.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(postprocess.os, "replace", _boom(OSError("locked")))
+    tmp = tmp_path / "ours.tmp"
+    tmp.write_bytes(b"normalised")
+
+    with pytest.raises(OSError):
+        postprocess._replace_or_accept(tmp, dest, derived=False)
+
+
+def _boom(exc):
+    def _replace(_src, _dst):
+        raise exc
+
+    return _replace
+
+
+def test_normalize_glb_stages_without_the_escape(tmp_path):
+    """The wiring, not the helper: a failed rewrite of ``model.glb`` must not
+    come back as a successful normalisation."""
+    import inspect
+
+    from warlock.pipelines import postprocess
+
+    source = inspect.getsource(postprocess.normalize_glb)
+    assert "derived=False" in source

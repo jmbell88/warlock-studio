@@ -360,3 +360,32 @@ def test_a_delta_clip_reaches_the_worker_as_a_cell_that_says_so():
     source = Path(q_rig.__file__).read_text(encoding="utf-8")
     assert '"pose_space"] = space' in source
     assert 'r["space"] for r in records if r.get("space")' in source
+
+
+# --- the pivot's unit --------------------------------------------------------
+
+
+def test_a_pivot_projected_at_the_render_size_lands_inside_the_cell():
+    """The sidecar's pivot is cell-relative, and Troupe renders at 512 while
+    packing at the logical size -- so the projected number has to be converted
+    or it names a point far outside the cell it belongs to."""
+    # Centre-bottom of the render, which is where a grounded subject's origin
+    # projects: it must come back as centre-bottom of the *cell*.
+    half = cs.RENDER_SIZE / 2.0
+    assert cs.pivot_in_cell((half, float(cs.RENDER_SIZE)), 32) == (16.0, 32.0)
+    assert cs.pivot_in_cell((half, float(cs.RENDER_SIZE)), 64) == (32.0, 64.0)
+
+
+def test_every_supported_size_keeps_the_pivot_within_its_cell():
+    """The failure in its own terms: unconverted, a 32px cell recorded a pivot
+    near (256, 470) -- sixteen cells below the sprite."""
+    for size in cs.SIZES:
+        x, y = cs.pivot_in_cell((256.0, 470.0), size)
+        assert 0.0 <= x <= size, size
+        assert 0.0 <= y <= size, size
+
+
+def test_no_pivot_stays_no_pivot():
+    """``sidecar`` falls back to centre-bottom when there is none, so None has
+    to survive the conversion rather than becoming (0, 0)."""
+    assert cs.pivot_in_cell(None, 32) is None

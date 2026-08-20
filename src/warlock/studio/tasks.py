@@ -16,6 +16,8 @@ from __future__ import annotations
 import concurrent.futures
 import contextlib
 import logging
+import os
+import sys
 import threading
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -252,3 +254,58 @@ class TaskRunner:
             self._pending.clear()
             self._progress.clear()
         return not not_done
+
+
+def leaked_workers() -> list[threading.Thread]:
+    """Non-daemon threads still alive that will block interpreter exit.
+
+    The main thread is excluded because it is the one asking. Daemon threads
+    are excluded because ``threading._shutdown`` does not wait on them, which
+    is the whole distinction that matters here.
+    """
+    main = threading.main_thread()
+    return [
+        thread
+        for thread in threading.enumerate()
+        if thread is not main and thread.is_alive() and not thread.daemon
+    ]
+
+
+def hard_exit_if_leaked(code: int = 0) -> int:
+    """Exit *now* with ``code`` if a worker outlived shutdown. -> ``code``.
+
+    Dropping a leaked worker from ``concurrent.futures``' atexit registry --
+    which is what :meth:`TaskRunner.shutdown` does on the timeout path -- only
+    defeats *that* join. ``threading._shutdown`` still waits on every
+    non-daemon thread before the interpreter can finish, so a task parked in a
+    native file dialog that the user will never dismiss (the window it belonged
+    to is already destroyed) held the whole process open indefinitely, with
+    nothing on screen and nothing in the log to say why.
+
+    The threads cannot be daemonized after the fact -- setting ``.daemon`` on a
+    started thread raises -- so the only remaining lever is not to reach that
+    wait at all. ``os._exit`` skips atexit handlers, interpreter finalisation
+    and the join, which is exactly what is wanted *here* and nowhere else: this
+    is called at the very end of the entry point, after the instance lock is
+    released and every ordinary cleanup has run, so what it skips is only the
+    waiting. The kill-on-close job takes the child processes with it.
+
+    Returns ``code`` untouched when nothing leaked, so the caller stays a plain
+    ``sys.exit(hard_exit_if_leaked(code))`` on both paths rather than branching.
+    """
+    leaked = leaked_workers()
+    if not leaked:
+        return code
+    log.warning(
+        "%d worker thread(s) outlived shutdown (%s); exiting without joining them",
+        len(leaked),
+        ", ".join(sorted(t.name for t in leaked)),
+    )
+    # ``os._exit`` takes the buffers with it, so anything already written has to
+    # be pushed out first -- including the log file's handler, which is the one
+    # record of why this happened.
+    logging.shutdown()
+    for stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(Exception):
+            stream.flush()
+    os._exit(code)

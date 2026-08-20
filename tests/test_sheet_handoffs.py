@@ -213,3 +213,82 @@ def test_a_picked_file_still_keeps_the_last_typed_cell_size(tmp_path, monkeypatc
         })(),
     )
     assert state.tileset_cell == (48, 48)
+
+
+def _charsheet(tmp_path, size: int = 8) -> dict[str, Any]:
+    """A Troupe-shaped sidecar: per-cell rects *and* an ``animation`` block.
+
+    The plain ``_sheet`` above is every rendered sheet written before
+    ``charsheet.animation_block`` existed -- cells that carry only an index,
+    and no animation at all -- which is why the two doors both have to work.
+    """
+    from warlock.pipelines import charsheet
+
+    block = charsheet.animation_block()
+    columns, rows = 16, 16
+    atlas = np.zeros((rows * size, columns * size, 4), dtype=np.uint8)
+    atlas[..., 3] = 255
+    Image.fromarray(atlas, "RGBA").save(tmp_path / "sheet.png")
+    return {
+        "name": "ranger",
+        "columns": columns,
+        "rows": rows,
+        "frame_size": size,
+        "cells": [
+            {
+                "index": i,
+                "x": (i % columns) * size,
+                "y": (i // columns) * size,
+                "w": size,
+                "h": size,
+            }
+            for i in range(columns * rows)
+        ],
+        "animation": block,
+    }
+
+
+def test_a_character_sheet_opens_with_its_tags_and_durations(tmp_path, monkeypatch):
+    """The handoff the button's tooltip and ``docs/manual/14-troupe.md`` both
+    promise: "one tag per animation and direction".
+
+    ``sheetin.document_from_sheet`` was written for this and had no production
+    caller at all -- the door said ``document_from_grid``, which is geometry
+    only, so a character sheet opened as 256 untagged frames at one default
+    duration and every span, loop flag and per-animation frame rate in the
+    sidecar was dropped on the floor.
+    """
+    ctx = _Ctx()
+    record = _charsheet(tmp_path)
+    _serve(monkeypatch, tmp_path, record)
+
+    inker_mode.open_rendered_sheet(ctx, "j1", "s1")
+
+    doc = ctx.result["doc"]
+    assert len(doc.anim.frames) == 256
+    names = [tag.name for tag in doc.anim.tags]
+    assert len(names) == len(record["animation"]["tags"])
+    assert "walk_front" in names and "idle_front" in names
+    # The durations are per animation, which is the point of carrying them: a
+    # run is faster than an idle, and a single default would flatten both.
+    by_index = {
+        int(f["cell_index"]): int(f["duration_ms"])
+        for f in record["animation"]["frames"]
+    }
+    assert doc.anim.frames[0].duration_ms == by_index[0]
+    fastest = min(by_index.values())
+    assert fastest != by_index[0], "this fixture has to contain two rates"
+    assert any(frame.duration_ms == fastest for frame in doc.anim.frames)
+
+
+def test_a_sheet_with_no_animation_block_still_opens_as_a_plain_grid(
+    tmp_path, monkeypatch
+):
+    """The fallback stays: every sheet written before the block existed has
+    cells that carry an index and nothing else, and slicing those as rects
+    would raise a KeyError on the first one."""
+    ctx = _Ctx()
+    _serve(monkeypatch, tmp_path, _sheet(tmp_path))
+    inker_mode.open_rendered_sheet(ctx, "j1", "s1")
+    assert len(ctx.result["doc"].anim.frames) == 8
+    assert not ctx.result["doc"].anim.tags

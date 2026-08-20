@@ -475,7 +475,9 @@ def test_the_worker_never_hands_the_sprite_bar_a_t2i_phase():
 # --- pixel sheets and re-textures --------------------------------------------
 
 
-@pytest.mark.parametrize("kind", ["pixel_sheet", "retexture", "tile_sheet"])
+@pytest.mark.parametrize(
+    "kind", ["pixel_sheet", "retexture", "tile_sheet", "charsheet"]
+)
 def test_the_multi_pass_kinds_have_their_own_contiguous_tables(kind):
     """CON-02: none of these kinds had a table, and ``phases_for`` falls back
     to ``PHASES_IMAGE`` -- whose only real phase is ``trellis``.
@@ -514,6 +516,11 @@ def test_the_multi_pass_kinds_have_their_own_contiguous_tables(kind):
             ("views", "restyle", "t2i_load", "t2i_sample", "project", "assemble"),
         ),
         ("tile_sheet", ("guide", "t2i_load", "t2i_sample", "slice", "quantize")),
+        # Troupe's. The Blender render, then the three host-side steps of the
+        # tail, in the order ``_q_troupe`` emits them. Every one was undeclared,
+        # so the bar reached 100% when Blender finished and the never-regress
+        # creep held it there for the whole pixel-art pass.
+        ("charsheet", ("sheet", "reduce", "pack", "pixel")),
     ],
 )
 def test_every_phase_these_kinds_emit_is_declared(kind, emitted):
@@ -541,3 +548,22 @@ def test_the_first_sampling_pass_does_not_reach_the_end_of_the_bar(kind):
     snap = bus.snapshot("job")
     assert snap is not None
     assert snap["percent"] < 100.0, "the bar finished during the first pass"
+
+
+def test_a_charsheet_render_does_not_reach_the_end_of_the_bar():
+    """The same failure, in the one kind whose first pass is a subprocess.
+
+    Kept apart from the three above rather than parametrised into them because
+    a character sheet emits no ``t2i_sample`` at all: its first pass is the
+    Blender render, which reports its own 0..1 fraction, and the closing
+    ``on_progress(1.0, ...)`` is the call that used to finish the bar with 256
+    frames still to reduce, pack and quantise.
+    """
+    from warlock.progress import ProgressBus
+
+    bus = ProgressBus()
+    bus.begin("job", "charsheet")
+    bus.update("job", phase="sheet", label="Rendering", inner=1.0)
+    snap = bus.snapshot("job")
+    assert snap is not None
+    assert snap["percent"] < 100.0, "the bar finished when Blender did"

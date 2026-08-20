@@ -115,12 +115,20 @@ class GeometryOps:
         layer = self.stack.active
         box = (0, 0, width, height)
         before = layer.pixels.copy()
+        indexed = self.color_mode == "indexed" and layer.indices is not None
+        # Taken *before* the roll, because the plane is about to move and the
+        # indexed funnel's contract is that it has not: see
+        # ``Document._commit_permuted_indices``, which this hands it to.
+        before_indices = layer.indices.copy() if indexed else None
         layer.pixels[:, :] = tf.translate(layer.pixels, dx, dy, wrap=True)
         if layer.indices is not None:
             # The permutation, applied to the plane rather than re-inferred
             # from the colours: two slots holding one colour stay two slots.
             layer.indices[:, :] = tf.translate(layer.indices, dx, dy, wrap=True)
-        self._commit_patch(layer, box, before)
+        if before_indices is not None:
+            self._commit_permuted_indices(layer, box, before_indices)
+        else:
+            self._commit_patch(layer, box, before)
         return True
 
     def descale_to_grid(self: Document, scale: int, phase: tuple[int, int]) -> None:

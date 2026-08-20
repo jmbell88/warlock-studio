@@ -33,7 +33,7 @@ _rebuild_glb = glbio.rebuild_glb
 
 
 @contextlib.contextmanager
-def _staged(dest: Path) -> Iterator[Path]:
+def _staged(dest: Path, *, derived: bool = True) -> Iterator[Path]:
     """Yield a temp path beside ``dest``, renamed onto it on clean exit.
 
     Both exports are produced on demand by the file-serving route, so two
@@ -43,6 +43,11 @@ def _staged(dest: Path) -> Iterator[Path]:
     rename on POSIX and Windows alike when both share a filesystem -- means a
     reader sees either the old file or the complete new one. Same reasoning as
     scale_glb below, which had this bug first.
+
+    ``derived`` is whether ``dest`` is a pure function of some *other* file, in
+    which case a lost rename race can be accepted -- see
+    :func:`_replace_or_accept`. It is false for the one caller that stages onto
+    the file it just read.
     """
     dest.parent.mkdir(parents=True, exist_ok=True)
     fd, raw = tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.name}.", suffix=".tmp")
@@ -50,13 +55,13 @@ def _staged(dest: Path) -> Iterator[Path]:
     tmp = Path(raw)
     try:
         yield tmp
-        _replace_or_accept(tmp, dest)
+        _replace_or_accept(tmp, dest, derived=derived)
     finally:
         with contextlib.suppress(OSError):
             tmp.unlink()
 
 
-def _replace_or_accept(tmp: Path, dest: Path) -> None:
+def _replace_or_accept(tmp: Path, dest: Path, *, derived: bool = True) -> None:
     """os.replace(tmp, dest), tolerating a concurrent writer.
 
     Windows fails the rename with ERROR_ACCESS_DENIED when two threads replace
@@ -64,6 +69,17 @@ def _replace_or_accept(tmp: Path, dest: Path) -> None:
     artifacts are pure functions of the GLB, so whoever landed first produced a
     file identical to ours: losing the race is a success, not an error. Only a
     failure that leaves no file at all is worth raising.
+
+    **That argument holds only while ``dest`` is derived, which is what
+    ``derived`` says.** ``normalize_glb`` stages onto ``glb_path`` itself -- the
+    file it has just read and rewritten -- so "something is already there" is
+    not evidence that a concurrent writer produced our bytes; it is the *old*
+    file, every time. The escape was therefore unconditionally reachable there,
+    and taking it returned a scale and a translation for a normalisation that
+    had not happened: the job went ``done``, the row claimed a grounded asset,
+    every derived export was a pure function of the wrong file, and the whole
+    of it was one ``log.debug`` line. "Grounding always runs" is an invariant,
+    so on that path a failed rename raises.
     """
     for attempt in range(3):
         try:
@@ -72,7 +88,7 @@ def _replace_or_accept(tmp: Path, dest: Path) -> None:
         except OSError:
             if attempt < 2:
                 time.sleep(0.05)
-    if dest.exists() and dest.stat().st_size > 0:
+    if derived and dest.exists() and dest.stat().st_size > 0:
         log.debug("%s was written by a concurrent export; keeping theirs", dest)
         return
     os.replace(tmp, dest)  # re-raise the real error with the real traceback
@@ -247,7 +263,10 @@ def normalize_glb(glb_path: Path, target_max_m: float | None) -> dict[str, Any]:
     # another export) could observe a half-written file. _staged is the house
     # pattern: a dotfile beside the destination, os.replace on clean exit, and
     # the unlink in a finally so a failed rebuild strands nothing.
-    with _staged(glb_path) as tmp:
+    # ``derived=False``: this stages onto the file it just read, so the
+    # "somebody else wrote an identical one" escape cannot apply -- what is
+    # already at ``dest`` is the un-normalised original.
+    with _staged(glb_path, derived=False) as tmp:
         tmp.write_bytes(_rebuild_glb(header, gltf, rest))
     return {
         "scale": factor,

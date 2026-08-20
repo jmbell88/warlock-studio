@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import inspect
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -210,14 +211,27 @@ def test_a_never_dropped_on_slot_is_not_outlined():
     assert widgets.drop_flash(AppState(), "2d-ref") == 0.0
 
 
-def test_a_drop_opens_the_section_it_landed_in():
-    """In 2D the reference block is collapsed by default, so the drop used to
-    be accepted with nothing on screen moving at all."""
+def test_a_drop_says_so_where_it_landed():
+    """H70: the drop used to be accepted with nothing on screen moving at all.
+
+    The flash is the whole of the acknowledgement now. It was written beside a
+    ``widgets.request_open("2d/reference")`` from when the References block was
+    a collapsible ``header`` that defaulted shut; the block is a plain
+    ``section`` today, always open, and no ``persist_key`` by that name exists
+    -- so that call matched nothing and only accumulated in
+    ``widgets._OPEN_REQUESTS``. Asserting it here is what kept it alive.
+    """
     from warlock.studio import main
+    from warlock.studio.panes import settings_2d
 
     source = inspect.getsource(main.App._on_drop)
-    assert 'widgets.request_open("2d/reference")' in source
     assert '_flash_drop("2d-ref")' in source
+    assert 'widgets.request_open("2d/reference")' not in source
+    # The premise, checked rather than remembered: nothing in the panes draws a
+    # collapsible section under that key, so there is nothing to ask to open.
+    panes = Path(inspect.getfile(settings_2d)).parent
+    for module in panes.glob("*.py"):
+        assert "2d/reference" not in module.read_text(encoding="utf-8"), module.name
 
 
 def test_the_wrong_file_refusal_says_what_this_mode_would_have_done():

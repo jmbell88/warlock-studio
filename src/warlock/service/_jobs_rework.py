@@ -30,11 +30,13 @@ from ._jobs_create import resolve_profile
 from .core import WarlockService
 from .errors import Conflict, Failed, Invalid, TooLarge
 from .validation import (
+    ARTIFACT_HEALTH,
     MAX_PROMPT,
     check_job_id,
     check_seed,
     check_vram,
     check_weights,
+    note_degraded,
     random_seed,
 )
 
@@ -84,6 +86,17 @@ def optimize_job(
     # and `profile` is in VECTOR_PARAMS, so the corpus learned it.
     budget = resolve_profile(svc, {}, profile, custom_triangles)
 
+    # Read from the row rather than started empty: a step that failed on the
+    # *original* run is still true of this mesh unless this run fixes it, and
+    # the successful branch below is what clears it. Held out here because the
+    # ``changes``/``drop`` pair that consumes it is out here.
+    inherited = job["params"].get(ARTIFACT_HEALTH)
+    # ``note_degraded``'s guard, for its reason: the value on a hand-edited row
+    # (or one of the test fixtures that fills every ``DERIVED_PARAMS`` key with
+    # a marker string) is not a dict, and starting fresh beats raising over it.
+    health = {
+        ARTIFACT_HEALTH: dict(inherited) if isinstance(inherited, dict) else {}
+    }
     with svc.convert_lock(job_id, "optimize"):
         try:
             result = optimize.run(
@@ -105,8 +118,17 @@ def optimize_job(
                 job_dir / "model.glb",
                 float(job["params"]["size_m"]) if job["params"].get("size_m") else None,
             )
-        except Exception:
+        except Exception as exc:
             log.exception("normalize failed after optimize for job %s", job_id)
+            # Recorded, not only logged. This is the half that was missing, and
+            # the half ``_q_mesh._apply_scale``, ``_q_mesh._audit_mesh`` and
+            # ``_jobs_create.import_mesh`` all get right for the identical
+            # swallow; ``validation`` states the reason in as many words --
+            # without it "a user could export a visibly successful asset with
+            # the wrong pivot or the wrong scale and have no way to find out".
+            # The row stays ``done`` and serves ``model.glb`` either way; the
+            # difference is whether anything says so.
+            note_degraded(health, "normalize", str(exc))
         # Derived artifacts describe the old mesh; drop them once model.glb is
         # *finished*, and under each artifact's own lock so an in-flight
         # conversion of the old mesh can't rename a stale copy into place after
@@ -128,6 +150,15 @@ def optimize_job(
     else:
         changes["transform"] = transform
         changes["scale_factor"] = transform["scale"]
+        # And the other direction, which was unhandled too: a stale
+        # ``degraded["normalize"]`` inherited from the original run described a
+        # mesh that no longer exists, so it left the asset flagged after the
+        # step that fixed it.
+        health[ARTIFACT_HEALTH].pop("normalize", None)
+    if health[ARTIFACT_HEALTH]:
+        changes[ARTIFACT_HEALTH] = health[ARTIFACT_HEALTH]
+    else:
+        drop.append(ARTIFACT_HEALTH)
     # Merged rather than written from the copy read at the top: params is one
     # JSON blob, and a full-blob write from a stale read silently discards
     # anything committed in between.

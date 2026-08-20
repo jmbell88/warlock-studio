@@ -54,8 +54,34 @@ def test_an_index_plane_permutes_exactly() -> None:
     doc.convert_to_indexed(palette, transparent=0)
     before = doc.stack[0].indices.copy()
 
+    depth = len(doc.history)
     doc.offset_layer(3, 5)
     assert np.array_equal(doc.stack[0].indices, np.roll(before, (5, 3), axis=(0, 1)))
+    doc.check_materialized()
+    # The step, not only the permutation. Asserting the plane alone is what let
+    # the indexed roll ship with no undo step at all: it went through the
+    # funnel, which read the already-rolled plane as both sides of the patch,
+    # found them equal and pushed nothing -- so the roll was permanent, the
+    # history head never moved and ``dirty`` reported the file saved.
+    assert len(doc.history) == depth + 1, "an indexed roll is one undo step"
+    assert doc.undo() is True
+    assert np.array_equal(doc.stack[0].indices, before), "undo restores the plane"
+    doc.check_materialized()
+    assert doc.redo() is True
+    assert np.array_equal(doc.stack[0].indices, np.roll(before, (5, 3), axis=(0, 1)))
+    doc.check_materialized()
+
+
+def test_a_uniform_indexed_plane_rolls_onto_itself_and_pushes_nothing() -> None:
+    """The no-op rule survives the new path: a plane every pixel of which holds
+    one slot is unchanged by a roll, so it must not ask to be saved."""
+    doc = Document.blank(8, 8)
+    doc.stack.active.pixels[..., 3] = 255
+    doc.stack.active.pixels[..., :3] = (200, 20, 20)
+    doc.convert_to_indexed([(0, 0, 0, 255), (200, 20, 20, 255)], transparent=0)
+    depth = len(doc.history)
+    doc.offset_layer(3, 5)
+    assert len(doc.history) == depth
     doc.check_materialized()
 
 

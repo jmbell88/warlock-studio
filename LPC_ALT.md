@@ -239,8 +239,21 @@ Four new units, each with one job:
 
 ## Status, 2026-08-20
 
-**Phases 0a, 0b, 0c, 0d, 1, 2, 3, 4 and 5 are implemented and verified.** 10,700 passing, ruff
-clean; `tests/troupe/` is 179 of those. Phases 0e, 6 and 7 are open.
+**Phases 0a, 0b, 0c, 0d, 1, 3, 4 and 5 are implemented and verified.** Phases 0e, 2, 6 and 7 are
+open.
+
+**Phase 2 is half open, and the half that is missing is the art half.** The clip *format* and its
+expansion ship — `templates/clips/humanoid.json`, `rigging._load_clip_library`,
+`clips.expand_clips` — and Troupe renders from them. What does not exist is the authoring surface
+the phase specifies: there is no keyframe list, no onion-skinning and no live low-res sprite
+preview in Poser, and `poser_mode.py` was not touched by any of the four commits that built
+Troupe. The 22 keyframes are editable only as raw JSON. Since the phase itself calls this "the most
+important art task in the program", it is listed as open rather than done.
+
+An earlier revision of this line claimed phase 2 complete and reported "10,700 passing" while
+twelve tests were failing on master. Those twelve are fixed (audit, 2026-08-20); the count is not
+restated here, because a number in a plan file goes stale the moment anything lands and the suite
+is the place to ask.
 
 ### Phases 4 and 5 are built
 

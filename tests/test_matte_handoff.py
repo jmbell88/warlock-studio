@@ -251,3 +251,75 @@ def test_a_failed_cut_still_opens_the_reference(svc, monkeypatch):
 
     assert result["doc"] is not None
     assert result["job_id"] == job_id
+
+
+# --- a cutout that fails ------------------------------------------------------
+
+
+class _Failed:
+    """The shape ``TaskRunner.poll`` hands ``_collect_tasks`` for a failure."""
+
+    ok = False
+
+    def __init__(self, key: str) -> None:
+        self.key = key
+        self.error = ValueError("this job has no reference image")
+
+
+def test_a_failed_cutout_is_asked_for_once_and_not_once_per_frame(svc, monkeypatch):
+    """``matte_modal`` runs ``pump`` every frame, and a failure left no note
+    behind: the cache missed, the submit was accepted because the previous task
+    had already failed, and the modal sat on "Cutting the subject out..."
+    behind one new red toast per frame.
+
+    The failure to model is the cheap one -- ``service.matte.preview`` refuses
+    a reference with no ``input.png`` *before* any compute -- because that is
+    the one that spins at the full frame rate.
+    """
+    from warlock.service import jobs as svc_jobs
+
+    job_id = svc_jobs.import_reference(svc, _png(_subject()))["id"]
+    ctx = _Ctx(svc)
+    monkeypatch.setattr(matte_preview.svc_matte, "preview", lambda *a, **k: None)
+    matte_preview.open_for(ctx, job_id, {})
+
+    matte_preview.pump(ctx)
+    assert len(ctx.submitted) == 1
+
+    matte_preview.on_task_failed(ctx, _Failed(matte_preview.key(job_id)))
+    for _frame in range(5):
+        matte_preview.pump(ctx)
+    assert len(ctx.submitted) == 1, "the failed cutout was asked for again"
+
+
+def test_the_modal_stays_open_after_a_failure(svc, monkeypatch):
+    """The user asked to see a cutout; closing the modal under them answers a
+    different question. The toast says what went wrong and Cancel still works."""
+    from warlock.service import jobs as svc_jobs
+
+    job_id = svc_jobs.import_reference(svc, _png(_subject()))["id"]
+    ctx = _Ctx(svc)
+    monkeypatch.setattr(matte_preview.svc_matte, "preview", lambda *a, **k: None)
+    matte_preview.open_for(ctx, job_id, {})
+    matte_preview.pump(ctx)
+
+    matte_preview.on_task_failed(ctx, _Failed(matte_preview.key(job_id)))
+
+    assert matte_preview.is_open(ctx)
+
+
+def test_a_failure_for_another_reference_does_not_latch_this_one(svc, monkeypatch):
+    """The latch is per-stamp on the *open* preview. A result arriving for a
+    reference the user has moved off must not suppress a submit that has never
+    been tried."""
+    from warlock.service import jobs as svc_jobs
+
+    job_id = svc_jobs.import_reference(svc, _png(_subject()))["id"]
+    ctx = _Ctx(svc)
+    monkeypatch.setattr(matte_preview.svc_matte, "preview", lambda *a, **k: None)
+    matte_preview.open_for(ctx, job_id, {})
+    matte_preview.pump(ctx)
+
+    matte_preview.on_task_failed(ctx, _Failed(matte_preview.key("someone-else")))
+
+    assert ctx.state.matte.failed_stamp is None

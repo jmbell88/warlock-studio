@@ -129,9 +129,10 @@ class TroupeOps:
         png = rigging.sheet_png_path(source_dir, sheet_id)
         # The staging name ``_publish_text`` and every other served write use.
         atlas_path = png.with_name(f".{png.name}.render")
+        reduce_mode = str(params.get("reduce_mode", "box"))
         result, trims = await self._render_charsheet(
             rig_glb, layout, cells, on_progress=on_progress, job_id=job_id,
-            pack_target=atlas_path,
+            pack_target=atlas_path, reduce_mode=reduce_mode,
         )
 
         # --- the pixel-art pass -------------------------------------------
@@ -150,7 +151,7 @@ class TroupeOps:
         palette_name = str(params.get("palette") or "")
         colors = int(params.get("colors", 64))
 
-        def _quantise() -> dict[str, Any]:
+        def _quantise() -> tuple[dict[str, Any], dict[int, dict[str, int] | None]]:
             from PIL import Image
 
             with Image.open(atlas_path) as opened:
@@ -180,12 +181,51 @@ class TroupeOps:
                 cell=logical,
                 palette=entries,
                 dither=bool(params.get("dither")),
-                reduce_mode=str(params.get("reduce_mode", "box")),
+                # Still passed, and still a no-op on this path -- the atlas
+                # arrives already reduced. Kept rather than dropped because
+                # ``pixelize_atlas`` is shared with the restyle door, where the
+                # atlas is *not* pre-reduced and the mode is live; the report
+                # below is corrected instead.
+                reduce_mode=reduce_mode,
                 outline_mode=str(params.get("outline", "none")),
             )
+            # About the reduction that actually happened, which is
+            # ``reduce_frames``' and not ``pixelize_atlas``'. Computed here
+            # rather than trusted from the report: on this path the atlas is
+            # already at the target, so ``pixelize_atlas`` measured a stride of
+            # 1 and answered ``True`` unconditionally -- including at 24, 48 and
+            # 96px, where 512 does not divide and the real reduction fell back
+            # to a NEAREST resize.
+            report["exact_stride"] = charsheet.RENDER_SIZE % logical == 0
             report["palette"] = chosen
             report["palette_name"] = palette_name
             report["palette_size"] = len(entries)
+            # Re-measured off the atlas that is actually published, not the one
+            # that was packed. ``pack`` measures each frame as it composites --
+            # correct there, and stale by the time this pass has finished with
+            # it: ``snap_alpha`` zeroes alpha below 128 and shrinks the
+            # silhouette, and ``outline`` in the default ``"outer"`` mode grows
+            # it by a pixel on every side. The packed trims were written into
+            # the sidecar unchanged, so every cell's rectangle was a pixel
+            # short all round and a packer that honoured it -- which is the
+            # field's whole purpose -- clipped the outline off every sprite.
+            #
+            # Cell-local, like ``measure_trim``'s own answer: the crop is taken
+            # at the cell's place in the atlas and the box comes back relative
+            # to the crop, so nothing downstream has to know where the cell sat.
+            trimmed = {
+                cell.index: sheetlib.measure_trim(
+                    out.crop(
+                        (
+                            cell.x,
+                            cell.y,
+                            cell.x + layout.cell_w,
+                            cell.y + layout.cell_h,
+                        )
+                    )
+                )
+                for cell in layout.cells
+            }
             # Onto the served name last, staged: the sidecar is what marks the
             # sheet complete, so nothing is reading this yet -- but the rule
             # that a write onto a served path is staged does not have an
@@ -197,13 +237,18 @@ class TroupeOps:
             # is on disk, and leaving it behind would double every character
             # sheet's footprint in a directory the user never cleans.
             atlas_path.unlink(missing_ok=True)
-            return report
+            return report, trimmed
 
-        pixel_report = await asyncio.to_thread(_quantise)
+        pixel_report, trims = await asyncio.to_thread(_quantise)
 
         # The sidecar is written last and is what ``list_sheets`` treats as the
         # completion marker -- ``_sheet``'s rule, and ``rig.json``'s before it.
         pivot = result.get("pivot") if isinstance(result, dict) else None
+        # Into *cell* pixels: the worker projected it at ``RENDER_SIZE`` and
+        # the sidecar documents cell-relative. ``_q_rig._sheet`` hands the same
+        # value straight through and is right to -- there, render size *is*
+        # cell size.
+        pivot = charsheet.pivot_in_cell(pivot, layout.frame_size)
         meta = sheetlib.sidecar(
             layout,
             sheet_id=sheet_id,
@@ -211,7 +256,7 @@ class TroupeOps:
             image=png.name,
             created=time.time(),
             name=str(params.get("name") or ""),
-            pivot=(float(pivot[0]), float(pivot[1])) if pivot else None,
+            pivot=pivot,
             trims=trims,
             animation=charsheet.animation_block(),
         )
@@ -259,6 +304,7 @@ class TroupeOps:
         on_progress: Any,
         job_id: str,
         pack_target: Path,
+        reduce_mode: str = "box",
     ) -> tuple[Any, Any]:
         """Render at ``RENDER_SIZE``, reduce to the layout's size, then pack.
 
@@ -309,6 +355,14 @@ class TroupeOps:
                     rendered,
                     layout.frame_size,
                     scratch / "reduced",
+                    # The user's choice belongs *here*, on the only reduction
+                    # this path performs: 512 down to the logical size, per
+                    # frame. It was passed to ``pixelize_atlas`` instead, where
+                    # the atlas is already at the logical size -- so ``reduce``
+                    # took its ``rgba.size == (w, h)`` early return, the mode
+                    # was never consulted and the setting was dead while being
+                    # validated at the door and reported back in the record.
+                    mode=reduce_mode,
                 )
             )
             self.progress.update(

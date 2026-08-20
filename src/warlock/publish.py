@@ -58,6 +58,40 @@ def backup_dir(dest: Path) -> Path:
     return dest.parent / f".{dest.name}.fetch.bak"
 
 
+def planned_names(staging: Path) -> list[str]:
+    """The names :func:`move_into` would publish out of ``staging``, in order.
+
+    Split out so the *plan* and the *doing* cannot disagree. The journal is
+    written from this before the first file moves, which is what makes an
+    interrupted publish recoverable: ``undo_into`` skips a name that is not
+    at the destination, so the intended list undoes exactly the prefix that
+    happened.
+
+    Recording it afterwards -- which is what ``note_published`` alone did --
+    left the entry with no ``published`` list at all when the process was
+    killed *inside* the loop. Recovery then moved nothing back out of the
+    destination, restored only the backup tree (which covers replaced files,
+    never added ones) and deleted the staging tree that held the other copy.
+    The destination kept an arbitrary prefix of a model with no manifest, and
+    for an adapter whose presence probe sorts early that reads as installed.
+
+    Forward slashes, because these names go into JSON and come back out in a
+    later process that may not be this one's platform.
+    """
+    staging = Path(staging)
+    out: list[str] = []
+    for src in sorted(staging.rglob("*")):
+        if src.is_dir():
+            continue
+        rel = src.relative_to(staging)
+        if rel.name == PUBLISH_NAME:
+            # The child's completion marker belongs to the staging tree and
+            # must not be published into a model directory.
+            continue
+        out.append(str(rel).replace("\\", "/"))
+    return out
+
+
 def move_into(staging: Path, dest: Path) -> list[str]:
     """Move the staged tree into ``dest``: all of it, or none of it.
 
@@ -85,14 +119,9 @@ def move_into(staging: Path, dest: Path) -> list[str]:
     saved: list[tuple[Path, Path]] = []
     names: list[str] = []
     try:
-        for src in sorted(staging.rglob("*")):
-            if src.is_dir():
-                continue
-            rel = src.relative_to(staging)
-            if rel.name == PUBLISH_NAME:
-                # The child's completion marker belongs to the staging tree and
-                # must not be published into a model directory.
-                continue
+        for name in planned_names(staging):
+            src = staging / name
+            rel = Path(name)
             target = dest / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             if target.exists():
@@ -108,7 +137,7 @@ def move_into(staging: Path, dest: Path) -> list[str]:
             # on some platforms and silently differs on others.
             os.replace(src, target)
             moved.append((src, target))
-            names.append(str(rel).replace("\\", "/"))
+            names.append(name)
     except BaseException:
         # Suppressed, every one of them: a rollback that raises would replace
         # the real failure with a second one and tell the user nothing about

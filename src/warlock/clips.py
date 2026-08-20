@@ -46,6 +46,13 @@ def expand_clips(template_key: str) -> dict[str, list[dict[str, Any]]]:
             closed=clip["closed"],
             easing=clip["easing"],
             space=clip["space"],
+            # The animation's name *is* the row identity here. Left to
+            # ``_expand``'s default it was derived from the keys' ``id``
+            # fields, which a clip library's key poses do not have -- so every
+            # four-key clip shared one id and ``_charsheet``'s ``(id, frame)``
+            # lookup let run overwrite walk. Names are unique by construction:
+            # ``by_name`` above is keyed on them.
+            clip_id=animation,
         )
     charsheet.check_frame_counts(records)
     return records

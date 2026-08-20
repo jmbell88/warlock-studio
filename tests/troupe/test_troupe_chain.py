@@ -102,6 +102,32 @@ def test_the_shipped_clips_fill_the_frame_table():
     }
 
 
+def test_every_expanded_frame_has_its_own_identity():
+    """``(id, frame)`` is a key, and a key has to be unique across the library.
+
+    ``_q_troupe._charsheet`` flattens all five animations into one dict keyed
+    exactly this way, so two clips sharing an id do not collide loudly -- the
+    later one silently wins every frame of the earlier one.
+
+    That is what happened. ``_expand`` derived the id by joining the keys'
+    ``id`` fields, and a clip library's key poses are built with ``name`` and
+    ``bones`` and no ``id``, so every id collapsed to ``":" * (len(keys) - 1)``
+    -- and ``walk`` and ``run`` both have four keys. Run overwrote walk, so all
+    64 walk cells of every character sheet rendered the run cycle. The unit
+    tests could not see it because their key fixtures fabricate an ``id``; only
+    the real library shows it, which is why this assertion lives here.
+    """
+    records = clips.expand_clips("humanoid")
+    keys = [(r["id"], r["frame"]) for rows in records.values() for r in rows]
+    assert len(set(keys)) == len(keys)
+    # And the id names the animation it came from, rather than being an opaque
+    # hash of it: the sidecar records it, so a wrong one is a wrong label on a
+    # block a user reads.
+    assert {name: rows[0]["id"] for name, rows in records.items()} == {
+        name: name for name in records
+    }
+
+
 def test_a_template_with_no_clips_is_a_keyerror_not_an_empty_sheet():
     with pytest.raises(KeyError):
         clips.expand_clips("fish")

@@ -547,13 +547,25 @@ def _journal_slots(ctx: Any) -> list[Any]:
     if draft is None:
         return []
     origin = getattr(state, "profile_draft_origin", "")
-    saved = (ctx.settings.get("profiles") or {}) if hasattr(ctx, "settings") else {}
-    if origin and origin in saved:
-        from .. import profiles
+    from .. import profiles
 
-        if profiles.capture(profiles.apply(dict(draft), saved[origin])) == draft:
-            # Byte-identical to the profile it was opened from: nothing typed.
-            return []
+    # ``profiles.list_profiles``, not ``settings.get("profiles")``. Profiles are
+    # stored under ``profiles.KEY``, which is ``"user_profiles"`` -- named that
+    # deliberately, per that module's own docstring, "because the app already
+    # has another thing by that name". Nothing writes ``"profiles"``, so this
+    # read was always ``{}``: ``origin in saved`` was never true and the guard
+    # this function's docstring describes never ran. Opening a saved profile to
+    # look at it and closing the panel left a crash copy, and ``journal.py`` has
+    # no age-out, so the next launch offered to recover a draft nobody edited.
+    # ``is_dirty``, two functions up, had it right all along.
+    saved = profiles.list_profiles(ctx.settings) if hasattr(ctx, "settings") else {}
+    if (
+        origin
+        and origin in saved
+        and profiles.capture(profiles.apply(dict(draft), saved[origin])) == draft
+    ):
+        # Byte-identical to the profile it was opened from: nothing typed.
+        return []
     return [_DraftSlot(state)]
 
 

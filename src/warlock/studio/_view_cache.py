@@ -75,16 +75,26 @@ class CacheOps:
                 continue
             if entry is not None:
                 entry.gpu.release()
+                # The hovered element is an index into the *old* mesh's
+                # vertices, edges or faces. A keyboard op that shrank any of
+                # those would have next frame's overlay read
+                # ``edge_verts[hover]`` past the end -- an IndexError out of
+                # ``draw()`` on the frame loop -- or send a stale vertex index
+                # to the GPU. This is the one place every mesh *replacement*
+                # passes through before anything draws.
+                #
+                # Only a replacement, which is what ``entry is not None`` says.
+                # Unconditionally, it also cleared the hover on an object's
+                # *first* build -- where there is no old mesh for the index to
+                # be stale against -- and ``sync`` runs immediately before
+                # ``_element_overlays`` in ``draw``, so the hovered element was
+                # never drawn on the frame an object was built. That is every
+                # first frame, and every frame after a mesh edit: the highlight
+                # dropped out until the cursor moved again.
+                if self.hover_element is not None and self.hover_element[0] == obj.uid:
+                    self.hover_element = None
             self._cache[obj.uid] = self._build(obj, doc, key)
             self.rebuilds += 1
-            # The hovered element is an index into the *old* mesh's vertices,
-            # edges or faces. A keyboard op that shrank any of those would have
-            # next frame's overlay read ``edge_verts[hover]`` past the end --
-            # an IndexError out of ``draw()`` on the frame loop -- or send a
-            # stale vertex index to the GPU. This is the one place every mesh
-            # replacement passes through before anything draws.
-            if self.hover_element is not None and self.hover_element[0] == obj.uid:
-                self.hover_element = None
         for uid in [u for u in self._cache if u not in live]:
             # A hidden object's buffers go too: ``visible=False`` means it does
             # not render, does not export and is not picked, and holding its

@@ -299,6 +299,7 @@ def interpolate_clip(
     closed: bool = False,
     easing: str = "linear",
     space: str = "node",
+    clip_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """An ordered keyframe list expanded into pose records.
 
@@ -336,7 +337,9 @@ def interpolate_clip(
 
     if space not in POSE_SPACES:
         raise ValueError(f"space must be one of {list(POSE_SPACES)}")
-    return _expand(keys, counts, easing, land=not closed, space=space)
+    return _expand(
+        keys, counts, easing, land=not closed, space=space, clip_id=clip_id
+    )
 
 
 def _expand(
@@ -346,14 +349,27 @@ def _expand(
     *,
     land: bool,
     space: str = "node",
+    clip_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """The expansion itself, shared by the two-key door and the multi-key one.
 
     ``counts[i]`` steps from ``keys[i]`` toward ``keys[i + 1]``, wrapping, and
     never lands on that far key. ``land`` appends the one extra frame that
     finishes a one-shot on its final pose.
+
+    ``clip_id`` names the row outright. Derived from the keys' own ids when it
+    is not given, which is right for :func:`interpolate`: its two poses are
+    *pose library* rows, and those carry an ``id``. It is wrong for a clip
+    library, whose key poses are built by ``rigging._load_clip_library`` as
+    ``{"name", "bones"[, "root_translation"]}`` with no ``id`` at all -- so the
+    join collapsed to ``":" * (len(keys) - 1)`` and every clip with the same
+    number of keys shared one identity. ``walk`` and ``run`` both have four,
+    and ``_q_troupe._charsheet`` keys its lookup on ``(id, frame)``: run
+    overwrote walk, and all 64 walk cells of every character sheet rendered the
+    run cycle. See :func:`warlock.clips.expand_clips`, which passes the name.
     """
-    clip_id = ":".join(str(k.get("id") or "") for k in keys)
+    if clip_id is None:
+        clip_id = ":".join(str(k.get("id") or "") for k in keys)
     name = " -> ".join(str(k.get("name") or "?") for k in keys)
     with_root = any(any(_root(k)) for k in keys)
     out: list[dict[str, Any]] = []

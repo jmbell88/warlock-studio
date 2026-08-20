@@ -6,7 +6,29 @@ record of what a version actually changed. The top heading's version must
 match `pyproject.toml` — a test asserts it, so a release bump cannot leave this
 file behind.
 
-## 0.0.24 — 2026-08-18
+## 0.0.24 — 2026-08-20
+
+- **Troupe: character sheets from a 3D model.** A tenth mode, and a chain
+  rather than a button: a prompt draws a reference with a T-pose guide, you
+  approve it, and the same asset then goes through reconstruction, the auto-rig
+  and a 256-cell render without being asked again. The sheet is five animations
+  — idle, walk, run, attack and jump — across eight directions, rendered at
+  512px per cell and reduced to the pixel size you asked for, then quantised
+  against one palette so the same shirt cannot come out two shades in two
+  directions. The sidecar carries a tag per animation and direction and a
+  duration per frame, so **Edit in Inker** opens the whole sheet on its own
+  timeline with the spans already set. See the *Troupe* chapter in the manual.
+- **Fixes.** Delete in Packwright sent the *selected library asset* to the
+  trash, because that mode's keyboard fell through to the library's;
+  ``walk`` and ``run`` shared one internal identity, so every character
+  sheet's walk cycle was really its run cycle; the Wrap ½ tool on an indexed
+  drawing moved the picture without recording an undo step, and the document
+  went on reporting itself saved; a character sheet's progress bar reached 100%
+  when Blender finished and stayed there for the whole pixel-art pass; a matte
+  preview that failed re-asked for itself every frame, filling the screen with
+  the same error; and a re-texture's facing weights were being written
+  sRGB-encoded and read back as linear, so the grazing views the blend is meant
+  to discard were being kept and over-weighted.
 
 - **Create makes sheets.** The **Output** switch is now *Object*, *Seamless
   tile* or **Sheet**, and a sheet is one of two things. A **tile grid** is 64

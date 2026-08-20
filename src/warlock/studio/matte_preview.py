@@ -52,6 +52,19 @@ class MatteState:
     # the ``dialogs.Confirm._open`` idiom, and here for the same reason: the
     # call must happen exactly once, and the pane redraws every frame.
     _open: bool = False
+    # The stamp whose cutout *failed*, so ``pump`` does not ask again for the
+    # same bytes. Without it a refused preview -- ``service.matte.preview``
+    # raises before any compute when ``input.png`` is missing -- left
+    # ``preview`` None with ``job_id`` still set, and ``matte_modal`` is drawn
+    # unconditionally every frame: the cache missed, the submit was accepted
+    # because the previous task had already failed, and the modal sat on
+    # "Cutting the subject out..." behind one new red toast per frame until the
+    # 100-entry history had rolled over.
+    #
+    # A stamp rather than a flag, so the *remedy* still works: Fix matte
+    # rewrites ``input.png``, the mtime moves, and the next frame asks again on
+    # its own.
+    failed_stamp: int | None = None
     # Previews by job id, cached under the racily-clean rule. Kept on the state
     # rather than module-global so a second Ctx (a test, a compare view) does
     # not inherit another's answers.
@@ -78,6 +91,7 @@ def open_for(ctx: Any, job_id: str, kwargs: dict[str, Any], *, force: bool = Fal
     state.force = force
     state.stamp = None
     state.preview = None
+    state.failed_stamp = None
     state._open = False
     return state
 
@@ -88,6 +102,7 @@ def close(ctx: Any) -> None:
         state.job_id = ""
         state.preview = None
         state.stamp = None
+        state.failed_stamp = None
         state._open = False
 
 
@@ -124,6 +139,10 @@ def pump(ctx: Any) -> MatteState | None:
         state.preview = hit
         return state
     state.preview = None
+    if state.failed_stamp == stamp:
+        # Already tried these exact bytes and it failed. The toast has been
+        # shown once; asking again would only show it again.
+        return state
     ctx.submit(key(state.job_id), svc_matte.preview, ctx.svc, state.job_id)
     return state
 
@@ -131,6 +150,32 @@ def pump(ctx: Any) -> MatteState | None:
 def busy(ctx: Any) -> bool:
     state = ctx.state.matte
     return bool(state is not None and state.job_id and ctx.busy(key(state.job_id)))
+
+
+def on_task_failed(ctx: Any, done: Any) -> None:
+    """A cutout that could not be computed. Frame thread.
+
+    The seventh arm of ``App._collect_tasks``' failure dispatch, and the one
+    that was missing. Every mode prefix routed its failures somewhere and
+    ``matte-`` routed nowhere, so the failure fell through to the shared toast
+    and ``continue`` -- leaving ``pump`` to re-submit the identical task on the
+    very next frame, forever.
+
+    Latching the stamp rather than closing the modal: the user asked to see a
+    cutout and closing it under them answers a different question. The toast
+    (raised by ``_collect_tasks`` before this runs, with the refusal's own
+    ``field``) says what went wrong; the modal stays up with its Cancel, and
+    Fix matte still clears the latch by moving the file's mtime.
+    """
+    state = ctx.state.matte
+    if state is None or not state.job_id:
+        return
+    if not str(getattr(done, "key", "")).endswith(state.job_id):
+        # A cutout for a reference the user has since moved off. The current
+        # one is untouched -- latching here would suppress a submit that has
+        # never been tried.
+        return
+    state.failed_stamp = state.stamp
 
 
 def on_task_done(ctx: Any, done: Any) -> None:
