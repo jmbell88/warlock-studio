@@ -119,12 +119,17 @@ with the app installed has looked.*
 The Aseprite P1 backlog stays unscheduled *by design* — items are pulled into
 sessions individually, never waved. It now lives in `docs/INVARIANTS.md` (the
 parity programme's own plan file was retired on 2026-08-20, finished). I did not
-build any of it. Three are cheap and sit on machinery that already exists, if
-you want them:
+build any of it. Three were cheap and sat on machinery that already existed;
+all three are now built:
 
-- [ ] Shift-to-line-from-last-point (pure `inker_canvas` press logic + `line_pixels`)
-- [ ] Onion-skin "current layer only" (filter the `frame_stack` fold to one track)
-- [ ] Color Range selection (the global `similar` exists; it needs a UI door)
+- [x] ~~Shift-to-line-from-last-point~~ — was already live before this pass, at
+  `inker_canvas._press`'s `from_last` branch (the entry here was stale).
+- [x] ~~Onion-skin "current layer only"~~ — `frame_flat(track_uid=...)`, keyed
+  into the frame cache; the checkbox is on the onion controls row.
+- [x] ~~Color Range selection~~ — `selection.colour_range` /
+  `Document.select_colour_range`, with a button in the Selection section.
+- [x] ~~Auto-select layer under cursor~~ — pulled in as the replacement for the
+  one that turned out to be done. `Document.layer_at`, on Ctrl+click.
 
 ## 7. Not on this list on purpose
 

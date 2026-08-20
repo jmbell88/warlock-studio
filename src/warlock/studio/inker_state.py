@@ -1009,6 +1009,11 @@ class InkerState:
     onion_before: int = 1
     onion_after: int = 1
     onion_alpha: float = 0.35
+    #: Ghost only the *active* track's drawing rather than the whole frame's
+    #: composite, which is what an animator inking one layer over a static
+    #: background actually wants to see. App-level and unpersisted like the
+    #: other four: onion is a property of the canvas, not of a tool.
+    onion_current_layer: bool = False
     fg: tuple[int, int, int, int] = (0, 0, 0, 255)
     #: Which palette **slot** the foreground came from, or None when it came
     #: from the wheel, the eyedropper or the session swatch row.

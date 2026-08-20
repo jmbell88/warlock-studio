@@ -266,12 +266,17 @@ class Document(
     #: read-only placeholder plane and raising out of the middle of a stroke,
     #: which is not a failure mode worth keeping in exchange for a scalar.
     _pending_cels: list[Any] = field(init=False, default_factory=list, repr=False)
-    #: frame uid -> (stamp it was built at, pixels), least-recently-used first
-    #: in ``_frame_order``. See :meth:`frame_flat`.
-    _frame_cache: dict[int, tuple[int, np.ndarray]] = field(
+    #: ``(frame uid, track uid or None)`` -> (stamp it was built at, pixels),
+    #: least-recently-used first in ``_frame_order``. See :meth:`frame_flat`.
+    #: The track is *in the key* because a current-layer-only onion skin asks
+    #: for a filtered flatten of a frame the unfiltered draw also asks for, and
+    #: one key for both would hand each of them the other's pixels.
+    _frame_cache: dict[tuple[int, int | None], tuple[int, np.ndarray]] = field(
         default_factory=dict, repr=False
     )
-    _frame_order: list[int] = field(default_factory=list, repr=False)
+    _frame_order: list[tuple[int, int | None]] = field(
+        default_factory=list, repr=False
+    )
     #: An open layer-move session: the active layer's pixels as they were when
     #: it opened, and the **uid** of the layer they came off. ``_filter``'s
     #: shape and for the same reasons -- a preview re-renders from the snapshot
@@ -611,7 +616,9 @@ class Document(
     def frame_stamp(self, frame_uid: int) -> int:
         return self._frame_stamps.get(frame_uid, 0)
 
-    def frame_flat(self, frame_uid: int) -> np.ndarray | None:
+    def frame_flat(
+        self, frame_uid: int, *, track_uid: int | None = None
+    ) -> np.ndarray | None:
         """One frame's flattened RGBA, cached against that frame's stamp.
 
         Onion skinning asks for two or four of these every frame the app draws,
@@ -626,6 +633,13 @@ class Document(
         whatever is being looked at -- and during playback that is a window
         sweeping round the timeline, which oldest-first eviction would evict
         exactly one tick before it came round again.
+
+        ``track_uid`` restricts the flatten to one track, for the current-layer
+        -only onion skin. It is part of the cache key rather than a bypass,
+        because this is asked for per drawn frame and must stay a lookup; the
+        *stamp* stays keyed on the frame alone, so an edit on another track
+        recomposites the filtered entry needlessly. That is conservative and
+        correct, and a per-track stamp would be a second answer to drift from.
         """
         anim = self.anim
         if anim is None:
@@ -634,17 +648,28 @@ class Document(
             frame = anim.frames[anim.frame_index(frame_uid)]
         except KeyError:
             return None
+        if track_uid is not None and all(
+            track.uid != track_uid for track in anim.tracks
+        ):
+            # A stale active index must not raise out of the middle of a draw.
+            return None
+        key = (frame_uid, track_uid)
         stamp = self.frame_stamp(frame_uid)
-        hit = self._frame_cache.get(frame_uid)
+        hit = self._frame_cache.get(key)
         if hit is not None and hit[0] == stamp:
-            self._frame_order.remove(frame_uid)
-            self._frame_order.append(frame_uid)
+            self._frame_order.remove(key)
+            self._frame_order.append(key)
             return hit[1]
-        flat = self.frame_stack(frame).flatten()
-        self._frame_cache[frame_uid] = (stamp, flat)
-        if frame_uid in self._frame_order:
-            self._frame_order.remove(frame_uid)
-        self._frame_order.append(frame_uid)
+        stack = (
+            self.frame_stack(frame)
+            if track_uid is None
+            else self.frame_stack(frame, track_uids={track_uid})
+        )
+        flat = stack.flatten()
+        self._frame_cache[key] = (stamp, flat)
+        if key in self._frame_order:
+            self._frame_order.remove(key)
+        self._frame_order.append(key)
         self._evict_frames()
         return flat
 
@@ -714,14 +739,16 @@ class Document(
         delete re-inserts the same ``Frame`` object -- would then match a cache
         entry built before it was removed and show pixels from another edit.
         """
-        self._frame_cache.pop(frame_uid, None)
-        if frame_uid in self._frame_order:
-            self._frame_order.remove(frame_uid)
+        # *Every* key on this frame, not one: the filtered flattens are
+        # separate entries under the same frame uid.
+        for key in [k for k in self._frame_cache if k[0] == frame_uid]:
+            self._frame_cache.pop(key, None)
+        self._frame_order = [k for k in self._frame_order if k[0] != frame_uid]
         self._frame_stamps.pop(frame_uid, None)
         self._dropped_frames.append(frame_uid)
 
     def _forget_all_frames(self) -> None:
-        for uid in set(self._frame_stamps) | set(self._frame_cache):
+        for uid in set(self._frame_stamps) | {k[0] for k in self._frame_cache}:
             self._forget_frame(uid)
 
     def take_dropped_frames(self) -> list[int]:

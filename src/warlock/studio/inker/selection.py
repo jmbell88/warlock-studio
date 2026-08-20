@@ -491,6 +491,23 @@ def similar(pixels: np.ndarray, seed: tuple[int, int], tolerance: int) -> np.nda
     return colour_distance(pixels, pixels[y, x]) <= int(tolerance)
 
 
+def colour_range(
+    pixels: np.ndarray, colour: tuple[int, int, int, int], tolerance: int = 32
+) -> SelectionMask:
+    """Every pixel within ``tolerance`` of ``colour``, anywhere on the canvas.
+
+    Colour-first where the wand is seed-first: you pick the colour and press
+    the button, rather than having to find a pixel of it to click. Never
+    contiguous -- selecting one palette entry everywhere is the whole gesture.
+
+    Over :func:`colour_distance` rather than beside it, so this and the wand
+    and the flood fill remain one predicate and a tolerance means the same
+    thing wherever the user reads it.
+    """
+    plane = colour_distance(pixels, np.asarray(colour, dtype=np.uint8))
+    return SelectionMask((plane <= int(tolerance)).astype(np.uint8) * 255)
+
+
 def magic_wand(
     pixels: np.ndarray,
     seed: tuple[int, int],

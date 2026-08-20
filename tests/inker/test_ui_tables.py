@@ -132,7 +132,7 @@ def test_every_combine_op_is_reachable_from_the_keyboard(monkeypatch, shift, alt
     monkeypatch.setattr(
         inker_canvas.imgui,
         "get_io",
-        lambda: SimpleNamespace(key_shift=shift, key_alt=alt),
+        lambda: SimpleNamespace(key_shift=shift, key_alt=alt, key_ctrl=False),
     )
     assert inker_canvas._combine_op() == expected
 

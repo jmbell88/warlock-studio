@@ -1021,6 +1021,28 @@ def _selection_actions(state: Any, doc: Any) -> None:
         "painted at -- a soft edge becomes a soft selection."
     )
 
+    # Colour-first where the wand is seed-first, and the *wand's* tolerance
+    # rather than ``state.wand_tolerance``: that property follows the tool in
+    # hand, and this button is in a section that is drawn whatever the tool is,
+    # so it would otherwise read the pencil's copy. Reading the wand's is the
+    # one-predicate rule kept honest -- there is one tolerance the user set and
+    # one meaning of "similar" (see ``selection.colour_distance``).
+    wand_options = state.options_for("wand")
+    imgui.set_next_item_width(-sp(110))
+    changed, value = controls.slider_int(
+        "##range_tolerance", wand_options["wand_tolerance"], 0, 255, "tolerance %d"
+    )
+    if changed:
+        wand_options["wand_tolerance"] = value
+    imgui.same_line()
+    if controls.button("Colour range"):
+        doc.select_colour_range(state.fg, tolerance=wand_options["wand_tolerance"])
+    widgets.help_marker(
+        "Selects every pixel close to the *foreground* colour, anywhere on the "
+        "canvas -- it is not contiguous, so one press selects a palette entry "
+        "wherever it was used. The tolerance beside it is the magic wand's."
+    )
+
     imgui.set_next_item_width(-sp(80))
     changed, value = controls.slider_float("##feather", state.feather_radius, 0.0, 32.0, "%.1f px")
     if changed:

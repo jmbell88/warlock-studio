@@ -934,6 +934,65 @@ def test_one_frame_over_the_whole_budget_is_still_returned(monkeypatch):
     assert doc.frame_flat(uid) is doc.frame_flat(uid)
 
 
+def test_a_filtered_flatten_is_a_separate_cache_entry():
+    """The onion skin's current-layer-only flatten and the ordinary one are two
+    pictures of one frame. One cache key for both hands each the other's."""
+    doc = _doc()
+    _add_frame(doc)
+    doc.add_layer()
+    _paint(doc, RED)
+    uid = doc.anim.frames[0].uid
+    track = doc.anim.tracks[doc.stack.active_index].uid
+
+    whole = doc.frame_flat(uid)
+    filtered = doc.frame_flat(uid, track_uid=track)
+
+    assert whole is not None and filtered is not None
+    assert filtered is not whole
+    # And neither ask is served the other's entry, in either order.
+    assert doc.frame_flat(uid) is whole
+    assert doc.frame_flat(uid, track_uid=track) is filtered
+    assert len(doc._frame_cache) == 2
+
+
+def test_forgetting_a_frame_drops_its_filtered_flatten_too():
+    doc = _doc()
+    doc.add_frame()
+    track = doc.anim.tracks[0].uid
+    gone = doc.anim.frames[1].uid
+    assert doc.frame_flat(gone) is not None
+    assert doc.frame_flat(gone, track_uid=track) is not None
+
+    assert doc.remove_frame(1)
+    assert not [key for key in doc._frame_cache if key[0] == gone]
+    assert not [key for key in doc._frame_order if key[0] == gone]
+
+
+def test_the_byte_ceiling_counts_filtered_flattens(monkeypatch):
+    from warlock.studio.inker import document as document_mod
+
+    doc = _doc(64, 64)
+    one_frame = 64 * 64 * 4
+    monkeypatch.setattr(document_mod, "FRAME_CACHE_BYTES", one_frame * 2)
+    for _ in range(5):
+        doc.add_frame()
+    track = doc.anim.tracks[0].uid
+    for frame in doc.anim.frames:
+        doc.frame_flat(frame.uid)
+        doc.frame_flat(frame.uid, track_uid=track)
+
+    assert doc.frame_cache_bytes() <= one_frame * 2
+
+
+def test_a_track_the_animation_does_not_have_is_not_flattened():
+    """A stale active index must not raise out of the middle of a draw."""
+    doc = _doc()
+    doc.add_frame()
+    uid = doc.anim.frames[0].uid
+
+    assert doc.frame_flat(uid, track_uid=9999) is None
+
+
 def test_a_still_document_has_no_frame_flatten():
     assert _doc().frame_flat(1) is None
 
@@ -1226,8 +1285,10 @@ def test_deleting_a_frame_drops_its_cached_flatten_and_reports_it():
     doc.take_dropped_frames()
 
     assert doc.remove_frame(1)
-    assert gone not in doc._frame_cache
-    assert gone not in doc._frame_order
+    # By *frame*, not by key: the cache is keyed on (frame, track) and a
+    # filtered flatten of the same frame is a separate entry.
+    assert not [key for key in doc._frame_cache if key[0] == gone]
+    assert not [key for key in doc._frame_order if key[0] == gone]
     assert doc.take_dropped_frames() == [gone]
     assert doc.take_dropped_frames() == [], "a drain, not a list that grows"
 

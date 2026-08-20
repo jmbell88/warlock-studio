@@ -291,6 +291,11 @@ so you can decide halfway through. They belong to the shape tools alone: on the 
 tools Shift and Alt already mean add and subtract. **Alt** over a painting tool picks the colour
 under the cursor, which saves a trip to the eyedropper.
 
+**Ctrl**+click on the canvas selects the *layer* under the cursor — the topmost visible one with
+something painted at that pixel. It is the same gesture Alt gives for colour: point at a drawing and
+you are on the layer it is on, without hunting down the layers panel. It never paints, whatever tool
+you are holding, and clicking where nothing is painted does nothing at all.
+
 **The right button paints with the background colour.** It drives the brush, the eraser and the fill
 — the three where "the other colour" is unambiguous — and Alt with it picks *into* the background,
 so the button means one thing in both directions. On every other tool the right button does nothing
@@ -880,6 +885,12 @@ from is in.
 **This layer** selects what is painted on the active layer, at the coverage it is painted at — a
 soft brush edge becomes a soft selection rather than a jagged one. It reads the layer's own pixels,
 so its opacity and blend mode do not enter into it.
+
+**Colour range** selects every pixel close to the *foreground* colour, anywhere on the canvas. It is
+the magic wand asked the other way round — you pick the colour and press the button rather than
+having to find a pixel of it to click — and it is never contiguous, so one press selects a palette
+entry everywhere it was used. The tolerance beside the button is the magic wand's own, so "similar"
+means the same thing wherever you set it.
 
 **Grow**, **Shrink** and **Border** move the edge by a whole number of pixels, which is a different
 thing from feathering: feather *softens* an edge where these *move* it, so they have their own

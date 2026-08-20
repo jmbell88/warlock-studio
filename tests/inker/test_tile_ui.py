@@ -49,7 +49,7 @@ def scene(monkeypatch):
     monkeypatch.setattr(
         inker_canvas.imgui,
         "get_io",
-        lambda: SimpleNamespace(key_shift=False, key_alt=False),
+        lambda: SimpleNamespace(key_shift=False, key_alt=False, key_ctrl=False),
     )
     doc = inker.Document.blank(*SIZE)
     tab = inker_state.InkerDoc(doc=doc, uid="t1", title="Untitled")

@@ -299,6 +299,36 @@ class LayerOps:
         self.history.push(edits[0] if len(edits) == 1 else CompoundEdit(edits))
         return True
 
+    def layer_at(self: Document, xy: tuple[int, int]) -> int | None:
+        """The topmost *visible* layer with paint under ``xy``, or None.
+
+        The gesture Alt already gives for colour, given for layers: point at a
+        drawing and get the layer it is on. Top-down, because that is the one
+        the user is looking at.
+
+        **Alpha > 0, not a threshold.** An antialiased edge at alpha 1 is paint
+        at that pixel, and any cut-off above it would be arbitrary.
+
+        **Visibility is consulted, opacity is not** -- ``select_layer_alpha``'s
+        split read forwards. You cannot point at a layer you cannot see, so a
+        hidden layer (in its own right, or through the group fold) is not under
+        the cursor; opacity is a continuum with no non-arbitrary cut, and a
+        layer at 2% is still one the user chose to show.
+        """
+        if not self.in_bounds(xy):
+            return None
+        x, y = int(xy[0]), int(xy[1])
+        fold = self.group_fold()
+        for index in range(len(self.stack) - 1, -1, -1):
+            layer = self.stack[index]
+            if not layer.visible:
+                continue
+            if fold is not None and not fold[index][0]:
+                continue
+            if layer.pixels[y, x, 3] > 0:
+                return index
+        return None
+
     def set_active_layer(self: Document, index: int) -> None:
         """Not undoable: which layer is selected is a view state, not an edit."""
         if index == self.stack.active_index:

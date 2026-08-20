@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from warlock.studio import imgui_backend, inker, inker_mode, inker_state
@@ -31,7 +32,9 @@ def scene(monkeypatch):
     dispatch untested.
     """
     monkeypatch.setattr(
-        inker_canvas.imgui, "get_io", lambda: SimpleNamespace(key_shift=False, key_alt=False)
+        inker_canvas.imgui,
+        "get_io",
+        lambda: SimpleNamespace(key_shift=False, key_alt=False, key_ctrl=False),
     )
     state = inker_state.InkerState(fg=FG, bg=BG)
     tab = SimpleNamespace(doc=inker.Document.blank(*SIZE), tiled="off", busy=False)
@@ -44,7 +47,9 @@ def _press(state, tab, point):
 
 def _alt(monkeypatch, held=True):
     monkeypatch.setattr(
-        inker_canvas.imgui, "get_io", lambda: SimpleNamespace(key_shift=False, key_alt=held)
+        inker_canvas.imgui,
+        "get_io",
+        lambda: SimpleNamespace(key_shift=False, key_alt=held, key_ctrl=False),
     )
 
 
@@ -70,6 +75,7 @@ class _Mouse:
         self.cursors: list[str] = []
         #: Held modifiers, for the gestures that read them at the press.
         self.shift = False
+        self.ctrl = False
 
     def module(self) -> SimpleNamespace:
         return SimpleNamespace(
@@ -77,6 +83,7 @@ class _Mouse:
                 mouse_wheel=self.wheel,
                 key_shift=self.shift,
                 key_alt=False,
+                key_ctrl=self.ctrl,
                 delta_time=1.0 / 60.0,
             ),
             get_mouse_pos=lambda: SimpleNamespace(x=self.at[0], y=self.at[1]),
@@ -110,7 +117,9 @@ def driven(monkeypatch):
         view=inker_state.PaintView(zoom=1.0, pan=(0.0, 0.0), fitted=True),
     )
 
-    def frame(at, *, click=None, down=(), wheel=0.0, shift=False, hovered=True):
+    def frame(
+        at, *, click=None, down=(), wheel=0.0, shift=False, ctrl=False, hovered=True
+    ):
         mouse.at = (float(at[0]), float(at[1]))
         mouse.clicked = {0: False, 1: False, 2: False}
         if click is not None:
@@ -118,6 +127,7 @@ def driven(monkeypatch):
         mouse.down = {b: b in down for b in (0, 1, 2)}
         mouse.wheel = float(wheel)
         mouse.shift = shift
+        mouse.ctrl = ctrl
         inker_canvas._input(None, state, tab, (0.0, 0.0), active=True, hovered=hovered)
 
     frame.mouse = mouse
@@ -639,3 +649,50 @@ def test_nothing_is_asked_for_while_the_canvas_is_not_hovered(driven):
     state.set_tool("move")
     frame((8.0, 8.0), hovered=False)
     assert frame.mouse.cursors == []
+
+
+# --- Ctrl picks the layer under the cursor ----------------------------------
+
+
+def _two_layers(tab):
+    tab.doc.stack[0].pixels[:, :] = (255, 0, 0, 255)
+    tab.doc.add_layer("upper")
+    tab.doc.stack[1].pixels[2, 2] = (0, 0, 255, 255)
+    tab.doc.invalidate_all()
+    tab.doc.set_active_layer(0)
+
+
+def test_ctrl_click_makes_the_layer_under_the_cursor_active(driven):
+    state, tab, frame = driven
+    _two_layers(tab)
+    state.set_tool("brush")
+
+    frame((2.5, 2.5), click=0, down=(0,), ctrl=True)
+
+    assert tab.doc.stack.active_index == 1
+
+
+def test_ctrl_click_leaves_no_dab_behind(driven):
+    """The slice and text arms' rule: a modifier gesture must return before
+    every paint branch, or picking a layer paints on the one you left."""
+    state, tab, frame = driven
+    _two_layers(tab)
+    state.set_tool("brush")
+    before = tab.doc.stack[1].pixels.copy()
+
+    frame((2.5, 2.5), click=0, down=(0,), ctrl=True)
+
+    assert np.array_equal(tab.doc.stack[1].pixels, before)
+    assert state.drag_kind == ""
+
+
+def test_ctrl_click_over_empty_canvas_changes_nothing(driven):
+    state, tab, frame = driven
+    _two_layers(tab)
+    tab.doc.stack[0].pixels[:, :] = 0
+    tab.doc.invalidate_all()
+    state.set_tool("brush")
+
+    frame((6.5, 6.5), click=0, down=(0,), ctrl=True)
+
+    assert tab.doc.stack.active_index == 0

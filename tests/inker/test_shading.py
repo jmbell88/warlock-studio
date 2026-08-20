@@ -359,7 +359,7 @@ def scene(monkeypatch):
     monkeypatch.setattr(
         inker_canvas.imgui,
         "get_io",
-        lambda: SimpleNamespace(key_shift=False, key_alt=False),
+        lambda: SimpleNamespace(key_shift=False, key_alt=False, key_ctrl=False),
     )
     state = inker_state.InkerState()
     state.tool = "shade"

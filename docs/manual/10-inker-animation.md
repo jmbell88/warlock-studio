@@ -81,6 +81,11 @@ red and the next tinted green. Toggle it on the strip's second row; while it is 
 and how strongly. Both counts may be zero, which is how you see only what is behind or only what is
 ahead.
 
+**Current layer only**, on the row beneath them, ghosts just the layer you have selected on those
+neighbouring frames rather than the whole frame. That is what you want when the drawing sits over a
+static background: without it, the background is repeated in red and green under every ghost and
+hides the line you are trying to see.
+
 ## Playback
 
 **Playback** is the Play button or `Enter`; `Esc` or Play again stops it, leaving the playhead where

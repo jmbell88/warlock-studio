@@ -592,6 +592,19 @@ def _onion_controls(state: Any) -> None:
     changed, alpha = controls.slider_float("fade", state.onion_alpha, 0.05, 1.0, "%.2f")
     if changed:
         state.onion_alpha = min(1.0, max(0.05, float(alpha)))
+    # Its own row, not ``same_line``d onto the three above: that row already
+    # carries two int boxes and a slider, and a ``same_line`` past the panel
+    # edge does not wrap, it hides the control.
+    changed, only = controls.checkbox(
+        "current layer only",
+        state.onion_current_layer,
+        tooltip=(
+            "Ghost only the active layer's drawing on the neighbouring frames, "
+            "rather than the whole frame."
+        ),
+    )
+    if changed:
+        state.onion_current_layer = bool(only)
 
 
 def _grid(ctx: Any, tab: Any) -> None:

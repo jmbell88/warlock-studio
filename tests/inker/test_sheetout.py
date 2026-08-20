@@ -1014,9 +1014,10 @@ def test_a_subset_carries_the_group_fold_of_the_rows_it_keeps():
 
 
 def test_a_subset_flatten_never_enters_the_frame_cache():
-    """The cache is keyed on the frame uid and nothing else. A subset stored
-    under that key is a whole document's flatten with layers missing, handed to
-    the onion skin, to playback and to the next export."""
+    """The cache is keyed on a frame and *at most one track* -- the onion
+    skin's current-layer-only ask. An arbitrary subset stored under either key
+    is a whole document's flatten with layers missing, handed to the onion
+    skin, to playback and to the next export, so it stays out entirely."""
     doc = _tracked()
     uid = doc.anim.frames[0].uid
     assert doc.frame_cache_bytes() == 0

@@ -158,3 +158,67 @@ def test_compositing_a_region_touches_only_that_region():
     stack = _stack((255, 0, 0, 255))
     got = stack.composite_region((2, 3, 5, 8))
     assert got.shape == (5, 3, 4)
+
+
+# --- the layer under the cursor ---------------------------------------------
+#
+# Ctrl+click's answer. Every rule here is one the gesture is unusable without:
+# top-down or it picks the background, alpha>0 or it skips a soft edge,
+# visibility consulted or it picks a layer that is not on screen.
+
+
+def _stacked_doc():
+    from warlock.studio.inker.document import Document
+
+    doc = Document.blank(8, 8)
+    doc.stack[0].pixels[:, :] = (255, 0, 0, 255)
+    doc.add_layer("upper")
+    doc.stack[1].pixels[2, 2] = (0, 0, 255, 255)
+    doc.invalidate_all()
+    return doc
+
+
+def test_layer_at_answers_top_down():
+    doc = _stacked_doc()
+    assert doc.layer_at((2, 2)) == 1, "the upper layer's dot, not the ground"
+    assert doc.layer_at((5, 5)) == 0
+
+
+def test_layer_at_skips_a_pixel_with_no_paint_in_it():
+    doc = _stacked_doc()
+    doc.stack[0].pixels[:, :] = 0
+    doc.invalidate_all()
+
+    assert doc.layer_at((5, 5)) is None
+
+
+def test_layer_at_takes_an_antialiased_edge_as_paint():
+    """Alpha above zero, not a threshold: an edge pixel at alpha 1 is paint,
+    and any cut-off above it would be arbitrary."""
+    doc = _stacked_doc()
+    doc.stack[1].pixels[4, 4] = (0, 0, 255, 1)
+    doc.invalidate_all()
+
+    assert doc.layer_at((4, 4)) == 1
+
+
+def test_layer_at_skips_a_hidden_layer():
+    doc = _stacked_doc()
+    doc.stack[1].visible = False
+    doc.invalidate_all()
+
+    assert doc.layer_at((2, 2)) == 0, "you cannot point at what you cannot see"
+
+
+def test_layer_at_skips_a_layer_hidden_by_its_group():
+    doc = _stacked_doc()
+    node = doc.group_layers([1], name="hidden")
+    doc.set_group_props(node.uid, visible=False)
+
+    assert doc.layer_at((2, 2)) == 0
+
+
+def test_layer_at_is_none_off_the_canvas():
+    doc = _stacked_doc()
+    assert doc.layer_at((-1, 2)) is None
+    assert doc.layer_at((99, 99)) is None

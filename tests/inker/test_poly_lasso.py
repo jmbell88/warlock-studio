@@ -58,6 +58,7 @@ class _Mouse:
             get_io=lambda: SimpleNamespace(
                 mouse_wheel=0.0,
                 key_shift=self.shift,
+                key_ctrl=False,
                 key_alt=self.alt,
                 delta_time=1.0 / 60.0,
             ),

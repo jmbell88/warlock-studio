@@ -267,7 +267,7 @@ def pressed(monkeypatch):
         inker_canvas,
         "imgui",
         SimpleNamespace(
-            get_io=lambda: SimpleNamespace(key_shift=False, key_alt=False),
+            get_io=lambda: SimpleNamespace(key_shift=False, key_alt=False, key_ctrl=False),
             open_popup=opened.append,
         ),
     )

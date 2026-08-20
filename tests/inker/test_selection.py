@@ -431,3 +431,58 @@ def test_selecting_a_layers_alpha_ignores_its_opacity_and_visibility():
     doc.invalidate_all()
     doc.select_layer_alpha()
     assert doc.mask is not None and int(doc.mask.mask[0, 0]) == 255
+
+
+# --- colour range -----------------------------------------------------------
+
+
+def _range_doc():
+    doc = inker.Document.blank(8, 8)
+    doc.stack.active.pixels[1, 1] = (255, 0, 0, 255)
+    doc.stack.active.pixels[6, 6] = (255, 0, 0, 255)
+    doc.stack.active.pixels[3, 3] = (250, 0, 0, 255)
+    doc.invalidate_all()
+    return doc
+
+
+def test_colour_range_selects_an_exact_match_anywhere():
+    doc = _range_doc()
+    doc.select_colour_range((255, 0, 0, 255), tolerance=0)
+
+    mask = doc.mask.mask
+    assert mask[1, 1] == 255
+    assert mask[6, 6] == 255
+    assert mask[3, 3] == 0, "250 is outside a tolerance of zero"
+
+
+def test_colour_range_is_not_contiguous():
+    """Two disjoint regions of the same colour both come in -- that is the
+    whole gesture the wand cannot do without four clicks."""
+    doc = _range_doc()
+    doc.select_colour_range((255, 0, 0, 255), tolerance=8)
+
+    mask = doc.mask.mask
+    assert mask[1, 1] == 255 and mask[6, 6] == 255
+    assert mask[3, 3] == 255, "within tolerance"
+    assert mask[0, 0] == 0
+
+
+def test_colour_range_honours_the_tolerance_boundary():
+    doc = _range_doc()
+    doc.select_colour_range((255, 0, 0, 255), tolerance=5)
+    assert doc.mask.mask[3, 3] == 255, "a distance of exactly 5 is inside"
+
+    doc.select_colour_range((255, 0, 0, 255), tolerance=4)
+    assert doc.mask.mask[3, 3] == 0
+
+
+def test_colour_range_agrees_with_a_non_contiguous_wand():
+    """One predicate, asserted rather than assumed: the wand seeded on a pixel
+    of that colour must answer exactly what the colour-first door answers."""
+    doc = _range_doc()
+    pixels = doc._composite
+
+    ranged = sel.colour_range(pixels, (255, 0, 0, 255), 8)
+    wanded = sel.magic_wand(pixels, (1, 1), tolerance=8, contiguous=False)
+
+    assert np.array_equal(ranged.mask, wanded.mask)

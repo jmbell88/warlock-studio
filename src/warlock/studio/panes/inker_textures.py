@@ -139,7 +139,9 @@ def floating(ctx: Any, tab: Any, *, nearest: bool) -> Any:
     return texture
 
 
-def frame_texture(ctx: Any, tab: Any, frame_uid: int) -> Any:
+def frame_texture(
+    ctx: Any, tab: Any, frame_uid: int, *, track_uid: int | None = None
+) -> Any:
     """One animation frame's flatten, for onion skinning and playback.
 
     Inside the existing ``inker_tex:{uid}:`` naming on purpose, so
@@ -150,14 +152,19 @@ def frame_texture(ctx: Any, tab: Any, frame_uid: int) -> Any:
     Keyed on the *frame's* stamp rather than on ``doc.rev``: rev moves for any
     change anywhere, so every onion-skinned neighbour would re-upload on every
     dab the user made on the frame between them.
+
+    ``track_uid`` asks for the current-layer-only flatten, and goes *into the
+    slot key*, so the filtered and unfiltered pictures of one frame are two
+    textures and toggling the checkbox cannot show the other one's pixels.
     """
     if ctx.viewer is None:
         return None
     doc = tab.doc
-    pixels = doc.frame_flat(frame_uid)
+    pixels = doc.frame_flat(frame_uid, track_uid=track_uid)
     if pixels is None:
         return None
-    key = _slot(tab.uid, f"frame{frame_uid}")
+    suffix = "" if track_uid is None else f"t{track_uid}"
+    key = _slot(tab.uid, f"frame{frame_uid}{suffix}")
     rev_key = f"{key}:rev"
     stamp = doc.frame_stamp(frame_uid)
     height, width = pixels.shape[:2]

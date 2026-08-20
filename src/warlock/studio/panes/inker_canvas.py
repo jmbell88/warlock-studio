@@ -1278,6 +1278,21 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
         state.drag_kind = ""
         return
 
+    # Ctrl picks the *layer* under the cursor, which is the same gesture Alt
+    # gives for colour. Here for the slice and text arms' reason -- it returns
+    # rather than falling through, so a Ctrl+click can never leave a dab behind
+    # whatever tool is held -- and before the Alt branch, so the two modifiers
+    # never both fire on one press. Ctrl is genuinely free on this canvas:
+    # panning is middle-drag or space-drag.
+    if imgui.get_io().key_ctrl:
+        hit = doc.layer_at(ipoint)
+        if hit is not None:
+            doc.set_active_layer(hit)
+        # A miss is a silent no-op: a toast on every Ctrl+click over empty
+        # canvas would be noise on a gesture people repeat.
+        state.drag_kind = ""
+        return
+
     # Alt over a paint tool picks the colour under the cursor, which is the one
     # convention a user coming from any other paint program reaches for without
     # thinking. Checked before the tool branches rather than inside the paint
@@ -2277,13 +2292,23 @@ def _onion(ctx: Any, state: Any, tab: Any, draw_list, view, origin, size) -> Non
     if anim is None:
         return
     current = anim.current
+    # Resolved once, before the loop: the active track's uid does not change
+    # between two ghosts of the same draw, and asking per neighbour would be
+    # the same answer four times.
+    track_uid = None
+    if state.onion_current_layer:
+        active = tab.doc.stack.active_index
+        if 0 <= active < len(anim.tracks):
+            track_uid = anim.tracks[active].uid
     for offset in range(max(state.onion_before, state.onion_after), 0, -1):
         for delta, colour in ((-offset, ONION_BACK), (offset, ONION_FORWARD)):
             limit = state.onion_before if delta < 0 else state.onion_after
             index = current + delta
             if offset > limit or not 0 <= index < len(anim.frames):
                 continue
-            texture = inker_textures.frame_texture(ctx, tab, anim.frames[index].uid)
+            texture = inker_textures.frame_texture(
+                ctx, tab, anim.frames[index].uid, track_uid=track_uid
+            )
             if texture is None:
                 continue
             fade = state.onion_alpha / offset

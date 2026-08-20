@@ -19,7 +19,13 @@ from .anim_edits import TrackAddEdit
 from .animation import Track
 from .brush import MAX_STAMP, Stamp
 from .layers import Layer
-from .selection import FloatingBuffer, SelectionMask, magic_wand, render_transform
+from .selection import (
+    FloatingBuffer,
+    SelectionMask,
+    colour_range,
+    magic_wand,
+    render_transform,
+)
 from .tiles import TilemapCel
 from .undo import CompoundEdit, LayerAddEdit, SelectionEdit
 
@@ -163,6 +169,20 @@ class SelectionOps:
             ),
             op,
         )
+
+    def select_colour_range(
+        self: Document,
+        colour: tuple[int, int, int, int],
+        *,
+        tolerance: int = 32,
+        op: str = "replace",
+    ) -> None:
+        """Everything of one colour, non-contiguously, across the composite.
+
+        The composite and not the active layer, exactly as ``select_wand``
+        reads it: the user is pointing at what they can *see*.
+        """
+        self.select(colour_range(self._composite, colour, tolerance), op)
 
     # -- floating pixels ----------------------------------------------------
 
