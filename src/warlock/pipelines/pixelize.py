@@ -11,9 +11,15 @@ an alpha-weighted supersample reduction and an outline pass.
 
 The chain, in this order, and the order is the design:
 
-1. **Reduce**, whole-atlas, alpha-weighted. Whole-atlas so a cell boundary in
-   the output is in the same place whichever side of it you compute from
-   (``spritesynth.reduce_atlas``'s argument). Alpha-weighted because a plain
+1. **Reduce**, alpha-weighted -- whole-atlas via ``pixelize_atlas`` where the
+   atlas exists at the render size, and **per frame** via ``reduce_frames``
+   where it cannot, which for a 256-cell Troupe sheet at a 512px render is
+   always (see that function: the packed atlas would be 4096x16384 against an
+   8192 ceiling). Whole-atlas is preferred where it is available so a cell
+   boundary is in the same place computed from either side
+   (``spritesynth.reduce_atlas``'s argument); per frame gives up nothing there,
+   because each frame reduces to exactly the cell size and no output pixel can
+   straddle two cells. Alpha-weighted because a plain
    RGBA mean averages the transparent background's black into every silhouette
    edge, which is a dark fringe on every sprite -- the exact "muddy" failure
    this program exists to escape.
@@ -37,7 +43,7 @@ where it matters -- which is what makes the golden-image test in
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .pixel import RGB, clean_orphans, map_palette, snap_alpha
@@ -49,6 +55,7 @@ __all__ = [
     "pixelize",
     "pixelize_atlas",
     "reduce",
+    "reduce_frames",
 ]
 
 PILImage = Any
@@ -292,3 +299,53 @@ def pixelize_atlas(
         "columns": int(columns),
         "rows": int(rows),
     }
+
+
+def reduce_frames(
+    frames: Mapping[int, Any],
+    size: int,
+    out_dir: Any,
+    *,
+    mode: str = "box",
+) -> dict[int, Any]:
+    """Reduce rendered cell PNGs to ``size`` before they are packed.
+
+    **The supersample step has to happen per frame, not on the packed atlas,
+    and that is forced rather than preferred.** A Troupe sheet is 256 cells; at
+    the 512px render the whole program is specified to supersample from, the
+    packed atlas would be 4096x16384 and ``check_atlas_size`` refuses it at
+    8192 -- correctly, because no engine would load it. So the atlas can only
+    ever exist at the *logical* size, and the reduction is what stands between
+    the two.
+
+    Per frame costs nothing here that whole-atlas reduction was buying: the
+    boundary argument (``spritesynth.reduce_atlas``) is about a target that
+    does not divide the source, and every frame reduces to exactly ``size`` by
+    construction, so no output pixel can straddle two cells.
+
+    It also keeps ``sheet.pack`` off the pixel-art path. That function resizes
+    a mismatched frame with **LANCZOS**, which is the right answer for a
+    preview and the wrong one for a sprite: a filtered downscale is precisely
+    the soft, fringed result the alpha snap then has to guess about.
+
+    Returns a fresh ``{cell index: path}`` mapping for ``sheet.pack``.
+    """
+    from pathlib import Path
+
+    from PIL import Image
+
+    if int(size) < 1:
+        raise ValueError("a reduction target must be at least 1 pixel")
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    reduced: dict[int, Any] = {}
+    for index, path in frames.items():
+        source = Path(path)
+        if not source.exists():
+            raise ValueError(f"no rendered frame for cell {index}")
+        with Image.open(source) as frame:
+            small = reduce(frame, (int(size), int(size)), mode=mode)
+            dst = out / f"cell_{int(index):04d}.png"
+            small.save(dst, "PNG")
+        reduced[int(index)] = dst
+    return reduced

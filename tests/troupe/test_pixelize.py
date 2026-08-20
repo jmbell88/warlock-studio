@@ -189,3 +189,48 @@ def test_an_atlas_is_byte_identical_run_to_run():
     a, _ = pixelize.pixelize_atlas(_atlas(), columns=2, rows=2, cell=8, palette=RAMP)
     b, _ = pixelize.pixelize_atlas(_atlas(), columns=2, rows=2, cell=8, palette=RAMP)
     assert a.tobytes() == b.tobytes()
+
+
+# --- reducing rendered frames before they are packed --------------------------
+
+
+def test_frames_reduce_to_the_cell_size(tmp_path):
+    frames = {}
+    for i in range(3):
+        path = tmp_path / f"{i:04d}.png"
+        _render(64, seed=i).save(path)
+        frames[i] = path
+    out = pixelize.reduce_frames(frames, 16, tmp_path / "small")
+    assert sorted(out) == [0, 1, 2]
+    for path in out.values():
+        with Image.open(path) as im:
+            assert im.size == (16, 16)
+
+
+def test_a_reduced_frame_set_packs_into_an_atlas_the_ceiling_allows(tmp_path):
+    """Why this exists at all: a 256-cell Troupe sheet at the 512px render the
+    program supersamples from would pack to 4096x16384, and ``check_atlas_size``
+    refuses it at 8192. The atlas can only ever exist at the logical size."""
+    from warlock.pipelines import sheet
+
+    with pytest.raises(ValueError, match="the limit is 8192"):
+        sheet.check_atlas_size(8 * 512, 32 * 512)
+    sheet.check_atlas_size(8 * 128, 32 * 128)
+
+
+def test_a_missing_frame_is_refused_by_index(tmp_path):
+    with pytest.raises(ValueError, match="no rendered frame for cell 4"):
+        pixelize.reduce_frames({4: tmp_path / "nope.png"}, 8, tmp_path / "out")
+
+
+def test_a_zero_reduction_target_is_refused(tmp_path):
+    with pytest.raises(ValueError, match="at least 1 pixel"):
+        pixelize.reduce_frames({}, 0, tmp_path / "out")
+
+
+def test_reduction_is_byte_identical_run_to_run(tmp_path):
+    src = tmp_path / "0000.png"
+    _render(64).save(src)
+    a = pixelize.reduce_frames({0: src}, 16, tmp_path / "a")[0].read_bytes()
+    b = pixelize.reduce_frames({0: src}, 16, tmp_path / "b")[0].read_bytes()
+    assert a == b

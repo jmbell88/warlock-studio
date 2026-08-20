@@ -274,6 +274,10 @@ def _load_clip_library(directory: Path) -> dict[str, dict[str, Any]]:
                         float(v) for v in pose["root_translation"]
                     ]
                 poses[row["name"]] = row
+            # The frame every clip in this file is authored in. Per file and
+            # not per clip: a library mixing the two would be one edit away
+            # from a clip that silently means the other thing.
+            space = str(raw.get("space") or "node")
             clips = []
             for clip in raw["clips"]:
                 keys = [str(k) for k in clip["keys"]]
@@ -287,9 +291,10 @@ def _load_clip_library(directory: Path) -> dict[str, dict[str, Any]]:
                         "segments": [int(n) for n in clip["segments"]],
                         "closed": bool(clip.get("closed", False)),
                         "easing": str(clip.get("easing") or "linear"),
+                        "space": space,
                     }
                 )
-            found[path.stem] = {"poses": poses, "clips": clips}
+            found[path.stem] = {"poses": poses, "clips": clips, "space": space}
         except Exception:
             log.exception("skipping unusable clip library %s", path)
     return found
@@ -306,7 +311,7 @@ def clip_library(template_key: str) -> dict[str, Any]:
     get_template(template_key)
     if _clips is None:
         _clips = _load_clip_library(CLIP_DIR)
-    return _clips.get(template_key) or {"poses": {}, "clips": []}
+    return _clips.get(template_key) or {"poses": {}, "clips": [], "space": "node"}
 
 
 def clip_keys(template_key: str, clip_name: str) -> list[dict[str, Any]]:
@@ -704,6 +709,12 @@ RIG_JSON_TMP = ".rig.tmp.json"
 RETEXTURE_GLB_TMP = ".retexture.tmp.glb"
 
 
+#: Where a rig's joints come from when the user has not moved them by hand.
+#: ``template`` is the bbox-proportional fit every rig used before this existed
+#: and is still the default; ``measured`` reads them off the mesh.
+JOINT_SOURCES = ("template", "measured")
+
+
 def rig_spec(
     job_dir: Path,
     template_key: str,
@@ -711,6 +722,7 @@ def rig_spec(
     *,
     template_bones: list[dict[str, Any]] | None = None,
     fit: dict[str, Any] | None = None,
+    joints: str | None = None,
 ) -> dict[str, Any]:
     """The worker spec for rigging a finished job's mesh.
 
@@ -733,6 +745,15 @@ def rig_spec(
     ``fit`` is what the host knows about how the second of those was found and
     the worker cannot: which model, how confident. It is recorded in rig.json
     and read by nothing that has to work, which is why it is a free-form dict.
+
+    ``joints="measured"`` asks the worker to take ``pipelines.jointfit`` to the
+    mesh's own vertices and use the result as if the user had corrected the
+    joints by hand. It sits *below* ``bones`` in the same order of preference --
+    a real correction is still the last word -- and above the template, because
+    a measurement of the mesh in front of you beats a template scaled to its
+    bounding box whenever the two disagree. The two supplied base meshes are
+    exactly where they disagree: the shipped humanoid template is an A-pose and
+    a T-pose mesh fits it badly.
     """
     get_template(template_key)  # fail here, not three seconds into a subprocess
     spec = {
@@ -749,6 +770,10 @@ def rig_spec(
         spec["template_bones"] = template_bones
     if fit is not None:
         spec["fit"] = fit
+    if joints is not None:
+        if joints not in JOINT_SOURCES:
+            raise ValueError(f"joints must be one of {list(JOINT_SOURCES)}")
+        spec["joints"] = joints
     return spec
 
 

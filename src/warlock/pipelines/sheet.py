@@ -235,6 +235,7 @@ def _record(
     root: tuple[float, float, float],
     *,
     with_root: bool,
+    space: str = "node",
 ) -> dict[str, Any]:
     out: dict[str, Any] = {
         # The row's identity is the clip, not the frame: the worker re-poses
@@ -245,6 +246,10 @@ def _record(
         "frame": index,
         "bones": bones,
     }
+    # Emitted only for a clip that is not in the default frame, so a record
+    # from the two-key door is byte-identical to the one it always was.
+    if space != "node":
+        out["space"] = space
     # Emitted for every frame of a clip whose *keys* carry an offset, and for
     # no frame of one whose keys do not. Per clip and not per frame, because a
     # bob passes through zero at its midpoint and a frame that dropped the key
@@ -280,12 +285,20 @@ def interpolate(
     return _expand([pose_a, pose_b], [int(frames)], "linear", land=False)
 
 
+#: Which frame a stored rotation is in. ``node`` is the pose editor's and every
+#: shipped *pose*'s: absolute, relative to the parent joint. ``delta`` is a
+#: rotation from the bone's own rest, which is what a clip is authored in --
+#: see ``blender_worker.POSE_SPACES`` for why the difference is load-bearing.
+POSE_SPACES = ("node", "delta")
+
+
 def interpolate_clip(
     keys: Sequence[Mapping[str, Any]],
     segments: Sequence[int],
     *,
     closed: bool = False,
     easing: str = "linear",
+    space: str = "node",
 ) -> list[dict[str, Any]]:
     """An ordered keyframe list expanded into pose records.
 
@@ -321,7 +334,9 @@ def interpolate_clip(
     if not 1 <= total <= MAX_CLIP_FRAMES:
         raise ValueError(f"a clip must be 1-{MAX_CLIP_FRAMES} frames")
 
-    return _expand(keys, counts, easing, land=not closed)
+    if space not in POSE_SPACES:
+        raise ValueError(f"space must be one of {list(POSE_SPACES)}")
+    return _expand(keys, counts, easing, land=not closed, space=space)
 
 
 def _expand(
@@ -330,6 +345,7 @@ def _expand(
     easing: str,
     *,
     land: bool,
+    space: str = "node",
 ) -> list[dict[str, Any]]:
     """The expansion itself, shared by the two-key door and the multi-key one.
 
@@ -345,10 +361,19 @@ def _expand(
         a, b = keys[i], keys[(i + 1) % len(keys)]
         for j in range(count):
             bones, root = _blend(a, b, _ease(j / count, easing))
-            out.append(_record(clip_id, name, len(out), bones, root, with_root=with_root))
+            out.append(
+                _record(
+                    clip_id, name, len(out), bones, root,
+                    with_root=with_root, space=space,
+                )
+            )
     if land:
         bones, root = _blend(keys[-1], keys[-1], 0.0)
-        out.append(_record(clip_id, name, len(out), bones, root, with_root=with_root))
+        out.append(
+            _record(
+                clip_id, name, len(out), bones, root, with_root=with_root, space=space
+            )
+        )
     return out
 
 

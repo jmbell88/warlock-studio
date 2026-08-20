@@ -398,11 +398,32 @@ def _apply_root_translation(arm_obj: Any, bone_name: Any, offset_world: Sequence
     return True
 
 
-def _apply_pose(arm_obj: Any, bones: dict[str, Any]) -> tuple[int, list[str]]:
+#: The two frames a stored rotation can be in, and they are not interchangeable.
+#:
+#: ``node`` is what the pose editor saves and every shipped *pose* uses: the
+#: joint's orientation in the glTF node frame, i.e. **absolute** relative to its
+#: parent joint. Identity there does not mean "at rest", it means "aligned with
+#: the parent", which is why :func:`_rest_local_rotation` has to be divided out.
+#:
+#: ``delta`` is a rotation **from the bone's own rest orientation**, which is
+#: exactly what Blender's pose basis already is -- so it applies with no
+#: correction at all. Clips are authored in it because an author thinks in it
+#: ("swing the thigh forward 24 degrees") and, more importantly, because it is
+#: the frame that survives a *re-fit*: a node-local value bakes in the rest
+#: orientation of the skeleton it was authored against, so the same numbers on a
+#: rig whose joints were measured off the mesh rather than fitted to its bbox
+#: produce a different -- and usually broken -- pose.
+POSE_SPACES = ("node", "delta")
+
+
+def _apply_pose(
+    arm_obj: Any, bones: dict[str, Any], space: str = "node"
+) -> tuple[int, list[str]]:
     from mathutils import Quaternion
 
     applied = 0
     unknown: list[str] = []
+    delta = str(space) == "delta"
     for name, quat in bones.items():
         pbone = arm_obj.pose.bones.get(name)
         if pbone is None:
@@ -412,8 +433,9 @@ def _apply_pose(arm_obj: Any, bones: dict[str, Any]) -> tuple[int, list[str]]:
             continue
         x, y, z, w = (float(v) for v in quat)   # stored XYZW, three.js order
         pbone.rotation_mode = "QUATERNION"
-        pbone.rotation_quaternion = _rest_local_rotation(pbone.bone).inverted() @ Quaternion(
-            (w, x, y, z)
+        basis = Quaternion((w, x, y, z))
+        pbone.rotation_quaternion = (
+            basis if delta else _rest_local_rotation(pbone.bone).inverted() @ basis
         )
         applied += 1
     return applied, unknown
@@ -706,6 +728,24 @@ def op_rig(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
 
     progress(0.25, "Fitting skeleton")
     lo, hi = _world_bounds(mesh)
+    if spec.get("joints") == "measured" and not spec.get("bones"):
+        # Measured off the geometry rather than scaled to its box. Done here
+        # and not on the host because this is the only process that can read a
+        # GLB's vertices; it lands in ``spec["bones"]``, so from ``_rig_bones``
+        # onward it is indistinguishable from a user's own joint correction --
+        # which is exactly what it is, taken automatically.
+        from . import jointfit
+
+        verts = [mesh.matrix_world @ v.co for v in mesh.data.vertices]
+        try:
+            measured = jointfit.payload([tuple(v) for v in verts])
+        except ValueError as exc:
+            # Costs the measurement, never the rig: the bbox fit is still a
+            # rig, and a mesh this cannot read is exactly the mesh whose
+            # measurements would be worth least.
+            print(f"joint measurement failed, using the template fit: {exc}", flush=True)
+        else:
+            spec = {**spec, "bones": rigging.validate_joints(measured, template)}
     bones, fit = _rig_bones(spec, lo, hi)
     arm_obj = _build_armature(bpy, bones)
 
@@ -746,7 +786,9 @@ def op_pose(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
     arm_obj = _import_rig(bpy, rig_glb)
 
     progress(0.50, "Applying pose")
-    applied, unknown = _apply_pose(arm_obj, spec["bones"])
+    applied, unknown = _apply_pose(
+        arm_obj, spec["bones"], str(spec.get("pose_space") or "node")
+    )
     if unknown:
         print(f"pose names {len(unknown)} bone(s) this rig does not have: {unknown}", flush=True)
     if spec.get("root_offset"):
@@ -853,7 +895,9 @@ def op_sheet(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
         key = (cell.get("pose"), cell.get("frame", 0))
         if armature is not None and key != posed:
             _reset_pose(armature)
-            _apply_pose(armature, cell.get("bones") or {})
+            _apply_pose(
+                armature, cell.get("bones") or {}, str(cell.get("pose_space") or "node")
+            )
             if cell.get("root_offset"):
                 # A sheet built from snapshotted library poses must not
                 # silently disagree with the bake -- one meaning per pose.

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from warlock import rigging
@@ -135,7 +137,7 @@ def test_a_clip_naming_a_pose_the_file_lacks_costs_that_library(tmp_path, caplog
 
 
 def test_a_template_with_no_clips_gets_an_empty_library():
-    assert rigging.clip_library("fish") == {"poses": {}, "clips": []}
+    assert rigging.clip_library("fish") == {"poses": {}, "clips": [], "space": "node"}
 
 
 # --- the plan ----------------------------------------------------------------
@@ -298,3 +300,63 @@ def test_a_tag_that_runs_backwards_is_refused():
 
     with pytest.raises(ValueError, match="covers frames 5-2"):
         sheetin.span_tags([{"name": "bad", "start": 5, "end": 2}])
+
+
+# --- pose space --------------------------------------------------------------
+
+
+def test_a_clip_records_the_frame_its_rotations_are_in():
+    keys = [_pose("a"), _pose("b", 0.3)]
+    node = sheetlib.interpolate_clip(keys, [2, 2], closed=True)
+    delta = sheetlib.interpolate_clip(keys, [2, 2], closed=True, space="delta")
+    # Absent on the default, so a record from the two-key door is byte-identical
+    # to the one it always was.
+    assert all("space" not in r for r in node)
+    assert all(r["space"] == "delta" for r in delta)
+    assert [r["bones"] for r in node] == [r["bones"] for r in delta]
+
+
+def test_an_unknown_pose_space_is_refused():
+    with pytest.raises(ValueError, match="space must be one of"):
+        sheetlib.interpolate_clip([_pose("a"), _pose("b")], [2], space="world")
+
+
+def test_the_two_modules_name_the_same_pose_spaces():
+    """``sheet`` decides what a clip record says and ``blender_worker`` decides
+    what it means; a spelling in one and not the other is a clip that silently
+    applies in the wrong frame."""
+    from warlock.pipelines import blender_worker
+
+    assert sheetlib.POSE_SPACES == blender_worker.POSE_SPACES
+
+
+def test_the_shipped_clips_are_authored_as_deltas_from_rest():
+    """The finding that made them work at all. A node-local value bakes in the
+    rest orientation of the skeleton it was authored against, so the same
+    numbers on a rig whose joints were measured rather than fitted produce a
+    different -- and in practice broken -- pose."""
+    library = rigging.clip_library("humanoid")
+    assert library["space"] == "delta"
+    assert {c["space"] for c in library["clips"]} == {"delta"}
+
+
+def test_a_clip_library_that_says_nothing_is_read_as_node_local(tmp_path):
+    (tmp_path / "old.json").write_text(
+        '{"poses": [{"name": "a", "bones": {}}, {"name": "b", "bones": {}}], '
+        '"clips": [{"name": "c", "keys": ["a", "b"], "segments": [1, 1], '
+        '"closed": true}]}',
+        encoding="utf-8",
+    )
+    library = rigging._load_clip_library(tmp_path)["old"]
+    assert library["space"] == "node"
+    assert library["clips"][0]["space"] == "node"
+
+
+def test_a_delta_clip_reaches_the_worker_as_a_cell_that_says_so():
+    """The end of the thread: ``_q_rig`` puts ``pose_space`` on the cell only
+    where the record carries one, so every pose row is the cell it always was."""
+    import warlock._q_rig as q_rig
+
+    source = Path(q_rig.__file__).read_text(encoding="utf-8")
+    assert '"pose_space"] = space' in source
+    assert 'r["space"] for r in records if r.get("space")' in source

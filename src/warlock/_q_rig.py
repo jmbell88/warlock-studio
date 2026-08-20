@@ -360,6 +360,11 @@ class RigOps:
         # shares an id by construction, and keying on the id alone would render
         # frame 0 in every row of the clip.
         bones = {(r.get("id"), r.get("frame", 0)): r["bones"] for r in records}
+        # A clip authored as deltas from rest rather than in the pose editor's
+        # node frame says so per record; see ``blender_worker.POSE_SPACES``.
+        spaces = {
+            (r.get("id"), r.get("frame", 0)): r["space"] for r in records if r.get("space")
+        }
         # The why lives on _sheet_root_offsets, which is module-level so a test
         # can drive the map-building without a Worker or a Blender fake. The
         # read stays here: it is I/O, and only worth doing when some record
@@ -378,6 +383,11 @@ class RigOps:
                 "frame": c.frame,
                 "bones": bones.get((c.pose, c.frame)) or {},
             }
+            # Only where the record says so, so an ordinary pose row is the
+            # byte-identical cell it always was and the worker's default holds.
+            space = spaces.get((c.pose, c.frame))
+            if space:
+                cell["pose_space"] = space
             offset = roots.get((c.pose, c.frame))
             if offset:
                 cell["root_bone"] = root_bone

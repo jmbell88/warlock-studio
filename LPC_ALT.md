@@ -237,27 +237,54 @@ Four new units, each with one job:
 
 ---
 
-## Status, 2026-08-19
+## Status, 2026-08-20
 
-**Phases 0b, 0c, 1, 2 and 3 are implemented and verified.** 10,605 passing, ruff clean;
-`tests/troupe/` is 103 of those. What shipped:
+**Phases 0a, 0b, 0c, 0d, 1, 2 and 3 are implemented and verified.** 10,632 passing, gpu lane 26,
+ruff clean; `tests/troupe/` is 128 of those.
+
+### Phase 0d is a GO
+
+Rendered on the supplied `male_base.obj`: 256 cells at 512px in **35 seconds**, reduced to 128 /
+64 / 32 and quantised against `examples/colors.gpl` (The Cosmos, 64 colours). At 32px the result
+is hard-edged, cleanly outlined and legible as a stride -- **pixel art, not a shrunk render**.
+The largest risk in the program is retired.
+
+### What the spike found, that the plan did not
+
+1. **A 512px render of a 256-cell sheet cannot be packed.** 4096x16384 against an 8192 ceiling, so
+   the supersample reduction is *mandatory and per frame* -- `pixelize.reduce_frames`.
+2. **The shipped poses are in the wrong frame for a clip.** A stored rotation is a glTF *node-local*
+   orientation, not a delta from rest, so "swing the thigh 24 degrees" was not what those numbers
+   meant and the first walk rendered a character lying on its side. Clips are now authored as
+   `delta`, which is also the only frame that survives a re-fit.
+3. **The humanoid template is an A-pose and a T-pose mesh fits it badly** -- the arm chain lands
+   inside the ribcage and the arms skin to the chest. `pipelines/jointfit.py` measures them instead;
+   `rig_spec(joints="measured")` asks for it.
+
+### The two meshes, qualified (0a)
+
+Both convert to +Z-up GLB and rig with **all 19 template bones surviving** and automatic weights
+welded, in about a second each. `male_base` is a wide **A-pose** (hands at 0.55 of height),
+`female_base` a true **T-pose**; they are 2x apart in scale and are normalised on import. 4,476 and
+6,708 faces -- far under the 300k ceiling.
 
 | | |
 |---|---|
 | `studio/troupe/spec.py` + `data/layout.json` | the frame table as versioned data; import-pinned to an empty outward set |
 | `studio/troupe/ulpc.py` | the 352-cell reader; every measurement in this file is now a passing oracle |
-| `pipelines/pixelize.py` | gap 2, the AI-free pixeliser, byte-identical run to run |
-| `blender_worker._setup_render(taa_samples=1)` | gap 3's crispness half, on the flat sheet path only |
-| `sheet.interpolate_clip` + root translation | gap 1; the refusal is lifted and `service.sheets` no longer routes it |
-| `templates/clips/humanoid.json` | the 22 keyframes and five clips, expanding to exactly 4/8/8/6/6 |
+| `pipelines/pixelize.py` | gap 2, the AI-free pixeliser, byte-identical run to run, plus `reduce_frames` |
+| `pipelines/jointfit.py` | measured joints, for a mesh the template does not fit |
+| `blender_worker` | `taa_render_samples=1` on the flat sheet path; `POSE_SPACES` |
+| `sheet.interpolate_clip` | multi-key clips, easing, root translation, `space` |
+| `templates/clips/humanoid.json` | the 22 keyframes and five clips, in delta space, v2 |
 | `pipelines/charsheet.py` | clip x yaw -> `Plan`, and gap 4's `animation` block |
 | `sheetin.span_tags` / `document_from_sheet` | the handoff, generalised off the 4x4 layout |
 
-**Not done, and why:** 0a/0d/0e need the base mesh, which has not been supplied; Phase 1's
-palette and Phase 2's keyframe judgement need the art direction and a render to judge; Phases
-4-8 are downstream of 0d, which the plan calls a real go/no-go gate. The clip library is
-authored to the frame table's *shape* and has never been seen as pixels -- treat it as a
-starting point, not a result.
+**Still owed:** the meshes carry no texture, so every frame quantises into the pale end of the
+palette -- **colour needs a textured mesh or the Phase 4 reference chain**, and until then the
+palette is unproven on anything but greys. The arms want an art pass (they hang slightly forward).
+Phase 0e -- humanoid reconstruction from a single image -- is untested and matters only for the
+generated-character path, not for a supplied base mesh. Phases 4-8 are unstarted.
 
 ## Phases
 
