@@ -169,7 +169,7 @@ def test_every_rendered_command_carries_its_revision():
 #: names the right repository and the wrong commit, or no commit at all.
 PINNED_DOCS = (
     "docs/MODELS.md",
-    "docs/manual/18-installation.md",
+    "docs/manual/19-installation.md",
     "README.md",
     # Not a document: ``doctor``'s hint for the GGUF weights, which are one of
     # the two fatal rows and are declared as text because nothing downloads

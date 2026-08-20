@@ -43,11 +43,11 @@ without the UI knowing anything about either.
 
 Only one base model is resident at a time. Selecting a different one unloads the previous pipeline
 before building the next, because the card holds the reconstruction engine plus one SDXL-class
-pipeline and not two. See [VRAM modes](19-configuration.md#vram-modes).
+pipeline and not two. See [VRAM modes](20-configuration.md#vram-modes).
 
 A registry entry is also the right answer when `WARLOCK_T2I_DIR` is not — that variable redirects
 where the built-in `turbo` entry loads from and changes nothing about how it is run. See
-[Using a different image model](19-configuration.md#using-a-different-image-model).
+[Using a different image model](20-configuration.md#using-a-different-image-model).
 
 ## Adding a style LoRA
 
@@ -87,7 +87,7 @@ adapter trained with `use_rslora` declares a much larger one than an ordinary ad
 
 A missing LoRA file is skipped at load time rather than failing the job, and the diagnostics name it.
 See [Models and style LoRAs](03-generating-references.md#models-and-style-loras) and
-[Optional image models and style LoRAs](18-installation.md#optional-image-models-and-style-loras).
+[Optional image models and style LoRAs](19-installation.md#optional-image-models-and-style-loras).
 
 ## Adding a palette
 
@@ -175,7 +175,7 @@ adapter that cannot have run is a lie about provenance.
 Inputs are bounded at the door rather than deep in the pipeline: an upload is size-checked before it
 is decoded and pixel-checked from its header before pixels are allocated, prompts are length-capped,
 and every service entry point that accepts a seed range-checks it. See
-[Rerun and promotion](14-library-and-jobs.md#rerun-and-promotion).
+[Rerun and promotion](15-library-and-jobs.md#rerun-and-promotion).
 
 ## Pure-module boundaries
 
@@ -190,7 +190,7 @@ what makes every rule about pixels assertable headlessly — and there are a lot
 undo is addressed by layer uid rather than index precisely so that an undo issued after a reorder
 still lands on the layer the edit was made to.
 
-**Sheet planning.** As described in [Sheet planning](23-pipelines.md#sheet-planning), the grid is
+**Sheet planning.** As described in [Sheet planning](24-pipelines.md#sheet-planning), the grid is
 decided in a module with no Blender and no GPU, so the layout can be tested exhaustively and the
 preview cannot drift from the render.
 

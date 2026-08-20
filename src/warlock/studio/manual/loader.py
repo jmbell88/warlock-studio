@@ -53,10 +53,14 @@ from . import parser
 # animation (09) came out of a chapter that had reached 1110 lines, two and a
 # half times the next largest, of which the timeline was the one self-contained
 # subsystem.
+# Troupe joined Part I as chapter 14 on 2026-08-20, moving everything from the
+# old 14 onward by one. It is the LPC_ALT program's own mode and it belongs
+# beside the five workspaces it follows rather than after the library: the
+# grouping in Part I is the *rail's*, and Troupe is in the rail's second group.
 PARTS: tuple[tuple[str, range], ...] = (
-    ("Using Warlock Studio", range(1, 18)),
-    ("Setup & operations", range(18, 22)),
-    ("Architecture", range(22, 25)),
+    ("Using Warlock Studio", range(1, 19)),
+    ("Setup & operations", range(19, 23)),
+    ("Architecture", range(23, 26)),
 )
 
 _H1 = re.compile(r"^# +(.+)$", re.MULTILINE)

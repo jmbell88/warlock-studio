@@ -188,5 +188,5 @@ reopen the real document rather than a flat picture. It follows the same precede
 | `~/.warlock/assets/<job>/input.png` | The atlas, for one exported to the library. |
 | `~/.warlock/assets/<job>/pack.wpack` | The document behind it. Not served; reopened by **Edit in Packwright**. |
 
-See [Keyboard shortcuts](17-shortcuts.md) for every binding, and [Plotter](12-plotter.md) for the
+See [Keyboard shortcuts](18-shortcuts.md) for every binding, and [Plotter](12-plotter.md) for the
 mode that consumes a grid pack as a tileset.

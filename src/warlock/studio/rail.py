@@ -304,7 +304,26 @@ def draw(app: Any, ctx: Any) -> None:
     gap = imgui.get_style().item_spacing.y
     if rows * sp(ITEM_H) + (rows - 1) * gap + group_gaps > avail_h:
         gap = 0.0
+    # **And then the section gaps go too, last of all.** The ladder above gives
+    # up the row-to-row air before it compresses the rows; this is its third
+    # rung, and it exists because the second one has a floor with a citation
+    # (:data:`MIN_ITEM_H`) that must not be argued down. Adding Troupe made the
+    # rail fifteen rows, which at the resize floor on a 175% display wants
+    # 23.85 design px a row against that 24 px floor -- four physical pixels of
+    # overflow, and four physical pixels of overflow is an unreachable mode.
+    #
+    # A section marker is air, and air is what this ladder spends first. Giving
+    # up some of it to keep every row at the floor is the same trade the two
+    # rungs above make, not an exception to them -- and the gap only vanishes
+    # entirely in a window shorter than any this app can be resized to.
+    floor = rows * sp(MIN_ITEM_H)
+    if floor + group_gaps > avail_h:
+        group_gaps = max(avail_h - floor, 0.0)
     item_h = fitted_height(rows, (rows - 1) * gap + group_gaps, avail_h)
+    # The drawn gap follows the budget, or the rows are laid out to one figure
+    # and drawn against another -- which is the footer landing somewhere else
+    # entirely, one rung down.
+    group_gap = group_gaps / len(body_groups) if body_groups else 0.0
     step = item_h + gap
     # Stated to imgui as well as used in the arithmetic, or the two disagree by
     # one spacing per row and the footer lands somewhere else entirely.
@@ -323,7 +342,7 @@ def draw(app: Any, ctx: Any) -> None:
     y = 0.0
     for index, group in enumerate(body_groups):
         if index:
-            y += sp(GROUP_GAP)
+            y += group_gap
         for key in group:
             offsets[key] = y
             y += step
@@ -332,7 +351,7 @@ def draw(app: Any, ctx: Any) -> None:
     body_h = y - gap
 
     footer_h = len(footer_rows) * item_h + (len(footer_rows) - 1) * gap
-    footer_top = max(body_h + sp(GROUP_GAP), avail_h - footer_h)
+    footer_top = max(body_h + group_gap, avail_h - footer_h)
     for offset, key in enumerate(footer_rows):
         offsets[key] = footer_top + offset * step
 
@@ -348,7 +367,7 @@ def draw(app: Any, ctx: Any) -> None:
 
     for index, group in enumerate(body_groups):
         if index:
-            imgui.dummy((0, sp(GROUP_GAP) - gap))
+            imgui.dummy((0, max(group_gap - gap, 0.0)))
         for key in group:
             label, icon = labels[key]
             if _item(key, label, icon, item_w, selected=key == current, height=item_h):

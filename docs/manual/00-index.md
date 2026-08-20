@@ -21,20 +21,21 @@ it running and keeping it running, and Part III explains how it is built.
 - [Clay](11-clay.md) — modelling from primitives, and the two ways a built document leaves the mode.
 - [Plotter](12-plotter.md) — tile maps: tilesets, layers, objects, and Tiled import and export.
 - [Packwright](13-packwright.md) — packing sprites into an atlas, and the sidecar that describes it.
-- [The library and jobs](14-library-and-jobs.md) — job status, filters, rerunning, style profiles, storage and pruning.
-- [Style profiles](15-profiles.md) — saving a house style, and the anchor image that shows one.
-- [Review](16-review.md) — judging finished meshes, parameter sweeps, and the findings the verdicts add up to.
-- [Keyboard shortcuts](17-shortcuts.md) — every binding the app answers to.
+- [Troupe](14-troupe.md) — character sprite sheets: a prompt to a rigged mesh to 256 animated cells.
+- [The library and jobs](15-library-and-jobs.md) — job status, filters, rerunning, style profiles, storage and pruning.
+- [Style profiles](16-profiles.md) — saving a house style, and the anchor image that shows one.
+- [Review](17-review.md) — judging finished meshes, parameter sweeps, and the findings the verdicts add up to.
+- [Keyboard shortcuts](18-shortcuts.md) — every binding the app answers to.
 
 ## Setup & operations
 
-- [Installation](18-installation.md) — requirements, dependencies and the one-time model downloads.
-- [Configuration](19-configuration.md) — environment variables, data locations and VRAM modes.
-- [App settings](20-app-settings.md) — UI scale, pane layout, and the model list with its downloads.
-- [Troubleshooting](21-troubleshooting.md) — what the diagnostics say and what to do about it.
+- [Installation](19-installation.md) — requirements, dependencies and the one-time model downloads.
+- [Configuration](20-configuration.md) — environment variables, data locations and VRAM modes.
+- [App settings](21-app-settings.md) — UI scale, pane layout, and the model list with its downloads.
+- [Troubleshooting](22-troubleshooting.md) — what the diagnostics say and what to do about it.
 
 ## Architecture
 
-- [Architecture](22-architecture.md) — the process, the threads, the job store and the service layer.
-- [Pipelines](23-pipelines.md) — how a job travels from prompt to GLB.
-- [Extending](24-extending.md) — adding a model, a style or a skeleton.
+- [Architecture](23-architecture.md) — the process, the threads, the job store and the service layer.
+- [Pipelines](24-pipelines.md) — how a job travels from prompt to GLB.
+- [Extending](25-extending.md) — adding a model, a style or a skeleton.

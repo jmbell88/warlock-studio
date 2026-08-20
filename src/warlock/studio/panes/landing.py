@@ -953,7 +953,23 @@ def start_packwright(ctx: Any) -> None:
         packwright_mode.new_document(ctx)
 
 
-#: The six things this app can start from nothing, in the order the menu offers
+def start_troupe(ctx: Any) -> None:
+    """Troupe from Home. It asks for nothing and invents nothing.
+
+    Unlike the four document modes above it, entering Troupe does not create
+    anything: the mode is a selection over character sheets a worker published,
+    and what a user does first here is either watch one or describe a new
+    character in the form. Creating something on entry would be the "entering
+    Plotter *was* the act of creating a map" mistake the function above it
+    exists to have stopped making.
+    """
+    from .. import troupe_mode
+
+    set_mode(ctx.state, "troupe")
+    troupe_mode.ensure(ctx)
+
+
+#: The seven things this app can start from nothing, in the order the menu offers
 #: them. "New 3D model" and "New Model" used to sit side by side and the second
 #: one meant *Clay* -- two buttons whose labels differ by a word neither of them
 #: defines, one of which generates a mesh from a prompt and the other opens a
@@ -971,4 +987,5 @@ NEW_ITEMS: tuple[tuple[str, str, str, object], ...] = (
     ("clay", "New Clay model", icons.RULER, start_clay),
     ("plotter", "New tile map", icons.GRID, start_plotter),
     ("packwright", "New sprite atlas", icons.LAYERS, start_packwright),
+    ("troupe", "New character", icons.PERSON_STANDING, start_troupe),
 )

@@ -17,7 +17,7 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     # The Rig stage's own column (the UI redesign, wave 5). Rigging was three
     # buttons in three places and no pane of its own, so it had no (?) either.
     "settings-rig": ("06-rigging-and-posing", "rigging-a-mesh"),
-    "library": ("14-library-and-jobs", None),
+    "library": ("15-library-and-jobs", None),
     "inspector": ("04-generating-meshes", "exports"),
     "retarget": ("04-generating-meshes", "triangle-budget"),
     "retexture": ("04-generating-meshes", "surface-texture"),
@@ -58,9 +58,19 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "packwright-settings": ("13-packwright", "settings"),
     "packwright-items": ("13-packwright", "when-it-does-not-fit"),
     "packwright-bridge": ("13-packwright", "exporting"),
-    "profiles": ("15-profiles", None),
-    "review": ("16-review", None),
-    "app-settings": ("20-app-settings", None),
+    # Troupe's four panes. Four entries rather than one chapter-wide target
+    # because the questions differ per pane: what a sheet *is* is the cast's
+    # question, what the options mean is the form's, why the preview never
+    # stops is the centre's, and what a stray-pixel count means is the sheet
+    # panel's.
+    "troupe-characters": ("14-troupe", "what-a-character-sheet-contains"),
+    "troupe-settings": ("14-troupe", "making-a-character"),
+    "troupe-preview": ("14-troupe", "watching-it"),
+    "troupe-sheets": ("14-troupe", "the-sheet-panel"),
+    "troupe-bridge": ("14-troupe", "taking-it-somewhere"),
+    "profiles": ("16-profiles", None),
+    "review": ("17-review", None),
+    "app-settings": ("21-app-settings", None),
     # The chooser the app opens on (F56/O118): the one pane a first run
     # certainly sees, and the only one that had no way into the manual at all.
     "home": ("02-home", None),
@@ -75,4 +85,4 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
 # are a red banner, a popup and a Home row, none of which is a pane with a (?).
 # Named once rather than spelled at each of the three, so a chapter that moved
 # does not have to be found in three places (F57).
-TROUBLESHOOTING: tuple[str, str | None] = ("21-troubleshooting", None)
+TROUBLESHOOTING: tuple[str, str | None] = ("22-troubleshooting", None)

@@ -239,8 +239,34 @@ Four new units, each with one job:
 
 ## Status, 2026-08-20
 
-**Phases 0a, 0b, 0c, 0d, 1, 2 and 3 are implemented and verified.** 10,632 passing, gpu lane 26,
-ruff clean; `tests/troupe/` is 128 of those.
+**Phases 0a, 0b, 0c, 0d, 1, 2, 3, 4 and 5 are implemented and verified.** 10,700 passing, ruff
+clean; `tests/troupe/` is 179 of those. Phases 0e, 6 and 7 are open.
+
+### Phases 4 and 5 are built
+
+The chain runs end to end: describe a character, approve its T-pose reference in Create, and the
+mesh, the auto-rig and a 256-cell sheet follow. Troupe is a workspace mode of its own -- cast and
+form on the left, a continuously playing sprite in the middle, the sheet and the two bridges on
+the right -- and chapter `docs/manual/14-troupe.md` documents it, which was a renumbering of
+everything from the old 14 onward.
+
+Four things the plan did not anticipate, each written up in `docs/INVARIANTS.md`:
+
+- The plan asked for **one job kind that orchestrates the run**. What shipped is the shape the rig
+  checkbox and the sprite sheet already use -- a nested block on the reference row, honoured by the
+  worker once the artifact it needs exists -- because the human gate the plan wants *is* the
+  existing promote gate, and an orchestrator would have had to reimplement it.
+- The guide has to be **drawn by the worker, not written by the door**: a rerolled reference is a
+  new job id with an empty directory, and a file the door wrote belongs to the row that was
+  rerolled. `_conditioning` renders it from the variant instead.
+- The output is an **ordinary sheet**, not a format. That is what buys Open in Inker, Add to
+  Packwright, the exporters and the library with no new code.
+- Adding a mode ran the **rail** four physical pixels out of the window at the resize floor on a
+  175% display. The compression ladder grew a third rung; the smoke test is what caught it.
+
+Phase 4's `charsheet` job has never been run against a real Blender. The pieces either side of it
+have (phase 0d), and the render call is `rigging.sheet_spec` + `run_worker` exactly as `_sheet`
+makes it, but the end-to-end run on a card is owed.
 
 ### Phase 0d is a GO
 

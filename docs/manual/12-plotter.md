@@ -484,5 +484,5 @@ Hidden layers are not rendered. One flag decides both what you see and what come
 | `~/.warlock/assets/<job>/input.png` | The flat render, for a map exported to the library. |
 | `~/.warlock/assets/<job>/map.wmap` | The map behind that render. Not served; reopened by **Edit in Plotter**. |
 
-See [Keyboard shortcuts](17-shortcuts.md) for every binding, and
+See [Keyboard shortcuts](18-shortcuts.md) for every binding, and
 [Packwright](13-packwright.md) for building the tilesets this mode consumes.

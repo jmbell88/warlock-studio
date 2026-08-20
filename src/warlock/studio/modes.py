@@ -60,6 +60,13 @@ MODES: list[tuple[str, str, str]] = [
     ("poser", "Poser", icons.PERSON_STANDING),
     ("plotter", "Plotter", icons.GRID),
     ("packwright", "Packwright", icons.LAYERS),
+    # Troupe (the LPC_ALT program, phase 5). A workspace of its own rather
+    # than a panel in Create for the reason Poser is one: what happens here is
+    # *watching* -- a walk cycle plays continuously and you judge it -- and
+    # that is a use of the whole window, not of a 300px column beside a form.
+    # The glyph is Poser's, deliberately: both are about a human figure, and
+    # the rail distinguishes them by label.
+    ("troupe", "Troupe", icons.PERSON_STANDING),
     ("settings", "Settings", icons.SETTINGS),
 ]
 
@@ -76,7 +83,7 @@ MODES: list[tuple[str, str, str]] = [
 # the health badge and the expand toggle rather than in the column above.
 RAIL_GROUPS: tuple[tuple[str, ...], ...] = (
     ("home", "create", "library", "review"),
-    ("inker", "clay", "poser", "plotter", "packwright"),
+    ("inker", "clay", "poser", "plotter", "packwright", "troupe"),
     ("settings",),
 )
 
@@ -85,7 +92,7 @@ RAIL_GROUPS: tuple[tuple[str, ...], ...] = (
 # submit and no viewport to frame, which is why they take no keyboard
 # shortcuts at all.
 WORK_MODES = frozenset(
-    {"create", "inker", "clay", "poser", "review", "plotter", "packwright"}
+    {"create", "inker", "clay", "poser", "review", "plotter", "packwright", "troupe"}
 )
 
 # The subset that draws the *asset* viewport, and therefore the only modes
@@ -110,7 +117,9 @@ VIEWPORT_MODES = frozenset({"create"})
 # partition KEYS exactly -- which matters because ``_build_ui``'s dispatch ends
 # in a bare ``else``, so an unlisted mode would draw one of these rather than
 # fail.
-WORKSPACE_MODES = frozenset({"inker", "clay", "poser", "review", "plotter", "packwright"})
+WORKSPACE_MODES = frozenset(
+    {"inker", "clay", "poser", "review", "plotter", "packwright", "troupe"}
+)
 
 # The modes that bind the arrow keys or Space themselves, and so keep them from
 # imgui's keyboard navigation (UX-02). Home and the Library move a selection
@@ -121,7 +130,10 @@ WORKSPACE_MODES = frozenset({"inker", "clay", "poser", "review", "plotter", "pac
 # the arrows belong to the surface. This is the "which surface" half, listed
 # here beside the other mode groupings rather than inside the backend, because
 # it is a fact about the modes and not about the input door.
-NAV_KEY_MODES = frozenset({"home", "library", "review", "inker", "plotter"})
+# Troupe joins them for its own version of the same clash: Space toggles
+# playback and Left/Right step one frame of a clip, so one press must not also
+# move a focus ring through the direction buttons.
+NAV_KEY_MODES = frozenset({"home", "library", "review", "inker", "plotter", "troupe"})
 
 KEYS = tuple(key for key, _label, _icon in MODES)
 

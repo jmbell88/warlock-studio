@@ -371,6 +371,16 @@ def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
             ("Middle drag", "Pan (wheel zooms)"),
         ],
     )
+    table(
+        "Troupe",
+        [
+            ("Space", "Play / pause the preview"),
+            # Stepping pauses, which is why the two rows are not "step" alone:
+            # the binding does two things and a sheet that named one of them
+            # would be describing a different control.
+            ("Left / Right", "Step one frame, and pause"),
+        ],
+    )
     return sections
 
 
@@ -1268,6 +1278,14 @@ class App:
                     # to clear ``packing`` and record why, or the items
                     # pane shows an empty list that reads as success.
                     packwright_mode.on_task_failed(ctx, done)
+                elif done.key.startswith("troupe-"):
+                    from . import troupe_mode
+
+                    # Both of Troupe's tasks are *doors*, so a failure here is
+                    # always a refusal with a sentence in it -- and one the
+                    # user is owed, since neither door's button can know in
+                    # advance which of its options the service will object to.
+                    troupe_mode.on_task_failed(ctx, done)
                 elif done.key.startswith(("download:", "remove:")):
                     # A failed fetch has to be *routed* somewhere, not merely
                     # toasted: the rows carry a presence flag, and a fetch that
@@ -1448,6 +1466,11 @@ class App:
             packwright_mode.on_task_done(ctx, done)
             if isinstance(done.result, dict) and done.result.get("exported_asset"):
                 self._capture_clay_thumbnail(done.result["job_id"])
+            return
+        if key.startswith("troupe-"):
+            from . import troupe_mode
+
+            troupe_mode.on_task_done(ctx, done)
             return
         if key.startswith("review-"):
             from . import review_mode
@@ -2366,6 +2389,15 @@ class App:
             from . import packwright_mode
 
             packwright_mode.handle_key(ctx, event)
+        if ctx.state.mode == "troupe":
+            from . import troupe_mode
+
+            # Unconditional and returning, for the reason the three above are:
+            # ``handle_key`` answers False for every key it does not bind, and
+            # letting that fall through would let F/W/S act on a viewport
+            # Troupe has replaced with a sprite.
+            troupe_mode.handle_key(ctx, event)
+            return
             return
         # Both edges reach this function, because Inker's space-to-pan is a
         # hold and needs the release. Nothing below is a hold: every one of
@@ -2820,6 +2852,8 @@ class App:
                 self._plotter_workspace()
             elif mode == "packwright":
                 self._packwright_workspace()
+            elif mode == "troupe":
+                self._troupe_workspace()
             else:
                 self._inker_workspace()
             imgui.end_child()
@@ -3605,6 +3639,85 @@ class App:
         ) as visible:
             if visible:
                 plotter_bridge.draw(ctx)
+        imgui.end_group()
+
+    def _troupe_workspace(self) -> None:
+        """The same skeleton the other five use:
+
+            [ troupe-cast     ]                  [ troupe-sheets ]
+            [ troupe-settings ]   the sprite     [ troupe-bridge ]
+
+        The centre pane is also the mode's heartbeat -- there is no per-mode
+        update hook, so the pane that draws is what pumps the preview clock.
+        """
+        from imgui_bundle import imgui
+
+        from . import layout as layout_mod
+        from .panes import (
+            troupe_bridge,
+            troupe_characters,
+            troupe_preview,
+            troupe_settings,
+            troupe_sheets,
+        )
+
+        ctx = self.app_ctx
+        lay = self.layout
+        sidebar_w = layout_mod.sidebar_width()
+
+        imgui.begin_group()
+        cast_height = imgui.get_content_region_avail().y * lay.settings_share
+        with layout_mod.pane(
+            "troupe-cast",
+            (sidebar_w, cast_height),
+            layout_mod.PaneRole.SIDEBAR,
+            edge=layout_mod.PaneEdge.RIGHT,
+        ) as visible:
+            if visible:
+                troupe_characters.draw(ctx)
+        with layout_mod.pane(
+            "troupe-settings",
+            (sidebar_w, 0),
+            layout_mod.PaneRole.SIDEBAR,
+            edge=layout_mod.PaneEdge.RIGHT,
+        ) as visible:
+            if visible:
+                troupe_settings.draw(ctx)
+        imgui.end_group()
+
+        imgui.same_line()
+        width = layout_mod.centre_width()
+        # No scroll-with-mouse for the reason Plotter's centre has none: the
+        # wheel belongs to the picture, and here it is the zoom control's.
+        flags = imgui.WindowFlags_.no_scroll_with_mouse.value
+        with layout_mod.pane(
+            "troupe-centre",
+            (width, 0),
+            layout_mod.PaneRole.CONTENT,
+            window_flags=flags,
+        ) as visible:
+            if visible:
+                troupe_preview.draw(ctx)
+
+        imgui.same_line()
+        imgui.begin_group()
+        sheets_height = imgui.get_content_region_avail().y * lay.settings_share
+        with layout_mod.pane(
+            "troupe-sheets",
+            (0, sheets_height),
+            layout_mod.PaneRole.INSPECTOR,
+            edge=layout_mod.PaneEdge.LEFT,
+        ) as visible:
+            if visible:
+                troupe_sheets.draw(ctx)
+        with layout_mod.pane(
+            "troupe-bridge",
+            (0, 0),
+            layout_mod.PaneRole.INSPECTOR,
+            edge=layout_mod.PaneEdge.LEFT,
+        ) as visible:
+            if visible:
+                troupe_bridge.draw(ctx)
         imgui.end_group()
 
     def _packwright_workspace(self) -> None:
@@ -4985,9 +5098,14 @@ class App:
             _step("write settings", ctx.settings.flush)
             if ctx.textures is not None:
                 _step("release textures", ctx.textures.release)
+            from . import troupe_mode
             from .panes import sheet_panel
 
             _step("release sheet strip", lambda: sheet_panel.release_strip_texture(ctx))
+            # Troupe's atlas, for the same reason and by the same rule: it is
+            # registered with the imgui backend by ``widgets.texture_ref``, so
+            # it must be forgotten before it is released.
+            _step("release troupe atlas", lambda: troupe_mode.release_texture(ctx))
             from . import inker_mode, packwright_mode, plotter_mode
 
             _step("release inker textures", lambda: inker_mode.release_all(ctx))

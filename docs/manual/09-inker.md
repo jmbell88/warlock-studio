@@ -133,7 +133,7 @@ not a property of the picture.
 ## Tools
 
 The toolbox is an icon grid; hovering a tool shows its name and its letter. Every tool is listed in
-[Keyboard shortcuts](17-shortcuts.md).
+[Keyboard shortcuts](18-shortcuts.md).
 
 The letters are Aseprite's wherever Aseprite has one to lend: `L` is the line and `U` the rectangle,
 and three tools answer to a shifted letter as well as their own — `Shift+G` for the gradient,
@@ -1145,4 +1145,4 @@ A painted reference is a real job row that never ran on the worker: the image al
 queueing a run to reproduce what you just drew would be two minutes of GPU for nothing. It is
 created finished, at the reference stage, which is exactly what promotion consumes. It cannot be
 rerolled — there is no generator behind it for a new seed to change — but it can be remeshed. See
-[Rerun and promotion](14-library-and-jobs.md#rerun-and-promotion).
+[Rerun and promotion](15-library-and-jobs.md#rerun-and-promotion).

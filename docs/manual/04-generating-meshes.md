@@ -26,7 +26,7 @@ the promotion inherit whatever the reference happened to record.
 Derived values never carry across. Anything the worker recorded about the *source* run's artifacts
 — the composed prompt, the mesh report, the applied transform — is stripped, so a new job never
 wears a quality verdict about a mesh that does not exist yet. See
-[Rerun and promotion](14-library-and-jobs.md#rerun-and-promotion).
+[Rerun and promotion](15-library-and-jobs.md#rerun-and-promotion).
 
 ## Checking the cutout
 
@@ -75,7 +75,7 @@ Nothing is ever deleted on your behalf, and declining leaves you with ordinary a
 hidden ones.
 
 Verdicts work on a candidate like any other mesh, so judging the group feeds the same findings pool.
-See [Review](16-review.md).
+See [Review](17-review.md).
 
 The count applies to **Make 3D** only. An upload queues one mesh job, as it always has.
 
@@ -156,7 +156,7 @@ header. It appears only on jobs that have a `source.glb` — older jobs and rig 
 Five tiers exist in the code: Raw (full density), Draft (20k), Standard (50k), Detailed (100k) and
 Custom. `gltfpack` — the binary every decimating tier runs through — is a one-time manual drop into
 `vendor/gltfpack/` like the reconstruction engine, not something the checkout brings with it; see
-[Installation](18-installation.md#gltfpack). When it is there this panel offers the whole list, and
+[Installation](19-installation.md#gltfpack). When it is there this panel offers the whole list, and
 Custom gains a triangle-count field with its own valid range. When it is not, `warlock doctor` says
 so and every tier ships the raw reconstruction instead of failing.
 **The generate form still offers Raw alone**, because none of the decimating tiers has been
@@ -297,4 +297,4 @@ the pixel-art reductions and the manifest — see
 [2D exports](03-generating-references.md#2d-exports).
 
 For bulk export of several assets at once, and for the storage those files occupy, see
-[The library and jobs](14-library-and-jobs.md#storage-and-pruning).
+[The library and jobs](15-library-and-jobs.md#storage-and-pruning).

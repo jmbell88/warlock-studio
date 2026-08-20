@@ -342,3 +342,13 @@ throw away the selection you spent a gesture placing.
 | Esc | Deselect |
 
 Packing is automatic — `R` is only there for when you want it now rather than on the next change.
+
+## Troupe
+
+| Keys | Action |
+| --- | --- |
+| Space | Play / pause the preview |
+| Left / Right | Step one frame, and pause |
+
+There is nothing else. Troupe holds no document — the sheet it plays was published by a job and
+lives in that job's directory — so there is no save, no undo and no tab to close.

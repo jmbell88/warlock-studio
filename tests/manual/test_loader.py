@@ -12,22 +12,22 @@ from warlock.studio.state import AppState, ManualState
 def tree(tmp_path: Path) -> Path:
     (tmp_path / "00-index.md").write_text("# Warlock Studio Manual\n", encoding="utf-8")
     (tmp_path / "01-overview.md").write_text("# Overview\n\nHello.\n", encoding="utf-8")
-    (tmp_path / "18-installation.md").write_text("# Installation\n", encoding="utf-8")
-    (tmp_path / "22-architecture.md").write_text("# Architecture\n", encoding="utf-8")
+    (tmp_path / "19-installation.md").write_text("# Installation\n", encoding="utf-8")
+    (tmp_path / "23-architecture.md").write_text("# Architecture\n", encoding="utf-8")
     return tmp_path
 
 
 def test_chapters_sorted_titled_and_grouped(tree: Path):
     chapters = loader.chapters(root=tree)
     assert [c.key for c in chapters] == [
-        "00-index", "01-overview", "18-installation", "22-architecture",
+        "00-index", "01-overview", "19-installation", "23-architecture",
     ]
     by_key = {c.key: c for c in chapters}
     assert by_key["01-overview"].title == "Overview"
     assert by_key["00-index"].part == ""
     assert by_key["01-overview"].part == "Using Warlock Studio"
-    assert by_key["18-installation"].part == "Setup & operations"
-    assert by_key["22-architecture"].part == "Architecture"
+    assert by_key["19-installation"].part == "Setup & operations"
+    assert by_key["23-architecture"].part == "Architecture"
 
 
 def test_every_real_chapter_lands_in_a_part():

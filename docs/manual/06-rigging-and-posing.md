@@ -94,7 +94,7 @@ Two things about it are worth knowing:
 
 `rig.json` records which was used, so a rig can be told apart afterwards. Without the pose model the
 bbox fit is used and nothing about your rigs changes — see
-[Model weights](18-installation.md#model-weights) for the download. Set `WARLOCK_POSE_FIT=off` to
+[Model weights](19-installation.md#model-weights) for the download. Set `WARLOCK_POSE_FIT=off` to
 force the template everywhere, whatever is installed; it is a kill switch rather than an opt-in,
 because the measurement already refuses itself whenever it is unsure.
 

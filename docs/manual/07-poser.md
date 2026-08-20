@@ -140,4 +140,4 @@ that could not do anything.
 Blender ships CPython 3.13 wheels only, so on any other Python version the optional extra installs
 nothing at all. See [When rigging is
 unavailable](06-rigging-and-posing.md#when-rigging-is-unavailable) for the full list of what that
-takes with it, and [Installation](18-installation.md) for how to get it.
+takes with it, and [Installation](19-installation.md) for how to get it.

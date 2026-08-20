@@ -23,7 +23,7 @@ import pytest
 
 from warlock.studio.main import shortcut_sections
 
-CHAPTER = Path(__file__).resolve().parents[2] / "docs" / "manual" / "17-shortcuts.md"
+CHAPTER = Path(__file__).resolve().parents[2] / "docs" / "manual" / "18-shortcuts.md"
 
 # The popup's group titles against the chapter headings that cover them. Two
 # popup groups share one chapter section, which is why this is a table rather
@@ -37,6 +37,7 @@ SECTIONS = {
     "Inker": "Inker",
     "Plotter": "Plotter",
     "Packwright": "Packwright",
+    "Troupe": "Troupe",
 }
 
 _MODIFIED = re.compile(r"^(?:Ctrl\+|Shift\+|Alt\+)+")
@@ -168,7 +169,7 @@ def test_no_binding_in_the_sheet_is_missing_from_the_chapter(title):
     missing = sorted(_popup_atoms().get(title, set()) - chapter)
     assert not missing, (
         f"the Ctrl+/ sheet's {title} group lists {missing}, which "
-        f"docs/manual/17-shortcuts.md does not"
+        f"docs/manual/18-shortcuts.md does not"
     )
 
 
@@ -184,6 +185,6 @@ def test_the_installation_chapter_puts_the_health_badge_where_it_is():
     """The same class: the badge moved to the rail's footer, and it renders
     nothing at all when every check passed -- so "green when everything
     passed" described a state the app cannot be in."""
-    text = (CHAPTER.parent / "18-installation.md").read_text(encoding="utf-8")
+    text = (CHAPTER.parent / "19-installation.md").read_text(encoding="utf-8")
     assert "top bar" not in text.lower()
     assert "green when everything passed" not in text

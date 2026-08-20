@@ -848,6 +848,11 @@ class AppState:
     # and deliberately knows nothing about what a mode keeps.
     plotter: Any = None
     packwright: Any = None
+    # Troupe's selection and its preview clock, built on first use by
+    # ``troupe_mode.ensure``. Untyped and None for the reason the others are --
+    # and the only one of them that holds no document: it is a selection over
+    # sheets a worker published, so there is nothing here to lose.
+    troupe: Any = None
     # Poser's authoring session -- which template, what the library holds --
     # built on first use by ``poser_mode.ensure``. Untyped and None for the
     # reason the four above are. Its Viewer lives on the App/Ctx, not here:
