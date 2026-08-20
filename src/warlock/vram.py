@@ -294,7 +294,10 @@ def estimate_parts(
             sheet += IP_ENCODER_GIB
         return (sheet if exclusive else sheet + TRELLIS_GIB), image
     if kind not in ("text", "image"):
-        # rig / pose / sheet are Blender, out of process and CPU-side.
+        # rig / pose / sheet / charsheet are Blender, out of process and
+        # CPU-side -- and the character sheet's pixel-art pass after it is
+        # numpy and Pillow in this process, which costs this budget nothing
+        # for the same reason the tile sheet's reduction does not.
         return 0.0, 0.0
 
     sdxl = 0.0

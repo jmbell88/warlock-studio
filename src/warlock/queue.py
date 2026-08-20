@@ -39,6 +39,7 @@ from ._q_mesh import MeshPostOps
 from ._q_rig import RigOps
 from ._q_sprite import SpriteOps
 from ._q_tilesheet import TileSheetOps
+from ._q_troupe import TroupeOps
 from .config import Config
 from .db import JobStore
 from .pipelines import pose2d, reference
@@ -625,7 +626,7 @@ def commit_fraction() -> float | None:
     return None if sysmem is None else sysmem.commit_fraction
 
 
-class Worker(GenerateOps, RigOps, SpriteOps, TileSheetOps, MeshPostOps, JobOps):
+class Worker(GenerateOps, RigOps, TroupeOps, SpriteOps, TileSheetOps, MeshPostOps, JobOps):
     def __init__(self, config: Config, store: JobStore) -> None:
         self.config = config
         self.store = store
@@ -1341,6 +1342,13 @@ class Worker(GenerateOps, RigOps, SpriteOps, TileSheetOps, MeshPostOps, JobOps):
                         # a mesh job's follow-up and the other a reference's --
                         # so their order relative to each other says nothing.
                         await self._maybe_queue_sprite_sheet(job)
+                        # Beside the other two and *after* the rig, which is
+                        # the whole ordering: the queue is serial and FIFO, so
+                        # a charsheet row minted here is claimed after the rig
+                        # row minted above it has finished. The three never
+                        # all fire -- a rig follows a mesh, a sprite sheet a
+                        # reference, a character sheet a promoted mesh.
+                        await self._maybe_queue_charsheet(job)
                         await self._record_observation(job_id)
                     else:
                         # An errored job too, and it is not a consolation

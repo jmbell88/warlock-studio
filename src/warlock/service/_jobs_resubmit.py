@@ -163,6 +163,17 @@ def rerun_job(
         # depicts -- so the strip above must not cost it, or the minted job
         # dispatches straight into "sheet_id is not a sheet id: ''".
         params["sheet_id"] = source["params"].get("sheet_id")
+    if kind == "charsheet":
+        # A *fresh* sheet id, not the source's: a rerun of a character sheet is
+        # another sheet beside the first one, never an overwrite of it -- which
+        # is what the strip above already implies, made true here rather than
+        # left to the worker's ``or new_id()`` fallback. Minted at the door so
+        # ``_discard_artifacts`` has an id to name this run's atlas by; without
+        # one a cancel leaves the staged render behind, having nothing to look
+        # for.
+        from .. import rigging as rigging_mod
+
+        params["sheet_id"] = rigging_mod.new_id()
     if kind == "sprite_synthesis":
         # Reroll only: remesh forced ``kind`` to "image" above (and a sprite
         # job has no input.png, so it is refused there anyway).

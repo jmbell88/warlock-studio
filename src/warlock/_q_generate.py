@@ -31,6 +31,7 @@ import asyncio
 import contextlib
 import functools
 import logging
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -60,8 +61,21 @@ class GenerateOps:
         """
         from .pipelines.conditioning import Conditioning
 
+        # A guide the caller drew itself, rather than a hint derived from a
+        # reference. Troupe's T-pose reference stage writes ``control.png``
+        # at the door (``spritesynth.render_tpose_guide``) and asks for it by
+        # name here, for the reason ``render_guide``'s docstring gives: the
+        # guide is already line art in canny space, and running the detector
+        # over it would return the outline of each stroke -- two lines where
+        # the guide means one, which is the "why does my character have four
+        # legs" failure. ``_sprite_synthesis`` builds its Conditioning by hand
+        # for exactly this reason; a reference job cannot, because it is the
+        # ordinary text path and must keep the candidates, the reroll and the
+        # promote gate that path already has.
+        prerendered = str(params.get("control_hint_source") or "") == "guide"
+
         ref = job_dir / "ref.png"
-        if not ref.exists():
+        if not ref.exists() and not prerendered:
             return None
 
         ip_key = params.get("ip_adapter") or None
@@ -98,15 +112,40 @@ class GenerateOps:
         if control_key is not None:
             cn = models.CONTROLNETS[control_key]
             control_image = job_dir / "control.png"
-            params["control_hint"] = await asyncio.to_thread(
-                functools.partial(
-                    control.write_hint,
-                    ref,
-                    control_image,
-                    kind=cn.preprocessor,
-                    size=spec.image_size,
+            if prerendered:
+                # Drawn here rather than copied from the door's job directory,
+                # and that is the point: a guide is a pure function of its
+                # variant, so a rerolled reference -- a *new* job id and a new,
+                # empty directory -- draws the same guide instead of failing on
+                # a file the door wrote into the row it rerolled. It is also
+                # what keeps ``params`` the whole description of the run.
+                #
+                # ``edge_fraction`` is still recorded against it, so "the guide
+                # drew nothing" stays an answerable question -- the same number
+                # ``write_hint`` would have written.
+                variant = str(params.get("guide_variant") or "")
+
+                def _draw(variant: str = variant, dest: Path = control_image) -> Any:
+                    from .pipelines import spritesynth
+
+                    guide = spritesynth.render_tpose_guide(variant)
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    tmp = dest.with_name(f".{dest.name}.tmp")
+                    guide.save(tmp, format="PNG")
+                    os.replace(tmp, dest)
+                    return control.hint_report(dest)
+
+                params["control_hint"] = await asyncio.to_thread(_draw)
+            else:
+                params["control_hint"] = await asyncio.to_thread(
+                    functools.partial(
+                        control.write_hint,
+                        ref,
+                        control_image,
+                        kind=cn.preprocessor,
+                        size=spec.image_size,
+                    )
                 )
-            )
 
         return Conditioning(
             ip_adapter=ip_key,
@@ -126,6 +165,9 @@ class GenerateOps:
             return
         if job["kind"] == "sheet":
             await self._sheet(job)
+            return
+        if job["kind"] == "charsheet":
+            await self._charsheet(job)
             return
         if job["kind"] == "pixel_sheet":
             await self._pixel_sheet(job)

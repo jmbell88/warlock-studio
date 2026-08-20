@@ -1,0 +1,117 @@
+{
+  "kind": "tpose",
+  "variant": "male",
+  "comment": "The single-cell T-pose reference guide, in the same normalised cell space the sheet guides use: x and y run 0..1 across one cell with y pointing down. It is drawn by spritesynth.render_guide through TPOSE_GEOMETRY -- one 1024px cell, deliberately outside the GEOMETRY registry, because a T-pose reference is not a sprite sheet and tests/test_sprite_geometry_agreement.py owns the claim that GEOMETRY, SHEET_TYPES and inker's SHEET_KINDS name the same set. The arms are horizontal and the legs are straight because this guide exists to make reconstruction and the bbox-proportional fit_template predictable, not to make an attractive illustration: limb separation and a wide, unambiguous silhouette are what TRELLIS needs from a single view. Feet at y 0.92 leave the headroom a hat or a crest needs without the figure ever touching the frame. This is DATA: the pose is iterable without touching any code.",
+  "head_point": "head",
+  "head_radius": 0.055,
+  "segments": [
+    [
+      "head",
+      "neck"
+    ],
+    [
+      "neck",
+      "hip"
+    ],
+    [
+      "neck",
+      "shoulder.L"
+    ],
+    [
+      "shoulder.L",
+      "elbow.L"
+    ],
+    [
+      "elbow.L",
+      "hand.L"
+    ],
+    [
+      "neck",
+      "shoulder.R"
+    ],
+    [
+      "shoulder.R",
+      "elbow.R"
+    ],
+    [
+      "elbow.R",
+      "hand.R"
+    ],
+    [
+      "hip",
+      "knee.L"
+    ],
+    [
+      "knee.L",
+      "foot.L"
+    ],
+    [
+      "hip",
+      "knee.R"
+    ],
+    [
+      "knee.R",
+      "foot.R"
+    ]
+  ],
+  "poses": [
+    {
+      "name": "front",
+      "frame": 0,
+      "points": {
+        "head": [
+          0.5,
+          0.13
+        ],
+        "neck": [
+          0.5,
+          0.22
+        ],
+        "shoulder.L": [
+          0.4,
+          0.255
+        ],
+        "shoulder.R": [
+          0.6,
+          0.255
+        ],
+        "elbow.L": [
+          0.27,
+          0.255
+        ],
+        "elbow.R": [
+          0.73,
+          0.255
+        ],
+        "hand.L": [
+          0.14,
+          0.255
+        ],
+        "hand.R": [
+          0.86,
+          0.255
+        ],
+        "hip": [
+          0.5,
+          0.55
+        ],
+        "knee.L": [
+          0.445,
+          0.735
+        ],
+        "knee.R": [
+          0.555,
+          0.735
+        ],
+        "foot.L": [
+          0.44,
+          0.92
+        ],
+        "foot.R": [
+          0.56,
+          0.92
+        ]
+      }
+    }
+  ]
+}

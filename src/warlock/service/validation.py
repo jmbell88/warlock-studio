@@ -119,6 +119,10 @@ DERIVED_PARAMS = (
     # a rerun inheriting it would claim remeshes it never made.
     "mesh_attempts",
     "control_hint",
+    # What the character sheet's pixel-art pass measured about *this* atlas:
+    # orphans cleaned, colours used, which palette it chose. A rerun wearing it
+    # would claim a colour count for pixels it has not rendered yet.
+    "pixel_report",
     "recipe",
     # What the tile-sheet worker recorded about the sheet it painted -- the
     # finished pixel size, the palette it quantized to, the base and LoRA it
@@ -180,6 +184,15 @@ CONDITIONING_PARAMS = (
     "control",
     "control_scale",
     "control_end",
+    # Troupe's T-pose guide: which figure was drawn into control.png, and the
+    # fact that it was drawn rather than derived. Conditioning by definition,
+    # and here for the same reason as the five above -- a promotion and a
+    # remesh are image jobs where SDXL never runs, so carrying these would
+    # describe a run that cannot happen. The ``troupe`` block itself is *not*
+    # here: it is the request for the sheet, and the promoted job is exactly
+    # the one that has to honour it.
+    "control_hint_source",
+    "guide_variant",
 )
 
 

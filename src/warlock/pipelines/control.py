@@ -136,3 +136,25 @@ def write_hint(
         "size": size,
         "edge_fraction": edge_fraction(out),
     }
+
+
+def hint_report(path: Path) -> dict[str, Any]:
+    """The provenance block for a hint some other code already drew.
+
+    Same shape :func:`write_hint` returns, so a job's ``control_hint`` means
+    one thing whoever produced the image, and with ``edge_fraction`` measured
+    over the file that will actually condition the generation -- which is the
+    only reading that answers "did my guide draw anything".
+
+    ``kind`` says ``"guide"`` rather than a preprocessor name because no
+    preprocessor ran: the caller handed the ControlNet line art directly.
+    """
+    from PIL import Image
+
+    with Image.open(path) as im:
+        im.load()
+        return {
+            "kind": "guide",
+            "size": max(im.size),
+            "edge_fraction": edge_fraction(im),
+        }

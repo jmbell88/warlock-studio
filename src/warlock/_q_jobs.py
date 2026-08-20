@@ -108,6 +108,12 @@ class JobOps:
             "template": params.get("rig_template") or self.config.rig_template,
             "auto": True,
         }
+        if params.get("rig_joints"):
+            # Only where the job asked for it, so an ordinary auto-rig is the
+            # byte-identical rig it always was. Troupe asks: its reference is a
+            # constrained T-pose, and measuring joints off the vertex cloud is
+            # what stops the A-pose template mis-fitting one.
+            rig_params["joints"] = params["rig_joints"]
         try:
             rig_id = await asyncio.to_thread(
                 self.store.create, "rig", job["prompt"], rig_params, None
@@ -197,6 +203,71 @@ class JobOps:
             return
         log.info("queued follow-up sprite sheet %s for job %s", sheet_id, job["id"])
 
+    async def _maybe_queue_charsheet(self: Worker, job: dict[str, Any]) -> None:
+        """Honour a Troupe request, once the character's mesh exists.
+
+        ``_maybe_queue_rig``'s shape and its reasons, one link further down the
+        chain. The block rides on the *reference* job and survives the promote
+        gate (``promote_to_model`` copies everything that is not derived or
+        conditioning), so this fires on the model-stage job the gate produced
+        -- which is the job that has a ``model.glb`` for the sheet to depict.
+
+        **Queued behind the rig, not instead of it.** ``_maybe_queue_rig`` runs
+        immediately before this one on the same finished job, and the queue is
+        serial and FIFO, so the rig row is claimed and finished before the
+        charsheet row is claimed. That ordering is the whole reason this method
+        does not rig anything itself: a character sheet needs a rig, the app
+        already has a rig job with its own progress and its own cancel, and
+        chaining a second rigger inside here would be a second implementation
+        of the thing that failed.
+
+        A missing rig is still refused in ``_charsheet`` rather than assumed:
+        the user can cancel the rig row on its own, which is exactly what the
+        two-row shape is for.
+        """
+        params = job["params"]
+        block = params.get("troupe")
+        if not block or job["kind"] == "charsheet" or job["stage"] != "model":
+            return
+        if not (self.config.job_dir(job["id"]) / "model.glb").exists():
+            return
+        if not params.get("rig"):
+            # The door sets it, so this is a row whose rig flag was edited
+            # away between the reference and the promotion. Saying so beats
+            # queueing a sheet that will refuse an hour later.
+            log.warning(
+                "job %s asks for a character sheet but not a rig; skipping the sheet",
+                job["id"],
+            )
+            return
+        sheet_params = {
+            "source_job": job["id"],
+            # Minted here because the door that normally mints it is not on
+            # this path -- ``_maybe_queue_sprite_sheet``'s draft id, exactly.
+            # ``_discard_artifacts`` names this job's atlas by it, so a cancel
+            # deletes its own sheet and no earlier one of the same character.
+            "sheet_id": rigging.new_id(),
+            "template": params.get("rig_template") or self.config.rig_template,
+            "logical_size": block.get("logical_size"),
+            "colors": block.get("colors"),
+            "outline": block.get("outline"),
+            "reduce_mode": block.get("reduce_mode"),
+            "dither": bool(block.get("dither")),
+            "palette": block.get("palette") or "",
+            "name": "",
+        }
+        try:
+            sheet_id = await asyncio.to_thread(
+                self.store.create, "charsheet", job["prompt"], sheet_params, None
+            )
+        except Exception:
+            # The mesh is finished and on disk. A failure to queue the optional
+            # follow-up must not retroactively fail the job that produced it --
+            # the rig's rule, verbatim.
+            log.exception("could not queue follow-up character sheet for job %s", job["id"])
+            return
+        log.info("queued follow-up character sheet %s for job %s", sheet_id, job["id"])
+
     def _discard_artifacts(self: Worker, job: dict[str, Any]) -> None:
         """Remove what a cancelled job half-wrote -- and only that.
 
@@ -207,7 +278,7 @@ class JobOps:
         """
         params = job["params"]
         if job["kind"] in (
-            "rig", "sheet", "pixel_sheet", "retexture", "sprite_synthesis"
+            "rig", "sheet", "charsheet", "pixel_sheet", "retexture", "sprite_synthesis"
         ):
             # Both write into the *source* job's directory, not their own --
             # see _rig and _sheet. Without a source_job there is nothing they
@@ -268,6 +339,15 @@ class JobOps:
                         rigging.sheet_path(job_dir, sheet_id),
                         rigging.sheet_png_path(job_dir, sheet_id),
                     ]
+                    if job["kind"] == "charsheet":
+                        # The un-quantised render the pixel-art pass reads
+                        # between the pack and the publish. A cancel lands
+                        # between them often -- it is the longest gap in the
+                        # job -- and it is this run's leftover by construction,
+                        # named off the sheet id it minted at the door.
+                        png = rigging.sheet_png_path(job_dir, sheet_id)
+                        paths.append(png.with_name(f".{png.name}.render"))
+                        paths.append(png.with_name(f".{png.name}.tmp"))
         elif job["kind"] == "tile_sheet":
             # This job's own directory, unlike the five above -- a tile sheet is
             # not a derivation of anything on disk, and ``input.png`` here *is*

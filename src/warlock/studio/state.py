@@ -473,6 +473,15 @@ def card_kind(job: dict[str, Any]) -> str:
     """
     if job.get("kind") in ("rig", "sheet"):
         return job["kind"]
+    if job.get("kind") == "charsheet":
+        # Filed under "sheet" with the pose sheets rather than given a kind of
+        # its own: what the filter is for is "show me the sprite sheets this
+        # mesh has", and a character sheet is one -- it lands in the same
+        # ``sheets/`` directory, opens in the same viewer and exports through
+        # the same writers. The thing that makes it a Troupe sheet is the
+        # frame table it was laid out on, which is a property of the artifact
+        # and not of the row.
+        return "sheet"
     if job.get("kind") == "sprite_synthesis":
         # A kind of its own rather than the "model" every other follow-up job
         # falls through to: a sprite draft is 2D and its next step is Inker, so

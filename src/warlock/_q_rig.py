@@ -124,7 +124,17 @@ class RigOps:
             )
 
         spec = rigging.rig_spec(
-            source_dir, template, params.get("bones"), template_bones=landmarks, fit=fit
+            source_dir,
+            template,
+            params.get("bones"),
+            template_bones=landmarks,
+            fit=fit,
+            # Where the job asked for it -- Troupe does, because its reference
+            # is a constrained T-pose and the shipped humanoid template is an
+            # A-pose, which fits a T-pose mesh badly enough to skin the arms to
+            # the chest. ``rig_spec`` documents where this sits in the order of
+            # preference: below a user correction, above the template.
+            joints=params.get("joints") or None,
         )
         try:
             result = await asyncio.to_thread(

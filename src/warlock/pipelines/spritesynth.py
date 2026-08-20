@@ -189,6 +189,61 @@ def geometry(sheet_type: str) -> SheetGeometry:
         ) from None
 
 
+# --- the T-pose reference guide ---------------------------------------------
+#
+# Troupe's reference stage wants an orthographic T-pose character reference
+# rather than a dynamic illustration, because both the reconstruction and the
+# bbox-proportional ``rigging.fit_template`` are far more reliable against one:
+# limb separation and silhouette are what a single-view reconstruction has to
+# get right, and a folded arm is the failure it cannot recover from.
+#
+# It reuses this module's guide machinery -- ``_parse_template`` for the
+# validation and ``render_guide`` for the drawing -- against a one-cell grid,
+# and that grid is deliberately **not** in ``GEOMETRY``:
+# ``tests/test_sprite_geometry_agreement.py`` owns the claim that ``GEOMETRY``,
+# ``SHEET_TYPES`` and ``inker.animation.SHEET_KINDS`` name the same set of
+# sprite sheet kinds, and a T-pose reference is not a sprite sheet. Registering
+# it there to save a name would make that test say something weaker.
+
+_TPOSE_TABLE = (("front", 0, 0, 0),)
+
+#: One full 1024px SDXL frame. ``kind="tpose"``, which is what the two template
+#: files declare and what ``_parse_template`` checks them against.
+TPOSE_GEOMETRY = _build("tpose", _TPOSE_TABLE)
+
+#: Male and female get their own guides, per the program spec: the proportions
+#: differ enough (shoulder width, arm length, stance) that one compromise
+#: figure conditions both badly.
+TPOSE_VARIANTS: tuple[str, ...] = ("male", "female")
+
+
+def load_tpose_guide(variant: str) -> GuideTemplate:
+    """Read and validate ``templates/sprite_guides/tpose_<variant>.json``.
+
+    Raises on an unknown variant rather than defaulting, for the reason
+    :func:`geometry` gives: silently conditioning on the other sex's guide is a
+    wrong character published under the caller's name.
+    """
+    if variant not in TPOSE_VARIANTS:
+        raise ValueError(
+            f"unknown T-pose variant {variant!r}; "
+            f"this module has {', '.join(TPOSE_VARIANTS)}"
+        )
+    raw = json.loads((TEMPLATE_DIR / f"tpose_{variant}.json").read_text(encoding="utf-8"))
+    return _parse_template(raw, TPOSE_GEOMETRY)
+
+
+def render_tpose_guide(variant: str) -> PILImage:
+    """The 1024px white-on-black T-pose stick figure for ``variant``.
+
+    Handed to the ControlNet as the hint *directly*, exactly as
+    :func:`render_guide`'s docstring argues: it is already line art in canny
+    space, and running the detector over it would return two lines where the
+    guide means one.
+    """
+    return render_guide(TPOSE_GEOMETRY, load_tpose_guide(variant))
+
+
 #: ``service.validation.MAX_SEED``, restated rather than imported: a pipeline
 #: may not import the service layer. ``tests/test_sprite_followup.py`` pins the
 #: two together, so the copy cannot drift.
