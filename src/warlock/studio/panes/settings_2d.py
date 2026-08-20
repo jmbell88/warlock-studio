@@ -894,6 +894,17 @@ def _model(ctx: Any, form: dict[str, Any]) -> None:
         widgets.hint_text(hint)
 
 
+def lora_default_weight(key: str) -> float:
+    """The measured strength for one style LoRA, or the flat default.
+
+    ``ctx.style_loras`` is pinned to 2-tuples by the smoke tests and
+    ``guidance.catalog()`` does not carry the weight, so the pane reads the
+    registry it already imports.
+    """
+    spec = modelslib.STYLE_LORAS.get(key or "")
+    return spec.default_weight if spec is not None else modelslib.DEFAULT_LORA_WEIGHT
+
+
 def _lora(ctx: Any, form: dict[str, Any]) -> None:
     no_lora = lora_note(ctx, form)
     if no_lora is not None:
@@ -909,6 +920,12 @@ def _lora(ctx: Any, form: dict[str, Any]) -> None:
     widgets.field_error(ctx.state, "style_lora")
     if form["style_lora"] != was_lora:
         ctx.state.clear_field_error("style_lora")
+        # Each adapter carries its own measured strength -- pixel-art-klein
+        # restores an rslora scale of 16, so the flat DEFAULT_LORA_WEIGHT is
+        # ~14x its usable band and returns black frames. guidance.normalize
+        # only applies default_weight when the caller omits the field, and
+        # this form always sends a number, so the seed has to happen here.
+        form["lora_weight"] = lora_default_weight(form["style_lora"])
     hint = _findings_hint(ctx, "style_lora", form["style_lora"])
     if hint is not None:
         widgets.hint_text(hint)
@@ -918,6 +935,12 @@ def _lora(ctx: Any, form: dict[str, Any]) -> None:
         changed, value = controls.slider_float("Strength", form["lora_weight"], 0.0, 1.5)
         if changed:
             form["lora_weight"] = value
+        # The tuned value, so a user who has moved the slider can get back to
+        # it. Shown always rather than only when moved: the bands differ by
+        # more than an order of magnitude between adapters.
+        widgets.muted_wrapped(
+            f"tuned default: {lora_default_weight(form['style_lora']):g}"
+        )
         # The only shipped sweep is lora-weight-v1, so this is the one
         # slider in the form with a findings bucket behind it -- the
         # feedback loop the sweep exists for. findings.hint absorbs the
