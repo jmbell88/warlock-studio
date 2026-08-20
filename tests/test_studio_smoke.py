@@ -947,6 +947,45 @@ def test_the_manual_builds_embedded(app_ctx, imgui_ctx):
     _frame(imgui_ctx, lambda: render.draw_body(app_ctx))
 
 
+def test_a_chapter_with_a_screenshot_uploads_and_draws_it(app_ctx, imgui_ctx):
+    """The manual can show a control now, not only describe it.
+
+    Through a real GL frame because that is where the parts meet: the parser
+    makes an ``Image`` block, the renderer resolves it against
+    ``loader.manual_dir()`` and asks the thumbnail cache for it at a *screenshot*
+    cap -- and the cap being 256 px was the whole reason images could not be
+    added before, since a screenshot reduced to 256 px is unreadable.
+    """
+    from warlock.studio.manual import loader, parser, render
+
+    key = next(c.key for c in loader.chapters() if c.key.startswith("02-"))
+    blocks = parser.parse(loader.load(key))
+    images = [b for b in blocks if isinstance(b, parser.Image)]
+    assert images, f"{key} is the chapter this test is about and has no image"
+    assert (loader.manual_dir() / images[0].path).is_file()
+
+    app_ctx.state.manual.open_at(key, None)
+    _frame(imgui_ctx, lambda: render.draw_body(app_ctx))
+
+    texture = app_ctx.textures.get(
+        f"manual:{images[0].path}",
+        loader.manual_dir() / images[0].path,
+        max_side=render.IMAGE_MAX_SIDE,
+    )
+    assert texture is not None
+    assert max(texture.width, texture.height) > 256
+
+
+def test_a_missing_screenshot_degrades_to_its_alt_text(app_ctx, imgui_ctx):
+    """Which is why alt text is required rather than optional: the chapters
+    ship and the captures are generated, so "not there yet" is an ordinary
+    state and must read as a caption rather than as damage."""
+    from warlock.studio.manual import parser, render
+
+    block = parser.Image("The Inker toolbar", "img/not-generated-yet.png")
+    _frame(imgui_ctx, lambda: render._draw_image(app_ctx, block))
+
+
 def test_the_toc_tree_draws_its_sections_and_follows_the_scroll(app_ctx, imgui_ctx):
     """The TOC's second level, through a real frame.
 

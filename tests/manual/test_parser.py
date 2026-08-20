@@ -73,7 +73,8 @@ def test_table():
 @pytest.mark.parametrize(
     "source, fragment",
     [
-        ("![alt](x.png)\n", "subset"),
+        ("![](x.png)\n", "alt text"),
+        ("text ![alt](x.png) more\n", "line of its own"),
         ("a <div> b\n", "subset"),
         ("> quoted\n", "blockquote"),
         ("unclosed **bold\n", "unclosed"),
@@ -147,3 +148,26 @@ def test_every_block_type_contributes_its_text():
     ]
     for block in cases:
         assert "findable" in loader.block_text(block), type(block).__name__
+
+
+# --- images -------------------------------------------------------------------
+
+
+def test_an_image_on_its_own_line_is_a_block():
+    """The manual could describe a control it could not show you, which for a
+    chapter about a toolbar is the wrong half to have."""
+    blocks = parser.parse("![The Inker toolbar](img/08-toolbar.png)\n")
+    assert blocks == [parser.Image("The Inker toolbar", "img/08-toolbar.png")]
+
+
+def test_an_image_breaks_the_paragraph_around_it():
+    blocks = parser.parse("before\n![shot](a.png)\nafter\n")
+    kinds = [type(b).__name__ for b in blocks]
+    assert kinds == ["Paragraph", "Image", "Paragraph"]
+
+
+def test_html_is_still_outside_the_subset():
+    """Only images left the forbidden set."""
+    with pytest.raises(ManualSyntaxError) as err:
+        parser.parse("a <div> b\n")
+    assert "HTML" in str(err.value)

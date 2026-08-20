@@ -53,12 +53,27 @@ class ListItem:
 
 
 @dataclass(frozen=True)
+class Image:
+    """``![alt](path)`` on a line of its own.
+
+    ``path`` is relative to the chapter, and resolving it is the renderer's
+    job -- the parser is a pure function of text and has no filesystem. Alt
+    text is required rather than optional: it is what the block degrades to
+    when the file is missing, which is the state a fresh checkout of the
+    docs is in until the screenshots are generated.
+    """
+
+    alt: str
+    path: str
+
+
+@dataclass(frozen=True)
 class Table:
     header: tuple[tuple[Span, ...], ...]
     rows: tuple[tuple[tuple[Span, ...], ...], ...]
 
 
-Block = Heading | Paragraph | CodeBlock | ListItem | Table
+Block = Heading | Paragraph | CodeBlock | Image | ListItem | Table
 
 
 def slugify(text: str) -> str:
@@ -118,7 +133,13 @@ _HEADING = re.compile(r"^(#{1,4}) +(.+)$")
 _ULIST = re.compile(r"^( *)- +(.*)$")
 _OLIST = re.compile(r"^( *)(\d+\.) +(.*)$")
 _SEP = re.compile(r"^\|(?: *:?-{3,}:? *\|)+ *$")
-_FORBIDDEN = re.compile(r"!\[|<[A-Za-z!/]")
+# Inline HTML only. Images used to be here too -- the manual could describe
+# a control it could not show you, which for a chapter about a *toolbar* is
+# the wrong half to have. They are a block of their own now, and still only
+# as a whole line: an image inside a sentence is a layout problem the manual
+# renderer has no answer for.
+_FORBIDDEN = re.compile(r"<[A-Za-z!/]")
+_IMAGE = re.compile(r"^!\[([^\]]*)\]\(([^)]+)\)$")
 
 
 def parse(text: str) -> list[Block]:
@@ -149,10 +170,19 @@ def parse(text: str) -> list[Block]:
             blocks.append(CodeBlock("\n".join(body), fence.group(1)))
             i += 1
             continue
+        image = _IMAGE.match(line.strip())
+        if image:
+            flush()
+            alt, path = image.group(1).strip(), image.group(2).strip()
+            if not alt:
+                raise ManualSyntaxError(no, "an image needs alt text")
+            blocks.append(Image(alt, path))
+            i += 1
+            continue
+        if "![" in line:
+            raise ManualSyntaxError(no, "an image needs a line of its own")
         if _FORBIDDEN.search(line):
-            raise ManualSyntaxError(
-                no, "images and HTML are outside the manual subset"
-            )
+            raise ManualSyntaxError(no, "HTML is outside the manual subset")
         if line.lstrip().startswith(">"):
             raise ManualSyntaxError(no, "blockquotes are outside the manual subset")
         if not line.strip():

@@ -60,7 +60,14 @@ class ThumbnailCache:
         for texture in retired:
             self._release_one(texture)
 
-    def get(self, job_id: str, path: Path, *, nearest: bool = False) -> Any | None:
+    def get(
+        self,
+        job_id: str,
+        path: Path,
+        *,
+        nearest: bool = False,
+        max_side: int = MAX_SIDE,
+    ) -> Any | None:
         """-> a texture for the job's thumb.png, or None if there isn't one.
 
         Decoding happens on the frame thread on purpose: it is one small PNG,
@@ -73,6 +80,12 @@ class ThumbnailCache:
         held only by convention that a given key string was requested with one
         filter, and the failure -- a blurry pixel preview, or a crisp thumbnail
         somewhere else -- is silent and depends on which was decoded first.
+
+        ``max_side`` is in the key for exactly that reason. This class was a
+        *thumbnail* cache and 256 px was hardcoded; the manual's screenshots
+        come through it too and a screenshot reduced to 256 px is unreadable,
+        so the cap is a parameter -- and a cap that was not part of the key
+        would hand back whichever size happened to be decoded first.
         """
         stat_key = str(path)
         if stat_key in self._stats:
@@ -85,7 +98,7 @@ class ThumbnailCache:
             self._stats[stat_key] = mtime
         if mtime is None:
             return None
-        key = (job_id, mtime, nearest)
+        key = (job_id, mtime, nearest, max_side)
         entry = self._entries.get(key)
         if entry is not None:
             self._entries.move_to_end(key)
@@ -93,7 +106,7 @@ class ThumbnailCache:
             return entry
         if key in self._missing:
             return None
-        texture = self._load(path, nearest)
+        texture = self._load(path, nearest, max_side)
         if texture is None:
             self._missing.add(key)
             self._missing_by_key.setdefault(job_id, set()).add(key)
@@ -177,13 +190,15 @@ class ThumbnailCache:
             if not missing:
                 del self._missing_by_key[job_id]
 
-    def _load(self, path: Path, nearest: bool = False) -> Any | None:
+    def _load(
+        self, path: Path, nearest: bool = False, max_side: int = MAX_SIDE
+    ) -> Any | None:
         from PIL import Image
 
         try:
             with Image.open(path) as im:
                 im = im.convert("RGBA")
-                im.thumbnail((MAX_SIDE, MAX_SIDE))
+                im.thumbnail((max_side, max_side))
                 texture = self.ctx.texture(im.size, 4, im.tobytes())
         except Exception:
             log.debug("could not decode %s", path, exc_info=True)

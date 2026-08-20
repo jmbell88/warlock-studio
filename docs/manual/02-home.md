@@ -16,6 +16,8 @@ itself about where it opens.
 The three answers are one column, weighted by how often each is the reason you are looking: a card
 you dismiss once per release, one quiet line, and then the whole rest of the screen.
 
+![Home: the rail, the What's new card, New... and an empty Resume](img/02-home.png)
+
 ## What's new
 
 A card at the top names this build and gives you the first three lines of its release notes, with a

@@ -63,6 +63,21 @@ def test_every_chapter_opens_with_a_single_h1():
         assert isinstance(blocks[0], parser.Heading), f"{key}: must open with its H1"
 
 
+def test_every_image_resolves():
+    """The link test's sibling. A screenshot is generated rather than written,
+    so the failure mode is a chapter referring to a capture nobody ran --
+    which degrades to its alt text on screen and is therefore silent."""
+    root = loader.manual_dir()
+    for key, blocks in _all_blocks().items():
+        for block in blocks:
+            if not isinstance(block, parser.Image):
+                continue
+            assert (root / block.path).is_file(), (
+                f"{key}: no image at {block.path}"
+            )
+            assert block.alt.strip(), f"{key}: {block.path} has no alt text"
+
+
 def test_cross_links_resolve():
     anchors = {
         key: {b.anchor for b in blocks if isinstance(b, parser.Heading)}

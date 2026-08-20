@@ -3,6 +3,8 @@
 A reference is the picture the mesh will be reconstructed from. Everything in this chapter lives in
 the **2D reference** mode's settings pane, in the left sidebar.
 
+![The Reference stage: the form, the preview, the library](img/03-reference.png)
+
 ## The prompt
 
 The large text box under **Prompt** is where you describe the object. Write the subject and nothing

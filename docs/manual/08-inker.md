@@ -11,6 +11,8 @@ the canvas. Only quitting the app and closing a tab can lose pixels, and both as
 The layout follows the rest of the app: tools and their options on the left, the canvas in the
 middle, layers and the pipeline panel on the right. Several documents stay open at once, as tabs.
 
+![Inker: tools left, canvas centre, layers and the pipeline right](img/08-inker.png)
+
 ## Starting a canvas
 
 **New**, **Open**, **Save**, **Save as** and **Export PNG** are in the **file** section at the top of

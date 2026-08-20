@@ -448,6 +448,8 @@ def _draw_block(ctx: Any, ms: Any, block: parser.Block, index: int, anchor: str 
             f"##code-{index}", block.text, (_measure(), height),
             imgui.InputTextFlags_.read_only.value,
         )
+    elif isinstance(block, parser.Image):
+        _draw_image(ctx, block)
     elif isinstance(block, parser.ListItem):
         imgui.dummy((sp(14) * (block.depth + 1), 0))
         imgui.same_line()
@@ -468,6 +470,42 @@ def _draw_block(ctx: Any, ms: Any, block: parser.Block, index: int, anchor: str 
                     imgui.table_next_column()
                     _draw_spans(ctx, ms, cell)
             imgui.end_table()
+
+
+# What a screenshot is decoded to. Bigger than a thumbnail by an order of
+# magnitude and still a cap: a 4K capture uploaded whole is 32 MB of VRAM per
+# chapter, and the column it is drawn into is ~700 dp wide.
+IMAGE_MAX_SIDE = 1600
+
+
+def _draw_image(ctx: Any, block: parser.Image) -> None:
+    """A screenshot, scaled to the prose column, or its alt text.
+
+    Degrading to the alt text rather than to a broken-image box is the whole
+    reason alt text is required: the repository ships the chapters and the
+    screenshots are generated, so "not there yet" is an ordinary state and has
+    to read as a caption rather than as damage.
+    """
+    path = loader.manual_dir() / block.path
+    cache = getattr(ctx, "textures", None)
+    texture = None
+    if cache is not None:
+        texture = cache.get(
+            f"manual:{block.path}", path, max_side=IMAGE_MAX_SIDE
+        )
+    if texture is None:
+        widgets.muted_wrapped(block.alt)
+        imgui.dummy((0, sp(4)))
+        return
+    width = min(float(texture.width), _measure())
+    height = width * float(texture.height) / float(texture.width)
+    imgui.image(widgets.texture_ref(texture), (width, height))
+    # The alt text as a caption under it. Two readers, one line: it names the
+    # picture for anyone the picture does not reach, and it says what to look
+    # at for everyone else.
+    with fonts.small(imgui):
+        widgets.muted_wrapped(block.alt)
+    imgui.dummy((0, sp(6)))
 
 
 def _draw_spans(ctx: Any, ms: Any, spans: tuple[parser.Span, ...]) -> None:
