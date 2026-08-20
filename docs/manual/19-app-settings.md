@@ -51,6 +51,13 @@ the same information the startup diagnostics report, in a place you can look at 
 log. Tick several rows and *Download selected* fetches them together; four of the image models share
 one set of SDXL 1.0 weights, and picking all four downloads them once.
 
+Each row also names the repository its weights come from, and a style LoRA names the trigger words
+it was trained on — the words the app prepends to your prompt whenever that adapter is selected. A
+running download shows its rate and an estimate of the time left, and carries its own **Cancel**
+beside the bar. Cancelling installs nothing: the fetch stages beside the destination and only moves
+into place once it has finished, and the staging a cancelled fetch leaves is swept the next time
+this pane is opened, which says so when it reclaims anything.
+
 Beside each image model, once the app has measured your card, sits a fit note: nothing at all when
 the model runs comfortably, **tight fit** when it will load but cannot stay resident beside the
 reconstruction engine — so every 3D job pays a stop and restart for it — and **won't fit this GPU**
@@ -82,11 +89,14 @@ selection is refused if it will not fit. Everything is still equally installable
 
 ## Storage
 
-Two figures and two buttons. The figures are how many job directories exist and what they occupy,
-and what is sitting in the [trash](13-library-and-jobs.md#the-trash) waiting to be emptied. Both are
-measured on a background thread and the last answer is drawn until a new one arrives, so neither
-walks the disk while you are looking at something else. They are the same measurements the library
-reports, not a second opinion about the same directories.
+Three figures and two buttons. The figures are how many job directories exist and what they occupy,
+what is sitting in the [trash](13-library-and-jobs.md#the-trash) waiting to be emptied, and how much
+disk the downloaded model weights are actually using. All three are measured on a background thread
+and the last answer is drawn until a new one arrives, so none of them walks the disk while you are
+looking at something else. The first two are the same measurements the library reports, not a second
+opinion about the same directories; the third is a real measurement of the model store rather than
+the sizes the Models list declares, which are approximations kept for the progress bar and the
+free-disk check.
 
 **Prune...** deletes everything but the newest N assets from disk, after a confirm that carries the
 count — N is yours to choose and it starts at twenty every time it is asked. Running jobs are never

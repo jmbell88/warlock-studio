@@ -152,6 +152,228 @@ def _ui_scale(settings: Any) -> float:
     return min(max(value, lo), hi)
 
 
+def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
+    """Every binding the Ctrl+/ sheet lists, as data.
+
+    Module-level and imgui-free so ``tests/manual/test_shortcuts.py`` can
+    compare it against chapter 16 -- which is the gate that did not exist
+    while the popup drifted into saying "F1 -- Switch to the Manual" and
+    "thirteen modes" against a tree with ten and no such mode.
+    Every group's rows are gathered before anything is drawn because the
+    query decides which *groups* survive: a heading over nothing is a section
+    that looks broken.
+    """
+    sections: list[tuple[str, list[tuple[str, str]]]] = []
+
+    def table(title: str, rows: list[tuple[str, str]]) -> None:
+        sections.append((title, rows))
+
+    table(
+        "Everywhere",
+        [
+            # No per-mode digit: ten modes against ten digits reads as a
+            # promise of a stable mapping that the next mode breaks, and
+            # the palette is the keyboard route to all of them.
+            ("Ctrl+K", "Command palette -- switch mode, or open an asset"),
+            ("Ctrl+/", "This list"),
+            ("F1", "Open the manual over whatever is on screen"),
+            ("Esc", "Close the topmost thing: the manual, then the profile "
+                    "sheet, then a mode you passed through"),
+            ("F10", "Toggle the frame-rate readout"),
+        ],
+    )
+    # One heading, because there is one mode (the UI redesign, wave 5). The
+    # rows that used to be split "2D" from "3D" are the same keys either
+    # way -- what changed is which stage of Create you are standing on,
+    # and the stage rail is a click rather than a shortcut, so there is
+    # nothing here to key.
+    table(
+        "Create",
+        [
+            ("Ctrl+Enter", "Run the stage: Generate, or Make 3D"),
+            ("Tab / Shift+Tab", "Move between the form's controls"),
+            ("Enter", "Press the stage's button when it is the one focused"),
+            ("Up / Down", "Previous / next asset in the library"),
+            ("Right-click a card", "Its actions menu"),
+            ("F", "Frame the model"),
+            ("W", "Toggle wireframe"),
+            ("S", "Toggle turntable"),
+            ("Esc", "Exit comparison / pose edit"),
+        ],
+    )
+    table(
+        "Review",
+        [
+            ("1 - 5", "Grade the mesh +1 to +5 (+3 is usable)"),
+            ("R then 1 - 5", "Grade it -1 to -5"),
+            ("0", "Grade it 0 - no opinion either way"),
+            ("Ctrl + 1-5", "Toggle a good tag for the next grade"),
+            ("Shift + 1-5", "Toggle a bad tag for the next grade"),
+            ("S", "Skip to the next unverdicted unit"),
+            ("Left / Right", "Previous / next unit"),
+            ("Esc", "Clear the pending sign and tags"),
+        ],
+    )
+    table(
+        "Review - a judging pass",
+        [
+            ("A", "Accept - files +3"),
+            ("R", "Reject - files -3, rather than arming a negative"),
+            ("S", "Skip, staying in the pass"),
+            ("Esc", "End the pass and show its report"),
+        ],
+    )
+    from . import inker_state
+    from .clay_mode import TOOL_KEYS as CLAY_KEYS
+    from .inker_mode import ALT_TOOL_CHORDS
+
+    table(
+        "Clay",
+        [
+            (
+                " / ".join(k.upper() for k in CLAY_KEYS),
+                # Capitalised here rather than in ``TOOL_KEYS``: those
+                # values are the tool *ids* ``state.tool`` is compared
+                # against and the saved documents carry, and this is the
+                # one place they are read as English. Joined lowercase
+                # they were the only row in the popup that did not start
+                # with a capital, one line above "Vertex / edge / face".
+                " / ".join(CLAY_KEYS.values()).capitalize(),
+            ),
+            ("1 / 2 / 3 / 4", "Vertex / edge / face / object mode"),
+            ("E", "Extrude (with faces selected)"),
+            ("F", "Frame the selection"),
+            ("Delete", "Delete -- faces in an element mode, objects otherwise"),
+            ("Ctrl+D", "Duplicate (object mode)"),
+            ("Ctrl+J", "Merge the selected objects (object mode)"),
+            ("Ctrl+A", "Select all, in the current mode"),
+            ("Ctrl+Shift+I", "Invert the selection"),
+            ("Right-click", "Context menu"),
+            ("Alt+drag", "Orbit, in any mode"),
+            ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
+            ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
+            # "Ctrl+N / O / W", matching Inker's row below rather than
+            # stopping at O: Clay closes a document with Ctrl+W like every
+            # other document mode, and the popup simply never said so
+            # (UX-13). The axis views were missing from both this popup and
+            # the manual's "full list", which made six of them
+            # undiscoverable.
+            ("Ctrl+N / O / W", "New / open / close"),
+            ("Ctrl+E", "Export to the library"),
+            ("Ctrl+Tab", "Next document"),
+            ("Ctrl+1 / 3 / 7", "Look along front / right / top"),
+            ("Ctrl+Shift+1 / 3 / 7", "The opposite view: back / left / bottom"),
+            ("Ctrl+5", "Orthographic / perspective"),
+        ],
+    )
+    # **The letters, named, six to a row.** This was one squashed row
+    # reading "A, B, C, D, E, ..." with the note "hover a tool for its
+    # letter" -- which is a shortcut sheet declining to be one, and the
+    # only mode's table that did. Six per row keeps the two columns
+    # readable, and the order is the toolbox's, so the pairs that sit
+    # together there (brush/spray, line/curve, the two lassos) sit
+    # together here.
+    tool_rows = []
+    band = list(inker_state.TOOLS)
+    for start in range(0, len(band), 6):
+        chunk = band[start : start + 6]
+        tool_rows.append(
+            (
+                " / ".join(letter for _key, _label, letter in chunk),
+                " / ".join(label for _key, label, _letter in chunk),
+            )
+        )
+    # Aseprite files these two-to-a-slot and cycles with Shift; here they
+    # are second bindings beside the plain letters, so they are listed
+    # rather than left to the tooltips.
+    alt = " / ".join(
+        f"{chord} {inker_state.tool_label(tool)}"
+        for tool, chord in ALT_TOOL_CHORDS.items()
+    )
+    table(
+        "Inker",
+        [
+            *tool_rows,
+            (alt, "The same tools on Aseprite's shifted letters"),
+            ("X", "Swap colours"),
+            ("[ / ]", "Brush size (Shift: hardness)"),
+            ("Shift+click", "Paint a line from where the last stroke ended"),
+            ("+ / -", "Zoom in / out, by whole scales"),
+            ("Ctrl+0 / Ctrl+1", "Fit / 100%"),
+            ("Space / middle drag", "Pan (wheel zooms in 5% steps)"),
+            ("Ctrl+4 / Ctrl+5", "Rotate the view a quarter turn / flip it"),
+            ("Arrows", "Nudge a pixel (Shift: eight)"),
+            ("Delete", "Delete what is selected"),
+            ("Esc", "Cancel -- a move, playback, a float, then the selection"),
+            ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
+            ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
+            ("Ctrl+E", "Save as a reference in the library"),
+            ("Ctrl+Shift+E", "Export PNG"),
+            ("Ctrl+N / O / W", "New / open / close"),
+            ("Ctrl+A / D", "Select all / deselect"),
+            ("Ctrl+Shift+D", "Reselect what was last dismissed"),
+            ("Ctrl+C / X / V", "Copy / cut / paste"),
+            ("Ctrl+Shift+V", "Paste as a layer"),
+            ("Ctrl+J / Ctrl+Shift+J", "Copy / move the selection to its own layer"),
+            ("Ctrl+Shift+I", "Invert the selection"),
+            ("Ctrl+T", "Free transform"),
+            ("Ctrl+B", "Capture the selection as an image brush"),
+            ("Ctrl+Tab", "Next tab"),
+            (", / .", "Previous / next frame (animated)"),
+            ("Enter", "Play or pause (animated)"),
+        ],
+    )
+    from .plotter_state import TOOLS as PLOTTER_TOOLS
+
+    table(
+        "Plotter",
+        [
+            (
+                " / ".join(letter for _k, _l, letter in PLOTTER_TOOLS),
+                " / ".join(label for _k, label, _letter in PLOTTER_TOOLS),
+            ),
+            ("X / Y / Z", "Flip the brush across, down; turn it (Shift turns back)"),
+            ("Shift+click", "Stamp a line from the last cell painted"),
+            ("Pick drag", "Capture a block off the map as the brush"),
+            ("Wand Ctrl+click", "Select every cell of that tile, map-wide"),
+            ("Shift / Alt", "Add to / subtract from the selection (Wand and marquee)"),
+            ("Ctrl+A / Ctrl+D", "Select all / deselect (Ctrl+Shift+A also)"),
+            ("Ctrl+C / Ctrl+X / Ctrl+V", "Copy / cut / paste as the brush"),
+            ("Ctrl+J", "Duplicate the selected object"),
+            ("Ctrl+click / Alt+click", "Insert / remove a polygon vertex"),
+            ("Delete", "Clear the selection, or remove the object"),
+            ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
+            ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
+            ("Ctrl+E", "Export to the library"),
+            ("Ctrl+Shift+E", "Export a Tiled .tmx"),
+            ("Ctrl+N / O / W", "New / open / close"),
+            ("Ctrl+G", "Toggle the grid"),
+            ("Ctrl+Tab", "Next map"),
+            ("Ctrl+0 / Ctrl+1", "Fit / 100%"),
+            ("Space / middle drag", "Pan (wheel zooms)"),
+            ("Esc", "Cancel a drag, then the object, then the selection"),
+        ],
+    )
+    table(
+        "Packwright",
+        [
+            ("R", "Repack now"),
+            ("Delete", "Remove the selected source"),
+            ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
+            ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
+            ("Ctrl+E", "Export to the library"),
+            ("Ctrl+Shift+E", "Export the atlas and its JSON"),
+            ("Ctrl+N / O / W", "New / open / close"),
+            ("Ctrl+Tab", "Next atlas"),
+            ("Ctrl+0 / Ctrl+1", "Fit / 100%"),
+            # Middle drag alone, not "Space / middle drag" as Plotter's row
+            # says: there is no space-pan in this mode to advertise.
+            ("Middle drag", "Pan (wheel zooms)"),
+        ],
+    )
+    return sections
+
+
 def filter_shortcuts(
     sections: list[tuple[str, list[tuple[str, str]]]], query: str
 ) -> list[tuple[str, list[tuple[str, str]]]]:
@@ -4420,216 +4642,9 @@ class App:
         # rows over eight groups, which is a scroll and a read rather than a
         # lookup -- and the subsequence matcher the command palette already
         # carries is the right instrument, so it is reused rather than
-        # reimplemented. Every group's rows are gathered before anything is
-        # drawn because the query decides which *groups* survive: a heading over
-        # nothing is a section that looks broken.
-        sections: list[tuple[str, list[tuple[str, str]]]] = []
-
-        def table(title: str, rows: list[tuple[str, str]]) -> None:
-            sections.append((title, rows))
-
-        table(
-            "Everywhere",
-            [
-                # No per-mode digit: thirteen modes against ten digits is either
-                # two modes with no key or a table saying which two, and the
-                # palette is the keyboard route to all of them.
-                ("Ctrl+K", "Command palette -- switch mode, or open an asset"),
-                ("Ctrl+/", "This list"),
-                ("F1", "Switch to the Manual"),
-                ("Esc", "Leave Home, the Manual or Settings"),
-                ("F10", "Toggle the frame-rate readout"),
-            ],
-        )
-        # One heading, because there is one mode (the UI redesign, wave 5). The
-        # rows that used to be split "2D" from "3D" are the same keys either
-        # way -- what changed is which stage of Create you are standing on,
-        # and the stage rail is a click rather than a shortcut, so there is
-        # nothing here to key.
-        table(
-            "Create",
-            [
-                ("Ctrl+Enter", "Run the stage: Generate, or Make 3D"),
-                ("Tab / Shift+Tab", "Move between the form's controls"),
-                ("Enter", "Press the stage's button when it is the one focused"),
-                ("Up / Down", "Previous / next asset in the library"),
-                ("Right-click a card", "Its actions menu"),
-                ("F", "Frame the model"),
-                ("W", "Toggle wireframe"),
-                ("S", "Toggle turntable"),
-                ("Esc", "Exit comparison / pose edit"),
-            ],
-        )
-        table(
-            "Review",
-            [
-                ("1 - 5", "Grade the mesh +1 to +5 (+3 is usable)"),
-                ("R then 1 - 5", "Grade it -1 to -5"),
-                ("0", "Grade it 0 - no opinion either way"),
-                ("Ctrl + 1-5", "Toggle a good tag for the next grade"),
-                ("Shift + 1-5", "Toggle a bad tag for the next grade"),
-                ("S", "Skip to the next unverdicted unit"),
-                ("Left / Right", "Previous / next unit"),
-                ("Esc", "Clear the pending sign and tags"),
-            ],
-        )
-        table(
-            "Review - a judging pass",
-            [
-                ("A", "Accept - files +3"),
-                ("R", "Reject - files -3, rather than arming a negative"),
-                ("S", "Skip, staying in the pass"),
-                ("Esc", "End the pass and show its report"),
-            ],
-        )
-        from . import inker_state
-        from .clay_mode import TOOL_KEYS as CLAY_KEYS
-        from .inker_mode import ALT_TOOL_CHORDS
-
-        table(
-            "Clay",
-            [
-                (
-                    " / ".join(k.upper() for k in CLAY_KEYS),
-                    # Capitalised here rather than in ``TOOL_KEYS``: those
-                    # values are the tool *ids* ``state.tool`` is compared
-                    # against and the saved documents carry, and this is the
-                    # one place they are read as English. Joined lowercase
-                    # they were the only row in the popup that did not start
-                    # with a capital, one line above "Vertex / edge / face".
-                    " / ".join(CLAY_KEYS.values()).capitalize(),
-                ),
-                ("1 / 2 / 3 / 4", "Vertex / edge / face / object mode"),
-                ("E", "Extrude (with faces selected)"),
-                ("F", "Frame the selection"),
-                ("Delete", "Delete -- faces in an element mode, objects otherwise"),
-                ("Ctrl+D", "Duplicate (object mode)"),
-                ("Ctrl+J", "Merge the selected objects (object mode)"),
-                ("Ctrl+A", "Select all, in the current mode"),
-                ("Ctrl+Shift+I", "Invert the selection"),
-                ("Right-click", "Context menu"),
-                ("Alt+drag", "Orbit, in any mode"),
-                ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
-                ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
-                # "Ctrl+N / O / W", matching Inker's row below rather than
-                # stopping at O: Clay closes a document with Ctrl+W like every
-                # other document mode, and the popup simply never said so
-                # (UX-13). The axis views were missing from both this popup and
-                # the manual's "full list", which made six of them
-                # undiscoverable.
-                ("Ctrl+N / O / W", "New / open / close"),
-                ("Ctrl+E", "Export to the library"),
-                ("Ctrl+Tab", "Next document"),
-                ("Ctrl+1 / 3 / 7", "Look along front / right / top"),
-                ("Ctrl+Shift+1 / 3 / 7", "The opposite view: back / left / bottom"),
-                ("Ctrl+5", "Orthographic / perspective"),
-            ],
-        )
-        # **The letters, named, six to a row.** This was one squashed row
-        # reading "A, B, C, D, E, ..." with the note "hover a tool for its
-        # letter" -- which is a shortcut sheet declining to be one, and the
-        # only mode's table that did. Six per row keeps the two columns
-        # readable, and the order is the toolbox's, so the pairs that sit
-        # together there (brush/spray, line/curve, the two lassos) sit
-        # together here.
-        tool_rows = []
-        band = list(inker_state.TOOLS)
-        for start in range(0, len(band), 6):
-            chunk = band[start : start + 6]
-            tool_rows.append(
-                (
-                    " / ".join(letter for _key, _label, letter in chunk),
-                    " / ".join(label for _key, label, _letter in chunk),
-                )
-            )
-        # Aseprite files these two-to-a-slot and cycles with Shift; here they
-        # are second bindings beside the plain letters, so they are listed
-        # rather than left to the tooltips.
-        alt = " / ".join(
-            f"{chord} {inker_state.tool_label(tool)}"
-            for tool, chord in ALT_TOOL_CHORDS.items()
-        )
-        table(
-            "Inker",
-            [
-                *tool_rows,
-                (alt, "The same tools on Aseprite's shifted letters"),
-                ("X", "Swap colours"),
-                ("[ / ]", "Brush size (Shift: hardness)"),
-                ("Shift+click", "Paint a line from where the last stroke ended"),
-                ("+ / -", "Zoom in / out, by whole scales"),
-                ("Ctrl+0 / Ctrl+1", "Fit / 100%"),
-                ("Space / middle drag", "Pan (wheel zooms in 5% steps)"),
-                ("Ctrl+4 / Ctrl+5", "Rotate the view a quarter turn / flip it"),
-                ("Arrows", "Nudge a pixel (Shift: eight)"),
-                ("Delete", "Delete what is selected"),
-                ("Esc", "Cancel -- a move, playback, a float, then the selection"),
-                ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
-                ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
-                ("Ctrl+E", "Save as a reference in the library"),
-                ("Ctrl+Shift+E", "Export PNG"),
-                ("Ctrl+N / O / W", "New / open / close"),
-                ("Ctrl+A / D", "Select all / deselect"),
-                ("Ctrl+Shift+D", "Reselect what was last dismissed"),
-                ("Ctrl+C / X / V", "Copy / cut / paste"),
-                ("Ctrl+Shift+V", "Paste as a layer"),
-                ("Ctrl+J / Ctrl+Shift+J", "Copy / move the selection to its own layer"),
-                ("Ctrl+Shift+I", "Invert the selection"),
-                ("Ctrl+T", "Free transform"),
-                ("Ctrl+B", "Capture the selection as an image brush"),
-                ("Ctrl+Tab", "Next tab"),
-                (", / .", "Previous / next frame (animated)"),
-                ("Enter", "Play or pause (animated)"),
-            ],
-        )
-        from .plotter_state import TOOLS as PLOTTER_TOOLS
-
-        table(
-            "Plotter",
-            [
-                (
-                    " / ".join(letter for _k, _l, letter in PLOTTER_TOOLS),
-                    " / ".join(label for _k, label, _letter in PLOTTER_TOOLS),
-                ),
-                ("X / Y / Z", "Flip the brush across, down; turn it (Shift turns back)"),
-                ("Shift+click", "Stamp a line from the last cell painted"),
-                ("Pick drag", "Capture a block off the map as the brush"),
-                ("Wand Ctrl+click", "Select every cell of that tile, map-wide"),
-                ("Shift / Alt", "Add to / subtract from the selection (Wand and marquee)"),
-                ("Ctrl+A / Ctrl+D", "Select all / deselect (Ctrl+Shift+A also)"),
-                ("Ctrl+C / Ctrl+X / Ctrl+V", "Copy / cut / paste as the brush"),
-                ("Ctrl+J", "Duplicate the selected object"),
-                ("Ctrl+click / Alt+click", "Insert / remove a polygon vertex"),
-                ("Delete", "Clear the selection, or remove the object"),
-                ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
-                ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
-                ("Ctrl+E", "Export to the library"),
-                ("Ctrl+Shift+E", "Export a Tiled .tmx"),
-                ("Ctrl+N / O / W", "New / open / close"),
-                ("Ctrl+G", "Toggle the grid"),
-                ("Ctrl+Tab", "Next map"),
-                ("Ctrl+0 / Ctrl+1", "Fit / 100%"),
-                ("Space / middle drag", "Pan (wheel zooms)"),
-                ("Esc", "Cancel a drag, then the object, then the selection"),
-            ],
-        )
-        table(
-            "Packwright",
-            [
-                ("R", "Repack now"),
-                ("Delete", "Remove the selected source"),
-                ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
-                ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
-                ("Ctrl+E", "Export to the library"),
-                ("Ctrl+Shift+E", "Export the atlas and its JSON"),
-                ("Ctrl+N / O / W", "New / open / close"),
-                ("Ctrl+Tab", "Next atlas"),
-                ("Ctrl+0 / Ctrl+1", "Fit / 100%"),
-                # Middle drag alone, not "Space / middle drag" as Plotter's row
-                # says: there is no space-pan in this mode to advertise.
-                ("Middle drag", "Pan (wheel zooms)"),
-            ],
-        )
+        # reimplemented. The rows themselves are ``shortcut_sections``, which
+        # is module-level so the manual can be gated against it.
+        sections = shortcut_sections()
         if imgui.begin_child("shortcuts/scroll", (0, 0)):
             self._draw_shortcut_rows(sections)
         imgui.end_child()

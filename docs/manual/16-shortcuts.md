@@ -1,6 +1,7 @@
 # Keyboard shortcuts
 
-A shorter version is in the app: press the **?** button in the top-right of the top bar. That popup
+A shorter version is in the app: press **Ctrl+/**, or the **Shortcuts** button in the navigation
+rail's footer. That popup
 is a condensed subset — the tables below are the full list. It has a filter box of its own at the
 top, matched the way the command palette matches (so `ctz` finds `Ctrl+Z`) against a binding's keys,
 its description, or the name of the group it is in — typing `clay` lists all of Clay's rather than
@@ -171,6 +172,7 @@ one loop at a time, so a keypress about a picture can never be filed as a verdic
 | Ctrl+1 / Ctrl+3 / Ctrl+7 | Look along front / right / top |
 | Ctrl+Shift+1 / +3 / +7 | The opposite view: back / left / bottom |
 | Ctrl+5 | Toggle orthographic and perspective |
+| Alt+drag | Orbit, whatever mode you are in |
 | Esc | Cancel a drag; otherwise step back: element selection, then element mode, then object selection |
 
 **The mouse.** Left-drag in empty space orbits, and `Alt`+left-drag always orbits whatever mode you
@@ -207,6 +209,7 @@ left-drag in empty space with `Q` selected sweeps a marquee.
 | `I` | Pick a colour from the canvas |
 | `T` | Text |
 | `C` | Slice |
+| `Y` | Tile stamp |
 | `X` | Swap the two colours |
 | `[` / `]` | Brush size (with Shift, hardness) |
 | `+` / `-` | Zoom in / out, by whole scales |
@@ -285,11 +288,17 @@ the same one the asset pose editor answers to, because they are
 | `T` | Terrain |
 | `P` | Shape (rectangle or ellipse) |
 | `R` | Rectangular select |
+| `W` | Wand |
 | `I` | Pick the tile under the cursor |
 | `S` | Objects |
 | `X` / `Y` | Flip the brush across / down |
 | `Z` | Turn the brush a quarter clockwise (Shift+Z turns it back) |
 | Shift+click | Stamp a line from the last cell painted |
+| Pick drag | Capture a block off the map as the brush |
+| Wand Ctrl+click | Select every cell using that tile, map-wide |
+| Shift / Alt | Add to / subtract from the selection (Wand and marquee) |
+| Ctrl+J | Duplicate the selected object |
+| Ctrl+click / Alt+click | Insert / remove a polygon vertex |
 | Ctrl+A / Ctrl+D | Select all / deselect (Ctrl+Shift+A also deselects) |
 | Ctrl+C / Ctrl+X | Copy / cut the selected cells |
 | Ctrl+V | Load the copy into the brush and switch to Stamp |

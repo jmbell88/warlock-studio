@@ -64,15 +64,24 @@ not be in `warlock.log`. Look in `crash.log` instead — see
 
 ## Missing weights
 
-**What you see.** The health dot is amber. The diagnostics list has one `x` row per missing
-download, and at the Reference stage the model combo shows an entry as "weights missing".
+**What you see.** The **Issues** badge in the rail's footer is amber. The diagnostics list has one
+`x` row per missing download, and at the Reference stage the model combo shows an entry as "weights
+missing". Submitting anyway is refused, and the refusal itself carries an **Install** button that
+ticks exactly the downloads that job needed.
 
 **Why.** Every image model, style LoRA, IP-Adapter, ControlNet and metric model is an optional
-one-time manual download. The app never fetches anything at runtime, by design.
+one-time download. The app never fetches anything at runtime, by design — only a button you press
+does, and that fetch runs in its own process.
 
-**Fix.** Run `uv run warlock doctor`. Each missing item is listed individually with the exact
-command that fetches it, so you can copy the line and run it. The commands are also collected in
-[Model weights](17-installation.md#model-weights).
+**Fix.** Open **Settings → Models**. Every registered model is listed with its size, where it comes
+from and whether it is on this card; tick what you need and press *Download selected*, which fetches
+the whole selection as one transaction and shows a rate and an ETA. A download can be cancelled from
+its own row, and cancelling installs nothing — the staging is swept the next time the pane opens.
+See [Models](19-app-settings.md#models).
+
+**Or from a terminal**, which is the only route on a headless box: `uv run warlock doctor` lists each
+missing item individually with the exact command that fetches it, and the same commands are
+collected in [Model weights](17-installation.md#model-weights).
 
 Two of these rows are **fatal** rather than a note — `trellis-server.exe` and the TRELLIS GGUF
 weights. Nothing degrades gracefully without a reconstruction engine, so those get a red banner and

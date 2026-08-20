@@ -284,10 +284,11 @@ of reading it:
   individually with the command that fixes it. A single "weights" row could not tell you *which* of
   five downloads you skipped.
 
-The same checks run when the app starts, and their result is the **health dot** at the far right of
-the top bar: green when everything passed, amber when a non-fatal check failed, red for a fatal one
-or a dead GPU worker. Click it for the full list, a **Copy details** button and a shortcut to the
-log file.
+The same checks run when the app starts, and their result is the **Issues** badge in the navigation
+rail's footer: amber when a non-fatal check failed, red for a fatal one or a dead GPU worker. It is
+not there at all when everything passed — a permanent "OK" badge is noise. Click it for the full
+list, a **Copy details** button and a shortcut to the log file. When nothing is failing, the same
+list is reachable from the command palette (Ctrl+K, "Issues").
 
 One non-fatal check gets a red banner anyway: the trellis port. The app is perfectly usable without
 ever running a mesh job, but a port already held at startup means an orphaned server from a previous
