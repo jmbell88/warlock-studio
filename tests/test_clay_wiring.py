@@ -129,7 +129,7 @@ def test_esc_reaches_cancel_drag_through_the_ctx() -> None:
 
     ctx = _tab_ctx()
     ctx.clay_view = _StubView()
-    event = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE)
+    event = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE, mod=0)
     assert clay_mode.handle_key(ctx, event) is True
     assert [c[0] for c in ctx.clay_view.calls] == ["cancel"]
 
@@ -139,7 +139,7 @@ def test_enter_reaches_release_drag_through_the_ctx() -> None:
 
     ctx = _tab_ctx()
     ctx.clay_view = _StubView()
-    event = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN)
+    event = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN, mod=0)
     assert clay_mode.handle_key(ctx, event) is True
     assert [c[0] for c in ctx.clay_view.calls] == ["release"]
 
@@ -151,7 +151,7 @@ def test_an_axis_key_reaches_drag_key_through_the_ctx() -> None:
 
     ctx = _tab_ctx()
     ctx.clay_view = _StubView()
-    event = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_x)
+    event = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_x, mod=0)
     assert clay_mode.handle_key(ctx, event) is True
     assert ("key", "x") in ctx.clay_view.calls
 

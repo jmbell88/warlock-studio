@@ -1171,6 +1171,13 @@ class InkerState:
     # it is on -- which is exactly what "modal" means and why it cannot live in
     # the tool list beside brush and fill.
     transforming: bool = False
+    # **Which tab owns the transform** -- ``convert_uid``'s pattern, for its
+    # exact bug shape: the modal lives on one ``Document``, this state object
+    # is shared by every tab, and the panes draw whichever tab is in front. A
+    # bare bool meant Enter after a mid-transform tab switch committed the
+    # *new* tab's floating buffer and stranded the owner's lifted pixels.
+    # Empty means no transform; see ``_settle_transform``.
+    transform_uid: str = ""
     # What the handle was grabbed at, so a drag is measured against the press
     # rather than against the previous frame. Widened past four entries when
     # the scale became per-axis; ``inker_canvas._transform_input`` names them.
@@ -1546,6 +1553,7 @@ class InkerState:
     def add(self, doc: InkerDoc) -> InkerDoc:
         self.docs.append(doc)
         self.active_uid = doc.uid
+        self._settle_transform()
         self.clear_drag()
         return doc
 
@@ -1565,13 +1573,37 @@ class InkerState:
             # The neighbour, not the first: closing a tab should leave you next
             # to where you were rather than at the far end of the bar.
             self.active_uid = self.docs[min(index, len(self.docs) - 1)].uid if self.docs else ""
+        self._settle_transform()
         self.clear_drag()
         return True
 
     def activate(self, uid: str) -> None:
         if uid != self.active_uid:
             self.active_uid = uid
+            self._settle_transform()
             self.clear_drag()
+
+    def _settle_transform(self) -> None:
+        """Cancel an open free transform the moment its owner stops being the
+        active tab.
+
+        The transform is modal on one document, and Enter/Escape are answered
+        against whichever tab is in front -- so a transform left open across a
+        switch would commit or cancel the *wrong* tab's floating buffer and
+        strand the owner's lifted pixels. Cancelled rather than committed, for
+        ``end_convert_session``'s reason: an unanswered modal is not a yes,
+        and the cancel only puts back what the lift itself cut. An owner that
+        was just closed has nothing left to put back; the flags still clear.
+        """
+        if not self.transforming or self.transform_uid == self.active_uid:
+            return
+        owner = self.get(self.transform_uid)
+        if owner is not None:
+            owner.doc.cancel_floating()
+        self.transforming = False
+        self.transform_uid = ""
+        self.transform_ref = None
+        self.transform_grab = ""
 
     def cycle(self, step: int = 1) -> None:
         if len(self.docs) < 2:
@@ -1612,6 +1644,12 @@ class InkerState:
         self.tile_head = None
         self.spray_carry = 0.0
         self.transform_grab = ""
+        # A half-typed tag rename goes with the gesture state: the index is
+        # into the *active* document's tag list, so surviving a tab switch --
+        # every switch comes through here -- would leave the rename box open
+        # over some other document's tag of the same number.
+        self.tag_editing = -1
+        self.tag_name = ""
         # An open multi-click gesture goes with it, which is what makes a tab
         # switch, a tab close and Escape cancel a half-drawn polygon for free --
         # all three already come through here. Safe *because* a gesture holds no
@@ -1715,7 +1753,12 @@ class InkerState:
     # -- colours ------------------------------------------------------------
 
     def swap_colours(self) -> None:
+        # Beside ``set_fg``'s clearing rule rather than through it: the
+        # foreground is now whatever the background held, and the background
+        # never carries a slot -- so a claim left standing would land the next
+        # stroke in the slot of a colour no longer in hand.
         self.fg, self.bg = self.bg, self.fg
+        self.fg_slot = None
 
     def add_swatch(self, colour: tuple[int, int, int, int]) -> None:
         colour = tuple(int(c) for c in colour)  # type: ignore[assignment]

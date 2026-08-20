@@ -116,10 +116,22 @@ def move_into(staging: Path, dest: Path) -> list[str]:
         for src, target in reversed(moved):
             with contextlib.suppress(OSError):
                 os.replace(target, src)
+        restored_all = True
         for kept, target in reversed(saved):
-            with contextlib.suppress(OSError):
+            try:
                 os.replace(kept, target)
-        shutil.rmtree(backup, ignore_errors=True)
+            except OSError:
+                # Still suppressed -- but remembered. A file another process
+                # holds open (the realistic Windows failure; finalize_rig
+                # retries for exactly it) cannot be restored right now, and
+                # the backup tree holds its only copy.
+                restored_all = False
+        if restored_all:
+            shutil.rmtree(backup, ignore_errors=True)
+        # else: leave the backup in place. Its name is deterministic
+        # (backup_dir), so recovery on a later launch can still restore from
+        # it -- deleting it here would destroy the only copy of whatever the
+        # loop above could not put back.
         raise
     return names
 

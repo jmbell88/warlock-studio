@@ -12,12 +12,10 @@ self.tile_w, self.tile_h`` verbatim, which is five chances apiece to pass tile
 height where tile width goes and get an answer that is wrong only for
 non-square tiles.
 
-``stagger_axis``, ``stagger_index`` and ``hex_side`` are carried on the document
-even though staggered and hexagonal maps remain named Tiled refusals, so the
-shared lattice signature needs no model migration on the day they stop being
-refusals. (This paragraph was left mid-edit as two half-sentences spliced
-together -- "The document has no ... fields are carried even while ..." -- and
-said the opposite of the code in its first clause.)
+``stagger_axis``, ``stagger_index`` and ``hex_side`` are the offset lattices'
+three extra facts: staggered and hexagonal maps are accepted projections now
+(``project.PROJECTIONS`` lists all five), so the document carries them and the
+shared lattice signature threads them through with the skews.
 """
 
 from __future__ import annotations

@@ -428,6 +428,11 @@ def bevel_edges(
         counts.append(size)
 
     # --- one quad per beveled edge, and the darts the fans chain on ---------
+    # Each new face remembers a source face, so it inherits that face's
+    # material slot and shading -- the rule every other face-growing op here
+    # follows. Minting them at slot 0 / flat made a bevel on a painted, smooth
+    # mesh sprout strips of the palette's first material.
+    owners: list[int] = []
     darts: dict[int, list[tuple[int, int, int]]] = {}
 
     def dart(vertex: int, tail: int, head: int, source: int) -> None:
@@ -448,6 +453,7 @@ def bevel_edges(
             if corner_uv is not None:
                 new_uv.append(uv_row)
         counts.append(4)
+        owners.append(int(a.corner_face[c1]))
         dart(v, a_v[0], b_v[0], int(a.next_corner[c1]))
         dart(u, b_u[0], a_u[0], int(a.next_corner[c2]))
 
@@ -464,16 +470,18 @@ def bevel_edges(
             if corner_uv is not None:
                 new_uv.append(corner_uv[source])
         counts.append(len(ring))
+        owners.append(int(a.corner_face[ring[0][1]]))
 
     n_faces = face_count(mesh)
     n_new = len(counts) - n_faces
+    sources = np.asarray(owners, dtype="i8")
     out, _ = topo.compact_vertices(
         topo.rebuild(
             np.concatenate([positions, np.array(minted).reshape(-1, 3)]),
             np.array(new_loops, dtype="i8"),
             topo.starts_from_counts(counts),
-            np.concatenate([mesh.material, np.zeros(n_new, dtype="i4")]),
-            np.concatenate([mesh.smooth, np.zeros(n_new, dtype=bool)]),
+            np.concatenate([mesh.material, mesh.material[sources]]),
+            np.concatenate([mesh.smooth, mesh.smooth[sources]]),
             uv=None if corner_uv is None else np.array(new_uv).reshape(-1, 2),
         )
     )

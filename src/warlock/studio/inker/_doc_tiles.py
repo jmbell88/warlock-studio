@@ -201,7 +201,9 @@ class TileOps:
             return isinstance(existing, TilemapCel)
         return index < len(self.anim.tracks) and self.anim.tracks[index].tileset_uid is not None
 
-    def _refuse_stale_ids(self: Document, layer_uid: int, patch: np.ndarray) -> None:
+    def _refuse_stale_ids(
+        self: Document, layer_uid: int, patch: np.ndarray, origin: tuple[int, int]
+    ) -> None:
         """Refuse a patch naming a tile the bound tileset does not have.
 
         **Blank today, a different tile tomorrow.** :func:`~.tiles.materialize`
@@ -226,15 +228,64 @@ class TileOps:
         if tileset_uid is None or not patch.size:
             return
         try:
-            count = self.tileset_slot(tileset_uid).tileset.tile_count
+            ts = self.tileset_slot(tileset_uid).tileset
         except KeyError:  # pragma: no cover - a dangling binding
             return
+        # Only the cells the write will actually land on. The clip is the same
+        # arithmetic ``place_tiles`` applies to ``layer.refs`` below, taken off
+        # the *canvas* rather than the cel so it can run before the autovivify:
+        # a stale id in a region the grid clips away is never written, and a
+        # patch straddling the canvas edge should not be refused for the part
+        # of it that does not exist.
+        grid_h, grid_w = grid_shape(self.size, ts.tile_w, ts.tile_h)
+        tx, ty = int(origin[0]), int(origin[1])
+        x0, y0 = max(0, tx), max(0, ty)
+        x1 = min(grid_w, tx + patch.shape[1])
+        y1 = min(grid_h, ty + patch.shape[0])
+        if x1 <= x0 or y1 <= y0:
+            return
+        patch = patch[y0 - ty : y1 - ty, x0 - tx : x1 - tx]
+        count = ts.tile_count
         worst = int((patch & gid.GID_MASK).max())
         if worst >= count:
             raise ValueError(
                 f"tile {worst} is outside this layer's tileset, which holds "
                 f"0..{count - 1}"
             )
+
+    def _strip_diagonal(self: Document, layer_uid: int, patch: np.ndarray) -> np.ndarray:
+        """*patch* with ``FLIP_D`` masked off wherever the bound tileset's tiles
+        are not square. The documented mask at the refs door.
+
+        A diagonal flip is a transpose, and a transpose of a non-square tile is
+        a ``(tile_w, tile_h)`` picture asked to fill a ``(tile_h, tile_w)``
+        cell -- Tiled itself defines the flag only for square tiles.
+        :func:`~.tiles.materialize` would paste the wrong footprint over a
+        neighbouring cell, and worse, ``_commit_tilemap_patch`` would read the
+        neighbour's canvas pixels back through :func:`~.tiles.canonical` into
+        the canonical tile: a permanent, propagating corruption of the atlas.
+        So the flag is stripped where placements enter rather than answered
+        for downstream; the import doors (``ora._read_tiles``,
+        ``asein._build_tilemap_cel``) apply the same mask to what a file
+        carries.
+
+        A mask rather than a refusal, deliberately: the stamp's D toggle is
+        offered per-*session*, not per-tileset, and ``place_tiles`` refuses by
+        raising -- a raise out of a canvas press is a window down, not a
+        refusal a user can meet. The placement lands unturned instead.
+        """
+        if not patch.size or not (patch & gid.DTYPE(gid.FLIP_D)).any():
+            return patch
+        tileset_uid = self.tileset_uid_of(layer_uid)
+        if tileset_uid is None:
+            return patch
+        try:
+            ts = self.tileset_slot(tileset_uid).tileset
+        except KeyError:  # pragma: no cover - a dangling binding
+            return patch
+        if ts.tile_w == ts.tile_h:
+            return patch
+        return patch & gid.DTYPE(0xFFFFFFFF ^ gid.FLIP_D)
 
     def place_tiles(
         self: Document, layer_uid: int, origin: tuple[int, int], patch: np.ndarray
@@ -261,7 +312,8 @@ class TileOps:
         patch = np.asarray(patch, dtype=np.uint32)
         if patch.ndim != 2:
             raise ValueError("a tile patch is a 2-D refs plane")
-        self._refuse_stale_ids(layer_uid, patch)
+        patch = self._strip_diagonal(layer_uid, patch)
+        self._refuse_stale_ids(layer_uid, patch, origin)
         self._ensure_cel_for(layer_uid)
         layer = self.layer_by_uid(layer_uid)
         if not isinstance(layer, TilemapCel):  # pragma: no cover - defensive
@@ -401,6 +453,10 @@ class TileOps:
         refs_before = layer.refs[ty0:ty1, tx0:tx1].copy()
         refs_after = refs_before.copy()
         patches: dict[int, np.ndarray] = {}
+        #: local id -> the ``lookup`` key its in-place patch claimed this
+        #: gesture, so a second patch of the same tile can retire the first
+        #: key before claiming its own. See the bookkeeping note below.
+        patched_keys: dict[int, bytes] = {}
         added: list[np.ndarray] = []
         for ty in range(ty0, ty1):
             for tx in range(tx0, tx1):
@@ -463,11 +519,26 @@ class TileOps:
                     added.append(tile)
                     lookup[key] = target
                 if target is None:
-                    patches[local] = tile
                     # The atlas entry this id answers to has moved; keep the
-                    # working index honest for the rest of the gesture.
-                    lookup.pop(content_key(current), None)
+                    # working index honest for the rest of the gesture. Two
+                    # rules make that bookkeeping rather than a bare ``pop``.
+                    # The retired key is the one this tile actually holds in
+                    # the index -- its content when the gesture opened, or the
+                    # key an *earlier patch this gesture* claimed for it -- and
+                    # it is dropped only when the index maps it to this tile:
+                    # the index maps content to the lowest id holding it, so
+                    # ``current``'s key may name a different tile with the same
+                    # content, and popping that shared key would send the next
+                    # matching cell to a redundant append. Leaving the earlier
+                    # patch's key live would be the opposite failure -- a later
+                    # cell matching the first content would point at a tile
+                    # whose final content is something else.
+                    previous = patched_keys.get(local, content_key(current))
+                    if lookup.get(previous) == local:
+                        del lookup[previous]
+                    patches[local] = tile
                     lookup[key] = local
+                    patched_keys[local] = key
                     continue
                 # The flags stay on. The content that matched is the *canonical*
                 # tile, so the cell still has to be turned the same way to draw
@@ -744,6 +815,11 @@ class TileOps:
         whatever a remove's undo is trying to make room for.
         """
         if slot is None:
+            # The dedup cache goes with the slot -- it is keyed by uid and
+            # rebuilt on demand, so a removed tileset's entry is only a strip
+            # image held alive for nothing. An undo re-inserting the slot
+            # rebuilds the index on the next ask.
+            self._tile_hashes.pop(self.tilesets[index].uid, None)
             del self.tilesets[index]
         else:
             self.tilesets.insert(index, slot)

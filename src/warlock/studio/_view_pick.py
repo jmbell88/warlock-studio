@@ -111,6 +111,10 @@ class PickOps:
             (self.camera.theta, self.camera.phi, self.camera.distance),
             tuple(self.camera.target),
             (width, height),
+            # The projection *kind* moves every projected point without moving
+            # the camera, so leaving it out let a Ctrl+5 toggle serve stale
+            # positions to pick, hover and the marquee until the camera moved.
+            bool(self.camera.orthographic),
         )
         cached = self._screens.get(uid)
         if cached is not None and cached[0] == key:
@@ -123,7 +127,11 @@ class PickOps:
             width,
             height,
         )
-        self._screens[uid] = (key, screen)
+        # The mesh rides along as the ``_view_cache._Entry`` pin does: its id is
+        # in the key, and an id is only sound while the object it named is
+        # alive -- a freed mesh's address coming back on new geometry would
+        # otherwise match a stale projection.
+        self._screens[uid] = (key, screen, obj.mesh)
         return screen
 
     def pick_element(

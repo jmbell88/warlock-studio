@@ -529,3 +529,30 @@ def test_the_mode_is_wired_into_the_switch():
     # ``GROUP_BREAKS`` still collapsed to two; the grouping is written out now,
     # so what a new mode has to do is *be in a group*.
     assert "poser" in modes.RAIL_GROUPS[1]
+
+
+# --- crash recovery ------------------------------------------------------------
+
+
+def test_a_recovered_pose_restores_joint_corrections(tmp_path):
+    """``_pose_payload`` writes ``moved`` and ``mode``; an adopt that applied
+    only bones and root translation recovered a crash mid-joint-placement as a
+    rest pose under a success toast, the corrections silently dropped."""
+    viewer = _bound_viewer()
+    editor = viewer.editor
+    editor.enter_joints_mode()
+    editor.move_handle("hips", editor.home["hips"] + m3.vec3(0.1, 0.0, 0.2))
+    assert editor.moved, "the session holds a correction"
+    moved = {name: list(delta) for name, delta in editor.moved.items()}
+
+    slot = poser_mode._PoseSlot(viewer, editor, "poser")
+    path = tmp_path / "poser.pose.json"
+    path.write_bytes(poser_mode._pose_payload(slot))
+
+    ctx = FakeCtx()
+    ctx.poser_viewer = _bound_viewer()
+    assert poser_mode._journal_adopt(ctx, path, {}) is True
+    recovered = ctx.poser_viewer.editor
+    assert recovered.mode == "joints"
+    assert recovered.moved == moved
+    assert recovered.has_unsaved_edits()

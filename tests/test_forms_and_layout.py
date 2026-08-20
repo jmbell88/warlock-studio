@@ -33,6 +33,9 @@ SP_SWEPT = (
     "settings_3d.py",
     "stage_rig.py",
     "inker_colors.py",
+    # Joined 2026-08-19: THUMB and INDENT were used as raw physical pixels, so
+    # thumbnails and group indents stayed put while the monitor scaled.
+    "inker_layers.py",
 )
 
 

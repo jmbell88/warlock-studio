@@ -227,12 +227,6 @@ def create_sprite_synthesis(
 
     _check_weights(svc)
 
-    if len(rigging.list_sprite_drafts(job_dir)) >= rigging.MAX_SPRITE_DRAFTS:
-        raise Conflict(
-            f"this reference already has {rigging.MAX_SPRITE_DRAFTS} sprite "
-            "sheet drafts; delete one first"
-        )
-
     draft_id = rigging.new_id()
     params = {
         # Inputs only, exactly as ``create_pixel_sheet`` says: what actually
@@ -250,9 +244,25 @@ def create_sprite_synthesis(
         "base_model": SPRITE_BASE_MODEL,
     }
     check_vram(svc, "sprite_synthesis", "model", params)
-    new_id = svc.store.create(
-        "sprite_synthesis", source["prompt"], params, uuid.uuid4().hex[:12]
-    )
+    # On disk *plus* every unfinished row that will land a draft here: the
+    # trio is written by the worker minutes after this row is minted, so a
+    # file count alone let N rapid submits all pass. Count and create under
+    # one job-wide hold -- the pose cap's CON-03 rule, taken at this door.
+    with svc.convert_lock(job_id, "sprite_drafts"):
+        queued = sum(
+            1
+            for j in svc.store.active_jobs()
+            if j["kind"] == "sprite_synthesis"
+            and (j.get("params") or {}).get("source_job") == job_id
+        )
+        if len(rigging.list_sprite_drafts(job_dir)) + queued >= rigging.MAX_SPRITE_DRAFTS:
+            raise Conflict(
+                f"this reference already has {rigging.MAX_SPRITE_DRAFTS} sprite "
+                "sheet drafts; delete one first"
+            )
+        new_id = svc.store.create(
+            "sprite_synthesis", source["prompt"], params, uuid.uuid4().hex[:12]
+        )
     svc.wake_worker()
     return {"id": new_id, "source_job": job_id, "draft": draft_id}
 

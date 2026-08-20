@@ -17,6 +17,9 @@ from ..manual import render as manual_render
 from ..tokens import sp
 from . import inker_textures
 
+# Design pixels, routed through ``sp()`` at every use site (the K97 rule --
+# ``inker_timeline`` does the same with its own constants): raw, a thumbnail
+# and an indent stayed physical-pixel sized at 150% DPI.
 THUMB = 40.0
 
 # Opacity the active layer held when its slider drag began, keyed by layer uid.
@@ -115,7 +118,7 @@ def _group_row(ctx: Any, tab: Any, doc: Any, node: Any, depth: int) -> None:
     """One folder: a fold arrow, an eye, a name, and a drop target."""
     imgui.push_id(f"group{node.uid}")
     if depth:
-        imgui.indent(INDENT * depth)
+        imgui.indent(sp(INDENT) * depth)
     folded = node.uid in tab.collapsed_groups
     if controls.small_button("+" if folded else "-"):
         tab.collapsed_groups.discard(node.uid) if folded else tab.collapsed_groups.add(
@@ -149,7 +152,7 @@ def _group_row(ctx: Any, tab: Any, doc: Any, node: Any, depth: int) -> None:
     if changed:
         doc.set_group_props(node.uid, opacity=value)
     if depth:
-        imgui.unindent(INDENT * depth)
+        imgui.unindent(sp(INDENT) * depth)
     imgui.pop_id()
 
 
@@ -377,7 +380,7 @@ def _row(ctx: Any, tab: Any, doc: Any, index: int, depth: int = 0) -> None:
     layer = doc.stack[index]
     imgui.push_id(f"layer{layer.uid}")
     if depth:
-        imgui.indent(INDENT * depth)
+        imgui.indent(sp(INDENT) * depth)
     active = index == doc.stack.active_index
     span = track_range(tab, doc)
     in_range = span is not None and span[0] <= index <= span[1]
@@ -401,7 +404,7 @@ def _row(ctx: Any, tab: Any, doc: Any, index: int, depth: int = 0) -> None:
 
     texture = inker_textures.layer_thumb(ctx, tab, index)
     if texture is not None:
-        imgui.image(widgets.texture_ref(texture), (THUMB, THUMB))
+        imgui.image(widgets.texture_ref(texture), (sp(THUMB), sp(THUMB)))
         imgui.same_line()
 
     # Name only, the full thumbnail tall: the blend/opacity subtitle moved to
@@ -410,7 +413,7 @@ def _row(ctx: Any, tab: Any, doc: Any, index: int, depth: int = 0) -> None:
     label = layer.name
     if layer.locked or layer.alpha_lock:
         label += f"  {icons.LOCK}"
-    if controls.selectable(f"{label}##pick", active or in_range, 0, (0, THUMB))[0]:
+    if controls.selectable(f"{label}##pick", active or in_range, 0, (0, sp(THUMB)))[0]:
         extend_range(tab, doc, index)
         doc.set_active_layer(index)
     _reorder(doc, index)
@@ -441,7 +444,7 @@ def _row(ctx: Any, tab: Any, doc: Any, index: int, depth: int = 0) -> None:
             doc.move_into_group(index, None)
         imgui.end_popup()
     if depth:
-        imgui.unindent(INDENT * depth)
+        imgui.unindent(sp(INDENT) * depth)
     imgui.pop_id()
 
 

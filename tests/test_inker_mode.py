@@ -1182,8 +1182,14 @@ def _transform_ctx(monkeypatch, rect):
 
     doc = _Recorder()
     tab = SimpleNamespace(doc=doc, range_sel=rect)
+    # ``transform_uid``/``get`` because ``end_transform`` resolves the owner by
+    # uid now; an empty uid falls back to ``active``, which is this tab.
     state = SimpleNamespace(
-        active=tab, transforming=True, clear_drag=lambda: None
+        active=tab,
+        transforming=True,
+        transform_uid="",
+        get=lambda uid: None,
+        clear_drag=lambda: None,
     )
     monkeypatch.setattr(inker_mode, "ensure", lambda ctx: state)
     return doc
@@ -1334,3 +1340,93 @@ def test_a_detection_overwrites_the_field_values():
     )
     assert state.sheet_cell == (16, 16)
     assert state.sheet_padding == (2, 2)
+
+
+# --- the transform's owner ----------------------------------------------------
+#
+# ``transforming`` was an app-level bool with no tab identity -- the exact bug
+# shape ``convert_uid`` documents: the modal lives on one document, the state
+# is shared by every tab, and Enter after a mid-transform switch committed the
+# *new* tab's floating buffer while the owner's lifted pixels stayed stranded.
+
+
+def test_a_tab_switch_cancels_the_transform_on_its_owner():
+    import numpy as np
+
+    a, b = _tab("a"), _tab("b")
+    a.doc.stack.active.pixels[...] = 200
+    before = a.doc.stack.active.pixels.copy()
+    state = _state(a, b)
+    state.activate(a.uid)
+    assert a.doc.begin_transform()
+    state.transforming = True
+    state.transform_uid = a.uid
+
+    state.activate(b.uid)
+
+    assert not state.transforming
+    assert state.transform_uid == ""
+    assert a.doc.floating is None, "the owner's lift went back where it came from"
+    # The pixels are exactly where they were lifted from -- the select step
+    # ``begin_transform`` pushed remains (a selection op moves the head), but
+    # no lifted pixel is stranded and no alpha-cut survives.
+    assert np.array_equal(a.doc.stack.active.pixels, before)
+
+
+def test_closing_the_owner_mid_transform_clears_the_mode():
+    a, b = _tab("a"), _tab("b")
+    state = _state(a, b)
+    state.activate(a.uid)
+    assert a.doc.begin_transform()
+    state.transforming = True
+    state.transform_uid = a.uid
+
+    state.close(a.uid)
+
+    assert not state.transforming
+    assert state.transform_uid == ""
+
+
+def test_end_transform_lands_on_the_owner_by_uid():
+    from types import SimpleNamespace
+
+    a = _tab("a")
+    state = _state(a)
+    ctx = SimpleNamespace(state=SimpleNamespace(inker=state))
+    assert a.doc.begin_transform()
+    state.transforming = True
+    state.transform_uid = a.uid
+
+    inker_mode.end_transform(ctx, commit=False)
+
+    assert a.doc.floating is None
+    assert not state.transforming
+    assert state.transform_uid == ""
+
+
+# --- the brush's slot claim, and the rename buffer ----------------------------
+
+
+def test_swapping_colours_releases_the_palette_slot_claim():
+    """X puts the background in hand, and the background never came from a
+    slot -- a claim left standing would land the next stroke in the slot of a
+    colour no longer held."""
+    state = InkerState()
+    state.set_fg((1, 2, 3, 255), slot=4)
+    assert state.fg_slot == 4
+    state.swap_colours()
+    assert state.fg_slot is None
+
+
+def test_a_tab_switch_drops_a_half_typed_tag_rename():
+    """``tag_editing`` indexes the *active* document's tag list, so surviving
+    a switch left the rename box open over another document's tag of the same
+    number."""
+    a, b = _tab("a"), _tab("b")
+    state = _state(a, b)
+    state.activate(a.uid)
+    state.tag_editing = 2
+    state.tag_name = "walk"
+    state.activate(b.uid)
+    assert state.tag_editing == -1
+    assert state.tag_name == ""

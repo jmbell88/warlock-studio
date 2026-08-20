@@ -419,9 +419,11 @@ TOOL_KEYS = plotter_state.TOOL_KEYS
 # Ctrl bindings that change the document, and are therefore refused while the
 # tab is busy. The ``inker_mode._MUTATING_CTRL`` idiom: one list, so a control
 # cannot be added to the keyboard and forgotten in the gate.
-# Cut is here and copy and paste are not: copy reads, and paste only sets the
-# brush and the tool, both of which are view state. Cut is the one that writes.
-_MUTATING_CTRL = frozenset({"z", "y", "x"})
+# Copy is the one that stays out: it only reads. Cut removes, Ctrl+J adds a
+# duplicate, and paste is here since ``ObjectClip`` -- pasting an *object*
+# writes the document, where a tile paste only sets the brush and the tool.
+# Gating the tile case alongside costs a busy tab nothing it could have used.
+_MUTATING_CTRL = frozenset({"z", "y", "x", "v", "j"})
 
 
 def _flipped_h(brush: Any, _shift: bool) -> Any:
@@ -468,8 +470,13 @@ def handle_key(ctx: Any, event: Any) -> bool:
 
     state = ensure(ctx)
     # Read before the Space branch, because that branch now has to know whether
-    # a modifier is down -- see below.
-    mods = pygame.key.get_mods()
+    # a modifier is down -- see below. Off ``event.mod``, never
+    # ``pygame.key.get_mods()`` -- ``main._shortcut``'s rule (UX-12): ``mod``
+    # is the modifier state at the instant this key was pressed, where
+    # ``get_mods()`` is the state *now*, after the event batch drained, so a
+    # Ctrl released between the two made a fast chord fall through as the
+    # bare letter.
+    mods = event.mod
     ctrl = bool(mods & pygame.KMOD_CTRL)
     shift = bool(mods & pygame.KMOD_SHIFT)
     if event.key == pygame.K_SPACE:
@@ -650,6 +657,13 @@ def _copy_object(
     layer = tab.doc.active()
     if not isinstance(layer, ObjectLayer):
         return
+    # Copying from a locked layer is allowed while cutting is not (the lock
+    # blocks content edits and nothing else) -- and a refused cut copies
+    # nothing, because a cut that quietly became a copy would leave the user
+    # pasting what they believe they moved.
+    if cut and getattr(layer, "locked", False):
+        ctx.toast(f"{layer.name} is locked.", "error")
+        return
     found = next((o for o in layer.objects if o.uid == state.selected_object), None)
     if found is None:
         return
@@ -681,6 +695,11 @@ def _paste_object(ctx: Any, state: PlotterState, tab: PlotterDoc) -> None:
     layer = tab.doc.active()
     if not isinstance(layer, ObjectLayer):
         ctx.toast("Pick an object layer to paste onto.", "error")
+        return
+    # A paste adds an object, which is a content edit -- the same door
+    # ``_delete`` holds, because the lock is enforced at the studio layer.
+    if getattr(layer, "locked", False):
+        ctx.toast(f"{layer.name} is locked.", "error")
         return
     copy = dataclasses.replace(
         state.clipboard.obj,
@@ -715,6 +734,11 @@ def _duplicate_object(ctx: Any, state: PlotterState, tab: PlotterDoc) -> None:
         return
     layer = tab.doc.active()
     if not isinstance(layer, ObjectLayer):
+        return
+    # A duplicate adds an object, which is a content edit -- the same door
+    # ``_delete`` holds, because the lock is enforced at the studio layer.
+    if getattr(layer, "locked", False):
+        ctx.toast(f"{layer.name} is locked.", "error")
         return
     found = next((o for o in layer.objects if o.uid == state.selected_object), None)
     if found is None:
@@ -864,6 +888,13 @@ def _journal_adopt(ctx: Any, path: Path, meta: dict[str, Any]) -> bool:
         return False
     title = f"{meta.get('title') or Path(path).stem} (recovered)"
     tab = adopt(ctx, doc, path=None, title=title, file_format="wmap")
+    # A recovered document must read dirty until the user saves it somewhere:
+    # ``read_wmap`` hands back a document already marked saved, and a clean
+    # recovered tab closes without a confirm -- taking the journal copy, the
+    # only surviving copy of the work, with it. ``PlotterDoc.dirty`` delegates
+    # to the document, so the never-matching head goes on the *document*; the
+    # tab's mirror follows so ``mark_saved`` keeps them in step.
+    doc.saved_head = -1
     tab.saved_head = -1
     tab.journal_name = Path(path).name
     return True

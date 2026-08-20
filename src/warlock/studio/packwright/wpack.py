@@ -330,7 +330,16 @@ def _settings_from(entry: Any) -> PackSettings:
             "extrude": int(values.get("extrude", default.extrude)),
             "trim": bool(values.get("trim", default.trim)),
             "max_size": int(values.get("max_size", default.max_size)),
-            "power_of_two": bool(values.get("power_of_two", default.power_of_two)),
+            # The ``None`` sentinel survives: a manifest that leaves this
+            # unsaid gets the *file's* mode's default via ``__post_init__``,
+            # not the default constructed above -- which resolved for the
+            # default mode, so a maxrects file with the key missing was handed
+            # the grid answer and the documented per-mode default never fired.
+            "power_of_two": (
+                None
+                if values.get("power_of_two") is None
+                else bool(values.get("power_of_two"))
+            ),
             "columns": (
                 None if values.get("columns") is None else int(values.get("columns"))
             ),

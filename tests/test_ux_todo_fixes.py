@@ -283,11 +283,11 @@ def test_space_clears_on_the_key_up(plotter_ctx):
 
     state = plotter_mode.ensure(plotter_ctx)
 
-    down = SimpleNamespace(type=pygame.KEYDOWN, key=pygame.K_SPACE)
+    down = SimpleNamespace(type=pygame.KEYDOWN, key=pygame.K_SPACE, mod=0)
     assert plotter_mode.handle_key(plotter_ctx, down) is True
     assert state.space_held is True
 
-    up = SimpleNamespace(type=pygame.KEYUP, key=pygame.K_SPACE)
+    up = SimpleNamespace(type=pygame.KEYUP, key=pygame.K_SPACE, mod=0)
     assert plotter_mode.handle_key(plotter_ctx, up) is True
     assert state.space_held is False
 
@@ -296,7 +296,7 @@ def test_a_key_up_that_is_not_space_is_still_ignored(plotter_ctx):
     """The rest of the KEYDOWN filter stays: only space is a hold."""
     import pygame
 
-    up = SimpleNamespace(type=pygame.KEYUP, key=pygame.K_f)
+    up = SimpleNamespace(type=pygame.KEYUP, key=pygame.K_f, mod=0)
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(pygame, "key", SimpleNamespace(get_mods=lambda: 0, name=lambda k: "f"))
         assert plotter_mode.handle_key(plotter_ctx, up) is False

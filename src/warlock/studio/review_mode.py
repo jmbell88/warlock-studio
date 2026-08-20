@@ -543,9 +543,9 @@ def _removal_toast(ctx: Any, done: Any) -> None:
         # A unit the worker is still inside is cancelled but not deleted --
         # its directory is being written to. Say so and say what to do,
         # rather than reporting a deletion that did not happen.
-        # Plain info: the toast vocabulary is info|error (widgets.py reads
-        # nothing else), and a partial delete is neither a failure nor a
-        # surprise -- it is what cancelling something mid-run looks like.
+        # Plain info rather than warn or error: a partial delete is neither a
+        # failure nor a surprise -- it is what cancelling something mid-run
+        # looks like, and the sentence already says what to do next.
         ctx.toast(
             f"{verb} {removed} asset folder(s); {remaining} still finishing. "
             "Delete again in a moment."

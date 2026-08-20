@@ -539,3 +539,26 @@ def test_the_probe_does_not_run_at_all_without_weights(monkeypatch, tmp_path):
     ok, detail = doctor._run_load_probe("matting", tmp_path / "absent")
     assert ok is False
     assert "not on disk" in detail
+
+
+def test_the_gguf_remedy_downloads_into_the_configured_models_dir(tmp_path):
+    """The command is pasted from whatever directory the user's shell happens
+    to be in, so a relative ``--local-dir`` put 16 GB somewhere Warlock never
+    inspects and left the fatal row standing (audit 2026-08-19)."""
+    config = _config(tmp_path)
+    checks = {c.name: c for c in run_checks(config)}
+    assert f'--local-dir "{config.trellis_models_dir}"' in checks["TRELLIS GGUF weights"].detail
+
+
+def test_the_exe_remedy_names_the_exact_release_asset_and_its_digest(tmp_path):
+    """The binary is the one unsigned third-party download in the setup, so
+    the remedy pins the direct v0.5.4 asset URL and the SHA-256 GitHub
+    publishes for it -- a bare releases page gave the user nothing to verify
+    a download against."""
+    checks = {c.name: c for c in run_checks(_config(tmp_path))}
+    detail = checks["trellis-server.exe"].detail
+    assert (
+        "https://github.com/pwilkin/trellis.cpp/releases/download/v0.5.4/"
+        "trellis-cuda-windows-x64.zip"
+    ) in detail
+    assert "f7d2912b064bf1520f03e025c5eb344df6b347ad04831ac7aa04d847581bd7ad" in detail

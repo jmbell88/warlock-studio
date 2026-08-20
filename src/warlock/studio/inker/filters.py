@@ -288,12 +288,19 @@ def _straight(rgb: np.ndarray, alpha: np.ndarray, pixels: np.ndarray) -> np.ndar
 
     The division writes into ``out`` directly. ``np.divide(..., out=zeros_like,
     where=...)`` allocated a second full plane per call purely to supply the
-    zero an unlit pixel keeps, which ``out[..., :3] = 0.0`` states in place.
+    zero an unlit pixel keeps, which the boolean assignment states in place.
     """
     out = np.empty(pixels.shape, dtype=np.float32)
     lit = alpha[..., None]
-    out[..., :3] = 0.0
-    np.divide(rgb, lit, out=out[..., :3], where=lit > 1e-6)
+    # ``composite.over``'s masked-lane fix: ``where=`` does not promise the
+    # masked lanes go unevaluated, so a SIMD lane with a near-zero blurred
+    # alpha under a non-zero blurred colour still ran x/0 and raised under
+    # ``np.errstate(all="raise")``. Divide by one there and select --
+    # bit-identical everywhere the old form defined a value, and the unlit
+    # pixels keep the zero they always got.
+    shown = lit > 1e-6
+    np.divide(rgb, np.where(shown, lit, 1.0), out=out[..., :3])
+    out[..., :3][~shown[..., 0]] = 0.0
     out[..., 3] = alpha * 255.0
     return cp.to_uint8_255(out)
 
@@ -353,9 +360,9 @@ def _gaussian(plane: np.ndarray, radius: float) -> np.ndarray:
     ``Document.preview_filter`` memoises the filtered array for the life of a
     session, so this runs once per parameter change instead of once per frame.
     """
+    # ``_kernel`` floors its half-width at 1, so the kernel is never shorter
+    # than three taps -- there is no degenerate case to return early for.
     kernel = _kernel(radius)
-    if len(kernel) < 2:
-        return plane.astype(np.float32, copy=True)
     padded = np.pad(plane.astype(np.float32), len(kernel) // 2, mode="edge")
     rows = np.apply_along_axis(lambda row: np.convolve(row, kernel, "valid"), 1, padded)
     return np.apply_along_axis(lambda col: np.convolve(col, kernel, "valid"), 0, rows)

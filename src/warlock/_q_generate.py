@@ -658,6 +658,19 @@ class GenerateOps:
                     )
                 )
                 await asyncio.to_thread(self.store.set_params, job_id, params)
+        except BaseException:
+            # The restore above runs only on the clean fall-through. An
+            # exception from a retry's _optimize/_apply_scale/_audit_mesh or
+            # the params write (and a cancel that propagates) would skip it,
+            # and the finally below would then delete the staged pair --
+            # erasing the measured-good mesh while a half-processed attempt
+            # sits on the served names. Best-effort and synchronous on purpose:
+            # two link+replace ops, so a second cancel cannot skip it either.
+            if staged and best is not None and on_disk_seed != best["seed"]:
+                with contextlib.suppress(OSError):
+                    queue_mod._stage_link(keep_source, source_glb)
+                    queue_mod._stage_link(keep, glb_path)
+            raise
         finally:
             for scratch in (keep, keep_source):
                 with contextlib.suppress(OSError):

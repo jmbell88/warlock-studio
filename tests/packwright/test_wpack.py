@@ -356,6 +356,18 @@ def test_an_old_grid_document_keeps_its_stored_power_of_two_true():
     assert back.settings.power_of_two is True
 
 
+def test_a_manifest_without_power_of_two_resolves_per_the_files_mode():
+    """A hand-written manifest may omit the key entirely. The ``None`` sentinel
+    has to reach ``PackSettings`` so ``__post_init__`` resolves it against the
+    *file's* mode -- the reader used to fill in ``PackSettings()``'s resolved
+    default instead, which is the grid answer (off), so a maxrects manifest
+    silently lost its documented on-by-default."""
+    data = _rewrite(_doc(), lambda m: m["settings"].pop("power_of_two", None))
+    back = wpack.read_wpack(data)
+    assert back.settings.mode == "maxrects"
+    assert back.settings.power_of_two is True
+
+
 # --- refusals -----------------------------------------------------------------
 
 

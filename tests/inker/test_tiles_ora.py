@@ -554,3 +554,145 @@ def test_reopened_document_still_supports_tile_edits(tmp_path: Path):
     assert isinstance(cel, TilemapCel)
     assert back.place_tiles(cel.uid, (1, 1), np.array([[1]], dtype=np.uint32))
     _assert_synced(back)
+
+
+# --- the diagonal mask at the import doors, and the two empties ---------------
+
+
+def test_ora_read_strips_diagonal_flips_on_a_non_square_tileset(tmp_path: Path):
+    """A file from before the refs door was sealed: the D bit over a
+    non-square tileset degrades to the unturned placement -- left in, a later
+    Auto-mode commit would read neighbour-cell pixels back into the atlas."""
+    doc = Document.blank(8, 8)
+    blank = np.zeros((2, 4, 4), dtype=np.uint8)
+    red = np.zeros((2, 4, 4), dtype=np.uint8)
+    red[:] = RED
+    slot = doc.add_tileset(strip(np.stack([blank, red], axis=0)))  # 4x2 tiles
+    cel = doc.add_tilemap_layer(slot.uid, name="Tiles")
+    doc.place_tiles(cel.uid, (0, 0), np.array([[1]], dtype=np.uint32))
+    path = tmp_path / "wide.ora"
+    ora.write_ora(doc, path)
+
+    with zipfile.ZipFile(path) as zf:
+        payload = json.loads(zf.read(ora.TILES_MEMBER))
+        member = payload["cels"][0]["refs"]
+        refs = np.frombuffer(zf.read(member), dtype="<u4").copy()
+    refs[0] |= np.uint32(gid.FLIP_D)
+    _rewrite_member(path, member, refs.tobytes())
+
+    back = ora.read_ora(path)
+    cell = next(layer for layer in back.stack if isinstance(layer, TilemapCel))
+    assert int(cell.refs.flat[0]) == 1, "the D bit stripped, the id kept"
+    assert not (np.asarray(cell.refs) & np.uint32(gid.FLIP_D)).any()
+    _assert_synced(back)
+
+
+def test_a_corrupt_tileset_strip_drops_structure_and_keeps_pixels(tmp_path: Path):
+    """A tileset member holding non-image bytes is Pillow's
+    ``UnidentifiedImageError`` -- an ``OSError`` -- and used to crash the open
+    instead of costing the member, against the reader's stated contract."""
+    doc = _still_doc()
+    path = tmp_path / "strip.ora"
+    ora.write_ora(doc, path)
+    with zipfile.ZipFile(path) as zf:
+        member = json.loads(zf.read(ora.TILES_MEMBER))["tilesets"][0]["data"]
+    _rewrite_member(path, member, b"this is not a png")
+
+    back = ora.read_ora(path)
+    assert back.tilesets == []
+    assert not any(isinstance(layer, TilemapCel) for layer in back.stack)
+    doc.invalidate_all()  # ``_still_doc`` writes Ink's pixels directly
+    assert np.array_equal(back.composite, doc.composite)
+
+
+def test_a_0xffffffff_cell_imports_as_empty_with_a_warning():
+    """The format's other empty: a tileset without the "tile ID 0 is empty"
+    flag stores erased cells as 0xFFFFFFFF, which the mask arithmetic would
+    otherwise read as a huge id wearing every flag."""
+    blank = _ase_rgba(2, 2, (0, 0, 0, 0))
+    art = _ase_rgba(2, 2, (11, 22, 33, 255))
+    data = _ase_file(
+        _ase_header(1, 4, 2),
+        [
+            _ase_frame(
+                [
+                    _ase_tileset(5, 2, 2, [blank, art]),
+                    _ase_layer("Tiles", kind=2, tileset=5),
+                    _ase_tilemap_cel(0, np.array([[1, 0xFFFFFFFF]], dtype=np.uint32)),
+                ]
+            )
+        ],
+    )
+    doc, warnings = asein.document_from_aseprite(data)
+    assert any("0xffffffff" in warning for warning in warnings)
+    cel = next(
+        layer
+        for layer in (doc.stack if doc.anim is None else doc.anim.unique_cel_layers())
+        if isinstance(layer, TilemapCel)
+    )
+    assert int(cel.refs[0, 0]) == 1
+    assert int(cel.refs[0, 1]) == 0
+    _assert_synced(doc)
+
+
+def test_import_drops_diagonal_flips_on_a_non_square_tileset():
+    blank = _ase_rgba(4, 2, (0, 0, 0, 0))
+    art = _ase_rgba(4, 2, (11, 22, 33, 255))
+    data = _ase_file(
+        _ase_header(1, 8, 2),
+        [
+            _ase_frame(
+                [
+                    _ase_tileset(5, 4, 2, [blank, art]),
+                    _ase_layer("Tiles", kind=2, tileset=5),
+                    _ase_tilemap_cel(
+                        0,
+                        np.array(
+                            [[gid.compose(1, flip_d=True), 1]], dtype=np.uint32
+                        ),
+                    ),
+                ]
+            )
+        ],
+    )
+    doc, warnings = asein.document_from_aseprite(data)
+    assert any("diagonal" in warning for warning in warnings)
+    cel = next(
+        layer
+        for layer in (doc.stack if doc.anim is None else doc.anim.unique_cel_layers())
+        if isinstance(layer, TilemapCel)
+    )
+    assert int(cel.refs[0, 0]) == 1, "D dropped, the id kept"
+    assert int(cel.refs[0, 1]) == 1
+    _assert_synced(doc)
+
+
+def _tileset_chunk_flags(data: bytes) -> list[int]:
+    """Every 0x2023 chunk's flags word, walked off the raw bytes."""
+    out: list[int] = []
+    at = 128  # the header's own size
+    while at < len(data):
+        frame_size, magic, _old, _dur, _pad, chunk_count = struct.unpack_from(
+            "<IHHHHI", data, at
+        )
+        assert magic == 0xF1FA
+        chunk_at = at + 16
+        for _ in range(chunk_count):
+            size, kind = struct.unpack_from("<IH", data, chunk_at)
+            if kind == 0x2023:
+                _tileset_id, flags = struct.unpack_from("<II", data, chunk_at + 6)
+                out.append(flags)
+            chunk_at += size
+        at += frame_size
+    return out
+
+
+def test_the_written_tileset_chunk_declares_tile_zero_empty():
+    """Flag 4 says what ``tiles.py`` already promises -- gid 0 *is* the blank
+    tile. Without it real Aseprite treats the file as the pre-release layout
+    whose empty cell is 0xFFFFFFFF, and a re-save there could hand
+    ``_remap_tile_refs`` that value as a tile id."""
+    data = aseout.aseprite_bytes(_still_doc())
+    flags = _tileset_chunk_flags(data)
+    assert flags, "the document writes at least one tileset chunk"
+    assert all(word == (2 | 4) for word in flags)

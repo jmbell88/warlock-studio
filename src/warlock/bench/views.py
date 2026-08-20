@@ -135,7 +135,7 @@ def render_views(
         "calibrated": False,
         "frames": [f"{i:04d}.png" for i in range(len(plan.cells))],
     }
-    payload["worker"] = {"frames": result.get("frames"), "rendered": result.get("rendered")}
+    payload["worker"] = {"frames": result.get("frames")}
     (out_dir / SIDECAR).write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return payload
 

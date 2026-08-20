@@ -436,10 +436,13 @@ def score_reference(reference_path: Path) -> dict[str, Any]:
     failures this is here to detect, so measuring the post-processed file would
     make every arm score the same.
 
-    The colour and orphan counts are taken *through* the export's own reduction
-    (``pipelines.pixel``), because a reduction is how anyone would ever look at
-    the image, and they are what "reads as pixel art" comes down to once the
-    grid is there.
+    The colour and orphan counts are taken on plain whole-image NEAREST
+    reductions to fixed sizes (128 and 64), not through the export's
+    phase-aligned ``downscale_grid``: that reduction only exists when a grid
+    was detected, and these counts have to stay comparable across arms whose
+    generations drew no lattice at all. A reduction is still how anyone would
+    ever look at the image, and the counts are what "reads as pixel art"
+    comes down to once the grid is there.
 
     Pure numpy and Pillow, no torch, so a reference-stage run scores on a
     machine that cannot load a model.

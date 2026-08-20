@@ -109,9 +109,12 @@ class GeometryOps:
         """Move cells by whole cells. Tiled's Map -> Offset Map.
 
         ``wrap`` rolls, which is an exact permutation -- no cell is invented and
-        none is lost, so offsetting back is the identity. Without it the vacated
+        none is lost, so offsetting back is the identity. Objects wrap with the
+        cells, modulo the map's pixel size, which is Tiled's answer and what
+        keeps the identity holding for them too. Without ``wrap`` the vacated
         cells take gid 0, which is the honest answer for a shift that genuinely
-        pushed content off the edge.
+        pushed content off the edge -- and objects then ride the shift off the
+        map with the content they annotate.
 
         ``scope`` is ``"map"`` (every tile leaf) or ``"layer"`` (the active one).
         Whole-map scope moves objects by the pixel equivalent, which is
@@ -160,12 +163,25 @@ class GeometryOps:
         after_objects: dict[int, list[tuple[float, float]]] = {}
         if scope == "map":
             shift_x, shift_y = dx * self.tile_w, dy * self.tile_h
+            # Under ``wrap`` the objects wrap too, modulo the map's pixel size --
+            # Tiled's own answer, and the only one that keeps the docstring's
+            # identity claim true for them: the cells were normalized by modulo
+            # above, so a shift applied *un*-wrapped moved objects by the
+            # normalized amount -- ``offset(-1)`` on an 8-wide map pushed every
+            # object 7 tiles right, and ``offset(+1)`` then ``offset(-1)`` left
+            # them displaced a full map width from the geometry they annotate.
+            pixel_w, pixel_h = self.width * self.tile_w, self.height * self.tile_h
             for layer in self.all_layers():
                 if not isinstance(layer, ObjectLayer):
                     continue
                 before_objects[layer.uid] = [(o.x, o.y) for o in layer.objects]
                 after_objects[layer.uid] = [
-                    (o.x + shift_x, o.y + shift_y) for o in layer.objects
+                    (
+                        ((o.x + shift_x) % pixel_w, (o.y + shift_y) % pixel_h)
+                        if wrap
+                        else (o.x + shift_x, o.y + shift_y)
+                    )
+                    for o in layer.objects
                 ]
 
         self.history.push(

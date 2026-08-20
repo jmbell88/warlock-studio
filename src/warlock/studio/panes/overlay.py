@@ -202,34 +202,6 @@ def _screenshot(ctx: Any) -> None:
     ctx.submit("screenshot", run)
 
 
-def status_text(ctx: Any, meter: Any) -> tuple[str, str]:
-    """The strip's compact line and its tooltip, sampled at about 2 Hz.
-
-    Formatting and sampling both live in state.py, which has no imgui in it, so
-    what the numbers say is assertable without a window; this is only the pump
-    and the two strings it produces.
-    """
-    resources = ctx.state.pump_resources()
-    return (
-        resources.line(meter.fps, meter.frames),
-        resources.detail(meter.fps, meter.frame_ms, meter.worst_ms, meter.frames),
-    )
-
-
-def status_readout(text: str, tooltip: str) -> None:
-    """Draw the strip's text where the cursor already is.
-
-    Positioning is the caller's, because the caller is the one that knows how
-    much room the whole right-hand strip needs -- a ``same_line`` past the
-    content region clips rather than wraps, so the reservation has to be
-    measured before anything on the line is drawn.
-    """
-    imgui.align_text_to_frame_padding()
-    widgets.muted(text)
-    if imgui.is_item_hovered():
-        imgui.set_tooltip(tooltip)
-
-
 def fps_meter(ctx: Any, meter: Any) -> None:
     """The frame rate in full, bottom-left, when F10 has asked for it.
 

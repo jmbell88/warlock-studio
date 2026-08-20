@@ -2,9 +2,10 @@
 
 Two decisions carry the module. **A tileset is edited by frozen-replace, never
 in place** -- ``tilegrid.Tileset`` is frozen and its ``pixels`` are read-only
-(see :mod:`..tilegrid.tileset`), because the pane's texture cache keys an
-upload on ``id(pixels)``; an in-place edit would move no counter and redraw
-nothing. :class:`TilesetSlot` is the thing that *can* change identity across
+(see :mod:`..tilegrid.tileset`), because the pane's texture cache holds the
+strip array it last uploaded and compares identity with ``is``
+(``inker_textures.tileset_texture``); an in-place edit would hand back the same
+array and redraw nothing. :class:`TilesetSlot` is the thing that *can* change identity across
 an edit while still answering to a stable name: the ``uid`` undo addresses,
 the ``tileset`` a whole new frozen object each time :func:`grow`,
 :func:`shrink` or :func:`with_tiles` runs.
@@ -279,8 +280,10 @@ def materialize(refs: np.ndarray, ts: Tileset, size: tuple[int, int]) -> np.ndar
             if x0 >= width:
                 break
             raw = int(refs[row, col])
+            # ``refs`` is uint32 and the mask keeps it non-negative, so the
+            # only way to be out of range is past the end.
             local = raw & gid.GID_MASK
-            if local < 0 or local >= ts.tile_count:
+            if local >= ts.tile_count:
                 local = 0
             tile = oriented(ts.tile_pixels(local), raw)
             h = min(tile.shape[0], height - y0)

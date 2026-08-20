@@ -50,7 +50,6 @@ class JointMarkers:
         self.ctx = ctx
         self.program = programs.get("solid")
         data = sphere(1.0)
-        self.count = len(data)
         self._vbo = ctx.buffer(data.tobytes())
         self._vao = ctx.vertex_array(self.program, [(self._vbo, "3f", "a_position")])
 

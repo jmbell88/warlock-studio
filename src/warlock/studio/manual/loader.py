@@ -28,10 +28,12 @@ from . import parser
 # it always belonged: it is a mode with a keyboard loop, not a note about how
 # the app is built.
 #
-# Chapter 14 (Keyboard shortcuts) is a *user* chapter and belongs to Part I,
+# The Keyboard shortcuts chapter is a *user* chapter and belongs to Part I,
 # which is where ``docs/manual/00-index.md`` has always listed it; the ranges
-# here said 14 was where "Setup & operations" began, so the in-app contents and
+# here used to start "Setup & operations" at it, so the in-app contents and
 # the index disagreed about one chapter's part for as long as both existed.
+# (Its number is not written here on purpose -- it has already moved once,
+# and the ranges below are the one place a number is load-bearing.)
 # Nothing failed, because ``tests/manual/test_docs.py`` asserted only that the
 # index *links* every chapter -- so grouping is now asserted too, in
 # ``test_index_sections_match_the_loaders_parts``, and the two cannot drift

@@ -715,7 +715,10 @@ class App:
         from . import journal
 
         try:
-            data_dir = Path(self.config.data_dir)
+            # ``self.runtime.config`` -- App has no ``config`` of its own, and
+            # reading one here was an AttributeError this except swallowed, so
+            # the dialog's "Open the log folder?" could never actually open it.
+            data_dir = Path(self.runtime.config.data_dir)
         except Exception:  # noqa: BLE001 -- a crash report must not crash
             data_dir = None
         try:
@@ -2770,11 +2773,12 @@ class App:
             # card falls back to the placeholder, which on its own reads as "the
             # build produced nothing".
             log.exception("could not capture a thumbnail for built asset %s", job_id)
-            # Level ``info``, not ``error``: the export succeeded and only the
-            # picture did not, and there is exactly one level above info until
-            # H68 adds the middle one -- claiming ``error`` here would put a red
-            # dismissable card over a build that worked.
-            ctx.toast("The asset was built, but its thumbnail could not be made.", "info", "log")
+            # Level ``warn``, not ``error``: the export succeeded and only the
+            # picture did not, so a red card over a build that worked would
+            # overclaim -- but something *did* fail and the log has the
+            # traceback, which is exactly the middle level H68 added. (It sat
+            # at ``info`` only while info and error were the whole vocabulary.)
+            ctx.toast("The asset was built, but its thumbnail could not be made.", "warn", "log")
             return
 
         def run() -> Any:

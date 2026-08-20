@@ -445,6 +445,30 @@ def test_the_pasted_front_stands_on_the_shared_baseline():
     assert bounds[0][1] == bounds[1][1] == 460
 
 
+def test_a_wide_reference_never_bleeds_into_the_neighbouring_cell():
+    """front_fits gates on bbox *aspect*, which still admits a source up to a
+    third wider than the generated front's -- so a height-matched paste can come
+    out wider than the cell, and the overflow would land in the "left" view."""
+    geom = ss.geometry("turnaround")
+    atlas = Image.new("RGBA", (ss.ATLAS_PX, ss.ATLAS_PX), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(atlas)
+    for cell in geom.cells:
+        draw.rectangle(
+            (cell.x + 200, cell.y + 200, cell.x + 300, cell.y + 460),
+            fill=(1, 2, 3, 255),
+        )
+    before = np.asarray(atlas).copy()
+    subject = Image.new("RGBA", (500, 50), (9, 9, 9, 255))
+    pasted = np.asarray(ss.preserve_front(atlas, geom, subject))
+    front = geom.cells[0]
+    outside = np.ones(pasted.shape[:2], dtype=bool)
+    outside[front.y : front.y + front.h, front.x : front.x + front.w] = False
+    assert (pasted[outside] == before[outside]).all()
+    # Trimmed, not vanished: the paste still spans the whole cell width.
+    cell_alpha = pasted[front.y : front.y + front.h, front.x : front.x + front.w, 3]
+    assert cell_alpha[:, 0].any() and cell_alpha[:, -1].any()
+
+
 def test_front_preservation_is_a_turnaround_only_step():
     geom = ss.geometry("walk")
     with pytest.raises(ValueError, match="turnaround-only"):

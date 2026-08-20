@@ -85,6 +85,9 @@ def draw_sheet(ctx: Any) -> None:
         imgui.set_next_window_bg_alpha(0.0)
     imgui.push_style_var(imgui.StyleVar_.alpha.value, alpha)
     radius = widgets.push_surface_rounding()
+    # ``begin`` returns a (visible, open) tuple in imgui_bundle, and a tuple is
+    # always truthy -- the guard needs the first element or it never skips.
+    # ``end`` stays unconditional either way; that is begin/end's contract.
     opened = imgui.begin(
         "##profiles-sheet",
         None,
@@ -93,7 +96,7 @@ def draw_sheet(ctx: Any) -> None:
         | imgui.WindowFlags_.no_resize.value
         | imgui.WindowFlags_.no_collapse.value
         | imgui.WindowFlags_.no_saved_settings.value,
-    )
+    )[0]
     widgets.pop_surface_rounding()
     if opened:
         widgets.window_shadow("overlay", radius=radius)

@@ -643,7 +643,12 @@ def handle_key(ctx: Any, event: Any) -> bool:
     if event.type != pygame.KEYDOWN:
         return True
 
-    mods = pygame.key.get_mods()
+    # Off ``event.mod``, never ``pygame.key.get_mods()`` -- ``main._shortcut``'s
+    # rule (UX-12): ``mod`` is the modifier state at the instant this key was
+    # pressed, where ``get_mods()`` is the state *now*, after the event batch
+    # drained, so a Ctrl released between the two made a fast chord fall
+    # through as the bare letter.
+    mods = event.mod
     ctrl = bool(mods & pygame.KMOD_CTRL)
     shift = bool(mods & pygame.KMOD_SHIFT)
     name = pygame.key.name(event.key)

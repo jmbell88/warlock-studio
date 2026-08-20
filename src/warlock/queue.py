@@ -282,9 +282,9 @@ def _needs_handoff(
 ) -> bool:
     """Must trellis be stopped before this image model loads?
 
-    Three independent reasons, and the predicate has one owner because three
-    call sites (``_generate``, ``_pixel_sheet``, ``_retexture``) ask it and a
-    fourth spelling is how they come to disagree.
+    Three independent reasons, and the predicate has one owner because every
+    t2i stage asks it through ``_acquire_t2i`` -- a second spelling is how
+    they would come to disagree.
 
     * ``exclusive`` -- WARLOCK_VRAM_EXCLUSIVE, the original reason.
     * conditioning beside a *running* trellis -- a ControlNet plus the
@@ -348,7 +348,7 @@ def _sprite_source(src: Path, config: Config) -> tuple[Any, Any, str]:
     return (cut, reference.measure(cut), matte_source)
 
 
-def _sprite_ip_image(cut: Any, size: int | None = None) -> Any:
+def _sprite_ip_image(cut: Any) -> Any:
     """The reference framed for the IP-Adapter: subject only, on neutral grey.
 
     Cropped to the subject so the adapter's sixteen patch tokens are spent on
@@ -360,7 +360,7 @@ def _sprite_ip_image(cut: Any, size: int | None = None) -> Any:
 
     from .pipelines import pixelsheet, spritesynth
 
-    side = spritesynth.ATLAS_PX if size is None else int(size)
+    side = spritesynth.ATLAS_PX
     box = cut.getbbox()
     subject = cut.crop(box) if box else cut
     scale = min(side / max(1, subject.width), side / max(1, subject.height)) * 0.9

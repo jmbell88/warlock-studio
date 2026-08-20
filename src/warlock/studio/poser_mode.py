@@ -693,6 +693,28 @@ def _journal_adopt(ctx: Any, path: Path, meta: dict[str, Any]) -> bool:
     editor.apply(data.get("bones") or {}, pose_id=None, dirty=True)
     if data.get("root_translation"):
         editor.set_root_translation(data["root_translation"])
+    if str(data.get("mode") or "pose") == "joints":
+        # The payload records everything ``_pose_payload`` writes, and joint
+        # corrections are half of it: a crash mid-placement recovered as a rest
+        # pose under a success toast, the corrections silently gone. Entering
+        # joints mode takes fresh homes (the rotations in a joints session are
+        # rest anyway -- ``enter_joints_mode`` resets them on the way in, as it
+        # did in the crashed session), and each recorded displacement is then
+        # replayed through ``move_handle``, the same door a drag uses, so the
+        # markers land where the user put them and ``moved`` is re-derived
+        # rather than trusted.
+        import numpy as np
+
+        from .viewer import math3d as m3
+
+        editor.enter_joints_mode()
+        for name, delta in (data.get("moved") or {}).items():
+            home = editor.home.get(name)
+            if home is None:
+                continue
+            editor.move_handle(
+                name, home + m3.blender_delta_to_gltf(np.asarray(delta, dtype="f8"))
+            )
     after = getattr(viewer, "_after_pose_change", None)
     if after is not None:
         after()

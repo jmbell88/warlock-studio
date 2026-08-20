@@ -290,7 +290,7 @@ def dedup_tiles(
     simply never collide with the untransposed ones -- so the four transposing
     variants cost nothing and refuse nothing there.
     """
-    seen: dict[bytes, int] = {}
+    seen: set[bytes] = set()
     kept: list[Sprite] = []
     for sprite in sprites:
         tile = np.asarray(sprite.pixels)
@@ -303,7 +303,7 @@ def dedup_tiles(
             key = tile.tobytes()
         if key in seen:
             continue
-        seen[key] = len(kept)
+        seen.add(key)
         kept.append(sprite)
     return kept, len(sprites) - len(kept)
 

@@ -168,7 +168,14 @@ class SpriteOps:
                             lora_weight=pixel_style.default_weight,
                             conditioning=cond,
                             on_state=lambda s: self._t2i_state(job_id, s),
-                            on_step=lambda i, n: self._t2i_step(job_id, i, n),
+                            # Band k's steps *inside* the one t2i_sample
+                            # window -- (k*n + i) / (N*n), the CON-02
+                            # arithmetic. Raw (i, n) per band walked the whole
+                            # window on band one and the never-regress floor
+                            # pinned the bar at its top for every later band.
+                            on_step=lambda i, n, k=band.index: self._t2i_step(
+                                job_id, k * n + i, len(plan) * n
+                            ),
                             cancel_event=self._cancel.event if self._cancel else None,
                             sheet=True,
                         )
@@ -627,7 +634,13 @@ class SpriteOps:
                         seed=seed,
                         conditioning=conditioning,
                         on_state=lambda s: self._t2i_state(job_id, s),
-                        on_step=lambda i, n: self._t2i_step(job_id, i, n),
+                        # View k's steps inside the one t2i_sample window --
+                        # the same CON-02 arithmetic as the pixel-sheet bands:
+                        # raw (i, n) per view pinned the bar at the window top
+                        # after the first view.
+                        on_step=lambda i, n, k=index: self._t2i_step(
+                            job_id, k * n + i, len(views) * n
+                        ),
                         cancel_event=self._cancel.event if self._cancel else None,
                     )
                 )

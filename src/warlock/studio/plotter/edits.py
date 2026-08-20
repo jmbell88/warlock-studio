@@ -521,10 +521,13 @@ class TileSizeEdit(Edit):
 
     before_size: tuple[int, int]
     after_size: tuple[int, int]
-    before_objects: dict[int, list[tuple[float, float, float, float]]] = field(
+    # ``(x, y, shape)`` per object -- the position and the (frozen) scaled
+    # Shape, which is what ``_apply_tile_size`` puts back. ``Any`` for the
+    # shape because this module sits below the model.
+    before_objects: dict[int, list[tuple[float, float, Any]]] = field(
         default_factory=dict
     )
-    after_objects: dict[int, list[tuple[float, float, float, float]]] = field(
+    after_objects: dict[int, list[tuple[float, float, Any]]] = field(
         default_factory=dict
     )
 

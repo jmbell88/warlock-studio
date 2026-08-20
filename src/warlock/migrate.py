@@ -163,9 +163,13 @@ def _no_live_writer() -> Iterator[None]:
     modification of equal size is invisible to it, so the good case is a loud
     failure and the bad case is a silently split library (RUN-02).
 
-    So the transaction stays open across ``_move`` and is only rolled back
-    afterwards -- including after the deletes, because the window that matters
-    runs right up to the ``rmtree``. The single-instance lock (RUN-01) now makes
+    So the transaction stays open across every ``_move`` -- the measure, the
+    copy and the verify. The ``rmtree`` of the legacy trees happens *after* it
+    is released, deliberately: the hold is an open handle on the legacy
+    ``jobs.sqlite``, and Windows will not unlink a tree that contains one. That
+    ordering is safe because by then the destinations are published and
+    ``_pending`` skips a populated destination -- a legacy tree that survives
+    costs disk space, never a split library. The single-instance lock (RUN-01) now makes
     a second Warlock on the same home impossible in the first place; this is the
     same guarantee taken at the level of the thing actually being moved, which
     still holds when the two processes have different homes and one of them is
@@ -298,8 +302,9 @@ def run(config: Config) -> list[str]:
         return []
 
     moved: list[tuple[Path, Path]] = []
-    # The exclusive hold spans the measure, the copy, the verify *and* the
-    # delete -- see ``_no_live_writer``. Measuring inside it as well is not
+    # The exclusive hold spans the measure, the copy and the verify; the
+    # deletes wait below until it is released -- see ``_no_live_writer`` for
+    # why the boundary sits there. Measuring inside it as well is not
     # incidental: sizes taken before the lock could already be stale by the time
     # the copy starts, and the verify compares against them.
     with _no_live_writer():

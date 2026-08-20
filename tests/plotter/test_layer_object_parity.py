@@ -45,9 +45,10 @@ def test_a_duplicate_lands_directly_above_its_original() -> None:
     doc = _doc()
     original = doc.tile_layers()[0]
     copy = doc.duplicate_layer(original.uid)
-    # ``children_of`` is top-first, so "above" is the lower index.
+    # ``children_of`` is bottom-first -- a later sibling paints over an earlier
+    # one -- so "above" is the *higher* index.
     order = [layer.uid for layer in doc.children_of(None)]
-    assert order.index(copy.uid) + 1 == order.index(original.uid)
+    assert order.index(copy.uid) == order.index(original.uid) + 1
 
 
 def test_duplicating_a_group_mints_fresh_ids_all_the_way_down() -> None:
@@ -89,7 +90,7 @@ def test_a_duplicate_is_one_undo_step() -> None:
 def test_merge_down_is_nonzero_above_wins_per_cell() -> None:
     doc = _doc()
     below = doc.tile_layers()[0]
-    above = doc.add_tile_layer("Above", index=0)
+    above = doc.add_tile_layer("Above")  # appended: the higher index paints on top
     doc.write_region(below.uid, 0, 0, np.array([[1, 2]], gidlib.DTYPE))
     doc.write_region(above.uid, 0, 0, np.array([[0, 9]], gidlib.DTYPE))
 
@@ -102,7 +103,7 @@ def test_merge_down_is_nonzero_above_wins_per_cell() -> None:
 def test_merge_down_removes_the_layer_it_merged() -> None:
     doc = _doc()
     below = doc.tile_layers()[0]
-    above = doc.add_tile_layer("Above", index=0)
+    above = doc.add_tile_layer("Above")
     doc.merge_down(above.uid)
     assert [layer.uid for layer in doc.children_of(None)] == [below.uid]
 
@@ -113,7 +114,7 @@ def test_merge_down_leaves_presentation_alone() -> None:
     renderer the first time the tint changed."""
     doc = _doc()
     below = doc.tile_layers()[0]
-    above = doc.add_tile_layer("Above", index=0)
+    above = doc.add_tile_layer("Above")
     doc.set_layer_props(above.uid, opacity=0.4)
     doc.write_region(above.uid, 0, 0, np.array([[9]], gidlib.DTYPE))
 
@@ -125,7 +126,7 @@ def test_merge_down_leaves_presentation_alone() -> None:
 def test_merge_down_is_one_undo_step() -> None:
     doc = _doc()
     below = doc.tile_layers()[0]
-    above = doc.add_tile_layer("Above", index=0)
+    above = doc.add_tile_layer("Above")
     doc.write_region(above.uid, 0, 0, np.array([[9]], gidlib.DTYPE))
     doc.write_region(below.uid, 1, 1, np.array([[3]], gidlib.DTYPE))
 
@@ -143,9 +144,18 @@ def test_merge_down_refuses_with_nothing_below() -> None:
         doc.merge_down(only.uid)
 
 
+def test_merge_down_refuses_on_the_bottom_of_a_stack() -> None:
+    """Index 0 is the visual bottom -- a layer *above* it is no merge target."""
+    doc = _doc()
+    bottom = doc.tile_layers()[0]
+    doc.add_tile_layer("Above")
+    with pytest.raises(ValueError, match="no layer below"):
+        doc.merge_down(bottom.uid)
+
+
 def test_merge_down_refuses_across_kinds_by_name() -> None:
     doc = _doc()
-    doc.add_object_layer("Objects")  # lands at the end, below the tile layer
+    doc.add_object_layer("Objects", index=0)  # index 0: below the tile layer
     above = doc.tile_layers()[0]
     with pytest.raises(ValueError, match="not a tile layer"):
         doc.merge_down(above.uid)
@@ -153,7 +163,7 @@ def test_merge_down_refuses_across_kinds_by_name() -> None:
 
 def test_merge_down_refuses_a_non_tile_layer() -> None:
     doc = _doc()
-    objects = doc.add_object_layer("Objects", index=0)
+    objects = doc.add_object_layer("Objects")
     with pytest.raises(ValueError, match="not a tile layer"):
         doc.merge_down(objects.uid)
 
@@ -175,9 +185,9 @@ def test_attaching_a_picture_is_undoable() -> None:
     assert doc.layer(layer.uid).pixels.shape == (4, 4, 4)
     assert doc.layer(layer.uid).source == "a.png"
 
-    doc.undo()  # the source change
-    doc.undo()  # the pixels
+    doc.undo()  # one step: the pixels and the source travel together
     assert doc.layer(layer.uid).pixels.shape != (4, 4, 4)
+    assert doc.layer(layer.uid).source == "", "the source rides the same step"
 
 
 def test_the_attached_picture_is_frozen() -> None:

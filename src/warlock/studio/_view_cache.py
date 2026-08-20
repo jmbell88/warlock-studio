@@ -77,11 +77,24 @@ class CacheOps:
                 entry.gpu.release()
             self._cache[obj.uid] = self._build(obj, doc, key)
             self.rebuilds += 1
+            # The hovered element is an index into the *old* mesh's vertices,
+            # edges or faces. A keyboard op that shrank any of those would have
+            # next frame's overlay read ``edge_verts[hover]`` past the end --
+            # an IndexError out of ``draw()`` on the frame loop -- or send a
+            # stale vertex index to the GPU. This is the one place every mesh
+            # replacement passes through before anything draws.
+            if self.hover_element is not None and self.hover_element[0] == obj.uid:
+                self.hover_element = None
         for uid in [u for u in self._cache if u not in live]:
             # A hidden object's buffers go too: ``visible=False`` means it does
             # not render, does not export and is not picked, and holding its
             # upload would make it the one of the three that is only half true.
             self._cache.pop(uid).gpu.release()
+        # The projection cache rides the same lifetime: a deleted object's
+        # entry pins its mesh and its projected arrays, and nothing else would
+        # ever evict it.
+        for uid in [u for u in self._screens if u not in live]:
+            self._screens.pop(uid)
 
     def _build(self: ClayView, obj: Any, doc: Any, key: Any) -> _Entry:
         prims = bd.to_primitives(obj, doc.materials)

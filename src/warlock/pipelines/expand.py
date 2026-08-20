@@ -21,8 +21,8 @@ Two deliberate behaviours, both measured elsewhere before they were rules:
 
 * **A detailed prompt is not expanded.** Mandatory rewriting measurably hurts
   prompts that already carry their own description (arXiv 2407.14333), so
-  ``should_expand`` gates on the prompt's own token count and the caller keeps
-  the original text when it says no.
+  ``expand`` gates on the prompt's own token count and returns None, and the
+  caller keeps the original text.
 * **The whitelist is the safety.** Generation is constrained to the tokens of
   ``positive.txt`` (plus the comma), so the expander can only append aesthetic
   vocabulary -- it cannot rewrite the subject, contradict the negative prompt,
@@ -115,12 +115,6 @@ def _load(model_dir: Path) -> tuple[Any, Any, Any]:
     loaded = (tokenizer, model, _allowed_ids(tokenizer, words))
     _cache[model_dir] = loaded
     return loaded
-
-
-def should_expand(prompt: str, model_dir: Path) -> bool:
-    """Whether this prompt is short enough to benefit from expansion."""
-    tokenizer, _model, _allowed = _load(model_dir)
-    return len(tokenizer(prompt)["input_ids"]) <= DETAILED_PROMPT_TOKENS
 
 
 def expand(prompt: str, model_dir: Path, *, seed: int) -> str | None:

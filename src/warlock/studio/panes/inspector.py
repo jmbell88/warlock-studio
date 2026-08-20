@@ -21,7 +21,6 @@ from ...service import system as svc_system
 from .. import controls, create_stages, fonts, forms, theme, widgets
 from ..app_ctx import derive_key, pixel_prefs
 from ..manual import render as manual_render
-from ..state import format_duration
 from ..tokens import sp
 from . import (
     candidates_panel,
@@ -1382,7 +1381,3 @@ def _manifest(ctx: Any, job_id: str) -> dict[str, Any] | None:
     if stamps.storable(mtime):
         ctx.state.manifest = (key, manifest)
     return manifest
-
-
-def duration(job: Any) -> str:
-    return format_duration(job.get("duration"))

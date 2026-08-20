@@ -863,9 +863,11 @@ class StrokeState:
         else:
             # The same anchoring the pixel nib uses: floor to the pixel the dab
             # is on, then grow left and up by half the tip. An even tip has no
-            # centre pixel, so it grows down and right -- consistent with the
-            # disc, and a half-pixel choice that a picture with a hard edge
-            # would otherwise make visible as a one-pixel jitter along a stroke.
+            # centre pixel, so the extra pixel lands on the left/up side --
+            # ``p - width // 2`` puts more of an even tip before the anchor
+            # than after it, which is what ``test_image_brush`` pins -- and it
+            # is a half-pixel choice that a picture with a hard edge would
+            # otherwise make visible as a one-pixel jitter along a stroke.
             left = int(math.floor(point[0])) - width // 2
             top = int(math.floor(point[1])) - height // 2
         for rect, (sx, sy) in tiling.pieces(
@@ -928,9 +930,16 @@ class StrokeState:
         covered = self.coverage[y0:y1, x0:x1]
         gain = np.clip(alpha - covered, 0.0, None) * self.opacity
         denominator = 1.0 - covered * self.opacity
-        share = np.divide(
-            gain, denominator, out=np.zeros_like(gain), where=denominator > 0.0
-        )
+        # ``composite.over``'s masked-lane fix: ``where=`` does not promise the
+        # masked lanes go unevaluated, so a SIMD lane with a zero denominator
+        # (fully covered at full opacity -- its gain is zero too) still ran
+        # 0/0 and raised under ``np.errstate(all="raise")``. Divide by one
+        # there and select; bit-identical everywhere the old form defined a
+        # value.
+        lit = denominator > 0.0
+        share = np.empty_like(gain)
+        np.divide(gain, np.where(lit, denominator, 1.0), out=share)
+        share = np.where(lit, share, 0.0)
         # After the share is computed from it, never before.
         np.maximum(covered, alpha, out=covered)
         if not share.any():
@@ -948,7 +957,12 @@ class StrokeState:
             # toward black.
             dst_a = crop[..., 3] / 255.0
             out_a = share + dst_a * (1.0 - share)
-            frac = np.divide(share, out_a, out=np.zeros_like(share), where=out_a > 0.0)
+            # The same masked-lane fix as ``share`` above: ``out_a == 0``
+            # implies ``share == 0``, so the masked lanes were 0/0.
+            lit = out_a > 0.0
+            frac = np.empty_like(share)
+            np.divide(share, np.where(lit, out_a, 1.0), out=frac)
+            frac = np.where(lit, frac, 0.0)
             out = np.empty_like(crop)
             out[..., :3] = crop[..., :3] + (src[..., :3] - crop[..., :3]) * frac[..., None]
             out[..., 3] = out_a * 255.0

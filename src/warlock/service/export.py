@@ -84,9 +84,19 @@ def bulk_export(
     if not members:
         raise NotFound("nothing to export")
     dest_zip.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(dest_zip, "w", zipfile.ZIP_DEFLATED) as zf:
-        for arcname, path in members:
-            zf.write(path, arcname)
+    # Through a temp sibling, like ``_staged_copy`` below and for its reason:
+    # the destination is wherever the user pointed the save dialog -- possibly
+    # a watched project folder -- and writing the zip in place would leave a
+    # torn archive there for the length of the build (SVC-06).
+    tmp = dest_zip.with_name(f".{dest_zip.name}.{secrets.token_hex(4)}.tmp")
+    try:
+        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zf:
+            for arcname, path in members:
+                zf.write(path, arcname)
+        os.replace(tmp, dest_zip)
+    finally:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
     return {"path": str(dest_zip), "files": len(members)}
 
 

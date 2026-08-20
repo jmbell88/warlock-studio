@@ -14,6 +14,7 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 import numpy as np
+import pytest
 from PIL import Image
 
 from warlock.studio import inker
@@ -700,3 +701,35 @@ def test_a_file_written_before_continuous_existed_reads_as_discontinuous(tmp_pat
 
     back = inker.Document.load(path)
     assert all(not t.continuous for t in back.anim.tracks)
+
+
+# --- the door: what a crafted archive may not do ----------------------------
+
+
+def test_an_archive_claiming_more_than_the_ceiling_is_refused(tmp_path, monkeypatch):
+    """A zip's directory declares what each member unpacks to and nothing makes
+    that number honest, so the refusal has to come off the directory rather
+    than off the read that has already exhausted memory -- the
+    ``.wblk``/``.wmap``/``.wpack`` door, which this reader alone lacked. The
+    constant is lowered rather than a gigabyte being built, which is why it is
+    read at call time."""
+    path = _saved(tmp_path)
+    monkeypatch.setattr(inker_ora, "MAX_DECOMPRESSED_BYTES", 16)
+    with pytest.raises(ValueError, match="bytes unpacked"):
+        inker_ora.read_ora(path)
+
+
+def test_a_stack_xml_declaring_a_dtd_is_refused(tmp_path):
+    """``plotter/tsx.py``'s rule: an internal DTD is entity amplification
+    inside ``fromstring`` before any ceiling downstream gets a turn, and no
+    ORA writer emits one, so nothing legitimate is lost."""
+    path = tmp_path / "dtd.ora"
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("mimetype", "image/openraster")
+        zf.writestr(
+            "stack.xml",
+            '<?xml version="1.0"?><!DOCTYPE image [<!ENTITY a "b">]>'
+            '<image w="8" h="8"><stack/></image>',
+        )
+    with pytest.raises(ValueError, match="DTD"):
+        inker_ora.read_ora(path)

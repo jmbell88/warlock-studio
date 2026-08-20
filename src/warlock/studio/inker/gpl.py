@@ -117,7 +117,10 @@ def parse_jasc(text: str) -> list[RGBA]:
     in enough files in the wild that trusting it would drop real colours, and
     the rows are the palette.
     """
-    lines = [line.strip() for line in text.splitlines()]
+    # A UTF-8 BOM survives ``errors="replace"`` decoding as U+FEFF, which is
+    # not whitespace to ``strip`` -- left in place it hides the magic line and
+    # a legitimate file is refused as "not a JASC palette".
+    lines = [line.strip() for line in text.lstrip("﻿").splitlines()]
     if not lines or lines[0].strip().upper() != JASC_HEADER:
         raise ValueError("not a JASC palette file")
     out: list[RGBA] = []
@@ -159,7 +162,10 @@ def parse_any(text: str) -> list[RGBA]:
     Sniffed on the magic line rather than on the suffix, because the suffix is
     what a download got renamed to and the first line is what the file is.
     """
-    if text.lstrip().upper().startswith(JASC_HEADER):
+    # The BOM before the whitespace: ``lstrip()`` strips whitespace and U+FEFF
+    # is not one, so a BOM'd JASC file failed the sniff and fell into the
+    # ``.gpl`` reader, which refuses it as "no colours".
+    if text.lstrip("﻿").lstrip().upper().startswith(JASC_HEADER):
         return parse_jasc(text)
     return parse(text)
 

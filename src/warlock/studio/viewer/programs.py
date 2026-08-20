@@ -401,31 +401,6 @@ void main() {
 }
 """
 
-# A full-screen triangle, shared by the blit pass. Three vertices rather than
-# a quad's four: no diagonal seam, one less triangle.
-FULLSCREEN_VERT = """
-#version 330 core
-in vec2 a_position;
-out vec2 v_uv;
-void main() {
-    v_uv = a_position * 0.5 + 0.5;
-    gl_Position = vec4(a_position, 0.0, 1.0);
-}
-"""
-
-# Copies a resolved texture through, used to blit an MSAA resolve into the
-# texture imgui shows. Kept trivial on purpose.
-BLIT_VERT = FULLSCREEN_VERT
-
-BLIT_FRAG = """
-#version 330 core
-in vec2 v_uv;
-out vec4 f_color;
-uniform sampler2D u_source;
-void main() { f_color = texture(u_source, v_uv); }
-"""
-
-
 def _expand(source: str, defines: tuple[str, ...]) -> str:
     """Splice the shared chunks in and put the #defines after the #version.
 
@@ -478,10 +453,12 @@ class ProgramCache:
         self._cache.clear()
 
 
+# No "blit" entry, deliberately: the MSAA resolve is ``ctx.copy_framebuffer``
+# (see ``glctx.Viewport.resolve``), so a fullscreen-copy program never had a
+# caller and carrying its sources only claimed one existed.
 SOURCES: dict[str, tuple[str, str]] = {
     "pbr": (PBR_VERT, PBR_FRAG),
     "unlit": (UNLIT_VERT, UNLIT_FRAG),
     "solid": (SOLID_VERT, SOLID_FRAG),
     "lines": (LINES_VERT, LINES_FRAG),
-    "blit": (BLIT_VERT, BLIT_FRAG),
 }

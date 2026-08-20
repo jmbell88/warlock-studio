@@ -892,6 +892,85 @@ def test_a_move_never_snaps_onto_the_geometry_it_is_moving(view) -> None:
     assert found is None or not any(np.allclose(found, c) for c in carried)
 
 
+def test_an_object_move_never_snaps_onto_its_own_geometry(view) -> None:
+    """The element path's rule, on the object path: in object mode the whole
+    object rides the drag, so every one of its vertices -- reprojected at the
+    live transform -- would track the cursor exactly and report a snap."""
+    doc = _doc(count=1)
+    uid = doc.objects[0].uid
+    doc.select([uid])
+    view.app_ctx.state.clay.tool = "move"
+    view.app_ctx.state.clay.snap_vertex = True
+    view.frame_selection(doc)
+    view.draw(doc, RECT, 0.0)
+    view._begin_gizmo_drag(doc)
+
+    screen = view.screen_of(doc, uid)
+    index = int(np.argmin(screen.depth))
+    at = (float(screen.xy[index][0]), float(screen.xy[index][1]))
+    assert view._snap_vertex(doc, at) is None, "the only object is the one moving"
+
+
+def test_only_the_owning_button_releases_a_grab(view) -> None:
+    """The press half guards exactly this; the release half has to mirror it.
+    An MMB release or a wheel tick (buttons 4/5) mid-LMB-drag used to commit
+    the gizmo drag early, and the real LMB-up then found no grab."""
+    import pygame
+
+    doc = _doc(count=1)
+    _moving_face(view, doc)
+    view._begin_gizmo_drag(doc)
+    assert view._grab == "gizmo"
+
+    for button in (2, 4, 5):
+        up = pygame.event.Event(pygame.MOUSEBUTTONUP, button=button, pos=_centre())
+        assert view.handle_event(doc, up, True) is True
+        assert view._grab == "gizmo", "a stray button-up must not end the drag"
+
+    up = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=_centre())
+    assert view.handle_event(doc, up, True) is True
+    assert view._grab is None
+
+
+def test_a_pan_is_released_by_the_middle_button_alone(view) -> None:
+    doc = _doc(count=1)
+    _press(view, doc, _centre(), button=2)
+    assert view._grab == "pan"
+    import pygame
+
+    up = pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=_centre())
+    assert view.handle_event(doc, up, True) is True
+    assert view._grab == "pan", "an LMB release must not end a pan"
+    up = pygame.event.Event(pygame.MOUSEBUTTONUP, button=2, pos=_centre())
+    assert view.handle_event(doc, up, True) is True
+    assert view._grab is None
+
+
+def test_an_object_rotation_snap_quantises_the_delta_not_the_orientation(view) -> None:
+    """``ops.snap_rotation``'s own docstring: "rotate this by fifteen degrees
+    about the ring I grabbed" leaves an already-placed object where it was put.
+    Quantising the absolute orientation instead swung a 37-degree object to 30
+    the moment a snapped drag began, even with the mouse held still."""
+    doc = _doc(count=1)
+    obj = doc.objects[0]
+    obj.rotation = m3.quat_from_axis_angle(
+        np.array([0.0, 1.0, 0.0]), np.radians(37.0)
+    )
+    was = tuple(np.array(v, copy=True) for v in obj.trs())
+    view.app_ctx.state.clay.snap = True
+    view.app_ctx.state.clay.tool = "rotate"
+
+    view._apply(obj, was, m3.quat_identity(), view.state)
+    assert np.allclose(obj.rotation, was[1]), "a zero delta moves nothing"
+
+    delta = m3.quat_from_axis_angle(np.array([0.0, 1.0, 0.0]), np.radians(14.0))
+    view._apply(obj, was, delta, view.state)
+    snapped = m3.quat_mul(
+        m3.quat_from_axis_angle(np.array([0.0, 1.0, 0.0]), np.radians(15.0)), was[1]
+    )
+    assert np.allclose(obj.rotation, snapped), "the delta snaps to the grid"
+
+
 def test_an_explicit_constraint_beats_a_snap(view) -> None:
     """A user who has typed a number has said exactly where the thing goes, and
     moving it onto a nearby vertex instead would be the app overruling them."""
@@ -1155,3 +1234,40 @@ def test_a_selection_change_still_rebuilds_the_overlay(view) -> None:
     doc.set_element_sel(uid, el.ElementSel(faces=[0]))
     view.draw(doc, RECT, 0.0)
     assert view._overlays[uid] is not overlay
+
+
+def test_a_hover_does_not_outlive_the_mesh_it_indexed(view) -> None:
+    """``hover_element`` names an index into a particular mesh's elements. A
+    keyboard op that shrinks the edge set left next frame's overlay reading
+    ``edge_verts[hover]`` past the end -- an IndexError out of ``draw()`` on
+    the frame loop -- and vertex mode sent the stale index to the GPU."""
+    doc = _doc(count=1)
+    doc.set_element_mode("edge")
+    uid = doc.objects[0].uid
+    view.draw(doc, RECT, 0.0)
+
+    # The read-site guard: an out-of-range hover draws nothing, never raises.
+    view.hover_element = (uid, 10_000)
+    view._render_dirty = True
+    view.draw(doc, RECT, 0.0)
+
+    # The choke point: replacing the mesh clears a hover naming the old one.
+    view.hover_element = (uid, 10_000)
+    doc.set_mesh(uid, bp.plane())
+    view.draw(doc, RECT, 0.0)
+    assert view.hover_element is None
+
+
+def test_a_projection_toggle_invalidates_the_screen_cache(view) -> None:
+    """The projection *kind* moves every projected point without moving the
+    camera, so a key without it served stale positions to pick, hover and the
+    marquee until the camera happened to move (Ctrl+5)."""
+    doc = _doc(count=1)
+    uid = doc.objects[0].uid
+    view.frame_selection(doc)
+    view.draw(doc, RECT, 0.0)
+
+    before = view.screen_of(doc, uid)
+    assert view.screen_of(doc, uid) is before, "an unchanged camera hits"
+    view.camera.orthographic = True
+    assert view.screen_of(doc, uid) is not before, "the toggle misses"

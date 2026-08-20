@@ -700,7 +700,6 @@ def test_a_selection_is_clamped_to_the_map_it_is_used_on():
 def test_escape_cancels_one_thing_at_a_time(monkeypatch):
     """Staged, outermost first: a press that abandons a drag must not also throw
     away the marquee the user spent a gesture placing."""
-    import pygame
 
     ctx = FakeCtx()
     _tab(ctx)
@@ -708,8 +707,7 @@ def test_escape_cancels_one_thing_at_a_time(monkeypatch):
     state.select = (0, 0, 2, 2)
     state.selected_object = 7
     state.drag_kind = "paint"
-    event, mods = _key("ESCAPE")
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    event = _key("ESCAPE")
 
     assert plotter_mode.handle_key(ctx, event) is True
     assert state.drag_kind == ""
@@ -727,27 +725,23 @@ def test_escape_cancels_one_thing_at_a_time(monkeypatch):
 
 
 def test_ctrl_a_selects_everything_and_ctrl_d_drops_it(monkeypatch):
-    import pygame
 
     ctx = FakeCtx()
     tab = _tab(ctx)
     state = plotter_mode.ensure(ctx)
     head = tab.doc.history.head
 
-    event, mods = _key("a", ctrl=True)
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    event = _key("a", ctrl=True)
     assert plotter_mode.handle_key(ctx, event) is True
     assert state.select == (0, 0, tab.doc.width - 1, tab.doc.height - 1)
 
-    event, mods = _key("d", ctrl=True)
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    event = _key("d", ctrl=True)
     plotter_mode.handle_key(ctx, event)
     assert state.select is None
 
     # Inker's spelling deselects too.
     state.select = (0, 0, 1, 1)
-    event, mods = _key("a", ctrl=True, shift=True)
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    event = _key("a", ctrl=True, shift=True)
     plotter_mode.handle_key(ctx, event)
     assert state.select is None
 
@@ -781,21 +775,18 @@ def _painted(ctx: FakeCtx):
 def test_copy_then_paste_puts_the_block_in_the_brush(monkeypatch):
     """Paste is Tiled's model -- the block becomes the brush and the tool
     becomes Stamp -- so every rule the stamp already has applies unchanged."""
-    import pygame
 
     ctx = FakeCtx()
     tab, state, layer, value = _painted(ctx)
     state.select = (0, 0, 1, 1)
 
-    event, mods = _key("c", ctrl=True)
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    event = _key("c", ctrl=True)
     assert plotter_mode.handle_key(ctx, event) is True
     assert state.clipboard.shape == (2, 2)
     assert state.clipboard_doc == tab.uid
 
     state.tool = "select"
-    event, mods = _key("v", ctrl=True)
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    event = _key("v", ctrl=True)
     plotter_mode.handle_key(ctx, event)
     assert state.tool == "stamp"
     assert np.array_equal(state.brush, np.full((2, 2), value, gid.DTYPE))
@@ -942,14 +933,12 @@ def test_a_selection_constrains_a_shape_fill():
 
 
 def test_a_cut_is_refused_while_the_tab_is_busy(monkeypatch):
-    import pygame
 
     ctx = FakeCtx()
     tab, state, layer, _value = _painted(ctx)
     state.select = (0, 0, 1, 1)
     tab.saving = True
-    event, mods = _key("x", ctrl=True)
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    event = _key("x", ctrl=True)
     assert plotter_mode.handle_key(ctx, event) is True
     assert layer.data.all(), "nothing was cut"
     assert state.clipboard is None
@@ -1167,6 +1156,55 @@ def test_a_lock_stops_removing_an_object_but_not_selecting_it():
     plotter_mode._delete(ctx, state, tab)
     assert tab.doc.layers[-1].objects, "the object is still there"
     assert state.selected_object == obj.uid, "and still selected, so it can be read"
+    assert "locked" in ctx.toasts[-1][0]
+
+
+def _locked_object_layer(ctx: FakeCtx) -> tuple[Any, Any, Any, Any]:
+    """A tab whose active layer is a locked object layer holding one object."""
+    tab, state, _layer, _value = _painted(ctx)
+    obj_layer = tab.doc.add_object_layer("Things")
+    tab.doc.set_active_layer(obj_layer.uid)
+    obj = MapObject(uid=new_uid(), name="spawn", kind="point", x=1, y=1)
+    tab.doc.add_object(obj_layer.uid, obj)
+    tab.doc.set_layer_props(obj_layer.uid, locked=True)
+    state.tool = "object"
+    state.selected_object = obj.uid
+    return tab, state, obj_layer, obj
+
+
+def test_a_lock_stops_cutting_an_object_but_not_copying_it():
+    """Cutting removes the object, which is a content edit; and a refused cut
+    copies nothing, or the user would paste what they believe they moved."""
+    ctx = FakeCtx()
+    tab, state, obj_layer, obj = _locked_object_layer(ctx)
+
+    plotter_mode._copy(ctx, state, tab, cut=True)
+    assert obj_layer.objects, "nothing was cut"
+    assert state.clipboard is None, "and a refused cut copies nothing"
+    assert "locked" in ctx.toasts[-1][0]
+
+    plotter_mode._copy(ctx, state, tab, cut=False)
+    assert isinstance(state.clipboard, plotter_mode.ObjectClip), "copying is allowed"
+
+
+def test_a_lock_stops_pasting_an_object():
+    """A paste adds an object, which is a content edit like any other."""
+    ctx = FakeCtx()
+    tab, state, obj_layer, obj = _locked_object_layer(ctx)
+    state.clipboard = plotter_mode.ObjectClip(obj=obj)
+    state.clipboard_doc = tab.uid
+
+    plotter_mode._paste(ctx, state, tab)
+    assert len(obj_layer.objects) == 1, "nothing landed"
+    assert "locked" in ctx.toasts[-1][0]
+
+
+def test_a_lock_stops_duplicating_an_object():
+    ctx = FakeCtx()
+    tab, state, obj_layer, _obj = _locked_object_layer(ctx)
+
+    plotter_mode._duplicate_object(ctx, state, tab)
+    assert len(obj_layer.objects) == 1, "nothing was added"
     assert "locked" in ctx.toasts[-1][0]
 
 
@@ -1675,17 +1713,18 @@ def test_the_guard_is_silent_before_the_mode_has_ever_been_opened():
 
 
 def _key(name: str, *, ctrl: bool = False, shift: bool = False):
+    """One KEYDOWN carrying its own modifier state. ``handle_key`` reads
+    ``event.mod`` (``main._shortcut``'s UX-12 rule), never ``get_mods()``."""
     import pygame
 
     mods = (pygame.KMOD_CTRL if ctrl else 0) | (pygame.KMOD_SHIFT if shift else 0)
-    return pygame.event.Event(pygame.KEYDOWN, key=getattr(pygame, f"K_{name}")), mods
+    return pygame.event.Event(pygame.KEYDOWN, key=getattr(pygame, f"K_{name}"), mod=mods)
 
 
 def test_a_tool_letter_picks_that_tool(monkeypatch):
     """Every letter, derived from ``TOOLS`` rather than one hard-coded pair:
     this test named G/fill and so had to be edited by hand when the keymap moved
     to Tiled's letters, which is exactly the drift the derivation prevents."""
-    import pygame
 
     from warlock.studio import plotter_state
 
@@ -1694,8 +1733,7 @@ def test_a_tool_letter_picks_that_tool(monkeypatch):
     state = plotter_mode.ensure(ctx)
     for key, _label, letter in plotter_state.TOOLS:
         state.tool = "stamp" if key != "stamp" else "erase"
-        event, mods = _key(letter.lower())
-        monkeypatch.setattr(pygame.key, "get_mods", lambda held=mods: held)
+        event = _key(letter.lower())
         assert plotter_mode.handle_key(ctx, event) is True, letter
         assert state.tool == key, f"{letter} should pick {key}"
 
@@ -1714,25 +1752,21 @@ def test_no_tool_letter_collides_with_another_binding():
 def test_undo_is_refused_while_the_tab_is_busy(monkeypatch):
     """Consumed, not passed through: the key belongs to this mode either way,
     and letting it fall through would act on a viewport Plotter has replaced."""
-    import pygame
 
     ctx = FakeCtx()
     tab = _tab(ctx, dirty=True)
     tab.saving = True
     head = tab.doc.history.head
-    event, mods = _key("z", ctrl=True)
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    event = _key("z", ctrl=True)
     assert plotter_mode.handle_key(ctx, event) is True
     assert tab.doc.history.head == head
 
 
 def test_undo_works_when_it_is_not(monkeypatch):
-    import pygame
 
     ctx = FakeCtx()
     tab = _tab(ctx, dirty=True)
-    event, mods = _key("z", ctrl=True)
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    event = _key("z", ctrl=True)
     plotter_mode.handle_key(ctx, event)
     assert not tab.dirty
 
@@ -1740,19 +1774,16 @@ def test_undo_works_when_it_is_not(monkeypatch):
 def test_ctrl_shift_z_redoes_the_way_inker_and_clay_accept(monkeypatch):
     """Plotter was Ctrl+Y only, so a user arriving from either of the other two
     editors found their redo silently doing nothing."""
-    import pygame
 
     ctx = FakeCtx()
     tab = _tab(ctx, dirty=True)
     dirty_data = tab.doc.tile_layers()[0].data.copy()
 
-    event, mods = _key("z", ctrl=True)
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    event = _key("z", ctrl=True)
     plotter_mode.handle_key(ctx, event)
     assert not tab.dirty
 
-    event, mods = _key("z", ctrl=True, shift=True)
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    event = _key("z", ctrl=True, shift=True)
     plotter_mode.handle_key(ctx, event)
     assert tab.dirty
     assert np.array_equal(tab.doc.tile_layers()[0].data, dirty_data)
@@ -1770,25 +1801,22 @@ def test_a_key_release_is_never_consumed():
 
     ctx = FakeCtx()
     _tab(ctx)
-    up = pygame.event.Event(pygame.KEYUP, key=pygame.K_g)
+    up = pygame.event.Event(pygame.KEYUP, key=pygame.K_g, mod=0)
     assert plotter_mode.handle_key(ctx, up) is False
 
 
 def test_x_y_and_z_transform_the_brush_in_hand(monkeypatch):
-    import pygame
 
     ctx = FakeCtx()
     _tab(ctx)
     state = plotter_mode.ensure(ctx)
     state.brush = np.array([[1, 2], [3, 4]], gid.DTYPE)
 
-    event, mods = _key("x")
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    event = _key("x")
     assert plotter_mode.handle_key(ctx, event) is True
     assert np.array_equal(gid.tile_ids(state.brush), [[2, 1], [4, 3]])
 
-    event, mods = _key("y")
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    event = _key("y")
     plotter_mode.handle_key(ctx, event)
     assert np.array_equal(gid.tile_ids(state.brush), [[4, 3], [2, 1]])
 
@@ -1796,7 +1824,6 @@ def test_x_y_and_z_transform_the_brush_in_hand(monkeypatch):
 def test_shift_z_turns_the_brush_the_other_way(monkeypatch):
     """Three clockwise turns rather than a counter-clockwise routine of its
     own: Z then Shift+Z must be the identity."""
-    import pygame
 
     ctx = FakeCtx()
     _tab(ctx)
@@ -1804,13 +1831,11 @@ def test_shift_z_turns_the_brush_the_other_way(monkeypatch):
     original = np.array([[1, 2], [3, 4]], gid.DTYPE)
     state.brush = original.copy()
 
-    event, mods = _key("z")
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    event = _key("z")
     plotter_mode.handle_key(ctx, event)
     assert not np.array_equal(state.brush, original)
 
-    event, mods = _key("z", shift=True)
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    event = _key("z", shift=True)
     plotter_mode.handle_key(ctx, event)
     assert np.array_equal(state.brush, original)
 
@@ -1818,7 +1843,6 @@ def test_shift_z_turns_the_brush_the_other_way(monkeypatch):
 def test_a_brush_transform_is_not_refused_while_the_tab_is_busy(monkeypatch):
     """The brush is view state: transforming it writes nothing and pushes no
     step, so it stays outside the gate that ``Ctrl+Z`` sits behind."""
-    import pygame
 
     ctx = FakeCtx()
     tab = _tab(ctx)
@@ -1827,8 +1851,7 @@ def test_a_brush_transform_is_not_refused_while_the_tab_is_busy(monkeypatch):
     state.brush = np.array([[1, 2]], gid.DTYPE)
     head = tab.doc.history.head
 
-    event, mods = _key("x")
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    event = _key("x")
     assert plotter_mode.handle_key(ctx, event) is True
     assert np.array_equal(gid.tile_ids(state.brush), [[2, 1]])
     assert tab.doc.history.head == head
@@ -1836,14 +1859,12 @@ def test_a_brush_transform_is_not_refused_while_the_tab_is_busy(monkeypatch):
 
 
 def test_a_brush_transform_with_nothing_in_hand_does_nothing(monkeypatch):
-    import pygame
 
     ctx = FakeCtx()
     _tab(ctx)
     state = plotter_mode.ensure(ctx)
     state.brush = None
-    event, mods = _key("x")
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: mods)
+    event = _key("x")
     assert plotter_mode.handle_key(ctx, event) is False
     assert state.brush is None
 
@@ -2658,3 +2679,57 @@ def test_a_shift_click_line_survives_the_growth_it_causes():
     plotter_canvas._apply_line(ctx, state, tab, state.last_paint, (-2, 0))
     data = tab.doc.tile_layers()[0].data
     assert [int(value != 0) for value in data[0, :4].tolist()] == [1, 1, 1, 1]
+
+
+# --- crash recovery -------------------------------------------------------------
+
+
+def test_a_recovered_map_reads_dirty_and_close_asks(tmp_path):
+    """``read_wmap`` hands back a document already marked saved, and
+    ``PlotterDoc.dirty`` delegates to the document -- so an adopt that only
+    wrote ``tab.saved_head`` produced a *clean* recovered tab: one unprompted
+    close skipped the confirm and ``drop()`` deleted the journal copy, the only
+    surviving copy of the work."""
+    from warlock.studio.plotter.tilemap import MapDoc
+
+    doc = MapDoc(4, 4, 16, 16)
+    doc.add_tile_layer("Ground")
+    path = tmp_path / "level.wmap"
+    path.write_bytes(wmap.wmap_bytes(doc))
+
+    ctx = FakeCtx()
+    assert plotter_mode._journal_adopt(ctx, path, {"title": "level"}) is True
+    tab = ctx.state.plotter.docs[-1]
+    assert tab.dirty is True, "recovered work is unsaved by definition"
+
+    plotter_mode.close_tab(ctx, tab.uid)
+    assert ctx.confirms.pending is not None, "closing recovered work must ask"
+    assert ctx.state.plotter.get(tab.uid) is not None, "still open until answered"
+
+
+def test_an_aux_file_named_like_the_map_is_not_routed_onto_it(tmp_path):
+    """``startswith("map.")`` also matched an image layer whose source happened
+    to be ``map.png``, which then overwrote the map at the user's chosen path
+    with the picture -- or the other way round, depending on dict order."""
+    plotter_io._write(
+        {"map.tmx": b"the map", "map.png": b"the picture"}, tmp_path / "level.tmx"
+    )
+    assert (tmp_path / "level.tmx").read_bytes() == b"the map"
+    assert (tmp_path / "map.png").read_bytes() == b"the picture"
+
+
+def test_paste_and_duplicate_are_refused_while_the_tab_is_busy():
+    """Ctrl+V writes the document since ``ObjectClip`` (an object paste is an
+    ``add_object``) and Ctrl+J adds a duplicate, so both sit behind the busy
+    gate with their mutating peers."""
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    tab.saving = True
+    state = plotter_mode.ensure(ctx)
+    state.clipboard = np.array([[1]], gid.DTYPE)
+    state.clipboard_doc = tab.uid
+
+    assert plotter_mode.handle_key(ctx, _key("v", ctrl=True)) is True
+    assert state.brush is None, "a busy tab takes no paste"
+    assert plotter_mode.handle_key(ctx, _key("j", ctrl=True)) is True
+    assert not tab.dirty

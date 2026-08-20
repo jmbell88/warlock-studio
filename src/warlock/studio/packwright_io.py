@@ -302,6 +302,16 @@ def export_library(ctx: Any, tab: PackTab | None = None) -> None:
     if tab.atlas is None:
         ctx.toast("Nothing packed yet.", "error")
         return
+    # Unlike :func:`export_files`, whose PNG and sidecar both derive from the
+    # *landed* pack and so agree with each other, this pairs the landed atlas
+    # with the **current** document's bytes -- so while an edit is unpacked
+    # (``pack_dirty``) or a repack is in flight, the picture and the document
+    # beside it would describe two different atlases. Refused rather than
+    # snapshotted, because the atlas that matches the current document does
+    # not exist yet; the preview pane's pump repacks within a frame.
+    if tab.pack_dirty or tab.packing:
+        ctx.toast("Still packing your latest edits -- try again in a moment.", "error")
+        return
     png = composelib.png_bytes(tab.atlas)
     source = wpack.wpack_bytes(tab.doc)
     title = tab.title

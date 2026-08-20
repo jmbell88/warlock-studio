@@ -379,6 +379,7 @@ def normalise(
     return canvas, Report(
         ok=out_report.ok,
         reasons=out_report.reasons,
+        codes=out_report.codes,
         warnings=out_report.warnings,
         occupancy=out_report.occupancy,
         bbox=out_report.bbox,

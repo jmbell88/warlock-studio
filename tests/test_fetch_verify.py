@@ -184,7 +184,7 @@ def _install(root: Path, name: str, files: dict[str, bytes], *, digests=True) ->
 
 def test_an_intact_install_verifies(tmp_path: Path):
     dest = _install(tmp_path, "thing", {"w.safetensors": b"weights"})
-    result = fetch.verify_manifest(Config(), dest)
+    result = fetch.verify_manifest(dest)
     assert result.status == fetch.VERIFY_OK
     assert result.checked == 1
     assert "1 file(s) match" in result.detail
@@ -193,7 +193,7 @@ def test_an_intact_install_verifies(tmp_path: Path):
 def test_a_file_changed_after_the_download_is_reported(tmp_path: Path):
     dest = _install(tmp_path, "thing", {"w.safetensors": b"weights"})
     (dest / "w.safetensors").write_bytes(b"something else")
-    result = fetch.verify_manifest(Config(), dest)
+    result = fetch.verify_manifest(dest)
     assert result.status == fetch.VERIFY_BAD
     assert result.bad == ("w.safetensors",)
     assert "corrupt" in result.detail
@@ -204,7 +204,7 @@ def test_a_file_deleted_after_the_download_is_reported_separately(tmp_path: Path
     and the other is a file that changed under the app."""
     dest = _install(tmp_path, "thing", {"a.bin": b"a", "b.bin": b"b"})
     (dest / "a.bin").unlink()
-    result = fetch.verify_manifest(Config(), dest)
+    result = fetch.verify_manifest(dest)
     assert result.status == fetch.VERIFY_BAD
     assert result.missing == ("a.bin",)
     assert result.bad == ()
@@ -216,7 +216,7 @@ def test_a_manifest_with_no_digests_is_unknown_and_never_red(tmp_path: Path):
     with no digests in it, and reporting those as a problem would light up the
     whole models directory and teach the reader that the check is noise."""
     dest = _install(tmp_path, "thing", {"w.safetensors": b"weights"}, digests=False)
-    result = fetch.verify_manifest(Config(), dest)
+    result = fetch.verify_manifest(dest)
     assert result.status == fetch.VERIFY_UNKNOWN
     assert result.bad == () and result.missing == ()
     assert "no digests recorded" in result.detail
@@ -225,7 +225,7 @@ def test_a_manifest_with_no_digests_is_unknown_and_never_red(tmp_path: Path):
 def test_a_directory_with_no_manifest_at_all_is_unknown(tmp_path: Path):
     dest = tmp_path / "bare"
     dest.mkdir()
-    assert fetch.verify_manifest(Config(), dest).status == fetch.VERIFY_UNKNOWN
+    assert fetch.verify_manifest(dest).status == fetch.VERIFY_UNKNOWN
 
 
 def test_verify_all_walks_the_manifests_rather_than_the_registry(tmp_path, monkeypatch):

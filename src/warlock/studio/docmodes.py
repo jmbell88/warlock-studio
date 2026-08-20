@@ -85,9 +85,9 @@ def release_prefix(ctx: Any, prefix: str) -> None:
 def guard(ctx: Any, attr: str, singular: str, plural: str, verb: str, proceed: Any) -> bool:
     """Ask before losing unsaved work. -> whether it went ahead now.
 
-    One question for all of them: ``ConfirmQueue`` holds a single pending
-    question per modal, so asking per dirty document would put the user in
-    front of a queue they answered the same way each time.
+    One question for all of them: ``ConfirmQueue`` really queues (I78), so
+    asking per dirty document would not lose any -- it would park the user in
+    front of a run of modals they answer the same way each time.
 
     ``getattr`` rather than the mode's ``ensure``: asking which documents are
     unsaved must not create the state that says none is, which is what the quit

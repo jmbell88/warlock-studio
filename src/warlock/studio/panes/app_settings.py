@@ -97,8 +97,12 @@ def draw(ctx: Any) -> None:
                     "Settings",
                     help_text="Application appearance, models, storage, and layout.",
                 )
-                with forms.Form("application-settings") as form_ui:
-                    _category_body(ctx, _categories(ctx, width), form_ui)
+                # No outer ``forms.Form`` around the dispatch: no category body
+                # ever read it -- ``_interface`` opens its own nested Form for
+                # the adaptive layout, and the rest are tables and read-only
+                # rows. All a Form contributes besides layout is an id scope,
+                # and nothing persisted keys on imgui id paths.
+                _category_body(ctx, _categories(ctx, width))
         imgui.end_child()
     imgui.end_child()
 
@@ -141,7 +145,7 @@ def _categories(ctx: Any, width: float) -> str:
     return chosen
 
 
-def _category_body(ctx: Any, category: str, form_ui: forms.Form) -> None:
+def _category_body(ctx: Any, category: str) -> None:
     if category == "models":
         _models(ctx)
     elif category == "storage":

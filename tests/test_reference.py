@@ -100,6 +100,18 @@ def test_normalise_never_invents_or_strips_an_alpha_channel():
     assert rgba.mode == "RGBA"
 
 
+def test_normalise_carries_the_machine_codes_with_the_reasons():
+    """``vectors`` turns codes into refused_<code> rates; a rebuilt report that
+    dropped them would record a prep-enabled refusal with every bucket at zero,
+    which counts as a failure mode that stopped happening."""
+    im = _subject(box=(20, 100, 90, 170))
+    ImageDraw.Draw(im).rectangle([160, 100, 230, 170], fill=(160, 40, 40))
+    _out, report = reference.normalise(im)
+    assert not report.ok
+    assert len(report.codes) == len(report.reasons)
+    assert "multi_object" in report.codes
+
+
 def test_prepare_disabled_is_a_byte_exact_copy(tmp_path):
     src = tmp_path / "ref.png"
     _subject().save(src)

@@ -581,12 +581,15 @@ def _preview(ctx: Any) -> None:
         return
     if imgui.tree_node("Prompt actually sent"):
         imgui.text_wrapped(preview.get("prompt") or "")
-        tokens, chunks = preview.get("tokens"), preview.get("chunks")
-        if tokens is not None:
+        # ``token_count``, not ``tokens``: that name is the design-token module
+        # this file imports, and shadowing it inside a draw function is a
+        # NameError waiting for the next person to reach for ``tokens.SP_2``.
+        token_count, chunks = preview.get("tokens"), preview.get("chunks")
+        if token_count is not None:
             # Chunks, not a truncation warning: the composed prompt is split on
             # comma boundaries and each chunk encoded separately, so a long one
             # costs attention rather than being cut off.
-            widgets.muted(f"{tokens} tokens - {chunks} chunk(s)")
+            widgets.muted(f"{token_count} tokens - {chunks} chunk(s)")
         imgui.tree_pop()
 
 

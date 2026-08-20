@@ -306,3 +306,56 @@ def test_every_program_compiles(gl, renderer):
         ("HAS_EMISSIVE_MAP", "HAS_AO_MAP"),
     ):
         assert renderer.programs.get("pbr", defines) is not None
+
+
+# --- release hygiene ----------------------------------------------------------
+
+
+def test_a_viewport_never_orphans_a_renderbuffer():
+    """Releasing a moderngl framebuffer does not release its attachments, and
+    the app sets no gc_mode -- so the MSAA colour and depth renderbuffers must
+    be held by name and released on every reallocation. Built inline, they
+    leaked a 4xMSAA pair per resize for the life of the context, and a splitter
+    drag resizes on nearly every frame.
+
+    A recording fake rather than the ``gl`` fixture: what is under test is the
+    bookkeeping, and a real context cannot say what was *not* freed."""
+
+    class _Obj:
+        def __init__(self, released):
+            self._released = released
+            self.filter = None
+            self.repeat_x = self.repeat_y = False
+
+        def release(self):
+            self._released.append(self)
+
+    class _Ctx:
+        def __init__(self):
+            self.made: list[_Obj] = []
+            self.released: list[_Obj] = []
+
+        def _new(self):
+            obj = _Obj(self.released)
+            self.made.append(obj)
+            return obj
+
+        def texture(self, size, components):
+            return self._new()
+
+        def renderbuffer(self, size, components, samples=0):
+            return self._new()
+
+        def depth_renderbuffer(self, size, samples=0):
+            return self._new()
+
+        def framebuffer(self, color_attachments=None, depth_attachment=None):
+            return self._new()
+
+    for samples in (4, 1):
+        ctx = _Ctx()
+        vp = glctx.Viewport(ctx, (16, 16), samples=samples)
+        vp.resize((32, 32))
+        vp.release()
+        leaked = [o for o in ctx.made if o not in ctx.released]
+        assert not leaked, f"{len(leaked)} GL object(s) leaked at samples={samples}"

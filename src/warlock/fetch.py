@@ -658,7 +658,7 @@ class Verification:
         return "; ".join(parts)
 
 
-def verify_manifest(config: Config, dest: Path) -> Verification:
+def verify_manifest(dest: Path) -> Verification:
     """Re-hash an installed directory against what its download recorded.
 
     **On demand only, and never at startup.** The C29/C30 lesson: a check that
@@ -722,7 +722,7 @@ def verify_all(config: Config) -> list[Verification]:
     if not root.is_dir():
         return []
     dests = sorted({p.parent for p in root.glob(f"*/{MANIFEST_NAME}")})
-    return [verify_manifest(config, dest) for dest in dests]
+    return [verify_manifest(dest) for dest in dests]
 
 
 def suspect_files(config: Config, kind: str, spec: Any) -> list[str]:
@@ -801,4 +801,13 @@ def present(config: Config, kind: str, spec: Any) -> bool:
         # directory would read as present and fail at load with the job
         # already dispatched.
         return (base / "config.json").exists() and (base / "pytorch_model.bin").exists()
-    return (root / spec.dir_name / "config.json").exists()
+    # metric / pose / matting: every entry in those tables downloads
+    # config.json plus safetensors weights, and the weights are the multi-GB
+    # half an interrupted fetch is missing. Config alone must not read as
+    # installed -- that is this docstring's whole promise, and a PickScore
+    # directory holding config.json without its 3.7 GB model.safetensors used
+    # to read as present with no compensating doctor load probe.
+    base = root / spec.dir_name
+    if not (base / "config.json").exists():
+        return False
+    return any(base.rglob("*.safetensors"))

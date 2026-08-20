@@ -118,7 +118,7 @@ class DragOps:
         if event.type == pygame.MOUSEBUTTONUP:
             if event.button == 3:
                 return self._rmb_release(local)
-            return self._release_drag(doc)
+            return self._release_drag(doc, event.button)
         if event.type == pygame.MOUSEMOTION:
             return self._motion(doc, local)
         if event.type == pygame.MOUSEWHEEL and hovered:
@@ -267,9 +267,17 @@ class DragOps:
             self.menu_request = local
         return True
 
-    def _release_drag(self: ClayView, doc: Any) -> bool:
+    def _release_drag(self: ClayView, doc: Any, button: int = 1) -> bool:
         if self._grab is None:
             return False
+        # The press half's guard, mirrored: a grab is owned by the button that
+        # began it -- pan by the middle button, everything else by the left --
+        # and only that button's release ends it. Without this an MMB release
+        # or a wheel tick (buttons 4/5) mid-LMB-drag committed the gizmo drag
+        # early, and the real LMB-up then found no grab to commit.
+        owner = 2 if self._grab == "pan" else 1
+        if button != owner:
+            return True
         was, self._grab = self._grab, None
         if was == "gizmo":
             gizmo = self.active_gizmo(doc)
@@ -366,9 +374,16 @@ class DragOps:
         """
         from .clay import pick as bp
 
+        object_mode = doc.element_mode == "object"
         best: tuple[float, np.ndarray] | None = None
         for obj in doc.objects:
             if not obj.visible:
+                continue
+            # In object mode the whole object rides the drag, so every one of
+            # its vertices -- reprojected at the live transform -- would track
+            # the cursor exactly and report a snap: the same self-snap the
+            # ``allowed`` mask below exists to prevent on the element path.
+            if object_mode and obj.uid in self._drag_start:
                 continue
             drag = self._element_drags.get(obj.uid)
             allowed = None
@@ -746,9 +761,15 @@ class DragOps:
         if isinstance(delta, np.ndarray) and delta.shape == (3,) and self._is_scale(state):
             obj.scale = np.array(was[2], dtype="f8") * delta
         elif isinstance(delta, np.ndarray) and delta.shape == (4,):
-            obj.rotation = m3.quat_normalize(m3.quat_mul(delta, np.array(was[1], dtype="f8")))
+            # The *delta* angle is what snaps, exactly as the element path does
+            # in ``_element_world_transform`` and for ``ops.snap_rotation``'s
+            # own stated reason: "rotate this by fifteen degrees about the ring
+            # I grabbed" leaves an already-placed object where it was put,
+            # where quantising the absolute orientation visibly swings it the
+            # moment the drag starts.
             if snap:
-                obj.rotation = ops.snap_rotation(obj.rotation, state.snap_rotate)
+                delta = ops.snap_rotation(delta, state.snap_rotate)
+            obj.rotation = m3.quat_normalize(m3.quat_mul(delta, np.array(was[1], dtype="f8")))
         else:
             moved = np.asarray(delta, dtype="f8").reshape(3) - self._drag_origin
             obj.translation = np.array(was[0], dtype="f8") + moved

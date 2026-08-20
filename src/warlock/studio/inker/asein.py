@@ -669,6 +669,14 @@ def _read_cel(state: _Parse, r: _Reader) -> None:
             )
         cel.width, cel.height = grid_w, grid_h
         tiles = np.frombuffer(decompressed, dtype="<u4").reshape(grid_h, grid_w)
+        if (tiles == np.uint32(0xFFFFFFFF)).any():
+            # The format's *other* empty: when a tileset's "tile ID 0 is empty"
+            # flag is off (rare, pre-release Aseprite builds), an erased cell is
+            # stored as 0xFFFFFFFF rather than 0. Left alone, the mask
+            # arithmetic below would read it as a huge id wearing every flag --
+            # so it is translated to this model's own empty, said out loud.
+            state.warn("cells stored as 0xffffffff were read as empty")
+            tiles = np.where(tiles == np.uint32(0xFFFFFFFF), np.uint32(0), tiles)
         cel.refs = _remap_tile_refs(tiles, id_mask, x_mask, y_mask, d_mask)
     else:
         raise ValueError(f"cel type {kind} is not one this build knows")
@@ -1075,6 +1083,13 @@ def _build_tilemap_cel(
         refs[y0:y1, x0:x1] = src[y0 - ty : y1 - ty, x0 - tx : x1 - tx]
     if tx < 0 or ty < 0 or tx + src_w > grid_w or ty + src_h > grid_h:
         warn("a cel reaching past the canvas was cropped to it")
+    if tile_w != tile_h and (refs & gid.DTYPE(gid.FLIP_D)).any():
+        # The refs door's own mask (``_doc_tiles._strip_diagonal``), applied
+        # to what the file carries: a diagonal flip of a non-square tile has
+        # the wrong footprint, and a commit over one reads neighbour pixels
+        # back into the atlas. The placement lands unturned, said out loud.
+        warn("diagonal flips on a non-square tileset were dropped")
+        refs = refs & gid.DTYPE(0xFFFFFFFF ^ gid.FLIP_D)
     pixels = materialize(refs, ts, size)
     return TilemapCel(pixels=pixels, refs=refs, tileset_uid=slot.uid, name=layer.name)
 

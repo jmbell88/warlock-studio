@@ -139,9 +139,12 @@ def _check_sprite_sheet(svc: WarlockService, block: Any) -> dict[str, Any]:
         logical = int(
             entries.get("logical_size") or svc_sprites.DEFAULT_SPRITE_LOGICAL_SIZE
         )
+    except (TypeError, ValueError):
+        raise Invalid("logical_size must be a whole number", field="logical_size") from None
+    try:
         colors = int(entries.get("colors") or svc_sprites.DEFAULT_SPRITE_COLORS)
     except (TypeError, ValueError):
-        raise Invalid("a sprite sheet's sizes are whole numbers", field="sheet_type") from None
+        raise Invalid("colors must be a whole number", field="colors") from None
     if logical not in svc_sprites.SPRITE_LOGICAL_SIZES:
         raise Invalid(
             f"logical_size must be one of {list(svc_sprites.SPRITE_LOGICAL_SIZES)}",
@@ -275,6 +278,12 @@ def create_job(
         # An image job never touches SDXL, so there is nothing for a
         # conditioning reference to condition.
         raise Invalid("only text jobs take a conditioning reference", field="reference")
+    if image is not None and kind != "image":
+        # The symmetric refusal: a text job's picture is its ``reference``,
+        # and silently accepting an ``image`` upload here would write an
+        # input.png the text pipeline never reads (the comment beside the
+        # pre-write loop below assumes exactly this cannot happen).
+        raise Invalid("only image jobs take an image upload", field="image")
     for name, value in (
         ("seed", seed),
         ("reference_seed", reference_seed),

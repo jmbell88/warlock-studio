@@ -459,7 +459,7 @@ def test_r_forces_a_repack(monkeypatch):
     ctx = FakeCtx()
     tab = _tab(ctx)
     _pack(ctx, tab)
-    event = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_r)
+    event = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_r, mod=0)
     assert packwright_mode.handle_key(ctx, event) is True
     assert tab.pack_dirty
 
@@ -470,8 +470,7 @@ def test_undo_re_arms_the_pack(monkeypatch):
     ctx = FakeCtx()
     tab = _tab(ctx)
     _pack(ctx, tab)
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: pygame.KMOD_CTRL)
-    event = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_z)
+    event = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_z, mod=pygame.KMOD_CTRL)
     assert packwright_mode.handle_key(ctx, event) is True
     assert tab.pack_dirty
 
@@ -487,8 +486,9 @@ def test_ctrl_shift_z_redoes(monkeypatch):
     tab.doc.undo()
     assert tab.doc.settings.padding != 6
 
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: pygame.KMOD_CTRL | pygame.KMOD_SHIFT)
-    event = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_z)
+    event = pygame.event.Event(
+        pygame.KEYDOWN, key=pygame.K_z, mod=pygame.KMOD_CTRL | pygame.KMOD_SHIFT
+    )
     assert packwright_mode.handle_key(ctx, event) is True
     assert tab.doc.settings.padding == 6
 
@@ -504,12 +504,14 @@ def test_delete_after_an_undo_does_not_crash(monkeypatch):
     added = tab.doc.add_source(_sprite("new"))
     state.selected = added.uid
 
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: pygame.KMOD_CTRL)
-    packwright_mode.handle_key(ctx, pygame.event.Event(pygame.KEYDOWN, key=pygame.K_z))
+    packwright_mode.handle_key(
+        ctx, pygame.event.Event(pygame.KEYDOWN, key=pygame.K_z, mod=pygame.KMOD_CTRL)
+    )
     assert state.selected is None
 
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: 0)
-    packwright_mode.handle_key(ctx, pygame.event.Event(pygame.KEYDOWN, key=pygame.K_DELETE))
+    packwright_mode.handle_key(
+        ctx, pygame.event.Event(pygame.KEYDOWN, key=pygame.K_DELETE, mod=0)
+    )
     assert len(tab.doc.sources) == 1
 
 
@@ -526,8 +528,9 @@ def test_an_undo_that_keeps_the_source_keeps_the_selection(monkeypatch):
     tab.doc.rename_source(uid, "hero")
     state.selected = uid
 
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: pygame.KMOD_CTRL)
-    packwright_mode.handle_key(ctx, pygame.event.Event(pygame.KEYDOWN, key=pygame.K_z))
+    packwright_mode.handle_key(
+        ctx, pygame.event.Event(pygame.KEYDOWN, key=pygame.K_z, mod=pygame.KMOD_CTRL)
+    )
     assert state.selected == uid
 
 
@@ -538,7 +541,7 @@ def test_delete_removes_the_selected_source(monkeypatch):
     tab = _tab(ctx)
     state = packwright_mode.ensure(ctx)
     state.selected = tab.doc.sources[1].uid
-    event = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_DELETE)
+    event = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_DELETE, mod=0)
     assert packwright_mode.handle_key(ctx, event) is True
     assert len(tab.doc.sources) == 2
 
@@ -548,7 +551,7 @@ def test_a_key_release_is_never_consumed():
 
     ctx = FakeCtx()
     _tab(ctx)
-    up = pygame.event.Event(pygame.KEYUP, key=pygame.K_r)
+    up = pygame.event.Event(pygame.KEYUP, key=pygame.K_r, mod=0)
     assert packwright_mode.handle_key(ctx, up) is False
 
 
@@ -558,3 +561,42 @@ def test_recent_files_persist():
     path = Path("/tmp/atlas.wpack")
     packwright_mode.adopt(ctx, doc, path=path)
     assert packwright_mode.recent_paths(ctx) == [str(path)]
+
+
+# --- crash recovery -------------------------------------------------------------
+
+
+def test_a_recovered_atlas_reads_dirty_and_close_asks(tmp_path):
+    """``read_wpack`` hands back a document already marked saved, and
+    ``PackTab.dirty`` delegates to the document -- so an adopt that only wrote
+    ``tab.saved_head`` produced a *clean* recovered tab: one unprompted close
+    skipped the confirm and ``drop()`` deleted the journal copy, the only
+    surviving copy of the work."""
+    seed = FakeCtx()
+    source = packwright_mode.new_document(seed)
+    source.doc.add_source(_sprite("s0"))
+    path = tmp_path / "atlas.wpack"
+    path.write_bytes(wpack.wpack_bytes(source.doc))
+
+    ctx = FakeCtx()
+    assert packwright_mode._journal_adopt(ctx, path, {"title": "atlas"}) is True
+    tab = ctx.state.packwright.docs[-1]
+    assert tab.dirty is True, "recovered work is unsaved by definition"
+
+    packwright_mode.close_tab(ctx, tab.uid)
+    assert ctx.confirms.pending is not None, "closing recovered work must ask"
+    assert ctx.state.packwright.get(tab.uid) is not None, "still open until answered"
+
+
+def test_export_library_refuses_while_the_pack_is_behind():
+    """Unlike the file export, whose PNG and sidecar both derive from the
+    landed pack, this pairs the landed atlas with the *current* document -- so
+    while an edit is unpacked the two would describe different atlases."""
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    _pack(ctx, tab)
+    tab.pack_dirty = True
+
+    packwright_mode.export_library(ctx, tab)
+    assert ctx.toasts and ctx.toasts[-1][1] == "error"
+    assert not any(key.startswith("packwright-library") for key in ctx.submitted)

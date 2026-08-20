@@ -3,14 +3,14 @@
 Each generator is a plain function of its parameters returning a :class:`Mesh`,
 and :data:`GENERATORS` maps a name to ``(defaults, builder)``. The registry is
 the point of the module rather than an index over it: the properties panel is
-generated from those default dictionaries, so adding a seventh primitive is
+generated from those default dictionaries, so adding a tenth primitive is
 adding a function and one registry line, in the same spirit as "add a skeleton
 by adding a JSON file, never by hardcoding bones in ``blender_worker``". A
 panel that switched on a hardcoded list of shape names would be a second place
 that has to know what a cylinder's parameters are, and the two would drift the
 first time a parameter was renamed.
 
-Three rules hold across all six, and each of them is pinned by a test:
+Four rules hold across all nine, and each of them is pinned by a test:
 
 **Every primitive is built centred on the origin.** ``Obj`` carries the
 translation, so geometry that baked its placement in would make the numeric TRS

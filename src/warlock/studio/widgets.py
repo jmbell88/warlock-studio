@@ -667,7 +667,7 @@ def combo(
 ):
     """A combo over (key, label) pairs. -> the (possibly unchanged) key.
 
-    Keys rather than indices because every one of these is a guidance taxonomy
+    Keys rather than indices because every one of these is an option table
     whose order is free to change; an index would silently become a different
     option the next time a table gained an entry.
 
@@ -746,7 +746,7 @@ def multiline(label: str, value: str, height: float, max_length: int) -> str:
 
 
 def field_options(ctx: Any, field: str) -> list[tuple[str, str]]:
-    """(key, label) pairs for one taxonomy field, with a blank first entry.
+    """(key, label) pairs for one guidance field, with a blank first entry.
 
     Blank because every guidance field is optional: an empty select means "say
     nothing about this", which is a different prompt from any of the choices.

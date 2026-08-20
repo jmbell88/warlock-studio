@@ -191,7 +191,7 @@ def test_handle_key_returns_false_with_no_document_open(svc) -> None:
     import pygame
 
     ctx = FakeCtx(svc)
-    event = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_g)
+    event = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_g, mod=0)
     assert clay_mode.handle_key(ctx, event) is False
 
 
@@ -201,7 +201,7 @@ def test_a_tool_key_is_consumed_and_selects_its_tool(svc) -> None:
     ctx = FakeCtx(svc)
     _tab(ctx)
     for key_name, tool in clay_mode.TOOL_KEYS.items():
-        event = pygame.event.Event(pygame.KEYDOWN, key=getattr(pygame, f"K_{key_name}"))
+        event = pygame.event.Event(pygame.KEYDOWN, key=getattr(pygame, f"K_{key_name}"), mod=0)
         assert clay_mode.handle_key(ctx, event) is True
         assert ctx.state.clay.tool == tool
 
@@ -222,7 +222,7 @@ def test_a_mutating_key_is_ignored_while_the_tab_is_saving(svc) -> None:
     depth = len(tab.doc.history)
     tab.saving = True
 
-    event = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_DELETE)
+    event = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_DELETE, mod=0)
     ctx.state.clay.doc_selection_hint = None
     tab.doc.select([tab.doc.objects[0].uid])
     assert clay_mode.handle_key(ctx, event) is True
@@ -236,7 +236,7 @@ def test_delete_removes_the_selection_when_not_saving(svc) -> None:
     tab = _tab(ctx)
     tab.doc.select([tab.doc.objects[0].uid])
 
-    event = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_DELETE)
+    event = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_DELETE, mod=0)
     assert clay_mode.handle_key(ctx, event) is True
     assert tab.doc.objects == []
 
@@ -1059,9 +1059,10 @@ def test_ctrl_w_closes_the_active_document(svc) -> None:
 # --- Ctrl+J and Ctrl+Shift+J -------------------------------------------------
 #
 # The two halves of "make these one object", one shift apart. Dispatched through
-# ``_ctrl_key`` rather than through ``handle_key`` because the modifier state
-# comes from ``pygame.key.get_mods()``, which a headless test cannot set --
-# ``_ctrl_key`` takes it as an argument precisely so this is assertable.
+# ``_ctrl_key``, which takes the shift state as an argument so it is directly
+# assertable. (``handle_key`` reads ``event.mod`` now -- the UX-12 rule -- so
+# these could also travel as events carrying ``mod``; the direct call stays
+# because it is the narrower statement.)
 
 
 def _merge_ready(svc):

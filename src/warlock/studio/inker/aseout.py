@@ -132,12 +132,7 @@ from .asein import (
 )
 from .index_plane import MAX_COLOURS, OPAQUE_THRESHOLD
 
-__all__ = ["ASEPRITE_SUFFIX", "aseprite_bytes", "write_aseprite"]
-
-#: What this writer produces. The reader opens ``.ase`` as well -- both
-#: spellings are the same format -- but a *save* picks one, and the modern one
-#: is what Aseprite itself has written since 1.0.
-ASEPRITE_SUFFIX = ".aseprite"
+__all__ = ["aseprite_bytes", "write_aseprite"]
 
 #: Every count this format spends a WORD on. Frames, layers, a tag's repeat and
 #: a canvas side are all bounded by it, and each is refused by its own name
@@ -166,11 +161,17 @@ _DIRECTION_INDEX: dict[str, int] = {}
 for _index, _name in enumerate(_TAG_DIRECTIONS):
     _DIRECTION_INDEX.setdefault(_name, _index)
 
-#: The 0x2023 flag this writer sets: the tileset's pixels are **in this file**.
-#: Bit 0 is the external-file link :func:`asein._read_tileset` refuses by name,
-#: and nothing here can produce one -- a ``TilesetSlot`` holds a whole frozen
-#: atlas, not a path.
+#: The 0x2023 flags this writer sets: the tileset's pixels are **in this file**
+#: (2), and **tile ID 0 is the empty tile** (4). Bit 0 is the external-file
+#: link :func:`asein._read_tileset` refuses by name, and nothing here can
+#: produce one -- a ``TilesetSlot`` holds a whole frozen atlas, not a path.
 _TILESET_EMBEDDED = 2
+#: Flag 4 states this package's own convention (``tiles.py``: gid 0 *is* the
+#: required blank tile). Without it, real Aseprite treats the file as the
+#: pre-release layout whose empty cell is 0xFFFFFFFF -- so a re-save there
+#: could store erased cells as a value :func:`asein._remap_tile_refs`'s mask
+#: arithmetic would read as a huge id wearing every flag.
+_TILESET_ZERO_EMPTY = 4
 
 #: Aseprite's own tile numbering in its tileset panel starts at 1. It changes
 #: no id either half of this pair stores, and the reader *warns* about any
@@ -908,7 +909,7 @@ def _tileset_chunk(
     body = struct.pack(
         "<IIIHHh",
         tileset_id,
-        _TILESET_EMBEDDED,
+        _TILESET_EMBEDDED | _TILESET_ZERO_EMPTY,
         int(ts.tile_count),
         tile_w,
         tile_h,

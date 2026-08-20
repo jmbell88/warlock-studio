@@ -136,6 +136,51 @@ def test_an_object_position_converts_at_the_tiled_door_and_nowhere_else():
     assert b'x="-64.0" y="-64.0"' in tmx.tmx_export(doc)["map.tmx"]
 
 
+def test_an_isometric_infinite_object_lands_on_its_cell():
+    """Tiled stores an isometric object's x/y in tile-space units of the map's
+    *tile height* on both axes, so the window origin's shift is
+    ``origin_x * tile_h`` in that space too. The old ``tile_w`` shift landed
+    every imported object off by ``tile_w / tile_h`` in x -- double, on the
+    recommended 2:1 preset -- and the writer adding the same wrong shift back
+    is what let a round trip hide it, which is why this asserts the *absolute*
+    position and not just the trip."""
+    body = b"""<?xml version="1.0" encoding="UTF-8"?>
+<map version="1.10" orientation="isometric" renderorder="right-down"
+     width="4" height="4" tilewidth="32" tileheight="16" infinite="1">
+ <tileset firstgid="1" name="t" tilewidth="32" tileheight="16" tilecount="2" columns="1">
+  <image source="t.png" width="32" height="32"/>
+ </tileset>
+ <layer id="1" name="Ground" width="4" height="4">
+  <data encoding="csv">
+   <chunk x="-8" y="-4" width="4" height="4">
+1,0,0,0,
+0,0,0,0,
+0,0,0,0,
+0,0,0,0
+   </chunk>
+  </data>
+ </layer>
+ <objectgroup id="2" name="O">
+  <object id="1" name="spawn" x="16" y="32"/>
+ </objectgroup>
+</map>
+"""
+    doc = tmx.read_tmx(body, **LOADERS)
+    assert (doc.origin_x, doc.origin_y) == (-8, -4)
+    obj = next(
+        layer.objects[0]
+        for layer in doc.all_layers()
+        if isinstance(layer, tilemap.ObjectLayer)
+    )
+    # The file puts the object at true fractional cell (1, 2) -- x/y are cell
+    # coordinates times tileheight. Window-relative that is cell (9, 6), and
+    # the document holds its lattice node in window pixels.
+    assert (obj.x, obj.y) == doc.cell_corner(9.0, 6.0)
+    assert (obj.x, obj.y) == (112.0, 120.0)
+    # The writer inverts the same shift, so Tiled reads back what it wrote.
+    assert b'x="16.0" y="32.0"' in tmx.tmx_export(doc)["map.tmx"]
+
+
 # --- the tools ----------------------------------------------------------------
 
 

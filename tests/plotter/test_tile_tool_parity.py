@@ -293,6 +293,42 @@ def test_only_whole_map_scope_moves_objects() -> None:
     assert doc.layer(layer.uid).objects[0].x == 48.0
 
 
+def test_a_wrapped_offset_wraps_objects_with_the_cells() -> None:
+    """The cells are normalized by modulo, so an object shifted by the
+    normalized amount *un*-wrapped rode ``offset(-1)`` seven tiles right on an
+    8-wide map -- off the geometry it annotates."""
+    from warlock.studio.plotter.tilemap import MapObject, new_uid
+
+    doc = _doc()  # 8x8 of 16px cells: 128px across
+    layer = doc.add_object_layer("Objects")
+    doc.add_object(
+        layer.uid, MapObject(uid=new_uid(), name="a", kind="rect", x=32.0, y=48.0)
+    )
+
+    doc.offset(-1, 0, wrap=True)
+    assert doc.layer(layer.uid).objects[0].x == 16.0, "one tile left, not seven right"
+    doc.offset(3, 0, wrap=True)  # 16 + 48 stays inside the 128px map
+    assert doc.layer(layer.uid).objects[0].x == 64.0
+    doc.offset(5, 0, wrap=True)  # 64 + 80 wraps past the edge
+    assert doc.layer(layer.uid).objects[0].x == 16.0
+
+
+def test_a_wrapped_offset_and_back_is_the_identity_for_objects_too() -> None:
+    """The docstring's identity claim, stated for the half of the document that
+    used to break it."""
+    from warlock.studio.plotter.tilemap import MapObject, new_uid
+
+    doc = _doc()
+    layer = doc.add_object_layer("Objects")
+    doc.add_object(
+        layer.uid, MapObject(uid=new_uid(), name="a", kind="rect", x=32.0, y=48.0)
+    )
+    doc.offset(1, 2, wrap=True)
+    doc.offset(-1, -2, wrap=True)
+    obj = doc.layer(layer.uid).objects[0]
+    assert (obj.x, obj.y) == (32.0, 48.0)
+
+
 def test_an_offset_scope_must_be_named() -> None:
     with pytest.raises(ValueError):
         _doc().offset(1, 1, scope="everything")

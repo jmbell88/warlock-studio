@@ -324,7 +324,14 @@ def _write(files: dict[str, bytes], path: Path) -> None:
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     for name, blob in files.items():
-        target = path if Path(name).name.startswith("map.") else path.parent / name
+        # The main artifact by its exact exporter-chosen name, not by prefix:
+        # ``startswith("map.")`` also matched an image layer whose source
+        # happened to be ``map.png``, which then overwrote the map at the
+        # user's chosen path with the picture (or the other way round,
+        # depending on dict order).
+        target = (
+            path if name in ("map.wmap", "map.tmx", "map.tmj") else path.parent / name
+        )
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_name(f".{target.name}.tmp")
         try:

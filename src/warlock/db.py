@@ -19,6 +19,8 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
     id          TEXT PRIMARY KEY,
     kind        TEXT NOT NULL,              -- 'text' | 'image' | 'rig' | 'sheet'
+                                            --   | 'pixel_sheet' | 'sprite_synthesis'
+                                            --   | 'retexture' | 'tile_sheet'
     status      TEXT NOT NULL,              -- queued | running | done | error | cancelled
     prompt      TEXT,
     params      TEXT NOT NULL DEFAULT '{}', -- JSON: seed, resolution, ...
@@ -588,11 +590,16 @@ class JobStore:
         """
         d = dict(row)
         raw = d["params"] or "{}"
-        params = self._params_cache.get(raw)
-        if params is None:
-            if len(self._params_cache) > 2048:
-                self._params_cache.clear()
-            params = self._params_cache[raw] = json.loads(raw)
+        # Under the same RLock as every other touch of shared state in this
+        # class -- the callers hold it for the SELECT and release it before
+        # mapping rows, so without this the memo was the one mutation outside
+        # it. Re-entrant, so a caller still inside the lock pays nothing.
+        with self._lock:
+            params = self._params_cache.get(raw)
+            if params is None:
+                if len(self._params_cache) > 2048:
+                    self._params_cache.clear()
+                params = self._params_cache[raw] = json.loads(raw)
         d["params"] = dict(params)
         return d
 

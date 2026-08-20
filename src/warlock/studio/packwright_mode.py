@@ -469,7 +469,10 @@ def on_task_done(ctx: Any, done: Any) -> None:
         return
 
     if name == "packwright-add":
-        tab.packing = False
+        # ``packing`` is deliberately not touched: it belongs to the pack task
+        # (set by ``request_pack``, cleared where the pack lands or fails), and
+        # an add landing while a pack was in flight used to clear it here --
+        # the preview then read "not packing" about a pack still running.
         if isinstance(result, dict):
             from .packwright.sources import sprite_from_image
 
@@ -601,7 +604,10 @@ def handle_key(ctx: Any, event: Any) -> bool:
         return False
     state = ensure(ctx)
     tab = state.active
-    mods = pygame.key.get_mods()
+    # Off ``event.mod``, never ``pygame.key.get_mods()`` -- ``main._shortcut``'s
+    # rule (UX-12): ``mod`` is the state when this key was pressed, and
+    # ``get_mods()`` is the state now, after the event batch drained.
+    mods = event.mod
     ctrl = bool(mods & pygame.KMOD_CTRL)
     shift = bool(mods & pygame.KMOD_SHIFT)
     name = pygame.key.name(event.key).lower()
@@ -720,6 +726,13 @@ def _journal_adopt(ctx: Any, path: Path, meta: dict[str, Any]) -> bool:
         return False
     title = f"{meta.get('title') or Path(path).stem} (recovered)"
     tab = adopt(ctx, doc, path=None, title=title)
+    # A recovered document must read dirty until the user saves it somewhere:
+    # ``read_wpack`` hands back a document already marked saved, and a clean
+    # recovered tab closes without a confirm -- taking the journal copy, the
+    # only surviving copy of the work, with it. ``PackTab.dirty`` delegates to
+    # the document, so the never-matching head goes on the *document*; the
+    # tab's mirror follows so ``mark_saved`` keeps them in step.
+    doc.saved_head = -1
     tab.saved_head = -1
     tab.journal_name = Path(path).name
     return True

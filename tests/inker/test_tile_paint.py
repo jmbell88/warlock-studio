@@ -732,3 +732,98 @@ def test_commit_floating_onto_a_tilemap_layer_goes_through_the_funnel():
     assert doc.commit_floating() is True
     assert slot.tileset.tile_count == 3  # stack mode appended the new content
     _assert_synced(doc)
+
+
+# --- the diagonal door, and the dedup index's bookkeeping ---------------------
+#
+# The first two pin ``_strip_diagonal``: a diagonal flip is a transpose, and a
+# transposed non-square tile has the wrong footprint -- ``materialize`` would
+# paste over a neighbouring cell and ``_commit_tilemap_patch`` would read that
+# neighbour's pixels back into the atlas. The door masks the flag off rather
+# than refusing, because the stamp's D toggle is reachable regardless of which
+# tileset is bound and a raise out of a canvas press is a window down.
+
+
+def _wide_tileset():
+    """Two 4x2 tiles (wide, not square): the blank plus a solid red."""
+    blank = np.zeros((2, 4, 4), dtype=np.uint8)
+    red = np.zeros((2, 4, 4), dtype=np.uint8)
+    red[:] = RED
+    return strip(np.stack([blank, red], axis=0))
+
+
+def test_the_refs_door_strips_diagonal_on_a_non_square_tileset():
+    doc = _doc()
+    slot = doc.add_tileset(_wide_tileset())
+    cel = doc.add_tilemap_layer(slot.uid)
+    word = np.uint32(1 | gid.FLIP_D | gid.FLIP_H)
+    assert doc.place_tiles(cel.uid, (0, 0), np.array([[word]], dtype=np.uint32)) is True
+    assert int(cel.refs[0, 0]) == (1 | gid.FLIP_H), "D stripped, the id and H kept"
+    _assert_synced(doc)
+
+
+def test_the_refs_door_keeps_diagonal_on_a_square_tileset():
+    doc = _doc()
+    slot, cel = _still_tilemap(doc, _corner_tile())
+    word = np.uint32(1 | gid.FLIP_D)
+    assert doc.place_tiles(cel.uid, (0, 0), np.array([[word]], dtype=np.uint32)) is True
+    assert int(cel.refs[0, 0]) == int(word)
+    _assert_synced(doc)
+
+
+def test_a_stale_id_clipped_off_the_grid_does_not_refuse_the_rest():
+    """The refusal reads the *clipped* patch: an id past the tileset in a
+    region the grid clips away is never written, so it is no reason to refuse
+    the cells that are."""
+    doc = _doc()
+    slot, cel = _still_tilemap(doc, _tile(RED))  # ids 0 and 1
+    assert doc.place_tiles(cel.uid, (1, 0), np.array([[1, 9]], dtype=np.uint32)) is True
+    assert int(cel.refs[0, 1]) == 1
+    with pytest.raises(ValueError):
+        # Fully on-grid, the same stale id still refuses by name.
+        doc.place_tiles(cel.uid, (0, 0), np.array([[9]], dtype=np.uint32))
+    _assert_synced(doc)
+
+
+def test_auto_keeps_a_shared_content_key_for_the_tile_that_still_holds_it():
+    """The gesture-local dedup index maps content to the *lowest* id holding
+    it. Patching a higher duplicate in place must not pop that shared key --
+    popping it sent the next matching cell to a redundant append."""
+    doc = _doc()
+    slot, cel = _still_tilemap(doc, _tile(RED), _tile(RED))  # 1 and 2, duplicates
+    doc.place_tiles(cel.uid, (0, 0), np.array([[2]], dtype=np.uint32))
+    _activate(doc, cel)
+    doc.tile_behavior = "auto"
+    before = cel.pixels.copy()
+    cel.pixels[0:4, 0:4] = GREEN  # repaint tile 2's placement in place
+    cel.pixels[4:8, 0:4] = RED  # a blank cell painted to match tile 1
+    doc._commit_patch(cel, (0, 0, 4, 8), before[0:8, 0:4])
+    assert slot.tileset.tile_count == 3, "no redundant tile appended"
+    assert np.array_equal(slot.tileset.tile_pixels(2), _tile(GREEN))
+    assert np.array_equal(slot.tileset.tile_pixels(1), _tile(RED))
+    assert int(cel.refs[0, 0]) == 2
+    assert int(cel.refs[1, 0]) == 1, "the match landed on the tile still holding red"
+    _assert_synced(doc)
+
+
+def test_auto_retires_the_key_an_earlier_patch_of_the_same_tile_claimed():
+    """A tile patched twice in one gesture: the first patch's key must not
+    stay live, or a later cell matching that content points at a tile whose
+    final content is something else entirely."""
+    doc = _doc()
+    slot, cel = _still_tilemap(doc, _tile(RED))  # ids 0 and 1
+    doc.place_tiles(cel.uid, (0, 0), np.array([[1, 1]], dtype=np.uint32))
+    _activate(doc, cel)
+    doc.tile_behavior = "auto"
+    before = cel.pixels.copy()
+    cel.pixels[0:4, 0:4] = GREEN  # first patch of tile 1
+    cel.pixels[0:4, 4:8] = BLUE  # second patch of tile 1 -- last writer wins
+    cel.pixels[4:8, 0:4] = GREEN  # a blank cell painted the retired content
+    doc._commit_patch(cel, (0, 0, 8, 8), before)
+    assert np.array_equal(slot.tileset.tile_pixels(1), _tile(BLUE))
+    assert slot.tileset.tile_count == 3, "the green content earned its own tile"
+    assert int(cel.refs[1, 0]) == 2
+    assert np.array_equal(cel.pixels[4:8, 0:4], _tile(GREEN)), (
+        "the cell the user painted green must not come back blue"
+    )
+    _assert_synced(doc)

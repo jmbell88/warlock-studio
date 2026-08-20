@@ -1100,7 +1100,20 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int], reader=None):
             )
             for entry in payload.get("tags", [])
         ]
-    except (KeyError, ValueError, TypeError, json.JSONDecodeError) as exc:
+    except (
+        AttributeError,
+        KeyError,
+        ValueError,
+        TypeError,
+        OSError,
+        json.JSONDecodeError,
+    ) as exc:
+        # ``_read_colour``'s verbatim five, plus ``OSError``: this member is
+        # the one whose entries name *PNGs* to decode, and Pillow's
+        # ``UnidentifiedImageError`` on a member holding non-image bytes is an
+        # ``OSError`` -- without it a corrupt cel crashed the open instead of
+        # falling back flat. ``AttributeError`` for ``_read_slices``' reason:
+        # a payload key of the wrong shape fails on its first ``.get``.
         log.warning("ignoring animation.json in %s: %s", getattr(zf, "filename", "?"), exc)
         return None
 
@@ -1260,6 +1273,13 @@ def _finish_colour(doc, mode: str, transparent: int, reader, palette) -> None:
     """
     if mode == "grayscale":
         doc.color_mode = "grayscale"
+        # The writer records ``palette.gpl`` for a grayscale document too --
+        # the funnel's own rule is two ``if``s, not an ``elif``, because "a
+        # grayscale document with a palette gets both". Dropping the table
+        # here lost it permanently on the first save-open-save. ``snap=False``
+        # for the RGB branch's reason: the pixels were written snapped.
+        if palette:
+            doc.set_palette(palette, snap=False)
         return
     if mode != "indexed":
         return
@@ -1461,6 +1481,21 @@ def _read_tiles(zf: zipfile.ZipFile, doc, anim: Animation | None) -> None:
                     f"{entry['refs']} is {len(blob)} bytes, expected {expected}"
                 )
             refs = np.frombuffer(blob, dtype="<u4").reshape(grid_h, grid_w).astype(gid.DTYPE)
+            ts = slots[si].tileset
+            if ts.tile_w != ts.tile_h and (refs & gid.DTYPE(gid.FLIP_D)).any():
+                # The refs door's own mask (``_doc_tiles._strip_diagonal``),
+                # applied to what a file carries: a diagonal flip of a
+                # non-square tile has the wrong footprint, and a commit over
+                # one reads neighbour pixels back into the atlas. A file from
+                # before the door was sealed degrades to the unturned
+                # placement, the member's own log-and-keep contract.
+                log.warning(
+                    "dropping diagonal flips on a %dx%d tileset in %s",
+                    ts.tile_w,
+                    ts.tile_h,
+                    getattr(zf, "filename", "?"),
+                )
+                refs = refs & gid.DTYPE(0xFFFFFFFF ^ gid.FLIP_D)
             return TilemapCel(
                 pixels=layer.pixels,
                 name=layer.name,
@@ -1501,7 +1536,18 @@ def _read_tiles(zf: zipfile.ZipFile, doc, anim: Animation | None) -> None:
                     raise ValueError(f"{TILES_MEMBER} cel names layer {li}")
                 layer = stack_layers[li]
                 replacements[id(layer)] = _new_cel(layer, entry)
-    except (AttributeError, KeyError, ValueError, TypeError, json.JSONDecodeError) as exc:
+    except (
+        AttributeError,
+        KeyError,
+        ValueError,
+        TypeError,
+        OSError,
+        json.JSONDecodeError,
+    ) as exc:
+        # ``OSError`` beyond ``_read_colour``'s verbatim five, for
+        # ``_read_animation``'s reason: this member's entries name embedded
+        # images, and Pillow's ``UnidentifiedImageError`` on a strip member
+        # holding non-image bytes is an ``OSError``.
         log.warning("ignoring %s in %s: %s", TILES_MEMBER, getattr(zf, "filename", "?"), exc)
         return
 
@@ -1603,9 +1649,17 @@ def read_ora(path: Path, *, budget: int | None = None):
                 data = zf.read(src)
             except KeyError:
                 continue
-            with Image.open(io.BytesIO(data)) as im:
-                im.load()
-                pixels = np.asarray(im.convert("RGBA"), dtype=np.uint8).copy()
+            try:
+                with Image.open(io.BytesIO(data)) as im:
+                    im.load()
+                    pixels = np.asarray(im.convert("RGBA"), dtype=np.uint8).copy()
+            except OSError as exc:
+                # A member that is not an image (Pillow's
+                # ``UnidentifiedImageError`` is an ``OSError``) costs that one
+                # layer, exactly as a missing member does one branch up --
+                # the degradation contract every optional member here follows.
+                log.warning("skipping undecodable %s in %s: %s", src, path, exc)
+                continue
             planes_data.append(data)
             if not width or not height:
                 width, height = pixels.shape[1], pixels.shape[0]

@@ -219,6 +219,17 @@ def rerun_job(
         _check_sheet_weights(
             svc, with_reference=(svc.job_dir(job_id) / "ref.png").exists()
         )
+    if kind == "pixel_sheet":
+        # The same door ``create_pixel_sheet`` holds, held again on the way
+        # back in -- the tile-sheet precedent above, for the same reason:
+        # ``check_weights`` is text-only, and the pixel LoRA is what makes
+        # this kind pixel art at all. Missing, the worker logs and restyles
+        # bare, so a reroll against a pruned models directory would finish
+        # looking like plain img2img while its sidecar claims a LoRA that
+        # never loaded.
+        from .sheets import _check_weights as _check_pixel_weights
+
+        _check_pixel_weights(svc)
     if kind == "sprite_synthesis":
         # The same door ``create_sprite_synthesis`` holds, held again on the
         # way back in -- the tile-sheet precedent above, for the same reason:
@@ -261,6 +272,12 @@ def rerun_job(
         stored = models.BASE_MODELS.get(str(params.get("base_model") or ""))
         if stored is not None:
             _check_retexture_family(stored)
+        # Presence as well as fit, exactly as ``retexture_job``'s door holds
+        # it: ``check_weights(svc, kind, ...)`` above no-ops for this kind,
+        # so without the "text" spelling a reroll against a pruned checkpoint
+        # or ControlNet spends the six Blender views and a ~16 GiB load to
+        # reach a runtime refusal instead of one at the door.
+        check_weights(svc, "text", params)
 
     new_id = uuid.uuid4().hex[:12]
     new_dir = None

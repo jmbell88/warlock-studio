@@ -33,6 +33,7 @@ from .core import WarlockService
 from .errors import Invalid, TooLarge
 from .files import ImageTooLarge, to_png
 from .validation import (
+    MAX_JOB_NAME,
     MAX_PROMPT,
     MAX_UPLOAD_BYTES,
     check_base_model_weights,
@@ -316,7 +317,9 @@ def create_tile_sheet(
     # Named at creation rather than left to the library's fallback: a tile sheet
     # is not a subject, and a row called "mossy dungeon" among a list of assets
     # reads as a mesh somebody generated.
-    svc.store.set_meta(new_id, name=f"{text} tile sheet")
+    # Truncated like every other auto-derived name (_jobs_create's two): the
+    # prompt is capped at MAX_PROMPT (1000), far past what a name column holds.
+    svc.store.set_meta(new_id, name=f"{text} tile sheet"[:MAX_JOB_NAME])
     svc.wake_worker()
     return {
         "id": new_id,

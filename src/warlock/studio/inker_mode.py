@@ -24,6 +24,7 @@ from typing import Any
 from ..pipelines import sheet as sheetlib
 from . import dialogs, docmodes, filetypes, fonts, inker_state, journal, recents
 from .inker import animation
+from .inker.asein import ASEPRITE_SUFFIXES
 from .inker_state import InkerDoc, InkerState
 from .state import set_mode
 
@@ -57,9 +58,9 @@ OPEN_FILTER = ["Images and layered files", filetypes.pattern(OPENABLE)]
 # this format even after a Save As has written one: the export is lossy
 # (alpha_lock, group opacity, matte, palette-constrained mode all fall out of
 # the round trip), and a lossy in-place write on a keystroke that means "keep
-# what I have" is exactly what that gate refuses. Two suffixes, one format:
-# Aseprite's older releases wrote ``.ase``.
-ASEPRITE_SUFFIXES = (".aseprite", ".ase")
+# what I have" is exactly what that gate refuses. The suffix pair itself is
+# ``asein.ASEPRITE_SUFFIXES`` -- the reader's own constant, imported above
+# rather than restated, so the two lists cannot drift.
 ASEPRITE_FILTER = ["Aseprite files", filetypes.pattern(ASEPRITE_SUFFIXES)]
 # ``save_as``'s picker: ORA first (the default, unsaved suggestion stays
 # ``.ora``) with the Aseprite pair beside it -- one dialog, two writers, and
@@ -116,10 +117,16 @@ def ensure(ctx: Any) -> InkerState:
         stored = ctx.settings.get("inker") or {}
         swatches = stored.get("swatches")
         if isinstance(swatches, list) and swatches:
+            # Element types validated too, the module's doctrine for a
+            # hand-editable settings file (``_restore_presets``): a swatch
+            # entry holding a string would raise out of ``int`` on the first
+            # frame Paint mode is opened.
             state.swatches = [
                 tuple(int(c) for c in s)  # type: ignore[misc]
                 for s in swatches
-                if isinstance(s, list | tuple) and len(s) == 4
+                if isinstance(s, list | tuple)
+                and len(s) == 4
+                and all(isinstance(c, int | float) and not isinstance(c, bool) for c in s)
             ] or list(inker_state.DEFAULT_SWATCHES)
         _restore_presets(state, stored.get("presets"))
         _restore_canvas(state, stored.get("canvas"))
@@ -339,7 +346,14 @@ def _adopt(
         has_original=has_original,
     )
     state.add(tab)
-    remember_path(ctx, path)
+    if not job_id:
+        # A linked document's path is the job's *served* ``input.png``, and a
+        # recents entry would offer it back as a plain file: reopening it that
+        # way makes Ctrl+S write PNG bytes over the served file in place,
+        # bypassing ``save_edited_image``'s backup and staged replace. The way
+        # back to a job document is the job's own "Open in Inker", which
+        # re-links it.
+        remember_path(ctx, path)
     persist(ctx)
     return tab
 
@@ -894,6 +908,13 @@ def save(ctx: Any, tab: InkerDoc | None = None) -> None:
     tab = tab or active(ctx)
     if tab is None or tab.saving:
         return
+    # Playback stopped *before* the capture, synchronously: an encode walks
+    # the live layer stack on a task thread, and playback's own stop --
+    # Escape, or the clip reaching a non-looping tag's end -- rebuilds that
+    # stack through ``set_current_frame`` mid-write. Stopping here on the
+    # frame thread settles the document first; ``stop_play`` is a no-op on a
+    # still tab.
+    stop_play(tab)
     if tab.linked:
         _save_linked(ctx, tab)
         return
@@ -939,6 +960,7 @@ def save_as(ctx: Any, tab: InkerDoc | None = None) -> None:
     tab = tab or active(ctx)
     if tab is None or tab.saving:
         return
+    stop_play(tab)  # settle the stack before capturing; see save()
     doc = tab.doc
     _settle(ctx, tab)  # before the head is read; see _save_linked
     rev = doc.history.head
@@ -965,6 +987,7 @@ def export_png(ctx: Any, tab: InkerDoc | None = None) -> None:
     tab = tab or active(ctx)
     if tab is None or tab.saving:
         return
+    stop_play(tab)  # settle the stack before capturing; see save()
     doc = tab.doc
     # Not a save, but the same rule about what is on the canvas: the composite
     # a floating buffer draws into is the pane's, not the document's, so an
@@ -1997,6 +2020,7 @@ def save_as_reference(ctx: Any, tab: InkerDoc | None = None) -> None:
     tab = tab or active(ctx)
     if tab is None or tab.saving or tab.linked:
         return
+    stop_play(tab)  # settle the stack before capturing; see save()
     doc, title = tab.doc, tab.title
     _settle(ctx, tab)  # before the head is read; see _save_linked
     rev = doc.history.head
@@ -2032,6 +2056,7 @@ def send_to_3d(ctx: Any, tab: InkerDoc | None = None) -> None:
     tab = tab or active(ctx)
     if tab is None or tab.saving:
         return
+    stop_play(tab)  # settle the stack before capturing; see save()
     doc = tab.doc
     _settle(ctx, tab)
     if tab.linked:
@@ -2245,7 +2270,13 @@ def on_task_done(ctx: Any, done: Any) -> None:
         # unbounded, and the user may well have switched tabs while it was up.
         if isinstance(result, dict) and result.get("tileset") is not None:
             target = state.get(key.split(":", 1)[1])
-            if target is not None:
+            # ``busy`` re-checked at completion, the way the sibling
+            # ``inker-index``/``inker-palimg`` branches land through
+            # ``index_to``'s own gate: the picker is unbounded, and a save or
+            # playback may have started on this tab while it was up --
+            # ``add_tileset`` pushes a history step into a stack an encode is
+            # walking.
+            if target is not None and not target.busy:
                 slot = target.doc.add_tileset(result["tileset"])
                 ctx.toast(f"{slot.tileset.name} added.", "success")
         return
@@ -2336,10 +2367,18 @@ def _reload_linked(ctx: Any, tab: InkerDoc) -> None:
     if tab.path is None:
         return
     try:
-        tab.doc = inker.Document.load(tab.path)
+        doc = inker.Document.load(tab.path)
     except Exception as exc:
         ctx.toast(f"Reverted, but the image could not be reopened ({exc}).", "error")
         return
+    from .panes import inker_textures
+
+    # The old document's textures go with it -- ``request_close``'s own pair
+    # of calls, minus the tab removal. Without this the swap leaked every
+    # layer texture until the tab was closed; the new document re-uploads
+    # lazily on its first draw.
+    inker_textures.release_doc(ctx, tab.uid)
+    tab.doc = doc
     tab.saved_head = tab.doc.history.head
     tab.has_original = False
     tab.view.fitted = False
@@ -2408,6 +2447,10 @@ def begin_transform(ctx: Any, tab: InkerDoc | None = None) -> None:
         return
     if tab.doc.begin_transform():
         state.transforming = True
+        # The owner, by uid -- ``convert_uid``'s pattern. The modal lives on
+        # this document, and Enter/Escape must land on it and no other; see
+        # ``InkerState._settle_transform`` for the switch-away half.
+        state.transform_uid = tab.uid
         state.clear_drag()
         _warn_rotsprite(ctx, state, tab)
     elif tab.doc.write_locked():
@@ -2452,8 +2495,14 @@ def end_transform(ctx: Any, *, commit: bool) -> None:
     ever written, so there is nothing else to put back.
     """
     state = ensure(ctx)
-    tab = state.active
+    # The owner, never ``active``: the two are the same tab whenever the modal
+    # is genuinely open (``_settle_transform`` cancels on every switch), but
+    # resolving by uid is what makes that a fact rather than a hope --
+    # committing ``active`` here is exactly how a mid-transform switch came to
+    # land one tab's Enter on another tab's floating buffer.
+    tab = state.get(state.transform_uid) or state.active
     state.transforming = False
+    state.transform_uid = ""
     state.clear_drag()
     if tab is None:
         return
@@ -2726,7 +2775,7 @@ TOOL_KEYS = {letter.lower(): key for key, _label, letter in inker_state.TOOLS}
 #: Aseprite files several tools two-to-a-slot and cycles them with Shift: the
 #: gradient sits on the paint bucket's, the ellipse on the rectangle's, the
 #: elliptical marquee on the rectangular one's. Inker gives every tool a letter
-#: of its own (twenty-three tools, twenty-three letters, no cycling), so these
+#: of its own (one per ``TOOLS`` row, no cycling), so these
 #: are added *beside* the plain letters, not instead of them -- a hand trained
 #: on Aseprite finds what it reaches for, and a hand trained here keeps what it
 #: had. Reconstructed from Aseprite's defaults; if one is wrong it is wrong in
@@ -2819,7 +2868,14 @@ def stop_play(tab: InkerDoc) -> None:
     if not tab.playing:
         return
     tab.playing = False
-    tab.doc.set_current_frame(tab.play_index)
+    if not tab.saving:
+        # ``set_current_frame`` rebuilds the layer stack, which is exactly the
+        # structure an in-flight encode is walking -- the ``_MUTATING_CTRL``
+        # rule, applied to the one mutation stopping playback itself makes.
+        # Unreachable while the saves below stop playback before capturing and
+        # ``toggle_play`` refuses to start during one; kept as the backstop,
+        # at the cost of the playhead resting where play began.
+        tab.doc.set_current_frame(tab.play_index)
     tab.play_accum_ms = 0.0
 
 
@@ -2860,12 +2916,6 @@ def tick_playback(tab: InkerDoc, dt_ms: float) -> None:
 #: reaches zero is a stopped clip pretending to play.
 MIN_PREVIEW_SPEED = 0.25
 MAX_PREVIEW_SPEED = 4.0
-
-#: What the preview can play: the whole timeline, or the tag under its own
-#: index. Per-tab preview state rather than a document playback mode -- see the
-#: divergence list.
-PREVIEW_SCOPES = ("clip", "tag")
-
 
 def toggle_preview(tab: InkerDoc) -> None:
     """Start or stop the preview. Refused for nothing at all.
@@ -2936,6 +2986,15 @@ def tick_preview(tab: InkerDoc, dt_ms: float) -> None:
 def step_frame(ctx: Any, delta: int, tab: InkerDoc | None = None) -> None:
     tab = tab or active(ctx)
     if tab is None or tab.doc.anim is None or tab.busy:
+        return
+    state = ctx.state.inker
+    if state is not None and (state.drag_kind or state.gesture_pts):
+        # ``set_current_frame`` rebuilds the layer stack, and an open paint
+        # drag holds a ``StrokeState`` addressed into the stack it began on --
+        # the next ``stroke_to``/``end_stroke`` raises out of ``by_uid``. A
+        # multi-click gesture's vertices likewise belong to the frame they
+        # were placed on. Refused like the ``_MUTATING_CTRL`` set: the gesture
+        # finishes first.
         return
     anim = tab.doc.anim
     tab.doc.set_current_frame((anim.current + delta) % len(anim.frames))
@@ -3056,7 +3115,16 @@ def handle_key(ctx: Any, event: Any) -> bool:
         # and said nothing -- while the *same* refusal reached by a mouse press
         # raised a toast. The two doors gave two different answers to one
         # question, and the quiet one is the one a user meets by accident.
-        if not nudge(state, tab, dx * step, dy * step) and doc.write_locked():
+        # Only when the lock is what actually refused it, though: ``nudge``
+        # also declines for a busy tab and for a tool the arrows do not serve
+        # (no floating buffer, not the move tool), and blaming the lock for
+        # either would be a toast naming the wrong problem.
+        if (
+            not nudge(state, tab, dx * step, dy * step)
+            and not tab.busy
+            and (state.tool == "move" or doc.floating is not None)
+            and doc.write_locked()
+        ):
             ctx.toast(LOCKED_LAYER, "warn")
     elif event.key == pygame.K_DELETE:
         if not tab.busy and not doc.delete_selection() and doc.write_locked():
@@ -3371,6 +3439,11 @@ def index_to(ctx: Any, tab: Any, colours: Any) -> bool:
     state.palette_slot = 0
     state.palette_slots = []
     state.palette_usage = None
+    # ``set_color_mode`` clears it too, and for the same reason: the slot the
+    # brush was claiming indexes a table that has just been replaced, so left
+    # standing it would land the next stroke in whatever colour inherited
+    # that number.
+    state.fg_slot = None
     if colours:
         ctx.toast(f"Indexed to {len(list(colours))} colour(s).", "success")
     else:

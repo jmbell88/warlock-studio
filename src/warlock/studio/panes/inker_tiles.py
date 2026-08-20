@@ -90,7 +90,7 @@ def draw(ctx: Any) -> None:
     _chooser(ctx, state, tab, uid)
     _picker(ctx, state, tab, slot)
     imgui.dummy((0, 4))
-    _flips(state)
+    _flips(state, slot.tileset)
     imgui.dummy((0, 6))
     _files(ctx, state, tab, uid)
 
@@ -309,14 +309,21 @@ def _picker(ctx: Any, state: Any, tab: Any, slot: Any) -> None:
     widgets.muted("Tile 0 (blank)" if picked == 0 else f"Tile {picked}")
 
 
-def _flips(state: Any) -> None:
+def _flips(state: Any, tileset: Any) -> None:
     """The three flag bits, as three boxes.
 
     Named for the transform rather than for the bit -- Aseprite's X/Y/D, in the
     words this app already uses for a flip -- and folded into one gid by
     ``InkerState.tile_gid``, which is the only place the three are read
     together.
+
+    D is disabled (and the held flag cleared) when the picked tileset's tiles
+    are not square: a transpose swaps the footprint, and the document masks
+    the flag off at every door for exactly that reason
+    (``TileOps._strip_diagonal``) -- a live checkbox over a masked flag would
+    just look broken.
     """
+    square = int(tileset.tile_w) == int(tileset.tile_h)
     widgets.field_label("flip")
     changed, value = controls.checkbox("H##tileflip", state.tile_flip_h)
     if changed:
@@ -326,13 +333,19 @@ def _flips(state: Any) -> None:
     if changed:
         state.tile_flip_v = value
     imgui.same_line()
+    if not square and state.tile_flip_d:
+        state.tile_flip_d = False
+    imgui.begin_disabled(not square)
     changed, value = controls.checkbox("D##tileflip", state.tile_flip_d)
     if changed:
         state.tile_flip_d = value
+    imgui.end_disabled()
     widgets.help_marker(
         "How the tile is turned as it goes down. D is the diagonal -- a "
         "transpose -- and the three together give all eight orientations. The "
-        "flags ride in the cell, so the tileset holds one copy of the tile."
+        "flags ride in the cell, so the tileset holds one copy of the tile. "
+        "D needs square tiles: a transpose of a non-square tile would not "
+        "fit its own cell."
     )
 
 

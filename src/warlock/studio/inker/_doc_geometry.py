@@ -100,14 +100,19 @@ class GeometryOps:
         an indexed document records an index patch, and a zero offset pushes
         nothing at all.
         """
-        layer = self.stack.active
-        if layer is None or self.write_locked(layer):
+        if self.write_locked(self.stack.active):
             return False
         width, height = self.size
         dx, dy = int(dx) % width if width else 0, int(dy) % height if height else 0
         if not dx and not dy:
             return False
         self.commit_floating()
+        # Autovivify like every other write path: on an animated document the
+        # active row may be a placeholder over the shared read-only blank
+        # plane, and rolling that in place raises mid-gesture. The pending cel
+        # rides into ``_commit_patch``'s step, a stroke's own machinery.
+        self._ensure_active_cel()
+        layer = self.stack.active
         box = (0, 0, width, height)
         before = layer.pixels.copy()
         layer.pixels[:, :] = tf.translate(layer.pixels, dx, dy, wrap=True)

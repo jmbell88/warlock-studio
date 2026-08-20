@@ -511,6 +511,11 @@ def over(
     backdrop wherever the source is empty -- the ``ao == 0`` guard is not an
     edge case, it is most of a brush stamp's bounding box.
     """
+    if source.size == 0:
+        # A zero-size crop: both native gates decline it too, and ``min()`` of
+        # an empty plane raises. The general arithmetic below is happy with
+        # empties, so decline the shortcut rather than the call.
+        return backdrop.copy()
     if opacity >= 1.0 and mode == "normal" and float(source[..., 3].min()) >= 1.0:
         return source.copy()
 
@@ -564,7 +569,15 @@ def paint_colour(
     src_a = (colour[3] / 255.0) * weight
     dst_a = before[..., 3] / 255.0
     out_a = src_a + dst_a * (1.0 - src_a)
-    share = np.divide(src_a, out_a, out=np.zeros_like(src_a), where=out_a > 0.0)
+    # ``over``'s masked-lane fix, verbatim: ``where=`` does not promise the
+    # masked lanes go unevaluated, so a SIMD lane with ``out_a == 0`` still
+    # ran 0/0 and raised under ``np.errstate(all="raise")``. Divide by one
+    # there and select, which is bit-identical everywhere the old form
+    # defined a value and defines the rest as the same zero.
+    shown = out_a > 0.0
+    share = np.empty_like(src_a)
+    np.divide(src_a, np.where(shown, out_a, 1.0), out=share)
+    share = np.where(shown, share, 0.0)
     rgb = np.array(colour[:3], dtype=np.float32)
     out = np.empty_like(before)
     out[..., :3] = before[..., :3] + (rgb - before[..., :3]) * share[..., None]

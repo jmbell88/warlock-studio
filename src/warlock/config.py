@@ -129,6 +129,24 @@ def _env_opt_int(name: str, default: int | None) -> int | None:
         return default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    """``bool`` from the environment, or the default with a note. Never raises.
+
+    One vocabulary for every boolean variable -- this used to differ per field,
+    so ``WARLOCK_TRELLIS_WEBP=yes`` silently meant *off*.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    text = raw.strip().lower()
+    if text in ("1", "true", "on", "yes"):
+        return True
+    if text in ("0", "false", "off", "no"):
+        return False
+    _note_invalid(name, raw, "1/true/on/yes or 0/false/off/no")
+    return default
+
+
 def _env_opt_bool(name: str) -> bool | None:
     """A tri-state flag: unset (None) is distinguishable from an explicit off.
 
@@ -138,10 +156,18 @@ def _env_opt_bool(name: str) -> bool | None:
     raw = os.environ.get(name)
     if raw is None:
         return None
-    raw = raw.strip().lower()
-    if raw == "":
+    text = raw.strip().lower()
+    if text == "":
         return None
-    return raw in ("1", "true", "on", "yes")
+    if text in ("1", "true", "on", "yes"):
+        return True
+    if text in ("0", "false", "off", "no"):
+        return False
+    # Recorded and defaulted like every other field (RUN-03): a typo used to
+    # read as an *explicit* "coexist", which suppressed ``vram.plan``'s
+    # auto-detection on exactly the switch whose wrong value OOMs a small card.
+    _note_invalid(name, raw, "1/true/on/yes or 0/false/off/no")
+    return None
 
 
 def _env_opt_float(name: str) -> float | None:
@@ -328,8 +354,7 @@ class Config:
     # which Godot's glTF importer does not implement (it refuses the file
     # rather than skip the extension). Off is the correct default.
     trellis_webp: bool = field(
-        default_factory=lambda: os.environ.get("WARLOCK_TRELLIS_WEBP", "off").lower()
-        in ("1", "true", "on")
+        default_factory=lambda: _env_bool("WARLOCK_TRELLIS_WEBP", False)
     )
     # trellis-server.exe's "auto" texture PBR resolution bakes visible per-texel
     # noise into the baseColor atlas at --res 1024/1536 (reproduced via

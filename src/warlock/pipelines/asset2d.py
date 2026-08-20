@@ -366,7 +366,12 @@ def pixel(
             "palette": palette_cap,
             "palette_file": opts.palette_name,
             "palette_hash": opts.palette_hash,
-            "dither": bool(opts.dither),
+            # What actually ran, not what was asked: dither only happens inside
+            # ``map_palette``, so without a palette it never runs. Recording
+            # the request here made ``derive._current`` see a plain export
+            # marked dithered -- a permanent cache miss that re-ran
+            # matte+quantize on every serve and rewrote the same manifest.
+            "dither": bool(opts.dither and opts.palette),
             "grid": (
                 {"scale": grid["scale"], "phase": grid["phase"],
                  "residual": grid["residual"]}

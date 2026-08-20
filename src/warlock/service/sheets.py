@@ -161,9 +161,6 @@ def create_sheet(
             f"sheet name must be at most {rigging.MAX_SHEET_NAME} characters", field="name"
         )
 
-    if len(rigging.list_sheets(job_dir)) >= rigging.MAX_SHEETS:
-        raise Conflict(f"a job may hold at most {rigging.MAX_SHEETS} sheets")
-
     params = {
         "source_job": job_id,
         "sheet_id": rigging.new_id(),
@@ -178,7 +175,21 @@ def create_sheet(
         # could disagree with sheet.interpolate.
         "clip": ({"from": clip_from, "to": clip_to, "frames": clip_frames} if clip_from else None),
     }
-    new_id = svc.store.create("sheet", source["prompt"], params, uuid.uuid4().hex[:12])
+    # The cap counts what is on disk *plus* every unfinished row that will
+    # write a sheet into this directory: the artifact lands minutes after the
+    # row is minted, so counting files alone let N rapid submits all read the
+    # same count and all pass. Count and create under one job-wide hold --
+    # the pose cap's CON-03 rule, taken at this door.
+    with svc.convert_lock(job_id, "sheets"):
+        queued = sum(
+            1
+            for j in svc.store.active_jobs()
+            if j["kind"] == "sheet"
+            and (j.get("params") or {}).get("source_job") == job_id
+        )
+        if len(rigging.list_sheets(job_dir)) + queued >= rigging.MAX_SHEETS:
+            raise Conflict(f"a job may hold at most {rigging.MAX_SHEETS} sheets")
+        new_id = svc.store.create("sheet", source["prompt"], params, uuid.uuid4().hex[:12])
     svc.wake_worker()
     return {"id": new_id, "source_job": job_id, "sheet_id": params["sheet_id"]}
 
@@ -241,6 +252,38 @@ def pixel_sheet_options() -> dict[str, Any]:
     }
 
 
+def _check_weights(svc: WarlockService) -> None:
+    """Presence of the two weights a pixel-sheet restyle cannot run without.
+
+    Presence as well as fit: the family check at the door only asks whether
+    base and LoRA *belong* together; it says nothing about whether either is on
+    this host. Missing, the worker's own tolerance takes over -- it logs and
+    restyles bare -- so the job would finish, look like an ordinary img2img
+    pass rather than pixel art, and write a sidecar naming a LoRA that never
+    loaded. The ControlNet is deliberately not checked: ``structure_lock`` is
+    a preference the worker already degrades gracefully, and refusing the
+    whole request over an optional hint would be the wrong trade.
+
+    Shared by ``create_pixel_sheet``'s door and ``rerun_job``'s re-admission,
+    like ``tilesheets._check_weights`` and ``sprites._check_weights``: a reroll
+    can be days later, against a models directory the user has since pruned.
+    """
+    from .. import fetch
+    from .downloads import needed_keys
+
+    base = models.BASE_MODELS[PIXEL_SHEET_BASE_MODEL]
+    pixel_lora = models.STYLE_LORAS[models.PIXEL_SHEET_LORA]
+    check_base_model_weights(svc, base, rows=needed_keys(svc, PIXEL_SHEET_ROWS))
+    if not fetch.present(svc.config, "lora", pixel_lora):
+        remedy = fetch.download_text(svc.config, "lora", pixel_lora)
+        raise Invalid(
+            f"A pixel sheet needs {pixel_lora.label!r}, which is not downloaded. "
+            f"{install_remedy(pixel_lora.label, remedy)}",
+            field="base_model",
+            rows=needed_keys(svc, PIXEL_SHEET_ROWS),
+        )
+
+
 def create_pixel_sheet(
     svc: WarlockService,
     job_id: str,
@@ -259,9 +302,7 @@ def create_pixel_sheet(
     does not divide its cells, costs the request rather than a place in the
     queue and a minute of GPU.
     """
-    from .. import fetch
     from ..pipelines import pixelsheet
-    from .downloads import needed_keys
 
     check_job_id(job_id)
     check_sheet_id(sheet_id)
@@ -340,25 +381,10 @@ def create_pixel_sheet(
     }
     # At the door, exactly as create_job does, and before the row exists: an
     # img2img restyle wants SDXL plus a ControlNet, which is the shape of
-    # request a smaller card has to refuse.
-    #
-    # Presence as well as fit. The family check above only asks whether these
-    # two weights *belong* together; it says nothing about whether either is on
-    # this host. Missing, the worker's own tolerance takes over -- it logs and
-    # restyles bare -- so the job would finish, look like an ordinary img2img
-    # pass rather than pixel art, and write a sidecar naming a LoRA that never
-    # loaded. The ControlNet is deliberately not checked: ``structure_lock`` is
-    # a preference the worker already degrades gracefully, and refusing the
-    # whole request over an optional hint would be the wrong trade.
-    check_base_model_weights(svc, base, rows=needed_keys(svc, PIXEL_SHEET_ROWS))
-    if not fetch.present(svc.config, "lora", pixel_lora):
-        remedy = fetch.download_text(svc.config, "lora", pixel_lora)
-        raise Invalid(
-            f"A pixel sheet needs {pixel_lora.label!r}, which is not downloaded. "
-            f"{install_remedy(pixel_lora.label, remedy)}",
-            field="base_model",
-            rows=needed_keys(svc, PIXEL_SHEET_ROWS),
-        )
+    # request a smaller card has to refuse. The presence half lives in
+    # ``_check_weights`` so ``rerun_job`` can hold the same door on the way
+    # back in.
+    _check_weights(svc)
     check_vram(svc, "pixel_sheet", "model", params)
     new_id = svc.store.create(
         "pixel_sheet", source["prompt"], params, uuid.uuid4().hex[:12]

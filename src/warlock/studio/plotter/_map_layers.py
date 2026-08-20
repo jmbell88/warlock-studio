@@ -270,10 +270,12 @@ class LayerOps:
         layer, parent_uid, index = found
         copy = self._copied_subtree(layer)
         copy.name = f"{layer.name} copy"
-        # At the original's own index, not one past it: ``children_of`` is
-        # top-first, so inserting here puts the copy *above* and pushes the
-        # original down -- which is what "duplicate" means everywhere else.
-        return self._add_layer(copy, index, parent_uid)
+        # One past the original, not at its own index: ``children_of`` is
+        # bottom-first -- a later sibling paints *over* an earlier one, which is
+        # what ``scene.resolve`` composites and the layer pane draws reversed --
+        # so inserting after puts the copy above its original, which is what
+        # "duplicate" means everywhere else.
+        return self._add_layer(copy, index + 1, parent_uid)
 
     def _copied_subtree(self: MapDoc, layer: Any) -> Any:
         """One layer deep-copied with new identities. Recursive over groups."""
@@ -318,9 +320,12 @@ class LayerOps:
         if not isinstance(layer, TileLayer):
             raise ValueError(f"{layer.name} is not a tile layer")
         siblings = self.children_of(parent_uid)
-        if index + 1 >= len(siblings):
+        # ``children_of`` is bottom-first -- a later sibling paints *over* an
+        # earlier one -- so "below" is the previous index, and the first layer
+        # in the list is the one with nothing under it.
+        if index == 0:
             raise ValueError(f"there is no layer below {layer.name} to merge into")
-        below = siblings[index + 1]
+        below = siblings[index - 1]
         if not isinstance(below, TileLayer):
             raise ValueError(f"{below.name} is not a tile layer")
 
@@ -421,12 +426,22 @@ class LayerOps:
             if str(source) != layer.source:
                 self.set_layer_props(uid, source=str(source))
             return False
-        self.history.push(
+        # The pixels and the source travel as one compound step, the
+        # ``merge_down`` rule: they arrive in one gesture, and two Ctrl+Z
+        # presses would show the user a picture whose reference names the file
+        # it no longer is.
+        steps: list[Any] = [
             ImagePixelsEdit(layer_uid=int(uid), before=layer.pixels, after=wanted)
-        )
+        ]
         self._apply_image_pixels(uid, wanted)
         if str(source) != layer.source:
-            self.set_layer_props(uid, source=str(source))
+            before = layer.snapshot()
+            after = normalize_layer_values({**before, "source": str(source)})
+            steps.append(
+                LayerPropsEdit(layer_uid=int(uid), before=before, after=after)
+            )
+            self._apply_layer_props(uid, after)
+        self.compound(steps)
         return True
 
     def _apply_image_pixels(self: MapDoc, uid: int, pixels: np.ndarray) -> None:

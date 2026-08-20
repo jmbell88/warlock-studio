@@ -56,11 +56,18 @@ class BoundsOps:
 
         total = np.zeros(3)
         count = 0
+        # Everything whose id() the key carries, held so those ids cannot be
+        # recycled while the memo lives -- the ``_view_cache._Entry`` pin. A
+        # freed selection or mesh whose address came back on a new one would
+        # otherwise match a stale centre.
+        pins: list[Any] = [doc]
         for uid, sel in doc.element_sel.items():
+            pins.append(sel)
             try:
                 obj = doc.by_uid(uid)
             except KeyError:
                 continue
+            pins.extend((obj.mesh, obj.translation, obj.rotation, obj.scale))
             verts = el.affected_verts(obj.mesh, sel)
             if not len(verts):
                 continue
@@ -70,7 +77,7 @@ class BoundsOps:
             total += world.sum(axis=0)
             count += len(world)
         centre = None if count == 0 else total / count
-        self._centre_memo = (key, centre)
+        self._centre_memo = (key, centre, tuple(pins))
         return centre
 
     @staticmethod
@@ -102,7 +109,11 @@ class BoundsOps:
         lo = np.full(3, np.inf)
         hi = np.full(3, -np.inf)
         found = False
+        # The pin: see ``element_centre``. Every object whose ids the key names
+        # is held alive for as long as the memo can match on them.
+        pins: list[Any] = [doc]
         for obj in doc.objects:
+            pins.extend((obj.mesh, obj.translation, obj.rotation, obj.scale))
             if not obj.visible or (selected_only and obj.uid not in doc.selection):
                 continue
             box = self._object_world_box(obj)
@@ -112,7 +123,7 @@ class BoundsOps:
             hi = np.maximum(hi, box[1])
             found = True
         out = (lo, hi) if found else (None, None)
-        self._bounds_memo[selected_only] = (key, out)
+        self._bounds_memo[selected_only] = (key, out, tuple(pins))
         return out
 
     def _object_world_box(self: ClayView, obj: Any) -> tuple[Any, Any] | None:

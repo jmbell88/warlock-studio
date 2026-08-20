@@ -89,12 +89,12 @@ def open_at(ctx: Any, target: tuple[str, str | None]) -> None:
 
 
 def troubleshooting_button(ctx: Any, label: str = "Troubleshooting") -> bool:
-    """A small button onto the troubleshooting chapter (18). -> whether it was
+    """A small button onto the Troubleshooting chapter. -> whether it was
     pressed, so a caller that wants to close a popup first can.
 
-    The number is written out of habit and has already outlived one
-    renumbering -- it said 12. ``TROUBLESHOOTING`` is the target; a chapter
-    number in a docstring is a copy of it that no test reads."""
+    No chapter number here, deliberately: one written out of habit outlived
+    two renumberings (it said 12, then 18). ``TROUBLESHOOTING`` is the target;
+    a number in a docstring is a copy of it that no test reads."""
     if not controls.small_button(label):
         return False
     open_at(ctx, TROUBLESHOOTING)
@@ -172,6 +172,9 @@ def draw_overlay(ctx: Any) -> None:
         imgui.set_next_window_bg_alpha(0.0)
     imgui.push_style_var(imgui.StyleVar_.alpha.value, alpha)
     radius = widgets.push_surface_rounding()
+    # ``begin`` returns a (visible, open) tuple in imgui_bundle, and a tuple is
+    # always truthy -- the guard needs the first element or it never skips.
+    # ``end`` stays unconditional either way; that is begin/end's contract.
     opened = imgui.begin(
         "##manual-overlay",
         None,
@@ -180,7 +183,7 @@ def draw_overlay(ctx: Any) -> None:
         | imgui.WindowFlags_.no_resize.value
         | imgui.WindowFlags_.no_collapse.value
         | imgui.WindowFlags_.no_saved_settings.value,
-    )
+    )[0]
     widgets.pop_surface_rounding()
     if opened:
         widgets.window_shadow("overlay", radius=radius)

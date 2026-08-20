@@ -272,7 +272,6 @@ def detect_grid(image: PILImage) -> dict[str, Any]:
         "scale": scale if passing else None,
         "phase": [phase[0], phase[1]],
         "residual": float(residual),
-        "candidate": scale,
     }
 
 
@@ -507,9 +506,9 @@ def verdict(rep: dict[str, Any]) -> str | None:
     """One sentence a person reads beside the export, or None when there is
     nothing to say.
 
-    Basic-Latin only, like every other UI string: imgui's default atlas has no
-    glyph for the symbols that would be tidier here, and a missing glyph draws
-    as a box.
+    Basic-Latin plus Latin-1, like every other UI string: imgui's atlas is
+    baked with that default glyph range, so the middle dot (U+00B7) is safe
+    but anything past U+00FF would draw as the missing-glyph box.
     """
     if not rep:
         return None

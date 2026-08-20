@@ -283,9 +283,12 @@ def run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[Any]:
         assign(proc.pid)
         try:
             out, err = proc.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
             proc.kill()
-            proc.communicate()
+            # Attach what the child wrote before the kill, as subprocess.run
+            # does -- the docstring promises "matching it", and a caller
+            # diagnosing a hang wants the partial output, not nothing.
+            exc.output, exc.stderr = proc.communicate()
             raise
     return subprocess.CompletedProcess(argv, proc.returncode, out, err)
 

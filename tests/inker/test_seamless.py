@@ -156,3 +156,29 @@ def test_the_threshold_carries_its_citation() -> None:
     from warlock.pipelines import seam
 
     assert tiling.SEAM_MAX == seam.SEAM_MAX
+
+
+def test_offset_autovivifies_an_empty_animated_cel():
+    """The defect: ``offset_layer`` skipped ``_ensure_active_cel``, so Wrap
+    1/2 on an empty animated cel wrote into the shared read-only placeholder
+    plane and raised ``ValueError`` mid-gesture. Autovivified like every other
+    write path, the pending cel rides the same undo step as the roll."""
+    doc = Document.blank(8, 8)
+    doc.stack.active.pixels[0:2, 0:2] = (9, 8, 7, 255)
+    doc.invalidate_all()
+    anim = doc.ensure_animation()
+    anim.tracks[0].continuous = True  # the new cel starts from frame 0's art
+    art = doc.stack.active.pixels.copy()
+    doc.add_frame()
+    doc.set_current_frame(1)
+    head = doc.history.head
+
+    assert doc.offset_layer(4, 4) is True
+
+    assert np.array_equal(
+        doc.stack.active.pixels, np.roll(art, (4, 4), axis=(0, 1))
+    )
+    assert doc.history.head == head + 1, "one step: the cel and the roll together"
+    doc.undo()
+    track, frame = anim.tracks[0], anim.frames[1]
+    assert (track.uid, frame.uid) not in anim.cels, "the undo took the cel back out"

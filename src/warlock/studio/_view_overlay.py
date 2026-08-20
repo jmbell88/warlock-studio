@@ -75,14 +75,19 @@ class _SelOverlay:
     """
 
     __slots__ = (
-        "ctx", "key", "pos_vbo", "count", "specs", "_ibos", "_vaos", "_program",
-        "hover", "hover_specs", "_hover_ibos", "_hover_vaos",
+        "ctx", "key", "pins", "pos_vbo", "count", "specs", "_ibos", "_vaos",
+        "_program", "hover", "hover_specs", "_hover_ibos", "_hover_vaos",
     )
 
     def __init__(self, ctx: Any, program: Any, key: Any, positions: Any) -> None:
         self.ctx = ctx
         self._program = program
         self.key = key
+        # What the key's ids name, held so they cannot be recycled while the
+        # overlay lives -- the ``_view_cache._Entry`` pin. Set by the caller,
+        # which is the one that knows which mesh and selection the key came
+        # from.
+        self.pins: Any = None
         data = np.ascontiguousarray(positions, dtype="f4")
         self.count = len(data)
         self.pos_vbo = ctx.buffer(data.tobytes())
@@ -225,6 +230,11 @@ class OverlayOps:
                 if overlay is not None:
                     overlay.release()
                 overlay = _SelOverlay(self.ctx, program, key, obj.mesh.positions)
+                # Pinned so the ids in the key stay sound: nothing else keeps
+                # the mesh or the stored selection alive, and a recycled
+                # address would match a stale overlay -- a new selection drawn
+                # invisible, the failure the key's own comment describes.
+                overlay.pins = (obj.mesh, stored)
                 self._overlays[obj.uid] = overlay
             world = self._world(obj)
             items.extend(
@@ -329,11 +339,18 @@ class OverlayOps:
         from .clay.adjacency import adjacency, cached_triangulation
 
         add, specs = self._collect(overlay, hover=True)
+        # Bounds-checked, not trusted: ``sync`` clears a stale hover when it
+        # rebuilds the object, but this is the read that would raise (or hand
+        # the GPU an index past the buffer), so it guards itself too.
         if mode == "vertex":
+            if hover >= len(obj.mesh.positions):
+                return []
             add([hover], moderngl.POINTS, HOVER_COLOR, depth=False, size=9.0)
         elif mode == "edge":
-            add(adjacency(obj.mesh).edge_verts[hover], moderngl.LINES, HOVER_COLOR,
-                depth=False)
+            edge_verts = adjacency(obj.mesh).edge_verts
+            if hover >= len(edge_verts):
+                return []
+            add(edge_verts[hover], moderngl.LINES, HOVER_COLOR, depth=False)
         else:
             tris, tri_face = cached_triangulation(obj.mesh)
             if len(tris):

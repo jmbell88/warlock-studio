@@ -168,6 +168,32 @@ def test_run_tears_down_when_setup_fails(runtime, monkeypatch):
     assert runtime.store is None and runtime.worker is None
 
 
+def test_the_crash_report_offers_the_real_log_folder(runtime, monkeypatch):
+    """The dialog asks "Open the log folder?", so it has to know the folder.
+
+    ``_report_crash`` used to read ``self.config``, which App never defines;
+    the AttributeError was swallowed by the adjacent except (a crash report
+    must not crash) and ``log_dir`` was always None -- the offer could never
+    be honoured. The right spelling is ``self.runtime.config``."""
+    from pathlib import Path
+
+    from warlock import instance
+    from warlock.studio.main import App
+
+    seen: dict[str, object] = {}
+
+    def record(title, text, log_dir=None):
+        seen["log_dir"] = log_dir
+        return False
+
+    monkeypatch.setattr(instance, "alert_fatal", record)
+    app = App.__new__(App)
+    app.runtime = runtime
+    app.app_ctx = None
+    app._report_crash(in_setup=True)
+    assert seen["log_dir"] == Path(runtime.config.data_dir)
+
+
 # --- tasks ------------------------------------------------------------------
 
 
@@ -348,3 +374,33 @@ def test_a_service_error_needs_no_log_route(tasks):
 def test_a_successful_task_carries_no_action(tasks):
     tasks.submit("fine", lambda: 1)
     assert _wait(tasks, "fine").action is None
+
+
+def test_a_worker_that_survives_shutdown_cannot_hold_the_process_open():
+    """Dropping a leaked worker from concurrent.futures' atexit registry only
+    defeats *that* join -- ``threading._shutdown`` still waits on every
+    non-daemon thread, so a task parked in a never-dismissed native dialog
+    held the process open indefinitely after the window was gone (audit
+    2026-08-19). The proof has to be a child interpreter actually exiting;
+    asserting registry removal was testing the half that never blocked."""
+    import subprocess
+    import sys
+    import textwrap
+
+    script = textwrap.dedent(
+        """
+        import sys
+        import threading
+
+        from warlock.studio.tasks import TaskRunner, hard_exit_if_leaked
+
+        runner = TaskRunner(workers=1)
+        runner.submit("parked", threading.Event().wait)
+        runner.shutdown(timeout=0.2)
+        sys.exit(hard_exit_if_leaked(3))
+        """
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script], timeout=60, capture_output=True, text=True
+    )
+    assert proc.returncode == 3, (proc.returncode, proc.stderr)

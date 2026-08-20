@@ -621,12 +621,19 @@ def fill_hole(mesh: Mesh, sel: ElementSel) -> tuple[Mesh, ElementSel]:
         rows = np.stack([uv[a.vertex_corners(int(v))[0]] for v in corners])
         uv = np.concatenate([uv, rows])
 
+    # Each cap inherits from a face on its own rim -- the rule every other
+    # face-growing op here follows. Minting caps at slot 0 / flat put the
+    # palette's first material on a hole filled in a painted, smooth mesh.
+    sources = np.array(
+        [int(a.corner_face[a.vertex_corners(int(r[0]))[0]]) for r in new_loops],
+        dtype="i8",
+    )
     out = topo.rebuild(
         mesh.positions,
         np.concatenate([mesh.loops.astype("i8"), corners]),
         np.concatenate([mesh.starts.astype("i8"), int(mesh.starts[-1]) + np.cumsum(counts)]),
-        np.concatenate([mesh.material, np.zeros(len(counts), dtype="i4")]),
-        np.concatenate([mesh.smooth, np.zeros(len(counts), dtype=bool)]),
+        np.concatenate([mesh.material, mesh.material[sources]]),
+        np.concatenate([mesh.smooth, mesh.smooth[sources]]),
         uv=uv,
     )
     return out, ElementSel(faces=np.arange(n_faces, n_faces + len(counts)))
@@ -793,10 +800,10 @@ def _directed_runs(pairs: np.ndarray, what: str) -> list[list[int]]:
         # Walk back to a beginning first, so an open run is reported from its
         # end rather than from wherever the iteration happened to start.
         head = start
+        # ``into[head] != start`` is what stops a closed loop's walk-back; the
+        # step below can therefore never land back on ``start`` itself.
         while head in into and into[head] not in seen and into[head] != start:
             head = into[head]
-            if head == start:
-                break
         run = [head]
         seen.add(head)
         while run[-1] in out_of:

@@ -119,9 +119,15 @@ def dithered(stops: Sequence[Stop], t: np.ndarray, method: str) -> np.ndarray:
     # two stops at one position the hard edge ``sample`` already gives them.
     low = np.clip(np.searchsorted(positions, t, side="right") - 1, 0, len(ordered) - 2)
     span = positions[low + 1] - positions[low]
-    where = np.divide(
-        t - positions[low], span, out=np.ones_like(t), where=span > 0.0
-    )
+    # ``composite.over``'s masked-lane fix: ``where=`` does not promise the
+    # masked lanes go unevaluated, so a SIMD lane with a zero span (two stops
+    # at one position) still ran x/0 and raised under
+    # ``np.errstate(all="raise")``. Divide by one there and select -- the
+    # masked lanes keep the one a zero-width segment always answered.
+    lit = span > 0.0
+    where = np.empty_like(t)
+    np.divide(t - positions[low], np.where(lit, span, 1.0), out=where)
+    where = np.where(lit, where, 1.0)
     where = np.clip(where, 0.0, 1.0)
     threshold = dith.tile_matrix(dith.bayer_matrix(dith.BAYER_SIZES[method]), t.shape)
     return colours[np.where(where > threshold, low + 1, low)]

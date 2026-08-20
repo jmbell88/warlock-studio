@@ -145,7 +145,13 @@ class WangSet:
         return tuple(range(POSITIONS))
 
     def wangid_of(self, local_id: int) -> tuple[int, ...]:
-        """One tile's wangid, or all-unset for a tile the set says nothing about."""
+        """One tile's wangid, or all-unset for a tile the set says nothing about.
+
+        No studio caller yet -- the wang tests exercise it directly. It is the
+        per-tile read a ``field_of`` callback for :func:`constraints_from` is
+        built from, which is why it stays published rather than folding into
+        ``matching``.
+        """
         return self.tiles.get(int(local_id), (0,) * POSITIONS)
 
     def matching(self, wanted: dict[int, int]) -> list[int]:
@@ -197,6 +203,11 @@ def blob_wangset(names: list[str], colours: list[str]) -> WangSet:
     Its ``kind`` is ``mixed`` because a blob tile constrains all eight slots: the
     collapse is precisely the rule that a corner only counts when both its
     flanking edges do.
+
+    No studio caller yet -- the wang tests exercise it directly. It exists as
+    the proof the module docstring leans on (the blob preset *is* one
+    particular table), and it is what a Tiled ``.tsx`` export of the preset
+    will serialize when that door is built.
     """
     entries = [
         WangColour(name=name or f"Terrain {index + 1}", colour=colour)

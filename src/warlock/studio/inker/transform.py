@@ -98,7 +98,15 @@ def _premultiplied(pixels: np.ndarray) -> np.ndarray:
 
 def _unpremultiplied(pixels: np.ndarray) -> np.ndarray:
     alpha = pixels[..., 3:4] / 255.0
-    rgb = np.divide(pixels[..., :3], alpha, out=np.zeros_like(pixels[..., :3]), where=alpha > 0.0)
+    # ``composite.over``'s masked-lane fix: ``where=`` does not promise the
+    # masked lanes go unevaluated, so a SIMD lane with zero alpha under a
+    # filtered colour still ran x/0 and raised under
+    # ``np.errstate(all="raise")``. Divide by one there and select --
+    # bit-identical everywhere the old form defined a value.
+    shown = alpha > 0.0
+    rgb = np.empty_like(pixels[..., :3])
+    np.divide(pixels[..., :3], np.where(shown, alpha, 1.0), out=rgb)
+    rgb = np.where(shown, rgb, 0.0)
     out = np.empty_like(pixels)
     out[..., :3] = rgb
     out[..., 3:4] = pixels[..., 3:4]

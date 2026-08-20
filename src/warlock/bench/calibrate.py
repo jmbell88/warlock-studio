@@ -97,8 +97,13 @@ def sweep_job(
     # One worker call per elevation: the spec carries a single elevation for
     # the whole render, which is also what keeps the camera framed once.
     for elevation in elevations:
-        say(f"  elevation {elevation:.0f}: rendering {yaws} views")
-        frames = out_dir / f"e{int(elevation):03d}"
+        say(f"  elevation {elevation:.1f}: rendering {yaws} views")
+        # Named to the hundredth of a degree: truncating to whole degrees
+        # folded 22.0 and 22.5 into one directory, so the second elevation
+        # rendered over the first and any frame it failed to write was then
+        # scored from the stale render. Underscore for the point so the name
+        # never reads as a file extension.
+        frames = out_dir / f"e{elevation:06.2f}".replace(".", "_")
         frames.mkdir(parents=True, exist_ok=True)
         angles = sweep_cells(yaws)
         spec = rigging.sheet_spec(

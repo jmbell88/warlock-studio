@@ -173,7 +173,9 @@ class ClayView(CacheOps, BoundsOps, PickOps, OverlayOps, DragOps):
         # -- a hover that recomputed every frame would reproject every vertex
         # of every object while the scene sits perfectly still.
         self.hover_element: tuple[int, int] | None = None
-        self._screens: dict[int, tuple[Any, Any]] = {}
+        # ``(key, screen, mesh)`` -- the mesh pinned so the id in the key stays
+        # sound; see ``screen_of``.
+        self._screens: dict[int, tuple[Any, Any, Any]] = {}
 
         # Where the right button went down, and where the menu should open.
         # ``menu_request`` is read and cleared by the pane layer, which is the
@@ -193,10 +195,17 @@ class ClayView(CacheOps, BoundsOps, PickOps, OverlayOps, DragOps):
         # Per-object world matrices, keyed on the identity of the three
         # transform arrays -- sound because every transform write *rebinds*
         # them (the documented gizmo rule) rather than mutating in place (B26).
-        self._world_cache: dict[int, tuple[tuple[int, int, int], Any]] = {}
-        # element_centre / selection_centre / world_bounds memos (B25/B27).
-        self._centre_memo: tuple[Any, Any] | None = None
-        self._bounds_memo: dict[bool, tuple[Any, tuple[Any, Any]]] = {}
+        # The arrays themselves ride in the entry (the ``_view_cache._Entry``
+        # pin), because an id is only sound while its object is alive: a freed
+        # array's address coming back on a different transform would otherwise
+        # match a stale matrix.
+        self._world_cache: dict[
+            int, tuple[tuple[int, int, int], Any, tuple[Any, Any, Any]]
+        ] = {}
+        # element_centre / selection_centre / world_bounds memos (B25/B27),
+        # each ``(key, answer, pins)`` -- the pins hold what the key's ids name.
+        self._centre_memo: tuple[Any, Any, Any] | None = None
+        self._bounds_memo: dict[bool, tuple[Any, tuple[Any, Any], Any]] = {}
         # One shared empty element-selection, so an unselected object stops
         # synthesising a fresh empty() per frame (B26).
         self._empty_sel: Any = None
@@ -268,7 +277,9 @@ class ClayView(CacheOps, BoundsOps, PickOps, OverlayOps, DragOps):
         if hit is not None and hit[0] == key:
             return hit[1]
         world = m3.compose(obj.translation, obj.rotation, obj.scale)
-        self._world_cache[obj.uid] = (key, world)
+        self._world_cache[obj.uid] = (
+            key, world, (obj.translation, obj.rotation, obj.scale)
+        )
         if len(self._world_cache) > 4096:
             self._world_cache.clear()
         return world

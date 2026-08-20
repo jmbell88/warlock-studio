@@ -479,7 +479,15 @@ def _ordered(out: np.ndarray, table: np.ndarray, matrix: np.ndarray) -> np.ndarr
     span = (high - low).astype(np.float64)
     length = (span * span).sum(axis=1)
     along = ((colours - low).astype(np.float64) * span).sum(axis=1)
-    mix = np.divide(along, length, out=np.zeros_like(along), where=length > 0.0)
+    # ``composite.over``'s masked-lane fix: ``where=`` does not promise the
+    # masked lanes go unevaluated, so a SIMD lane with a zero-length span
+    # (``along`` is zero there too) still ran 0/0 and raised under
+    # ``np.errstate(all="raise")``. Divide by one there and select --
+    # bit-identical everywhere the old form defined a value.
+    lit = length > 0.0
+    mix = np.empty_like(along)
+    np.divide(along, np.where(lit, length, 1.0), out=mix)
+    mix = np.where(lit, mix, 0.0)
     mix = np.clip(mix, 0.0, 1.0)
 
     threshold = tile_matrix(matrix, out.shape[:2])[visible].astype(np.float64)

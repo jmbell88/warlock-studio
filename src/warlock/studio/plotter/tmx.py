@@ -685,9 +685,21 @@ def _adopt_object_space(doc: MapDoc) -> None:
 
 
 def _origin_pixels(doc: MapDoc) -> tuple[float, float]:
-    """The window's corner in pixels. ``(0.0, 0.0)`` on a finite map."""
+    """The window's corner in *Tiled's object space*. ``(0.0, 0.0)`` finite.
+
+    The shift is applied before :func:`~.project.object_to_pixels` converts and
+    after :func:`~.project.object_from_pixels` inverts, so it has to be in the
+    space those two speak on the Tiled side. For an isometric map that is
+    tile-space units of ``tile_h`` on *both* axes -- see ``object_to_pixels`` --
+    so a cell of origin is ``tile_h`` there, not ``tile_w``: the ``tile_w``
+    shift landed every imported object off by ``tile_w / tile_h`` in x (double,
+    on the recommended 2:1 preset), and the writer adding the same wrong shift
+    back is what let a round trip hide it.
+    """
     if not doc.infinite:
         return 0.0, 0.0
+    if doc.isometric:
+        return float(doc.origin_x * doc.tile_h), float(doc.origin_y * doc.tile_h)
     return float(doc.origin_x * doc.tile_w), float(doc.origin_y * doc.tile_h)
 
 

@@ -13,7 +13,9 @@ Two products come out of the same 32x16 gradient:
 * **Diffuse** -- nine spherical-harmonic coefficients, integrated on the CPU.
   Exact for a source this smooth (it has no energy above the second band), and
   it carries the ambient-from-below that the whole environment exists for.
-* **Specular** -- a small GGX-prefiltered cubemap, seven mips of roughness.
+* **Specular** -- a small GGX-prefiltered equirect probe, one mip per roughness
+  step (``PROBE_MIPS`` of them; see the note on ``PROBE_SIZE`` for why it is a
+  2D texture and not a cubemap).
 """
 
 from __future__ import annotations
@@ -244,7 +246,7 @@ def prefilter(
 
 
 class Environment:
-    """The GPU-side environment: SH coefficients and a prefiltered cubemap."""
+    """The GPU-side environment: SH coefficients and a prefiltered equirect probe."""
 
     def __init__(self, ctx: Any) -> None:
         self.ctx = ctx

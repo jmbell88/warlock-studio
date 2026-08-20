@@ -263,8 +263,30 @@ def normalize(raw: dict[str, Any], *, bg_default: str | None = None) -> dict[str
 
     platform = chosen["platform"] or PLATFORMS[DEFAULT_PLATFORM]
     resolution = raw.get("resolution")
-    # An explicit resolution stays an override; otherwise the platform supplies it.
-    resolution = int(resolution) if resolution not in (None, "") else platform.resolution
+    # An explicit resolution stays an override; otherwise the platform supplies
+    # it. The override is bounded by the resolutions ``vram`` prices
+    # (TRELLIS_RES_MULT): admission re-buckets anything it does not know to the
+    # 1024 baseline, so an unpriced value here would be *sent* to trellis-server
+    # verbatim while being *charged* as the cheap case -- accounting as the
+    # optimistic half, which the VRAM invariant forbids.
+    if resolution in (None, ""):
+        resolution = platform.resolution
+    else:
+        from . import vram
+
+        try:
+            resolution = int(resolution)
+        except (TypeError, ValueError) as exc:
+            raise GuidanceError(
+                f"resolution must be a number, got {resolution!r}",
+                field="platform",
+            ) from exc
+        if resolution not in vram.TRELLIS_RES_MULT:
+            raise GuidanceError(
+                f"resolution must be one of {sorted(vram.TRELLIS_RES_MULT)}, "
+                f"got {resolution!r}",
+                field="platform",
+            )
 
     size_m = raw.get("size_m")
     if size_m in (None, ""):

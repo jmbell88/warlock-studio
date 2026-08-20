@@ -156,3 +156,12 @@ def test_a_suffixless_name_lands_as_a_gpl_on_disk(tmp_path):
     inker_mode._write_palette(tmp_path / "swatches", [(1, 2, 3, 255)], "Swatches")
 
     assert (tmp_path / "swatches.gpl").exists()
+
+
+def test_a_utf8_bom_does_not_defeat_the_jasc_sniff():
+    """A ``.pal`` saved by a BOM-writing editor decodes with U+FEFF in front
+    of the magic line -- not whitespace, so ``lstrip()`` alone left the sniff
+    blind and the file fell into the ``.gpl`` reader's refusal."""
+    bommed = "\ufeff" + SAMPLE
+    assert gpl.parse_any(bommed) == gpl.parse_jasc(SAMPLE)
+    assert gpl.parse_jasc(bommed) == gpl.parse_jasc(SAMPLE)

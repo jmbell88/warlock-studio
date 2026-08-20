@@ -148,7 +148,13 @@ class JobOps:
         # has no RNG and should not grow one -- every seed in this codebase
         # comes from a door or from arithmetic over one that did. It also makes
         # the whole chain reproducible from the single seed the user can lock.
-        base = int(params.get("reference_seed") or params.get("seed") or 0)
+        # ``is None`` rather than ``or``: seed 0 is a legal pinned seed, and
+        # the truthiness spelling skipped it -- breaking the one-seed
+        # reproducibility this comment promises for exactly that corner.
+        raw = params.get("reference_seed")
+        if raw is None:
+            raw = params.get("seed")
+        base = int(raw) if raw is not None else 0
         seed_a = spritesynth.candidate_seed(base, "a")
         seed_b = spritesynth.candidate_seed(base, "b")
         sheet_params = {

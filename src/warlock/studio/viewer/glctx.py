@@ -33,6 +33,13 @@ class Viewport:
         self._msaa: moderngl.Framebuffer | None = None
         self._resolve: moderngl.Framebuffer | None = None
         self.texture: moderngl.Texture | None = None
+        # The renderbuffers behind ``_msaa``, held by name because releasing a
+        # framebuffer does not release its attachments (and the app sets no
+        # gc_mode, so a dropped reference frees nothing either). Built inline,
+        # they leaked a colour + depth pair per reallocation -- and a splitter
+        # drag reallocates on nearly every frame.
+        self._color_rb: moderngl.Renderbuffer | None = None
+        self._depth_rb: moderngl.Renderbuffer | None = None
         self.resize(size)
 
     def resize(self, size: tuple[int, int]) -> bool:
@@ -51,18 +58,21 @@ class Viewport:
             # A multisample texture cannot be sampled by an ordinary sampler2D,
             # which is why there are two framebuffers and a blit rather than
             # one target used both ways.
+            self._color_rb = self.ctx.renderbuffer(
+                (width, height), 4, samples=self.samples
+            )
+            self._depth_rb = self.ctx.depth_renderbuffer(
+                (width, height), samples=self.samples
+            )
             self._msaa = self.ctx.framebuffer(
-                color_attachments=[
-                    self.ctx.renderbuffer((width, height), 4, samples=self.samples)
-                ],
-                depth_attachment=self.ctx.depth_renderbuffer(
-                    (width, height), samples=self.samples
-                ),
+                color_attachments=[self._color_rb],
+                depth_attachment=self._depth_rb,
             )
         else:
+            self._depth_rb = self.ctx.depth_renderbuffer((width, height))
             self._msaa = self.ctx.framebuffer(
                 color_attachments=[self.texture],
-                depth_attachment=self.ctx.depth_renderbuffer((width, height)),
+                depth_attachment=self._depth_rb,
             )
         return True
 
@@ -107,9 +117,13 @@ class Viewport:
         return image[::-1].copy()
 
     def release(self) -> None:
-        for obj in (self._msaa, self._resolve, self.texture):
+        # Attachments after their framebuffers: the renderbuffers must be
+        # released by name, because they are exactly what a framebuffer's
+        # ``release`` leaves behind.
+        for obj in (self._msaa, self._resolve, self.texture, self._color_rb, self._depth_rb):
             if obj is not None:
                 obj.release()
         self._msaa = self._resolve = self.texture = None
+        self._color_rb = self._depth_rb = None
         self.size = (0, 0)
 

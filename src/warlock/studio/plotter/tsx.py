@@ -28,6 +28,7 @@ one model rather than about moving where anybody looks for it.
 
 from __future__ import annotations
 
+import logging
 import xml.etree.ElementTree as ET
 from typing import Any
 
@@ -53,6 +54,8 @@ from .props import (
     read_properties,
     write_properties,
 )
+
+log = logging.getLogger(__name__)
 
 # What this build writes. Tiled accepts anything it recognises; these are the
 # values a current Tiled writes and so the values least likely to surprise it.
@@ -564,10 +567,14 @@ def _terrains_of(root: ET.Element, phases: int = 1) -> tuple[TerrainSpec, ...]:
 def _collision_from(group: ET.Element) -> tuple[Any, ...]:
     """A ``<objectgroup>`` inside a ``<tile>`` as tilegrid collision records.
 
-    Only the three shapes a collision outline can be. Anything else in the
+    Only the three shapes the tilegrid records can hold. Anything else in the
     group -- a text object, a tile object -- is skipped rather than refused: it
     is not collision, and a file that carries one is not a file this editor
-    cannot open.
+    cannot open. Two things Tiled's collision editor *can* author are dropped
+    by name into the log rather than silently: a point or polyline member (the
+    records have no shape for either), and a shape's ``rotation`` (the records
+    carry none, so it would not survive to the export either way). Both are
+    stated in ``docs/PLOTTER_COMPAT.md`` beside the round-trip claim.
     """
     out: list[Any] = []
     for obj in group.findall("object"):
@@ -575,6 +582,11 @@ def _collision_from(group: ET.Element) -> tuple[Any, ...]:
         y = float(obj.get("y", 0) or 0)
         w = float(obj.get("width", 0) or 0)
         h = float(obj.get("height", 0) or 0)
+        if float(obj.get("rotation", 0) or 0):
+            log.warning(
+                "collision shape %s: rotation is not modeled and was dropped",
+                obj.get("id", "?"),
+            )
         polygon = obj.find("polygon")
         if polygon is not None:
             points = tuple(
@@ -586,7 +598,13 @@ def _collision_from(group: ET.Element) -> tuple[Any, ...]:
             out.append(TilePolygon(x=x, y=y, points=points))
         elif obj.find("ellipse") is not None:
             out.append(TileEllipse(x=x, y=y, w=w, h=h))
-        elif obj.find("point") is None and obj.find("polyline") is None:
+        elif obj.find("point") is not None or obj.find("polyline") is not None:
+            log.warning(
+                "collision shape %s: point and polyline outlines are not "
+                "modeled and were dropped",
+                obj.get("id", "?"),
+            )
+        else:
             out.append(TileRect(x=x, y=y, w=w, h=h))
     return tuple(out)
 

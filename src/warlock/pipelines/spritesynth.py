@@ -636,6 +636,16 @@ def preserve_front(
     # NEAREST, and a LANCZOS pass here would put a soft rim into the one cell
     # that is meant to be the crispest.
     src = src.resize((nw, nh), Image.NEAREST)
+    if nw > front.w:
+        # front_fits admits sources up to a third wider than the generated
+        # front's proportions, so a height-matched paste can come out wider
+        # than the cell. Trim the excess evenly from both sides rather than
+        # letting the paste spill: the cell to the right is the "left" view,
+        # and an opaque stripe of the reference along its edge survives the
+        # reduction into every export.
+        lost = nw - front.w
+        src = src.crop((lost // 2, 0, lost // 2 + front.w, nh))
+        nw = front.w
 
     left = front.x + max(0, (front.w - nw) // 2)
     top = front.y + max(0, min(front.h - nh, baseline - nh + 1))

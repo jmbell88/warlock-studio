@@ -204,3 +204,13 @@ def test_a_matte_shows_through_transparency_and_a_none_matte_does_not():
     pixels = np.zeros((1, 1, 4), dtype=np.uint8)
     assert cp.flatten_onto(pixels, (255, 255, 255, 255))[0, 0].tolist() == [255, 255, 255, 255]
     assert cp.flatten_onto(pixels, None)[0, 0].tolist() == [0, 0, 0, 0]
+
+
+def test_over_declines_a_zero_size_crop():
+    """Both native gates already answer None for an empty crop; the pure path
+    crashed instead, on ``min()`` of an empty alpha plane in its own fast
+    path. An empty source composites to the backdrop it was handed."""
+    backdrop = np.zeros((0, 4, 4), dtype=np.float32)
+    source = np.zeros((0, 4, 4), dtype=np.float32)
+    out = cp.over(backdrop, source)
+    assert out.shape == backdrop.shape

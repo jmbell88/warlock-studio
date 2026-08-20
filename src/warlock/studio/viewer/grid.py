@@ -70,7 +70,6 @@ class Grid:
         self._vao = self.ctx.vertex_array(
             self.program, [(self._vbo, "3f 3f", "a_position", "a_color")]
         )
-        self.count = len(positions)
 
     def render(self, view, proj) -> None:
         self.program["u_view"].write(m3.gl_bytes(view))
