@@ -1999,10 +1999,17 @@ def stage_rail(
     return picked
 
 
-def toggle(label: str, value: bool, *, tag: str | None = None) -> tuple[bool, bool]:
+def toggle(
+    label: str, value: bool, *, tag: str | None = None, tooltip: str = ""
+) -> tuple[bool, bool]:
     """An animated switch. -> (changed, value).
 
     ``tag`` keys the animation when the visible label alone would collide.
+
+    ``tooltip`` is what every other control in ``controls`` already takes. A
+    switch whose label is two words -- *Repeat X*, *Turntable* -- is the one
+    shape that most needs a sentence and was the one shape that could not
+    carry one.
     """
     key = tag or label
     track = sp(18)
@@ -2042,6 +2049,8 @@ def toggle(label: str, value: bool, *, tag: str | None = None) -> tuple[bool, bo
         )
     if imgui.is_item_hovered():
         imgui.set_mouse_cursor(imgui.MouseCursor_.hand.value)
+        if tooltip:
+            imgui.set_tooltip(tooltip)
     return clicked, value
 
 

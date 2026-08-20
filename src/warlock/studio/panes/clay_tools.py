@@ -226,8 +226,13 @@ def _actions(ctx: Any, state: Any, doc: Any) -> None:
             continue
         if widgets.disabled_button(f"{label}##clayop{op.name}", enabled):
             _invoke(ctx, doc, op)
-        if imgui.is_item_hovered() and op.key:
-            imgui.set_tooltip(op.key)
+        # The key *and* the sentence. ``Op.hint`` was written for the dialog a
+        # parameterised op opens, which means the explanation of what an op is
+        # for was reachable only by pressing the button -- and the two ops it
+        # most has to tell apart sit side by side here.
+        tip = "\n".join(part for part in (op.key, op.hint) if part)
+        if imgui.is_item_hovered() and tip:
+            imgui.set_tooltip(tip)
         if index % 2 == 0:
             imgui.same_line()
         else:

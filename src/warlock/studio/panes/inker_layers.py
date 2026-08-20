@@ -338,6 +338,27 @@ def _actions_bar(ctx: Any, doc: Any) -> None:
         enabled=len(doc.stack) > 1,
     ):
         doc.remove_layer()
+    imgui.same_line()
+    # Rename, the two moves and "take out of group" were reachable only by
+    # right-clicking a row, and nothing on screen said a row had a menu. The
+    # bar is where the other verbs are, so the ones that did not fit go behind
+    # one glyph here rather than staying a thing you have to guess at.
+    if widgets.icon_button(f"{icons.ELLIPSIS}##layermore", "More layer actions"):
+        imgui.open_popup("layer-more")
+    if imgui.begin_popup("layer-more"):
+        widgets.popup_chrome(_imgui=imgui)
+        index = doc.stack.active_index
+        if controls.selectable("Rename", False)[0]:
+            _ask_rename(ctx, doc, index)
+        if controls.selectable("Move up", False)[0]:
+            doc.move_layer(index, index + 1)
+        if controls.selectable("Move down", False)[0]:
+            doc.move_layer(index, index - 1)
+        if doc.group_of.get(_member_uid(doc, index)) is not None and controls.selectable(
+            "Take out of group", False
+        )[0]:
+            doc.move_into_group(index, None)
+        imgui.end_popup()
     if doc.anim is not None:
         widgets.muted_wrapped("Merge and flatten apply to every frame.")
 

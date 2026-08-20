@@ -205,29 +205,52 @@ def _row(ctx: Any, doc: Any, state: Any, layer: Any, editable: bool) -> None:
         imgui.end_disabled()
         imgui.end_popup()
     if active and editable:
-        changed, opacity = widgets.labeled_slider_float("Opacity", layer.opacity, 0.0, 1.0)
+        changed, opacity = widgets.labeled_slider_float(
+            "Opacity",
+            layer.opacity,
+            0.0,
+            1.0,
+            help_text="How strongly this layer draws over the ones below it.",
+        )
         if changed:
             doc.set_layer_props(layer.uid, opacity=float(opacity))
         # Labels live above their fields throughout the Studio.  Keeping them
         # out of the ImGui ids also gives the narrow inspector the whole row
         # for the value instead of clipping labels into the controls.
-        widgets.field_label("Name")
+        widgets.field_label(
+            "Name",
+            "What this layer is called in the map, in Tiled, and in the exported "
+            ".tmx. Two layers may share a name; the map addresses them by uid.",
+        )
         name = widgets.input_text("##layer-name", layer.name, max_length=64)
         if name != layer.name:
             doc.set_layer_props(layer.uid, name=name)
-        widgets.field_label("Class")
+        widgets.field_label(
+            "Class",
+            "Tiled's per-layer class string. Round-trips through export and import "
+            "and means nothing to Plotter itself -- it is for whatever reads the "
+            "map afterwards.",
+        )
         class_name = widgets.input_text(
             "##layer-class", layer.class_name, max_length=64, hint="Optional class"
         )
         if class_name != layer.class_name:
             doc.set_layer_props(layer.uid, class_name=class_name)
-        widgets.field_label("Blend")
+        widgets.field_label(
+            "Blend",
+            "How this layer composites onto the ones below it. Tiled has no blend "
+            "mode, so anything but normal is dropped on .tmx export.",
+        )
         blend_mode = widgets.combo(
             "##layer-blend", layer.blend_mode, [(mode, mode) for mode in BLEND_MODES]
         )
         if blend_mode != layer.blend_mode:
             doc.set_layer_props(layer.uid, blend_mode=blend_mode)
-        widgets.field_label("Tint")
+        widgets.field_label(
+            "Tint",
+            "Multiplied into every tile this layer draws. Alpha multiplies the "
+            "layer opacity above.",
+        )
         imgui.set_next_item_width(-1)
         changed, tint = controls.color_edit4(
             "##layer-tint", [channel / 255.0 for channel in layer.tint]
@@ -240,7 +263,11 @@ def _row(ctx: Any, doc: Any, state: Any, layer: Any, editable: bool) -> None:
                     for channel in tint
                 ),
             )
-        widgets.field_label("Offset")
+        widgets.field_label(
+            "Offset",
+            "Shifts the whole layer by this many pixels when drawn, without moving "
+            "any tile in the grid.",
+        )
         imgui.set_next_item_width(-1)
         changed, offset = controls.input_float2(
             "##layer-offset", [float(layer.offset_x), float(layer.offset_y)]
@@ -249,7 +276,11 @@ def _row(ctx: Any, doc: Any, state: Any, layer: Any, editable: bool) -> None:
             doc.set_layer_props(
                 layer.uid, offset_x=float(offset[0]), offset_y=float(offset[1])
             )
-        widgets.field_label("Parallax")
+        widgets.field_label(
+            "Parallax",
+            "How fast this layer scrolls against the camera. 1 is locked to the "
+            "map, 0.5 is half speed -- a distant background.",
+        )
         imgui.set_next_item_width(-1)
         changed, parallax = controls.input_float2(
             "##layer-parallax", [float(layer.parallax_x), float(layer.parallax_y)]
@@ -261,7 +292,12 @@ def _row(ctx: Any, doc: Any, state: Any, layer: Any, editable: bool) -> None:
                 parallax_y=float(parallax[1]),
             )
         if isinstance(layer, ObjectLayer):
-            widgets.field_label("Draw order")
+            widgets.field_label(
+                "Draw order",
+                "Top-down sorts the objects by their y position each frame, so one "
+                "in front overlaps one behind. Manual keeps the order they were "
+                "added in.",
+            )
             draworder = widgets.combo(
                 "##object-layer-draw-order",
                 layer.draworder,
@@ -269,7 +305,11 @@ def _row(ctx: Any, doc: Any, state: Any, layer: Any, editable: bool) -> None:
             )
             if draworder != layer.draworder:
                 doc.set_layer_props(layer.uid, draworder=draworder)
-            widgets.field_label("Outline colour")
+            widgets.field_label(
+                "Outline colour",
+                "The colour Tiled draws this layer's object outlines in. It is "
+                "editor chrome, not part of the map.",
+            )
             color = widgets.input_text(
                 "##object-layer-color",
                 layer.color or "",
@@ -287,8 +327,16 @@ def _row(ctx: Any, doc: Any, state: Any, layer: Any, editable: bool) -> None:
                 f"{icons.PLUS} Choose image...##img-{layer.uid}", editable, (-1, 0)
             ):
                 plotter_mode.choose_layer_image(ctx, layer.uid)
-            changed_x, repeat_x = widgets.toggle("Repeat X", layer.repeat_x)
-            changed_y, repeat_y = widgets.toggle("Repeat Y", layer.repeat_y)
+            changed_x, repeat_x = widgets.toggle(
+                "Repeat X",
+                layer.repeat_x,
+                tooltip="Tile the picture across the map horizontally.",
+            )
+            changed_y, repeat_y = widgets.toggle(
+                "Repeat Y",
+                layer.repeat_y,
+                tooltip="Tile the picture down the map vertically.",
+            )
             if changed_x or changed_y:
                 doc.set_layer_props(
                     layer.uid,
@@ -388,13 +436,28 @@ def _object_fields(ctx: Any, doc: Any, state: Any, layer: Any, obj: MapObject) -
         f"{obj.kind} at {obj.x:.0f}, {obj.y:.0f}"
         + (f" -- {obj.w:.0f} x {obj.h:.0f}" if hasattr(obj.shape, "w") else "")
     )
-    changed, visible = widgets.toggle("Visible", obj.visible)
+    changed, visible = widgets.toggle(
+        "Visible",
+        obj.visible,
+        tag="obj-visible",
+        tooltip="Hides the object without removing it. Tiled carries the flag too.",
+    )
     if changed:
         doc.set_object(layer.uid, obj.uid, visible=visible)
-    changed, opacity = widgets.labeled_slider_float("Opacity", obj.opacity, 0.0, 1.0)
+    changed, opacity = widgets.labeled_slider_float(
+        "Opacity",
+        obj.opacity,
+        0.0,
+        1.0,
+        help_text="This one object's opacity, multiplied into its layer's.",
+    )
     if changed:
         doc.set_object(layer.uid, obj.uid, opacity=float(opacity))
-    changed, rotation = controls.input_float("Rotation", float(obj.rotation))
+    changed, rotation = controls.input_float(
+        "Rotation",
+        float(obj.rotation),
+        tooltip="Degrees clockwise about the object's own origin.",
+    )
     if changed:
         doc.set_object(layer.uid, obj.uid, rotation=float(rotation))
     _shape_fields(doc, layer, obj)
@@ -414,10 +477,27 @@ def _shape_fields(doc: Any, layer: Any, obj: MapObject) -> None:
     shape = obj.shape
     if isinstance(shape, TileShape):
         tile_id, flip_h, flip_v, flip_d = gidlib.decompose(shape.gid)
-        changed, value = controls.input_int("Tile gid", tile_id, 1)
-        changed_h, next_h = widgets.toggle("Flip horizontal", flip_h)
-        changed_v, next_v = widgets.toggle("Flip vertical", flip_v)
-        changed_d, next_d = widgets.toggle("Flip diagonal", flip_d)
+        changed, value = controls.input_int(
+            "Tile gid",
+            tile_id,
+            1,
+            tooltip=(
+                "Which tile this object draws, as a global id across every "
+                "tileset in the map. The three flip flags are stored in the "
+                "high bits of the same number."
+            ),
+        )
+        changed_h, next_h = widgets.toggle(
+            "Flip horizontal", flip_h, tooltip="Mirror the tile across."
+        )
+        changed_v, next_v = widgets.toggle(
+            "Flip vertical", flip_v, tooltip="Mirror the tile down."
+        )
+        changed_d, next_d = widgets.toggle(
+            "Flip diagonal",
+            flip_d,
+            tooltip="Transpose the tile. With the other two it makes the quarter turns.",
+        )
         if changed or changed_h or changed_v or changed_d:
             try:
                 encoded = gidlib.compose(

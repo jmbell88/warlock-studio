@@ -826,7 +826,7 @@ def _overflow(ctx: Any, job: Any) -> None:
         if ctx.rigging_available and controls.menu_item("Rig", "", False)[0]:
             run_action(ctx, job, "rig")
     imgui.separator()
-    if controls.menu_item("Delete", "", False)[0]:
+    if controls.menu_item("Delete", "Delete", False)[0]:
         # No confirm (J91): the trash *is* the confirmation, and it is a better
         # one -- an undo the user can take an hour later beats a question they
         # answer in half a second while looking at something else. The
