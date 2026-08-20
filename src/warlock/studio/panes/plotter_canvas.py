@@ -912,7 +912,7 @@ def _grid(draw_list: Any, doc: Any, view: Any, origin, region) -> None:
                     inker_state.to_screen(view, origin, px, py)
                     for px, py in doc.cell_outline(column, row)
                 ]
-                draw_list.add_polyline(points, colour, imgui.ImDrawFlags_.closed, 1.0)
+                draw_list.add_polyline(points, colour, 1.0, imgui.ImDrawFlags_.closed.value)
         return
 
     # Lines along the two *lattice* directions rather than the screen axes.
