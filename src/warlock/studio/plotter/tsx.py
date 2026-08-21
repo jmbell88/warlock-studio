@@ -61,7 +61,7 @@ log = logging.getLogger(__name__)
 # values a current Tiled writes and so the values least likely to surprise it.
 #
 # ``TILED_VERSION`` is deliberately *behind* the target in
-# ``docs/PLOTTER_COMPAT.md``, and that gap is the point: it is a claim that a
+# ``docs/COMPAT.md``, and that gap is the point: it is a claim that a
 # real Tiled of that version opens what we write, and nothing in this repository
 # can establish it -- a fixture we authored ourselves proves a round trip
 # against ourselves. It moves to "1.12.2" when a human with Tiled installed has
@@ -394,7 +394,7 @@ def write_wangsets(
 
     A phase set writes every sub-row's tiles with the *same* wangid per case:
     Tiled treats equal wangids as random alternatives, so its brush still
-    paints (randomising phases, which ``docs/PLOTTER_COMPAT.md`` accepts),
+    paints (randomising phases, which ``docs/COMPAT.md`` accepts),
     while exported *layers* carry concrete gids and travel exactly.
     """
     if not terrains:
@@ -574,7 +574,7 @@ def _collision_from(group: ET.Element) -> tuple[Any, ...]:
     by name into the log rather than silently: a point or polyline member (the
     records have no shape for either), and a shape's ``rotation`` (the records
     carry none, so it would not survive to the export either way). Both are
-    stated in ``docs/PLOTTER_COMPAT.md`` beside the round-trip claim.
+    stated in ``docs/COMPAT.md`` beside the round-trip claim.
     """
     out: list[Any] = []
     for obj in group.findall("object"):

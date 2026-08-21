@@ -1,9 +1,9 @@
 """Poser's clip editor: authoring the keyframes a character sheet animates.
 
-``LPC_ALT.md`` Phase 2's open half. The clip *format* and its expansion shipped
-with Troupe; what did not was any way to change a clip that is not editing JSON
-in the package tree, and the plan calls authoring those twenty-two keyframes
-"the most important art task in the program".
+The Troupe programme's clip-authoring half. The clip *format* and its expansion
+shipped with Troupe; what did not was any way to change a clip that is not
+editing JSON in the package tree, and authoring those twenty-two keyframes is
+the most important art task in the programme.
 
 **The armature is the editor.** Poser already has a skeleton, gizmos and a pose
 editor, so this pane adds no second posing surface: picking a key loads it onto

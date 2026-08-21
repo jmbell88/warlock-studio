@@ -1,12 +1,13 @@
 """A quality judge: linear probes over frozen DINOv2 embeddings.
 
-Named for the analogy that produced it (`TODO.md` §7): an industrial vision
-system is shown good parts and bad parts, learns the boundary, then inspects on
-its own. What is built here is the boundary and nothing else -- **advisory
-only**. A probe files a verdict beside a human's and sorts Review; it never
-refuses, deletes or retries. That is the only mode in which its accuracy can be
-measured before it is trusted, and it mirrors ``native.py``'s doctrine that an
-optimisation never replaces the reference it is checked against.
+Named for the analogy that produced it, in the quality-judge programme: an
+industrial vision system is shown good parts and bad parts, learns the
+boundary, then inspects on its own. What is built here is the boundary and
+nothing else -- **advisory only**. A probe files a verdict beside a human's and
+sorts Review; it never refuses, deletes or retries. That is the only mode in
+which its accuracy can be measured before it is trusted, and it mirrors
+``native.py``'s doctrine that an optimisation never replaces the reference it
+is checked against.
 
 **Pure in the ``vram.py`` / ``memlog.py`` sense.** Stdlib plus numpy plus
 ``bench.metrics`` for the embedding; nothing from ``service``, ``queue`` or
@@ -21,10 +22,11 @@ reconstruct) and ``mesh``. The first two read the same *kind* of file and mean
 opposite things by good: in 2D mode the image is the deliverable, so a dramatic
 plate with pillars and a cast shadow is a better asset and a worse blank. A
 single probe trained across both label sets learns the average of two opposed
-objectives and is useless for each -- which is why a probe file records the stage
-it was fitted to and refuses to be anything else. The mesh probe is `TODO.md` §8
-and is not built here: it is blocked on a corpus with positives in it, and its
-pooling over eight views is a decision §8 says to make with data.
+objectives and is useless for each -- which is why a probe file records the
+stage it was fitted to and refuses to be anything else. The mesh probe is the
+programme's deferred half and is not built here: it is blocked on a corpus with
+positives in it, and how it pools over eight views is a decision to make with
+data rather than in advance.
 
 Its **target** changed on 2026-08-09 without a line of this module moving. Mesh
 verdicts are graded -5..+5 now rather than accept/reject
@@ -77,14 +79,14 @@ SCHEMA_VERSION = 1
 # and a probe whose stage string did not match the column it is trained from
 # would need a translation table between two names for one thing, which is how
 # the two drift. ``model`` is declared and left unbuilt -- see the module
-# docstring on why §8 is blocked on a corpus rather than on code.
+# docstring on why the mesh probe is blocked on a corpus rather than on code.
 STAGES = ("reference", "blank", "model")
 
 # Below this, per class, there is no boundary to learn -- only the class balance.
 # Stated as a constant so a caller can say "12 more labels to go" rather than
 # reporting a silent None. Deliberately modest: a linear probe over a 768-d
 # frozen embedding needs tens of examples per class, not thousands, and the
-# gate that actually matters is `TODO.md` §8's "positives in the tens".
+# gate that actually matters is the mesh probe's own "positives in the tens".
 MIN_PER_CLASS = 8
 
 # Fit hyperparameters. Full-batch gradient descent rather than an optimiser from

@@ -1,9 +1,9 @@
 """The refusal ledger, machine-checked against the code that does the refusing.
 
-``docs/PLOTTER_COMPAT.md`` is a promise about what Plotter does with a Tiled
-file, and a promise in a markdown table drifts the moment somebody adds a
-refusal without opening it. So the table is not prose: the ``refused`` rows
-are checked, both ways, against every ``TiledUnsupported`` raised in the
+``docs/COMPAT.md``'s **Plotter/Tiled** part is a promise about what Plotter does
+with a Tiled file, and a promise in a markdown table drifts the moment somebody
+adds a refusal without opening it. So the table is not prose: the ``refused``
+rows are checked, both ways, against every ``TiledUnsupported`` raised in the
 engine.
 
 Both ways is the part that matters. A missing row means a refusal the docs do
@@ -18,7 +18,7 @@ import ast
 import re
 from pathlib import Path
 
-MATRIX = Path(__file__).resolve().parents[2] / "docs" / "PLOTTER_COMPAT.md"
+MATRIX = Path(__file__).resolve().parents[2] / "docs" / "COMPAT.md"
 ENGINE = Path(__file__).resolve().parents[2] / "src" / "warlock" / "studio" / "plotter"
 
 STATES = {
@@ -141,14 +141,29 @@ def _raised_features() -> set[str]:
 # three states and giving it one would blur them.
 _UNCHECKED_SECTION = "Permanent non-goals"
 
+# ``docs/COMPAT.md`` holds two ledgers, one per foreign format, and only the
+# Tiled one is executable. The Aseprite part's tables carry rows spelled the
+# same way -- ``| `Track.alpha_lock` | dropped | ...`` -- over an entirely
+# different state vocabulary, so a scan that read the whole file would report
+# those as Tiled rows in unknown states. **Do not widen this**: the scope is
+# what lets one file hold both ledgers without one gating the other. A ``##``
+# heading opens a part; a ``###`` heading opens a section within it.
+_CHECKED_PART = "Plotter"
+
 
 def _rows() -> list[tuple[str, str, str]]:
     """``(feature, state, note)`` for every checked row of the matrix table."""
     rows = []
+    part = ""
     section = ""
     for line in MATRIX.read_text(encoding="utf-8").splitlines():
         if line.startswith("## "):
-            section = line[3:].strip()
+            part = line[3:].strip()
+            section = ""
+        elif line.startswith("### "):
+            section = line[4:].strip()
+        if not part.startswith(_CHECKED_PART):
+            continue
         if section == _UNCHECKED_SECTION:
             continue
         if not line.startswith("| `"):
@@ -164,6 +179,21 @@ def _rows() -> list[tuple[str, str, str]]:
 def test_the_matrix_exists_and_parses():
     assert MATRIX.is_file()
     assert _rows(), "the matrix has no rows"
+
+
+def test_the_scan_stops_at_the_aseprite_part():
+    """The scoping above, asserted rather than trusted.
+
+    The two ledgers merged into one file on 2026-08-21, and the failure mode of
+    that merge is silent in the wrong direction: a widened scan pulls Aseprite
+    rows in, they fail ``test_every_row_is_in_exactly_one_state`` loudly, and
+    somebody "fixes" it by adding ``dropped`` to ``STATES`` -- at which point
+    the two vocabularies are one and neither ledger says what it meant. So the
+    boundary itself is the assertion.
+    """
+    states = {state for _, state, _ in _rows()}
+    assert states <= STATES
+    assert "dropped" not in states and "warned" not in states
 
 
 def test_every_row_is_in_exactly_one_state():

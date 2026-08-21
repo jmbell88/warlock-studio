@@ -1,13 +1,15 @@
 """Whether a gltfpack tier preserved what it had to. Pure, and the bar is data.
 
-`TODO.md` §3's automated half. ``vendor/gltfpack/gltfpack.exe`` has been present
-since 2026-08-07, so ``draft``/``standard``/``detailed`` are live code rather
-than dormant -- which changed the shape of the constraint instead of removing
-it. A named tier is no longer a button that *fails*; it is a button that
-silently ships a worse mesh, and that is harder to notice. The bar therefore
-stands unchanged: a tier stays out of the generate forms until it has been run
-against a chest, a sword and a rock and shown to keep UVs, both PBR maps and
-material assignment. This module is that sentence, made checkable.
+Tier qualification's automated half
+(``docs/measurements/2026-08-13-tier-qualification.md`` records the run).
+``vendor/gltfpack/gltfpack.exe`` has been present since 2026-08-07, so
+``draft``/``standard``/``detailed`` are live code rather than dormant -- which
+changed the shape of the constraint instead of removing it. A named tier is no
+longer a button that *fails*; it is a button that silently ships a worse mesh,
+and that is harder to notice. The bar therefore stands unchanged: a tier stays
+out of the generate forms until it has been run against a chest, a sword and a
+rock and shown to keep UVs, both PBR maps and material assignment. This module
+is that sentence, made checkable.
 
 **Pure in the ``vram.py``/``meshreport`` sense.** Stdlib plus ``glbio``, no
 imports from ``service``/``queue``/``studio``, and a file it cannot read is
@@ -280,7 +282,8 @@ def qualify(
     ``workdir``. This is not tidiness: ``service.jobs.optimize_job`` rewrites
     ``model.glb`` in place and deletes the derived artifacts (and reports the rig
     sheets) that describe the old mesh, so driving *it* would consume the very
-    meshes the qualification needs -- which, per §3, are the handful of accepted
+    meshes the qualification needs -- which, per the bar above, are the handful of
+    accepted
     ones, the only meshes on which preservation can be judged at all. A harness
     that destroys its inputs can be run once.
     """

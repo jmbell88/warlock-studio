@@ -60,7 +60,7 @@ MODES: list[tuple[str, str, str]] = [
     ("poser", "Poser", icons.PERSON_STANDING),
     ("plotter", "Plotter", icons.GRID),
     ("packwright", "Packwright", icons.LAYERS),
-    # Troupe (the LPC_ALT program, phase 5). A workspace of its own rather
+    # Troupe (the Troupe programme's own mode). A workspace of its own rather
     # than a panel in Create for the reason Poser is one: what happens here is
     # *watching* -- a walk cycle plays continuously and you judge it -- and
     # that is a use of the whole window, not of a 300px column beside a form.

@@ -149,8 +149,8 @@ PHASES_TILE_SHEET: dict[str, tuple[float, float]] = {
 # the sweep test below is parametrised rather than hand-written: the Blender
 # render's closing ``on_progress(1.0, ...)`` landed in an undeclared phase,
 # mapped onto the whole bar, and the never-regress creep pinned it at 100% for
-# the entire tail. ``LPC_ALT.md`` lists this table among the nine a new kind
-# must sweep, and Troupe swept eight of them.
+# the entire tail. This table is one of the nine stage-keyed tables a new job
+# kind must sweep (``docs/INVARIANTS.md``), and Troupe swept eight of them.
 PHASES_CHARSHEET: dict[str, tuple[float, float]] = {
     "sheet": (0.00, 0.70),
     "reduce": (0.70, 0.82),

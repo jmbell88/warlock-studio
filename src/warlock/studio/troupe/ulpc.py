@@ -1,7 +1,7 @@
 """A reader for Universal-LPC "full" sheets -- validation material, not art.
 
 Troupe is an alternative to ULPC, not a consumer of it. This module exists for
-two narrow reasons, both stated in ``LPC_ALT.md``:
+two narrow reasons:
 
 1. It turns the measurements taken off ``examples/*.png`` into regression
    oracles that cost nothing to keep passing -- the 352-cell frame table, the

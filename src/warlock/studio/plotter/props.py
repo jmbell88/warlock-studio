@@ -55,7 +55,7 @@ parent's value object, and that costs two things on the way back in:
 Both are real losses, and both beat the alternatives: guessing a member's type
 from the shape of its text is precisely the silent retyping this model exists
 to prevent, and inventing somewhere to hang the nested name would write a
-``.tmj`` Tiled does not read back. ``docs/PLOTTER_COMPAT.md`` enumerates both
+``.tmj`` Tiled does not read back. ``docs/COMPAT.md`` enumerates both
 and ``tests/plotter/test_props.py`` pins them.
 
 Nothing here imports anything: it is the package's leaf, below :mod:`.tsx`,

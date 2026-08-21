@@ -1,8 +1,8 @@
 """Training a probe from the labels on disk, and scoring one image with it.
 
-`TODO.md` §7's service half: the seam between the verdict table (which owns the
-labels) and ``judge.py`` (which owns the arithmetic). Three properties matter
-here and none of them is about the maths.
+The quality-judge programme's service half: the seam between the verdict table
+(which owns the labels) and ``judge.py`` (which owns the arithmetic). Three
+properties matter here and none of them is about the maths.
 
 **A label whose pixels are gone cannot train anything.** The verdict corpus is
 denormalized precisely so it outlives ``prune_jobs`` deleting the assets -- which

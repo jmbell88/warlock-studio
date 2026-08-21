@@ -563,7 +563,8 @@ def test_a_recovered_pose_restores_joint_corrections(tmp_path):
 
 # --- the clip editor ----------------------------------------------------------
 #
-# ``LPC_ALT.md`` Phase 2's open half. The armature *is* the editor here -- a key
+# The Troupe programme's clip-authoring half. The armature *is* the editor
+# here -- a key
 # is authored by posing the preview and putting it back -- so what these pin is
 # the part that is not the pose editor: the timing model, and the places a clip
 # can be edited into something the renderer would refuse.

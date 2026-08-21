@@ -1,11 +1,11 @@
 """The quality judge: a linear probe over frozen DINOv2 embeddings.
 
-`TODO.md` §7. Every test here runs with no weights, no GPU and no torch, which
-is the point of the module being pure: ``judge.py`` is stdlib plus numpy, imports
-nothing from ``service``/``queue``/``studio``, and returns ``None`` rather than
-raising when a probe file or DINOv2 is absent. That is the ``vram.py`` /
-``memlog.py`` doctrine, and it is what makes the arithmetic below assertable from
-synthetic vectors.
+The quality-judge programme. Every test here runs with no weights, no GPU and
+no torch, which is the point of the module being pure: ``judge.py`` is stdlib
+plus numpy, imports nothing from ``service``/``queue``/``studio``, and returns
+``None`` rather than raising when a probe file or DINOv2 is absent. That is the
+``vram.py`` / ``memlog.py`` doctrine, and it is what makes the arithmetic below
+assertable from synthetic vectors.
 
 Two design points are pinned here rather than left to the caller.
 

@@ -53,6 +53,13 @@ SOURCES = (
     # 2026-08-10. It points readers at the guidance-panel chapter, so its links
     # rot with a renumbering exactly the way README.md's do.
     ROOT / "docs" / "MODELS.md",
+    # The two documents created by the 2026-08-21 consolidation, declared here
+    # on the day they were written rather than after the first dead link.
+    # ``TODO.md`` is the one plan file and cites the code paths its owed work
+    # touches; ``docs/COMPAT.md`` is the merged interop ledger and cites the
+    # fixture inventories, the manual and this file's other sources.
+    ROOT / "TODO.md",
+    ROOT / "docs" / "COMPAT.md",
     *sorted((ROOT / "docs" / "measurements").glob("*.md")),
 )
 

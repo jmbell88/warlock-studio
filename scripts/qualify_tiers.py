@@ -1,12 +1,13 @@
 """Qualify the gltfpack tiers: does draft/standard/detailed keep what it must?
 
-`TODO.md` §3. ``vendor/gltfpack/gltfpack.exe`` arrived on 2026-08-07, so
+Tier qualification (``docs/measurements/2026-08-13-tier-qualification.md``
+records the run). ``vendor/gltfpack/gltfpack.exe`` arrived on 2026-08-07, so
 ``pipelines/optimize.py``, the config field, the doctor check and the retarget
-panel's full tier list are all live. What is *not* done is the qualification, and
-until it is, ``Config.mesh_profile`` stays ``raw`` and the generate forms offer
-``raw`` alone. The bar: a tier stays unqualified until it has been run against a
-chest, a sword and a rock and shown to keep UVs, both PBR maps and material
-assignment.
+panel's full tier list are all live. What is *not* done is the qualification,
+and until it is, ``Config.mesh_profile`` stays ``raw`` and the generate forms
+offer ``raw`` alone. The bar: a tier stays unqualified until it has been run
+against a chest, a sword and a rock and shown to keep UVs, both PBR maps and
+material assignment.
 
 The measurable half is ``warlock.tiercheck``, which reads both GLBs' JSON chunks
 and reports every loss; this script is the driver, the corpus selection and the
@@ -106,7 +107,7 @@ def _warn_about_the_corpus(names: list[str]) -> None:
     if missing:
         print(
             f"warning: nothing in this corpus looks like a {', '.join(missing)}. "
-            "A pass here is weaker than the bar in TODO.md section 3 describes.",
+            "A pass here is weaker than the tier-qualification bar describes.",
             file=sys.stderr,
         )
 
@@ -190,7 +191,7 @@ def main() -> int:
             return 1
         if not sources:
             print(
-                "no accepted meshes to qualify against. TODO.md section 3: whether "
+                "no accepted meshes to qualify against. Tier qualification: whether "
                 "a tier preserves something cannot be judged on output that is "
                 "already broken -- review some meshes first, or name subjects "
                 "with --glb.",

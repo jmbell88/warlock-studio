@@ -54,7 +54,7 @@ from . import parser
 # half times the next largest, of which the timeline was the one self-contained
 # subsystem.
 # Troupe joined Part I as chapter 14 on 2026-08-20, moving everything from the
-# old 14 onward by one. It is the LPC_ALT program's own mode and it belongs
+# old 14 onward by one. It is the Troupe programme's own mode and it belongs
 # beside the five workspaces it follows rather than after the library: the
 # grouping in Part I is the *rail's*, and Troupe is in the rail's second group.
 PARTS: tuple[tuple[str, range], ...] = (

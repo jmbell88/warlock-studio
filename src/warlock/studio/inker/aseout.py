@@ -73,7 +73,7 @@ invented for one). A sixth is not a loss of this writer's making but is worth
 the same line: an indexed document's tileset strip is stored one byte per
 pixel, so a strip pixel's own alpha becomes its palette slot's -- the same
 normalisation every other plane in an indexed document already went through.
-Each is a line in ``docs/ASEPRITE_INTEROP.md``.
+Each is a line in ``docs/COMPAT.md``'s Inker/Aseprite part.
 
 Refusals are by name and are the format's own limits, not this build's: more
 frames or layers than a 16-bit count can hold, a palette past 256, a canvas past

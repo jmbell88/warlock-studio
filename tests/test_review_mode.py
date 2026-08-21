@@ -833,7 +833,8 @@ def test_blinding_is_not_persisted(ctx, svc):
 
 # --- the labelling pass ------------------------------------------------------
 #
-# `TODO.md` §7's UI half. A grid of images with two keys, in Review beside the
+# The quality-judge programme's UI half. A grid of images with two keys, in
+# Review beside the
 # verdict loop, because the judge is meant to improve as the corpus is reviewed
 # -- the analogue of a vision system's teach mode. Four rules from the plan are
 # asserted here and every one of them is a bug that has already happened once

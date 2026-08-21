@@ -23,7 +23,7 @@ it must never be quoted as compatibility.
 > Tiled-authored corpus is a debt this repository cannot pay on its own. It
 > needs a human with Tiled 1.12.2 installed; see "What is owed" at the end.
 
-`docs/PLOTTER_COMPAT.md` marks the rows that rest only on a synthesized
+`docs/COMPAT.md` marks the rows that rest only on a synthesized
 fixture, so the ledger and this file cannot drift into disagreeing about what
 has been proved.
 
@@ -69,7 +69,7 @@ order/background colour, flipped gids, and a recursively nested list property.
 
 Several of those constructs are **Warlock dialect** rather than Tiled features
 — layer blend modes, object opacity, the `capsule` shape and the `list`
-property type. See the dialect section of `docs/PLOTTER_COMPAT.md`. This
+property type. See the dialect rows in `docs/COMPAT.md`. This
 fixture therefore *cannot* be re-authored in Tiled as it stands; a
 Tiled-authored replacement would cover the Tiled half and a separate
 synthesized fixture would keep the dialect half honest.
@@ -152,4 +152,4 @@ In rough order of what it would buy:
    dialect constructs listed under its entry.
 4. Once any Tiled-authored fixture opens one of our exports without complaint,
    `TILED_VERSION` in `src/warlock/studio/plotter/tsx.py` may move to `1.12.2`
-   and the gate paragraph in `docs/PLOTTER_COMPAT.md` comes out.
+   and the gate paragraph in `docs/COMPAT.md` comes out.

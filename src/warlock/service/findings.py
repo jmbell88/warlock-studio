@@ -122,7 +122,8 @@ def aggregate(store: Any) -> dict[str, Any]:
     """The whole findings document, over every source's latest verdicts and
     every job's latest observation."""
     # **Mesh verdicts only, and the filter is here rather than in _marginals.**
-    # §7 asks for it in ``_marginals`` on the grounds that the per-subject
+    # The quality-judge programme asked for it in ``_marginals`` on the grounds
+    # that the per-subject
     # ``prompts`` section is built by the same helper -- true, and not enough.
     # Two other consumers read this same list. ``vectors`` would advertise an
     # image label as a ranked mesh configuration, and ``_comparisons`` pairs rows

@@ -84,8 +84,8 @@ class PoserState:
 
     # -- the clip editor ------------------------------------------------------
     #
-    # ``LPC_ALT.md`` Phase 2's open half: a clip was editable only as raw JSON
-    # in the package tree. The library here is the *whole* file -- see
+    # The Troupe programme's clip-authoring half: a clip was editable only as
+    # raw JSON in the package tree. The library here is the *whole* file -- see
     # ``service.clips``, which will not save less than one -- held as the
     # editor's working copy and written back on Save.
     clips: dict[str, Any] = field(default_factory=dict)
@@ -649,10 +649,10 @@ def on_task_failed(ctx: Any, done: Any) -> None:
 
 # --- the clip editor ---------------------------------------------------------
 #
-# ``LPC_ALT.md`` Phase 2's open half. The clip *format* and its expansion
-# shipped with Troupe; what did not was any way to change a clip that is not
-# editing JSON in the package tree, which the plan calls "the most important art
-# task in the program".
+# The Troupe programme's clip-authoring half. The clip *format* and its
+# expansion shipped with Troupe; what did not was any way to change a clip that
+# is not editing JSON in the package tree -- and authoring those keyframes is
+# the most important art task in the programme.
 #
 # **The editor holds a whole library as its working copy**, because
 # ``service.clips`` will not save less than one -- a clip library is internally

@@ -1,6 +1,7 @@
 """What a gltfpack tier has to preserve, measured off the GLB itself.
 
-`TODO.md` §3. A named tier has been a live code path since the binary landed on
+Tier qualification. A named tier has been a live code path since the binary
+landed on
 2026-08-07, and the *only* thing keeping it out of the generate forms is that
 nobody has shown it keeps UVs, both PBR maps and material assignment. That is
 not a matter of opinion, so it is a function: two GLBs in, a verdict out.

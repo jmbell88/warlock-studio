@@ -1,10 +1,10 @@
 """Training the quality probes from the labels on disk, and scoring with them.
 
-`TODO.md` §7's service half: the seam between the verdict table, which owns the
-labels, and ``judge.py``, which owns the arithmetic and may not import anything
-from here. Everything slow lives behind ``train``, which is a TaskRunner task --
-a DINOv2 forward pass over a hundred images plus a logistic fit is seconds, and
-seconds on the frame thread is a freeze.
+The quality-judge programme's service half: the seam between the verdict table,
+which owns the labels, and ``judge.py``, which owns the arithmetic and may not
+import anything from here. Everything slow lives behind ``train``, which is a
+TaskRunner task -- a DINOv2 forward pass over a hundred images plus a logistic
+fit is seconds, and seconds on the frame thread is a freeze.
 
 **A label whose pixels are gone cannot train anything, and the count says so.**
 ``verdicts.vector`` is denormalized exactly so the corpus outlives ``prune_jobs``

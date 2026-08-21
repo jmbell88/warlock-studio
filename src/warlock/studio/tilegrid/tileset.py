@@ -75,7 +75,7 @@ def colour_text(value: Any, what: str) -> str | None:
 
 # --- per-tile metadata -------------------------------------------------------
 #
-# Six of ``docs/PLOTTER_COMPAT.md``'s refused rows fall to one model: a tile can
+# Six of ``docs/COMPAT.md``'s refused Tiled rows fall to one model: a tile can
 # carry a class, custom properties, a random-pick probability, an animation and
 # a set of collision shapes. Stored **sparsely** -- Tiled's own shape, and the
 # right one here because most tiles in an atlas carry nothing at all and a dense

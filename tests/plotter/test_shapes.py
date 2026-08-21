@@ -7,7 +7,7 @@ is exactly the flip the refusals existed to be flipped onto. The docstring here
 said they still stood, directly above the tests asserting they do not.
 
 Seven of the eight are Tiled's; ``capsule`` is Warlock dialect and no Tiled
-release reads it back. See ``docs/PLOTTER_COMPAT.md``.
+release reads it back. See ``docs/COMPAT.md``.
 
 The rule the file is written around: ``kind``/``w``/``h`` are **derived** from
 the shape and never stored beside it. Two fields that must agree is a bug

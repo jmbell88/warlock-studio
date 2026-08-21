@@ -291,7 +291,7 @@ cel's z-index (layer order is stacking order), per-frame palettes (the final tab
 reference layer opens hidden, which is what exporting from Aseprite would do with it.
 
 The full list of what comes across, what is only a message, and what a save back out to `.aseprite`
-drops in turn, is kept in `docs/ASEPRITE_INTEROP.md`.
+drops in turn, is kept in `docs/COMPAT.md`.
 
 ## Slices on an animated document
 

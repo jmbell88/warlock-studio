@@ -1,4 +1,5 @@
-"""Editing a template's clip library -- ``LPC_ALT.md`` Phase 2's open half.
+"""Editing a template's clip library -- the Troupe programme's clip-authoring
+half.
 
 The clip *format* and its expansion shipped with Troupe; what did not was any
 way to change a clip that is not editing JSON in the package tree. This is the

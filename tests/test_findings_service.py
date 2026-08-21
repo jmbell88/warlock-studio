@@ -107,8 +107,8 @@ def test_a_verdict_credits_every_param_in_its_vector(svc):
 
 
 def test_an_image_label_never_reaches_the_mesh_findings(svc):
-    """§7's stage filter, and it is the *whole document* rather than only the
-    marginals §7 names.
+    """The quality-judge programme's stage filter, and it is the *whole document*
+    rather than only the marginals the programme names.
 
     The marginals are the obvious half: an image label counting into the same
     accept/reject rate as a mesh verdict would put "accept 6/8" under a prompt

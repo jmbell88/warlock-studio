@@ -465,7 +465,7 @@ back here, `.wmap` holds everything without qualification — which is why expor
 does not retarget `Ctrl+S`.
 
 The full list of what Plotter reads, refuses, preserves and writes as dialect is kept in
-`docs/PLOTTER_COMPAT.md`, checked against the code on every test run.
+`docs/COMPAT.md`, checked against the code on every test run.
 
 ## Sending a map to the library
 

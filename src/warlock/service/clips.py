@@ -3,7 +3,8 @@
 A *clip* is an ordered list of key poses plus how many frames each step holds,
 and the shipped library under ``templates/clips/`` is what Troupe renders every
 character sheet from. Until now it was editable only as raw JSON in the package
-tree, which ``LPC_ALT.md`` names as the open half of Phase 2 -- and which is the
+tree, which the Troupe programme named as the open half of its clip work -- and
+which is the
 wrong place twice over: an installed build replaces that tree wholesale on
 upgrade, and it may not even be writable.
 

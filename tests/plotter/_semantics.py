@@ -99,7 +99,7 @@ def _tileset_facts(ref: Any) -> dict[str, Any]:
         # comes back out as an external ``.tsx``, because both exporters write
         # every tileset as a ``source=`` reference. The atlas, its properties
         # and its terrains survive intact -- which is what this comparison is
-        # for -- but "embedded" does not, and ``docs/PLOTTER_COMPAT.md``'s
+        # for -- but "embedded" does not, and ``docs/COMPAT.md``'s
         # `embedded atlas tilesets` row says so rather than leaving the reader
         # to infer it from a passing round trip.
         "name": tileset.name,

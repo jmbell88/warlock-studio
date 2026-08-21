@@ -996,7 +996,7 @@ and write. That is the format that keeps your layers, their blend modes and thei
 
 What Save As keeps and drops going out to `.aseprite`, and what **Import Aseprite file** drops coming
 in (see [Importing an Aseprite file](10-inker-animation.md#from-an-aseprite-file)), is kept in full in
-`docs/ASEPRITE_INTEROP.md`.
+`docs/COMPAT.md`.
 
 Saving is a background operation, and it shows: while a save is in flight the layer panel and the
 structural shortcuts are disabled, because a save is encoding the layer stack on another thread and

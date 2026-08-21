@@ -1,7 +1,7 @@
 """The judge's half of the data model: ``verdicts.stage`` and the labelling query.
 
-`TODO.md` §7. Two additions, and both of them are shaped by things that have
-already gone wrong once.
+The quality-judge programme. Two additions, and both of them are shaped by
+things that have already gone wrong once.
 
 **``verdicts.stage`` has three values, not two, and the third is the point.**
 The instinct is a two-value column mirroring ``jobs.stage`` (which is already
@@ -109,7 +109,8 @@ def test_verdicts_for_can_be_asked_about_one_stage(store):
 
 
 def test_each_intent_asks_about_the_population_it_is_a_question_about(store):
-    """§7's probe table, which is not a detail: ``image-as-product`` judges a
+    """The programme's probe table, which is not a detail: ``image-as-product``
+    judges a
     **reference**-stage job's image (that image *is* the deliverable), while
     ``image-as-blank`` judges a **model**-stage job's -- the image trellis
     actually consumed. Pointing one probe at the other's population would train

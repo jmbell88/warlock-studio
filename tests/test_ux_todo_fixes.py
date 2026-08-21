@@ -67,40 +67,47 @@ def test_every_toast_level_literal_is_a_level_that_exists():
     assert offenders == []
 
 
-# --- no new citations of the deleted roadmap ---------------------------------
+# --- no module cites a plan file ---------------------------------------------
 
 
-def test_no_studio_module_cites_the_deleted_roadmap():
-    """``docs/INVARIANTS.md``'s rule, made a ratchet over the UI half of the
-    tree.
+def test_no_module_cites_the_plan_file():
+    """``docs/INVARIANTS.md``'s rule, now a full sweep rather than a ratchet.
 
-    A ``TODO.md §N`` citation resolves against ``docs/LEFTOVERS.md`` -- deleted
-    2026-08-10 -- and never against the ``docs/TODO.md`` that replaced it,
-    which had no sections and is itself deleted (`de87838`). Three of them
-    survived in ``studio/`` pointing at reasoning that has since been written
-    down properly in ``docs/measurements/``, so they now cite the measurement
-    documents instead. The invariant says not to mint new ones at all; this is
-    what makes that enforceable in the tree most likely to grow them.
+    This began as a narrowed check over ``studio/`` alone, because a
+    ``TODO.md §N`` citation resolved against ``docs/LEFTOVERS.md`` -- deleted
+    2026-08-10 -- and never against the ``docs/TODO.md`` that replaced it, and
+    fourteen such citations were grandfathered elsewhere in ``src`` and
+    ``scripts``. **All fourteen were rewritten on 2026-08-21**, when the four
+    remaining plan files were consolidated into a root ``TODO.md`` and the
+    filename was deliberately reclaimed: each now names the programme it means
+    (the quality judge, tier qualification) or the ``docs/measurements/``
+    document that records the reasoning, so no ``§N`` API exists anywhere in
+    the tree and none is to be minted.
 
-    Scoped to ``studio/`` deliberately. Fourteen citations remain elsewhere in
-    ``src`` and they are grandfathered: each names reasoning that has no other
-    home yet, and rewriting them blind would replace a findable pointer with a
-    vaguer one. Narrowing the scope is what makes this a ratchet rather than a
-    migration.
+    That reclaim is exactly what makes the scope widen. With no grandfathered
+    site left the rule is no longer "the roadmap is deleted, do not cite it"
+    but the stronger one: **a plan file is not a citable reference, and
+    ``TODO.md`` is a plan file.** What a module needs to explain, it explains
+    where it is, or in an invariant or a measurement document that outlives any
+    plan.
+
+    Scoped to ``src`` and ``scripts`` and never ``tests`` -- this docstring is
+    why.
     """
     offenders = [
-        f"{path.relative_to(SRC).as_posix()}:{n}"
-        for path in sorted(STUDIO.rglob("*.py"))
+        f"{path}:{n}"
+        for root in (SRC, SCRIPTS)
+        for path in sorted(root.rglob("*.py"))
         for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
         if "TODO.md" in line
     ]
     assert offenders == []
 
 
-#: The plan files retired on 2026-08-15 and 2026-08-20, named here so the scan
-#: below can look for them without this module's own prose becoming an offender
-#: -- which is also why the scan is scoped to ``src`` and ``scripts`` and never
-#: ``tests``.
+#: The plan files retired on 2026-08-15, 2026-08-20 and 2026-08-21, named here
+#: so the scan below can look for them without this module's own prose becoming
+#: an offender -- which is also why the scan is scoped to ``src`` and
+#: ``scripts`` and never ``tests``. Copy the split spelling for anything added.
 RETIRED_PLANS = (
     "REDESIGN" ".md",
     "INKER_UPDATE" ".md",
@@ -113,23 +120,47 @@ RETIRED_PLANS = (
     # the tree -- so it went with nothing to rewrite at all.
     "ASEPRITE_PARITY" ".md",
     "UPDATE_2" ".md",
+    # Retired 2026-08-21, when every plan file in the repo was consolidated into
+    # one root ``TODO.md``. ``LPC_ALT.md`` was the Troupe programme and was
+    # ~85% a record of shipped work -- its invariants already live in
+    # ``docs/INVARIANTS.md`` and its ULPC measurements are passing oracles in
+    # ``studio/troupe/ulpc.py``, so only phases 0e and 6-8 travelled; its eight
+    # citations under ``src`` were rewritten to name the programme.
+    # ``EXE_PLAN.md`` was unstarted in full and moved across whole.
+    # ``MY_TODO.md`` was the human-only queue and simply changed name -- it is
+    # covered twice over, since "MY_TODO.md" contains "TODO.md" and the sweep
+    # above forbids that substring outright.
+    "LPC_ALT" ".md",
+    "EXE_PLAN" ".md",
+    "MY_TODO" ".md",
+    # Not plans but renamed on the same day: the two interop ledgers merged
+    # into ``docs/COMPAT.md``, so a citation of either old name is a dead
+    # pointer rather than a stale plan.
+    "PLOTTER_COMPAT" ".md",
+    "ASEPRITE_INTEROP" ".md",
 )
 
 
 def test_no_module_cites_a_retired_plan_file():
-    """The sibling of the ratchet above, for the three plans deleted on 2026-08-15.
+    """The sibling of the sweep above, for every plan file that has been retired.
 
     ``REDESIGN.md``, ``INKER_UPDATE.md`` and ``NEXT_SESSION.md`` described work
     that is merged; ``docs/INVARIANTS.md`` records their retirement and carries
     the one section worth keeping (the eighteen Aseprite divergences). Their
     eighty-odd citations were rewritten to name the *programme* rather than the
-    file -- "the UI redesign, wave N" -- and unlike the ``TODO.md §N`` case
-    above that rewrite loses nothing, because a wave's outcome is described in
-    ``docs/INVARIANTS.md`` and the filename pointed only at a deleted plan.
+    file -- "the UI redesign, wave N" -- and that rewrite loses nothing, because
+    a wave's outcome is described in ``docs/INVARIANTS.md`` and the filename
+    pointed only at a deleted plan. The 2026-08-21 batch went the same way.
 
-    This is a full sweep rather than a narrowed ratchet for exactly that
-    reason: there is no grandfathered site left to protect. Scoped to ``src``
-    and ``scripts`` because ``tests`` contains this docstring.
+    Two of the names are not plans at all. ``docs/PLOTTER_COMPAT.md`` and
+    ``docs/ASEPRITE_INTEROP.md`` merged into ``docs/COMPAT.md`` on the same day,
+    and they are listed here for the narrower reason that a comment naming
+    either is now pointing at nothing -- the one failure this scan is shaped to
+    catch, whatever the reason a file went.
+
+    A full sweep rather than a narrowed ratchet: there is no grandfathered site
+    left to protect. Scoped to ``src`` and ``scripts`` because ``tests``
+    contains this docstring.
     """
     offenders = [
         f"{path}:{n} -> {token}"

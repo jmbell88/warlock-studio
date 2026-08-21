@@ -35,10 +35,10 @@ from warlock import models  # noqa: E402
 from warlock.pipelines import prompt as prompt_lib  # noqa: E402
 from warlock.pipelines import seam, text2image  # noqa: E402
 
-# The four TODO.md names, plus four more that stress the ratio's denominator
-# from both ends: the statistic divides the wrap seam by the picture's own
-# grain, so a texture with almost no grain (plaster) and one that is nothing
-# but grain (gravel) are the two places it can misbehave.
+# The four names the seam work started from, plus four more that stress the
+# ratio's denominator from both ends: the statistic divides the wrap seam by the
+# picture's own grain, so a texture with almost no grain (plaster) and one that
+# is nothing but grain (gravel) are the two places it can misbehave.
 MATERIALS: dict[str, str] = {
     "stone": "rough grey granite stone surface",
     "plaster": "smooth off-white painted plaster wall",
