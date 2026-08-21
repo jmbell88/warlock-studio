@@ -383,7 +383,7 @@ def _stage_review_tag(app) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", type=Path, required=True)
-    ap.add_argument("--themes", default="dark,light")
+    ap.add_argument("--themes", default="dark,light,pixel")
     ap.add_argument(
         "--seed",
         action="store_true",

@@ -249,7 +249,7 @@ def test_home_takes_the_arrows_and_enter():
 # --- M105: the theme hook ----------------------------------------------------
 
 
-def test_both_palettes_define_exactly_the_same_names():
+def test_every_palette_defines_exactly_the_same_names():
     """A name missing from one is an AttributeError on the frame somebody
     switches, in whichever pane happens to read it first."""
     names = [set(p) for p in tokens.PALETTES.values()]
@@ -304,6 +304,41 @@ def test_the_light_palette_keeps_the_roles_rather_than_inverting_the_numbers():
     assert lum(light["PANEL"]) > lum(light["BG"])
     assert lum(light["ELEV_1"]) > lum(light["ELEV_2"]) > lum(light["EDGE"])
     assert lum(light["TEXT"]) < lum(light["MUTED"]) < lum(light["BG"])
+
+
+def test_the_pixel_palette_is_warm_and_keeps_darks_elevation_direction():
+    """The pixel-editor register, and the two things that make it one.
+
+    Its *direction* is dark's -- a step away from the floor reads lighter --
+    because it is a dark palette; what separates it from dark is temperature,
+    and nothing else in the suite pins that. A palette that drifted neutral
+    would still pass every contrast bar and every name check while having lost
+    the only reason it exists, so the warmth is asserted where the values are.
+    """
+    pixel = tokens.PALETTES["pixel"]
+
+    def lum(value: int) -> float:
+        return ((value >> 16 & 0xFF) + (value >> 8 & 0xFF) + (value & 0xFF)) / 3
+
+    assert (
+        lum(pixel["BG"])
+        < lum(pixel["PANEL"])
+        < lum(pixel["ELEV_1"])
+        < lum(pixel["ELEV_2"])
+        < lum(pixel["EDGE"])
+    )
+    assert lum(pixel["TEXT"]) > lum(pixel["MUTED"]) > lum(pixel["EDGE"])
+
+    # Warm means red over blue, on the neutral ramp as well as on the accent --
+    # a warm accent over a neutral grey chrome is a different design, and the
+    # one this replaced.
+    for role in ("BG", "PANEL", "ELEV_1", "ELEV_2", "EDGE", "TEXT", "MUTED", "ACCENT"):
+        value = pixel[role]
+        assert (value >> 16 & 0xFF) > (value & 0xFF), role
+
+    # And the accent is amber rather than dark's indigo: the red channel leads.
+    accent = pixel["ACCENT"]
+    assert (accent >> 16 & 0xFF) > (accent >> 8 & 0xFF) > (accent & 0xFF)
 
 
 # --- L104 / K93 --------------------------------------------------------------

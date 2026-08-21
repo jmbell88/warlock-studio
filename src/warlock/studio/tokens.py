@@ -185,7 +185,7 @@ DUR_SLOW = 0.30
 # elevation ramp replaces "everything is PANEL with a border" -- a surface says
 # how high it sits by which step it fills with, not by drawing an outline.
 #
-# **Two palettes, one set of names** (M105). Every pane reads ``theme.ACCENT``
+# **Three palettes, one set of names** (M105). Every pane reads ``theme.ACCENT``
 # and never a literal, so the whole of a theme is this table plus the module
 # ``__getattr__`` in :mod:`.theme` that resolves the names through it live --
 # module-level constants would have bound at import and a switch would have
@@ -198,6 +198,21 @@ DUR_SLOW = 0.30
 # rather than lighter -- so a card still reads as raised. ACCENT keeps its hue
 # and drops in lightness, because the same indigo that reads as a highlight on
 # black is barely visible on white.
+#
+# The third is the pixel-editor register, and it exists because Inker is measured
+# against the program its users already know in *format* and *behaviour* -- a
+# reader, a writer, a corpus, twenty-four numbered divergences -- and, until now,
+# in look not at all. So somebody who lives in a pixel editor opened the Inker
+# into the cool indigo-on-near-black that belongs to the 3D half of the app.
+# ``pixel`` answers that with the register those tools draw in: a warm neutral
+# ramp against a near-black canvas surround, and amber where the accent goes.
+# It keeps *dark*'s elevation direction (steps away from the floor read lighter),
+# so it is a change of hue and temperature rather than a third set of rules.
+#
+# It is *not* an eyedropper copy. A real pixel editor's chrome is grey on grey
+# and would fail several of the bars in this module outright; these values take
+# the hues and the roles and lift the numbers until every one clears, which is
+# why MUTED is well above where a screenshot would have put it.
 PALETTES: dict[str, dict[str, int]] = {
     "dark": {
         "BG": 0x0F1014,  # the window floor
@@ -239,6 +254,38 @@ PALETTES: dict[str, dict[str, int]] = {
         "CHECKER_A": 0xFFFFFF,
         "CHECKER_B": 0xD6D6DE,
     },
+    "pixel": {
+        "BG": 0x1A1714,  # the canvas surround: the darkest thing on screen
+        "PANEL": 0x232019,  # toolbox, timeline, sidebars: ELEV_0
+        "ELEV_1": 0x2E2A22,
+        "ELEV_2": 0x3A352B,
+        "EDGE": 0x4A4438,
+        "DIVIDER": 0x2A2620,
+        "TEXT": 0xF2EDE3,  # warm off-white rather than dark's cool one
+        "MUTED": 0xB9AE9B,
+        # Amber, where dark and light both spend indigo. It is the one colour
+        # that says "pixel editor" on its own, and it clears the 3:1 control
+        # boundary on all four elevation steps with room to spare.
+        #
+        # A warm accent puts ACCENT and WARN in the same family, which the other
+        # two palettes never have to solve -- indigo against amber separates
+        # itself. The first pass here landed them 2 degrees of hue apart, so a
+        # warning badge and a focus ring were the same colour with a different
+        # name. They are pulled to opposite ends of the warm range instead: the
+        # accent is orange and heavily saturated, WARN is yellow and washed out,
+        # and the two differ in hue, saturation *and* lightness rather than in
+        # any one of them. ``theme.STATUS_GLYPHS`` is still the reason this is a
+        # legibility improvement rather than the thing legibility rests on --
+        # every status says itself in a shape as well as a colour.
+        "ACCENT": 0xF7921E,
+        "OK": 0x8FCB6B,
+        "ERR": 0xF2706B,
+        "WARN": 0xE3C75E,
+        # Warmed to match the ramp: a neutral-grey checker under a warm panel
+        # reads as a colour cast rather than as the absence of pixels.
+        "CHECKER_A": 0x4F4A40,
+        "CHECKER_B": 0x35312A,
+    },
 }
 
 # Which one is in force. Module state, exactly as ``SCALE`` is, and read
@@ -250,9 +297,9 @@ def set_theme(name: str) -> str:
     """Switch palettes. -> the name actually applied.
 
     An unknown name falls back to dark rather than raising: this comes out of a
-    settings file, and a value written by a build that shipped a third palette
-    must not stop the window opening. The caller still has to re-run
-    ``theme.apply`` -- imgui's style holds *copies* of these numbers.
+    settings file, and a value written by a build that shipped a palette this
+    one does not carry must not stop the window opening. The caller still has
+    to re-run ``theme.apply`` -- imgui's style holds *copies* of these numbers.
     """
     global THEME
     THEME = name if name in PALETTES else "dark"

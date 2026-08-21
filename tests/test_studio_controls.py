@@ -37,7 +37,7 @@ def test_sentence_case_normalises_legacy_labels_without_losing_acronyms():
     assert forms.sentence_case("mesh_seed") == "Mesh seed"
 
 
-def test_both_palettes_carry_a_subtle_dedicated_divider():
+def test_every_palette_carries_a_subtle_dedicated_divider():
     for palette in tokens.PALETTES.values():
         assert "DIVIDER" in palette
         ratio = tokens.contrast(palette["DIVIDER"], palette["BG"])
@@ -94,7 +94,10 @@ def test_component_gallery_is_developer_only():
     assert component_gallery.enabled({component_gallery.ENV_KEY: "true"})
 
 
-@pytest.mark.parametrize("palette", ["dark", "light"])
+# Every palette that ships, not a literal pair: a third one was added without
+# this list noticing, and a gallery that renders under two of three palettes
+# is exactly the coverage this test exists to deny.
+@pytest.mark.parametrize("palette", sorted(tokens.PALETTES))
 @pytest.mark.parametrize("scale", [1.0, 1.5, 1.75])
 def test_component_gallery_builds_every_state(
     gl, monkeypatch, palette, scale
