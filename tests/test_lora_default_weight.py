@@ -35,11 +35,27 @@ def test_the_klein_default_sits_inside_its_usable_band():
     assert not 0.02 <= models.DEFAULT_LORA_WEIGHT <= 0.08
 
 
-def test_the_pane_seeds_the_weight_when_the_selection_changes():
-    """The seed lives in the draw path, so this reads the source rather than a
-    GL frame -- the assertion that matters is that the change branch writes
-    ``lora_weight`` at all, which it did not before."""
+def test_the_reseed_writes_the_tuned_weight_only_when_the_selection_changed():
+    """The rule itself, called directly now that both forms share it."""
+    form = {"style_lora": "pixelklein", "lora_weight": 0.9}
+    settings_2d.reseed_lora_weight(form, "")
+    assert form["lora_weight"] == 0.0625
+    # A redraw with no change must not stomp a weight the user set by hand.
+    form["lora_weight"] = 0.05
+    settings_2d.reseed_lora_weight(form, "pixelklein")
+    assert form["lora_weight"] == 0.05
+
+
+def test_every_form_that_edits_a_lora_seeds_its_weight():
+    """The seeds live in draw paths, so this reads the source rather than a GL
+    frame. **Both** forms, listed together: the generate pane was fixed on its
+    own and the profile editor -- which stores ``lora_weight`` verbatim and
+    overlays it onto every later submission -- went on shipping 0.9 against an
+    adapter whose band is 0.02-0.08, silently, with no error.
+    """
     import inspect
 
-    src = inspect.getsource(settings_2d._lora)
-    assert 'form["lora_weight"] = lora_default_weight(form["style_lora"])' in src
+    from warlock.studio.panes import profiles_panel
+
+    for func in (settings_2d._lora, profiles_panel._editor_form):
+        assert "reseed_lora_weight" in inspect.getsource(func), func.__name__

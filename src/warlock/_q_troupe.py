@@ -144,6 +144,13 @@ class TroupeOps:
         # neighbourhood passes per cell, because a dense atlas has no gutter
         # and a sprite touching its edge would otherwise be outlined against
         # the sprite beside it.
+        # The Blender subprocess has exited, so from here a cancel has no
+        # leverage on anything running -- and this is the expensive tail: a
+        # whole-atlas nearest search over 256 cells. Every sibling stage checks
+        # between its phases; without it a cancel clicked here does nothing,
+        # visibly, for a long time.
+        if self._cancel is not None and self._cancel.event.is_set():
+            return
         self.progress.update(
             job_id, phase="pixel", label="Quantising", inner=0.0,
             inner_next=1.0, nominal=8.0, detail="",

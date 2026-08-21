@@ -905,6 +905,22 @@ def lora_default_weight(key: str) -> float:
     return spec.default_weight if spec is not None else modelslib.DEFAULT_LORA_WEIGHT
 
 
+def reseed_lora_weight(form: dict[str, Any], was_lora: str) -> None:
+    """Put the newly-picked adapter's tuned strength into ``form``.
+
+    Shared by this pane and the profile editor rather than written twice.
+    Each adapter carries its own measured strength -- pixel-art-klein restores
+    an rslora scale of 16, so the flat ``DEFAULT_LORA_WEIGHT`` is ~14x its
+    usable band and returns black frames -- and ``guidance.normalize`` only
+    applies ``default_weight`` when the caller *omits* the field. Both of these
+    forms always send a number, so the seed has to happen at the widget. It
+    lives here because the profile editor already had this bug once by holding
+    a second copy of the rule, and a third copy would find it again.
+    """
+    if form["style_lora"] != was_lora:
+        form["lora_weight"] = lora_default_weight(form["style_lora"])
+
+
 def _lora(ctx: Any, form: dict[str, Any]) -> None:
     no_lora = lora_note(ctx, form)
     if no_lora is not None:
@@ -920,12 +936,7 @@ def _lora(ctx: Any, form: dict[str, Any]) -> None:
     widgets.field_error(ctx.state, "style_lora")
     if form["style_lora"] != was_lora:
         ctx.state.clear_field_error("style_lora")
-        # Each adapter carries its own measured strength -- pixel-art-klein
-        # restores an rslora scale of 16, so the flat DEFAULT_LORA_WEIGHT is
-        # ~14x its usable band and returns black frames. guidance.normalize
-        # only applies default_weight when the caller omits the field, and
-        # this form always sends a number, so the seed has to happen here.
-        form["lora_weight"] = lora_default_weight(form["style_lora"])
+    reseed_lora_weight(form, was_lora)
     hint = _findings_hint(ctx, "style_lora", form["style_lora"])
     if hint is not None:
         widgets.hint_text(hint)

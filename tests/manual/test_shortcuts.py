@@ -35,6 +35,7 @@ SECTIONS = {
     "Review - a judging pass": "Review — a judging pass",
     "Clay": "Clay",
     "Inker": "Inker",
+    "Poser": "Poser",
     "Plotter": "Plotter",
     "Packwright": "Packwright",
     "Troupe": "Troupe",
@@ -160,6 +161,31 @@ def test_the_sheet_lists_exactly_the_groups_the_gate_knows_about():
     """A new group must join ``SECTIONS`` rather than slip past the gate --
     which is the failure mode a per-section test cannot catch on its own."""
     assert sorted(t for t, _ in shortcut_sections()) == sorted(SECTIONS)
+
+
+def test_every_mode_the_chapter_gives_a_section_has_a_group_in_the_sheet():
+    """Derived from the chapter, not from ``SECTIONS``.
+
+    ``SECTIONS`` is a second hand-written copy, so it can only catch drift
+    *within* a group it already knows about -- which is how the sheet came to
+    have no Poser group at all while the chapter had one and the bindings
+    worked. Reading the mode list off ``studio.modes`` and the headings off the
+    chapter closes that: a mode the chapter documents and the sheet is silent
+    about now fails here.
+    """
+    from warlock.studio import modes
+
+    headings = set(_chapter_atoms())
+    groups = {title for title, _ in shortcut_sections()}
+    missing = sorted(
+        label
+        for _key, label, _icon in modes.MODES
+        if label in headings and label not in groups
+    )
+    assert not missing, (
+        f"docs/manual/18-shortcuts.md documents {missing}, and the Ctrl+/ "
+        f"sheet has no group for them -- a user in that mode learns nothing"
+    )
 
 
 @pytest.mark.parametrize("title", sorted(SECTIONS))

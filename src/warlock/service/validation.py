@@ -79,6 +79,17 @@ MAX_TAG_LEN = 32
 # run's mesh, and a new job wearing the old job's mesh_report claims a quality
 # verdict about a mesh that doesn't exist yet. Keep in sync with what
 # queue.py writes into params.
+# **``mesh_seed``/``reference_seed`` are deliberately not here.** They are
+# worker-recorded provenance and would otherwise qualify, but a stripped seed
+# reads as "no seed was requested" and every door would then mint a fresh one
+# by accident rather than on purpose. Instead each reroll/promotion path in
+# ``service/_jobs_resubmit.py`` overwrites them explicitly. That compensation
+# lives in a different file from this list, so
+# ``tests/test_jobs_resubmit.py::test_every_door_that_copies_params_rerolls_the_seeds``
+# ties the two ends together: a future reroll-shaped door that copies
+# ``source["params"]`` and forgets the override would reproduce the previous
+# run's seed -- a reroll that looks like it ran and returns a byte-identical
+# result.
 DERIVED_PARAMS = (
     "composed_prompt",
     # What the prompt expander actually appended on *this* run. The mode

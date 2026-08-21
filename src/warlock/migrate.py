@@ -286,6 +286,49 @@ def _breadcrumb(config: Config, moved: list[tuple[Path, Path]]) -> None:
         pass
 
 
+def _carry_the_database(config: Config, moved: list[tuple[Path, Path]]) -> None:
+    """Put the migrated ``jobs.sqlite`` where a custom ``WARLOCK_DB`` points.
+
+    ``_ROOTS`` moves the legacy ``assets`` tree as one unit keyed on
+    ``WARLOCK_DATA_DIR``, and ``db_path`` normally sits *inside* it, so the
+    store rides along for free. It does not have to: pointing ``WARLOCK_DB`` at
+    a fast volume over a spinning-disk library is a documented, advertised
+    setup. A user in that setup with an unmigrated legacy tree got their assets
+    moved correctly, the old ``jobs.sqlite`` moved with them, and ``JobStore``
+    then opening the custom path, finding nothing, and silently creating an
+    empty database -- every job's files on disk, unread, and the whole verdict
+    corpus with them. Nothing warned.
+
+    Copied rather than refused, because the user's intent is unambiguous and a
+    hard stop at startup over a config they deliberately set helps nobody. Only
+    ever onto a path that does not exist: a database already there is a library
+    in its own right, and merging two of them is the thing ``_pending`` already
+    declines to attempt.
+    """
+    store = config.db_path
+    if store.exists():
+        return
+    for _legacy, dest in moved:
+        candidate = dest / "jobs.sqlite"
+        if not candidate.is_file() or candidate.resolve() == store.resolve():
+            continue
+        try:
+            store.parent.mkdir(parents=True, exist_ok=True)
+            # Staged, like every other write onto a served name: a half-copied
+            # sqlite file at the path the app is about to open is worse than no
+            # file at all, which at least reads as "new library".
+            tmp = store.with_name(store.name + ".migrating")
+            shutil.copy2(candidate, tmp)
+            os.replace(tmp, store)
+        except OSError as exc:  # pragma: no cover -- a full or read-only volume
+            raise MigrationError(
+                f"the library moved to {dest}, but its job history could not be "
+                f"copied to {store}: {exc}"
+            ) from exc
+        print(f"warlock: job history copied to {store}.", file=sys.stderr, flush=True)
+        return
+
+
 def run(config: Config) -> list[str]:
     """Move any legacy root into ``config.home``. -> the roots that moved.
 
@@ -324,6 +367,8 @@ def run(config: Config) -> list[str]:
             _move(legacy, dest, files, total, remove=False)
             print(f"warlock: moved {dest.name}.", file=sys.stderr, flush=True)
             moved.append((legacy, dest))
+
+    _carry_the_database(config, moved)
 
     # Outside the hold, and deliberately last. The destinations are already
     # published, so nothing is at risk here except the disk space the legacy

@@ -155,6 +155,16 @@ class RigOps:
                 # the params of a job recorded as cancelled.
                 return
             await asyncio.to_thread(rigging.finalize_rig, source_dir)
+            # Published onto the served rig.glb/rig.json. From here a cancel
+            # cannot take the artifact back -- ``_discard_artifacts`` removes
+            # only the temps, because a cancelled *re*-rig must not destroy an
+            # earlier successful one -- so the row must not say "cancelled"
+            # either. It would leave a real rig under a row claiming it never
+            # happened, and ``_maybe_queue_charsheet`` is gated on "done", so a
+            # cancel during the QA tail below silently stalled the Troupe chain
+            # with a perfectly good rig nobody pointed at.
+            if self._cancel is not None:
+                self._cancel.commit()
         finally:
             # No-op on success (finalize renamed them away); on failure or
             # cancel it removes the half-written temps and never touches the
@@ -217,6 +227,12 @@ class RigOps:
         poses = rigging.deform_battery(template)
         rig_glb = source_dir / "rig.glb"
         if not poses or not self.config.deform_qa or not rig_glb.exists():
+            return None
+        # The rig is published and the row will say "done" either way; what a
+        # cancel buys here is not paying for the QA battery. Checked at the top
+        # and again after the render, which are the two places there is
+        # anything left to skip -- every sibling stage checks the same way.
+        if self._cancel is not None and self._cancel.event.is_set():
             return None
 
         layout = sheetlib.plan(

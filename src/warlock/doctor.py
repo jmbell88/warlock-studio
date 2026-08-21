@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import shutil
 import socket
 import subprocess
@@ -11,6 +12,7 @@ import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from . import fetch, guidance, models, native, rigging, vram, winjob
 from .config import Config
@@ -425,9 +427,35 @@ def _job_object_check() -> Check:
 
 
 def _disk_check(config: Config) -> Check:
-    free_gb = shutil.disk_usage(config.data_dir).free / (1024**3)
+    """Both volumes, not just the library's.
+
+    ``db_path`` is deliberately allowed to sit outside the asset tree -- the
+    advertised "SSD index over a spinning-disk library" -- so measuring
+    ``data_dir`` alone is blind to exactly the split the config supports: a
+    full DB volume showed a green row right up until a raw sqlite "disk full".
+    Reported as the *worse* of the two, named, so the row says which one.
+    """
+    seen: dict[Any, tuple[float, Any]] = {}
+    for where in (config.data_dir, config.db_path.parent):
+        try:
+            free_gb = shutil.disk_usage(where).free / (1024**3)
+        except OSError:
+            continue
+        seen.setdefault(_volume_key(where), (free_gb, where))
+    if not seen:
+        return Check("free disk space", False, "no volume could be measured", fatal=False)
+    free_gb, where = min(seen.values())
     ok = free_gb >= MIN_FREE_DISK_GB
-    return Check("free disk space", ok, f"{free_gb:.1f} GB free in {config.data_dir}", fatal=False)
+    return Check("free disk space", ok, f"{free_gb:.1f} GB free in {where}", fatal=False)
+
+
+def _volume_key(path: Path) -> Any:
+    """What makes two paths the same volume, so one drive is not measured
+    twice. ``os.stat`` where it is meaningful, the drive letter otherwise."""
+    try:
+        return os.stat(path).st_dev
+    except OSError:
+        return str(path.drive or path).lower()
 
 
 def _port_check(config: Config, trellis_running: bool = False) -> Check:

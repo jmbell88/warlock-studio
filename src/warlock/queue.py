@@ -163,6 +163,24 @@ def _fresh_seed() -> int:
 class _Cancel:
     job_id: str
     event: threading.Event = field(default_factory=threading.Event)
+    #: Set by a stage the moment it *publishes* onto a served name. After that
+    #: the artifact exists and a later cancel cannot un-publish it -- the
+    #: cleanup deliberately never touches served files -- so recording the row
+    #: as "cancelled" would leave a real rig on disk under a row saying it
+    #: never happened, and every follow-up gated on ``status == "done"`` would
+    #: silently never fire. A committed stage finishes normally; what a cancel
+    #: still buys is skipping the work that comes *after* the publish.
+    committed: bool = False
+
+    def commit(self) -> None:
+        self.committed = True
+
+    @property
+    def stopping(self) -> bool:
+        """Whether a stage should stop early. False once committed is not a
+        cancel being ignored: the tail after a publish is bookkeeping and QA,
+        both of which are cheap to finish and expensive to have half-done."""
+        return self.event.is_set()
 
 
 def vram_gib() -> tuple[float, float] | None:
@@ -1304,7 +1322,7 @@ class Worker(GenerateOps, RigOps, TroupeOps, SpriteOps, TileSheetOps, MeshPostOp
                         await asyncio.to_thread(t2i.trim)
         finally:
             try:
-                if self._cancel.event.is_set():
+                if self._cancel.event.is_set() and not self._cancel.committed:
                     await asyncio.to_thread(self.store.set_status, job_id, "cancelled")
                     # Through a thread, like every DB write in this same
                     # ``finally``. For a cancelled re-texture this ``rmtree``s

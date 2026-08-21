@@ -355,6 +355,16 @@ def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
         ],
     )
     table(
+        "Poser",
+        [
+            # The mode is otherwise mouse-shaped -- joints are clicked and
+            # gizmos are dragged -- which is why two rows are the whole group
+            # and not a sign that the rest were forgotten.
+            ("Ctrl+Z / Ctrl+Y", "Undo / redo (Ctrl+Shift+Z also redoes)"),
+            ("Esc", "Deselect the joint"),
+        ],
+    )
+    table(
         "Packwright",
         [
             ("R", "Repack now"),
@@ -1102,6 +1112,13 @@ class App:
             return True
         poser = self.poser_viewer
         if poser is not None and state.mode == "poser" and not poser.camera.settled():
+            return True
+        # Troupe plays its sheet with no input at all, and ``advance`` only
+        # runs inside the preview's draw -- so a skipped frame does not advance
+        # playback, it *drops* it. Throttled to IDLE_FPS the preview becomes
+        # coarse catch-up jumps that can step straight over the frame being
+        # judged, which is the one thing the mode exists to make obvious.
+        if state.mode == "troupe" and getattr(state.troupe, "playing", False):
             return True
         inker = state.inker
         tab = None if inker is None else inker.active

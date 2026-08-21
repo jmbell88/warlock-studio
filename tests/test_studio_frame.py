@@ -791,3 +791,29 @@ def test_the_worker_traceback_is_logged_before_it_is_stripped():
 
     source = inspect.getsource(queue.Worker._on_task_done)
     assert source.index("log.critical") < source.index("with_traceback(None)")
+
+
+# --- the idle throttle -------------------------------------------------------
+#
+# ``_skip_idle_frame`` gates the *whole* frame, so a surface that animates
+# without input and is not named in ``_frame_active`` does not merely render at
+# IDLE_FPS -- it has frames dropped. Troupe's ``advance`` runs inside the
+# preview's draw, so a skipped frame does not advance its playback at all, and
+# the sheet becomes coarse catch-up jumps that can step over the frame being
+# judged. Pinned against the source because the alternative is a real window.
+
+
+def test_every_input_free_animation_is_named_in_the_idle_check():
+    from warlock.studio import main as studio_main
+
+    source = Path(studio_main.__file__).read_text(encoding="utf-8")
+    body = source.split("def _frame_active(self)", 1)[1].split("\n    def ", 1)[0]
+    for surface in (
+        "motion.animating()",       # widget easing
+        "state.toasts",             # TTL fade
+        "ctx.tasks.busy_keys",      # spinners
+        "camera.settled()",         # the viewers
+        'state.troupe, "playing"',  # Troupe's sheet playback
+        'tab, "playing"',           # Inker's timeline playback
+    ):
+        assert surface in body, f"{surface} animates with no input and is not named"

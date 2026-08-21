@@ -270,7 +270,12 @@ def _check_weights(svc: WarlockService) -> None:
         raise Invalid(
             f"A pixel sheet needs {pixel_lora.label!r}, which is not downloaded. "
             f"{install_remedy(pixel_lora.label, remedy)}",
-            field="base_model",
+            # ``style_lora``, like both siblings: ``PIXEL_SHEET_BASE_MODEL`` is
+            # a pinned constant with no form control at all, so a refusal
+            # naming it leaves ``main``'s field-driven error ring with nothing
+            # to attach to and the user gets a bare toast -- exactly what
+            # ``ServiceError.field`` exists to prevent.
+            field="style_lora",
             rows=needed_keys(svc, PIXEL_SHEET_ROWS),
         )
 

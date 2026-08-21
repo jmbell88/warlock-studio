@@ -273,12 +273,18 @@ def _editor_form(ctx: Any, form_ui: forms.Form, negative_prompt: Any) -> None:
     # visible and marked so it cannot become the value the user cannot see.
     # The *summary* above deliberately still reads the full ctx.style_loras --
     # it must be able to name a selection the draft's base does not take.
+    was_lora = draft.get("style_lora", "")
     _changed, draft["style_lora"] = form_ui.combo(
         "style_lora",
         "Style LoRA",
-        draft.get("style_lora", ""),
+        was_lora,
         settings_2d.lora_options(ctx, draft),
     )
+    # A profile stores ``lora_weight`` verbatim and overlays it onto every
+    # future submission, so a profile made here and never touched again pinned
+    # whatever the seed happened to be -- 0.9 -- onto an adapter whose measured
+    # band is 0.02-0.08. Same call as the generate form; see its docstring.
+    settings_2d.reseed_lora_weight(draft, was_lora)
     if draft["style_lora"]:
         changed, value = form_ui.slider(
             "lora_weight", "Strength", float(draft["lora_weight"]), 0.0, 1.5

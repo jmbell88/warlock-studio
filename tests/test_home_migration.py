@@ -304,3 +304,45 @@ def test_the_exclusive_hold_survives_the_copy_and_not_only_the_check(home, legac
     # handle -- and jobs.sqlite is inside the tree being deleted.
     assert (home / "assets" / "jobs.sqlite").exists()
     assert not (legacy / "assets").exists()
+
+
+def test_a_custom_warlock_db_gets_the_migrated_job_history(
+    home, legacy, monkeypatch, tmp_path
+):
+    """The advertised "SSD index over a spinning-disk library" setup.
+
+    ``_ROOTS`` moves ``assets`` as one unit keyed on ``WARLOCK_DATA_DIR``, and
+    ``jobs.sqlite`` normally rides along inside it. With ``WARLOCK_DB`` pointed
+    elsewhere it used to ride along anyway -- and ``JobStore`` then opened the
+    custom path, found nothing and silently created an empty database. Every
+    job's files sat on disk unread, and the verdict corpus went with them.
+    """
+    elsewhere = tmp_path / "fast-disk" / "jobs.sqlite"
+    monkeypatch.setenv("WARLOCK_DB", str(elsewhere))
+
+    migrate.run(Config())
+
+    assert elsewhere.exists(), "the job history was orphaned by the move"
+    conn = sqlite3.connect(str(elsewhere))
+    try:
+        names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master")}
+    finally:
+        conn.close()
+    assert "jobs" in names
+    # Nothing half-written is left at the destination.
+    assert not list(elsewhere.parent.glob("*.migrating"))
+
+
+def test_an_existing_custom_database_is_never_overwritten(
+    home, legacy, monkeypatch, tmp_path
+):
+    """A database already at the custom path is a library in its own right --
+    the same reason ``_pending`` declines a populated destination."""
+    elsewhere = tmp_path / "fast-disk" / "jobs.sqlite"
+    elsewhere.parent.mkdir(parents=True)
+    elsewhere.write_bytes(b"mine")
+    monkeypatch.setenv("WARLOCK_DB", str(elsewhere))
+
+    migrate.run(Config())
+
+    assert elsewhere.read_bytes() == b"mine"

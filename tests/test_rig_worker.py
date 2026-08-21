@@ -773,3 +773,46 @@ def test_a_good_run_stages_its_result_and_leaves_no_tmp_sibling(monkeypatch, tmp
     assert blender_worker.main() == 0
     assert json.loads(result.read_text(encoding="utf-8")) == {"ok": True, "bones": 3}
     assert [p.name for p in tmp_path.iterdir()] == [result.name]
+
+
+async def test_a_cancel_after_the_rig_is_published_still_records_it_as_done(
+    worker, monkeypatch
+):
+    """The window between ``finalize_rig`` and the QA tail.
+
+    ``_discard_artifacts`` deliberately removes only the temps -- a cancelled
+    re-rig must not destroy an earlier rig -- so once finalize has renamed onto
+    the served names the artifact is real and cannot be taken back. Recording
+    the row as "cancelled" then leaves a valid rig under a row saying it never
+    happened, and every follow-up is gated on ``status == "done"``, so the
+    Troupe chain stalls with a perfectly good rig nobody points at.
+    """
+    _fake_worker_run(monkeypatch)
+    source = _mesh_job(worker)
+    source_dir = worker.config.job_dir(source)
+    rig_id = worker.store.create("rig", None, {"source_job": source})
+
+    published = threading.Event()
+    release = threading.Event()
+    real_finalize = rigging.finalize_rig
+
+    def finalize(*args, **kwargs):
+        out = real_finalize(*args, **kwargs)
+        published.set()
+        release.wait(10.0)
+        return out
+
+    monkeypatch.setattr(rigging, "finalize_rig", finalize)
+
+    worker.start()
+    await _wait_until(published.is_set)
+    await worker.request_cancel(rig_id)
+    release.set()
+    await _wait_until(
+        lambda: worker.store.get(rig_id)["status"] in ("done", "cancelled", "error")
+    )
+
+    job = worker.store.get(rig_id)
+    assert job["status"] == "done", "a published rig must not be recorded as cancelled"
+    assert (source_dir / "rig.glb").read_bytes() == b"fake-rig"
+    await worker.shutdown()

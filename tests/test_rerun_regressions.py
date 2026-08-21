@@ -279,3 +279,43 @@ def test_a_pixel_sheet_reroll_keeps_its_sheet_id(svc):
     kept = svc.store.get(new["id"])["params"]["sheet_id"]
     assert kept == wanted
     assert rigging.is_valid_id(kept)
+
+
+# --- the seeds DERIVED_PARAMS deliberately does not carry ---------------------
+
+
+def test_the_seeds_are_deliberately_absent_from_the_derived_list(svc):
+    """Stripping them would read as "no seed was requested", so every door
+    would mint a fresh one by accident rather than on purpose. The comment at
+    ``DERIVED_PARAMS`` says so; this is the half that fails if it changes."""
+    from warlock.service.validation import DERIVED_PARAMS
+
+    assert "mesh_seed" not in DERIVED_PARAMS
+    assert "reference_seed" not in DERIVED_PARAMS
+
+
+@pytest.mark.parametrize("door", ["reroll", "remesh", "promote"])
+def test_every_door_that_copies_params_rerolls_the_seeds(svc, door):
+    """The compensation for the line above, tied to it.
+
+    Each of these copies ``source["params"]`` wholesale and then overwrites the
+    two seeds by hand -- in a *different file* from the strip list. A new
+    reroll-shaped door that forgets the override reproduces the previous run's
+    seed exactly: a reroll that looks like it ran, took the time, and returned a
+    byte-identical result. Nothing else in the suite would notice.
+    """
+    job_id = _reference(svc, seed=4242)
+    source = svc.store.get(job_id)["params"]
+    assert source["mesh_seed"] == source["reference_seed"] == 4242
+
+    if door == "promote":
+        # force: the fixture is a flat rectangle the composition gate refuses.
+        child = svc_jobs.promote_to_model(svc, job_id, force=True)
+    else:
+        child = svc_jobs.rerun_job(svc, job_id, mode=door)
+    params = svc.store.get(child["id"])["params"]
+
+    # A remesh reuses the reference verbatim, so only the 3D stage rerolls.
+    assert params["mesh_seed"] != 4242, "the mesh seed came through unchanged"
+    if door == "reroll":
+        assert params["reference_seed"] != 4242
