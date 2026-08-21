@@ -59,26 +59,3 @@ def draw(ctx: Any) -> None:
             f"sheet-{record['id']}", label, selected=selected
         ):
             troupe_mode.select(ctx, state.job_id, record["id"])
-
-
-def draw_actions(ctx: Any) -> None:
-    """The two ways out, drawn wherever the workspace has room for them.
-
-    Both are existing bridges rather than new importers: a character sheet is
-    an ordinary sheet plus an ``animation`` block, and Inker's grid slicer and
-    Packwright's sheet adder already read exactly that.
-    """
-    from imgui_bundle import imgui
-
-    state = troupe_mode.ensure(ctx)
-    enabled = bool(state.job_id and state.sheet_id)
-    if widgets.disabled_button(
-        "Open in Inker",
-        enabled,
-        (-1, 0),
-        reason="Pick a character sheet first.",
-    ):
-        troupe_mode.open_in_inker(ctx)
-    imgui.dummy((0, 2))
-    if controls.small_button("Add to Packwright") and enabled:
-        troupe_mode.add_to_packwright(ctx)

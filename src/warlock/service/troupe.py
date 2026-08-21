@@ -93,6 +93,7 @@ def troupe_options(svc: WarlockService) -> dict[str, Any]:
             "logical_size": DEFAULT_TROUPE_LOGICAL_SIZE,
             "colors": DEFAULT_TROUPE_COLORS,
             "outline": DEFAULT_TROUPE_OUTLINE,
+            "reduce_mode": TROUPE_REDUCE_MODES[0],
         },
     }
 

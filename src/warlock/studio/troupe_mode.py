@@ -62,8 +62,8 @@ def characters(ctx: Any) -> list[dict[str, Any]]:
     as a broken card: the sheet went with the directory.
     """
     seen: dict[str, dict[str, Any]] = {}
-    for row in ctx.svc.store.list(limit=SCAN_LIMIT):
-        if row["kind"] != "charsheet" or row["status"] != "done":
+    for row in ctx.svc.store.list(limit=SCAN_LIMIT, kind="charsheet"):
+        if row["status"] != "done":
             continue
         source = str((row.get("params") or {}).get("source_job") or "")
         if not source or source in seen:
@@ -304,6 +304,7 @@ def start_character(ctx: Any, form: dict[str, Any]) -> bool:
             "logical_size": form.get("logical_size"),
             "colors": form.get("colors"),
             "outline": form.get("outline"),
+            "reduce_mode": form.get("reduce_mode"),
             "dither": bool(form.get("dither")),
             "palette": form.get("palette") or "",
         },

@@ -56,9 +56,10 @@ def _pixel_report(ctx: Any, state: Any) -> dict[str, Any]:
     ``DERIVED_PARAMS`` keeps out of a rerun -- and the sidecar is the
     engine-neutral description of the atlas, not a place to file verdicts.
     """
-    for row in ctx.svc.store.list(limit=troupe_mode.SCAN_LIMIT):
-        if row["kind"] != "charsheet":
-            continue
+    # Narrowed in SQL: filtering a mixed page in Python meant that past
+    # ``SCAN_LIMIT`` newer jobs of any kind this line silently vanished for a
+    # sheet that was still perfectly findable.
+    for row in ctx.svc.store.list(limit=troupe_mode.SCAN_LIMIT, kind="charsheet"):
         params = row.get("params") or {}
         if params.get("sheet_id") == state.sheet_id:
             return dict(params.get("pixel_report") or {})

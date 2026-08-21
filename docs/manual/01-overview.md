@@ -42,7 +42,7 @@ If you already have a picture, you can skip the first stage entirely and upload 
 
 ## The modes
 
-A rail down the left edge of the window chooses between ten modes, and that rail is the single
+A rail down the left edge of the window chooses between eleven modes, and that rail is the single
 thing that decides what the panes show. It is drawn in every mode, so there is no screen you cannot
 leave. There is no per-mode keyboard shortcut — the command palette (`Ctrl+K`) is the keyboard
 route, see [Keyboard shortcuts](18-shortcuts.md).
@@ -76,7 +76,7 @@ collapse toggle.
 - **Review.** Judging finished meshes — one at a time or as a parameter sweep — and the "what
   works" findings the verdicts add up to. Covered in [Review](17-review.md).
 
-Then the five workspaces:
+Then the six workspaces:
 
 - **Inker.** A layered raster editor, wired into the pipeline in both directions. Covered in
   [Inker](09-inker.md), with the timeline in [Inker: animation](10-inker-animation.md).
@@ -89,6 +89,9 @@ Then the five workspaces:
   speaks Tiled's formats in both directions. Covered in [Plotter](12-plotter.md).
 - **Packwright.** A sprite-atlas packer: many images in, one atlas out, with a sidecar that says
   where everything landed. Covered in [Packwright](13-packwright.md).
+- **Troupe.** A character-sprite factory: a prompt becomes a reference, a mesh, a fitted rig and
+  then a rendered, pixelised sprite sheet of the clips a character walks and swings through.
+  Covered in [Troupe](14-troupe.md).
 
 And in the footer:
 

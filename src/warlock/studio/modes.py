@@ -111,8 +111,8 @@ WORK_MODES = frozenset(
 VIEWPORT_MODES = frozenset({"create"})
 
 # Neither one pane nor the asset viewport: a mode that fills the window with
-# its own three-column workspace. Inker, Clay, Poser, Review, Plotter and
-# Packwright are the six; Library and Profiles are single panes, not
+# its own three-column workspace. Inker, Clay, Poser, Review, Plotter,
+# Packwright and Troupe are the seven; Library and Profiles are single panes, not
 # workspaces, and join Home/Manual/Settings there. The three categories
 # partition KEYS exactly -- which matters because ``_build_ui``'s dispatch ends
 # in a bare ``else``, so an unlisted mode would draw one of these rather than

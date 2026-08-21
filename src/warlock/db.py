@@ -549,9 +549,18 @@ class JobStore:
         return self._to_dict(row) if row else None
 
     def list(
-        self, limit: int = 100, before: tuple[float, str] | None = None
+        self,
+        limit: int = 100,
+        before: tuple[float, str] | None = None,
+        kind: str | None = None,
     ) -> list[dict[str, Any]]:
         """The newest ``limit`` jobs, or the newest after ``before``.
+
+        ``kind`` narrows in SQL rather than in the caller. It exists because a
+        caller looking for one kind of row had no choice but to take a page of
+        *every* kind and filter it -- so past ``limit`` newer jobs of other
+        kinds the row it wanted silently stopped being in the page, and the
+        answer degraded from "not found yet" to "not there" with nothing said.
 
         ``before`` is a keyset cursor -- the (created_at, id) of the last row of
         the previous page -- rather than an offset, so rows deleted while
@@ -562,9 +571,15 @@ class JobStore:
         """
         sql = "SELECT * FROM jobs"
         args: list[Any] = []
+        where: list[str] = []
         if before is not None:
-            sql += " WHERE (created_at < ?) OR (created_at = ? AND id < ?)"
+            where.append("((created_at < ?) OR (created_at = ? AND id < ?))")
             args += [before[0], before[0], before[1]]
+        if kind is not None:
+            where.append("kind = ?")
+            args.append(kind)
+        if where:
+            sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY created_at DESC, id DESC LIMIT ?"
         args.append(limit)
         with self._lock:

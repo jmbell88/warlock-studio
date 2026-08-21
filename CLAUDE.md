@@ -11,7 +11,7 @@ Eleven modes (`studio/modes.py` is authoritative): the asset pipeline is Home/Cr
 ## Commands
 
 - Install: `uv sync --extra studio --extra text2image --extra rig` — dev tooling is a dependency *group*, not an extra, and a bare `uv sync` prunes the extras (breaking ~10 test files at collection). `rig` needs a Python 3.13 venv or it silently installs nothing.
-- Tests: `uv run pytest` — parallel by default (`-n 8 --dist loadfile`, ~55 s for 8,692 tests). Never edit `src/` while the suite runs — several tests read module source. Three lanes are excluded from the default run and each is opt-in:
+- Tests: `uv run pytest` — parallel by default (`-n 8 --dist loadfile`, ~45 s for 10,900+ tests). Never edit `src/` while the suite runs — several tests read module source. Three lanes are excluded from the default run and each is opt-in:
   - `uv run pytest -m gpu -n 0` — real card, real weights. Run it before changing model loading, VRAM accounting or conditioning. **Serial is enforced**: `-m gpu` under xdist is refused, because N workers means N simultaneous 7 GB loads onto one card. This is also the one lane that sees the real `~/.warlock` (see below).
   - `uv run pytest -m perf -n 0` — the wall-clock budget assertions. Meaningless under contention, so they are never in the parallel run.
   - `uv run pytest tests/test_x.py::test_name -n 0` — a single test is quicker without paying for worker startup.

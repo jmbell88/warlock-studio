@@ -198,3 +198,42 @@ def test_help_button_call_sites_match_help_targets():
     for path in [*(studio_dir / "panes").glob("*.py"), studio_dir / "main.py"]:
         found.update(pattern.findall(path.read_text(encoding="utf-8")))
     assert found == HELP_TARGETS.keys()
+
+
+# --- the mode count ---------------------------------------------------------
+#
+# Prose, and so self-correcting by nothing. ``docs/INVARIANTS.md`` -- the
+# authoritative file -- said "Ten modes" and enumerated nine plus Settings, with
+# Troupe missing, while CLAUDE.md, README.md and ``modes.py`` all said eleven;
+# the manual's own mode list was missing Troupe too, despite carrying a chapter
+# about it. Both are pinned to the one list that decides.
+
+_COUNT_WORDS = {
+    9: "nine", 10: "ten", 11: "eleven", 12: "twelve", 13: "thirteen", 14: "fourteen",
+}
+
+
+def _root():
+    return Path(__file__).resolve().parents[2]
+
+
+def test_both_documents_state_the_mode_count_the_rail_actually_draws():
+    from warlock.studio import modes
+
+    want = _COUNT_WORDS[len(modes.MODES)]
+    invariants = (_root() / "docs" / "INVARIANTS.md").read_text(encoding="utf-8")
+    overview = (_root() / "docs" / "manual" / "01-overview.md").read_text(encoding="utf-8")
+    assert f"**{want.capitalize()} modes and one rail" in invariants
+    assert f"chooses between {want} modes" in overview
+
+
+def test_every_mode_is_named_in_the_manuals_own_list_of_them():
+    """The count agreeing is not the same as the list agreeing: a chapter can
+    exist for a mode the overview never mentions, which is how Troupe came to
+    be documented and unlisted at the same time."""
+    from warlock.studio import modes
+
+    overview = (_root() / "docs" / "manual" / "01-overview.md").read_text(encoding="utf-8")
+    section = overview.split("## The modes", 1)[1].split("\n## ", 1)[0]
+    missing = [label for _key, label, _icon in modes.MODES if f"**{label}.**" not in section]
+    assert not missing, f"the overview's mode list does not name {missing}"

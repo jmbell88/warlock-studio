@@ -67,6 +67,7 @@ def _form(state: Any, options: dict[str, Any]) -> dict[str, Any]:
             "logical_size": int(defaults.get("logical_size") or 32),
             "colors": int(defaults.get("colors") or 64),
             "outline": str(defaults.get("outline") or "outer"),
+            "reduce_mode": str(defaults.get("reduce_mode") or "box"),
             "dither": False,
             "palette": "",
         }
@@ -88,6 +89,18 @@ def _size(form: dict[str, Any], form_ui: forms.Form, options: dict[str, Any]) ->
         [(m, m) for m in options.get("outline_modes") or ()],
     )
     form["outline"] = outline
+    # Beside the size, because it is a statement about the same act: how the
+    # 512px render becomes a sprite of that size. Both modes were validated and
+    # tested from the day the mode shipped and neither was ever askable, so
+    # ``point`` -- the crisp, every-Nth-sample answer -- was a real code path
+    # reachable only by editing a job row.
+    _changed, reduce_mode = form_ui.combo(
+        "reduce_mode",
+        "Reduction",
+        form["reduce_mode"],
+        [(m, m) for m in options.get("reduce_modes") or ()],
+    )
+    form["reduce_mode"] = reduce_mode
 
 
 def _palette(
