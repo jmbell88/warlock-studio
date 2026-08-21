@@ -19,11 +19,17 @@ apply. It takes effect as you drag it, and the font atlas is re-baked when you l
 frames rather than during one, since a rebuild invalidates every font handle a half-drawn frame is
 holding. Nothing needs a restart.
 
-*Theme* switches the whole palette and takes effect at once. The
-light palette keeps the same *roles* as the dark one rather than inverting its numbers: a panel is
+*Theme* switches the whole palette and takes effect at once. There are three. *Dark* is the
+default. *Light* keeps the same *roles* as the dark one rather than inverting its numbers: a panel is
 still the surface a form sits on, and the elevation steps still read as raised — which on a light
-ground means slightly darker rather than lighter. The one thing it does **not** repaint is the 3D
-viewport's background, which stays the dark `#0F1014` under either theme: that colour is a property
+ground means slightly darker rather than lighter. *Pixel* is a second dark palette in the register
+the pixel workspaces belong to: warm neutral greys against a near-black canvas surround, with amber
+where the other two spend indigo. It keeps dark's direction — a step away from the floor still reads
+lighter — and differs from it in temperature, so the Inker, the Plotter and Packwright sit in
+something closer to the tools their work comes from. It is not a copy of any one program's chrome:
+those are typically grey on grey, and every colour here has to clear a measured contrast bar. The
+one thing **no** theme repaints is the 3D
+viewport's background, which stays the dark `#0F1014` under all three: that colour is a property
 of the renderer rather than of the palette, and making it follow the theme means threading a colour
 into the render-skip key so a theme switch triggers a redraw. It is a known gap, deliberately left
 open. *Show frame rate* is the same toggle as `F10`.

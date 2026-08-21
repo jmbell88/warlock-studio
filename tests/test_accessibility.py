@@ -9,6 +9,7 @@ has to remember to re-run a colour picker.
 
 from __future__ import annotations
 
+import colorsys
 import re
 from pathlib import Path
 
@@ -95,6 +96,50 @@ def test_the_accent_qualifies_as_a_control_boundary(palette: str, surface: str) 
         f"{palette}/ACCENT on {surface} is {ratio:.2f}:1, under "
         f"{tokens.CONTRAST_UI}:1 -- the focus ring would be invisible"
     )
+
+
+@pytest.mark.parametrize("palette", sorted(tokens.PALETTES))
+def test_the_accent_is_told_apart_from_the_warning_colour(palette: str) -> None:
+    """Contrast qualifies a colour against its *ground*; this is the other axis.
+
+    Dark and light never had to answer for it -- indigo against amber separates
+    itself -- but a palette whose accent is warm puts ACCENT and WARN in one
+    family, and ``pixel``'s first pass landed them 2 degrees of hue apart. A
+    focus ring and a warning badge were then the same colour under two names,
+    which no contrast bar in this module would have caught: both cleared their
+    own, against a surface, independently.
+
+    Twelve degrees is where the pair stops reading as one hue at the sizes these
+    are drawn -- a 2 px ring, a status dot -- and the saturation gap is asked
+    for as well, because hue alone is the weakest of the three channels for
+    anyone with a red-green deficiency. ``theme.STATUS_GLYPHS`` remains the
+    reason legibility does not *rest* on this: every status says itself in a
+    shape too.
+    """
+    colours = tokens.PALETTES[palette]
+
+    def hue_and_saturation(value: int) -> tuple[float, float]:
+        red, green, blue = (
+            (value >> 16 & 0xFF) / 255,
+            (value >> 8 & 0xFF) / 255,
+            (value & 0xFF) / 255,
+        )
+        hue, saturation, _value = colorsys.rgb_to_hsv(red, green, blue)
+        return hue * 360, saturation
+
+    accent_hue, accent_sat = hue_and_saturation(colours["ACCENT"])
+    warn_hue, warn_sat = hue_and_saturation(colours["WARN"])
+    apart = abs(accent_hue - warn_hue)
+    apart = min(apart, 360 - apart)
+    assert apart >= 12.0, (
+        f"{palette}: ACCENT and WARN are {apart:.1f} degrees apart -- a focus "
+        f"ring and a warning read as the same colour"
+    )
+    if apart < 60.0:
+        assert abs(accent_sat - warn_sat) >= 0.15, (
+            f"{palette}: ACCENT and WARN are close in hue ({apart:.1f} degrees) "
+            f"and within {abs(accent_sat - warn_sat):.2f} saturation of each other"
+        )
 
 
 @pytest.mark.parametrize("palette", sorted(tokens.PALETTES))

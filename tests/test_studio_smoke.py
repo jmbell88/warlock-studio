@@ -3182,17 +3182,23 @@ def test_the_panel_search_boxes_build_and_hide_themselves(app_ctx, imgui_ctx):
     assert "demo" not in app_ctx.state.list_filters
 
 
-def test_the_whole_frame_builds_under_the_light_palette(app_ctx, imgui_ctx):
+@pytest.mark.parametrize("palette", ["light", "pixel"])
+def test_the_whole_frame_builds_under_every_palette(app_ctx, imgui_ctx, palette):
     """M105. The palette is resolved live through ``theme.__getattr__``, so a
     switch reaches every hand-drawn rect -- and every one of those call sites
-    is a place a missing name would raise on the frame somebody switched."""
+    is a place a missing name would raise on the frame somebody switched.
+
+    Dark is not in the list because every other test in this file already
+    builds under it; what is worth the frames is each palette somebody has to
+    *switch into*.
+    """
     from warlock.studio import theme, tokens
     from warlock.studio.panes import app_settings, inspector, landing, library
 
     imgui, _renderer = imgui_ctx
     _seeded(app_ctx)
     try:
-        tokens.set_theme("light")
+        tokens.set_theme(palette)
         theme.apply(imgui)
         for mode, draw in (
             ("home", lambda: landing.draw(app_ctx)),

@@ -50,6 +50,17 @@ FIELD_W = 260
 #: because it is read-only diagnostics. The keys are stable ids -- they are in
 #: the segmented control's imgui ids and in ``state.preview`` -- and the labels
 #: are what changes when the wording does.
+# What each palette is called in the combo. The key is a settings-file value and
+# the label is copy, and conflating the two is how a Settings pane comes to say
+# "dark" in lower case beside a sentence-cased everything else. Anything absent
+# falls back to a title-cased key, so a new palette is readable before it is
+# named.
+_THEME_LABELS = {
+    "dark": "Dark",
+    "light": "Light",
+    "pixel": "Pixel",
+}
+
 CATEGORIES = [
     ("appearance", f"{icons.PALETTE} Appearance"),
     ("models", f"{icons.BOX} Models"),
@@ -198,13 +209,15 @@ def _interface(ctx: Any, form_ui: forms.Form | None = None) -> None:
     # M105. The palette is a table of names in ``tokens`` and every pane reads
     # ``theme.NAME``, so switching is this plus a re-``apply`` -- imgui's style
     # holds *copies* of the numbers, which is the one thing the live lookup
-    # cannot do for it.
+    # cannot do for it. The options come from the table rather than from a list
+# here, so a palette added there appears without an edit in this pane; only
+# the *label* is spelled below, because a dict key is not a sentence.
     _changed, chosen = form_ui.combo(
         "theme",
         "Theme",
         tokens.THEME,
-        [(name, name) for name in tokens.PALETTES],
-        help_text="The whole palette, including the viewport background.",
+        [(name, _THEME_LABELS.get(name, name.title())) for name in tokens.PALETTES],
+        help_text="The whole palette: chrome, canvas surround and every hand-drawn edge.",
         helper="It takes effect at once and is remembered.",
     )
     if chosen != tokens.THEME:

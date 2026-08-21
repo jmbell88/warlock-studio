@@ -8,6 +8,19 @@ file behind.
 
 ## 0.0.25 — 2026-08-20
 
+- **A third theme, for the pixel side of the app.** Settings → Appearance now
+  offers **Pixel** beside Dark and Light. It is a second dark palette in the
+  register the pixel workspaces belong to: warm neutral greys against a
+  near-black canvas surround, with amber where the other two spend indigo. The
+  Inker is measured against the editor its users already know in what it reads,
+  what it writes and how its tools behave — and, until now, in how it looks not
+  at all, so somebody who lives in a pixel editor opened it into the cool
+  register that belongs to the 3D half of the program. Pixel keeps the dark
+  palette's direction, so a raised surface still reads as raised; what changes
+  is temperature. It is not an eyedropper copy of anyone's chrome — those are
+  typically grey on grey, and every colour in this program has to clear a
+  measured contrast bar before it ships. The three themes are now spelled
+  *Dark*, *Light* and *Pixel* in the menu rather than in lower case.
 - **Clip editing in Poser.** The keyframes a Troupe character sheet animates —
   which keys, in what order, how many frames apart — could only be changed by
   hand-editing a file inside the app's own installation. Poser now has a
