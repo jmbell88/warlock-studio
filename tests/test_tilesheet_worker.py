@@ -44,13 +44,13 @@ def _sheet_job(
     worker,
     *,
     tile_w=16,
-    projection="orthogonal",
+    view="top_down",
     seed=7,
     colors=8,
     prompt="a damp dungeon",
     **extra,
 ) -> str:
-    geom = tilesheet.geometry(tile_w, projection)
+    geom = tilesheet.geometry(tile_w, view)
     params = {
         "seed": seed,
         "base_model": "sdxl_cfg",
@@ -59,10 +59,10 @@ def _sheet_job(
         "colors": colors,
         "negative_prompt": "",
         "sheet": {
-            "version": 1,
+            "version": 2,
             "tile_w": geom.tile_w,
             "tile_h": geom.tile_h,
-            "projection": geom.projection,
+            "projection": geom.view,
             "columns": geom.columns,
             "rows": geom.rows,
         },
@@ -116,8 +116,8 @@ async def test_the_generation_uses_the_grid_template_and_never_wraps(worker):
 
 
 @pytest.mark.asyncio
-async def test_an_orthogonal_sheet_is_generated_square(worker):
-    await _run(worker, _sheet_job(worker, tile_w=32, projection="orthogonal"))
+async def test_a_top_down_sheet_is_generated_square(worker):
+    await _run(worker, _sheet_job(worker, tile_w=32, view="top_down"))
     assert worker._text2image.sizes == [(1024, 1024)]
 
 
@@ -125,7 +125,7 @@ async def test_an_orthogonal_sheet_is_generated_square(worker):
 async def test_an_isometric_sheet_is_generated_two_to_one(worker):
     """The reason ``generate`` grew a size override at all: squashed afterwards,
     every diamond comes back an ellipse."""
-    await _run(worker, _sheet_job(worker, tile_w=32, projection="isometric"))
+    await _run(worker, _sheet_job(worker, tile_w=32, view="isometric"))
     assert worker._text2image.sizes == [(1024, 512)]
 
 
@@ -151,8 +151,8 @@ async def test_the_grid_guide_reaches_the_controlnet(worker):
 
 
 @pytest.mark.asyncio
-async def test_the_subject_carries_the_projection_and_the_detail_clause(worker):
-    await _run(worker, _sheet_job(worker, projection="isometric", prompt="a mine"))
+async def test_the_subject_carries_the_view_and_the_detail_clause(worker):
+    await _run(worker, _sheet_job(worker, view="isometric", prompt="a mine"))
 
     composed = worker._text2image.prompts[0]
     assert "a mine" in composed
@@ -209,7 +209,7 @@ async def test_a_params_adapter_with_no_file_conditions_on_nothing(worker):
 
 @pytest.mark.asyncio
 async def test_the_published_sheet_is_exactly_the_grid_times_the_tile(worker):
-    job_id = _sheet_job(worker, tile_w=32, projection="orthogonal")
+    job_id = _sheet_job(worker, tile_w=32, view="top_down")
     await _run(worker, job_id)
 
     with Image.open(worker.config.job_dir(job_id) / "input.png") as sheet:
@@ -218,7 +218,7 @@ async def test_the_published_sheet_is_exactly_the_grid_times_the_tile(worker):
 
 @pytest.mark.asyncio
 async def test_an_isometric_sheet_publishes_two_to_one_tiles(worker):
-    job_id = _sheet_job(worker, tile_w=32, projection="isometric")
+    job_id = _sheet_job(worker, tile_w=32, view="isometric")
     await _run(worker, job_id)
 
     with Image.open(worker.config.job_dir(job_id) / "input.png") as sheet:
@@ -252,7 +252,7 @@ async def test_the_sidecar_is_written_after_the_sheet(worker):
 
 @pytest.mark.asyncio
 async def test_the_sidecar_says_what_ran(worker):
-    job_id = _sheet_job(worker, tile_w=48, projection="isometric", colors=16)
+    job_id = _sheet_job(worker, tile_w=48, view="isometric", colors=16)
     await _run(worker, job_id)
 
     doc = json.loads((worker.config.job_dir(job_id) / "sheet.json").read_text())
@@ -275,7 +275,7 @@ async def test_the_row_records_what_it_drew(worker):
     assert report["tiles"] == 64
     assert report["tile_w"] == 32
     assert report["sheet_w"] == 256
-    assert report["projection"] == "orthogonal"
+    assert report["projection"] == "top_down"
 
 
 @pytest.mark.asyncio

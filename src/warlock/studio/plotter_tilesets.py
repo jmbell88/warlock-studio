@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from . import dialogs, filetypes
+from .plotter import project
 from .plotter_io import _decode, _resolve_source, _within_ceiling
 from .plotter_state import active, ensure
 
@@ -114,6 +115,47 @@ class SheetMismatch:
     tile_h: int
 
 
+#: Which Plotter lattice each sheet view is drawn for.
+#:
+#: Two views map to one lattice and that is the point: a 3/4 tile is square and
+#: sits on the orthogonal grid exactly as a top-down one does -- the tilt is in
+#: the art. So a 3/4 sheet on a top-down map is not a mismatch and must never
+#: be reported as one; only the diamond is a different lattice.
+#:
+#: ``"orthogonal"`` is here as well as ``"top_down"`` because a sidecar written
+#: before the vocabulary widened carries the old spelling, and this table is
+#: read against files on disk.
+_VIEW_LATTICE: dict[str, str] = {
+    "top_down": project.ORTHOGONAL,
+    "three_quarter": project.ORTHOGONAL,
+    "orthogonal": project.ORTHOGONAL,
+    "isometric": project.ISOMETRIC,
+}
+
+
+@dataclass(frozen=True)
+class SheetLattice:
+    """A sheet drawn for a lattice this map is not on.
+
+    The fourth thing that can be wrong at an import door, and the last one the
+    detector cannot see. ``sheet.json`` has recorded the view since tile sheets
+    existed and nothing ever read it back, so an isometric sheet added to an
+    orthogonal map was sliced into diamonds and laid on a square grid with
+    nothing anywhere saying so.
+
+    Parked rather than fixed, for :class:`SheetMismatch`'s reason and one more
+    of its own: a map's lattice is fixed once anything is painted on it (a
+    tileset drawn for one lattice paints the wrong shape into every cell of the
+    other), so on a map with paint the only honest options are to add it anyway
+    or not at all. An *empty* map is not parked at all -- there the lattice is
+    still the sheet's to bring, which is what ``land_tileset``'s projection arm
+    has always been for.
+    """
+
+    view: str
+    lattice: str
+
+
 @dataclass(frozen=True)
 class SheetTerrain:
     """A sheet whose cells look like a complete 47-case blob terrain set.
@@ -156,6 +198,9 @@ def _sheet_or_tileset(
     tile_h: int,
     *,
     recorded: tuple[int, int] | None = None,
+    recorded_lattice: str = "",
+    lattice: str = "",
+    unpainted: bool = False,
 ) -> dict[str, Any]:
     """Task-thread: is this image a ruled sheet, or is it already a tileset?
 
@@ -172,6 +217,13 @@ def _sheet_or_tileset(
     today's path exactly. Different, it parks a :class:`SheetMismatch` instead,
     because a blind slice at the map's size would cut every tile in half with
     nothing anywhere to say so.
+
+    ``recorded_lattice`` is the same record's *view*, resolved to the lattice it
+    is drawn for. Against ``lattice`` -- the map's -- it answers a question the
+    cell size cannot: a 32x32 isometric sheet and a 32x32 top-down one measure
+    identically and are not interchangeable. On an ``unpainted`` map the sheet
+    simply brings its lattice with it; on a painted one the lattice is fixed and
+    a :class:`SheetLattice` is parked for the user to rule on.
     """
     from .tilegrid import slicing
     from .tilegrid.tileset import Tileset
@@ -186,11 +238,23 @@ def _sheet_or_tileset(
     if recorded is not None and (int(recorded[0]), int(recorded[1])) != (tile_w, tile_h):
         mismatch = SheetMismatch(int(recorded[0]), int(recorded[1]))
         return {"sheet": (uid, name, source, pixels, mismatch), "uid": uid}
+    # After the cell size, because a sheet that is wrong on both counts is more
+    # usefully described by the number the user can see than by the word.
+    wrong_lattice = bool(recorded_lattice and lattice and recorded_lattice != lattice)
+    if wrong_lattice and not unpainted:
+        parked = SheetLattice(recorded_lattice, lattice)
+        return {"sheet": (uid, name, source, pixels, parked), "uid": uid}
     terrain = _terrain_from(pixels, tile_w, tile_h)
     if terrain is not None:
         return {"sheet": (uid, name, source, pixels, terrain), "uid": uid}
     tileset = Tileset(name=name, pixels=pixels, tile_w=tile_w, tile_h=tile_h)
-    return {"tileset": tileset, "source": source, "uid": uid}
+    out = {"tileset": tileset, "source": source, "uid": uid}
+    if wrong_lattice:
+        # An empty map takes the sheet's lattice. ``land_tileset`` has carried
+        # the arm for this since the ground generator was deleted and nothing
+        # has reached it since; this is the door it was kept for.
+        out["projection"] = recorded_lattice
+    return out
 
 
 def land_tileset(ctx: Any, state: Any, tab: Any, result: dict[str, Any]) -> None:
@@ -570,12 +634,19 @@ def ask_add_tileset(ctx: Any) -> None:
     ctx.submit(f"plotter-tileset:{uid}", run)
 
 
-def _recorded_cell(ctx: Any, job_id: str) -> tuple[int, int] | None:
-    """The tile size a generated sheet's ``sheet.json`` declares, or ``None``.
+def _recorded_sheet(ctx: Any, job_id: str) -> tuple[int, int, str] | None:
+    """What a generated sheet's ``sheet.json`` declares: ``(w, h, lattice)``.
 
     ``None`` for every job that has no sidecar -- an ordinary reference image,
     a render, anything not a tile sheet -- and those doors are untouched by
     design: absence of a record is not evidence of a mismatch.
+
+    The view is read here too, and until now it was not read anywhere at all:
+    the sidecar has recorded it since tile sheets existed and every consumer
+    took the cell size and left it. An unrecognised view reads as an empty
+    lattice rather than a refusal -- a sidecar from a build that knows a view
+    this one does not is not a reason to refuse an import, and the cell size in
+    it is still good.
     """
     import json
 
@@ -587,9 +658,13 @@ def _recorded_cell(ctx: Any, job_id: str) -> tuple[int, int] | None:
     except (OSError, ValueError):
         return None
     try:
-        return int(data["tile_w"]), int(data["tile_h"])
+        cell = int(data["tile_w"]), int(data["tile_h"])
     except (KeyError, TypeError, ValueError):
         return None
+    # The key on disk is ``projection`` and its value is a view; see
+    # ``pipelines.tilesheet.sheet_sidecar`` for why the key never moved.
+    lattice = _VIEW_LATTICE.get(str(data.get("projection") or ""), "")
+    return (*cell, lattice)
 
 
 def use_as_tileset(ctx: Any, job: Any) -> None:
@@ -618,12 +693,17 @@ def use_as_tileset(ctx: Any, job: Any) -> None:
     job_id = job["id"] if isinstance(job, dict) else str(job)
     name = (job.get("name") or job_id) if isinstance(job, dict) else job_id
     width, height = int(tab.doc.tile_w), int(tab.doc.tile_h)
+    # Read on the frame thread with the document in hand, like the cell size
+    # beside it: the task may not touch a document the user is still editing.
+    lattice = str(tab.doc.projection)
+    unpainted = not any(bool(layer.data.any()) for layer in tab.doc.tile_layers())
 
     uid = tab.uid
 
     def run() -> dict[str, Any]:
         from ..service import files as svc_files
 
+        recorded = _recorded_sheet(ctx, job_id)
         path = svc_files.job_dir_file(ctx.svc, job_id, "input.png")
         # Create's own sheets are drawn on imposed rectangles and carry no
         # separator lines, so detection finds nothing here and this is today's
@@ -638,7 +718,10 @@ def use_as_tileset(ctx: Any, job: Any) -> None:
             uid,
             width,
             height,
-            recorded=_recorded_cell(ctx, job_id),
+            recorded=recorded[:2] if recorded else None,
+            recorded_lattice=recorded[2] if recorded else "",
+            lattice=lattice,
+            unpainted=unpainted,
         )
 
     ctx.submit(f"plotter-tileset:{tab.uid}", run)

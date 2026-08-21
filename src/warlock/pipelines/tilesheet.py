@@ -58,7 +58,12 @@ else:  # pragma: no cover - runtime alias
 #: The *layout* clauses live in ``prompt.TILESHEET_TEMPLATE`` under
 #: ``PROMPT_VERSION`` instead -- that template serves the prompt preview as well
 #: as this path, and the two numbers answer different questions.
-TILE_SHEET_VERSION = 1
+#:
+#: 2: the third view. ``orthogonal`` became ``top_down`` (the old spelling still
+#: reads, :func:`normalize_view`), ``three_quarter`` joined it, and every
+#: subject clause is now this module's own rather than a lookup that fell back
+#: to top-down when it did not recognise the key.
+TILE_SHEET_VERSION = 2
 
 #: One SDXL frame's long edge, and the reason the cell size below is what it is.
 SHEET_PX = 1024
@@ -71,13 +76,47 @@ SHEET_PX = 1024
 COLS = 8
 ROWS = 8
 
+#: The stored spelling of :data:`TOP_DOWN`, and the only reason this constant
+#: still exists. Rows and sidecars written before the vocabulary widened carry
+#: ``"orthogonal"``; the house rule is that a stale value is *ignored, not
+#: stripped*, so :func:`normalize_view` reads it and every one of them still
+#: opens. Nothing writes it any more.
 ORTHOGONAL = "orthogonal"
+
+TOP_DOWN = "top_down"
+THREE_QUARTER = "three_quarter"
 ISOMETRIC = "isometric"
 
-#: The two the sheet generator serves. ``oblique`` is deliberately absent: it
-#: uses the rectangle exactly as the orthogonal case does, so offering it would
-#: be a third button that changed nothing about the picture.
-PROJECTIONS: tuple[str, str] = (ORTHOGONAL, ISOMETRIC)
+#: The three the sheet generator serves, and the one axis it has. A *view* is
+#: where the camera is; the lattice is derived from it (:func:`tile_height`)
+#: rather than chosen beside it, because two of the four camera-by-lattice
+#: combinations name nothing that renders.
+#:
+#: ``oblique`` is still deliberately absent, and the reason it was refused is
+#: worth restating because :data:`THREE_QUARTER` looks like the same case and is
+#: not. Oblique uses the rectangle exactly as top-down does *and asks the model
+#: for the same picture*, so it would have been a third button that changed
+#: nothing. 3/4 shares the rectangle too -- but what SDXL is handed is the
+#: subject clause and the guide, and both of those differ, which is the whole
+#: measured argument (``docs/measurements/2026-08-21-three-quarter-guide.md``).
+VIEWS: tuple[str, ...] = (TOP_DOWN, THREE_QUARTER, ISOMETRIC)
+
+#: Stored spellings that are not the canonical one. Read-only: one entry, and a
+#: second would want a reason of its own.
+_VIEW_ALIASES: dict[str, str] = {ORTHOGONAL: TOP_DOWN}
+
+
+def normalize_view(view: Any) -> str:
+    """A stored view value as this module spells it today.
+
+    The single door every entry point takes, so "orthogonal reads as top-down"
+    is one fact in one place rather than a `` == `` scattered across the door,
+    the worker and the pane. Membership is *not* checked here: :func:`geometry`
+    and :func:`sheet_subject` each refuse an unknown view in their own words,
+    and a third refusal site would be a third message about one mistake.
+    """
+    text = str(view)
+    return _VIEW_ALIASES.get(text, text)
 
 #: What the form offers. Every one divides evenly enough to leave the two-stage
 #: reduction a factor to work with (128 // 16 = 8, 128 // 64 = 2), and every one
@@ -111,13 +150,23 @@ SHEET_NEGATIVE_PROMPT = (
     "one large scene, tiles bleeding together, inconsistent scale"
 )
 
-#: How each projection frames a cell, as words. Kept here rather than in the
+#: How each view frames a cell, as words. Kept here rather than in the
 #: template, and the split is the point: the template serves the prompt preview
 #: as well as this path, and a change to it bumps ``PROMPT_VERSION`` -- whereas
 #: these clauses are this module's own and sit under
 #: :data:`TILE_SHEET_VERSION`.
-_PROJECTION_CLAUSE: dict[str, str] = {
-    ORTHOGONAL: "flat top-down orthographic view, square tiles",
+#:
+#: The 3/4 clause is deliberately *not* ``prompt.PROMPT_TEMPLATE``'s "3/4
+#: perspective view" verbatim. That literal frames a single object for trellis
+#: and is pinned byte-for-byte by ``tests/test_prompt.py``; this one frames a
+#: ground tile, and two clauses that happened to share a spelling would be one
+#: string with two owners.
+_VIEW_CLAUSE: dict[str, str] = {
+    TOP_DOWN: "flat top-down orthographic view, square tiles",
+    THREE_QUARTER: (
+        "3/4 top-down game view, camera tilted about thirty degrees, "
+        "square tiles with a shallow visible front face"
+    ),
     ISOMETRIC: "2:1 isometric projection, diamond tiles on a dimetric grid",
 }
 
@@ -143,7 +192,7 @@ class Cell:
 class SheetGeometry:
     """The fixed grid one request is generated and sliced on."""
 
-    projection: str
+    view: str
     columns: int
     rows: int
     cell_w: int
@@ -167,34 +216,45 @@ class SheetGeometry:
         return len(self.cells)
 
 
-def tile_height(tile_w: int, projection: str) -> int:
-    """A tile's height, which is a function of its width and the projection.
+def tile_height(tile_w: int, view: str) -> int:
+    """A tile's height, which is a function of its width and the view.
 
-    Not a second control. An isometric tile is 2:1 by definition of the
-    projection, and a form that let the two disagree would let a user ask for a
-    diamond lattice that does not tesselate.
+    Not a second control. An isometric tile is 2:1 by definition of the view,
+    and a form that let the two disagree would let a user ask for a diamond
+    lattice that does not tesselate.
+
+    Spelled out per view rather than "isometric halves it, everything else
+    falls through". The fallthrough gave a *correct* answer for a view this
+    module had never heard of, which is the silent defaulting :func:`geometry`
+    exists to refuse -- and a third view is what turns that from a tidiness
+    argument into a live one.
     """
     width = int(tile_w)
-    if str(projection) == ISOMETRIC:
+    resolved = normalize_view(view)
+    if resolved == ISOMETRIC:
         return width // 2
-    return width
+    if resolved in (TOP_DOWN, THREE_QUARTER):
+        # A 3/4 tile is square: the tilt is in the art, not the lattice. That
+        # is exactly why the front face is the guide's business.
+        return width
+    raise ValueError(f"unknown view {resolved!r}; this module draws {', '.join(VIEWS)}")
 
 
-def geometry(tile_w: int, projection: str) -> SheetGeometry:
+def geometry(tile_w: int, view: str) -> SheetGeometry:
     """The grid for one request. Unknown or impossible asks raise.
 
-    Defaulting on an unknown projection would generate an orthogonal sheet for
-    a typo'd isometric request and publish it under the caller's name -- a
-    wrong sheet nobody asked for, rather than an error somebody can read.
+    Defaulting on an unknown view would generate a top-down sheet for a typo'd
+    isometric request and publish it under the caller's name -- a wrong sheet
+    nobody asked for, rather than an error somebody can read.
     ``spritesynth.geometry``'s rule, and its reason.
     """
     width = int(tile_w)
     if width < 1:
         raise ValueError("a tile is at least one pixel across")
-    text = str(projection)
-    if text not in PROJECTIONS:
+    text = normalize_view(view)
+    if text not in VIEWS:
         raise ValueError(
-            f"unknown projection {text!r}; this module draws {', '.join(PROJECTIONS)}"
+            f"unknown view {text!r}; this module draws {', '.join(VIEWS)}"
         )
     if text == ISOMETRIC and width % 2:
         # ``tile_h`` is ``tile_w // 2``, so an odd width silently loses half a
@@ -202,6 +262,9 @@ def geometry(tile_w: int, projection: str) -> SheetGeometry:
         raise ValueError(f"an isometric tile needs an even width; {width} is odd")
 
     cell_w = SHEET_PX // COLS
+    # Only isometric halves the cell: 3/4 is generated on the same square frame
+    # as top-down, because the tilt is in what is drawn rather than in the
+    # rectangle it is drawn in.
     cell_h = cell_w // 2 if text == ISOMETRIC else cell_w
     height = tile_height(width, text)
     if width > cell_w or height > cell_h:
@@ -215,7 +278,7 @@ def geometry(tile_w: int, projection: str) -> SheetGeometry:
         for col in range(COLS)
     )
     return SheetGeometry(
-        projection=text,
+        view=text,
         columns=COLS,
         rows=ROWS,
         cell_w=cell_w,
@@ -239,6 +302,16 @@ def render_guide(geom: SheetGeometry) -> PILImage:
     back as a square seen from above; with it, the cell still says where the
     storage rectangle is (which is what the slicer needs) and the diamond says
     where the tile's top face goes.
+
+    **A 3/4 cell gets the plain rectangle, exactly as a top-down one does, and
+    that was measured rather than assumed** --
+    ``docs/measurements/2026-08-21-three-quarter-guide.md``. Two interior marks
+    were tried (a horizon line at 2/3 height, and that plus a hatched front
+    band) and both were *obeyed* and both made the sheet worse: the model drew
+    the mark as a dark stripe rather than a change of plane, and flattened every
+    cell towards the same tile doing it -- the failure mode the grid measurement
+    already named. What carries the view is the subject clause, so there are
+    still exactly two guide shapes here and the third view adds none.
     """
     from PIL import Image, ImageDraw
 
@@ -251,21 +324,24 @@ def render_guide(geom: SheetGeometry) -> PILImage:
     for cell in geom.cells:
         right, bottom = cell.x + cell.w - 1, cell.y + cell.h - 1
         draw.rectangle([cell.x, cell.y, right, bottom], outline=white, width=width)
-        if geom.projection != ISOMETRIC:
-            continue
-        mid_x = cell.x + cell.w // 2
-        mid_y = cell.y + cell.h // 2
-        # Four explicit lines rather than ``polygon(outline=...)``: the width
-        # keyword on a polygon outline is newer than the Pillow floor this
-        # package builds against, and an antialiased fallback would break the
-        # "only 0 and 255" promise the canny hint depends on.
-        points = [(mid_x, cell.y), (right, mid_y), (mid_x, bottom), (cell.x, mid_y)]
-        for start, end in zip(points, points[1:] + points[:1], strict=True):
-            draw.line([start, end], fill=white, width=width)
+        # A per-view dispatch rather than "everything that is not isometric
+        # continues". Two views share the plain rectangle today and the third
+        # does not, so which of them a new view joins has to be a decision
+        # somebody wrote down.
+        if geom.view == ISOMETRIC:
+            mid_x = cell.x + cell.w // 2
+            mid_y = cell.y + cell.h // 2
+            # Four explicit lines rather than ``polygon(outline=...)``: the
+            # width keyword on a polygon outline is newer than the Pillow floor
+            # this package builds against, and an antialiased fallback would
+            # break the "only 0 and 255" promise the canny hint depends on.
+            points = [(mid_x, cell.y), (right, mid_y), (mid_x, bottom), (cell.x, mid_y)]
+            for start, end in zip(points, points[1:] + points[:1], strict=True):
+                draw.line([start, end], fill=white, width=width)
     return canvas
 
 
-def sheet_subject(prompt: str, projection: str) -> str:
+def sheet_subject(prompt: str, view: str) -> str:
     """The subject clause for one sheet. A *subject*, not a finished prompt.
 
     The caller runs this through ``guidance.compose_prompt`` and
@@ -276,9 +352,19 @@ def sheet_subject(prompt: str, projection: str) -> str:
     the template sits under ``PROMPT_VERSION`` because the prompt preview
     serves it too, and the clauses below sit under :data:`TILE_SHEET_VERSION`
     because only this path can reach them.
+
+    An unknown view raises rather than falling back to the top-down clause.
+    This was the one function that defaulted where :func:`geometry` refuses, and
+    the fallback was invisible by construction: it produced a *plausible* sheet
+    described by the wrong sentence. The moment a view can be added to
+    :data:`VIEWS` without a clause beside it, that is a wrong picture nobody is
+    told about.
     """
     text = str(prompt).strip()
-    clause = _PROJECTION_CLAUSE.get(str(projection), _PROJECTION_CLAUSE[ORTHOGONAL])
+    resolved = normalize_view(view)
+    clause = _VIEW_CLAUSE.get(resolved)
+    if clause is None:
+        raise ValueError(f"unknown view {resolved!r}; this module draws {', '.join(VIEWS)}")
     return ", ".join(part for part in (text, clause, DETAIL_CLAUSE) if part)
 
 
@@ -397,7 +483,7 @@ def sheet_sidecar(
     prompt: str,
     tile_w: int,
     tile_h: int,
-    projection: str,
+    view: str,
     colors: int,
     palette: Any,
     recipe: Any,
@@ -414,6 +500,12 @@ def sheet_sidecar(
     site: this is written with ``json.dumps`` *after* the sheet is on disk, and
     a numpy scalar that survived would fail the write with the artifact already
     published and no marker to say so.
+
+    **The key on disk is still ``"projection"``** while the value is a *view*.
+    The rename is a Python one: every sidecar already written carries that key,
+    ``plotter_tilesets`` reads sheets by it, and renaming it would mean two
+    spellings on disk to buy one tidier word. The vocabulary widened; the key
+    did not move.
     """
     return {
         "version": TILE_SHEET_VERSION,
@@ -425,7 +517,7 @@ def sheet_sidecar(
         "tiles": int(COLS * ROWS),
         "tile_w": int(tile_w),
         "tile_h": int(tile_h),
-        "projection": str(projection),
+        "projection": normalize_view(view),
         "colors": int(colors),
         "palette": [str(entry) for entry in palette],
         "recipe": dict(recipe),

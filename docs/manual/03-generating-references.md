@@ -378,10 +378,23 @@ A tile grid is 64 tiles in an 8×8 arrangement — grass, path, water, cliffs, p
 picture and cut up. Being one generation is the point: every tile shares a palette, a light
 direction and a style, which is what separates a tileset from 64 unrelated pictures.
 
-Two settings, and only two. **Tile size** is how many pixels across one tile is; **Projection** is
-*Orthogonal* (square tiles seen from above) or *Isometric* (2:1 diamonds). The line under them says
-what the finished sheet comes to — a 32 px orthogonal sheet is 256×256, a 64 px isometric one is
-512×256 — so there is no arithmetic to do.
+Two settings, and only two. **Tile size** is how many pixels across one tile is; **View** is where
+the camera is:
+
+| View | What it draws | Lattice |
+| --- | --- | --- |
+| **Top-down** | flat, straight down; tiles show only their top face | square |
+| **3/4** | tilted about thirty degrees, so things with height show a front face as well as a top | square |
+| **Isometric** | the 2:1 dimetric view; tiles are diamonds | 2:1 diamond |
+
+The line under them says what the finished sheet comes to — a 32 px top-down sheet is 256×256, a
+64 px isometric one is 512×256 — so there is no arithmetic to do.
+
+**3/4 needs subjects with height to show.** It is the same square grid as top-down, and the whole
+difference is what the model is asked to draw, so a sheet of flat flagstones comes back looking the
+same either way. Ask it for walls, crates, fences, roofs, a well — anything with a front — and the
+difference is unmistakable. This was measured rather than assumed; see
+`docs/measurements/2026-08-21-three-quarter-guide.md`.
 
 Everything else is decided for you and is not a control: the grid is 8×8 because 1024 ÷ 8 is the
 true art resolution the pixel-art style draws at, and the palette is shared across the whole sheet

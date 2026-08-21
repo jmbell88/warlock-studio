@@ -1,6 +1,6 @@
 """The tile sheet's door: every refusal, and what a good request writes.
 
-The tile sizes and the projection list here are *copies* -- ``service/`` may not
+The tile sizes and the view list here are *copies* -- ``service/`` may not
 import ``studio/`` and a form's ceiling does not belong in a pipeline -- so the
 drift pins at the bottom of this file are the point of it: if somebody adds a
 tile size to ``pipelines.tilesheet`` and forgets this module, the copy goes red
@@ -26,7 +26,7 @@ from warlock.service.validation import DERIVED_PARAMS
 
 
 def _create(svc, **overrides):
-    kwargs = {"prompt": "mossy dungeon", "tile_size": 32, "projection": "orthogonal"}
+    kwargs = {"prompt": "mossy dungeon", "tile_size": 32, "view": "top_down"}
     kwargs.update(overrides)
     return tilesheets.create_tile_sheet(svc, **kwargs)
 
@@ -59,7 +59,7 @@ def test_a_good_request_writes_a_queued_row_and_no_files(svc):
 def test_the_sheet_block_carries_the_geometry(svc):
     """One stored fact, derived once at the door, so the worker and anything
     reading the row later never re-derive the table and disagree."""
-    made = _create(svc, tile_size=64, projection="isometric")
+    made = _create(svc, tile_size=64, view="isometric")
     block = svc.store.get(made["id"])["params"]["sheet"]
     assert block["tile_w"] == 64
     assert block["tile_h"] == 32
@@ -74,7 +74,7 @@ def test_the_row_is_named_so_a_library_list_says_what_it_is(svc):
 
 
 def test_the_reply_says_what_it_will_produce(svc):
-    made = _create(svc, tile_size=48, projection="isometric")
+    made = _create(svc, tile_size=48, view="isometric")
     assert made["tiles"] == 64
     assert made["tile_w"] == 48
     assert made["tile_h"] == 24
@@ -128,25 +128,37 @@ def test_a_tile_size_that_is_not_a_number_is_a_refusal_not_a_crash(svc):
     assert excinfo.value.field == "tile_size"
 
 
-@pytest.mark.parametrize("projection", tilesheets.PROJECTIONS)
-def test_every_offered_projection_is_accepted(svc, projection):
-    made = _create(svc, projection=projection)
-    assert svc.store.get(made["id"])["params"]["sheet"]["projection"] == projection
+@pytest.mark.parametrize("view", tilesheets.VIEWS)
+def test_every_offered_view_is_accepted(svc, view):
+    made = _create(svc, view=view)
+    # The stored key is still ``projection``; only its vocabulary widened.
+    assert svc.store.get(made["id"])["params"]["sheet"]["projection"] == view
 
 
-@pytest.mark.parametrize("projection", ["hexagonal", "oblique", "", None])
-def test_a_projection_off_the_menu_is_refused(svc, projection):
+def test_the_old_orthogonal_spelling_is_accepted_and_stored_as_top_down(svc):
+    """A profile or a reroll from before the vocabulary widened carries it, and
+    refusing one would make rerolling last week's sheet an error."""
+    made = _create(svc, view="orthogonal")
+    block = svc.store.get(made["id"])["params"]["sheet"]
+    assert block["projection"] == "top_down"
+    assert block["version"] == 2
+
+
+@pytest.mark.parametrize("view", ["hexagonal", "oblique", "", None])
+def test_a_view_off_the_menu_is_refused(svc, view):
     with pytest.raises(Invalid) as excinfo:
-        _create(svc, projection=projection)
+        _create(svc, view=view)
+    # ``field="projection"`` and not ``"view"``: the refusal has to name the
+    # control the user is looking at, and the form field kept its name.
     assert excinfo.value.field == "projection"
 
 
 def test_oblique_is_refused_here_even_though_plotter_knows_it(svc):
     """Deliberate, not an oversight: oblique frames a cell exactly as
-    orthogonal does, so offering it would be a third button that changed
+    top-down does, so offering it would be a third button that changed
     nothing about the picture."""
     with pytest.raises(Invalid):
-        _create(svc, projection="oblique")
+        _create(svc, view="oblique")
 
 
 # -- the negative prompt -----------------------------------------------------
@@ -288,7 +300,8 @@ def test_a_sheet_never_charges_for_trellis_when_it_has_the_card_alone(svc):
 def test_the_options_reply_carries_the_menus_and_the_grid(svc):
     options = tilesheets.tile_sheet_options()
     assert options["tile_sizes"] == list(tilesheets.TILE_SIZES)
-    assert options["projections"] == list(tilesheets.PROJECTIONS)
+    assert options["views"] == list(tilesheets.VIEWS)
+    assert set(options["view_labels"]) == set(tilesheets.VIEWS)
     assert options["columns"] == 8
     assert options["rows"] == 8
     assert options["tiles"] == 64
@@ -300,13 +313,19 @@ def test_the_options_reply_states_the_finished_size_of_every_choice(svc):
     twice."""
     options = tilesheets.tile_sheet_options()
     entry = next(row for row in options["sizes"] if row["key"] == 64)
-    assert entry["projections"]["orthogonal"] == {
+    assert entry["views"]["top_down"] == {
         "tile_w": 64,
         "tile_h": 64,
         "sheet_w": 512,
         "sheet_h": 512,
     }
-    assert entry["projections"]["isometric"] == {
+    assert entry["views"]["three_quarter"] == {
+        "tile_w": 64,
+        "tile_h": 64,
+        "sheet_w": 512,
+        "sheet_h": 512,
+    }
+    assert entry["views"]["isometric"] == {
         "tile_w": 64,
         "tile_h": 32,
         "sheet_w": 512,
@@ -321,17 +340,21 @@ def test_the_tile_sizes_match_the_pipeline():
     assert tilesheets.TILE_SIZES == tilesheet.TILE_SIZES
 
 
-def test_the_projections_match_the_pipeline():
-    assert tilesheets.PROJECTIONS == tilesheet.PROJECTIONS
+def test_the_views_match_the_pipeline():
+    assert tilesheets.VIEWS == tilesheet.VIEWS
+    assert tilesheets.DEFAULT_VIEW in tilesheets.VIEWS
+    # The alias table is restated here too, and for the same reason.
+    for stored, canonical in tilesheets.LEGACY_VIEWS.items():
+        assert tilesheet.normalize_view(stored) == canonical
 
 
-def test_every_offered_size_and_projection_builds_a_geometry():
+def test_every_offered_size_and_view_builds_a_geometry():
     """The door hands its own two lists straight to ``tilesheet.geometry``
     after checking them, so a pair this module accepts and the pipeline refuses
     would be an unhandled ValueError past the point of no return."""
     for size in tilesheets.TILE_SIZES:
-        for projection in tilesheets.PROJECTIONS:
-            assert tilesheet.geometry(size, projection).tiles == 64
+        for view in tilesheets.VIEWS:
+            assert tilesheet.geometry(size, view).tiles == 64
 
 
 def test_the_palette_size_is_the_measured_one():

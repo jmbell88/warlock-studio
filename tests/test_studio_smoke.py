@@ -168,17 +168,22 @@ def test_the_2d_pane_builds_every_output_kind(app_ctx, imgui_ctx):
 def test_the_2d_pane_builds_both_arms_of_the_sheet_output(app_ctx, imgui_ctx):
     """The two arms draw different controls off the same form dict, and the
     sprite arm's are the ones a stale tile-arm value can reach."""
+    from warlock.service import tilesheets as svc_tilesheets
     from warlock.studio.panes import settings_2d
 
     app_ctx.state.form_2d["prompt"] = "a hooded ranger"
     app_ctx.state.form_2d["output"] = "sheet"
-    for sheet_type, projection in (
-        ("tile", "orthogonal"),
-        ("tile", "isometric"),
-        ("sprite", "orthogonal"),
-    ):
+    # Every view the service offers, off the service's own list rather than a
+    # literal here: the pair this used to hold could not have grown a third
+    # entry without somebody remembering to edit it, which is exactly how a new
+    # view gets shipped having never been drawn in a frame.
+    arms = [("tile", view) for view in svc_tilesheets.VIEWS]
+    # ...plus the old spelling a stored profile can still carry, and the sprite
+    # arm, whose controls are the ones a stale tile-arm value reaches.
+    arms += [("tile", "orthogonal"), ("sprite", "top_down")]
+    for sheet_type, view in arms:
         app_ctx.state.form_2d["sheet_type"] = sheet_type
-        app_ctx.state.form_2d["projection"] = projection
+        app_ctx.state.form_2d["projection"] = view
         _frame(imgui_ctx, lambda: settings_2d.draw(app_ctx))
 
 

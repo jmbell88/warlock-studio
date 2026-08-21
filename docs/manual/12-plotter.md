@@ -23,8 +23,9 @@ you had open recently — clicking one reopens it, and hovering it shows the ful
 on the right offers the same two buttons. Once a map is open, `Ctrl+N` and `Ctrl+O` do the same two
 things from the keyboard.
 
-**New map** asks what the map is before making it. Three presets start you off — 16 px tiles, 32 px
-tiles, or a 2:1 isometric cell — and each one fills in every field below, which you can then change.
+**New map** asks what the map is before making it. Five presets start you off — 16 px tiles, 32 px
+tiles, a 2:1 isometric cell, staggered, or hexagonal — and each one fills in every field below,
+which you can then change.
 The fields are the projection, the map size in tiles, and the tile size in pixels; a line under them
 says what that comes to in pixels overall, because a map is authored in tiles and exported in pixels
 and the two numbers are easy to be surprised by. Choosing *Isometric* with a cell that is not twice
@@ -45,7 +46,10 @@ which is what the dialog is for.
 Last, **Then** picks what happens once the map exists: add a tileset from a file, or nothing yet.
 A map cannot be painted until it has a tileset, so the dialog offers the door rather than leaving
 you to find it. Tile sheets are made in **Create** — see *Sheets* — and reach a map from the library
-like any other asset.
+like any other asset. A sheet records the view it was drawn for, and Plotter reads it: an isometric
+sheet added to a square map you have already painted on asks first, because a map's lattice is fixed
+once anything is on it. On an empty map the sheet simply brings its lattice with it. Top-down and
+3/4 sheets are both square, so neither ever asks about the other.
 
 Every new map arrives with one tile layer called *Ground* already on it. Both sizes can be changed
 later, under **Resize** in the tools pane. The grid fields grow or crop the map and move every object
@@ -136,7 +140,7 @@ honest thing without it. [Tilemap layers](09-inker.md#tilemap-layers) is the Ink
 
 ## Isometric and oblique maps
 
-A map is drawn on one of three lattices, and which one is a property of the map. On an **isometric**
+A map is drawn on one of five lattices, and which one is a property of the map. On an **isometric**
 map a cell is a 2:1 diamond, the grid follows the two lattice directions rather than the screen
 axes, and the status line under the canvas shows the cell under the pointer — which is the only
 thing that reliably answers "am I about to click the diamond I mean".

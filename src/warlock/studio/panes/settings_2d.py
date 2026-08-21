@@ -228,7 +228,7 @@ SHEET_TYPES: tuple[tuple[str, str], ...] = (
 
 # ``tile_sheet_options()`` and ``sprite_options()`` are pure functions of module
 # constants, and this pane calls them from the frame loop. The tile-sheet one
-# builds a geometry per size per projection -- sixty-four Cell objects each --
+# builds a geometry per size per view -- sixty-four Cell objects each --
 # which is nothing once and a thousand short-lived dataclasses a frame at 60fps.
 # Cached in a one-slot list, the ``_submit_px`` idiom, because there is nothing
 # for them to go stale against: neither reads config, disk or state.
@@ -298,6 +298,19 @@ def _sheet(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
         _tile_fields(ctx, form, form_ui)
 
 
+def _view_of(form: dict[str, Any]) -> str:
+    """The form's view, in today's spelling.
+
+    The form field is still ``projection`` -- it is a persisted key and a
+    control the user has a name for -- and a profile saved before the
+    vocabulary widened carries ``"orthogonal"``. Read through the service's
+    alias table rather than by comparing strings here, so the pane never holds
+    a second opinion about what an old value means.
+    """
+    stored = str(form.get("projection") or svc_tilesheets.DEFAULT_VIEW)
+    return svc_tilesheets.LEGACY_VIEWS.get(stored, stored)
+
+
 def _tile_fields(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
     options = _tile_options()
     with focus.item(ctx.state, FOCUS_PANE, "tile_size"):
@@ -313,26 +326,34 @@ def _tile_fields(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
         form["tile_size"] = picked
         ctx.state.clear_field_error("tile_size")
     with focus.item(ctx.state, FOCUS_PANE, "projection"):
+        # Both the keys and the words come off the service reply. They were
+        # written out here as a literal pair, which is why a third view could
+        # not be added without editing a pane that knows nothing about what a
+        # view is -- and why the refusal below used to spell its own list too.
+        labels = options["view_labels"]
         changed, picked = form_ui.segmented_choice(
             "projection",
-            "Projection",
-            str(form.get("projection", "orthogonal")),
-            (("orthogonal", "Orthogonal"), ("isometric", "Isometric")),
-            help_text="Square tiles seen from above, or 2:1 diamonds.",
+            "View",
+            _view_of(form),
+            tuple((key, labels.get(key, key)) for key in options["views"]),
+            help_text=(
+                "Where the camera is. Top-down is flat; 3/4 tilts it so tiles "
+                "show a front face; isometric is the 2:1 diamond lattice."
+            ),
             compact=True,
         )
     if changed:
         form["projection"] = picked
         ctx.state.clear_field_error("projection")
     # The finished size, said rather than left to be worked out. The arithmetic
-    # is the service's (``tile_sheet_options`` returns it per size per
-    # projection) precisely so this line cannot drift from what lands on disk.
+    # is the service's (``tile_sheet_options`` returns it per size per view)
+    # precisely so this line cannot drift from what lands on disk.
     entry = next(
         (row for row in options["sizes"] if str(row["key"]) == str(form.get("tile_size"))),
         None,
     )
     if entry is not None:
-        shape = entry["projections"].get(form.get("projection")) or {}
+        shape = entry["views"].get(_view_of(form)) or {}
         if shape:
             widgets.muted(
                 f"{options['tiles']} tiles of {shape['tile_w']}x{shape['tile_h']} "
@@ -561,7 +582,7 @@ def _preview(ctx: Any) -> None:
         # the half of the composition that this output kind adds.
         subject = (
             tilesheetlib.sheet_subject(
-                form["prompt"], str(form.get("projection") or "orthogonal")
+                form["prompt"], _view_of(form)
             )
             if grid
             else form["prompt"]
@@ -1212,10 +1233,13 @@ def validate(form: dict[str, Any]) -> list[widgets.Problem]:
                     "tile_size",
                 )
             )
-        if grid and form.get("projection") not in svc_tilesheets.PROJECTIONS:
+        if grid and _view_of(form) not in svc_tilesheets.VIEWS:
+            # Interpolated rather than spelled out. The sentence used to name
+            # its two values, so the day a third arrived the form would have
+            # refused it with a list that did not contain it.
             problems.append(
                 widgets.Problem(
-                    "Projection must be orthogonal or isometric.", "projection"
+                    f"View must be one of {list(svc_tilesheets.VIEWS)}.", "projection"
                 )
             )
     return problems
@@ -1279,7 +1303,7 @@ def _generate_tile_sheet(ctx: Any, form: dict[str, Any]) -> None:
     """
     prompt = form["prompt"].strip()
     tile_size = int(form.get("tile_size") or 32)
-    projection = str(form.get("projection") or "orthogonal")
+    view = _view_of(form)
     seed = int(form["seed"])
     negative = form.get("negative_prompt") or None
     ref_path = form.get("ref_path") or ""
@@ -1300,7 +1324,7 @@ def _generate_tile_sheet(ctx: Any, form: dict[str, Any]) -> None:
             ctx.svc,
             prompt=prompt,
             tile_size=tile_size,
-            projection=projection,
+            view=view,
             seed=seed,
             negative_prompt=negative,
             reference=reference,

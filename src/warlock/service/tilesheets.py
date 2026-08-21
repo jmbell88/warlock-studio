@@ -78,9 +78,15 @@ TILE_SHEET_REFERENCE_ROWS: tuple[str, ...] = (
     f"{_REFERENCE_REQUIRED[0]}:{_REFERENCE_REQUIRED[1]}",
 )
 
-#: ``tilesheet.TILE_SIZES`` and ``tilesheet.PROJECTIONS``, restated.
+#: ``tilesheet.TILE_SIZES`` and ``tilesheet.VIEWS``, restated.
 TILE_SIZES: tuple[int, ...] = (16, 32, 48, 64)
-PROJECTIONS: tuple[str, ...] = ("orthogonal", "isometric")
+VIEWS: tuple[str, ...] = ("top_down", "three_quarter", "isometric")
+
+#: The one stored spelling that is not in :data:`VIEWS`. Restated here for the
+#: same reason the list is: a door may not import the pipeline's constants, and
+#: a request carrying the old word has to be accepted rather than refused --
+#: rerolling a sheet made last week is not an error.
+LEGACY_VIEWS: dict[str, str] = {"orthogonal": "top_down"}
 
 #: One palette across the whole sheet, at the size the ground run measured
 #: (``docs/measurements/2026-08-17-ground-reduction.md``: occupancy at 32 was
@@ -89,7 +95,7 @@ PROJECTIONS: tuple[str, ...] = ("orthogonal", "isometric")
 SHEET_COLORS = 64
 
 DEFAULT_TILE_SIZE = 32
-DEFAULT_PROJECTION = "orthogonal"
+DEFAULT_VIEW = "top_down"
 
 
 def tile_sheet_options() -> dict[str, Any]:
@@ -106,19 +112,28 @@ def tile_sheet_options() -> dict[str, Any]:
     sizes = []
     for size in TILE_SIZES:
         entries = {}
-        for projection in PROJECTIONS:
-            geom = tilesheet.geometry(size, projection)
-            entries[projection] = {
+        for view in VIEWS:
+            geom = tilesheet.geometry(size, view)
+            entries[view] = {
                 "tile_w": geom.tile_w,
                 "tile_h": geom.tile_h,
                 "sheet_w": geom.sheet_size[0],
                 "sheet_h": geom.sheet_size[1],
             }
-        sizes.append({"key": size, "projections": entries})
-    reference = tilesheet.geometry(DEFAULT_TILE_SIZE, DEFAULT_PROJECTION)
+        sizes.append({"key": size, "views": entries})
+    reference = tilesheet.geometry(DEFAULT_TILE_SIZE, DEFAULT_VIEW)
     return {
         "tile_sizes": list(TILE_SIZES),
-        "projections": list(PROJECTIONS),
+        "views": list(VIEWS),
+        # The label the form draws, beside the key it submits. Here rather than
+        # in the pane for ``tile_sizes``' reason: the pane hardcoded its two
+        # labels and so could not have grown a third without an edit in a file
+        # that knows nothing about what a view is.
+        "view_labels": {
+            "top_down": "Top-down",
+            "three_quarter": "3/4",
+            "isometric": "Isometric",
+        },
         "sizes": sizes,
         "columns": reference.columns,
         "rows": reference.rows,
@@ -129,7 +144,7 @@ def tile_sheet_options() -> dict[str, Any]:
         "reference_rows_needed": list(TILE_SHEET_REFERENCE_ROWS),
         "defaults": {
             "tile_size": DEFAULT_TILE_SIZE,
-            "projection": DEFAULT_PROJECTION,
+            "view": DEFAULT_VIEW,
         },
     }
 
@@ -175,7 +190,7 @@ def create_tile_sheet(
     *,
     prompt: str,
     tile_size: int = DEFAULT_TILE_SIZE,
-    projection: str = DEFAULT_PROJECTION,
+    view: str = DEFAULT_VIEW,
     seed: int | None = None,
     negative_prompt: str | None = None,
     reference: bytes | None = None,
@@ -218,10 +233,12 @@ def create_tile_sheet(
         raise Invalid("tile_size must be a whole number", field="tile_size") from None
     if size not in TILE_SIZES:
         raise Invalid(f"tile_size must be one of {list(TILE_SIZES)}", field="tile_size")
-    if str(projection) not in PROJECTIONS:
-        raise Invalid(
-            f"projection must be one of {list(PROJECTIONS)}", field="projection"
-        )
+    # ``field="projection"`` and not ``"view"``: the *form field* is still
+    # called that, and a refusal has to name the control the user is looking at.
+    # The vocabulary moved; the field key did not.
+    resolved = LEGACY_VIEWS.get(str(view), str(view))
+    if resolved not in VIEWS:
+        raise Invalid(f"view must be one of {list(VIEWS)}", field="projection")
     if seed is not None:
         check_seed("seed", seed)
 
@@ -230,7 +247,7 @@ def create_tile_sheet(
     # than each re-deriving the table. Raises nothing at this point: every
     # input has just been checked against the same two lists the pipeline
     # validates, and the test suite pins the pair together.
-    geom = tilesheet.geometry(size, str(projection))
+    geom = tilesheet.geometry(size, resolved)
 
     # The sheet's identity is the pixel-art LoRA on a base that can take it, so
     # a mismatch is refused here rather than queued -- the worker would drop the
@@ -265,10 +282,15 @@ def create_tile_sheet(
         # reading the sheet back compares it whole against the file on disk,
         # and VECTOR_PARAMS deliberately does not carry it.
         "sheet": {
-            "version": 1,
+            # 2: the view vocabulary widened. The key below is still
+            # ``projection`` and ``orthogonal`` still reads, so a version-1
+            # block opens unchanged -- the number says which words to expect,
+            # not whether the block can be read.
+            "version": 2,
             "tile_w": geom.tile_w,
             "tile_h": geom.tile_h,
-            "projection": geom.projection,
+            # The key stays ``projection`` -- see ``tilesheet.sheet_sidecar``.
+            "projection": geom.view,
             "columns": geom.columns,
             "rows": geom.rows,
         },

@@ -99,7 +99,7 @@ class TileSheetOps:
         geom = tilesheet.geometry(tile_w, projection)
         colors = int(params.get("colors", 64))
         seed = int(params.get("seed", 42))
-        subject = tilesheet.sheet_subject(job["prompt"] or "", geom.projection)
+        subject = tilesheet.sheet_subject(job["prompt"] or "", geom.view)
 
         base_key = self._resolve_base_key(params, default="sdxl_cfg")
         spec = models.BASE_MODELS[base_key]
@@ -277,7 +277,7 @@ class TileSheetOps:
             prompt=job["prompt"] or "",
             tile_w=geom.tile_w,
             tile_h=geom.tile_h,
-            projection=geom.projection,
+            view=geom.view,
             colors=colors,
             palette=palette,
             recipe=recipe,
@@ -301,12 +301,12 @@ class TileSheetOps:
                     "tile_h": geom.tile_h,
                     "sheet_w": geom.sheet_size[0],
                     "sheet_h": geom.sheet_size[1],
-                    "projection": geom.projection,
+                    "projection": geom.view,
                     "recipe": recipe,
                 }
             },
         )
         log.info(
             "drew tile sheet %s: %d tiles, %d colours at %dx%d (%s)",
-            job_id, geom.tiles, len(palette), geom.tile_w, geom.tile_h, geom.projection,
+            job_id, geom.tiles, len(palette), geom.tile_w, geom.tile_h, geom.view,
         )

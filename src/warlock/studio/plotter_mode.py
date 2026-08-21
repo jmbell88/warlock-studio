@@ -74,6 +74,7 @@ from .plotter_state import (  # noqa: F401
 # wiring test parametrizes over by identity.
 from .plotter_tilesets import (  # noqa: F401
     TILESET_FILTER,
+    SheetLattice,
     SheetMismatch,
     SheetTerrain,
     add_tileset_path,

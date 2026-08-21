@@ -55,7 +55,8 @@ def test_a_new_form_defaults_to_a_tile_grid():
     form = default_form_2d()
     assert form["sheet_type"] == "tile"
     assert form["tile_size"] == "32"
-    assert form["projection"] == "orthogonal"
+    # The key is still ``projection``; only its vocabulary widened.
+    assert form["projection"] == "top_down"
 
 
 def test_the_sheet_fields_are_strings_so_they_restore():
@@ -96,7 +97,7 @@ def test_a_tile_size_off_the_menu_is_caught_before_the_door():
     assert any(p.field == "tile_size" for p in problems)
 
 
-def test_a_projection_off_the_menu_is_caught_before_the_door():
+def test_a_view_off_the_menu_is_caught_before_the_door():
     problems = settings_2d.validate(_sheet_form(projection="hexagonal"))
     assert any(p.field == "projection" for p in problems)
 
@@ -249,7 +250,7 @@ def test_the_preview_of_a_grid_asks_for_the_grid_template():
 
 
 def test_the_preview_of_a_grid_sends_the_pipelines_subject_not_the_bare_prompt():
-    """The projection and detail clauses are appended before the template, so a
+    """The view and detail clauses are appended before the template, so a
     preview built from the raw prompt would be missing half the composition
     this output kind adds."""
     ctx = _PreviewCtx(_sheet_form(projection="isometric"))
@@ -268,3 +269,22 @@ def test_the_preview_of_a_sprite_sheet_is_an_ordinary_reference_preview():
     assert ctx.calls[0][1]["tilesheet"] is False
     assert ctx.calls[0][1]["tile"] is False
     assert ctx.calls[0][0][2] == "mossy dungeon"
+
+
+def test_a_restored_form_with_the_old_projection_word_still_validates():
+    """A profile saved before the vocabulary widened carries "orthogonal". The
+    form reads it through the service's alias table rather than holding a second
+    opinion, so an old profile opens on Top-down instead of being refused."""
+    assert not [p for p in settings_2d.validate(_sheet_form(projection="orthogonal"))
+                if p.field == "projection"]
+
+
+def test_every_offered_view_validates():
+    """The mirror of the tile-size sweep beside it. The old suite had no such
+    sweep for views, which is how a third one could have been added and gone
+    unexercised by the form."""
+    from warlock.service import tilesheets as svc_tilesheets
+
+    for view in svc_tilesheets.VIEWS:
+        problems = settings_2d.validate(_sheet_form(projection=view))
+        assert not [p for p in problems if p.field == "projection"], view

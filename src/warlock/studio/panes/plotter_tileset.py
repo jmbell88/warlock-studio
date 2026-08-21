@@ -87,6 +87,34 @@ def _sheet_popup(ctx: Any, state: Any, tab: Any) -> None:
             imgui.close_current_popup()
         imgui.end_popup()
         return
+    if isinstance(grid, plotter_mode.SheetLattice):
+        # The fourth variant, and the only one about the *lattice* rather than
+        # the cut. A map's projection is fixed once anything is painted on it --
+        # a tileset drawn for one lattice paints the wrong shape into every cell
+        # of the other -- so there is no "convert" to offer here and pretending
+        # otherwise would be the offer-then-refuse shape. On an empty map this
+        # popup never opens: the sheet simply brings its lattice with it.
+        imgui.text(
+            f"This sheet was drawn for an {grid.view} map; this one is "
+            f"{grid.lattice}."
+        )
+        widgets.muted_wrapped(
+            "This map has been painted, so its lattice is fixed. Adding the "
+            "sheet anyway slices it on this map's grid, which will not line up "
+            "with what the tiles were drawn as. Starting a new "
+            f"{grid.view} map is the other way round it."
+        )
+        imgui.dummy((0, 4))
+        if controls.button("Add anyway", (sp(120), 0)) and (
+            plotter_mode.import_sheet_blind(ctx)
+        ):
+            imgui.close_current_popup()
+        imgui.same_line()
+        if controls.button("Cancel##sheet", (sp(90), 0)):
+            plotter_mode.clear_sheet_import(ctx)
+            imgui.close_current_popup()
+        imgui.end_popup()
+        return
     if isinstance(grid, plotter_mode.SheetMismatch):
         # The second variant: no rules were found, but the sheet's own sidecar
         # records a cell size the map does not share. A blind slice here cuts

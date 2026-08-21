@@ -2793,3 +2793,77 @@ def test_the_new_map_dialog_hands_the_waiting_asset_to_the_map_it_makes(
     tab = plotter_mode.active(ctx)
     plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
     assert state.sheet_import is not None
+
+
+def test_an_isometric_sheet_on_a_painted_square_map_parks(tmp_path, monkeypatch):
+    """The sidecar has recorded the view since tile sheets existed and nothing
+    ever read it back, so a diamond sheet was sliced onto a square grid with
+    nothing anywhere saying so. A 32x32 isometric sheet and a 32x32 top-down one
+    measure identically, which is why the cell size cannot catch this."""
+    ctx = FakeCtx()
+    tab = _tab(ctx, tileset=False, dirty=True)
+    _library(
+        monkeypatch, tmp_path, _flat(), {"tile_w": 16, "tile_h": 16, "projection": "isometric"}
+    )
+
+    plotter_mode.use_as_tileset(ctx, {"id": "j1", "name": "sheet"})
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+
+    state = plotter_mode.ensure(ctx)
+    assert state.sheet_import is not None
+    assert state.sheet_import[4] == plotter_mode.SheetLattice("isometric", "orthogonal")
+    assert len(tab.doc.tilesets) == 0
+
+
+def test_an_isometric_sheet_on_an_unpainted_map_brings_its_lattice(tmp_path, monkeypatch):
+    """An empty map has no lattice worth defending, and ``land_tileset`` has
+    carried the arm for exactly this since the ground generator was deleted."""
+    ctx = FakeCtx()
+    tab = _tab(ctx, tileset=False)
+    _library(
+        monkeypatch, tmp_path, _flat(), {"tile_w": 16, "tile_h": 16, "projection": "isometric"}
+    )
+
+    plotter_mode.use_as_tileset(ctx, {"id": "j1", "name": "sheet"})
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+
+    assert plotter_mode.ensure(ctx).sheet_import is None
+    assert tab.doc.projection == "isometric"
+    assert len(tab.doc.tilesets) == 1
+
+
+def test_a_three_quarter_sheet_is_not_a_lattice_mismatch(tmp_path, monkeypatch):
+    """3/4 is square and sits on the orthogonal grid exactly as top-down does --
+    the tilt is in the art. Reporting it as a mismatch would be a popup in front
+    of every 3/4 import there will ever be."""
+    ctx = FakeCtx()
+    tab = _tab(ctx, tileset=False, dirty=True)
+    _library(
+        monkeypatch,
+        tmp_path,
+        _flat(),
+        {"tile_w": 16, "tile_h": 16, "projection": "three_quarter"},
+    )
+
+    plotter_mode.use_as_tileset(ctx, {"id": "j1", "name": "sheet"})
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+
+    assert plotter_mode.ensure(ctx).sheet_import is None
+    assert tab.doc.projection == "orthogonal"
+    assert len(tab.doc.tilesets) == 1
+
+
+def test_the_old_orthogonal_spelling_in_a_sidecar_is_not_a_mismatch(tmp_path, monkeypatch):
+    """Sidecars written before the vocabulary widened carry it, and every one of
+    them is on the square lattice."""
+    ctx = FakeCtx()
+    tab = _tab(ctx, tileset=False, dirty=True)
+    _library(
+        monkeypatch, tmp_path, _flat(), {"tile_w": 16, "tile_h": 16, "projection": "orthogonal"}
+    )
+
+    plotter_mode.use_as_tileset(ctx, {"id": "j1", "name": "sheet"})
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+
+    assert plotter_mode.ensure(ctx).sheet_import is None
+    assert len(tab.doc.tilesets) == 1

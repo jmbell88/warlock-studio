@@ -68,10 +68,18 @@ def default_form_2d() -> dict[str, Any]:
         # cell, not offered for a tile) across a switch of arms.
         "sheet_layout": "turnaround",
         "cell_size": "64",
-        # orthogonal | isometric. Deliberately not Plotter's three: oblique
-        # frames a cell exactly as orthogonal does, so it would be a third
-        # button that changed nothing about the picture.
-        "projection": "orthogonal",
+        # top_down | three_quarter | isometric -- the *view*, meaning where
+        # the camera is. The key is still ``projection`` because it is a
+        # persisted form field and a stored profile carries it; a value of
+        # "orthogonal" from before the vocabulary widened reads as "top_down"
+        # (``service.tilesheets.LEGACY_VIEWS``).
+        #
+        # Still deliberately not Plotter's five. Oblique was refused for being
+        # a button that changed nothing about the picture, and 3/4 shares its
+        # lattice -- but what SDXL is handed is the subject clause and the
+        # guide, and both of those differ, which is the difference between the
+        # two cases.
+        "projection": "top_down",
         # Conditioning. Every number is a float literal on purpose:
         # restore_form gates on `type(value) is type(default)`, so an int here
         # would make a persisted 0.6 fail to restore.

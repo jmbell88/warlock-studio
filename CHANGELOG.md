@@ -8,6 +8,23 @@ file behind.
 
 ## 0.0.25 — 2026-08-20
 
+- **Tile sheets come in three views.** The choice used to be *Orthogonal* or
+  *Isometric*, and the first of those was spelled "flat top-down" in the prompt
+  the model actually reads — so **3/4**, the tilted top-down that most 2D games
+  use, was the one framing you could not ask for. There are three now: Top-down,
+  3/4 and Isometric. 3/4 shares the square grid with top-down and differs in
+  what the model is asked to draw, so it wants subjects with height — walls,
+  crates, fences, a well — and on those the difference is unmistakable. Sheets
+  made before this still open; the old *Orthogonal* reads as Top-down. Which
+  guide 3/4 gets was measured rather than guessed: two interior marks were
+  tried, both were obeyed, and both made the sheet worse, so 3/4 gets the same
+  plain guide top-down does and the words carry the view.
+- **Plotter checks a sheet's view against the map's.** A tile sheet has always
+  recorded the view it was drawn for and nothing ever read it back, so an
+  isometric sheet added to a square map was sliced into diamonds and laid on a
+  square grid with nothing saying so. It asks now — and on an empty map it
+  simply brings its lattice with it. Top-down and 3/4 are both square, so
+  neither ever asks about the other.
 - **Clip editing in Poser.** The keyframes a Troupe character sheet animates —
   which keys, in what order, how many frames apart — could only be changed by
   hand-editing a file inside the app's own installation. Poser now has a
@@ -77,7 +94,7 @@ file behind.
   tiles in an 8×8 arrangement — grass, path, water, cliffs, props — drawn as a
   single generation and cut up, so every tile shares one palette, one light
   direction and one style. Two settings and no more: the tile size (16/32/48/64)
-  and the projection (orthogonal squares or 2:1 isometric diamonds); the line
+  and the view (top-down, 3/4, or 2:1 isometric diamonds); the line
   under them says what the finished sheet comes to. The grid is *imposed* rather
   than asked for — the cell boundaries go to the structure control as a guide,
   so the tiles land where the app is about to cut. A **sprite sheet** turns the
