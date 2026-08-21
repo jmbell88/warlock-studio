@@ -435,12 +435,15 @@ def _right_column(
     *,
     inspector_draw: Callable[[Any], None],
     library_draw: Callable[[Any], None],
+    share_key: str = "create",
 ) -> None:
     """The right sidebar: inspector on top, library on bottom.
 
-    Split by ``lay.settings_share`` -- the same split the left sidebar used to
-    make between settings and library, before the library moved to share this
-    column with the inspector instead. Pulled out of ``App._build_ui`` as a
+    Split by ``lay.share(share_key)`` -- the same split the left sidebar used
+    to make between settings and library, before the library moved to share
+    this column with the inspector instead. Keyed, because one number behind
+    every workspace's split meant a handle here re-split six other screens
+    (see ``Layout.share``). Pulled out of ``App._build_ui`` as a
     module-level function (no ``self`` needed) so a test can call the exact
     geometry the frame draws rather than a hand-copied reimplementation of it.
     """
@@ -451,7 +454,7 @@ def _right_column(
 
     imgui.begin_group()
     avail_y = imgui.get_content_region_avail().y
-    inspector_height = avail_y * lay.settings_share
+    inspector_height = avail_y * lay.share(share_key)
     with layout_mod.pane(
         "inspector",
         (0, inspector_height),
@@ -462,10 +465,7 @@ def _right_column(
             inspector_draw(ctx)
     drag = layout_mod.splitter("sidebar-share", vertical=False, length=sidebar_w)
     if drag and avail_y > 0:
-        lay.settings_share = min(
-            max(lay.settings_share + drag * tokens.SCALE / avail_y, layout_mod.SHARE_MIN),
-            layout_mod.SHARE_MAX,
-        )
+        lay.set_share(share_key, lay.share(share_key) + drag * tokens.SCALE / avail_y)
         lay.save()
     with layout_mod.pane(
         "library", (0, 0), layout_mod.PaneRole.SIDEBAR, edge=layout_mod.PaneEdge.LEFT
@@ -2597,6 +2597,21 @@ class App:
                     "Packwright opens .wpack documents and packs image files.", "error"
                 )
             return
+        if ctx.state.mode in ("poser", "troupe"):
+            # Neither mode opens a file, and neither said so: a drop here fell
+            # through to Create's branches below, which would either refuse it
+            # by describing a generation form that is not on screen or accept
+            # it by switching modes out from under the user. The refusal names
+            # what this mode works on instead, H71's rule.
+            ctx.toast(
+                "The Poser opens no files: it edits poses on a rig you already "
+                "have, chosen from its own library."
+                if ctx.state.mode == "poser"
+                else "Troupe opens no files: it plays the character sheets a "
+                "render has already produced.",
+                "error",
+            )
+            return
         if path.suffix.lower() not in DROPPABLE_IMAGES:
             # The refusal says what a drop would have *done here* (H71). One
             # sentence for both modes was wrong in 2D, where a dropped image is
@@ -2906,17 +2921,30 @@ class App:
 
         lay = self.layout
         sidebar_w = layout_mod.sidebar_width()
+        # The rail first, above the columns it switches: it is a breadcrumb for
+        # what is under it, and one drawn at the bottom would be a tab strip
+        # that had lost its tabs.
+        #
+        # Spanning the whole content width rather than boxed inside the 300 dp
+        # settings column, which is where it used to live. Five labelled
+        # segments measure ~304 dp; a sidebar gives the widget ~276 dp, so the
+        # fitting ladder in ``widgets.stage_rail`` was pinned to its last rung
+        # -- five anonymous icons standing in for the app's central navigation
+        # metaphor, at every realistic window size rather than only at small
+        # ones. Full width, the same widget sits on rung 1 (labels and ticks)
+        # and the ladder goes back to being a response to a narrow window.
+        pad = tokens.sp(layout_mod.PANE_PADDING)
+        rail_w = imgui.get_content_region_avail().x - pad * 2
+        imgui.indent(pad)
+        self._stage_rail(ctx, max_width=rail_w)
+        imgui.unindent(pad)
         with layout_mod.pane(
             "settings",
             (sidebar_w, 0),
             layout_mod.PaneRole.SIDEBAR,
             edge=layout_mod.PaneEdge.RIGHT,
         ) as visible:
-            # The rail first, above the panel it switches: it is a breadcrumb
-            # for the column under it, and one drawn at the bottom would be a
-            # tab strip that had lost its tabs.
             if visible:
-                self._stage_rail(ctx)
                 _stage_pane(ctx)
 
         imgui.same_line()
@@ -2931,8 +2959,8 @@ class App:
         imgui.end()
         self._overlays(viewport)
 
-    def _stage_rail(self, ctx: Any) -> None:
-        """Create's breadcrumb, over the settings column.
+    def _stage_rail(self, ctx: Any, *, max_width: float | None = None) -> None:
+        """Create's breadcrumb, over the three columns.
 
         The pane dispatch that follows it reads ``state.create_stage``, and
         this is the only control that writes one -- through
@@ -2965,7 +2993,9 @@ class App:
             items,
             ctx.state.create_stage,
             done=create_stages.reached(job, meta, poses),
-            max_width=imgui.get_content_region_avail().x,
+            max_width=(
+                imgui.get_content_region_avail().x if max_width is None else max_width
+            ),
         )
         if picked != ctx.state.create_stage:
             create_stages.go(ctx, picked)
@@ -3040,7 +3070,7 @@ class App:
     def _poser_viewport(self, ctx: Any) -> None:
         from imgui_bundle import imgui
 
-        from . import poser_mode, widgets
+        from . import icons, poser_mode, widgets
         from .panes import overlay
 
         self._poser_hovered = False
@@ -3051,16 +3081,20 @@ class App:
         viewer = self._ensure_poser_viewer()
         showing = poser_mode.sync_preview(ctx, viewer)
         if not showing:
+            # Both branches through ``centred_empty``, the shape every other
+            # workspace's empty viewport takes. These two were the app's one
+            # pair of top-left muted lines where nine centred cards go.
             if state.building:
-                imgui.dummy((0, 40))
-                widgets.muted("Building the skeleton preview...")
-                widgets.cost_note(
+                overlay.centred_empty(
+                    icons.PERSON_STANDING,
+                    "Building the skeleton preview",
                     "The armature is built by Blender once per skeleton and "
-                    "cached; the first open of a template takes a moment."
+                    "cached; the first open of a template takes a moment.",
                 )
             elif state.error:
-                imgui.dummy((0, 40))
-                widgets.muted(state.error)
+                overlay.centred_empty(
+                    icons.TRIANGLE_ALERT, "The skeleton did not build", state.error
+                )
             else:
                 overlay.placeholder(ctx)
             return
@@ -3183,7 +3217,7 @@ class App:
     def _clay_workspace(self) -> None:
         """The same sidebar / centre / sidebar skeleton every other mode uses.
 
-        Mirrors ``_inker_workspace`` line for line, including ``settings_share``
+        Mirrors ``_inker_workspace`` line for line, including its share key
         for the vertical split, so the two editors do not drift into looking
         like different applications:
 
@@ -3201,7 +3235,7 @@ class App:
         sidebar_w = layout_mod.sidebar_width()
 
         imgui.begin_group()
-        tools_height = imgui.get_content_region_avail().y * lay.settings_share
+        tools_height = imgui.get_content_region_avail().y * lay.share("clay")
         with layout_mod.pane(
             "clay-tools",
             (sidebar_w, tools_height),
@@ -3234,7 +3268,7 @@ class App:
 
         imgui.same_line()
         imgui.begin_group()
-        outliner_height = imgui.get_content_region_avail().y * lay.settings_share
+        outliner_height = imgui.get_content_region_avail().y * lay.share("clay")
         with layout_mod.pane(
             "clay-outliner",
             (0, outliner_height),
@@ -3445,8 +3479,14 @@ class App:
         # UI scale 1.5, where the toolbox grid alone is most of the 55% and the
         # Brush section starts below the fold: a screenshot pass found the tool
         # options unreachable without scrolling, and there was no way to give
-        # them room. Same value and same clamps as Create's, so the two handles
-        # are one setting seen twice rather than two settings to keep in step.
+        # them room.
+        #
+        # It used to be the same *value* as Create's, on the argument that two
+        # handles over one setting is better than two settings to keep in step.
+        # That was the wrong pair to compare: this handle also drove Clay,
+        # Plotter, Packwright, Troupe, Review and the right column two panes
+        # over, none of which the user can see while dragging it. Its own key
+        # now, and the same clamps as before.
         avail_y = imgui.get_content_region_avail().y
         # **The share is a preference, not a promise.** The toolbox is a fixed
         # five-across grid of twenty-three buttons, so its height is known --
@@ -3469,7 +3509,7 @@ class App:
         below_floor = inker_colors.PANEL_FLOOR + (inker_tiles.PANEL_H if tiled_doc else 0.0)
         tools_height = layout_mod.give_way(
             avail_y,
-            lay.settings_share,
+            lay.share("inker-tools"),
             sp(inker_tools.grid_height() + inker_tools.OPTIONS_FLOOR),
             sp(below_floor),
         )
@@ -3487,18 +3527,19 @@ class App:
             # stored share: ``give_way`` above can pin the tools pane, and a
             # drag measured against the stored share then updated a share this
             # handle was not moving -- zero travel under the cursor while the
-            # right column's layers/bridge split (keyed to the same share, no
-            # give_way) resized in real time. ``give_way_drag`` leaves the
-            # share alone whenever the pane under the handle cannot follow.
+            # right column's layers/bridge split resized in real time. That
+            # second half is gone for good: the two columns are two keys now.
+            # ``give_way_drag`` leaves the share alone whenever the pane under
+            # the handle cannot follow.
             share = layout_mod.give_way_drag(
                 avail_y,
-                lay.settings_share,
+                lay.share("inker-tools"),
                 sp(inker_tools.grid_height() + inker_tools.OPTIONS_FLOOR),
                 sp(below_floor),
                 drag * tokens_mod.SCALE,
             )
-            if share != lay.settings_share:
-                lay.settings_share = share
+            if share != lay.share("inker-tools"):
+                lay.set_share("inker-tools", share)
                 lay.save()
         if tiled_doc:
             with layout_mod.pane(
@@ -3577,7 +3618,7 @@ class App:
                 if visible:
                     inker_preview.draw(ctx)
         right_avail = imgui.get_content_region_avail().y
-        layers_height = right_avail * lay.settings_share
+        layers_height = right_avail * lay.share("inker-layers")
         with layout_mod.pane(
             "inker-layers",
             (0, layers_height),
@@ -3591,12 +3632,11 @@ class App:
         # fold, on a panel whose entire job is picking one.
         drag = layout_mod.splitter("inker-inspector-share", vertical=False, length=sidebar_w)
         if drag and right_avail > 0:
-            lay.settings_share = min(
-                max(
-                    lay.settings_share + drag * tokens_mod.SCALE / right_avail,
-                    layout_mod.SHARE_MIN,
-                ),
-                layout_mod.SHARE_MAX,
+            # ``set_share`` clamps, so the min/max pair this used to spell out
+            # by hand went with the move.
+            lay.set_share(
+                "inker-layers",
+                lay.share("inker-layers") + drag * tokens_mod.SCALE / right_avail,
             )
             lay.save()
         with layout_mod.pane(
@@ -3615,7 +3655,7 @@ class App:
             [ plotter-tools   ]           [ plotter-layers ]
             [ plotter-tileset ]  the map  [ plotter-bridge ]
 
-        Mirrors ``_clay_workspace`` line for line, ``settings_share`` included,
+        Mirrors ``_clay_workspace`` line for line, its share key included,
         so the editors do not drift into looking like different applications.
         """
         from imgui_bundle import imgui
@@ -3634,7 +3674,7 @@ class App:
         sidebar_w = layout_mod.sidebar_width()
 
         imgui.begin_group()
-        tools_height = imgui.get_content_region_avail().y * lay.settings_share
+        tools_height = imgui.get_content_region_avail().y * lay.share("plotter")
         with layout_mod.pane(
             "plotter-tools",
             (sidebar_w, tools_height),
@@ -3667,7 +3707,7 @@ class App:
 
         imgui.same_line()
         imgui.begin_group()
-        layers_height = imgui.get_content_region_avail().y * lay.settings_share
+        layers_height = imgui.get_content_region_avail().y * lay.share("plotter")
         with layout_mod.pane(
             "plotter-layers",
             (0, layers_height),
@@ -3711,7 +3751,7 @@ class App:
         sidebar_w = layout_mod.sidebar_width()
 
         imgui.begin_group()
-        cast_height = imgui.get_content_region_avail().y * lay.settings_share
+        cast_height = imgui.get_content_region_avail().y * lay.share("troupe")
         with layout_mod.pane(
             "troupe-cast",
             (sidebar_w, cast_height),
@@ -3746,7 +3786,7 @@ class App:
 
         imgui.same_line()
         imgui.begin_group()
-        sheets_height = imgui.get_content_region_avail().y * lay.settings_share
+        sheets_height = imgui.get_content_region_avail().y * lay.share("troupe")
         with layout_mod.pane(
             "troupe-sheets",
             (0, sheets_height),
@@ -3790,7 +3830,7 @@ class App:
         sidebar_w = layout_mod.sidebar_width()
 
         imgui.begin_group()
-        sources_height = imgui.get_content_region_avail().y * lay.settings_share
+        sources_height = imgui.get_content_region_avail().y * lay.share("packwright")
         with layout_mod.pane(
             "packwright-sources",
             (sidebar_w, sources_height),
@@ -3823,7 +3863,7 @@ class App:
 
         imgui.same_line()
         imgui.begin_group()
-        items_height = imgui.get_content_region_avail().y * lay.settings_share
+        items_height = imgui.get_content_region_avail().y * lay.share("packwright")
         with layout_mod.pane(
             "packwright-items",
             (0, items_height),
@@ -3865,7 +3905,7 @@ class App:
         sidebar_w = layout_mod.sidebar_width()
 
         imgui.begin_group()
-        runs_height = imgui.get_content_region_avail().y * lay.settings_share
+        runs_height = imgui.get_content_region_avail().y * lay.share("review")
         with layout_mod.pane(
             "review-runs",
             (sidebar_w, runs_height),

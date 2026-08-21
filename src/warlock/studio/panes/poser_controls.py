@@ -25,7 +25,9 @@ def draw(ctx: Any) -> None:
         return
     viewer = poser_mode.viewer_of(ctx)
     if viewer is None or not viewer.pose_mode:
-        widgets.muted("The skeleton preview is still loading.")
+        # Silently: the viewport beside this pane is already a centred empty
+        # state saying the armature is being built, and this was the same fact
+        # in different words a column away.
         return
 
     with forms.Form("poser-controls"):
@@ -56,10 +58,14 @@ def _joint(ctx: Any, viewer: Any) -> None:
             "touch is recorded in the pose; the ones you do not are left at "
             "rest, so a wave is two joints rather than a whole skeleton."
         )
+        # It used to say "There is no undo here", which stopped being true
+        # when Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y were bound over
+        # ``viewer.pose.undo()``: the pane was telling the user a working key
+        # did not exist.
         widgets.muted_wrapped(
-            "There is no undo here. Reset joint puts one joint back and Reset "
-            "all puts every joint back; both ask first if there is anything "
-            "unsaved."
+            "Ctrl+Z undoes a rotation. Reset joint puts one joint back and "
+            "Reset all puts every joint back; both ask first if there is "
+            "anything unsaved."
         )
     if widgets.disabled_button(
         "Reset joint",

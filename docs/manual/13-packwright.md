@@ -54,7 +54,8 @@ because a repack should be faithful unless you ask otherwise.
 a still one contributes one sprite per layer. A packed frame is pixel-identical to what the timeline
 plays, because it goes through the same flatten the playback and the onion skin use.
 
-**From the library** — right-click any reference card and choose **Add to a Packwright atlas**.
+**From the library** — right-click any reference card and choose **Add to a Packwright atlas**. If
+no atlas is open, one is started for you.
 
 Each source keeps a stable identity derived from where it came from, not from what it is called. So
 renaming a sprite changes what the sidecar calls it and nothing else: two layers legitimately called
@@ -173,7 +174,7 @@ the packer is deterministic all the way down.
 ## Sending an atlas to the library
 
 **Export to the library** (`Ctrl+E`) mints the atlas as an ordinary reference asset, with the
-document kept beside it as `pack.wpack` — which is what lets **Edit in Packwright** on the card
+document kept beside it as `pack.wpack` — which is what lets **Open in Packwright** on the card
 reopen the real document rather than a flat picture. It follows the same precedent as Inker's
 `paint.ora` and Clay's `build.wblk`.
 
@@ -186,7 +187,7 @@ reopen the real document rather than a flat picture. It follows the same precede
 | `<name>.json` | Its sidecar, in TexturePacker's Array or Hash JSON schema. |
 | `<name>.tsx` | A Tiled tileset, written for a grid pack whose geometry agrees with Tiled's own. |
 | `~/.warlock/assets/<job>/input.png` | The atlas, for one exported to the library. |
-| `~/.warlock/assets/<job>/pack.wpack` | The document behind it. Not served; reopened by **Edit in Packwright**. |
+| `~/.warlock/assets/<job>/pack.wpack` | The document behind it. Not served; reopened by **Open in Packwright**. |
 
 See [Keyboard shortcuts](18-shortcuts.md) for every binding, and [Plotter](12-plotter.md) for the
 mode that consumes a grid pack as a tileset.

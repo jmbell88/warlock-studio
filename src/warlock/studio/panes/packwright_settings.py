@@ -58,7 +58,9 @@ def draw(ctx: Any) -> None:
     manual_render.help_button(ctx, "packwright-settings")
 
     if tab is None:
-        widgets.muted("Start or open an atlas first.")
+        # The heading and nothing else. One voice for one empty state:
+        # the canvas's ``nothing_open`` is it, and four panels each
+        # repeating it reads as four separate problems.
         return
 
     settings = tab.doc.settings

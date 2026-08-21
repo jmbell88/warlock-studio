@@ -565,8 +565,8 @@ def import_reference(
 
     ``authored`` names the mode that has a document beside this row -- today
     ``"plotter"`` or ``"packwright"``. It is what lets the library offer
-    *Edit in Plotter* from the **cached row alone**, with no stat on the frame
-    thread: a reopen has no fallback (unlike *Edit in Clay*, which imports
+    *Open in Plotter* from the **cached row alone**, with no stat on the frame
+    thread: a reopen has no fallback (unlike *Open in Clay*, which imports
     ``model.glb`` when there is no ``.wblk``), so the menu has to know whether
     the source is there before it offers to open it. It is an *input*, like
     ``built``, so it stays out of ``DERIVED_PARAMS`` -- a reroll of one of these

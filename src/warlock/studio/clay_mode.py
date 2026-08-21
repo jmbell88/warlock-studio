@@ -621,6 +621,28 @@ AXIS_VIEW_KEYS = {"1": "front", "3": "right", "7": "top"}
 _MUTATING_CTRL = frozenset({"z", "y", "d", "a", "i", "j"})
 
 
+# --- history ------------------------------------------------------------------
+#
+# One call per direction, rather than two lines under the key handler, because
+# the bridge panel draws the same Undo/Redo pair Inker's does. Clay, Plotter and
+# Packwright each had a full undo stack and no on-screen control at all, so the
+# feature existed only for a user who already knew the chord -- and every
+# side effect a step has (nothing, here) belongs to *undoing*, not to the
+# keyboard.
+
+
+def undo(ctx: Any, tab: Any) -> None:
+    """One step back, whichever surface asked for it."""
+    tab.doc.undo()
+
+
+
+def redo(ctx: Any, tab: Any) -> None:
+    """One step forward. :func:`undo`'s twin, and its reasoning."""
+    tab.doc.redo()
+
+
+
 def handle_key(ctx: Any, event: Any) -> bool:
     """Clay's shortcuts. -> whether the key was consumed.
 
@@ -793,9 +815,9 @@ def _ctrl_key(
     elif name == "e":
         export_asset(ctx, tab)
     elif name == "z":
-        doc.redo() if shift else doc.undo()
+        redo(ctx, tab) if shift else undo(ctx, tab)
     elif name == "y":
-        doc.redo()
+        redo(ctx, tab)
     elif name == "a":
         _select_all(doc)
     elif name == "i" and shift:

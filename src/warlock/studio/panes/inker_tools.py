@@ -182,7 +182,8 @@ def draw(ctx: Any) -> None:
     # an unscaled 6 here is a reservation short by 6 * (SCALE - 1).
     imgui.dummy((0, sp(GRID_GAP)))
     if tab is None:
-        widgets.muted("Open something to paint on.")
+        # The greyed grid above already says the toolbox has nothing to act on.
+        # The canvas's ``nothing_open`` is the one voice for the empty state.
         return
     _options(ctx, state, tab)
     imgui.dummy((0, 6))

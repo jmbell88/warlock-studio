@@ -26,13 +26,23 @@ from . import plotter_layers
 # The tool letters, drawn on the buttons. From ``plotter_state.TOOLS`` rather
 # than restated, so a tool added there cannot get a button with no key or a key
 # with no button.
+# One glyph per tool, and **every** tool: Wand had no entry, so it fell through
+# to the ``icons.SQUARE`` default and drew the same picture as Shape two
+# buttons away -- while ``icons.WAND`` was on Terrain, which is the one tool in
+# the grid the word does not describe. Wand carries the wand (Inker's raster
+# wand already does, and two pictures for one idea is how a user comes to
+# believe they are two things); Terrain carries ``BLEND``, which is what
+# terrain painting does to the eight cells around what you touch.
+# ``test_every_plotter_tool_has_its_own_icon`` pins the completeness, because
+# the missing entry was invisible -- a wrong glyph, not a blank one.
 _ICONS = {
     "stamp": icons.BRUSH,
     "erase": icons.ERASER,
     "fill": icons.PAINT_BUCKET,
-    "terrain": icons.WAND,
+    "terrain": icons.BLEND,
     "shape": icons.SQUARE,
     "select": icons.SQUARE_DASHED,
+    "wand": icons.WAND,
     "pick": icons.PIPETTE,
     "object": icons.FLAG,
 }
@@ -214,7 +224,9 @@ def draw(ctx: Any) -> None:
     imgui.dummy((0, 6))
 
     if tab is None:
-        widgets.muted("Open or start a map to draw on.")
+        # The heading and nothing else. One voice for one empty state:
+        # the canvas's ``nothing_open`` is it, and four panels each
+        # repeating it reads as four separate problems.
         return
 
     doc = tab.doc

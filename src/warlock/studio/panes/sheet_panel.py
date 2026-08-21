@@ -627,7 +627,7 @@ def _handoffs(ctx: Any, job_id: str, sheet_id: str, *, pixel: bool = False) -> N
     from .. import inker_mode, packwright_mode
 
     suffix = "pixel" if pixel else "render"
-    if controls.small_button(f"Edit in Inker##ink-{suffix}"):
+    if controls.small_button(f"Open in Inker##ink-{suffix}"):
         inker_mode.open_rendered_sheet(ctx, job_id, sheet_id, pixel=pixel)
     widgets.same_line_or_wrap(widgets.button_width("Add to Packwright"))
     if controls.small_button(f"Add to Packwright##pw-{suffix}"):

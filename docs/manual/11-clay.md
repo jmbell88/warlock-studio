@@ -412,9 +412,9 @@ is to open the document and change it.
 ## Importing an asset
 
 Dropping a `.glb` on the window while Clay is on screen imports it, and the library card's overflow
-menu has **Edit in Clay** for any finished model.
+menu has **Open in Clay** for any finished model.
 
-**Edit in Clay** prefers the document you authored. If the asset was exported from Clay, its
+**Open in Clay** prefers the document you authored. If the asset was exported from Clay, its
 `build.wblk` sidecar is reopened — objects, names, generator parameters and all. If it was not, the
 served `model.glb` is imported instead: that is the optimized, grounded mesh, not the raw
 reconstruction.

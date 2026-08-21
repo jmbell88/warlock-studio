@@ -79,15 +79,14 @@ def test_shell_issue_summary_is_compact_and_singular_or_plural():
     assert overlay.doctor_summary(["A", "B"])[0] == "2 setup issues"
 
 
-def test_home_suppresses_its_health_row_while_the_shell_summary_is_visible():
+def test_home_never_draws_the_health_row():
+    """It was the third rendering of one fact -- after the rail's badge and the
+    doctor banner -- and the suppression that used to hide it behind the banner
+    was this argument made halfway."""
     health = landing.Status("health", "!", "2 things need attention", 0)
     queue = landing.Status("queue", "o", "Queue idle", 0)
-    assert landing.visible_home_rows(
-        [health, queue], shell_issue_visible=True
-    ) == [queue]
-    assert landing.visible_home_rows(
-        [health, queue], shell_issue_visible=False
-    ) == [health, queue]
+    assert landing.visible_home_rows([health, queue], shell_issue_visible=True) == [queue]
+    assert landing.visible_home_rows([health, queue], shell_issue_visible=False) == [queue]
 
 
 def test_component_gallery_is_developer_only():

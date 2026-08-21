@@ -275,7 +275,7 @@ def _candidate(
             widgets.muted_wrapped(
                 f"{warning.get('cell')}: {warning.get('detail')}"
             )
-        if controls.small_button("Edit in Inker"):
+        if controls.small_button("Open in Inker"):
             from .. import inker_mode
 
             inker_mode.open_sprite_draft(ctx, job_id, draft_id, letter)

@@ -43,7 +43,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from . import icons, modes, motion, theme, tokens
+from . import fonts, icons, modes, motion, theme, tokens
 from . import layout as layout_mod
 from .tokens import sp
 
@@ -269,6 +269,29 @@ def _health(ctx: Any) -> tuple[int, str] | None:
     return (theme.ERR if fatal else theme.WARN, tip)
 
 
+def _caption(text: str, height: float) -> None:
+    """A group's name in the expanded rail, in exactly ``height`` of column.
+
+    Drawn onto the draw list under a bare ``dummy`` rather than emitted as
+    ``imgui.text``, for :func:`_item`'s reason: this rail's vertical layout is
+    arithmetic, and an item whose height is whatever the font happened to
+    measure is a footer six pixels out of place. Left-aligned with the row
+    labels, not with the glyphs -- it names the words, not the icons.
+    """
+    origin = imgui.get_cursor_screen_pos()
+    with fonts.small(imgui):
+        size = imgui.calc_text_size(text)
+        imgui.get_window_draw_list().add_text(
+            (
+                origin.x + sp(RAIL_W) - sp(tokens.SP_1),
+                origin.y + max(height - size.y, 0.0),
+            ),
+            imgui.get_color_u32(theme.rgba(theme.MUTED, 0.75 * _label_alpha())),
+            text,
+        )
+    imgui.dummy((0, height))
+
+
 def draw(app: Any, ctx: Any) -> None:
     """The whole column, inside the host window. Nothing else is a header."""
     from .manual import render as manual_render
@@ -302,7 +325,23 @@ def draw(app: Any, ctx: Any) -> None:
     # sections at all.
     group_gaps = sp(GROUP_GAP) * len(body_groups)
     gap = imgui.get_style().item_spacing.y
-    if rows * sp(ITEM_H) + (rows - 1) * gap + group_gaps > avail_h:
+    # **The group captions are the ladder's new first rung.** They are the most
+    # air of anything here -- a word over a gap that already exists -- so they
+    # are the first thing given up, before the row-to-row spacing and long
+    # before an item is compressed. They are also tied to ``_label_alpha``: a
+    # 52 dp column has no room for a word, and there the gap alone is right.
+    with fonts.small(imgui):
+        caption_h = imgui.get_text_line_height() + sp(tokens.SP_1)
+    # ``caption_h`` plus one row spacing, because the dummy the caption draws
+    # emits the spacing after it like every other item does -- budget one and
+    # draw the other and the footer lands a row's air out of place.
+    caption_step = caption_h + gap
+    captions = _label_alpha() > 0.5
+    body_h_wanted = rows * sp(ITEM_H) + (rows - 1) * gap + group_gaps
+    if captions and body_h_wanted + caption_step * len(body_groups) > avail_h:
+        captions = False
+    caption_total = caption_step * len(body_groups) if captions else 0.0
+    if body_h_wanted > avail_h:
         gap = 0.0
     # **And then the section gaps go too, last of all.** The ladder above gives
     # up the row-to-row air before it compresses the rows; this is its third
@@ -319,7 +358,7 @@ def draw(app: Any, ctx: Any) -> None:
     floor = rows * sp(MIN_ITEM_H)
     if floor + group_gaps > avail_h:
         group_gaps = max(avail_h - floor, 0.0)
-    item_h = fitted_height(rows, (rows - 1) * gap + group_gaps, avail_h)
+    item_h = fitted_height(rows, (rows - 1) * gap + group_gaps + caption_total, avail_h)
     # The drawn gap follows the budget, or the rows are laid out to one figure
     # and drawn against another -- which is the footer landing somewhere else
     # entirely, one rung down.
@@ -343,6 +382,8 @@ def draw(app: Any, ctx: Any) -> None:
     for index, group in enumerate(body_groups):
         if index:
             y += group_gap
+        if captions:
+            y += caption_step
         for key in group:
             offsets[key] = y
             y += step
@@ -368,6 +409,8 @@ def draw(app: Any, ctx: Any) -> None:
     for index, group in enumerate(body_groups):
         if index:
             imgui.dummy((0, max(group_gap - gap, 0.0)))
+        if captions:
+            _caption(modes.RAIL_GROUP_LABELS[index], caption_h)
         for key in group:
             label, icon = labels[key]
             if _item(key, label, icon, item_w, selected=key == current, height=item_h):

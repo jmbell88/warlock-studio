@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import controls, icons, plotter_mode, plotter_state, widgets
+from .. import controls, icons, plotter_mode, widgets
 from ..manual import render as manual_render
 
 
@@ -27,20 +27,19 @@ def draw(ctx: Any) -> None:
     widgets.section("Map file")
     manual_render.help_button(ctx, "plotter-bridge")
 
+    if tab is None:
+        # The recent list and nothing else. New/Open and the drop hint are on
+        # the empty canvas one column to the left, word for word -- one pair of
+        # buttons in two places, and the same sentence twice on one screen.
+        _recent(ctx)
+        return
+
     width = widgets.grid_width(2)
     if controls.button(f"{icons.PLUS} New...", (width, 0)):
         plotter_mode.ask_new_document(ctx)
     imgui.same_line()
     if controls.button(f"{icons.FOLDER_OPEN} Open...", (width, 0)):
         plotter_mode.ask_open(ctx)
-
-    if tab is None:
-        imgui.dummy((0, 8))
-        widgets.muted_wrapped(
-            f"Start a map, open one, or drop a {plotter_state.MAP_SUFFIX_TEXT} on the window."
-        )
-        _recent(ctx)
-        return
 
     ready = not tab.busy
     # ``packwright_bridge``'s two hoisted sentences, for the same reason: the
@@ -60,6 +59,9 @@ def draw(ctx: Any) -> None:
         widgets.muted(str(tab.path))
     if tab.dirty:
         widgets.muted("Unsaved changes.")
+
+    imgui.dummy((0, 8))
+    _history(ctx, tab)
 
     imgui.dummy((0, 8))
     widgets.section("Tiled")
@@ -87,7 +89,11 @@ def draw(ctx: Any) -> None:
         )
 
     imgui.dummy((0, 8))
-    widgets.section("Library")
+    # The one heading every mode's exits are under -- see ``inker_bridge``'s
+    # ``_pipeline``. The Tiled block above stays named for the format, because
+    # it writes files for another application rather than moving the map
+    # anywhere inside the app.
+    widgets.section("Take it somewhere")
     if widgets.disabled_button(
         f"{icons.UPLOAD} Export to the library (Ctrl+E)",
         ready and has_tilesets,
@@ -101,6 +107,34 @@ def draw(ctx: Any) -> None:
     )
 
     _recent(ctx)
+
+
+def _history(ctx: Any, tab: Any) -> None:
+    """Undo and Redo, on screen.
+
+    This mode had a full undo stack and no visible control for it, so the
+    feature existed only for a user who already knew Ctrl+Z -- while Inker drew
+    the same pair twice. ``plotter_mode.undo``/``redo`` rather than
+    ``tab.doc.undo()`` here, so the button and the chord carry the same side
+    effects (see the history block in that module).
+    """
+    from imgui_bundle import imgui
+
+    doc = tab.doc
+    width = widgets.grid_width(2)
+    if widgets.disabled_button(
+        f"{icons.UNDO} Undo", doc.history.can_undo, (width, 0), reason="Nothing to undo yet."
+    ):
+        plotter_mode.undo(ctx, tab)
+    imgui.same_line()
+    if widgets.disabled_button(
+        f"{icons.REDO} Redo",
+        doc.history.can_redo,
+        (width, 0),
+        reason="Nothing to redo: this is the newest step.",
+    ):
+        plotter_mode.redo(ctx, tab)
+    widgets.muted(f"{len(doc.history)} step(s)")
 
 
 def _recent(ctx: Any) -> None:

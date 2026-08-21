@@ -312,7 +312,7 @@ def test_a_wmap_writer_door_refusal_is_toasted_too_rather_than_raised(tmp_path):
 
 def test_exporting_a_map_the_wmap_writer_refuses_toasts_rather_than_raising():
     """``export_to_library`` is the one other frame-thread encode: it writes the
-    ``.wmap`` beside the render so ``Edit in Plotter`` can reopen the real
+    ``.wmap`` beside the render so ``Open in Plotter`` can reopen the real
     document, and it does so before the task starts."""
     ctx = FakeCtx()
     tab = _tab(ctx)
@@ -2733,3 +2733,63 @@ def test_paste_and_duplicate_are_refused_while_the_tab_is_busy():
     assert state.brush is None, "a busy tab takes no paste"
     assert plotter_mode.handle_key(ctx, _key("j", ctrl=True)) is True
     assert not tab.dirty
+
+
+def test_every_plotter_tool_has_its_own_icon():
+    """Wand had no entry, fell through to the ``icons.SQUARE`` default, and so
+    drew Shape's glyph two buttons along -- while ``icons.WAND`` sat on
+    Terrain. A missing entry here is a *wrong* picture, not a blank one, so the
+    table's completeness and its distinctness are both pinned."""
+    from warlock.studio import plotter_state
+    from warlock.studio.panes import plotter_tools
+
+    keys = [key for key, _label, _letter in plotter_state.TOOLS]
+    assert set(plotter_tools._ICONS) == set(keys)
+    glyphs = [plotter_tools._ICONS[key] for key in keys]
+    assert len(set(glyphs)) == len(glyphs), "two tools cannot share one glyph"
+
+
+def test_use_as_tileset_with_no_map_starts_one_rather_than_refusing():
+    """The Library offers this for any asset carrying an ``input.png`` and
+    cannot know whether a map is open, so the old error toast was an offer the
+    app took straight back -- and six navigation steps for the user to put
+    right. It asks rather than invents, because a map's tile size is the number
+    this very action slices on."""
+    ctx = FakeCtx()
+    job = {"id": "j1", "name": "sheet"}
+
+    plotter_mode.use_as_tileset(ctx, job)
+
+    state = plotter_mode.ensure(ctx)
+    assert not ctx.toasts, "starting the map is the answer, not an error"
+    assert state.setup_pending is True
+    assert state.pending_job_tileset == job
+    assert ctx.state.mode == "plotter"
+
+
+def test_the_new_map_dialog_hands_the_waiting_asset_to_the_map_it_makes(
+    tmp_path, monkeypatch
+):
+    """``plotter_canvas._create`` is the far side of the dialog: it calls back
+    into ``use_as_tileset`` with a tab to work on, and the pending asset wins
+    over the form's own "Then" choice."""
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    png = _save_png(tmp_path / "input.png", _ruled_sheet())
+    monkeypatch.setattr("warlock.service.files.job_dir_file", lambda svc, job_id, name: png)
+    asked: list[int] = []
+    monkeypatch.setattr(plotter_mode, "ask_add_tileset", lambda ctx: asked.append(1))
+
+    plotter_mode.use_as_tileset(ctx, {"id": "j1", "name": "sheet"})
+    form = {"projection": "orthogonal", "width": 8, "height": 8, "tile_w": 16, "tile_h": 16}
+    form["next"] = "file"
+    plotter_canvas._create(ctx, form)
+
+    state = plotter_mode.ensure(ctx)
+    assert state.docs, "the dialog made the map"
+    assert state.pending_job_tileset is None, "the one-shot is cleared"
+    assert not asked, "the picker would be a second tileset nobody asked for"
+    tab = plotter_mode.active(ctx)
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+    assert state.sheet_import is not None

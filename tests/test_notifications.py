@@ -309,7 +309,12 @@ def test_the_six_lists_that_lacked_an_empty_state_have_one():
 
     root = Path(inspect.getfile(widgets)).resolve().parent
     for relative in (
-        "panes/inker_layers.py",
+        # ``panes/inker_layers.py`` was on this list and is deliberately not
+        # any more: its empty state was "no drawing open", which the canvas
+        # beside it already says as a full ``nothing_open`` with the presets,
+        # Open and the recent list on it. Two empty states for one fact, one
+        # column apart, is what the single-voice rule removed. The pane's
+        # filtered-empty case is still answered, by ``widgets.no_matches``.
         "panes/profiles_panel.py",
         "panes/sheet_panel.py",
         "panes/pose_panel.py",

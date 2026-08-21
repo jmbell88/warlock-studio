@@ -24,7 +24,7 @@ def draw(ctx: Any) -> None:
 
     ready = bool(state.job_id and state.sheet_id)
     if widgets.disabled_button(
-        "Edit in Inker",
+        "Open in Inker",
         ready,
         (-1, 0),
         reason="Pick a character sheet first.",

@@ -43,7 +43,7 @@ def draw(ctx: Any) -> None:
     widgets.section("Properties")
     manual_render.help_button(ctx, "clay-props")
     if tab is None:
-        widgets.muted("Nothing open.")
+        # The heading and nothing else; see ``clay_outliner``.
         return
     doc = tab.doc
     _element_summary(doc)

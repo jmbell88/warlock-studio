@@ -98,7 +98,8 @@ def _presets(ctx: Any, state: Any) -> None:
     widgets.section("Shipped presets")
     # Read-only by design: a preset is a starting point, and apply-then-Save-as
     # is the promotion path into the library.
-    widgets.muted("Apply one, adjust it, then Save as to keep your version.")
+    # Wrapped: at the sidebar's width this clipped mid-word at the panel edge.
+    widgets.muted_wrapped("Apply one, adjust it, then Save as to keep your version.")
     selected = str(ctx.state.preview.get("poser_preset") or "")
     if imgui.begin_table("poser-presets", 2):
         for preset in state.presets:

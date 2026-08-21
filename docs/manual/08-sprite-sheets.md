@@ -81,7 +81,7 @@ A reader that walks the flat list handles both without knowing which it has.
 
 Rendered sheets are listed under **Rendered sheets** with their cell count and frame size. Each
 offers **Save PNG...**, **Save JSON...** and **Delete**. Save both: the PNG without its sidecar is
-just a picture. **Edit in Inker** opens the sheet as an animation — one frame per cell, cut on the
+just a picture. **Open in Inker** opens the sheet as an animation — one frame per cell, cut on the
 grid the sidecar records — as an *unlinked* document, so the first Ctrl+S asks where to put it and
 the render on disk is never overwritten. **Add to Packwright** sends it to the atlas packer with
 the cell size already filled in, and the pixel restyle below offers the same two.
@@ -160,7 +160,7 @@ cell, or far off the size of the rest of the sheet. These are notes, never refus
 costs you a sentence to read, and throwing a candidate away would leave you comparing one draft
 against nothing.
 
-**Edit in Inker** opens that candidate as an animation, one frame per cell, and this is the point of
+**Open in Inker** opens that candidate as an animation, one frame per cell, and this is the point of
 the whole feature: what arrives is editable, not final. A walk sheet arrives with a tag per
 direction, so pressing Play loops one direction at a time. The document is unsaved and belongs to no
 file — the first `Ctrl+S` asks where to put it, and the draft on disk is left alone. **Export

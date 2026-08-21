@@ -600,3 +600,45 @@ def test_export_library_refuses_while_the_pack_is_behind():
     packwright_mode.export_library(ctx, tab)
     assert ctx.toasts and ctx.toasts[-1][1] == "error"
     assert not any(key.startswith("packwright-library") for key in ctx.submitted)
+
+
+def test_adding_a_library_asset_with_no_atlas_starts_one(tmp_path, monkeypatch):
+    """The Library offers this for any asset carrying an ``input.png`` and
+    cannot know whether an atlas is open, so the error toast was an offer taken
+    back. Unlike a map, an atlas has no numbers that cannot be taken back
+    later, so one is simply made -- and the user is taken to it, because a new
+    empty atlas they cannot see is the same dead end by another route."""
+    from PIL import Image
+
+    png = tmp_path / "input.png"
+    Image.new("RGBA", (4, 4), (255, 0, 0, 255)).save(png)
+    monkeypatch.setattr("warlock.service.files.job_dir_file", lambda svc, job_id, name: png)
+
+    ctx = FakeCtx()
+    assert packwright_mode.active(ctx) is None
+
+    packwright_mode.add_job_source(ctx, {"id": "j1", "name": "chest"})
+
+    tab = packwright_mode.active(ctx)
+    assert tab is not None
+    assert not ctx.toasts
+    assert ctx.state.mode == "packwright"
+    assert ctx.submitted == [f"packwright-add:{tab.uid}"]
+
+
+def test_an_inker_document_with_no_atlas_starts_one_too():
+    """The same door from Inker's bridge, which is where this is now offered
+    from -- Packwright's sources pane could already pull a document in, and a
+    push from the near side must not refuse for want of an atlas."""
+    from warlock.studio.inker.document import Document
+
+    ctx = FakeCtx()
+    doc = Document.blank(8, 8)
+    doc.stack.active.pixels[:] = (255, 0, 0, 255)
+    inker_tab = type("T", (), {"doc": doc, "title": "walk.ora", "uid": "pd1"})()
+
+    packwright_mode.add_inker_document(ctx, inker_tab)
+
+    tab = packwright_mode.active(ctx)
+    assert tab is not None
+    assert [s.key for s in tab.doc.sprites()] == ["walk#layer00:Background"]

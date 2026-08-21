@@ -87,6 +87,14 @@ RAIL_GROUPS: tuple[tuple[str, ...], ...] = (
     ("settings",),
 )
 
+#: What each group is called, when the rail is wide enough to say so. One entry
+#: per group in :data:`RAIL_GROUPS`, footer included -- its own is never drawn,
+#: because a caption over a single item pinned to the bottom edge is a label
+#: for a label. The grouping above is a *claim* ("these four are one pipeline;
+#: these six are workspaces") and until these existed the only thing asserting
+#: it was a gap, which at a glance reads as an accident of spacing.
+RAIL_GROUP_LABELS: tuple[str, ...] = ("Pipeline", "Workspaces", "")
+
 # The modes that own a viewport or a form, and so have work in them. Home, the
 # Manual and Settings are places you pass through: they have no form to
 # submit and no viewport to frame, which is why they take no keyboard

@@ -113,11 +113,11 @@ and small, a 3D one in a scene. Higher resolutions cost more VRAM and more time,
 hold both models at once they may need the exclusive VRAM mode (`WARLOCK_VRAM_EXCLUSIVE=1`), which
 stops the reconstruction engine while the image model runs.
 
-**Budget** picks the triangle-reduction tier. It is disabled here, with the reason beside it: only
-"Raw (no decimation)" has been qualified, and a combo with one entry that gives no reason is
-indistinguishable from a broken one. See [Triangle budget](#triangle-budget) for where a budget can
-actually be chosen today. Once a tier is offered, picking *Custom* reveals a triangle count beside
-it.
+There is deliberately no **Budget** control here. Only "Raw (no decimation)" has been qualified, so
+the triangle-reduction tier is not something this form can offer a choice about, and a control that
+exists to explain its own inertness is worse than no control. See
+[Triangle budget](#triangle-budget) for where a budget can actually be chosen today. Once a tier is
+qualified the select appears here, and picking *Custom* reveals a triangle count beside it.
 
 **Size** is the physical size the finished GLB is scaled to, along its largest dimension. Drag it —
 about a centimetre per pixel — or double-click to type a figure; the readout carries the unit, and at

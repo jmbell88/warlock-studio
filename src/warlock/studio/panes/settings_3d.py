@@ -262,28 +262,24 @@ def _size(form: dict[str, Any]) -> None:
 
 
 def _budget(ctx: Any, form: dict[str, Any]) -> None:
-    """The triangle budget, and why it has one option (K94/K95).
+    """The triangle budget -- drawn only when there is a choice to make.
 
-    A combo with a single entry is a control that looks broken: the user reads
-    "Raw (no decimation)", opens it, finds nothing else, and has no way to tell
-    a missing feature from a missing file. Disabled with the reason beside it,
-    it says which of the two this is -- and the reason is no longer about a
-    missing binary, which stopped being true when gltfpack was vendored. It is
-    that no tier has been qualified yet, and the retarget control on a
-    finished mesh is where one can be tried.
+    While :data:`PROFILES` has one entry there is nothing here a user can do.
+    It used to be drawn anyway, disabled, with three lines explaining why: the
+    argument was that a combo with a single entry looks broken, so saying
+    "unqualified tier, not missing binary" beats saying nothing. But the
+    control and its note are five lines of the densest form in the app, spent
+    entirely on explaining their own inertness -- and the note's own answer is
+    that the *inspector's* retarget control is where a tier gets tried. Send
+    the user there by not putting a dead affordance in front of them here.
+
+    The form key is untouched either way, so the door (``profile`` at submit)
+    is unchanged: this stops drawing a control, it does not stop sending one.
     """
-    single = len(PROFILES) == 1
-    imgui.begin_disabled(single)
-    form["profile"] = widgets.labeled_combo("Budget", form["profile"], PROFILES)
-    imgui.end_disabled()
-    widgets.field_error(ctx.state, "profile")
-    if single:
-        widgets.hint_text(
-            "Only 'raw' here until a decimation tier has been checked against "
-            "real assets. Try one on a finished mesh, under Triangle budget in "
-            "the inspector."
-        )
+    if len(PROFILES) == 1:
         return
+    form["profile"] = widgets.labeled_combo("Budget", form["profile"], PROFILES)
+    widgets.field_error(ctx.state, "profile")
     _hint(ctx, "profile", form["profile"])
     if form["profile"] == "custom":
         # The same control the retarget panel draws, appearing under exactly

@@ -33,11 +33,9 @@ def draw(ctx: Any) -> None:
     widgets.section("Layers")
     manual_render.help_button(ctx, "inker-layers")
     if tab is None:
-        widgets.empty_state(
-            icons.LAYERS,
-            "No drawing open",
-            "Ctrl+N starts one, Ctrl+O opens a file.",
-        )
+        # The heading and nothing else: the canvas beside this one is already
+        # a full ``nothing_open`` with the presets, Open and the recent list on
+        # it, and a second empty state in the sidebar competes with it.
         return
     doc = tab.doc
     # Every control below restructures the stack, and a save is encoding that

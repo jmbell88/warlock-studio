@@ -601,7 +601,19 @@ def use_as_tileset(ctx: Any, job: Any) -> None:
     """
     tab = active(ctx)
     if tab is None:
-        ctx.toast("Open or start a map first.", "error")
+        # Start the map rather than refuse the action. This is offered from the
+        # Library for any asset carrying an ``input.png`` and nothing there
+        # knows whether a map is open, so refusing here made the item an offer
+        # the app took back -- and left the user to walk to Plotter, make a
+        # map, walk back to the Library and find the card again. Asks rather
+        # than invents (``plotter_mode.ask_new_document``'s rule), because the
+        # tile size a map is built with is the number this action slices on;
+        # the asset waits on ``pending_job_tileset`` and the dialog's Create
+        # calls back in here with a tab to work on.
+        from . import plotter_mode
+
+        plotter_mode.ask_new_document(ctx)
+        plotter_mode.ensure(ctx).pending_job_tileset = job
         return
     job_id = job["id"] if isinstance(job, dict) else str(job)
     name = (job.get("name") or job_id) if isinstance(job, dict) else job_id

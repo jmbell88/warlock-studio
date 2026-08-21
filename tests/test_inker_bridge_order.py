@@ -39,18 +39,34 @@ def test_recent_files_trail_the_file_buttons() -> None:
     )
 
 
-def test_the_document_section_survives_having_no_tab() -> None:
-    """Importing a sheet makes a document, so Document and File must both be
-    emitted on the no-tab path -- the reorder must not park them behind an
-    early return that only a tab reaches."""
+def test_the_sheet_import_survives_having_no_tab() -> None:
+    """Importing a sheet *makes* a document, so it has to be reachable when
+    there is none -- which is exactly the moment a user wants it. It must not
+    be parked behind an early return that only a tab reaches.
+
+    New and Open are deliberately *not* on this list any more. They live on the
+    empty canvas one column to the left, which is a full ``nothing_open`` with
+    the presets, Open and the recent list on it; drawing them here as well was
+    one pair of buttons in two places under a fourth copy of "Nothing open."
+    """
     from warlock.studio.panes import inker_bridge
 
     source = inspect.getsource(inker_bridge.draw)
-    document = source.index('section("Document")')
-    file = source.index('section("File")')
-    for position in (document, file):
-        head = source[:position]
-        assert "return" not in head, (
-            "a return above the Document/File sections would make an empty "
-            "session lose its New/Open/Import buttons"
-        )
+    head = source[: source.index("_sheet_import(")]
+    assert "return" not in head, (
+        "a return above the sheet import would make an empty session lose the "
+        "one action that can create a document from this panel"
+    )
+
+
+def test_the_file_section_is_behind_the_no_tab_return() -> None:
+    """The other half of the rule above: New/Open belong to the empty canvas,
+    so the File block is for a document that exists."""
+    from warlock.studio.panes import inker_bridge
+
+    source = inspect.getsource(inker_bridge.draw)
+    head = source[: source.index('section("File")')]
+    assert "return" in head, (
+        "the File block draws a second New/Open pair against the empty "
+        "canvas's own; it belongs behind the no-tab return"
+    )

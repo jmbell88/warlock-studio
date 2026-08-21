@@ -26,18 +26,18 @@ def draw(ctx: Any) -> None:
     widgets.section("Atlas file")
     manual_render.help_button(ctx, "packwright-bridge")
 
+    if tab is None:
+        # The recent list and nothing else -- see ``plotter_bridge``. The hint
+        # this used to draw was the empty canvas's sentence verbatim.
+        _recent(ctx)
+        return
+
     width = widgets.grid_width(2)
     if controls.button(f"{icons.PLUS} New", (width, 0)):
         packwright_mode.new_document(ctx)
     imgui.same_line()
     if controls.button(f"{icons.FOLDER_OPEN} Open...", (width, 0)):
         packwright_mode.ask_open(ctx)
-
-    if tab is None:
-        imgui.dummy((0, 8))
-        widgets.muted_wrapped("Start an atlas, open one, or drop images on the window.")
-        _recent(ctx)
-        return
 
     ready = not tab.busy
     packed = tab.layout is not None and tab.atlas is not None
@@ -64,6 +64,9 @@ def draw(ctx: Any) -> None:
         widgets.muted("Unsaved changes.")
 
     imgui.dummy((0, 8))
+    _history(ctx, tab)
+
+    imgui.dummy((0, 8))
     widgets.section("Export")
     if widgets.disabled_button(
         f"{icons.DOWNLOAD} Atlas + JSON (Ctrl+Shift+E)",
@@ -78,7 +81,10 @@ def draw(ctx: Any) -> None:
         widgets.muted_wrapped("TexturePacker's JSON (Array) schema, which most engines read.")
 
     imgui.dummy((0, 8))
-    widgets.section("Library")
+    # The one heading every mode's exits are under -- see ``inker_bridge``'s
+    # ``_pipeline``. The Export block above stays named for what it writes: it
+    # produces files for another application, not a move inside the app.
+    widgets.section("Take it somewhere")
     if widgets.disabled_button(
         f"{icons.UPLOAD} Export to the library (Ctrl+E)",
         ready and packed,
@@ -92,6 +98,34 @@ def draw(ctx: Any) -> None:
     )
 
     _recent(ctx)
+
+
+def _history(ctx: Any, tab: Any) -> None:
+    """Undo and Redo, on screen.
+
+    This mode had a full undo stack and no visible control for it, so the
+    feature existed only for a user who already knew Ctrl+Z -- while Inker drew
+    the same pair twice. ``packwright_mode.undo``/``redo`` rather than
+    ``tab.doc.undo()`` here, so the button and the chord carry the same side
+    effects (see the history block in that module).
+    """
+    from imgui_bundle import imgui
+
+    doc = tab.doc
+    width = widgets.grid_width(2)
+    if widgets.disabled_button(
+        f"{icons.UNDO} Undo", doc.history.can_undo, (width, 0), reason="Nothing to undo yet."
+    ):
+        packwright_mode.undo(ctx, tab)
+    imgui.same_line()
+    if widgets.disabled_button(
+        f"{icons.REDO} Redo",
+        doc.history.can_redo,
+        (width, 0),
+        reason="Nothing to redo: this is the newest step.",
+    ):
+        packwright_mode.redo(ctx, tab)
+    widgets.muted(f"{len(doc.history)} step(s)")
 
 
 def _recent(ctx: Any) -> None:

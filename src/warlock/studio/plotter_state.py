@@ -195,6 +195,16 @@ class PlotterState:
     # all say *that* a map was asked for; the canvas pane is the one window that
     # can ask what it should be, and it clears this when it opens.
     setup_pending: bool = False
+    # A library asset waiting for the map that ``setup_pending`` is asking
+    # about. The Library's *Add to Plotter as a tileset* used to be drawn for
+    # any asset with an ``input.png`` and then refused with an error toast when
+    # no map happened to be open -- an action offered and then taken back, and
+    # six navigation steps for the user to put right. It starts the map now
+    # instead, which means the asset has to survive the dialog: the same
+    # one-shot shape as the flag above it, cleared by whichever of Create or
+    # Cancel gets there. The whole job row rather than its id, because the
+    # tileset is named after the asset.
+    pending_job_tileset: Any = None
 
     grid: bool = True
     show_objects: bool = True

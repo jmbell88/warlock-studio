@@ -262,8 +262,16 @@ def add_job_source(ctx: Any, job: Any) -> None:
     """
     tab = active(ctx)
     if tab is None:
-        ctx.toast("Start or open an atlas first.", "error")
-        return
+        # Start the atlas rather than refuse. The Library offers this for any
+        # asset with an ``input.png`` and cannot know whether an atlas is open,
+        # so the toast was an offer taken back. ``landing.start_packwright``'s
+        # move, and unlike a map an atlas has no numbers that cannot be taken
+        # back later, so there is nothing to ask about first.
+        tab = new_document(ctx)
+        # Only when one was minted here: joining an atlas the user already had
+        # open is a background addition and does not move them, but a brand new
+        # empty atlas they cannot see is the same dead end by another route.
+        set_mode(ctx.state, "packwright")
     job_id = job["id"] if isinstance(job, dict) else str(job)
     name = (job.get("name") or job_id) if isinstance(job, dict) else job_id
     uid = tab.uid
@@ -290,8 +298,13 @@ def add_inker_document(ctx: Any, inker_tab: Any) -> None:
 
     tab = active(ctx)
     if tab is None:
-        ctx.toast("Start or open an atlas first.", "error")
-        return
+        # ``add_job_source``'s rule: this is offered from *outside* Packwright
+        # (Inker's bridge, and Packwright's own sources pane before an atlas
+        # exists), so refusing here is an offer taken back. An atlas has no
+        # numbers that cannot be taken back later, so one is simply made.
+        tab = new_document(ctx)
+        if ctx.state.mode != "packwright":
+            set_mode(ctx.state, "packwright")
     prefix = Path(inker_tab.title).stem or inker_tab.uid
     try:
         sprites = sprites_from_document(inker_tab.doc, prefix=prefix)
@@ -595,6 +608,32 @@ def release_all(ctx: Any) -> None:
 _MUTATING_CTRL = frozenset({"z", "y"})
 
 
+# --- history ------------------------------------------------------------------
+#
+# One call per direction, rather than two lines under the key handler, because
+# the bridge panel draws the same Undo/Redo pair Inker's does. Clay, Plotter and
+# Packwright each had a full undo stack and no on-screen control at all, so the
+# feature existed only for a user who already knew the chord -- and every
+# side effect a step has (a repack, and a selection that may name a sprite
+# the step removed) belongs to *undoing*, not to the keyboard.
+
+
+def undo(ctx: Any, tab: Any) -> None:
+    """One step back, whichever surface asked for it."""
+    tab.doc.undo()
+    tab.pack_dirty = True
+    _drop_stale_selection(ensure(ctx), tab)
+
+
+
+def redo(ctx: Any, tab: Any) -> None:
+    """One step forward. :func:`undo`'s twin, and its reasoning."""
+    tab.doc.redo()
+    tab.pack_dirty = True
+    _drop_stale_selection(ensure(ctx), tab)
+
+
+
 def handle_key(ctx: Any, event: Any) -> bool:
     """Packwright's keyboard. Returns whether the key was consumed; the app
     returns afterwards either way, as it does for every workspace mode."""
@@ -670,14 +709,10 @@ def _ctrl_key(
         # accept and what a user arriving from any of them already has in their
         # hand. Ctrl+Y keeps working: this adds a spelling rather than
         # replacing one.
-        tab.doc.redo() if shift else tab.doc.undo()
-        tab.pack_dirty = True
-        _drop_stale_selection(state, tab)
+        redo(ctx, tab) if shift else undo(ctx, tab)
         return True
     if name == "y":
-        tab.doc.redo()
-        tab.pack_dirty = True
-        _drop_stale_selection(state, tab)
+        redo(ctx, tab)
         return True
     if name == "tab":
         state.cycle(-1 if shift else 1)

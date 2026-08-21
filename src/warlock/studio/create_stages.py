@@ -99,13 +99,27 @@ def _reached_rig(job: Any, rig_meta: Any, poses: Any) -> bool:
 
 
 def _reached_export(job: Any, rig_meta: Any, poses: Any) -> bool:
-    """**Never.** Export is the one stage that leaves nothing behind in the
-    app: ``save_artifact`` copies a file to a directory of the user's choosing
-    and the job row records none of it. So there is no honest way to say a
-    user has finished exporting, and a check drawn on a guess would be the one
-    tick on the rail that meant nothing. Ticking it off "an artifact has been
-    derived" was the near miss -- a derivation is a cache, not a delivery."""
-    return False
+    """Whether there is anything to export.
+
+    It used to be **never**, and the reasoning was about a different question:
+    ``save_artifact`` copies a file to a directory of the user's choosing and
+    the job row records none of it, so "has the user finished exporting" has
+    no honest answer and a check drawn on a guess would mean nothing.
+
+    But that is not the question the rail asks. The rail asks *what has this
+    asset got*, one segment at a time, and it now draws its labels rather than
+    five anonymous icons -- so a final step that can never tick reads as work
+    still outstanding on every finished asset there will ever be. Answer the
+    rail's question instead: the export grid is stage-keyed and never empty
+    (:func:`panes.widgets.artifacts_for`), so this is reached the moment the
+    asset is one the grid has entries for. Note that :func:`reached` stops at
+    the first unreached stage, which is what keeps this from ticking on a bare
+    reference: Export is only asked about once mesh, rig and pose have all
+    answered yes.
+    """
+    from . import widgets
+
+    return job is not None and bool(widgets.artifacts_for(job))
 
 
 def _reached_pose(job: Any, rig_meta: Any, poses: Any) -> bool:

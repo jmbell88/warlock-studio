@@ -458,6 +458,30 @@ def _turned(brush: Any, shift: bool) -> Any:
 _BRUSH_TRANSFORMS: dict[str, Any] = {"x": _flipped_h, "y": _flipped_v, "z": _turned}
 
 
+# --- history ------------------------------------------------------------------
+#
+# One call per direction, rather than two lines under the key handler, because
+# the bridge panel draws the same Undo/Redo pair Inker's does. Clay, Plotter and
+# Packwright each had a full undo stack and no on-screen control at all, so the
+# feature existed only for a user who already knew the chord -- and every
+# side effect a step has (the object selection, which may name a shape the
+# step removed) belongs to *undoing*, not to the keyboard.
+
+
+def undo(ctx: Any, tab: Any) -> None:
+    """One step back, whichever surface asked for it."""
+    tab.doc.undo()
+    ensure(ctx).selected_object = None
+
+
+
+def redo(ctx: Any, tab: Any) -> None:
+    """One step forward. :func:`undo`'s twin, and its reasoning."""
+    tab.doc.redo()
+    ensure(ctx).selected_object = None
+
+
+
 def handle_key(ctx: Any, event: Any) -> bool:
     """Plotter's keyboard. Returns whether the key was consumed.
 
@@ -812,12 +836,10 @@ def _ctrl_key(
         # Ctrl+Shift+Z redoes as well, which is what Inker and Clay accept and
         # what a user arriving from either already has in their hand. Ctrl+Y
         # keeps working: this adds a spelling rather than replacing one.
-        tab.doc.redo() if shift else tab.doc.undo()
-        state.selected_object = None
+        redo(ctx, tab) if shift else undo(ctx, tab)
         return True
     if name == "y":
-        tab.doc.redo()
-        state.selected_object = None
+        redo(ctx, tab)
         return True
     if name == "g":
         state.grid = not state.grid

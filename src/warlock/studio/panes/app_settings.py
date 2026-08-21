@@ -362,6 +362,9 @@ def _layout(ctx: Any) -> None:
         return
     if controls.button("Reset pane sizes"):
         lay.settings_share = 0.55
+        # Every keyed split too, or "reset" would leave each workspace on
+        # whatever it had drifted to and only move the ones that never did.
+        lay.shares.clear()
         lay.save()
         ctx.toast("Pane sizes reset.")
     imgui.same_line()

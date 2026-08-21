@@ -69,9 +69,10 @@ a plain image, which is sliced into a grid at the map's own tile size, or a Tile
 carries its own slicing, spacing and margin. Dropping an image or a `.tsx` on the window does the
 same thing.
 
-You can also send a library asset straight in — right-click any reference card and choose **Use as a
-tileset in Plotter**. A [Packwright](13-packwright.md) grid pack is the natural source: it writes a
-`.tsx` beside its atlas precisely so it can be used here with no conversion.
+You can also send a library asset straight in — right-click any reference card and choose **Add to
+Plotter as a tileset**. If no map is open, the **New map** dialog appears first and the asset is
+added to whatever you make there. A [Packwright](13-packwright.md) grid pack is the natural source:
+it writes a `.tsx` beside its atlas precisely so it can be used here with no conversion.
 
 A generated tilesheet — the kind an image model produces when you ask it for a tileset — usually
 comes back as one image with dark lines ruled between its cells, and cells that are not quite the
@@ -468,7 +469,7 @@ The full list of what Plotter reads, refuses, preserves and writes as dialect is
 asset. It joins the same library every other asset is in, with a thumbnail, a card and every export
 the library offers.
 
-The map itself is kept beside it as `map.wmap`, which is what lets **Edit in Plotter** on the card
+The map itself is kept beside it as `map.wmap`, which is what lets **Open in Plotter** on the card
 reopen the real document — layers, objects and all — rather than a single flattened picture. It
 follows the same precedent as Inker's `paint.ora` and Clay's `build.wblk`: never served, never
 downloadable, and gone with the job directory for free.
@@ -482,7 +483,7 @@ Hidden layers are not rendered. One flag decides both what you see and what come
 | `<name>.wmap` | The map, with its tileset images embedded. Warlock's own format. |
 | `<name>.tmx` / `.tmj` | A Tiled export, beside its `tilesets/` folder. |
 | `~/.warlock/assets/<job>/input.png` | The flat render, for a map exported to the library. |
-| `~/.warlock/assets/<job>/map.wmap` | The map behind that render. Not served; reopened by **Edit in Plotter**. |
+| `~/.warlock/assets/<job>/map.wmap` | The map behind that render. Not served; reopened by **Open in Plotter**. |
 
 See [Keyboard shortcuts](18-shortcuts.md) for every binding, and
 [Packwright](13-packwright.md) for building the tilesets this mode consumes.

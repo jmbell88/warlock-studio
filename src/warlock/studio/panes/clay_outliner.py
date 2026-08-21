@@ -45,7 +45,9 @@ def draw(ctx: Any) -> None:
     widgets.section("Outliner")
     manual_render.help_button(ctx, "clay-outliner")
     if tab is None:
-        widgets.muted("Nothing open.")
+        # One voice for one empty state -- the canvas's ``nothing_open`` is it.
+        # This heading plus three more each saying "Nothing open." was Clay
+        # telling the user four times, which reads as four problems.
         return
     doc = tab.doc
     if not doc.objects:

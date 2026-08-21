@@ -2889,7 +2889,7 @@ def _overflow_labels(app_ctx, imgui_ctx) -> list[str]:
 
 
 def test_the_library_offers_a_finished_reference_to_the_inker(app_ctx, imgui_ctx):
-    """The 2D half of Edit in Clay. Inker could already open a job's reference
+    """The 2D half of Open in Clay. Inker could already open a job's reference
     and reuse an open tab for it; nothing in the library said so."""
     from warlock.studio import inker_mode
 
@@ -2904,14 +2904,14 @@ def test_the_library_offers_a_finished_reference_to_the_inker(app_ctx, imgui_ctx
 def test_the_library_does_not_offer_the_inker_a_mesh(app_ctx, imgui_ctx):
     """Never offer an action the loader would refuse: Inker opens the pixels a
     reference *is*, and a model-stage job's ``input.png`` is the input to a
-    mesh, not the asset. Edit in Clay is the item that belongs on that card."""
+    mesh, not the asset. Open in Clay is the item that belongs on that card."""
     job_id = _seeded(app_ctx)
     app_ctx.svc.store.set_stage(job_id, "model")
     app_ctx.cache.invalidate()
     app_ctx.cache.tick()
     labels = _overflow_labels(app_ctx, imgui_ctx)
     assert "Open in Inker" not in labels
-    assert "Edit in Clay" in labels
+    assert "Open in Clay" in labels
 
 
 def test_editing_a_big_mesh_in_clay_still_asks_first(app_ctx):
@@ -4544,7 +4544,7 @@ def test_a_rendered_sheet_offers_both_hand_offs(app_ctx, imgui_ctx):
     ]
 
     labels = _drawn_labels(imgui, lambda: sheet_panel.draw(app_ctx, job), "##sheet-hand")
-    assert _index_of(labels, "Edit in Inker") >= 0, labels
+    assert _index_of(labels, "Open in Inker") >= 0, labels
     assert _index_of(labels, "Add to Packwright") >= 0, labels
 
 

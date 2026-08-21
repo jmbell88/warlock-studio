@@ -80,7 +80,7 @@ def match(query: str, text: str) -> int | None:
     Three things earn points, in the order they matter: a prefix match on the
     whole string, a match that starts at a word boundary, and adjacency between
     consecutive matched characters. A shorter haystack breaks ties, so "Clay"
-    outranks "Edit in Clay" for the query "clay".
+    outranks "Open in Clay" for the query "clay".
     """
     if not query:
         return 0

@@ -33,14 +33,46 @@ def draw(ctx: Any) -> None:
     tab = state.active
     widgets.section("Document")
     manual_render.help_button(ctx, "clay-bridge")
-    _files(ctx, tab)
     if tab is None:
-        widgets.muted("Nothing open.")
+        # The heading and nothing else. New/Open used to be drawn here as well
+        # as on the empty canvas two columns to the left -- one pair of buttons
+        # in two places, under a fourth copy of "Nothing open."
         return
+    _files(ctx, tab)
 
     _facts(tab)
     imgui.dummy((0, 8))
+    _history(ctx, tab)
+    imgui.dummy((0, 8))
     _outputs(ctx, tab)
+
+
+def _history(ctx: Any, tab: Any) -> None:
+    """Undo and Redo, on screen.
+
+    This mode had a full undo stack and no visible control for it, so the
+    feature existed only for a user who already knew Ctrl+Z -- while Inker drew
+    the same pair twice. ``clay_mode.undo``/``redo`` rather than
+    ``tab.doc.undo()`` here, so the button and the chord carry the same side
+    effects (see the history block in that module).
+    """
+    from imgui_bundle import imgui
+
+    doc = tab.doc
+    width = widgets.grid_width(2)
+    if widgets.disabled_button(
+        f"{icons.UNDO} Undo", doc.history.can_undo, (width, 0), reason="Nothing to undo yet."
+    ):
+        clay_mode.undo(ctx, tab)
+    imgui.same_line()
+    if widgets.disabled_button(
+        f"{icons.REDO} Redo",
+        doc.history.can_redo,
+        (width, 0),
+        reason="Nothing to redo: this is the newest step.",
+    ):
+        clay_mode.redo(ctx, tab)
+    widgets.muted(f"{len(doc.history)} step(s)")
 
 
 def _facts(tab: Any) -> None:
@@ -70,15 +102,15 @@ def _triangles(mesh: Any) -> int:
     return int(np.maximum(counts - 2, 0).sum()) if len(counts) else 0
 
 
-def _files(ctx: Any, tab: Any | None) -> None:
+def _files(ctx: Any, tab: Any) -> None:
+    """The file row for an *open* document. ``draw`` returns before this when
+    there is none, because New and Open belong to the empty canvas."""
     width = widgets.grid_width(2)
     if controls.button(f"{icons.PLUS} New", (width, 0)):
         clay_mode.new_document(ctx)
     imgui.same_line()
     if controls.button(f"{icons.FOLDER_OPEN} Open...", (width, 0)):
         clay_mode.ask_open(ctx)
-    if tab is None:
-        return
     imgui.begin_disabled(tab.saving)
     if controls.button(f"{icons.SAVE} Save (Ctrl+S)", (width, 0)):
         clay_mode.save(ctx, tab)
@@ -92,7 +124,9 @@ def _files(ctx: Any, tab: Any | None) -> None:
 
 
 def _outputs(ctx: Any, tab: Any) -> None:
-    widgets.field_label("send")
+    # The one heading every mode's exits are under. See ``inker_bridge``'s
+    # ``_pipeline`` for why the five of them agree on a name.
+    widgets.section("Take it somewhere")
     doc = tab.doc
     ready = any(obj.visible for obj in doc.objects) and not tab.saving
     # One sentence for both buttons below, because they are refused for the

@@ -526,6 +526,14 @@ def test_the_rail_groups_are_the_modes_in_order():
     # The last group is the footer, and Settings is what belongs there: it is
     # about the program rather than about a piece of work.
     assert modes.RAIL_GROUPS[-1] == ("settings",)
+    # One caption per group, footer included: the rail indexes the two tuples
+    # together, so a group added without a label is an IndexError on the frame
+    # thread rather than a missing word.
+    assert len(modes.RAIL_GROUP_LABELS) == len(modes.RAIL_GROUPS)
+    assert modes.RAIL_GROUP_LABELS[-1] == "", (
+        "the footer group is drawn against the bottom edge, not under a caption"
+    )
+    assert all(modes.RAIL_GROUP_LABELS[:-1]), "a body group with no caption draws a bare gap"
 
 
 def test_the_app_opens_on_home_and_only_the_work_modes_take_shortcuts():

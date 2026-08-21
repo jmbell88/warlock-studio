@@ -135,7 +135,9 @@ def draw(ctx: Any) -> None:
     manual_render.help_button(ctx, "plotter-tileset")
 
     if tab is None:
-        widgets.muted("Open or start a map first.")
+        # The heading and nothing else. One voice for one empty state:
+        # the canvas's ``nothing_open`` is it, and four panels each
+        # repeating it reads as four separate problems.
         return
 
     doc = tab.doc

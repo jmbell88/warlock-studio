@@ -110,7 +110,7 @@ what makes "try it at 64 as well" a reasonable thing to do.
 Both ways out are bridges the app already had, because a character sheet is an ordinary sheet with
 an animation block on it.
 
-**Edit in Inker** opens the sheet sliced on its own grid, one tag per animation and direction, in
+**Open in Inker** opens the sheet sliced on its own grid, one tag per animation and direction, in
 the [Inker timeline](10-inker-animation.md). It opens *unlinked*: the first `Ctrl+S`
 is a Save As, so cleaning up frames cannot overwrite the render they came from.
 

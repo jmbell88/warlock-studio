@@ -408,12 +408,13 @@ def _filters(ctx: Any, jobs: list[Any]) -> None:
     # room for only the star and the tick put it exactly on top of the tick --
     # same pixels, and the later item takes the click, so the select-all opened
     # the manual instead.
-    # Four square buttons on this row now: the direction toggle joined the
-    # star, the tick and the (?). The reservation is computed rather than
-    # written out for the reason the comment above gives -- a child window
-    # clips, so anything that overruns the sidebar's chosen width is neither
-    # visible nor clickable, and that width is now the user's to change.
-    buttons = 4 * (imgui.get_frame_height() + spacing)
+    # Three square buttons on this row: the direction toggle, the tick and the
+    # (?). The star left for the view row, where the *other* control that picks
+    # a pile already was -- see ``_view_row``. The reservation is computed
+    # rather than written out for the reason the comment above gives -- a child
+    # window clips, so anything that overruns the sidebar's chosen width is
+    # neither visible nor clickable, and that width is now the user's to change.
+    buttons = 3 * (imgui.get_frame_height() + spacing)
     filters.sort = widgets.combo(
         "##sort",
         filters.sort,
@@ -441,16 +442,6 @@ def _filters(ctx: Any, jobs: list[Any]) -> None:
     ):
         filters.descending = not down
     imgui.same_line()
-    # A star that lights up, not a checkbox labelled "*".
-    lit = filters.favorites_only
-    if lit:
-        imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.WARN)))
-        imgui.push_style_color(imgui.Col_.button.value, imgui.ImVec4(*theme.rgba(theme.WARN, 0.2)))
-    if widgets.icon_button(icons.STAR, "Favourites only"):
-        filters.favorites_only = not filters.favorites_only
-    if lit:
-        imgui.pop_style_color(2)
-    imgui.same_line()
     _select_all(ctx, jobs)
     # Before ``_failures``, which starts a line of its own: the (?) joins the
     # line that is current when it is called, and joining that one would put it
@@ -461,23 +452,35 @@ def _filters(ctx: Any, jobs: list[Any]) -> None:
 
 
 def _view_row(ctx: Any) -> None:
-    """Density and the trash: which *set* is on screen and how tightly (J89/J91).
+    """Favourites, the trash and density: which *set* is on screen, and how
+    tightly it is drawn (J89/J91).
 
-    Its own row rather than two more squares on the sort row, which is already
-    a computed reservation against a sidebar that clips -- and one whose width
-    is the user's to pick (``layout.SIDEBAR_WIDTHS``). These two
-    are also a different kind of control from the ones above -- everything on
-    the rows above narrows what you are looking at, and these change how it is
-    drawn and which pile it comes from.
+    Its own row rather than three more squares on the sort row, which is
+    already a computed reservation against a sidebar that clips -- and one
+    whose width is the user's to pick (``layout.SIDEBAR_WIDTHS``). These are
+    also a different kind of control from the ones above: everything on the
+    rows above narrows what you are looking at, and these change which pile it
+    comes from and how it is drawn.
+
+    Favourites is here, beside the trash, rather than on the sort row where it
+    used to sit. ``library_full._rail`` draws the same two fields together
+    under one **Collections** heading, on exactly that argument -- they pick a
+    pile -- and the two compositions write the same ``Filters`` object. One
+    model deserves one vocabulary, so the pairing and its order agree in both.
     """
     filters = ctx.state.filters
-    compact = filters_compact(ctx)
-    if widgets.icon_button(
-        icons.LIST if compact else icons.LAYERS,
-        "Comfortable rows" if compact else "Compact rows",
-    ):
-        ctx.settings.set("library_compact", not compact)
+    # A star that lights up, not a checkbox labelled "*".
+    starred = filters.favorites_only
+    if starred:
+        imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.WARN)))
+        imgui.push_style_color(imgui.Col_.button.value, imgui.ImVec4(*theme.rgba(theme.WARN, 0.2)))
+    if widgets.icon_button(icons.STAR, "Favourites"):
+        filters.favorites_only = not starred
+    if starred:
+        imgui.pop_style_color(2)
     imgui.same_line()
+    # Trash next, immediately after the star, because the rail lists the two
+    # of them together in that order.
     lit = filters.trash
     if lit:
         imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.WARN)))
@@ -488,6 +491,15 @@ def _view_row(ctx: Any) -> None:
         ctx.state.checked.clear()
     if lit:
         imgui.pop_style_color()
+    imgui.same_line()
+    # Density trails the pair: it is the one control here that changes how the
+    # set is *drawn* rather than which set it is.
+    compact = filters_compact(ctx)
+    if widgets.icon_button(
+        icons.LIST if compact else icons.LAYERS,
+        "Comfortable rows" if compact else "Compact rows",
+    ):
+        ctx.settings.set("library_compact", not compact)
     if lit:
         imgui.same_line()
         widgets.text_colored(theme.WARN, "Trash")
@@ -794,7 +806,7 @@ def _overflow(ctx: Any, job: Any) -> None:
             ctx.submit(f"rerun:{job_id}", svc_jobs.rerun_job, ctx.svc, job_id, mode="reroll")
         if _remeshable(job) and controls.menu_item("Remesh", "", False)[0]:
             ctx.submit(f"remesh:{job_id}", svc_jobs.rerun_job, ctx.svc, job_id, mode="remesh")
-    # The 2D half of the same pair as Edit in Clay, and gated the same way: on
+    # The 2D half of the same pair as Open in Clay, and gated the same way: on
     # a predicate the mode owns, answered from the cached row alone so the
     # frame thread never stats anything. Above the mesh block because the two
     # are mutually exclusive -- a reference has no ``model.glb`` -- and the
@@ -805,12 +817,13 @@ def _overflow(ctx: Any, job: Any) -> None:
     if inker_mode.can_edit_job(ctx, job) and controls.menu_item("Open in Inker", "", False)[0]:
         inker_mode.open_job_reference(ctx, job)
     _map_and_atlas_items(ctx, job, files)
+    _troupe_item(ctx, job)
     if "model.glb" in files:
         # Clay prefers the ``build.wblk`` sidecar when the asset was authored
         # here, and imports ``model.glb`` -- the optimized, grounded, served
         # mesh -- when it was not. Never ``source.glb``: that is the raw
         # reconstruction, and nothing downstream of the pipeline uses it.
-        if controls.menu_item("Edit in Clay", "", False)[0]:
+        if controls.menu_item("Open in Clay", "", False)[0]:
             from .. import clay_mode
 
             clay_mode.edit_asset_in_clay(ctx, job)
@@ -825,6 +838,14 @@ def _overflow(ctx: Any, job: Any) -> None:
             compare(ctx, job_id)
         if ctx.rigging_available and controls.menu_item("Rig", "", False)[0]:
             run_action(ctx, job, "rig")
+        # The Poser was reachable from the pipeline through exactly one button,
+        # inside the inspector's Rig & Pose tab -- so a user with six rigged
+        # props and a walk cycle to author had to already know the mode
+        # existed. Same gate the pose pane uses, answered from the cached row.
+        if "rig.glb" in files and controls.menu_item("Open in Poser", "", False)[0]:
+            from . import pose_panel
+
+            pose_panel.open_in_poser(ctx, job)
     imgui.separator()
     if controls.menu_item("Delete", "Delete", False)[0]:
         # No confirm (J91): the trash *is* the confirmation, and it is a better
@@ -835,13 +856,37 @@ def _overflow(ctx: Any, job: Any) -> None:
     imgui.end_popup()
 
 
+def _troupe_item(ctx: Any, job: dict[str, Any]) -> None:
+    """The one route into Troupe from the library.
+
+    Troupe's sheets *are* library assets -- a ``charsheet`` row, filed under
+    the "sheet" card kind -- and there was no way to get from one back to the
+    mode that plays it: the only doors were Home's tile and the rail. The row
+    carries both halves of the selection (``source_job`` and ``sheet_id``), so
+    this is answered from the cached row like every other item here.
+    """
+    if job.get("kind") != "charsheet" or job.get("status") != "done":
+        return
+    params = job.get("params") or {}
+    source = str(params.get("source_job") or "")
+    sheet_id = str(params.get("sheet_id") or "")
+    if not source:
+        return
+    if controls.menu_item("Open in Troupe", "", False)[0]:
+        from .. import troupe_mode
+        from ..state import set_mode
+
+        troupe_mode.select(ctx, source, sheet_id)
+        set_mode(ctx.state, "troupe")
+
+
 def _map_and_atlas_items(ctx: Any, job: dict[str, Any], files: Any) -> None:
-    """The Plotter and Packwright half of the same pair as *Edit in Clay*.
+    """The Plotter and Packwright half of the same pair as *Open in Clay*.
 
     Two kinds of entry, and the difference matters. **Reopening** is offered
     only when the asset carries an authored document beside it -- answered from
     ``params["authored"]``, which the exporter set, rather than from a stat,
-    because this menu is built on the frame thread. Unlike *Edit in Clay* there
+    because this menu is built on the frame thread. Unlike *Open in Clay* there
     is no fallback: a reference with no ``map.wmap`` cannot be reopened as a
     map at all, so the item must not be offered rather than offered and refused.
     **Consuming** an image is offered for any reference: a tileset or an atlas
@@ -851,13 +896,13 @@ def _map_and_atlas_items(ctx: Any, job: dict[str, Any], files: Any) -> None:
     from .. import packwright_mode, plotter_mode
 
     authored = (job.get("params") or {}).get("authored")
-    if authored == "plotter" and controls.menu_item("Edit in Plotter", "", False)[0]:
+    if authored == "plotter" and controls.menu_item("Open in Plotter", "", False)[0]:
         plotter_mode.edit_asset_in_plotter(ctx, job)
-    if authored == "packwright" and controls.menu_item("Edit in Packwright", "", False)[0]:
+    if authored == "packwright" and controls.menu_item("Open in Packwright", "", False)[0]:
         packwright_mode.edit_asset_in_packwright(ctx, job)
     if "input.png" not in files:
         return
-    if controls.menu_item("Use as a tileset in Plotter", "", False)[0]:
+    if controls.menu_item("Add to Plotter as a tileset", "", False)[0]:
         plotter_mode.use_as_tileset(ctx, job)
     if controls.menu_item("Add to a Packwright atlas", "", False)[0]:
         packwright_mode.add_job_source(ctx, job)

@@ -350,6 +350,9 @@ def _setup_body(ctx: Any, form: dict, key: str) -> None:
         imgui.close_current_popup()
     imgui.same_line()
     if controls.button("Cancel", (sp(120), 0)) or imgui.is_key_pressed(imgui.Key.escape):
+        # Cancelling the map cancels what was waiting on it, or the next map
+        # made for any other reason would silently acquire a tileset.
+        plotter_mode.ensure(ctx).pending_job_tileset = None
         imgui.close_current_popup()
 
 
@@ -366,6 +369,16 @@ def _create(ctx: Any, form: dict) -> None:
         projection=form["projection"],
         infinite=bool(form.get("infinite")),
     )
+    # A library asset armed before the dialog opened wins over the form's
+    # "Then" choice: it is the thing the user asked for, and the picker would
+    # be a second tileset they never asked about.
+    state = plotter_mode.ensure(ctx)
+    pending, state.pending_job_tileset = state.pending_job_tileset, None
+    if pending is not None:
+        from .. import plotter_tilesets
+
+        plotter_tilesets.use_as_tileset(ctx, pending)
+        return
     choice = form.get("next")
     if choice == plotter_setup.NEXT_FILE:
         plotter_mode.ask_add_tileset(ctx)

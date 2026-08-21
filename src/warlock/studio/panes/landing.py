@@ -246,6 +246,11 @@ class Status:
     text: str
     colour: int
     target: str = ""  # a mode to switch to, or "" for a row that only reports
+    #: A ``Filters.status`` value to set on the way, or "" to leave the filter
+    #: alone. Only the queue row uses one: "what ran" is reconstructible
+    #: nowhere else in the app -- there is no job list -- and the Library's
+    #: status filter is the nearest thing to one.
+    status_filter: str = ""
 
 
 def _health_status(ctx: Any) -> Status:
@@ -281,7 +286,19 @@ def _queue_status(ctx: Any) -> Status:
     if isinstance(found, dict) and isinstance(found.get("percent"), int | float):
         percent = f" {int(found['percent'])}%"
     word = "running" if job.get("status") == "running" else "queued"
-    return Status("queue", icons.PLAY, f"{word}: {name}{percent}", theme.ACCENT)
+    # The one status row that went nowhere, and the only route to a job list
+    # there is: nothing in the app lists what has run, so "what happened to
+    # that" is otherwise reconstructible only by finding the Library's status
+    # filter yourself. Idle stays a pure report -- a filtered list with nothing
+    # in it is a worse answer than the sentence already on screen.
+    return Status(
+        "queue",
+        icons.PLAY,
+        f"{word}: {name}{percent}",
+        theme.ACCENT,
+        "library",
+        "running",
+    )
 
 
 def _library_status(ctx: Any) -> Status:
@@ -334,16 +351,18 @@ def status_rows(ctx: Any) -> list[Status]:
 
 
 def visible_home_rows(
-    rows: list[Status], *, shell_issue_visible: bool
+    rows: list[Status], *, shell_issue_visible: bool = False
 ) -> list[Status]:
-    """Home's quiet status line, without repeating the shell issue summary."""
+    """Home's quiet status line.
 
-    return [
-        row
-        for row in rows
-        if row.key in HOME_STATUS
-        and not (shell_issue_visible and row.key == "health")
-    ]
+    ``shell_issue_visible`` is vestigial: it existed to hide the health row
+    behind the doctor banner, and the health row is no longer one of Home's --
+    the rail's badge and the banner already say it, and three renderings of one
+    fact is what the parameter was half-admitting. Kept as a defaulted keyword
+    so the two callers that pass it are not a wiring change.
+    """
+
+    return [row for row in rows if row.key in HOME_STATUS]
 
 
 def _count_unreviewed(svc: Any) -> int:
@@ -384,11 +403,17 @@ def pump(ctx: Any) -> None:
 #: be two answers to "is this install healthy" -- but the *library* row is not
 #: one of Home's questions any more: it counted assets on a screen whose whole
 #: lower half is now assets, and its destination is one click away in the rail.
-HOME_STATUS = ("health", "queue", "review")
+#: The health row went with it, for the same reason: it was the *third*
+#: rendering of one fact, after the rail's badge and the doctor banner -- and
+#: ``visible_home_rows`` already suppressed it whenever the banner was up,
+#: which is half of this argument made and then stopped.
+HOME_STATUS = ("queue", "review")
 
 #: How many bullets the What's New card shows before "all release notes".
 #: Three is a summary; the eighth bullet of a release is a changelog, and a
-#: changelog is what the popup is for.
+#: changelog is what the popup is for. Each is drawn as its lead sentence only
+#: (``changelog.lead``) -- three whole bullets was the summary in name and the
+#: changelog in fact.
 NEWS_BULLETS = 3
 
 #: Where the dismissal is remembered. Keyed on the *version* rather than on a
@@ -629,7 +654,11 @@ def _news(ctx: Any) -> None:
     seen = str(ctx.settings.get(NEWS_SEEN_KEY, "") or "")
     if not news_should_show(release, seen):
         return
-    bullets = tuple(release.bullets[:NEWS_BULLETS])
+    # Leads, not the whole bullets. Every bullet in the shipped file opens with
+    # a sentence naming what changed and then argues for it at ~150 words, so
+    # three of them took roughly a quarter of Home above the fold. The full
+    # text is one ghost button away, at the foot of this same screen.
+    bullets = tuple(changelog.lead(text) for text in release.bullets[:NEWS_BULLETS])
     style = imgui.get_style()
     pad = style.window_padding
     avail = imgui.get_content_region_avail().x
@@ -770,6 +799,8 @@ def _status(ctx: Any, status: list[Status]) -> None:
             if imgui.is_item_hovered():
                 imgui.set_mouse_cursor(imgui.MouseCursor_.hand.value)
             if clicked:
+                if row.status_filter:
+                    ctx.state.filters.status = row.status_filter
                 set_mode(ctx.state, row.target)
         else:
             widgets.text_colored(row.colour, row.text)

@@ -188,7 +188,8 @@ def test_the_pose_stage_is_reached_by_a_saved_pose_and_not_by_the_rig():
     """Ticking Pose off the rig would put a check beside a step nobody has
     taken -- a rig is the *ability* to pose, not a pose."""
     assert create_stages.reached(rigged()) == "rig"
-    assert create_stages.reached(rigged(), poses=[{"name": "idle"}]) == "pose"
+    assert create_stages._REACHED["pose"](rigged(), None, [{"name": "idle"}]) is True
+    assert create_stages._REACHED["pose"](rigged(), None, None) is False
 
 
 def test_an_unfinished_asset_blocks_the_export_stage_in_the_grids_own_words():
@@ -206,12 +207,20 @@ def test_everything_exports_so_the_last_segment_never_moves_the_selection():
         assert create_stages.shows("export", row) is True
 
 
-def test_export_is_never_reached():
-    """It leaves nothing behind in the app -- ``save_artifact`` copies a file
-    somewhere the job row never hears about -- so a check beside it would be
-    the one tick on the rail that meant nothing."""
-    assert create_stages.reached(rigged(), poses=[{"name": "idle"}]) == "pose"
+def test_export_is_reached_once_the_asset_has_something_to_export():
+    """The rail asks *what has this asset got*, not "has the user saved a file
+    somewhere" -- which nothing records. The export grid is stage-keyed and
+    never empty, so the last segment ticks once every stage before it has."""
+    assert create_stages.reached(rigged(), poses=[{"name": "idle"}]) == "export"
     assert create_stages.STAGES[-1] == "export"
+
+
+def test_export_does_not_tick_ahead_of_the_stages_before_it():
+    """``reached`` stops at the first unreached stage, which is what keeps a
+    bare reference -- which also has an export grid -- from ticking Export."""
+    assert create_stages.reached(job(stage="reference")) == "reference"
+    assert create_stages.reached(rigged()) == "rig"
+    assert create_stages.reached(None) is None
 
 
 def test_an_unknown_stage_is_a_programming_error():

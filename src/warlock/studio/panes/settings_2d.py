@@ -90,8 +90,6 @@ def draw(ctx: Any) -> None:
                     widgets.section("Sheet")
                     manual_render.help_button(ctx, "settings-sheet")
                     _sheet(ctx, form, form_ui)
-                widgets.section("Profile")
-                _profiles(ctx, form)
                 widgets.section("Prompt")
                 manual_render.help_button(ctx, "settings-2d")
                 _prompt(ctx, form, form_ui)
@@ -102,6 +100,16 @@ def draw(ctx: Any) -> None:
                 _references(ctx, form)
                 widgets.section("Seed")
                 _run_controls(ctx, form, form_ui)
+                # Preset management sits *below* the thing being preset. It
+                # used to lead the form, above Prompt, which put the least
+                # frequently touched block between the output switch and the
+                # only control anyone types into -- and it is a control about
+                # the whole form, so it cannot be read before there is a form
+                # to read it against. Below Seed rather than immediately below
+                # References, so the run a user actually walks -- Prompt,
+                # References, Seed -- stays contiguous.
+                widgets.section("Profile")
+                _profiles(ctx, form)
                 widgets.section("Model")
                 _model(ctx, form)
                 widgets.section("LoRA")
@@ -1014,7 +1022,10 @@ def _run_controls(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
     with focus.item(ctx.state, FOCUS_PANE, "count") as focused:
         changed, picked = form_ui.segmented_choice(
             "count",
-            "Tiles" if form.get("output") == "tile" else "References",
+            # Not "References": the References *section* 150 dp above this
+            # one is the input images, and one word cannot be both the pictures
+            # going in and the count coming out.
+            "Tiles" if form.get("output") == "tile" else "How many",
             str(form["count"]),
             tuple((str(count), str(count)) for count in (1, 2, 4, 8)),
             help_text="How many alternatives this run should create.",

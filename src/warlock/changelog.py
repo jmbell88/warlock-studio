@@ -58,6 +58,33 @@ class Release:
     bullets: tuple[str, ...] = field(default_factory=tuple)
 
 
+#: A bullet's opening sentence. Bounded on both sides: three characters so a
+#: stray "e.g." cannot be a lead, and 120 so a bullet written as one very long
+#: sentence does not defeat the point of asking.
+_LEAD = re.compile(r"^(.{3,120}?[.!?])(?:\s|$)", re.S)
+
+
+def lead(bullet: str) -> str:
+    """``bullet``'s opening sentence -- what the What's New card shows.
+
+    Every bullet in the shipped file opens with a bolded lead sentence naming
+    what changed, and the rest is the argument for it. The card was drawing
+    three whole bullets, which at ~150 words each took a quarter of Home above
+    the fold for something a user reads once per release; the full text is
+    still one click away in "All release notes...".
+
+    Computed rather than stored beside the bullet, so there is one string per
+    bullet and no parallel tuple to fall out of step with it. The emphasis
+    markers are already gone by the time this sees anything (:func:`_plain`),
+    which is why this matches on the sentence and not on the ``**``.
+    """
+    text = " ".join(bullet.split())
+    match = _LEAD.match(text)
+    if match is not None:
+        return match.group(1)
+    return text if len(text) <= 120 else text[:117].rstrip() + "..."
+
+
 def changelog_path() -> Path:
     """The packaged copy if there is one, the repo root otherwise.
 

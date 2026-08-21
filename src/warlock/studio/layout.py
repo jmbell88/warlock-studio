@@ -250,6 +250,24 @@ class Layout:
         except (TypeError, ValueError):
             share = 0.55
         self.settings_share = min(max(share, SHARE_MIN), SHARE_MAX)
+        # **One share per split, not one for the whole app.** ``settings_share``
+        # above is a single number that seven workspaces read and one -- Inker
+        # -- can write, from two handles. So dragging Inker's toolbox handle
+        # silently re-split Create, Clay, Plotter, Packwright, Troupe and
+        # Review, and Inker's own right column besides: a handle that resizes
+        # six screens the user cannot see is not a handle, it is a setting.
+        #
+        # Keyed now, and the scalar above is what an unkeyed split *starts*
+        # at, so an existing profile opens on exactly the layout it had and
+        # each split then goes its own way from there. Written under a separate
+        # settings key for the same reason: an old build reading a new file
+        # still finds ``settings_share`` where it left it.
+        self.shares: dict[str, float] = {}
+        for key, value in (stored.get("settings_shares") or {}).items():
+            try:
+                self.shares[str(key)] = min(max(float(value), SHARE_MIN), SHARE_MAX)
+            except (TypeError, ValueError):
+                continue
         self.sidebar = set_sidebar(str(stored.get("sidebar", "default")))
         # Whether the navigation rail shows its labels. A *name* rather than a
         # width, exactly as ``sidebar`` is, so a stored value can never be a
@@ -261,6 +279,19 @@ class Layout:
         # control that would tell you is itself an unnamed glyph. A *stored*
         # "icons" still wins -- this moves the default, not anyone's choice.
         self.rail = "icons" if str(stored.get("rail", "labels")) == "icons" else "labels"
+
+    def share(self, key: str) -> float:
+        """The split ``key`` is drawn at -- its own, or the shared default.
+
+        ``key`` names a *split*, not a mode: Inker has two independent handles
+        and they are two entries, because one value behind both is the same
+        defect one rung down.
+        """
+        return self.shares.get(key, self.settings_share)
+
+    def set_share(self, key: str, value: float) -> None:
+        """Move one split. Clamped here so no caller has to remember to."""
+        self.shares[key] = min(max(value, SHARE_MIN), SHARE_MAX)
 
     def set_sidebar_width(self, key: str) -> None:
         self.sidebar = set_sidebar(key, animate=True)
@@ -283,6 +314,9 @@ class Layout:
             "layout",
             {
                 "settings_share": round(self.settings_share, 3),
+                "settings_shares": {
+                    key: round(value, 3) for key, value in sorted(self.shares.items())
+                },
                 "sidebar": self.sidebar,
                 "rail": self.rail,
             },

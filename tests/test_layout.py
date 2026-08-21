@@ -89,6 +89,9 @@ def test_a_save_writes_no_width_key_at_all():
     layout_mod.Layout(settings).save()
     assert settings.store["layout"] == {
         "settings_share": 0.4,
+        # The per-split shares (empty here: nothing has been dragged). Written
+        # every time for the same reason the rest of this dict is.
+        "settings_shares": {},
         "sidebar": "default",
         # The navigation rail's labels-or-icons preference (the UI redesign, wave 3).
         # It has to be written here every time for the reason the whole test
@@ -122,3 +125,26 @@ def test_a_nonsense_share_falls_back_rather_than_raising():
     assert layout_mod.Layout(_Settings({"settings_share": 9.0})).settings_share == (
         layout_mod.SHARE_MAX
     )
+
+
+def test_a_split_starts_at_the_shared_default_and_then_goes_its_own_way():
+    """One number behind every workspace's split meant Inker's toolbox handle
+    silently re-split Create, Clay, Plotter, Packwright, Troupe and Review."""
+    lay = layout_mod.Layout(_Settings({"settings_share": 0.4}))
+    assert lay.share("clay") == 0.4
+    assert lay.share("inker-tools") == 0.4
+    lay.set_share("inker-tools", 0.7)
+    assert lay.share("inker-tools") == 0.7
+    assert lay.share("clay") == 0.4, "a keyed drag must not move another split"
+    assert lay.share("inker-layers") == 0.4, "Inker's two handles are two splits"
+
+
+def test_a_stored_split_is_clamped_and_junk_is_dropped():
+    lay = layout_mod.Layout(
+        _Settings({"settings_shares": {"clay": 9.0, "review": "wide", "troupe": 0.42}})
+    )
+    assert lay.share("clay") == layout_mod.SHARE_MAX
+    assert lay.share("review") == lay.settings_share
+    assert lay.share("troupe") == 0.42
+    lay.set_share("packwright", -3.0)
+    assert lay.share("packwright") == layout_mod.SHARE_MIN

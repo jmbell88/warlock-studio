@@ -467,10 +467,26 @@ PLACEHOLDERS: dict[str, tuple[str, str, str]] = {
 }
 
 
+def centred_empty(icon: str, title: str, hint: str) -> None:
+    """An :func:`widgets.empty_state` centred in the viewport it is drawn in.
+
+    Hoisted out of :func:`placeholder` so a viewport with a *transient* empty
+    state -- the Poser while Blender builds an armature, or after it failed --
+    can look like the nine that have a permanent one, instead of two lines of
+    muted text in the top-left corner.
+    """
+    from ..tokens import sp
+
+    avail = imgui.get_content_region_avail()
+    # Centred vertically by hand: ``empty_state`` centres its own text
+    # horizontally but knows nothing about the height it is sitting in.
+    imgui.dummy((0, max(avail.y * 0.5 - sp(48), 0)))
+    widgets.empty_state(icon, title, hint)
+
+
 def placeholder(ctx: Any) -> None:
     """What the viewport says when there is nothing in it."""
     from .. import create_stages
-    from ..tokens import sp
 
     key = (
         f"{create_stages.MODE}/{ctx.state.create_stage}"
@@ -478,8 +494,4 @@ def placeholder(ctx: Any) -> None:
         else ctx.state.mode
     )
     icon, title, hint = PLACEHOLDERS.get(key, PLACEHOLDERS["create/mesh"])
-    avail = imgui.get_content_region_avail()
-    # Centred vertically by hand, as before: ``empty_state`` centres its own
-    # text horizontally but knows nothing about the height it is sitting in.
-    imgui.dummy((0, max(avail.y * 0.5 - sp(48), 0)))
-    widgets.empty_state(icon, title, hint)
+    centred_empty(icon, title, hint)

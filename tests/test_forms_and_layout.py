@@ -124,14 +124,18 @@ def test_a_measured_footer_is_stored_in_design_pixels():
 # --- K94 / K95 / K96: the 3D form's three controls ---------------------------
 
 
-def test_the_one_option_budget_is_disabled_with_a_reason():
-    """K94. A combo with a single entry looks broken: the user opens it, finds
-    nothing else, and cannot tell a missing feature from a missing file."""
+def test_the_one_option_budget_is_not_drawn_at_all():
+    """K94, settled the other way. A combo with a single entry looks broken --
+    but drawing it disabled costs five lines of the densest form in the app to
+    explain its own inertness, and the explanation's own answer is that the
+    *inspector's* retarget control is where a tier gets tried. So while
+    ``PROFILES`` has one entry there is nothing here, and the form key is
+    untouched either way: this stops drawing a control, not sending one."""
+    assert len(settings_3d.PROFILES) == 1
     source = inspect.getsource(settings_3d._budget)
-    assert "begin_disabled(single)" in source
-    assert "qualified" in source
-    # And the reason is no longer the one that stopped being true when
-    # gltfpack was vendored.
+    assert "if len(PROFILES) == 1:" in source
+    assert "begin_disabled" not in source
+    # And nothing is left explaining a control that is not on screen.
     assert "not installed" not in source
 
 

@@ -63,18 +63,21 @@ def draw(ctx: Any) -> None:
     # is most likely to want it.
     _sheet_import(ctx)
     if tab is None:
-        widgets.muted("Nothing open.")
+        # The heading, the sheet import, and nothing else. "Nothing open." was
+        # the fourth thing on this screen saying so, and the File block below
+        # would have drawn a second New/Open pair against the empty canvas's.
+        return
+
+    doc = tab.doc
+    width, height = doc.size
+    widgets.muted(f"{width} x {height} - {len(doc.stack)} layer(s)")
+    widgets.muted(f"{tab.view.zoom * 100:.0f}%  -  {tab.file_format.upper()}")
+    if tab.path is not None:
+        imgui.text_wrapped(str(tab.path))
+    if tab.linked:
+        widgets.text_colored(theme.OK, f"linked to job {tab.job_id[:8]}")
     else:
-        doc = tab.doc
-        width, height = doc.size
-        widgets.muted(f"{width} x {height} - {len(doc.stack)} layer(s)")
-        widgets.muted(f"{tab.view.zoom * 100:.0f}%  -  {tab.file_format.upper()}")
-        if tab.path is not None:
-            imgui.text_wrapped(str(tab.path))
-        if tab.linked:
-            widgets.text_colored(theme.OK, f"linked to job {tab.job_id[:8]}")
-        else:
-            widgets.muted("not part of a job")
+        widgets.muted("not part of a job")
 
     imgui.dummy((0, 8))
     widgets.section("File")
@@ -194,7 +197,12 @@ def _animation(ctx: Any, tab: Any) -> None:
 
 
 def _pipeline(ctx: Any, tab: Any) -> None:
-    widgets.section("Pipeline")
+    # "Take it somewhere" rather than "Pipeline", and the same heading over the
+    # same shape of button in Clay, Plotter, Packwright and Troupe: the answer
+    # to "where can this go next" was in five places under five names, so a
+    # user learned each mode's exits separately. Every entry here is an
+    # existing bridge -- nothing new is being offered.
+    widgets.section("Take it somewhere")
     busy = tab.busy
     why = _busy_why(tab)
     # Help as ``tooltip=`` on each full-width button, not a trailing
@@ -222,6 +230,21 @@ def _pipeline(ctx: Any, tab: Any) -> None:
         tooltip="Queues the mesh stage from the flattened image.",
     ):
         inker_mode.send_to_3d(ctx, tab)
+    if widgets.disabled_button(
+        "Add to Packwright",
+        not busy,
+        (-1, 0),
+        reason=why,
+        tooltip=(
+            "One sprite per frame, packed beside everything else in the atlas."
+            " Packwright's own sources pane could already pull this document"
+            " in; this is the same bridge from the near side. If no atlas is"
+            " open, one is started."
+        ),
+    ):
+        from .. import packwright_mode
+
+        packwright_mode.add_inker_document(ctx, tab)
     if tab.linked and widgets.disabled_button(
         "Revert to original",
         tab.has_original and not busy,

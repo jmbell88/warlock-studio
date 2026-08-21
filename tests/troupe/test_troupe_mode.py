@@ -298,3 +298,28 @@ def test_entering_from_home_creates_nothing(ctx, svc):
     landing.start_troupe(ctx)
     assert ctx.state.mode == "troupe"
     assert len(svc.store.list()) == before
+
+
+def test_a_key_release_never_acts_twice(ctx):
+    """``handle_key`` used to read ``event.key`` without looking at
+    ``event.type``, so every binding ran on the press *and* on the release:
+    Space toggled play and toggled it straight back, and a tap of Right stepped
+    two frames."""
+    import pygame
+
+    state = troupe_mode.ensure(ctx)
+    was = state.playing
+    down = SimpleNamespace(type=pygame.KEYDOWN, key=pygame.K_SPACE, mod=0)
+    up = SimpleNamespace(type=pygame.KEYUP, key=pygame.K_SPACE, mod=0)
+    assert troupe_mode.handle_key(ctx, down) is True
+    assert state.playing is not was
+    assert troupe_mode.handle_key(ctx, up) is False
+    assert state.playing is not was, "a release must not undo the press"
+
+    state.frame = 0
+    right = SimpleNamespace(type=pygame.KEYDOWN, key=pygame.K_RIGHT, mod=0)
+    assert troupe_mode.handle_key(ctx, right) is True
+    stepped = state.frame
+    release = SimpleNamespace(type=pygame.KEYUP, key=pygame.K_RIGHT, mod=0)
+    assert troupe_mode.handle_key(ctx, release) is False
+    assert state.frame == stepped, "a tap of Right stepped two frames"

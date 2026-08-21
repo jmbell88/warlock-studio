@@ -397,9 +397,18 @@ def handle_key(ctx: Any, event: Any) -> bool:
 
     Which is why ``troupe`` is in ``modes.NAV_KEY_MODES``: one press must not
     also step imgui's focus ring.
+
+    **Presses only.** This used to act on ``event.key`` without looking at
+    ``event.type``, so every one of these ran twice per press -- Space toggled
+    play and toggled it straight back, and a tap of Right stepped two frames.
+    ``plotter_mode.handle_key`` states the same contract explicitly and for the
+    same reason; a release is not consumed, because nothing downstream acts on
+    a bare KEYUP.
     """
     import pygame
 
+    if event.type != pygame.KEYDOWN:
+        return False
     state = ensure(ctx)
     if event.key == pygame.K_SPACE:
         state.playing = not state.playing
