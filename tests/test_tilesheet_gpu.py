@@ -36,6 +36,12 @@ pytestmark = pytest.mark.gpu
 
 TILE = 32
 PROMPT = "a damp stone dungeon: flagstones, moss, still water, rubble"
+#: Spelled with the canonical constant rather than the ``orthogonal`` alias the
+#: module still reads: nothing writes that spelling any more, and using it here
+#: is how this file went a whole view-vocabulary change without noticing that
+#: ``SheetGeometry.projection`` had become ``.view`` -- the lane does not run by
+#: default, so the rename cost a card run rather than a test run.
+VIEW = tilesheet.TOP_DOWN
 
 
 @pytest.fixture(scope="module")
@@ -65,15 +71,13 @@ def sheet(pipe, tmp_path_factory):
         pytest.skip("the canny ControlNet is not downloaded")
 
     scratch = tmp_path_factory.mktemp("tilesheet-gpu")
-    geom = tilesheet.geometry(TILE, tilesheet.ORTHOGONAL)
+    geom = tilesheet.geometry(TILE, VIEW)
     guide_path = scratch / "guide.png"
     tilesheet.render_guide(geom).save(guide_path, "PNG")
 
     out = scratch / "sheet.png"
     pipe.generate(
-        guidance.compose_prompt(
-            tilesheet.sheet_subject(PROMPT, geom.projection), {}
-        ),
+        guidance.compose_prompt(tilesheet.sheet_subject(PROMPT, geom.view), {}),
         out,
         seed=42,
         lora=models.PIXEL_SHEET_LORA,

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import ctypes
 import sys
+from collections.abc import Iterable
 from ctypes import wintypes
 from dataclasses import dataclass
 
@@ -142,12 +143,82 @@ def system_memory() -> SystemMemory | None:
     )
 
 
-def summary() -> str | None:
+#: ``PROCESS_QUERY_LIMITED_INFORMATION``. Deliberately not
+#: ``PROCESS_QUERY_INFORMATION``: the limited right is enough for
+#: ``GetProcessMemoryInfo`` and is grantable for a process this one did not
+#: necessarily create, so a reading never depends on the handle inheritance of
+#: whichever code path spawned the child.
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+
+def children_private(pids: Iterable[int]) -> float | None:
+    """Total private commit, in GiB, of the given pids. None off Windows.
+
+    The app's own ``process_memory`` cannot see a subprocess, and Warlock's
+    subprocesses are not incidental: the BiRefNet matting worker was measured
+    at **6.56 GiB of private commit** on 2026-08-21 while the idle-tick line
+    reported 15.9 GiB for the app -- so the log understated what this
+    application was charging against the commit limit by 40%, and the idle
+    sweep that kills that child looked like a rounding error rather than the
+    largest single thing it could give back.
+
+    A pid that cannot be opened contributes nothing rather than failing the
+    whole reading: children are killed by the same idle sweep whose effect this
+    measures, so one disappearing between ``winjob.tracked()`` and this call is
+    the ordinary case and not an error. An empty set is ``0.0`` and never
+    ``None`` -- "no children" and "cannot read" are different facts and the
+    caller renders them differently.
+
+    Never raises, for the module's standing reason: it is called from ``finally``
+    blocks and from the frame loop.
+    """
+    if sys.platform != "win32":
+        return None
+    total = 0.0
+    try:
+        kernel32 = ctypes.windll.kernel32
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        psapi = ctypes.windll.psapi
+        psapi.GetProcessMemoryInfo.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(_PROCESS_MEMORY_COUNTERS_EX),
+            wintypes.DWORD,
+        ]
+        for pid in pids:
+            handle = kernel32.OpenProcess(
+                _PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid)
+            )
+            if not handle:
+                continue
+            try:
+                counters = _PROCESS_MEMORY_COUNTERS_EX()
+                counters.cb = ctypes.sizeof(counters)
+                if psapi.GetProcessMemoryInfo(
+                    handle, ctypes.byref(counters), counters.cb
+                ):
+                    total += counters.PrivateUsage / _GIB
+            finally:
+                kernel32.CloseHandle(handle)
+    except (OSError, AttributeError, TypeError, ValueError):
+        return None
+    return total
+
+
+def summary(children: Iterable[int] | None = None) -> str | None:
     """A one-line host-memory summary for the log, or None if unavailable.
 
-    Both halves matter and they answer different questions: `private` says
-    whether *we* are the leak, `commit` says how close the machine is to the
-    wall the crash hit.
+    Three halves now, and they answer three questions: `private` says whether
+    *we* are the leak, `children` says whether one of our subprocesses is, and
+    `commit` says how close the machine is to the wall the crash hit.
+
+    ``children`` is a set of pids -- ``winjob.tracked()`` at every call site --
+    rather than something this module looks up itself, because ``memlog``
+    imports nothing from the package and is called from inside ``finally``
+    blocks where an import cycle or a lock would be the worse failure.
+
+    The clause is omitted entirely when there are no children, so an idle
+    session does not grow a permanent "children 0.0 GiB" column on a line that
+    is read by eye across thousands of ticks.
     """
     proc = process_memory()
     sysmem = system_memory()
@@ -156,6 +227,10 @@ def summary() -> str | None:
     parts = []
     if proc is not None:
         parts.append(f"private {proc.private:.1f} GiB, ws {proc.working_set:.1f} GiB")
+    if children is not None:
+        kids = children_private(children)
+        if kids:
+            parts.append(f"children {kids:.1f} GiB")
     if sysmem is not None:
         parts.append(
             f"commit {sysmem.commit_total:.1f}/{sysmem.commit_limit:.1f} GiB"

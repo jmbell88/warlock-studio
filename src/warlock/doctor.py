@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import importlib.util
 import os
 import shutil
@@ -14,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import fetch, guidance, models, native, rigging, vram, winjob
+from . import fetch, guidance, memlog, models, native, rigging, vram, winjob
 from .config import Config
 
 # Cheap: matting itself imports nothing heavier than models and reference, both
@@ -24,6 +25,17 @@ from .config import Config
 from .pipelines import matting
 
 MIN_FREE_DISK_GB = 5.0
+
+#: Where the host-memory row stops being green. Below the queue's own
+#: ``COMMIT_CEILING`` (0.90) on purpose: the doctor's job is to explain the
+#: refusal *before* it happens, and a row that only turns amber at the exact
+#: point jobs start failing tells the user nothing they had not already been
+#: told by the failure.
+COMMIT_WARN = 0.85
+
+#: How far above installed RAM the commit limit must sit before the pagefile
+#: stops being the thing to blame. See ``_commit_check``.
+PAGEFILE_HEADROOM = 1.25
 
 # Importing bpy costs seconds and its answer cannot change while this process
 # lives, so the probe runs once. The header's health poll re-runs these.
@@ -101,6 +113,7 @@ def volatile_checks(config: Config, trellis_running: bool = False) -> list[Check
     disk and the port are the four answers that change while the app runs."""
     return [
         _vram_check(config),
+        _commit_check(),
         _job_object_check(),
         _instance_check(config),
         _environment_check(),
@@ -447,6 +460,74 @@ def _disk_check(config: Config) -> Check:
     free_gb, where = min(seen.values())
     ok = free_gb >= MIN_FREE_DISK_GB
     return Check("free disk space", ok, f"{free_gb:.1f} GB free in {where}", fatal=False)
+
+
+def _physical_ram_gib() -> float | None:
+    """Installed RAM in GiB, or None when it cannot be read.
+
+    Its own function so the commit row can be tested without a machine of a
+    particular shape -- ``memlog`` deliberately reports the commit *limit* and
+    not the physical total, because the limit is what the ceiling divides by.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        info = memlog._PERFORMANCE_INFORMATION()  # type: ignore[attr-defined]
+        info.cb = ctypes.sizeof(info)
+        if not ctypes.windll.psapi.GetPerformanceInfo(ctypes.byref(info), info.cb):
+            return None
+        return info.PhysicalTotal * info.PageSize / (1024**3)
+    except (OSError, AttributeError):
+        return None
+
+
+def _commit_check() -> Check:
+    """How close the host is to the commit wall, and whether the pagefile is why.
+
+    The queue refuses a job at ``COMMIT_CEILING`` on a percentage of
+    **system-wide** commit, and that refusal used to arrive with no context at
+    all: "close other applications or restart Warlock". On 2026-08-21 that
+    message was shown on a machine with **24 GiB of physical RAM free** --
+    63.5 GiB installed, a 14.2 GiB pagefile, so a 77.7 GiB limit that ordinary
+    GPU-driver and allocator commit had pushed to 96%. Closing applications was
+    not the answer and restarting Warlock only postponed it.
+
+    So the row distinguishes the two diagnoses, because the remedies are
+    opposite. A limit barely above installed RAM means the *pagefile* is the
+    constraint and growing it is the fix. A limit already well above RAM means
+    something is genuinely consuming the memory and the pagefile advice would
+    do nothing.
+
+    Never fatal. It is a explanation for a refusal the queue owns, not a
+    precondition for starting: a machine at 91% runs everything except the
+    largest job, and refusing to start would be a worse answer than saying so.
+    """
+    sysmem = memlog.system_memory()
+    if sysmem is None or sysmem.commit_limit <= 0:
+        return Check("host memory", True, "commit not measured on this platform", fatal=False)
+    pct = sysmem.commit_fraction * 100
+    free = sysmem.commit_limit - sysmem.commit_total
+    detail = (
+        f"{sysmem.commit_total:.1f}/{sysmem.commit_limit:.1f} GiB committed "
+        f"({pct:.0f}%), {free:.1f} GiB free"
+    )
+    if sysmem.commit_fraction < COMMIT_WARN:
+        return Check("host memory", True, detail, fatal=False)
+    ram = _physical_ram_gib()
+    # 1.25x installed RAM: below that the pagefile is small enough that the
+    # limit is essentially RAM itself, which is the shape that produces a
+    # refusal beside plentiful free memory. A number rather than "any pagefile
+    # at all" because Windows' default managed pagefile on a large-RAM machine
+    # is genuinely small, and that default is the case being described.
+    if ram is not None and sysmem.commit_limit < ram * PAGEFILE_HEADROOM:
+        detail += (
+            f" -- the commit limit is only {sysmem.commit_limit - ram:+.1f} GiB above "
+            f"{ram:.1f} GiB of installed RAM, so the pagefile is the constraint "
+            "rather than memory itself; growing it raises the limit"
+        )
+    else:
+        detail += " -- jobs are refused past 90%; close other applications"
+    return Check("host memory", False, detail, fatal=False)
 
 
 def _volume_key(path: Path) -> Any:

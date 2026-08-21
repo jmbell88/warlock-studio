@@ -179,9 +179,21 @@ def unload() -> None:
     restarting the app.
 
     It now keeps that promise. It used to clear a dict, which returned about a
-    third of what the load cost; killing the child returns all 1475 MB. Called
-    from ``queue.Worker._maybe_evict_caches`` past the idle timeout -- through
+    third of what the load cost; killing the child returns the lot. Called from
+    ``queue.Worker._maybe_evict_caches`` past the idle timeout -- through
     ``asyncio.to_thread``, because it is a process kill now and blocks.
+
+    **How much "the lot" is, measured rather than recalled.** This was written
+    as "all 1475 MB", which is a working-set figure. The number that decides
+    whether the *next job is admitted* is private commit, and on 2026-08-21 a
+    live worker was measured at **6.56 GiB private / 3.98 GiB working set** --
+    4.5x the figure this docstring used to quote. Being a child process it
+    appears in none of the app's own ``private`` readings, so a session log
+    showing 15.9 GiB was under-reporting Warlock by this much again; the
+    idle-tick line adds child commit for exactly that reason. Worth knowing
+    before deciding this release is a rounding error: on the machine that
+    prompted the change it was the single largest thing eviction could give
+    back.
 
     ``_cache`` is still cleared for the case where this module *is* the child
     (``matting_worker`` calls ``_load`` in its own process) and because the

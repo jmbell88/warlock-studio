@@ -2,9 +2,11 @@
 
 One job runs at a time. By default an SDXL-class image pipe (~7 GB; the
 default checkpoint is ``sdxl_cfg``, SDXL 1.0 at full CFG, with Turbo as the
-fast option) and the trellis server
-(~16 GB) coexist in VRAM — neither is stopped for the other, and both are
-evicted after the idle timeout. With Config.vram_exclusive set
+fast option) and the trellis server (~16 GB) coexist in VRAM — neither is
+stopped for the other. **The image pipe is unloaded when the stage that loaded
+it ends**, though (see ``_release_t2i`` for why the host, not the card, decides
+that); trellis is a subprocess with a far larger startup cost and is evicted on
+its own idle timeout. With Config.vram_exclusive set
 (WARLOCK_VRAM_EXCLUSIVE=1, for small cards or a resident Flux), text jobs
 instead use the sequential handoff: the trellis server is stopped before the
 image model loads, and the image model is unloaded before trellis restarts.
@@ -32,7 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import errors, fetch, leases, memlog, models, rigging, vectors, vram
+from . import errors, fetch, leases, memlog, models, rigging, vectors, vram, winjob
 from ._q_generate import GenerateOps
 from ._q_jobs import JobOps
 from ._q_mesh import MeshPostOps
@@ -235,7 +237,10 @@ def _log_mem(when: str) -> None:
     mem = vram_gib()
     if mem is not None:
         log.info("vram %s: %.2f GiB allocated, %.2f GiB reserved", when, *mem)
-    host = memlog.summary()
+    # ``winjob.tracked()`` rather than nothing: the matting worker is a child,
+    # and at 6.5 GiB of private commit it was the largest single charge this
+    # app made that no ``host ...`` line in this log had ever shown.
+    host = memlog.summary(children=winjob.tracked())
     if host is not None:
         log.info("host %s: %s", when, host)
     pressure = commit_fraction()
@@ -930,7 +935,14 @@ class Worker(GenerateOps, RigOps, TroupeOps, SpriteOps, TileSheetOps, MeshPostOp
         if forget:
             self._text2image = None
             self._t2i_key = None
-        if pipe is not None:
+        # ``.loaded`` is checked, not just ``is not None``: since every t2i
+        # stage gives its checkpoint back when it ends (see ``_release_t2i``),
+        # the pipe this finds is usually *already* unloaded and kept only for
+        # its identity. ``Text2Image._unload`` returns immediately on
+        # ``_pipe is None``, so the call would be harmless -- but it is still a
+        # thread hop and the models lease for nothing, and it would make
+        # "the switch unloads the previous pipe exactly once" false by one.
+        if pipe is not None and getattr(pipe, "loaded", True):
             await asyncio.to_thread(pipe.unload)
 
     async def _evict_stale_t2i(self, base_key: str) -> bool:
@@ -993,10 +1005,11 @@ class Worker(GenerateOps, RigOps, TroupeOps, SpriteOps, TileSheetOps, MeshPostOp
         """Drop the host-side inference caches an idle session is not using.
 
         Three session-long caches whose release functions existed and were
-        called from nothing in ``src/``: BiRefNet (~1.5 GB of host RSS, and now
-        a child process), the 2D pose model, and ``bench.metrics``' DINOv2 --
-        which is the one of the three that can hold *VRAM*, because its cache
-        key carries the device and the benchmark path resolves ``None`` to cuda.
+        called from nothing in ``src/``: BiRefNet (a child process holding
+        ~4 GB of working set and **6.5 GiB of private commit**, measured
+        2026-08-21), the 2D pose model, and ``bench.metrics``' DINOv2 -- which
+        is the one of the three that can hold *VRAM*, because its cache key
+        carries the device and the benchmark path resolves ``None`` to cuda.
 
         Stamped off the last finished job rather than off each cache, because
         none of the three records a last-used of its own and an unload of an
@@ -1008,7 +1021,8 @@ class Worker(GenerateOps, RigOps, TroupeOps, SpriteOps, TileSheetOps, MeshPostOp
         stayed resident indefinitely. Matting is exactly such a path: an export
         or a matte preview loads it through ``TaskRunner``
         (``service/derive.py``, ``service/matte.py``), never through the queue,
-        and its ~1.5 GB child then sat there until the app closed (MDL-12).
+        and its child -- the largest single charge this sweep can give back --
+        then sat there until the app closed (MDL-12).
 
         A repeat pass over three empty caches is one thread hop per idle
         timeout -- ten minutes apart, three no-op function calls -- which is the
@@ -1167,18 +1181,41 @@ class Worker(GenerateOps, RigOps, TroupeOps, SpriteOps, TileSheetOps, MeshPostOp
         pipe's ~16 GiB is host weights that only a full ``unload`` releases --
         and this pipe must not still be holding them when trellis restarts.
 
-        Deliberately narrower than ``handoff``: stopping a running trellis to
-        make room is not a reason to throw away a resident pipe the next job
-        may want warm.
+        **Unconditional since 2026-08-21.** It used to fire only under
+        ``vram_exclusive`` or an OFFLOAD spec, on the reasoning that a card
+        with room for both models should not throw away a checkpoint the next
+        job may want warm. That reasoning is about the *card*, and the
+        constraint that actually bit is the *host*: a resident pipe is ~7 GiB
+        of VRAM whose WDDM backing, plus the pipe's own arenas, is charged
+        against system commit -- and ``_require_commit_headroom`` refuses the
+        next job on a percentage of that commit. A 63.5 GiB machine with a
+        14.2 GiB pagefile sat at 96% while holding a pipe for a job that had
+        finished ten minutes of idle ago, with 24 GiB of RAM free.
 
-        ``_generate``'s teardown is deliberately *not* this -- see the comment
-        at its own ``finally``, which trades the same VRAM against the mesh
-        stage that immediately follows it in the same job.
+        So the trade is taken the other way: the checkpoint goes back when the
+        stage that loaded it ends, and a back-to-back job pays one reload
+        rather than the queue holding memory against a job that may never come.
+        ``spec`` stays in the signature -- the offload distinction still
+        decides *how much* is being given back, and the argument above is
+        written in terms of it.
+
+        ``_generate``'s teardown is still deliberately *not* this -- see the
+        comment at its own ``finally``, which reaches the same conclusion by a
+        different route because it hands straight on to the mesh stage.
+
+        The pipe is unloaded and **kept**, which is the second thing that
+        changed. Forgetting it was right while this only ran on the exclusive
+        and offload paths, where the point was to make room for something
+        different; as the ordinary end of every t2i stage it would throw away
+        the cache entry on every job and construct a second ``Text2Image`` for
+        the next one at the same base. ``_generate``'s handoff branch already
+        argues this and already unloads without clearing: ``.loaded`` is what
+        every reader asks -- the idle sweep, the dispatch credit,
+        ``_evict_stale_t2i`` -- and ``load()`` rebuilds from ``_pipe is None``,
+        so an unloaded instance is reusable rather than stale. Both teardown
+        families now do the same thing for the same reason.
         """
-        if self.config.vram_exclusive or spec.residency == models.OFFLOAD:
-            await asyncio.to_thread(t2i.unload)
-            self._text2image = None
-            self._t2i_key = None
+        await asyncio.to_thread(t2i.unload)
 
     def _check_resources(self, job: dict[str, Any]) -> None:
         """The dispatch-time half of admission control.
@@ -1285,8 +1322,12 @@ class Worker(GenerateOps, RigOps, TroupeOps, SpriteOps, TileSheetOps, MeshPostOp
         )
         self.progress.begin(job_id, job["kind"], cold=cold)
         error: str | None = None
+        # Whether the job got past the door. Only work that *ran* may re-arm the
+        # idle clock below -- see that ``finally`` for the loop this closes.
+        admitted = False
         try:
             self._check_resources(job)
+            admitted = True
             await self._generate(job)
         except Exception as exc:
             if not self._cancel.event.is_set():
@@ -1401,6 +1442,18 @@ class Worker(GenerateOps, RigOps, TroupeOps, SpriteOps, TileSheetOps, MeshPostOp
                 # of those caches (a 2D export mattes, a bench run embeds), so
                 # the throttle has to reopen on every finish, not only on the
                 # ones that did.
-                self._last_job_at = time.monotonic()
-                self._caches_evicted_at = 0.0
+                #
+                # **Only for a job that was admitted**, and that condition is
+                # the whole point. A job refused by ``_check_resources`` has
+                # loaded nothing and touched no cache, so re-arming for it made
+                # the refusal postpone the cleanup that would lift the refusal:
+                # "host memory is 96% committed" invites a retry, each retry
+                # pushed eviction another ``trellis_idle_timeout`` away, and the
+                # 6.5 GiB BiRefNet child that eviction exists to kill stayed
+                # resident for as long as the user kept trying. The app could
+                # not recover on its own from the one state it most needed to.
+                # A refusal is not a finish.
+                if admitted:
+                    self._last_job_at = time.monotonic()
+                    self._caches_evicted_at = 0.0
                 self.progress.end(job_id)

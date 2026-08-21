@@ -66,3 +66,74 @@ def test_readings_are_none_off_windows(monkeypatch, real_system_memory):
     monkeypatch.setattr(memlog.sys, "platform", "linux")
     assert memlog.process_memory() is None
     assert memlog.system_memory() is None
+
+
+# --- children ----------------------------------------------------------------
+
+
+@windows_only
+def test_child_commit_reads_a_real_process():
+    """The reading that stops a subprocess being invisible in the log.
+
+    A matting worker measured 6.56 GiB of private commit on 2026-08-21 while
+    the app's own idle-tick line said 15.9 GiB -- so the log under-reported
+    Warlock's charge against the ceiling by 40%, and the sweep that would have
+    freed the largest single piece of it looked unimportant. ``os.getpid()``
+    stands in for a child here: what is being pinned is that a *pid* resolves
+    to a plausible figure at all, in GiB rather than bytes or pages.
+    """
+    import os
+
+    total = memlog.children_private([os.getpid()])
+    assert total is not None
+    assert 0.01 < total < 1024
+
+
+@windows_only
+def test_child_commit_skips_a_pid_that_is_gone_rather_than_failing():
+    """A child reaped between ``tracked()`` and this call is the ordinary case,
+    not an error: the sweep that kills them runs on the same loop this reads
+    from. An unknown pid contributes nothing and the rest still count."""
+    import os
+
+    # 0xFFFFFFF0 is not a live pid on any machine; OpenProcess simply fails.
+    mixed = memlog.children_private([os.getpid(), 0xFFFFFFF0])
+    alone = memlog.children_private([os.getpid()])
+    assert mixed is not None and alone is not None
+    assert abs(mixed - alone) < 0.5
+
+
+def test_child_commit_of_nothing_is_zero_not_none():
+    """None means "cannot read"; an empty child set is a *known* zero, and the
+    caller formats the two differently."""
+    assert memlog.children_private([]) == 0.0
+
+
+def test_child_commit_is_none_off_windows(monkeypatch):
+    monkeypatch.setattr(memlog.sys, "platform", "linux")
+    assert memlog.children_private([1234]) is None
+
+
+@windows_only
+def test_summary_names_child_commit_when_there_is_any():
+    """The log line is the artifact; a figure that never reaches it is not
+    instrumentation. ``memlog`` takes pids rather than importing ``winjob``,
+    which is what keeps it stdlib-only and callable from a ``finally``."""
+    import os
+
+    line = memlog.summary(children=[os.getpid()])
+    assert line is not None
+    assert "children" in line, line
+    assert "commit" in line
+
+
+@windows_only
+def test_summary_omits_the_child_clause_when_there_are_none():
+    """An idle session with no subprocess must not grow a "children 0.0 GiB"
+    column: the line is read by eye across thousands of ticks."""
+    line = memlog.summary(children=[])
+    assert line is not None
+    assert "children" not in line
+    line_default = memlog.summary()
+    assert line_default is not None
+    assert "children" not in line_default

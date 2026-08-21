@@ -453,17 +453,88 @@ def _make_worker(tmp_path, **config_overrides) -> Worker:
     return Worker(config, JobStore(config.db_path))
 
 
-async def test_coexist_text_job_keeps_trellis_and_sdxl_resident(worker):
+async def test_coexist_text_job_keeps_trellis_but_releases_the_image_model(worker):
+    """Coexist keeps *trellis* resident and gives the checkpoint back.
+
+    This used to assert ``unload_calls == 0`` and ``loaded is True``: under
+    coexist the image pipe stayed warm until the 600 s idle sweep, on the
+    reasoning that the next job may want it and the card has room for both.
+    The card did. **The host did not** -- a resident SDXL pipe is ~7 GiB of
+    VRAM whose WDDM backing, plus its own arenas, is charged against system
+    commit, and on a 63.5 GiB machine with a 14.2 GiB pagefile that is the
+    difference between admitting the next job and refusing it at the 90%
+    ceiling with 24 GiB of RAM sitting free.
+
+    So the trade is taken the other way now: every t2i stage gives the
+    checkpoint back when it ends, exactly as exclusive mode always has, and a
+    back-to-back job pays one reload rather than the queue holding memory
+    against a job that may never come.
+
+    Trellis is deliberately *not* included. It is a subprocess with a startup
+    cost an order of magnitude larger, and it is on its own ``last_used``
+    timer -- which the refusal path never touched.
+    """
     job_id = worker.store.create("text", "a barrel", {"seed": 1, "resolution": 512})
     worker.start()
     await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
 
-    # Checked before shutdown() (which legitimately stops trellis): the job
-    # itself must not have stopped the 3D server or unloaded the image model.
-    assert worker.trellis.stop_calls == 0
-    assert worker._text2image.unload_calls == 0
-    assert worker._text2image.loaded is True
+    # Checked before shutdown(), which legitimately stops trellis.
+    assert worker.trellis.stop_calls == 0, "a text job must not stop the 3D server"
+    await _wait_until(lambda: worker._text2image.loaded is False)
+    assert worker._text2image.unload_calls == 1, (
+        "the image model must be released when the job that loaded it ends"
+    )
     await worker.shutdown()
+
+
+async def test_a_coexist_sprite_stage_also_releases_the_image_model(
+    tmp_path, fake_pipelines
+):
+    """The other teardown family, and the reason this is two tests.
+
+    ``_generate`` has its own ``finally`` because it hands straight on to the
+    mesh stage; every other t2i stage ends when the image does and tears down
+    through ``Worker._release_t2i``. That method used to unload only under
+    ``vram_exclusive`` or an OFFLOAD spec and leave the pipe resident
+    otherwise, so a sprite or tile-sheet job on a coexist card held the
+    checkpoint just as a text job did. Both sites changed together or the
+    guarantee would hold for one kind of job and not the next.
+    """
+    from warlock import models
+
+    worker = _make_worker(tmp_path)
+    try:
+        pipe = SimpleNamespace(loaded=True, unload_calls=0)
+
+        def _unload() -> None:
+            pipe.unload_calls += 1
+            pipe.loaded = False
+
+        pipe.unload = _unload
+        worker._text2image = pipe
+        worker._t2i_key = models.DEFAULT_BASE_MODEL
+
+        spec = models.BASE_MODELS[models.DEFAULT_BASE_MODEL]
+        assert spec.residency != models.OFFLOAD, (
+            "this test is about the *non*-offload path; pick another base if "
+            "the default ever becomes an offloaded one"
+        )
+        assert not worker.config.vram_exclusive
+
+        await worker._release_t2i(pipe, spec)
+
+        assert pipe.unload_calls == 1, (
+            "a coexist sprite/tile stage left the checkpoint resident"
+        )
+        # Unloaded and *kept*, exactly as ``_generate``'s teardown does: the
+        # object is the cache entry, ``loaded`` says whether its weights are
+        # resident, and dropping it would build a second pipe for the next job
+        # at the same base.
+        assert pipe.loaded is False
+        assert worker._text2image is pipe
+        assert worker._t2i_key == models.DEFAULT_BASE_MODEL
+    finally:
+        worker.store.close()
 
 
 async def test_a_load_is_refused_when_commit_is_short_in_bytes_not_in_percent(
@@ -558,6 +629,16 @@ async def test_a_base_switch_unloads_the_old_pipe_before_the_commit_check(
                                   models.DEFAULT_BASE_MODEL)
         old = worker._text2image
         assert old is not None
+        # ``_acquire_t2i`` *constructs* the pipe; the real one loads its
+        # weights lazily inside ``generate``, and ``Text2Image.loaded`` is
+        # ``self._pipe is not None``. So a pipe that has only been acquired
+        # holds nothing, and the scenario this test describes -- a resident
+        # SDXL pipe whose ~12 GiB is the shortfall -- is one where a job has
+        # already generated through it. Said explicitly since 2026-08-21, when
+        # ``_evict_stale_t2i`` began skipping a pipe that is already unloaded:
+        # before that the unconditional unload made the distinction invisible
+        # and this setup passed while reproducing the wrong state.
+        old.loaded = True
 
         # Short while the old pipe is resident, roomy once it has unloaded --
         # exactly the live machine's shape.
@@ -593,6 +674,7 @@ async def test_a_switch_still_short_after_the_unload_is_refused(
         await worker._acquire_t2i(models.BASE_MODELS[models.DEFAULT_BASE_MODEL],
                                   models.DEFAULT_BASE_MODEL)
         old = worker._text2image
+        old.loaded = True  # a resident pipe holds weights -- see the test above
         state["free"] = 6.0
 
         with pytest.raises(RuntimeError, match="host memory"):
@@ -684,6 +766,7 @@ async def test_a_store_generation_bump_reloads_through_the_commit_check(
         await worker._acquire_t2i(models.BASE_MODELS[models.DEFAULT_BASE_MODEL],
                                   models.DEFAULT_BASE_MODEL)
         old = worker._text2image
+        old.loaded = True  # a resident pipe holds weights -- see the test above
         fetch.bump_store_generation()
 
         # Short before the unload, roomy after: passes only if the check runs
@@ -767,7 +850,11 @@ async def test_installing_a_model_while_a_pipe_is_warm_rebuilds_it(worker):
     worker.start()
     await _wait_until(lambda: worker.store.get(first)["status"] == "done")
     warm = worker._text2image
-    assert warm.loaded is True
+    # Released by its own job since 2026-08-21, but *kept* -- the object is the
+    # cache entry, and ``loaded`` is what says whether its weights are resident.
+    # This test is about the entry being invalidated by a store change, which
+    # is orthogonal to whether the weights happen to be in memory right now.
+    await _wait_until(lambda: warm.loaded is False)
     unloads = warm.unload_calls
 
     # Same base, same key: without the generation this is a plain cache hit.
@@ -779,10 +866,25 @@ async def test_installing_a_model_while_a_pipe_is_warm_rebuilds_it(worker):
     fetch.bump_store_generation()
     rebuilt = await worker._get_text2image(worker._t2i_key)
     assert rebuilt is not warm, "a pipe older than the store must not be reused"
-    assert warm.unload_calls == unloads + 1
+    assert warm.loaded is False, "the discarded pipe must hold no weights"
+    # No *second* unload: the job teardown already gave this pipe's checkpoint
+    # back, and ``_evict_stale_t2i`` skips a pipe that is already unloaded
+    # rather than paying a thread hop and the models lease to no effect.
+    assert warm.unload_calls == unloads
 
-    # And the rebuilt pipe is current, so the next job is a cache hit again.
-    assert await worker._get_text2image(worker._t2i_key) is rebuilt
+    # And the guarantee that skip could hide, asserted on its own: a stale pipe
+    # that *is* holding weights is still unloaded before it is dropped. This is
+    # the case the counter above used to cover incidentally.
+    rebuilt.loaded = True
+    before = rebuilt.unload_calls
+    fetch.bump_store_generation()
+    assert await worker._get_text2image(worker._t2i_key) is not rebuilt
+    assert rebuilt.unload_calls == before + 1
+    assert rebuilt.loaded is False
+
+    # And the current pipe is a cache hit again.
+    current = worker._text2image
+    assert await worker._get_text2image(worker._t2i_key) is current
     await worker.shutdown()
 
 
@@ -841,9 +943,11 @@ async def test_a_resident_base_still_coexists(tmp_path, fake_pipelines):
         worker.start()
         await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
         assert worker.trellis.stop_calls == 0
-        assert worker._text2image.unload_calls == 0
-        assert worker._text2image.trim_calls == 1
-        assert worker._text2image.loaded is True
+        # The pipe is released when the job ends (2026-08-21); what this test
+        # is about is that naming a base did not change *trellis*, which is the
+        # half the residency term could have broken by accident.
+        await _wait_until(lambda: worker._text2image.loaded is False)
+        assert worker._text2image.unload_calls == 1
         await worker.shutdown()
     finally:
         worker.store.close()
@@ -948,11 +1052,19 @@ async def test_a_job_is_refused_at_dispatch_when_the_card_has_since_filled(
 async def test_a_resident_sdxl_pipe_is_not_charged_twice_at_dispatch(
     tmp_path, fake_pipelines, monkeypatch
 ):
-    """The steady state coexist is designed for -- the pipe warm between jobs --
-    is exactly when free VRAM is lowest. What the pipe holds is already inside
-    `need`, so it must be credited back rather than demanded a second time."""
+    """A resident pipe is already inside `need`, so it must be credited back
+    rather than demanded a second time -- the 2026-08-04 session, where free
+    VRAM was low precisely *because* the pipe was holding it.
+
+    The residency is now set up directly rather than by running a job first.
+    Since 2026-08-21 every t2i stage releases its checkpoint when it ends, so
+    two sequential jobs no longer reach dispatch with a pipe resident and the
+    old setup would have been asserting the credit against ``loaded is False``
+    -- passing for the wrong reason. The arithmetic is still worth pinning:
+    ``_check_resources`` must credit whatever it finds resident, and the
+    sibling test below pins that an *image* job gets no such credit."""
     import warlock.queue as queue_mod
-    from warlock import vram
+    from warlock import models, vram
 
     monkeypatch.setattr(queue_mod, "commit_fraction", lambda: None)
     monkeypatch.setattr(queue_mod, "vram_gib", lambda: (7.1, 7.52))
@@ -962,16 +1074,21 @@ async def test_a_resident_sdxl_pipe_is_not_charged_twice_at_dispatch(
     )
     worker = _make_worker(tmp_path)
     try:
-        first = worker.store.create("text", "a barrel", {"seed": 1, "resolution": 512})
-        worker.start()
-        await _wait_until(lambda: worker.store.get(first)["status"] == "done")
-        assert worker._text2image.loaded is True
+        worker.trellis.running = True
+        worker._text2image = SimpleNamespace(loaded=True)
+        worker._t2i_key = models.DEFAULT_BASE_MODEL
 
-        # The 2026-08-04 session: pipe resident, free down by what it holds.
+        # Pipe resident, free down by what it holds: admitted, because the
+        # 7.5 GiB it is holding is credited rather than demanded again.
         free["gib"] = 22.6
-        second = worker.store.create("text", "a crate", {"seed": 2, "resolution": 512})
-        await _wait_until(lambda: worker.store.get(second)["status"] == "done")
-        await worker.shutdown()
+        job = {"kind": "text", "stage": "model", "params": {"resolution": 512}}
+        worker._check_resources(job)
+
+        # The refusal direction is not asserted here: it belongs to
+        # ``test_dispatch_still_refuses_past_what_the_resident_models_explain``,
+        # which picks a card tight enough for the credit to be the deciding
+        # term. Asserting it on this card would need a second set of invented
+        # numbers to mean anything.
     finally:
         worker.store.close()
 
@@ -1070,6 +1187,79 @@ async def test_dispatch_still_refuses_past_what_the_resident_models_explain(
             worker._check_resources(job)
     finally:
         worker.store.close()
+
+
+async def test_a_refused_job_does_not_rearm_the_cache_eviction_clock(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    """The refusal must not postpone the cleanup that would lift the refusal.
+
+    ``_process``'s outer ``finally`` re-arms ``_last_job_at`` on every outcome,
+    and ``_maybe_evict_caches`` gates on it -- so a job that died in
+    ``_check_resources`` microseconds after dispatch, having loaded nothing and
+    touched no cache, pushed host-cache eviction a whole idle timeout into the
+    future. Retrying is the natural response to "host memory is 96% committed",
+    and each retry pushed it out again: the app could not recover on its own,
+    and the 6.5 GiB BiRefNet child that eviction exists to kill stayed resident
+    for as long as the user kept trying.
+
+    The clock belongs to work that ran. A job refused at the door is not a
+    finished job, and the caches it did not populate are not made fresher by
+    its failure.
+    """
+    import warlock.queue as queue_mod
+
+    monkeypatch.setattr(queue_mod, "commit_fraction", lambda: 0.97)
+    worker = _make_worker(tmp_path, trellis_idle_timeout=600.0)
+    try:
+        # Idle since well before the timeout: eviction is due.
+        stale = time.monotonic() - 10_000.0
+        worker._last_job_at = stale
+        worker._caches_evicted_at = stale
+
+        job_id = worker.store.create("text", "a barrel", {"seed": 1, "resolution": 512})
+        worker.start()
+        await _wait_until(lambda: worker.store.get(job_id)["status"] == "error")
+        assert "committed" in (worker.store.get(job_id)["error"] or "")
+
+        assert worker._last_job_at == stale, (
+            "a job refused at admission re-armed the idle clock, so the eviction "
+            "that would free the memory it was refused for is pushed a whole "
+            "timeout away -- and every retry pushes it again"
+        )
+        # And the consequence, which is the property that actually matters: the
+        # idle sweep is free to run despite the refusal, so the caches holding
+        # the memory get dropped rather than pinned by the retry.
+        assert worker._caches_evicted_at > stale, (
+            "the refusal blocked the cache eviction it should have left alone"
+        )
+    finally:
+        await worker.shutdown()
+        worker.store.close()
+
+
+async def test_a_finished_job_still_rearms_the_cache_eviction_clock(worker):
+    """The other direction, so the fix above cannot be a blanket removal.
+
+    A job that *ran* may well have populated one of the three caches -- a 2D
+    export mattes, a bench run embeds -- so the throttle has to reopen when it
+    finishes. That is what the clock is for, and it is the half MDL-12 added.
+    """
+    stale = time.monotonic() - 10_000.0
+    worker._last_job_at = stale
+    worker._caches_evicted_at = stale
+
+    job_id = worker.store.create("text", "a barrel", {"seed": 1, "resolution": 512})
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    # The terminal status is written *inside* the try; both clock writes happen
+    # afterwards in the outer ``finally``, and ``_caches_evicted_at`` is the
+    # second of the two. Waiting on it is what makes this deterministic rather
+    # than a race the status alone would lose about one run in twenty.
+    await _wait_until(lambda: worker._caches_evicted_at == 0.0)
+
+    assert worker._last_job_at > stale, "a job that ran must re-arm the clock"
+    await worker.shutdown()
 
 
 async def test_idle_eviction_unloads_sdxl_in_coexist_mode(tmp_path, fake_pipelines):
@@ -1373,8 +1563,20 @@ async def test_worker_picks_up_the_next_queued_job_after_a_completed_one(worker)
 
 
 async def test_same_base_model_across_jobs_reuses_the_resident_pipe(tmp_path, fake_pipelines):
-    """The pipe is process-lifetime cached, so two jobs on one base must not
-    pay a 7 GB reload between them."""
+    """Two jobs on one base reuse the pipe *object*, and reload its weights.
+
+    This used to assert ``unload_calls == 0`` -- the pipe was held across jobs
+    so the second paid no reload at all. Since 2026-08-21 the checkpoint goes
+    back when each job ends, and that cost is the accepted price of not holding
+    ~7 GiB of VRAM and its host commit against a job that may never be
+    submitted.
+
+    What survives, and is the half worth pinning, is the *identity*: the same
+    ``Text2Image`` is reused rather than a second one constructed, because
+    ``_generate``'s teardown unloads without clearing ``_text2image``. That is
+    what keeps ``_t2i_key``, the store-generation check and the dispatch credit
+    talking about one object rather than two.
+    """
     worker = _make_worker(tmp_path)
     try:
         first = worker.store.create(
@@ -1386,7 +1588,11 @@ async def test_same_base_model_across_jobs_reuses_the_resident_pipe(tmp_path, fa
         worker.start()
         await _wait_until(lambda: worker.store.get(second)["status"] == "done")
         assert worker.store.get(first)["status"] == "done"
-        assert worker._text2image.unload_calls == 0
+        pipe = worker._text2image
+        assert pipe.spec.key == "turbo"
+        assert pipe.seeds == [1, 2], "both jobs generated through the one object"
+        assert pipe.unload_calls == 2, "and each released its checkpoint when it ended"
+        assert worker._t2i_key == "turbo", "the key must still name the reused object"
         await worker.shutdown()
     finally:
         worker.store.close()
@@ -1418,7 +1624,11 @@ async def test_switching_base_model_unloads_the_previous_one_exactly_once(
         assert first_pipe.unload_calls == 1
         assert worker._t2i_key == "sdxl"
         assert worker._text2image.spec.key == "sdxl"
-        assert worker._text2image.unload_calls == 0
+        # The new pipe released its own checkpoint when its job ended, like
+        # every other t2i stage. What "exactly once" is about is the *previous*
+        # pipe above: the switch must not unload it twice, and it does not --
+        # ``_evict_stale_t2i`` skips a pipe the job teardown already unloaded.
+        assert worker._text2image.unload_calls == 1
         await worker.shutdown()
     finally:
         worker.store.close()
@@ -1850,10 +2060,14 @@ async def test_a_bad_reference_is_rerolled_once_with_a_fresh_seed(
     attempts = store.get(job_id)["params"]["reference_attempts"]
     assert [a["ok"] for a in attempts] == [False, True]
     assert [a["seed"] for a in attempts] == seeds
-    # One load and one teardown around both samples: the retry must not repeat
-    # the VRAM handoff, which is the whole reason it lives inside the try.
-    assert unloads == 0
-    assert trims == 1
+    # One load and one teardown around *both* samples: the retry must not repeat
+    # the VRAM handoff, which is the whole reason it lives inside the try. That
+    # property is what this pins, and it got sharper on 2026-08-21: the coexist
+    # teardown became an unload rather than a trim, so a reroll that reloaded
+    # between attempts would now show up as two unloads rather than as a
+    # second trim nobody would look twice at.
+    assert unloads == 1, "the reroll reloaded the checkpoint between attempts"
+    assert trims == 0
     store.close()
 
 

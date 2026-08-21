@@ -346,11 +346,12 @@ def test_health_reports_the_worker_and_the_doctor_checks(svc, worker):
     assert body["ok"] is True
     assert body["worker_alive"] is True
     assert body["fatal"] is None
-    # Thirteen fixed rows: eleven, plus "single instance" (RUN-01) and
-    # "environment" (RUN-03). Derived rather than hardcoded past that, so
-    # adding a model does not fail an assertion about something else.
+    # Fourteen fixed rows: eleven, plus "single instance" (RUN-01),
+    # "environment" (RUN-03) and "host memory" (the commit-headroom row).
+    # Derived rather than hardcoded past that, so adding a model does not fail
+    # an assertion about something else.
     assert len(body["checks"]) == (
-        13
+        14
         + len(models.BASE_MODELS)
         + len(models.STYLE_LORAS)
         + len(models.IP_ADAPTERS)

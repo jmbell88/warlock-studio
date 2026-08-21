@@ -34,17 +34,38 @@ explains where it is — or in `docs/INVARIANTS.md`, or in a
 **The single highest-value thing on this list.** Everything downstream of it is
 built and waiting.
 
-- [ ] **Two or three pixel-art references** whose look you want. Without them
-      the pixeliser has no bar to clear — every palette, outline and shading
-      decision is judged against these, and "too generic" was one of the four
-      complaints the whole Troupe programme exists to escape.
-- [ ] **Palette ramps**, or approval of ones derived from those references, as
-      `.hex`/`.gpl` through `service/palettes.py`. Median-cut quantisation is
-      *why* 3D-derived sheets come out muddy; authored ramps are the fix.
+- [x] ~~**Two or three pixel-art references** whose look you want.~~ **Supplied
+      2026-08-21**, in `examples/`: `light_world.png` (the LTTP light world map
+      — 4110×5136, indexed, 204 colours, the only one of the four that carries a
+      real palette), `zelda_1.jpg` and `player_male_spritesheet.png` (the
+      character bar: four directions, five rows, chunky limbs, dark outline).
+      **The two character references are colour-destroyed and can only ever be
+      look references** — the JPEG carries 19,909 colours and bakes transparency
+      in as a checkerboard, and the sheet is a smooth upscale at 53,088. A ramp
+      pulled from either would be JPEG ringing and bicubic interpolation
+      wearing the name of art direction. A clean PNG rip is a minute's work if a
+      character ramp is wanted.
+- [x] ~~**Palette ramps**~~ **Installed 2026-08-21 — the directory had been
+      empty**, which is *why* this blocked: `colors.gpl` sat in `examples/`
+      where nothing reads it, so every pixel export and every Troupe sheet to
+      date ran on median cut. `~/.warlock/palettes/` now holds **`cosmos`** (The
+      Cosmos, 64, the chosen bar — pass it as Troupe's `palette` param) and
+      **`light_world`** (64, derived from the map's own index table). Both
+      verified through `service.palettes.load` and `pixel.map_palette`.
+      They stay *user data and out of git*, per the standing rule the manual
+      states: nothing ships with the app, because a palette is a decision about
+      which colours exist.
+      One finding worth keeping, recorded in the derived file's own header: a
+      coverage rule alone would have kept the map rip's **canvas** — a flat grey
+      covering 14.29% of the sheet, ranking *first* by coverage — so the
+      derivation drops any colour filling complete scanlines before it ranks
+      anything. No map feature spans 4110 px; padding does.
 - [ ] **A textured base mesh** (or a run through the Phase 4 reference chain).
-      Both `examples/*_base.obj` carry no texture, so every frame currently
-      quantises into the pale end of the palette — **the palette is unproven on
-      anything but greys.**
+      Both `examples/*_base.obj` carry no texture, so every frame still
+      quantises into the pale end of whatever ramp it is given — **and now that
+      the ramps exist, this is the only thing between them and a verdict.** The
+      palette is provable on 2D today (a tile sheet has real colour) and stays
+      unproven *on Troupe* until this lands.
 
 ## 2. Author the 22 keyframes — the editor is built for exactly this
 
@@ -121,8 +142,21 @@ has looked.**
 
 ## 5. GPU runs — need your card
 
-- [ ] **`uv run pytest -m gpu -n 0`.** Serial is enforced; it is the only lane
-      that sees real weights and the real `~/.warlock`.
+- [x] ~~**`uv run pytest -m gpu -n 0`.**~~ **Run 2026-08-21: 21 passed, 5
+      errors**, and the five were one stale attribute rather than a defect on
+      the card — the three-views change renamed `SheetGeometry.projection` to
+      `.view` and `tests/test_tilesheet_gpu.py` was the one caller it did not
+      reach, because that file only runs when someone asks for it. Fixed the
+      same day. Serial is still enforced, and this is still the only lane that
+      sees real weights and the real `~/.warlock`.
+- [ ] **Re-run the one file the errors ate**:
+      `uv run pytest tests/test_tilesheet_gpu.py -m gpu -n 0`. ~20 s of card for
+      one 8×8 generation. Its two load-bearing claims — the model puts its seams
+      where the guide drew them, and the reduction keeps a cell's contrast — have
+      **never been asserted since the view vocabulary widened**, so the lane's
+      verdict on tile sheets is currently a run that did not happen. Top-down
+      only; the isometric diamond guide and the 3/4 clause are unproven on a
+      card either way, and that is a separate ask, not this one.
 - [ ] **Run a `charsheet` job end to end against real Blender.** Troupe Phase
       4's job has *never* been run on a card. The pieces either side of it have
       (Phase 0d), and the render call is `rigging.sheet_spec` + `run_worker`

@@ -76,15 +76,18 @@ def test_port_check_reports_a_bound_port_as_not_ok(tmp_path):
 
 
 def test_run_checks_returns_every_check(tmp_path):
-    # Thirteen fixed checks plus one row per registry entry -- derived rather
+    # Fourteen fixed checks plus one row per registry entry -- derived rather
     # than hardcoded so adding a model doesn't fail an unrelated assertion.
     # The twelfth is "single instance", which RUN-01 added alongside the
     # startup lock: the refusal fires once, and two Warlocks over one job
     # database is exactly what somebody goes looking for in diagnostics
     # afterwards. The thirteenth is "environment", RUN-03's single surface for
-    # every WARLOCK_* value that would not parse.
+    # every WARLOCK_* value that would not parse. The fourteenth is "host
+    # memory" (2026-08-21): the queue refuses jobs on a percentage of
+    # system-wide commit and that refusal used to arrive with no context, on a
+    # machine with 24 GiB of RAM free.
     expected = (
-        13
+        14
         + len(model_registry.BASE_MODELS)
         + len(model_registry.STYLE_LORAS)
         + len(model_registry.IP_ADAPTERS)
@@ -579,3 +582,86 @@ def test_the_exe_remedy_names_the_exact_release_asset_and_its_digest(tmp_path):
         "trellis-cuda-windows-x64.zip"
     ) in detail
     assert "f7d2912b064bf1520f03e025c5eb344df6b347ad04831ac7aa04d847581bd7ad" in detail
+
+
+# --- host commit -------------------------------------------------------------
+
+
+def _sysmem(total: float, limit: float):
+    from warlock import memlog
+
+    return memlog.SystemMemory(commit_total=total, commit_limit=limit)
+
+
+def test_commit_headroom_row_warns_when_the_pagefile_is_the_constraint(monkeypatch):
+    """The shape of the machine that prompted this row, 2026-08-21.
+
+    63.5 GiB of RAM, a 14.2 GiB pagefile, so a 77.7 GiB commit limit -- and the
+    queue refusing every job at the 90% ceiling **with 24 GiB of RAM free**.
+    Nothing in the app said why, and the honest answer is not "close some
+    applications": it is that the commit limit is barely above physical RAM, so
+    normal GPU-driver and allocator commit puts the fraction at the wall while
+    memory itself is plentiful.
+    """
+    from warlock import doctor, memlog
+
+    monkeypatch.setattr(memlog, "system_memory", lambda: _sysmem(75.1, 77.7))
+    monkeypatch.setattr(doctor, "_physical_ram_gib", lambda: 63.5)
+    row = doctor._commit_check()
+    assert row.ok is False
+    assert row.fatal is False, "an informative row, never a startup blocker"
+    assert "pagefile" in row.detail.lower(), row.detail
+    assert "97" in row.detail or "96" in row.detail, row.detail
+
+
+def test_commit_headroom_row_is_quiet_on_a_healthy_machine(monkeypatch):
+    """A roomy limit and a modest charge is the ordinary case and must not
+    grow a warning row -- the doctor is read by eye and a row that is always
+    amber is a row nobody reads."""
+    from warlock import doctor, memlog
+
+    monkeypatch.setattr(memlog, "system_memory", lambda: _sysmem(30.0, 128.0))
+    monkeypatch.setattr(doctor, "_physical_ram_gib", lambda: 64.0)
+    row = doctor._commit_check()
+    assert row.ok is True
+    assert row.fatal is False
+
+
+def test_commit_headroom_row_does_not_blame_the_pagefile_when_it_is_generous(
+    monkeypatch,
+):
+    """High commit with a large pagefile is a different diagnosis: something is
+    genuinely using the memory, and telling the user to grow a pagefile that is
+    already 2x their RAM would be advice that does nothing."""
+    from warlock import doctor, memlog
+
+    monkeypatch.setattr(memlog, "system_memory", lambda: _sysmem(180.0, 192.0))
+    monkeypatch.setattr(doctor, "_physical_ram_gib", lambda: 64.0)
+    row = doctor._commit_check()
+    assert row.ok is False
+    assert "pagefile" not in row.detail.lower(), row.detail
+
+
+def test_commit_headroom_row_says_so_when_it_cannot_measure(monkeypatch):
+    """Off Windows, or when the call fails. The row must not claim a healthy
+    machine it did not read -- every other doctor row states its own
+    unavailability rather than passing by default."""
+    from warlock import doctor, memlog
+
+    monkeypatch.setattr(memlog, "system_memory", lambda: None)
+    row = doctor._commit_check()
+    assert row.ok is True
+    assert row.fatal is False
+    assert "not measured" in row.detail.lower() or "unavailable" in row.detail.lower()
+
+
+def test_the_commit_row_is_in_the_volatile_set(tmp_path):
+    """Commit changes minute to minute -- it is exactly a volatile row, and a
+    static one would report the figure at startup forever."""
+    from warlock import doctor
+
+    config = _config(tmp_path)
+    names = [c.name for c in doctor.volatile_checks(config)]
+    assert "host memory" in names
+    static = [c.name for c in doctor.static_checks(config, probe_slow=False)]
+    assert "host memory" not in static

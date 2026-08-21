@@ -8,6 +8,27 @@ file behind.
 
 ## 0.0.25 — 2026-08-20
 
+- **Warlock stops refusing jobs while the machine has memory free.** A job is
+  admitted against a percentage of Windows' *commit* total, and the image model
+  used to stay loaded between jobs — around 7 GB whose backing is charged
+  against that commit for the whole idle timeout after the job that wanted it
+  had finished. On a 64 GB machine with the default pagefile that reads as 96%
+  committed while 24 GB of RAM is genuinely free, and every job is refused with
+  advice — close other applications, restart Warlock — that cannot help. The
+  image model is handed back when the stage that loaded it ends, so a run of
+  jobs pays one reload each instead of the queue holding memory against a job
+  that may never come. A refused job no longer counts as a finished one either:
+  it used to restart the idle clock, so each retry pushed the cleanup that would
+  have lifted the refusal another timeout away, and the app could not recover on
+  its own from the one state it most needed to.
+- **The memory readings now include Warlock's own background work.** Doctor has
+  a **host memory** row that says how close the machine is to that wall and,
+  when the pagefile is what is holding the limit down, says so — the two causes
+  look identical from the error message and want opposite fixes. The session
+  log's memory line counts child processes as well: the background cut-out
+  worker holds about 6.5 GB while it is alive, which no line in the log had ever
+  shown, and it is the largest single thing the idle sweep gives back.
+
 - **Tile sheets come in three views.** The choice used to be *Orthogonal* or
   *Isometric*, and the first of those was spelled "flat top-down" in the prompt
   the model actually reads — so **3/4**, the tilted top-down that most 2D games

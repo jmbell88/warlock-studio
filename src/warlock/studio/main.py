@@ -23,7 +23,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .. import memlog
+from .. import memlog, winjob
 from . import filetypes
 from . import fps as fps_mod
 
@@ -1147,7 +1147,12 @@ class App:
         if now - self._last_memory_log < MEMORY_TICK_SECONDS:
             return
         self._last_memory_log = now
-        summary = memlog.summary()
+        # Child commit is included: Warlock's subprocesses are not incidental
+        # (the BiRefNet matting worker measured 6.5 GiB of private commit on
+        # 2026-08-21), and a line reporting only ``private`` understated this
+        # app's charge against the commit limit by 40% on the session that
+        # prompted the reading.
+        summary = memlog.summary(children=winjob.tracked())
         if summary is not None:
             # The frame rate rides along on the same line: a session that dies
             # without unwinding leaves no teardown summary, and memory and

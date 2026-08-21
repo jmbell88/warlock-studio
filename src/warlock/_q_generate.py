@@ -368,14 +368,33 @@ class GenerateOps:
                     # one identity rather than two.
                     await asyncio.to_thread(t2i.unload)
                 else:
-                    # Coexist mode keeps the pipeline resident by design, which
-                    # is why nothing here used to run at all -- the teardown is
-                    # a no-op closure. But "stays loaded" was silently also
-                    # meaning "never returns its caching allocator pool", and
-                    # under WDDM those device blocks are charged against system
-                    # commit. trim() gives the pool back without unloading
-                    # anything, so the VRAM-modes invariant is untouched.
-                    await asyncio.to_thread(t2i.trim)
+                    # Coexist used to keep the pipeline resident here and merely
+                    # ``trim()`` the caching allocator's pool -- the card had
+                    # room for both models, so why throw away a checkpoint the
+                    # next job may want warm.
+                    #
+                    # Because the card was never the binding constraint. The
+                    # *host* is: the pool trim gave back the CUDA blocks, and
+                    # the ~7 GiB of weights it left resident kept both their
+                    # WDDM backing and the pipe's own arenas charged against
+                    # system commit, for the full 600 s idle timeout after a job
+                    # that had already finished. ``_require_commit_headroom``
+                    # then refuses the *next* job on a percentage of that
+                    # commit: a 63.5 GiB machine with a 14.2 GiB pagefile sat at
+                    # 96% and refused everything while 24 GiB of RAM was free.
+                    #
+                    # So both branches unload now and the difference between
+                    # them is gone. Kept as two branches anyway, because the
+                    # reasons are still two -- ``handoff`` must unload before
+                    # trellis restarts, and this one unloads because nothing is
+                    # owed a warm pipe -- and collapsing them would leave one
+                    # comment claiming to explain both.
+                    #
+                    # ``self._text2image`` is deliberately *not* cleared, for
+                    # the reason spelled out in the branch above: ``.loaded`` is
+                    # what every reader asks, and keeping the identity is what
+                    # lets the next job at the same base reuse this object.
+                    await asyncio.to_thread(t2i.unload)
 
             if job.get("stage") in ("reference", "tile"):
                 # The whole point of the split: the user judges the image before
