@@ -56,9 +56,7 @@ class GeometryOps:
             else before_origin
         )
 
-        before = {layer.uid: layer.data for layer in self.tile_layers()}
-        after: dict[int, np.ndarray] = {}
-        for uid, data in before.items():
+        def _reframed(data: np.ndarray) -> np.ndarray:
             grown = gidlib.empty_layer(width, height)
             # The overlap of the old rectangle, shifted, with the new one.
             sx0, sy0 = max(0, -dx), max(0, -dy)
@@ -69,7 +67,19 @@ class GeometryOps:
                 grown[ty0 : ty0 + span_h, tx0 : tx0 + span_w] = data[
                     sy0 : sy0 + span_h, sx0 : sx0 + span_w
                 ]
-            after[uid] = grown
+            return grown
+
+        # ``after`` always comes from the live array -- that is what goes into
+        # the document. ``before`` uses the stroke's pre-drag snapshot for the
+        # layer a session is open on: mid-drag the live array already holds half
+        # a stroke, and undoing back through this edit would put those cells
+        # back just after the stroke's own patch had taken them away.
+        before: dict[int, np.ndarray] = {}
+        after: dict[int, np.ndarray] = {}
+        for layer in self.tile_layers():
+            baseline = self._stroke_baseline(layer.uid)
+            before[layer.uid] = layer.data if baseline is None else baseline
+            after[layer.uid] = _reframed(layer.data)
 
         shift_x, shift_y = dx * self.tile_w, dy * self.tile_h
         before_objects: dict[int, list[tuple[float, float]]] = {}
@@ -95,6 +105,10 @@ class GeometryOps:
                 after_origin=after_origin,
             )
         )
+        # After the push and before the arrays are swapped in: an open stroke
+        # session snapshot the *old* array at the *old* coordinates, and an
+        # infinite map grows mid-drag by design. See ``_reframe_stroke``.
+        self._reframe_stroke(dx, dy, width, height)
         self._apply_resize((width, height), after, after_objects, after_origin)
         return True
 
@@ -129,6 +143,13 @@ class GeometryOps:
         dx, dy = int(dx), int(dy)
         if scope not in ("map", "layer"):
             raise ValueError("an offset scope is 'map' or 'layer'")
+        # ``undo``/``redo``'s rule, and for their reason: a session left open is
+        # a document whose cells are ahead of its head. Unlike ``resize`` this
+        # is not a translation of the window -- a wrapped roll has no offset to
+        # carry a snapshot across -- and it is a menu command with no drag in
+        # flight, so the session is closed rather than moved.
+        self.end_stroke()
+        self.end_object_edit()
         if wrap and self.width and self.height:
             dx, dy = dx % self.width, dy % self.height
         if (dx, dy) == (0, 0):

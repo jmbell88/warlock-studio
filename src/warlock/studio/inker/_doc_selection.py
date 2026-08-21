@@ -710,6 +710,11 @@ class SelectionOps:
         """
         if self.write_locked():
             return False
+        # A tilemap cel's pixels are re-derived from its tile references, so
+        # this write would be silently discarded in manual mode and diced
+        # into the shared tileset in auto/stack mode -- corrupting every
+        # other placement of those tiles. Refused by name, like lift and cut.
+        self._refuse_tilemap_layer(self.stack.active.uid, "pasting onto")
         taken = self.clipboard.take()
         if taken is None:
             return False
@@ -898,6 +903,11 @@ class SelectionOps:
         """
         if self.write_locked():
             return False
+        # A tilemap cel's pixels are re-derived from its tile references, so
+        # this write would be silently discarded in manual mode and diced
+        # into the shared tileset in auto/stack mode -- corrupting every
+        # other placement of those tiles. Refused by name, like lift and cut.
+        self._refuse_tilemap_layer(self.stack.active.uid, "placing pixels on")
         array = np.array(pixels, dtype=np.uint8, copy=True)
         if array.ndim != 3 or array.shape[2] != 4 or array.shape[0] < 1 or array.shape[1] < 1:
             return False

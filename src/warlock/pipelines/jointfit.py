@@ -133,7 +133,10 @@ def measure(points: Any) -> dict[str, tuple[list[float], list[float]]]:
     knee, ankle = leg_at(_KNEE), leg_at(_ANKLE)
     pelvis = height * _PELVIS
     hip_x = float(leg_at(_HIP)[0])
-    toe = [hip_x, float(pts[:, 1].min()), 0.0]
+    # Forward depth off the *leg* band, never the whole mesh: a nose, a chest
+    # or a held prop reaches further forward than any foot, and the shipped clips
+    # pose the ankle in delta space -- relative to exactly this rest orientation.
+    toe = [hip_x, float(leg_band[:, 1].min()), 0.0]
 
     # --- spine. The chest sits at the shoulder joint and the head tops the box.
     chest_z = float(shoulder[2])

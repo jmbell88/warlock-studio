@@ -159,3 +159,20 @@ def test_a_body_with_no_arms_is_refused_rather_than_guessed():
     ])
     with pytest.raises(ValueError, match="not standing in a T-pose"):
         jointfit.measure(legs)
+
+
+def test_the_toe_is_measured_off_the_leg_not_the_whole_body():
+    """A nose, a chest or a held prop reaches further forward than any foot.
+
+    Taking the toe's forward depth off ``pts`` puts the ankle's rest orientation
+    wherever the body happens to bulge, and the shipped clips flex that ankle in
+    *delta* space -- relative to exactly this rest -- so every walk, run and jump
+    then swings the foot about a skewed axis.
+    """
+    # A body whose chest reaches well forward of its feet: the failure mode.
+    pts = np.vstack([_body(0.0), _capsule((0, -0.30, 1.30), (0, -0.30, 1.44), 0.05, 300, 9)])
+    bones = jointfit.measure(pts)
+    toe = np.asarray(bones["foot.L"][1], float)
+    assert toe[1] > float(pts[:, 1].min()) + 1e-6
+    # And it stays inside the leg's own forward extent, which is the rule.
+    assert toe[1] >= float(_body(0.0)[:, 1].min()) - 1e-6

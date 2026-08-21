@@ -393,3 +393,44 @@ def test_converting_to_what_it_already_is_does_nothing():
     doc = _doc()
     assert doc.set_infinite(True) is False
     assert not len(doc.history)
+
+
+# --- a stroke that grows the map --------------------------------------------
+#
+# The whole point of an infinite map is that painting past its edge grows it,
+# and the pane does exactly that mid-drag: begin_stroke, then grow_to_hold once
+# per frame the cursor is outside. The session snapshot the old array at the old
+# coordinates, so unless it is moved with everything else the undo step's two
+# halves describe different true cells.
+
+
+def _painted(doc):
+    return {
+        layer.uid: np.array(layer.data)
+        for layer in doc.tile_layers()
+    }
+
+
+def test_a_stroke_that_grows_the_map_undoes_exactly():
+    doc = _doc()
+    doc.set_infinite(True)
+    layer = next(iter(doc.tile_layers()))
+    before_size = (doc.width, doc.height)
+    before = _painted(doc)
+
+    doc.begin_stroke(layer.uid)
+    doc.stroke_write(0, 0, np.full((1, 1), 1, dtype=gidlib.DTYPE))
+    # The cursor leaves the window: the pane's per-frame grow.
+    doc.grow_to_hold(-3, -3, doc.width, doc.height)
+    assert (doc.width, doc.height) != before_size
+    doc.stroke_write(0, 0, np.full((1, 1), 2, dtype=gidlib.DTYPE))
+    assert doc.end_stroke() is True
+
+    # One step for the paint and one for the grow, in that order.
+    doc.undo()
+    doc.undo()
+    assert (doc.width, doc.height) == before_size
+    after = _painted(doc)
+    assert set(after) == set(before)
+    for uid, data in before.items():
+        assert np.array_equal(after[uid], data), "the stroke did not undo cleanly"

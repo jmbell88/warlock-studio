@@ -208,10 +208,21 @@ def _check_shape(payload: dict[str, Any]) -> dict[str, Any]:
                 f"this build knows {', '.join(EASINGS)}",
                 field="easing",
             )
+    # The rotation frame is not cosmetic: "node" is parent-relative absolute and
+    # "delta" is relative to the bone's own rest, and the two are composed
+    # differently by the renderer (``blender_worker.POSE_SPACES``). An unknown
+    # name would be read as "node" downstream and silently mis-pose every clip.
+    space = str(payload.get("space") or "node")
+    if space not in sheetlib.POSE_SPACES:
+        raise Invalid(
+            f"unknown rotation space {space!r}; this build knows "
+            f"{', '.join(sheetlib.POSE_SPACES)}",
+            field="space",
+        )
     return {
         "version": 2,
         "template": str(payload.get("template") or ""),
-        "space": str(payload.get("space") or "node"),
+        "space": space,
         "poses": [
             {
                 "name": str(p["name"]).strip(),
@@ -280,6 +291,17 @@ def save(svc: WarlockService, template: str, payload: dict[str, Any]) -> dict[st
     """
     key = _template_or_invalid(template)
     document = _check_shape({**payload, "template": key})
+    # A library's rotation space is a property of its stored *values*. Changing
+    # it without rewriting every quaternion leaves a file whose poses mean
+    # something other than what it says they mean, and the only place that shows
+    # up is a mangled character sheet -- so it is refused by name here.
+    current = library(svc, key).get("space") or "node"
+    if document["space"] != current:
+        raise Invalid(
+            f'this library stores {current!r} rotations; saving it as '
+            f'{document["space"]!r} would reinterpret every pose it holds',
+            field="space",
+        )
     try:
         rigging.parse_clip_library(document)
     except Exception as exc:
@@ -297,10 +319,15 @@ def save(svc: WarlockService, template: str, payload: dict[str, Any]) -> dict[st
         try:
             _check_renders(key)
         except Exception:
+            # Staged, like the publish above: ``rigging.clip_library`` reads this
+            # same path from the render worker with no lock shared with ours, so
+            # a direct ``write_bytes`` here would hand it a torn file.
             if previous is None:
                 path.unlink(missing_ok=True)
             else:
-                path.write_bytes(previous)
+                back = path.with_name(path.name + ".tmp")
+                back.write_bytes(previous)
+                os.replace(back, path)
             rigging.invalidate_clips()
             raise
     return library(svc, key)

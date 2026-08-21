@@ -117,6 +117,11 @@ class GeometryOps:
         """
         if self.write_locked(self.stack.active):
             return False
+        # A tilemap cel's pixels are re-derived from its tile references, so
+        # this write would be silently discarded in manual mode and diced
+        # into the shared tileset in auto/stack mode -- corrupting every
+        # other placement of those tiles. Refused by name, like lift and cut.
+        self._refuse_tilemap_layer(self.stack.active.uid, "offsetting")
         width, height = self.size
         dx, dy = int(dx) % width if width else 0, int(dy) % height if height else 0
         if not dx and not dy:

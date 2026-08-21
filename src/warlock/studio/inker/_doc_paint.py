@@ -333,6 +333,11 @@ class PaintOps:
         self.end_filter()
         if self.write_locked():
             return None
+        # A tilemap cel's pixels are re-derived from its tile references, so
+        # this write would be silently discarded in manual mode and diced
+        # into the shared tileset in auto/stack mode -- corrupting every
+        # other placement of those tiles. Refused by name, like lift and cut.
+        self._refuse_tilemap_layer(self.stack.active.uid, "filtering")
         width, height = self.size
         bounds = self.mask.bounds if self.mask is not None else None
         box = self.clip(bounds or (0, 0, width, height))
@@ -500,6 +505,11 @@ class PaintOps:
         # happened.
         if self.write_locked():
             return False
+        # A tilemap cel's pixels are re-derived from its tile references, so
+        # this write would be silently discarded in manual mode and diced
+        # into the shared tileset in auto/stack mode -- corrupting every
+        # other placement of those tiles. Refused by name, like lift and cut.
+        self._refuse_tilemap_layer(self.stack.active.uid, "moving")
         self.commit_floating()
         self._ensure_active_cel()
         layer = self.stack.active

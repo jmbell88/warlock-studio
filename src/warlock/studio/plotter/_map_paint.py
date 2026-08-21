@@ -104,6 +104,57 @@ class PaintOps:
         )
         return True
 
+    def _stroke_baseline(self: MapDoc, uid: int) -> np.ndarray | None:
+        """The pre-stroke contents of ``uid``, if a session is open on it.
+
+        What a mid-drag ``resize`` must record as its *before*: the live array
+        is already carrying half a stroke, and a ``ResizeEdit`` that snapshot
+        that would put those cells back on undo -- after the stroke's own patch
+        had just taken them away.
+        """
+        if self._stroke is None or int(self._stroke["uid"]) != int(uid):
+            return None
+        return self._stroke["before"]
+
+    def _reframe_stroke(self: MapDoc, dx: int, dy: int, width: int, height: int) -> None:
+        """Move an open session into a resized grid.
+
+        An infinite map grows *while the drag is happening* -- that is what
+        makes it infinite -- and :meth:`~._map_geometry.GeometryOps.resize`
+        reallocates every tile layer under a session that has already snapshot
+        the old array at the old coordinates. Left alone, ``end_stroke`` slices
+        ``before`` out of the stale array at post-resize coordinates: the two
+        halves of the patch then describe *different* true cells, and Ctrl+Z
+        plants stale tiles at unrelated coordinates while leaving some of the
+        painted ones unreverted.
+
+        The remap is the same overlap arithmetic ``resize`` applies to the
+        layers themselves, applied to the snapshot and to the dirty box, so the
+        session comes out the far side describing exactly what it did before.
+        ``undo``/``redo`` close a session instead; that is not an option here,
+        because the pane only writes ``if doc.stroking`` and a closed session
+        would silently drop the rest of the drag.
+        """
+        if self._stroke is None:
+            return
+        data = self._stroke["before"]
+        grown = gidlib.empty_layer(width, height)
+        sx0, sy0 = max(0, -dx), max(0, -dy)
+        tx0, ty0 = max(0, dx), max(0, dy)
+        span_w = min(data.shape[1] - sx0, width - tx0)
+        span_h = min(data.shape[0] - sy0, height - ty0)
+        if span_w > 0 and span_h > 0:
+            grown[ty0 : ty0 + span_h, tx0 : tx0 + span_w] = data[
+                sy0 : sy0 + span_h, sx0 : sx0 + span_w
+            ]
+        self._stroke["before"] = grown
+        box = self._stroke["box"]
+        if box is not None:
+            x0, y0, x1, y1 = box
+            x0, x1 = max(0, min(x0 + dx, width)), max(0, min(x1 + dx, width))
+            y0, y1 = max(0, min(y0 + dy, height)), max(0, min(y1 + dy, height))
+            self._stroke["box"] = (x0, y0, x1, y1) if x1 > x0 and y1 > y0 else None
+
     def end_stroke(self: MapDoc) -> bool:
         """Close the session and push one step. ``False`` if nothing moved.
 

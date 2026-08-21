@@ -875,3 +875,63 @@ def test_patch_edit_for_refuses_a_tilemap_cel():
     assert isinstance(cel, TilemapCel)
     with pytest.raises(ValueError):
         doc._patch_edit_for(cel, (0, 0, 4, 4), cel.pixels[0:4, 0:4].copy())
+
+
+# --- the per-layer door -----------------------------------------------------
+#
+# ``_refuse_tilemap_layer`` guards the ops that write **one** layer's pixels
+# whole and only then reach the funnel. Every such op is listed here in one
+# test rather than one each, deliberately: manual mode's re-derive is *silent*,
+# so an op that lost its door would show up nowhere -- not as an exception, not
+# as a toast, not as a wrong pixel in this suite. A partial fix has to fail.
+
+
+def _refused(doc: Document, call) -> str:
+    with pytest.raises(ValueError) as excinfo:
+        call()
+    message = str(excinfo.value)
+    assert "tilemap layer" in message, message
+    _assert_synced(doc)
+    return message
+
+
+def test_every_whole_layer_write_refuses_a_tilemap_cel():
+    def fresh():
+        doc = _doc()
+        _still_tilemap(doc, RED)
+        return doc
+
+    doc = fresh()
+    _refused(doc, lambda: doc.offset_layer(2, 2))          # Wrap 1/2
+
+    doc = fresh()
+    _refused(doc, lambda: doc.begin_layer_move())          # the move tool
+
+    doc = fresh()
+    _refused(doc, lambda: doc.begin_filter())              # every FX popup
+
+    doc = fresh()
+    doc.put_clipboard(np.full((4, 4, 4), 255, dtype=np.uint8))
+    _refused(doc, lambda: doc.paste())                     # paste
+
+    doc = fresh()
+    _refused(                                              # the text stamp
+        doc, lambda: doc.float_pixels(np.full((4, 4, 4), 255, dtype=np.uint8), (0, 0))
+    )
+
+    doc = fresh()
+    doc.mask = SelectionMask.full(*doc.size)
+    _refused(doc, lambda: doc.lift(doc.mask))              # already guarded
+    _refused(doc, lambda: doc.cut())                       # already guarded
+
+
+def test_a_raster_layer_is_untouched_by_the_door():
+    """The door is per *layer*, not per document: a document merely holding a
+    tilemap somewhere else must not lose the move tool."""
+    doc = _doc()
+    _still_tilemap(doc, RED)
+    doc.add_layer()
+    assert doc.begin_layer_move() is True
+    doc.end_layer_move()
+    assert doc.offset_layer(2, 2) is True
+    _assert_synced(doc)

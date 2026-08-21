@@ -213,16 +213,18 @@ def _timing(ctx: Any, state: Any) -> None:
         help_text="How the frames are spaced inside each step.",
     )
     poser_mode.set_easing(ctx, easing)
-    if max(segments or [0]) < 3:
-        # Stated rather than left to be discovered. Easing reshapes *where
-        # inside a segment* frames land, so with one or two frames per step
-        # there is nowhere for it to act -- and ``ease`` is a smoothstep whose
-        # value at the halfway sample is exactly one half, so it renders
-        # identically to ``linear``. An author who changes this and sees
-        # nothing deserves to be told why rather than conclude it is ignored.
+    if easing == "ease" and max(segments or [0]) < 3:
+        # Stated rather than left to be discovered, and stated only for the one
+        # easing it is true of. ``ease`` is a smoothstep whose value at a
+        # two-frame segment's single interior sample is exactly one half, so it
+        # renders identically to ``linear`` there. ``ease_in`` and ``ease_out``
+        # sample 0.25 and 0.75 and genuinely differ at that length -- telling an
+        # author otherwise sends them away from the option that would have
+        # worked.
         widgets.muted_wrapped(
-            "Easing needs at least three frames in a step to do anything; "
-            "every step here is shorter than that."
+            '"ease" needs at least three frames in a step to do anything; '
+            "every step here is shorter than that. Try ease_in or ease_out, "
+            "which do act on a two-frame step."
         )
 
     total = sum(segments)

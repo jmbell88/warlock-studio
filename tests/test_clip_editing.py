@@ -337,3 +337,30 @@ def test_an_unknown_clip_is_not_found(svc):
     with pytest.raises(NotFound) as caught:
         svc_clips.preview_frames(svc, TEMPLATE, "moonwalk")
     assert caught.value.field == "clip"
+
+
+# --- rotation space ---------------------------------------------------------
+#
+# A library's ``space`` says how to read every quaternion it holds, and nothing
+# downstream re-derives it. Both of these refusals exist because the only place
+# a wrong space shows up otherwise is a mangled character sheet.
+
+
+def test_save_refuses_an_unknown_rotation_space(svc):
+    payload = _as_payload(_shipped(svc))
+    payload["space"] = "local"
+    with pytest.raises(Invalid) as excinfo:
+        svc_clips.save(svc, TEMPLATE, payload)
+    assert excinfo.value.field == "space"
+    assert "local" in str(excinfo.value)
+
+
+def test_save_refuses_changing_the_rotation_space(svc):
+    view = _shipped(svc)
+    assert view["space"] == "delta"
+    payload = _as_payload(view)
+    payload["space"] = "node"
+    with pytest.raises(Invalid) as excinfo:
+        svc_clips.save(svc, TEMPLATE, payload)
+    assert excinfo.value.field == "space"
+    assert not poselib.clip_path(svc.config, TEMPLATE).is_file()

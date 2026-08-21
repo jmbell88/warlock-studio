@@ -775,6 +775,54 @@ def _viewer_editor(ctx: Any) -> Any:
     return viewer.editor
 
 
+
+# --- rotation space ---------------------------------------------------------
+#
+# Two frames, and they are not interchangeable (``blender_worker.POSE_SPACES``).
+# ``PoseEditor`` is unconditionally *node-local*: parent-relative absolute
+# rotations, which is what ``Model.set_rotation`` writes. A clip library may
+# declare ``space="delta"`` instead -- each value a rotation from the bone's own
+# rest, composed as ``node = rest * delta``. The shipped humanoid library is
+# delta and its arms carry a constant -58 degrees off rest, so pushing its
+# values through the editor raw contorts the skeleton, and capturing back out
+# raw writes node-local values into a delta-declared file. Everything crossing
+# the boundary goes through these two.
+
+
+def _clip_space(state: Any) -> str:
+    return "delta" if str(state.clips.get("space") or "node") == "delta" else "node"
+
+
+def _to_node(editor: Any, bones: dict[str, Any], space: str) -> dict[str, list[float]]:
+    """Library rotations -> the editor's node-local frame."""
+    from .viewer import math3d as m3
+
+    out: dict[str, list[float]] = {}
+    for name, quat in bones.items():
+        value = [float(v) for v in quat]
+        if space == "delta":
+            rest = editor.rest.get(name) if editor is not None else None
+            if rest is not None:
+                value = [float(v) for v in m3.quat_mul(rest, value)]
+        out[name] = value
+    return out
+
+
+def _from_node(editor: Any, bones: dict[str, Any], space: str) -> dict[str, list[float]]:
+    """The editor's node-local frame -> library rotations."""
+    from .viewer import math3d as m3
+
+    out: dict[str, list[float]] = {}
+    for name, quat in bones.items():
+        value = [float(v) for v in quat]
+        if space == "delta":
+            rest = editor.rest.get(name) if editor is not None else None
+            if rest is not None:
+                value = [float(v) for v in m3.quat_mul(m3.quat_conjugate(rest), value)]
+        out[name] = value
+    return out
+
+
 def apply_key(ctx: Any) -> None:
     """Put the selected key's rotations onto the preview armature.
 
@@ -798,7 +846,9 @@ def apply_key(ctx: Any) -> None:
     # so the rest have to go back to rest first, or loading "walk contact"
     # after "attack strike" leaves the sword arm up. It is one undo step, which
     # is right for a discrete "go to this key".
-    editor.apply_preset({"bones": dict(pose.get("bones") or {})})
+    editor.apply_preset(
+        {"bones": _to_node(editor, dict(pose.get("bones") or {}), _clip_space(state))}
+    )
     root = pose.get("root_translation")
     if root:
         editor.set_root_translation([float(v) for v in root])
@@ -838,7 +888,7 @@ def scrub(ctx: Any, frame: int) -> None:
     # the full map first is what makes one non-undoable call equivalent to
     # reset-then-apply.
     full = {name: [float(v) for v in quat] for name, quat in editor.rest.items()}
-    full.update({k: [float(v) for v in q] for k, q in (pose.get("bones") or {}).items()})
+    full.update(_to_node(editor, dict(pose.get("bones") or {}), _clip_space(state)))
     editor.apply(full, pose_id=None, dirty=False)
     editor.set_root_translation(
         [float(v) for v in (pose.get("root_translation") or (0.0, 0.0, 0.0))],
@@ -870,7 +920,7 @@ def capture_key(ctx: Any) -> None:
     pose = state.key_pose(keys[state.key_index])
     if pose is None:
         return
-    pose["bones"] = dict(editor.pose())
+    pose["bones"] = _from_node(editor, dict(editor.pose()), _clip_space(state))
     root = editor.root_translation() if editor.root is not None else None
     if root and any(root):
         pose["root_translation"] = [float(v) for v in root]
@@ -920,7 +970,11 @@ def sync_onion(ctx: Any) -> None:
             out.append({})
             continue
         pose = state.key_pose(keys[index])
-        out.append(dict(pose.get("bones") or {}) if pose else {})
+        out.append(
+            _to_node(_viewer_editor(ctx), dict(pose.get("bones") or {}), _clip_space(state))
+            if pose
+            else {}
+        )
     viewer.onion = out
 
 
@@ -1053,7 +1107,10 @@ def new_key(ctx: Any, name: str) -> None:
             "warn",
         )
         return
-    record = {"name": label, "bones": dict(editor.pose())}
+    record = {
+        "name": label,
+        "bones": _from_node(editor, dict(editor.pose()), _clip_space(state)),
+    }
     root = editor.root_translation() if editor.root is not None else None
     if root and any(root):
         record["root_translation"] = [float(v) for v in root]

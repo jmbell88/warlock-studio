@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from warlock import doctor, rigging
@@ -836,3 +837,53 @@ def test_turning_onion_skin_off_clears_the_viewer():
     assert ctx.poser_viewer.onion
     poser_mode.set_onion(ctx, False)
     assert ctx.poser_viewer.onion == []
+
+
+# --- rotation space ---------------------------------------------------------
+#
+# ``PoseEditor`` is node-local; the shipped clip library is ``space="delta"``.
+# Nothing studio-side used to convert, so loading a humanoid key contorted the
+# preview and capturing one back wrote node-local values into a delta file.
+
+
+class _RestEditor:
+    """Just enough editor for the two converters: a rest map, XYZW."""
+
+    def __init__(self, rest) -> None:
+        self.rest = {name: np.asarray(q, dtype="f8") for name, q in rest.items()}
+
+
+def _swing(angle):
+    """A rotation about local X, the swing axis both converters have to respect."""
+    import math
+
+    return [math.sin(angle / 2), 0.0, 0.0, math.cos(angle / 2)]
+
+
+def test_delta_rotations_round_trip_through_the_node_local_editor():
+    editor = _RestEditor({"upper_arm.L": _swing(1.2), "thigh.L": _swing(-0.3)})
+    stored = {"upper_arm.L": _swing(-1.0), "thigh.L": _swing(0.4)}
+
+    node = poser_mode._to_node(editor, stored, "delta")
+    back = poser_mode._from_node(editor, node, "delta")
+
+    for name, quat in stored.items():
+        assert np.allclose(back[name], quat, atol=1e-12)
+        # And the trip through the editor genuinely moved the values -- a
+        # converter that was quietly a no-op would pass the line above.
+        assert not np.allclose(node[name], quat, atol=1e-6)
+
+
+def test_node_space_libraries_are_passed_through_untouched():
+    editor = _RestEditor({"upper_arm.L": _swing(1.2)})
+    stored = {"upper_arm.L": _swing(-1.0)}
+    want = stored["upper_arm.L"]
+    assert np.allclose(poser_mode._to_node(editor, stored, "node")["upper_arm.L"], want)
+    assert np.allclose(poser_mode._from_node(editor, stored, "node")["upper_arm.L"], want)
+
+
+def test_the_shipped_humanoid_library_is_delta_so_the_conversion_is_load_bearing():
+    from warlock import rigging
+
+    library = rigging.clip_library("humanoid")
+    assert library["space"] == "delta"
