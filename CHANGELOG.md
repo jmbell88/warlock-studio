@@ -6,6 +6,22 @@ record of what a version actually changed. The top heading's version must
 match `pyproject.toml` — a test asserts it, so a release bump cannot leave this
 file behind.
 
+## 0.0.26 — 2026-08-22
+
+- **A whole-tree audit, written down rather than acted on.** `AUDIT.md` records
+  what twelve parallel auditors found across the queue, the database, `service/`,
+  the app shell, Inker, Plotter, Packwright, Clay, Poser, Troupe, the pipelines,
+  the test suite and the docs — every finding re-verified against the source
+  before it was written, and three of them re-graded when verification showed the
+  reported severity was wrong. Nothing in it is fixed yet: the file is the work
+  list for the next session, and it also records which subsystems were checked
+  and found clean, so a later pass does not pay to re-derive them. Four HIGH
+  findings lead it — Inker's Symmetry controls are unreachable in the shipped
+  app, background/reference layer conversions push no undo step and lose the
+  matte, the layers panel is missing the `busy` gate the invariants name it
+  under, and pressing Tab during playback leaves the document silently
+  read-only. No behaviour changed in this release.
+
 ## 0.0.25 — 2026-08-20
 
 - **Warlock stops refusing jobs while the machine has memory free.** A job is
