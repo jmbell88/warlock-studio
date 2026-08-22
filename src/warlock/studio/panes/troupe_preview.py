@@ -97,7 +97,10 @@ def _transport(ctx: Any, state: Any) -> None:
     def _trailing() -> None:
         widgets.muted(f"frame {state.frame + 1} of {frames}")
         imgui.same_line()
-        imgui.set_next_item_width(sp(80))
+        # 110, not less: an ``input_int`` spends most of its width on the two
+        # step buttons, and at UI scale 1.5 a narrower field squeezes the
+        # *value* out from between them -- a number control showing no number.
+        imgui.set_next_item_width(sp(110))
         changed, zoom = controls.input_int("##troupe-zoom", int(state.zoom), 1, 2)
         if changed:
             # Clamped rather than validated: this is a view control, and
@@ -127,7 +130,7 @@ def _transport(ctx: Any, state: Any) -> None:
         toolbar.Item(key="back", label="Previous frame", icon=icons.ARROW_LEFT, pinned=True),
         toolbar.Item(key="fwd", label="Next frame", icon=icons.CHEVRON_RIGHT, pinned=True),
     ]
-    clicked = toolbar.toolbar("troupe-transport", row, trailing=(sp(300), _trailing))
+    clicked = toolbar.toolbar("troupe-transport", row, trailing=(sp(340), _trailing))
     if clicked == "play":
         state.playing = not state.playing
     elif clicked == "back":
