@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import controls, icons, plotter_mode, widgets
+from .. import icons, plotter_mode, widgets
 from ..manual import render as manual_render
 
 
@@ -34,78 +34,28 @@ def draw(ctx: Any) -> None:
         _recent(ctx)
         return
 
-    width = widgets.grid_width(2)
-    if controls.button(f"{icons.PLUS} New...", (width, 0)):
-        plotter_mode.ask_new_document(ctx)
-    imgui.same_line()
-    if controls.button(f"{icons.FOLDER_OPEN} Open...", (width, 0)):
-        plotter_mode.ask_open(ctx)
-
-    ready = not tab.busy
-    # ``packwright_bridge``'s two hoisted sentences, for the same reason: the
-    # five buttons below share two gates, and five spellings of one state is
-    # five problems for the user to look for.
-    busy_why = "This map is being written; the buttons come back when it lands."
-    tileset_why = "This map has no tileset yet, so there is nothing to write."
-    imgui.dummy((0, 4))
-    if widgets.disabled_button(
-        f"{icons.SAVE} Save (Ctrl+S)", ready, (width, 0), reason=busy_why
-    ):
-        plotter_mode.save(ctx, tab)
-    imgui.same_line()
-    if widgets.disabled_button("Save As...", ready, (width, 0), reason=busy_why):
-        plotter_mode.save_as(ctx, tab)
+    # **The facts, and the two verbs a hand reaches for without a menu.** The
+    # nine buttons that were here -- New, Open, Save, Save As, the two exports,
+    # the library export -- are the Map menu's rows now (W3.1), which is where
+    # a user coming from Tiled looks for them. What a panel is for is what is
+    # left: where this map lives, whether it is written, and how deep the undo
+    # stack is. Clay's bridge is the same size for the same reason.
     if tab.path is not None:
-        widgets.muted(str(tab.path))
+        imgui.text_wrapped(str(tab.path))
+    else:
+        widgets.muted("Not saved to a file yet.")
     if tab.dirty:
         widgets.muted("Unsaved changes.")
-
-    imgui.dummy((0, 8))
-    _history(ctx, tab)
-
-    imgui.dummy((0, 8))
-    widgets.section("Tiled")
-    has_tilesets = bool(tab.doc.tilesets)
-    if widgets.disabled_button(
-        "Export .tmx (Ctrl+Shift+E)",
-        ready and has_tilesets,
-        (-1, 0),
-        reason=busy_why if not ready else tileset_why,
-    ):
-        plotter_mode.export_map(ctx, "tmx", tab)
-    if widgets.disabled_button(
-        "Export .tmj",
-        ready and has_tilesets,
-        (-1, 0),
-        reason=busy_why if not ready else tileset_why,
-    ):
-        plotter_mode.export_map(ctx, "tmj", tab)
-    if not has_tilesets:
-        widgets.muted_wrapped("A Tiled map needs at least one tileset.")
     else:
+        widgets.muted("Saved.")
+    if not tab.doc.tilesets:
         widgets.muted_wrapped(
-            "Writes the map beside one .tsx and one .png per tileset, which is "
-            "the layout Tiled and every engine importer expects."
+            "No tileset yet -- Tileset > Import a tileset. A Tiled map needs "
+            "at least one before it can be exported."
         )
 
     imgui.dummy((0, 8))
-    # The one heading every mode's exits are under -- see ``inker_bridge``'s
-    # ``_pipeline``. The Tiled block above stays named for the format, because
-    # it writes files for another application rather than moving the map
-    # anywhere inside the app.
-    widgets.section("Take it somewhere")
-    if widgets.disabled_button(
-        f"{icons.UPLOAD} Export to the library (Ctrl+E)",
-        ready and has_tilesets,
-        (-1, 0),
-        reason=busy_why if not ready else tileset_why,
-    ):
-        plotter_mode.export_library(ctx, tab)
-    widgets.muted_wrapped(
-        "A flat render becomes an ordinary reference asset, with the map itself "
-        "kept beside it so this document can be reopened from the library."
-    )
-
+    _history(ctx, tab)
     _recent(ctx)
 
 

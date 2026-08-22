@@ -28,6 +28,7 @@ NO_HELP_BUTTON = {
     "packwright_preview",  # the atlas itself; its controls are packwright-settings
     "packwright_textures",  # a texture cache, drawn by nobody
     "clay_menu",  # a menu bar
+    "plotter_menu",  # a menu bar
     "inker_menu",  # a menu bar
     # The row of tool options above the canvas. Not a pane with a heading: it
     # is one line of controls belonging to the tool the toolbox's own (?)

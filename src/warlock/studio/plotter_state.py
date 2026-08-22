@@ -195,6 +195,15 @@ class PlotterState:
     # all say *that* a map was asked for; the canvas pane is the one window that
     # can ask what it should be, and it clears this when it opens.
     setup_pending: bool = False
+    #: A menu row has asked for the resize dialog / the map-settings dialog.
+    #: Flags rather than calls, ``setup_pending``'s own pattern and its reason:
+    #: a popup belongs to the window that begins it, and a menu is not that
+    #: window. Cleared by the pane that opens the popup.
+    resize_pending: bool = False
+    map_settings_pending: bool = False
+    #: Which tileset the editor sheet is open on, by index, or None for "the
+    #: map is on screen". The branch ``_review_workspace`` already takes.
+    editing_tileset: int | None = None
     # A library asset waiting for the map that ``setup_pending`` is asking
     # about. The Library's *Add to Plotter as a tileset* used to be drawn for
     # any asset with an ``input.png`` and then refused with an error toast when

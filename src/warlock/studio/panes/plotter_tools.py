@@ -268,7 +268,35 @@ def draw(ctx: Any) -> None:
         widgets.muted("Saving...")
         return
 
-    if widgets.header("Map metadata", default_open=False, persist_key="plotter/map-meta"):
+
+SETTINGS_POPUP = "plotter-map-settings"
+
+
+def map_settings_popup(ctx: Any, state: Any, tab: Any) -> None:
+    """Map -> Map properties: the metadata and the custom-property table.
+
+    Two accordions in the tools pane, opened when a map is set up and closed
+    for the rest of the session -- which is a dialog wearing a sidebar's
+    clothes. Same door as the resize form, same flag pattern, same reason.
+    """
+    from imgui_bundle import imgui
+
+    if state.map_settings_pending:
+        state.map_settings_pending = False
+        if tab is not None:
+            imgui.open_popup(SETTINGS_POPUP)
+    if tab is None or not imgui.begin_popup(SETTINGS_POPUP):
+        return
+    widgets.popup_chrome(_imgui=imgui)
+    doc = tab.doc
+    imgui.text("Map properties")
+    imgui.separator()
+    if tab.busy:
+        widgets.muted("Saving...")
+        imgui.end_popup()
+        return
+    widgets.section("Metadata")
+    if True:
         class_name = widgets.input_text(
             "##map-class", doc.class_name, max_length=64, hint="map class"
         )
@@ -312,7 +340,8 @@ def draw(ctx: Any) -> None:
                 doc.set_map_settings(skew_x=int(skew[0]), skew_y=int(skew[1]))
 
     imgui.dummy((0, 6))
-    if widgets.header("Properties", default_open=False, persist_key="plotter/map-props"):
+    widgets.section("Custom properties")
+    if True:
         # The map's own custom properties. They survive a Tiled round trip and
         # always have; this is the first way to set one without a text editor.
         plotter_layers.property_editor(
@@ -322,13 +351,40 @@ def draw(ctx: Any) -> None:
             doc.set_map_properties,
             object_options=plotter_layers.object_options(doc),
         )
+    imgui.end_popup()
 
-    imgui.dummy((0, 6))
-    # The header says which map this is, because the section under it is a
-    # different section on each: an infinite map has no width and height to set.
-    label = "Size" if doc.infinite else "Resize"
-    if widgets.header(label, default_open=False, persist_key="plotter/resize"):
-        _resize_form(ctx, tab)
+
+RESIZE_POPUP = "plotter-resize"
+
+
+def resize_popup(ctx: Any, state: Any, tab: Any) -> None:
+    """Map -> Resize, as a dialog rather than as an accordion in the sidebar.
+
+    Two hundred lines of column -- width, height, the offset pair, autocrop,
+    the infinite conversion and the tile size -- for a form opened once when a
+    map is set up and then never again. It is a *dialog* by nature: it is
+    answered and dismissed, and everything in it is about the document rather
+    than about the click you are about to make.
+
+    Opened by name off ``state.resize_pending``, which is how a menu row asks
+    for a popup: a popup belongs to the window that begins it, and a menu is
+    not that window.
+    """
+    from imgui_bundle import imgui
+
+    if state.resize_pending:
+        state.resize_pending = False
+        if tab is not None:
+            imgui.open_popup(RESIZE_POPUP)
+    if tab is None or not imgui.begin_popup(RESIZE_POPUP):
+        return
+    widgets.popup_chrome(_imgui=imgui)
+    # The title says which map this is, because the form under it is a
+    # different form on each: an infinite map has no width and height to set.
+    imgui.text("Map size" if tab.doc.infinite else "Resize the map")
+    imgui.separator()
+    _resize_form(ctx, tab)
+    imgui.end_popup()
 
 
 def _resize_form(ctx: Any, tab: Any) -> None:

@@ -4590,15 +4590,25 @@ def test_a_rendered_sheet_offers_both_hand_offs(app_ctx, imgui_ctx):
 
 def test_the_offset_and_autocrop_controls_render(app_ctx, imgui_ctx):
     from warlock.studio import plotter_mode
-    from warlock.studio.panes import plotter_tools
 
     imgui, _renderer = imgui_ctx
     tab = plotter_mode.new_document(app_ctx, (8, 8, 16, 16))
     tab.doc.add_tileset(_tileset())
     app_ctx.settings.set("plotter/resize", True)
 
-    _drawn_labels(imgui, lambda: plotter_tools.draw(app_ctx), "##k-geom")
-    labels = _drawn_labels(imgui, lambda: plotter_tools.draw(app_ctx), "##k-geom")
+    # The form is the Map > Resize dialog now (W3.1), so it is driven through
+    # the popup's own function rather than through the pane: two hundred lines
+    # of accordion for a form answered once per map is a dialog.
+    state = plotter_mode.ensure(app_ctx)
+    state.resize_pending = True
+
+    def frame() -> None:
+        from warlock.studio.panes import plotter_tools as pane
+
+        pane.resize_popup(app_ctx, state, tab)
+
+    _drawn_labels(imgui, frame, "##k-geom")
+    labels = _drawn_labels(imgui, frame, "##k-geom")
     assert _index_of(labels, "Move X") >= 0, labels
     assert _index_of(labels, "Autocrop to content") >= 0, labels
     assert _index_of(labels, "Scope") >= 0, labels
@@ -4616,7 +4626,11 @@ def test_the_wand_row_renders_and_no_dead_generator_route_remains(app_ctx, imgui
     imgui, _renderer = imgui_ctx
     plotter_mode.new_document(app_ctx, (8, 8, 16, 16))
     labels = _drawn_labels(imgui, lambda: plotter_tools.draw(app_ctx), "##k-wand")
-    assert _index_of(labels, "W") >= 0, "the Wand tool button is drawn"
+    # By its id, not by the letter "W": that letter was being matched against
+    # the tile-size field's *Width* box, which has since moved into the Map >
+    # Resize dialog (W3.1) -- so the assertion passed for four months without
+    # ever looking at the Wand button.
+    assert any("##tool-wand" in label for label in labels), labels
     assert _index_of(labels, "Open the generator") == -1, labels
 
     root = _Path(__file__).resolve().parents[1] / "src"

@@ -58,7 +58,7 @@ from ..plotter.tilemap import (
 )
 from ..tilegrid import gid as gidlib
 from ..tokens import sp
-from . import plotter_layers, plotter_textures
+from . import plotter_layers, plotter_menu, plotter_textures
 
 # Below this many pixels per tile the grid stops being drawn: at two pixels a
 # cell it is a solid wash rather than a guide, and it costs one line per column.
@@ -107,11 +107,23 @@ def draw(ctx: Any) -> None:
     from imgui_bundle import imgui
 
     state = plotter_mode.ensure(ctx)
+    # Menu, tabs, canvas, status -- the Inker's order and Tiled's. Inside this
+    # pane because an imgui popup renders only in the id stack that opened it.
+    plotter_menu.draw(ctx)
     _tabs(ctx, state)
     # Before the empty-state return, or "New map" would open a dialog that only
     # exists on the branch where a map is already open.
     setup_popup(ctx, state)
     tab = state.active
+    # The two dialogs the menu asks for, hosted here for the same reason the
+    # menu is drawn here.
+    # Imported here, not at module scope: ``..plotter.tools`` already owns the
+    # name ``plotter_tools`` in this file, and the pane is only wanted for its
+    # two dialogs.
+    from . import plotter_tools as tools_pane
+
+    tools_pane.resize_popup(ctx, state, tab)
+    tools_pane.map_settings_popup(ctx, state, tab)
     if tab is None:
         _empty(ctx)
         return
