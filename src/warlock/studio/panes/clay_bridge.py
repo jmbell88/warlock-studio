@@ -34,9 +34,12 @@ def draw(ctx: Any) -> None:
     widgets.section("Document")
     manual_render.help_button(ctx, "clay-bridge")
     if tab is None:
-        # The heading and nothing else. New/Open used to be drawn here as well
-        # as on the empty canvas two columns to the left -- one pair of buttons
-        # in two places, under a fourth copy of "Nothing open."
+        # The recent list and nothing else -- Plotter's bridge exactly (B5).
+        # New/Open are on the empty canvas two columns to the left, and drawing
+        # them here as well was one pair of buttons in two places; the *list*
+        # is the opposite case, because the moment it matters most is the
+        # moment there is nothing open.
+        _recent(ctx)
         return
     _files(ctx, tab)
 
@@ -45,6 +48,7 @@ def draw(ctx: Any) -> None:
     _history(ctx, tab)
     imgui.dummy((0, 8))
     _outputs(ctx, tab)
+    _recent(ctx)
 
 
 def _history(ctx: Any, tab: Any) -> None:
@@ -84,9 +88,7 @@ def _facts(tab: Any) -> None:
         f"{triangles:,} triangles  -  {len(doc.materials)} materials"
     )
     if tab.saving:
-        widgets.spinner()
-        imgui.same_line()
-        widgets.muted("saving...")
+        widgets.busy("Saving")
     elif tab.dirty:
         widgets.muted("unsaved changes")
     else:
@@ -187,3 +189,20 @@ def send_to_3d(ctx: Any, tab: Any) -> None:
         ctx.toast("Could not make a mesh: this window has no viewport to render from.", "error")
         return
     handler(tab)
+
+
+def _recent(ctx: Any) -> None:
+    """The recent list, on the bridge, on **both** branches.
+
+    Plotter's bridge already draws its list whether or not a document is open,
+    and that is the answer: a recent list is how you get *back* to work, so the
+    one moment it matters most is the moment there is nothing open. Clay's was
+    on the empty canvas instead, which is the one screen it disappears from as
+    soon as it becomes useful again.
+    """
+    from pathlib import Path
+
+    widgets.recent_files(
+        clay_mode.recent_paths(ctx),
+        lambda path: clay_mode.open_path(ctx, Path(path)),
+    )

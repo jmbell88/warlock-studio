@@ -201,14 +201,12 @@ def _palette(
 
 
 def _submit(ctx: Any, form: dict[str, Any]) -> None:
-    from imgui_bundle import imgui
 
     busy = ctx.busy("troupe-start")
     count = cell_count(form)
     ready = bool(form["prompt"].strip()) and 0 < count <= 512
     if busy:
-        widgets.spinner()
-        imgui.same_line()
+        widgets.busy("Drawing the reference")
     if widgets.disabled_button(
         "Draw the reference",
         not busy and ready,

@@ -443,3 +443,56 @@ def test_clay_state_close_has_a_caller():
     # ``main`` rather than by a pane, because ``main`` owns Clay's centre pane.
     assert "close_tab" in (STUDIO / "main.py").read_text(encoding="utf-8")
     assert 'name == "w"' in text
+
+
+def test_the_troupe_cast_rows_have_a_context_menu():
+    """B2. Four idioms across the app was never the defect -- *none* was: this
+    was the one list in the tree with no way to act on a member without first
+    selecting it and then finding a button in another pane."""
+    import inspect
+
+    from warlock.studio.panes import troupe_characters
+
+    source = inspect.getsource(troupe_characters)
+    assert "_row_menu(ctx, state, character)" in source
+    assert "begin_popup_context_item" in source
+
+
+def test_poser_saves_from_the_keyboard_and_the_palette():
+    """B1. Both functions existed and neither had a key: saving a pose was a
+    button in one pane and nothing else."""
+    import inspect
+
+    from warlock.studio import palette, poser_mode
+
+    assert "poser" in palette._DOC_MODES
+    assert callable(poser_mode.active)
+    source = inspect.getsource(poser_mode.handle_key)
+    assert 'pygame.key.name(event.key) == "s"' in source
+
+
+def test_clays_frame_key_lives_with_clays_other_keys():
+    """B6. It was a branch in App._shortcut reaching past clay_mode.handle_key
+    -- the one Clay binding that did not live with the others."""
+    import inspect
+
+    from warlock.studio import clay_mode, main
+
+    assert "frame_pending" in inspect.getsource(clay_mode.handle_key)
+    shortcut = inspect.getsource(main.App._shortcut)
+    assert "_frame_clay_selection" not in shortcut
+
+
+def test_the_right_button_means_one_thing_in_both_viewports():
+    """B7. It was a second pan in one viewport and a context menu in the other,
+    so which the user got depended on which viewport they were over."""
+    import inspect
+
+    from warlock.studio import viewer_embed
+
+    source = inspect.getsource(viewer_embed.Viewer._press)
+    assert "button in (2, 3)" not in source
+    assert 'self._grab = "pan" if button == 2 else "orbit"' in source
+    # And the menu is gated on pose mode, or it would appear over Create's
+    # inspector, where nobody is posing anything.
+    assert "button == 3 and self.pose_mode" in source

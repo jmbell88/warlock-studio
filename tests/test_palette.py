@@ -331,7 +331,16 @@ def test_the_document_dispatch_covers_every_document_mode():
     from warlock.studio import modes as modes_mod
 
     assert set(palette._DOC_MODES) <= {key for key, _label, _icon in modes_mod.MODES}
-    assert set(palette._DOC_MODES) == {"inker", "clay", "plotter", "packwright"}
+    # Poser joined in B1: it has a Save and a Save-as and had neither a key
+    # nor a palette entry for them. **Troupe deliberately does not** -- it has
+    # no document, so all four commands would be empty rows.
+    assert set(palette._DOC_MODES) == {
+        "inker",
+        "clay",
+        "plotter",
+        "packwright",
+        "poser",
+    }
 
 
 def test_the_shortcuts_command_sets_a_flag_rather_than_opening_a_popup():
@@ -452,3 +461,14 @@ def test_undo_falls_back_to_the_document_for_a_mode_with_no_wrapper():
         del sys.modules[name]
 
     assert calls == ["doc"]
+
+
+def test_a_mode_with_no_export_suppresses_the_command_rather_than_faking_one():
+    """A pose *is* a library record, so it is saved and never exported --
+    offering an Export row here would be one that has to refuse."""
+    ctx = _ctx()
+    ctx.state.mode = "poser"
+    assert palette._doc_export_label(ctx) == ""
+    assert palette._can_export(ctx) is False
+    command = next(c for c in palette.commands(ctx) if c.key == "export")
+    assert "library" in command.why

@@ -61,6 +61,10 @@ class Viewer(PoseOps):
 
         self.wireframe = False
         self.pose_mode = False
+        #: Where the right button went down while posing, or None. Read and
+        #: cleared by the pane that draws the joint menu -- ``clay_view``'s
+        #: rule, and its reason: this layer may not know imgui exists.
+        self.menu_request: tuple[float, float] | None = None
         # Which job's rig the editor is bound to, so a write can never land on
         # whichever asset happens to be selected. See enter_pose_mode.
         self.pose_job_id: str | None = None
@@ -520,7 +524,21 @@ class Viewer(PoseOps):
                 self.editor.selected = hit
                 self._grab = "marker"
                 return True
-        self._grab = "pan" if button in (2, 3) else "orbit"
+        if button == 3 and self.pose_mode:
+            # **Button 2 pans; button 3 asks what can be done here** (B7). The
+            # right button was a second pan in this viewport and a context menu
+            # in Clay's, so which one the user got depended on which viewport
+            # they were over -- and the menu is the Wings3D idea the whole ops
+            # registry exists for, so the convergence goes the other way.
+            #
+            # Gated on ``pose_mode`` deliberately: this class also draws
+            # Create's inspector, where a joint menu would appear over an asset
+            # nobody is posing. Recorded rather than opened, ``clay_view``'s
+            # rule -- the pane layer is the only one allowed to know imgui
+            # exists.
+            self.menu_request = local
+            return True
+        self._grab = "pan" if button == 2 else "orbit"
         return True
 
     def _release(self, button: int) -> bool:

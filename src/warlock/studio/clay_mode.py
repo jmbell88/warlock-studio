@@ -654,6 +654,13 @@ def handle_key(ctx: Any, event: Any) -> bool:
     """
     import pygame
 
+    if event.type == pygame.KEYDOWN and pygame.key.name(event.key) == "f" and not (
+        event.mod & (pygame.KMOD_CTRL | pygame.KMOD_ALT)
+    ):
+        # Recorded, not done: see ``ClayState.frame_pending``.
+        ensure(ctx).frame_pending = True
+        return True
+
     state = ctx.state.clay
     if state is None or not state.docs:
         return False

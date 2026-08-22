@@ -411,8 +411,25 @@ def _mutate(ctx: Any, key: str, fn: Any, *args: Any) -> bool:
     return False
 
 
-def save(ctx: Any) -> None:
-    """Save over the pose being edited, or fall through to Save-as."""
+def active(ctx: Any) -> Any:
+    """The pose being edited, or None. The palette's door into this mode.
+
+    Poser has no *document* -- a pose is a library record rather than a file
+    the user places -- so what is returned is the viewer, which is the thing
+    Save and Save-as act on. That is enough for the palette's dispatch, which
+    only ever asks "is there something to save".
+    """
+    viewer = viewer_of(ctx)
+    return viewer if viewer is not None and viewer.pose_mode else None
+
+
+def save(ctx: Any, tab: Any = None) -> None:
+    """Save over the pose being edited, or fall through to Save-as.
+
+    ``tab`` is accepted and ignored: the palette's dispatch hands every
+    document mode its active tab, and Poser's "tab" is the viewer it already
+    reads off the ctx. One signature there beats a special case.
+    """
     from ..service import poses as svc_poses
 
     state = ensure(ctx)
@@ -436,7 +453,7 @@ def save(ctx: Any) -> None:
     )
 
 
-def save_as(ctx: Any) -> None:
+def save_as(ctx: Any, tab: Any = None) -> None:
     from ..service import poses as svc_poses
 
     state = ensure(ctx)
@@ -547,6 +564,13 @@ def handle_key(ctx: Any, event: Any) -> bool:
         return True
     if event.key == pygame.K_ESCAPE and viewer.editor.selected is not None:
         viewer.editor.selected = None
+        return True
+    # Ctrl+S / Ctrl+Shift+S, the one chord a user carries between every editor
+    # in this app. Both functions existed and neither had a key: saving a pose
+    # was a button in one pane and nothing else.
+    ctrl = bool(event.mod & pygame.KMOD_CTRL)
+    if ctrl and pygame.key.name(event.key) == "s":
+        save_as(ctx) if event.mod & pygame.KMOD_SHIFT else save(ctx)
         return True
     return False
 

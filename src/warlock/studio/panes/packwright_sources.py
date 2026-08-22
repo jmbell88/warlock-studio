@@ -63,9 +63,20 @@ def draw(ctx: Any) -> None:
         return
 
     widgets.muted(f"{len(sources)} sprite(s)")
+    # **The one list in this app that grows without bound** (B-list, wave 4).
+    # Packwright's items pane is a *result* list and Troupe's cast is below
+    # ``list_filter``'s own self-hiding threshold; an atlas's sources are
+    # whatever the user has dropped on it, which is hundreds by the end of a
+    # sheet.
+    needle = widgets.list_filter(ctx, "packwright-sources", len(sources))
     imgui.dummy((0, 2))
+    shown = 0
     for source in sources:
+        if needle and needle not in (getattr(source, "name", "") or "").lower():
+            continue
+        shown += 1
         _row(ctx, state, tab, source, editable)
+    widgets.no_matches(needle, shown)
 
 
 TILESET_POPUP = "packwright-tileset-import"

@@ -155,6 +155,16 @@ class ClayState:
 
     docs: list[ClayTab] = field(default_factory=list)
     active_uid: str = ""
+    #: ``F`` has been pressed and the viewport has not framed yet.
+    #:
+    #: A flag rather than a call, the house pattern (``plotter_state``'s
+    #: ``setup_pending``, Inker's ``pending_dialog``): framing needs the
+    #: viewport, which is a thing ``main`` owns and ``clay_mode`` may not
+    #: import, so the mode records the *intent* and the pane consumes it. What
+    #: it replaces is a branch in ``App._shortcut`` that reached past
+    #: ``clay_mode.handle_key`` to do the same thing -- the one Clay binding
+    #: that did not live with the others.
+    frame_pending: bool = False
 
     # Tool and snap settings: shared across documents on purpose.
     tool: str = "select"

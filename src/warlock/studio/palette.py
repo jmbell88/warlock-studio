@@ -192,6 +192,12 @@ _DOC_MODES: dict[str, tuple[str, str]] = {
     "clay": ("clay_mode", "Export to the library"),
     "plotter": ("plotter_mode", "Export .tmx"),
     "packwright": ("packwright_mode", "Export atlas + JSON"),
+    # **An empty export label suppresses the command** rather than forcing a
+    # fake one: a pose *is* a library record, so it is saved and never
+    # exported, and offering "Export" here would be a row that has to refuse.
+    # Troupe deliberately does not join this table at all -- it has no
+    # document, so all four commands would be empty.
+    "poser": ("poser_mode", ""),
 }
 
 _DOC_WHY = "Open a drawing, model, map or atlas first."
@@ -232,6 +238,8 @@ def _doc_export(ctx: Any) -> None:
     # Each mode's *primary* export, which is the one its bridge puts first and
     # the one Ctrl+E is bound to. The others stay panel-only: a palette listing
     # four exports per mode is a list nobody reads.
+    if not _doc_export_label(ctx):
+        return
     if ctx.state.mode == "inker":
         module.export_png(ctx, tab)
     elif ctx.state.mode == "clay":
@@ -245,6 +253,11 @@ def _doc_export(ctx: Any) -> None:
 def _doc_export_label(ctx: Any) -> str:
     entry = _DOC_MODES.get(ctx.state.mode)
     return entry[1] if entry else "Export"
+
+
+def _can_export(ctx: Any) -> bool:
+    """Whether this mode has an export at all. See :data:`_DOC_MODES`."""
+    return bool(_doc_export_label(ctx)) and _has_doc(ctx)
 
 
 def _doc_history(ctx: Any):
@@ -570,8 +583,10 @@ def commands(ctx: Any) -> list[Command]:
             group="Document",
             run=_doc_export,
             hint="Ctrl+E",
-            enabled=_has_doc,
-            why=_DOC_WHY,
+            enabled=_can_export,
+            why=_DOC_WHY
+            if _doc_export_label(ctx)
+            else "A pose is saved into the library rather than exported.",
         ),
         Command(
             key="undo",

@@ -20,7 +20,7 @@ from warlock.studio import widgets
 
 STUDIO = Path(inspect.getfile(widgets)).resolve().parent
 
-#: Every pane drawing a ``list_filter``. ``pose_panel`` holds two of the six --
+#: Every pane drawing a ``list_filter``. ``pose_panel`` holds two of them --
 #: the library list and the saved list -- which is why this is a file list and
 #: the count assertion below is separate.
 FILTERED = (
@@ -32,6 +32,12 @@ FILTERED = (
     "panes/inker_timeline.py",
     "panes/pose_panel.py",
     "panes/poser_library.py",
+    # The one list in the app that grows without bound: an atlas's sources are
+    # whatever has been dropped on it, which is hundreds by the end of a sheet.
+    # Packwright's *items* pane is deliberately not here -- it is a result list
+    # -- and neither is Troupe's cast, which is below list_filter's own
+    # self-hiding threshold.
+    "panes/packwright_sources.py",
 )
 
 
@@ -40,9 +46,9 @@ def test_every_filtered_list_reports_a_filter_that_matched_nothing(relative):
     assert "no_matches(" in (STUDIO / relative).read_text(encoding="utf-8"), relative
 
 
-def test_every_list_filter_call_site_is_one_of_the_six():
-    """The other direction: a seventh filtered list added without the row would
-    be exactly the panel-looks-lost bug again, in a new pane."""
+def test_every_list_filter_call_site_is_listed_above():
+    """The other direction: a filtered list added without the row would be
+    exactly the panel-looks-lost bug again, in a new pane."""
     found = {
         str(path.relative_to(STUDIO)).replace("\\", "/")
         for path in STUDIO.rglob("*.py")

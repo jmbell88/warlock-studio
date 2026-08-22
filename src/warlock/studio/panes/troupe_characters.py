@@ -48,6 +48,7 @@ def draw(ctx: Any) -> None:
             tooltip=character["id"],
         ):
             troupe_mode.select(ctx, character["id"])
+        _row_menu(ctx, state, character)
 
     _pending(ctx, pending)
 
@@ -69,6 +70,42 @@ def draw(ctx: Any) -> None:
             f"sheet-{record['id']}", label, selected=selected
         ):
             troupe_mode.select(ctx, state.job_id, record["id"])
+
+
+def _row_menu(ctx: Any, state: Any, character: dict[str, Any]) -> None:
+    """A cast row's own verbs (B2).
+
+    Four idioms across the app was never the defect -- *none* was. Troupe's
+    rows were the one list in the tree with no way to act on a member without
+    first selecting it and then finding a button somewhere else, and every
+    action here is one that already exists behind that route.
+    """
+    from imgui_bundle import imgui
+
+    if not imgui.begin_popup_context_item(f"cast-menu-{character['id']}"):
+        return
+    widgets.popup_chrome(_imgui=imgui)
+    is_active = character["id"] == state.job_id
+    if controls.menu_item_simple("Select"):
+        troupe_mode.select(ctx, character["id"])
+    imgui.separator()
+    if controls.menu_item_simple(
+        "Open the sheet in Inker",
+        "",
+        False,
+        is_active,
+        reason="Select this character first.",
+    ):
+        troupe_mode.open_in_inker(ctx)
+    if controls.menu_item_simple(
+        "Add the sheet to Packwright",
+        "",
+        False,
+        is_active,
+        reason="Select this character first.",
+    ):
+        troupe_mode.add_to_packwright(ctx)
+    imgui.end_popup()
 
 
 def _pending(ctx: Any, pending: list[dict[str, Any]]) -> None:

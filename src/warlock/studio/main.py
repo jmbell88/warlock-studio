@@ -2464,9 +2464,11 @@ class App:
             # First refusal, and unconditional for the reason Inker's is:
             # handle_key returns False with no document open, and letting that
             # fall through meant F/W/S acted on a viewport Clay has replaced.
+            # Every Clay binding is in ``clay_mode.handle_key`` now, F
+            # included: it records ``state.frame_pending`` and the viewport
+            # consumes it, because framing needs a viewport this module owns
+            # and that one may not import (B6).
             clay_mode.handle_key(ctx, event)
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_f:
-                self._frame_clay_selection()
             return
         if ctx.state.mode == "poser":
             from . import poser_mode
@@ -3200,6 +3202,44 @@ class App:
         texture = viewer.render(rect, 1.0 / TARGET_FPS)
         imgui.image(widgets.texture_ref(texture), (rect[2], rect[3]), (0, 1), (1, 0))
         self._poser_hovered = imgui.is_item_hovered()
+        self._poser_menu(ctx, viewer)
+
+    def _poser_menu(self, ctx: Any, viewer: Any) -> None:
+        """The joint's right-click menu (B7).
+
+        Drawn here rather than in a pane because a popup belongs to the window
+        that begins it and this is that window -- the same reason
+        ``clay_menu`` is called from Clay's viewport. The viewer records
+        ``menu_request`` and knows nothing about imgui.
+        """
+        from imgui_bundle import imgui
+
+        from . import controls, widgets
+
+        popup = "poser-joint-menu"
+        if viewer.menu_request is not None:
+            viewer.menu_request = None
+            imgui.open_popup(popup)
+        if not imgui.begin_popup(popup):
+            return
+        widgets.popup_chrome(_imgui=imgui)
+        selected = viewer.editor.selected
+        if selected is None:
+            widgets.secondary("No joint selected")
+        else:
+            widgets.secondary(str(selected))
+            imgui.separator()
+            # Through the *viewer*, never the editor: every one of these has a
+            # ``_after_pose_change`` behind it that re-skins the preview, which
+            # is exactly the step a direct editor call would skip.
+            if controls.menu_item_simple("Clear this joint's rotation"):
+                viewer.reset_bone()
+            if controls.menu_item_simple("Deselect"):
+                viewer.editor.selected = None
+        imgui.separator()
+        if controls.menu_item_simple("Reset the whole pose"):
+            viewer.reset_all()
+        imgui.end_popup()
 
     def _ensure_poser_viewer(self) -> Any:
         """Poser's own Viewer, built on first use for ClayView's reason -- and
@@ -3379,6 +3419,11 @@ class App:
             max(avail.y, 1.0),
         )
         state = clay_mode.ensure(ctx)
+        if state.frame_pending:
+            # The other half of ``F``: the mode recorded the intent and this is
+            # the only place that has the viewport to act on it (B6).
+            state.frame_pending = False
+            self._frame_clay_selection()
         view = self._ensure_build_view()
         # One viewport, many tabs: the camera belongs to the *document*, so it
         # is snapshotted off the live one on the way out of a tab and put back
@@ -3444,7 +3489,6 @@ class App:
         through Ctrl+N, so the empty state told the user to "start a document"
         and offered no way to.
         """
-        from pathlib import Path
 
         from . import widgets
 
@@ -3460,8 +3504,8 @@ class App:
                 ("New model", lambda: clay_mode.new_document(ctx)),
                 ("Open a file...", lambda: clay_mode.ask_open(ctx)),
             ],
-            recent_paths=clay_mode.recent_paths(ctx),
-            on_open=lambda path: clay_mode.open_path(ctx, Path(path)),
+            # No recent list here: it is the bridge panel's, on both of its
+            # branches, which is where Plotter and Packwright keep theirs (B5).
         )
 
     def _clay_marquee(self, imgui: Any, view: Any, rect: Any) -> None:

@@ -20,8 +20,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from imgui_bundle import imgui
-
 from ...pipelines import optimize
 from ...service import jobs as svc_jobs
 from .. import forms, theme, widgets
@@ -165,8 +163,7 @@ def _submit(ctx: Any, job_id: str, form: dict[str, Any]) -> None:
     for problem in problems:
         widgets.muted(problem)
     if busy:
-        widgets.spinner()
-        imgui.same_line()
+        widgets.busy("Rebuilding the mesh")
     if widgets.disabled_button(
         "Rebuild mesh",
         not problems and not busy,
