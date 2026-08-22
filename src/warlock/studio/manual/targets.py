@@ -49,6 +49,9 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "clay-outliner": ("11-clay", "adding-a-primitive"),
     "clay-bridge": ("11-clay", "the-two-ways-out"),
     "plotter-tools": ("12-plotter", "tools"),
+    # The sheet over the centre pane: three titled tabs a user interacts with,
+    # so an exemption would be false.
+    "plotter-tileset-editor": ("12-plotter", "tilesets"),
     "plotter-tileset": ("12-plotter", "tilesets"),
     "plotter-layers": ("12-plotter", "layers"),
     "plotter-bridge": ("12-plotter", "files"),

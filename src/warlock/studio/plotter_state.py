@@ -338,6 +338,10 @@ class PlotterState:
     #: Which tileset the editor sheet is open on, by index, or None for "the
     #: map is on screen". The branch ``_review_workspace`` already takes.
     editing_tileset: int | None = None
+    #: Which tile the sheet is editing, and which of its three tabs is up.
+    #: View state: nothing here is written to the document.
+    editing_tile: int = 0
+    tileset_tab: str = "Tiles"
     # A library asset waiting for the map that ``setup_pending`` is asking
     # about. The Library's *Add to Plotter as a tileset* used to be drawn for
     # any asset with an ``input.png`` and then refused with an error toast when

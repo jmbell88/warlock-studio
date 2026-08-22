@@ -25,6 +25,7 @@ from .edits import (
     ProjectionEdit,
     TileMetaEdit,
     TilesetAddEdit,
+    TilesetRemoveEdit,
     TilesetReplaceEdit,
 )
 
@@ -75,6 +76,58 @@ class TilesetOps:
         self.history.push(TilesetAddEdit(ref=ref))
         self._attach_tileset(ref)
         return ref
+
+    def tileset_usage(self: MapDoc, index: int) -> tuple[int, str]:
+        """How many cells hold a gid from this tileset, and where. -> (count, layer).
+
+        Pure, and the whole of the refusal's evidence: a removal that silently
+        blanked forty-two cells is the failure this exists to stop, and a count
+        with no layer name is a refusal the user cannot act on.
+        """
+        import numpy as np
+
+        if index < 0 or index >= len(self.tilesets):
+            return (0, "")
+        ref = self.tilesets[index]
+        low = int(ref.firstgid)
+        high = int(ref.last_gid)
+        worst_count, worst_name = 0, ""
+        total = 0
+        for layer in self.layers:
+            data = getattr(layer, "data", None)
+            if data is None:
+                continue
+            ids = gidlib.tile_ids(np.asarray(data))
+            held = int(np.count_nonzero((ids >= low) & (ids <= high)))
+            total += held
+            if held > worst_count:
+                worst_count, worst_name = held, layer.name
+        return (total, worst_name)
+
+    def remove_tileset(self: MapDoc, index: int) -> None:
+        """Take a tileset out of the map, refusing while anything still uses it.
+
+        **The refusal is the feature.** A gid is a firstgid plus a local id, so
+        dropping a tileset out from under painted cells does not clear them --
+        it renumbers what they mean. The message names the tileset, the count
+        and the layer, because "it is still in use" is a sentence the user
+        cannot act on.
+
+        Survivors keep their firstgids. A hole in gid space is legal: ``wmap``
+        requires only that they increase.
+        """
+        if index < 0 or index >= len(self.tilesets):
+            raise IndexError(f"no tileset {index}")
+        used, where = self.tileset_usage(index)
+        ref = self.tilesets[index]
+        if used:
+            name = ref.tileset.name or "this tileset"
+            raise ValueError(
+                f"{name} is still used by {used} cell(s)"
+                + (f" on {where}" if where else "")
+            )
+        self.history.push(TilesetRemoveEdit(index=index, ref=ref))
+        self._detach_tileset(ref)
 
     def set_tile_meta(self: MapDoc, index: int, local_id: int, meta: Any) -> bool:
         """Set (or clear) one tile's metadata on one tileset, undoably.
@@ -178,6 +231,16 @@ class TilesetOps:
 
     def _attach_tileset(self: MapDoc, ref: TilesetRef) -> None:
         self.tilesets.append(ref)
+        self.tileset_epoch += 1
+
+    def _insert_tileset(self: MapDoc, index: int, ref: TilesetRef) -> None:
+        """Put a removed set back where it was. The undo half of a removal.
+
+        By index rather than by append: the list is in firstgid order and a set
+        put back at the end would be out of it, which ``wmap`` refuses on the
+        next save.
+        """
+        self.tilesets.insert(max(0, min(int(index), len(self.tilesets))), ref)
         self.tileset_epoch += 1
 
     def _detach_tileset(self: MapDoc, ref: TilesetRef) -> None:

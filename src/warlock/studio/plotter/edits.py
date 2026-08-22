@@ -271,13 +271,15 @@ class MapSettingsEdit(Edit):
 class TilesetAddEdit(Edit):
     """Adding a tileset to the map's list.
 
-    Removal is not an operation the map offers, and the omission is deliberate:
-    ``firstgid`` allocation is contiguous, so dropping a set from the middle
-    would either renumber every set above it -- invalidating every gid already
-    painted -- or leave a hole that the next add would have to reason about.
-    Undo therefore only ever has to take back the set it appended, and it does
-    so by identity so that a stack which has somehow got out of order fails
-    loudly rather than removing somebody else's.
+    Undo takes back the set it appended, by identity, so that a stack which
+    has somehow got out of order fails loudly rather than removing somebody
+    else's.
+
+    Removal *is* an operation now (:class:`TilesetRemoveEdit`, W3.5), and the
+    old reasoning here for why it could not be still holds where it matters:
+    survivors keep their firstgids and a **hole in gid space is legal** --
+    ``wmap`` requires only that they increase -- while a set that anything has
+    painted with is refused by name rather than renumbered under the cells.
     """
 
     ref: Any
@@ -290,6 +292,31 @@ class TilesetAddEdit(Edit):
 
     def redo(self, doc: Any) -> None:
         doc._attach_tileset(self.ref)
+
+
+
+@dataclass
+class TilesetRemoveEdit(Edit):
+    """Taking a tileset back out of the map's list.
+
+    Only ever reached for a set nothing is painted with -- ``remove_tileset``
+    refuses otherwise, by name and with a count -- so undoing is putting an
+    unused set back at its old index, and the gids around it never moved.
+    """
+
+    index: int
+    ref: Any
+
+    def __post_init__(self) -> None:
+        self.cost = int(
+            getattr(getattr(self.ref, "tileset", None), "pixels", np.empty(0)).nbytes
+        )
+
+    def undo(self, doc: Any) -> None:
+        doc._insert_tileset(self.index, self.ref)
+
+    def redo(self, doc: Any) -> None:
+        doc._detach_tileset(self.ref)
 
 
 @dataclass

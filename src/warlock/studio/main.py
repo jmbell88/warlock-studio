@@ -3675,6 +3675,7 @@ class App:
             plotter_canvas,
             plotter_layers,
             plotter_tileset,
+            plotter_tileset_editor,
             plotter_tools,
         )
 
@@ -3696,14 +3697,23 @@ class App:
         imgui.same_line()
         width = layout_mod.centre_width()
         flags = imgui.WindowFlags_.no_scroll_with_mouse.value
+        # The tileset editor is a **sheet over the centre pane**, drawn instead
+        # of the map: the branch ``_review_workspace`` already takes, with the
+        # role that already exists for it. Not a mode (a 21-place checklist,
+        # including prose asserting the mode count) and not a document kind
+        # (which would teach nine places a second shape).
+        sheet = plotter_tileset_editor.active(ctx)
         with layout_mod.pane(
             "plotter-centre",
             (width, 0),
-            layout_mod.PaneRole.CONTENT,
+            layout_mod.PaneRole.SHEET if sheet else layout_mod.PaneRole.CONTENT,
             window_flags=flags,
         ) as visible:
             if visible:
-                plotter_canvas.draw(ctx)
+                if sheet:
+                    plotter_tileset_editor.draw(ctx)
+                else:
+                    plotter_canvas.draw(ctx)
 
         imgui.same_line()
         _split_column(
