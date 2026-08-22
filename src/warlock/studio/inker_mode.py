@@ -3072,6 +3072,7 @@ def handle_key(ctx: Any, event: Any) -> bool:
     mods = event.mod
     ctrl = bool(mods & pygame.KMOD_CTRL)
     shift = bool(mods & pygame.KMOD_SHIFT)
+    alt = bool(mods & pygame.KMOD_ALT)
     name = pygame.key.name(event.key)
     # Built here rather than at module scope: pygame is imported lazily in this
     # function, so a module-level table would drag it into every import of the
@@ -3132,6 +3133,17 @@ def handle_key(ctx: Any, event: Any) -> bool:
         inker_timeline.toggle(state)
     elif name == "x":
         state.swap_colours()
+    elif alt and name.isdigit() and name != "0":
+        # Aseprite's Alt+1..9. Shift stores, plain recalls -- Plotter's stamp
+        # slots' rule and its reason: recall happens hundreds of times a
+        # session and storing nine times, so the cheap gesture goes to the
+        # frequent one.
+        slot = int(name)
+        if shift:
+            if not state.store_stamp(slot):
+                state.say("There is no captured brush to store -- Ctrl+B captures one.")
+        elif not state.recall_stamp(slot):
+            state.say(f"Brush {slot} is empty -- Alt+Shift+{slot} stores one.")
     elif not shift and name.isdigit():
         # **The number row was entirely unbound in Inker**, and Aseprite's
         # answer to the same spare keys is the same one: opacity in tenths,

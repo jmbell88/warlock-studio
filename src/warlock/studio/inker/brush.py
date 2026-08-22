@@ -116,10 +116,17 @@ MAX_STAMP = 512
 #: with no intermediate values has no falloff to shape, which is why
 #: ``_stamp`` passes 1.0 for them rather than letting the slider quietly widen
 #: the cache with values that change nothing.
-NIBS = ("soft", "pixel", "square")
+#: ``line`` is Aseprite's line nib: a one-pixel-thick run at the brush angle,
+#: which is what a calligraphic stroke is made of. It is a *pixel* nib -- its
+#: coverage is 0 or 1 -- because a feathered one-pixel line is a grey smear
+#: rather than a line.
+NIBS = ("soft", "pixel", "square", "line")
 
 #: The nibs whose dabs land on whole pixels and whose coverage is binary.
 PIXEL_NIBS = frozenset(NIBS[1:])
+
+#: The nibs a brush *angle* means anything to. A disc turned is a disc.
+ANGLED_NIBS = frozenset({"square", "line"})
 
 # How many ways a radial symmetry divides the circle by default. Six is the
 # snowflake/mandala number every tool that has this control opens on.
@@ -149,7 +156,9 @@ def clamp_brush(size: int) -> int:
 
 
 @lru_cache(maxsize=256)
-def make_stamp(diameter: int, hardness: float, nib: str = "soft") -> np.ndarray:
+def make_stamp(
+    diameter: int, hardness: float, nib: str = "soft", angle: float = 0.0
+) -> np.ndarray:
     """A float32 coverage stamp, ``diameter`` square, 0..1. **Read-only.**
 
     Cached, and the cache hands the *same array* to every caller that asks for
@@ -160,12 +169,12 @@ def make_stamp(diameter: int, hardness: float, nib: str = "soft") -> np.ndarray:
     that needs to modify one copies it; the sibling caches in ``clay/mesh.py``
     and ``plotter/tileset.py`` freeze theirs for the same reason.
     """
-    stamp = _stamp(diameter, hardness, nib)
+    stamp = _stamp(diameter, hardness, nib, angle)
     stamp.setflags(write=False)
     return stamp
 
 
-def _stamp(diameter: int, hardness: float, nib: str) -> np.ndarray:
+def _stamp(diameter: int, hardness: float, nib: str, angle: float = 0.0) -> np.ndarray:
     """``make_stamp``'s body, uncached and writable.
 
     For the ``soft`` nib the rim is antialiased over the last half pixel even at
@@ -183,8 +192,23 @@ def _stamp(diameter: int, hardness: float, nib: str) -> np.ndarray:
     hardness = min(1.0, max(0.0, float(hardness)))
     radius = diameter / 2.0
     axis = np.arange(diameter, dtype=np.float32) + 0.5 - radius
-    if nib == "square":
-        return np.ones((diameter, diameter), dtype=np.float32)
+    if nib in ANGLED_NIBS:
+        # **Rotated in the stamp's own space**, not by turning the drawing:
+        # every sample asks where it lands in the nib's frame and answers 0 or
+        # 1, so an angled square is still a square with hard edges at every
+        # angle rather than a resampled one with a grey rim.
+        radians = math.radians(float(angle))
+        cos, sin = math.cos(radians), math.sin(radians)
+        ys, xs = np.meshgrid(axis, axis, indexing="ij")
+        local_x = xs * cos + ys * sin
+        local_y = -xs * sin + ys * cos
+        if nib == "square":
+            inside = (np.abs(local_x) <= radius) & (np.abs(local_y) <= radius)
+        else:
+            # A run of ``diameter`` pixels, one pixel thick. ``<= 0.5`` is the
+            # same half-pixel rule the rest of this module uses for "inside".
+            inside = (np.abs(local_y) <= 0.5) & (np.abs(local_x) <= radius)
+        return inside.astype(np.float32)
     distance = np.hypot(axis[None, :], axis[:, None])
     if nib == "pixel":
         # ``<=`` rather than ``<``: at diameter 1 the single sample sits exactly
@@ -470,6 +494,9 @@ class StrokeState:
     #: Which stamp; see NIBS. ``soft`` is every stroke this class drew before
     #: the pixel nibs existed, and the default keeps it that way.
     nib: str = "soft"
+    #: Which way an angled nib points, in degrees. Meaningless to a disc (a
+    #: turned circle is a circle) and read only by :data:`ANGLED_NIBS`.
+    angle: float = 0.0
     #: Drop the elbow of every staircase step; see :func:`is_corner`. Only
     #: meaningful for a pixel nib -- a soft dab has a rim wider than the elbow
     #: it would remove -- and ignored for the others rather than refused, since
@@ -803,7 +830,15 @@ class StrokeState:
         # 1.0 rather than ``self.hardness`` for a pixel nib: neither reads it,
         # and passing it through would key the shared stamp cache on a value
         # that cannot change the answer.
-        stamp = make_stamp(diameter, 1.0 if self.pixel else self.hardness, self.nib)
+        stamp = make_stamp(
+            diameter,
+            1.0 if self.pixel else self.hardness,
+            self.nib,
+            # Quantised into the cache key on purpose: a stamp per tenth of a
+            # degree is a cache miss per dab of a rotating stroke, and half a
+            # degree is below what a hard-edged nib can even express.
+            round(float(self.angle) * 2.0) / 2.0 if self.nib in ANGLED_NIBS else 0.0,
+        )
         radius = diameter / 2.0
         if self.pixel:
             # Anchored on the pixel the dab is *on*, so an odd nib is centred on

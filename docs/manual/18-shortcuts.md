@@ -212,6 +212,8 @@ left-drag in empty space with `Q` selected sweeps a marquee.
 | `Y` | Tile stamp |
 | `X` | Swap the two colours |
 | `1` - `0` | Brush opacity, 10% to 100% |
+| Alt+`1` - `9` | Recall a numbered custom brush |
+| Alt+Shift+1 - 9 | Store the captured brush in that slot |
 | Tab | Show or hide the timeline -- which is where the layers are |
 | Ctrl+Shift+N | New layer |
 | Ctrl+Shift+Up / Down | Move the layer up / down the stack |

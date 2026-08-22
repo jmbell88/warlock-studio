@@ -483,6 +483,7 @@ def _context_table() -> tuple[tuple[str, str, frozenset[str], str], ...]:
     return (
         ("brush_size", "Size", frozenset(sized), ""),
         ("nib", "Nib", frozenset(PAINT_TOOLS), ""),
+        ("brush_angle", "Angle", frozenset(PAINT_TOOLS), ""),
         ("pixel_perfect", "Pixel perfect", frozenset(PAINT_TOOLS - {"spray"}), ""),
         ("hardness", "Hardness", frozenset(PAINT_TOOLS), ""),
         ("opacity", "Opacity", frozenset(PAINT_TOOLS - {"shade"}), ""),
@@ -524,7 +525,7 @@ def widgets_for(tool: str, doc: Any = None, state: Any = None) -> tuple[str, ...
     full set, which is what the coverage test wants.
     """
 
-    from .inker.brush import PIXEL_NIBS
+    from .inker.brush import ANGLED_NIBS, PIXEL_NIBS
 
     nib = "soft"
     if state is not None:
@@ -538,6 +539,11 @@ def widgets_for(tool: str, doc: Any = None, state: Any = None) -> tuple[str, ...
         if key == "hardness" and pixel:
             continue
         if key == "pixel_perfect" and not pixel:
+            continue
+        if key == "brush_angle" and nib not in ANGLED_NIBS:
+            # Hidden rather than greyed, for hardness's reason: a turned disc
+            # is a disc, so there is nothing here for the control to change and
+            # a greyed slider would suggest there is one somewhere.
             continue
         keys.append(key)
     return tuple(keys)
@@ -641,6 +647,10 @@ TOOL_OPTION_DEFAULTS: dict[str, Any] = {
     # stop -- a one-pixel line rubbed out with a feathered eraser leaves a
     # fringe of half-alpha nobody asked for.
     "nib": "soft",
+    #: Which way an angled nib points, in degrees. Per tool like every other
+    #: brush setting, and read only by the nibs an angle means anything to --
+    #: a turned disc is a disc (``brush.ANGLED_NIBS``).
+    "brush_angle": 0,
     "pixel_perfect": False,
     # Which ink this tool lays down; see :data:`INKS`. Per tool like everything
     # else here -- and offered on *every* painting tool now (6.1), which is
@@ -1314,6 +1324,13 @@ class InkerState:
     #: "use the captured tip" -- and the tip is recaptured from the drawing,
     #: which is where it came from and where it still is.
     stamp: Any = None
+    #: Nine numbered custom brushes, by slot. Aseprite's ``Alt+1..9``.
+    #:
+    #: **Not persisted, for ``stamp``'s reason**: a tip is pixels rather than a
+    #: setting, and a quarter of a megabyte of base64 in the settings block
+    #: would be paid for on every swatch click. They live as long as the
+    #: session, which is as long as the drawing they were cut out of is open.
+    stamp_slots: dict[int, Any] = field(default_factory=dict)
     #: Named bundles of one tool's options; see :meth:`save_preset`. Persisted
     #: beside the swatches by ``inker_mode.persist``.
     presets: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -1750,6 +1767,7 @@ class InkerState:
     nib = _tool_option("nib")
     pixel_perfect = _tool_option("pixel_perfect")
     paint_ink = _tool_option("paint_ink")
+    brush_angle = _tool_option("brush_angle")
 
     @property
     def ink(self) -> str:
@@ -2070,6 +2088,35 @@ class InkerState:
         """
         self.gesture_pts = []
         self.gesture_combine = "replace"
+
+    def store_stamp(self, slot: int) -> bool:
+        """Put the captured tip into a numbered slot. -> whether there was one.
+
+        The slots are the tips a drawing keeps coming back to -- a hatch, a
+        leaf, a stipple -- and the reason they are numbered rather than named
+        is the same reason Plotter's stamps are: recall happens hundreds of
+        times a session and storing nine times.
+        """
+
+        if self.stamp is None:
+            return False
+        self.stamp_slots[int(slot)] = self.stamp
+        return True
+
+    def recall_stamp(self, slot: int) -> bool:
+        """Take a numbered brush back into the hand, and switch the tip on.
+
+        Switching ``use_stamp`` on with it is what makes the gesture one step:
+        a tip loaded on a tool that is not set to use one is a recall that
+        appears to have done nothing.
+        """
+
+        stamp = self.stamp_slots.get(int(slot))
+        if stamp is None:
+            return False
+        self.stamp = stamp
+        self.options_for(self.tool)["use_stamp"] = True
+        return True
 
     def say(self, text: str, *, remedy: str = "", remedy_label: str = "") -> None:
         """Put a tip under the canvas. The refusal door for a gesture.

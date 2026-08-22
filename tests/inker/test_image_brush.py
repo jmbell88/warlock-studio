@@ -871,3 +871,62 @@ def test_the_captured_tip_is_not_part_of_a_preset():
     assert restored.use_stamp is True
     assert restored.stamp is None
     assert restored.tip_for("brush") is None
+
+
+# --- 6.2: numbered custom brushes, and the angled nibs -----------------------
+
+
+def test_a_numbered_brush_round_trips():
+    state = inker_state.InkerState()
+    state.stamp = brush.Stamp(_tip())
+    assert state.store_stamp(3) is True
+    state.stamp = None
+    assert state.recall_stamp(3) is True
+    assert state.stamp is not None
+    # Recall switches the tip *on*, or it is a gesture that appears to have
+    # done nothing: a loaded tip on a tool not set to use one draws a disc.
+    assert state.options_for(state.tool)["use_stamp"] is True
+
+
+def test_storing_nothing_and_recalling_an_empty_slot_both_refuse():
+    state = inker_state.InkerState()
+    assert state.store_stamp(1) is False
+    assert state.recall_stamp(1) is False
+
+
+def test_the_slots_are_not_persisted():
+    """``stamp``'s own reason: a tip is pixels rather than a setting, and a
+    quarter of a megabyte of base64 in the settings block would be paid for on
+    every swatch click."""
+    import inspect
+
+    from warlock.studio import inker_mode
+
+    source = inspect.getsource(inker_mode.persist)
+    assert "stamp_slots" not in source
+
+
+def test_an_angled_square_nib_stays_hard_edged_at_every_angle():
+    """Rotated in the stamp's own space rather than by resampling one: a
+    resampled square has a grey rim, which is the thing a pixel nib exists to
+    not have."""
+    for angle in (0, 15, 30, 45, 60, 90):
+        stamp = brush.make_stamp(9, 1.0, "square", angle)
+        assert set(np.unique(stamp)) <= {0.0, 1.0}, angle
+
+
+def test_the_line_nib_is_one_pixel_thick():
+    stamp = brush.make_stamp(9, 1.0, "line", 0.0)
+    assert stamp.sum() == 9
+    assert stamp[4].sum() == 9, "the run is on the middle row at angle 0"
+    turned = brush.make_stamp(9, 1.0, "line", 90.0)
+    assert turned[:, 4].sum() == 9
+
+
+def test_the_angle_is_only_offered_where_it_means_something():
+    """A turned disc is a disc."""
+    state = inker_state.InkerState(tool="brush")
+    state.options_for("brush")["nib"] = "soft"
+    assert "brush_angle" not in inker_state.widgets_for("brush", None, state)
+    state.options_for("brush")["nib"] = "square"
+    assert "brush_angle" in inker_state.widgets_for("brush", None, state)

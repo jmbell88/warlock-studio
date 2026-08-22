@@ -101,7 +101,12 @@ def test_radial_symmetry_shows_its_pivot_rather_than_nothing(guide):
 
 
 def test_the_nib_combo_offers_every_nib_the_brush_implements():
-    assert tuple(key for key, _label in inker_tools.NIB_LABELS) == brush.NIBS
+    """The nib picker is the context bar's now (W2.4) and it gained the line
+    nib in 6.1's sibling wave; a nib the engine has and no control offers is a
+    feature that exists only in the source."""
+    from warlock.studio.panes import inker_context
+
+    assert tuple(key for key, _label in inker_context.NIB_LABELS) == brush.NIBS
 
 
 def test_the_tag_menu_names_every_direction_playback_understands():

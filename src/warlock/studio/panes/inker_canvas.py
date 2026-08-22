@@ -1479,6 +1479,7 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
             mode=_press_mode(state, tool, tip),
             strength=state.strength,
             nib=state.nib,
+            angle=float(state.brush_angle),
             # Both forced off for the spray: the corner filter is about a
             # *line* and there is no line here, and a lag on a stationary
             # airbrush would move the cloud away from the cursor.

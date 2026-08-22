@@ -48,6 +48,7 @@ NIB_LABELS = [
     ("soft", "Soft"),
     ("pixel", "Pixel"),
     ("square", "Square"),
+    ("line", "Line"),
 ]
 INK_LABELS = inker_state.INK_LABELS
 ALIGN_LABELS = [("free", "Free"), ("origin", "Origin"), ("tile", "Tile")]
@@ -314,6 +315,8 @@ def _field(ctx: Any, state: Any, tab: Any, key: str) -> Any:
         return slider_float(0.0, 1.0)
     if key == "wand_tolerance":
         return slider_int(0, 255)
+    if key == "brush_angle":
+        return slider_int(0, 180, "%d deg")
     if key == "text_size":
         return slider_int(4, 256, "%d px")
     if key == "shade_dir":
