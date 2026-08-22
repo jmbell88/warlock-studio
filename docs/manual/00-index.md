@@ -3,8 +3,28 @@
 Warlock Studio is a local, fully offline desktop application that turns a text prompt or a
 reference image into a game-ready, textured 3D asset on your own GPU. This manual is written for
 three kinds of reader at once: the person making assets, the person installing and configuring the
-app, and the person changing its code. Part I is the tour of the app itself, Part II covers getting
-it running and keeping it running, and Part III explains how it is built.
+app, and the person changing its code.
+
+Start with the tutorials. They walk one path through the app and explain what you are looking at as
+you go, beginning with what the app needs before it will run at all. The parts after them are
+reference: Part II describes every screen, Part III covers installing and operating the app, and
+Part IV explains how it is built.
+
+## Tutorials
+
+- [Before you begin](01-before-you-begin.md) — hardware, the two downloads, and what works without them.
+- [Your first asset](02-your-first-asset.md) — a prompt to a textured mesh, and why it stops halfway.
+- [Finding your work again](03-finding-your-work.md) — Home, the library, and the four kinds of delete.
+- [Judging what you made](04-judging-what-you-made.md) — grades, tags, and what the measurements are worth.
+- [Drawing](05-drawing.md) — Inker: tools, inks, layers, colour and selections.
+- [Animating](06-animating.md) — the timeline: frames, copy versus link, tags and onion skin.
+- [Modelling](07-modelling.md) — Clay: primitives, element editing, and merge versus union.
+- [Rigging and posing](08-rigging-and-posing.md) — fitting a skeleton, the A-pose trap, and the pose library.
+- [Building a map](09-building-a-map.md) — Plotter: tilesets, terrain, objects and Tiled.
+- [Packing an atlas](10-packing-an-atlas.md) — Packwright, and the power-of-two trap.
+- [A character sprite sheet](11-a-character-sprite-sheet.md) — Troupe, and what in it is proven.
+- [Tuning what you get](12-tuning-what-you-get.md) — seeds, profiles, LoRAs and conditioning.
+- [Putting it in a game](13-putting-it-in-a-game.md) — exports, engines, and the interop caveats.
 
 ## Using Warlock Studio
 
