@@ -48,28 +48,60 @@ _ICONS = {
 }
 
 
-def _tool_grid(state: Any) -> None:
+def _tool_grid(state: Any, layer: Any = None) -> None:
+    """The palette **the layer in hand hosts**, three across.
+
+    Tiled's split, and the reason for it: half the toolbox does nothing on the
+    layer you are standing on, and a toolbox that offers a Fill on an object
+    layer is one that has to refuse the click afterwards.
+
+    A group or an image layer hosts no gesture at all, and the grid draws
+    **disabled with a reason** rather than empty -- the house pattern. An empty
+    toolbox reads as a broken pane; a greyed one with a sentence on the hover
+    says what to select instead.
+    """
     from imgui_bundle import imgui
 
+    palette = plotter_state.tools_for(layer)
+    reason = ""
+    if not palette:
+        palette = plotter_state.TILE_TOOLS
+        reason = (
+            "Nothing is drawn on this layer directly. Select a tile layer or "
+            "an object layer -- a group holds layers and an image layer holds "
+            "a picture."
+            if layer is not None
+            else "Nothing is open."
+        )
     # Width from the style rather than a literal gap: ``theme.apply`` sets
     # item_spacing through ``sp()``, so a grid that subtracted a hard-coded 8
     # was right at UI scale 1.0 and short by five pixels per gap at 1.5 --
     # which is what dropped the raster editor's fifth toolbox column.
     width = widgets.grid_width(3)
-    for index, (key, label, letter) in enumerate(plotter_state.TOOLS):
+    for index, (key, label, letter) in enumerate(palette):
         if index % 3:
             imgui.same_line()
-        active = state.tool == key
+        active = not reason and state.tool == key
         if active:
             imgui.push_style_color(
                 imgui.Col_.button.value, imgui.get_style().color_(imgui.Col_.button_active.value)
             )
-        if controls.button(f"{_ICONS.get(key, icons.SQUARE)}##tool-{key}", (width, 0)):
+        if reason:
+            imgui.begin_disabled()
+        clicked = controls.button(f"{_ICONS.get(key, icons.SQUARE)}##tool-{key}", (width, 0))
+        if reason:
+            imgui.end_disabled()
+        if clicked and not reason:
             state.tool = key
+            shape = plotter_state.OBJECT_SHAPES.get(key)
+            if shape:
+                state.object_shape = shape
         if active:
             imgui.pop_style_color()
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(f"{label} ({letter})")
+        if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value):
+            note = f"{label} ({letter})"
+            imgui.set_tooltip(f"{note}\n{reason}" if reason else note)
+    imgui.new_line()
 
 
 #: What the Shape tool can fill, in the order the buttons sit. A tuple rather
@@ -220,7 +252,13 @@ def draw(ctx: Any) -> None:
     tab = state.active
     widgets.section("Tools")
     manual_render.help_button(ctx, "plotter-tools")
-    _tool_grid(state)
+    layer = None if tab is None else tab.doc.active()
+    # Before the grid draws, so the frame that follows a layer switch already
+    # has a legal tool in hand: ``sync_tool`` is idempotent and is called from
+    # here and from the key handler, which are the two places a gesture can
+    # start.
+    plotter_state.sync_tool(state, layer)
+    _tool_grid(state, layer)
     imgui.dummy((0, 6))
 
     if tab is None:

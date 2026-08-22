@@ -124,6 +124,11 @@ def draw(ctx: Any) -> None:
 
     tools_pane.resize_popup(ctx, state, tab)
     tools_pane.map_settings_popup(ctx, state, tab)
+    # Idempotent, and the second of the two places it is called: no frame may
+    # act with a tool the active layer cannot host, and the frame after a layer
+    # switch is the one where that goes wrong.
+    if tab is not None:
+        plotter_state.sync_tool(state, tab.doc.active())
     if tab is None:
         _empty(ctx)
         return
@@ -1344,7 +1349,10 @@ def _events(ctx: Any, state: Any, tab: Any, origin, hovered: bool, region) -> No
     if cell is None:
         return
 
-    if state.tool == "object":
+    if state.tool == "object" or state.tool in plotter_state.OBJECT_SHAPES:
+        # Every insert tool is the objects gesture with a shape already
+        # chosen -- ``sync_tool`` writes ``state.object_shape`` from the tool,
+        # so what arrives here is the one gesture it always was.
         _object_input(ctx, state, tab, origin, hovered)
         return
 

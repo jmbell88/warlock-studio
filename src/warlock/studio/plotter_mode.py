@@ -567,8 +567,19 @@ def handle_key(ctx: Any, event: Any) -> bool:
         # pushes no step -- the same reason ``tool`` is unguarded.
         state.brush = _BRUSH_TRANSFORMS[name](state.brush, shift)
         return True
-    if name in TOOL_KEYS:
-        state.tool = TOOL_KEYS[name]
+    # **The letters belong to the layer** (W3.2): six of them mean two things,
+    # which is Tiled's arrangement -- ``R`` is the rectangular select on a tile
+    # layer and insert-rectangle on an object one. ``sync_tool`` first, and
+    # idempotently, so a key pressed on the frame after a layer switch cannot
+    # act with a tool the layer does not host.
+    layer = None if tab is None else tab.doc.active()
+    plotter_state.sync_tool(state, layer)
+    keys = plotter_state.tool_keys(layer)
+    if name in keys:
+        state.tool = keys[name]
+        shape = plotter_state.OBJECT_SHAPES.get(state.tool)
+        if shape:
+            state.object_shape = shape
         return True
     return False
 

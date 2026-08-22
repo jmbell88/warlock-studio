@@ -78,6 +78,130 @@ TOOLS = (
     ("object", "Objects", "S"),
 )
 
+#: The tools a **tile** layer can host, and the ones an **object** layer can.
+#:
+#: Tiled's own split, and the reason to have it: half the toolbox does nothing
+#: on the layer you are standing on, and a toolbox that offers a Fill on an
+#: object layer is one that has to refuse the click afterwards. Six letters
+#: mean two things, which is Tiled's arrangement exactly -- the letter belongs
+#: to the *gesture*, and which gesture it is depends on what you are painting.
+#:
+#: **Insert Template is deliberately absent.** ``docs/COMPAT.md`` states object
+#: templates are a non-goal, and offering the tool would be the offer-then-
+#: refuse shape this codebase rejects.
+TILE_TOOLS = (
+    ("stamp", "Stamp", "B"),
+    ("erase", "Erase", "E"),
+    ("fill", "Fill", "F"),
+    ("terrain", "Terrain", "T"),
+    ("shape", "Shape", "P"),
+    ("select", "Select", "R"),
+    ("wand", "Wand", "W"),
+    ("pick", "Pick", "I"),
+    ("object", "Objects", "S"),
+)
+
+OBJECT_TOOLS = (
+    ("object", "Select objects", "S"),
+    ("object_rect", "Insert rectangle", "R"),
+    ("object_point", "Insert point", "I"),
+    ("object_ellipse", "Insert ellipse", "E"),
+    ("object_polygon", "Insert polygon", "P"),
+    ("object_polyline", "Insert polyline", "L"),
+    ("object_tile", "Insert tile", "T"),
+    ("object_text", "Insert text", "X"),
+)
+
+#: Which ``state.object_shape`` each insert tool means. The combo that used to
+#: sit in the layers pane *was* this table with one control in front of it;
+#: making the tools the control is Tiled's arrangement and one fewer place to
+#: look. ``object`` is the pointer and picks nothing.
+OBJECT_SHAPES = {
+    "object_rect": "rect",
+    "object_point": "point",
+    "object_ellipse": "ellipse",
+    "object_polygon": "polygon",
+    "object_polyline": "polyline",
+    "object_tile": "tile",
+    "object_text": "text",
+}
+
+
+def layer_kind(layer: Any) -> str:
+    """"tile", "object", or "" for a layer nothing can be drawn on.
+
+    A group and an image layer answer ``""``: neither hosts a gesture, and the
+    tools pane draws its grid disabled with a reason over them, which is the
+    house pattern (greyed, never hidden).
+    """
+    if layer is None:
+        return ""
+    name = type(layer).__name__
+    if name == "ObjectLayer":
+        return "object"
+    if name == "TileLayer":
+        return "tile"
+    return ""
+
+
+def tools_for_kind(kind: str) -> tuple[tuple[str, str, str], ...]:
+    """The palette for a layer *kind*, by name."""
+
+    if kind == "object":
+        return OBJECT_TOOLS
+    if kind == "tile":
+        return TILE_TOOLS
+    return ()
+
+
+def tools_for(layer: Any) -> tuple[tuple[str, str, str], ...]:
+    """The palette for the layer in hand. Empty for a group or an image."""
+
+    return tools_for_kind(layer_kind(layer))
+
+
+def tool_keys(layer: Any) -> dict[str, str]:
+    """Letter -> tool, for the palette this layer hosts.
+
+    Per layer rather than one global table, because six letters mean two
+    things: ``R`` is the rectangular *select* on a tile layer and *insert
+    rectangle* on an object one, exactly as in Tiled.
+    """
+
+    return {letter.lower(): key for key, _label, letter in tools_for(layer)}
+
+
+def sync_tool(state: Any, layer: Any) -> str:
+    """Put a legal tool in hand for this layer, and remember the last one.
+
+    **Idempotent, and called at the top of both the canvas's draw and the key
+    handler**, so no frame can act with a tool the layer cannot host -- which
+    is the one way a layer-driven palette goes wrong, and it goes wrong on the
+    frame after a layer switch rather than at the switch.
+    """
+
+    kind = layer_kind(layer)
+    if not kind:
+        return state.tool
+    palette = [key for key, _label, _letter in tools_for(layer)]
+    if state.tool in palette:
+        state.remembered[kind] = state.tool
+    else:
+        # Record it under the kind it *does* belong to before replacing it:
+        # the tool in hand at a layer switch is the one the user will want back
+        # when they switch back, and it is about to stop being reachable.
+        for other in ("tile", "object"):
+            if state.tool in {key for key, _l, _k in tools_for_kind(other)}:
+                state.remembered[other] = state.tool
+        state.tool = state.remembered.get(kind) or palette[0]
+        if state.tool not in palette:  # pragma: no cover - a retired tool name
+            state.tool = palette[0]
+    shape = OBJECT_SHAPES.get(state.tool)
+    if shape:
+        state.object_shape = shape
+    return state.tool
+
+
 TOOL_KEYS = {letter.lower(): key for key, _label, letter in TOOLS}
 
 _uids = itertools.count(1)
@@ -160,6 +284,10 @@ class PlotterState:
     # Geometry placed by the Object tool. Kept with the other tool settings so
     # switching maps does not unexpectedly switch the insertion tool.
     object_shape: str = "rect"
+    #: The tool last used on each kind of layer, so switching to an object
+    #: layer and back finds the brush you left in your hand rather than the
+    #: first button of the palette.
+    remembered: dict[str, str] = field(default_factory=dict)
     # Which tileset the palette is showing, by index into ``doc.tilesets``.
     # An index rather than a firstgid because tilesets are append-only and the
     # palette is a view of a list -- and because index 0 is a meaningful

@@ -88,25 +88,10 @@ def draw(ctx: Any) -> None:
     ):
         doc.add_image_layer()
 
-    if isinstance(doc.active(), ObjectLayer):
-        state.object_shape = widgets.labeled_combo(
-            "Insert",
-            state.object_shape,
-            [
-                (kind, kind.title())
-                for kind in (
-                    "rect",
-                    "point",
-                    "ellipse",
-                    "capsule",
-                    "polygon",
-                    "polyline",
-                    "tile",
-                    "text",
-                )
-            ],
-        )
-
+    # The "Insert" combo that stood here is the object palette's tools now
+    # (W3.2): eight kinds behind a dropdown, on a pane that is about layers,
+    # when Tiled makes each of them a tool. ``state.object_shape`` is still the
+    # stored answer -- ``sync_tool`` writes it from the tool in hand.
     imgui.dummy((0, 4))
     for layer in reversed(doc.layers):
         _row(ctx, doc, state, layer, editable)
