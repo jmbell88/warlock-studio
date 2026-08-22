@@ -1463,6 +1463,21 @@ class InkerState:
     # preference, and off by default: the cells are 20px without it and the
     # off path draws exactly what it always did.
     timeline_thumbs: bool = False
+    #: Whether the timeline strip is on screen. Aseprite's ``Tab``, and
+    #: Aseprite's ``general.autoshowTimeline``: a fresh single-layer still
+    #: starts without it, and it comes up by itself on the second layer or the
+    #: second frame -- so a quick drawing session never pays the strip and
+    #: nobody can lose their layer list by accident, the strip being where the
+    #: layers now live.
+    timeline_open: bool = False
+    #: The state a drag down the eye column is painting, or None. See
+    #: ``inker_timeline._drag_toggle``: the value is the one the *first* row
+    #: took, so the drag paints rather than flipping each row it crosses.
+    eye_drag: bool | None = None
+    #: The documents auto-show has already fired for, by uid, so a user who
+    #: closes the strip on a five-layer drawing is not shown it again on the
+    #: next frame they add.
+    timeline_shown: set[str] = field(default_factory=set)
     # Nearest-neighbour multiplier applied to sheet, GIF and PNG exports.
     export_scale: int = 1
     # How a sheet export packs its cells: None is the plain row-wrap this

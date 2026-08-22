@@ -418,34 +418,34 @@ def _range_tab(doc, rect=None):
     return SimpleNamespace(doc=doc, range_sel=rect)
 
 
-def test_the_layers_panel_reads_the_range_track_span():
-    from warlock.studio.panes import inker_layers
+def test_the_timeline_reads_the_range_track_span():
+    from warlock.studio.panes import inker_timeline
 
     doc = inker.Document.blank(4, 4)
     doc.add_layer()
     doc.add_frame()
-    assert inker_layers.track_range(_range_tab(doc), doc) is None
-    assert inker_layers.track_range(_range_tab(doc, (1, 0, 0, 0)), doc) == (0, 1)
+    assert inker_timeline.track_range(_range_tab(doc), doc) is None
+    assert inker_timeline.track_range(_range_tab(doc, (1, 0, 0, 0)), doc) == (0, 1)
 
 
 def test_the_track_span_is_clamped_at_use_like_every_other_reader():
-    from warlock.studio.panes import inker_layers
+    from warlock.studio.panes import inker_timeline
 
     doc = inker.Document.blank(4, 4)
     doc.add_frame()
-    assert inker_layers.track_range(_range_tab(doc, (0, 9, 0, 0)), doc) == (0, 0)
-    assert inker_layers.track_range(_range_tab(doc, (7, 9, 0, 0)), doc) is None
+    assert inker_timeline.track_range(_range_tab(doc, (0, 9, 0, 0)), doc) == (0, 0)
+    assert inker_timeline.track_range(_range_tab(doc, (7, 9, 0, 0)), doc) is None
 
 
 def test_a_still_document_has_no_track_span_to_read():
-    from warlock.studio.panes import inker_layers
+    from warlock.studio.panes import inker_timeline
 
     doc = inker.Document.blank(4, 4)
-    assert inker_layers.track_range(_range_tab(doc, (0, 0, 0, 0)), doc) is None
+    assert inker_timeline.track_range(_range_tab(doc, (0, 0, 0, 0)), doc) is None
 
 
 def test_shift_clicking_a_layer_row_extends_the_range_over_the_whole_clip(monkeypatch):
-    from warlock.studio.panes import inker_layers
+    from warlock.studio.panes import inker_timeline
 
     doc = inker.Document.blank(4, 4)
     doc.add_layer()
@@ -454,17 +454,17 @@ def test_shift_clicking_a_layer_row_extends_the_range_over_the_whole_clip(monkey
     doc.set_active_layer(0)
     tab = _range_tab(doc)
     monkeypatch.setattr(
-        inker_layers.imgui, "get_io", lambda: SimpleNamespace(key_shift=True)
+        inker_timeline.imgui, "get_io", lambda: SimpleNamespace(key_shift=True)
     )
 
-    assert inker_layers.extend_range(tab, doc, 2)
+    assert inker_timeline.extend_range(tab, doc, 2)
     # Anchored on the row that *was* active, and with no range yet the frame
     # span is the whole clip.
     assert tab.range_sel == (0, 2, 0, 1)
 
 
 def test_shift_clicking_keeps_the_frame_span_a_range_already_has(monkeypatch):
-    from warlock.studio.panes import inker_layers
+    from warlock.studio.panes import inker_timeline
 
     doc = inker.Document.blank(4, 4)
     doc.add_layer()
@@ -473,23 +473,23 @@ def test_shift_clicking_keeps_the_frame_span_a_range_already_has(monkeypatch):
     doc.set_active_layer(1)
     tab = _range_tab(doc, (1, 1, 1, 2))
     monkeypatch.setattr(
-        inker_layers.imgui, "get_io", lambda: SimpleNamespace(key_shift=True)
+        inker_timeline.imgui, "get_io", lambda: SimpleNamespace(key_shift=True)
     )
 
-    assert inker_layers.extend_range(tab, doc, 0)
+    assert inker_timeline.extend_range(tab, doc, 0)
     assert tab.range_sel == (0, 1, 1, 2)
 
 
 def test_an_unmodified_click_does_not_extend_the_range(monkeypatch):
-    from warlock.studio.panes import inker_layers
+    from warlock.studio.panes import inker_timeline
 
     doc = inker.Document.blank(4, 4)
     doc.add_layer()
     doc.add_frame()
     tab = _range_tab(doc)
     monkeypatch.setattr(
-        inker_layers.imgui, "get_io", lambda: SimpleNamespace(key_shift=False)
+        inker_timeline.imgui, "get_io", lambda: SimpleNamespace(key_shift=False)
     )
 
-    assert not inker_layers.extend_range(tab, doc, 1)
+    assert not inker_timeline.extend_range(tab, doc, 1)
     assert tab.range_sel is None

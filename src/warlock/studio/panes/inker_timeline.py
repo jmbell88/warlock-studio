@@ -1,9 +1,27 @@
-"""The animation timeline: frames across, tracks down.
+"""The timeline: frames across, **layers** down. There is no layers panel.
 
-A strip along the bottom of the centre column, drawn **only** when the document
-is animated -- a still document's layout is byte-for-byte what it always was,
-which is what keeps "the timeline is opt-in" true of the pixels and not just of
-the data model.
+Aseprite has none, and this is why: rows are layers, columns are frames, cells
+are cels, and visibility, locking, ordering and cel editing all happen in that
+one grid. Warlock used to split the job across ``inker-layers`` (right column,
+always drawn) and this strip (bottom, animated documents only), with layer rows
+drawn in *both* -- two panels, one subject, and 300 px of column for the half
+that could not show a cel.
+
+So the panel is deleted and its rows merged in here. A **still document is a
+one-frame sprite**: ``doc.anim is None`` stays the stored state, and the grid
+renders a single column against the layer stack, which is the same picture with
+one frame in it.
+
+The strip is always available and ``Tab`` toggles it -- Aseprite's binding.
+Following ``general.autoshowTimeline`` it starts hidden for a fresh
+single-layer still and shows itself on the second layer or the second frame, so
+a quick drawing session pays neither the strip nor the old panel's column, and
+nobody can lose their layer list by accident.
+
+**Rows run bottom-up**: the background is the bottom row, which is Aseprite's
+order, Photoshop's order, and -- the reason it changed -- the order this grid's
+own frame columns already implied. The engine's list is painter's order and the
+panel is now the same way up as it.
 
 Two things about this pane are load-bearing rather than incidental.
 
@@ -145,12 +163,45 @@ def cell_index(
 def draw(ctx: Any) -> None:
     state = ctx.state.inker
     tab = None if state is None else state.active
-    if tab is None or tab.doc.anim is None:
+    if tab is None:
+        return
+    autoshow(state, tab)
+    if not state.timeline_open:
         return
     _tick(tab)
-    _transport(ctx, tab)
-    imgui.separator()
+    if tab.doc.anim is not None:
+        _transport(ctx, tab)
+        imgui.separator()
     _grid(ctx, tab)
+
+
+def autoshow(state: Any, tab: Any) -> bool:
+    """Raise the strip by itself the first time a document needs it.
+
+    Aseprite's ``general.autoshowTimeline``. The threshold is "more than one
+    layer or more than one frame", because either one is the moment the grid
+    stops being a picture of a single drawing -- and it fires **once per
+    document**, so closing it again is a decision that sticks.
+    """
+    doc = tab.doc
+    frames = len(doc.anim.frames) if doc.anim is not None else 1
+    grown = len(doc.stack) > 1 or frames > 1
+    if grown and tab.uid not in state.timeline_shown:
+        state.timeline_shown.add(tab.uid)
+        state.timeline_open = True
+        return True
+    return False
+
+
+def toggle(state: Any) -> None:
+    """``Tab``. Also marks every open document as already auto-shown.
+
+    Otherwise closing the strip on a two-layer drawing would last exactly until
+    the next layer was added, which is a toggle the app argues with.
+    """
+    state.timeline_open = not state.timeline_open
+    for tab in state.docs:
+        state.timeline_shown.add(tab.uid)
 
 
 def _tick(tab: Any) -> None:
@@ -607,9 +658,20 @@ def _onion_controls(state: Any) -> None:
         state.onion_current_layer = bool(only)
 
 
+def frame_uids(doc) -> list:
+    """The frame column ids, or ``[None]`` for a still document.
+
+    One list, so every row-drawing function below is written once: a still
+    document is a one-frame sprite and ``None`` is that one frame. It is not a
+    model change -- ``doc.anim is None`` remains the stored state -- it is the
+    grid refusing to have two shapes.
+    """
+    anim = doc.anim
+    return list(anim.frames) if anim is not None else [None]
+
+
 def _grid(ctx: Any, tab: Any) -> None:
     doc = tab.doc
-    anim = doc.anim
     state = ctx.state.inker
     cell = sp(THUMB_CELL if state.timeline_thumbs else CELL)
     gutter = sp(GUTTER)
@@ -617,6 +679,9 @@ def _grid(ctx: Any, tab: Any) -> None:
         imgui.end_child()
         return
 
+    # The layers panel's filter, moved rather than dropped: it is one of six
+    # call sites in the app and the list it filtered is this one now.
+    needle = widgets.list_filter(ctx, "inker-layers", len(doc.stack))
     _frame_headers(ctx, tab, cell, gutter)
     # Where every cell ended up, filled in as the rows draw. The marquee is
     # measured against this rather than against hover, and the numbers have to
@@ -626,15 +691,23 @@ def _grid(ctx: Any, tab: Any) -> None:
         "tops": {},
         "cell": cell,
         "gutter": gutter,
-        "frames": len(anim.frames),
+        "frames": len(frame_uids(doc)),
     }
-    # Top first, like the layers panel: the engine's list is painter's order and
-    # the timeline reads the same way down the page that the stack does.
-    for index in range(len(anim.tracks) - 1, -1, -1):
+    # **Bottom-up**: index 0 is the background and it draws last, at the foot.
+    # This is the one thing about the grid that reversed when the panel merged
+    # in -- the panel drew top-down because Photoshop's does, and the grid has
+    # always read the same way down the page as the stack does.
+    shown = 0
+    for index in range(len(doc.stack)):
+        if needle and needle not in (doc.stack[index].name or "").lower():
+            continue
+        shown += 1
         _track_row(ctx, tab, index, cell, gutter, geom)
+    widgets.no_matches(needle, shown)
     _range_gesture(ctx, tab, geom)
     _range_overlay(ctx, tab, geom)
-    _tag_row(ctx, tab, cell, gutter)
+    if doc.anim is not None:
+        _tag_row(ctx, tab, cell, gutter)
 
     imgui.end_child()
 
@@ -702,11 +775,25 @@ def _range_overlay(ctx: Any, tab: Any, geom: dict[str, Any]) -> None:
 
 
 def _frame_headers(ctx: Any, tab: Any, cell: float, gutter: float) -> None:
-    anim = tab.doc.anim
+    """The frame numbers, and the three toggle-alls in front of them.
+
+    The eye, the padlock and the continuous flag in the header cell set *every*
+    row at once, which is Aseprite's header and the answer to the same round
+    trips ``_drag_toggle`` addresses from the other direction.
+    """
+    doc = tab.doc
+    anim = doc.anim
+    _toggle_all(ctx, tab)
+    imgui.same_line(sp(TRACK_LABEL_W))
+    if anim is None:
+        # One column, no number: the header of a still document says which
+        # frame you are on, and there is only one.
+        imgui.dummy((cell, cell))
+        return
     playing = tab.play_index if tab.playing else anim.current
-    imgui.dummy((sp(TRACK_LABEL_W), cell))
     for index, frame in enumerate(anim.frames):
-        imgui.same_line(0.0, gutter)
+        if index:
+            imgui.same_line(0.0, gutter)
         imgui.push_id(f"fh{frame.uid}")
         current = index == playing
         if current:
@@ -721,6 +808,33 @@ def _frame_headers(ctx: Any, tab: Any, cell: float, gutter: float) -> None:
             imgui.pop_style_color()
         _frame_menu(tab, index)
         imgui.pop_id()
+
+
+def _toggle_all(ctx: Any, tab: Any) -> None:
+    """Eye and padlock over the whole stack, from the header row.
+
+    "All visible" is decided by *any* row being hidden, not by all of them
+    being shown: with three of ten hidden, the button a user reaches for means
+    "show everything", and a strict-all rule would make it hide the seven.
+    """
+    doc = tab.doc
+    hidden = any(not layer.visible for layer in doc.stack)
+    locked = all(layer.locked for layer in doc.stack) if len(doc.stack) else False
+    if widgets.icon_button(
+        f"{icons.EYE if not hidden else icons.EYE_OFF}##alleyes",
+        "Show every layer" if hidden else "Hide every layer",
+        borderless=True,
+    ):
+        for index in range(len(doc.stack)):
+            doc.set_layer_props(index, visible=hidden)
+    imgui.same_line()
+    if widgets.icon_button(
+        f"{icons.LOCK if locked else icons.LOCK_OPEN}##alllocks",
+        "Unlock every layer" if locked else "Lock every layer",
+        borderless=True,
+    ):
+        for index in range(len(doc.stack)):
+            doc.set_layer_props(index, locked=not locked)
 
 
 def _frame_menu(tab: Any, index: int) -> None:
@@ -763,6 +877,41 @@ def _frame_menu(tab: Any, index: int) -> None:
     imgui.end_popup()
 
 
+def track_range(tab: Any, doc: Any) -> tuple[int, int] | None:
+    """The timeline range's *track* span, or None. One reader; it was two panes.
+
+    The range is the timeline's selection, and a row inside it draws
+    highlighted and has its controls act on the whole span. It lived in the
+    layers panel because that panel was the other view of this axis; there is
+    one view now. Clamped at use like every other reader of
+    ``range_sel`` -- it is stored unclamped on purpose.
+    """
+    rect = getattr(tab, "range_sel", None)
+    if rect is None or doc.anim is None:
+        return None
+    low, high = sorted((int(rect[0]), int(rect[1])))
+    low, high = max(0, low), min(high, len(doc.anim.tracks) - 1)
+    return None if low > high else (low, high)
+
+
+def extend_range(tab: Any, doc: Any, index: int) -> bool:
+    """Shift-click: stretch the timeline range from the active row to this one.
+
+    The anchor is the row that *was* active, read before the click moves it --
+    which is the same thing the timeline's own drag anchors on, so the two
+    axes of one selection behave the same way. The frame span is left alone
+    when there already is one: the user is widening the track side of an
+    existing range, not starting a new one.
+    """
+    if doc.anim is None or not imgui.get_io().key_shift:
+        return False
+    anchor = doc.stack.active_index
+    rect = getattr(tab, "range_sel", None)
+    frames = (rect[2], rect[3]) if rect is not None else (0, len(doc.anim.frames) - 1)
+    tab.range_sel = (min(anchor, index), max(anchor, index), *frames)
+    return True
+
+
 def _track_row(
     ctx: Any,
     tab: Any,
@@ -771,38 +920,180 @@ def _track_row(
     gutter: float,
     geom: dict[str, Any] | None = None,
 ) -> None:
+    """One layer: its eye, its name, its lock, and its cels across.
+
+    The layers panel's row and the timeline's row, which were two renderings of
+    the same layer in two panes, are this. What the panel had and the strip did
+    not -- the eye, the lock glyph, the drag reorder, the context menu, the
+    tooltip that carries blend and opacity -- came with it; what the strip had
+    and the panel could not show is everything to the right of the name.
+    """
     doc = tab.doc
-    anim = doc.anim
-    track = anim.tracks[track_index]
+    layer = doc.stack[track_index]
     active_track = track_index == doc.stack.active_index
 
-    imgui.push_id(f"tr{track.uid}")
+    imgui.push_id(f"tr{layer.uid}")
     # Indent only (L3 v1): no header row and no fold, so a grouped track's row
     # is exactly like an ungrouped one except that its label is shifted right
     # by its nesting depth. ``same_line(sp(TRACK_LABEL_W))`` below is an
     # *absolute* offset from the window's own left edge, not from wherever the
     # indent left the cursor, so it puts the first cell at the same x either
     # way -- the indent cannot move a cell, only the text before it.
-    depth = len(track_depth(doc, track.uid))
+    depth = _depth(doc, track_index)
     if depth:
         imgui.indent(sp(GROUP_INDENT) * depth)
+    # The eye, not a checkbox: it is what every layers panel draws there, and
+    # the off state is a different glyph rather than an empty box -- an empty
+    # box beside a thumbnail reads as "unselected", which visibility is not.
+    if widgets.icon_button(
+        f"{icons.EYE if layer.visible else icons.EYE_OFF}##visible",
+        "Hide this layer" if layer.visible else "Show this layer",
+        borderless=True,
+    ):
+        _set_visible(ctx, tab, track_index, not layer.visible)
+    _drag_toggle(ctx, tab, track_index)
+    imgui.same_line()
+    label = layer.name[:12]
+    if layer.locked or layer.alpha_lock:
+        label += f" {icons.LOCK}"
     if active_track:
-        widgets.text_colored(theme.ACCENT, track.name[:14])
-    elif not track.visible:
-        widgets.muted(track.name[:14])
+        widgets.text_colored(theme.ACCENT, label)
+    elif not layer.visible:
+        widgets.muted(label)
     else:
-        imgui.text(track.name[:14])
+        imgui.text(label)
+    if imgui.is_item_hovered():
+        detail = f"{layer.blend}  {layer.opacity * 100:.0f}%"
+        if not layer.visible:
+            detail += "  hidden"
+        if layer.alpha_lock:
+            detail += "  alpha locked"
+        if layer.locked:
+            detail += "  locked"
+        imgui.set_tooltip(detail)
+    _reorder(ctx, doc, track_index)
+    _row_menu(ctx, tab, doc, track_index)
     if depth:
         imgui.unindent(sp(GROUP_INDENT) * depth)
     imgui.same_line(sp(TRACK_LABEL_W))
 
-    for frame_index, frame in enumerate(anim.frames):
+    for frame_index, frame in enumerate(frame_uids(doc)):
         if frame_index:
             imgui.same_line(0.0, gutter)
-        imgui.push_id(frame.uid)
-        _cell(ctx, tab, track, frame, track_index, frame_index, cell, geom)
+        imgui.push_id(frame_index if frame is None else frame.uid)
+        _cell(ctx, tab, track_index, frame, track_index, frame_index, cell, geom)
         imgui.pop_id()
     imgui.pop_id()
+
+
+def _depth(doc: Any, index: int) -> int:
+    """How deep in the group tree this row sits."""
+    order = doc.member_uids()
+    uid = order[index] if 0 <= index < len(order) else None
+    if uid is None:
+        return 0
+    return len(track_depth(doc, uid))
+
+
+def _set_visible(ctx: Any, tab: Any, index: int, visible: bool) -> None:
+    """Show or hide one row, or a whole selected block of them.
+
+    A row inside a multi-track range toggles the whole range, as one step: the
+    user selected a block and clicked its eye, and hiding one row of it would
+    be an answer to a question nobody asked.
+    """
+    doc = tab.doc
+    span = track_range(tab, doc)
+    if span is not None and span[0] <= index <= span[1] and span[1] > span[0]:
+        doc.set_range_props(span[0], span[1], visible=visible)
+    else:
+        doc.set_layer_props(index, visible=visible)
+
+
+def _drag_toggle(ctx: Any, tab: Any, index: int) -> None:
+    """Press one eye and drag down the column to set every row you pass.
+
+    Aseprite's gesture, and the reason it is worth having: hiding eight of ten
+    layers is otherwise eight round trips to the same 16 px target. The state
+    applied is the one the *first* row took, so the drag paints a value rather
+    than flipping each row it crosses.
+    """
+    state = ctx.state.inker
+    if imgui.is_item_activated():
+        state.eye_drag = not tab.doc.stack[index].visible
+        return
+    if state.eye_drag is None or not imgui.is_mouse_down(0):
+        state.eye_drag = None
+        return
+    if imgui.is_item_hovered() and tab.doc.stack[index].visible != state.eye_drag:
+        _set_visible(ctx, tab, index, state.eye_drag)
+
+
+def _reorder(ctx: Any, doc: Any, index: int) -> None:
+    """Drag a layer's name onto another row to move it there.
+
+    imgui's drag-and-drop payload carries the *index*, and the drop reads the
+    stack again -- so a reorder mid-drag cannot make the drop land on a
+    different layer than the one under the cursor.
+    """
+    if imgui.begin_drag_drop_source(imgui.DragDropFlags_.source_no_hold_to_open_others.value):
+        imgui.set_drag_drop_payload_py_id("inker-layer", index)
+        imgui.text(doc.stack[index].name)
+        imgui.end_drag_drop_source()
+    if imgui.begin_drag_drop_target():
+        payload = imgui.accept_drag_drop_payload_py_id("inker-layer")
+        if payload is not None:
+            source = int(payload.data_id)
+            if 0 <= source < len(doc.stack) and source != index:
+                doc.move_layer(source, index)
+        imgui.end_drag_drop_target()
+
+
+def _row_menu(ctx: Any, tab: Any, doc: Any, index: int) -> None:
+    """The row's own verbs. The panel's context menu, unchanged."""
+    if not imgui.begin_popup_context_item("layer-menu"):
+        return
+    widgets.popup_chrome(_imgui=imgui)
+    if controls.selectable("Rename", False)[0]:
+        _ask_rename(ctx, doc, index)
+    if controls.selectable("Properties...", False)[0]:
+        doc.set_active_layer(index)
+        ctx.state.inker.pending_dialog = "inker-layer-properties"
+    imgui.separator()
+    if controls.selectable("Move up", False)[0]:
+        doc.move_layer(index, index + 1)
+    if controls.selectable("Move down", False)[0]:
+        doc.move_layer(index, index - 1)
+    imgui.separator()
+    if controls.selectable("Group", False)[0]:
+        doc.group_layers([index])
+    if doc.group_of.get(_member_uid(doc, index)) is not None and controls.selectable(
+        "Take out of group", False
+    )[0]:
+        doc.move_into_group(index, None)
+    imgui.end_popup()
+
+
+def _member_uid(doc: Any, index: int) -> int:
+    """What the group tree knows this row by -- the *track* uid on an animated
+    document, because a materialised empty cel carries a placeholder uid of its
+    own. ``Document.member_uids`` owns the argument."""
+    order = doc.member_uids()
+    return order[index] if 0 <= index < len(order) else -1
+
+
+def _ask_rename(ctx: Any, doc: Any, index: int) -> None:
+    from .. import dialogs
+
+    layer = doc.stack[index]
+    ctx.prompts.ask(
+        dialogs.Prompt(
+            title="Rename layer",
+            label="Name",
+            value=layer.name,
+            on_accept=lambda text: doc.set_layer_props(index, name=text[:60]),
+        )
+    )
 
 
 def _cell(
@@ -818,8 +1109,16 @@ def _cell(
     doc = tab.doc
     anim = doc.anim
     state = ctx.state.inker
-    layer = anim.cel(track.uid, frame.uid)
-    linked = layer is not None and anim.is_linked(track.uid, frame.uid)
+    if anim is None:
+        # A still document is a one-frame sprite: the single column *is* the
+        # layer, so it is never empty and never linked. ``track`` is the row
+        # index here rather than a track object, which is what lets one row
+        # renderer serve both shapes.
+        layer, linked = doc.stack[ti], False
+    else:
+        track_obj = anim.tracks[ti]
+        layer = anim.cel(track_obj.uid, frame.uid)
+        linked = layer is not None and anim.is_linked(track_obj.uid, frame.uid)
     # Three states, three glyphs, and colour on top rather than instead: a grid
     # that only differs by hue is unreadable to a chunk of people, which is the
     # argument STATUS_GLYPHS already makes elsewhere in this app.
@@ -832,7 +1131,8 @@ def _cell(
     imgui.push_style_color(imgui.Col_.button.value, theme.rgba(colour, alpha))
     if controls.button(label, (cell, cell)) and not tab.busy:
         doc.set_active_layer(ti)
-        doc.set_current_frame(fi)
+        if anim is not None:
+            doc.set_current_frame(fi)
     imgui.pop_style_color()
     if geom is not None:
         low = imgui.get_item_rect_min()
@@ -850,7 +1150,8 @@ def _cell(
         _press(ctx, tab, ti, fi)
     if state.timeline_thumbs:
         _cel_thumb(ctx, tab, layer, cell)
-    _cell_menu(ctx, tab, ti, fi, layer is not None, linked)
+    if anim is not None:
+        _cell_menu(ctx, tab, ti, fi, layer is not None, linked)
 
 
 def _in_range(rect: tuple[int, int, int, int] | None, ti: int, fi: int) -> bool:

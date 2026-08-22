@@ -27,7 +27,9 @@ FILTERED = (
     "main.py",  # Review's sweep list
     "panes/profiles_panel.py",
     "panes/clay_outliner.py",
-    "panes/inker_layers.py",
+    # The layers panel is deleted and its filter moved with the list it
+    # filtered -- the timeline's track column (W2.5a).
+    "panes/inker_timeline.py",
     "panes/pose_panel.py",
     "panes/poser_library.py",
 )

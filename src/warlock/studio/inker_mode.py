@@ -3125,6 +3125,14 @@ def handle_key(ctx: Any, event: Any) -> bool:
         tab.view.pending_zoom_rung = 1
     elif event.key in (pygame.K_MINUS, pygame.K_KP_MINUS):
         tab.view.pending_zoom_rung = -1
+    elif event.key == pygame.K_TAB:
+        # Aseprite's binding, and the reason the timeline can be hidden at all
+        # now that it holds the layers: one key, always the same one, whether
+        # the document is animated or not. Ctrl+Tab still cycles documents --
+        # that branch is in ``_ctrl_key`` and cannot be reached from here.
+        from .panes import inker_timeline
+
+        inker_timeline.toggle(state)
     elif name == "x":
         state.swap_colours()
     elif event.key == pygame.K_LEFTBRACKET:

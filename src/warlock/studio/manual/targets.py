@@ -28,7 +28,6 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "sheet": ("08-sprite-sheets", None),
     "sprites": ("08-sprite-sheets", "from-a-single-drawing"),
     "inker-tools": ("09-inker", "tools"),
-    "inker-layers": ("09-inker", "layers"),
     "inker-timeline": ("10-inker-animation", "the-timeline"),
     # Found by the O118 coverage sweep: two panes a user reads and neither had
     # a way into the chapter that describes it.

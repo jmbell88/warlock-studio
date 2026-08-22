@@ -35,7 +35,6 @@ SP_SWEPT = (
     "inker_colors.py",
     # Joined 2026-08-19: THUMB and INDENT were used as raw physical pixels, so
     # thumbnails and group indents stayed put while the monitor scaled.
-    "inker_layers.py",
 )
 
 
@@ -362,7 +361,6 @@ DENSE_PANES = (
     "pose_panel.py",
     "retarget_panel.py",
     "texture_panel.py",
-    "inker_layers.py",
     "clay_props.py",
     "clay_outliner.py",
     "sheet_panel.py",

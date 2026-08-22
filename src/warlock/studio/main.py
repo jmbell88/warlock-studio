@@ -3511,7 +3511,6 @@ class App:
         from .panes import (
             inker_canvas,
             inker_colors,
-            inker_layers,
             inker_preview,
             inker_tiles,
             inker_timeline,
@@ -3612,20 +3611,16 @@ class App:
         imgui.end_group()
 
         imgui.same_line()
-        # Above the layer panel and only for an animated document, so a still
-        # document's right column is byte-for-byte what it always was. A fixed
-        # height rather than a share of the column: it is a picture of the
-        # canvas, and a preview that grew with the window would push the layer
-        # list off the bottom on a short screen.
-        #
-        # **One pane under it, so no handle.** The bridge panel used to sit
-        # here and the split existed to keep the layer list from being pushed
-        # below the fold by it; its verbs are the menu strip's rows now (W2.2)
-        # and its four dialogs are drawn by the centre pane, so there is
-        # nothing left to divide. W2.5 gives this column the colour bar and the
-        # tile panel, and the handles come back with them.
-        imgui.begin_group()
+        # **The right column is the preview and nothing else.** The layers
+        # panel is gone: its rows are the timeline's rows now (W2.5a), which is
+        # where Aseprite has always kept them and where a row can show its cels
+        # as well as its name. The preview is a fixed height rather than a
+        # share -- it is a picture of the canvas, and one that grew with the
+        # window would have pushed the list off the bottom on a short screen,
+        # back when there was a list here to push. W2.9 gives this column the
+        # colour bar and the tile panel.
         if animated:
+            imgui.begin_group()
             with layout_mod.pane(
                 "inker-preview",
                 (0, sp(inker_preview.PREVIEW_H)),
@@ -3634,15 +3629,7 @@ class App:
             ) as visible:
                 if visible:
                     inker_preview.draw(ctx)
-        with layout_mod.pane(
-            "inker-layers",
-            (0, 0),
-            layout_mod.PaneRole.INSPECTOR,
-            edge=layout_mod.PaneEdge.LEFT,
-        ) as visible:
-            if visible:
-                inker_layers.draw(ctx)
-        imgui.end_group()
+            imgui.end_group()
 
     def _plotter_workspace(self) -> None:
         """The same sidebar / centre / sidebar skeleton every other mode uses:

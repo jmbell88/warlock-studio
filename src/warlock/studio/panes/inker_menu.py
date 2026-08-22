@@ -30,8 +30,11 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import controls, inker_mode, inker_ops, toolbar, widgets
+from .. import controls, icons, inker, inker_mode, inker_ops, toolbar, widgets
 from ..tokens import sp
+
+#: Opacity mid-drag, per layer uid. See :func:`header_controls`.
+_opacity_drag: dict[int, float] = {}
 
 BAR = "inker-menu"
 PARAM_POPUP = "inker-op-params"
@@ -150,6 +153,100 @@ def _properties_popup(ctx: Any, state: Any, tab: Any) -> None:
     with controls.menu_popup(PROPERTIES_POPUP) as opened:
         if not opened:
             return
-        from . import inker_layers
+        header_controls(ctx, tab.doc)
 
-        inker_layers.header_controls(ctx, tab.doc)
+
+def header_controls(ctx: Any, doc: Any) -> None:
+    """The active layer's blend, opacity and locks -- the Photoshop header.
+
+    Blend first, then opacity, which is the order every layers panel since
+    Photoshop has used and therefore the one a user's eye already knows.
+    """
+    layer = doc.stack.active
+    blend = widgets.labeled_combo(
+        "Blend",
+        layer.blend,
+        [(m, m) for m in inker.BLEND_MODES],
+        help_text=(
+            "How this layer combines with everything under it. Saved into the .ora "
+            "so other editors read it the same way."
+        ),
+    )
+    if blend != layer.blend:
+        doc.set_layer_props(blend=blend)
+    changed, value = widgets.labeled_slider_float(
+        "Opacity",
+        layer.opacity,
+        0.0,
+        1.0,
+        help_text=(
+            "The active layer's opacity. Dragging previews it live and records one "
+            "undo step when you let go."
+        ),
+    )
+    if changed:
+        # Live while dragging, but only one undo step: set the value directly
+        # for the preview and record the step when the drag is released. The
+        # value it started from has to be remembered here -- by release the
+        # layer already holds the new one, and asking the document to diff it
+        # against itself records nothing at all.
+        _opacity_drag.setdefault(layer.uid, layer.opacity)
+        layer.opacity = value
+        doc.invalidate_all()
+    if imgui.is_item_deactivated_after_edit():
+        was = _opacity_drag.pop(layer.uid, None)
+        if was is not None:
+            doc.set_layer_props(opacity=layer.opacity, was={"opacity": was})
+
+    widgets.muted("Lock:")
+    imgui.same_line()
+    if _toggle_icon(
+        f"{icons.SQUARE_DASHED}##lockalpha",
+        layer.alpha_lock,
+        "Lock alpha: paints inside what is already on this layer and never "
+        "past its edge -- colours change, transparency does not. The eraser "
+        "does nothing here, because erasing is changing transparency.",
+    ):
+        doc.set_layer_props(alpha_lock=not layer.alpha_lock)
+    imgui.same_line()
+    if _toggle_icon(
+        f"{icons.LOCK}##locklayer",
+        layer.locked,
+        "Lock layer: refuses every tool -- no strokes, fills, gradients, "
+        "filters, lifts or pastes land on it. Renaming, hiding, reordering "
+        "and deleting still work, and so do whole-document changes like a "
+        "rotate or a crop.",
+    ):
+        doc.set_layer_props(locked=not layer.locked)
+    imgui.same_line()
+    # Its own label, not a third button under "Lock:". It is a statement about
+    # what a *new cel* starts as, and filing it with the two locks would have
+    # the panel claiming it refuses something -- which is the one thing it does
+    # not do. Disabled, never hidden, on a still document: the engine refuses
+    # it there by name and a greyed button says the setting exists.
+    widgets.muted("  Cels:")
+    imgui.same_line()
+    continuous = doc.anim is not None and doc.anim.tracks[doc.stack.active_index].continuous
+    imgui.begin_disabled(doc.anim is None)
+    if _toggle_icon(
+        f"{icons.COPY}##continuous",
+        continuous,
+        "Continuous: drawing on an empty frame of this layer starts from a "
+        "copy of the last drawing on it rather than from nothing. A copy, not "
+        "a link -- editing it does not change the frame it came from.",
+    ):
+        doc.set_layer_props(continuous=not continuous)
+    imgui.end_disabled()
+
+
+def _toggle_icon(icon: str, engaged: bool, tooltip: str) -> bool:
+    """An icon button that shows its on state -- the anchor grid's idiom."""
+    if engaged:
+        imgui.push_style_color(
+            imgui.Col_.button.value,
+            imgui.get_style().color_(imgui.Col_.button_active.value),
+        )
+    clicked = widgets.icon_button(icon, tooltip)
+    if engaged:
+        imgui.pop_style_color()
+    return clicked

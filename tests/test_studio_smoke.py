@@ -452,7 +452,6 @@ def test_no_pane_continues_a_line_that_has_no_room_left(app_ctx, imgui_ctx):
         clay_props,
         clay_tools,
         inker_colors,
-        inker_layers,
         inker_menu,
         inker_tools,
         inspector,
@@ -502,7 +501,6 @@ def test_no_pane_continues_a_line_that_has_no_room_left(app_ctx, imgui_ctx):
         ("clay-outliner", lambda: clay_outliner.draw(app_ctx)),
         ("clay-bridge", lambda: clay_bridge.draw(app_ctx)),
         ("inker-tools", lambda: inker_tools.draw(app_ctx)),
-        ("inker-layers", lambda: inker_layers.draw(app_ctx)),
         ("inker-colors", lambda: inker_colors.draw(app_ctx)),
         ("inker-menu", lambda: inker_menu.draw(app_ctx)),
     ]
@@ -1417,7 +1415,6 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
         inker_bridge,
         inker_canvas,
         inker_colors,
-        inker_layers,
         inker_tiles,
         inker_tools,
     )
@@ -1465,9 +1462,8 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
                 inker_bridge._open_filter(app_ctx, tab)
         imgui.end_child()
         imgui.same_line()
-        if imgui.begin_child("##paint-right", (sp(300), 0)):
-            inker_layers.draw(app_ctx)
-        imgui.end_child()
+        # The right column is the preview alone now: the layers panel is
+        # deleted and its rows are the timeline's (W2.5a).
 
     # Empty first: the "nothing open" branch is what a user sees on arrival.
     _frame(imgui_ctx, build)
@@ -1695,7 +1691,6 @@ def test_the_animated_inker_builds_and_gives_its_frame_textures_back(app_ctx, im
     from warlock.studio.panes import (
         inker_canvas,
         inker_colors,
-        inker_layers,
         inker_timeline,
         inker_tools,
     )
@@ -1724,10 +1719,7 @@ def test_the_animated_inker_builds_and_gives_its_frame_textures_back(app_ctx, im
             inker_canvas.draw(app_ctx)
             inker_timeline.draw(app_ctx)
         imgui.end_child()
-        imgui.same_line()
-        if imgui.begin_child("##smoke-right", (sp(300), 0)):
-            inker_layers.draw(app_ctx)
-        imgui.end_child()
+        # The right column is the preview alone now (W2.5a).
 
     def frame() -> None:
         _frame(imgui_ctx, build)
