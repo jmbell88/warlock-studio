@@ -300,6 +300,8 @@ the same one the asset pose editor answers to, because they are
 | Right-drag | Capture a block off the map, without leaving the tool |
 | Right-click an object | Duplicate, raise, lower or delete it |
 | `H` | Highlight the current layer |
+| `+` / `-` | Zoom in / out, by whole scales |
+| Ctrl+Shift+I | Invert the selection |
 | `X` / `Y` | Flip the brush across / down |
 | `Z` | Turn the brush a quarter clockwise (Shift+Z turns it back) |
 | Shift+click | Stamp a line from the last cell painted |

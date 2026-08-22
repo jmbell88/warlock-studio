@@ -337,6 +337,8 @@ def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
             ("Right-drag", "Capture a block off the map, keeping the tool"),
             ("Right-click an object", "Duplicate, raise, lower or delete it"),
             ("H", "Highlight the current layer"),
+            ("+ / -", "Zoom in / out, by whole scales"),
+            ("Ctrl+Shift+I", "Invert the selection"),
             (
                 " / ".join(letter for _k, _l, letter in PLOTTER_TOOLS),
                 " / ".join(label for _k, label, _letter in PLOTTER_TOOLS),

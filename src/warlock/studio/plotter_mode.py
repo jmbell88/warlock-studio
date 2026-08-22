@@ -572,6 +572,21 @@ def handle_key(ctx: Any, event: Any) -> bool:
     # layer and insert-rectangle on an object one. ``sync_tool`` first, and
     # idempotently, so a key pressed on the frame after a layer switch cannot
     # act with a tool the layer does not host.
+    zoom_in, zoom_out = _zoom_keys()
+    if tab is not None and event.key in zoom_in:
+        # Whole rungs, and ``=`` unshifted answers too: it is the same physical
+        # key on every layout this ships to. Inker's own pair, spelled the same.
+        tab.view.pending_zoom = _stepped(tab.view.zoom, 1)
+        return True
+    if tab is not None and event.key in zoom_out:
+        tab.view.pending_zoom = _stepped(tab.view.zoom, -1)
+        return True
+    if tab is not None and name == "h":
+        # Tiled's Highlight Current Layer. A canvas setting and nothing more --
+        # ``render.py`` composites exports off the same resolver, so a dim
+        # living in ``scene.resolve`` would export dimmed.
+        state.highlight = not state.highlight
+        return True
     if tab is not None and name.isdigit() and name != "0":
         # Bare 1-9 recall. Tiled binds these to *tools*; this editor's tools
         # already have letters, and a numbered stamp is the thing a map-painting
@@ -830,6 +845,30 @@ def _delete(ctx: Any, state: PlotterState, tab: PlotterDoc) -> None:
     )
 
 
+#: The zoom ladder the keyboard steps through, as scales. Whole numbers above
+#: 1:1 and halving below it -- the pixel-art rule, and the same ladder Inker's
+#: keyboard uses, so a hand that learned one editor's + and - has learned both.
+ZOOM_RUNGS = (0.25, 0.5, 1.0, 2.0, 4.0, 8.0)
+
+
+def _zoom_keys():
+    """The two key sets, built lazily: pygame is imported inside the handler."""
+    import pygame
+
+    return (
+        {pygame.K_EQUALS, pygame.K_PLUS, pygame.K_KP_PLUS},
+        {pygame.K_MINUS, pygame.K_KP_MINUS},
+    )
+
+
+def _stepped(zoom: float, direction: int) -> float:
+    """The next rung up or down from wherever the wheel has left the zoom."""
+    rungs = list(ZOOM_RUNGS)
+    if direction > 0:
+        return next((rung for rung in rungs if rung > zoom + 1e-6), rungs[-1])
+    return next((rung for rung in reversed(rungs) if rung < zoom - 1e-6), rungs[0])
+
+
 def store_stamp(ctx: Any, state: PlotterState, tab: PlotterDoc, slot: int) -> bool:
     """Ctrl+Shift+N: put the brush in hand into a numbered slot.
 
@@ -859,6 +898,44 @@ def recall_stamp(ctx: Any, state: PlotterState, tab: PlotterDoc, slot: int) -> b
     state.brush = block.copy()
     state.tool = "stamp"
     return True
+
+
+def _invert_selection(state: PlotterState, tab: PlotterDoc) -> None:
+    """Select every cell the selection does not hold.
+
+    Through ``set_selection``, the one door, so the rect and the mask cannot
+    disagree about which cells are in it -- and with a mask always, because the
+    inverse of a rectangle is not a rectangle.
+    """
+    from .plotter import tools as tools_lib
+
+    doc = tab.doc
+    mask, rect = tools_lib.invert_selection(
+        state.select_mask, state.select, doc.width, doc.height
+    )
+    state.set_selection(rect, mask)
+
+
+def grow_selection(state: PlotterState, tab: PlotterDoc, steps: int = 1) -> None:
+    """Tiled's Expand Selection, and its Contract on a negative step."""
+    import numpy as np
+
+    from .plotter import tools as tools_lib
+
+    doc = tab.doc
+    if state.select is None:
+        return
+    mask = state.select_mask
+    if mask is None:
+        mask = np.zeros((doc.height, doc.width), dtype=bool)
+        x0, y0, x1, y1 = state.select
+        mask[max(0, y0) : y1 + 1, max(0, x0) : x1 + 1] = True
+    grown = (
+        tools_lib.grow_selection(mask, steps)
+        if steps > 0
+        else tools_lib.shrink_selection(mask, -steps)
+    )
+    state.set_selection(tools_lib._bounds_of(grown, doc.width, doc.height), grown)
 
 
 def _ctrl_key(
@@ -894,6 +971,10 @@ def _ctrl_key(
         return True
     if name == "g":
         state.grid = not state.grid
+        return True
+    if name == "i" and shift:
+        # Ctrl+Shift+I, the chord Inker and Clay both bind for the same verb.
+        _invert_selection(state, tab)
         return True
     if name == "a":
         # Ctrl+Shift+A deselects, which is Inker's spelling; Ctrl+D is Tiled's.

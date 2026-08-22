@@ -416,6 +416,14 @@ def _status(ctx: Any, state: Any, tab: Any) -> None:
     # nothing on screen says which diamond you are in, so "did I click the one
     # I meant" is otherwise unanswerable. Suppressed off-map so it cannot
     # flicker while the pointer is over the chrome.
+    rect = state.select
+    if rect is not None:
+        # The size of the selection, which every tile editor puts here and this
+        # one never has: "how big is the block I am about to stamp" was
+        # answerable only by counting cells on screen. Inker's status bar has
+        # printed the same three numbers since W2.4.
+        x0, y0, x1, y1 = rect
+        bits.append(f"sel {x1 - x0 + 1} x {y1 - y0 + 1}")
     cell = state.hover_cell
     if cell is not None and 0 <= cell[0] < doc.width and 0 <= cell[1] < doc.height:
         bits.append(f"cell {cell[0]}, {cell[1]}")
@@ -429,6 +437,33 @@ def _status(ctx: Any, state: Any, tab: Any) -> None:
     if tab.busy:
         bits.append("saving")
     widgets.muted("  --  ".join(bits))
+    _zoom_combo(tab)
+
+
+#: The zoom rungs the combo offers, as percentages. Tiled's ladder, and whole
+#: numbers only: at 135% a source pixel is 1.35 screen pixels, so some are
+#: drawn one wide and some two and a checkerboard dither comes out as bands.
+ZOOM_RUNGS = (25, 50, 100, 200, 400, 800)
+
+
+def _zoom_combo(tab: Any) -> None:
+    """A zoom the user can *set*, rather than only nudge.
+
+    Writes ``tab.view.pending_zoom``, which already exists and is already
+    consumed by the canvas -- the only thing that knows how big the pane is, so
+    a keypress or a combo cannot centre on its own.
+    """
+    from imgui_bundle import imgui
+
+    imgui.same_line()
+    imgui.set_next_item_width(sp(84))
+    current = f"{int(round(tab.view.zoom * 100))}"
+    options = [(f"{rung}", f"{rung}%") for rung in ZOOM_RUNGS]
+    if current not in {key for key, _label in options}:
+        options = [(current, f"{current}%"), *options]
+    picked = widgets.combo("##plotter-zoom", current, options, tooltip="Zoom")
+    if picked != current:
+        tab.view.pending_zoom = int(picked) / 100.0
 
 
 # --- drawing ------------------------------------------------------------------
@@ -2581,7 +2616,14 @@ def _resized(obj: Any, fixed: tuple[float, float], point: tuple[float, float]):
 
 
 def _object_at(layer: Any, point: tuple[float, float]):
-    """Topmost first, so a small object drawn over a large one is reachable."""
+    """Topmost first, so a small object drawn over a large one is reachable.
+
+    Tiled's second half of "prefer the current layer" is the caller's: this is
+    only ever asked about the *active* object layer, so an object on another
+    layer under the cursor is not a candidate at all. Stated here because the
+    first half -- highlight the current layer -- is a view setting and it would
+    be easy to read the pair as one feature.
+    """
     x, y = point
     for obj in reversed(layer.objects):
         if obj.kind == "point":

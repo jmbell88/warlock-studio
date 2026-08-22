@@ -588,3 +588,75 @@ def flip_brush_v(brush: np.ndarray) -> np.ndarray:
 def rotate_brush_cw(brush: np.ndarray) -> np.ndarray:
     """A quarter turn clockwise. Non-square brushes come back transposed."""
     return gidlib.rotate_plane_cw(brush)
+
+
+def invert_selection(
+    mask: np.ndarray | None, rect: tuple[int, int, int, int] | None, width: int, height: int
+) -> tuple[np.ndarray, tuple[int, int, int, int]]:
+    """Every cell the selection does not hold. -> (mask, bounding rect).
+
+    Pure, over the whole map, and it is the reason ``select``'s mask half exists
+    at all: the inverse of a rectangle is not a rectangle. ``mask is None``
+    means "the rect is solid", which is the state ``PlotterState.set_selection``
+    documents, so a plain marquee inverts without ever materialising the
+    rectangle's own mask.
+    """
+    full = np.ones((height, width), dtype=bool)
+    if rect is not None:
+        x0, y0, x1, y1 = rect
+        x0, y0 = max(0, x0), max(0, y0)
+        x1, y1 = min(width - 1, x1), min(height - 1, y1)
+        if x0 <= x1 and y0 <= y1:
+            inside = (
+                np.ones((y1 - y0 + 1, x1 - x0 + 1), dtype=bool)
+                if mask is None
+                else np.asarray(mask, dtype=bool)[y0 : y1 + 1, x0 : x1 + 1]
+            )
+            full[y0 : y1 + 1, x0 : x1 + 1] &= ~inside
+    return full, _bounds_of(full, width, height)
+
+
+def grow_selection(
+    mask: np.ndarray, steps: int = 1
+) -> np.ndarray:
+    """Add every cell orthogonally touching the selection, ``steps`` times.
+
+    Four-connected rather than eight: a tile map's neighbours are the four it
+    shares an edge with, which is what every flood fill and terrain walk in
+    this module already means by "next to".
+    """
+    grown = np.asarray(mask, dtype=bool)
+    for _ in range(max(0, int(steps))):
+        out = grown.copy()
+        out[1:, :] |= grown[:-1, :]
+        out[:-1, :] |= grown[1:, :]
+        out[:, 1:] |= grown[:, :-1]
+        out[:, :-1] |= grown[:, 1:]
+        grown = out
+    return grown
+
+
+def shrink_selection(mask: np.ndarray, steps: int = 1) -> np.ndarray:
+    """Drop every cell on the selection's edge, ``steps`` times.
+
+    The inverse of :func:`grow_selection` by construction -- grow the *outside*
+    -- so the two cannot disagree about what "next to" means, which is exactly
+    how a hand-written erosion drifts from its dilation.
+    """
+    return ~grow_selection(~np.asarray(mask, dtype=bool), steps)
+
+
+def _bounds_of(
+    mask: np.ndarray, width: int, height: int
+) -> tuple[int, int, int, int]:
+    """The bounding rect of a mask, or the whole map when it holds nothing.
+
+    An empty selection has no meaningful rectangle, and the callers' contract
+    is that a rect always accompanies a mask; the whole map with an all-false
+    mask is the honest spelling of "nothing selected but still a selection".
+    """
+    rows = np.flatnonzero(mask.any(axis=1))
+    cols = np.flatnonzero(mask.any(axis=0))
+    if not rows.size or not cols.size:
+        return (0, 0, max(0, width - 1), max(0, height - 1))
+    return (int(cols[0]), int(rows[0]), int(cols[-1]), int(rows[-1]))
