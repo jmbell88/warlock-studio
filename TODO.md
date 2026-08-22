@@ -69,6 +69,41 @@ built and waiting.
       palette is provable on 2D today (a tile sheet has real colour) and stays
       unproven *on Troupe* until this lands.
 
+## 1b. Tutorial sample assets — art, so they are yours
+
+The tutorial chapters (`docs/manual/01-13`) were deliberately written not to
+*need* shipped starting material: every exercise either starts from nothing
+("Ctrl+N, draw something", "place a box and a sphere") or from a file the
+reader already has ("import a tileset image"). That is why the series ships
+complete without this item, and why this is an improvement rather than a
+blocker.
+
+What would improve them is a small set of **original, project-licensed** files,
+and each is a piece of art rather than a build step:
+
+- [ ] **A 32x32 sprite** (`.ora`, a few layers, two or three frames) for the
+      Inker chapters, so "draw something" has an alternative for a reader who
+      would rather learn the tools than design a character in the same ten
+      minutes.
+- [ ] **A 16 px tileset** for Plotter's and Packwright's exercises. Small --
+      sixteen or twenty-four tiles with a terrain set among them, so the
+      terrain brush has something to resolve.
+- [ ] **A low-poly `crate.glb`** for Clay's import exercise.
+- [ ] **A textured, rigged humanoid `.glb`** for Troupe's no-GPU path. This is
+      the same file as the base mesh in section 1 and should be authored once
+      for both.
+
+Two constraints that are not negotiable. **`examples/` cannot supply any of
+them**: it is ULPC-derived, CC-BY-SA/GPL, and reference-and-validation only, and
+the manual would be shipping it. And nothing procedurally generated should
+stand in -- a generated 32x32 "sprite" would be a picture of nothing, shipped in
+the wheel, teaching a reader that this is what the tool produces.
+
+If they land, `src/warlock/assets/tutorial/` is the place (add it to the
+hatchling force-include beside `docs/manual/`), keep the set under about a
+megabyte, and the "Try it" sections that would use them are the last section of
+chapters 05, 07, 09, 10 and 11.
+
 ## 2. Author the 22 keyframes — the editor is built for exactly this
 
 Open Poser → **Clips** in the left sidebar. Pick a key, pose the skeleton with

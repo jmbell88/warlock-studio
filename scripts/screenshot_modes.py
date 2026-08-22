@@ -504,6 +504,13 @@ def main() -> int:
     # is deleted either way: declining keeps the files, and this process has
     # no business adopting somebody's documents to take a photograph.
     app.app_ctx.state.recovery_offered = True
+    # And the setup question, for the same reason one wave later. It owns the
+    # screen ahead of every other overlay and it is pending whenever the home
+    # this runs against has not answered it -- which a throwaway WARLOCK_HOME,
+    # the sane way to run this, never has. So every picture came out with
+    # "Set up this PC" across the middle of it, and nothing about the file said
+    # so. ``--overlays`` turns it back on deliberately for its own capture.
+    app.app_ctx.first_run = False
     if args.seed:
         _seed(app)
     if args.asset:
@@ -566,9 +573,20 @@ def main() -> int:
                 state.mode = "home"
             if args.overlays:
                 from warlock.studio.manual import render as manual_render
-                from warlock.studio.panes import profiles_panel
+                from warlock.studio.panes import first_run, profiles_panel
 
                 state = app.app_ctx.state
+                # The setup question, which is the first screen a new install
+                # shows and the only one nothing else could photograph: it is
+                # not a mode, and it is gone for good once answered. Forced on
+                # rather than waited for, because a capture run's home may
+                # already carry the marker.
+                app.app_ctx.first_run = True
+                if not app.app_ctx.first_run_info:
+                    app.app_ctx.first_run_info = first_run.snapshot(app.app_ctx)
+                state.mode = "home"
+                _capture(app, args.out / f"{name}-first-run.png")
+                app.app_ctx.first_run = False
                 state.mode = create_stages.MODE
                 state.create_stage = "mesh"
                 manual_render.open_at(app.app_ctx, ("20-overview", None))

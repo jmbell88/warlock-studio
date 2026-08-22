@@ -56,6 +56,8 @@ has not yet been run end to end on real hardware, so the checkout above is the p
 Start the app and the first thing you see is a panel titled **Set up this PC**. It appears once, on
 the first launch against a given data directory, and not again once you answer it.
 
+![Set up this PC: the GPU and VRAM readout, three readiness verdicts, and the required downloads](img/01-first-run.png)
+
 It reports three verdicts, all measured on your actual machine while the app was starting rather
 than guessed:
 
