@@ -738,6 +738,113 @@ def remove_orphans(pixels: np.ndarray, *, orphans: float = 0.0) -> np.ndarray:
 # the live preview safe to run on every frame, including the first. What the
 # *popup* opens on is one step away from that (:func:`popup_values`) and Invert
 # is the only filter where the two differ.
+def curves(
+    pixels: np.ndarray,
+    *,
+    shadows: float = 0.0,
+    midtones: float = 0.0,
+    highlights: float = 0.0,
+    red: float = 1.0,
+    green: float = 1.0,
+    blue: float = 1.0,
+) -> np.ndarray:
+    """A tone curve, as three handles rather than a spline the app must store.
+
+    Aseprite offers a curve widget; this offers the **three points a curve is
+    actually pulled at** -- the shadow end, the middle and the highlight end --
+    each in [-1, 1], and interpolates a smooth curve through them. The reason
+    is not simplicity for its own sake: a spline is a document-level object
+    with control points that have to be serialized, undone, presetted and
+    round-tripped, and none of the formats this app writes has anywhere to put
+    one. Three numbers are a filter parameter like every other filter's.
+
+    ``red``/``green``/``blue`` are **per-channel weights** -- Aseprite's
+    per-channel adjustment targeting, which every filter in this module was
+    missing: a curve that could only move all three at once cannot warm a
+    picture, which is the ordinary reason to reach for one. A weight of 0
+    leaves that channel exactly as it was, which is what makes the control a
+    *target* rather than a second amount.
+    """
+    rgb, alpha = _premultiplied(pixels)
+    # ``_premultiplied`` hands back **0..255** premultiplied colour, which is
+    # what every other filter here works in; a curve is defined over 0..1, so
+    # it is scaled at the door and back at the end rather than the table being
+    # rewritten in a second unit.
+    rgb = rgb / 255.0
+    x = np.linspace(0.0, 1.0, 256, dtype=np.float32)
+    # A quadratic bump per handle, peaking where that handle lives, so the
+    # curve is smooth, passes through 0 and 1 unchanged, and cannot fold back
+    # on itself however hard the three are pulled.
+    bumps = (
+        float(shadows) * np.clip(1.0 - 2.0 * x, 0.0, 1.0) ** 2
+        + float(midtones) * (1.0 - (2.0 * x - 1.0) ** 2)
+        + float(highlights) * np.clip(2.0 * x - 1.0, 0.0, 1.0) ** 2
+    )
+    # **Windowed to zero at both ends.** Black stays black and white stays
+    # white however hard the three handles are pulled, which is what stops a
+    # curve folding back on itself -- and is the property that lets the same
+    # filter be run twice without the drawing creeping toward grey.
+    table = np.clip(x + bumps * 0.5 * (4.0 * x * (1.0 - x)), 0.0, 1.0).astype(np.float32)
+    out = rgb.copy()
+    weights = (float(red), float(green), float(blue))
+    for channel, weight in enumerate(weights):
+        if weight == 0.0:
+            continue
+        mapped = np.interp(rgb[..., channel], x, table).astype(np.float32)
+        out[..., channel] = rgb[..., channel] + (mapped - rgb[..., channel]) * weight
+    return _straight(np.clip(out, 0.0, 1.0) * 255.0, alpha, pixels)
+
+
+def convolve(
+    pixels: np.ndarray,
+    *,
+    m00: float = 0.0,
+    m01: float = 0.0,
+    m02: float = 0.0,
+    m10: float = 0.0,
+    m11: float = 1.0,
+    m12: float = 0.0,
+    m20: float = 0.0,
+    m21: float = 0.0,
+    m22: float = 0.0,
+) -> np.ndarray:
+    """A custom 3x3 convolution: Aseprite's Convolution Matrix.
+
+    Nine numbers rather than a matrix object, because ``FILTERS`` is a table of
+    *scalar* parameters and the popup builds itself from it -- a filter that
+    needed a widget of its own would be the one entry in the registry the
+    extension point could not serve, which is precisely the property that makes
+    it an extension point.
+
+    **Normalised by the sum when the sum is non-zero.** An unnormalised blur
+    brightens and an unnormalised sharpen clips, and neither is what the
+    numbers say; an edge-detect sums to zero and is left alone, because there
+    the point is the difference rather than the level.
+    """
+    rgb, alpha = _premultiplied(pixels)
+    kernel = np.array(
+        [[m00, m01, m02], [m10, m11, m12], [m20, m21, m22]], dtype=np.float32
+    )
+    total = float(kernel.sum())
+    if total:
+        kernel = kernel / total
+    if kernel[1, 1] == 1.0 and not kernel.sum() - 1.0:
+        # The identity, returned untouched rather than convolved with itself:
+        # ``FILTERS``' rule is that a filter at its defaults changes no pixel,
+        # and a 3x3 pass over premultiplied colour rounds where it should not.
+        return pixels.copy()
+    padded = np.pad(rgb, ((1, 1), (1, 1), (0, 0)), mode="edge")
+    out = np.zeros_like(rgb)
+    for dy in range(3):
+        for dx in range(3):
+            weight = float(kernel[dy, dx])
+            if weight:
+                out += padded[dy : dy + rgb.shape[0], dx : dx + rgb.shape[1]] * weight
+    # 0..255: ``_premultiplied`` works in the byte range, which is the unit
+    # every other filter in this module composites in.
+    return _straight(np.clip(out, 0.0, 255.0), alpha, pixels)
+
+
 FILTERS: dict[str, tuple[dict[str, Any], Callable[..., np.ndarray]]] = {
     "brightness / contrast": ({"brightness": 0.0, "contrast": 0.0}, brightness_contrast),
     "hue / saturation": (
@@ -745,6 +852,31 @@ FILTERS: dict[str, tuple[dict[str, Any], Callable[..., np.ndarray]]] = {
         hue_saturation,
     ),
     "levels": ({"black": 0.0, "white": 255.0, "gamma": 1.0}, levels),
+    "curves": (
+        {
+            "shadows": 0.0,
+            "midtones": 0.0,
+            "highlights": 0.0,
+            # The per-channel targeting, defaulting to all three at full
+            # weight -- which is the filter every other one in this table
+            # already is, so the control adds a capability rather than an
+            # obligation.
+            "red": 1.0,
+            "green": 1.0,
+            "blue": 1.0,
+        },
+        curves,
+    ),
+    "convolution": (
+        # The identity kernel, so opening the popup previews nothing --
+        # ``FILTERS``' own rule for a default.
+        {
+            "m00": 0.0, "m01": 0.0, "m02": 0.0,
+            "m10": 0.0, "m11": 1.0, "m12": 0.0,
+            "m20": 0.0, "m21": 0.0, "m22": 0.0,
+        },
+        convolve,
+    ),
     "blur": ({"radius": 0.0}, blur),
     "sharpen": ({"amount": 0.0, "radius": 1.5}, sharpen),
     "invert": ({"red": 0.0, "green": 0.0, "blue": 0.0}, invert),
@@ -776,9 +908,24 @@ FILTERS: dict[str, tuple[dict[str, Any], Callable[..., np.ndarray]]] = {
 # entry in one file, and a pane that had to know which of "colour" and "size"
 # was a colour would be a second place to keep in step.
 COLOUR_PARAMS: frozenset[str] = frozenset({"old", "new", "colour"})
-TOGGLE_PARAMS: frozenset[str] = frozenset(
-    {"red", "green", "blue", "wrap", "orphans"}
-)
+TOGGLE_PARAMS: frozenset[str] = frozenset({"wrap", "orphans"})
+
+#: Parameters that are a toggle **in one filter and a number in another**.
+#:
+#: ``invert`` takes red/green/blue as three checkboxes and ``curves`` takes the
+#: same three names as per-channel weights, which is not a collision to be
+#: renamed away: they are the same *idea* -- which channels this filter is
+#: about -- expressed at the precision each filter can use. The pane therefore
+#: asks per filter rather than per name, and the table below is what it asks.
+PER_FILTER_TOGGLES: dict[str, frozenset[str]] = {
+    "invert": frozenset({"red", "green", "blue"}),
+}
+
+
+def toggles_for(filter_name: str) -> frozenset[str]:
+    """Which of *filter_name*'s parameters are drawn as checkboxes."""
+
+    return TOGGLE_PARAMS | PER_FILTER_TOGGLES.get(filter_name, frozenset())
 CHOICE_PARAMS: dict[str, tuple[Any, ...]] = {
     "place": ("outside", "inside"),
     # 4-connected is a diamond step and 8-connected is a square one; there is
@@ -815,6 +962,26 @@ def popup_values(name: str) -> dict[str, Any]:
 # three tables above is drawn by that table instead and wants no entry here.
 RANGES: dict[str, tuple[float, float]] = {
     "brightness": (-1.0, 1.0),
+    # The curve's three handles, each a pull on one end of the tone range.
+    "shadows": (-1.0, 1.0),
+    "midtones": (-1.0, 1.0),
+    "highlights": (-1.0, 1.0),
+    # Per-channel *weights*, not amounts: 0 leaves that channel exactly as it
+    # was, which is what makes the control a target rather than a second dial.
+    "red": (0.0, 1.0),
+    "green": (0.0, 1.0),
+    "blue": (0.0, 1.0),
+    # A convolution cell. Wide enough for an edge-detect's -4 and a sharpen's
+    # 5, and symmetric because a kernel's sign is half of what it says.
+    "m00": (-8.0, 8.0),
+    "m01": (-8.0, 8.0),
+    "m02": (-8.0, 8.0),
+    "m10": (-8.0, 8.0),
+    "m11": (-8.0, 8.0),
+    "m12": (-8.0, 8.0),
+    "m20": (-8.0, 8.0),
+    "m21": (-8.0, 8.0),
+    "m22": (-8.0, 8.0),
     "contrast": (-1.0, 1.0),
     "hue": (-1.0, 1.0),
     "saturation": (-1.0, 1.0),

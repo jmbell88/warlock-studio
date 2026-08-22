@@ -1329,6 +1329,10 @@ class InkerState:
     #: "use the captured tip" -- and the tip is recaptured from the drawing,
     #: which is where it came from and where it still is.
     stamp: Any = None
+    #: Which harmony the colour panel shows; see ``inker.indexed.HARMONIES``.
+    #: App-level like every other tool setting, and not persisted: it is a way
+    #: of *looking* at the colour in hand rather than a preference.
+    harmony: str = "complement"
     #: Nine numbered custom brushes, by slot. Aseprite's ``Alt+1..9``.
     #:
     #: **Not persisted, for ``stamp``'s reason**: a tip is pixels rather than a

@@ -263,7 +263,9 @@ def _param_label(key: str) -> str:
     return _PARAM_LABELS.get(key, key)
 
 
-def _filter_control(state: Any, values: dict[str, Any], key: str) -> None:
+def _filter_control(
+    state: Any, values: dict[str, Any], key: str, filter_name: str = ""
+) -> None:
     """One parameter row, drawn by the kind the registry says it is.
 
     Four kinds rather than a slider and a special case, because the FX staples
@@ -295,7 +297,7 @@ def _filter_control(state: Any, values: dict[str, Any], key: str) -> None:
         if controls.button(f"use FG##fg{key}"):
             values[key] = tuple(state.fg)
         return
-    if key in filters.TOGGLE_PARAMS:
+    if key in filters.toggles_for(filter_name or state.filter_name):
         # Stored as 0.0/1.0, not as a bool: the registry holds one kind of value
         # and ``apply_named`` passes it straight through.
         changed, on = controls.checkbox(f"{label}##{key}", bool(values[key]))
@@ -343,7 +345,7 @@ def _filter_popup(ctx: Any, tab: Any) -> None:
         state.filter_name = name
     values = _filter_values(state, state.filter_name)
     for key in filters.FILTERS[state.filter_name][0]:
-        _filter_control(state, values, key)
+        _filter_control(state, values, key, state.filter_name)
     if controls.button("Reset##filterreset"):
         # Back to what opening the popup gave, not to the identity defaults --
         # Reset on Invert that unticked all three channels would be a button

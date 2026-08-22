@@ -78,6 +78,7 @@ def draw(ctx: Any) -> None:
 
     imgui.dummy((0, 4))
     _swatches(ctx, state)
+    _harmonies(ctx, state)
     imgui.dummy((0, 4))
     _palette_files(ctx, state)
     imgui.dummy((0, 6))
@@ -420,6 +421,56 @@ def _palette_files(ctx: Any, state: Any) -> None:
         "channel, so exported swatches are written opaque. An import adds to "
         "the row rather than replacing it."
     )
+
+
+def _harmonies(ctx: Any, state: Any) -> None:
+    """The Shades strip, and the harmonies of the colour in hand (6.6).
+
+    Both are **derived from the foreground colour**, which is what keeps them
+    out of the document: there is nothing to store, nothing to undo, and
+    nothing to get out of step with the swatch they came from. A click takes
+    one as the foreground; a right-click keeps it as a swatch, which is the
+    gesture the swatch row above already uses.
+    """
+    from ..inker import indexed as ix
+
+    imgui.dummy((0, 6))
+    if not widgets.header("Shades", default_open=False, persist_key="inker/shades"):
+        return
+    side = sp(SWATCH)
+    for index, colour in enumerate(ix.shades(state.fg, 7)):
+        imgui.push_id(f"shade{index}")
+        if imgui.color_button("##shade", _vec(colour), 0, (side, side)):
+            state.set_fg(colour)
+        if imgui.is_item_clicked(1):
+            state.add_swatch(colour)
+            inker_mode.persist(ctx)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(f"{colour}  -  right-click to keep it as a swatch")
+        imgui.pop_id()
+        imgui.same_line()
+    imgui.new_line()
+
+    state.harmony = widgets.labeled_combo(
+        "Harmony",
+        state.harmony if state.harmony in ix.HARMONIES else "complement",
+        [(key, key.title()) for key in ix.HARMONIES],
+        help_text=(
+            "Hue rotation only: the saturation and lightness are the ones you "
+            "chose, because a harmony that changed them would be a palette "
+            "generator rather than an answer to what goes with this colour."
+        ),
+    )
+    for index, colour in enumerate(ix.harmony(state.fg, state.harmony)):
+        imgui.push_id(f"harm{index}")
+        if imgui.color_button("##harm", _vec(colour), 0, (side, side)):
+            state.set_fg(colour)
+        if imgui.is_item_clicked(1):
+            state.add_swatch(colour)
+            inker_mode.persist(ctx)
+        imgui.pop_id()
+        imgui.same_line()
+    imgui.new_line()
 
 
 def _swatches(ctx: Any, state: Any) -> None:

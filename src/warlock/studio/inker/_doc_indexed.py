@@ -685,6 +685,45 @@ class IndexedOps:
                 totals[slot] += count
         return totals
 
+    def used_slots(self: Document) -> list[int]:
+        """Which palette slots the drawing actually holds pixels in.
+
+        Derived from :meth:`palette_usage` rather than counted a second way --
+        Aseprite's *Select Used Colors* and *Select Unused* are two readings of
+        one histogram, and two walks would be two answers on a document whose
+        planes changed between them.
+        """
+        return [slot for slot, count in enumerate(self.palette_usage()) if count]
+
+    def unused_slots(self: Document) -> list[int]:
+        used = set(self.used_slots())
+        return [slot for slot in range(len(self.palette or [])) if slot not in used]
+
+    def remap_palette(self: Document, colours: Sequence[RGBA]) -> bool:
+        """Swap the palette and keep every index. -> whether it changed.
+
+        Aseprite's *Remap Palette*, and the distinction it turns on is the
+        whole reason it is a second verb beside ``set_palette``: setting a
+        palette **re-matches** every pixel to the nearest new colour, so a
+        drawing keeps its *colours* and gets new indices; remapping keeps the
+        indices, so the drawing keeps its *structure* and every pixel in slot 4
+        becomes whatever slot 4 now is. That is what makes a palette swap a
+        recolour rather than a re-quantisation.
+
+        Refused on a document that is not indexed, by name: without planes
+        there are no indices to keep, and the honest operation there is
+        ``set_palette``.
+        """
+        if not self.is_indexed:
+            raise ValueError(
+                "remapping keeps each pixel's palette index, and only an "
+                "indexed document has one -- convert it first"
+            )
+        wanted = [tuple(int(channel) for channel in colour) for colour in colours]
+        if not wanted or wanted == [tuple(c) for c in (self.palette or [])]:
+            return False
+        return self.set_palette(wanted, snap=False)
+
     # -- mode conversions ---------------------------------------------------
 
     def _index_planes(self: Document) -> list[Any]:

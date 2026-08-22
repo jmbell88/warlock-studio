@@ -344,3 +344,75 @@ def histogram(pixels: np.ndarray, palette: Sequence[RGBA]) -> list[int]:
         want = np.asarray(tuple(colour)[:3], dtype=np.uint8)
         counts[index] = int((rgb == want).all(axis=1).sum())
     return counts
+
+
+#: The colour harmonies the wheel offers, as the hue offsets each one is.
+#:
+#: Degrees rather than named recipes, because that is all a harmony *is* -- and
+#: a table of numbers is something a test can check against the wheel it is
+#: drawn on, where a function per harmony would be five places for the same
+#: arithmetic to be slightly wrong in.
+HARMONIES: dict[str, tuple[float, ...]] = {
+    "complement": (0.0, 180.0),
+    "triad": (0.0, 120.0, 240.0),
+    "tetrad": (0.0, 90.0, 180.0, 270.0),
+    "analogous": (0.0, 30.0, -30.0),
+    "split": (0.0, 150.0, 210.0),
+    "square": (0.0, 90.0, 180.0, 270.0),
+}
+
+
+def harmony(colour: tuple[int, int, int, int], kind: str) -> list[tuple[int, int, int, int]]:
+    """The colours *kind* makes of this one, the first being it.
+
+    Hue rotation only: saturation and lightness are what the user chose, and a
+    harmony that changed them would be a palette generator rather than the
+    answer to "what goes with this".
+    """
+    import colorsys
+
+    offsets = HARMONIES.get(kind)
+    if not offsets:
+        return [colour]
+    r, g, b, a = (int(channel) for channel in colour)
+    hue0, light, sat = colorsys.rgb_to_hls(r / 255.0, g / 255.0, b / 255.0)
+    out: list[tuple[int, int, int, int]] = []
+    for offset in offsets:
+        hue = (hue0 + offset / 360.0) % 1.0
+        rr, gg, bb = colorsys.hls_to_rgb(hue, light, sat)
+        out.append(
+            (
+                max(0, min(255, round(rr * 255))),
+                max(0, min(255, round(gg * 255))),
+                max(0, min(255, round(bb * 255))),
+                a,
+            )
+        )
+    return out
+
+
+def shades(colour: tuple[int, int, int, int], steps: int = 5) -> list[tuple[int, int, int, int]]:
+    """A ramp from black through *colour* to white, ``steps`` entries.
+
+    Aseprite's Shades widget, and the reason it is one function rather than a
+    stored object: it is derived from the colour in hand, so there is nothing
+    to persist, nothing to undo and nothing to get out of step with the swatch
+    it came from.
+    """
+    steps = max(2, int(steps))
+    r, g, b, a = (int(channel) for channel in colour)
+    out = []
+    for index in range(steps):
+        t = index / (steps - 1)
+        if t < 0.5:
+            factor = t * 2.0
+            mixed = (round(r * factor), round(g * factor), round(b * factor))
+        else:
+            factor = (t - 0.5) * 2.0
+            mixed = (
+                round(r + (255 - r) * factor),
+                round(g + (255 - g) * factor),
+                round(b + (255 - b) * factor),
+            )
+        out.append((*mixed, a))
+    return out

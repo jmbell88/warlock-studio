@@ -1133,6 +1133,56 @@ register(
         reason=NO_SELECTION,
     )
 )
+def _select_slots(ctx: Any, tab: Any, *, used: bool) -> bool:
+    """Select every pixel drawn in the used (or unused) palette slots.
+
+    One function for Aseprite's two commands, because they are two readings of
+    one histogram -- and the *selection* is the answer either way, so the two
+    rows differ by a boolean rather than by a second walk of the document.
+    """
+    doc = tab.doc
+    slots = doc.used_slots() if used else doc.unused_slots()
+    if not slots or not doc.palette:
+        return False
+    mask = None
+    for slot in slots:
+        colour = doc.palette[slot]
+        doc.select_colour_range(colour, tolerance=0)
+        if doc.mask is None:
+            continue
+        mask = doc.mask.copy() if mask is None else mask.combined(doc.mask, "add")
+    if mask is None:
+        return False
+    doc.select(mask)
+    return True
+
+
+register(
+    Op(
+        "select_used_colours",
+        "Used colours",
+        lambda ctx, tab, **_: _select_slots(ctx, tab, used=True),
+        menu="Select",
+        enabled=lambda state, tab: tab is not None and bool(tab.doc.palette),
+        reason="This document has no palette.",
+        hint=(
+            "Selects every pixel drawn in a palette slot that is in use. Its "
+            "sibling below selects what the unused slots hold, which on a tidy "
+            "drawing is nothing at all -- which is the answer."
+        ),
+        separator_before=True,
+    )
+)
+register(
+    Op(
+        "select_unused_colours",
+        "Unused colours",
+        lambda ctx, tab, **_: _select_slots(ctx, tab, used=False),
+        menu="Select",
+        enabled=lambda state, tab: tab is not None and bool(tab.doc.palette),
+        reason="This document has no palette.",
+    )
+)
 register(
     Op(
         "feather",

@@ -190,8 +190,16 @@ def test_every_parameter_is_drawable_exactly_one_way():
     The numeric case keeps its old assertion as well: a default outside its own
     slider's span is a popup that changes a pixel the moment it opens.
     """
-    kinds = (filters.COLOUR_PARAMS, filters.TOGGLE_PARAMS, filters.CHOICE_PARAMS)
-    for defaults, _func in filters.FILTERS.values():
+    for name, (defaults, _func) in filters.FILTERS.items():
+        # **Per filter, not per name** (6.6): ``invert`` takes red/green/blue
+        # as three checkboxes and ``curves`` takes the same three names as
+        # per-channel weights. They are the same idea at the precision each
+        # filter can use, so the pane asks per filter and so does this.
+        kinds = (
+            filters.COLOUR_PARAMS,
+            filters.toggles_for(name),
+            filters.CHOICE_PARAMS,
+        )
         for key, value in defaults.items():
             named = [table for table in kinds if key in table]
             assert len(named) <= 1, key
