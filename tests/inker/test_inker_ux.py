@@ -535,11 +535,18 @@ def test_every_folding_key_is_namespaced_to_this_pane() -> None:
 def test_the_inker_workspace_has_drag_handles_of_its_own() -> None:
     """Both of its shares were ``lay.settings_share`` and it had no splitter,
     so the only way to change the split was to switch to Create and drag the
-    handle there. One setting seen twice, not two settings to keep in step."""
+    handle there. One setting seen twice, not two settings to keep in step.
+
+    The handle ids are no longer written here to be found: every column goes
+    through ``main._split_column``, which derives the handle from the split's
+    own key, and ``tests/test_layout.py`` gates that for all twelve splits at
+    once. What this still pins is that Inker's two columns are *two* keys --
+    the specific pair whose collision started the whole finding.
+    """
     main = Path(inker_tools.__file__).resolve().parent.parent / "main.py"
     source = main.read_text(encoding="utf-8")
-    assert 'splitter("inker-sidebar-share"' in source
-    assert 'splitter("inker-inspector-share"' in source
+    assert 'split_id="inker-tools"' in source
+    assert 'split_id="inker-layers"' in source
 
 
 def test_the_share_gives_way_to_the_toolboxs_own_height() -> None:

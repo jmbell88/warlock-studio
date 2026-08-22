@@ -268,6 +268,7 @@ class Layout:
                 self.shares[str(key)] = min(max(float(value), SHARE_MIN), SHARE_MAX)
             except (TypeError, ValueError):
                 continue
+        self._migrate_shares()
         self.sidebar = set_sidebar(str(stored.get("sidebar", "default")))
         # Whether the navigation rail shows its labels. A *name* rather than a
         # width, exactly as ``sidebar`` is, so a stored value can never be a
@@ -279,6 +280,37 @@ class Layout:
         # control that would tell you is itself an unnamed glyph. A *stored*
         # "icons" still wins -- this moves the default, not anyone's choice.
         self.rail = "icons" if str(stored.get("rail", "labels")) == "icons" else "labels"
+
+    # A workspace that stacks two panes on the left *and* two on the right is
+    # two splits, and until now both read one key -- so dragging Clay's tools
+    # handle also re-split its outliner column, one pane the user was not
+    # looking at. The keying above already supported a key per split; the
+    # callers simply passed the same string twice.
+    #
+    # Seeded rather than dropped: an existing profile opens on exactly the
+    # proportion it had, on both of the splits the old key served, and they go
+    # their own way from there. The old key is then *deleted*, because
+    # :meth:`save` writes ``self.shares`` wholesale -- left in place it would
+    # be re-seeded from on every launch for ever, and a later build that
+    # reused the name would inherit a value from a split that no longer
+    # exists.
+    _SHARE_SPLITS: dict[str, tuple[str, ...]] = {
+        "clay": ("clay-tools", "clay-outliner"),
+        "plotter": ("plotter-tools", "plotter-layers"),
+        "troupe": ("troupe-cast", "troupe-sheets"),
+        "packwright": ("packwright-sources", "packwright-items"),
+        "review": ("review-runs",),
+        "create": ("create-inspector",),
+    }
+
+    def _migrate_shares(self) -> None:
+        """Split each retired one-per-workspace key across the splits it served."""
+        for old, new_keys in self._SHARE_SPLITS.items():
+            if old not in self.shares:
+                continue
+            value = self.shares.pop(old)
+            for key in new_keys:
+                self.shares.setdefault(key, value)
 
     def share(self, key: str) -> float:
         """The split ``key`` is drawn at -- its own, or the shared default.

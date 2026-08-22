@@ -9,6 +9,8 @@ and half-honour.
 
 from __future__ import annotations
 
+import ast
+import pathlib
 from typing import Any
 
 from warlock.studio import layout as layout_mod
@@ -141,10 +143,146 @@ def test_a_split_starts_at_the_shared_default_and_then_goes_its_own_way():
 
 def test_a_stored_split_is_clamped_and_junk_is_dropped():
     lay = layout_mod.Layout(
-        _Settings({"settings_shares": {"clay": 9.0, "review": "wide", "troupe": 0.42}})
+        _Settings(
+            {
+                "settings_shares": {
+                    "clay-tools": 9.0,
+                    "review-runs": "wide",
+                    "troupe-cast": 0.42,
+                }
+            }
+        )
     )
-    assert lay.share("clay") == layout_mod.SHARE_MAX
-    assert lay.share("review") == lay.settings_share
-    assert lay.share("troupe") == 0.42
-    lay.set_share("packwright", -3.0)
-    assert lay.share("packwright") == layout_mod.SHARE_MIN
+    assert lay.share("clay-tools") == layout_mod.SHARE_MAX
+    assert lay.share("review-runs") == lay.settings_share
+    assert lay.share("troupe-cast") == 0.42
+    lay.set_share("packwright-items", -3.0)
+    assert lay.share("packwright-items") == layout_mod.SHARE_MIN
+
+
+def test_a_retired_workspace_key_seeds_both_splits_it_used_to_serve():
+    """Clay, Plotter, Troupe and Packwright each stacked two panes on the left
+    *and* two on the right and read one key for both, so one handle moved a
+    column the user was not looking at. Two keys now -- seeded from the old
+    one, so an existing profile opens on the proportion it had."""
+    lay = layout_mod.Layout(_Settings({"settings_shares": {"clay": 0.31, "create": 0.62}}))
+    assert lay.share("clay-tools") == 0.31
+    assert lay.share("clay-outliner") == 0.31
+    assert lay.share("create-inspector") == 0.62
+    # Deleted, not left alongside: ``save`` writes ``shares`` wholesale, so a
+    # key left in place would be re-seeded from on every launch for ever.
+    assert "clay" not in lay.shares
+    assert "create" not in lay.shares
+
+
+def test_migration_never_overwrites_a_split_the_user_has_already_moved():
+    lay = layout_mod.Layout(
+        _Settings({"settings_shares": {"plotter": 0.30, "plotter-layers": 0.66}})
+    )
+    assert lay.share("plotter-tools") == 0.30
+    assert lay.share("plotter-layers") == 0.66
+
+
+# --- The keying, derived from the source rather than kept in step by hand ----
+#
+# Wave 0's whole finding was that ``Layout.shares`` had been keyed per split
+# since the day it was written, and the callers passed the same string twice
+# anyway. A list of expected keys maintained here would be one more thing to
+# forget beside them; these two read ``main.py`` and check the property.
+
+
+def _main_source() -> str:
+    from warlock.studio import main as main_mod
+
+    return pathlib.Path(main_mod.__file__).read_text(encoding="utf-8")
+
+
+def _share_literals() -> list[str]:
+    """Every string literal ``main.py`` names a split by.
+
+    Both spellings count: ``lay.share("x")`` in hand-built code, and
+    ``split_id="x"`` passed to ``_split_column``, which derives the ``share``
+    call and the handle's id from it.
+    """
+    tree = ast.parse(_main_source())
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr in {"share", "set_share"}
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+            ):
+                found.append(node.args[0].value)
+            for kw in node.keywords:
+                if kw.arg == "split_id" and isinstance(kw.value, ast.Constant):
+                    found.append(kw.value.value)
+        elif isinstance(node, ast.FunctionDef):
+            # ``_right_column``'s ``share_key`` default -- Create names its
+            # split in the signature and hands it straight to ``split_id``.
+            args = node.args
+            for name, default in zip(
+                args.kwonlyargs, args.kw_defaults, strict=True
+            ):
+                if name.arg == "share_key" and isinstance(default, ast.Constant):
+                    found.append(default.value)
+    return found
+
+
+def _splitter_ids() -> list[str]:
+    tree = ast.parse(_main_source())
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr == "splitter" and node.args:
+            arg = node.args[0]
+            if isinstance(arg, ast.Constant):
+                found.append(arg.value)
+            elif isinstance(arg, ast.JoinedStr):
+                # ``f"{split_id}-share"`` -- the derived form. Recorded by the
+                # suffix it contributes, since the id itself is not a literal.
+                found.append("<derived>")
+    return found
+
+
+def test_no_split_key_is_used_by_two_splits():
+    """The defect this wave fixed, stated so it cannot come back by copy-paste:
+    Clay, Plotter, Troupe, Packwright and Review each passed one key to both
+    their left and their right column."""
+    literals = _share_literals()
+    duplicates = sorted({key for key in literals if literals.count(key) > 1})
+    assert not duplicates, f"one key serving two splits: {duplicates}"
+
+
+def test_every_split_has_a_handle_and_every_handle_a_split():
+    """Six of seven workspaces drew a proportion with no way to change it.
+
+    ``_split_column`` derives the handle's id from ``split_id``, so the check
+    is that nothing builds a split outside it -- a hand-built ``lay.share``
+    with no matching ``splitter`` is a proportion the user cannot drag, and a
+    hand-built ``splitter`` with no share is a handle that moves nothing.
+    """
+    ids = _splitter_ids()
+    assert ids == ["<derived>"], (
+        "every column's handle should come from _split_column, which derives "
+        f"its id from split_id; hand-built splitters found: {sorted(set(ids))}"
+    )
+    keys = set(_share_literals())
+    assert keys == {
+        "clay-tools",
+        "clay-outliner",
+        "create-inspector",
+        "inker-tools",
+        "inker-layers",
+        "packwright-sources",
+        "packwright-items",
+        "plotter-tools",
+        "plotter-layers",
+        "review-runs",
+        "troupe-cast",
+        "troupe-sheets",
+    }

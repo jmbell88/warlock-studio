@@ -428,24 +428,44 @@ def filter_shortcuts(
     return out
 
 
-def _right_column(
+def _split_column(
     ctx: Any,
     lay: Any,
-    sidebar_w: float,
     *,
-    inspector_draw: Callable[[Any], None],
-    library_draw: Callable[[Any], None],
-    share_key: str = "create",
+    split_id: str,
+    handle_length: float,
+    width: float,
+    edge: Any,
+    top: tuple[str, Any, Callable[[Any], None]],
+    bottom: tuple[str, Any, Callable[[Any], None]],
+    before: tuple[str, Any, Callable[[Any], None], float] | None = None,
+    middle: tuple[str, Any, Callable[[Any], None], float] | None = None,
+    wanted: float | None = None,
+    below_floor: float = 0.0,
 ) -> None:
-    """The right sidebar: inspector on top, library on bottom.
+    """One column of stacked panes with a drag handle between them.
 
-    Split by ``lay.share(share_key)`` -- the same split the left sidebar used
-    to make between settings and library, before the library moved to share
-    this column with the inspector instead. Keyed, because one number behind
-    every workspace's split meant a handle here re-split six other screens
-    (see ``Layout.share``). Pulled out of ``App._build_ui`` as a
-    module-level function (no ``self`` needed) so a test can call the exact
-    geometry the frame draws rather than a hand-copied reimplementation of it.
+    Every workspace builds the same shape twice -- a pane sized from a share,
+    a pane taking what is left -- and each built it by hand. Two consequences
+    the one function fixes at the source:
+
+    * **A key per split.** ``split_id`` names *this* column, and the handle's
+      id is derived from it (``f"{split_id}-share"``) rather than passed. So
+      the two can no longer disagree, and a second column cannot be given the
+      first one's key by copying the block.
+    * **A handle at all.** Six of the seven workspaces drew a proportion the
+      user could not change, because only the three columns that had a
+      ``splitter`` call got one. It is drawn here, so having a split *is*
+      having a handle.
+
+    ``avail_y`` is captured before the first sized pane and after ``before``,
+    which is the height the shares are really taken out of; measuring it after
+    the top pane divides the drag delta by a height that pane already spent,
+    and the handle then travels at the wrong rate.
+
+    ``wanted``/``below_floor`` turn the plain proportion into Inker's give-way
+    split, where a pane with a known minimum content height wins over the
+    stored share and the pane beneath it keeps a floor of its own.
     """
     from imgui_bundle import imgui
 
@@ -453,26 +473,71 @@ def _right_column(
     from . import tokens
 
     imgui.begin_group()
+    if before is not None:
+        name, role, draw_fn, height = before
+        with layout_mod.pane(name, (width, height), role, edge=edge) as visible:
+            if visible:
+                draw_fn(ctx)
     avail_y = imgui.get_content_region_avail().y
-    inspector_height = avail_y * lay.share(share_key)
-    with layout_mod.pane(
-        "inspector",
-        (0, inspector_height),
-        layout_mod.PaneRole.INSPECTOR,
-        edge=layout_mod.PaneEdge.LEFT,
-    ) as visible:
+    if wanted is None:
+        top_height = avail_y * lay.share(split_id)
+    else:
+        top_height = layout_mod.give_way(avail_y, lay.share(split_id), wanted, below_floor)
+    with layout_mod.pane(top[0], (width, top_height), top[1], edge=edge) as visible:
         if visible:
-            inspector_draw(ctx)
-    drag = layout_mod.splitter("sidebar-share", vertical=False, length=sidebar_w)
+            top[2](ctx)
+    drag = layout_mod.splitter(f"{split_id}-share", vertical=False, length=handle_length)
     if drag and avail_y > 0:
-        lay.set_share(share_key, lay.share(share_key) + drag * tokens.SCALE / avail_y)
-        lay.save()
-    with layout_mod.pane(
-        "library", (0, 0), layout_mod.PaneRole.SIDEBAR, edge=layout_mod.PaneEdge.LEFT
-    ) as visible:
+        if wanted is None:
+            share = lay.share(split_id) + drag * tokens.SCALE / avail_y
+        else:
+            # ``give_way_drag`` leaves the share alone whenever the pane under
+            # the handle is pinned by its content and cannot follow the cursor.
+            share = layout_mod.give_way_drag(
+                avail_y, lay.share(split_id), wanted, below_floor, drag * tokens.SCALE
+            )
+        previous = lay.share(split_id)
+        lay.set_share(split_id, share)
+        if lay.share(split_id) != previous:
+            lay.save()
+    if middle is not None:
+        name, role, draw_fn, height = middle
+        with layout_mod.pane(name, (width, height), role, edge=edge) as visible:
+            if visible:
+                draw_fn(ctx)
+    with layout_mod.pane(bottom[0], (width, 0), bottom[1], edge=edge) as visible:
         if visible:
-            library_draw(ctx)
+            bottom[2](ctx)
     imgui.end_group()
+
+
+def _right_column(
+    ctx: Any,
+    lay: Any,
+    sidebar_w: float,
+    *,
+    inspector_draw: Callable[[Any], None],
+    library_draw: Callable[[Any], None],
+    share_key: str = "create-inspector",
+) -> None:
+    """The right sidebar: inspector on top, library on bottom.
+
+    Kept as its own name because it is the one column a test drives directly
+    -- it is :func:`_split_column` with Create's two panes filled in, and the
+    geometry the frame draws is therefore the geometry the test measures.
+    """
+    from . import layout as layout_mod
+
+    _split_column(
+        ctx,
+        lay,
+        split_id=share_key,
+        handle_length=sidebar_w,
+        width=0,
+        edge=layout_mod.PaneEdge.LEFT,
+        top=("inspector", layout_mod.PaneRole.INSPECTOR, inspector_draw),
+        bottom=("library", layout_mod.PaneRole.SIDEBAR, library_draw),
+    )
 
 
 def _stage_pane(ctx: Any) -> None:
@@ -3250,25 +3315,16 @@ class App:
         lay = self.layout
         sidebar_w = layout_mod.sidebar_width()
 
-        imgui.begin_group()
-        tools_height = imgui.get_content_region_avail().y * lay.share("clay")
-        with layout_mod.pane(
-            "clay-tools",
-            (sidebar_w, tools_height),
-            layout_mod.PaneRole.SIDEBAR,
+        _split_column(
+            ctx,
+            lay,
+            split_id="clay-tools",
+            handle_length=sidebar_w,
+            width=sidebar_w,
             edge=layout_mod.PaneEdge.RIGHT,
-        ) as visible:
-            if visible:
-                clay_tools.draw(ctx)
-        with layout_mod.pane(
-            "clay-props",
-            (sidebar_w, 0),
-            layout_mod.PaneRole.SIDEBAR,
-            edge=layout_mod.PaneEdge.RIGHT,
-        ) as visible:
-            if visible:
-                clay_props.draw(ctx)
-        imgui.end_group()
+            top=("clay-tools", layout_mod.PaneRole.SIDEBAR, clay_tools.draw),
+            bottom=("clay-props", layout_mod.PaneRole.SIDEBAR, clay_props.draw),
+        )
 
         imgui.same_line()
         width = layout_mod.centre_width()
@@ -3283,25 +3339,16 @@ class App:
                 self._clay_viewport(ctx, clay_mode, widgets)
 
         imgui.same_line()
-        imgui.begin_group()
-        outliner_height = imgui.get_content_region_avail().y * lay.share("clay")
-        with layout_mod.pane(
-            "clay-outliner",
-            (0, outliner_height),
-            layout_mod.PaneRole.INSPECTOR,
+        _split_column(
+            ctx,
+            lay,
+            split_id="clay-outliner",
+            handle_length=sidebar_w,
+            width=0,
             edge=layout_mod.PaneEdge.LEFT,
-        ) as visible:
-            if visible:
-                clay_outliner.draw(ctx)
-        with layout_mod.pane(
-            "clay-bridge",
-            (0, 0),
-            layout_mod.PaneRole.INSPECTOR,
-            edge=layout_mod.PaneEdge.LEFT,
-        ) as visible:
-            if visible:
-                clay_bridge.draw(ctx)
-        imgui.end_group()
+            top=("clay-outliner", layout_mod.PaneRole.INSPECTOR, clay_outliner.draw),
+            bottom=("clay-bridge", layout_mod.PaneRole.INSPECTOR, clay_bridge.draw),
+        )
 
     def _clay_viewport(self, ctx: Any, clay_mode: Any, widgets: Any) -> None:
         from imgui_bundle import imgui
@@ -3461,7 +3508,6 @@ class App:
         from imgui_bundle import imgui
 
         from . import layout as layout_mod
-        from . import tokens as tokens_mod
         from .panes import (
             inker_bridge,
             inker_canvas,
@@ -3487,94 +3533,44 @@ class App:
         # *verbs* that make the first tileset are not hidden with it -- they are
         # in the bridge panel, which is always drawn.
         tiled_doc = tab is not None and bool(tab.doc.tilesets)
-        imgui.begin_group()
-        # **A drag handle, at last.** The two shares in this workspace have
-        # always been ``lay.settings_share``, and this workspace has never had a
-        # splitter -- so the only way an Inker user could change the split was
-        # to switch to Create and drag the handle *there*. It bites hardest at
-        # UI scale 1.5, where the toolbox grid alone is most of the 55% and the
-        # Brush section starts below the fold: a screenshot pass found the tool
-        # options unreachable without scrolling, and there was no way to give
-        # them room.
-        #
-        # It used to be the same *value* as Create's, on the argument that two
-        # handles over one setting is better than two settings to keep in step.
-        # That was the wrong pair to compare: this handle also drove Clay,
-        # Plotter, Packwright, Troupe, Review and the right column two panes
-        # over, none of which the user can see while dragging it. Its own key
-        # now, and the same clamps as before.
-        avail_y = imgui.get_content_region_avail().y
         # **The share is a preference, not a promise.** The toolbox is a fixed
-        # five-across grid of twenty-three buttons, so its height is known --
-        # and at UI scale 1.5 it is very nearly the whole 55% this pane used to
-        # be given, which left the Brush heading at the bottom edge with its
-        # first control cut in half. The pane scrolls, so nothing was
-        # unreachable; it simply looked broken, and the panel a user reaches for
-        # most was the one below the fold.
+        # grid whose height is known, and at UI scale 1.5 it is very nearly the
+        # whole 55% this pane used to be given, which left the Brush heading at
+        # the bottom edge with its first control cut in half. So the share is
+        # honoured when it is generous enough and overridden when it is not:
+        # the toolbox plus a floor of options wins, and the colour panel below
+        # keeps a floor of its own so this cannot swallow it on a short window.
+        # Same shape as the sidebar/centre give-way rule in INVARIANTS.md,
+        # applied down a column instead of across a row.
         #
-        # So the share is honoured when it is generous enough and overridden
-        # when it is not: the toolbox plus a floor of options wins, and the
-        # colour panel below keeps a floor of its own so this cannot swallow it
-        # on a short window. Same shape as the sidebar/centre give-way rule in
-        # INVARIANTS.md, applied down a column instead of across a row.
         # The tile panel's fixed height joins the *floor* the toolbox has to
         # give way to rather than being carved out of the colour panel: it sits
         # between the two, so without this the give-way arithmetic would hand
         # the toolbox room the tile panel then took, and the colour panel would
         # end up below its own floor on a short window.
         below_floor = inker_colors.PANEL_FLOOR + (inker_tiles.PANEL_H if tiled_doc else 0.0)
-        tools_height = layout_mod.give_way(
-            avail_y,
-            lay.share("inker-tools"),
-            sp(inker_tools.grid_height() + inker_tools.OPTIONS_FLOOR),
-            sp(below_floor),
+        _split_column(
+            ctx,
+            lay,
+            split_id="inker-tools",
+            handle_length=sidebar_w,
+            width=sidebar_w,
+            edge=layout_mod.PaneEdge.RIGHT,
+            top=("inker-tools", layout_mod.PaneRole.SIDEBAR, inker_tools.draw),
+            middle=(
+                (
+                    "inker-tiles",
+                    layout_mod.PaneRole.SIDEBAR,
+                    inker_tiles.draw,
+                    sp(inker_tiles.PANEL_H),
+                )
+                if tiled_doc
+                else None
+            ),
+            bottom=("inker-colors", layout_mod.PaneRole.SIDEBAR, inker_colors.draw),
+            wanted=sp(inker_tools.grid_height() + inker_tools.OPTIONS_FLOOR),
+            below_floor=sp(below_floor),
         )
-        with layout_mod.pane(
-            "inker-tools",
-            (sidebar_w, tools_height),
-            layout_mod.PaneRole.SIDEBAR,
-            edge=layout_mod.PaneEdge.RIGHT,
-        ) as visible:
-            if visible:
-                inker_tools.draw(ctx)
-        drag = layout_mod.splitter("inker-sidebar-share", vertical=False, length=sidebar_w)
-        if drag and avail_y > 0:
-            # Applied to the height the pane is actually drawn at, not to the
-            # stored share: ``give_way`` above can pin the tools pane, and a
-            # drag measured against the stored share then updated a share this
-            # handle was not moving -- zero travel under the cursor while the
-            # right column's layers/bridge split resized in real time. That
-            # second half is gone for good: the two columns are two keys now.
-            # ``give_way_drag`` leaves the share alone whenever the pane under
-            # the handle cannot follow.
-            share = layout_mod.give_way_drag(
-                avail_y,
-                lay.share("inker-tools"),
-                sp(inker_tools.grid_height() + inker_tools.OPTIONS_FLOOR),
-                sp(below_floor),
-                drag * tokens_mod.SCALE,
-            )
-            if share != lay.share("inker-tools"):
-                lay.set_share("inker-tools", share)
-                lay.save()
-        if tiled_doc:
-            with layout_mod.pane(
-                "inker-tiles",
-                (sidebar_w, sp(inker_tiles.PANEL_H)),
-                layout_mod.PaneRole.SIDEBAR,
-                edge=layout_mod.PaneEdge.RIGHT,
-            ) as visible:
-                if visible:
-                    inker_tiles.draw(ctx)
-        with layout_mod.pane(
-            "inker-colors",
-            (sidebar_w, 0),
-            layout_mod.PaneRole.SIDEBAR,
-            edge=layout_mod.PaneEdge.RIGHT,
-        ) as visible:
-            if visible:
-                inker_colors.draw(ctx)
-        imgui.end_group()
 
         imgui.same_line()
         width = layout_mod.centre_width()
@@ -3617,53 +3613,35 @@ class App:
         imgui.end_group()
 
         imgui.same_line()
-        imgui.begin_group()
         # Above the layer panel and only for an animated document, so a still
         # document's right column is byte-for-byte what it always was -- the
         # same rule the timeline strip follows on the other side. A fixed
         # height rather than a share of the column: it is a picture of the
         # canvas, and a preview that grew with the window would push the layer
         # list off the bottom on a short screen.
-        if animated:
-            with layout_mod.pane(
-                "inker-preview",
-                (0, sp(inker_preview.PREVIEW_H)),
-                layout_mod.PaneRole.INSPECTOR,
-                edge=layout_mod.PaneEdge.LEFT,
-            ) as visible:
-                if visible:
-                    inker_preview.draw(ctx)
-        right_avail = imgui.get_content_region_avail().y
-        layers_height = right_avail * lay.share("inker-layers")
-        with layout_mod.pane(
-            "inker-layers",
-            (0, layers_height),
-            layout_mod.PaneRole.INSPECTOR,
+        _split_column(
+            ctx,
+            lay,
+            split_id="inker-layers",
+            handle_length=sidebar_w,
+            width=0,
             edge=layout_mod.PaneEdge.LEFT,
-        ) as visible:
-            if visible:
-                inker_layers.draw(ctx)
-        # The layer *list* is the thing this frees: at 1.5 the panel's own
-        # header, blend and opacity fill the pane and every layer is below the
-        # fold, on a panel whose entire job is picking one.
-        drag = layout_mod.splitter("inker-inspector-share", vertical=False, length=sidebar_w)
-        if drag and right_avail > 0:
-            # ``set_share`` clamps, so the min/max pair this used to spell out
-            # by hand went with the move.
-            lay.set_share(
-                "inker-layers",
-                lay.share("inker-layers") + drag * tokens_mod.SCALE / right_avail,
-            )
-            lay.save()
-        with layout_mod.pane(
-            "inker-bridge",
-            (0, 0),
-            layout_mod.PaneRole.INSPECTOR,
-            edge=layout_mod.PaneEdge.LEFT,
-        ) as visible:
-            if visible:
-                inker_bridge.draw(ctx)
-        imgui.end_group()
+            before=(
+                (
+                    "inker-preview",
+                    layout_mod.PaneRole.INSPECTOR,
+                    inker_preview.draw,
+                    sp(inker_preview.PREVIEW_H),
+                )
+                if animated
+                else None
+            ),
+            # The layer *list* is what the handle frees: at 1.5 the panel's own
+            # header, blend and opacity fill the pane and every layer is below
+            # the fold, on a panel whose entire job is picking one.
+            top=("inker-layers", layout_mod.PaneRole.INSPECTOR, inker_layers.draw),
+            bottom=("inker-bridge", layout_mod.PaneRole.INSPECTOR, inker_bridge.draw),
+        )
 
     def _plotter_workspace(self) -> None:
         """The same sidebar / centre / sidebar skeleton every other mode uses:
@@ -3689,25 +3667,16 @@ class App:
         lay = self.layout
         sidebar_w = layout_mod.sidebar_width()
 
-        imgui.begin_group()
-        tools_height = imgui.get_content_region_avail().y * lay.share("plotter")
-        with layout_mod.pane(
-            "plotter-tools",
-            (sidebar_w, tools_height),
-            layout_mod.PaneRole.SIDEBAR,
+        _split_column(
+            ctx,
+            lay,
+            split_id="plotter-tools",
+            handle_length=sidebar_w,
+            width=sidebar_w,
             edge=layout_mod.PaneEdge.RIGHT,
-        ) as visible:
-            if visible:
-                plotter_tools.draw(ctx)
-        with layout_mod.pane(
-            "plotter-tileset",
-            (sidebar_w, 0),
-            layout_mod.PaneRole.SIDEBAR,
-            edge=layout_mod.PaneEdge.RIGHT,
-        ) as visible:
-            if visible:
-                plotter_tileset.draw(ctx)
-        imgui.end_group()
+            top=("plotter-tools", layout_mod.PaneRole.SIDEBAR, plotter_tools.draw),
+            bottom=("plotter-tileset", layout_mod.PaneRole.SIDEBAR, plotter_tileset.draw),
+        )
 
         imgui.same_line()
         width = layout_mod.centre_width()
@@ -3722,25 +3691,16 @@ class App:
                 plotter_canvas.draw(ctx)
 
         imgui.same_line()
-        imgui.begin_group()
-        layers_height = imgui.get_content_region_avail().y * lay.share("plotter")
-        with layout_mod.pane(
-            "plotter-layers",
-            (0, layers_height),
-            layout_mod.PaneRole.INSPECTOR,
+        _split_column(
+            ctx,
+            lay,
+            split_id="plotter-layers",
+            handle_length=sidebar_w,
+            width=0,
             edge=layout_mod.PaneEdge.LEFT,
-        ) as visible:
-            if visible:
-                plotter_layers.draw(ctx)
-        with layout_mod.pane(
-            "plotter-bridge",
-            (0, 0),
-            layout_mod.PaneRole.INSPECTOR,
-            edge=layout_mod.PaneEdge.LEFT,
-        ) as visible:
-            if visible:
-                plotter_bridge.draw(ctx)
-        imgui.end_group()
+            top=("plotter-layers", layout_mod.PaneRole.INSPECTOR, plotter_layers.draw),
+            bottom=("plotter-bridge", layout_mod.PaneRole.INSPECTOR, plotter_bridge.draw),
+        )
 
     def _troupe_workspace(self) -> None:
         """The same skeleton the other five use:
@@ -3766,25 +3726,16 @@ class App:
         lay = self.layout
         sidebar_w = layout_mod.sidebar_width()
 
-        imgui.begin_group()
-        cast_height = imgui.get_content_region_avail().y * lay.share("troupe")
-        with layout_mod.pane(
-            "troupe-cast",
-            (sidebar_w, cast_height),
-            layout_mod.PaneRole.SIDEBAR,
+        _split_column(
+            ctx,
+            lay,
+            split_id="troupe-cast",
+            handle_length=sidebar_w,
+            width=sidebar_w,
             edge=layout_mod.PaneEdge.RIGHT,
-        ) as visible:
-            if visible:
-                troupe_characters.draw(ctx)
-        with layout_mod.pane(
-            "troupe-settings",
-            (sidebar_w, 0),
-            layout_mod.PaneRole.SIDEBAR,
-            edge=layout_mod.PaneEdge.RIGHT,
-        ) as visible:
-            if visible:
-                troupe_settings.draw(ctx)
-        imgui.end_group()
+            top=("troupe-cast", layout_mod.PaneRole.SIDEBAR, troupe_characters.draw),
+            bottom=("troupe-settings", layout_mod.PaneRole.SIDEBAR, troupe_settings.draw),
+        )
 
         imgui.same_line()
         width = layout_mod.centre_width()
@@ -3801,25 +3752,16 @@ class App:
                 troupe_preview.draw(ctx)
 
         imgui.same_line()
-        imgui.begin_group()
-        sheets_height = imgui.get_content_region_avail().y * lay.share("troupe")
-        with layout_mod.pane(
-            "troupe-sheets",
-            (0, sheets_height),
-            layout_mod.PaneRole.INSPECTOR,
+        _split_column(
+            ctx,
+            lay,
+            split_id="troupe-sheets",
+            handle_length=sidebar_w,
+            width=0,
             edge=layout_mod.PaneEdge.LEFT,
-        ) as visible:
-            if visible:
-                troupe_sheets.draw(ctx)
-        with layout_mod.pane(
-            "troupe-bridge",
-            (0, 0),
-            layout_mod.PaneRole.INSPECTOR,
-            edge=layout_mod.PaneEdge.LEFT,
-        ) as visible:
-            if visible:
-                troupe_bridge.draw(ctx)
-        imgui.end_group()
+            top=("troupe-sheets", layout_mod.PaneRole.INSPECTOR, troupe_sheets.draw),
+            bottom=("troupe-bridge", layout_mod.PaneRole.INSPECTOR, troupe_bridge.draw),
+        )
 
     def _packwright_workspace(self) -> None:
         """The same skeleton again:
@@ -3845,25 +3787,16 @@ class App:
         lay = self.layout
         sidebar_w = layout_mod.sidebar_width()
 
-        imgui.begin_group()
-        sources_height = imgui.get_content_region_avail().y * lay.share("packwright")
-        with layout_mod.pane(
-            "packwright-sources",
-            (sidebar_w, sources_height),
-            layout_mod.PaneRole.SIDEBAR,
+        _split_column(
+            ctx,
+            lay,
+            split_id="packwright-sources",
+            handle_length=sidebar_w,
+            width=sidebar_w,
             edge=layout_mod.PaneEdge.RIGHT,
-        ) as visible:
-            if visible:
-                packwright_sources.draw(ctx)
-        with layout_mod.pane(
-            "packwright-settings",
-            (sidebar_w, 0),
-            layout_mod.PaneRole.SIDEBAR,
-            edge=layout_mod.PaneEdge.RIGHT,
-        ) as visible:
-            if visible:
-                packwright_settings.draw(ctx)
-        imgui.end_group()
+            top=("packwright-sources", layout_mod.PaneRole.SIDEBAR, packwright_sources.draw),
+            bottom=("packwright-settings", layout_mod.PaneRole.SIDEBAR, packwright_settings.draw),
+        )
 
         imgui.same_line()
         width = layout_mod.centre_width()
@@ -3878,25 +3811,16 @@ class App:
                 packwright_preview.draw(ctx)
 
         imgui.same_line()
-        imgui.begin_group()
-        items_height = imgui.get_content_region_avail().y * lay.share("packwright")
-        with layout_mod.pane(
-            "packwright-items",
-            (0, items_height),
-            layout_mod.PaneRole.INSPECTOR,
+        _split_column(
+            ctx,
+            lay,
+            split_id="packwright-items",
+            handle_length=sidebar_w,
+            width=0,
             edge=layout_mod.PaneEdge.LEFT,
-        ) as visible:
-            if visible:
-                packwright_items.draw(ctx)
-        with layout_mod.pane(
-            "packwright-bridge",
-            (0, 0),
-            layout_mod.PaneRole.INSPECTOR,
-            edge=layout_mod.PaneEdge.LEFT,
-        ) as visible:
-            if visible:
-                packwright_bridge.draw(ctx)
-        imgui.end_group()
+            top=("packwright-items", layout_mod.PaneRole.INSPECTOR, packwright_items.draw),
+            bottom=("packwright-bridge", layout_mod.PaneRole.INSPECTOR, packwright_bridge.draw),
+        )
 
     def _review_workspace(self) -> None:
         """The same sidebar / centre / sidebar skeleton every other mode uses:
@@ -3920,25 +3844,24 @@ class App:
         lay = self.layout
         sidebar_w = layout_mod.sidebar_width()
 
-        imgui.begin_group()
-        runs_height = imgui.get_content_region_avail().y * lay.share("review")
-        with layout_mod.pane(
-            "review-runs",
-            (sidebar_w, runs_height),
-            layout_mod.PaneRole.SIDEBAR,
+        _split_column(
+            ctx,
+            lay,
+            split_id="review-runs",
+            handle_length=sidebar_w,
+            width=sidebar_w,
             edge=layout_mod.PaneEdge.RIGHT,
-        ) as visible:
-            if visible:
-                self._review_runs(ctx, state, review_mode)
-        with layout_mod.pane(
-            "review-units",
-            (sidebar_w, 0),
-            layout_mod.PaneRole.SIDEBAR,
-            edge=layout_mod.PaneEdge.RIGHT,
-        ) as visible:
-            if visible:
-                self._review_units(state, review_mode)
-        imgui.end_group()
+            top=(
+                "review-runs",
+                layout_mod.PaneRole.SIDEBAR,
+                lambda _ctx: self._review_runs(ctx, state, review_mode),
+            ),
+            bottom=(
+                "review-units",
+                layout_mod.PaneRole.SIDEBAR,
+                lambda _ctx: self._review_units(state, review_mode),
+            ),
+        )
 
         imgui.same_line()
         width = layout_mod.centre_width()
