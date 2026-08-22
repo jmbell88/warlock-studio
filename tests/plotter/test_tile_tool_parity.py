@@ -385,3 +385,76 @@ def test_the_blob_neighbourhood_is_a_square_lattices() -> None:
     # because the lattice is square.
     assert masks[0, 0] & blob.SE
     assert not masks[0, 0] & blob.N
+
+
+# -- an infinite map has no edge, so it neither wraps nor clears --------------
+
+
+def _infinite(width: int = 8, height: int = 8):
+    doc = _doc(width, height)
+    doc.set_infinite(True)
+    return doc
+
+
+def test_wrapping_an_infinite_map_is_refused_by_name() -> None:
+    """``np.roll`` over a *window* whose size and position are an artifact of
+    painting history: two documents with identical true content offset
+    differently depending on how they happened to be framed."""
+
+    import pytest
+
+    doc = _infinite()
+    with pytest.raises(ValueError, match="no edge to wrap around"):
+        doc.offset(2, 0, wrap=True)
+
+
+def test_an_infinite_whole_map_offset_slides_the_origin_and_loses_nothing() -> None:
+    """The clear-what-was-vacated branch discarded content pushed past a line
+    that does not exist. On an infinite map the shift is a translation: the
+    window's corner moves and every array stays exactly as it was."""
+
+    doc = _infinite()
+    layer = doc.tile_layers()[0]
+    doc.write_region(layer.uid, 0, 0, np.array([[5]], gidlib.DTYPE))
+    before = np.array(doc.tile_layers()[0].data)
+    origin = (doc.origin_x, doc.origin_y)
+
+    assert doc.offset(-3, -2, wrap=False) is True
+    assert np.array_equal(doc.tile_layers()[0].data, before), "no cell was lost"
+    assert (doc.origin_x, doc.origin_y) == (origin[0] + 3, origin[1] + 2)
+
+
+def test_an_infinite_offset_is_one_undo_step_that_puts_the_origin_back() -> None:
+    """The old ``ResizeEdit`` push omitted both origin fields, so even where
+    the shift happened to be lossless the undo left every cell at a different
+    true coordinate than it was painted at."""
+
+    doc = _infinite()
+    origin = (doc.origin_x, doc.origin_y)
+    assert doc.offset(2, 3, wrap=False) is True
+    assert doc.undo() is True
+    assert (doc.origin_x, doc.origin_y) == origin
+
+
+def test_an_infinite_layer_offset_grows_the_window_rather_than_clipping() -> None:
+    """Layer scope cannot be an origin slide -- that would move every layer --
+    so the window grows by exactly what the shifted layer needs, as one step,
+    and the untouched layers keep their true coordinates."""
+
+    doc = _infinite()
+    lower = doc.tile_layers()[0]
+    upper = doc.add_tile_layer("Upper")
+    doc.write_region(lower.uid, 0, 0, np.array([[9]], gidlib.DTYPE))
+    doc.write_region(upper.uid, 7, 0, np.array([[5]], gidlib.DTYPE))
+    doc.set_active_layer(upper.uid)
+    origin_x = doc.origin_x
+
+    assert doc.offset(3, 0, wrap=False, scope="layer") is True
+    assert doc.width == 11, "the window grew to hold the shifted cell"
+    assert int(np.asarray(doc.layer(upper.uid).data).sum()) == 5, "nothing was lost"
+    # The lower layer did not move, and the origin did not have to move either:
+    # the growth was all on the right-hand side.
+    assert doc.origin_x == origin_x
+    assert int(doc.layer(lower.uid).data[0, 0]) == 9
+    assert doc.undo() is True
+    assert doc.width == 8

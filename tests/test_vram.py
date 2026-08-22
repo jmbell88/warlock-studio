@@ -148,15 +148,25 @@ def test_a_retexture_costs_one_img2img_pass_and_never_trellis():
     assert with_control == pytest.approx(exclusive + vram.CONTROLNET_GIB)
 
 
-def test_a_retexture_charges_the_ip_encoder_when_identity_is_asked_for():
-    """The optional "match the original reference" knob loads CLIP-ViT-H
-    beside the pipe; unpriced it would be admitted for free and OOM exactly
-    when combined with the depth ControlNet."""
+def test_a_retexture_has_no_ip_encoder_term_because_no_door_writes_one():
+    """The branch that charged ``IP_ENCODER_GIB`` here was unreachable:
+    ``service._jobs_rework.retexture_job`` is the only door that creates a
+    ``retexture`` job and it neither accepts nor writes ``ip_adapter``, so the
+    condition was always false and the estimate was already correct.
+
+    Asserted from the door rather than only from the arithmetic: if a re-texture
+    ever *does* grow an identity knob, this is what says the estimate has to
+    grow with it.
+    """
+    import inspect
+
+    from warlock.service import _jobs_rework
+
+    assert "ip_adapter" not in inspect.getsource(_jobs_rework.retexture_job)
     plain = vram.estimate("retexture", "model", {}, exclusive=True)
-    with_ip = vram.estimate(
+    assert vram.estimate(
         "retexture", "model", {"ip_adapter": "plus"}, exclusive=True
-    )
-    assert with_ip == pytest.approx(plain + vram.IP_ENCODER_GIB)
+    ) == pytest.approx(plain)
 
 
 def test_a_retexture_is_priced_from_the_registry_not_from_sdxl():

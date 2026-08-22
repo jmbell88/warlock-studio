@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Any
 from .. import rigging
 from ..clips import expand_clips
 from ..pipelines import charsheet, pixelize, spritesynth
-from .errors import Conflict, Invalid, NotFound, invalid_from
+from .errors import Conflict, Invalid, invalid_from
 from .validation import check_job_id, check_vram
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -296,15 +296,9 @@ def create_charsheet(
     return {"id": new_id, "source_job": job_id, "sheet_id": params["sheet_id"]}
 
 
-def get_charsheet(svc: WarlockService, job_id: str, sheet_id: str) -> dict[str, Any]:
-    """One rendered character sheet's sidecar.
-
-    Delegated to ``sheets.get_sheet`` -- a Troupe sheet *is* a sheet -- and
-    kept here as a name so a Troupe pane never has to know that.
-    """
-    from . import sheets
-
-    record = sheets.get_sheet(svc, job_id, sheet_id)
-    if not (record.get("animation") or {}).get("tags"):
-        raise NotFound("that sheet is not a character sheet")
-    return record
+# ``get_charsheet`` was deleted on 2026-08-22. It delegated to
+# ``sheets.get_sheet`` so a Troupe pane would not have to know that a Troupe
+# sheet *is* a sheet -- and all three of its would-be callers
+# (``packwright_mode``, ``inker_mode``, ``panes.sheet_panel``) called
+# ``sheets.get_sheet`` directly anyway, which is the thing it existed to spare
+# them. A wrapper nobody reaches for is a second answer to drift from.

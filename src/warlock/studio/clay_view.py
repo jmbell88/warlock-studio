@@ -379,9 +379,6 @@ class ClayView(CacheOps, BoundsOps, PickOps, OverlayOps, DragOps):
     def screenshot(self) -> Any:
         return capture.image(self.viewport)
 
-    def thumbnail_png(self) -> bytes:
-        return capture.png_bytes(self.viewport)
-
     def release(self) -> None:
         self.clear()
         self._release_overlays()

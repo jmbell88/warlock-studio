@@ -13,6 +13,7 @@ import io
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 
@@ -94,6 +95,34 @@ def test_a_refused_upload_leaves_no_input_png(svc):
     with pytest.raises(Invalid):
         svc_jobs.create_job(svc, kind="image", image=_png_bytes(), output="model")
     assert not list(svc.config.data_dir.glob("*/input.png"))
+
+
+def test_an_upload_is_written_before_the_store_lock_is_taken(svc):
+    """``transaction()`` holds the connection lock for its whole body, and the
+    frame thread reaches that same lock synchronously every tick
+    (``JobsCache.tick`` -> ``list_jobs`` -> ``JobStore.list``).
+
+    ``create_job`` used to do its ``input.png``/``ref.png`` writes *inside* the
+    savepoint -- up to eight iterations of up to 20 MB each -- so a submission
+    with an uploaded image froze the window for the length of the write. Only
+    the row inserts need the savepoint's atomicity, and the file-before-row
+    ordering the worker's poll depends on is stronger this way, not weaker.
+    """
+    seen: list[bool] = []
+    real_write = Path.write_bytes
+
+    def watched(self, blob):
+        if self.name in ("input.png", "ref.png"):
+            # Not held: another thread can take it right now.
+            seen.append(svc.store._lock.acquire(blocking=False))
+            if seen[-1]:
+                svc.store._lock.release()
+        return real_write(self, blob)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(Path, "write_bytes", watched)
+        svc_jobs.create_job(svc, kind="image", image=_png_bytes(), output="model")
+    assert seen and all(seen), "the store lock was held across a payload write"
 
 
 def test_a_reference_still_fits_a_card_a_reconstruction_does_not(svc):

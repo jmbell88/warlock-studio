@@ -97,3 +97,7 @@ def _skeleton_picker(ctx: Any) -> None:
             "proportion unless the mesh's own landmarks are found."
         ),
     )
+    # ``settings_3d``'s reason: ``service/rig.py`` and ``service/poses.py``
+    # both refuse on ``rig_template``, and a generic toast that leaves the
+    # dropdown at fault unmarked is the one failure the form cannot point at.
+    widgets.field_error(ctx.state, "rig_template")

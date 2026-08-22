@@ -896,25 +896,7 @@ def discard_rig_temps(job_dir: Path) -> None:
 
 
 def read_rig(job_dir: Path) -> dict[str, Any] | None:
-    path = job_dir / "rig.json"
-    if not path.exists():
-        return None
-    try:
-        size = path.stat().st_size
-        if size > MAX_RECORD_BYTES:
-            log.warning("ignoring rig.json at %s: %d bytes, over the ceiling", path, size)
-            return None
-        record = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        # ValueError covers both halves of "not our JSON": UnicodeDecodeError
-        # for bytes that are not UTF-8, JSONDecodeError for text that is not
-        # JSON. Either way the file costs itself, never the pane reading it.
-        log.exception("unreadable rig.json at %s", path)
-        return None
-    if not isinstance(record, dict):
-        log.warning("ignoring rig.json at %s: the document is not an object", path)
-        return None
-    return record
+    return read_record(job_dir / "rig.json", "rig.json")
 
 
 def rig_bone_names(job_dir: Path) -> list[str] | None:
@@ -942,6 +924,40 @@ MAX_POSES = 500
 # read so a blob dropped into a job directory costs a log line rather than the
 # RAM to parse it. Shared with poselib, which stores the same shape of record.
 MAX_RECORD_BYTES = 1 << 20
+
+
+def read_record(path: Path, what: str) -> dict[str, Any] | None:
+    """One JSON sidecar, or ``None`` -- with the three guards every one needs.
+
+    Written once because it was written four times and skipped three: the sheet,
+    the pixel-sheet and the sprite-draft readers each had the two-line version
+    of this, and each was missing all three guards.
+
+    - **The ceiling is checked by ``stat`` before the read.** A blob dropped
+      into a job directory should cost a log line, not the RAM to parse it.
+    - **``ValueError``, not ``JSONDecodeError``.** ``UnicodeDecodeError`` is a
+      ``ValueError`` and is *not* a ``JSONDecodeError``, so a sidecar holding
+      bytes that are not UTF-8 raised straight out of the reader, through the
+      listing, and into the pane -- instead of costing one record.
+    - **The document has to be an object.** A valid-JSON array passes the
+      parse and then fails at the first ``record.get(...)``, somewhere else
+      entirely.
+    """
+    if not path.exists():
+        return None
+    try:
+        size = path.stat().st_size
+        if size > MAX_RECORD_BYTES:
+            log.warning("ignoring %s at %s: %d bytes, over the ceiling", what, path, size)
+            return None
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        log.exception("unreadable %s at %s", what, path)
+        return None
+    if not isinstance(record, dict):
+        log.warning("ignoring %s at %s: the document is not an object", what, path)
+        return None
+    return record
 
 
 def write_json_staged(path: Path, payload: dict[str, Any], *, prefix: str) -> None:
@@ -1027,22 +1043,7 @@ def save_pose(
 
 
 def read_pose(job_dir: Path, pose_id: str) -> dict[str, Any] | None:
-    path = pose_path(job_dir, pose_id)
-    if not path.exists():
-        return None
-    try:
-        size = path.stat().st_size
-        if size > MAX_RECORD_BYTES:
-            log.warning("ignoring pose at %s: %d bytes, over the ceiling", path, size)
-            return None
-        record = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        log.exception("unreadable pose at %s", path)
-        return None
-    if not isinstance(record, dict):
-        log.warning("ignoring pose at %s: the document is not an object", path)
-        return None
-    return record
+    return read_record(pose_path(job_dir, pose_id), "pose")
 
 
 def _created_key(record: dict[str, Any]) -> float:
@@ -1154,25 +1155,11 @@ def sheet_pixel_png_path(job_dir: Path, sheet_id: str) -> Path:
 
 
 def read_sheet_pixel(job_dir: Path, sheet_id: str) -> dict[str, Any] | None:
-    path = sheet_pixel_path(job_dir, sheet_id)
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        log.exception("unreadable pixel sheet at %s", path)
-        return None
+    return read_record(sheet_pixel_path(job_dir, sheet_id), "pixel sheet")
 
 
 def read_sheet(job_dir: Path, sheet_id: str) -> dict[str, Any] | None:
-    path = sheet_path(job_dir, sheet_id)
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        log.exception("unreadable sheet at %s", path)
-        return None
+    return read_record(sheet_path(job_dir, sheet_id), "sheet")
 
 
 def list_sheets(job_dir: Path) -> list[dict[str, Any]]:
@@ -1260,14 +1247,7 @@ def sprite_draft_png_path(job_dir: Path, draft_id: str, candidate: str) -> Path:
 
 
 def read_sprite_draft(job_dir: Path, draft_id: str) -> dict[str, Any] | None:
-    path = sprite_draft_path(job_dir, draft_id)
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        log.exception("unreadable sprite draft at %s", path)
-        return None
+    return read_record(sprite_draft_path(job_dir, draft_id), "sprite draft")
 
 
 def list_sprite_drafts(job_dir: Path) -> list[dict[str, Any]]:

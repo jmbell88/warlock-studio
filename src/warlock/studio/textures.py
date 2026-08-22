@@ -26,16 +26,19 @@ class ThumbnailCache:
     def __init__(self, ctx: Any, limit: int = MAX_TEXTURES) -> None:
         self.ctx = ctx
         self.limit = limit
-        # Keyed (key string, mtime, unfiltered): the file's version, and the
-        # sampling baked into the decoded texture.
-        self._entries: OrderedDict[tuple[str, float, bool], Any] = OrderedDict()
-        self._missing: set[tuple[str, float, bool]] = set()
+        # Keyed (key string, mtime, unfiltered, max_side): the file's version,
+        # the sampling baked into the decoded texture, and the size it was
+        # decoded down to -- all three are properties of the *texture object*,
+        # not of the file, so two requests differing in any of them cannot
+        # share one entry.
+        self._entries: OrderedDict[tuple[str, float, bool, int], Any] = OrderedDict()
+        self._missing: set[tuple[str, float, bool, int]] = set()
         # Which frame each entry was last handed out on, and the textures whose
         # release is waiting for the frame that drew them to finish. Both exist
         # for the same reason: a card asks for its texture during the UI build
         # and the pixels are not fetched until the backend draws, so releasing
         # inside that window frees something the draw list still points at.
-        self._touched: dict[tuple[str, float, bool], int] = {}
+        self._touched: dict[tuple[str, float, bool, int], int] = {}
         self._retired: list[Any] = []
         self._frame = 0
         # Per-key-string index over ``_entries``/``_missing`` (L101):

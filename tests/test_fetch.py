@@ -239,6 +239,26 @@ def test_the_docs_name_every_repository_the_registry_does():
     assert not missing, f"in models.py but in neither README.md nor docs/MODELS.md: {missing}"
 
 
+def test_the_readme_counts_the_registered_base_models():
+    """It said "Ten" for the whole life of the ``flux_klein`` /
+    ``flux_klein_distilled`` split that pushed it to eleven. A number in prose
+    beside a registry is a number that goes stale silently, so it is spelled
+    out here and read back off the registry."""
+    from pathlib import Path
+
+    from warlock import models
+
+    words = {
+        9: "Nine", 10: "Ten", 11: "Eleven", 12: "Twelve", 13: "Thirteen",
+        14: "Fourteen", 15: "Fifteen", 16: "Sixteen",
+    }
+    count = len(models.BASE_MODELS)
+    wanted = words.get(count)
+    assert wanted is not None, f"add {count} to the spelling table above"
+    readme = Path("README.md").read_text(encoding="utf-8")
+    assert f"{wanted} base models are registered" in readme
+
+
 def test_the_authoritative_docs_agree_with_the_registry_about_the_default():
     """DOC-02: the default moved to ``sdxl_cfg`` and four documents did not.
 

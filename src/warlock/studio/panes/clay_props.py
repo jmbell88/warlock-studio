@@ -211,10 +211,14 @@ def _generator(doc: Any, obj: Any) -> None:
         log.debug("generator %r refused %r", getattr(build, "__name__", build), edited,
                   exc_info=True)
         return
-    doc.set_props(obj.uid, params=edited, was={"params": params})
-    # The one place a new mesh does *not* invalidate the generator: this mesh
-    # is precisely what the generator builds from the edited parameters.
-    doc.set_mesh(obj.uid, mesh, keep_generator=True)
+    # One step, not two. The numbers and the mesh they build are one act, and
+    # a lone Ctrl+Z restoring half the pair showed the old mesh in the viewport
+    # while this panel still read the new radius -- and ``InputFloat`` fires
+    # per keystroke, so typing a multi-digit number made several of them.
+    # ``set_generator_params`` also implies ``keep_generator``: this mesh is
+    # precisely what the generator builds from the edited parameters, which is
+    # the one case where the object's generator claim is still true.
+    doc.set_generator_params(obj.uid, edited, mesh, was={"params": params})
 
 
 def _widget(key: str, value: Any, default: Any) -> tuple[Any, bool]:

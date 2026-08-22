@@ -12,6 +12,7 @@ same operator.
 
 from __future__ import annotations
 
+import contextlib
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -119,6 +120,13 @@ def write_hint(
     Staged through a temp name and renamed, the same rule every other write
     onto a served path follows (optimize.staged_copy, rigging.finalize_rig):
     the file route may read this while a rerun is rewriting it.
+
+    The ``finally`` is the other half of that rule, and it is the half this had
+    missing: ``postprocess._staged``, ``trellis._atomic_write`` and
+    ``optimize.run`` all unlink theirs. A raising ``save`` left the dotfile
+    behind -- never a half-written served file, so this is consistency rather
+    than correctness, but a stranded fragment is a fragment nothing will ever
+    clean up.
     """
     from PIL import Image
 
@@ -127,8 +135,12 @@ def write_hint(
         out = hint(kind, im, size=size, low=low, high=high)
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(f".{dest.name}.tmp")
-    out.save(tmp, format="PNG")
-    os.replace(tmp, dest)
+    try:
+        out.save(tmp, format="PNG")
+        os.replace(tmp, dest)
+    finally:
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
     return {
         "kind": kind,
         "low": low,

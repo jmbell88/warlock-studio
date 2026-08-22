@@ -201,8 +201,9 @@ def group_members(key: str) -> tuple[str, ...]:
     return next((tools for name, _label, tools in TOOL_GROUPS if name == key), ())
 
 
-def group_label(key: str) -> str:
-    return next((label for name, label, _tools in TOOL_GROUPS if name == key), key)
+# ``group_label`` was deleted on 2026-08-22 with zero callers. Its sibling
+# ``group_members`` above is live; a label for a group is read off
+# ``TOOL_GROUPS`` where it is needed.
 
 
 def cycle_in_group(current: str, wanted: str) -> str:
@@ -1666,6 +1667,13 @@ class InkerState:
     #: ``inker_timeline._drag_toggle``: the value is the one the *first* row
     #: took, so the drag paints rather than flipping each row it crosses.
     eye_drag: bool | None = None
+    #: Which rows that drag has already written, and what each one held before
+    #: it did. The gesture mutates live so the column follows the cursor, and
+    #: asks for its undo step once, on release -- ``set_layers_props``' ``was``
+    #: pre-image, for the reason ``header_controls`` needs one on the opacity
+    #: drag: by release the rows already hold the new value, so reading
+    #: "before" off them would compare a value against itself.
+    eye_drag_was: dict[int, dict] = field(default_factory=dict)
     #: The documents auto-show has already fired for, by uid, so a user who
     #: closes the strip on a five-layer drawing is not shown it again on the
     #: next frame they add.

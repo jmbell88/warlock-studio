@@ -249,7 +249,7 @@ def create_tile_sheet(
     if asset_type is not None and asset_type != expected_asset_type:
         raise Invalid("asset_type does not match the tile-set view", field="asset_type")
     if asset_intent is not None and asset_intent != "tileset":
-        raise Invalid("a tile set must use asset_intent='tileset'", field="asset_type")
+        raise Invalid("a tile set must use asset_intent='tileset'", field="asset_intent")
     if seed is not None:
         check_seed("seed", seed)
 

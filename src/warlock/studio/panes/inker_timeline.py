@@ -166,9 +166,17 @@ def draw(ctx: Any) -> None:
     if tab is None:
         return
     autoshow(state, tab)
+    # **Above the early return.** ``_tick`` is the only caller of
+    # ``tick_playback``, which is the only thing that advances ``play_index``
+    # or ends a clip naturally -- so with it below the return, a strip hidden
+    # mid-playback left ``tab.playing`` True forever and ``tab.busy`` with it,
+    # and the canvas then refused every gesture silently while the Stop button
+    # explaining why was inside the strip that had just been hidden.
+    # ``toggle`` stops playback on the way out as well; this is what makes
+    # every *other* route to a hidden strip safe too.
+    _tick(tab)
     if not state.timeline_open:
         return
-    _tick(tab)
     if tab.doc.anim is not None:
         _transport(ctx, tab)
         imgui.separator()
@@ -198,8 +206,19 @@ def toggle(state: Any) -> None:
 
     Otherwise closing the strip on a two-layer drawing would last exactly until
     the next layer was added, which is a toggle the app argues with.
+
+    **Hiding the strip stops playback.** Everything that says a clip is running
+    -- the Stop button, the transport, the "playback is running" line -- is
+    drawn inside the strip, and playback holds ``tab.busy``, which is what the
+    canvas silently refuses paint gestures on. A running clip whose only
+    controls are off screen is a document that has stopped accepting edits with
+    nothing on screen saying why, so Tab ends it rather than hiding it.
     """
     state.timeline_open = not state.timeline_open
+    if not state.timeline_open:
+        for tab in state.docs:
+            if tab.playing:
+                inker_mode.stop_play(tab)
     for tab in state.docs:
         state.timeline_shown.add(tab.uid)
 
@@ -931,21 +950,26 @@ def _toggle_all(ctx: Any, tab: Any) -> None:
     doc = tab.doc
     hidden = any(not layer.visible for layer in doc.stack)
     locked = all(layer.locked for layer in doc.stack) if len(doc.stack) else False
+    # The gate every mutating surface takes (``busy`` is ``saving or
+    # playing``), and it was the one the layers panel did not have: ``ora.py``
+    # walks ``doc.stack`` twice on the task thread -- once for ``stack.xml``
+    # and again for the PNG members -- so a visibility flip landing between the
+    # two passes writes an archive whose parts disagree with each other.
+    imgui.begin_disabled(tab.busy)
     if widgets.icon_button(
         f"{icons.EYE if not hidden else icons.EYE_OFF}##alleyes",
         "Show every layer" if hidden else "Hide every layer",
         borderless=True,
     ):
-        for index in range(len(doc.stack)):
-            doc.set_layer_props(index, visible=hidden)
+        doc.set_all_layer_props(visible=hidden)
     imgui.same_line()
     if widgets.icon_button(
         f"{icons.LOCK if locked else icons.LOCK_OPEN}##alllocks",
         "Unlock every layer" if locked else "Lock every layer",
         borderless=True,
     ):
-        for index in range(len(doc.stack)):
-            doc.set_layer_props(index, locked=not locked)
+        doc.set_all_layer_props(locked=not locked)
+    imgui.end_disabled()
 
 
 def _frame_menu(tab: Any, index: int) -> None:
@@ -1056,12 +1080,18 @@ def _track_row(
     # The eye, not a checkbox: it is what every layers panel draws there, and
     # the off state is a different glyph rather than an empty box -- an empty
     # box beside a thumbnail reads as "unselected", which visibility is not.
+    # ``_toggle_all``'s gate, per row. The eye is disabled rather than merely
+    # ignored so the row *says* it is not accepting edits, and the guards
+    # inside ``_drag_toggle``/``_reorder`` are belt to this braces: a
+    # drag-and-drop source is not something ``begin_disabled`` reliably stops.
+    imgui.begin_disabled(tab.busy)
     if widgets.icon_button(
         f"{icons.EYE if layer.visible else icons.EYE_OFF}##visible",
         "Hide this layer" if layer.visible else "Show this layer",
         borderless=True,
     ):
         _set_visible(ctx, tab, track_index, not layer.visible)
+    imgui.end_disabled()
     _drag_toggle(ctx, tab, track_index)
     imgui.same_line()
     label = layer.name[:12]
@@ -1082,7 +1112,7 @@ def _track_row(
         if layer.locked:
             detail += "  locked"
         imgui.set_tooltip(detail)
-    _reorder(ctx, doc, track_index)
+    _reorder(ctx, tab, doc, track_index)
     _row_menu(ctx, tab, doc, track_index)
     if depth:
         imgui.unindent(sp(GROUP_INDENT) * depth)
@@ -1130,23 +1160,61 @@ def _drag_toggle(ctx: Any, tab: Any, index: int) -> None:
     than flipping each row it crosses.
     """
     state = ctx.state.inker
+    if tab.busy:
+        _end_eye_drag(state)
+        return
     if imgui.is_item_activated():
         state.eye_drag = not tab.doc.stack[index].visible
+        state.eye_drag_was = {}
         return
-    if state.eye_drag is None or not imgui.is_mouse_down(0):
-        state.eye_drag = None
+    if state.eye_drag is None:
+        return
+    if not imgui.is_mouse_down(0):
+        # **One step for the whole gesture.** The rows were written live so the
+        # column follows the cursor; the undo entry is asked for here, once, on
+        # release -- ``_toggle_all``'s rule from the other direction. Eight rows
+        # crossed used to cost eight Ctrl+Z to put back.
+        _end_eye_drag(state, tab)
         return
     if imgui.is_item_hovered() and tab.doc.stack[index].visible != state.eye_drag:
-        _set_visible(ctx, tab, index, state.eye_drag)
+        # Written straight onto the row rather than through ``set_layer_props``:
+        # the step for all of them is pushed on release, and an edit per row
+        # here is exactly what that exists to avoid.
+        state.eye_drag_was.setdefault(index, {"visible": tab.doc.stack[index].visible})
+        tab.doc.stack[index].visible = state.eye_drag
+        if tab.doc.anim is not None:
+            tab.doc.anim.tracks[index].visible = state.eye_drag
+        tab.doc.invalidate_all()
 
 
-def _reorder(ctx: Any, doc: Any, index: int) -> None:
+def _end_eye_drag(state: Any, tab: Any = None) -> None:
+    """Close the gesture, recording its one step where there is one to record.
+
+    ``tab`` is ``None`` on the abandon path (the document went busy mid-drag),
+    where the rows have already been written and there is nothing safe to push
+    -- the gate exists precisely because the stack must not be restructured
+    now. The pre-image is dropped either way, so the next drag starts clean.
+    """
+    was, state.eye_drag_was = state.eye_drag_was, {}
+    painted, state.eye_drag = state.eye_drag, None
+    if tab is not None and was and painted is not None:
+        tab.doc.set_layers_props(sorted(was), was=was, visible=painted)
+
+
+def _reorder(ctx: Any, tab: Any, doc: Any, index: int) -> None:
     """Drag a layer's name onto another row to move it there.
 
     imgui's drag-and-drop payload carries the *index*, and the drop reads the
     stack again -- so a reorder mid-drag cannot make the drop land on a
     different layer than the one under the cursor.
+
+    Refused outright while the tab is busy rather than drawn disabled: a
+    reorder is the exact write ``ora.py``'s two passes over ``doc.stack``
+    cannot survive, and ``begin_disabled`` does not stop a drag-drop source
+    from registering.
     """
+    if tab.busy:
+        return
     if imgui.begin_drag_drop_source(imgui.DragDropFlags_.source_no_hold_to_open_others.value):
         imgui.set_drag_drop_payload_py_id("inker-layer", index)
         imgui.text(doc.stack[index].name)
@@ -1165,6 +1233,9 @@ def _row_menu(ctx: Any, tab: Any, doc: Any, index: int) -> None:
     if not imgui.begin_popup_context_item("layer-menu"):
         return
     widgets.popup_chrome(_imgui=imgui)
+    # ``_frame_menu``'s shape: the menu opens so the user can see what is on
+    # it, and every verb on it is disabled while the document is busy.
+    imgui.begin_disabled(tab.busy)
     if controls.selectable("Rename", False)[0]:
         _ask_rename(ctx, doc, index)
     if controls.selectable("Properties...", False)[0]:
@@ -1182,6 +1253,7 @@ def _row_menu(ctx: Any, tab: Any, doc: Any, index: int) -> None:
         "Take out of group", False
     )[0]:
         doc.move_into_group(index, None)
+    imgui.end_disabled()
     imgui.end_popup()
 
 

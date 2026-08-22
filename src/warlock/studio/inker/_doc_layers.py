@@ -33,9 +33,11 @@ from .layers import Layer, LayerStack, new_uid
 from .undo import (
     CompoundEdit,
     LayerAddEdit,
+    LayerFlagEdit,
     LayerMoveEdit,
     LayerPropsEdit,
     LayerRemoveEdit,
+    MatteEdit,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -387,6 +389,78 @@ class LayerOps:
         self.invalidate_all()
         return True
 
+    def set_layers_props(
+        self: Document,
+        indices: Any = None,
+        *,
+        was: dict[int, dict] | None = None,
+        **props: Any,
+    ) -> bool:
+        """The same property change across several layers, as **one** undo step.
+
+        ``indices`` is the rows to write, or ``None`` for the whole stack.
+
+        :meth:`set_layer_props` pushes its own edit per call that changes
+        something, so the header row's "hide every layer" cost a ten-layer
+        document ten Ctrl+Z to reverse one click, and a drag down the eye column
+        cost one per row it crossed -- against the one-gesture-one-step rule the
+        filters, the palette conversion and ``apply_matte`` all follow.
+
+        ``set_range_props`` is this operation over a *span*, and it is not
+        reusable here: it refuses outright when ``anim`` is None, and a still
+        document is exactly where the header row is most often clicked. So this
+        covers both shapes, pushing the track edit or the layer edit per row and
+        compounding them.
+
+        ``was`` is :meth:`set_layer_props`' own, per row: a gesture that mutates
+        the layers live so the canvas follows the drag has already written the
+        new value by the time it asks for the step, so reading "before" off the
+        row would compare a value against itself and record nothing.
+
+        Only rows that actually change contribute an edit, ``set_range_props``'
+        rule: hiding a stack most of which is already hidden must not make undo
+        walk back through a row of no-ops.
+        """
+        unknown = set(props) - TRACK_PROPS
+        if unknown:
+            raise ValueError(f"unknown track property: {sorted(unknown)[0]}")
+        self.commit_floating()
+        anim = self.anim
+        rows = list(anim.tracks) if anim is not None else list(self.stack)
+        wanted = range(len(rows)) if indices is None else indices
+        sources = was or {}
+        edits: list[Any] = []
+        for index in wanted:
+            if not 0 <= index < len(rows):
+                continue
+            target = rows[index]
+            source = sources.get(index, {})
+            before = {
+                key: source.get(key, getattr(target, key)) for key in props
+            }
+            if before == props:
+                continue
+            for key, value in props.items():
+                setattr(target, key, value)
+            edits.append(
+                TrackPropsEdit(target.uid, before, dict(props))
+                if anim is not None
+                else LayerPropsEdit(target.uid, before, dict(props))
+            )
+        if not edits:
+            return False
+        self.history.push(edits[0] if len(edits) == 1 else CompoundEdit(edits))
+        if anim is not None:
+            self._anim_changed()
+        else:
+            self.invalidate_all()
+        return True
+
+    def set_all_layer_props(self: Document, **props: Any) -> bool:
+        """:meth:`set_layers_props` over the whole stack. The header row's."""
+
+        return self.set_layers_props(None, **props)
+
     def _resolved_plane(self: Document, pixels: np.ndarray) -> np.ndarray | None:
         """The index plane a freshly *minted* layer needs, or ``None`` outside
         indexed mode.
@@ -687,6 +761,40 @@ class LayerOps:
         self._stamp_all()
         self.stack = LayerStack(anim.layers_for(anim.frame, size), 0)
 
+    def _set_layer_flags(self: Document, uid: int, props: dict) -> None:
+        """Write ``background``/``reference`` onto both homes of one identity.
+
+        The track is authoritative on an animated document -- writing only the
+        materialised layer would last until the next time that frame was
+        rebuilt -- and the still document has no track at all. A track and its
+        layer share one uid by construction (``Track.of``), so this is one
+        address with two places to put the answer, not two objects to keep in
+        step.
+        """
+        if self.anim is not None:
+            for track in self.anim.tracks:
+                if track.uid == uid:
+                    for key, value in props.items():
+                        setattr(track, key, value)
+                    break
+        for layer in self.stack:
+            if layer.uid == uid:
+                for key, value in props.items():
+                    setattr(layer, key, value)
+                break
+        self.invalidate_all()
+
+    def _flag_edit(self: Document, uid: int, **props: Any) -> Any:
+        """A :class:`LayerFlagEdit` capturing the current values as ``before``."""
+
+        target = None
+        if self.anim is not None:
+            target = next((t for t in self.anim.tracks if t.uid == uid), None)
+        if target is None:
+            target = self.stack.by_uid(uid)
+        before = {key: getattr(target, key) for key in props}
+        return LayerFlagEdit(uid, before, dict(props))
+
     def to_background(self: Document) -> bool:
         """Make the bottom layer a real background layer. -> whether it changed.
 
@@ -701,11 +809,19 @@ class LayerOps:
         Only the bottom layer, which is the rule ``LayerStack`` enforces on
         every reorder: a background in the middle of a stack is a layer that
         hides everything under it while claiming to be the floor.
+
+        **One ``CompoundEdit`` covering all three of the things this writes.**
+        The pixels are a ``PatchEdit``, the flag a ``LayerFlagEdit`` and the
+        matte a ``MatteEdit``: pushing only the first put the pixels back under
+        a layer still calling itself a background -- so the composite still
+        forced alpha to 255 and the canvas did not change -- and left the matte
+        colour, which nothing else in the document holds, gone for good.
         """
         if not len(self.stack) or self.stack[0].background:
             return False
         layer = self.stack[0]
         before = layer.pixels.copy()
+        matte_before = None if self.matte is None else tuple(self.matte)
         if self.matte is not None:
             fill = np.asarray(self.matte, dtype=np.float32)
             alpha = layer.pixels[..., 3:4].astype(np.float32) / 255.0
@@ -714,9 +830,16 @@ class LayerOps:
             ) * alpha
             layer.pixels[...] = cp.to_uint8_255(blended)
         layer.pixels[..., 3] = 255
-        layer.background = True
+        flag = self._flag_edit(layer.uid, background=True)
+        edits: list[Any] = []
+        patch = self._patch_edit_for(layer, (0, 0, *self.size), before)
+        if patch is not None:
+            edits.append(patch)
+        edits.append(flag)
+        edits.append(MatteEdit(matte_before, None))
+        self._set_layer_flags(layer.uid, {"background": True})
         self.matte = None
-        self._commit_patch(layer, (0, 0, *self.size), before)
+        self.history.push(CompoundEdit(edits))
         self.invalidate_all()
         return True
 
@@ -725,12 +848,16 @@ class LayerOps:
 
         The pixels are left exactly as they are: what was painted stays
         painted, and the only thing that changes is that alpha starts meaning
-        something again.
+        something again. That flag *is* the whole edit, which is why one
+        ``LayerFlagEdit`` is the whole step -- before this pushed one, the
+        conversion was not undoable at all while still marking the document
+        dirty.
         """
         if not len(self.stack) or not self.stack[0].background:
             return False
-        self.stack[0].background = False
-        self.invalidate_all()
+        uid = self.stack[0].uid
+        self.history.push(self._flag_edit(uid, background=False))
+        self._set_layer_flags(uid, {"background": False})
         self.rev += 1
         return True
 
@@ -739,7 +866,12 @@ class LayerOps:
 
         if not 0 <= index < len(self.stack):
             return False
-        self.stack[index].reference = bool(value)
+        uid = self.stack[index].uid
+        value = bool(value)
+        if self.stack[index].reference == value:
+            return False
+        self.history.push(self._flag_edit(uid, reference=value))
+        self._set_layer_flags(uid, {"reference": value})
         self.rev += 1
         return True
 

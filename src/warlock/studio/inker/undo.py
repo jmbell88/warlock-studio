@@ -61,9 +61,11 @@ __all__ = [
     "IndexPatchEdit",
     "IndexRemapEdit",
     "LayerAddEdit",
+    "LayerFlagEdit",
     "LayerMoveEdit",
     "LayerPropsEdit",
     "LayerRemoveEdit",
+    "MatteEdit",
     "PaletteEdit",
     "PatchEdit",
     "ReplayEdit",
@@ -336,6 +338,64 @@ class LayerPropsEdit(Edit):
         layer = doc.stack.by_uid(self.layer_uid)
         for key, value in props.items():
             setattr(layer, key, value)
+        doc.invalidate_all()
+
+    def undo(self, doc: Any) -> None:
+        self._apply(doc, self.before)
+
+    def redo(self, doc: Any) -> None:
+        self._apply(doc, self.after)
+
+
+@dataclass
+class LayerFlagEdit(Edit):
+    """``background`` and ``reference``: the two flags no props edit can carry.
+
+    They are real persisted document state -- ``.aseprite`` stores them as the
+    layer-chunk flags ``0x08`` and ``0x40``, ``.ora`` as ``warlock-background``
+    and ``warlock-reference`` -- but they are deliberately outside
+    ``TRACK_PROPS``, because that allowlist is what ``set_range_props`` writes
+    through and "make every selected row a background" is not an operation:
+    the bottom layer is the only one that may be one, which is the rule
+    ``LayerStack`` enforces on every reorder.
+
+    So they get their own type rather than a widened allowlist. It writes both
+    the track (authoritative on an animated document) and the materialised
+    layer under one shared uid, which is the same identity by construction --
+    see ``Track.of``.
+    """
+
+    layer_uid: int
+    before: dict
+    after: dict
+
+    def undo(self, doc: Any) -> None:
+        doc._set_layer_flags(self.layer_uid, self.before)
+
+    def redo(self, doc: Any) -> None:
+        doc._set_layer_flags(self.layer_uid, self.after)
+
+
+@dataclass
+class MatteEdit(Edit):
+    """The document's matte colour, before and after.
+
+    ``Document.matte`` is what a flatten composites *under* the stack where
+    there is no background layer, so converting the bottom layer to a
+    background folds it into pixels and clears it. The pixels come back on an
+    undo through the ``PatchEdit`` that rides beside this one; without this the
+    colour did not, and it was unrecoverable -- nothing else in the document
+    ever held it.
+
+    A tuple of four ints. Cost is zero for ``TagsEdit``'s reason: there are no
+    pixels here for the byte budget to have an opinion about.
+    """
+
+    before: tuple | None
+    after: tuple | None
+
+    def _apply(self, doc: Any, matte: tuple | None) -> None:
+        doc.matte = None if matte is None else tuple(matte)
         doc.invalidate_all()
 
     def undo(self, doc: Any) -> None:

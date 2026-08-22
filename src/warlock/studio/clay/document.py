@@ -497,6 +497,43 @@ class ClayDoc:
         self.touch()
         return True
 
+    def set_generator_params(
+        self, uid: int, params: dict[str, Any], mesh: bm.Mesh, *, was: dict[str, Any]
+    ) -> bool:
+        """A generator's numbers and the mesh they build, as **one** step.
+
+        The properties panel used to call :meth:`set_props` and then
+        :meth:`set_mesh` as two independent edits, which is the shape
+        :meth:`set_mesh`'s own docstring argues against for the freeze: a lone
+        Ctrl+Z restoring half the pair leaves the viewport showing the old mesh
+        while the panel still reads the new radius. imgui's ``InputFloat`` fires
+        per keystroke, so typing a multi-digit number pushed several such pairs
+        for one felt edit.
+
+        ``was`` is :meth:`set_props`' own, and mandatory here rather than
+        optional: this caller edits the object's ``params`` dict in place before
+        it gets here, so reading "before" off the object would compare a value
+        against itself.
+
+        ``keep_generator`` is implied. The new mesh *is* what the generator
+        makes from these parameters, which is the one case where the object's
+        claim to be "box, size 1" is still true.
+        """
+        obj = self.by_uid(uid)
+        before = {"params": was.get("params", obj.params)}
+        edits: list[Any] = []
+        if before != {"params": params}:
+            obj.params = params
+            edits.append(ObjectPropsEdit(uid, before, {"params": params}))
+        if mesh is not obj.mesh:
+            was_mesh, obj.mesh = obj.mesh, mesh
+            edits.append(MeshEdit(uid, was_mesh, mesh))
+        if not edits:
+            return False
+        self.history.push(edits[0] if len(edits) == 1 else CompoundEdit(edits))
+        self.touch()
+        return True
+
     # -- palette -----------------------------------------------------------
 
     def set_material(self, index: int, material: gltf.Material) -> bool:

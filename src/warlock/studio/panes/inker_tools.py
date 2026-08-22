@@ -13,7 +13,7 @@ from typing import Any
 from imgui_bundle import imgui
 
 from .. import controls, icons, inker, inker_mode, inker_state, theme, widgets
-from ..inker import brush, transform
+from ..inker import brush
 from ..inker_state import (
     PAINT_TOOLS,
     SHAPE_TOOLS,
@@ -119,6 +119,8 @@ STAMP_ALIGN_LABELS = (
     ("aligned", "aligned to a grid"),
 )
 
+CANVAS_POPUP = "inker-canvas-options"
+
 SYMMETRY_LABELS = (
     ("none", "off"),
     ("x", "left / right"),
@@ -193,6 +195,16 @@ def _view_toggles(ctx: Any, state: Any) -> None:
         if attr != "rulers":
             imgui.same_line()
     imgui.new_line()
+    if widgets.icon_button(
+        f"{icons.FLIP_HORIZONTAL}##inkviewcanvas",
+        "Symmetry and the grid's step",
+    ):
+        imgui.open_popup(CANVAS_POPUP)
+    with controls.menu_popup(CANVAS_POPUP) as opened:
+        if opened:
+            imgui.push_item_width(sp(160))
+            canvas_options(ctx, state)
+            imgui.pop_item_width()
 
 
 def _colour_chips(ctx: Any, state: Any) -> None:
@@ -890,96 +902,28 @@ def _per_tool_note() -> None:
     )
 
 
-def _transform_entry(ctx: Any, state: Any, doc: Any) -> None:
-    """Free transform is a state rather than a tool, so it gets a button rather
-    than a slot in the grid -- it takes the canvas over until it is applied."""
-    widgets.section("Transform")
-    if state.transforming:
-        widgets.wrapped(theme.ACCENT, "Transforming - Enter applies, Esc cancels.")
-        _transform_numbers(state, doc)
-        return
-    if controls.button("Free transform (Ctrl+T)", (-1, 0)):
-        inker_mode.begin_transform(ctx)
-    widgets.muted_wrapped("Rotates, scales and slants the selection, or the whole layer.")
-
-
-def _transform_numbers(state: Any, doc: Any) -> None:
-    """Typed values for what the handles do by feel.
-
-    A drag cannot express "exactly 128 wide" or "exactly 15 degrees", and near
-    misses are worse than either -- a sprite one pixel off the grid it was
-    drawn on, an italic that is nearly the same slant as the last one. These
-    are the same four numbers the handles produce, so nothing new can be
-    expressed here; what is new is being able to say them exactly.
-
-    Width and height are converted against ``base_size`` -- the *lifted*
-    pixels' size -- rather than against the buffer's current size. Deriving a
-    factor from the transformed result would compound every keystroke against
-    the last one, which is the anti-compounding rule the drag handles follow
-    from the other side.
-    """
-    buf = doc.floating
-    if buf is None:
-        return
-    base_w, base_h = buf.base_size
-    width, height = buf.size
-
-    imgui.set_next_item_width(sp(70))
-    changed_x, x = controls.input_int("X##inkxfx", int(buf.offset[0]), 0)
-    imgui.same_line()
-    imgui.set_next_item_width(sp(70))
-    changed_y, y = controls.input_int("Y##inkxfy", int(buf.offset[1]), 0)
-    if changed_x or changed_y:
-        # Through ``move_floating``'s delta rather than by writing ``offset``:
-        # one owner for where a buffer sits, and it bumps ``rev`` for the pane.
-        doc.move_floating(int(x) - buf.offset[0], int(y) - buf.offset[1])
-
-    imgui.set_next_item_width(sp(70))
-    changed_w, new_w = controls.input_int("W##inkxfw", int(width), 0)
-    imgui.same_line()
-    imgui.set_next_item_width(sp(70))
-    changed_h, new_h = controls.input_int("H##inkxfh", int(height), 0)
-    if changed_w or changed_h:
-        fx = max(1, int(new_w)) / base_w if changed_w else buf.scale[0]
-        fy = max(1, int(new_h)) / base_h if changed_h else buf.scale[1]
-        if state.transform_link:
-            fx = fy = fx if changed_w else fy
-        doc.transform_floating(scale=(fx, fy), resample=state.resample)
-
-    imgui.set_next_item_width(sp(150))
-    changed, angle = controls.input_float("Angle##inkxfa", float(buf.angle), 0.0, 0.0, "%.2f")
-    if changed:
-        doc.transform_floating(angle=angle, resample=state.resample)
-
-    limit = transform.SHEAR_MAX
-    imgui.set_next_item_width(sp(150))
-    changed, values = controls.input_float2(
-        "Slant##inkxfs", [float(buf.shear[0]), float(buf.shear[1])], "%.1f"
-    )
-    if changed:
-        doc.transform_floating(
-            shear=(
-                max(-limit, min(float(values[0]), limit)),
-                max(-limit, min(float(values[1]), limit)),
-            ),
-            resample=state.resample,
-        )
-    widgets.help_marker(
-        "Slant in degrees, horizontal then vertical -- an italic, or a shadow "
-        "cast along the ground. Numbers only for now; there are no slant "
-        "handles on the box. Applied after the scale and before the rotation, "
-        "so the two axes stay the page's. Two large slants the same way fight "
-        "each other and would squash the picture to a sliver, so a pair that "
-        "extreme comes back unslanted."
-    )
+# ``_transform_entry`` and ``_transform_numbers`` were deleted on 2026-08-22
+# with zero callers. The comment at the foot of ``_options`` says where they
+# went: free transform is the Edit menu's row and Ctrl+T, its live handles are
+# the context bar's Transformation state, and the numbers they opened are on
+# the bar beside the canvas they turn. ``git show`` has them.
 
 
 def canvas_options(ctx: Any, state: Any) -> None:
-    imgui.dummy((0, 6))
-    # Symmetry, the grid, snapping and the rulers: settings of the *sitting*
-    # rather than of the gesture, reached once and then left for an hour.
-    if not widgets.header("Canvas", default_open=False, persist_key="inker/canvas"):
-        return
+    """Symmetry and the grid's step, in the popover off the rail's canvas glyph.
+
+    What is left of the old sidebar "Canvas" section. Grid, snap and rulers are
+    the three icon toggles in :func:`_view_toggles` above -- a checkbox and a
+    toggle for the same flag is one control too many -- so this holds the two
+    settings that need a *number* or a *menu* and had no other way in: the
+    symmetry mode (with its ways and its axis) and the grid's step in pixels.
+
+    Symmetry lives here rather than on the context bar because it is a setting
+    of the sitting, not of the tool: it survives every tool change, the canvas
+    draws its guides beside the grid's lines, and every paint mode -- erase,
+    blur, smudge -- inherits it without asking.
+    """
+
     state.symmetry = widgets.labeled_combo("Symmetry", state.symmetry, list(SYMMETRY_LABELS))
     if state.symmetry == "radial":
         imgui.set_next_item_width(sp(90))
@@ -990,39 +934,20 @@ def canvas_options(ctx: Any, state: Any) -> None:
             state.radial_count = int(count)
     if state.symmetry != "none":
         _symmetry_axis(state)
-    # Every write below goes back through ``persist``: the grid and the rulers
-    # are how the user likes to see, and a preference that resets on the next
-    # launch is a control they have to rediscover. Persisting on the change
-    # rather than only at quit is what survives a crash.
-    changed, value = controls.checkbox("Grid", state.grid)
+    # The grid's *step*. The three flags it used to sit beside are the rail's
+    # toggles; this one is a number, and "Selection as Grid" -- the only other
+    # way to set it -- needs a selection the exact size you meant.
+    imgui.dummy((0, 4))
+    widgets.field_label("Grid size")
+    imgui.set_next_item_width(sp(80))
+    changed, size = controls.input_int("##gridsize", state.grid_size, 0)
     if changed:
-        state.grid = value
+        state.grid_size = max(2, min(512, size))
+    # Persisted on the change rather than only at quit: how the user likes to
+    # see is a preference that resetting on the next launch makes them
+    # rediscover, and persisting here is what survives a crash.
+    if imgui.is_item_deactivated_after_edit():
         inker_mode.persist(ctx)
-    if state.grid:
-        imgui.same_line()
-        imgui.set_next_item_width(sp(80))
-        changed, size = controls.input_int("##gridsize", state.grid_size, 0)
-        if changed:
-            state.grid_size = max(2, min(512, size))
-        if imgui.is_item_deactivated_after_edit():
-            inker_mode.persist(ctx)
-        changed, value = controls.checkbox("Snap to grid", state.grid_snap)
-        if changed:
-            state.grid_snap = value
-            inker_mode.persist(ctx)
-        widgets.help_marker(
-            "Shapes, lines and the marquee land on grid intersections. "
-            "Freehand strokes never snap -- quantising a brush to a lattice is "
-            "a different tool, not a drawing aid."
-        )
-    changed, value = controls.checkbox("Rulers", state.rulers)
-    if changed:
-        state.rulers = value
-        inker_mode.persist(ctx)
-    widgets.help_marker(
-        "Pixel rulers along the canvas's top and left edges, for a sense of "
-        "size. Tick steps follow the decimal 1/2/5 ladder."
-    )
 
 
 def _symmetry_axis(state: Any) -> None:

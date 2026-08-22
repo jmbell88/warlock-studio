@@ -32,6 +32,7 @@ Pure and torch-free: cv2/numpy/Pillow imported inside functions.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import shutil
@@ -428,27 +429,38 @@ def prepare(
     the rejection rules ship before the transform does, because whether
     host-side normalisation helps or fights the exe's own preprocessing is
     unmeasured (see DEFAULT_REFERENCE_PREP).
+
+    Staged through a dotfile and renamed, with the ``finally`` unlink
+    ``postprocess._staged``, ``trellis._atomic_write`` and ``optimize.run`` all
+    have. The served file is never partially written either way; what the
+    ``finally`` adds is that a raising ``copyfile`` -- a full disk, on the one
+    path that runs after the normalise has already been given up on -- leaves
+    no fragment behind.
     """
     from PIL import Image
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(f".{dest.name}.tmp")
 
-    report = None
-    if enabled:
-        try:
-            with Image.open(src) as im:
-                im.load()
-                out, report = normalise(im, occupancy=occupancy)
-                out.save(tmp, format="PNG")
-        except Exception as exc:
-            # Same rule as measure_file: an unreadable file is handed on
-            # verbatim rather than failed here, and trellis decides.
-            log.warning("could not normalise reference %s: %s", src, exc)
-            report = None
-    if report is None:
-        shutil.copyfile(src, tmp)
-        report = measure_file(src)
+    try:
+        report = None
+        if enabled:
+            try:
+                with Image.open(src) as im:
+                    im.load()
+                    out, report = normalise(im, occupancy=occupancy)
+                    out.save(tmp, format="PNG")
+            except Exception as exc:
+                # Same rule as measure_file: an unreadable file is handed on
+                # verbatim rather than failed here, and trellis decides.
+                log.warning("could not normalise reference %s: %s", src, exc)
+                report = None
+        if report is None:
+            shutil.copyfile(src, tmp)
+            report = measure_file(src)
 
-    os.replace(tmp, dest)
+        os.replace(tmp, dest)
+    finally:
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
     return report

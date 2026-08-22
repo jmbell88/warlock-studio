@@ -392,17 +392,59 @@ def test_the_generator_field_survives_a_regenerate() -> None:
     a = doc.add_object(
         _obj("A", generator="cylinder", params={"radius": 0.5, "height": 1.0})
     )
-    doc.set_props(a.uid, params={"radius": 1.0, "height": 1.0})
-    # ``keep_generator`` because this *is* the properties panel's rebuild: the
-    # new mesh is exactly what the generator makes from the edited parameters,
-    # which is the one case where the claim "cylinder, radius 1" stays true.
-    doc.set_mesh(a.uid, bp.cylinder(radius=1.0), keep_generator=True)
+    # ``set_generator_params`` because this *is* the properties panel's
+    # rebuild: the new mesh is exactly what the generator makes from the edited
+    # parameters, which is the one case where the claim "cylinder, radius 1"
+    # stays true -- so the generator is kept.
+    doc.set_generator_params(
+        a.uid,
+        {"radius": 1.0, "height": 1.0},
+        bp.cylinder(radius=1.0),
+        was={"params": {"radius": 0.5, "height": 1.0}},
+    )
     assert doc.by_uid(a.uid).generator == "cylinder"
     assert doc.by_uid(a.uid).params == {"radius": 1.0, "height": 1.0}
 
     doc.undo()
-    doc.undo()
     assert doc.by_uid(a.uid).params == {"radius": 0.5, "height": 1.0}
+
+
+def test_a_generator_edit_is_one_undo_step_not_two() -> None:
+    """``set_props`` then ``set_mesh`` were two independent edits, so a lone
+    Ctrl+Z showed the old mesh in the viewport while the properties panel still
+    read the new radius -- and ``InputFloat`` fires per keystroke, so typing a
+    multi-digit number pushed several such pairs for one felt edit."""
+
+    doc = bd.ClayDoc()
+    a = doc.add_object(
+        _obj("A", generator="cylinder", params={"radius": 0.5, "height": 1.0})
+    )
+    was_mesh = doc.by_uid(a.uid).mesh
+    head = doc.history.head
+    doc.set_generator_params(
+        a.uid,
+        {"radius": 1.0, "height": 1.0},
+        bp.cylinder(radius=1.0),
+        was={"params": {"radius": 0.5, "height": 1.0}},
+    )
+    assert doc.history.head != head
+    assert doc.undo() is True
+    # Both halves came back together: the panel and the viewport agree again.
+    assert doc.by_uid(a.uid).params == {"radius": 0.5, "height": 1.0}
+    assert doc.by_uid(a.uid).mesh is was_mesh
+    assert doc.history.head == head
+
+
+def test_a_generator_edit_that_changes_nothing_records_nothing() -> None:
+    doc = bd.ClayDoc()
+    a = doc.add_object(_obj("A", generator="cylinder", params={"radius": 0.5}))
+    mesh = doc.by_uid(a.uid).mesh
+    assert (
+        doc.set_generator_params(
+            a.uid, {"radius": 0.5}, mesh, was={"params": {"radius": 0.5}}
+        )
+        is False
+    )
 
 
 def test_every_mesh_the_document_converts_is_valid() -> None:

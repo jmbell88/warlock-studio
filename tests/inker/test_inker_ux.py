@@ -338,10 +338,17 @@ def test_the_brush_controls_left_the_panel_for_the_context_bar() -> None:
     }, "a per-tool brush control is drawn in both the sidebar and the context bar"
 
 
-def test_the_accent_line_about_a_live_transform_wraps() -> None:
-    """At 42 characters it was cut off at the sidebar edge, mid-sentence."""
-    source = Path(inker_tools.__file__).read_text(encoding="utf-8")
-    assert 'widgets.wrapped(theme.ACCENT, "Transforming' in source
+def test_a_live_transform_says_so_in_the_accent_colour() -> None:
+    """The sidebar's wrapped accent line went with ``_transform_entry``, which
+    had no caller left: the row is the canvas's own now
+    (``inker_context._transform_bar`` is deliberately empty and says why),
+    because the numeric handles read and write the floating buffer the canvas
+    is already holding. What has to stay true is that a transform in flight is
+    *announced*, and in the accent colour."""
+    from warlock.studio.panes import inker_canvas
+
+    source = Path(inker_canvas.__file__).read_text(encoding="utf-8")
+    assert 'widgets.text_colored(theme.ACCENT, "Transform")' in source
     assert hasattr(theme, "ACCENT")
 
 
@@ -491,10 +498,13 @@ def test_the_single_cell_outline_waits_until_a_cell_is_bigger_than_its_line() ->
 #: Named rather than counted, because *which* three is the decision: the tool
 #: grid and the brush options are what the pane is for and stay open, and these
 #: are the ones reached once and then left alone for an hour.
+#: "Canvas" is deliberately absent: it was a folding block in a sidebar that
+#: no longer draws it, and it is a popover off the rail's canvas glyph now --
+#: which is a header of a different kind, with nothing to remember an open
+#: state for. ``test_the_canvas_settings_are_reachable`` is what guards it.
 FOLDING = {
     "Image brush": "inker/image-brush",
     "Presets": "inker/presets",
-    "Canvas": "inker/canvas",
 }
 
 
@@ -519,6 +529,19 @@ def test_the_blocks_that_are_the_panel_do_not_fold() -> None:
     # of the panel is still plain rather than folded.
     for label in ("Gradient", "Slices"):
         assert f'widgets.section("{label}")' in source
+
+
+def test_the_canvas_settings_are_reachable() -> None:
+    """``canvas_options`` had **zero callers**: the symmetry mode, its ways and
+    its axis are the only writers of ``state.symmetry`` and friends, so
+    symmetry was permanently off in the shipped app while the whole mirror
+    engine behind it stayed live and tested. The grid's numeric step went the
+    same way. Both are the rail's canvas popover now.
+    """
+    source = Path(inker_tools.__file__).read_text(encoding="utf-8")
+    assert "canvas_options(ctx, state)" in source
+    assert "imgui.open_popup(CANVAS_POPUP)" in source
+    assert 'state.symmetry = widgets.labeled_combo(' in source
 
 
 def test_every_folding_key_is_namespaced_to_this_pane() -> None:

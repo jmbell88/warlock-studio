@@ -244,7 +244,7 @@ def create_job(
     if asset_intent is not None and asset_intent not in {
         "refine_2d", "reconstruct_3d", "tileset", "sprite",
     }:
-        raise Invalid("asset_intent is not recognised", field="asset_type")
+        raise Invalid("asset_intent is not recognised", field="asset_intent")
     expected_intent = {
         "image_2d": "refine_2d",
         "model_3d": "reconstruct_3d",
@@ -524,39 +524,54 @@ def create_job(
     # of that ordering is the except below: a failed insert must remove the dir
     # it already wrote, or every DB hiccup leaves an orphan directory nothing
     # will ever list or prune by id.
+    #
+    # **The files are written before the savepoint opens, not inside it.**
+    # ``transaction()`` deliberately holds the connection lock for its whole
+    # body -- unlike ``deferred_commits``, whose docstring explains it does not,
+    # "because the caller does file writes between inserts, and holding the
+    # store lock across those would queue the frame thread's reads behind a
+    # disk". This is that caller: up to ``MAX_REFERENCE_COUNT`` iterations each
+    # writing an ``input.png`` and a ``ref.png`` of up to ``MAX_UPLOAD_BYTES``.
+    # The frame thread reaches the same lock synchronously every tick
+    # (``JobsCache.tick`` -> ``list_jobs`` -> ``JobStore.list``), so a
+    # submission with an uploaded image froze the window for the length of the
+    # write. Only the row inserts need the savepoint's atomicity.
     ids: list[str] = []
     made_dirs: list[Path] = []
+    candidates: list[tuple[str, dict]] = []
     try:
+        for i in range(count):
+            candidate = dict(params)
+            if i > 0:
+                # Candidate 0 keeps the requested seed so a pinned seed
+                # still reproduces; the rest fan out from it. mesh_seed
+                # follows reference_seed/seed here even though these rows
+                # are still stage="reference" and never reach the mesh
+                # stage as-is: the settings panel renders all three seeds
+                # together, and a candidate whose seed/reference_seed
+                # changed but whose mesh_seed silently didn't would read as
+                # a bug, not as the "seed is the legacy fallback for both
+                # stages" contract a few lines up.
+                candidate["reference_seed"] = random_seed()
+                candidate["seed"] = candidate["reference_seed"]
+                candidate["mesh_seed"] = candidate["reference_seed"]
+            job_id = uuid.uuid4().hex[:12]
+            if normalized is not None or normalized_ref is not None:
+                job_dir = config.job_dir(job_id)
+                job_dir.mkdir(parents=True, exist_ok=True)
+                # Recorded before the payload writes, not after: a write
+                # that dies mid-file (disk full) must still remove its dir.
+                made_dirs.append(job_dir)
+                if normalized is not None:
+                    (job_dir / "input.png").write_bytes(normalized)
+                if normalized_ref is not None:
+                    # Every candidate gets its own copy: they are
+                    # independent rows, and prune deletes one dir without
+                    # touching another.
+                    (job_dir / "ref.png").write_bytes(normalized_ref)
+            candidates.append((job_id, candidate))
         with svc.store.transaction():
-            for i in range(count):
-                candidate = dict(params)
-                if i > 0:
-                    # Candidate 0 keeps the requested seed so a pinned seed
-                    # still reproduces; the rest fan out from it. mesh_seed
-                    # follows reference_seed/seed here even though these rows
-                    # are still stage="reference" and never reach the mesh
-                    # stage as-is: the settings panel renders all three seeds
-                    # together, and a candidate whose seed/reference_seed
-                    # changed but whose mesh_seed silently didn't would read as
-                    # a bug, not as the "seed is the legacy fallback for both
-                    # stages" contract a few lines up.
-                    candidate["reference_seed"] = random_seed()
-                    candidate["seed"] = candidate["reference_seed"]
-                    candidate["mesh_seed"] = candidate["reference_seed"]
-                job_id = uuid.uuid4().hex[:12]
-                if normalized is not None or normalized_ref is not None:
-                    job_dir = config.job_dir(job_id)
-                    job_dir.mkdir(parents=True, exist_ok=True)
-                    # Recorded before the payload writes, not after: a write
-                    # that dies mid-file (disk full) must still remove its dir.
-                    made_dirs.append(job_dir)
-                    if normalized is not None:
-                        (job_dir / "input.png").write_bytes(normalized)
-                    if normalized_ref is not None:
-                        # Every candidate gets its own copy: they are
-                        # independent rows, and prune deletes one dir without
-                        # touching another.
-                        (job_dir / "ref.png").write_bytes(normalized_ref)
+            for job_id, candidate in candidates:
                 svc.store.create(
                     kind,
                     prompt,

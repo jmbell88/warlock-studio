@@ -641,10 +641,9 @@ def handle_key(ctx: Any, event: Any) -> bool:
     return False
 
 
-def start_from_home(ctx: Any) -> None:
-    """Home's "New character" tile."""
-    set_mode(ctx.state, "troupe")
-    ensure(ctx)
+# Home's "New character" tile is ``panes.landing.start_troupe``, which is what
+# Home actually wires. The duplicate that sat here was deleted on 2026-08-22
+# with zero callers: two entry points to one mode is one of them going stale.
 
 
 #: The glyph the rail, Home and the palette all use for this mode. One name, so

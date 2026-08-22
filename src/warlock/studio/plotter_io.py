@@ -314,6 +314,21 @@ def _write(files: dict[str, bytes], path: Path) -> None:
     ``os.replace``, so a crash mid-write cannot leave a half-written map where a
     whole one was.
 
+    **Every file is staged before any of them is replaced**, which is the rule
+    ``packwright_io._write`` was written to add to this one and which this one
+    was never brought up to. A Tiled export is ``map.tmx`` plus a ``.tsx`` and a
+    ``.png`` per tileset, and replacing them one at a time meant a failure after
+    the map landed left it pointing at tilesets that were stale or not there --
+    a set of files that say they belong together and do not. Staging first turns
+    every failure that can be caught into "nothing was written".
+
+    What that does not close is the window *between* the replaces: two of three
+    can land and the process die before the third. Stated rather than papered
+    over, for ``packwright_io``'s reason -- closing it needs a directory-level
+    transaction no filesystem here offers, and staging into a temporary
+    directory and renaming that would take the user's chosen name off the file
+    they picked in the dialog.
+
     **The staging name is a dotfile and the cleanup is a ``finally``.** The
     temporary used to be ``level.wmap.tmp`` -- visible in the folder the user
     picked, sorted right beside the file it is a fragment of -- and it was
@@ -323,21 +338,27 @@ def _write(files: dict[str, bytes], path: Path) -> None:
     one that was already there.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    for name, blob in files.items():
-        # The main artifact by its exact exporter-chosen name, not by prefix:
-        # ``startswith("map.")`` also matched an image layer whose source
-        # happened to be ``map.png``, which then overwrote the map at the
-        # user's chosen path with the picture (or the other way round,
-        # depending on dict order).
-        target = (
-            path if name in ("map.wmap", "map.tmx", "map.tmj") else path.parent / name
-        )
-        target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = target.with_name(f".{target.name}.tmp")
-        try:
+    staged: list[tuple[Path, Path]] = []
+    try:
+        for name, blob in files.items():
+            # The main artifact by its exact exporter-chosen name, not by
+            # prefix: ``startswith("map.")`` also matched an image layer whose
+            # source happened to be ``map.png``, which then overwrote the map
+            # at the user's chosen path with the picture (or the other way
+            # round, depending on dict order).
+            target = (
+                path
+                if name in ("map.wmap", "map.tmx", "map.tmj")
+                else path.parent / name
+            )
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp = target.with_name(f".{target.name}.tmp")
             tmp.write_bytes(blob)
+            staged.append((tmp, target))
+        for tmp, target in staged:
             os.replace(tmp, target)
-        finally:
+    finally:
+        for tmp, _target in staged:
             with contextlib.suppress(OSError):
                 tmp.unlink(missing_ok=True)
 

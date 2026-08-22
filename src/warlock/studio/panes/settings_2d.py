@@ -249,65 +249,18 @@ def _findings_hint(
 # --- pieces -----------------------------------------------------------------
 
 
-# The output kinds, in the order the segmented control draws them. A tuple
-# rather than three literals at four call sites: the keyboard arrows below step
-# through it by index, and a fourth kind added to the control and missed by the
-# arrows is a segment the keyboard cannot reach.
-OUTPUTS: tuple[tuple[str, str], ...] = (
-    ("reference", "Object"),
-    ("tile", "Seamless tile"),
-    ("sheet", "Sheet"),
-)
-
-OUTPUT_NOTES: dict[str, str] = {
-    "tile": (
-        "A tile is drawn with wrapping convolutions, so its edges match "
-        "when repeated. It has no subject and cannot be made into a mesh."
-    ),
-    "sheet": (
-        "A sheet is one generation laid out on a grid and cut up, so every "
-        "cell shares a palette and a light direction. It cannot be made into "
-        "a mesh."
-    ),
-}
+# The output kind is **not** a control on this pane. ``_asset_type`` is what
+# the user picks, and ``create_assets.sync_legacy_fields`` sets ``form["output"]``
+# from the chosen spec -- so the pre-registry segmented control that used to be
+# here, its ``OUTPUTS`` table, its left/right keyboard arms and its
+# ``OUTPUT_NOTES`` prose were all superseded rather than lost. They were deleted
+# on 2026-08-22 with zero callers between them; ``git show`` has them if the
+# asset registry is ever unwound.
 
 
-def _output(ctx: Any, form: dict[str, Any]) -> None:
-    """Object, tile or sheet -- the one thing that changes what this pane
-    submits.
-
-    A segmented control rather than a combo: there are few of them, and the
-    choice changes which sections are on screen *and* which service door the
-    submit goes through, so it has to read as a mode and not as one more select
-    in a column of selects.
-    """
-    before = form.get("output", "reference")
-    keys = [key for key, _label in OUTPUTS]
-    with focus.item(ctx.state, FOCUS_PANE, "output") as focused:
-        form["output"] = widgets.segmented_control("output", list(OUTPUTS), before)
-        # A hand-drawn control, so imgui's focus does nothing for it and the
-        # keys are answered here. Left/Right rather than Enter, because it is a
-        # switch between states rather than a thing to press.
-        #
-        # Index arithmetic rather than a literal per arm: with two kinds a pair
-        # of assignments was the whole rule, and the third made "Right" mean
-        # something different depending on where you already were. ``count``'s
-        # own radio row solves it the same way.
-        if focused:
-            here = keys.index(form["output"]) if form["output"] in keys else 0
-            if imgui.is_key_pressed(imgui.Key.left_arrow):
-                form["output"] = keys[(here - 1) % len(keys)]
-            if imgui.is_key_pressed(imgui.Key.right_arrow):
-                form["output"] = keys[(here + 1) % len(keys)]
-    if form["output"] != before:
-        ctx.state.preview_dirty_at = time.monotonic()
-    note = OUTPUT_NOTES.get(form["output"])
-    if note is not None:
-        widgets.muted_wrapped(note)
-
-
-# The two things a Sheet can be. Tuple-of-pairs like OUTPUTS, and stepped
-# through by index for the same reason.
+# The two things a Sheet can be, stepped through by index so a third added to
+# the control and missed by the arrows cannot become a segment the keyboard
+# cannot reach.
 SHEET_TYPES: tuple[tuple[str, str], ...] = (
     ("tile", "Tile grid"),
     ("sprite", "Sprite sheet"),

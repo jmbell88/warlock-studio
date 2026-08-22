@@ -189,3 +189,62 @@ def test_every_symmetry_mode_reflects_the_axis_onto_itself():
     for mode in brush.SYMMETRY:
         points = brush._mirror((4.0, 4.0), (9, 9), mode, axis=(4.0, 4.0))
         assert all(point == (4.0, 4.0) for point in points), mode
+
+
+# -- the three conversions are undoable, flag and matte included -------------
+
+
+def test_undoing_a_background_conversion_restores_the_flag_and_the_matte():
+    """The pixel patch was the whole edit, and it was not the whole change.
+
+    Undo used to put the pixels back under a layer still calling itself a
+    background -- so ``_shown_pixels`` went on forcing alpha to 255 and the
+    canvas did not change -- and the matte colour, which nothing else in the
+    document holds, was gone for good.
+    """
+
+    doc = _doc(matte=(10, 20, 30, 255))
+    doc.to_background()
+    assert doc.undo() is True
+    assert doc.has_background is False
+    assert doc.matte == (10, 20, 30, 255)
+    assert int(doc.stack[0].pixels[0, 0, 3]) == 0
+    assert doc.redo() is True
+    assert doc.has_background is True
+    assert doc.matte is None
+
+
+def test_un_backgrounding_is_one_undoable_step():
+    doc = _doc()
+    doc.to_background()
+    head = doc.history.head
+    assert doc.from_background() is True
+    assert doc.history.head != head
+    assert doc.undo() is True
+    assert doc.has_background is True
+    assert doc.redo() is True
+    assert doc.has_background is False
+
+
+def test_the_reference_flag_is_one_undoable_step():
+    doc = _doc()
+    doc.add_layer()
+    assert doc.set_reference(1, True) is True
+    assert doc.set_reference(1, True) is False
+    assert doc.undo() is True
+    assert doc.stack[1].reference is False
+    assert doc.redo() is True
+    assert doc.stack[1].reference is True
+
+
+def test_a_conversion_on_an_animated_document_writes_the_track():
+    """The track is authoritative: a flag written only onto the materialised
+    layer lasts until the next time that frame is rebuilt."""
+
+    doc = _doc()
+    doc.ensure_animation()
+    doc.to_background()
+    uid = doc.stack[0].uid
+    assert [t.background for t in doc.anim.tracks if t.uid == uid] == [True]
+    assert doc.undo() is True
+    assert [t.background for t in doc.anim.tracks if t.uid == uid] == [False]

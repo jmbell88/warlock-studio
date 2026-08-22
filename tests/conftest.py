@@ -683,3 +683,36 @@ def fake_pipelines(monkeypatch):
 
     monkeypatch.setattr(queue_mod, "TrellisServer", FakeTrellisServer)
     monkeypatch.setattr(text2image_mod, "Text2Image", FakeText2Image)
+
+
+@pytest.fixture(autouse=True)
+def _reset_app_settings_session_flags():
+    """``app_settings`` caches two once-per-session facts in module flags.
+
+    ``_MEASURED`` (the model store's measured size) and ``_SWEPT`` (the
+    cancelled-download staging sweep) are facts about *this process's disk*
+    rather than preferences, which is why they are module-level and not ctx
+    state. Tests get a fresh service per case and not a fresh module, so
+    whichever case ran first decided the answer for every case after it.
+
+    The reset hooks for exactly this existed with no caller -- the pollution
+    the authors flagged in their own docstrings and then did not close. This is
+    the caller.
+
+    **Read out of ``sys.modules`` rather than imported.** An autouse fixture
+    that imports a pane would pull imgui into every test process, including the
+    ones that never touch the studio -- which changes module load order for the
+    whole session to reset two flags that are already False in a process that
+    has not loaded the pane.
+    """
+    import sys
+
+    def reset() -> None:
+        module = sys.modules.get("warlock.studio.panes.app_settings")
+        if module is not None:
+            module._reset_measure()
+            module._reset_sweep()
+
+    reset()
+    yield
+    reset()

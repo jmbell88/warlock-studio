@@ -155,7 +155,16 @@ def _properties_popup(ctx: Any, state: Any, tab: Any) -> None:
     with controls.menu_popup(PROPERTIES_POPUP) as opened:
         if not opened:
             return
+        # Every control in here writes persisted layer state -- blend,
+        # opacity, the two locks, continuous -- so it takes the gate the
+        # canvas, the keyboard path and the tool panels already share
+        # (``busy`` is ``saving or playing``). ``ora.py`` reads ``doc.stack``
+        # twice on the task thread, and a blend mode changed between the two
+        # passes writes an archive whose ``stack.xml`` disagrees with its own
+        # PNG members.
+        imgui.begin_disabled(tab.busy)
         header_controls(ctx, tab.doc)
+        imgui.end_disabled()
 
 
 def _history_popup(ctx: Any, state: Any, tab: Any) -> None:

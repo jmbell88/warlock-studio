@@ -980,6 +980,54 @@ def test_an_oversized_pose_is_refused_without_being_parsed(tmp_path, monkeypatch
     assert rigging.read_pose(tmp_path, pose_id) is None
 
 
+# The same three guards on the three readers that never had them. ``read_sheet``,
+# ``read_sheet_pixel`` and ``read_sprite_draft`` each caught only
+# ``json.JSONDecodeError`` and checked neither the size nor the shape --
+# ``UnicodeDecodeError`` is a ``ValueError`` and is *not* a ``JSONDecodeError``,
+# so a sidecar holding bytes that are not UTF-8 raised straight out of the
+# reader, through ``list_sheets``, and into the pane that called it.
+
+
+def _reader_cases(job_dir):
+    sheet_id, draft_id = rigging.new_id(), rigging.new_id()
+    return (
+        (
+            rigging.sheet_path(job_dir, sheet_id),
+            lambda: rigging.read_sheet(job_dir, sheet_id),
+        ),
+        (
+            rigging.sheet_pixel_path(job_dir, sheet_id),
+            lambda: rigging.read_sheet_pixel(job_dir, sheet_id),
+        ),
+        (
+            rigging.sprite_draft_path(job_dir, draft_id),
+            lambda: rigging.read_sprite_draft(job_dir, draft_id),
+        ),
+    )
+
+
+def test_a_sidecar_that_is_not_utf8_costs_itself(tmp_path):
+    for path, read in _reader_cases(tmp_path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(bytes([0xFF, 0xFE]) + b" not text at all")
+        assert read() is None, path.name
+
+
+def test_a_sidecar_that_is_a_json_array_costs_itself(tmp_path):
+    for path, read in _reader_cases(tmp_path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps([1, 2, 3]), encoding="utf-8")
+        assert read() is None, path.name
+
+
+def test_an_oversized_sidecar_is_refused_without_being_parsed(tmp_path, monkeypatch):
+    monkeypatch.setattr(rigging, "MAX_RECORD_BYTES", 32)
+    for path, read in _reader_cases(tmp_path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"name": "x" * 200}), encoding="utf-8")
+        assert read() is None, path.name
+
+
 def test_a_pose_whose_id_disagrees_with_its_filename_lists_under_the_stem(tmp_path):
     """The stem is the address every caller uses, so the stem wins: the pose
     stays readable and deletable instead of naming a file that isn't there."""

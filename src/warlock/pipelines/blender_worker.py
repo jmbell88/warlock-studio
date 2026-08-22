@@ -178,18 +178,28 @@ def _weld(bpy: Any, mesh: Any, distance: float) -> tuple[Any, int]:
     """
     original = mesh.data.copy()
     before = len(mesh.data.vertices)
-    bpy.ops.object.select_all(action="DESELECT")
-    mesh.select_set(True)
-    bpy.context.view_layer.objects.active = mesh
-    bpy.ops.object.mode_set(mode="EDIT")
     try:
-        bpy.ops.mesh.select_all(action="SELECT")
-        bpy.ops.mesh.remove_doubles(threshold=distance)
-        # Heat weighting reads the surface, and a weld can leave two merged
-        # shells disagreeing about which way is out.
-        bpy.ops.mesh.normals_make_consistent(inside=False)
-    finally:
-        bpy.ops.object.mode_set(mode="OBJECT")
+        bpy.ops.object.select_all(action="DESELECT")
+        mesh.select_set(True)
+        bpy.context.view_layer.objects.active = mesh
+        bpy.ops.object.mode_set(mode="EDIT")
+        try:
+            bpy.ops.mesh.select_all(action="SELECT")
+            bpy.ops.mesh.remove_doubles(threshold=distance)
+            # Heat weighting reads the surface, and a weld can leave two merged
+            # shells disagreeing about which way is out.
+            bpy.ops.mesh.normals_make_consistent(inside=False)
+        finally:
+            bpy.ops.object.mode_set(mode="OBJECT")
+    except BaseException:
+        # ``remove_doubles`` raising is a real failure mode -- ``_skin`` catches
+        # the ``RuntimeError`` and carries on down the fallback chain -- and the
+        # copy taken two lines up is the caller's only by *return*. A raise
+        # never returns it, so nothing downstream had a reference to free and
+        # the datablock stayed resident for the life of the subprocess.
+        with contextlib.suppress(Exception):
+            bpy.data.meshes.remove(original)
+        raise
     return original, before - len(mesh.data.vertices)
 
 
@@ -1233,6 +1243,34 @@ def _project_material(
     return material, colour_emit, weight_emit, depth_emit
 
 
+def _free_material(bpy: Any, material: Any) -> None:
+    """Free a projection material and every image it loaded.
+
+    Blender's datablocks are reference-counted only for *saving*: an image or a
+    material with no user still sits in ``bpy.data`` for the life of the
+    process. ``mesh.data.materials.clear()`` empties an object's slots and
+    ``tree.nodes.remove`` detaches a node; neither frees anything, which is why
+    both of those already being called is not enough.
+
+    Written defensively -- a datablock already gone is not an error worth
+    failing a bake over -- and it collects the images *before* removing the
+    material, because removing the material invalidates its node tree.
+    """
+    images = []
+    tree = getattr(material, "node_tree", None)
+    if tree is not None:
+        images = [
+            node.image
+            for node in tree.nodes
+            if getattr(node, "type", "") == "TEX_IMAGE" and node.image is not None
+        ]
+    with contextlib.suppress(Exception):
+        bpy.data.materials.remove(material)
+    for image in images:
+        with contextlib.suppress(Exception):
+            bpy.data.images.remove(image)
+
+
 def op_project(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
     """Bake each restyled view into the atlas, with a weight image beside it.
 
@@ -1358,8 +1396,20 @@ def op_project(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
             image.file_format = "PNG"
             image.save()
             tree.nodes.remove(node)
+            # The PNG is on disk and nothing reads the datablock again.
+            # ``nodes.remove`` only detaches it: an image datablock outlives
+            # every node that pointed at it and is freed only by an explicit
+            # ``images.remove``. At ``texture_size`` up to 2048 and three
+            # targets a view, ten views left the better part of a gibibyte
+            # resident in the one subprocess whose host-commit budget the rest
+            # of the codebase guards carefully.
+            bpy.data.images.remove(image)
 
         mesh.data.materials.clear()
+        # Same argument, for what ``_project_material`` allocated: the material
+        # and the two or three PNGs it loaded. ``materials.clear()`` empties the
+        # object's *slots*, which is not the same as freeing the datablock.
+        _free_material(bpy, material)
         done.append(i)
         progress(0.05 + 0.9 * (i + 1) / max(len(views), 1), f"Baking {i + 1}/{len(views)}")
 

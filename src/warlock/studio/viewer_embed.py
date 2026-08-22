@@ -393,9 +393,6 @@ class Viewer(PoseOps):
     def screenshot(self) -> Any:
         return capture.image(self.viewport)
 
-    def thumbnail_png(self) -> bytes:
-        return capture.png_bytes(self.viewport)
-
     # There is deliberately no whole-strip ``render_sheet_strip`` here any
     # more. It rendered every direction in one call -- a draw plus a
     # synchronous GPU-to-CPU readback per cell -- which for sixteen cells is a

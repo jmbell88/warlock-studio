@@ -379,7 +379,12 @@ def test_every_document_mutating_panel_is_gated_on_the_saving_flag():
     import ast
     import inspect
 
-    from warlock.studio.panes import inker_bridge, inker_timeline, inker_tools
+    from warlock.studio.panes import (
+        inker_bridge,
+        inker_menu,
+        inker_timeline,
+        inker_tools,
+    )
 
     targets = (
         # ``_canvas_ops`` was the bridge panel's row of flips and rotates; the
@@ -389,6 +394,16 @@ def test_every_document_mutating_panel_is_gated_on_the_saving_flag():
         inker_tools._options,
         inker_timeline._frame_menu,
         inker_timeline._cell_menu,
+        # The layers panel, which is named in the invariant with the rest of
+        # them and was the one surface without the gate: ``ora.write_ora``
+        # walks ``doc.stack`` twice on the task thread -- once for
+        # ``stack.xml``, once for the PNG members -- so an eye toggle, a
+        # reorder or a blend change landing between the two passes writes an
+        # archive whose parts disagree with each other.
+        inker_timeline._toggle_all,
+        inker_timeline._track_row,
+        inker_timeline._row_menu,
+        inker_menu._properties_popup,
     )
     for func in targets:
         tree = ast.parse(inspect.getsource(func).lstrip())
@@ -405,6 +420,20 @@ def test_every_document_mutating_panel_is_gated_on_the_saving_flag():
             )
         ]
         assert gates, f"{func.__qualname__} mutates the document with no save gate"
+
+
+def test_the_two_reorder_gestures_refuse_outright_rather_than_grey_out():
+    """``begin_disabled`` does not reliably stop a drag-and-drop source or a
+    press-and-drag gesture from registering, and a reorder is the exact write
+    the ORA writer's two passes over ``doc.stack`` cannot survive. So these two
+    check ``tab.busy`` themselves."""
+    import inspect
+
+    from warlock.studio.panes import inker_timeline
+
+    for func in (inker_timeline._reorder, inker_timeline._drag_toggle):
+        source = inspect.getsource(func)
+        assert "tab.busy" in source, f"{func.__qualname__} has no busy guard"
 
 
 def test_busy_is_saving_or_playing():

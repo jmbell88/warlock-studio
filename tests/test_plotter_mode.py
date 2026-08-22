@@ -370,6 +370,65 @@ def test_a_failed_write_strands_no_temporary(tmp_path, monkeypatch):
     assert tab is not None
 
 
+def test_an_export_stages_every_file_before_replacing_any(tmp_path, monkeypatch):
+    """``packwright_io._write``'s rule, which this one was written from and
+    never brought up to.
+
+    A Tiled export is ``map.tmx`` plus a ``.tsx`` and a ``.png`` per tileset.
+    Replacing them one at a time meant an encode that raised on the third left
+    the map already written on top of the previous export, pointing at tilesets
+    that were stale or not there -- a set of files that say they belong
+    together and do not.
+    """
+    (tmp_path / "level.tmx").write_bytes(b"old map")
+    (tmp_path / "tiles.tsx").write_bytes(b"old tileset")
+    calls: list[str] = []
+    real = plotter_io.os.replace
+
+    def counted(src, dst):
+        calls.append(Path(dst).name)
+        if len(calls) == 1:
+            raise OSError("no room")
+        return real(src, dst)
+
+    monkeypatch.setattr(plotter_io.os, "replace", counted)
+    with pytest.raises(OSError):
+        plotter_io._write(
+            {"map.tmx": b"new map", "tiles.tsx": b"new tileset"},
+            tmp_path / "level.tmx",
+        )
+    # The first replace is the one that raised, so nothing landed -- and in
+    # particular the *second* file was never written on its own.
+    assert (tmp_path / "level.tmx").read_bytes() == b"old map"
+    assert (tmp_path / "tiles.tsx").read_bytes() == b"old tileset"
+    assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
+
+
+def test_a_failing_encode_of_a_later_file_writes_none_of_them(tmp_path, monkeypatch):
+    """The half-of-one-export-and-half-of-another case, from the staging side:
+    a write that raises partway leaves every previous target untouched."""
+    (tmp_path / "level.tmx").write_bytes(b"old map")
+
+    calls: list[str] = []
+    real_write = Path.write_bytes
+
+    def counted(self, blob):
+        calls.append(self.name)
+        if len(calls) == 2:
+            raise OSError("no room")
+        return real_write(self, blob)
+
+    monkeypatch.setattr(Path, "write_bytes", counted)
+    with pytest.raises(OSError):
+        plotter_io._write(
+            {"map.tmx": b"new map", "tiles.tsx": b"new tileset"},
+            tmp_path / "level.tmx",
+        )
+    assert (tmp_path / "level.tmx").read_bytes() == b"old map"
+    assert not (tmp_path / "tiles.tsx").exists()
+    assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
+
+
 def test_a_map_opened_from_tiled_saves_back_to_tiled(tmp_path):
     """Warlock does not silently convert a file you brought from Tiled into one
     Tiled cannot open."""

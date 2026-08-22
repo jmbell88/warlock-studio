@@ -324,13 +324,9 @@ def _doc(verb: str, *args: Any, **kwargs: Any) -> Callable[..., Any]:
     return _run
 
 
-def _state_doc(verb: str, attr: str) -> Callable[..., Any]:
-    """A document method taking one app-level tool setting as its argument."""
-
-    def _run(ctx: Any, tab: Any, **_: Any) -> Any:
-        return getattr(tab.doc, verb)(getattr(ctx.state.inker, attr))
-
-    return _run
+# ``_state_doc`` -- a document method taking one app-level tool setting as its
+# argument -- was deleted on 2026-08-22 with zero callers, where its siblings
+# ``_mode_ctx`` and ``_doc`` are used dozens of times.
 
 
 def _view(verb: str, *args: Any) -> Callable[..., Any]:
@@ -983,8 +979,8 @@ register(
             tab.doc.stack.active_index, not tab.doc.stack.active.reference
         ),
         menu="Layer",
-        enabled=has_doc,
-        reason=NO_DOC,
+        enabled=ready,
+        reason=BUSY,
         hint="Drawn, never edited: an underlay to trace over.",
     )
 )
@@ -995,8 +991,8 @@ register(
         lambda ctx, tab, **_: tab.doc.solo(tab.doc.stack.active_index),
         menu="Layer",
         key="Alt+S",
-        enabled=has_doc,
-        reason=NO_DOC,
+        enabled=ready,
+        reason=BUSY,
         hint=(
             "Hides everything else -- and pressing it again on the layer that "
             "is already alone brings the rest back."

@@ -618,22 +618,39 @@ def _offset_form(ctx: Any, tab: Any) -> None:
     form["scope"] = widgets.labeled_combo(
         "Scope", str(form["scope"]), list(OFFSET_SCOPES)
     )
-    _changed, form["wrap"] = controls.checkbox(
-        "Wrap around the edges",
-        bool(form["wrap"]),
-        tooltip=(
-            "Wrapping is an exact permutation -- nothing is lost, so offsetting "
-            "back puts everything where it was. Without it the vacated cells "
-            "are cleared."
-        ),
-    )
-    if controls.button("Offset##apply", (-1, 0)):
-        moved = tab.doc.offset(
-            int(form["dx"]),
-            int(form["dy"]),
-            wrap=bool(form["wrap"]),
-            scope=str(form["scope"]),
+    # Not offered on an infinite map, and not merely disabled: there is no
+    # edge for a roll to wrap around, so the box would be asking a question
+    # with no answer. The engine refuses it by name for the same reason; this
+    # is that refusal made unreachable rather than survivable.
+    infinite = bool(tab.doc.infinite)
+    if infinite:
+        widgets.muted_wrapped(
+            "An infinite map has no edge, so an offset slides its window "
+            "rather than wrapping or clearing -- nothing is lost either way."
         )
+    else:
+        _changed, form["wrap"] = controls.checkbox(
+            "Wrap around the edges",
+            bool(form["wrap"]),
+            tooltip=(
+                "Wrapping is an exact permutation -- nothing is lost, so offsetting "
+                "back puts everything where it was. Without it the vacated cells "
+                "are cleared."
+            ),
+        )
+    if controls.button("Offset##apply", (-1, 0)):
+        try:
+            moved = tab.doc.offset(
+                int(form["dx"]),
+                int(form["dy"]),
+                wrap=False if infinite else bool(form["wrap"]),
+                scope=str(form["scope"]),
+            )
+        except ValueError as exc:
+            # ``_resize``'s framing: the engine's sentence says what was wrong
+            # and nothing about what was being attempted.
+            ctx.toast(f"The map was not offset: {exc}.", "error")
+            return
         if not moved:
             ctx.toast("That offset moves nothing.", "warn")
 

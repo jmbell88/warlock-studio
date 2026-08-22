@@ -39,16 +39,21 @@ def test_a_new_form_is_not_a_sheet():
     assert default_form_2d()["output"] == "reference"
 
 
-def test_the_three_outputs_are_the_ones_the_control_draws():
-    """The keyboard steps through ``OUTPUTS`` by index, so a kind in the
-    control and not in the tuple is a segment the keyboard cannot reach."""
-    assert [key for key, _ in settings_2d.OUTPUTS] == ["reference", "tile", "sheet"]
+def test_the_output_kind_comes_from_the_asset_registry_not_a_control():
+    """``OUTPUTS`` and ``OUTPUT_NOTES`` were the pre-registry segmented control
+    and its prose. ``_asset_type`` is the shipped control now and
+    ``create_assets.sync_legacy_fields`` sets ``form["output"]`` from the chosen
+    spec, so the old table had no caller left -- and this test was guarding the
+    *order of a dead control*, which is the failure it exists to catch now.
+    """
+    assert not hasattr(settings_2d, "OUTPUTS")
+    assert not hasattr(settings_2d, "OUTPUT_NOTES")
+    assert not hasattr(settings_2d, "_output")
+    # And the three kinds are still the three kinds, read where they live.
+    from warlock.studio import create_assets
 
-
-def test_every_output_but_the_object_explains_itself():
-    """The Object output is the default and needs no note; the other two each
-    change what the submit does, so each says how."""
-    assert set(settings_2d.OUTPUT_NOTES) == {"tile", "sheet"}
+    outputs = {spec.output for spec in create_assets.ASSET_TYPES.values()}
+    assert outputs == {"reference", "tile", "sheet"}
 
 
 def test_a_new_form_defaults_to_a_tile_grid():

@@ -382,6 +382,11 @@ def _rig(ctx: Any, form: dict[str, Any]) -> None:
             form["rig_template"] = widgets.labeled_combo(
                 "Skeleton", form["rig_template"] or ctx.rig_default, options
             )
+            # Three doors refuse on this exact field -- ``validation.py``,
+            # ``service/rig.py`` and ``service/poses.py`` -- and without this
+            # the one dropdown at fault was the only control in the form never
+            # outlined, unlike a bad ``profile`` or ``base_model``.
+            widgets.field_error(ctx.state, "rig_template")
 
 
 def _submit(ctx: Any, form: dict[str, Any]) -> None:

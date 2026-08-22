@@ -130,6 +130,28 @@ class GeometryOps:
         pushed content off the edge -- and objects then ride the shift off the
         map with the content they annotate.
 
+        **An infinite map has no edge, so neither branch above applies to it.**
+        Its stored rectangle is a dense *window* over the painted extent plus an
+        origin (see ``MapDoc.infinite``): the window's size and position are an
+        artifact of painting history, not a boundary. Rolling over it made two
+        documents with identical true content offset differently depending on
+        how they happened to be framed, and clearing the vacated cells threw
+        away content shifted past a line that does not exist. So an infinite
+        map takes :meth:`resize`'s rule instead -- the window grows or its
+        origin slides, and the shift is a lossless translation:
+
+        - Whole-map scope is *only* the origin: moving every cell by the same
+          amount is what "the window's corner moved" means, no array is touched
+          and the objects, which are window-relative in the document, travel
+          with it for free.
+        - Layer scope grows the window by exactly what the shifted layer needs
+          and reframes every layer into it, as one edit -- the other layers
+          keep their true coordinates because the origin absorbs the growth.
+
+        ``wrap`` is refused on an infinite map rather than reinterpreted: a roll
+        needs a fixed boundary to roll around, and there is no honest answer to
+        "wrap around what?".
+
         ``scope`` is ``"map"`` (every tile leaf) or ``"layer"`` (the active one).
         Whole-map scope moves objects by the pixel equivalent, which is
         :meth:`resize`'s own rule and for its reason: object coordinates are
@@ -150,6 +172,13 @@ class GeometryOps:
         # flight, so the session is closed rather than moved.
         self.end_stroke()
         self.end_object_edit()
+        if self.infinite:
+            if wrap:
+                raise ValueError(
+                    "an infinite map has no edge to wrap around; "
+                    "offset it without wrapping"
+                )
+            return self._offset_infinite(dx, dy, scope)
         if wrap and self.width and self.height:
             dx, dy = dx % self.width, dy % self.height
         if (dx, dy) == (0, 0):
@@ -216,6 +245,105 @@ class GeometryOps:
             )
         )
         self._apply_resize((self.width, self.height), after, after_objects)
+        return True
+
+    def _offset_infinite(self: MapDoc, dx: int, dy: int, scope: str) -> bool:
+        """:meth:`offset` on a map whose stored rectangle is a window.
+
+        One :class:`ResizeEdit`, which is what :meth:`resize` already pushes and
+        what already carries ``before_origin``/``after_origin`` -- the field
+        ``offset`` used to omit, which is how the origin got left behind.
+        """
+        if (dx, dy) == (0, 0):
+            return False
+        before_origin = (int(self.origin_x), int(self.origin_y))
+        if scope == "map":
+            # Nothing to copy: every cell moving by the same amount *is* the
+            # window's corner moving, and the arrays are the same arrays at a
+            # different true coordinate. Objects are window-relative in the
+            # document, so they travel with it and are deliberately absent
+            # here -- shifting them as well would move them twice.
+            after_origin = (before_origin[0] - dx, before_origin[1] - dy)
+            self.history.push(
+                ResizeEdit(
+                    before_size=(self.width, self.height),
+                    after_size=(self.width, self.height),
+                    before_origin=before_origin,
+                    after_origin=after_origin,
+                )
+            )
+            self._apply_resize((self.width, self.height), {}, {}, after_origin)
+            return True
+
+        layer = self.active()
+        if not isinstance(layer, TileLayer):
+            return False
+        # What the shifted layer needs the window to hold. Only its *painted*
+        # cells matter -- an empty margin sliding past the corner is not
+        # content -- so an offset of a layer with nothing on it grows nothing.
+        ys, xs = np.nonzero(np.asarray(layer.data) != gidlib.EMPTY)
+        if not xs.size:
+            return False
+        x0, x1 = int(xs.min()) + dx, int(xs.max()) + dx
+        y0, y1 = int(ys.min()) + dy, int(ys.max()) + dy
+        left, top = max(0, -x0), max(0, -y0)
+        right, bottom = max(0, x1 - self.width + 1), max(0, y1 - self.height + 1)
+        width, height = self.width + left + right, self.height + top + bottom
+        if width > MAX_DIMENSION or height > MAX_DIMENSION:
+            # ``grow_to_hold``'s cap and its argument, applied to the one other
+            # place an infinite map's window grows.
+            raise ValueError(
+                f"an infinite map's painted extent stops at {MAX_DIMENSION} cells a side"
+            )
+
+        def _reframed(data: np.ndarray, mx: int, my: int) -> np.ndarray:
+            grown = gidlib.empty_layer(width, height)
+            sx0, sy0 = max(0, -mx), max(0, -my)
+            tx0, ty0 = max(0, mx), max(0, my)
+            span_w = min(data.shape[1] - sx0, width - tx0)
+            span_h = min(data.shape[0] - sy0, height - ty0)
+            if span_w > 0 and span_h > 0:
+                grown[ty0 : ty0 + span_h, tx0 : tx0 + span_w] = data[
+                    sy0 : sy0 + span_h, sx0 : sx0 + span_w
+                ]
+            return grown
+
+        before: dict[int, np.ndarray] = {}
+        after: dict[int, np.ndarray] = {}
+        for other in self.tile_layers():
+            baseline = self._stroke_baseline(other.uid)
+            before[other.uid] = other.data if baseline is None else baseline
+            moved = (dx + left, dy + top) if other.uid == layer.uid else (left, top)
+            after[other.uid] = _reframed(other.data, *moved)
+
+        # The growth alone, not the layer's shift: the origin says where the
+        # *window* starts, and only the untouched layers' true coordinates are
+        # what it has to keep still.
+        after_origin = (before_origin[0] - left, before_origin[1] - top)
+        shift_x, shift_y = left * self.tile_w, top * self.tile_h
+        before_objects: dict[int, list[tuple[float, float]]] = {}
+        after_objects: dict[int, list[tuple[float, float]]] = {}
+        for other in self.all_layers():
+            if not isinstance(other, ObjectLayer):
+                continue
+            before_objects[other.uid] = [(o.x, o.y) for o in other.objects]
+            after_objects[other.uid] = [
+                (o.x + shift_x, o.y + shift_y) for o in other.objects
+            ]
+        self.history.push(
+            ResizeEdit(
+                before_size=(self.width, self.height),
+                after_size=(width, height),
+                before=before,
+                after=after,
+                before_objects=before_objects,
+                after_objects=after_objects,
+                before_origin=before_origin,
+                after_origin=after_origin,
+            )
+        )
+        self._reframe_stroke(left, top, width, height)
+        self._apply_resize((width, height), after, after_objects, after_origin)
         return True
 
     def grow_to_hold(self: MapDoc, x0: int, y0: int, x1: int, y1: int) -> bool:

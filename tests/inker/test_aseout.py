@@ -430,6 +430,33 @@ def test_the_derived_palette_is_capped_and_keeps_the_most_used_colours():
     assert MAGENTA in sprite.palette
 
 
+def test_the_cap_breaks_a_boundary_tie_by_colour_value():
+    """``argpartition`` guarantees only the pivot's own position, so which of
+    the colours sharing the cutoff count landed inside its window was
+    unspecified -- and a lower-coded colour that should have won the documented
+    "ties broken by colour value" rule was sometimes dropped for a higher-coded
+    one with the same count.
+
+    Built so *every* colour ties: 300 distinct colours at exactly two pixels
+    each. The cap then has nothing to go on but the colour value, so the answer
+    is fully determined -- the 256 lowest codes, and nothing else.
+    """
+    count = 300
+    doc = Document.blank(count, 2)
+    pixels = doc.stack[0].pixels
+    # Codes ascend with ``i``: red then green are the top two bytes of the
+    # packed uint32, so this is 0..299 in ascending code order.
+    wanted = [(i // 256, i % 256, 0, 255) for i in range(count)]
+    for i, colour in enumerate(wanted):
+        pixels[:, i] = colour
+    doc.invalidate_all()
+    sprite = asein.parse(aseout.aseprite_bytes(doc))
+    assert len(sprite.palette) == ixp.MAX_COLOURS
+    # Every colour is tied at two pixels, so the cap has nothing to go on but
+    # the colour value: the 256 lowest codes, and nothing else.
+    assert sorted(sprite.palette) == sorted(wanted[: ixp.MAX_COLOURS])
+
+
 def test_the_derived_palette_is_the_same_table_on_every_save():
     """The fixed-point property the corpus rests on. The reader drops a palette
     on a non-indexed file, so the writer has to rebuild an identical one from
