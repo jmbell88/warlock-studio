@@ -66,6 +66,7 @@ class Runtime:
         self._note: Callable[[str], None] = lambda _text: None
         self.checks: list[doctor.Check] = []
         self.vram_plan: vram.Plan | None = None
+        self.device_memory: vram.DeviceMemory | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._ready = threading.Event()
@@ -159,11 +160,12 @@ class Runtime:
 
     def _resolve_vram(self) -> vram.Plan:
         """Measure the card, choose the mode, write the decision back."""
+        self.device_memory = vram.probe()
         plan = vram.plan(
             exclusive=self.config.vram_exclusive,
             budget_gib=self.config.vram_budget_gib,
             total_gib=self.config.vram_total_gib,
-            device=vram.probe(),
+            device=self.device_memory,
             explicit=self.config.vram_exclusive_explicit,
         )
         self.config.vram_exclusive = plan.exclusive

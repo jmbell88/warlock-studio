@@ -243,6 +243,10 @@ def create_sprite_synthesis(
         "draft_id": draft_id,
         "base_model": SPRITE_BASE_MODEL,
     }
+    source_params = source.get("params") if isinstance(source.get("params"), dict) else {}
+    for identity_key in ("asset_type", "asset_intent"):
+        if source_params.get(identity_key):
+            params[identity_key] = source_params[identity_key]
     check_vram(svc, "sprite_synthesis", "model", params)
     # On disk *plus* every unfinished row that will land a draft here: the
     # trio is written by the worker minutes after this row is minted, so a

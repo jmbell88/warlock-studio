@@ -146,7 +146,7 @@ def _environment_check() -> Check:
 
 
 def _instance_check(config: Config) -> Check:
-    """Is this the only Warlock on this home?
+    """Is this the only Warlock on this writable resource set?
 
     A row rather than only a startup refusal, because the refusal fires once and
     the condition it guards -- two processes over one job database and one engine
@@ -166,21 +166,22 @@ def _instance_check(config: Config) -> Check:
         return Check(
             "single instance", True, f"this Warlock owns {config.home}", fatal=False
         )
-    path = config.home / instance.LOCK_NAME
-    probe = instance.InstanceLock(path)
+    probe = instance.InstanceLocks(instance.lock_paths(config))
     if probe.acquire():
         probe.release()
         return Check(
             "single instance",
             True,
-            f"no other Warlock is using {config.home}",
+            "no other Warlock is using this home, database, or model root",
             fatal=False,
         )
+    if probe.failure:
+        return Check("single instance", False, probe.failure, fatal=False)
     return Check(
         "single instance",
         False,
-        f"another Warlock is using {config.home} -- they share the job database "
-        f"and the engine port; close one, or give it its own WARLOCK_HOME",
+        f"another Warlock holds {probe.path} -- close it, or give this copy "
+        "separate WARLOCK_HOME, WARLOCK_DB, and WARLOCK_T2I_ROOT values",
         fatal=False,
     )
 
@@ -286,14 +287,6 @@ TRELLIS_EXE_HINT = (
     f"(vendored build: {TRELLIS_EXE_VERSION}; sha256 {TRELLIS_EXE_SHA256}), "
     "or point WARLOCK_TRELLIS_EXE at your own copy"
 )
-# Pinned like every registry ``Fetch`` (MDL-03), and this one is not a Fetch:
-# the GGUF weights are one of the two *fatal* doctor rows, declared as text
-# here because nothing downloads them through the registry. That makes the pin
-# matter more rather than less -- an unpinned fatal dependency is the one a
-# fresh install has no choice but to take.
-TRELLIS_GGUF_REVISION = "a57397bd3d351599d9729fc144b3f87c3f87d65b"
-
-
 def trellis_gguf_hint(config: Config) -> str:
     """The ``hf download`` line, landing in *this* install's models directory.
 
@@ -304,13 +297,7 @@ def trellis_gguf_hint(config: Config) -> str:
     left the fatal row standing. Quoted, because the resolved path contains
     spaces on any ordinary Windows profile.
     """
-    return (
-        "uvx hf download ilintar/trellis2-gguf "
-        f"--revision {TRELLIS_GGUF_REVISION} "
-        '--include "*.gguf" '
-        '--exclude "q4/*" --exclude "q8/*" '
-        f'--local-dir "{config.trellis_models_dir}"'
-    )
+    return fetch.download_text(config, "engine", models.ENGINE_MODELS["trellis_gguf"])
 
 
 def _exe_check(config: Config) -> Check:
@@ -324,11 +311,14 @@ def _exe_check(config: Config) -> Check:
 
 
 def _gguf_check(config: Config) -> Check:
-    ok = config.trellis_models_dir.exists() and any(config.trellis_models_dir.glob("*.gguf"))
+    spec = models.ENGINE_MODELS["trellis_gguf"]
+    ok = fetch.present(config, "engine", spec)
+    missing = [name for name in spec.probe if not (config.trellis_models_dir / name).is_file()]
     detail = (
         str(config.trellis_models_dir)
         if ok
-        else f"no *.gguf found in {config.trellis_models_dir} -- download with:\n"
+        else f"{len(missing)} required GGUF file(s) missing from "
+        f"{config.trellis_models_dir} ({', '.join(missing[:3])}) -- download with:\n"
         f"  {trellis_gguf_hint(config)}"
     )
     return Check("TRELLIS GGUF weights", ok, detail, fatal=True)

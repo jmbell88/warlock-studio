@@ -1768,6 +1768,7 @@ version = "0.0.25"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
+    { name = "huggingface-hub" },
     { name = "manifold3d" },
     { name = "numpy" },
     { name = "opencv-python-headless" },
@@ -1817,6 +1818,7 @@ requires-dist = [
     { name = "diffusers", marker = "extra == 'text2image'", specifier = ">=0.31" },
     { name = "einops", marker = "extra == 'text2image'", specifier = ">=0.8" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "huggingface-hub", specifier = ">=0.34" },
     { name = "imgui-bundle", marker = "extra == 'studio'", specifier = ">=1.6" },
     { name = "kornia", marker = "extra == 'text2image'", specifier = ">=0.7" },
     { name = "manifold3d", specifier = ">=2.5" },

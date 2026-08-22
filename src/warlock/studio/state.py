@@ -30,7 +30,9 @@ def default_form_2d() -> dict[str, Any]:
     not persisted (settings.VOLATILE), so a literal default meant every launch
     opened on the same seed and a first Generate reproduced last week's image.
     """
+    from .. import models
     from ..service.validation import random_seed
+    from .create_assets import DEFAULT_ASSET_TYPE
 
     return {
         "prompt": "",
@@ -39,7 +41,11 @@ def default_form_2d() -> dict[str, Any]:
         # normalize stores nothing for it.
         "expand": "off",
         "negative_prompt": "",
-        "base_model": "",
+        # Explicit rather than empty: the combo and the stored form must say
+        # the same model guidance.normalize will run.  An empty selection used
+        # to draw the registry's first row while silently submitting a
+        # different default.
+        "base_model": models.DEFAULT_BASE_MODEL,
         "style_lora": "",
         "lora_weight": 0.9,
         "seed": random_seed(),
@@ -52,6 +58,10 @@ def default_form_2d() -> dict[str, Any]:
         # texture set is making several. A sheet is a different *door* (its own
         # job kind), but it is composed from the same prompt, which is the whole
         # reason it is a third value here rather than a fourth mode in the rail.
+        # Authoritative user intent. The fields below remain as a compatibility
+        # bridge to the generation services and are synchronised from this by
+        # create_assets.sync_legacy_fields.
+        "asset_type": DEFAULT_ASSET_TYPE,
         "output": "reference",
         # The Sheet output's three fields. Strings, including the tile size,
         # because ``restore_form`` gates on ``type(value) is type(default)`` and
@@ -119,6 +129,12 @@ def form_from_params(params: dict[str, Any]) -> dict[str, Any]:
                 form[key] = str(value)
         except (TypeError, ValueError):
             continue
+    from . import create_assets
+
+    form["asset_type"] = (
+        create_assets.asset_type_from_params(params) or form["asset_type"]
+    )
+    create_assets.sync_legacy_fields(form)
     return form
 
 
@@ -803,6 +819,9 @@ class AppState:
     # next launch and would routinely name a stage that asset has not reached.
     # Written only by ``create_stages.go`` -- the one switch.
     create_stage: str = "reference"
+    # The Simple/Advanced disclosure is workspace state, not a creative
+    # setting. It deliberately resets each launch and is never persisted.
+    create_advanced: bool = False
     # Every outstanding failure the banner is showing, oldest first. A list
     # rather than the single ``last_error`` slot it replaces: three writers
     # (a failed doctor check, a dead worker, a worker that never started) all
@@ -1073,6 +1092,9 @@ ACTIONS = {
     "promote": "Make 3D",
     "rig": "Rig",
     "open": "Open",
+    "inker": "Open in Inker",
+    "clay": "Open in Clay",
+    "plotter": "Add to Plotter",
 }
 
 
@@ -1100,21 +1122,41 @@ def primary_action(job: dict[str, Any], *, rigging_available: bool = True) -> st
         and status == "done"
         and "input.png" in (job.get("files") or [])
     ):
-        return "open"
+        params = job.get("params") if isinstance(job.get("params"), dict) else {}
+        return "plotter" if params.get("asset_intent") == "tileset" else "open"
     if status == "error":
         return "retry"
     if status != "done":
         return None
     files = job.get("files") or []
+    params = job.get("params") if isinstance(job.get("params"), dict) else {}
+    intent = params.get("asset_intent")
+    if intent == "tileset" and "input.png" in files:
+        return "plotter"
+    if intent in ("refine_2d", "sprite") and "input.png" in files:
+        return "inker"
+    if (
+        intent == "reconstruct_3d"
+        and job.get("stage") == "reference"
+        and "input.png" in files
+    ):
+        # The reference is explicitly an approval/editing stage. Make 3D is
+        # still available from Create after the image has been inspected; the
+        # library card's contextual next action is the editor beside it.
+        return "inker"
     if job.get("stage") == "tile":
         # No mesh, no rig: a tile's next step is to be exported, which the
         # inspector's Export tab is. "Open" selects it and shows that tab.
-        return "open" if "input.png" in files else None
+        return "inker" if "input.png" in files and intent == "refine_2d" else (
+            "open" if "input.png" in files else None
+        )
     if job.get("stage") == "reference":
         # A finished reference's next step is the mesh it exists for.
         return "promote" if "input.png" in files else None
     if "model.glb" not in files:
         return None
+    if intent == "reconstruct_3d":
+        return "clay"
     if rigging_available and job.get("kind") != "rig" and "rig.glb" not in files:
         return "rig"
     return "open"

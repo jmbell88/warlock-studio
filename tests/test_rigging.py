@@ -768,6 +768,43 @@ def test_run_worker_kills_a_worker_that_hangs_without_closing_stdout(tmp_path, m
     assert started and started[0].poll() is not None, "the hung process was left running"
 
 
+def test_run_worker_never_waits_unbounded_after_a_kill(tmp_path, monkeypatch):
+    import io
+
+    waits: list[float | None] = []
+
+    class StuckProcess:
+        args = ["blender-worker"]
+        pid = 12345
+
+        def __init__(self):
+            self.stdin = io.StringIO()
+            self.stdout = io.StringIO("")
+
+        def wait(self, timeout=None):
+            waits.append(timeout)
+            raise subprocess.TimeoutExpired(self.args, timeout)
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr(rigging.subprocess, "Popen", lambda *_a, **_kw: StuckProcess())
+    monkeypatch.setattr(rigging.winjob, "assign", lambda _pid: None)
+    monkeypatch.setattr(rigging.winjob, "track", lambda _pid, _label: None)
+    monkeypatch.setattr(rigging.winjob, "untrack", lambda _pid: None)
+
+    with pytest.raises(rigging.BlenderError, match="timed out"):
+        rigging.run_worker(
+            {"op": "rig", "result_path": str(tmp_path / "r.json")}, timeout=0.01
+        )
+
+    assert waits
+    assert all(timeout is not None for timeout in waits)
+
+
 def test_run_worker_rejects_an_unknown_op(tmp_path):
     with pytest.raises(rigging.BlenderError, match="code 2"):
         rigging.run_worker(

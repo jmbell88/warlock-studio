@@ -1,4 +1,4 @@
-"""``Worker``'s Troupe stage: the 256-cell character sheet.
+"""``Worker``'s Troupe stage: a configured character sheet.
 
 One job kind, ``charsheet``, and it is the last link of the chain the program
 spec calls Phase 4: reference -> gate -> mesh -> rig -> **sheet**. The first
@@ -73,13 +73,15 @@ class TroupeOps:
             raise RuntimeError("that mesh is no longer rigged")
 
         template = str(params.get("template") or "humanoid")
-        records = await asyncio.to_thread(clips.expand_clips, template)
+        troupe_layout = charsheet.resolve_layout(params.get("layout"))
+        records = await asyncio.to_thread(clips.expand_clips, template, troupe_layout)
         logical = int(params.get("logical_size", 32))
         layout = charsheet.plan(
             records,
             frame_size=logical,
             elevation=float(params.get("elevation", sheetlib.DEFAULT_ELEVATION)),
             lighting=str(params.get("lighting", "flat")),
+            layout=troupe_layout,
         )
 
         # Keyed by ``(pose id, frame)`` rather than by id: every frame of a
@@ -265,8 +267,12 @@ class TroupeOps:
             name=str(params.get("name") or ""),
             pivot=pivot,
             trims=trims,
-            animation=charsheet.animation_block(),
+            animation=charsheet.animation_block(troupe_layout),
         )
+        # Additive metadata on the ordinary sheet v1 format. Inker continues to
+        # consume ``animation``; Troupe uses this immutable snapshot to drive
+        # its per-sheet preview controls.
+        meta["troupe"] = troupe_layout.as_dict()
         await asyncio.to_thread(
             queue_mod._publish_text,
             rigging.sheet_path(source_dir, sheet_id),
@@ -274,6 +280,7 @@ class TroupeOps:
         )
         params["sheet_id"] = sheet_id
         params["cells"] = len(cells)
+        params["layout"] = troupe_layout.as_dict()
         params["pixel_report"] = pixel_report
         await asyncio.to_thread(self.store.set_params, job_id, params)
         log.info(

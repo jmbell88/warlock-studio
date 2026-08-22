@@ -11,8 +11,8 @@ in that change, along with the two interop ledgers whose owed passes are now in
    file in real Aseprite or real Tiled, running a card. None of it is derivable
    from the tree and none of it can be closed by writing code.
 2. **Work that is fully specified and deliberately unstarted** — today that is
-   the installer and the open Troupe phases. Each is here with the argument
-   that makes it actionable, not as a title.
+   the installer, the open Troupe phases, and the three host-commit defects in
+   §8. Each is here with the argument that makes it actionable, not as a title.
 
 **The moment an item could be built, it is built and struck out rather than
 tracked.** A plan whose boxes disagree with the tree is worse than no plan, and
@@ -149,14 +149,14 @@ has looked.**
       reach, because that file only runs when someone asks for it. Fixed the
       same day. Serial is still enforced, and this is still the only lane that
       sees real weights and the real `~/.warlock`.
-- [ ] **Re-run the one file the errors ate**:
-      `uv run pytest tests/test_tilesheet_gpu.py -m gpu -n 0`. ~20 s of card for
-      one 8×8 generation. Its two load-bearing claims — the model puts its seams
-      where the guide drew them, and the reduction keeps a cell's contrast — have
-      **never been asserted since the view vocabulary widened**, so the lane's
-      verdict on tile sheets is currently a run that did not happen. Top-down
-      only; the isometric diamond guide and the 3/4 clause are unproven on a
-      card either way, and that is a separate ask, not this one.
+- [x] ~~**Re-run the one file the errors ate**~~ **Run 2026-08-21 as part of a
+      full `uv run pytest -m gpu -n 0`: 26 passed, 0 errors, 104 s**, with
+      `tests/test_tilesheet_gpu.py` contributing all five. Its two load-bearing
+      claims — the model puts its seams where the guide drew them, and the
+      reduction keeps a cell's contrast — are asserted again for the first time
+      since the view vocabulary widened. Top-down only; the isometric diamond
+      guide and the 3/4 clause remain unproven on a card, and that is still a
+      separate ask.
 - [ ] **Run a `charsheet` job end to end against real Blender.** Troupe Phase
       4's job has *never* been run on a card. The pieces either side of it have
       (Phase 0d), and the render call is `rigging.sheet_spec` + `run_worker`
@@ -479,7 +479,122 @@ informational message ("your assets and downloaded models remain at
 - An unsigned exe means SmartScreen's "More info → Run anyway". Accepted, and
   documented.
 
-## 8. Not on this list on purpose
+## 8. Host commit — a model load never gives its host memory back
+
+Measured 2026-08-21 on a live session, from the app's own `warlock.log` plus
+`Get-CimInstance Win32_Process`. It is here rather than built because the first
+defect is a **design question** with three possible shapes, and the other two
+are the instrumentation that decides which one is right — worth landing in the
+same pass, because the figure that would judge the fix is currently wrong by a
+third.
+
+**The session that produced this.** Two reference generations, ten minutes
+apart, on a 63.46 GiB machine with a 12.6 GiB pagefile — a 76.06 GiB commit
+limit:
+
+| time | event | app private | commit |
+| --- | --- | --- | --- |
+| 18:17:54 | idle at startup | **2.3 GiB** | 52.3/73.0 (72%) |
+| 18:18:48 | `sdxl-base-1.0` done, VRAM 6.58 → 0.01 | **11.3 GiB** | 61.3 (84%) |
+| 18:19:43 | `dreamshaper-xl` done, VRAM 6.74 → 0.02 | **13.6 GiB** | 63.6 (84%) |
+| 18:25:54 | idle, six minutes later | **13.5 GiB** | 70.9 (93%) |
+
+The card was empty throughout the tail (1.9 of 32.6 GiB). The session ended in
+the app refusing its own work:
+
+```
+CRITICAL warlock.queue: host commit at 92% before unloading dreamshaper
+  -- at or past the ceiling the 2026-08-03 crash hit; further jobs will be refused
+RuntimeError: host memory is 92% committed before loading SDXL 1.0
+  (full CFG, structural control), at or past the 90% ceiling.
+```
+
+- [ ] **D1 — the t2i load path pays an unreturnable host cost in the app
+      process.** The `host_peak_gib` comment in `models.py` states the
+      assumption this breaks: *"under RESIDENT the weights are read and handed
+      to the device, so the host charge is **transient** and roughly the
+      checkpoint's size."* It is not transient. `unload()` returns the VRAM
+      exactly as it claims (6.58 → 0.01 GiB) and the host figure does not move
+      — +9.0 GiB for the first checkpoint, +2.3 for the second, flat across six
+      minutes idle. **Each distinct checkpoint pays its own**, so the ceiling is
+      reached by switching models, not by running many jobs.
+
+      The mechanism is already measured and already written down:
+      `docs/measurements/2026-08-08-load-probe-memory.md` found that dropping
+      every reference plus `gc.collect()` recovered 422 MB of BiRefNet's 1475 —
+      **1053 MB, 71%, held by the allocator's arenas.** That document is *why*
+      `loadprobe` and `matting_worker` are child processes. The t2i loader is
+      the one path paying the same cost in the process that has to keep
+      running, where nothing but exit reclaims it.
+
+      **The decision owed is which fix**, and it is a conversation before it is
+      a commit:
+      1. **A t2i child process** — the trade `matting_worker` and `loadprobe`
+         already made, and the only option that genuinely returns the memory.
+         It costs the resident-pipe design: the pipe object the idle sweep
+         deliberately keeps would live across a process boundary, and every
+         LoRA / ControlNet / IP-Adapter handle with it. Large; do not start it
+         casually.
+      2. **Raise `host_peak_gib` to the truth and let admission refuse
+         earlier.** Cheap and honest. Makes the app *correct* rather than
+         better — the second checkpoint of a session becomes a refusal instead
+         of a crash. Worth doing regardless of 1, because the shipped figures
+         price a load that is released, and this one never is.
+      3. **Accept it and recycle the process** — an explicit "restart to
+         reclaim" affordance, which is what the user does today unprompted.
+
+      **Do not rank these until D2 lands.** The app's reading of what it is
+      charging is wrong by a third, and choosing on a bad number is how the
+      wrong shape gets built.
+
+- [ ] **D2 — every child pid the app records is the wrong process, so the
+      idle-tick reports `children 0.0 GiB` against a 6.56 GiB child.**
+      `sys.executable` under this uv venv is a **trampoline**, not an
+      interpreter: it spawns the real CPython as its own child and stays alive
+      as a ~0.8 MB parent. Demonstrated directly —
+
+      ```
+      sys.executable : D:\Projects\Warlock\.venv\Scripts\python.exe
+      Popen.pid      : 3144
+      child says pid : 2960      <- not the same process
+      ```
+
+      So `winjob.track(proc.pid)` records the shim. `memlog.children_private`
+      dutifully opens it, reads 0.8 MB and rounds to zero — while the matting
+      worker beside it holds **6.56 GiB**, which is the exact figure
+      `children_private`'s own docstring cites as its reason for existing.
+      Admission is **not** affected (`_require_commit_headroom` reads
+      system-wide commit, which counts the grandchild), so this is a reporting
+      defect and not a safety one. It is also the instrument D1 will be judged
+      with, which is why it goes first.
+
+      The fix is to record the pid that holds the memory rather than the one
+      `Popen` returned, and it touches every worker spawn — `blender_worker`,
+      `fetch_worker`, `matting_worker`, `loadprobe` — not just matting. Note
+      that **the installer removes this by construction**: §7's layout gives
+      `sys.executable` as a real `{app}\python\python.exe`, so the fix must not
+      assume a trampoline is always there.
+
+- [ ] **D3 — `matting.unload()` would orphan the process it means to kill.**
+      Same root cause as D2, latent rather than observed. `unload()` calls
+      `proc.kill()` on the trampoline, and Windows `TerminateProcess` does not
+      cascade to children, so the 6.56 GiB grandchild would survive — reparented
+      — until the app exits and the kill-on-close job takes it. That is the
+      precise opposite of the module's stated purpose, that *"only a process
+      that ends can"* return the memory. It has not fired in a session yet (both
+      pids were alive when this was measured), so there is no incident to point
+      at; it is waiting for the first idle sweep that calls it. The
+      kill-on-close guarantee is unaffected either way — job objects *do*
+      cascade — so nothing outlives the app.
+
+**Not a repo item, but it is what the machine looked like.** `mysqld` held
+8.40 GiB of commit with a *zero* working set, untouched since 2026-08-17; the
+21.4 GiB standby cache is reclaimable and was never the problem; and the commit
+limit is only 76.06 GiB because the pagefile is 12.6 GiB on a 63 GiB machine.
+Warlock's own ~20 GiB was the largest movable share. Any measurement of a fix
+has to name the other tenants, or it will credit itself with their departure.
+
+## 9. Not on this list on purpose
 
 These are decisions with arguments beside them, not backlog items waiting for
 time.

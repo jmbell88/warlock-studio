@@ -80,14 +80,22 @@ def _rebuild(ctx: Any, state: Any) -> None:
         # the appearance of the user's choices.
         form = troupe_settings._form(state, troupe_settings._options(ctx))
     key = f"troupe-sheet:{state.job_id}"
+    count = troupe_settings.cell_count(form)
+    valid = 0 < count <= 512
     if widgets.disabled_button(
         "Build another sheet",
-        not ctx.busy(key),
+        not ctx.busy(key) and valid,
         (-1, 0),
-        reason="A sheet is already being queued for this character.",
+        reason=(
+            "A sheet is already being queued for this character."
+            if ctx.busy(key)
+            else "Select a layout of at most 512 cells."
+        ),
     ):
         troupe_mode.build_sheet(ctx, state.job_id, form)
     widgets.cost_note(
-        "256 rendered frames from the rig that already exists -- minutes of "
+        f"{count} rendered cells from the rig that already exists -- minutes of "
         "CPU, no GPU. The settings on the left are what it uses."
     )
+    if count > 256:
+        widgets.muted("Large sheet: over 256 cells can take substantially longer.")

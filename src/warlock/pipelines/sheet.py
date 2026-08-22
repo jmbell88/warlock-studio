@@ -342,6 +342,76 @@ def interpolate_clip(
     )
 
 
+def resample_clip(
+    keys: Sequence[Mapping[str, Any]],
+    segments: Sequence[int],
+    frames: int,
+    *,
+    closed: bool = False,
+    easing: str = "linear",
+    space: str = "node",
+    clip_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Sample an authored clip at exactly ``frames`` normalized times.
+
+    Cycles sample ``i / frames`` and therefore never duplicate the seam.
+    One-shots sample ``i / (frames - 1)`` and include both endpoints; their
+    one-frame form is the first authored pose. Original segment lengths remain
+    the timing weights, but a small requested frame count need not allocate a
+    frame to every authored segment.
+    """
+    keys = list(keys)
+    counts = [int(n) for n in segments]
+    frames = int(frames)
+    if len(keys) < 2:
+        raise ValueError("a clip needs at least two keyframes")
+    wanted = len(keys) if closed else len(keys) - 1
+    if len(counts) != wanted or any(n < 1 for n in counts):
+        raise ValueError("the authored segment table does not match the clip")
+    if not 1 <= frames <= MAX_CLIP_FRAMES:
+        raise ValueError(f"a clip must be 1-{MAX_CLIP_FRAMES} frames")
+    if space not in POSE_SPACES:
+        raise ValueError(f"space must be one of {list(POSE_SPACES)}")
+    if easing not in EASINGS:
+        raise ValueError(f"easing must be one of {list(EASINGS)}")
+
+    identity = clip_id or ":".join(str(k.get("id") or "") for k in keys)
+    name = " -> ".join(str(k.get("name") or "?") for k in keys)
+    with_root = any(any(_root(k)) for k in keys)
+    total = float(sum(counts))
+    out: list[dict[str, Any]] = []
+    for index in range(frames):
+        phase = index / frames if closed else (index / (frames - 1) if frames > 1 else 0.0)
+        position = phase * total
+        if not closed and phase >= 1.0:
+            a = b = keys[-1]
+            local = 0.0
+        else:
+            offset = 0.0
+            segment = len(counts) - 1
+            for candidate, length in enumerate(counts):
+                if position < offset + length:
+                    segment = candidate
+                    break
+                offset += length
+            a = keys[segment]
+            b = keys[(segment + 1) % len(keys)]
+            local = (position - offset) / counts[segment]
+        bones, root = _blend(a, b, _ease(local, easing))
+        out.append(
+            _record(
+                identity,
+                name,
+                index,
+                bones,
+                root,
+                with_root=with_root,
+                space=space,
+            )
+        )
+    return out
+
+
 def _expand(
     keys: Sequence[Mapping[str, Any]],
     counts: Sequence[int],

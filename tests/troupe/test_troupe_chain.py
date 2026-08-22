@@ -304,6 +304,27 @@ async def test_the_rig_follow_up_asks_for_measured_joints(worker):
     assert rig["params"]["joints"] == "measured"
 
 
+async def test_a_character_sheet_enqueue_failure_is_recorded_on_the_mesh(
+    worker, monkeypatch
+):
+    job_id = _model_job(worker)
+    real_create = worker.store.create
+
+    def fail_sheet(kind, *args, **kwargs):
+        if kind == "charsheet":
+            raise RuntimeError("queue insert failed")
+        return real_create(kind, *args, **kwargs)
+
+    monkeypatch.setattr(worker.store, "create", fail_sheet)
+    await worker._maybe_queue_charsheet(worker.store.get(job_id))
+
+    job = worker.store.get(job_id)
+    assert job["status"] == "queued"
+    failure = job["params"]["followup_failures"]["charsheet"]
+    assert failure["label"] == "Character sheet"
+    assert failure["message"] == "queue insert failed"
+
+
 async def test_an_ordinary_rig_still_asks_for_nothing(worker):
     """The plumbing is keyed on the request, so an ordinary auto-rig is the
     byte-identical rig it always was."""
@@ -322,6 +343,56 @@ async def test_the_reference_stage_queues_nothing(worker):
     )
     await worker._maybe_queue_charsheet(worker.store.get(job_id))
     assert not [j for j in worker.store.list() if j["kind"] == "charsheet"]
+
+
+async def test_a_troupe_reference_records_no_rig_failure(worker):
+    """The regression that made a finished character look broken.
+
+    Troupe's door sets ``rig`` on the *reference* row -- it describes the mesh
+    the gate will promote it into -- so ``_maybe_queue_rig`` ran on every
+    Troupe reference completion, found no ``model.glb`` (there cannot be one
+    before the user approves the drawing) and, once follow-up failures became
+    durable, wrote a permanent false "the generated mesh artifact is missing"
+    onto every character anyone started.
+    """
+    job_id = worker.store.create(
+        "text",
+        "a ranger",
+        {"troupe": {"logical_size": 32}, "rig": True, "rig_template": "humanoid"},
+        stage="reference",
+    )
+    await worker._maybe_queue_rig(worker.store.get(job_id))
+
+    assert not [j for j in worker.store.list() if j["kind"] == "rig"]
+    assert "followup_failures" not in worker.store.get(job_id)["params"]
+
+
+async def test_a_mesh_that_asked_for_a_rig_and_has_none_still_records_it(worker):
+    """The guard must not swallow the case the record exists for."""
+    job_id = _model_job(worker)
+    worker.config.job_dir(job_id).joinpath("model.glb").unlink()
+    await worker._maybe_queue_rig(worker.store.get(job_id))
+
+    failure = worker.store.get(job_id)["params"]["followup_failures"]["rig"]
+    assert failure["message"] == "The generated mesh artifact is missing."
+
+
+def test_a_stale_reference_stage_rig_failure_is_not_shown():
+    """The rows written before the guard landed keep the record; the reader
+    drops it, because a record about a follow-up this row could never have had
+    is a fingerprint of the missing guard rather than evidence."""
+    from warlock import followups
+
+    params = {
+        "followup_failures": {
+            "rig": followups.failure_record("rig", "The generated mesh artifact is missing.")
+        }
+    }
+    assert followups.records(params, "reference") == []
+    assert len(followups.records(params, "model")) == 1
+    # Unfiltered without a stage: a caller that does not know is better served
+    # by the whole list than by a silent empty one.
+    assert len(followups.records(params)) == 1
 
 
 # -- the direct door ---------------------------------------------------------
@@ -347,6 +418,35 @@ def test_the_direct_door_queues_a_sheet_for_a_rigged_mesh(svc):
     assert row["kind"] == "charsheet"
     assert row["params"]["logical_size"] == 64
     assert row["params"]["source_job"] == job_id
+
+
+def test_the_direct_door_snapshots_a_configurable_layout(svc):
+    job_id = _rigged_mesh(svc)
+    request = {
+        "version": 2,
+        "movements": [
+            {"key": "idle", "frames": 3, "directions": 1},
+            {"key": "walk", "frames": 6, "directions": 4},
+        ],
+    }
+    made = svc_troupe.create_charsheet(svc, job_id, layout=request)
+    snapshot = svc.store.get(made["id"])["params"]["layout"]
+    assert snapshot["cell_count"] == 27
+    assert len(snapshot["runs"]) == 5
+    assert snapshot["movements"][1]["directions"][2]["key"] == "back"
+
+
+async def test_the_approved_layout_survives_the_automatic_follow_up(worker):
+    layout = charsheet.resolve_layout(
+        {
+            "version": 2,
+            "movements": [{"key": "run", "frames": 10, "directions": 4}],
+        }
+    ).as_dict()
+    job_id = _model_job(worker, troupe={"layout": layout, "logical_size": 32})
+    await worker._maybe_queue_charsheet(worker.store.get(job_id))
+    row = next(j for j in worker.store.list() if j["kind"] == "charsheet")
+    assert row["params"]["layout"] == layout
 
 
 def test_an_unrigged_mesh_is_refused_by_the_missing_step(svc):
@@ -513,7 +613,19 @@ async def test_the_sidecar_carries_the_engine_side_animation(worker, monkeypatch
     job_id = worker.store.create(
         "charsheet",
         "a ranger",
-        {"source_job": source, "sheet_id": sheet_id, "logical_size": 16, "colors": 8},
+        {
+            "source_job": source,
+            "sheet_id": sheet_id,
+            "logical_size": 16,
+            "colors": 8,
+            "layout": {
+                "version": 2,
+                "movements": [
+                    {"key": "idle", "frames": 3, "directions": 1},
+                    {"key": "attack", "frames": 5, "directions": 4},
+                ],
+            },
+        },
     )
     worker.start()
     try:
@@ -526,12 +638,14 @@ async def test_the_sidecar_carries_the_engine_side_animation(worker, monkeypatch
     assert worker.store.get(job_id)["error"] is None
     meta = rigging.read_sheet(source_dir, sheet_id)
     tags = {t["name"]: t for t in meta["animation"]["tags"]}
-    assert len(tags) == len(charsheet.ANIMATIONS) * len(charsheet.DIRECTIONS)
-    assert tags["walk_front"]["loop"] is True
+    assert len(tags) == 5
+    assert tags["idle_front"]["loop"] is True
     # A play-once tag is spelled the way Inker's exporter spells it, so
     # ``version: 1`` cannot come to mean two subtly different documents.
-    assert tags["attack_front"]["repeat"] == 1
-    assert "repeat" not in tags["walk_front"]
+    assert tags["attack_back"]["repeat"] == 1
+    assert "repeat" not in tags["idle_front"]
+    assert meta["troupe"]["cell_count"] == 23
+    assert worker.store.get(job_id)["params"]["layout"] == meta["troupe"]
     report = worker.store.get(job_id)["params"]["pixel_report"]
     assert report["palette"] == "derived"
     assert report["colors"] <= 8

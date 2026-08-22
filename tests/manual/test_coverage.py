@@ -46,6 +46,10 @@ NO_HELP_BUTTON = {
     # does is documented where the button lands -- `17-app-settings.md`, the
     # Models section.
     "model_gate",
+    # A startup modal rather than a workspace pane. Its Hardware and Required
+    # downloads blocks are the installation chapter made actionable, and the
+    # only exits dismiss the overlay or open the documented Models pane.
+    "first_run",
     # Not a pane: one job's picture, drawn *inside* whatever card or cell asked
     # for it (the UI redesign, wave 4.3). It has no section, no heading and no
     # window of its own -- a (?) beside a thumbnail would be a help button on a

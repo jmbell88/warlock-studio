@@ -347,6 +347,37 @@ async def test_no_follow_up_without_the_flag(worker, monkeypatch):
     await worker.shutdown()
 
 
+async def test_a_rig_enqueue_failure_is_recorded_on_the_finished_mesh(
+    worker, monkeypatch
+):
+    _fake_worker_run(monkeypatch)
+    real_create = worker.store.create
+
+    def fail_rig(kind, *args, **kwargs):
+        if kind == "rig":
+            raise OSError("database is read-only")
+        return real_create(kind, *args, **kwargs)
+
+    job_id = worker.store.create(
+        "image", None, {"seed": 1, "resolution": 512, "rig": True}
+    )
+    job_dir = worker.config.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "input.png").write_bytes(b"fake-png")
+    monkeypatch.setattr(worker.store, "create", fail_rig)
+
+    worker.start()
+    await _wait_until(
+        lambda: "followup_failures" in worker.store.get(job_id)["params"]
+    )
+    job = worker.store.get(job_id)
+    assert job["status"] == "done"
+    failure = job["params"]["followup_failures"]["rig"]
+    assert failure["error_type"] == "OSError"
+    assert failure["message"] == "database is read-only"
+    await worker.shutdown()
+
+
 async def test_a_rig_job_does_not_recursively_queue_another(worker, monkeypatch):
     """params flows from the generate job, so a rig job can inherit rig=True.
     It must not spawn a rig of a rig."""

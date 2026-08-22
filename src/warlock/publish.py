@@ -48,14 +48,24 @@ PUBLISH_NAME = ".warlock-publish.json"
 JOURNAL_NAME = ".warlock-txn.json"
 
 
-def backup_dir(dest: Path) -> Path:
+def backup_dir(dest: Path, staging: Path | None = None) -> Path:
     """Where :func:`move_into` parks whatever it is about to overwrite.
 
     A deterministic sibling, because ``recover`` has to find it on a later run
     with nothing but the destination's name to go on.
     """
     dest = Path(dest)
-    return dest.parent / f".{dest.name}.fetch.bak"
+    if staging is None:
+        return dest.parent / f".{dest.name}.fetch.bak"
+    staging = Path(staging)
+    suffix = ".fetch.part"
+    name = staging.name
+    name = (
+        f"{name[:-len(suffix)]}.fetch.bak"
+        if name.endswith(suffix)
+        else f"{name}.fetch.bak"
+    )
+    return staging.parent / name
 
 
 def planned_names(staging: Path) -> list[str]:
@@ -114,7 +124,7 @@ def move_into(staging: Path, dest: Path) -> list[str]:
     (:func:`backup_dir`), so a recovery on a later launch can find it.
     """
     staging, dest = Path(staging), Path(dest)
-    backup = backup_dir(dest)
+    backup = backup_dir(dest, staging)
     moved: list[tuple[Path, Path]] = []
     saved: list[tuple[Path, Path]] = []
     names: list[str] = []
@@ -165,8 +175,8 @@ def move_into(staging: Path, dest: Path) -> list[str]:
     return names
 
 
-def undo_into(staging: Path, dest: Path, names: list[str]) -> None:
-    """Reverse a publish that the process did not live to finish. Never raises.
+def undo_into(staging: Path, dest: Path, names: list[str]) -> bool:
+    """Reverse a publish that the process did not live to finish.
 
     The inverse of :func:`move_into`, driven by the journal rather than by
     in-memory state, because there is none: this runs in a later process.
@@ -175,27 +185,46 @@ def undo_into(staging: Path, dest: Path, names: list[str]) -> None:
     -- so a publish that got halfway is undone halfway, which is exactly the
     half that happened -- and then whatever the backup tree holds is restored
     over the top. Both directions are needed: the first puts back files that
-    were *added*, the second puts back files that were *replaced*.
+    were *added*, the second puts back files that were *replaced*. Returns
+    whether every required move succeeded; failures remain for a later retry.
     """
     staging, dest = Path(staging), Path(dest)
+    complete = True
+    failed: set[Path] = set()
     for name in names:
         target = dest / name
+        back = staging / name
+        # A previous recovery attempt may already have moved this file back.
+        # In that case the target is the restored original and must not be
+        # moved out again when a retained journal is retried.
+        if back.is_file():
+            continue
         if not target.is_file():
             continue
-        back = staging / name
-        with contextlib.suppress(OSError):
+        try:
             back.parent.mkdir(parents=True, exist_ok=True)
             os.replace(target, back)
-    backup = backup_dir(dest)
+        except OSError:
+            complete = False
+            failed.add(Path(name))
+    backup = backup_dir(dest, staging)
     if backup.is_dir():
         for kept in sorted(backup.rglob("*")):
             if kept.is_dir():
                 continue
-            target = dest / kept.relative_to(backup)
-            with contextlib.suppress(OSError):
+            rel = kept.relative_to(backup)
+            # Do not overwrite a new file that could not be moved back. The
+            # backup is its only copy of the original, so retaining both is
+            # what lets the next startup try again without data loss.
+            if rel in failed:
+                continue
+            target = dest / rel
+            try:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(kept, target)
-        shutil.rmtree(backup, ignore_errors=True)
+            except OSError:
+                complete = False
+    return complete
 
 
 def write_json(path: Path, payload: Any) -> None:
@@ -211,6 +240,28 @@ def write_json(path: Path, payload: Any) -> None:
         tmp = path.with_name(f".{path.name}.tmp")
         tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         os.replace(tmp, path)
+
+
+def _write_required(path: Path, payload: Any) -> None:
+    """Atomically write transaction state, propagating every I/O failure.
+
+    Completion manifests are advisory and use :func:`write_json`; the journal
+    is the only copy of the information needed to undo a crash and therefore
+    must exist before publication is allowed to begin.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    try:
+        with tmp.open("w", encoding="utf-8") as stream:
+            json.dump(payload, stream, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
+        raise
 
 
 def read_json(path: Path) -> dict[str, Any] | None:
@@ -234,28 +285,38 @@ def begin(root: Path, entries: list[dict[str, Any]]) -> Path:
     that fails before it leaves nothing installed, because nothing was.
     """
     path = journal_path(root)
-    write_json(path, {"version": 1, "entries": entries})
+    _write_required(path, {"version": 1, "entries": entries})
     return path
 
 
-def note_published(root: Path, dest: str, names: list[str]) -> None:
+def note_published(root: Path, staging: str, dest: str, names: list[str]) -> None:
     """Record which files one entry actually published, as it happens.
 
     Written per destination rather than once at the end, which is the whole
     point: the crash this survives happens *during* the loop, so the journal
     has to be true at every moment of it rather than only at the ends.
     """
-    data = read_json(journal_path(root)) or {"version": 1, "entries": []}
+    path = journal_path(root)
+    data = read_json(path)
+    if data is None:
+        raise OSError(f"publish journal is missing or unreadable: {path}")
+    found = False
     for entry in data.get("entries") or []:
-        if entry.get("dest") == dest:
+        if (
+            isinstance(entry, dict)
+            and entry.get("staging") == staging
+            and entry.get("dest") == dest
+        ):
             entry["published"] = names
-    write_json(journal_path(root), data)
+            found = True
+    if not found:
+        raise OSError(f"publish journal has no entry for {dest}")
+    _write_required(path, data)
 
 
 def finish(root: Path) -> None:
     """The transaction committed. Delete the journal; nothing to recover."""
-    with contextlib.suppress(OSError):
-        journal_path(root).unlink(missing_ok=True)
+    journal_path(root).unlink(missing_ok=True)
 
 
 def staged_dirs(root: Path) -> set[str]:
@@ -266,8 +327,17 @@ def staged_dirs(root: Path) -> set[str]:
     the litter of an interrupted fetch, and deletes the only copy of the files
     the rollback was about to put back.
     """
-    data = read_json(journal_path(root))
+    path = journal_path(root)
+    data = read_json(path)
     if not data:
+        # A present but unreadable journal must make the sweep conservative.
+        # Its staging paths cannot be recovered from JSON, but deleting every
+        # candidate would guarantee that recovery can never be attempted.
+        if path.exists():
+            try:
+                return {str(p) for p in Path(root).iterdir()}
+            except OSError:
+                return set()
         return set()
     return {
         str(Path(entry["staging"]))
@@ -288,15 +358,43 @@ def recover(root: Path) -> list[str]:
     if not data:
         return []
     undone: list[str] = []
+    cleanups: list[tuple[Path, Path]] = []
+    complete = True
     for entry in data.get("entries") or []:
         if not isinstance(entry, dict):
+            complete = False
             continue
         dest = entry.get("dest")
         staging = entry.get("staging")
-        if not dest or not staging:
+        if not isinstance(dest, str) or not dest or not isinstance(staging, str) or not staging:
+            complete = False
             continue
-        undo_into(Path(staging), Path(dest), list(entry.get("published") or []))
+        published = entry.get("published") or []
+        if not isinstance(published, list) or not all(
+            isinstance(name, str) for name in published
+        ):
+            complete = False
+            continue
+        staging_path, dest_path = Path(staging), Path(dest)
+        try:
+            restored = undo_into(staging_path, dest_path, published)
+        except OSError:
+            restored = False
+        if restored:
+            undone.append(str(dest))
+            cleanups.append((staging_path, backup_dir(dest_path, staging_path)))
+        else:
+            complete = False
+    if not complete:
+        return []
+    try:
+        # The journal is the retry marker. Remove it before cleanup: if its
+        # unlink fails, staging and backups retain the idempotence evidence a
+        # later recovery needs.
+        finish(root)
+    except OSError:
+        return []
+    for staging, backup in cleanups:
         shutil.rmtree(staging, ignore_errors=True)
-        undone.append(str(dest))
-    finish(root)
+        shutil.rmtree(backup, ignore_errors=True)
     return undone

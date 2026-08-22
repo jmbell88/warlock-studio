@@ -136,6 +136,38 @@ def _seeded(ctx, **overrides):
 # --- panes ------------------------------------------------------------------
 
 
+def test_the_first_run_overlay_builds_and_dismisses(app_ctx, imgui_ctx, monkeypatch):
+    from warlock.studio.panes import first_run
+
+    app_ctx.first_run = True
+    app_ctx.first_run_info = {
+        "gpu_name": "Test GPU",
+        "vram_total_gib": 24.0,
+        "vram_free_gib": 20.0,
+        "three_d": {"ready": True, "detail": "Ready"},
+        "images": {"ready": True, "detail": "Ready"},
+        "rigging": {"ready": False, "detail": "Needs Blender (bpy)."},
+        "rows": [
+            {"label": "TRELLIS.2 GGUF weights", "present": False},
+            {"label": "SDXL 1.0", "present": False},
+        ],
+        "total_gib": 23.1,
+        "download_gib": 23.1,
+        "disk_refusal": None,
+    }
+    monkeypatch.setattr(first_run.widgets, "primary_button", lambda *_a, **_k: False)
+    monkeypatch.setattr(
+        first_run.controls,
+        "button",
+        lambda label, *_a, **_k: label == "Not now",
+    )
+
+    _frame(imgui_ctx, lambda: first_run.draw(app_ctx))
+    assert app_ctx.first_run is False
+    assert first_run.marker_path(app_ctx.svc.config).is_file()
+    _frame(imgui_ctx, lambda: first_run.draw(app_ctx))
+
+
 def test_the_2d_pane_builds_with_an_empty_form(app_ctx, imgui_ctx):
     from warlock.studio.panes import settings_2d
 
@@ -160,8 +192,8 @@ def test_the_2d_pane_builds_every_output_kind(app_ctx, imgui_ctx):
     from warlock.studio.panes import settings_2d
 
     app_ctx.state.form_2d["prompt"] = "mossy dungeon"
-    for output in ("reference", "tile", "sheet"):
-        app_ctx.state.form_2d["output"] = output
+    for asset_type in ("model_3d", "seamless_tile", "tileset_top_down"):
+        app_ctx.state.form_2d["asset_type"] = asset_type
         _frame(imgui_ctx, lambda: settings_2d.draw(app_ctx))
 
 
@@ -172,7 +204,6 @@ def test_the_2d_pane_builds_both_arms_of_the_sheet_output(app_ctx, imgui_ctx):
     from warlock.studio.panes import settings_2d
 
     app_ctx.state.form_2d["prompt"] = "a hooded ranger"
-    app_ctx.state.form_2d["output"] = "sheet"
     # Every view the service offers, off the service's own list rather than a
     # literal here: the pair this used to hold could not have grown a third
     # entry without somebody remembering to edit it, which is exactly how a new
@@ -182,8 +213,16 @@ def test_the_2d_pane_builds_both_arms_of_the_sheet_output(app_ctx, imgui_ctx):
     # arm, whose controls are the ones a stale tile-arm value reaches.
     arms += [("tile", "orthogonal"), ("sprite", "top_down")]
     for sheet_type, view in arms:
-        app_ctx.state.form_2d["sheet_type"] = sheet_type
-        app_ctx.state.form_2d["projection"] = view
+        app_ctx.state.form_2d["asset_type"] = (
+            "sprite_turnaround"
+            if sheet_type == "sprite"
+            else {
+                "orthogonal": "tileset_top_down",
+                "top_down": "tileset_top_down",
+                "three_quarter": "tileset_three_quarter",
+                "isometric": "tileset_isometric",
+            }[view]
+        )
         _frame(imgui_ctx, lambda: settings_2d.draw(app_ctx))
 
 
@@ -195,7 +234,7 @@ def test_the_sheet_output_pins_the_count_to_one(app_ctx, imgui_ctx):
 
     app_ctx.state.form_2d["prompt"] = "mossy dungeon"
     app_ctx.state.form_2d["count"] = 4
-    app_ctx.state.form_2d["output"] = "sheet"
+    app_ctx.state.form_2d["asset_type"] = "tileset_top_down"
     _frame(imgui_ctx, lambda: settings_2d.draw(app_ctx))
     assert app_ctx.state.form_2d["count"] == 1
 

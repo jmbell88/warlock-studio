@@ -1,4 +1,4 @@
-"""One Warlock per home directory, enforced by the OS rather than by a note.
+"""One Warlock per writable resource set, enforced by OS locks.
 
 There was a check before this, and its shape is the finding: startup read a
 ``session.marker`` file, saw a live pid in it, wrote a **log warning**, and
@@ -19,9 +19,10 @@ Three properties an OS lock has that a marker file cannot:
 * **It is not a hint.** The second instance stops, with a dialog, before it has
   touched the store.
 
-Scoped to the *home*, not to the machine: two homes are two independent
-installs (``WARLOCK_HOME`` exists precisely so a second one is possible) and
-nothing is shared between them.
+Scoped to the home, configured job database and model root rather than to the
+machine. Two homes are independent only while those overrideable resources are
+independent too; pointing both at one external SQLite file or model directory
+must still converge on the same lock.
 
 This module is imported before ``migrate`` and before any store is opened, so it
 must stay dependency-free -- stdlib only, no config import at module scope.
@@ -29,6 +30,7 @@ must stay dependency-free -- stdlib only, no config import at module scope.
 
 from __future__ import annotations
 
+import errno
 import logging
 import os
 import sys
@@ -38,10 +40,45 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 LOCK_NAME = "instance.lock"
+DB_LOCK_SUFFIX = ".warlock-db.lock"
+MODEL_LOCK_NAME = ".warlock-models.lock"
+
+
+def _canonical(path: Path) -> Path:
+    """An absolute, symlink-resolved resource name without requiring existence."""
+    try:
+        return Path(path).resolve(strict=False)
+    except OSError:
+        return Path(path).absolute()
+
+
+def lock_paths(config: Any) -> tuple[Path, ...]:
+    """Canonical lock files for the home, database and shared model root.
+
+    The lock file lives beside (DB) or inside (models) the protected resource,
+    so two homes that spell the same resource through different relative paths
+    still converge on one OS lock after symlink resolution.
+    """
+    home = _canonical(Path(config.home))
+    database = _canonical(Path(config.db_path))
+    models = _canonical(Path(config.t2i_model_root))
+    candidates = (
+        home / LOCK_NAME,
+        database.parent / f".{database.name}{DB_LOCK_SUFFIX}",
+        models / MODEL_LOCK_NAME,
+    )
+    seen: set[str] = set()
+    out: list[Path] = []
+    for path in candidates:
+        key = os.path.normcase(str(path))
+        if key not in seen:
+            seen.add(key)
+            out.append(path)
+    return tuple(out)
 
 
 class InstanceLock:
-    """An exclusive, OS-level lock on one home directory.
+    """An exclusive, OS-level lock on one resource lock file.
 
     Held for the life of the process. ``release`` exists for tests and for an
     orderly shutdown; nothing depends on it being called, which is the point.
@@ -50,28 +87,31 @@ class InstanceLock:
     def __init__(self, path: Path) -> None:
         self.path = path
         self._fd: int | None = None
+        self.failure: str | None = None
 
     @property
     def held(self) -> bool:
         return self._fd is not None
 
-    def acquire(self) -> bool:
+    def acquire(self, *, allow_unsafe: bool = False) -> bool:
         """Take the lock. False if another process already holds it.
 
-        Never raises. A host where the locking call itself fails -- an exotic
-        filesystem, a permissions oddity -- gets the *old* behaviour rather than
-        a refusal to start: being unable to prove a second instance is not the
-        same as having one, and refusing to launch over an unreadable lock file
-        would be a worse failure than the one this prevents.
+        Never raises. Failure to open or operate the lock fails closed: sharing
+        a database and model roots is unsafe unless the caller explicitly opts
+        into recovery mode with ``allow_unsafe``. Lock contention is not
+        overridable and leaves ``failure`` as ``None``; an infrastructure
+        failure records a user-facing reason there.
         """
         if self._fd is not None:
             return True
+        self.failure = None
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             fd = os.open(str(self.path), os.O_RDWR | os.O_CREAT, 0o644)
         except OSError:
             log.warning("could not open the instance lock at %s", self.path, exc_info=True)
-            return True
+            self.failure = f"The instance lock could not be opened: {self.path}"
+            return allow_unsafe
         try:
             if not _lock(fd):
                 os.close(fd)
@@ -79,7 +119,8 @@ class InstanceLock:
         except OSError:
             log.warning("instance locking is unavailable on this host", exc_info=True)
             os.close(fd)
-            return True
+            self.failure = "The operating system could not lock the Warlock data directory."
+            return allow_unsafe
         self._fd = fd
         # Deliberately left empty. The obvious nicety -- writing ``pid=NNN`` for
         # somebody reading the directory -- cannot work here: Windows locks the
@@ -103,6 +144,45 @@ class InstanceLock:
             _unlock(fd)
         with _suppressed():
             os.close(fd)
+
+
+class InstanceLocks:
+    """Acquire several instance locks as one all-or-none startup guard."""
+
+    def __init__(self, paths: Any) -> None:
+        self.locks = tuple(InstanceLock(Path(path)) for path in paths)
+        self.blocked: InstanceLock | None = None
+
+    @property
+    def held(self) -> bool:
+        return bool(self.locks) and all(lock.held for lock in self.locks)
+
+    @property
+    def path(self) -> Path | None:
+        return self.blocked.path if self.blocked is not None else None
+
+    @property
+    def failure(self) -> str | None:
+        return self.blocked.failure if self.blocked is not None else None
+
+    def acquire(self, *, allow_unsafe: bool = False) -> bool:
+        """Take every lock, releasing earlier ones if any later lock refuses."""
+        self.blocked = None
+        acquired: list[InstanceLock] = []
+        for lock in self.locks:
+            if lock.acquire(allow_unsafe=allow_unsafe):
+                if lock.held:
+                    acquired.append(lock)
+                continue
+            self.blocked = lock
+            for held in reversed(acquired):
+                held.release()
+            return False
+        return True
+
+    def release(self) -> None:
+        for lock in reversed(self.locks):
+            lock.release()
 
 
 # The lock this process is holding, if any. Set on a successful acquire so a
@@ -132,11 +212,13 @@ if sys.platform == "win32":
 
         try:
             msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
-        except OSError:
+        except OSError as exc:
             # EACCES/EDEADLOCK here is the answer, not a failure: somebody else
             # holds it. Distinguished from "locking does not work at all" by
             # the fact that the call reached the kernel and was refused.
-            return False
+            if exc.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                return False
+            raise
         return True
 
     def _unlock(fd: int) -> None:
@@ -152,8 +234,10 @@ else:  # pragma: no cover - the app is Windows-only; this keeps tests portable
 
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            return False
+        except OSError as exc:
+            if exc.errno in (errno.EACCES, errno.EAGAIN):
+                return False
+            raise
         return True
 
     def _unlock(fd: int) -> None:

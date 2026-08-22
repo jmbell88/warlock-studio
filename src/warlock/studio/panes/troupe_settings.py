@@ -35,6 +35,7 @@ def draw(ctx: Any) -> None:
             form["variant"],
             [(v, v) for v in options.get("variants") or ()],
         )
+        _layout(form, form_ui, options)
         _size(form, form_ui, options)
         _palette(ctx, form, form_ui, options)
     imgui.dummy((0, 4))
@@ -59,8 +60,8 @@ def _options(ctx: Any) -> dict[str, Any]:
 def _form(state: Any, options: dict[str, Any]) -> dict[str, Any]:
     """The request, kept on the mode's own state so a trip to Create and back
     does not lose what was typed."""
+    defaults = options.get("defaults") or {}
     if not state.form:
-        defaults = options.get("defaults") or {}
         state.form = {
             "prompt": "",
             "variant": str(defaults.get("variant") or "male"),
@@ -70,8 +71,80 @@ def _form(state: Any, options: dict[str, Any]) -> dict[str, Any]:
             "reduce_mode": str(defaults.get("reduce_mode") or "box"),
             "dither": False,
             "palette": "",
+            "layout": {
+                "version": 2,
+                "columns": 8,
+                "movements": [
+                    {
+                        "key": row.get("name"),
+                        "enabled": True,
+                        "frames": int(row.get("frames") or 1),
+                        "directions": 8,
+                    }
+                    for row in options.get("animations") or ()
+                ],
+            },
+        }
+    elif "layout" not in state.form:
+        # Session-state migration for a form created by a pre-v2 build.
+        state.form["layout"] = {
+            "version": 2,
+            "columns": 8,
+            "movements": [
+                {
+                    "key": row.get("name"),
+                    "enabled": True,
+                    "frames": int(row.get("frames") or 1),
+                    "directions": 8,
+                }
+                for row in options.get("animations") or ()
+            ],
         }
     return state.form
+
+
+def _layout(form: dict[str, Any], form_ui: forms.Form, options: dict[str, Any]) -> None:
+    """Per-movement frame and direction controls; the total is always derived."""
+
+    layout = form["layout"]
+    limits = {row["name"]: row for row in options.get("animations") or ()}
+    presets = [int(n) for n in options.get("direction_presets") or (1, 4, 8, 16)]
+    for movement in layout.get("movements") or ():
+        key = str(movement.get("key") or "")
+        label = key.replace("_", " ").title()
+        _changed, movement["enabled"] = form_ui.checkbox(
+            f"movement_{key}", label, bool(movement.get("enabled", True))
+        )
+        if not movement["enabled"]:
+            continue
+        _changed, frames = form_ui.number(
+            f"frames_{key}",
+            f"{label} frames",
+            int(movement.get("frames") or limits.get(key, {}).get("frames") or 1),
+            helper=(
+                f"{limits.get(key, {}).get('min_frames', 1)}-"
+                f"{limits.get(key, {}).get('max_frames', 32)} frames"
+            ),
+        )
+        movement["frames"] = max(
+            int(limits.get(key, {}).get("min_frames") or 1),
+            min(int(frames), int(limits.get(key, {}).get("max_frames") or 32)),
+        )
+        _changed, directions = form_ui.combo(
+            f"directions_{key}",
+            f"{label} directions",
+            str(movement.get("directions") or 8),
+            [(str(n), f"{n}-direction") for n in presets],
+        )
+        movement["directions"] = int(directions)
+
+
+def cell_count(form: dict[str, Any]) -> int:
+    return sum(
+        int(row.get("frames") or 0) * int(row.get("directions") or 0)
+        for row in (form.get("layout") or {}).get("movements") or ()
+        if row.get("enabled", True)
+    )
 
 
 def _size(form: dict[str, Any], form_ui: forms.Form, options: dict[str, Any]) -> None:
@@ -131,7 +204,8 @@ def _submit(ctx: Any, form: dict[str, Any]) -> None:
     from imgui_bundle import imgui
 
     busy = ctx.busy("troupe-start")
-    ready = bool(form["prompt"].strip())
+    count = cell_count(form)
+    ready = bool(form["prompt"].strip()) and 0 < count <= 512
     if busy:
         widgets.spinner()
         imgui.same_line()
@@ -139,12 +213,14 @@ def _submit(ctx: Any, form: dict[str, Any]) -> None:
         "Draw the reference",
         not busy and ready,
         (-1, 0),
-        reason="Describe the character first."
+        reason="Describe the character and select a layout of at most 512 cells."
         if not ready
         else "A reference is already being queued.",
     ):
         troupe_mode.start_character(ctx, form)
     widgets.cost_note(
-        "One image, and then it stops. You approve the T-pose drawing in "
-        "Create; the mesh, the rig and 256 rendered frames follow from there."
+        f"One image, and then it stops. After approval, the mesh, rig, and "
+        f"{count} rendered cells follow."
     )
+    if count > 256:
+        widgets.muted("Large sheet: over 256 cells can take substantially longer.")

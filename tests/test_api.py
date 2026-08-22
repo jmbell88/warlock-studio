@@ -961,6 +961,43 @@ def test_count_is_bounded(svc):
         svc_jobs.create_job(svc, kind="text", prompt="x", output="reference", count=99)
 
 
+@pytest.mark.parametrize("bad", [True, 1.5, "2"])
+def test_count_must_be_a_real_whole_number(svc, bad):
+    with pytest.raises(Invalid) as caught:
+        svc_jobs.create_job(
+            svc, kind="text", prompt="x", output="reference", count=bad
+        )
+    assert caught.value.field == "count"
+
+
+def test_a_failed_candidate_batch_rolls_back_every_row_and_directory(
+    svc, assets, monkeypatch
+):
+    original = svc.store.create
+    calls = {"count": 0}
+
+    def fail_after_second_insert(*args, **kwargs):
+        job_id = original(*args, **kwargs)
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise RuntimeError("db failed after insert")
+        return job_id
+
+    monkeypatch.setattr(svc.store, "create", fail_after_second_insert)
+    with pytest.raises(RuntimeError, match="after insert"):
+        svc_jobs.create_job(
+            svc,
+            kind="text",
+            prompt="a barrel",
+            output="reference",
+            count=3,
+            reference=_png_bytes(),
+        )
+
+    assert svc.store.count() == 0
+    assert [path for path in assets.iterdir() if path.is_dir()] == []
+
+
 def test_candidate_zero_keeps_the_requested_seed(svc):
     # A pinned seed must still land on candidate 0 verbatim -- only 1..N-1 fan
     # out to fresh random seeds.

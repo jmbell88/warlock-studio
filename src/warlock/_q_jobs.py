@@ -26,7 +26,7 @@ import logging
 import shutil
 from typing import TYPE_CHECKING, Any
 
-from . import rigging
+from . import followups, rigging
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .queue import Worker
@@ -90,6 +90,32 @@ class JobOps:
         except Exception:
             log.exception("could not record observation for job %s", job_id)
 
+    async def _record_followup_failure(
+        self: Worker,
+        job_id: str,
+        followup: str,
+        error: BaseException | str,
+    ) -> None:
+        """Persist an optional follow-up failure without failing its parent."""
+        try:
+            saved = await asyncio.to_thread(
+                followups.persist, self.store, job_id, followup, error
+            )
+            if not saved:
+                log.warning(
+                    "could not record %s follow-up failure; parent %s is gone",
+                    followup,
+                    job_id,
+                )
+        except Exception:
+            # This is the fallback for the fallback. The parent artifact is
+            # complete, so a second database failure remains diagnostic only.
+            log.exception(
+                "could not record %s follow-up failure for job %s",
+                followup,
+                job_id,
+            )
+
     async def _maybe_queue_rig(self: Worker, job: dict[str, Any]) -> None:
         """Honour the generate form's "rig this" checkbox, once the mesh exists.
 
@@ -99,9 +125,23 @@ class JobOps:
         and make one cancel ambiguous between two very different operations.
         """
         params = job["params"]
-        if job["kind"] == "rig" or not params.get("rig"):
+        # The stage guard is not defensive; it is the only thing keeping this
+        # off a reference. Troupe's door sets ``rig`` on the *reference* row --
+        # it describes the mesh the gate will promote that reference into, not
+        # the reference itself -- so without it this runs on every Troupe
+        # reference completion, where a ``model.glb`` cannot exist because the
+        # mesh does not exist until the user approves the drawing. That was a
+        # silent no-op until the failure record below was added, and then it
+        # became a permanent, false "the generated mesh artifact is missing" on
+        # every character anyone started. ``_maybe_queue_sprite_sheet`` and
+        # ``_maybe_queue_charsheet`` have carried this guard from the start;
+        # this is the third of the three.
+        if job["kind"] == "rig" or job["stage"] != "model" or not params.get("rig"):
             return
         if not (self.config.job_dir(job["id"]) / "model.glb").exists():
+            await self._record_followup_failure(
+                job["id"], "rig", "The generated mesh artifact is missing."
+            )
             return
         rig_params = {
             "source_job": job["id"],
@@ -118,10 +158,11 @@ class JobOps:
             rig_id = await asyncio.to_thread(
                 self.store.create, "rig", job["prompt"], rig_params, None
             )
-        except Exception:
+        except Exception as exc:
             # The mesh is finished and on disk. A failure to queue the optional
             # follow-up must not retroactively fail the job that produced it.
             log.exception("could not queue follow-up rig for job %s", job["id"])
+            await self._record_followup_failure(job["id"], "rig", exc)
             return
         log.info("queued follow-up rig %s for job %s", rig_id, job["id"])
 
@@ -149,6 +190,11 @@ class JobOps:
         if not block or job["stage"] != "reference":
             return
         if not (self.config.job_dir(job["id"]) / "input.png").exists():
+            await self._record_followup_failure(
+                job["id"],
+                "sprite_synthesis",
+                "The generated reference image is missing.",
+            )
             return
         # Derived from the character's own seed rather than drawn: this worker
         # has no RNG and should not grow one -- every seed in this codebase
@@ -191,15 +237,21 @@ class JobOps:
             # weights and VRAM and the job ran on another's.
             "base_model": "sdxl_cfg",
         }
+        for identity_key in ("asset_type", "asset_intent"):
+            if params.get(identity_key):
+                sheet_params[identity_key] = params[identity_key]
         try:
             sheet_id = await asyncio.to_thread(
                 self.store.create, "sprite_synthesis", job["prompt"], sheet_params, None
             )
-        except Exception:
+        except Exception as exc:
             # The character is finished and on disk. A failure to queue the
             # optional follow-up must not retroactively fail the job that
             # produced it -- the rig's rule, verbatim.
             log.exception("could not queue follow-up sprite sheet for job %s", job["id"])
+            await self._record_followup_failure(
+                job["id"], "sprite_synthesis", exc
+            )
             return
         log.info("queued follow-up sprite sheet %s for job %s", sheet_id, job["id"])
 
@@ -230,6 +282,9 @@ class JobOps:
         if not block or job["kind"] == "charsheet" or job["stage"] != "model":
             return
         if not (self.config.job_dir(job["id"]) / "model.glb").exists():
+            await self._record_followup_failure(
+                job["id"], "charsheet", "The generated mesh artifact is missing."
+            )
             return
         if not params.get("rig"):
             # The door sets it, so this is a row whose rig flag was edited
@@ -238,6 +293,9 @@ class JobOps:
             log.warning(
                 "job %s asks for a character sheet but not a rig; skipping the sheet",
                 job["id"],
+            )
+            await self._record_followup_failure(
+                job["id"], "charsheet", "The character sheet requires an automatic rig."
             )
             return
         sheet_params = {
@@ -255,16 +313,21 @@ class JobOps:
             "dither": bool(block.get("dither")),
             "palette": block.get("palette") or "",
             "name": "",
+            # Resolved at the reference door and snapshotted there. Copy the
+            # value, not today's defaults, so approval/rerun cannot silently
+            # change what an older request means.
+            "layout": block.get("layout"),
         }
         try:
             sheet_id = await asyncio.to_thread(
                 self.store.create, "charsheet", job["prompt"], sheet_params, None
             )
-        except Exception:
+        except Exception as exc:
             # The mesh is finished and on disk. A failure to queue the optional
             # follow-up must not retroactively fail the job that produced it --
             # the rig's rule, verbatim.
             log.exception("could not queue follow-up character sheet for job %s", job["id"])
+            await self._record_followup_failure(job["id"], "charsheet", exc)
             return
         log.info("queued follow-up character sheet %s for job %s", sheet_id, job["id"])
 

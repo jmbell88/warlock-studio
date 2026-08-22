@@ -226,6 +226,33 @@ def test_a_fully_installed_host_has_no_sheet_problem():
     assert settings_2d.weights_problem(ctx, _sheet_form()) is None
 
 
+def test_a_sprite_checks_its_selected_reference_model_before_the_locked_recipe():
+    form = _sheet_form(sheet_type="sprite")
+    form["base_model"] = "turbo"
+    rows = [
+        {"row_key": key, "present": True, "label": key}
+        for key in svc_sprites.SPRITE_ROWS
+    ]
+    rows.append({"row_key": "base:turbo", "present": False, "label": "Turbo"})
+    problem = settings_2d.weights_problem(SimpleNamespace(model_rows=rows), form)
+    assert problem is not None
+    assert problem.field == "base_model"
+
+
+def test_a_sprite_checks_its_locked_recipe_after_the_reference_recipe():
+    form = _sheet_form(sheet_type="sprite")
+    rows = [
+        {"row_key": "base:sdxl_cfg", "present": True, "label": "SDXL"},
+        *[
+            {"row_key": key, "present": key != "control:canny", "label": key}
+            for key in svc_sprites.SPRITE_ROWS
+        ],
+    ]
+    problem = settings_2d.weights_problem(SimpleNamespace(model_rows=rows), form)
+    assert problem is not None
+    assert problem.field == "output"
+
+
 # -- the preview the pane asks for -------------------------------------------
 
 

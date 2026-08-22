@@ -272,6 +272,7 @@ def svc(tmp_path, monkeypatch):
     from warlock.config import get_config
     from warlock.service import WarlockService
 
+    monkeypatch.setenv("WARLOCK_HOME", str(tmp_path / "warlock-home"))
     monkeypatch.setenv("WARLOCK_DATA_DIR", str(tmp_path / "assets"))
     monkeypatch.setenv("WARLOCK_DB", str(tmp_path / "assets" / "jobs.sqlite"))
     # Points at a nonexistent exe; nothing here ever runs a job.

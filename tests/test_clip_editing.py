@@ -207,13 +207,11 @@ def test_a_one_key_clip_is_refused(svc):
     assert "a pose" in caught.value.message
 
 
-def test_a_library_that_cannot_fill_the_frame_table_is_refused(svc):
-    """``charsheet.check_frame_counts`` is what refuses a seven-frame walk laid
-    into an eight-frame table. Left to the renderer, that lands as a failed job
-    on an asset the user has already waited for."""
+def test_a_library_with_an_empty_timing_segment_is_refused(svc):
+    """Resampling accepts any positive timing weights, never an empty leg."""
     payload = _as_payload(_shipped(svc))
     walk = next(c for c in payload["clips"] if c["name"] == "walk")
-    walk["segments"] = [1] * len(walk["segments"])
+    walk["segments"] = [0] * len(walk["segments"])
     with pytest.raises(Invalid):
         svc_clips.save(svc, TEMPLATE, payload)
 
@@ -244,7 +242,7 @@ def test_a_refused_save_leaves_the_previous_library_byte_for_byte(svc):
 
     bad = _as_payload(svc_clips.library(svc, TEMPLATE))
     walk = next(c for c in bad["clips"] if c["name"] == "walk")
-    walk["segments"] = [1] * len(walk["segments"])
+    walk["segments"] = [0] * len(walk["segments"])
     with pytest.raises(Invalid):
         svc_clips.save(svc, TEMPLATE, bad)
 
@@ -258,7 +256,7 @@ def test_a_first_save_that_is_refused_leaves_no_file_at_all(svc):
     unedited afterwards, not edited-and-broken."""
     bad = _as_payload(_shipped(svc))
     walk = next(c for c in bad["clips"] if c["name"] == "walk")
-    walk["segments"] = [1] * len(walk["segments"])
+    walk["segments"] = [0] * len(walk["segments"])
     with pytest.raises(Invalid):
         svc_clips.save(svc, TEMPLATE, bad)
     assert not poselib.clip_path(svc.config, TEMPLATE).is_file()

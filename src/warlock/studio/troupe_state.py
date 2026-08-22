@@ -28,8 +28,8 @@ class TroupeState:
     job_id: str = ""
     sheet_id: str = ""
 
-    #: What the preview is playing. Names, from ``studio.troupe.spec`` -- not
-    #: indices, which would silently re-point if the frame table ever grew.
+    #: What the preview is playing. Names from the selected sheet's snapshot --
+    #: not indices, which would silently re-point if its frame table changed.
     animation: str = "walk"
     direction: str = "front"
 

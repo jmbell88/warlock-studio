@@ -753,6 +753,13 @@ class App:
             viewer=self.viewer,
             textures=textures.ThumbnailCache(self.ctx),
         )
+        from .panes import first_run
+
+        # Sampled once. The marker is intentionally outside studio_settings:
+        # resetting preferences must not turn setup into an annual popup.
+        self.app_ctx.first_run = first_run.pending(self.svc.config)
+        device = getattr(self.runtime, "device_memory", None)
+        self.app_ctx.gpu_name = str(getattr(device, "name", "") or "")
         self.app_ctx.dpi_scale = monitor_scale
         self.app_ctx.layout = self.layout
         # Every ``widgets.field_error`` call site gets the Install offer at
@@ -768,6 +775,8 @@ class App:
         self.app_ctx.refresh_rig_data = self._refresh_rig_side_data
         self.eta = Eta()
         self._load_static_answers()
+        if self.app_ctx.first_run:
+            self.app_ctx.first_run_info = first_run.snapshot(self.app_ctx)
         # Off the frame thread (C32): the walk stats every file under every
         # job directory, and nothing on the first frame needs the number --
         # the library's storage line simply appears when the task lands.
@@ -2197,12 +2206,14 @@ class App:
         to hold it, so the predicate asks all three.
         """
         from . import matte_preview
+        from .panes import first_run
 
         ctx = self.app_ctx
         return (
             ctx.confirms.pending is not None
             or ctx.prompts.pending is not None
             or matte_preview.is_open(ctx)
+            or first_run.is_open(ctx)
         )
 
     def _note_mode(self, state: Any) -> None:
@@ -4687,7 +4698,7 @@ class App:
         which is why this is not inline in either.
         """
         from . import widgets
-        from .panes import overlay, palette, settings_3d
+        from .panes import first_run, overlay, palette, settings_3d
 
         ctx = self.app_ctx
         overlay.fps_meter(ctx, self.fps)
@@ -4698,6 +4709,13 @@ class App:
             (viewport.work_size.x, viewport.work_size.y),
             on_action=self._toast_action,
         )
+        # The first-run question owns the screen before any workflow modal.
+        # Its two exits close it permanently, then later questions can use the
+        # one popup slot on the following frame.
+        first_run.draw(ctx)
+        if first_run.is_open(ctx):
+            self._transition_overlay(viewport)
+            return
         # Before the confirms, because it is the same kind of thing and the
         # earlier one wins the single modal slot imgui gives a frame.
         settings_3d.matte_modal(ctx)
@@ -4772,20 +4790,21 @@ class App:
         if name == "log":
             ctx.open_log()
         elif name == "show" and arg:
-            from . import create_stages
-            from .panes import library
+            from . import asset_open
 
-            # Through the library's own selector, so the promotion source
-            # follows the selection exactly as a click on the card would.
+            # Through ``asset_open``, which knows that a follow-up row -- a
+            # rig, a sheet, a sprite draft -- holds nothing of its own and
+            # routes to the asset whose directory its artifacts landed in.
+            # Routing by stage sent every one of them to the Mesh stage of a
+            # row with no mesh, which is a toast saying "finished" followed by
+            # a blank screen.
+            asset_open.open_asset(ctx, arg)
+            # The row that actually got selected, so the grid scrolls to what
+            # is on screen rather than to an invisible follow-up.
             job = ctx.cache.get(arg)
-            if job is not None:
-                # Through ``go`` with the id in hand, which *is* the library's
-                # own selector plus the stage: one call, so the promotion
-                # source follows exactly as a click on the card would.
-                create_stages.go(ctx, create_stages.stage_for(job), select=arg)
-            else:
-                library.select(ctx, arg)
-            ctx.state.library_scroll_to = arg
+            ctx.state.library_scroll_to = (
+                asset_open.route(job).job_id if job is not None else arg
+            )
         elif name == "undo" and arg:
             from .panes import library
 
@@ -5555,27 +5574,38 @@ def run() -> int:
             "This copy of Warlock was installed as a package rather than run "
             "from a checkout, and it cannot find the native binaries it needs: "
             "they live in vendor/ beside the source and are downloaded by hand.\n\n"
-            "Clone the repository and run:\n\n"
+            "Use the Warlock installer, or clone the repository and run:\n\n"
             "    uv sync --extra studio --extra text2image --extra rig\n"
-            "    uv run warlock-studio",
+            "    uv run warlock",
         )
         return 1
-    lock = instance.InstanceLock(get_config().home / instance.LOCK_NAME)
-    if not lock.acquire():
+    config = get_config()
+    lock = instance.InstanceLocks(instance.lock_paths(config))
+    unsafe_lock = os.environ.get("WARLOCK_ALLOW_UNSAFE_LOCK") == "1"
+    if not lock.acquire(allow_unsafe=unsafe_lock):
         # A dialog, not a log line. The behaviour this replaces wrote a warning
         # into warlock.log and carried on, so the second instance went on to
         # share the job database and the engine port with the first -- and
         # could terminate the first's trellis server -- with nothing on screen
         # to say why anything was going wrong (RUN-01).
+        if lock.failure:
+            log.error("instance locking failed for %s; refusing to start", lock.path)
+            instance.alert(
+            "Warlock Studio cannot protect its data",
+                f"{lock.failure}\n\nWarlock stopped before opening the library because "
+                "running without this protection can corrupt jobs or model files. "
+                "Fix the directory permissions and try again. For emergency recovery "
+                "only, set WARLOCK_ALLOW_UNSAFE_LOCK=1.",
+            )
+            return 1
         log.error("another Warlock instance holds %s; refusing to start", lock.path)
         instance.alert(
             "Warlock Studio is already running",
-            "Another Warlock Studio is using this data directory.\n\n"
-            "Only one can run at a time: they would share the job database and "
-            "the reconstruction engine's port.\n\n"
-            "Close the other window and try again. If you meant to run a second "
-            "copy against a separate library, set WARLOCK_HOME to a different "
-            "directory first.",
+            "Another Warlock Studio is using this home, job database, or model "
+            "directory.\n\nOnly one can use those resources at a time: sharing "
+            "them can corrupt jobs or model installs.\n\nClose the other window "
+            "and try again. A second copy needs a different WARLOCK_HOME, "
+            "WARLOCK_DB, and WARLOCK_T2I_ROOT.",
         )
         return 1
     try:

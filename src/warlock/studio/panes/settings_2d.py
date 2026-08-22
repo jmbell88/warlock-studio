@@ -35,7 +35,7 @@ from ...service.validation import (
     MAX_UPLOAD_BYTES,
     random_seed,
 )
-from .. import controls, dialogs, focus, forms, profiles, theme, tokens, widgets
+from .. import controls, create_assets, dialogs, focus, forms, profiles, theme, tokens, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 from ..widgets import field_options as _options
@@ -56,11 +56,20 @@ FOCUS_PANE = "2d"
 # Seeded at roughly one button plus its cost note, so the first frame reserves
 # something sane rather than nothing.
 _submit_px = [96.0]
+_LOAD_FINDINGS = object()
 
 
 def draw(ctx: Any) -> None:
     state = ctx.state
     form = state.form_2d
+    findings_doc = findings_lib.load(Path(ctx.svc.config.bench_dir) / "findings.json")
+    # Compatibility for live callers from the pre-registry UI that still set
+    # ``output`` directly. Settings loaded from disk have already migrated and
+    # been synchronised, so only an in-memory non-reference override reaches
+    # this bridge.
+    if "asset_type" not in form:
+        form["asset_type"] = create_assets.legacy_asset_type(form)
+        create_assets.sync_legacy_fields(form)
     # Form.errors now places the rings and copy beneath the owning controls;
     # these are the routes it replaces and keeps wired by the same field keys:
     # field_error(ctx.state, "prompt")
@@ -80,42 +89,57 @@ def draw(ctx: Any) -> None:
             # ``with`` closes before end_child -- an unbalanced splitter
             # corrupts the next frame (widgets.py, _BlockScope).
             with widgets.section_blocks():
-                widgets.section("Output")
-                _output(ctx, form)
-                if form.get("output") == "sheet":
-                    # Its own block, directly under the switch that revealed
-                    # it: these are the fields the choice *is*, and putting
-                    # them below Prompt would separate a control from the
-                    # reason it appeared.
-                    widgets.section("Sheet")
-                    manual_render.help_button(ctx, "settings-sheet")
-                    _sheet(ctx, form, form_ui)
+                widgets.section("Asset type")
+                _asset_type(ctx, form)
                 widgets.section("Prompt")
                 manual_render.help_button(ctx, "settings-2d")
                 _prompt(ctx, form, form_ui)
                 _history(ctx, form)
-                _expand(ctx, form)
-                _preview(ctx)
-                widgets.section("References")
-                _references(ctx, form)
-                widgets.section("Seed")
-                _run_controls(ctx, form, form_ui)
-                # Preset management sits *below* the thing being preset. It
-                # used to lead the form, above Prompt, which put the least
-                # frequently touched block between the output switch and the
-                # only control anyone types into -- and it is a control about
-                # the whole form, so it cannot be read before there is a form
-                # to read it against. Below Seed rather than immediately below
-                # References, so the run a user actually walks -- Prompt,
-                # References, Seed -- stays contiguous.
-                widgets.section("Profile")
-                _profiles(ctx, form)
-                widgets.section("Model")
-                _model(ctx, form)
-                widgets.section("LoRA")
-                _lora(ctx, form)
-                widgets.section("Negative prompt")
-                _negative(ctx, form)
+                widgets.section("Image model")
+                if create_assets.selected(form).intent == "tileset":
+                    _locked_sheet_recipe(ctx, "Tile-set recipe", part="model")
+                else:
+                    _model(ctx, form, findings_doc)
+                widgets.section("Style LoRA")
+                if create_assets.selected(form).intent == "tileset":
+                    _locked_sheet_recipe(ctx, "Locked for coherent pixel tiles", part="lora")
+                else:
+                    _lora(ctx, form, show_strength=False, findings_doc=findings_doc)
+                if create_assets.selected(form).intent == "sprite":
+                    _locked_sheet_recipe(ctx, "Final sheet recipe", sprite=True)
+
+                # Disclosure state belongs to this running workspace, not the
+                # recipe, so it is kept only in AppState and never settings.
+                imgui.set_next_item_open(
+                    bool(getattr(state, "create_advanced", False)),
+                    imgui.Cond_.always.value,
+                )
+                opened = controls.collapsing_header("Advanced##create")
+                state.create_advanced = bool(opened)
+                if opened:
+                    widgets.section("References & conditioning")
+                    _references(ctx, form)
+                    widgets.section("Seed & count")
+                    _run_controls(ctx, form, form_ui)
+                    if form.get("output") == "sheet":
+                        widgets.section("Dimensions")
+                        manual_render.help_button(ctx, "settings-sheet")
+                        # The asset type fixes sheet kind/view/layout; this
+                        # section exposes only the resulting pixel dimensions.
+                        if form.get("sheet_type") == "sprite":
+                            _sprite_size(ctx, form, form_ui)
+                        else:
+                            _tile_size(ctx, form, form_ui)
+                    widgets.section("Negative prompt")
+                    _negative(ctx, form)
+                    widgets.section("Profiles")
+                    _profiles(ctx, form)
+                    widgets.section("Prompt enrichment")
+                    _expand(ctx, form)
+                    _preview(ctx)
+                    if form.get("style_lora") and create_assets.selected(form).intent != "tileset":
+                        widgets.section("Style strength")
+                        _lora_strength(ctx, form, findings_doc)
         imgui.end_child()
         top = imgui.get_cursor_pos_y()
         _submit(ctx, form)
@@ -135,7 +159,69 @@ def field_label(field: str) -> str:
     return FIELD_LABELS.get(field, field.replace("_", " "))
 
 
-def _findings_hint(ctx: Any, param: str, value: Any) -> str | None:
+def _asset_type(ctx: Any, form: dict[str, Any]) -> None:
+    """The one top-level choice; legacy service switches follow it."""
+    before = create_assets.selected(form).key
+    picked = widgets.combo(
+        "##asset_type", before, list(create_assets.ASSET_TYPE_OPTIONS)
+    )
+    form["asset_type"] = picked if picked in create_assets.ASSET_TYPES else before
+    spec = create_assets.sync_legacy_fields(form)
+    if spec.key != before:
+        ctx.state.preview_dirty_at = time.monotonic()
+        ctx.state.clear_field_error("asset_type")
+
+
+def _locked_sheet_recipe(
+    ctx: Any, note: str, *, part: str = "both", sprite: bool = False
+) -> None:
+    """Say what the pinned sheet stage really loads; never draw fake pickers."""
+    base_key = (
+        svc_sprites.SPRITE_BASE_MODEL if sprite else svc_tilesheets.TILE_SHEET_BASE_MODEL
+    )
+    lora_key = modelslib.PIXEL_SHEET_LORA
+    if part in ("model", "both"):
+        if part == "both":
+            widgets.field_label("Image model")
+        imgui.text_wrapped(modelslib.BASE_MODELS[base_key].label)
+    if part in ("lora", "both"):
+        if part == "both":
+            widgets.field_label("Style LoRA")
+        imgui.text_wrapped(modelslib.STYLE_LORAS[lora_key].label)
+    widgets.muted_wrapped(note)
+
+
+def _tile_size(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
+    """Only the editable dimension of a tileset asset type."""
+    options = _tile_options()
+    changed, picked = form_ui.segmented_choice(
+        "tile_size", "Tile size", str(form.get("tile_size", "32")),
+        tuple((str(size), str(size)) for size in options["tile_sizes"]),
+        help_text="How many pixels across one tile is.", compact=True,
+    )
+    if changed:
+        form["tile_size"] = picked
+        ctx.state.clear_field_error("tile_size")
+
+
+def _sprite_size(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
+    """Only the editable dimension of a sprite asset type."""
+    options = _sprite_options()
+    changed, picked = form_ui.segmented_choice(
+        "cell_size", "Cell size", str(form.get("cell_size", "64")),
+        tuple((str(size), str(size)) for size in options["logical_sizes"]),
+        help_text="How many pixels across one frame is.", compact=True,
+    )
+    if changed:
+        form["cell_size"] = picked
+
+
+def _findings_hint(
+    ctx: Any,
+    param: str,
+    value: Any,
+    doc: Any = _LOAD_FINDINGS,
+) -> str | None:
     """The sweep's own verdict on this field's current value, or None.
 
     Read fresh every frame -- ``findings.load`` is mtime-cached, so the common
@@ -150,7 +236,8 @@ def _findings_hint(ctx: Any, param: str, value: Any) -> str | None:
     frame is a sha1 over a few dozen bytes, which is nothing beside the
     ``stat()`` above it.
     """
-    doc = findings_lib.load(Path(ctx.svc.config.bench_dir) / "findings.json")
+    if doc is _LOAD_FINDINGS:
+        doc = findings_lib.load(Path(ctx.svc.config.bench_dir) / "findings.json")
     return findings_lib.hint(
         doc,
         param,
@@ -898,7 +985,7 @@ def clear_unusable(ctx: Any, form: dict[str, Any]) -> list[str]:
     return cleared
 
 
-def _model(ctx: Any, form: dict[str, Any]) -> None:
+def _model(ctx: Any, form: dict[str, Any], findings_doc: Any = _LOAD_FINDINGS) -> None:
     # The section heading is the label; a labeled_combo here would say
     # "Model" twice in two type styles.
     before = form["base_model"]
@@ -918,7 +1005,7 @@ def _model(ctx: Any, form: dict[str, Any]) -> None:
         widgets.muted_wrapped(note)
     # On its own line, not same_line: the combo above takes the full width, so
     # a continuation would start on the right edge and clip entirely.
-    hint = _findings_hint(ctx, "base_model", form["base_model"])
+    hint = _findings_hint(ctx, "base_model", form["base_model"], findings_doc)
     if hint is not None:
         widgets.hint_text(hint)
 
@@ -950,7 +1037,13 @@ def reseed_lora_weight(form: dict[str, Any], was_lora: str) -> None:
         form["lora_weight"] = lora_default_weight(form["style_lora"])
 
 
-def _lora(ctx: Any, form: dict[str, Any]) -> None:
+def _lora(
+    ctx: Any,
+    form: dict[str, Any],
+    *,
+    show_strength: bool = True,
+    findings_doc: Any = _LOAD_FINDINGS,
+) -> None:
     no_lora = lora_note(ctx, form)
     if no_lora is not None:
         # Disabled rather than hidden, this pane's stated rule: the form holds
@@ -966,28 +1059,11 @@ def _lora(ctx: Any, form: dict[str, Any]) -> None:
     if form["style_lora"] != was_lora:
         ctx.state.clear_field_error("style_lora")
     reseed_lora_weight(form, was_lora)
-    hint = _findings_hint(ctx, "style_lora", form["style_lora"])
+    hint = _findings_hint(ctx, "style_lora", form["style_lora"], findings_doc)
     if hint is not None:
         widgets.hint_text(hint)
-    if form["style_lora"]:
-        # Hidden without a LoRA rather than disabled: a weight slider with
-        # nothing to weight is a control that cannot do anything.
-        changed, value = controls.slider_float("Strength", form["lora_weight"], 0.0, 1.5)
-        if changed:
-            form["lora_weight"] = value
-        # The tuned value, so a user who has moved the slider can get back to
-        # it. Shown always rather than only when moved: the bands differ by
-        # more than an order of magnitude between adapters.
-        widgets.muted_wrapped(
-            f"tuned default: {lora_default_weight(form['style_lora']):g}"
-        )
-        # The only shipped sweep is lora-weight-v1, so this is the one
-        # slider in the form with a findings bucket behind it -- the
-        # feedback loop the sweep exists for. findings.hint absorbs the
-        # float32 rounding a slider hands back (see its docstring).
-        hint = _findings_hint(ctx, "lora_weight", form["lora_weight"])
-        if hint is not None:
-            widgets.hint_text(hint)
+    if form["style_lora"] and show_strength:
+        _lora_strength(ctx, form, findings_doc)
     if no_lora is not None:
         imgui.end_disabled()
         widgets.muted_wrapped(no_lora)
@@ -998,6 +1074,21 @@ def _lora(ctx: Any, form: dict[str, Any]) -> None:
         narrowed = lora_filter_note(ctx, form)
         if narrowed is not None:
             widgets.muted_wrapped(narrowed)
+
+
+def _lora_strength(
+    ctx: Any, form: dict[str, Any], findings_doc: Any = _LOAD_FINDINGS
+) -> None:
+    """The advanced half of the style choice."""
+    if not form.get("style_lora"):
+        return
+    changed, value = controls.slider_float("Strength", form["lora_weight"], 0.0, 1.5)
+    if changed:
+        form["lora_weight"] = value
+    widgets.muted_wrapped(f"tuned default: {lora_default_weight(form['style_lora']):g}")
+    hint = _findings_hint(ctx, "lora_weight", form["lora_weight"], findings_doc)
+    if hint is not None:
+        widgets.hint_text(hint)
 
 
 def _negative(ctx: Any, form: dict[str, Any]) -> None:
@@ -1112,7 +1203,8 @@ def _submit(ctx: Any, form: dict[str, Any]) -> None:
         imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.ERR)))
         imgui.text_wrapped(problem)
         imgui.pop_style_color()
-    count = int(form["count"])
+    count = _safe_int(form.get("count"), 1)
+    spec = create_assets.selected(form)
     if form.get("output") == "sheet":
         # Its own sentence rather than a third noun in the line below: a sheet
         # is one press and either one generation or three, which "One sheet - a
@@ -1123,7 +1215,11 @@ def _submit(ctx: Any, form: dict[str, Any]) -> None:
             else "A character and two candidate sheets - a few minutes"
         )
     else:
-        noun = "tile" if form.get("output") == "tile" else "reference"
+        noun = {
+            "image_2d": "image",
+            "model_3d": "reference",
+            "seamless_tile": "tile",
+        }.get(spec.key, "reference")
         widgets.muted(
             f"{count} {noun}s - a few seconds each"
             if count > 1
@@ -1132,7 +1228,7 @@ def _submit(ctx: Any, form: dict[str, Any]) -> None:
     busy = ctx.busy("submit")
     enabled = not problems and not busy
     with focus.item(ctx.state, FOCUS_PANE, "generate") as focused:
-        pressed = widgets.primary_button("Generate", (-1, sp(34)), enabled=enabled)
+        pressed = widgets.primary_button(spec.create_label, (-1, sp(34)), enabled=enabled)
         # Enter on the last stop of the ring, which is what makes the whole
         # form keyboard-only: everything above it is a stock imgui control that
         # answers the keyboard once it has focus, and this is the one that
@@ -1162,18 +1258,45 @@ def validate(form: dict[str, Any]) -> list[widgets.Problem]:
     -- put the ring on the control the button path would have pointed at.
     """
     problems: list[widgets.Problem] = []
-    if not form["prompt"].strip():
+    asset_key = form.get("asset_type")
+    if asset_key is not None and asset_key not in create_assets.ASSET_TYPES:
+        problems.append(widgets.Problem("Choose a recognised asset type.", "asset_type"))
+    prompt = form.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip():
         problems.append(widgets.Problem("A prompt is required.", "prompt"))
-    if len(form["prompt"]) > MAX_PROMPT:
+    if isinstance(prompt, str) and len(prompt) > MAX_PROMPT:
         problems.append(
             widgets.Problem(f"The prompt is over {MAX_PROMPT} characters.", "prompt")
         )
-    if not 1 <= int(form["count"]) <= MAX_REFERENCE_COUNT:
+    count = _safe_int(form.get("count"), 0)
+    if not 1 <= count <= MAX_REFERENCE_COUNT:
         problems.append(
             widgets.Problem(
                 f"References must be between 1 and {MAX_REFERENCE_COUNT}.", "count"
             )
         )
+    grid = form.get("output") == "sheet" and form.get("sheet_type") != "sprite"
+    base = form.get("base_model")
+    style = form.get("style_lora")
+    # A tile set's fixed recipe does not read either selection. It validates
+    # its pinned pair at its own service door.
+    if not grid and (not isinstance(base, str) or base not in modelslib.BASE_MODELS):
+        problems.append(widgets.Problem("Choose a recognised image model.", "base_model"))
+    if not grid and (not isinstance(style, str) or (style and style not in modelslib.STYLE_LORAS)):
+        problems.append(widgets.Problem("Choose a recognised style LoRA.", "style_lora"))
+    if not grid and style:
+        try:
+            weight = float(form.get("lora_weight"))
+        except (TypeError, ValueError, OverflowError):
+            weight = float("nan")
+        if not modelslib.LORA_WEIGHT_MIN <= weight <= modelslib.LORA_WEIGHT_MAX:
+            problems.append(
+                widgets.Problem(
+                    f"Style strength must be between {modelslib.LORA_WEIGHT_MIN:g} "
+                    f"and {modelslib.LORA_WEIGHT_MAX:g}.",
+                    "style_lora",
+                )
+            )
     # The tile-grid arm is the one output that does not go through
     # ``create_job``: ``create_tile_sheet`` pins its own base, its own LoRA and
     # its own ControlNet and reads none of the four fields below. So the three
@@ -1184,7 +1307,6 @@ def validate(form: dict[str, Any]) -> list[widgets.Problem]:
     # ``ref_path`` is VOLATILE, so any session that once conditioned an Object
     # reopens with the pair already split. The sprite arm is deliberately *not*
     # exempt -- its first step is an ordinary reference job and reads all four.
-    grid = form.get("output") == "sheet" and form.get("sheet_type") != "sprite"
     # Both reachable from a restored form rather than from this frame's
     # controls, which is why they are checked here and not only where the
     # widgets are drawn: a persisted selection outlives the ref_path that
@@ -1197,7 +1319,7 @@ def validate(form: dict[str, Any]) -> list[widgets.Problem]:
     if (
         not grid
         and form.get("control")
-        and form["base_model"] not in modelslib.controlnet_bases()
+        and base not in modelslib.controlnet_bases()
     ):
         problems.append(
             widgets.Problem("Structure control needs a full-CFG model.", "base_model")
@@ -1206,7 +1328,7 @@ def validate(form: dict[str, Any]) -> list[widgets.Problem]:
     # of base under Advanced, and the service refuses the submit outright
     # rather than generating without it.
     if not grid and form.get("style_lora") and form["style_lora"] not in (
-        modelslib.loras_by_base().get(form["base_model"]) or []
+        modelslib.loras_by_base().get(base) or []
     ):
         problems.append(
             widgets.Problem(
@@ -1214,7 +1336,7 @@ def validate(form: dict[str, Any]) -> list[widgets.Problem]:
                 "style_lora",
             )
         )
-    if form.get("output") == "tile" and form["base_model"] not in modelslib.tile_bases():
+    if form.get("output") == "tile" and base not in modelslib.tile_bases():
         problems.append(
             widgets.Problem("Seamless tiles need an SDXL model.", "base_model")
         )
@@ -1243,6 +1365,13 @@ def validate(form: dict[str, Any]) -> list[widgets.Problem]:
                 )
             )
     return problems
+
+
+def _safe_int(value: Any, fallback: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return fallback
 
 
 def submit_kwargs(form: dict[str, Any]) -> dict[str, Any]:
@@ -1274,7 +1403,7 @@ def submit_kwargs(form: dict[str, Any]) -> dict[str, Any]:
         "kind": "text",
         "prompt": form["prompt"].strip(),
         "output": "tile" if tile else "reference",
-        "count": int(form["count"]),
+        "count": _safe_int(form.get("count"), 1),
         **({"sprite_sheet": sprite_sheet} if sprite_sheet is not None else {}),
         "seed": int(form["seed"]),
         "negative_prompt": form["negative_prompt"] or None,
@@ -1285,6 +1414,7 @@ def submit_kwargs(form: dict[str, Any]) -> dict[str, Any]:
         "control_scale": float(form["control_scale"]) if form.get("control") else None,
         "control_end": float(form["control_end"]) if form.get("control") else None,
         "guidance_fields": fields,
+        **create_assets.persisted_intent(form),
     }
 
 
@@ -1328,6 +1458,7 @@ def _generate_tile_sheet(ctx: Any, form: dict[str, Any]) -> None:
             seed=seed,
             negative_prompt=negative,
             reference=reference,
+            **create_assets.persisted_intent(form),
         )
 
     ctx.submit("submit", run)
@@ -1391,13 +1522,12 @@ def weights_problem(ctx: Any, form: dict[str, Any]) -> widgets.Problem | None:
     by_key = {str(row.get("row_key")): row for row in (getattr(ctx, "model_rows", None) or [])}
     if not by_key:
         return None
-    if form.get("output") == "sheet":
-        # A sheet's doors pin their own base and LoRA and ignore the form's, so
-        # walking ``_WEIGHT_FIELDS`` here would refuse a submit over a style
-        # selection the run will never read -- and stay silent about the
-        # ControlNet it actually needs. Asked as "which of this sheet's rows is
-        # missing" instead, against the same list the section's gate draws from,
-        # so the note above the button and the gate cannot disagree.
+    grid = form.get("output") == "sheet" and form.get("sheet_type") != "sprite"
+    if grid:
+        # A tile set's door pins its own base and LoRA and ignores the form's,
+        # so walking ``_WEIGHT_FIELDS`` here would point at a selection the run
+        # never reads. Sprite sheets are different: their preliminary
+        # reference does use those selected fields, then a pinned final recipe.
         for row_key in sheet_rows(form):
             row = by_key.get(row_key)
             if row is None or row.get("present"):
@@ -1433,6 +1563,20 @@ def weights_problem(ctx: Any, form: dict[str, Any]) -> widgets.Problem | None:
                 f"Prompt expansion needs {label!r}, which is not downloaded. "
                 f"Install it in Settings, or turn expansion off.",
                 "expand",
+            )
+    if form.get("output") == "sheet" and form.get("sheet_type") == "sprite":
+        # Only after the visible preliminary recipe has passed: both stages
+        # are real requirements, and the first problem should point at the
+        # editable control before naming the locked follow-up recipe.
+        for row_key in sheet_rows(form):
+            row = by_key.get(row_key)
+            if row is None or row.get("present"):
+                continue
+            label = row.get("label") or row_key
+            return widgets.Problem(
+                f"The final sheet needs {label!r}, which is not downloaded. "
+                f"Install it in Settings.",
+                "output",
             )
     return None
 

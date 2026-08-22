@@ -17,7 +17,7 @@ from imgui_bundle import imgui
 from ... import models, rigging
 from ...service import sheets as svc_sheets
 from ...service import validation
-from .. import controls, dialogs, forms, icons, widgets
+from .. import asset_open, controls, dialogs, forms, icons, widgets
 from ..manual import render as manual_render
 from ..viewer import sheet as sheetlib
 from . import model_gate, stamps
@@ -33,7 +33,13 @@ YAW_CHOICES = (4, 8, 16)
 def draw(ctx: Any, job: Any) -> None:
     if "model.glb" not in (job.get("files") or []):
         return
-    if not widgets.header("Sprite sheet", default_open=False):
+    if not widgets.header(
+        "Sprite sheet",
+        default_open=False,
+        # ``sprite_panel``'s reason, verbatim. The two headers share a label
+        # but live at different stages, so they take different keys.
+        persist_key=asset_open.SHEET_SECTION,
+    ):
         return
     manual_render.help_button(ctx, "sheet")
 

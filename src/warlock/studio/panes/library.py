@@ -15,6 +15,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
+from ... import followups
 from ...service import export as svc_export
 from ...service import jobs as svc_jobs
 from ...service import rig as svc_rig
@@ -643,10 +644,12 @@ def _card_body(ctx: Any, job: Any, queue_pos: dict[str, int] | None = None) -> N
         # compact to read.
         imgui.same_line()
         widgets.status_pill(job["status"])
+        _followup_badge(job, compact=True)
         imgui.end_group()
         _card_context(ctx, job)
         return
     widgets.status_pill(job["status"])
+    _followup_badge(job)
     # Between the two, and that order is the rule rather than a preference:
     # ``quality_badge`` may draw nothing and owns its own ``same_line`` for it,
     # so anything unconditional has to be ahead of it -- a badge placed after
@@ -701,6 +704,26 @@ def _card_body(ctx: Any, job: Any, queue_pos: dict[str, int] | None = None) -> N
         _card_actions(ctx, job)
     imgui.end_group()
     _card_context(ctx, job)
+
+
+def followup_failure_tooltip(job: Any) -> str:
+    """One compact explanation for a card whose parent job still succeeded."""
+    params = job.get("params") if isinstance(job, dict) else None
+    stage = job.get("stage") if isinstance(job, dict) else None
+    return "\n".join(
+        f"{item['label']} was not queued: {item['message']}"
+        for item in followups.records(params, stage)
+    )
+
+
+def _followup_badge(job: Any, *, compact: bool = False) -> None:
+    message = followup_failure_tooltip(job)
+    if not message:
+        return
+    imgui.same_line()
+    widgets.text_colored(theme.WARN, "!" if compact else "follow-up failed")
+    if imgui.is_item_hovered():
+        imgui.set_tooltip(message)
 
 
 def _card_context(ctx: Any, job: Any) -> None:
@@ -874,10 +897,10 @@ def _troupe_item(ctx: Any, job: dict[str, Any]) -> None:
         return
     if controls.menu_item("Open in Troupe", "", False)[0]:
         from .. import troupe_mode
-        from ..state import set_mode
 
-        troupe_mode.select(ctx, source, sheet_id)
-        set_mode(ctx.state, "troupe")
+        # The same call a finished charsheet's "Show" toast makes, so the
+        # menu item and the toast cannot disagree about which sheet.
+        troupe_mode.open_sheet(ctx, source, sheet_id)
 
 
 def _map_and_atlas_items(ctx: Any, job: dict[str, Any], files: Any) -> None:
@@ -1021,16 +1044,17 @@ def open_selected(ctx: Any) -> None:
 
     Opens the selected asset in the mode that shows it -- the same routing
     Home's Resume list applies to an asset row, so the two lists cannot
-    disagree about where an asset opens. Through ``create_stages.go`` rather
-    than assignment, so Esc still knows it came from the library. Silently
-    nothing with no selection: Enter with no cursor has nothing it could mean.
+    disagree about where an asset opens. Through ``asset_open`` (and so through
+    ``create_stages.go``) rather than assignment, so Esc still knows it came
+    from the library. Silently nothing with no selection: Enter with no cursor
+    has nothing it could mean.
     """
-    from .. import create_stages
+    from .. import asset_open
 
     job = ctx.cache.get(ctx.state.selected)
     if job is None:
         return
-    create_stages.go(ctx, create_stages.stage_for(job), select=job["id"])
+    asset_open.open_asset(ctx, job)
 
 
 def _copy_settings(ctx: Any, job: Any) -> None:
@@ -1041,6 +1065,7 @@ def _copy_settings(ctx: Any, job: Any) -> None:
     text, which left every guidance field, the model, the LoRA and the
     conditioning strengths behind.
     """
+    from .. import create_assets
     from ..state import form_from_params
 
     form = form_from_params(job.get("params") or {})
@@ -1050,6 +1075,10 @@ def _copy_settings(ctx: Any, job: Any) -> None:
     # of a texture. The whole job row is in hand here; form_from_params is not
     # given it, because it is the params allowlist and must stay one.
     form["output"] = "tile" if job.get("stage") == "tile" else "reference"
+    params = job.get("params") or {}
+    if "asset_type" not in params:
+        form["asset_type"] = create_assets.legacy_asset_type(form)
+    create_assets.sync_legacy_fields(form)
     from .. import create_stages
 
     ctx.state.form_2d = form
@@ -1116,15 +1145,26 @@ def run_action(ctx: Any, job: Any, action: str) -> None:
             template=stage_rig.skeleton(ctx),
         )
     elif action == "open":
-        from .. import create_stages
+        # A job that stops at an image opens at the stage that made it; a tile
+        # has no mesh at all; and a follow-up row opens the asset whose
+        # directory holds what it made. All three are ``asset_open``'s to know,
+        # which is what keeps this and the landing page's identical "open this
+        # asset" from being two answers to one question.
+        from .. import asset_open
 
-        # A job that stops at an image opens at the stage that made it. A tile
-        # has no mesh at all, so opening it at Mesh would show an empty
-        # viewport. Through ``go`` and not a bare assignment, which is what the
-        # landing page's identical "open this asset" already does: the two are
-        # the same act reached from two surfaces, and only one of them used to
-        # leave Esc a way back to where the user came from.
-        create_stages.go(ctx, create_stages.stage_for(job), select=job_id)
+        asset_open.open_asset(ctx, job)
+    elif action == "inker":
+        from .. import inker_mode
+
+        inker_mode.open_job_reference(ctx, job)
+    elif action == "clay":
+        from .. import clay_mode
+
+        clay_mode.edit_asset_in_clay(ctx, job)
+    elif action == "plotter":
+        from .. import plotter_mode
+
+        plotter_mode.use_as_tileset(ctx, job)
 
 
 COMPARE_KEY = "compare-parse"

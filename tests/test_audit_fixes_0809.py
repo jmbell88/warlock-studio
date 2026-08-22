@@ -176,5 +176,7 @@ def test_the_volatile_rows_sit_after_the_install_rows(svc):
     seam = rows.index(doctor.VOLATILE_AFTER)
     volatile = [c.name for c in doctor.volatile_checks(svc.config)]
     assert rows[seam + 1 : seam + 1 + len(volatile)] == volatile
-    # And the per-model rows are still below them, not above.
-    assert rows.index(fetch.entries()[0].check_name) > seam
+    # Optional per-model rows are still below them. The engine row is fatal and
+    # deliberately remains in the startup-gate section above the seam.
+    first_optional = next(entry for entry in fetch.entries() if entry.kind != "engine")
+    assert rows.index(first_optional.check_name) > seam

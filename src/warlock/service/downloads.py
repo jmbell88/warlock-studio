@@ -202,7 +202,7 @@ def download(
         raise Invalid(refusal)
 
     with _maintenance("downloading a model"):
-        return _download(jobs, on_progress, timeout)
+        return _download(jobs, on_progress, timeout, journal_root=Path(svc.config.home))
 
 
 def _maintenance(what: str) -> Any:
@@ -285,18 +285,26 @@ def disk_usage(svc: WarlockService) -> dict[str, Any]:
     A walk, so it goes through ``TaskRunner`` like the library's own.
     """
     root = Path(svc.config.t2i_model_root)
+    engine_root = Path(svc.config.trellis_models_dir)
+    roots = (root,) if engine_root.is_relative_to(root) else (root, engine_root)
     total = 0
     files = 0
-    for path in root.rglob("*"):
-        try:
-            if path.is_file():
-                total += path.stat().st_size
-                files += 1
-        except OSError:
-            # A file a fetch is mid-way through renaming is the normal state of
-            # a download, not an error -- ``fetch_worker._dir_bytes``'s rule.
-            continue
-    return {"root": str(root), "bytes": total, "files": files}
+    for store in roots:
+        for path in store.rglob("*"):
+            try:
+                if path.is_file():
+                    total += path.stat().st_size
+                    files += 1
+            except OSError:
+                # A file a fetch is mid-way through renaming is the normal state of
+                # a download, not an error -- ``fetch_worker._dir_bytes``'s rule.
+                continue
+    return {
+        "root": str(root),
+        "engine_root": str(svc.config.trellis_models_dir),
+        "bytes": total,
+        "files": files,
+    }
 
 
 def sweep_staging(svc: WarlockService) -> list[str]:
@@ -316,7 +324,9 @@ def sweep_staging(svc: WarlockService) -> list[str]:
     root = Path(svc.config.t2i_model_root)
     jobs = fetch_mod.plan(svc.config, list(fetch_mod.entries()))
     parents = {job.dest.parent for job in jobs} | {root}
-    spared = publish.staged_dirs(root)
+    spared: set[str] = set()
+    for journal_root in _journal_roots(svc.config):
+        spared.update(publish.staged_dirs(journal_root))
     removed: list[str] = []
     for parent in parents:
         try:
@@ -349,12 +359,12 @@ def recover(config: Any) -> list[str]:
     """
     from .. import publish
 
-    root = Path(config.t2i_model_root)
-    try:
-        undone = publish.recover(root)
-    except Exception:  # pragma: no cover - publish.recover suppresses its own
-        log.exception("could not roll back an interrupted download")
-        return []
+    undone: list[str] = []
+    for root in _journal_roots(config):
+        try:
+            undone.extend(publish.recover(root))
+        except Exception:  # pragma: no cover - publish.recover suppresses its own
+            log.exception("could not roll back an interrupted download journal at %s", root)
     if undone:
         log.warning(
             "rolled back an interrupted download; these are as they were before "
@@ -365,8 +375,25 @@ def recover(config: Any) -> list[str]:
     return undone
 
 
+def _journal_roots(config: Any) -> tuple[Path, ...]:
+    """Canonical journal root followed by every location older builds used."""
+    candidates = [
+        Path(config.home),
+        Path(config.t2i_model_root),
+        Path(config.trellis_models_dir).parent,
+    ]
+    turbo = getattr(config, "t2i_turbo_dir", None)
+    if turbo is not None:
+        candidates.append(Path(turbo).parent)
+    return tuple(dict.fromkeys(path.resolve() for path in candidates))
+
+
 def _download(
-    jobs: list[fetch_mod.Job], on_progress: Progress | None, timeout: float
+    jobs: list[fetch_mod.Job],
+    on_progress: Progress | None,
+    timeout: float,
+    *,
+    journal_root: Path,
 ) -> dict[str, Any]:
     """Stage the whole selection, then publish all of it. MDL-10.
 
@@ -393,7 +420,7 @@ def _download(
     """
     from .. import publish
 
-    root = Path(jobs[0].dest).parent
+    root = Path(journal_root)
     _sweep_staging(jobs, spare=publish.staged_dirs(root))
     total = fetch_mod.total_gib(jobs) or float(len(jobs))
     done_gib = 0.0
@@ -416,17 +443,36 @@ def _download(
 
             report(0.0, f"{job.repo_id} ({index} of {len(jobs)})")
             result = _run_worker(job, on_progress=report, timeout=timeout, publish=False)
+            # A child normally stages under one deterministic name beside the
+            # destination. Different repositories can share that destination
+            # (most visibly the flat loras/ directory), so reserve this
+            # completed tree before the next child can reuse and erase it.
+            staging_text = result.get("staged")
+            if not isinstance(staging_text, str) or not staging_text:
+                raise OSError(f"{job.repo_id} returned no staging directory")
+            staging_path = Path(staging_text)
+            if not staging_path.is_dir():
+                raise OSError(
+                    f"{job.repo_id} staging directory is missing: {staging_path}"
+                )
+            held = staging_path.parent / (
+                f".{job.dest.name}.{secrets.token_hex(8)}.fetch.part"
+            )
+            os.replace(staging_path, held)
+            result = dict(result)
+            result["staged"] = str(held)
             staged.append((job, result))
             done_gib += share
-    except ServiceError as exc:
+    except (ServiceError, OSError) as exc:
         # Nothing has moved, so there is nothing to undo -- only staging trees
         # to drop. This is the whole benefit of the two phases: the message can
         # now say "nothing was installed" and be true.
         for _job, result in staged:
             shutil.rmtree(result.get("staged") or "", ignore_errors=True)
         _sweep_staging(jobs)
+        detail = exc.message if isinstance(exc, ServiceError) else str(exc)
         raise Invalid(
-            f"{exc.message} Nothing was installed: the whole selection is "
+            f"{detail} Nothing was installed: the whole selection is "
             f"downloaded before any of it is put in place, so your models are "
             f"exactly as they were. Try again."
         ) from exc
@@ -438,11 +484,16 @@ def _download(
         {"repo_id": job.repo_id, "staging": result.get("staged"), "dest": str(job.dest)}
         for job, result in staged
     ]
-    publish.begin(root, entries)
     fetched: list[str] = []
     try:
+        publish.begin(root, entries)
         for job, result in staged:
             staging = Path(result["staged"])
+            # Build the completion marker in staging so it is covered by the
+            # same journal, backup and rollback as every weight file. Writing
+            # it directly into the destination left a false "installed"
+            # marker behind when a later repository failed.
+            _stage_manifest_for(job, staging)
             # The journal has to be true at every moment of the move, not only
             # at its ends -- and the move is a file-by-file loop, so the only
             # entry that is true *throughout* it is the one written before it
@@ -456,25 +507,34 @@ def _download(
             # back out of the destination, restored only the backup tree, and
             # then deleted the staging tree that held the other copy.
             publish.note_published(
-                root, str(job.dest), publish.planned_names(staging)
+                root, str(staging), str(job.dest), publish.planned_names(staging)
             )
             names = publish.move_into(staging, job.dest)
             # Narrowed to what actually moved, now that it is known. A
             # refinement rather than the record: the line above is what a crash
             # reads.
-            publish.note_published(root, str(job.dest), names)
-            _write_manifest_for(job, staging, names)
-            shutil.rmtree(staging, ignore_errors=True)
-            shutil.rmtree(publish.backup_dir(job.dest), ignore_errors=True)
+            publish.note_published(root, str(staging), str(job.dest), names)
             fetched.append(job.repo_id)
     except BaseException:
         # In-process failure: undo what this loop did, in reverse, and leave
         # the journal for a recovery only if we cannot finish the undo here.
         publish.recover(root)
-        _sweep_staging(jobs)
+        _sweep_staging(jobs, spare=publish.staged_dirs(root))
         fetch_mod.bump_store_generation()
         raise
-    publish.finish(root)
+    # The journal's removal is the commit point. Until it succeeds, retain
+    # every staging and backup tree so recovery can put overwritten files back
+    # even if this process dies after publishing the final repository.
+    try:
+        publish.finish(root)
+    except OSError:
+        publish.recover(root)
+        fetch_mod.bump_store_generation()
+        raise
+    for job, result in staged:
+        shutil.rmtree(result.get("staged") or "", ignore_errors=True)
+        staging = Path(result.get("staged") or "")
+        shutil.rmtree(publish.backup_dir(job.dest, staging), ignore_errors=True)
     # Once, at the end, and now that is the honest place for it: before the
     # transaction, publication was per repo and the counter had to keep up with
     # it. Everything in this selection became visible at the same moment.
@@ -484,31 +544,37 @@ def _download(
     return {"fetched": fetched}
 
 
-def _write_manifest_for(job: fetch_mod.Job, staging: Path, names: list[str]) -> None:
-    """The completion marker, written by the parent now that it publishes.
+def _stage_manifest_for(job: fetch_mod.Job, staging: Path) -> None:
+    """Write the completion marker into staging before publication.
 
     Same record the child used to write and for the same reason -- a manifest
     is what makes "this directory was finished by a Warlock download" a
-    question with an answer -- and written last, after the publish, so it
-    remains a completion marker rather than an intention.
+    question with an answer. It is staged last, then moved with the weights,
+    so it becomes visible only after their moves and is rollback-covered.
 
     Never raises: a manifest that could not be written must not fail a download
     that succeeded. Its absence already means "unknown", which would be true.
     """
     from .. import hashes, publish
 
-    path = job.dest / fetch_mod.MANIFEST_NAME
+    names = publish.planned_names(staging)
+    path = staging / fetch_mod.MANIFEST_NAME
     record = {
         "repo_id": job.repo_id,
         "revision": job.revision,
         "files": sorted(names),
-        "digests": hashes.digest_files(job.dest, names),
+        "digests": hashes.digest_files(staging, names),
     }
-    existing = publish.read_json(path) or {}
+    existing = publish.read_json(job.dest / fetch_mod.MANIFEST_NAME) or {}
     repos = existing.get("repos")
     repos = dict(repos) if isinstance(repos, dict) else {}
     repos[job.repo_id] = record
     publish.write_json(path, {"repos": repos})
+    if not path.exists():
+        # ``write_json`` is intentionally best effort. Its temp is not an
+        # artifact and must not accidentally join ``planned_names``.
+        with contextlib.suppress(OSError):
+            path.with_name(f".{path.name}.tmp").unlink(missing_ok=True)
 
 
 # A directory being deleted is renamed to a sibling with this prefix first, so
@@ -635,16 +701,19 @@ def _uninstall(
     svc: WarlockService, removal: Any, on_progress: Progress | None
 ) -> dict[str, Any]:
     root = svc.config.t2i_model_root
-    _sweep_trash(root)
+    for parent in {Path(root), *(path.parent for path in removal.paths)}:
+        _sweep_trash(parent)
     if on_progress is not None:
         on_progress(0.0, "removing")
-    removed: list[str] = []
-    for index, path in enumerate(removal.paths, start=1):
-        _remove_one(path, root)
-        removed.append(str(path))
-        # Same reasoning as ``download``'s: per unlink, so a raise partway
-        # through cannot leave a cache believing in weights that are gone.
+    # Stage the whole selection through same-volume renames before deleting a
+    # byte. A failure during admission can therefore rename every earlier path
+    # back and preserve the all-or-nothing selection the public API promises.
+    staged = _stage_removals(removal.paths)
+    if staged:
         fetch_mod.bump_store_generation()
+    removed = [str(path) for path in removal.paths]
+    for index, (path, trash) in enumerate(staged, start=1):
+        _delete_staged(path, trash)
         if on_progress is not None:
             on_progress(100.0 * index / len(removal.paths), path.name)
     if on_progress is not None:
@@ -652,20 +721,52 @@ def _uninstall(
     return {"removed": removed, "freed_gib": removal.freed_gib}
 
 
-def _remove_one(path: Path, root: Path) -> None:
-    """Delete one claim, crash-atomically for a directory. Missing is fine.
+def _stage_removals(paths: Sequence[Path]) -> list[tuple[Path, Path]]:
+    """Rename every existing claim aside, rolling all renames back on error."""
+    staged: list[tuple[Path, Path]] = []
+    try:
+        for path in paths:
+            if not path.exists():
+                continue
+            # Rename beside the claim: engine weights may be configured on a
+            # different drive from image models, and Windows cannot rename a
+            # directory atomically across volumes.
+            trash = path.parent / f"{TRASH_PREFIX}{secrets.token_hex(6)}"
+            os.rename(path, trash)
+            staged.append((path, trash))
+    except OSError as exc:
+        rollback_errors: list[str] = []
+        for original, trash in reversed(staged):
+            try:
+                os.rename(trash, original)
+            except OSError as rollback_exc:
+                rollback_errors.append(f"{original.name}: {rollback_exc}")
+        detail = (
+            f" Rollback also failed for {'; '.join(rollback_errors)}."
+            if rollback_errors
+            else ""
+        )
+        if isinstance(exc, PermissionError):
+            raise Failed(
+                "Could not remove the selected models: another process holds "
+                f"these files. Nothing was removed.{detail}"
+            ) from exc
+        raise Failed(f"Could not remove the selected models: {exc}.{detail}") from exc
+    return staged
+
+
+def _delete_staged(path: Path, trash: Path) -> None:
+    """Delete one already-committed trash path. Missing is fine.
 
     An absent path is not an error: ``removal_plan`` is pure and answers about
     what a row *stands on*, not about what happens to be there, so a partially
     downloaded model has claims with nothing behind them.
     """
     try:
-        if path.is_dir():
-            trash = root / f"{TRASH_PREFIX}{secrets.token_hex(6)}"
-            os.rename(path, trash)
+        if trash.is_dir():
             shutil.rmtree(trash)
-        elif path.exists():
-            path.unlink()
+        elif trash.exists():
+            trash.unlink()
     except PermissionError as exc:
         raise Failed(
             f"Could not remove {path.name}: another process holds these files. "

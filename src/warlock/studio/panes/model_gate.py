@@ -50,7 +50,10 @@ def request_install(ctx: Any, row_keys: tuple[str, ...]) -> None:
     mode-switch contract (H14), which ``tests/test_mode_writes.py`` scans this
     whole tree for.
     """
+    from . import app_settings
+
     ctx.model_picks |= set(row_keys)
+    ctx.state.preview[app_settings.CATEGORY_SLOT] = "models"
     set_mode(ctx.state, "settings")
 
 

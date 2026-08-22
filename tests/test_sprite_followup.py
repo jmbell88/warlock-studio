@@ -345,6 +345,12 @@ async def test_the_character_survives_a_follow_up_that_cannot_be_queued(worker, 
 
     assert worker.store.get(job_id)["status"] == "done"
     assert worker.store.get(job_id)["error"] is None
+    failure = worker.store.get(job_id)["params"]["followup_failures"][
+        "sprite_synthesis"
+    ]
+    assert failure["kind"] == "sprite_synthesis"
+    assert failure["error_type"] == "RuntimeError"
+    assert failure["message"] == "no"
     await worker.shutdown()
 
 

@@ -26,6 +26,7 @@ edit away from a form that offers a size the renderer refuses.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from .. import rigging
@@ -82,11 +83,21 @@ def troupe_options(svc: WarlockService) -> dict[str, Any]:
         "reduce_modes": list(TROUPE_REDUCE_MODES),
         "palettes": palettes.available(svc.config),
         "animations": [
-            {"name": name, "frames": frames, "loop": loop, "duration_ms": ms}
+            {
+                "name": name,
+                "frames": frames,
+                "min_frames": charsheet.MOVEMENT_MIN_FRAMES[name],
+                "max_frames": charsheet.MAX_FRAMES,
+                "loop": loop,
+                "duration_ms": ms,
+            }
             for name, frames, loop, ms in charsheet.ANIMATIONS
         ],
         "directions": [name for name, _yaw in charsheet.DIRECTIONS],
+        "direction_presets": list(charsheet.DIRECTION_PRESETS),
         "cells": len(charsheet.frame_table()),
+        "warn_cells": charsheet.WARN_CELLS,
+        "max_cells": charsheet.MAX_CELLS,
         "render_size": charsheet.RENDER_SIZE,
         "defaults": {
             "variant": DEFAULT_TROUPE_VARIANT,
@@ -94,6 +105,7 @@ def troupe_options(svc: WarlockService) -> dict[str, Any]:
             "colors": DEFAULT_TROUPE_COLORS,
             "outline": DEFAULT_TROUPE_OUTLINE,
             "reduce_mode": TROUPE_REDUCE_MODES[0],
+            "layout": charsheet.resolve_layout().as_dict(),
         },
     }
 
@@ -161,12 +173,16 @@ def check_troupe(svc: WarlockService, block: Any) -> dict[str, Any]:
             f"variant must be one of {list(TROUPE_VARIANTS)}", field="variant"
         )
     options = _check_options(svc, entries)
+    try:
+        layout = charsheet.resolve_layout(entries.get("layout"))
+    except (TypeError, ValueError) as exc:
+        raise Invalid(str(exc), field="layout") from exc
     # The VRAM the *sheet* half needs is nothing -- EEVEE and CPU -- but the
     # mesh the gate promotes to is an ordinary image job and is admitted by
     # its own door. What is checked here is the reference stage's own base,
     # because this door pins it rather than inheriting it.
     check_vram(svc, "text", "reference", {"base_model": TROUPE_BASE_MODEL})
-    return {"variant": variant, **options}
+    return {"variant": variant, "layout": layout.as_dict(), **options}
 
 
 def create_charsheet(
@@ -182,8 +198,9 @@ def create_charsheet(
     elevation: float | None = None,
     lighting: str | None = None,
     name: str | None = None,
+    layout: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Queue the full 256-cell character sheet for a finished, rigged mesh.
+    """Queue a configured character sheet for a finished, rigged mesh.
 
     The output is an ordinary sheet -- ``sheets/<id>.png`` plus its sidecar, in
     the *source* job's directory -- and that is the whole reason it is not a
@@ -226,16 +243,18 @@ def create_charsheet(
     )
 
     try:
+        resolved_layout = charsheet.resolve_layout(layout)
         # Expanded and thrown away, exactly as ``create_sheet`` plans and
         # throws away: a clip library that does not fill the frame table, or a
         # size whose atlas is over the texture limit, is refused now instead of
         # failing a job that has already rendered.
-        records = expand_clips(TROUPE_TEMPLATE)
+        records = expand_clips(TROUPE_TEMPLATE, resolved_layout)
         charsheet.plan(
             records,
             frame_size=options["logical_size"],
             elevation=sheetlib.DEFAULT_ELEVATION if elevation is None else elevation,
             lighting=lighting or "flat",
+            layout=resolved_layout,
         )
     except KeyError as exc:
         raise Invalid(f"the {TROUPE_TEMPLATE} clip library is missing {exc}") from exc
@@ -255,6 +274,7 @@ def create_charsheet(
         "elevation": sheetlib.DEFAULT_ELEVATION if elevation is None else elevation,
         "lighting": lighting or "flat",
         "name": sheet_name,
+        "layout": resolved_layout.as_dict(),
         **options,
     }
     # The sheet cap, counted the way ``create_sheet`` counts it and under the

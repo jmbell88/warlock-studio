@@ -254,6 +254,29 @@ def test_a_locked_file_fails_loudly_and_the_trash_is_swept_next_time(svc, monkey
     )
 
 
+def test_a_failed_multi_model_rename_rolls_the_whole_selection_back(svc, monkeypatch):
+    first = _lora(svc, "pixel-art-xl.safetensors")
+    second = _lora(svc, "3d_render_style_xl.safetensors")
+    real_rename = svc_downloads.os.rename
+    calls = {"count": 0}
+
+    def fail_second(src, dst):
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise PermissionError("locked")
+        return real_rename(src, dst)
+
+    monkeypatch.setattr(svc_downloads.os, "rename", fail_second)
+    with pytest.raises(Failed, match="Nothing was removed"):
+        svc_downloads.uninstall(svc, ["lora:pixelxl", "lora:render3d"])
+
+    assert first.exists() and second.exists()
+    assert not any(
+        p.name.startswith(svc_downloads.TRASH_PREFIX)
+        for p in svc.config.t2i_model_root.iterdir()
+    )
+
+
 def test_removing_the_default_base_model_is_allowed(svc):
     """No special case: it degrades to the friendly refusal every other missing
     checkpoint gets, and a rule the user cannot see would be worse."""

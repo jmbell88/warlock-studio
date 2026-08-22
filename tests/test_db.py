@@ -242,6 +242,25 @@ def test_merge_params_on_a_missing_job_is_none(store):
     assert store.merge_params("0" * 12, {"profile": "raw"}) is None
 
 
+def test_malformed_params_are_tolerated_by_get_list_and_dispatch(store):
+    job_id = store.create("text", "a barrel", {"seed": 7})
+    store._conn.execute("UPDATE jobs SET params = ? WHERE id = ?", ("{broken", job_id))
+    store._conn.commit()
+
+    assert store.get(job_id)["params"] == {}
+    assert store.list()[0]["params"] == {}
+    assert store.next_queued()["params"] == {}
+
+
+def test_merge_params_repairs_a_non_object_params_blob(store):
+    job_id = store.create("text", "a barrel", {})
+    store._conn.execute("UPDATE jobs SET params = ? WHERE id = ?", ("[1, 2]", job_id))
+    store._conn.commit()
+
+    assert store.merge_params(job_id, {"profile": "raw"}) == {"profile": "raw"}
+    assert store.get(job_id)["params"] == {"profile": "raw"}
+
+
 def test_created_at_is_indexed(store):
     """list() and next_queued() both sort on it, and next_queued runs on every
     dispatch tick. Asserted through the schema rather than a timing, which is

@@ -461,8 +461,54 @@ class ControlNet:
         return download_text(self.fetch)
 
 
+@dataclass(frozen=True, slots=True)
+class EngineModel:
+    """A native reconstruction engine's non-Python model payload."""
+
+    key: str
+    label: str
+    probe: tuple[str, ...]
+    fetch: tuple[Fetch, ...] = ()
+
+    @property
+    def download(self) -> str:
+        return download_text(self.fetch)
+
+
 def _table(*items):
     return {item.key: item for item in items}
+
+
+TRELLIS_GGUF_FILES = (
+    "birefnet.gguf",
+    "dinov3.gguf",
+    "shape_dec.gguf",
+    "shape_flow_1024.gguf",
+    "shape_flow_512.gguf",
+    "ss_dec.gguf",
+    "ss_flow.gguf",
+    "tex_dec.gguf",
+    "tex_flow_1024.gguf",
+    "tex_flow_512.gguf",
+)
+
+ENGINE_MODELS: dict[str, EngineModel] = _table(
+    EngineModel(
+        "trellis_gguf",
+        "TRELLIS.2 GGUF weights",
+        TRELLIS_GGUF_FILES,
+        fetch=(
+            Fetch(
+                "ilintar/trellis2-gguf",
+                "trellis2-gguf",
+                revision="a57397bd3d351599d9729fc144b3f87c3f87d65b",
+                allow_patterns=("*.gguf",),
+                ignore_patterns=("q4/*", "q8/*"),
+                size_gib=16.1,
+            ),
+        ),
+    )
+)
 
 
 # The diffusers-layout include set every SDXL-class checkpoint takes: configs,

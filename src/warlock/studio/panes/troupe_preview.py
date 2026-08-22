@@ -23,7 +23,6 @@ from typing import Any
 from .. import controls, icons, troupe_mode, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
-from ..troupe import spec as troupe_spec
 
 
 def draw(ctx: Any) -> None:
@@ -56,7 +55,9 @@ def _transport(ctx: Any, state: Any) -> None:
     """
     from imgui_bundle import imgui
 
-    table = troupe_spec.load()
+    layout = troupe_mode.preview_layout(ctx)
+    movements = list(layout.get("movements") or ())
+    movement = troupe_mode.preview_movement(ctx)
     manual_render.help_button(ctx, "troupe-preview")
 
     # ``SQUARE`` for pause: the icon set is lucide 0.525.0 pinned to the
@@ -75,7 +76,7 @@ def _transport(ctx: Any, state: Any) -> None:
     # The frame counter and the zoom ride the transport's own row: they are
     # about *this* frame, and they are short.
     imgui.same_line()
-    frames = table.animation(state.animation).frames
+    frames = int((movement or {}).get("frames") or 1)
     widgets.muted(f"frame {state.frame + 1} of {frames}")
     imgui.same_line()
     imgui.set_next_item_width(sp(110))
@@ -85,17 +86,16 @@ def _transport(ctx: Any, state: Any) -> None:
         # number the user dragged past the end would be a dialog about nothing.
         state.zoom = max(1, min(int(zoom), 32))
 
-    # A row each, and both wrapping. Five animations and eight directions on
-    # the transport's line ran the last of them into the pane edge and clipped
-    # its label -- and a clipped radio is a direction nobody can pick.
+    # A row each, and both wrapping. A 16-direction movement cannot fit on the
+    # transport's line, and a clipped radio is a direction nobody can pick.
     _choices(
-        [a.name for a in table.animations],
+        [str(row.get("key") or "") for row in movements],
         state.animation,
         "anim",
         lambda name: troupe_mode.set_animation(ctx, name),
     )
     _choices(
-        [d.name for d in table.directions],
+        [str(row.get("key") or "") for row in (movement or {}).get("directions") or ()],
         state.direction,
         "dir",
         lambda name: troupe_mode.set_direction(ctx, name),

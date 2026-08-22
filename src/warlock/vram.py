@@ -40,6 +40,9 @@ class DeviceMemory:
 
     total_gib: float
     free_gib: float
+    # Read during the same CUDA query as the figures. Empty for test doubles
+    # and overrides where no physical device supplied the total.
+    name: str = ""
 
 
 # --- what things cost --------------------------------------------------------
@@ -346,7 +349,12 @@ def _read(torch: Any) -> DeviceMemory | None:
     except Exception:  # noqa: BLE001 -- a reading must never raise
         log.debug("could not read CUDA memory", exc_info=True)
         return None
-    return DeviceMemory(total_gib=total / _GIB, free_gib=free / _GIB)
+    try:
+        get_name = getattr(torch.cuda, "get_device_name", None)
+        name = str(get_name(0)) if callable(get_name) else ""
+    except Exception:  # noqa: BLE001 -- a name must not erase valid figures
+        name = ""
+    return DeviceMemory(total_gib=total / _GIB, free_gib=free / _GIB, name=name)
 
 
 def device_memory() -> DeviceMemory | None:

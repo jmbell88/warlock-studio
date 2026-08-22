@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import tempfile
 import time
@@ -50,6 +51,22 @@ def _migrate(data: dict[str, Any]) -> dict[str, Any]:
     # ignored either way.
     if "paint" in data and "inker" not in data:
         data["inker"] = data.pop("paint")
+    form = data.get("form_2d")
+    if isinstance(form, dict):
+        # asset_type is authoritative from this release forward.  Older files
+        # expressed it as three coupled switches; translate that combination
+        # once, retaining every unrelated field verbatim.
+        from . import create_assets
+
+        if "asset_type" not in form:
+            form["asset_type"] = create_assets.legacy_asset_type(form)
+        elif form.get("asset_type") not in create_assets.ASSET_TYPES:
+            # Once the new identity exists, the old switches are no longer an
+            # alternate source of truth. A corrupt value falls back safely;
+            # it must not resurrect a contradictory legacy selection.
+            form["asset_type"] = create_assets.DEFAULT_ASSET_TYPE
+        if form.get("projection") == "orthogonal":
+            form["projection"] = "top_down"
     return data
 
 
@@ -199,7 +216,74 @@ def restore_form(defaults: dict[str, Any], stored: Any) -> dict[str, Any]:
     """
     out = dict(defaults)
     if isinstance(stored, dict):
-        for key, value in stored.items():
-            if key in out and key not in VOLATILE and type(value) is type(out[key]):
+        values = dict(stored)
+        if "asset_type" in out:
+            from . import create_assets
+
+            if "asset_type" not in values:
+                values["asset_type"] = create_assets.legacy_asset_type(values)
+            elif values.get("asset_type") not in create_assets.ASSET_TYPES:
+                values["asset_type"] = create_assets.DEFAULT_ASSET_TYPE
+            if values.get("projection") == "orthogonal":
+                values["projection"] = "top_down"
+        for key, value in values.items():
+            if (
+                key in out
+                and key not in VOLATILE
+                and type(value) is type(out[key])
+                and _safe_form_value(key, value)
+            ):
                 out[key] = value
+    # Keep the service-facing compatibility fields consistent even when a
+    # hand-edited settings file supplied a contradictory combination.
+    if "asset_type" in out:
+        from . import create_assets
+
+        create_assets.sync_legacy_fields(out)
     return out
+
+
+def _safe_form_value(key: str, value: Any) -> bool:
+    """Whether a same-typed persisted form value is safe to restore.
+
+    This is intentionally a boundary check, not submit validation.  Settings
+    are untrusted JSON and are read before any controls can clamp values; NaN,
+    an obsolete enum or a billion candidates must not make the first Create
+    frame or its cost summary raise.
+    """
+    if isinstance(value, float) and not math.isfinite(value):
+        return False
+    choices: dict[str, set[str]] = {
+        "output": {"reference", "tile", "sheet"},
+        "sheet_type": {"tile", "sprite"},
+        "projection": {"top_down", "three_quarter", "isometric", "orthogonal"},
+        "sheet_layout": {"turnaround", "walk"},
+        "tile_size": {"16", "32", "48", "64"},
+        "cell_size": {"32", "48", "64"},
+        "expand": {"off", "asset", "scene"},
+    }
+    if key == "asset_type":
+        from .create_assets import ASSET_TYPES
+
+        return value in ASSET_TYPES
+    if key in choices:
+        return value in choices[key]
+    if key == "base_model":
+        from ..models import BASE_MODELS
+
+        return value in BASE_MODELS
+    if key == "style_lora":
+        from ..models import STYLE_LORAS
+
+        return value == "" or value in STYLE_LORAS
+    if key == "count":
+        from ..service.validation import MAX_REFERENCE_COUNT
+
+        return 1 <= value <= MAX_REFERENCE_COUNT
+    if key == "lora_weight":
+        from ..models import LORA_WEIGHT_MAX, LORA_WEIGHT_MIN
+
+        return LORA_WEIGHT_MIN <= value <= LORA_WEIGHT_MAX
+    if key in {"ip_scale", "control_scale", "control_end"}:
+        return 0.0 <= value <= 1.5
+    return True

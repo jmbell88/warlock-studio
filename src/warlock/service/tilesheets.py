@@ -194,6 +194,8 @@ def create_tile_sheet(
     seed: int | None = None,
     negative_prompt: str | None = None,
     reference: bytes | None = None,
+    asset_type: str | None = None,
+    asset_intent: str | None = None,
 ) -> dict[str, Any]:
     """Queue an 8x8 sheet of generated tiles.
 
@@ -239,6 +241,15 @@ def create_tile_sheet(
     resolved = LEGACY_VIEWS.get(str(view), str(view))
     if resolved not in VIEWS:
         raise Invalid(f"view must be one of {list(VIEWS)}", field="projection")
+    expected_asset_type = {
+        "top_down": "tileset_top_down",
+        "three_quarter": "tileset_three_quarter",
+        "isometric": "tileset_isometric",
+    }[resolved]
+    if asset_type is not None and asset_type != expected_asset_type:
+        raise Invalid("asset_type does not match the tile-set view", field="asset_type")
+    if asset_intent is not None and asset_intent != "tileset":
+        raise Invalid("a tile set must use asset_intent='tileset'", field="asset_type")
     if seed is not None:
         check_seed("seed", seed)
 
@@ -295,6 +306,12 @@ def create_tile_sheet(
             "rows": geom.rows,
         },
     }
+    if asset_type in {
+        "tileset_top_down", "tileset_three_quarter", "tileset_isometric"
+    }:
+        params["asset_type"] = asset_type
+    if asset_intent == "tileset":
+        params["asset_intent"] = asset_intent
     if reference is not None:
         # Only alongside the image it scales, so an unused adapter never
         # reaches params as a live setting -- ``settings_2d.submit_kwargs``'

@@ -14,8 +14,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 def source_checkout() -> bool:
     """Whether this package is running from a source checkout.
 
-    **Warlock is source-checkout-only, and that is a decision rather than an
-    omission** (DST-01, D4). Every native default below resolves against
+    Warlock requires a checkout-shaped runtime, produced by either a source
+    clone or the Windows installer (DST-01, D4). Every native default below resolves against
     ``PROJECT_ROOT`` -- ``Path(__file__).parents[2]`` -- which is the repository
     root for an editable install and, inside a wheel, points somewhere under the
     environment (``Lib/vendor``). The wheel carries the package, the manual and
@@ -30,8 +30,8 @@ def source_checkout() -> bool:
     bugfix, and nothing asks for it today -- so the supported model is stated
     and checked instead of half-implemented.
 
-    The probe is the marker that only a checkout has: ``pyproject.toml`` beside
-    the package's parent. Deliberately not "is vendor/ present" -- a checkout
+    The probe is the runtime-layout marker: ``pyproject.toml`` beside the
+    package's parent. Deliberately not "is vendor/ present" -- a layout
     that has not downloaded the binaries yet is a *supported* state with its own
     Doctor rows, and conflating the two would refuse to start over a missing
     optional file.

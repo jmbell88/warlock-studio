@@ -32,6 +32,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 dist/
+/build/
 *.egg-info/
 .claude/
 # imgui's window layout, rewritten every time the app is closed. Tracking it

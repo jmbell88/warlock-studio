@@ -23,11 +23,19 @@ def draw(ctx: Any) -> None:
     manual_render.help_button(ctx, "troupe-characters")
 
     cast = troupe_mode.characters(ctx)
+    pending = troupe_mode.in_progress(ctx)
     if not cast:
+        # Two registers, because "you have made none" and "the one you just
+        # made is still on its way" are different facts and the second one used
+        # to be told as the first -- a user who described a character here and
+        # came back was informed that nothing had been started.
         widgets.muted_wrapped(
-            "No character sheets yet. Describe one below; you will approve the "
-            "T-pose drawing in Create before anything is reconstructed."
+            "Nothing to play yet -- your first character is still on its way."
+            if pending
+            else "No character sheets yet. Describe one below; you will approve "
+            "the T-pose drawing in Create before anything is reconstructed."
         )
+        _pending(ctx, pending)
         return
 
     for character in cast:
@@ -40,6 +48,8 @@ def draw(ctx: Any) -> None:
             tooltip=character["id"],
         ):
             troupe_mode.select(ctx, character["id"])
+
+    _pending(ctx, pending)
 
     if not state.job_id:
         return
@@ -59,3 +69,35 @@ def draw(ctx: Any) -> None:
             f"sheet-{record['id']}", label, selected=selected
         ):
             troupe_mode.select(ctx, state.job_id, record["id"])
+
+
+def _pending(ctx: Any, pending: list[dict[str, Any]]) -> None:
+    """The characters that are on their way, and whose turn it is.
+
+    **Not a ``selectable_row``**, and that is the honesty rather than the
+    styling: selecting one would point the mode at a character with nothing to
+    play, which is the empty preview this whole section exists to explain. A
+    muted line cannot be mistaken for a member of the cast because it cannot be
+    picked.
+    """
+    from imgui_bundle import imgui
+
+    if not pending:
+        return
+    imgui.dummy((0, 6))
+    widgets.section("In progress")
+    for item in pending:
+        widgets.muted_wrapped(str(item.get("prompt") or item["id"]))
+        widgets.muted(str(item.get("phase") or ""))
+        if item.get("waiting") and widgets.disabled_button(
+            f"Approve in Create##troupe-approve-{item['id']}", True, (-1, 0)
+        ):
+            # The gate lives in Create by design -- a second promote button
+            # here would be a second gate -- so this is a way *to* it, not
+            # another one of it.
+            from .. import create_stages
+            from ..state import set_mode
+
+            set_mode(ctx.state, "create")
+            create_stages.go(ctx, "reference", select=item["id"])
+        imgui.dummy((0, 4))

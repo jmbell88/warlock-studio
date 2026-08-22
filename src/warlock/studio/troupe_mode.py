@@ -58,22 +58,39 @@ def characters(ctx: Any) -> list[dict[str, Any]]:
     rows are one indexed query and the sheets are a directory walk per job, and
     the two agree by construction -- a sheet exists because a row produced it.
 
-    A row whose source job has since been pruned is skipped rather than shown
-    as a broken card: the sheet went with the directory.
+    **The title comes off the charsheet row, not the library page.** Every
+    charsheet door mints its row with ``source["prompt"]``, so the row already
+    carries the character's description; the cache is consulted only to prefer
+    a name the user has since typed. This used to ``continue`` on a cache miss,
+    justified as "a row whose source job has since been pruned" -- but
+    ``ctx.cache.get`` answers about the *library's currently loaded page*, and
+    a pruned job is a different question with a different answer
+    (``store.get`` returning None). So a character silently vanished from the
+    cast as soon as its mesh scrolled off that page, which has nothing to do
+    with this mode. A genuinely pruned character is still handled, one layer
+    down and honestly: ``sheets()`` finds no sidecars and ``open_sheet``
+    refuses.
     """
     seen: dict[str, dict[str, Any]] = {}
     for row in ctx.svc.store.list(limit=SCAN_LIMIT, kind="charsheet"):
-        if row["status"] != "done":
+        if row["status"] != "done" or row.get("deleted_at"):
             continue
         source = str((row.get("params") or {}).get("source_job") or "")
         if not source or source in seen:
             continue
-        job = ctx.cache.get(source)
-        if job is None:
+        # ``store.list`` does not filter the trash, and trashing a mesh does
+        # not cascade to the sheets made from it -- so a character thrown away
+        # keeps its live charsheet rows. The cache used to hide that by
+        # accident (the loaded page is filtered by ``state.trash``), and
+        # dropping the cache dependency above dropped the accident with it.
+        # Skipped on a *known* trashed source, kept on a cache miss: the two
+        # are different answers and only one of them is about the trash.
+        job = ctx.cache.get(source) or {}
+        if job.get("deleted_at"):
             continue
         seen[source] = {
             "id": source,
-            "prompt": job.get("prompt") or "",
+            "prompt": job.get("name") or job.get("prompt") or row.get("prompt") or "",
             "created_at": row["created_at"],
         }
     return list(seen.values())
@@ -100,6 +117,109 @@ def sheets(ctx: Any, job_id: str) -> list[dict[str, Any]]:
     return out
 
 
+#: The phase sentences an unfinished character can be at, in chain order. The
+#: gate is the only one the *user* can be blocking on, which is why it is the
+#: only one that offers a button.
+_WAITING = "Waiting for you. Approve the drawing in Create."
+
+#: How many unfinished characters the cast lists. A reference that was never
+#: approved stays unapproved forever, so without a cap a user who abandons
+#: drafts accumulates a sidebar of them above the characters they finished --
+#: the section would grow into the noise it exists to prevent.
+MAX_IN_PROGRESS = 5
+
+
+def in_progress(ctx: Any) -> list[dict[str, Any]]:
+    """Characters on the chain that cannot be played yet, newest first.
+
+    The chain is reference -> a human gate in Create -> mesh -> rig -> sheet,
+    and until the last link lands the character exists nowhere :func:`characters`
+    looks. Submitting one from this mode hands off to Create (see
+    :func:`start_character`), so a user who came back before approving the
+    drawing was shown "No character sheets yet" -- the mode's own empty state,
+    telling them nothing had been started, about the thing they had just
+    started. This is the row that was missing.
+
+    One unfiltered page rather than a query per link: the classification needs
+    the references, their promoted children and the charsheet rows together,
+    and asking three times would be three times the cost to answer one
+    question. ``status`` is read off the rows, so a character that is mid-mesh
+    says so without this walking the queue.
+    """
+    rows = ctx.svc.store.list(limit=SCAN_LIMIT)
+    refs: list[dict[str, Any]] = []
+    children: dict[str, list[dict[str, Any]]] = {}
+    sheeted: set[str] = set()
+    for row in rows:
+        # ``store.list`` does not filter the trash. A character the user threw
+        # away must not come back as work they still owe -- and a trashed mesh
+        # must not count as the promotion that makes its reference "building",
+        # which is why this is dropped before the walk rather than after it.
+        if row.get("deleted_at"):
+            continue
+        params = row.get("params") or {}
+        if row.get("kind") == "charsheet" and row.get("status") == "done":
+            sheeted.add(str(params.get("source_job") or ""))
+        parent = str(row.get("parent_id") or "")
+        if parent:
+            children.setdefault(parent, []).append(row)
+        if params.get("troupe") and row.get("stage") == "reference":
+            refs.append(row)
+
+    out: list[dict[str, Any]] = []
+    for row in refs:
+        status = str(row.get("status") or "")
+        kids = children.get(str(row["id"]), [])
+        if any(str(kid["id"]) in sheeted for kid in kids):
+            # Finished: ``characters`` already holds it, and listing it twice
+            # would say the thing it is about to draw is not ready.
+            continue
+        if status in ("error", "cancelled"):
+            # The library's failure card owns a failed row, with the error text
+            # and the reroll. Repeating it here would be a second account of
+            # one failure, in a sidebar that cannot act on it.
+            continue
+        if status != "done":
+            phase, waiting = "Drawing the T-pose reference...", False
+        elif not kids:
+            phase, waiting = _WAITING, True
+        else:
+            phase, waiting = "Building the mesh, rig and sheet...", False
+        out.append(
+            {
+                "id": str(row["id"]),
+                "prompt": row.get("name") or row.get("prompt") or "",
+                "phase": phase,
+                "waiting": waiting,
+                "created_at": row.get("created_at"),
+            }
+        )
+    out.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+    return out[:MAX_IN_PROGRESS]
+
+
+def open_sheet(ctx: Any, job_id: str, sheet_id: str = "") -> bool:
+    """Enter Troupe pointed at one sheet. **The one door in from elsewhere.**
+
+    Two callers -- the library's overflow item and a finished charsheet's
+    "Show" toast -- and each used to be its own copy of ``select`` plus a
+    ``set_mode``, which is one copy away from disagreeing about which sheet.
+
+    Returns False, and does *not* switch the mode, when the character has no
+    playable sheet: the preview would draw "No character on screen", and
+    arriving at an empty room is the failure this door exists to stop. The
+    caller says so in its own words rather than being switched into silence.
+    """
+    state = ensure(ctx)
+    if not job_id or not sheets(ctx, job_id):
+        return False
+    select(ctx, job_id, sheet_id)
+    if not state.sheet_id:
+        return False
+    set_mode(ctx.state, "troupe")
+    return True
+
+
 def select(ctx: Any, job_id: str, sheet_id: str = "") -> None:
     """Point the mode at a character, and at one of its sheets.
 
@@ -117,6 +237,7 @@ def select(ctx: Any, job_id: str, sheet_id: str = "") -> None:
         state.sheet_id = available[0]["id"] if available else ""
     state.clock = 0.0
     state.frame = 0
+    _reconcile_preview(ctx)
     release_texture(ctx)
 
 
@@ -128,6 +249,80 @@ def active_sheet(ctx: Any) -> dict[str, Any] | None:
     if not (state.job_id and state.sheet_id):
         return None
     return rigging.read_sheet(ctx.job_dir(state.job_id), state.sheet_id)
+
+
+def preview_layout(ctx: Any) -> dict[str, Any]:
+    """The active sheet's immutable layout, with a pre-v2 legacy fallback."""
+
+    record = active_sheet(ctx) or {}
+    snapshot = record.get("troupe")
+    if isinstance(snapshot, dict):
+        try:
+            movements = snapshot.get("movements") or ()
+            runs = snapshot.get("runs") or ()
+            valid = bool(movements and runs) and all(
+                str(m.get("key") or "")
+                and int(m.get("frames") or 0) > 0
+                and bool(m.get("directions"))
+                for m in movements
+            ) and all(
+                str(run.get("movement") or "")
+                and str(run.get("direction") or "")
+                and 0 <= int(run.get("start")) <= int(run.get("end"))
+                for run in runs
+            )
+        except (AttributeError, TypeError, ValueError):
+            valid = False
+        if valid:
+            return snapshot
+        return {"version": 2, "movements": [], "runs": [], "cell_count": 0}
+    table = troupe_spec.load()
+    movements = [
+        {
+            "key": animation.name,
+            "label": animation.name.title(),
+            "frames": animation.frames,
+            "loop": animation.loop,
+            "duration_ms": animation.duration_ms,
+            "directions": [
+                {"key": direction.name, "yaw": direction.yaw}
+                for direction in table.directions
+            ],
+        }
+        for animation in table.animations
+    ]
+    runs = [
+        {
+            "movement": animation,
+            "direction": direction,
+            "start": start,
+            "end": end,
+        }
+        for animation, direction, start, end, _loop in table.spans()
+    ]
+    return {"version": 1, "movements": movements, "runs": runs, "cell_count": 256}
+
+
+def preview_movement(ctx: Any, name: str | None = None) -> dict[str, Any] | None:
+    wanted = name or ensure(ctx).animation
+    return next(
+        (m for m in preview_layout(ctx).get("movements") or () if m.get("key") == wanted),
+        None,
+    )
+
+
+def _reconcile_preview(ctx: Any) -> None:
+    state = ensure(ctx)
+    movements = preview_layout(ctx).get("movements") or ()
+    if not movements:
+        return
+    movement = next((m for m in movements if m.get("key") == state.animation), movements[0])
+    state.animation = str(movement.get("key") or "")
+    directions = movement.get("directions") or ()
+    keys = [str(d.get("key") or "") for d in directions]
+    if keys and state.direction not in keys:
+        state.direction = keys[0]
+    state.frame = min(state.frame, max(int(movement.get("frames") or 1) - 1, 0))
 
 
 # --- the clock --------------------------------------------------------------
@@ -144,30 +339,30 @@ def advance(ctx: Any, dt: float) -> None:
     state = ensure(ctx)
     if not state.playing:
         return
-    table = troupe_spec.load()
-    try:
-        animation = table.animation(state.animation)
-    except KeyError:
+    animation = preview_movement(ctx)
+    if animation is None:
         return
     # Named ``interval`` rather than ``step`` because ``step`` is this
     # module's one-frame nudge, and a local shadowing it here would read as a
     # call to it.
-    interval = max(animation.duration_ms, 1) / 1000.0 / max(state.speed, 0.01)
+    duration = int(animation.get("duration_ms") or 100)
+    frames = int(animation.get("frames") or 1)
+    interval = max(duration, 1) / 1000.0 / max(state.speed, 0.01)
     state.clock += max(dt, 0.0)
     laps = 0
-    while state.clock >= interval and laps <= animation.frames:
+    while state.clock >= interval and laps <= frames:
         state.clock -= interval
         state.frame += 1
         laps += 1
-    if animation.loop:
-        state.frame %= animation.frames
+    if animation.get("loop"):
+        state.frame %= frames
     else:
         # A one-shot holds its last frame, which is what the extra landing
         # frame in ``sheet.interpolate_clip`` exists for. Held rather than
         # looped *and* rather than stopped: a preview that stops needs a
         # control to start it again, and the point of the mode is that a bad
         # frame is obvious without pressing anything.
-        state.frame = min(state.frame, animation.frames - 1)
+        state.frame = min(state.frame, frames - 1)
 
 
 def cell_index(ctx: Any) -> int | None:
@@ -180,13 +375,11 @@ def cell_index(ctx: Any) -> int | None:
     third copy nothing owns.
     """
     state = ensure(ctx)
-    for cell in troupe_spec.load().cells():
-        if (
-            cell.animation == state.animation
-            and cell.direction == state.direction
-            and cell.frame == state.frame
-        ):
-            return cell.index
+    for run in preview_layout(ctx).get("runs") or ():
+        if run.get("movement") == state.animation and run.get("direction") == state.direction:
+            start, end = int(run.get("start") or 0), int(run.get("end") or 0)
+            index = start + state.frame
+            return index if start <= index <= end else None
     return None
 
 
@@ -197,17 +390,21 @@ def set_animation(ctx: Any, name: str) -> None:
     state.animation = name
     state.clock = 0.0
     state.frame = 0
+    _reconcile_preview(ctx)
 
 
 def set_direction(ctx: Any, name: str) -> None:
-    ensure(ctx).direction = name
+    state = ensure(ctx)
+    state.direction = name
+    movement = preview_movement(ctx)
+    state.frame = min(state.frame, max(int((movement or {}).get("frames") or 1) - 1, 0))
 
 
 def step(ctx: Any, delta: int) -> None:
     """Nudge one frame, and stop playing -- stepping implies looking."""
     state = ensure(ctx)
     state.playing = False
-    frames = troupe_spec.load().animation(state.animation).frames
+    frames = int((preview_movement(ctx) or {}).get("frames") or 1)
     state.frame = (state.frame + delta) % frames
     state.clock = 0.0
 
@@ -278,6 +475,25 @@ def atlas_texture(ctx: Any) -> Any:
 # --- the two doors ----------------------------------------------------------
 
 
+def _layout_request(form: dict[str, Any]) -> dict[str, Any]:
+    """Strip presentation-only flags from the editable Troupe form."""
+
+    source = form.get("layout") or {}
+    return {
+        "version": 2,
+        "columns": int(source.get("columns") or 8),
+        "movements": [
+            {
+                "key": row.get("key"),
+                "frames": row.get("frames"),
+                "directions": row.get("directions"),
+            }
+            for row in source.get("movements") or ()
+            if row.get("enabled", True)
+        ],
+    }
+
+
 def start_character(ctx: Any, form: dict[str, Any]) -> bool:
     """Submit the T-pose reference that starts a character.
 
@@ -307,6 +523,7 @@ def start_character(ctx: Any, form: dict[str, Any]) -> bool:
             "reduce_mode": form.get("reduce_mode"),
             "dither": bool(form.get("dither")),
             "palette": form.get("palette") or "",
+            "layout": _layout_request(form),
         },
     )
 
@@ -331,8 +548,10 @@ def build_sheet(ctx: Any, job_id: str, form: dict[str, Any]) -> bool:
         logical_size=form.get("logical_size"),
         colors=form.get("colors"),
         outline=form.get("outline"),
+        reduce_mode=form.get("reduce_mode"),
         dither=bool(form.get("dither")),
         palette=form.get("palette") or "",
+        layout=_layout_request(form),
     )
 
 
@@ -384,7 +603,7 @@ def on_task_done(ctx: Any, done: Any) -> None:
         )
         set_mode(ctx.state, "create")
     else:
-        ctx.toast("Queued a character sheet. 256 frames; give it a few minutes.", "info")
+        ctx.toast("Queued the configured character sheet; give it a few minutes.", "info")
 
 
 def on_task_failed(ctx: Any, done: Any) -> None:

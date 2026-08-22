@@ -171,7 +171,7 @@ On VRAM: the trellis server subprocess starts on the first 3D job and by default
 
 ```powershell
 uv run pytest -q            # unit tests; the renderer's skip without a GL 3.3 context
-uv run pytest -m gpu -q     # the opt-in lane: real card, real weights, minutes not seconds
+uv run pytest -m gpu -n 0 -q  # opt-in lane: real card/weights; must run serially
 uv run ruff check .
 ```
 

@@ -6,9 +6,9 @@ at 0.0.21 -- is precisely what ``tests/test_changelog.py`` and
 ``tests/test_offline.py`` were written to stop, and it shipped because nobody
 ran them. Two tests existed, were correct, and were not executed.
 
-So this is the smallest thing that would have caught it, and it is deliberately
-*not* a CI workflow: this project has no CI, releases are local, and a gate that
-lives somewhere the release does not happen is a gate nobody passes through.
+This remains the local release command.  CI runs the same cheap guards and
+non-GPU suite on Windows so a forgotten local invocation cannot publish a
+known-bad tree.
 
 Four checks, in the order that fails cheapest first:
 
@@ -113,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
     # imply they did.
     print(
         "note  the gpu lane is not part of this gate: run "
-        "`uv run pytest -m gpu` on a provisioned machine before changing "
+        "`uv run pytest -m gpu -n 0` on a provisioned machine before changing "
         "model loading, VRAM accounting or conditioning"
     )
 

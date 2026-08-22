@@ -473,6 +473,30 @@ class JobStore:
                 with self._lock:
                     self._conn.commit()
 
+    @contextlib.contextmanager
+    def transaction(self):
+        """Run this thread's store writes as one commit or one rollback.
+
+        Unlike :meth:`deferred_commits`, this holds the connection lock for the
+        block and rolls back when its body raises. It is for small admission
+        batches whose rows must never become visible as a partial selection.
+        """
+        with self._lock:
+            depth = getattr(self._defer, "depth", 0)
+            savepoint = f"warlock_batch_{depth}"
+            self._conn.execute(f"SAVEPOINT {savepoint}")
+            self._defer.depth = depth + 1
+            try:
+                yield
+            except BaseException:
+                self._conn.execute(f"ROLLBACK TO {savepoint}")
+                self._conn.execute(f"RELEASE {savepoint}")
+                raise
+            else:
+                self._conn.execute(f"RELEASE {savepoint}")
+            finally:
+                self._defer.depth -= 1
+
     def create(
         self,
         kind: str,
@@ -614,7 +638,7 @@ class JobStore:
             if params is None:
                 if len(self._params_cache) > 2048:
                     self._params_cache.clear()
-                params = self._params_cache[raw] = json.loads(raw)
+                params = self._params_cache[raw] = self._params_blob(raw, d.get("id"))
         d["params"] = dict(params)
         return d
 
@@ -678,7 +702,7 @@ class JobStore:
             ).fetchone()
             if row is None:
                 return None
-            params = json.loads(row["params"] or "{}")
+            params = self._params_blob(row["params"], job_id)
             for key in remove:
                 params.pop(key, None)
             params.update(changes)

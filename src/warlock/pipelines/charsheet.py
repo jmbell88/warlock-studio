@@ -31,13 +31,22 @@ from . import sheet
 __all__ = [
     "ANIMATIONS",
     "COLUMNS",
+    "DIRECTION_PRESETS",
     "DIRECTIONS",
+    "LAYOUT_VERSION",
+    "MAX_CELLS",
+    "MAX_FRAMES",
+    "MOVEMENT_MIN_FRAMES",
+    "WARN_CELLS",
     "SIZES",
+    "LayoutSpec",
+    "MovementSpec",
     "TroupeCell",
     "animation_block",
     "check_frame_counts",
     "frame_table",
     "plan",
+    "resolve_layout",
     "spans",
 ]
 
@@ -67,6 +76,178 @@ DIRECTIONS: tuple[tuple[str, float], ...] = (
 COLUMNS = 8
 SIZES = (16, 24, 32, 48, 64, 96, 128)
 RENDER_SIZE = 512
+LAYOUT_VERSION = 2
+WARN_CELLS = 256
+MAX_CELLS = 512
+MAX_FRAMES = sheet.MAX_CLIP_FRAMES
+
+_DIRECTIONS_16: tuple[tuple[str, float], ...] = (
+    ("front", 0.0),
+    ("front_front_left", 22.5),
+    ("front_left", 45.0),
+    ("left_front_left", 67.5),
+    ("left", 90.0),
+    ("left_back_left", 112.5),
+    ("back_left", 135.0),
+    ("back_back_left", 157.5),
+    ("back", 180.0),
+    ("back_back_right", 202.5),
+    ("back_right", 225.0),
+    ("right_back_right", 247.5),
+    ("right", 270.0),
+    ("right_front_right", 292.5),
+    ("front_right", 315.0),
+    ("front_front_right", 337.5),
+)
+
+DIRECTION_PRESETS: dict[int, tuple[tuple[str, float], ...]] = {
+    1: (_DIRECTIONS_16[0],),
+    4: tuple(_DIRECTIONS_16[i] for i in (0, 4, 8, 12)),
+    8: tuple(_DIRECTIONS_16[i] for i in range(0, 16, 2)),
+    16: _DIRECTIONS_16,
+}
+
+_ANIMATION_BY_NAME = {a[0]: a for a in ANIMATIONS}
+MOVEMENT_MIN_FRAMES = {name: 1 for name, *_rest in ANIMATIONS}
+
+
+@dataclass(frozen=True, slots=True)
+class MovementSpec:
+    name: str
+    frames: int
+    loop: bool
+    duration_ms: int
+    directions: tuple[tuple[str, float], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class LayoutSpec:
+    """A validated, immutable Troupe frame-table snapshot."""
+
+    version: int
+    columns: int
+    movements: tuple[MovementSpec, ...]
+
+    @property
+    def cell_count(self) -> int:
+        return sum(m.frames * len(m.directions) for m in self.movements)
+
+    @property
+    def directions(self) -> tuple[tuple[str, float], ...]:
+        out: list[tuple[str, float]] = []
+        seen: set[str] = set()
+        for movement in self.movements:
+            for direction in movement.directions:
+                if direction[0] not in seen:
+                    seen.add(direction[0])
+                    out.append(direction)
+        return tuple(out)
+
+    def as_dict(self) -> dict[str, Any]:
+        runs = []
+        index = 0
+        movements = []
+        for movement in self.movements:
+            directions = [
+                {"key": name, "label": name.replace("_", " ").title(), "yaw": yaw}
+                for name, yaw in movement.directions
+            ]
+            movements.append(
+                {
+                    "key": movement.name,
+                    "label": movement.name.title(),
+                    "frames": movement.frames,
+                    "loop": movement.loop,
+                    "duration_ms": movement.duration_ms,
+                    "directions": directions,
+                }
+            )
+            for direction, yaw in movement.directions:
+                runs.append(
+                    {
+                        "movement": movement.name,
+                        "direction": direction,
+                        "yaw": yaw,
+                        "start": index,
+                        "end": index + movement.frames - 1,
+                    }
+                )
+                index += movement.frames
+        return {
+            "version": self.version,
+            "columns": self.columns,
+            "movements": movements,
+            "runs": runs,
+            "cell_count": self.cell_count,
+        }
+
+
+def resolve_layout(payload: Mapping[str, Any] | None = None) -> LayoutSpec:
+    """Validate a v2 request/snapshot; absence is the immutable legacy layout."""
+
+    if not payload:
+        movements = tuple(
+            MovementSpec(name, frames, loop, ms, DIRECTIONS)
+            for name, frames, loop, ms in ANIMATIONS
+        )
+        return LayoutSpec(LAYOUT_VERSION, COLUMNS, movements)
+    raw_version = payload.get("version")
+    version = LAYOUT_VERSION if raw_version is None else int(raw_version)
+    if version != LAYOUT_VERSION:
+        raise ValueError(f"Troupe layout version {version} is not supported")
+    raw_movements = payload.get("movements")
+    if not isinstance(raw_movements, Sequence) or isinstance(raw_movements, (str, bytes)):
+        raise ValueError("a Troupe layout needs at least one movement")
+    movements: list[MovementSpec] = []
+    seen: set[str] = set()
+    for raw in raw_movements:
+        if not isinstance(raw, Mapping):
+            raise ValueError("every Troupe movement must be an object")
+        name = str(raw.get("key") or raw.get("name") or "").strip()
+        if name not in _ANIMATION_BY_NAME:
+            raise ValueError(f"{name!r} is not a Troupe movement")
+        if name in seen:
+            raise ValueError(f"two Troupe movements are named {name!r}")
+        seen.add(name)
+        _name, default_frames, loop, ms = _ANIMATION_BY_NAME[name]
+        raw_frames = raw.get("frames")
+        frames = default_frames if raw_frames is None else int(raw_frames)
+        minimum = MOVEMENT_MIN_FRAMES[name]
+        if not minimum <= frames <= sheet.MAX_CLIP_FRAMES:
+            raise ValueError(
+                f"{name} must have {minimum}-{sheet.MAX_CLIP_FRAMES} frames"
+            )
+        raw_directions = raw.get("directions", raw.get("direction_preset", 8))
+        if isinstance(raw_directions, Sequence) and not isinstance(
+            raw_directions, (str, bytes)
+        ):
+            if any(not isinstance(d, Mapping) for d in raw_directions):
+                raise ValueError("every Troupe direction must be an object")
+            directions = tuple(
+                (
+                    str(d.get("key") or d.get("name") or ""),
+                    float(d.get("yaw")),
+                )
+                for d in raw_directions
+            )
+            if directions not in DIRECTION_PRESETS.values():
+                raise ValueError("directions must use the 1, 4, 8, or 16 direction preset")
+        else:
+            try:
+                directions = DIRECTION_PRESETS[int(raw_directions)]
+            except (KeyError, TypeError, ValueError):
+                raise ValueError("directions must be 1, 4, 8, or 16") from None
+        movements.append(MovementSpec(name, frames, loop, ms, directions))
+    if not movements:
+        raise ValueError("a Troupe layout needs at least one movement")
+    raw_columns = payload.get("columns")
+    columns = COLUMNS if raw_columns is None else int(raw_columns)
+    if columns != COLUMNS:
+        raise ValueError(f"Troupe sheets use exactly {COLUMNS} columns")
+    result = LayoutSpec(LAYOUT_VERSION, columns, tuple(movements))
+    if result.cell_count > MAX_CELLS:
+        raise ValueError(f"a Troupe sheet may contain at most {MAX_CELLS} cells")
+    return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,20 +259,24 @@ class TroupeCell:
     frame: int
 
 
-def frames_per_direction() -> int:
-    return sum(a[1] for a in ANIMATIONS)
+def frames_per_direction(layout: LayoutSpec | Mapping[str, Any] | None = None) -> int:
+    resolved = layout if isinstance(layout, LayoutSpec) else resolve_layout(layout)
+    return sum(m.frames for m in resolved.movements)
 
 
-def frame_table() -> tuple[TroupeCell, ...]:
+def frame_table(
+    layout: LayoutSpec | Mapping[str, Any] | None = None,
+) -> tuple[TroupeCell, ...]:
     """Every cell of a character sheet, in pack-and-play order."""
     out: list[TroupeCell] = []
-    for name, frames, _loop, _ms in ANIMATIONS:
-        for direction, yaw in DIRECTIONS:
-            for frame in range(frames):
+    resolved = layout if isinstance(layout, LayoutSpec) else resolve_layout(layout)
+    for movement in resolved.movements:
+        for direction, yaw in movement.directions:
+            for frame in range(movement.frames):
                 out.append(
                     TroupeCell(
                         index=len(out),
-                        animation=name,
+                        animation=movement.name,
                         direction=direction,
                         yaw=yaw,
                         frame=frame,
@@ -100,31 +285,47 @@ def frame_table() -> tuple[TroupeCell, ...]:
     return tuple(out)
 
 
-def spans() -> tuple[tuple[str, str, int, int, bool], ...]:
+def spans(
+    layout: LayoutSpec | Mapping[str, Any] | None = None,
+) -> tuple[tuple[str, str, int, int, bool], ...]:
     """``(animation, direction, start, end, loop)`` per contiguous run."""
     out = []
     index = 0
-    for name, frames, loop, _ms in ANIMATIONS:
-        for direction, _yaw in DIRECTIONS:
-            out.append((name, direction, index, index + frames - 1, loop))
-            index += frames
+    resolved = layout if isinstance(layout, LayoutSpec) else resolve_layout(layout)
+    for movement in resolved.movements:
+        for direction, _yaw in movement.directions:
+            out.append(
+                (
+                    movement.name,
+                    direction,
+                    index,
+                    index + movement.frames - 1,
+                    movement.loop,
+                )
+            )
+            index += movement.frames
     return tuple(out)
 
 
-def check_frame_counts(records: Mapping[str, Sequence[Any]]) -> None:
+def check_frame_counts(
+    records: Mapping[str, Sequence[Any]],
+    layout: LayoutSpec | Mapping[str, Any] | None = None,
+) -> None:
     """Refuse a set of expanded clips that does not fill the frame table.
 
     By name and with both numbers, rather than by padding or truncating: a
     seven-frame walk laid into an eight-frame table renders one cell of some
     other animation, and the user would go looking at the rig.
     """
-    for name, frames, _loop, _ms in ANIMATIONS:
-        got = len(records.get(name) or ())
-        if got != frames:
+    resolved = layout if isinstance(layout, LayoutSpec) else resolve_layout(layout)
+    for movement in resolved.movements:
+        got = len(records.get(movement.name) or ())
+        if got != movement.frames:
             raise ValueError(
-                f"the {name} clip expands to {got} frames and the table wants {frames}"
+                f"the {movement.name} clip expands to {got} frames and the table wants "
+                f"{movement.frames}"
             )
-    extra = sorted(set(records) - {a[0] for a in ANIMATIONS})
+    extra = sorted(set(records) - {m.name for m in resolved.movements})
     if extra:
         raise ValueError(f"not Troupe animations: {extra}")
 
@@ -135,6 +336,7 @@ def plan(
     frame_size: int = 128,
     elevation: float = sheet.DEFAULT_ELEVATION,
     lighting: str = "flat",
+    layout: LayoutSpec | Mapping[str, Any] | None = None,
 ) -> sheet.Plan:
     """The whole character sheet as one ``sheet.Plan``.
 
@@ -156,17 +358,18 @@ def plan(
         raise ValueError("elevation must be between -89 and 89 degrees")
     if frame_size not in SIZES and frame_size not in sheet.FRAME_SIZES:
         raise ValueError(f"frame_size must be one of {list(SIZES)}")
-    check_frame_counts(records)
+    resolved = layout if isinstance(layout, LayoutSpec) else resolve_layout(layout)
+    check_frame_counts(records, resolved)
 
-    table = frame_table()
-    rows = (len(table) + COLUMNS - 1) // COLUMNS
-    sheet.check_atlas_size(COLUMNS * frame_size, rows * frame_size)
+    table = frame_table(resolved)
+    rows = (len(table) + resolved.columns - 1) // resolved.columns
+    sheet.check_atlas_size(resolved.columns * frame_size, rows * frame_size)
 
     cells: list[sheet.Cell] = []
     poses: list[dict[str, Any]] = []
     for cell in table:
         record = records[cell.animation][cell.frame]
-        column, row = cell.index % COLUMNS, cell.index // COLUMNS
+        column, row = cell.index % resolved.columns, cell.index // resolved.columns
         cells.append(
             sheet.Cell(
                 index=cell.index,
@@ -183,12 +386,12 @@ def plan(
         poses.append(dict(record))
     return sheet.Plan(
         frame_size=frame_size,
-        columns=COLUMNS,
+        columns=resolved.columns,
         rows=rows,
         # Every direction the sheet contains, in table order -- ``Plan.yaws``
         # is the sheet's set of view directions, and here it is not the same
         # thing as "one per column" the way it is for a pose-per-row sheet.
-        yaws=tuple(y for _n, y in DIRECTIONS),
+        yaws=tuple(y for _n, y in resolved.directions),
         elevation=float(elevation),
         lighting=lighting,
         poses=tuple(poses),
@@ -196,7 +399,9 @@ def plan(
     )
 
 
-def animation_block() -> dict[str, Any]:
+def animation_block(
+    layout: LayoutSpec | Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """The sidecar's ``animation`` block: durations and per-direction tags.
 
     Gap 4 of the plan, closed. The block has been defined in ``sheet.sidecar``
@@ -209,8 +414,9 @@ def animation_block() -> dict[str, Any]:
     for a play-once tag, so the two writers produce one format rather than two
     dialects of it.
     """
-    table = frame_table()
-    durations = {a[0]: a[3] for a in ANIMATIONS}
+    resolved = layout if isinstance(layout, LayoutSpec) else resolve_layout(layout)
+    table = frame_table(resolved)
+    durations = {m.name: m.duration_ms for m in resolved.movements}
     return {
         "frames": [
             {"cell_index": c.index, "duration_ms": durations[c.animation]}
@@ -225,7 +431,7 @@ def animation_block() -> dict[str, Any]:
                 "direction": "forward",
                 **({} if loop else {"repeat": 1}),
             }
-            for animation, direction, start, end, loop in spans()
+            for animation, direction, start, end, loop in spans(resolved)
         ],
     }
 

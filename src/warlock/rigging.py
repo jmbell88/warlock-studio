@@ -621,6 +621,14 @@ class BlenderError(RuntimeError):
     """The worker exited non-zero, timed out, or produced no result file."""
 
 
+def _terminate_worker(proc: subprocess.Popen[str], timeout: float = 10.0) -> None:
+    """Kill and reap a Blender child without ever introducing another hang."""
+    with contextlib.suppress(Exception):
+        proc.kill()
+    with contextlib.suppress(Exception):
+        proc.wait(timeout=timeout)
+
+
 def run_worker(
     spec: dict[str, Any],
     *,
@@ -668,7 +676,12 @@ def run_worker(
     winjob.track(proc.pid, "blender worker")
     tail: list[str] = []
     if on_start is not None:
-        on_start(proc)
+        try:
+            on_start(proc)
+        except BaseException:
+            _terminate_worker(proc)
+            winjob.untrack(proc.pid)
+            raise
     # stdout is drained on a helper thread so the *whole* run has a deadline, not
     # just the wait() after EOF: a bpy process that hangs mid-solve (or mid-render)
     # produces no further output and never closes stdout, and reading it inline
@@ -725,19 +738,13 @@ def run_worker(
                 del tail[:100]
         code = proc.wait(timeout=max(deadline - time.monotonic(), 0.0))
     except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait()
+        _terminate_worker(proc)
         result_path.unlink(missing_ok=True)
         result_tmp.unlink(missing_ok=True)
         raise BlenderError(f"Blender worker timed out after {timeout:.0f}s") from None
     finally:
         if proc.poll() is None:
-            proc.kill()
-            # Reaped, like the timeout branch above does: a kill without a
-            # wait leaves the child unreaped and the pump thread blocked on a
-            # pipe that never closes.
-            with contextlib.suppress(Exception):
-                proc.wait(timeout=10.0)
+            _terminate_worker(proc)
         # Every exit path leaves the child dead or killed, so the registry
         # entry comes out with it -- winjob's contract is that entries are
         # removed on reap, or terminate_tracked later opens a recycled pid

@@ -259,17 +259,16 @@ def test_the_service_still_names_the_controls_the_panes_ring():
         assert f'field_error(ctx.state, "{key}")' in panes
 
 
-# --- the flat form ------------------------------------------------------------
+# --- the simple/advanced form ------------------------------------------------
 
 
-def test_the_2d_form_is_flat_with_no_folds():
-    """The taxonomy retirement took the "More options" fold with it: every
-    section draws unconditionally, in one column, inside the block scope."""
+def test_the_2d_form_keeps_the_creation_decision_simple():
+    """Asset, prompt, model and LoRA stay visible; machinery is Advanced."""
     source = inspect.getsource(settings_2d.draw)
-    for call in (
-        "_output", "_profiles", "_prompt", "_references",
-        "_run_controls", "_model", "_lora", "_negative",
-    ):
+    for call in ("_asset_type", "_prompt", "_model", "_lora"):
+        assert call in source
+    assert 'collapsing_header("Advanced##create")' in source
+    for call in ("_profiles", "_references", "_run_controls", "_negative"):
         assert call in source
     assert "section_blocks" in source
     for retired in ("_more", "_guidance", "_presets", "_vector_presets"):

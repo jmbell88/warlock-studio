@@ -64,7 +64,13 @@ def forget_texture(texture: Any) -> None:
     from . import imgui_backend
 
     renderer = imgui_backend.current()
-    if renderer is not None:
+    # Headless/editor callers can hold texture-shaped objects with release()
+    # but no GL name.  Still give a renderer the first chance to forget them
+    # (recording/test renderers deliberately support those objects), while an
+    # ambient real GL renderer must not prevent their release.
+    if renderer is not None and (
+        hasattr(texture, "glo") or not isinstance(renderer, imgui_backend.ImguiRenderer)
+    ):
         renderer.forget_texture(texture)
     texture.release()
 

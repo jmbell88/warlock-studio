@@ -13,6 +13,7 @@ import os
 import sys
 import textwrap
 import time
+from pathlib import Path
 
 import pytest
 
@@ -358,8 +359,88 @@ def test_the_journal_is_gone_once_the_transaction_commits(svc, monkeypatch):
     monkeypatch.setattr(downloads, "_run_worker", lambda job, **_kw: stage_for(job))
     downloads.download(svc, ["base:sdxl"])
     root = svc.config.t2i_model_root
-    assert not publish.journal_path(root).exists()
+    assert not publish.journal_path(svc.config.home).exists()
     assert list(root.glob("*/w.safetensors")), "the files really were published"
+
+
+def test_two_repositories_sharing_one_destination_keep_both_staging_trees(
+    svc, monkeypatch
+):
+    """The flat loras/ destination is shared, but each fetch is still a repo.
+
+    A no-publish child uses a deterministic staging name. Without the parent's
+    reservation rename, the second child deleted the first child's completed
+    tree before the transaction began, so a successful two-row selection
+    silently installed only the last adapter.
+    """
+    from warlock import fetch
+    from warlock.service import downloads
+
+    def stage_distinct(job, **_kw):
+        name = f"{job.repo_id.rsplit('/', 1)[-1]}.safetensors"
+        return stage_for(job, files=(name,))
+
+    monkeypatch.setattr(downloads, "_run_worker", stage_distinct)
+    result = downloads.download(svc, ["lora:pixelxl", "lora:render3d"])
+
+    assert len(result["fetched"]) == 2
+    loras = svc.config.t2i_model_root / "loras"
+    assert (loras / "pixel-art-xl.safetensors").is_file()
+    assert (loras / "3d_render_style_xl.safetensors").is_file()
+    manifest = fetch.read_manifest(loras) or {}
+    assert set(manifest.get("repos") or {}) == set(result["fetched"])
+
+
+def test_shared_destination_recovery_keeps_each_repositorys_backup(tmp_path):
+    """Two repositories updating loras/ must not share one backup tree."""
+    from warlock import publish
+
+    root = tmp_path / "home"
+    dest = tmp_path / "models" / "loras"
+    dest.mkdir(parents=True)
+    (dest / "a.bin").write_bytes(b"old-a")
+    (dest / "b.bin").write_bytes(b"old-b")
+    stage_a = dest.parent / ".loras.a.fetch.part"
+    stage_b = dest.parent / ".loras.b.fetch.part"
+    stage_a.mkdir()
+    stage_b.mkdir()
+    (stage_a / "a.bin").write_bytes(b"new-a")
+    (stage_b / "b.bin").write_bytes(b"new-b")
+    publish.begin(
+        root,
+        [
+            {"staging": str(stage_a), "dest": str(dest)},
+            {"staging": str(stage_b), "dest": str(dest)},
+        ],
+    )
+    for staging in (stage_a, stage_b):
+        names = publish.planned_names(staging)
+        publish.note_published(root, str(staging), str(dest), names)
+        publish.move_into(staging, dest)
+
+    assert publish.recover(root) == [str(dest), str(dest)]
+    assert (dest / "a.bin").read_bytes() == b"old-a"
+    assert (dest / "b.bin").read_bytes() == b"old-b"
+    assert not publish.journal_path(root).exists()
+
+
+def test_a_journal_write_failure_prevents_every_publish(svc, monkeypatch):
+    """Transaction state is mandatory: no journal means no file may move."""
+    from warlock import publish
+    from warlock.service import downloads
+
+    monkeypatch.setattr(downloads, "_run_worker", lambda job, **_kw: stage_for(job))
+
+    def fail(_path, _payload):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(publish, "_write_required", fail)
+    with pytest.raises(OSError, match="disk full"):
+        downloads.download(svc, ["base:sdxl"])
+
+    assert list(svc.config.t2i_model_root.glob("*/w.safetensors")) == []
+    assert list(svc.config.t2i_model_root.glob(".*.fetch.part")) == []
+    assert not publish.journal_path(svc.config.home).exists()
 
 
 def test_a_kill_mid_publish_is_rolled_back_on_the_next_launch(svc):
@@ -438,12 +519,73 @@ def test_a_replaced_file_comes_back_out_of_the_backup_tree(svc):
     assert not backup.exists()
 
 
+def test_a_failed_recovery_retains_everything_needed_for_a_retry(svc, monkeypatch):
+    """A locked destination cannot turn the recovery attempt into data loss."""
+    from warlock import publish
+
+    root = svc.config.t2i_model_root
+    dest = root / "sdxl-base-1.0"
+    dest.mkdir(parents=True, exist_ok=True)
+    target = dest / "w.safetensors"
+    target.write_bytes(b"new")
+    backup = publish.backup_dir(dest)
+    backup.mkdir(parents=True)
+    (backup / target.name).write_bytes(b"old")
+    staging = root / ".sdxl-base-1.0.fetch.part"
+    staging.mkdir()
+    publish.begin(
+        root,
+        [{"staging": str(staging), "dest": str(dest), "published": [target.name]}],
+    )
+
+    real_replace = publish.os.replace
+    blocked = {"yes": True}
+
+    def replace(src, dst):
+        if blocked["yes"] and Path(src) == target:
+            raise PermissionError("locked")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(publish.os, "replace", replace)
+    assert publish.recover(root) == []
+    assert publish.journal_path(root).exists()
+    assert target.read_bytes() == b"new"
+    assert (backup / target.name).read_bytes() == b"old"
+
+    blocked["yes"] = False
+    assert publish.recover(root) == [str(dest)]
+    assert target.read_bytes() == b"old"
+    assert not publish.journal_path(root).exists()
+
+
 def test_recovering_nothing_is_silent_and_cheap(svc):
     """The overwhelmingly common startup: no journal, nothing to do, and no
     generation bump -- which would invalidate a resident pipe for no reason."""
     from warlock.service import downloads
 
     assert downloads.recover(svc.config) == []
+
+
+def test_engine_publish_recovers_from_the_canonical_home_journal(svc):
+    """Engine weights live outside the image-model root but share one journal."""
+    from warlock import publish
+    from warlock.service import downloads
+
+    root = svc.config.home
+    dest = svc.config.trellis_models_dir
+    dest.mkdir(parents=True)
+    added = dest / "ss_flow.gguf"
+    added.write_bytes(b"partial-new-file")
+    staging = dest.parent / ".trellis2-gguf.fetch.part"
+    staging.mkdir()
+    publish.begin(
+        root,
+        [{"staging": str(staging), "dest": str(dest), "published": [added.name]}],
+    )
+
+    assert downloads.recover(svc.config) == [str(dest)]
+    assert not added.exists()
+    assert not publish.journal_path(root).exists()
 
 
 def test_the_sweep_spares_a_staging_tree_an_open_journal_needs(svc):
@@ -508,10 +650,10 @@ def test_the_journal_names_every_file_before_the_first_one_moves(svc, monkeypatc
     arbitrary prefix of a model with no manifest and nothing that would ever
     clean it up.
     """
-    from warlock import publish
+    from warlock import fetch, publish
     from warlock.service import downloads
 
-    root = svc.config.t2i_model_root
+    root = svc.config.home
     seen: list[list[str]] = []
     real_move = publish.move_into
 
@@ -532,6 +674,7 @@ def test_the_journal_names_every_file_before_the_first_one_moves(svc, monkeypatc
     assert "w.safetensors" in seen[0], (
         "the journal must name the files before any of them moves"
     )
+    assert fetch.MANIFEST_NAME in seen[0], "the completion marker must roll back too"
 
 
 def test_a_kill_before_any_file_moved_undoes_nothing_and_loses_nothing(svc):

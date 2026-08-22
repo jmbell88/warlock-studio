@@ -182,6 +182,12 @@ class Ctx:
     # the App rather than by the pane: ``vram.recommended_base`` wants a Plan,
     # and a pane that reached for one would be a pane doing service work.
     recommended_base_label: str = ""
+    # Installer onboarding. ``first_run`` is sampled exactly once while the
+    # Ctx is built; the dict is likewise a startup snapshot so drawing the
+    # modal never probes hardware, disk or the model store on the frame thread.
+    first_run: bool = False
+    first_run_info: dict[str, Any] = field(default_factory=dict)
+    gpu_name: str = ""
 
     # -- shorthands --------------------------------------------------------
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import socket
 
-from warlock import doctor, fetch
+from warlock import doctor, fetch, instance
 from warlock import models as model_registry
 from warlock.config import Config
 from warlock.doctor import run_checks
@@ -44,7 +44,8 @@ def test_exe_check_passes_when_exe_exists(tmp_path):
 def test_gguf_check_finds_weight_files(tmp_path):
     models = tmp_path / "models"
     models.mkdir(parents=True)
-    (models / "trellis.gguf").write_bytes(b"")
+    for name in model_registry.TRELLIS_GGUF_FILES:
+        (models / name).write_bytes(b"weights")
     checks = {c.name: c for c in run_checks(_config(tmp_path, trellis_models_dir=models))}
     assert checks["TRELLIS GGUF weights"].ok is True
 
@@ -98,6 +99,34 @@ def test_run_checks_returns_every_check(tmp_path):
         + len(model_registry.POSE_MODELS)
     )
     assert len(run_checks(_config(tmp_path))) == expected
+
+
+def test_instance_check_probes_the_shared_database_and_model_root(tmp_path, monkeypatch):
+    shared_db = tmp_path / "shared" / "jobs.sqlite"
+    shared_models = tmp_path / "shared-models"
+    first_config = _config(
+        tmp_path / "one",
+        home=tmp_path / "home-one",
+        db_path=shared_db,
+        t2i_model_root=shared_models,
+    )
+    second_config = _config(
+        tmp_path / "two",
+        home=tmp_path / "home-two",
+        db_path=shared_db,
+        t2i_model_root=shared_models,
+    )
+    holder = instance.InstanceLocks(instance.lock_paths(first_config))
+    assert holder.acquire()
+    try:
+        # Simulate ``warlock doctor`` in another process rather than the Studio
+        # process that owns ``holder``.
+        monkeypatch.setattr(instance, "held_by_us", lambda: False)
+        check = doctor._instance_check(second_config)
+        assert check.ok is False
+        assert "warlock-db.lock" in check.detail
+    finally:
+        holder.release()
 
 
 def test_cuda_check_is_not_fatal_when_torch_missing_or_unavailable(tmp_path):
@@ -567,7 +596,10 @@ def test_the_gguf_remedy_downloads_into_the_configured_models_dir(tmp_path):
     inspects and left the fatal row standing (audit 2026-08-19)."""
     config = _config(tmp_path)
     checks = {c.name: c for c in run_checks(config)}
-    assert f'--local-dir "{config.trellis_models_dir}"' in checks["TRELLIS GGUF weights"].detail
+    assert (
+        f"--local-dir {fetch.quote_for_shell(config.trellis_models_dir)}"
+        in checks["TRELLIS GGUF weights"].detail
+    )
 
 
 def test_the_exe_remedy_names_the_exact_release_asset_and_its_digest(tmp_path):

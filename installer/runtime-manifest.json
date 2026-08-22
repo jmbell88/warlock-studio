@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "python": {
+    "implementation": "CPython",
+    "distribution": "python-build-standalone via uv",
+    "major_minor": "3.13",
+    "architecture": "x86_64",
+    "torch_cuda": "12.8"
+  },
+  "roots": [
+    "vendor/trellis",
+    "vendor/gltfpack",
+    "vendor/warlockc"
+  ],
+  "files": [
+    {
+      "path": "vendor/trellis/cublas64_13.dll",
+      "size": 51569776,
+      "sha256": "101ae2b98be62704ec96e90a3c49373b76122fc6b502497a7b6fae9ab0f01564"
+    },
+    {
+      "path": "vendor/trellis/cublasLt64_13.dll",
+      "size": 480693360,
+      "sha256": "517b6a69ac9faa7354cffcbd92179aec0cc18a8f6237d36b28d9adfe8c912d8d"
+    },
+    {
+      "path": "vendor/trellis/cudart64_13.dll",
+      "size": 540784,
+      "sha256": "352ba4ebe61e9a3b171f357a3daf5dd15b6af4a9857673ff893bd6fd2964c075"
+    },
+    {
+      "path": "vendor/trellis/ggml-base.dll",
+      "size": 637952,
+      "sha256": "4919ac09ed4543cd69a8ed7322843d011216ba751b68aedd9313da9afa5c5b52"
+    },
+    {
+      "path": "vendor/trellis/ggml-cpu.dll",
+      "size": 788480,
+      "sha256": "927afa2609d9280720ba4322fb440d04abfb3cf989c7b049007fbce4c1d8f27b"
+    },
+    {
+      "path": "vendor/trellis/ggml-cuda.dll",
+      "size": 338202624,
+      "sha256": "3b0a876bd1b4bb30105aa2e1c28930d125ac529b8464acbe5bfba638d8698d7c"
+    },
+    {
+      "path": "vendor/trellis/ggml.dll",
+      "size": 67072,
+      "sha256": "2d50bb8c8f1f0708fd2e111c93eede8e4544620c35ce9f44046f1737936ab9c8"
+    },
+    {
+      "path": "vendor/trellis/trellis-cli.exe",
+      "size": 1652736,
+      "sha256": "8980a1a2dac848528cf7e3ae7f0452259c666cbbae43488cd9fe9bae082bd0ec"
+    },
+    {
+      "path": "vendor/trellis/trellis-server.exe",
+      "size": 1897472,
+      "sha256": "ff7654354c0fcea96b4453a45c348d1e59c56ebd3f937245b9331821e0186bfe"
+    },
+    {
+      "path": "vendor/gltfpack/gltfpack.exe",
+      "size": 2966528,
+      "sha256": "ff64f45e84aac9a1f58880e40934b3f29277413e2d0b3ed257322261ec021d2b"
+    },
+    {
+      "path": "vendor/warlockc/warlockc.dll",
+      "size": 119296,
+      "sha256": "0dd80c7dce1ca889fdd9f0d421a807612174905c3bfe81b52724c1e4afb7edbe"
+    }
+  ]
+}

@@ -91,6 +91,40 @@ def _character(svc, *, sheets=1, size=32):
     return job_id, made
 
 
+def _v2_character(svc):
+    job_id, made = _character(svc)
+    path = rigging.sheet_path(svc.job_dir(job_id), made[0])
+    record = json.loads(path.read_text("utf-8"))
+    record["troupe"] = charsheet.resolve_layout(
+        {
+            "version": 2,
+            "movements": [
+                {"key": "idle", "frames": 3, "directions": 1},
+                {"key": "walk", "frames": 6, "directions": 4},
+            ],
+        }
+    ).as_dict()
+    path.write_text(json.dumps(record), "utf-8")
+    return job_id, made
+
+
+def test_v2_preview_uses_the_selected_sheets_movements_and_runs(ctx, svc):
+    job_id, made = _v2_character(svc)
+    troupe_mode.select(ctx, job_id, made[0])
+    state = troupe_mode.ensure(ctx)
+    state.animation, state.direction, state.frame = "walk", "back", 5
+    assert troupe_mode.cell_index(ctx) == 20
+    assert int(troupe_mode.preview_movement(ctx)["frames"]) == 6
+
+
+def test_v2_selection_reconciles_a_movement_missing_from_the_sheet(ctx, svc):
+    state = troupe_mode.ensure(ctx)
+    state.animation, state.direction, state.frame = "jump", "back_right", 5
+    job_id, made = _v2_character(svc)
+    troupe_mode.select(ctx, job_id, made[0])
+    assert (state.animation, state.direction, state.frame) == ("idle", "front", 0)
+
+
 # -- the cast ----------------------------------------------------------------
 
 
@@ -115,6 +149,134 @@ def test_an_unfinished_sheet_puts_nobody_in_the_cast(ctx, svc):
     job_id = svc.store.create("image", "a ranger", {}, stage="model")
     svc.store.create("charsheet", "a ranger", {"source_job": job_id})
     assert troupe_mode.characters(ctx) == []
+
+
+def test_a_character_survives_its_source_falling_off_the_library_page(ctx, svc):
+    """``ctx.cache`` answers about the library's *currently loaded page*, and
+    this used to ``continue`` on a miss -- so a finished character silently
+    vanished from the cast as soon as its mesh scrolled out of a list that has
+    nothing to do with this mode. The charsheet row carries the prompt itself,
+    because every charsheet door mints with ``source["prompt"]``."""
+    job_id, _sheets = _character(svc)
+    ctx.cache = SimpleNamespace(get=lambda _job_id: None, jobs=[])
+
+    cast = troupe_mode.characters(ctx)
+    assert [c["id"] for c in cast] == [job_id]
+    assert cast[0]["prompt"], "the title comes off the charsheet row"
+
+
+# -- characters that are still on their way ----------------------------------
+
+
+def _troupe_reference(svc, *, status="done", prompt="a fire guardian"):
+    # Status at creation: ``store.finish`` only transitions a *running* row.
+    return svc.store.create(
+        "text",
+        prompt,
+        {"troupe": {"logical_size": 32}, "rig": True},
+        stage="reference",
+        status=status,
+    )
+
+
+def test_a_submitted_character_shows_as_waiting_before_it_is_approved(ctx, svc):
+    """The row that was missing. Submitting here hands off to Create, so a user
+    who came back before approving the drawing was told "No character sheets
+    yet" -- about the character they had just started."""
+    job_id = _troupe_reference(svc)
+
+    pending = troupe_mode.in_progress(ctx)
+    assert [p["id"] for p in pending] == [job_id]
+    assert pending[0]["waiting"] is True
+    assert "Approve" in pending[0]["phase"]
+
+
+def test_a_character_still_drawing_offers_nothing_to_press(ctx, svc):
+    """The gate is the only link the *user* can be blocking on."""
+    _troupe_reference(svc, status="queued")
+    assert troupe_mode.in_progress(ctx)[0]["waiting"] is False
+
+
+def test_an_approved_character_says_it_is_building(ctx, svc):
+    job_id = _troupe_reference(svc)
+    svc.store.create("image", "a fire guardian", {}, stage="model", parent_id=job_id)
+
+    pending = troupe_mode.in_progress(ctx)
+    assert pending[0]["waiting"] is False
+    assert "mesh" in pending[0]["phase"]
+
+
+def test_a_finished_character_is_not_listed_twice(ctx, svc):
+    """Once the sheet exists the cast holds it, and saying it is on its way
+    would contradict the preview about to play it."""
+    ref_id = _troupe_reference(svc)
+    mesh_id = svc.store.create(
+        "image", "a fire guardian", {}, stage="model", parent_id=ref_id
+    )
+    svc.store.create(
+        "charsheet", "a fire guardian", {"source_job": mesh_id}, status="done"
+    )
+
+    assert troupe_mode.in_progress(ctx) == []
+
+
+def test_a_failed_reference_is_left_to_the_library(ctx, svc):
+    """Repeating it here would be a second account of one failure, in a sidebar
+    that cannot act on it."""
+    _troupe_reference(svc, status="error")
+    assert troupe_mode.in_progress(ctx) == []
+
+
+def test_only_troupe_references_are_listed(ctx, svc):
+    svc.store.create("text", "a barrel", {}, stage="reference")
+    assert troupe_mode.in_progress(ctx) == []
+
+
+def test_a_trashed_character_is_not_work_you_still_owe(ctx, svc):
+    """``store.list`` does not filter the trash, so without this a character
+    the user threw away came back as an unfinished one, forever."""
+    job_id = _troupe_reference(svc)
+    svc.store.set_deleted_if_not_running(job_id, 1.0)
+    assert troupe_mode.in_progress(ctx) == []
+
+
+def test_a_trashed_character_is_not_in_the_cast(ctx, svc):
+    """Trashing a mesh does not cascade to the sheets made from it, so its
+    charsheet rows stay live. The library page used to hide that by accident;
+    dropping the page dependency dropped the accident with it."""
+    job_id, _sheets = _character(svc)
+    svc.store.set_deleted_if_not_running(job_id, 1.0)
+    ctx.cache = SimpleNamespace(get=svc.store.get, jobs=[])
+
+    assert troupe_mode.characters(ctx) == []
+
+
+def test_the_pending_list_is_capped(ctx, svc):
+    for index in range(troupe_mode.MAX_IN_PROGRESS + 3):
+        _troupe_reference(svc, prompt=f"guardian {index}")
+    assert len(troupe_mode.in_progress(ctx)) == troupe_mode.MAX_IN_PROGRESS
+
+
+# -- the one door in ---------------------------------------------------------
+
+
+def test_open_sheet_enters_the_mode_pointed_at_the_sheet(ctx, svc):
+    job_id, sheets = _character(svc)
+    ctx.state.mode = "library"
+
+    assert troupe_mode.open_sheet(ctx, job_id, sheets[0]) is True
+    assert ctx.state.mode == "troupe"
+    assert troupe_mode.ensure(ctx).sheet_id == sheets[0]
+
+
+def test_open_sheet_refuses_rather_than_switching_into_an_empty_room(ctx, svc):
+    """Troupe would draw "No character on screen", which is the blank arrival
+    the whole routing change exists to stop."""
+    job_id = svc.store.create("image", "a ranger", {}, stage="model")
+    ctx.state.mode = "library"
+
+    assert troupe_mode.open_sheet(ctx, job_id) is False
+    assert ctx.state.mode == "library"
 
 
 def test_only_character_sheets_are_listed_under_a_character(ctx, svc):

@@ -31,6 +31,7 @@ from imgui_bundle import imgui
 
 from ... import changelog
 from .. import (
+    asset_open,
     controls,
     create_stages,
     fonts,
@@ -117,8 +118,10 @@ def _asset_rows(ctx: Any) -> list[Row]:
             continue
         name = str(job.get("name") or job.get("prompt") or job.get("id") or "asset")
         # The same reference/tile/model split the library filter uses: a job
-        # that stops at an image belongs to the stage that made it.
-        stage = create_stages.stage_for(job)
+        # that stops at an image belongs to the stage that made it -- asked
+        # through ``asset_open`` so the picture is the picture of the place the
+        # row actually opens, follow-ups included.
+        stage = asset_open.route(job).stage or "reference"
         when = job.get("created_at")
         out.append(
             Row(
@@ -175,8 +178,7 @@ def open_row(ctx: Any, row: Row) -> None:
         # ``_sync_viewer`` owns the pose guard, ``viewer.pending`` and the
         # off-thread parse, and a shortcut past it reproduces two of those three
         # and gets the last one wrong.
-        job = ctx.cache.get(row.key) if getattr(ctx, "cache", None) else None
-        create_stages.go(ctx, create_stages.stage_for(job), select=row.key)
+        asset_open.open_asset(ctx, row.key)
         return
     path = Path(row.key)
     if not path.exists():

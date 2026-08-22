@@ -14,7 +14,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from warlock import doctor
+from warlock import doctor, fetch
+from warlock import models as model_registry
 from warlock.service import downloads as svc_downloads
 from warlock.studio import widgets
 from warlock.studio.panes import model_gate
@@ -112,8 +113,8 @@ def test_the_gguf_remedy_is_never_a_relative_path(tmp_path):
     )
     hint = doctor.trellis_gguf_hint(config)
     assert "--local-dir models/trellis2-gguf" not in hint
-    assert f'--local-dir "{config.trellis_models_dir}"' in hint
-    assert doctor.TRELLIS_GGUF_REVISION in hint
+    assert f"--local-dir {fetch.quote_for_shell(config.trellis_models_dir)}" in hint
+    assert model_registry.ENGINE_MODELS["trellis_gguf"].fetch[0].revision in hint
 
 
 # --- rate and ETA -------------------------------------------------------------

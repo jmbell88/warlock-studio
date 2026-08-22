@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from warlock import doctor
+from warlock import doctor, fetch
 from warlock.config import Config
 from warlock.service.errors import Invalid
 
@@ -61,7 +61,7 @@ def test_the_gguf_remedy_is_the_command_from_the_install_instructions(tmp_path):
     assert "ilintar/trellis2-gguf" in hint
     # Resolved, never relative: the whole reason the constant became a
     # function (see its docstring).
-    assert f'--local-dir "{config.trellis_models_dir}"' in hint
+    assert f"--local-dir {fetch.quote_for_shell(config.trellis_models_dir)}" in hint
 
 
 # --- F55: missing weights are refused at the door ---------------------------

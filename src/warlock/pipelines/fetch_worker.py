@@ -152,7 +152,7 @@ def _move_into(staging: Path, dest: Path) -> list[str]:
     from .. import publish
 
     names = publish.move_into(staging, dest)
-    shutil.rmtree(publish.backup_dir(dest), ignore_errors=True)
+    shutil.rmtree(publish.backup_dir(dest, staging), ignore_errors=True)
     return names
 
 

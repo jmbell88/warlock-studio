@@ -24,6 +24,10 @@ dependencies = [
     # reference before the trellis upload, and that path never touches torch.
     # The headless build on purpose: the GUI one drags in Qt.
     "opencv-python-headless>=4.10",
+    # The fetch worker imports snapshot_download directly.  Keeping this as a
+    # direct dependency prevents model downloads from depending on whichever
+    # optional ML package happens to pull the Hub client in transitively.
+    "huggingface-hub>=0.34",
 ]
 
 [project.optional-dependencies]

@@ -129,6 +129,10 @@ DERIVED_PARAMS = (
     # The same, for the mesh half: it describes this run's reconstructions, so
     # a rerun inheriting it would claim remeshes it never made.
     "mesh_attempts",
+    # Operational evidence about an automatic rig/sheet insert after this run
+    # finished. A rerun gets its own follow-up attempt and must not inherit the
+    # earlier row's database failure as though it happened again.
+    "followup_failures",
     "control_hint",
     # What the character sheet's pixel-art pass measured about *this* atlas:
     # orphans cleaned, colours used, which palette it chose. A rerun wearing it

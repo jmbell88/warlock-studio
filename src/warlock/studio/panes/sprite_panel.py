@@ -22,7 +22,7 @@ from imgui_bundle import imgui
 from ... import rigging
 from ...service import sprites as svc_sprites
 from ...service import validation
-from .. import controls, forms, widgets
+from .. import asset_open, controls, forms, theme, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 from . import model_gate, stamps
@@ -50,7 +50,15 @@ def draw(ctx: Any, job: Any) -> None:
         return
     if "input.png" not in set(job.get("files") or []):
         return
-    if not widgets.header("Sprite sheet", default_open=False):
+    if not widgets.header(
+        "Sprite sheet",
+        default_open=False,
+        # Two reasons and both matter: it is what ``widgets.request_open``
+        # addresses, so arriving from a "Show" toast can open a section the
+        # user last left shut -- and it is what makes "shut" a preference
+        # rather than a fact reasserted on every reselect.
+        persist_key=asset_open.SPRITES_SECTION,
+    ):
         return
     manual_render.help_button(ctx, "sprites")
 
@@ -82,6 +90,10 @@ def _form(ctx: Any, job_id: str) -> dict[str, Any]:
             "seed_b": validation.random_seed(),
         }
         ctx.state.preview["sprite_form"] = form
+        # Cleared beside the rest of the per-job preview state: the marker
+        # names a draft in *this* job, so carrying it to another asset would
+        # decorate whichever draft happened to share the id.
+        ctx.state.preview.pop("sprite_focus", None)
     return form
 
 
@@ -225,6 +237,13 @@ def _draft(ctx: Any, job_id: str, record: dict[str, Any]) -> None:
             str(c.get("seed")) for c in record.get("candidates") or []
         )
         widgets.muted(f"{record.get('sheet_type', 'sheet')} - seeds {seeds}")
+        if ctx.state.preview.get("sprite_focus") == draft_id:
+            # Which of several drafts is the one the toast was about.
+            # ``rigging.list_sprite_drafts`` is documented oldest-first, so the
+            # new one is at the *bottom* of a list the user did not watch grow
+            # -- and arriving at the top of it, told the sheet was ready, is a
+            # smaller version of the blank screen ``asset_open`` exists to fix.
+            widgets.text_colored(theme.ACCENT, "just made")
         for candidate, letter in zip(
             record.get("candidates") or [], rigging.SPRITE_CANDIDATES, strict=False
         ):

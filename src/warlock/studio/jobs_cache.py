@@ -18,6 +18,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from .. import followups
 from ..service import jobs as svc_jobs
 from ..service.files import dir_size
 
@@ -289,6 +290,15 @@ def transition_message(job: dict[str, Any], previous: str | None) -> tuple[str, 
         # ``success`` rather than ``info`` (H68): a finished job is the one
         # unambiguously good thing this function reports, and it spent its
         # whole life in the same neutral grey as "settings copied to the form".
+        #
+        # The noun comes from ``followups.PRODUCTS`` where there is one: a
+        # follow-up row is minted with its *source's* prompt, so "fire guardian
+        # finished." fired twice for one character with the same name both
+        # times and said nothing about which half had landed -- while the
+        # ``Show`` beside it opened two entirely different places.
+        product = followups.PRODUCTS.get(str(job.get("kind") or ""))
+        if product:
+            return f"{product} for {name} is ready.", "success"
         return f"{name} finished.", "success"
     if job["status"] == "error":
         return f"{name} failed: {job.get('error') or 'unknown error'}", "error"

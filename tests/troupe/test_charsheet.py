@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from warlock import rigging
+from warlock import clips, rigging
 from warlock.pipelines import charsheet as cs
 from warlock.pipelines import sheet as sheetlib
 
@@ -32,6 +32,15 @@ def test_a_cyclic_clip_never_lands_on_a_key_twice():
     assert [r["frame"] for r in out] == list(range(8))
     assert out[0]["bones"]["hips"] == keys[0]["bones"]["hips"]
     assert out[2]["bones"]["hips"] == keys[1]["bones"]["hips"]
+
+
+def test_normalized_resampling_uses_cycle_and_one_shot_endpoints() -> None:
+    keys = [_pose("a"), _pose("b", 0.2), _pose("c", 0.4), _pose("d", 0.2)]
+    cycle = sheetlib.resample_clip(keys, [2, 2, 2, 2], 4, closed=True)
+    assert [frame["bones"] for frame in cycle] == [key["bones"] for key in keys]
+    one_shot = sheetlib.resample_clip(keys, [2, 2, 2], 2, closed=False)
+    assert one_shot[0]["bones"] == keys[0]["bones"]
+    assert one_shot[-1]["bones"] == keys[-1]["bones"]
 
 
 def test_a_one_shot_lands_exactly_on_its_last_key():
@@ -199,6 +208,77 @@ def test_an_animation_the_table_does_not_have_is_refused():
 def test_an_atlas_over_the_texture_limit_is_refused_before_anything_renders():
     with pytest.raises(ValueError, match="the limit is 8192"):
         cs.plan(_records(), frame_size=512)
+
+
+def test_v2_layout_gives_each_movement_its_own_direction_count_and_frames():
+    layout = cs.resolve_layout(
+        {
+            "version": 2,
+            "columns": 8,
+            "movements": [
+                {"key": "idle", "frames": 3, "directions": 1},
+                {"key": "walk", "frames": 6, "directions": 4},
+            ],
+        }
+    )
+    records = clips.expand_clips("humanoid", layout)
+    planned = cs.plan(records, frame_size=32, layout=layout)
+    assert layout.cell_count == 27
+    assert (planned.columns, planned.rows) == (8, 4)
+    assert len(cs.spans(layout)) == 5
+    assert [len(records[name]) for name in ("idle", "walk")] == [3, 6]
+
+
+def test_one_frame_movements_sample_the_first_pose() -> None:
+    layout = cs.resolve_layout(
+        {"version": 2, "movements": [{"key": "attack", "frames": 1, "directions": 1}]}
+    )
+    records = clips.expand_clips("humanoid", layout)
+    source = rigging.clip_keys("humanoid", "attack")[0]
+    assert len(records["attack"]) == 1
+    for bone, rotation in source["bones"].items():
+        assert records["attack"][0]["bones"][bone] == pytest.approx(rotation, abs=1e-4)
+
+
+def test_troupe_columns_are_fixed_at_eight() -> None:
+    with pytest.raises(ValueError, match="exactly 8 columns"):
+        cs.resolve_layout(
+            {"version": 2, "columns": 4, "movements": [{"key": "idle", "frames": 1}]}
+        )
+
+
+def test_a_resolved_v2_snapshot_round_trips_without_changing_cell_identity():
+    first = cs.resolve_layout(
+        {
+            "version": 2,
+            "movements": [{"key": "run", "frames": 12, "directions": 16}],
+        }
+    )
+    second = cs.resolve_layout(first.as_dict())
+    assert second == first
+    assert cs.frame_table(second) == cs.frame_table(first)
+    assert len(cs.frame_table(second)) == 192
+
+
+def test_v2_warns_above_legacy_size_but_refuses_only_above_the_512_cap():
+    large = cs.resolve_layout(
+        {
+            "version": 2,
+            "movements": [{"key": "walk", "frames": 32, "directions": 16}],
+        }
+    )
+    assert large.cell_count == cs.MAX_CELLS == 512
+    assert large.cell_count > cs.WARN_CELLS
+    with pytest.raises(ValueError, match="at most 512 cells"):
+        cs.resolve_layout(
+            {
+                "version": 2,
+                "movements": [
+                    {"key": "walk", "frames": 32, "directions": 16},
+                    {"key": "idle", "frames": 3, "directions": 1},
+                ],
+            }
+        )
 
 
 # --- the sidecar's animation block -------------------------------------------

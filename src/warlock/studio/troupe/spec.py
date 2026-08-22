@@ -1,10 +1,7 @@
-"""What a Troupe character sheet *is*, as data rather than as code.
+"""The immutable legacy Troupe layout used by pre-v2 sheets.
 
-One owner for the five animations, their frame counts and loop flags, the eight
-directions and the order a cell index means, the size ladder and the camera
-elevation. Every other unit in the program -- the planner, the pixeliser, the
-sheet writer, the Inker handoff -- derives its numbers from here, so a change to
-the frame table is one edit rather than five that can half-land.
+New sheets carry a resolved layout snapshot in their sidecar. This table remains
+the compatibility authority for sheets written before that block existed.
 
 The table itself lives in ``data/layout.json`` and carries a version, for the
 reason every stored corpus in this repo does: a sheet on disk was laid out by

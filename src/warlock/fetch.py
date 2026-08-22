@@ -62,6 +62,7 @@ class Kind:
 
 
 KINDS: tuple[Kind, ...] = (
+    Kind("engine", models.ENGINE_MODELS, "engine: ", "Reconstruction engine"),
     Kind("base", models.BASE_MODELS, "image model: ", "Image models"),
     Kind("lora", models.STYLE_LORAS, "style LoRA: ", "Style LoRAs"),
     Kind("adapter", models.IP_ADAPTERS, "IP-Adapter: ", "Conditioning"),
@@ -104,6 +105,10 @@ class Entry:
     @property
     def check_name(self) -> str:
         """The ``doctor.Check.name`` this row's presence is reported under."""
+        if self.kind == "engine":
+            # Kept byte-for-byte for scripts and onboarding checks that predate
+            # the engine becoming an installable registry row.
+            return "TRELLIS GGUF weights"
         return check_name(self.kind, self.label)
 
     def is_present(self, config: Config) -> bool:
@@ -167,6 +172,8 @@ def destination(config: Config, entry: Entry, one: models.Fetch) -> Path:
     ``--local-dir models/...`` in the command string never did.
     """
     spec = entry.spec
+    if entry.kind == "engine":
+        return config.trellis_models_dir
     is_base = entry.kind == "base"
     return models.fetch_dests(
         (one,),
@@ -213,8 +220,11 @@ def download_text(config: Config, kind: str, spec: Any) -> str:
     if not fetches:
         return ""
     entry = Entry(kind, getattr(spec, "key", ""), getattr(spec, "label", ""), spec)
+    destinations = [
+        quote_for_shell(destination(config, entry, one)) for one in fetches
+    ]
     return models.download_text(
-        fetches, [quote_for_shell(destination(config, entry, one)) for one in fetches]
+        fetches, destinations
     )
 
 
@@ -490,6 +500,8 @@ def claims(config: Config, entry: Entry) -> tuple[Path, ...]:
     """
     root = config.t2i_model_root
     spec = entry.spec
+    if entry.kind == "engine":
+        return (config.trellis_models_dir,)
     if entry.kind == "base":
         out = [base_model_dir(config, spec)]
         if spec.base_lora:
@@ -550,8 +562,10 @@ def removal_plan(config: Config, chosen: list[Entry]) -> Removal:
                 "first if you really want it gone."
             )
     try:
-        root = config.t2i_model_root.resolve()
-        outside = [p for p in wanted if not p.resolve().is_relative_to(root)]
+        roots = (config.t2i_model_root.resolve(), config.trellis_models_dir.resolve())
+        outside = [
+            p for p in wanted if not any(p.resolve().is_relative_to(root) for root in roots)
+        ]
     except OSError:  # pragma: no cover -- a root that cannot be resolved
         outside = list(wanted)
     if outside:
@@ -718,10 +732,15 @@ def verify_all(config: Config) -> list[Verification]:
     "is what is installed intact", and a directory installed by a registry row
     that has since been renamed is still a directory on this disk.
     """
-    root = Path(config.t2i_model_root)
-    if not root.is_dir():
-        return []
-    dests = sorted({p.parent for p in root.glob(f"*/{MANIFEST_NAME}")})
+    roots = (Path(config.t2i_model_root), Path(config.trellis_models_dir).parent)
+    dests = sorted(
+        {
+            p.parent
+            for root in roots
+            if root.is_dir()
+            for p in root.glob(f"*/{MANIFEST_NAME}")
+        }
+    )
     return [verify_manifest(dest) for dest in dests]
 
 
@@ -742,6 +761,15 @@ def suspect_files(config: Config, kind: str, spec: Any) -> list[str]:
     """
     out: list[str] = []
     root = config.t2i_model_root
+    if kind == "engine":
+        candidates = [config.trellis_models_dir / name for name in spec.probe]
+        for path in candidates:
+            try:
+                if path.exists() and path.stat().st_size == 0:
+                    out.append(str(path))
+            except OSError:
+                continue
+        return out
     base = base_model_dir(config, spec) if kind == "base" else root / getattr(
         spec, "dir_name", ""
     )
@@ -777,6 +805,8 @@ def present(config: Config, kind: str, spec: Any) -> bool:
     against is this question and not that one.
     """
     root = config.t2i_model_root
+    if kind == "engine":
+        return all((config.trellis_models_dir / name).is_file() for name in spec.probe)
     if kind == "base":
         return base_model_state(config, spec)[0]
     if kind == "lora":

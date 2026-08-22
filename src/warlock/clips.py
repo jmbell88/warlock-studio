@@ -3,7 +3,7 @@
 One function, in a module of its own, for the reason ``vectors.py`` is a module
 of its own: **the worker may not import ``service``**, and the door may not
 reimplement the worker. Both need to turn "the humanoid template's clips" into
-"the expanded pose records the 256-cell frame table wants", and if either one
+"the expanded pose records the resolved frame table wants", and if either one
 owned it the other would have to grow a second copy that could disagree about
 what a walk is.
 
@@ -15,13 +15,17 @@ do it -- and not in ``rigging`` because that module imports nothing from
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from . import rigging
 from .pipelines import charsheet, sheet
 
 
-def expand_clips(template_key: str) -> dict[str, list[dict[str, Any]]]:
+def expand_clips(
+    template_key: str,
+    layout: charsheet.LayoutSpec | Mapping[str, Any] | None = None,
+) -> dict[str, list[dict[str, Any]]]:
     """``animation name -> expanded pose records``, for every Troupe animation.
 
     A missing clip raises ``KeyError``, which is the honest answer: the library
@@ -32,17 +36,24 @@ def expand_clips(template_key: str) -> dict[str, list[dict[str, Any]]]:
     eight-frame table renders one cell of some other animation and sends the
     user to look at the rig.
     """
+    resolved = (
+        layout
+        if isinstance(layout, charsheet.LayoutSpec)
+        else charsheet.resolve_layout(layout)
+    )
     library = rigging.clip_library(template_key)
     by_name = {c["name"]: c for c in library["clips"]}
     records: dict[str, list[dict[str, Any]]] = {}
-    for animation, _frames, _loop, _ms in charsheet.ANIMATIONS:
+    for movement in resolved.movements:
+        animation = movement.name
         clip = by_name.get(animation)
         if clip is None:
             raise KeyError(animation)
         keys = rigging.clip_keys(template_key, animation)
-        records[animation] = sheet.interpolate_clip(
+        records[animation] = sheet.resample_clip(
             keys,
             clip["segments"],
+            movement.frames,
             closed=clip["closed"],
             easing=clip["easing"],
             space=clip["space"],
@@ -54,5 +65,5 @@ def expand_clips(template_key: str) -> dict[str, list[dict[str, Any]]]:
             # ``by_name`` above is keyed on them.
             clip_id=animation,
         )
-    charsheet.check_frame_counts(records)
+    charsheet.check_frame_counts(records, resolved)
     return records

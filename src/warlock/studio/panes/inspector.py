@@ -14,6 +14,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
+from ... import followups
 from ...service import derive as svc_derive
 from ...service import files as svc_files
 from ...service import jobs as svc_jobs
@@ -147,6 +148,7 @@ def draw(ctx: Any) -> None:
     _meta(ctx, job)
     if job.get("status") == "error":
         _error(ctx, job)
+    _followup_failures(job)
 
     if create_stages.in_create(ctx.state):
         _stage_body(ctx, job)
@@ -215,6 +217,20 @@ def _edit_actions(ctx: Any, job: Any) -> None:
     a 200k-triangle import still fires here.
     """
     from .. import clay_mode, icons, inker_mode
+
+    params = (
+        job.get("params")
+        if isinstance(job, dict) and isinstance(job.get("params"), dict)
+        else {}
+    )
+    if params.get("asset_intent") == "tileset" and "input.png" in (job.get("files") or []):
+        from .. import packwright_mode, plotter_mode
+
+        if controls.button("Add to Plotter"):
+            plotter_mode.use_as_tileset(ctx, job)
+        if controls.button("Add to Packwright"):
+            packwright_mode.add_job_source(ctx, job)
+        widgets.hint_text("Use the generated grid as a map tileset or atlas source.")
 
     if offers_inker(ctx, job):
         if controls.button(f"{icons.BRUSH} Open in Inker"):
@@ -600,6 +616,22 @@ def _error(ctx: Any, job: Any) -> None:
     if "error.log" in (job.get("files") or []) and controls.button("Save error.log..."):
         ctx.save_artifact(job["id"], "error.log")
     imgui.tree_pop()
+
+
+def followup_failure_lines(job: Any) -> list[tuple[str, str]]:
+    """User-facing follow-up failures for one cached row."""
+    params = job.get("params") if isinstance(job, dict) else None
+    stage = job.get("stage") if isinstance(job, dict) else None
+    return [
+        (f"{item['label']} was not queued.", item["message"])
+        for item in followups.records(params, stage)
+    ]
+
+
+def _followup_failures(job: Any) -> None:
+    for title, message in followup_failure_lines(job):
+        widgets.text_colored(theme.WARN, title)
+        widgets.muted(message)
 
 
 def _settings(ctx: Any, job: Any) -> None:

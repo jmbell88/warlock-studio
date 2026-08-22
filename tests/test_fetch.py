@@ -1111,4 +1111,6 @@ def test_every_claim_is_something_present_would_have_looked_at(tmp_path):
     cfg = _config(tmp_path)
     for entry in fetch.entries():
         for path in fetch.claims(cfg, entry):
-            assert path.is_relative_to(cfg.t2i_model_root), entry.row_key
+            assert path.is_relative_to(cfg.t2i_model_root) or path.is_relative_to(
+                cfg.trellis_models_dir
+            ), entry.row_key
