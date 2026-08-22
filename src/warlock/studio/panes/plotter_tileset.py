@@ -32,6 +32,12 @@ from . import plotter_layers, plotter_textures
 SHEET_POPUP = "plotter-sheet-import"
 
 
+#: Every button in this pane that can grey out does so for this one cause, and
+#: hoisting it is the ``_VIEWPORT_WHY`` pattern: four dead controls explaining
+#: themselves in four different sentences read as four separate problems.
+_BUSY_WHY = "This map is being written; the buttons come back when it lands."
+
+
 def _sheet_popup(ctx: Any, state: Any, tab: Any) -> None:
     """Confirm what to do with a sheet the detector found rules in.
 
@@ -172,7 +178,9 @@ def draw(ctx: Any) -> None:
     disabled = tab.busy
 
     def add_button() -> None:
-        if widgets.disabled_button(f"{icons.PLUS} Add from a file...", not disabled, (-1, 0)):
+        if widgets.disabled_button(
+            f"{icons.PLUS} Add from a file...", not disabled, (-1, 0), reason=_BUSY_WHY
+        ):
             plotter_mode.ask_add_tileset(ctx)
 
     # **Above the empty-map early return, deliberately.** A ruled sheet arriving
@@ -465,7 +473,9 @@ def _inker_row(ctx: Any, state: Any, tab: Any, index: int) -> None:
     """
     from imgui_bundle import imgui
 
-    if widgets.disabled_button(f"{icons.BRUSH} Polish in Inker", not tab.busy, (-1, 0)):
+    if widgets.disabled_button(
+        f"{icons.BRUSH} Polish in Inker", not tab.busy, (-1, 0), reason=_BUSY_WHY
+    ):
         plotter_mode.polish_in_inker(ctx, tab, index)
 
     inker = getattr(ctx.state, "inker", None)
@@ -477,7 +487,7 @@ def _inker_row(ctx: Any, state: Any, tab: Any, index: int) -> None:
     name = tab.doc.tilesets[index].tileset.name
     for entry in docs:
         label = f"{icons.IMAGE} Back onto {name}##ink-{entry.uid}"
-        if widgets.disabled_button(label, not tab.busy, (-1, 0)):
+        if widgets.disabled_button(label, not tab.busy, (-1, 0), reason=_BUSY_WHY):
             plotter_mode.tileset_from_inker(ctx, entry.doc, index=index)
         if imgui.is_item_hovered():
             imgui.set_tooltip(

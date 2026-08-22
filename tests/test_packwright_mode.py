@@ -642,3 +642,37 @@ def test_an_inker_document_with_no_atlas_starts_one_too():
     tab = packwright_mode.active(ctx)
     assert tab is not None
     assert [s.key for s in tab.doc.sprites()] == ["walk#layer00:Background"]
+
+
+# --- W0.2: the empty states told the truth for the first time ---------------
+
+
+def test_no_pane_promises_a_pack_button_that_does_not_exist() -> None:
+    """Two empty states read "Add images and press Pack." Packing is automatic
+    -- run from the centre pane's pump -- and the only manual trigger was a
+    bare ``R`` nothing on screen mentioned. An instruction naming a control
+    that has never existed is worse than no instruction at all."""
+    import pathlib
+
+    from warlock.studio import panes
+
+    root = pathlib.Path(panes.__file__).parent
+    for name in ("packwright_bridge.py", "packwright_items.py"):
+        source = (root / name).read_text(encoding="utf-8")
+        assert "press Pack" not in source, name
+
+
+def test_the_settings_pane_offers_the_repack_r_already_did() -> None:
+    """``R`` set ``pack_dirty`` inline and nothing on screen said so. The
+    button and the key are one verb now, not two that happen to agree."""
+    import pathlib
+
+    from warlock.studio import packwright_mode as mode
+    from warlock.studio import panes
+
+    assert hasattr(mode, "request_repack")
+    source = (pathlib.Path(panes.__file__).parent / "packwright_settings.py").read_text(
+        encoding="utf-8"
+    )
+    assert "Repack (R)" in source
+    assert "packwright_mode.request_repack(" in source

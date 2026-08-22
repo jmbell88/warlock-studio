@@ -485,3 +485,48 @@ def test_a_key_release_never_acts_twice(ctx):
     release = SimpleNamespace(type=pygame.KEYUP, key=pygame.K_RIGHT, mod=0)
     assert troupe_mode.handle_key(ctx, release) is False
     assert state.frame == stepped, "a tap of Right stepped two frames"
+
+
+# --- W0.3: two controls that were wired to nothing --------------------------
+
+
+def _preview_source() -> str:
+    import pathlib
+
+    from warlock.studio.panes import troupe_preview
+
+    return pathlib.Path(troupe_preview.__file__).read_text(encoding="utf-8")
+
+
+def test_the_centre_pane_takes_the_wheel_and_now_gives_it_to_something() -> None:
+    """``no_scroll_with_mouse`` said the wheel belonged to the zoom control.
+    No Troupe pane read the wheel, so it belonged to nothing and turning it
+    over the sprite did nothing at all."""
+    source = _preview_source()
+    assert "io.mouse_wheel" in source
+    assert "state.zoom = max(1, min(int(state.zoom + io.mouse_wheel), 32))" in source
+
+
+def test_playback_speed_has_a_control_at_last() -> None:
+    """``advance`` has divided the frame interval by ``state.speed`` since the
+    mode was written and nothing could ever change it, so every preview played
+    at exactly 1x."""
+    from warlock.studio.panes import troupe_preview
+
+    assert "##troupe-speed" in _preview_source()
+    keys = [float(key) for key, _ in troupe_preview._SPEEDS]
+    assert 1.0 in keys and min(keys) < 1.0 < max(keys)
+    # A stored value off the ladder resolves to its nearest rung rather than
+    # showing a blank combo.
+    assert troupe_preview._speed_key(0.9) == "1.0"
+    assert troupe_preview._speed_key(0.3) == "0.25"
+
+
+def test_the_transport_is_a_measured_row_not_a_same_line_chain() -> None:
+    """``same_line`` clips rather than wraps, so on a narrow centre pane the
+    zoom field went off the edge with no way to reach it."""
+    source = _preview_source()
+    assert 'toolbar.toolbar("troupe-transport"' in source
+    # Play/back/forward are the row's reason for existing: a Play collapsed
+    # into an overflow menu is not a transport.
+    assert source.count("pinned=True") == 3

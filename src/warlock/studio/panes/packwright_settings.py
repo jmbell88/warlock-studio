@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 from ...pipelines.sheet import MAX_ATLAS_PX
-from .. import packwright_mode, widgets
+from .. import icons, packwright_mode, widgets
 from ..manual import render as manual_render
 from ..packwright.layout import MODES
 
@@ -133,6 +133,27 @@ def draw(ctx: Any) -> None:
     widgets.muted_wrapped(_SCHEMA_NOTES.get(settings.json_schema, ""))
 
     imgui.end_disabled()
+
+    # **The one visible trigger.** Packing is automatic -- the centre pane's
+    # pump repacks whenever ``pack_dirty`` is set -- and the only way to ask
+    # for it *now* was a bare ``R`` nothing on screen mentioned. Two panes
+    # meanwhile told the user to "press Pack", a button that has never
+    # existed. So: the button exists, it names its key, and it lives in the
+    # pane that owns ``PackSettings`` rather than on a bridge, because asking
+    # for a repack is what you want after changing one of these.
+    imgui.dummy((0, 6))
+    sources = bool(tab.doc.sources)
+    if widgets.disabled_button(
+        f"{icons.REFRESH} Repack (R)",
+        editable and sources,
+        (-1, 0),
+        reason=(
+            "This atlas is being written; it comes back when it lands."
+            if not editable
+            else "Add an image first -- there is nothing to pack."
+        ),
+    ):
+        packwright_mode.request_repack(ctx, tab)
 
     # Outside the disabled block: it is the *explanation* of why everything
     # above is greyed, and a greyed explanation reads as one more dead control.

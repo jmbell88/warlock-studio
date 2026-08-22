@@ -20,9 +20,31 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import controls, icons, troupe_mode, widgets
+from .. import controls, icons, toolbar, troupe_mode, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
+
+#: The playback multipliers the transport offers. A short ladder rather than a
+#: slider: the useful speeds for reading a run cycle are a quarter, a half and
+#: full, and a continuous control invites 0.87x, which is not a thing anyone
+#: wants. Stored as strings because that is what ``controls.combo`` trades in.
+_SPEEDS: tuple[tuple[str, str], ...] = (
+    ("0.25", "0.25x"),
+    ("0.5", "0.5x"),
+    ("1.0", "1x"),
+    ("2.0", "2x"),
+    ("4.0", "4x"),
+)
+
+
+def _speed_key(value: float) -> str:
+    """The ladder rung ``value`` sits on -- nearest, never a refusal.
+
+    ``speed`` is a float on the state and a profile written by any other means
+    can hold something not on the ladder; a combo that showed a blank for it
+    would be a control describing nothing.
+    """
+    return min((key for key, _ in _SPEEDS), key=lambda key: abs(float(key) - value))
 
 
 def draw(ctx: Any) -> None:
@@ -64,27 +86,54 @@ def _transport(ctx: Any, state: Any) -> None:
     # codepoints in ``icons.py``, and it has no pause glyph -- a stop square is
     # the nearest thing in it, and inventing a codepoint would draw a box.
     glyph = icons.SQUARE if state.playing else icons.PLAY
-    if controls.small_button(f"{glyph}##troupe-play"):
-        state.playing = not state.playing
-    imgui.same_line()
-    if controls.small_button(f"{icons.ARROW_LEFT}##troupe-back"):
-        troupe_mode.step(ctx, -1)
-    imgui.same_line()
-    if controls.small_button(f"{icons.CHEVRON_RIGHT}##troupe-fwd"):
-        troupe_mode.step(ctx, 1)
-
-    # The frame counter and the zoom ride the transport's own row: they are
-    # about *this* frame, and they are short.
-    imgui.same_line()
     frames = int((movement or {}).get("frames") or 1)
-    widgets.muted(f"frame {state.frame + 1} of {frames}")
-    imgui.same_line()
-    imgui.set_next_item_width(sp(110))
-    changed, zoom = controls.input_int("##troupe-zoom", int(state.zoom), 1, 2)
-    if changed:
-        # Clamped rather than validated: this is a view control, and refusing a
-        # number the user dragged past the end would be a dialog about nothing.
-        state.zoom = max(1, min(int(zoom), 32))
+
+    # **A row, not a same_line chain.** This was four bare ``same_line`` calls,
+    # which do not wrap -- they clip, so on a narrow centre pane the zoom field
+    # went off the edge with no way to reach it. ``toolbar`` measures first and
+    # collapses to icons, then to an overflow menu. The transport is pinned:
+    # play/back/forward are the row's reason for existing, and a Play hidden
+    # in a menu is not a transport.
+    def _trailing() -> None:
+        widgets.muted(f"frame {state.frame + 1} of {frames}")
+        imgui.same_line()
+        imgui.set_next_item_width(sp(80))
+        changed, zoom = controls.input_int("##troupe-zoom", int(state.zoom), 1, 2)
+        if changed:
+            # Clamped rather than validated: this is a view control, and
+            # refusing a number the user dragged past the end would be a
+            # dialog about nothing.
+            state.zoom = max(1, min(int(zoom), 32))
+        imgui.same_line()
+        imgui.set_next_item_width(sp(90))
+        # **``state.speed`` had no reader on screen.** ``advance`` has divided
+        # the frame interval by it since the mode was written and nothing has
+        # ever been able to change it, so every Troupe preview has played at
+        # exactly 1x. Looking at a run cycle a quarter speed is the whole
+        # reason the field exists.
+        picked, name = controls.combo(
+            "##troupe-speed", _speed_key(state.speed), _SPEEDS
+        )
+        if picked:
+            state.speed = float(name)
+
+    row = [
+        toolbar.Item(
+            key="play",
+            label="Pause" if state.playing else "Play",
+            icon=glyph,
+            pinned=True,
+        ),
+        toolbar.Item(key="back", label="Previous frame", icon=icons.ARROW_LEFT, pinned=True),
+        toolbar.Item(key="fwd", label="Next frame", icon=icons.CHEVRON_RIGHT, pinned=True),
+    ]
+    clicked = toolbar.toolbar("troupe-transport", row, trailing=(sp(300), _trailing))
+    if clicked == "play":
+        state.playing = not state.playing
+    elif clicked == "back":
+        troupe_mode.step(ctx, -1)
+    elif clicked == "fwd":
+        troupe_mode.step(ctx, 1)
 
     # A row each, and both wrapping. A 16-direction movement cannot fit on the
     # transport's line, and a clipped radio is a direction nobody can pick.
@@ -156,3 +205,13 @@ def _sprite(ctx: Any, state: Any, texture: Any, record: dict[str, Any]) -> None:
     imgui.dummy((max((avail.x - drawn) * 0.5, 0), 0))
     imgui.same_line()
     imgui.image(widgets.texture_ref(texture), (drawn, drawn), uv0, uv1)
+
+    # **The wheel, at last.** The centre pane has carried
+    # ``no_scroll_with_mouse`` since the mode was built, on the stated grounds
+    # that the wheel belongs to the zoom control -- and no pane in Troupe read
+    # the wheel, so it belonged to nothing and turning it over the sprite did
+    # not do anything at all. Same clamp as the transport's field, because it
+    # is the same setting: a view control, clamped rather than refused.
+    io = imgui.get_io()
+    if imgui.is_item_hovered() and io.mouse_wheel:
+        state.zoom = max(1, min(int(state.zoom + io.mouse_wheel), 32))

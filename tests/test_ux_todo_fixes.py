@@ -193,7 +193,16 @@ REASON_SWEPT = (
     "panes/inker_tools.py",
     "panes/inker_colors.py",
     "panes/packwright_bridge.py",
+    # Added with W0.2's Repack button: this pane is the sole owner of
+    # ``PackSettings`` and its one button greys out on two distinct causes.
+    "panes/packwright_settings.py",
     "panes/plotter_bridge.py",
+    # Added ahead of Wave 3, which rewrites all three: a pane joining the
+    # sweep after it is rewritten gets the ratchet checked against the new
+    # code, which is the half of it that was never going to be wrong.
+    "panes/plotter_tileset.py",
+    "panes/plotter_layers.py",
+    "panes/plotter_tools.py",
     "panes/candidates_panel.py",
     "panes/retarget_panel.py",
     "panes/sheet_panel.py",

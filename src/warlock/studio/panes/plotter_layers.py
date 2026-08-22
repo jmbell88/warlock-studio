@@ -48,6 +48,12 @@ _KIND_ICONS = {
 }
 
 
+#: Every button in this pane that can grey out does so for this one cause, and
+#: hoisting it is the ``_VIEWPORT_WHY`` pattern: four dead controls explaining
+#: themselves in four different sentences read as four separate problems.
+_BUSY_WHY = "This map is being written; the buttons come back when it lands."
+
+
 def draw(ctx: Any) -> None:
     from imgui_bundle import imgui
 
@@ -65,15 +71,21 @@ def draw(ctx: Any) -> None:
     doc = tab.doc
     editable = not tab.busy
     width = widgets.grid_width(2)
-    if widgets.disabled_button(f"{icons.PLUS} Tiles", editable, (width, 0)):
+    if widgets.disabled_button(f"{icons.PLUS} Tiles", editable, (width, 0), reason=_BUSY_WHY):
         doc.add_tile_layer()
     imgui.same_line()
-    if widgets.disabled_button(f"{icons.FLAG} Objects", editable, (width, 0)):
+    if widgets.disabled_button(
+        f"{icons.FLAG} Objects", editable, (width, 0), reason=_BUSY_WHY
+    ):
         doc.add_object_layer()
-    if widgets.disabled_button(f"{icons.FOLDER_OPEN} Group", editable, (width, 0)):
+    if widgets.disabled_button(
+        f"{icons.FOLDER_OPEN} Group", editable, (width, 0), reason=_BUSY_WHY
+    ):
         doc.add_group_layer()
     imgui.same_line()
-    if widgets.disabled_button(f"{icons.IMAGE} Image", editable, (width, 0)):
+    if widgets.disabled_button(
+        f"{icons.IMAGE} Image", editable, (width, 0), reason=_BUSY_WHY
+    ):
         doc.add_image_layer()
 
     if isinstance(doc.active(), ObjectLayer):
@@ -326,7 +338,10 @@ def _row(ctx: Any, doc: Any, state: Any, layer: Any, editable: bool) -> None:
                     "This image layer has no picture yet."
                 )
             if widgets.disabled_button(
-                f"{icons.PLUS} Choose image...##img-{layer.uid}", editable, (-1, 0)
+                f"{icons.PLUS} Choose image...##img-{layer.uid}",
+                editable,
+                (-1, 0),
+                reason=_BUSY_WHY,
             ):
                 plotter_mode.choose_layer_image(ctx, layer.uid)
             changed_x, repeat_x = widgets.toggle(
@@ -671,7 +686,11 @@ def property_editor(
         "##prop-type", form["type"], [(t, t) for t in AUTHORABLE_TYPES], width=sp(90)
     )
     imgui.same_line()
-    if widgets.disabled_button(f"{icons.PLUS}##add-prop", bool(form["name"].strip())):
+    if widgets.disabled_button(
+        f"{icons.PLUS}##add-prop",
+        bool(form["name"].strip()),
+        reason="Give the property a name first.",
+    ):
         replacement = dict(props)
         replacement[form["name"].strip()] = Prop(
             type=form["type"], value=_blank_value(form["type"])

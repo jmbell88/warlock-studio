@@ -3740,7 +3740,10 @@ class App:
         imgui.same_line()
         width = layout_mod.centre_width()
         # No scroll-with-mouse for the reason Plotter's centre has none: the
-        # wheel belongs to the picture, and here it is the zoom control's.
+        # wheel belongs to the picture. It said so from the day the mode was
+        # built and it was not true until W0.3 -- no Troupe pane read the
+        # wheel, so the flag took it away from the pane's scrollbar and gave it
+        # to nothing. ``troupe_preview`` zooms with it now, over the sprite.
         flags = imgui.WindowFlags_.no_scroll_with_mouse.value
         with layout_mod.pane(
             "troupe-centre",

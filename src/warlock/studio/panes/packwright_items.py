@@ -43,7 +43,9 @@ def draw(ctx: Any) -> None:
 
     layout = tab.layout
     if layout is None:
-        widgets.muted("Packing..." if tab.packing else "Add a sprite to pack.")
+        widgets.muted(
+            "Packing..." if tab.packing else "Add a sprite -- packing runs by itself."
+        )
         return
 
     used = sum(frame.w * frame.h for frame in layout.frames)

@@ -544,7 +544,10 @@ def _tile_size_form(ctx: Any, tab: Any) -> None:
         "an image added *after* this is sliced at the new size."
     )
     if widgets.disabled_button(
-        "Apply tile size", (width, height) != stamp, (-1, 0)
+        "Apply tile size",
+        (width, height) != stamp,
+        (-1, 0),
+        reason="That is the size the map already uses.",
     ):
         try:
             tab.doc.set_tile_size(width, height)

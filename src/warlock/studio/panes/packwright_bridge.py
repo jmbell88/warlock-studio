@@ -45,7 +45,11 @@ def draw(ctx: Any) -> None:
     # so the four of them explain the same state in the same words -- the
     # ``_VIEWPORT_WHY`` pattern.
     busy_why = "This atlas is being written; the buttons come back when it lands."
-    packed_why = "Nothing is packed yet. Add images and press Pack."
+    # There is no Pack button and there never was: packing is automatic, run
+    # from the centre pane's pump whenever ``pack_dirty`` is set. This used to
+    # send the user hunting for a control that does not exist, which is the
+    # worst kind of empty state -- one that reads as a working instruction.
+    packed_why = "Nothing is packed yet. Add images -- packing runs by itself."
     imgui.dummy((0, 4))
     if widgets.disabled_button(
         f"{icons.SAVE} Save (Ctrl+S)", ready, (width, 0), reason=busy_why

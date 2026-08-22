@@ -390,6 +390,20 @@ def set_settings(ctx: Any, tab: PackTab | None = None, **values: Any) -> None:
 # --- packing ------------------------------------------------------------------
 
 
+def request_repack(ctx: Any, tab: PackTab | None = None) -> None:
+    """Mark the atlas dirty so the next pump repacks it.
+
+    What ``R`` does, given a name so the settings pane's Repack button is the
+    same verb rather than a second one that happens to agree. It does not pack
+    here: packing is a worker job the centre pane's pump owns, and a pane that
+    started one would be doing frame-thread work on a full-atlas composite.
+    """
+    tab = tab or active(ctx)
+    if tab is None:
+        return
+    tab.pack_dirty = True
+
+
 def request_pack(ctx: Any, tab: PackTab | None = None) -> None:
     """Ask for a repack. Safe to call every frame -- that is the point."""
     tab = tab or active(ctx)
@@ -659,7 +673,7 @@ def handle_key(ctx: Any, event: Any) -> bool:
     if tab is None:
         return False
     if name == "r":
-        tab.pack_dirty = True
+        request_repack(ctx, tab)
         return True
     if event.key == pygame.K_DELETE and state.selected is not None:
         remove_source(ctx, state.selected, tab)

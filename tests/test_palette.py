@@ -372,3 +372,83 @@ def test_empty_trash_is_shut_when_the_trash_is_empty():
     assert command.enabled(ctx) is False
     full = _ctx(jobs=[_job("a", deleted_at=1.0)])
     assert command.enabled(full) is True
+
+
+# --- W0.4: undo through the mode, not straight at the document --------------
+
+
+def test_undo_goes_through_the_modes_wrapper_when_it_has_one():
+    """``_doc_undo`` called ``tab.doc.undo()`` directly, which is not the whole
+    verb in Plotter: ``plotter_mode.undo`` also clears
+    ``state.selected_object``. Ctrl+K -> Undo could therefore retire the object
+    the form was drawing against and leave it rendering a dead uid."""
+    import sys
+    import types
+
+    from warlock.studio import palette as palette_mod
+
+    calls: list[str] = []
+
+    class _Doc:
+        def undo(self) -> None:
+            calls.append("doc")
+
+        def redo(self) -> None:
+            calls.append("doc-redo")
+
+    class _Tab:
+        doc = _Doc()
+
+    tab = _Tab()
+    module = types.SimpleNamespace(
+        active=lambda _ctx: tab,
+        undo=lambda _ctx, _tab: calls.append("mode"),
+        redo=lambda _ctx, _tab: calls.append("mode-redo"),
+    )
+    ctx = types.SimpleNamespace(state=types.SimpleNamespace(mode="plotter"))
+
+    name = "warlock.studio._palette_undo_probe"
+    sys.modules[name] = module
+    try:
+        original = dict(palette_mod._DOC_MODES)
+        palette_mod._DOC_MODES["plotter"] = ("_palette_undo_probe", "Export .tmx")
+        palette_mod._doc_undo(ctx)
+        palette_mod._doc_redo(ctx)
+    finally:
+        palette_mod._DOC_MODES.clear()
+        palette_mod._DOC_MODES.update(original)
+        del sys.modules[name]
+
+    assert calls == ["mode", "mode-redo"], "the document was stepped behind the mode's back"
+
+
+def test_undo_falls_back_to_the_document_for_a_mode_with_no_wrapper():
+    """Inker and Packwright need no bookkeeping around a step, and answering
+    them through the document is what this always did."""
+    import sys
+    import types
+
+    from warlock.studio import palette as palette_mod
+
+    calls: list[str] = []
+
+    class _Doc:
+        def undo(self) -> None:
+            calls.append("doc")
+
+    tab = types.SimpleNamespace(doc=_Doc())
+    module = types.SimpleNamespace(active=lambda _ctx: tab)
+    ctx = types.SimpleNamespace(state=types.SimpleNamespace(mode="inker"))
+
+    name = "warlock.studio._palette_plain_probe"
+    sys.modules[name] = module
+    try:
+        original = dict(palette_mod._DOC_MODES)
+        palette_mod._DOC_MODES["inker"] = ("_palette_plain_probe", "Export PNG")
+        palette_mod._doc_undo(ctx)
+    finally:
+        palette_mod._DOC_MODES.clear()
+        palette_mod._DOC_MODES.update(original)
+        del sys.modules[name]
+
+    assert calls == ["doc"]

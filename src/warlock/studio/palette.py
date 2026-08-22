@@ -264,16 +264,33 @@ def _can_redo(ctx: Any) -> bool:
     return bool(history is not None and history.can_redo)
 
 
+def _step(ctx: Any, name: str) -> None:
+    """Undo or redo through the *mode*, never straight at the document.
+
+    ``tab.doc.undo()`` is not the whole verb anywhere it has a bookkeeping
+    twin. Plotter's ``undo`` also clears ``state.selected_object``, and without
+    it Ctrl+K -> Undo could retire the object a form was still drawing against
+    -- a dead uid the panel keeps rendering, from the one surface that reaches
+    every mode. ``getattr`` rather than a required attribute: a mode with no
+    such wrapper is answered by the document directly, which is what this
+    always did and is correct for the modes that need nothing more.
+    """
+    module, tab = _doc_mode(ctx)
+    if tab is None or getattr(tab, "doc", None) is None:
+        return
+    through = getattr(module, name, None)
+    if callable(through):
+        through(ctx, tab)
+        return
+    getattr(tab.doc, name)()
+
+
 def _doc_undo(ctx: Any) -> None:
-    _module, tab = _doc_mode(ctx)
-    if tab is not None and getattr(tab, "doc", None) is not None:
-        tab.doc.undo()
+    _step(ctx, "undo")
 
 
 def _doc_redo(ctx: Any) -> None:
-    _module, tab = _doc_mode(ctx)
-    if tab is not None and getattr(tab, "doc", None) is not None:
-        tab.doc.redo()
+    _step(ctx, "redo")
 
 
 def _mode_commands() -> list[Command]:
