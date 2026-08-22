@@ -249,7 +249,7 @@ left-drag in empty space with `Q` selected sweeps a marquee.
 
 Shift and Alt are modifiers rather than shortcuts: holding **Shift** while dragging a selection adds
 to the current one, and **Alt** subtracts. Both are described in
-[Selections and transform](09-inker.md#selections-and-transform). With a *paint* tool Shift means
+[Selections and transform](28-inker.md#selections-and-transform). With a *paint* tool Shift means
 something else — it draws a straight line from wherever the last stroke finished, so click,
 Shift+click, Shift+click walks a chain of segments in the brush already in your hand.
 
@@ -274,7 +274,7 @@ These are live only once a document has been animated; on a still drawing the ke
 
 Enter reaches playback only after the transform branch has had it: with a free transform open, Enter
 applies the transform and does not also start the clip. See
-[Playback](10-inker-animation.md#playback).
+[Playback](29-inker-animation.md#playback).
 
 ## Poser
 
@@ -285,7 +285,7 @@ applies the transform and does not also start the clip. See
 
 The mode is otherwise mouse-shaped: joints are clicked and gizmos are dragged. The undo binding is
 the same one the asset pose editor answers to, because they are
-[one editor with two doors](07-poser.md#undo-and-redo).
+[one editor with two doors](26-poser.md#undo-and-redo).
 
 ## Plotter
 
@@ -334,7 +334,7 @@ the same one the asset pose editor answers to, because they are
 
 The tool letters are [Tiled](https://www.mapeditor.org/)'s. This editor reads and writes Tiled's
 files, so the editor you are most likely arriving from is that one — and its letters differ from
-[Inker](09-inker.md)'s in two places, so following both was never possible.
+[Inker](28-inker.md)'s in two places, so following both was never possible.
 
 Esc is **staged**: one press undoes one thing, outermost first. Cancelling a drag does not also
 throw away the selection you spent a gesture placing.

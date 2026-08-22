@@ -249,7 +249,7 @@ def _charsheet(tmp_path, size: int = 8) -> dict[str, Any]:
 
 
 def test_a_character_sheet_opens_with_its_tags_and_durations(tmp_path, monkeypatch):
-    """The handoff the button's tooltip and ``docs/manual/14-troupe.md`` both
+    """The handoff the button's tooltip and ``docs/manual/33-troupe.md`` both
     promise: "one tag per animation and direction".
 
     ``sheetin.document_from_sheet`` was written for this and had no production

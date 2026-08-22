@@ -52,15 +52,16 @@ NO_HELP_BUTTON = {
     # A search box over whatever is on screen: it has no titled section to hang
     # a (?) beside, and a help button inside a list the arrow keys walk is a
     # row the arrow keys would have to skip. Documented in
-    # `docs/manual/14-shortcuts.md` ("The command palette"), which is where a
-    # reader looks for a keyboard binding. Named by file rather than by chapter
-    # number: the numbers move, and this comment already outlived one
-    # renumbering saying "chapter 12".
+    # the Keyboard shortcuts chapter ("The command palette"), which is where a
+    # reader looks for a keyboard binding. Named by *title*: this comment has
+    # now outlived three renumberings, saying "chapter 12", then
+    # "14-shortcuts.md", and a filename carries the number that moves just as
+    # surely as the number did.
     "palette",
     # Not a pane either: two lines and a button that the sprite and pixel-sheet
     # sections draw *inside* their own (?)-bearing headers, so a second help
     # button would sit under the first and point at the same chapter. What it
-    # does is documented where the button lands -- `17-app-settings.md`, the
+    # does is documented where the button lands -- the App settings chapter's
     # Models section.
     "model_gate",
     # A startup modal rather than a workspace pane. Its Hardware and Required

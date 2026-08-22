@@ -62,7 +62,7 @@ The reconstruction engine is `trellis-server.exe`, a compiled CUDA binary from
 that `vendor/trellis/trellis-server.exe` exists.
 
 The vendored build is **v0.5.4** (2026-07-27). If you keep the binary somewhere else, point
-`WARLOCK_TRELLIS_EXE` at it — see [Environment variables](20-configuration.md#environment-variables).
+`WARLOCK_TRELLIS_EXE` at it — see [Environment variables](39-configuration.md#environment-variables).
 
 A missing binary is one of the **fatal** startup checks: no reconstruction engine means no mesh, and
 there is nothing to degrade to. The other two are the TRELLIS GGUF weights, for the same reason, and
@@ -126,7 +126,7 @@ was fitted to, the weight it was *measured* at, and its trigger words — none o
 carries, and each of which is wrong-by-default rather than merely missing. A LoRA trained with
 `use_rslora` needs a default weight an order of magnitude smaller than an ordinary one; an adapter
 fitted to another architecture raises with the checkpoint already resident in VRAM. Adding a model
-is [an ordinary code change](25-extending.md), and a small one.
+is [an ordinary code change](44-extending.md), and a small one.
 
 Base models are one-resident-at-a-time: a 32 GB card holds the reconstruction engine plus a single
 SDXL-class pipeline, not two, so switching between jobs costs a reload. Style LoRAs are the
@@ -205,7 +205,7 @@ uvx hf download diffusers/controlnet-canny-sdxl-1.0 --revision eb115a19a10d14909
   --include "*.json" --include "*fp16.safetensors" --local-dir $HOME/.warlock/models/controlnet-canny-sdxl
 ```
 
-See [Conditioning on an image](03-generating-references.md#conditioning-on-an-image) for what these
+See [Conditioning on an image](22-generating-references.md#conditioning-on-an-image) for what these
 actually do.
 
 ### Optional measuring and helper models
@@ -248,15 +248,15 @@ the asset. What each one changes when present:
 
 | Model | Without it | With it |
 | --- | --- | --- |
-| DINOv2 | A style profile has no anchor similarity; the judge has no probes. | [Style profiles](16-profiles.md) and [Review](17-review.md) work fully. |
-| PickScore | Candidates rank on composition and style anchor alone. | A human-preference term joins the ranking — see [Seeds and candidates](03-generating-references.md#seeds-and-candidates). |
-| Prompt expander | The prompt is used as typed. | [Prompt enrichment](03-generating-references.md#prompt-enrichment) can rewrite it. |
-| ViTPose | Skeletons are fitted by bounding box. | Humanoid rigs start from measured joints — see [Where the joints come from](06-rigging-and-posing.md#where-the-joints-come-from). |
+| DINOv2 | A style profile has no anchor similarity; the judge has no probes. | [Style profiles](35-profiles.md) and [Review](36-review.md) work fully. |
+| PickScore | Candidates rank on composition and style anchor alone. | A human-preference term joins the ranking — see [Seeds and candidates](22-generating-references.md#seeds-and-candidates). |
+| Prompt expander | The prompt is used as typed. | [Prompt enrichment](22-generating-references.md#prompt-enrichment) can rewrite it. |
+| ViTPose | Skeletons are fitted by bounding box. | Humanoid rigs start from measured joints — see [Where the joints come from](25-rigging-and-posing.md#where-the-joints-come-from). |
 
 **FLUX.1 is not offered; FLUX.2 klein is.** The two `FLUX.1` checkpoints — `dev` and `schnell` —
 are click-through gated on Hugging Face, and 12B parameters will not coexist with the reconstruction
 engine on one card. Using a local copy anyway is possible but constrained — see
-[Using a different image model](20-configuration.md#using-a-different-image-model). The FLUX.2 klein
+[Using a different image model](39-configuration.md#using-a-different-image-model). The FLUX.2 klein
 pair above is neither gated nor 12B, which is why those two are ordinary entries in the model list.
 
 Because klein is a different architecture, the controls fitted to SDXL do not apply to it, and the

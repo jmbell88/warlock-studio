@@ -57,10 +57,24 @@ from . import parser
 # old 14 onward by one. It is the Troupe programme's own mode and it belongs
 # beside the five workspaces it follows rather than after the library: the
 # grouping in Part I is the *rail's*, and Troupe is in the rail's second group.
+#
+# The tutorials took 01-19 on 2026-08-22, moving all twenty-five existing
+# chapters up by nineteen. A *block* rather than an exact fit, and that is the
+# whole point of the change: every renumbering above was forced by an insertion,
+# and a tutorial series grows a chapter at a time. Reserving more numbers than
+# the first wave uses means the next one is a new file and an ``EXPECTED_KEYS``
+# line, not another twenty-five renames across a hundred and sixty cross-links.
+# The gap is legal because ``chapters()`` globs and sorts -- nothing here
+# requires the numbers to be dense, only ordered.
+#
+# They go first because they are written for the reader who has just installed
+# the app and has never seen it. Appended, they would have sat behind
+# Architecture, which is written for the reader changing its code.
 PARTS: tuple[tuple[str, range], ...] = (
-    ("Using Warlock Studio", range(1, 19)),
-    ("Setup & operations", range(19, 23)),
-    ("Architecture", range(23, 26)),
+    ("Tutorials", range(1, 20)),
+    ("Using Warlock Studio", range(20, 38)),
+    ("Setup & operations", range(38, 42)),
+    ("Architecture", range(42, 45)),
 )
 
 _H1 = re.compile(r"^# +(.+)$", re.MULTILINE)
@@ -68,7 +82,7 @@ _H1 = re.compile(r"^# +(.+)$", re.MULTILINE)
 
 @dataclass(frozen=True)
 class Chapter:
-    key: str  # filename stem: "01-overview"
+    key: str  # filename stem: "20-overview"
     number: int
     title: str
     part: str

@@ -50,7 +50,7 @@ same tile; the count line says how many that removes before you commit to it. It
 because a repack should be faithful unless you ask otherwise.
 
 **From Inker** is the reason this mode sits beside the raster editor. Every document open in
-[Inker](09-inker.md) gets a button here: an animated document contributes one sprite per frame, and
+[Inker](28-inker.md) gets a button here: an animated document contributes one sprite per frame, and
 a still one contributes one sprite per layer. A packed frame is pixel-identical to what the timeline
 plays, because it goes through the same flatten the playback and the onion skin use.
 
@@ -72,7 +72,7 @@ written verbatim into the sidecar, where a consumer may treat it as a filename.
 
 **Grid** puts every sprite in a uniform cell the size of the largest one, row-major. The result is a
 *tileset* — a regular atlas an engine can slice by arithmetic — so it exports a `.tsx` as well as
-the JSON, and can be used directly as a tileset in [Plotter](12-plotter.md) or in Tiled.
+the JSON, and can be used directly as a tileset in [Plotter](31-plotter.md) or in Tiled.
 
 **MaxRects** packs tightly and irregularly. The atlas comes out considerably smaller, but the cells
 are not a grid, so an importer has to read the JSON to find anything.
@@ -164,7 +164,7 @@ in the atlas, whether it was trimmed, where the trimmed rectangle sat inside the
 what the original's size was — which together are what let a consumer place a sprite where you drew
 it rather than flush against its own bounding box.
 
-Note that this is deliberately *not* the sidecar a [sprite sheet](08-sprite-sheets.md) writes. That
+Note that this is deliberately *not* the sidecar a [sprite sheet](27-sprite-sheets.md) writes. That
 format is Warlock's own and describes poses and view directions; this one describes an arbitrary
 pile of pictures. They answer different questions and have one writer each.
 
@@ -189,5 +189,5 @@ reopen the real document rather than a flat picture. It follows the same precede
 | `~/.warlock/assets/<job>/input.png` | The atlas, for one exported to the library. |
 | `~/.warlock/assets/<job>/pack.wpack` | The document behind it. Not served; reopened by **Open in Packwright**. |
 
-See [Keyboard shortcuts](18-shortcuts.md) for every binding, and [Plotter](12-plotter.md) for the
+See [Keyboard shortcuts](37-shortcuts.md) for every binding, and [Plotter](31-plotter.md) for the
 mode that consumes a grid pack as a tileset.

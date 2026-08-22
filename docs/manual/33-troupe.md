@@ -11,7 +11,7 @@ animating it. Troupe is the second of those, with a clip library and a pixel-art
 end of it.
 
 The output is an ordinary sprite sheet — the same PNG-and-sidecar pair chapter
-[Sprite sheets](08-sprite-sheets.md) describes — plus an `animation` block that carries the frame
+[Sprite sheets](27-sprite-sheets.md) describes — plus an `animation` block that carries the frame
 durations and one tag per animation and direction. Everything that already reads a sheet reads
 this one.
 
@@ -45,7 +45,7 @@ is a stick figure fed straight to the ControlNet — arms out, legs straight, fe
 constrained pose is not an aesthetic choice: a single-view reconstruction has to get limb separation
 right, and a folded arm is the failure it cannot recover from.
 
-You approve that drawing in [Create](03-generating-references.md), the same way you approve any
+You approve that drawing in [Create](22-generating-references.md), the same way you approve any
 reference. Only then does the rest run: the reconstruction, then an automatic rig, then the sheet.
 Approving is the gate, and it is deliberate — the reconstruction is the expensive step and it should
 not be spent on a drawing you would not have kept.
@@ -111,19 +111,19 @@ Both ways out are bridges the app already had, because a character sheet is an o
 an animation block on it.
 
 **Open in Inker** opens the sheet sliced on its own grid, one tag per animation and direction, in
-the [Inker timeline](10-inker-animation.md). It opens *unlinked*: the first `Ctrl+S`
+the [Inker timeline](29-inker-animation.md). It opens *unlinked*: the first `Ctrl+S`
 is a Save As, so cleaning up frames cannot overwrite the render they came from.
 
 **Add to Packwright** contributes one sprite per cell to an open atlas, alongside everything else
 being packed.
 
 The sheet and its sidecar are on disk beside the mesh either way, in that job's directory, and the
-[library](15-library-and-jobs.md)'s export list is where the files themselves are.
+[library](34-library-and-jobs.md)'s export list is where the files themselves are.
 
 ## When it goes wrong
 
 **"A character sheet needs a rigged mesh."** The automatic rig failed, or you cancelled it. Rig the
-mesh in [Poser](07-poser.md) — joints measured off the mesh's own vertices, which is what the
+mesh in [Poser](26-poser.md) — joints measured off the mesh's own vertices, which is what the
 automatic pass tries first — and then use **Build another sheet**.
 
 **The arms are welded to the chest.** The shipped humanoid template is an A-pose, and fitting it to

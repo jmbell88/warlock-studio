@@ -163,7 +163,7 @@ remesh never runs the image model and a row claiming an adapter that could not h
 lie about how the asset was made.
 
 **Make 3D** — promotion — is the ordinary path from a reference to a mesh, covered in
-[Starting from a reference](04-generating-meshes.md#starting-from-a-reference).
+[Starting from a reference](23-generating-meshes.md#starting-from-a-reference).
 
 All three share one rule: **derived values never survive into the new job.** Anything the worker
 recorded about the finished job's *artifacts* is stripped before the new row is written — the
@@ -181,13 +181,13 @@ conditioning strengths, which prompt history alone never did.
 
 A **profile** is a saved house style — the *look* half of the 2D form, stored under a name, with an
 optional anchor image every generation under it is conditioned on. It has a chapter of its own:
-[Style profiles](16-profiles.md).
+[Style profiles](35-profiles.md).
 
 ## Storage and pruning
 
 Every job owns a directory under `~/.warlock/assets/`, named for its job id, and the SQLite job
 store lives at `~/.warlock/assets/jobs.sqlite`. That home directory is outside the source tree on
-purpose; see [Data locations](20-configuration.md#data-locations). A job directory holds:
+purpose; see [Data locations](39-configuration.md#data-locations). A job directory holds:
 
 - `input.png` — the reference image the mesh was made from.
 - `source.glb` — the raw reconstruction, kept forever.
@@ -205,7 +205,7 @@ foot of the library shows a **storage meter**: how many job directories exist an
 they occupy. It is measured on a background thread, so it never stalls the window.
 
 The two ways to make that number smaller live in
-[Settings → Storage](21-app-settings.md#storage), not here: a button under a scrolling list of assets
+[Settings → Storage](40-app-settings.md#storage), not here: a button under a scrolling list of assets
 reads as an action on the assets you can see, and neither of these is.
 
 **Prune...** deletes everything but the newest N jobs, after a confirm — the confirm

@@ -976,8 +976,9 @@ def test_the_manual_builds_embedded(app_ctx, imgui_ctx):
     _frame(imgui_ctx, lambda: render.draw_body(app_ctx))
     # A real chapter key, and *asserted* to be one rather than written out.
     # This said "08-shortcuts", then "12-shortcuts", and neither has ever been
-    # the name of anything -- shortcuts was chapter 14 when the second spelling
-    # was written and is 16 now. ``open_at`` stores whatever it is given and the
+    # the name of anything -- the chapter was 14 when the second spelling was
+    # written and has moved three times since, most recently when the tutorials
+    # reserved 01-19. ``open_at`` stores whatever it is given and the
     # drawn page falls back to "could not be loaded", so both spellings smoked
     # the not-found path rather than the renderer this test exists for, and
     # neither renumbering that moved the chapter could fail here. Looking the
@@ -997,14 +998,26 @@ def test_a_chapter_with_a_screenshot_uploads_and_draws_it(app_ctx, imgui_ctx):
     ``loader.manual_dir()`` and asks the thumbnail cache for it at a *screenshot*
     cap -- and the cap being 256 px was the whole reason images could not be
     added before, since a screenshot reduced to 256 px is unreadable.
+
+    The chapter is *found* rather than named. This asked for the one starting
+    "02-", which was Home for as long as Home was chapter 2 and became an
+    unrelated chapter the moment the tutorials reserved 01-19 -- a
+    ``StopIteration`` in a test whose subject has nothing to do with numbering.
+    Any chapter carrying a screenshot exercises the same seam, and only three of
+    them do, so the search is also the assertion that some chapter still does.
     """
     from warlock.studio.manual import loader, parser, render
 
-    key = next(c.key for c in loader.chapters() if c.key.startswith("02-"))
-    blocks = parser.parse(loader.load(key))
-    images = [b for b in blocks if isinstance(b, parser.Image)]
-    assert images, f"{key} is the chapter this test is about and has no image"
-    assert (loader.manual_dir() / images[0].path).is_file()
+    found = (
+        (c.key, b)
+        for c in loader.chapters()
+        for b in parser.parse(loader.load(c.key))
+        if isinstance(b, parser.Image)
+    )
+    key, image = next(found, (None, None))
+    assert image is not None, "no chapter carries a screenshot for this test to draw"
+    images = [image]
+    assert (loader.manual_dir() / image.path).is_file()
 
     app_ctx.state.manual.open_at(key, None)
     _frame(imgui_ctx, lambda: render.draw_body(app_ctx))

@@ -90,13 +90,13 @@ one repository and exits, into a staging folder beside the destination that is o
 if the fetch succeeded — so a download interrupted halfway leaves nothing behind rather than a model
 directory that looks finished. Free disk is checked against the whole selection first, and the whole
 selection is refused if it will not fit. Everything is still equally installable by hand — see
-[Model weights](19-installation.md#model-weights) and
-[Adding an image model](25-extending.md#adding-an-image-model).
+[Model weights](38-installation.md#model-weights) and
+[Adding an image model](44-extending.md#adding-an-image-model).
 
 ## Storage
 
 Three figures and two buttons. The figures are how many job directories exist and what they occupy,
-what is sitting in the [trash](15-library-and-jobs.md#the-trash) waiting to be emptied, and how much
+what is sitting in the [trash](34-library-and-jobs.md#the-trash) waiting to be emptied, and how much
 disk the downloaded model weights are actually using. All three are measured on a background thread
 and the last answer is drawn until a new one arrives, so none of them walks the disk while you are
 looking at something else. The first two are the same measurements the library reports, not a second
@@ -115,7 +115,7 @@ autosaves and settings are kept, and it refuses outright while anything is queue
 
 Both used to sit at the foot of the library, under the list of assets, which is the one place where
 "clean library" reads as an action on the assets you can see rather than on all of them.
-[Library and jobs](15-library-and-jobs.md#storage-and-pruning) has the longer account of what
+[Library and jobs](34-library-and-jobs.md#storage-and-pruning) has the longer account of what
 each one deletes and why prune removes from disk rather than trashing.
 
 ## Advanced
@@ -153,6 +153,6 @@ nothing — the log is written either way, and the recovery offer does not depen
 Not everything the app remembers has a control in this pane. `studio_settings.json` also holds your
 saved profiles, the sidebar's internal split, and the pixel-art export
 preferences — the
-size and palette set in an asset's [Pixel art](03-generating-references.md#pixel-art) section, which
+size and palette set in an asset's [Pixel art](22-generating-references.md#pixel-art) section, which
 are the app's preferences rather than any one job's and so apply to whichever asset you look at
 next.

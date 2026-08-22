@@ -1,6 +1,6 @@
 # Inker: animation
 
-A drawing in the [Inker](09-inker.md) can become a frame-by-frame animation. Everything in that
+A drawing in the [Inker](28-inker.md) can become a frame-by-frame animation. Everything in that
 chapter still applies — the tools, the layers, the colour modes, the selections — and this chapter is
 the second axis the document grows: frames across, layers down, a grid of cels between them.
 
@@ -187,7 +187,7 @@ Its rows are the timeline's tracks, so a row inside the selection draws highligh
 clicking the eye on a row of a multi-track range hides or shows the whole range as one step.
 
 **Merge down** and **flatten** are not unavailable here: both run across the whole grid, every frame
-at once, and the links you have survive them — see [Layers](09-inker.md#layers).
+at once, and the links you have survive them — see [Layers](28-inker.md#layers).
 
 ## Preview
 
@@ -235,7 +235,7 @@ numbered apart: a second `walk` quietly becoming `walk_2.png` is a file claiming
 never named. Rename one and press again.
 
 Splitting by slice is not offered; slices are exported as their own PNGs from the document panel
-instead — see [Slices](09-inker.md#slices).
+instead — see [Slices](28-inker.md#slices).
 
 ## Importing frames
 
@@ -260,7 +260,7 @@ The layout is saved with the document and survives a round trip through `.ora`. 
 repaint it and retime it like any other animation; adding or removing a frame is allowed and simply
 means the timeline no longer fills the grid, which **Export sheet** then says rather than writing a
 sheet with a hole in it. See [From a single
-drawing](08-sprite-sheets.md#from-a-single-drawing).
+drawing](27-sprite-sheets.md#from-a-single-drawing).
 
 ### From an Aseprite file
 
@@ -278,7 +278,7 @@ The import itself is still **reading only** — it does not decide where a save 
 document is — so it opens as an **unsaved** document and the first `Ctrl+S` asks where to put it,
 the same as any import. What has changed is the answer that dialog can give: Save As can now write
 `.aseprite` itself, deliberately made from the save dialog once you have looked at the document,
-never assumed by the door that read the file in. See [Saving](09-inker.md#saving) for that half.
+never assumed by the door that read the file in. See [Saving](28-inker.md#saving) for that half.
 
 Two kinds of thing do not come across, and they are told apart on purpose. Anything that would
 change what the pixels *mean* is a refusal that names itself and opens nothing: a colour depth this
@@ -295,7 +295,7 @@ drops in turn, is kept in `docs/COMPAT.md`.
 
 ## Slices on an animated document
 
-[Slices](09-inker.md#slices) are the same rectangles they are on a still drawing, and by default one
+[Slices](28-inker.md#slices) are the same rectangles they are on a still drawing, and by default one
 slice is the same rectangle on every frame.
 
 **Key this frame** gives the current frame its own rectangle, pivot and centre; every other frame

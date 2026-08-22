@@ -11,7 +11,7 @@ the canvas. Only quitting the app and closing a tab can lose pixels, and both as
 The layout follows the rest of the app: tools and their options on the left, the canvas in the
 middle, layers and the pipeline panel on the right. Several documents stay open at once, as tabs.
 
-![Inker: tools left, canvas centre, layers and the pipeline right](img/09-inker.png)
+![Inker: tools left, canvas centre, layers and the pipeline right](img/28-inker.png)
 
 ## Starting a canvas
 
@@ -133,7 +133,7 @@ not a property of the picture.
 ## Tools
 
 The toolbox is an icon grid; hovering a tool shows its name and its letter. Every tool is listed in
-[Keyboard shortcuts](18-shortcuts.md).
+[Keyboard shortcuts](37-shortcuts.md).
 
 The letters are Aseprite's wherever Aseprite has one to lend: `L` is the line and `U` the rectangle,
 and three tools answer to a shifted letter as well as their own — `Shift+G` for the gradient,
@@ -791,7 +791,7 @@ the tile structure gone — the same trade the animation timeline makes, for the
 open map exactly as it stands. It is a **snapshot, not a link**: painting on the tileset here
 afterwards leaves the map's copy alone, and you send it again to bring the changes across. A
 tileset exported as a `.tsx` behaves the same way and for the same reason — see
-[Tilesets](12-plotter.md#tilesets) for the map side of it.
+[Tilesets](31-plotter.md#tilesets) for the map side of it.
 
 ## Filters
 
@@ -937,7 +937,7 @@ A drawing can become a frame-by-frame animation: press **Animate** in the docume
 layers you have become *tracks*, with a timeline strip under the canvas.
 
 Everything that follows from that — cels and links, tags, onion skin, ranges, the preview, and the
-sheet, GIF and Aseprite imports and exports — is [Inker: animation](10-inker-animation.md).
+sheet, GIF and Aseprite imports and exports — is [Inker: animation](29-inker-animation.md).
 
 ## Slices
 
@@ -957,7 +957,7 @@ gives the selected one a name, two switches and a Delete.
   inside the slice, with its own corner handles.
 
 On an animated document a slice is the same rectangle on every frame until you key it — see
-[Slices on an animated document](10-inker-animation.md#slices-on-an-animated-document).
+[Slices on an animated document](29-inker-animation.md#slices-on-an-animated-document).
 
 Slices survive everything the canvas does to them: a flip, a quarter turn, a scale, a crop and a
 canvas resize all carry them — and their pivots and centres — along, and undoing puts them back. A
@@ -995,7 +995,7 @@ and write. That is the format that keeps your layers, their blend modes and thei
   the tab points at, so the document stays unsaved against its own file.
 
 What Save As keeps and drops going out to `.aseprite`, and what **Import Aseprite file** drops coming
-in (see [Importing an Aseprite file](10-inker-animation.md#from-an-aseprite-file)), is kept in full in
+in (see [Importing an Aseprite file](29-inker-animation.md#from-an-aseprite-file)), is kept in full in
 `docs/COMPAT.md`.
 
 Saving is a background operation, and it shows: while a save is in flight the layer panel and the
@@ -1146,7 +1146,7 @@ losing them.
 
 ### Fixing a matte
 
-**Fix matte**, in the [Check the cutout](04-generating-meshes.md#checking-the-cutout) panel, is the
+**Fix matte**, in the [Check the cutout](23-generating-meshes.md#checking-the-cutout) panel, is the
 same hand-off with one difference: the document opens with the cutout already folded into its alpha,
 as a single undoable step. Every layer keeps its own pixels — the cut is multiplied into each of
 them — so a layered reference stays layered, and the eraser and the brush now edit the matte itself.
@@ -1178,4 +1178,4 @@ A painted reference is a real job row that never ran on the worker: the image al
 queueing a run to reproduce what you just drew would be two minutes of GPU for nothing. It is
 created finished, at the reference stage, which is exactly what promotion consumes. It cannot be
 rerolled — there is no generator behind it for a new seed to change — but it can be remeshed. See
-[Rerun and promotion](15-library-and-jobs.md#rerun-and-promotion).
+[Rerun and promotion](34-library-and-jobs.md#rerun-and-promotion).

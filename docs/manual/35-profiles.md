@@ -1,7 +1,7 @@
 # Style profiles
 
 A **profile** is a saved house style. It is the *look* half of the [2D
-form](03-generating-references.md), stored under a name, so someone who works on two kinds of asset
+form](22-generating-references.md), stored under a name, so someone who works on two kinds of asset
 does not re-pick the same settings each time they switch.
 
 ## What a profile stores
@@ -57,7 +57,7 @@ against the profile's name.
 
 - **Attach an anchor** opens a file picker. Any readable image works; it is copied into
   `~/.warlock/assets/profiles/` under a generated name, so it outlives every job it came from and survives a
-  [prune](15-library-and-jobs.md#storage-and-pruning).
+  [prune](34-library-and-jobs.md#storage-and-pruning).
 - **Strength** is how hard the anchor is applied, from 0 to 1.5. The default is 0.6.
 - **Remove anchor** detaches and deletes it.
 
@@ -70,7 +70,7 @@ changing a select preserves it rather than dropping it. And attaching a conditio
 one generation at the Reference stage **replaces** the profile's anchor for that asset only; the stage
 says so when the active profile has one.
 
-When ranking is on (`WARLOCK_RANK`, see [Configuration](20-configuration.md)), a finished reference
+When ranking is on (`WARLOCK_RANK`, see [Configuration](39-configuration.md)), a finished reference
 is also scored for how close it looks to the anchor. That is one of the terms in the score on the
-library card — see [Seeds and candidates](03-generating-references.md#seeds-and-candidates) — and it
+library card — see [Seeds and candidates](22-generating-references.md#seeds-and-candidates) — and it
 is advisory throughout: nothing is rejected for scoring badly.

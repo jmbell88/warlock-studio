@@ -36,7 +36,7 @@ they cannot change without the disk changing — so having just installed someth
 missing, nothing short of a restart would otherwise change its mind. This button re-runs everything.
 
 A first run that has downloaded nothing yet is better served by the **Issues / Set up models**
-row on the [Home screen](02-home.md), which opens the model list and its Download buttons rather
+row on the [Home screen](21-home.md), which opens the model list and its Download buttons rather
 than this read-only list.
 
 ## Out of memory
@@ -52,11 +52,11 @@ raises the other side.
 
 **Fix.** Set `WARLOCK_VRAM_EXCLUSIVE=1` and restart. Text jobs then run sequentially — the engine is
 stopped, the image model loads, generates and unloads, and the engine restarts. It costs seconds per
-job and buys back roughly 7 GB of headroom. See [VRAM modes](20-configuration.md#vram-modes).
+job and buys back roughly 7 GB of headroom. See [VRAM modes](39-configuration.md#vram-modes).
 
 If it still fails, drop the geometry resolution: **Mesh resolution** at the Mesh stage, choosing "2D" rather
 than "3D" — see
-[the mapping](04-generating-meshes.md#mesh-parameters).
+[the mapping](23-generating-meshes.md#mesh-parameters).
 
 **Afterwards.** A hard crash inside CUDA or the allocator never reaches a Python handler, so it will
 not be in `warlock.log`. Look in `crash.log` instead — see
@@ -77,11 +77,11 @@ does, and that fetch runs in its own process.
 from and whether it is on this card; tick what you need and press *Download selected*, which fetches
 the whole selection as one transaction and shows a rate and an ETA. A download can be cancelled from
 its own row, and cancelling installs nothing — the staging is swept the next time the pane opens.
-See [Models](21-app-settings.md#models).
+See [Models](40-app-settings.md#models).
 
 **Or from a terminal**, which is the only route on a headless box: `uv run warlock doctor` lists each
 missing item individually with the exact command that fetches it, and the same commands are
-collected in [Model weights](19-installation.md#model-weights).
+collected in [Model weights](38-installation.md#model-weights).
 
 Two of these rows are **fatal** rather than a note — `trellis-server.exe` and the TRELLIS GGUF
 weights. Nothing degrades gracefully without a reconstruction engine, so those get a red banner and
@@ -111,7 +111,7 @@ either way: everything except rigging, posing and sheets works exactly as before
 Bone-heat weighting gives up outright on the kind of non-manifold geometry a reconstruction sometimes
 produces; the worker catches that, falls back to envelope weights, and records which was used in
 `rig.json` rather than failing the job. The result is cruder around joints, not broken. See
-[When rigging is unavailable](06-rigging-and-posing.md#when-rigging-is-unavailable).
+[When rigging is unavailable](25-rigging-and-posing.md#when-rigging-is-unavailable).
 
 ## The GPU worker stopped
 
@@ -202,7 +202,7 @@ matting falls back to a threshold cutout that clips soft edges.
 
 **Related.** The two mesh measurements answer different questions and disagreeing with each other is
 normal — see
-[Mesh audit and mesh report](04-generating-meshes.md#mesh-audit-and-mesh-report).
+[Mesh audit and mesh report](23-generating-meshes.md#mesh-audit-and-mesh-report).
 
 ## The window feels sluggish
 
@@ -244,4 +244,4 @@ profile. When something needs investigating, these are the places to look:
 
 All of those move with `WARLOCK_DATA_DIR` except the note, which sits at the top of `WARLOCK_HOME`,
 and the store, which has its own `WARLOCK_DB`. The full layout, and the one-time move, are in
-[Data locations](20-configuration.md#data-locations).
+[Data locations](39-configuration.md#data-locations).

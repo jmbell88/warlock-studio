@@ -11,23 +11,23 @@ from warlock.studio.state import AppState, ManualState
 @pytest.fixture
 def tree(tmp_path: Path) -> Path:
     (tmp_path / "00-index.md").write_text("# Warlock Studio Manual\n", encoding="utf-8")
-    (tmp_path / "01-overview.md").write_text("# Overview\n\nHello.\n", encoding="utf-8")
-    (tmp_path / "19-installation.md").write_text("# Installation\n", encoding="utf-8")
-    (tmp_path / "23-architecture.md").write_text("# Architecture\n", encoding="utf-8")
+    (tmp_path / "20-overview.md").write_text("# Overview\n\nHello.\n", encoding="utf-8")
+    (tmp_path / "38-installation.md").write_text("# Installation\n", encoding="utf-8")
+    (tmp_path / "42-architecture.md").write_text("# Architecture\n", encoding="utf-8")
     return tmp_path
 
 
 def test_chapters_sorted_titled_and_grouped(tree: Path):
     chapters = loader.chapters(root=tree)
     assert [c.key for c in chapters] == [
-        "00-index", "01-overview", "19-installation", "23-architecture",
+        "00-index", "20-overview", "38-installation", "42-architecture",
     ]
     by_key = {c.key: c for c in chapters}
-    assert by_key["01-overview"].title == "Overview"
+    assert by_key["20-overview"].title == "Overview"
     assert by_key["00-index"].part == ""
-    assert by_key["01-overview"].part == "Using Warlock Studio"
-    assert by_key["19-installation"].part == "Setup & operations"
-    assert by_key["23-architecture"].part == "Architecture"
+    assert by_key["20-overview"].part == "Using Warlock Studio"
+    assert by_key["38-installation"].part == "Setup & operations"
+    assert by_key["42-architecture"].part == "Architecture"
 
 
 def test_every_real_chapter_lands_in_a_part():
@@ -39,7 +39,7 @@ def test_every_real_chapter_lands_in_a_part():
 
 
 def test_load_reads_the_file(tree: Path):
-    assert "Hello." in loader.load("01-overview", root=tree)
+    assert "Hello." in loader.load("20-overview", root=tree)
 
 
 def test_load_rejects_unknown_key(tree: Path):
@@ -70,7 +70,7 @@ def test_manual_state_open_at():
     state = AppState()
     assert isinstance(state.manual, ManualState)
     assert state.manual.open is False
-    state.manual.open_at("04-generating-meshes", "exports")
+    state.manual.open_at("23-generating-meshes", "exports")
     assert state.manual.open is False
-    assert state.manual.chapter == "04-generating-meshes"
+    assert state.manual.chapter == "23-generating-meshes"
     assert state.manual.pending_anchor == "exports"

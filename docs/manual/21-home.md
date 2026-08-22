@@ -16,7 +16,7 @@ itself about where it opens.
 The three answers are one column, weighted by how often each is the reason you are looking: a card
 you dismiss once per release, one quiet line, and then the whole rest of the screen.
 
-![Home: the rail, the What's new card, New... and an empty Resume](img/02-home.png)
+![Home: the rail, the What's new card, New... and an empty Resume](img/21-home.png)
 
 ## What's new
 
@@ -47,9 +47,9 @@ to go is clickable.
 
 | Line | What it says | Where it goes |
 |---|---|---|
-| Issues | "Everything checks out", "still checking" for the first second or two after launch, or "N things need attention" — amber for a warning, red for something fatal. While the shell setup summary is visible this item is omitted instead of repeating it. | [App settings](21-app-settings.md), where the model list and its Download buttons are. |
+| Issues | "Everything checks out", "still checking" for the first second or two after launch, or "N things need attention" — amber for a warning, red for something fatal. While the shell setup summary is visible this item is omitted instead of repeating it. | [App settings](40-app-settings.md), where the model list and its Download buttons are. |
 | Queue | What is running or queued, with a percentage when the worker is reporting one, or "Queue idle". | — |
-| Unreviewed | How many finished meshes nobody has judged, when there are any. | [Review](17-review.md). |
+| Unreviewed | How many finished meshes nobody has judged, when there are any. | [Review](36-review.md). |
 
 There used to be a **Library** line here too, counting assets and disk. It went when Resume became a
 grid of those same assets: a count of the thing you are looking at is not news, and the Library is
@@ -94,4 +94,4 @@ title as well as in the banner across the top of every mode. Dismissing the bann
 the text: it moves into the Issues popup under a **Dismissed** heading, which is the only copy
 there is.
 
-See [Troubleshooting](22-troubleshooting.md) for what the individual checks mean.
+See [Troubleshooting](41-troubleshooting.md) for what the individual checks mean.

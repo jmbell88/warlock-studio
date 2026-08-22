@@ -107,6 +107,6 @@ threshold work above is suspended until it is explained.
 ## Results
 
 Not yet taken. The run needs the weights from
-[Installation](../manual/19-installation.md#optional-image-models-and-style-loras):
+[Installation](../manual/38-installation.md#optional-image-models-and-style-loras):
 `nerijs/pixel-art-xl`, `latent-consistency/lcm-lora-sdxl` (renamed), and the
 SDXL 1.0 base, which is likely already present.

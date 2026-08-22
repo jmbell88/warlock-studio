@@ -12,31 +12,31 @@ from warlock.studio.manual import loader, parser
 
 EXPECTED_KEYS = [
     "00-index",
-    "01-overview",
-    "02-home",
-    "03-generating-references",
-    "04-generating-meshes",
-    "05-the-3d-viewport",
-    "06-rigging-and-posing",
-    "07-poser",
-    "08-sprite-sheets",
-    "09-inker",
-    "10-inker-animation",
-    "11-clay",
-    "12-plotter",
-    "13-packwright",
-    "14-troupe",
-    "15-library-and-jobs",
-    "16-profiles",
-    "17-review",
-    "18-shortcuts",
-    "19-installation",
-    "20-configuration",
-    "21-app-settings",
-    "22-troubleshooting",
-    "23-architecture",
-    "24-pipelines",
-    "25-extending",
+    "20-overview",
+    "21-home",
+    "22-generating-references",
+    "23-generating-meshes",
+    "24-the-3d-viewport",
+    "25-rigging-and-posing",
+    "26-poser",
+    "27-sprite-sheets",
+    "28-inker",
+    "29-inker-animation",
+    "30-clay",
+    "31-plotter",
+    "32-packwright",
+    "33-troupe",
+    "34-library-and-jobs",
+    "35-profiles",
+    "36-review",
+    "37-shortcuts",
+    "38-installation",
+    "39-configuration",
+    "40-app-settings",
+    "41-troubleshooting",
+    "42-architecture",
+    "43-pipelines",
+    "44-extending",
 ]
 
 
@@ -113,6 +113,15 @@ def test_index_sections_match_the_loaders_parts():
     heading while ``loader.PARTS`` filed it under another, which is exactly what
     chapter 14 did (index: Part I; PARTS: "Setup & operations"). Asserting the
     index's own ``##`` sections against PARTS closes that direction.
+
+    The expectation is built from the chapters that *exist*, not from the whole
+    of each range. It used to be ``[n for n in rng if n <= last]``, which is the
+    same thing only while every part is densely filled -- and the Tutorials part
+    reserves 01-19 for a series that grows a chapter at a time, so it is not.
+    Read the other way, the old form asserted that a chapter exists for every
+    number below the highest one, which is a claim about the manual's size that
+    this test was never meant to make; a part with nothing in it needs no
+    heading, and drops out.
     """
     text = loader.load("00-index")
     index: dict[str, list[int]] = {}
@@ -126,8 +135,11 @@ def test_index_sections_match_the_loaders_parts():
             if found:
                 index[section].append(int(found.group(1)))
 
-    last = max(int(c.key[:2]) for c in loader.chapters())
-    expected = {label: [n for n in rng if n <= last] for label, rng in loader.PARTS}
+    grouped: dict[str, list[int]] = {label: [] for label, _ in loader.PARTS}
+    for chapter in loader.chapters():
+        if chapter.part:
+            grouped[chapter.part].append(int(chapter.key[:2]))
+    expected = {label: sorted(nums) for label, nums in grouped.items() if nums}
     assert index == expected, (
         "docs/manual/00-index.md's sections and loader.PARTS disagree about "
         "which part a chapter belongs to. Move the index entry or widen the "
@@ -222,7 +234,7 @@ def test_both_documents_state_the_mode_count_the_rail_actually_draws():
 
     want = _COUNT_WORDS[len(modes.MODES)]
     invariants = (_root() / "docs" / "INVARIANTS.md").read_text(encoding="utf-8")
-    overview = (_root() / "docs" / "manual" / "01-overview.md").read_text(encoding="utf-8")
+    overview = (_root() / "docs" / "manual" / "20-overview.md").read_text(encoding="utf-8")
     assert f"**{want.capitalize()} modes and one rail" in invariants
     assert f"chooses between {want} modes" in overview
 
@@ -233,7 +245,7 @@ def test_every_mode_is_named_in_the_manuals_own_list_of_them():
     be documented and unlisted at the same time."""
     from warlock.studio import modes
 
-    overview = (_root() / "docs" / "manual" / "01-overview.md").read_text(encoding="utf-8")
+    overview = (_root() / "docs" / "manual" / "20-overview.md").read_text(encoding="utf-8")
     section = overview.split("## The modes", 1)[1].split("\n## ", 1)[0]
     missing = [label for _key, label, _icon in modes.MODES if f"**{label}.**" not in section]
     assert not missing, f"the overview's mode list does not name {missing}"

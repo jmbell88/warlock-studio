@@ -16,7 +16,7 @@ download was.
 
 The reference image is the single biggest lever on final mesh quality — TRELLIS can only be as
 good as the picture it is handed — so the image model and an optional style LoRA are per-job
-choices in the guidance panel (`manual/03-generating-references.md`). Base models are
+choices in the guidance panel (`manual/22-generating-references.md`). Base models are
 one-resident-at-a-time (a 32 GB card holds trellis plus a single SDXL-class pipe, not two), so
 switching between jobs costs a reload; style LoRAs are adapters on the resident pipe and switch
 for free.

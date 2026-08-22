@@ -44,8 +44,8 @@ def test_paragraph_joins_lines_and_parses_spans():
 
 
 def test_link_span_carries_target():
-    [para] = parser.parse("See [Rigging](06-rigging-and-posing.md#templates).\n")
-    assert Span("link", "Rigging", "06-rigging-and-posing.md#templates") in para.spans
+    [para] = parser.parse("See [Rigging](25-rigging-and-posing.md#templates).\n")
+    assert Span("link", "Rigging", "25-rigging-and-posing.md#templates") in para.spans
 
 
 def test_code_block():
@@ -100,7 +100,7 @@ def test_error_carries_line_number():
 # --- the search reads the manual, not its table of contents -------------------
 
 
-def _chapter(key: str = "09-inker", title: str = "Inker"):
+def _chapter(key: str = "28-inker", title: str = "Inker"):
     from types import SimpleNamespace
 
     return SimpleNamespace(key=key, title=title, part="Editors")
@@ -114,7 +114,7 @@ def test_a_phrase_that_appears_only_in_prose_finds_its_chapter(monkeypatch):
     nothing at all."""
     from warlock.studio.manual import loader, render
 
-    blocks = render._blocks("09-inker")
+    blocks = render._blocks("28-inker")
     monkeypatch.setattr(render, "_blocks", lambda key: blocks)
     prose = " ".join(loader.block_text(b) for b in blocks if not _is_heading(b))
     word = next(w for w in prose.split() if len(w) > 9 and w.isalpha())

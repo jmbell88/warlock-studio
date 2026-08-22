@@ -6,7 +6,7 @@ are covered here.
 
 This chapter is about posing **an asset** — the mesh in front of you, with its own saved poses.
 Authoring a pose against a bare skeleton instead, so that it applies to every asset sharing that
-skeleton, is the [Poser](07-poser.md).
+skeleton, is the [Poser](26-poser.md).
 
 ## Templates
 
@@ -94,7 +94,7 @@ Two things about it are worth knowing:
 
 `rig.json` records which was used, so a rig can be told apart afterwards. Without the pose model the
 bbox fit is used and nothing about your rigs changes — see
-[Model weights](19-installation.md#model-weights) for the download. Set `WARLOCK_POSE_FIT=off` to
+[Model weights](38-installation.md#model-weights) for the download. Set `WARLOCK_POSE_FIT=off` to
 force the template everywhere, whatever is installed; it is a kill switch rather than an opt-in,
 because the measurement already refuses itself whenever it is unsure.
 
@@ -122,14 +122,14 @@ In pose mode:
   one humanoid applies to every other humanoid.
 
 `Ctrl+Z` undoes and `Ctrl+Y` — or `Ctrl+Shift+Z` — redoes, here as well as in the
-[Poser](07-poser.md): it is one editor with two doors, so the history behaves identically in both.
+[Poser](26-poser.md): it is one editor with two doors, so the history behaves identically in both.
 The unit is the **gesture** — one whole gizmo drag is one step, and so is a preset, a mirror or a
-reset. [Undo and redo](07-poser.md#undo-and-redo) has the detail.
+reset. [Undo and redo](26-poser.md#undo-and-redo) has the detail.
 
 Poses are **forward-kinematic only**. A pose is exactly a map of joint names to local rotations —
 there is no inverse kinematics, no translation, and no scaling. That is the whole contract, and it
 is what lets a pose be a small file that applies to any mesh sharing the skeleton. The one exception
-belongs to the Poser: see [Moving the root](07-poser.md#moving-the-root).
+belongs to the Poser: see [Moving the root](26-poser.md#moving-the-root).
 
 **Save pose...** asks for a name and stores it. Saving while a saved pose is loaded **replaces**
 that pose rather than adding a near-duplicate, so refining an "idle" leaves you with one idle rather
@@ -156,18 +156,18 @@ existing rig. **Revert** undoes your unapplied moves; **Back to posing** returns
 mode asks first if you have an unsaved pose, since a leftover rotation would put the markers where
 the posed bones are rather than where the rest skeleton is.
 
-Rigged meshes are also what [Sprite sheets](08-sprite-sheets.md) render rows from.
+Rigged meshes are also what [Sprite sheets](27-sprite-sheets.md) render rows from.
 
 ## Authoring a pose against the skeleton instead
 
-Everything above saves a pose **into one asset**. The [Poser](07-poser.md) is the other direction:
+Everything above saves a pose **into one asset**. The [Poser](26-poser.md) is the other direction:
 pick a skeleton, pose the bare armature, and the pose is offered on every rigged asset that shares
 it. That is where the global pose library lives, where a pose gets a root offset, and where the
 shipped presets can be adjusted and kept.
 
 The two meet in the inspector's **Pose** panel, which grows a **Library poses** section on any asset
 whose skeleton has poses in the library. Applying one copies it into that asset's own list as a
-snapshot marked `(library)` — see [The pose library](07-poser.md#the-pose-library).
+snapshot marked `(library)` — see [The pose library](26-poser.md#the-pose-library).
 
 ## When rigging is unavailable
 

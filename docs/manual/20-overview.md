@@ -38,14 +38,14 @@ output set to `reference`. Going straight from a prompt to a mesh would spend tw
 image nobody has looked at.
 
 If you already have a picture, you can skip the first stage entirely and upload it — see
-[Starting from an upload](04-generating-meshes.md#starting-from-an-upload).
+[Starting from an upload](23-generating-meshes.md#starting-from-an-upload).
 
 ## The modes
 
 A rail down the left edge of the window chooses between eleven modes, and that rail is the single
 thing that decides what the panes show. It is drawn in every mode, so there is no screen you cannot
 leave. There is no per-mode keyboard shortcut — the command palette (`Ctrl+K`) is the keyboard
-route, see [Keyboard shortcuts](18-shortcuts.md).
+route, see [Keyboard shortcuts](37-shortcuts.md).
 
 The rail shows glyphs by default and expands to show the labels beside them; the chevron at its foot
 toggles that, and the choice is remembered. In icon-only form every item names itself in a tooltip.
@@ -68,42 +68,42 @@ collapse toggle.
   uploaded image, and the column holds only the reconstruction decisions. **Rig** fits a skeleton,
   **Pose** edits one, and **Export** is what you can take away. A stage you cannot enter yet is
   drawn dimmed with the reason on hover rather than hidden. Covered in
-  [Generating references](03-generating-references.md),
-  [Generating meshes](04-generating-meshes.md) and
-  [Rigging and posing](06-rigging-and-posing.md).
+  [Generating references](22-generating-references.md),
+  [Generating meshes](23-generating-meshes.md) and
+  [Rigging and posing](25-rigging-and-posing.md).
 - **Library.** Every asset that has ever been generated, filtered, sorted and searched, with the
-  trash and the prune. Covered in [The library and jobs](15-library-and-jobs.md).
+  trash and the prune. Covered in [The library and jobs](34-library-and-jobs.md).
 - **Review.** Judging finished meshes — one at a time or as a parameter sweep — and the "what
-  works" findings the verdicts add up to. Covered in [Review](17-review.md).
+  works" findings the verdicts add up to. Covered in [Review](36-review.md).
 
 Then the six workspaces:
 
 - **Inker.** A layered raster editor, wired into the pipeline in both directions. Covered in
-  [Inker](09-inker.md), with the timeline in [Inker: animation](10-inker-animation.md).
+  [Inker](28-inker.md), with the timeline in [Inker: animation](29-inker-animation.md).
 - **Clay.** Modelling from primitives: transforms, a material palette, and two ways out —
-  export a `.glb` or import the document as an asset. Covered in [Clay](11-clay.md).
+  export a `.glb` or import the document as an asset. Covered in [Clay](30-clay.md).
 - **Poser.** Authoring reusable poses against a skeleton template, kept in a global pose library
-  rather than belonging to any one asset. Covered in [Poser](07-poser.md).
+  rather than belonging to any one asset. Covered in [Poser](26-poser.md).
 - **Plotter.** A tile-map editor: a grid, a layer stack, one or more tilesets, and the objects an
   engine reads as spawn points and trigger volumes — where a sheet of tiles becomes a level. It
-  speaks Tiled's formats in both directions. Covered in [Plotter](12-plotter.md).
+  speaks Tiled's formats in both directions. Covered in [Plotter](31-plotter.md).
 - **Packwright.** A sprite-atlas packer: many images in, one atlas out, with a sidecar that says
-  where everything landed. Covered in [Packwright](13-packwright.md).
+  where everything landed. Covered in [Packwright](32-packwright.md).
 - **Troupe.** A character-sprite factory: a prompt becomes a reference, a mesh, a fitted rig and
   then a rendered, pixelised sprite sheet of the clips a character walks and swings through.
-  Covered in [Troupe](14-troupe.md).
+  Covered in [Troupe](33-troupe.md).
 
 And in the footer:
 
 - **Settings.** The app's own preferences — UI scale, the frame-rate readout, layout resets, and the
   list of models it loaded, from which a missing one can be downloaded. See
-  [In-app settings](20-configuration.md#in-app-settings).
+  [In-app settings](39-configuration.md#in-app-settings).
 
 Two things that used to be modes are not, and both moved for the same reason: they are *about* the
 screen you are on rather than places to go. This documentation opens over the window (`F1`, or any
 pane's (?) button) instead of replacing it, so the control you were asking about is still there when
 you have the answer; and the style-profile manager opens as a sheet from the profile picker at the
-Reference stage — see [Profiles](16-profiles.md).
+Reference stage — see [Profiles](35-profiles.md).
 
 Each generation control belongs to exactly one stage. The one setting both Reference and Mesh need
 is **platform**, and it is deliberately two separate controls: at the Reference stage it is a hint
@@ -138,7 +138,7 @@ Once you are in the workspace, the window is three columns:
   own width is not draggable, only chosen from the three named sizes in Settings.
 
 There is no top bar. The keyboard shortcut list is `Ctrl+/` or **Keyboard shortcuts** in the command
-palette, and it is reproduced in [Keyboard shortcuts](18-shortcuts.md). The **health badge** sits in
+palette, and it is reproduced in [Keyboard shortcuts](37-shortcuts.md). The **health badge** sits in
 the rail's footer and appears only when a startup check is failing — amber for a non-fatal one
 (missing optional weights, no gltfpack, no CUDA), red when something fatal failed or the worker
 died. Hovering it names the failing checks; clicking it opens the full Issues list, which is also

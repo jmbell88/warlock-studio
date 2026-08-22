@@ -533,7 +533,7 @@ def main() -> int:
                 state = app.app_ctx.state
                 state.mode = create_stages.MODE
                 state.create_stage = "mesh"
-                manual_render.open_at(app.app_ctx, ("01-overview", None))
+                manual_render.open_at(app.app_ctx, ("20-overview", None))
                 _capture(app, args.out / f"{name}-manual.png")
                 manual_render.close(app.app_ctx)
                 state.create_stage = "reference"
