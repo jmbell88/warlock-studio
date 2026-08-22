@@ -320,6 +320,7 @@ def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
             ("Ctrl+Shift+D", "Reselect what was last dismissed"),
             ("Ctrl+C / X / V", "Copy / cut / paste"),
             ("Ctrl+Shift+V", "Paste as a layer"),
+            ("Ctrl+Shift+C", "Copy merged -- what is visible in the selection"),
             ("Ctrl+J / Ctrl+Shift+J", "Copy / move the selection to its own layer"),
             ("Ctrl+Shift+I", "Invert the selection"),
             ("Ctrl+T", "Free transform"),

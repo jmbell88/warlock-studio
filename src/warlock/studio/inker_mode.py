@@ -601,6 +601,27 @@ def _report_import_warnings(ctx: Any, warnings: Any) -> None:
     ctx.toast(f"Imported: {text}.", "warn", action="log")
 
 
+def new_from_selection(ctx: Any, tab: InkerDoc | None = None) -> bool:
+    """Aseprite's *New Sprite From Selection*. -> whether one was made.
+
+    Through ``open_pixels``, which is the door every other "here are some
+    pixels, make a document of them" path already uses (a sheet import, a
+    sprite draft, a rendered sheet) -- so the new tab is adopted, titled,
+    journalled and made active by the same code, and this function is the
+    crop and nothing else.
+    """
+    state = ensure(ctx)
+    tab = tab or state.active
+    if tab is None:
+        return False
+    pixels = tab.doc.selection_pixels()
+    if pixels is None or not pixels.size:
+        state.say("Select something first -- this makes a document of it.")
+        return False
+    open_pixels(ctx, pixels, title=f"{tab.title} crop")
+    return True
+
+
 def open_sprite_draft(ctx: Any, job_id: str, draft_id: str, candidate: str) -> None:
     """Open one candidate of a sprite draft as an editable animation.
 

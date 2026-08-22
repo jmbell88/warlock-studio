@@ -151,3 +151,88 @@ def test_the_view_toggles_flip_the_persisted_preference(monkeypatch):
     before = state.grid
     inker_ops.run(ctx, inker_ops.get("toggle_grid"))
     assert state.grid is not before and written
+
+
+# --- 6.3: the selection verbs ------------------------------------------------
+
+
+def test_copy_merged_takes_the_picture_and_not_one_layer_of_it():
+    """An ordinary copy moves a drawing between layers; this moves a part of
+    the picture between documents."""
+
+    ctx, state, tab = _session()
+    doc = tab.doc
+    doc.stack.active.pixels[4:8, 4:8] = (255, 0, 0, 255)
+    doc.add_layer()
+    doc.stack.active.pixels[4:8, 4:8] = (0, 0, 255, 128)
+    doc.invalidate_all()
+    doc.select_all()
+    assert inker_ops.run(ctx, inker_ops.get("copy_merged"))
+    pasted = doc.clipboard.take()
+    assert pasted is not None
+    # The blue over the red, which is neither layer on its own.
+    pixel = pasted[0][6, 6]
+    assert int(pixel[0]) and int(pixel[2]), tuple(int(c) for c in pixel)
+
+
+def test_the_stroke_stays_inside_the_selection():
+    """An outline that grew past the edge would paint pixels the user did not
+    select, which is the one thing a selection is a promise about."""
+
+    ctx, state, tab = _session()
+    doc = tab.doc
+    doc.select(inker.SelectionMask.from_rect(SIZE, (8, 8, 16, 16)))
+    assert inker_ops.run(ctx, inker_ops.get("stroke_selection"), width=1)
+    pixels = doc.stack.active.pixels
+    assert int(pixels[8, 8, 3]) > 0, "the edge is drawn"
+    assert int(pixels[7, 7, 3]) == 0, "and nothing outside it is"
+    assert int(pixels[12, 12, 3]) == 0, "nor the middle"
+
+
+def test_fill_covers_the_selection_and_nothing_else():
+    ctx, state, tab = _session()
+    doc = tab.doc
+    doc.select(inker.SelectionMask.from_rect(SIZE, (8, 8, 16, 16)))
+    state.fg = (255, 0, 0, 255)
+    assert inker_ops.run(ctx, inker_ops.get("fill_selection"))
+    pixels = doc.stack.active.pixels
+    assert int(pixels[12, 12, 0]) == 255
+    assert int(pixels[4, 4, 3]) == 0
+
+
+def test_shifting_pixels_leaves_a_hole_and_is_one_step():
+    ctx, state, tab = _session()
+    doc = tab.doc
+    doc.stack.active.pixels[8:12, 8:12] = (255, 0, 0, 255)
+    doc.select(inker.SelectionMask.from_rect(SIZE, (8, 8, 12, 12)))
+    head = doc.history.head
+    assert inker_ops.run(ctx, inker_ops.get("shift_selected"), dx=4, dy=0)
+    pixels = doc.stack.active.pixels
+    assert int(pixels[9, 13, 0]) == 255, "it moved"
+    assert int(pixels[9, 9, 3]) == 0, "and left a hole"
+    doc.undo()
+    assert doc.history.head <= head + 1
+
+
+def test_a_new_document_from_the_selection_crops_to_it(monkeypatch):
+    """Through ``open_pixels`` -- the door a sheet import, a sprite draft and a
+    rendered sheet already use -- so this pins the *crop* and lets the adoption
+    be the one that is already tested."""
+    from warlock.studio import inker_mode
+
+    ctx, state, tab = _session()
+    opened: list = []
+    monkeypatch.setattr(
+        inker_mode, "open_pixels", lambda ctx, pixels, title="": opened.append(pixels)
+    )
+    tab.doc.select(inker.SelectionMask.from_rect(SIZE, (4, 4, 12, 12)))
+    assert inker_ops.run(ctx, inker_ops.get("new_from_selection"))
+    assert opened and opened[0].shape[:2] == (8, 8)
+
+
+def test_making_a_document_of_nothing_says_so_rather_than_making_one():
+    from warlock.studio import inker_mode
+
+    ctx, state, tab = _session()
+    assert inker_mode.new_from_selection(ctx, tab) is False
+    assert state.tip is not None and "Select something" in state.tip.text

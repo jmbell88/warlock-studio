@@ -610,6 +610,81 @@ register(
 )
 register(
     Op(
+        "copy_merged",
+        "Copy merged",
+        _doc("copy_merged"),
+        menu="Edit",
+        key="Ctrl+Shift+C",
+        enabled=has_selection,
+        reason=NO_SELECTION,
+        hint=(
+            "What is visible inside the selection rather than one layer of it: "
+            "an ordinary copy moves a drawing between layers, this moves a part "
+            "of the picture between documents."
+        ),
+    )
+)
+register(
+    Op(
+        "new_from_selection",
+        "New document from selection",
+        _mode("new_from_selection"),
+        menu="Edit",
+        enabled=has_selection,
+        reason=NO_SELECTION,
+    )
+)
+register(
+    Op(
+        "fill_selection",
+        "Fill selection",
+        lambda ctx, tab, **_: tab.doc.fill_selection(ctx.state.inker.fg),
+        menu="Edit",
+        enabled=has_selection,
+        reason=NO_SELECTION,
+        separator_before=True,
+    )
+)
+register(
+    Op(
+        "stroke_selection",
+        "Stroke selection...",
+        lambda ctx, tab, **params: tab.doc.stroke_selection(
+            ctx.state.inker.fg, int(params["width"])
+        ),
+        menu="Edit",
+        enabled=has_selection,
+        reason=NO_SELECTION,
+        params=(Param("width", "Width", 1, 1, 32),),
+        hint=(
+            "The selection's own outline, drawn inside it -- an outline that "
+            "grew past the edge would paint pixels you did not select."
+        ),
+    )
+)
+register(
+    Op(
+        "shift_selected",
+        "Shift pixels...",
+        lambda ctx, tab, **params: tab.doc.shift_selected(
+            int(params["dx"]), int(params["dy"])
+        ),
+        menu="Edit",
+        enabled=has_selection,
+        reason=NO_SELECTION,
+        params=(
+            Param("dx", "Right", 1, -4096, 4096),
+            Param("dy", "Down", 0, -4096, 4096),
+        ),
+        hint=(
+            "Moves the selected pixels and leaves a hole behind, which is what "
+            "the move tool does -- it goes through the same floating buffer, so "
+            "it is one undo step."
+        ),
+    )
+)
+register(
+    Op(
         "filter",
         "Filter...",
         dialog("inker-filter"),

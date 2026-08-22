@@ -612,6 +612,109 @@ class SelectionOps:
         self.clipboard.put(_masked_alpha(self.stack.active.pixels[y0:y1, x0:x1], crop), crop)
         return True
 
+    def copy_merged(self: Document) -> bool:
+        """Copy what is *visible* inside the selection, not one layer of it.
+
+        Aseprite's Copy Merged, and the reason it is a second verb rather than
+        a flag: an ordinary copy is "these pixels of this layer", which is what
+        you want when you are moving a drawing between layers, and this is
+        "this part of the picture", which is what you want when you are moving
+        it between documents. The flatten it reads is ``frame_flat``, the same
+        composite the export path uses, so what lands on the clipboard is what
+        a PNG of the selection would have held.
+        """
+        if self.mask is None:
+            return False
+        bounds = self.mask.bounds
+        box = self.clip(bounds) if bounds else None
+        if box is None:
+            return False
+        x0, y0, x1, y1 = box
+        # ``flatten(matte=False)``: what is *visible*, without the matte a
+        # flattened export composites onto -- a copy that carried the document
+        # background would paste a rectangle of it into the next document.
+        flat = self.flatten(matte=False)
+        crop = self.mask.mask[y0:y1, x0:x1]
+        self.clipboard.put(_masked_alpha(flat[y0:y1, x0:x1], crop), crop)
+        return True
+
+    def selection_pixels(self: Document) -> np.ndarray | None:
+        """The visible pixels inside the selection, cropped. ``None`` if empty.
+
+        What *New sprite from selection* is made of, kept here rather than in
+        the mode because it is the same masked-crop-of-the-flatten that
+        :meth:`copy_merged` puts on the clipboard -- two spellings of it would
+        be two answers to "what is selected".
+        """
+        if self.mask is None:
+            return None
+        bounds = self.mask.bounds
+        box = self.clip(bounds) if bounds else None
+        if box is None:
+            return None
+        x0, y0, x1, y1 = box
+        flat = self.flatten(matte=False)
+        return _masked_alpha(flat[y0:y1, x0:x1], self.mask.mask[y0:y1, x0:x1])
+
+    def fill_selection(self: Document, colour: tuple[int, int, int, int]) -> bool:
+        """Fill the selection with a flat colour, at the mask's own coverage.
+
+        Aseprite's ``Edit > Fill``. Through ``write_colour``, which is the one
+        door the bucket and all six shapes already come through -- so the
+        content lock, the alpha lock, the cel autovivification and the single
+        undo patch are all the ones that already exist.
+        """
+        if self.mask is None:
+            return False
+        bounds = self.mask.bounds
+        box = self.clip(bounds) if bounds else None
+        if box is None:
+            return False
+        x0, y0, x1, y1 = box
+        weight = self.mask.mask[y0:y1, x0:x1].astype(np.float32) / 255.0
+        return self.write_colour(box, colour, weight)
+
+    def stroke_selection(
+        self: Document, colour: tuple[int, int, int, int], width: int = 1
+    ) -> bool:
+        """Draw the selection's own outline, ``width`` pixels thick, inside it.
+
+        Aseprite's ``Edit > Stroke``. Inside rather than centred on the edge:
+        an outline that grew past the selection would paint pixels the user did
+        not select, which is the one thing a selection is a promise about.
+        """
+        if self.mask is None:
+            return False
+        # ``bordered`` is the engine's own band-either-side-of-the-edge; the
+        # half that lies *inside* the selection is the stroke, and dropping the
+        # outer half is what keeps the outline a promise about selected pixels.
+        band = self.mask.bordered(max(1, int(width)))
+        band.mask = np.where(self.mask.mask > 0, band.mask, np.uint8(0))
+        bounds = band.bounds
+        box = self.clip(bounds) if bounds else None
+        if box is None:
+            return False
+        x0, y0, x1, y1 = box
+        weight = band.mask[y0:y1, x0:x1].astype(np.float32) / 255.0
+        return self.write_colour(box, colour, weight)
+
+    def shift_selected(self: Document, dx: int, dy: int) -> bool:
+        """Move the selected pixels by whole pixels, leaving a hole behind.
+
+        Aseprite's ``Edit > Shift``. Written as a lift-and-drop through the
+        machinery that already exists rather than as an array roll: a roll
+        would wrap the drawing round the canvas edge, and every other move in
+        this editor -- the move tool, a paste, a nudge -- goes through the
+        floating buffer, which is what makes this one undo step and what makes
+        the pixels land under the same alpha rules.
+        """
+        if self.mask is None or (not dx and not dy):
+            return False
+        if not self.lift():
+            return False
+        self.move_floating(int(dx), int(dy))
+        return self.commit_floating()
+
     def cut(self: Document) -> bool:
         return self.copy() and self.delete_selection()
 

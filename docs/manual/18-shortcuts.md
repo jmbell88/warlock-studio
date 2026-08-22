@@ -232,6 +232,7 @@ left-drag in empty space with `Q` selected sweeps a marquee.
 | Ctrl+Shift+D | Reselect what Ctrl+D dismissed |
 | Ctrl+C / Ctrl+X / Ctrl+V | Copy / cut / paste |
 | Ctrl+Shift+V | Paste as a new layer |
+| Ctrl+Shift+C | Copy what is visible inside the selection (merged) |
 | Ctrl+Shift+I | Invert the selection |
 | Ctrl+J / Ctrl+Shift+J | Layer from selection — copy it up / cut it up |
 | Ctrl+T | Free transform (Enter applies, Esc cancels) |
