@@ -332,6 +332,11 @@ def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
     table(
         "Plotter",
         [
+            ("1 - 9", "Recall a numbered stamp"),
+            ("Ctrl+Shift+1 - 9", "Store the stamp in hand in that slot"),
+            ("Right-drag", "Capture a block off the map, keeping the tool"),
+            ("Right-click an object", "Duplicate, raise, lower or delete it"),
+            ("H", "Highlight the current layer"),
             (
                 " / ".join(letter for _k, _l, letter in PLOTTER_TOOLS),
                 " / ".join(label for _k, label, _letter in PLOTTER_TOOLS),

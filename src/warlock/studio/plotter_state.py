@@ -224,6 +224,12 @@ class PlotterDoc:
     # cannot open in the tool they came from.
     file_format: str = "wmap"
     uid: str = field(default_factory=lambda: f"pl{next(_uids)}")
+    #: Nine numbered stamps, by slot (1-9). **Per tab, and view state**: a
+    #: stamp is an array of gids, and gids are numbered against one map's
+    #: firstgids -- which is exactly why ``plotter_mode._paste`` refuses a
+    #: cross-document tile paste by name. Not undoable, not serialized,
+    #: dropped with the tab; ``.wmap`` persistence is a deliberate later step.
+    stamps: dict[int, Any] = field(default_factory=dict)
     view: PaintView = field(default_factory=PaintView)
     saved_head: int = 0
     saving: bool = False

@@ -1350,10 +1350,25 @@ def _events(ctx: Any, state: Any, tab: Any, origin, hovered: bool, region) -> No
         return
 
     if state.tool == "object" or state.tool in plotter_state.OBJECT_SHAPES:
+        _object_menu(ctx, state, tab, hovered)
         # Every insert tool is the objects gesture with a shape already
         # chosen -- ``sync_tool`` writes ``state.object_shape`` from the tool,
         # so what arrives here is the one gesture it always was.
         _object_input(ctx, state, tab, origin, hovered)
+        return
+
+    # **The right button captures**, under every tile tool -- Tiled's binding,
+    # and the first job the second mouse button has ever had in this pane.
+    # Ahead of the per-tool branches so it cannot be shadowed by one of them,
+    # and only while a capture is what is in flight, so a tool's own right-drag
+    # (there are none today) would still be reachable.
+    from imgui_bundle import imgui as _imgui
+
+    capturing = state.drag_kind == "capture" or (
+        hovered and _imgui.is_mouse_clicked(1)
+    )
+    if capturing and state.tool != "pick" and isinstance(tab.doc.active(), TileLayer):
+        _capture_input(ctx, state, tab, cell, hovered)
         return
 
     if state.tool == "select":
@@ -1466,28 +1481,60 @@ def _pick_input(
 ) -> None:
     """Pick: a click is one cell, a drag captures a block off the map.
 
-    Tiled's capture. The marquee rectangle is reused for the feedback, so the
-    gesture looks exactly like a selection while it is happening and the brush
-    cursor takes over the moment it ends -- which is the paste precedent
-    (``plotter_mode``'s paste loads the brush and switches to Stamp rather than
-    dropping a block).
+    The left button under the Pick tool, which is byte for byte the gesture
+    this pane has always had. :func:`_capture_gesture` is where it lives now,
+    because the *right* button does the same thing under every tile tool --
+    Tiled's capture, and the first job the second mouse button has ever had
+    here.
+    """
+    _capture_gesture(ctx, state, tab, cell, hovered, button=0, switch=True)
 
-    A plain click -- press and release inside one cell -- is today's single-cell
-    pick, byte for byte, and goes through :func:`_apply` exactly as it did.
+
+def _capture_input(
+    ctx: Any, state: Any, tab: Any, cell: tuple[int, int], hovered: bool
+) -> None:
+    """Right-drag on a tile layer: capture a stamp without leaving the tool.
+
+    Tiled's own binding. **Unlike Pick it does not switch to Stamp**: Tiled
+    leaves the tool alone, and a right-drag that silently changed the tool in
+    your hand would be a capture with a mode change stapled to it.
+    """
+    _capture_gesture(ctx, state, tab, cell, hovered, button=1, switch=False)
+
+
+def _capture_gesture(
+    ctx: Any,
+    state: Any,
+    tab: Any,
+    cell: tuple[int, int],
+    hovered: bool,
+    *,
+    button: int,
+    switch: bool,
+) -> None:
+    """Press, drag, release -> a brush off the map. One state machine, two doors.
+
+    The marquee rectangle is reused for the feedback, so the gesture looks
+    exactly like a selection while it is happening and the brush cursor takes
+    over the moment it ends -- which is the paste precedent (``plotter_mode``'s
+    paste loads the brush and switches to Stamp rather than dropping a block).
+
+    A plain click -- press and release inside one cell -- is the single-cell
+    pick, and goes through :func:`_apply` exactly as it did.
     """
     from imgui_bundle import imgui
 
-    if hovered and imgui.is_mouse_clicked(0):
+    if hovered and imgui.is_mouse_clicked(button):
         state.drag_kind = "capture"
         state.drag_anchor = cell
         return
     if state.drag_kind != "capture":
         return
-    if imgui.is_mouse_down(0) and state.drag_anchor is not None:
+    if imgui.is_mouse_down(button) and state.drag_anchor is not None:
         # Drawn with the marquee, so there is one rectangle-feedback path.
         state.set_selection(_normalized(state.drag_anchor, cell))
         return
-    if not imgui.is_mouse_released(0):
+    if not imgui.is_mouse_released(button):
         return
     anchor = state.drag_anchor
     state.set_selection(None)
@@ -1495,7 +1542,13 @@ def _pick_input(
     if anchor is None:
         return
     if anchor == cell:
-        _apply(ctx, state, tab, cell)
+        if button == 0:
+            _apply(ctx, state, tab, cell)
+        else:
+            # One cell, right-clicked: the same single-tile pick the left
+            # button makes under Pick, which is what Tiled's right-click does
+            # under a paint tool.
+            _pick_cell(state, tab, cell)
         return
     layer = tab.doc.active()
     if not isinstance(layer, TileLayer):
@@ -1507,8 +1560,24 @@ def _pick_input(
         ctx.toast("There is nothing to capture there.", "warn")
         return
     state.brush = block
-    state.tool = "stamp"
+    if switch:
+        state.tool = "stamp"
     ctx.toast(f"Captured a {block.shape[1]} x {block.shape[0]} stamp.")
+
+
+def _pick_cell(state: Any, tab: Any, cell: tuple[int, int]) -> None:
+    """Load one cell's tile as the brush, without changing the tool."""
+    import numpy as np
+
+    layer = tab.doc.active()
+    if not isinstance(layer, TileLayer):
+        return
+    x, y = cell
+    if not (0 <= y < layer.data.shape[0] and 0 <= x < layer.data.shape[1]):
+        return
+    gid = int(layer.data[y, x])
+    if gid:
+        state.brush = np.array([[gid]], dtype=layer.data.dtype)
 
 
 def _before_drag(state: Any):
@@ -2054,6 +2123,49 @@ def _apply_erase_rect(
     )
     if result is not None:
         tab.doc.write_region(layer.uid, *result)
+
+
+OBJECT_MENU = "plotter-object-menu"
+
+
+def _object_menu(ctx: Any, state: Any, tab: Any, hovered: bool) -> None:
+    """Right-click on an object layer: the four verbs Tiled puts there.
+
+    The right button is the *capture* on a tile layer (W3.3) and this on an
+    object one, which is the same rule stated once: the second button means
+    "what can I do with what is under the cursor", and on an object layer that
+    is a menu rather than a block of tiles.
+    """
+    from imgui_bundle import imgui
+
+    doc = tab.doc
+    layer = doc.active()
+    if not isinstance(layer, ObjectLayer):
+        return
+    if hovered and imgui.is_mouse_clicked(1) and state.selected_object is not None:
+        imgui.open_popup(OBJECT_MENU)
+    with controls.menu_popup(OBJECT_MENU) as opened:
+        if not opened:
+            return
+        uid = state.selected_object
+        editable = uid is not None and not tab.busy and not layer.locked
+        reason = (
+            "This layer is locked."
+            if layer.locked
+            else "Select an object first."
+            if uid is None
+            else "This map is being written."
+        )
+        if controls.menu_item("Duplicate", "Ctrl+D", False, editable, reason=reason)[0]:
+            plotter_mode._duplicate_object(ctx, state, tab)
+        if controls.menu_item("Raise", "", False, editable, reason=reason)[0]:
+            doc.reorder_object(layer.uid, uid, 1)
+        if controls.menu_item("Lower", "", False, editable, reason=reason)[0]:
+            doc.reorder_object(layer.uid, uid, -1)
+        controls.menu_separator()
+        if controls.menu_item("Delete", "Delete", False, editable, reason=reason)[0]:
+            doc.remove_object(layer.uid, uid)
+            state.selected_object = None
 
 
 def _object_input(ctx: Any, state: Any, tab: Any, origin, hovered: bool) -> None:

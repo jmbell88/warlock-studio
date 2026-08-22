@@ -58,6 +58,36 @@ class ObjectOps:
                 return
         raise KeyError(f"no object {obj_uid}")
 
+    def reorder_object(self: MapDoc, layer_uid: int, obj_uid: int, delta: int) -> bool:
+        """Move an object one place in its layer's draw order. -> whether it moved.
+
+        Order *is* draw order inside an object layer, and Tiled's Raise/Lower
+        are exactly this. One compound step, out of the remove/add pair that
+        already exists: expressing it as two steps would put a state on the
+        undo stack in which the object does not exist, which the user never
+        saw and Ctrl+Z would stop at.
+        """
+        layer = self.layer(layer_uid)
+        if not isinstance(layer, ObjectLayer):
+            raise KeyError(f"no object layer {layer_uid}")
+        index = next(
+            (at for at, obj in enumerate(layer.objects) if obj.uid == obj_uid), None
+        )
+        if index is None:
+            raise KeyError(f"no object {obj_uid}")
+        wanted = index + int(delta)
+        if not 0 <= wanted < len(layer.objects):
+            return False
+        obj = layer.objects[index]
+        steps = [
+            ObjectRemoveEdit(layer_uid=int(layer_uid), obj=obj, index=index),
+            ObjectAddEdit(layer_uid=int(layer_uid), obj=obj, index=wanted),
+        ]
+        self._detach_object(layer_uid, obj)
+        self._attach_object(layer_uid, obj, wanted)
+        self.compound(steps)
+        return True
+
     def set_object(self: MapDoc, layer_uid: int, obj_uid: int, **values: Any) -> None:
         layer = self.layer(layer_uid)
         if not isinstance(layer, ObjectLayer):

@@ -572,6 +572,12 @@ def handle_key(ctx: Any, event: Any) -> bool:
     # layer and insert-rectangle on an object one. ``sync_tool`` first, and
     # idempotently, so a key pressed on the frame after a layer switch cannot
     # act with a tool the layer does not host.
+    if tab is not None and name.isdigit() and name != "0":
+        # Bare 1-9 recall. Tiled binds these to *tools*; this editor's tools
+        # already have letters, and a numbered stamp is the thing a map-painting
+        # hand reaches for by number. The divergence is recorded in
+        # ``docs/COMPAT.md`` beside the Ctrl+D one.
+        return recall_stamp(ctx, state, tab, int(name))
     layer = None if tab is None else tab.doc.active()
     plotter_state.sync_tool(state, layer)
     keys = plotter_state.tool_keys(layer)
@@ -824,6 +830,37 @@ def _delete(ctx: Any, state: PlotterState, tab: PlotterDoc) -> None:
     )
 
 
+def store_stamp(ctx: Any, state: PlotterState, tab: PlotterDoc, slot: int) -> bool:
+    """Ctrl+Shift+N: put the brush in hand into a numbered slot.
+
+    Nine slots, on the number row, because that is where a hand already
+    reaches -- and **bare digits recall while the chord stores**, which is the
+    way round that matters: recall happens hundreds of times a session and
+    storing happens nine times, so the cheap gesture goes to the frequent one.
+    """
+    if state.brush is None:
+        ctx.toast("There is no stamp in hand to store.", "warn")
+        return False
+    tab.stamps[int(slot)] = state.brush.copy()
+    ctx.toast(f"Stored stamp {slot}.")
+    return True
+
+
+def recall_stamp(ctx: Any, state: PlotterState, tab: PlotterDoc, slot: int) -> bool:
+    """A bare digit: take a numbered stamp back into the hand.
+
+    Switches to Stamp, which is the paste precedent: a brush loaded with no way
+    to put it down is a gesture that stops halfway.
+    """
+    block = tab.stamps.get(int(slot))
+    if block is None:
+        ctx.toast(f"Stamp {slot} is empty -- Ctrl+Shift+{slot} stores one.", "warn")
+        return False
+    state.brush = block.copy()
+    state.tool = "stamp"
+    return True
+
+
 def _ctrl_key(
     ctx: Any, state: PlotterState, tab: PlotterDoc | None, name: str, *, shift: bool
 ) -> bool:
@@ -844,6 +881,8 @@ def _ctrl_key(
     if name == "e":
         export_map(ctx, "tmx", tab) if shift else export_library(ctx, tab)
         return True
+    if shift and name.isdigit() and name != "0":
+        return store_stamp(ctx, state, tab, int(name))
     if name == "z":
         # Ctrl+Shift+Z redoes as well, which is what Inker and Clay accept and
         # what a user arriving from either already has in their hand. Ctrl+Y

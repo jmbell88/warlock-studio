@@ -294,7 +294,12 @@ the same one the asset pose editor answers to, because they are
 | `R` | Rectangular select |
 | `W` | Wand |
 | `I` | Pick the tile under the cursor |
-| `S` | Objects |
+| `S` | Objects (on an object layer, `R` `I` `E` `P` `L` `T` `X` insert a shape) |
+| `1` - `9` | Recall a numbered stamp |
+| Ctrl+Shift+1 - 9 | Store the stamp in hand in that slot |
+| Right-drag | Capture a block off the map, without leaving the tool |
+| Right-click an object | Duplicate, raise, lower or delete it |
+| `H` | Highlight the current layer |
 | `X` / `Y` | Flip the brush across / down |
 | `Z` | Turn the brush a quarter clockwise (Shift+Z turns it back) |
 | Shift+click | Stamp a line from the last cell painted |
