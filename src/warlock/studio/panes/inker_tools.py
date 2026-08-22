@@ -138,10 +138,16 @@ SYMMETRY_LABELS = (
 #: controls that are now a row above the canvas.
 RAIL_W = 90.0
 
-#: The colour chips' flags: no inputs, no label, alpha shown as a split square.
-#: The full editor is the colour panel's; these two are a *picture* of what the
-#: tool writes with, and a click opens the picker anyway.
-_CHIP_FLAGS = 0
+#: The colour chips' flags: no inputs, no label, alpha as a split square. The
+#: full editor is the colour panel's; these two are a *picture* of what the
+#: tool writes with, and a click opens the picker anyway. Zero would draw the
+#: picker's own R/G/B strips beside a 34 px swatch, which is what the rail's
+#: first screenshot showed.
+_CHIP_FLAGS = (
+    imgui.ColorEditFlags_.no_inputs.value
+    | imgui.ColorEditFlags_.no_label.value
+    | imgui.ColorEditFlags_.alpha_preview_half.value
+)
 
 
 def draw(ctx: Any) -> None:
@@ -197,12 +203,20 @@ def _colour_chips(ctx: Any, state: Any) -> None:
     -- swatches, ramps, the indexed table -- is a panel, which is why it sits
     in the right column instead (``inker_colors``).
     """
+    # **Sized, and drawn as swatches rather than editors.** ``color_edit4``
+    # defaults to a full-width item and to showing its inputs, so in a 90 px
+    # rail the two chips drew as coloured slivers with the picker's own strips
+    # either side -- which is what the screenshot pass at 1.5 caught. A chip is
+    # a picture of the colour; the editor is the click.
+    chip = sp(BUTTON_W)
+    imgui.set_next_item_width(chip)
     changed, value = controls.color_edit4("##inkfg", _vec(state.fg), _CHIP_FLAGS)
     if changed:
         state.set_fg(_rgba(value))
     if imgui.is_item_hovered():
         imgui.set_tooltip("Foreground -- what the tool writes with")
     imgui.same_line()
+    imgui.set_next_item_width(chip)
     changed, value = controls.color_edit4("##inkbg", _vec(state.bg), _CHIP_FLAGS)
     if changed:
         state.bg = _rgba(value)

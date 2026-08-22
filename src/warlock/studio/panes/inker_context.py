@@ -277,7 +277,11 @@ def _field(ctx: Any, state: Any, tab: Any, key: str) -> Any:
             if changed:
                 options[key] = value
 
-        return toolbar.Field(key, label, draw, width=width, compact=COMPACT)
+        # **A combo does not compact.** Its content is a word, and a combo
+        # narrower than its own longest option shows "So" where it means
+        # "Soft" -- which a screenshot at 1.0 caught. A slider can shrink
+        # because its content is a number and the number stays whole.
+        return toolbar.Field(key, label, draw, width=width, compact=width)
 
     def check() -> Any:
         def draw(compact: bool) -> None:
@@ -287,14 +291,22 @@ def _field(ctx: Any, state: Any, tab: Any, key: str) -> Any:
 
         return toolbar.Field(key, label, draw, width=WIDE, compact=WIDE, priority=1)
 
+    # **Every slider carries its own name in its format string.** A row of
+    # bare numbers -- 12, 0.85, 1.00 -- is three settings the user has to
+    # count along the bar to identify, which is what the screenshot pass
+    # found. The names are short because the field is 92 px: this is the
+    # place a four-letter word is worth more than a correct one.
     if key == "brush_size":
         return slider_int(inker.MIN_BRUSH, inker.MAX_BRUSH, "%d px")
     if key == "nib":
-        return combo(NIB_LABELS, COMPACT if len(NIB_LABELS) else NARROW)
+        # Not COMPACT: "Soft" drawn in a 54 px combo reads "So", which the
+        # screenshot pass at 1.0 caught. A combo is as wide as its longest
+        # word or it is lying about what is selected.
+        return combo(NIB_LABELS)
     if key == "hardness":
-        return slider_float(0.0, 1.0)
+        return slider_float(0.0, 1.0, "hard %.2f")
     if key == "opacity":
-        return slider_float(0.05, 1.0)
+        return slider_float(0.05, 1.0, "opa %.2f")
     if key == "paint_ink":
         def draw(compact: bool) -> None:
             changed, value = controls.combo(
@@ -312,9 +324,9 @@ def _field(ctx: Any, state: Any, tab: Any, key: str) -> Any:
     if key == "spray_rate":
         return slider_int(5, 400, "%d/s")
     if key in ("spacing", "stabilise", "speed_taper", "strength"):
-        return slider_float(0.0, 1.0)
+        return slider_float(0.0, 1.0, f"{label[:5].lower()} %.2f")
     if key == "wand_tolerance":
-        return slider_int(0, 255)
+        return slider_int(0, 255, "tol %d")
     if key == "brush_angle":
         return slider_int(0, 180, "%d deg")
     if key == "text_size":

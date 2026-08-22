@@ -461,7 +461,10 @@ def _zoom_combo(tab: Any) -> None:
     options = [(f"{rung}", f"{rung}%") for rung in ZOOM_RUNGS]
     if current not in {key for key, _label in options}:
         options = [(current, f"{current}%"), *options]
-    picked = widgets.combo("##plotter-zoom", current, options, tooltip="Zoom")
+    # An explicit width: ``widgets.combo`` defaults to -1, which is the whole
+    # remaining row -- so the zoom picker drew as a bar across the status line
+    # (the screenshot pass at 1.5 caught it).
+    picked = widgets.combo("##plotter-zoom", current, options, sp(84), tooltip="Zoom")
     if picked != current:
         tab.view.pending_zoom = int(picked) / 100.0
 

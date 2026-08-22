@@ -40,14 +40,18 @@ def draw(ctx: Any) -> None:
     # a user coming from Tiled looks for them. What a panel is for is what is
     # left: where this map lives, whether it is written, and how deep the undo
     # stack is. Clay's bridge is the same size for the same reason.
-    if tab.path is not None:
+    # **One sentence about where this map stands**, not two. Written as a
+    # ladder because the states are exclusive and the first draft printed
+    # "Not saved to a file yet." *and* "Saved." on the same screen -- which the
+    # screenshot pass caught, and which is the kind of thing only a picture
+    # does catch.
+    if tab.path is None:
+        widgets.muted(
+            "Not saved to a file yet." if tab.dirty else "Nothing to save yet."
+        )
+    else:
         imgui.text_wrapped(str(tab.path))
-    else:
-        widgets.muted("Not saved to a file yet.")
-    if tab.dirty:
-        widgets.muted("Unsaved changes.")
-    else:
-        widgets.muted("Saved.")
+        widgets.muted("Unsaved changes." if tab.dirty else "Saved.")
     if not tab.doc.tilesets:
         widgets.muted_wrapped(
             "No tileset yet -- Tileset > Import a tileset. A Tiled map needs "
