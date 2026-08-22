@@ -138,3 +138,54 @@ def test_an_ordinary_document_writes_the_xml_it_always_did(tmp_path):
         xml = archive.read("stack.xml").decode("utf-8")
     assert "warlock-background" not in xml
     assert "warlock-reference" not in xml
+
+
+# --- 6.8: trim, the 45-degree mirrors, grid from selection -------------------
+
+
+def test_trim_crops_to_what_is_drawn():
+    doc = inker.Document.blank(16, 16)
+    doc.stack.active.pixels[4:8, 4:8] = (255, 0, 0, 255)
+    doc.invalidate_all()
+    assert doc.trim() is True
+    assert doc.size == (4, 4)
+
+
+def test_trimming_an_empty_document_leaves_it_alone():
+    """An empty canvas is a size the user chose, and a trim that turned it
+    into 1x1 would be a command that destroys a setting."""
+
+    doc = inker.Document.blank(16, 16)
+    assert doc.trim() is False
+    assert doc.size == (16, 16)
+
+
+def test_trimming_a_full_document_is_a_no_op_rather_than_a_step():
+    doc = inker.Document.blank(8, 8)
+    doc.stack.active.pixels[...] = (255, 0, 0, 255)
+    doc.invalidate_all()
+    head = doc.history.head
+    assert doc.trim() is False
+    assert doc.history.head == head
+
+
+def test_the_diagonal_mirrors_reflect_about_the_forty_five_degree_lines():
+    """Neither is expressible as a combination of the axis-aligned pair, which
+    is why they are two more modes rather than a flag on the existing ones."""
+
+    from warlock.studio.inker import brush
+
+    size = (9, 9)
+    axis = (4.0, 4.0)
+    (_p, mirrored) = brush._mirror((6.0, 5.0), size, "diag", axis=axis)
+    assert mirrored == (5.0, 6.0)
+    (_p, anti) = brush._mirror((6.0, 5.0), size, "anti", axis=axis)
+    assert anti == (3.0, 2.0)
+
+
+def test_every_symmetry_mode_reflects_the_axis_onto_itself():
+    from warlock.studio.inker import brush
+
+    for mode in brush.SYMMETRY:
+        points = brush._mirror((4.0, 4.0), (9, 9), mode, axis=(4.0, 4.0))
+        assert all(point == (4.0, 4.0) for point in points), mode

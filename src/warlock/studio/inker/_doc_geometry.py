@@ -198,6 +198,31 @@ class GeometryOps:
         self._replay(run)
         return True
 
+    def trim(self: Document) -> bool:
+        """Crop away the fully transparent border. -> whether it changed.
+
+        Aseprite's ``Sprite > Trim``, and it is :meth:`crop_to_selection`'s
+        arithmetic over the *content* rather than over a mask -- so it is one
+        undo step, it moves every layer and every cel together, and slices and
+        the grid travel by the rule that already exists.
+
+        A document with nothing in it is left alone rather than cropped to
+        nothing: an empty canvas is a size the user chose, and a trim that
+        turned it into 1x1 would be a command that destroys a setting.
+        """
+        import numpy as np
+
+        pixels = self.flatten(matte=False)
+        opaque = pixels[..., 3] > 0
+        if not opaque.any():
+            return False
+        rows = np.flatnonzero(opaque.any(axis=1))
+        cols = np.flatnonzero(opaque.any(axis=0))
+        box = (int(cols[0]), int(rows[0]), int(cols[-1]) + 1, int(rows[-1]) + 1)
+        if box == (0, 0, *self.size):
+            return False
+        return self.crop(box)
+
     def crop_to_selection(self: Document) -> bool:
         bounds = self.mask.bounds if self.mask is not None else None
         return self.crop(bounds) if bounds else False

@@ -1335,6 +1335,17 @@ class InkerState:
     #: "use the captured tip" -- and the tip is recaptured from the drawing,
     #: which is where it came from and where it still is.
     stamp: Any = None
+    #: **The pixel grid** (6.8): one line per source pixel, drawn only past
+    #: the zoom where the lines would not be most of what is on screen.
+    #: Separate from ``grid``, which is the *tile* grid at ``grid_size`` -- two
+    #: different questions, and Aseprite has both.
+    pixel_grid: bool = False
+    #: Outline the active layer's own bounds, so what is being drawn on is
+    #: legible on a document where every layer is transparent at the edges.
+    layer_edges: bool = False
+    #: Draw each cell's local tile id on a tilemap layer. A reading aid for
+    #: authoring a tileset, and off by default because it covers the art.
+    tile_numbers: bool = False
     #: Which harmony the colour panel shows; see ``inker.indexed.HARMONIES``.
     #: App-level like every other tool setting, and not persisted: it is a way
     #: of *looking* at the colour in hand rather than a preference.

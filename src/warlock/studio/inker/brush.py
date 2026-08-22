@@ -66,7 +66,11 @@ MODES = ("paint", "erase", "blur", "smudge", "replace", "copy", "shade")
 #: whose coverage is only ever 0 or 1, it is not a rule at all.
 SHADE_COVERAGE = 0.5
 
-SYMMETRY = ("none", "x", "y", "xy", "radial")
+#: ``diag`` and ``anti`` are the 45-degree mirrors (6.8): a reflection about
+#: the line through the axis at +45 and at -45. Aseprite offers both, and they
+#: are the two an isometric tile is drawn with -- neither is expressible as a
+#: combination of the axis-aligned pair.
+SYMMETRY = ("none", "x", "y", "xy", "radial", "diag", "anti")
 
 #: The modes an image stamp is honoured for. A stamp handed to any other is
 #: dropped at ``__post_init__`` rather than half-applied -- it is a tip that
@@ -287,6 +291,16 @@ def _mirror(
         points.append((x, 2.0 * ay - y))
     if symmetry == "xy":
         points.append((2.0 * ax - x, 2.0 * ay - y))
+    if symmetry in ("diag", "anti"):
+        # Reflection about the 45-degree line through the axis: swap the two
+        # offsets (and negate both for the anti-diagonal). Written as offsets
+        # from the axis for ``2a - x``'s reason -- the two agree at the centre
+        # and only this form generalises to a moved axis.
+        dx, dy = x - ax, y - ay
+        if symmetry == "diag":
+            points.append((ax + dy, ay + dx))
+        else:
+            points.append((ax - dy, ay - dx))
     return points
 
 

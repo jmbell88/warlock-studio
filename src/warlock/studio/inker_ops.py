@@ -1293,6 +1293,75 @@ register(
 )
 register(
     Op(
+        "trim",
+        "Trim",
+        _doc("trim"),
+        menu="Sprite",
+        enabled=ready,
+        reason=BUSY,
+        hint=(
+            "Crops away the fully transparent border. A document with nothing "
+            "in it is left alone -- an empty canvas is a size you chose."
+        ),
+    )
+)
+register(
+    Op(
+        "duplicate_sprite",
+        "Duplicate document",
+        _mode("duplicate_document"),
+        menu="Sprite",
+        enabled=ready,
+        reason=BUSY,
+    )
+)
+register(
+    Op(
+        "toggle_pixel_grid",
+        "Pixel grid",
+        lambda ctx, tab, **_: _toggle(ctx, "pixel_grid"),
+        menu="View",
+        enabled=has_doc,
+        reason=NO_DOC,
+        separator_before=True,
+    )
+)
+register(
+    Op(
+        "toggle_layer_edges",
+        "Layer edges",
+        lambda ctx, tab, **_: _toggle(ctx, "layer_edges"),
+        menu="View",
+        enabled=has_doc,
+        reason=NO_DOC,
+    )
+)
+register(
+    Op(
+        "toggle_tile_numbers",
+        "Tile numbers",
+        lambda ctx, tab, **_: _toggle(ctx, "tile_numbers"),
+        menu="View",
+        enabled=has_doc,
+        reason=NO_DOC,
+    )
+)
+register(
+    Op(
+        "grid_from_selection",
+        "Grid from selection",
+        lambda ctx, tab, **_: _grid_from_selection(ctx, tab),
+        menu="View",
+        enabled=has_selection,
+        reason=NO_SELECTION,
+        hint=(
+            "Sets the grid to the selection's own size, which is how a tile "
+            "size gets from a drawing into the grid without being measured."
+        ),
+    )
+)
+register(
+    Op(
         "toggle_grid",
         "Grid",
         lambda ctx, tab, **_: _toggle(ctx, "grid"),
@@ -1335,6 +1404,25 @@ def _tiles() -> Any:
     from .panes import inker_tiles
 
     return inker_tiles
+
+
+def _grid_from_selection(ctx: Any, tab: Any) -> bool:
+    """Aseprite's *Selection as Grid*: the grid takes the marquee's size."""
+    from . import inker_mode
+
+    mask = tab.doc.mask
+    bounds = None if mask is None else mask.bounds
+    if bounds is None:
+        return False
+    x0, y0, x1, y1 = bounds
+    state = ctx.state.inker
+    # One number, because the grid is square here: the *shorter* side, so a
+    # grid derived from a rectangle never claims cells the selection did not
+    # cover.
+    state.grid_size = max(2, min(512, min(x1 - x0, y1 - y0)))
+    state.grid = True
+    inker_mode.persist(ctx)
+    return True
 
 
 def _toggle(ctx: Any, attr: str) -> None:

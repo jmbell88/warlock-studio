@@ -125,6 +125,10 @@ SYMMETRY_LABELS = (
     ("y", "top / bottom"),
     ("xy", "both"),
     ("radial", "radial"),
+    # The two 45-degree mirrors (6.8). Named for the line they reflect about
+    # rather than "diagonal", which does not say *which* diagonal.
+    ("diag", "diagonal, top-left to bottom-right"),
+    ("anti", "diagonal, bottom-left to top-right"),
 )
 
 

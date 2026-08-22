@@ -2503,6 +2503,17 @@ def _paint(ctx: Any, state: Any, tab: Any, origin, *, hovered: bool) -> None:
 
     if state.grid:
         _grid(state, draw_list, view, origin, doc.size, top_left, bottom_right)
+    if state.pixel_grid:
+        # Fainter than the tile grid and drawn after it, so where both are on
+        # the tile lines still read as the stronger of the two.
+        _grid(
+            state, draw_list, view, origin, doc.size, top_left, bottom_right,
+            step=1, alpha=0.25,
+        )
+    if state.layer_edges:
+        _layer_edges(tab, draw_list, view, origin)
+    if state.tile_numbers:
+        _tile_numbers(state, tab, draw_list, view, origin)
     if state.symmetry != "none":
         _symmetry(state, draw_list, view, origin, doc.size)
     _ants(ctx, tab, draw_list, origin, state)
@@ -2580,11 +2591,86 @@ def _floating(ctx: Any, tab: Any, draw_list: Any, origin) -> None:
     draw_list.add_rect(a, b, _u32(theme.ACCENT))
 
 
-def _grid(state: Any, draw_list: Any, view: Any, origin, size, top_left, bottom_right) -> None:
+def _layer_edges(tab: Any, draw_list: Any, view: Any, origin) -> None:
+    """Outline what the active layer actually holds (6.8).
+
+    The *content* bounds rather than the canvas: every layer is canvas-sized in
+    this engine, so a border round the whole page would say nothing. Nothing is
+    drawn for an empty layer, which is the honest answer -- an outline of
+    nothing at the origin would read as a one-pixel drawing.
+    """
+    import numpy as np
+
+    layer = tab.doc.stack.active
+    opaque = layer.pixels[..., 3] > 0
+    if not opaque.any():
+        return
+    rows = np.flatnonzero(opaque.any(axis=1))
+    cols = np.flatnonzero(opaque.any(axis=0))
+    x0, y0 = int(cols[0]), int(rows[0])
+    x1, y1 = int(cols[-1]) + 1, int(rows[-1]) + 1
+    corners = [
+        inker_state.to_screen(view, origin, x, y)
+        for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1))
+    ]
+    colour = _u32(theme.ACCENT, 0.8)
+    for index in range(4):
+        draw_list.add_line(corners[index], corners[(index + 1) % 4], colour)
+
+
+def _tile_numbers(state: Any, tab: Any, draw_list: Any, view: Any, origin) -> None:
+    """Each cell's local tile id, on a tilemap layer (6.8).
+
+    A reading aid for authoring a tileset, and gated on the zoom for the pixel
+    grid's reason: numbers smaller than the digits they are made of are a grey
+    haze over the art rather than information.
+    """
+    doc = tab.doc
+    layer = doc.stack.active
+    refs = getattr(layer, "refs", None)
+    if refs is None:
+        return
+    slot = doc.tileset_slot(doc.active_tileset_uid())
+    if slot is None:
+        return
+    tile_w, tile_h = slot.tileset.tile_w, slot.tileset.tile_h
+    if tile_w * view.zoom < 24.0:
+        return
+    colour = _u32(theme.TEXT, 0.75)
+    height, width = refs.shape[:2]
+    for row in range(height):
+        for column in range(width):
+            local = int(refs[row, column]) & 0x1FFFFFFF
+            if not local:
+                continue
+            at = inker_state.to_screen(
+                view, origin, column * tile_w + 2, row * tile_h + 2
+            )
+            draw_list.add_text(at, colour, str(local))
+
+
+def _grid(
+    state: Any,
+    draw_list: Any,
+    view: Any,
+    origin,
+    size,
+    top_left,
+    bottom_right,
+    *,
+    step: int = 0,
+    alpha: float = 0.55,
+) -> None:
     """Clipped to the visible rectangle: a 16-pixel grid over a 4096 canvas is
-    a quarter of a million lines if it is drawn in full."""
-    colour = _u32(theme.EDGE, 0.55)
-    step = max(1, int(state.grid_size))
+    a quarter of a million lines if it is drawn in full.
+
+    ``step`` overrides the tile grid's size, which is how the **pixel grid**
+    (6.8) is drawn: it is the same clipped walk at a step of one, not a second
+    implementation -- and the six-screen-pixel floor below is what keeps it
+    from being most of what is on screen at a low zoom.
+    """
+    colour = _u32(theme.EDGE, alpha)
+    step = max(1, int(step or state.grid_size))
     # The line below the step is the real floor: six screen pixels between
     # grid lines. (There was a ``GRID_MIN_ZOOM`` branch here that computed
     # ``min(step, step)`` -- a no-op guarding a per-pixel grid that was never

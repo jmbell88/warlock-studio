@@ -601,6 +601,23 @@ def _report_import_warnings(ctx: Any, warnings: Any) -> None:
     ctx.toast(f"Imported: {text}.", "warn", action="log")
 
 
+def duplicate_document(ctx: Any, tab: InkerDoc | None = None) -> bool:
+    """Aseprite's *Duplicate Sprite*: the whole document, as a second tab.
+
+    Through ``open_pixels`` for ``new_from_selection``'s reason -- the adoption
+    is the one that already exists -- which makes this a **flattened** copy
+    rather than a layered one, and the tab's title says so. A layered duplicate
+    would have to deep-copy every cel, every group, the palette, the tilesets
+    and the history budget, and the honest name for that is *save-as*.
+    """
+    state = ensure(ctx)
+    tab = tab or state.active
+    if tab is None:
+        return False
+    open_pixels(ctx, tab.doc.flatten(matte=False), title=f"{tab.title} copy")
+    return True
+
+
 def new_from_selection(ctx: Any, tab: InkerDoc | None = None) -> bool:
     """Aseprite's *New Sprite From Selection*. -> whether one was made.
 
