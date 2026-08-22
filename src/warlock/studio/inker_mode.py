@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from ..pipelines import sheet as sheetlib
-from . import dialogs, docmodes, filetypes, fonts, inker_state, journal, recents
+from . import dialogs, docmodes, filetypes, fonts, inker_ops, inker_state, journal, recents
 from .inker import animation
 from .inker.asein import ASEPRITE_SUFFIXES
 from .inker_state import InkerDoc, InkerState
@@ -3093,6 +3093,18 @@ def handle_key(ctx: Any, event: Any) -> bool:
     if _modal(ctx, state, tab, context, name, event, ctrl=ctrl):
         return True
 
+    # **The registry answers first.** Every op that carries a key is bound
+    # here, once, from the same field the menu row prints -- so a chord cannot
+    # be advertised in one place and implemented in another, which is what
+    # eleven of these branches used to be. What is left below is the bindings
+    # that are not ops: the tool letters, the sizes, the nudges, the modeless
+    # view keys.
+    op = inker_ops.by_key(chord_of(event, ctrl=ctrl, shift=shift), context)
+    if op is not None:
+        if not (tab.busy and ctrl and name in _MUTATING_CTRL):
+            inker_ops.run(ctx, op)
+        return True
+
     if ctrl:
         return _ctrl_key(ctx, state, tab, doc, name, event, shift=shift)
 
@@ -3120,6 +3132,13 @@ def handle_key(ctx: Any, event: Any) -> bool:
         inker_timeline.toggle(state)
     elif name == "x":
         state.swap_colours()
+    elif not shift and name.isdigit():
+        # **The number row was entirely unbound in Inker**, and Aseprite's
+        # answer to the same spare keys is the same one: opacity in tenths,
+        # with 0 meaning full rather than nothing -- a key that made the brush
+        # invisible would be one nobody could tell from a broken tool.
+        digit = int(name)
+        state.opacity = 1.0 if digit == 0 else digit / 10.0
     elif event.key == pygame.K_LEFTBRACKET:
         if shift:
             state.hardness = max(0.0, state.hardness - 0.05)
@@ -3201,6 +3220,56 @@ def handle_key(ctx: Any, event: Any) -> bool:
 _MUTATING_CTRL = frozenset({"z", "y", "a", "d", "x", "v", "i", "t", "e", "j"})
 
 
+#: The keys whose chord label is not simply the character on them.
+#:
+#: Written out rather than derived from ``pygame.key.name``: the names it
+#: returns are lowercase and platform-shaped ("return", "left", "escape"), and
+#: the label is what a menu row and the shortcut sheet *print*, so the two have
+#: to be the same string. ``Op.key`` is both the binding and the label for
+#: exactly this reason.
+_CHORD_NAMES: dict[str, str] = {
+    "return": "Enter",
+    "enter": "Enter",
+    "left": "Left",
+    "right": "Right",
+    "up": "Up",
+    "down": "Down",
+    "tab": "Tab",
+    "escape": "Esc",
+    "delete": "Delete",
+    "backspace": "Backspace",
+    "space": "Space",
+    "[": "[",
+    "]": "]",
+    ",": ",",
+    ".": ".",
+}
+
+
+def chord_of(event: Any, *, ctrl: bool, shift: bool) -> str:
+    """The chord this key press *is*, in ``Op.key``'s spelling, or ``""``.
+
+    One spelling, used by the binding and by the printed label, so a menu row
+    can never advertise a chord the keyboard does not answer -- which is the
+    whole reason ``Op.key`` is one field rather than two.
+    """
+    import pygame
+
+    name = pygame.key.name(event.key).lower()
+    label = _CHORD_NAMES.get(name)
+    if label is None and len(name) == 1:
+        label = name.upper()
+    if label is None:
+        return ""
+    parts = []
+    if ctrl:
+        parts.append("Ctrl")
+    if shift:
+        parts.append("Shift")
+    parts.append(label)
+    return "+".join(parts)
+
+
 def _modal(
     ctx: Any, state: InkerState, tab: InkerDoc, context: str, name: str, event, *, ctrl: bool
 ) -> bool:
@@ -3251,76 +3320,29 @@ def _ctrl_key(
     if tab.busy and name in _MUTATING_CTRL:
         return True
 
-    if name == "z":
-        doc.redo() if shift else doc.undo()
-    elif name == "y":
+    if name == "z" and shift:
+        # Ctrl+Shift+Z is redo's second spelling, which the registry does not
+        # carry: an op has one key, and Ctrl+Y is the one the menu prints.
         doc.redo()
-    elif name == "s":
-        save_as(ctx, tab) if shift else save(ctx, tab)
-    elif name == "e":
-        # Plain Ctrl+E is "put this in the library" in every other document
-        # mode -- Clay's ``export_asset``, Plotter's and Packwright's
-        # ``export_library`` -- and Shift is the file-on-disk export. Inker had
-        # only the Shift half, so the one chord a user carries between the four
-        # editors did nothing here.
-        #
-        # A linked document is already *in* the library (it is somebody's
-        # reference, opened for editing), so there is nothing to add and Ctrl+S
-        # is the write it wants. Silence rather than a second copy of the asset.
-        if shift:
-            export_png(ctx, tab)
-        elif not tab.linked:
-            save_as_reference(ctx, tab)
-    elif name == "n":
-        new_document(ctx, 1024, 1024)
-    elif name == "o":
-        ask_open(ctx)
-    elif name == "w":
-        request_close(ctx, tab)
-    elif name == "a":
-        doc.select_all()
-    elif name == "d":
+    elif name == "e" and shift:
+        # Ctrl+E is "put this in the library" and Ctrl+Shift+E is the file on
+        # disk -- both ops. Only the *shifted* half needs a branch, because an
+        # op carries one key and the pair differ by more than a modifier: see
+        # ``export_png`` and ``save_as_reference`` in the registry.
+        export_png(ctx, tab)
+    elif name == "d" and shift:
         # Ctrl+Shift+D brings back what Ctrl+D took away, the pair every other
-        # editor binds. It refuses a mask whose shape the canvas has outgrown.
-        doc.reselect() if shift else doc.deselect()
-    elif name == "j":
+        # editor binds. Both are ops; this is the shifted half.
+        doc.reselect()
+    elif name == "j" and shift:
         # Ctrl+J *copies* the selection onto a layer of its own and
         # Ctrl+Shift+J *cuts* it, which is the way round Photoshop and every
         # editor that followed it bind the pair: the plain chord is the
         # non-destructive one. Worth stating, because the obvious reading is
-        # the opposite -- plain does the whole thing, Shift does less -- and
-        # the whole point of a shortcut is that it matches the hand that
-        # already knows it. Both are one Ctrl+Z.
-        doc.layer_from_selection(cut=shift)
-    elif name == "c":
-        doc.copy()
-    elif name == "x":
-        doc.cut()
-    elif name == "v":
-        paste_from_os(ctx, tab)
-        if shift:
-            doc.paste_as_layer()
-        else:
-            doc.paste()
-            state.set_tool("move")
-    elif name == "i" and shift:
-        doc.invert_selection()
-    elif name == "t":
-        begin_transform(ctx, tab)
-    elif name == "b":
-        # Aseprite's "new brush from selection", on the chord it uses. Not in
-        # ``_MUTATING_CTRL``: it reads pixels and changes app state, which is
-        # the same thing Ctrl+C does while a save is in flight and is safe for
-        # the same reason.
-        capture_brush(ctx)
+        # the opposite -- plain does the whole thing, Shift does less.
+        doc.layer_from_selection(cut=True)
     elif event.key == pygame.K_TAB:
         state.cycle(-1 if shift else 1)
-    elif name == "0":
-        tab.view.fitted = False
-    elif name == "1":
-        # Applied by the canvas, which is the only thing that knows how big the
-        # pane is; a keypress cannot centre on its own.
-        tab.view.pending_zoom = 1.0
     elif name == "4":
         # Ctrl+4 / Ctrl+Shift+4 turn the page, Ctrl+5 mirrors it. Both are
         # *view* state -- no pixels move, nothing is pushed, nothing is saved --

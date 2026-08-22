@@ -322,10 +322,19 @@ def test_the_chords_are_the_photoshop_way_round():
     from warlock.studio import inker_mode
 
     calls: list[bool] = []
-    doc = SimpleNamespace(layer_from_selection=lambda *, cut: calls.append(cut))
-    tab = SimpleNamespace(busy=False)
-    for shift in (False, True):
-        inker_mode._ctrl_key(None, None, tab, doc, "j", None, shift=shift)
+    doc = SimpleNamespace(
+        layer_from_selection=lambda *, cut: calls.append(cut), mask=object()
+    )
+    tab = SimpleNamespace(busy=False, doc=doc)
+    state = SimpleNamespace(active=tab, tip=None, say=lambda *a, **k: None)
+    ctx = SimpleNamespace(state=SimpleNamespace(inker=state))
+
+    from warlock.studio import inker_ops
+
+    # The plain chord is an op; only the shifted half is still a branch, because
+    # an op carries one key and these two differ by more than a modifier.
+    inker_ops.run(ctx, inker_ops.get("copy_to_layer"))
+    inker_mode._ctrl_key(None, None, tab, doc, "j", None, shift=True)
 
     assert calls == [False, True]  # Ctrl+J copies, Ctrl+Shift+J cuts
     assert "j" in inker_mode._MUTATING_CTRL

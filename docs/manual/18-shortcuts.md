@@ -211,6 +211,10 @@ left-drag in empty space with `Q` selected sweeps a marquee.
 | `C` | Slice |
 | `Y` | Tile stamp |
 | `X` | Swap the two colours |
+| `1` - `0` | Brush opacity, 10% to 100% |
+| Tab | Show or hide the timeline -- which is where the layers are |
+| Ctrl+Shift+N | New layer |
+| Ctrl+Shift+Up / Down | Move the layer up / down the stack |
 | `[` / `]` | Brush size (with Shift, hardness) |
 | `+` / `-` | Zoom in / out, by whole scales |
 | Shift+click | With a paint tool, draw a line from where the last stroke ended |

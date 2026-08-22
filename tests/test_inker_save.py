@@ -321,6 +321,8 @@ def test_the_mutating_shortcuts_do_nothing_while_a_save_is_running():
     """
     from types import SimpleNamespace
 
+    import pygame
+
     from warlock.studio.inker_state import InkerState
 
     tab = _tab("")
@@ -331,18 +333,31 @@ def test_the_mutating_shortcuts_do_nothing_while_a_save_is_running():
     state = InkerState()
     state.add(tab)
     ctx = SimpleNamespace(state=SimpleNamespace(inker=state), svc=None)
-    event = SimpleNamespace(key=0, unicode="")
+
+    def press(letter: str) -> None:
+        """Through ``handle_key``, which is where the gate is since W2.7.
+
+        The bindings are the op registry's now and the busy check sits in front
+        of it, so driving ``_ctrl_key`` alone would test the half that no
+        longer holds most of them.
+        """
+        key = getattr(pygame, f"K_{letter}", None)
+        if key is None:
+            return
+        inker_mode.handle_key(
+            ctx, pygame.event.Event(pygame.KEYDOWN, key=key, mod=pygame.KMOD_LCTRL)
+        )
 
     tab.saving = True
     for name in sorted(inker_mode._MUTATING_CTRL):
-        inker_mode._ctrl_key(ctx, state, tab, doc, name, event, shift=False)
+        press(name)
 
     assert (doc.history.head, len(doc.stack)) == (before_head, before_layers)
 
     # ...and the same keys do land once the save is over, so the gate is a gate
     # and not a permanently dead branch.
     tab.saving = False
-    inker_mode._ctrl_key(ctx, state, tab, doc, "z", event, shift=False)
+    press("z")
     assert doc.history.head == before_head - 1
 
 

@@ -98,3 +98,75 @@ def test_the_modal_arms_read_the_context_rather_than_the_state():
     # The three-branch ladder is gone from the key handler itself.
     assert "if state.transforming:" not in source
     assert "if state.gesture_pts:" not in source
+
+
+# --- the registry is the binding table (W2.7) --------------------------------
+
+
+def test_a_chord_is_spelled_the_way_the_menu_prints_it():
+    """One spelling for the binding and the label, which is why ``Op.key`` is
+    one field: a menu row cannot advertise a chord the keyboard will not
+    answer if the row and the branch read the same string."""
+
+    import pygame
+
+    from warlock.studio import inker_mode
+
+    def chord(key, *, ctrl=False, shift=False):
+        event = pygame.event.Event(pygame.KEYDOWN, key=key, mod=0)
+        return inker_mode.chord_of(event, ctrl=ctrl, shift=shift)
+
+    assert chord(pygame.K_z, ctrl=True) == "Ctrl+Z"
+    assert chord(pygame.K_s, ctrl=True, shift=True) == "Ctrl+Shift+S"
+    assert chord(pygame.K_RETURN) == "Enter"
+    assert chord(pygame.K_UP, ctrl=True, shift=True) == "Ctrl+Shift+Up"
+    assert chord(pygame.K_0, ctrl=True) == "Ctrl+0"
+
+
+def test_every_bound_op_is_reachable_by_its_own_chord():
+    """The property the whole table exists for: what the menu prints beside a
+    row is what fires it."""
+
+
+    from warlock.studio import inker_ops
+
+    for op in inker_ops.OPS:
+        if not op.key:
+            continue
+        assert inker_ops.by_key(op.key, op.context) is not None, op.name
+
+
+def test_the_key_handler_asks_the_registry_before_its_own_branches():
+    import inspect
+
+    from warlock.studio import inker_mode
+
+    source = inspect.getsource(inker_mode.handle_key)
+    registry = source.index("inker_ops.by_key")
+    fallback = source.index("_ctrl_key(")
+    assert registry < fallback
+
+
+def test_the_digits_set_brush_opacity_with_zero_meaning_full():
+    """A key that made the brush invisible would be one nobody could tell from
+    a broken tool."""
+
+    from types import MethodType, SimpleNamespace
+
+    import pygame
+
+    from warlock.studio import inker, inker_mode
+    from warlock.studio import state as state_mod
+
+    doc = inker.Document.blank(8, 8)
+    tab = inker_state.InkerDoc(doc=doc, uid="t1", title="t")
+    state = inker_state.InkerState()
+    state.add(tab)
+    app = SimpleNamespace(inker=state, toasts=[], toast_log=[])
+    app.toast = MethodType(state_mod.AppState.toast, app)
+    app.toast_once = MethodType(state_mod.AppState.toast_once, app)
+    ctx = SimpleNamespace(state=app, toast=app.toast)
+
+    for key, expected in ((pygame.K_3, 0.3), (pygame.K_9, 0.9), (pygame.K_0, 1.0)):
+        inker_mode.handle_key(ctx, pygame.event.Event(pygame.KEYDOWN, key=key, mod=0))
+        assert state.opacity == expected

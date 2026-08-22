@@ -888,7 +888,7 @@ register(
         "Next frame",
         _mode("step_frame", delta=1),
         menu="Frame",
-        key="Right",
+        key=".",
         enabled=animated,
         reason="This drawing has no frames yet -- Animate it first.",
         separator_before=True,
@@ -900,7 +900,7 @@ register(
         "Previous frame",
         _mode("step_frame", delta=-1),
         menu="Frame",
-        key="Left",
+        key=",",
         enabled=animated,
         reason="This drawing has no frames yet -- Animate it first.",
     )

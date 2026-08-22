@@ -658,9 +658,13 @@ def test_ctrl_b_captures_the_way_aseprite_does():
     state = inker_mode.ensure(ctx)
     doc = _doc()
     doc.stack.active.pixels[10:18, 10:18] = _tip()
-    tab = state.add(inker_state.InkerDoc(doc=doc, title="t"))
+    state.add(inker_state.InkerDoc(doc=doc, title="t"))
     doc.select(_rect_mask(SIZE, (10, 10, 18, 18)))
-    inker_mode._ctrl_key(ctx, state, tab, doc, "b", None, shift=False)
+    # Through the registry, which is where Ctrl+B is bound now (W2.7): the
+    # chord is ``Op.key`` and the op is the only implementation of it.
+    from warlock.studio import inker_ops
+
+    inker_ops.run(ctx, inker_ops.get("capture_brush"))
     assert state.stamp is not None
     # Not a mutating chord: it reads pixels and changes app state, which is what
     # Ctrl+C does and is safe while a save is in flight for the same reason.
