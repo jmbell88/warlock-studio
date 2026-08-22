@@ -49,7 +49,7 @@ from ..inker_state import (
     SHAPE_TOOLS,
 )
 from ..tokens import sp
-from . import inker_bridge, inker_menu, inker_textures
+from . import inker_bridge, inker_context, inker_menu, inker_textures
 
 #: The four positions of the Tiled control, one per :data:`TILED_AXES` entry.
 #: Prefixed, because in a row of icon buttons a bare "X" says nothing about
@@ -156,10 +156,17 @@ def draw(ctx: Any) -> None:
         new_popup(ctx)
         inker_bridge.popups(ctx)
         return
-    _file_row(ctx, state)
     _tab_bar(ctx, state)
     tab = state.active
     if tab is not None:
+        # Menu, tabs, context bar, canvas, status: Aseprite's order, and the
+        # order the eye already knows. The view row -- what the *page* is
+        # doing, as against what the tool is set to -- rides the bar's trailing
+        # block; see ``_view_row``.
+        _view_row(ctx, state, tab)
+        inker_context.draw(ctx, state, tab)
+        if state.transforming:
+            _transform_row(ctx, state, tab)
         _canvas(ctx, state, tab)
     new_popup(ctx)
     # The four dialogs the retired bridge panel kept, hosted here for the same
@@ -182,43 +189,18 @@ def draw(ctx: Any) -> None:
 # degrades instead of clipping.
 
 
-def _file_row(ctx: Any, state: Any) -> None:
-    tab = state.active
-    if tab is None:
-        return
-    doc = tab.doc
-    # One priority group, deliberately: these five are all "act on the drawing
-    # in front of you", so they read as one control and they should abbreviate
-    # as one. Split across two groups the row spent most widths showing *Undo*
-    # and *Redo* as words beside two glyphs, which is the thing the tiering
-    # rule exists to prevent -- it just does not enforce it across groups.
-    # Undo can rebind the stack mid-write; the saving gate here matches the
-    # keyboard path (_MUTATING_CTRL) and the bridge panel's own pair.
-    idle = not tab.busy
+def _view_row(ctx: Any, state: Any, tab: Any) -> None:
+    """What the *page* is doing: the turns, the centring, the tiling.
+
+    Undo and Redo were the first two items here and are menu rows now -- the
+    only two verbs on this row that changed the drawing rather than the view,
+    and the pair every user reaches for by chord anyway. What is left is one
+    honest group: nothing here writes a pixel, which is why **none of it is
+    gated on ``busy``** -- an editor that refuses to let you *look* at your
+    drawing while it writes a file is not protecting anything.
+    """
     view = tab.view
     items = [
-        toolbar.Item(
-            "undo",
-            "Undo",
-            icons.UNDO,
-            tooltip="Undo (Ctrl+Z)",
-            enabled=idle and doc.history.can_undo,
-            reason="Nothing to undo yet.",
-            pinned=True,
-        ),
-        toolbar.Item(
-            "redo",
-            "Redo",
-            icons.REDO,
-            tooltip="Redo (Ctrl+Y)",
-            enabled=idle and doc.history.can_redo,
-            reason="Nothing to redo: this is the newest step.",
-            pinned=True,
-        ),
-        # Never gated on ``busy``: these change nothing at all -- no pixels
-        # move, no step is pushed, nothing is written -- so gating them would
-        # be an editor that refuses to let you *look* at your drawing while it
-        # writes a file.
         toolbar.Item(
             "rotate", "Rotate view", icons.ROTATE_CW, tooltip="Rotate the view (Ctrl+4)"
         ),
@@ -256,18 +238,11 @@ def _file_row(ctx: Any, state: Any) -> None:
         lambda key: _view_action(ctx, tab, key),
         trailing=_view_trailing(ctx, tab),
     )
-    imgui.separator()
-    if state.transforming:
-        _transform_row(ctx, state, tab)
 
 
 def _view_action(ctx: Any, tab: Any, key: str) -> None:
     view = tab.view
-    if key == "undo":
-        tab.doc.undo()
-    elif key == "redo":
-        tab.doc.redo()
-    elif key == "rotate":
+    if key == "rotate":
         inker_state.rotate_view(view, 1)
     elif key == "flip":
         inker_state.flip_view(view)

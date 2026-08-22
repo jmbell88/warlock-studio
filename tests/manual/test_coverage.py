@@ -29,6 +29,11 @@ NO_HELP_BUTTON = {
     "packwright_textures",  # a texture cache, drawn by nobody
     "clay_menu",  # a menu bar
     "inker_menu",  # a menu bar
+    # The row of tool options above the canvas. Not a pane with a heading: it
+    # is one line of controls belonging to the tool the toolbox's own (?)
+    # documents, and a help button in the middle of a row of sliders would be
+    # a fifteenth control. The options themselves are the Inker chapter's.
+    "inker_context",
     # No longer a pane: the Inker's bridge panel became rows in that menu
     # strip (W2.2). What is left is the four dialogs behind them, drawn by the
     # centre pane, and a popup has no heading to hang a (?) beside. The verbs

@@ -4064,9 +4064,9 @@ WIDTHS = (320.0, 480.0, 720.0, 1000.0, 1600.0)
 
 
 def _canvas_items():
+    # Undo and Redo left this row in W2.4: they are the only two verbs on it
+    # that changed the drawing rather than the view, and they are menu rows.
     return [
-        toolbar.Item("undo", "Undo", icons.UNDO, pinned=True),
-        toolbar.Item("redo", "Redo", icons.REDO, pinned=True),
         toolbar.Item("rotate", "Rotate view", icons.ROTATE_CW),
         toolbar.Item("flip", "Flip view", icons.FLIP_HORIZONTAL),
         toolbar.Item("center", "Center view", icons.CROSSHAIR),
@@ -4133,7 +4133,7 @@ def _rows():
     from warlock.studio.panes import inker_canvas, inker_timeline, library
 
     return [
-        ("inker-canvas", _canvas_items(), inker_canvas._view_action),
+        ("inker-view", _canvas_items(), inker_canvas._view_action),
         ("inker-transform", _transform_items(), inker_canvas._transform_action),
         ("inker-transport", _transport_items(), inker_timeline._frame_action),
         ("inker-timeline-out", _export_items(), inker_timeline._export_action),

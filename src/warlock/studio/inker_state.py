@@ -420,6 +420,98 @@ SPRAY_DAB_FRACTION = 0.25
 # background colours and the onion-skin settings stay app-level: they are
 # properties of the canvas or of the session rather than of a tool, and a grid
 # that switched off because you picked the eraser would be a bug.
+#: The tool options that live on the context bar, in the order they are drawn.
+#:
+#: A **table rather than a chain of ifs**, so both directions are assertable:
+#: which widgets a tool shows, and -- the one that earns its keep -- that every
+#: key in :data:`TOOL_OPTION_DEFAULTS` is reachable from at least one tool's
+#: bar. That assertion is what stops an option becoming unreachable the day it
+#: leaves the sidebar, which is the whole risk of moving them.
+#:
+#: ``group`` is ``"dynamics"`` for the four that go behind one popup: spacing,
+#: smoothing, taper and strength are the settings of a *stroke*, adjusted once
+#: for a way of working and then left, and Aseprite files them the same way.
+#: They are still options of the tool and still reachable from its bar, which
+#: is why they are rows here rather than an exception to the table.
+CONTEXT_WIDGETS: tuple[tuple[str, str, frozenset[str], str], ...] = ()
+
+
+def _context_table() -> tuple[tuple[str, str, frozenset[str], str], ...]:
+    """Built after the tool sets above exist, so the sets are named once."""
+
+    sized = PAINT_TOOLS | SHAPE_TOOLS
+    lined = PAINT_TOOLS - {"spray"}
+    return (
+        ("brush_size", "Size", frozenset(sized), ""),
+        ("nib", "Nib", frozenset(PAINT_TOOLS), ""),
+        ("pixel_perfect", "Pixel perfect", frozenset(PAINT_TOOLS - {"spray"}), ""),
+        ("hardness", "Hardness", frozenset(PAINT_TOOLS), ""),
+        ("opacity", "Opacity", frozenset(PAINT_TOOLS - {"shade"}), ""),
+        ("paint_ink", "Ink", frozenset({"brush"}), ""),
+        ("shade_dir", "Direction", frozenset({"shade"}), ""),
+        ("spray_rate", "Rate", frozenset({"spray"}), ""),
+        ("spacing", "Spacing", frozenset(lined), "dynamics"),
+        ("stabilise", "Smoothing", frozenset(lined), "dynamics"),
+        ("speed_taper", "Taper", frozenset(lined), "dynamics"),
+        ("strength", "Strength", frozenset({"blur", "smudge"}), "dynamics"),
+        ("use_stamp", "Image brush", frozenset(STAMP_TOOLS), "dynamics"),
+        ("stamp_align", "Pattern", frozenset(STAMP_TOOLS), "dynamics"),
+        ("shape_filled", "Filled", frozenset(SHAPE_TOOLS - OPEN_SHAPE_TOOLS), ""),
+        ("wand_tolerance", "Tolerance", frozenset({"fill", "wand"}), ""),
+        ("wand_contiguous", "Contiguous", frozenset({"fill", "wand"}), ""),
+        ("sample_layer", "This layer only", frozenset({"eyedropper"}), ""),
+        ("gradient_dither", "Dither", frozenset({"gradient"}), ""),
+        ("text_size", "Size", frozenset({"text"}), ""),
+        ("font", "Font", frozenset({"text"}), ""),
+        ("aa", "Antialias", frozenset({"text"}), ""),
+    )
+
+
+def widgets_for(tool: str, doc: Any = None, state: Any = None) -> tuple[str, ...]:
+    """Which option keys *tool*'s context bar shows, in drawn order.
+
+    The three hiding rules the sidebar already applied, kept because each is
+    the same argument: a control that cannot do what it says is worse than no
+    control.
+
+    * **A pixel nib has no hardness.** Coverage is 0 or 1 by definition, so
+      there is no falloff to shape and a greyed slider would suggest there is
+      one somewhere else.
+    * **Pixel perfect is only offered on a pixel nib**, and never on the spray:
+      the corner filter is about a *line*, and the canvas forces it off there.
+    * **An indexed document has no soft nib**, so it has no hardness either.
+
+    ``doc`` and ``state`` are optional; with neither, the answer is the tool's
+    full set, which is what the coverage test wants.
+    """
+
+    from .inker.brush import PIXEL_NIBS
+
+    nib = "soft"
+    if state is not None:
+        nib = state.options_for(tool).get("nib", "soft")
+    indexed = bool(getattr(doc, "is_indexed", False)) if doc is not None else False
+    pixel = indexed or nib in PIXEL_NIBS
+    keys = []
+    for key, _label, tools, _group in CONTEXT_WIDGETS:
+        if tool not in tools:
+            continue
+        if key == "hardness" and pixel:
+            continue
+        if key == "pixel_perfect" and not pixel:
+            continue
+        keys.append(key)
+    return tuple(keys)
+
+
+def context_label(key: str) -> str:
+    return next((label for name, label, _t, _g in CONTEXT_WIDGETS if name == key), key)
+
+
+def context_group(key: str) -> str:
+    return next((group for name, _l, _t, group in CONTEXT_WIDGETS if name == key), "")
+
+
 TOOL_OPTION_DEFAULTS: dict[str, Any] = {
     "brush_size": 12,
     "hardness": 0.85,
@@ -475,6 +567,12 @@ TOOL_OPTION_DEFAULTS: dict[str, Any] = {
     "use_stamp": False,
     "stamp_align": "free",
 }
+
+# Built here rather than at its declaration: the sets it names are defined
+# above ``TOOL_OPTION_DEFAULTS`` and the defaults are what it is checked
+# against, so this is the first line at which both are true.
+CONTEXT_WIDGETS = _context_table()
+
 
 def _safe_int(value: Any, fallback: int, *, minimum: int) -> int:
     """``value`` as an int no smaller than ``minimum``, or ``fallback`` if it
