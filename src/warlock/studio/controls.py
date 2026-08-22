@@ -536,6 +536,99 @@ def menu_item_simple(
     return bool(clicked and enabled)
 
 
+@contextmanager
+def menu(
+    label: str,
+    *,
+    enabled: bool = True,
+    reason: str = "",
+    tooltip: str = "",
+) -> Iterator[bool]:
+    """A submenu header. -> whether its body should be drawn.
+
+    ``imgui.begin_menu`` is not in the AST guard's ``FORBIDDEN`` set -- which
+    is how one pane came to call it directly -- but a greyed menu with no
+    explanation is exactly the failure the disabled-reason contract exists to
+    stop, and a menu header is the *one* row a user cannot hover a child of to
+    find out why. So it is wrapped like every other row, and the ``end_menu``
+    pairing becomes the context manager's problem rather than the caller's.
+    """
+
+    with _disabled(enabled):
+        opened = bool(imgui.begin_menu(label, enabled))
+    _finish_item(tooltip=tooltip, reason=reason, enabled=enabled)
+    try:
+        yield opened
+    finally:
+        if opened:
+            imgui.end_menu()
+
+
+def menu_bar_id(bar_id: str, label: str) -> str:
+    """The popup name a :func:`menu_button` opens. Pure, so tests can name it."""
+
+    return f"{bar_id}/menu/{label}"
+
+
+def menu_button(
+    bar_id: str,
+    label: str,
+    *,
+    enabled: bool = True,
+    reason: str = "",
+    tooltip: str = "",
+) -> str:
+    """One header of a workspace menu strip. -> the popup name to render.
+
+    Not ``imgui.begin_menu_bar``: that belongs to a *window* via a flag, and
+    the centre pane's flags are owned by :func:`layout.pane`. Changing the
+    child's content-region arithmetic is what the canvas's height reservation
+    depends on, and a negative child height silently kills the canvas. A strip
+    of ghost buttons that each open an anchored popup is the same picture with
+    none of that risk, and it collapses into :mod:`.toolbar`'s overflow for
+    free.
+
+    The name is returned rather than the popup opened, because a popup only
+    renders inside the id stack of the window that opened it: the caller draws
+    it in the same place it drew the button.
+    """
+
+    name = menu_bar_id(bar_id, label)
+    hit = button(
+        f"{label}##{bar_id}/menubutton/{label}",
+        role=ButtonRole.GHOST,
+        control_size=ControlSize.COMPACT,
+        enabled=enabled,
+        reason=reason,
+        tooltip=tooltip,
+    )
+    if hit and enabled:
+        imgui.open_popup(name)
+    return name
+
+
+@contextmanager
+def menu_popup(name: str) -> Iterator[bool]:
+    """The body of a menu opened by :func:`menu_button`. -> whether it is open."""
+
+    opened = bool(imgui.begin_popup(name))
+    if opened:
+        from . import widgets
+
+        widgets.popup_chrome(_imgui=imgui)
+    try:
+        yield opened
+    finally:
+        if opened:
+            imgui.end_popup()
+
+
+def menu_separator() -> None:
+    """The rule between two groups of menu rows."""
+
+    imgui.separator()
+
+
 def combo(
     control_id: str,
     current: str,

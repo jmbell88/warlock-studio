@@ -169,3 +169,30 @@ def test_a_range_that_does_not_start_at_zero_has_to_say_so(monkeypatch):
 def test_an_explicit_format_carries_a_unit_the_range_cannot_know(monkeypatch):
     stub, _ = _slider(monkeypatch, 2.0, "X", 2.0, 0.05, 8.0, fmt="%.2fx")
     assert stub.call[4] == "%.2fx"
+
+
+# --- Fields (wave 1) --------------------------------------------------------
+#
+# A context bar is a row of settings, not of buttons, and the tiering has to
+# treat the two alike or the collapse order becomes a rule about widget kinds
+# rather than about importance. These pin the two halves of that: a Field
+# reports both of its widths as numbers, and a Field's priority competes with
+# an Item's directly inside ``plan``.
+
+
+def test_a_field_with_no_compact_size_reports_one_width_twice():
+    field = toolbar.Field("size", "Size", draw=lambda compact: None, width=120)
+    wide, narrow = field.widths()
+    assert wide == narrow > 0
+
+
+def test_a_field_narrows_before_a_more_important_button_does():
+    field = toolbar.Field(
+        "size", "Size", draw=lambda compact: None, width=120, compact=48, priority=1
+    )
+    wide, narrow = field.widths()
+    tiers = toolbar.plan(
+        [100.0, wide], [30.0, narrow], [0, field.priority], [False, False],
+        100.0 + narrow, 30.0,
+    )
+    assert tiers == [FULL, ICON]

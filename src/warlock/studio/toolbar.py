@@ -50,6 +50,7 @@ from typing import Any
 from imgui_bundle import imgui
 
 from . import controls, fonts, icons, widgets
+from .tokens import sp
 
 # The three ways one item can be drawn. Strings rather than an enum because
 # they are compared in tests by name and read in a failure message by a person.
@@ -94,6 +95,42 @@ class Item:
             object.__setattr__(self, "role", controls.ButtonRole.DESTRUCTIVE)
         elif primary:
             object.__setattr__(self, "role", controls.ButtonRole.PRIMARY)
+
+
+@dataclass(frozen=True)
+class Field:
+    """A control that lives in a row and is not a button.
+
+    A context bar is a row of *settings* -- a size, a mode, an opacity -- and
+    the tier machinery above is exactly as right for them as it is for
+    buttons: a row that keeps every field at full width and clips the last one
+    is the same failure as a row that clips a button, and the fix is the same
+    ordered degradation.
+
+    ``draw`` is called with one argument, ``compact``, and draws the control
+    at the width it was measured at. It is a callable rather than a widget
+    spec because the controls a bar can hold are open-ended (a combo, a
+    slider, a colour chip, a segmented control) and enumerating them here
+    would make this module the place every new control has to be taught about.
+
+    ``width``/``compact`` are design pixels, not measured: a field's natural
+    size is a decision its author makes, not something a font metric can tell
+    us. ``priority`` and ``pinned`` mean exactly what they mean on :class:`Item`.
+    """
+
+    key: str
+    label: str
+    draw: Any
+    width: float = 120.0
+    compact: float = 0.0
+    priority: int = 0
+    pinned: bool = False
+
+    def widths(self) -> tuple[float, float]:
+        """(full, compact) in physical pixels. Equal when no compact size is set."""
+
+        full = sp(self.width)
+        return full, (sp(self.compact) if self.compact else full)
 
 
 def plan(
@@ -167,6 +204,7 @@ def toolbar(
     on_click: Any = None,
     *,
     trailing: Any = None,
+    fields: Any = (),
 ) -> str | None:
     """Draw the row. -> the key of the item clicked this frame, or None.
 
@@ -179,30 +217,46 @@ def toolbar(
     is subtracted *before* the tiers are chosen and its ``draw`` is called
     after them, because a control that is measured after the row has already
     claimed the space is a control that gets clipped.
+
+    ``fields`` are :class:`Field`s drawn after the items, in the same row and
+    under the same tiering: a field's ``priority`` competes with the buttons'
+    directly, so a bar can say "the size spinner goes before the Flip button"
+    rather than "controls collapse before buttons do", which is a rule no user
+    would predict. A field that reaches the overflow menu is drawn in it, with
+    its label above it -- the menu is where the words come back.
     """
     avail = imgui.get_content_region_avail().x
     gap = imgui.get_style().item_spacing.x
     overflow_w = imgui.get_frame_height()
     if trailing is not None:
         avail -= trailing[0] + gap
+    entries = [*items, *fields]
     full, icon = _measure(items)
+    for field in fields:
+        wide, narrow = field.widths()
+        full.append(wide)
+        icon.append(narrow)
     tiers = plan(
         full,
         icon,
-        [item.priority for item in items],
-        [item.pinned for item in items],
+        [entry.priority for entry in entries],
+        [entry.pinned for entry in entries],
         avail,
         overflow_w,
         gap=gap,
     )
     clicked: str | None = None
     drawn = False
-    for item, tier in zip(items, tiers, strict=True):
+    for index, (item, tier) in enumerate(zip(entries, tiers, strict=True)):
         if tier == MENU:
             continue
         if drawn:
             imgui.same_line()
         drawn = True
+        if isinstance(item, Field):
+            imgui.set_next_item_width(full[index] if tier == FULL else icon[index])
+            item.draw(tier != FULL)
+            continue
         ident = f"##{bar_id}/{item.key}"
         if tier == ICON and item.icon:
             # The label becomes the tooltip rather than disappearing: a glyph
@@ -274,8 +328,13 @@ def toolbar(
             imgui.open_popup(popup)
         if imgui.begin_popup(popup):
             widgets.popup_chrome(_imgui=imgui)
-            for item, tier in zip(items, tiers, strict=True):
+            for item, tier in zip(entries, tiers, strict=True):
                 if tier != MENU:
+                    continue
+                if isinstance(item, Field):
+                    widgets.field_label(item.label)
+                    imgui.set_next_item_width(sp(item.width))
+                    item.draw(False)
                     continue
                 if controls.menu_item(
                     f"{item.label}##{bar_id}/menu/{item.key}", "", False, item.enabled

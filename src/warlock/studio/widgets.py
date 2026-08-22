@@ -657,6 +657,25 @@ def spinner(radius: float = 0.0, thickness: float = 0.0) -> None:
     draw.path_stroke(imgui.get_color_u32(theme.rgba(theme.ACCENT)), thickness=thickness)
 
 
+def busy(label: str, *, note: str = "") -> None:
+    """The one way this app says "something is happening here".
+
+    Spinner, then the label, then an optional muted note on the same line --
+    Clay's spelling, which was the clearest of the four vocabularies the tree
+    had grown ("saving...", a bare spinner, a spinner plus a count, a label
+    with no spinner at all). The label is the *thing*, present tense; the note
+    is the arithmetic ("12 of 32"), and it is muted because a count that reads
+    as loudly as the verb makes the user parse two lines to learn one fact.
+    """
+
+    spinner()
+    imgui.same_line()
+    secondary(label)
+    if note:
+        imgui.same_line()
+        muted(note)
+
+
 def combo(
     label: str,
     value: str,
