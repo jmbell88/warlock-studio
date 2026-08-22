@@ -153,9 +153,26 @@ def _row(ctx: Any, doc: Any, state: Any, layer: Any, editable: bool) -> None:
     imgui.same_line()
     kind = _KIND_ICONS.get(type(layer), icons.LAYERS)
     active = doc.active_layer == layer.uid
-    if controls.selectable(f"{kind} {layer.name or '(unnamed)'}", active)[0]:
-        doc.set_active_layer(layer.uid)
-        state.selected_object = None
+    objects = getattr(layer, "objects", None)
+    if objects:
+        # An object layer's row folds open into its objects. **Not a new pane**:
+        # this one already is a tree, and ``_object_form`` already lives under
+        # it, so the objects belong in it for the same reason the layers do --
+        # it is the list of what the map is made of.
+        opened = imgui.tree_node_ex(
+            f"{kind} {layer.name or '(unnamed)'}##objtree",
+            imgui.TreeNodeFlags_.open_on_arrow.value
+            | imgui.TreeNodeFlags_.span_avail_width.value
+            | (imgui.TreeNodeFlags_.selected.value if active else 0),
+        )
+        if imgui.is_item_clicked() and not imgui.is_item_toggled_open():
+            doc.set_active_layer(layer.uid)
+            state.selected_object = None
+    else:
+        opened = False
+        if controls.selectable(f"{kind} {layer.name or '(unnamed)'}", active)[0]:
+            doc.set_active_layer(layer.uid)
+            state.selected_object = None
     if imgui.begin_popup_context_item(f"layer-menu-{layer.uid}"):
         widgets.popup_chrome(_imgui=imgui)
         imgui.begin_disabled(not editable)
@@ -203,6 +220,9 @@ def _row(ctx: Any, doc: Any, state: Any, layer: Any, editable: bool) -> None:
             _delete_layer(ctx, doc, layer)
         imgui.end_disabled()
         imgui.end_popup()
+    if opened:
+        _object_rows(ctx, doc, state, layer, editable)
+        imgui.tree_pop()
     if active and editable:
         changed, opacity = widgets.labeled_slider_float(
             "Opacity",
@@ -369,6 +389,50 @@ def _row(ctx: Any, doc: Any, state: Any, layer: Any, editable: bool) -> None:
         for child in reversed(layer.children):
             _row(ctx, doc, state, child, editable)
         imgui.unindent(sp(12))
+
+
+def _object_rows(ctx: Any, doc: Any, state: Any, layer: Any, editable: bool) -> None:
+    """One row per object: the same selectable-and-eye shape a layer row has.
+
+    **No per-object lock.** ``MapObject`` has none, adding one is a document
+    field plus a ``warlock-dialect`` row in ``COMPAT.md``, and the layer's own
+    padlock already gates every object edit -- so the control would be a second
+    switch for a state the first one already decides.
+
+    Bottom-up like the canvas draws them: the last object in the list is the
+    one on top, so it reads down the page the way it stacks on screen.
+    """
+    from imgui_bundle import imgui
+
+    for obj in reversed(layer.objects):
+        imgui.push_id(str(obj.uid))
+        picked = state.selected_object == obj.uid
+        imgui.begin_disabled(not editable)
+        if widgets.small_icon_button(
+            icons.EYE if obj.visible else icons.EYE_OFF, "Show / hide this object"
+        ):
+            doc.set_object(layer.uid, obj.uid, visible=not obj.visible)
+        imgui.end_disabled()
+        imgui.same_line()
+        label = obj.name or f"({obj.kind})"
+        if controls.selectable(f"{label}##objrow", picked)[0]:
+            doc.set_active_layer(layer.uid)
+            state.selected_object = obj.uid
+        if imgui.begin_popup_context_item(f"obj-menu-{obj.uid}"):
+            widgets.popup_chrome(_imgui=imgui)
+            imgui.begin_disabled(not editable)
+            if controls.menu_item_simple("Raise"):
+                doc.reorder_object(layer.uid, obj.uid, 1)
+            if controls.menu_item_simple("Lower"):
+                doc.reorder_object(layer.uid, obj.uid, -1)
+            imgui.separator()
+            if controls.menu_item_simple("Delete"):
+                doc.remove_object(layer.uid, obj.uid)
+                if state.selected_object == obj.uid:
+                    state.selected_object = None
+            imgui.end_disabled()
+            imgui.end_popup()
+        imgui.pop_id()
 
 
 def _delete_layer(ctx: Any, doc: Any, layer: Any) -> None:

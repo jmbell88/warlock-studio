@@ -627,6 +627,11 @@ def test_map_metadata_is_validated_and_undoable_as_one_step():
         backgroundcolor="#102030",
         skew_x=8,
         skew_y=-2,
+        # The three the offset projections read, editable since W3.7 and part
+        # of the same one-step snapshot as everything else here.
+        stagger_axis="x",
+        stagger_index="even",
+        hex_side=12,
     )
     assert doc.map_settings() == {
         "class_name": "Dungeon",
@@ -635,11 +640,15 @@ def test_map_metadata_is_validated_and_undoable_as_one_step():
         "backgroundcolor": "#102030",
         "skew_x": 8,
         "skew_y": -2,
+        "stagger_axis": "x",
+        "stagger_index": "even",
+        "hex_side": 12,
     }
     assert len(doc.history) == depth + 1
     doc.undo()
     assert doc.map_settings()["class_name"] == ""
     assert doc.map_settings()["backgroundcolor"] is None
+    assert doc.map_settings()["hex_side"] == 0, "and the hex side came back too"
     doc.redo()
     assert doc.map_settings()["class_name"] == "Dungeon"
 
@@ -901,3 +910,18 @@ def test_a_session_whose_object_was_deleted_commits_nothing():
     depth = len(doc.history)
     assert doc.end_object_edit() is False
     assert len(doc.history) == depth
+
+
+def test_the_offset_projection_fields_are_validated_like_every_other_setting():
+    """They round-tripped through TMX from the day the projections landed and
+    had no UI at all, so a hexagonal map made here always wrote hex_side = 0 --
+    a .tmx this editor produced and Tiled drew wrongly."""
+    doc = _doc()
+    with pytest.raises(ValueError, match="stagger axis"):
+        doc.set_map_settings(stagger_axis="sideways")
+    with pytest.raises(ValueError, match="stagger index"):
+        doc.set_map_settings(stagger_index="middling")
+    # A negative side is clamped rather than refused: it is a length, and zero
+    # is already the meaningful "no flat run" answer.
+    doc.set_map_settings(hex_side=-5)
+    assert doc.map_settings()["hex_side"] == 0

@@ -376,6 +376,39 @@ def map_settings_popup(ctx: Any, state: Any, tab: Any) -> None:
             )
             if changed:
                 doc.set_map_settings(skew_x=int(skew[0]), skew_y=int(skew[1]))
+        if doc.projection in (project.STAGGERED, project.HEXAGONAL):
+            # Shown only for the two projections that read them, which is the
+            # same rule Skew follows above: a field that means nothing on an
+            # orthogonal map is a question with no answer.
+            axis = widgets.labeled_combo(
+                "Stagger axis",
+                doc.stagger_axis,
+                [("y", "Rows (y)"), ("x", "Columns (x)")],
+                help_text="Which way the offset runs. Tiled's staggeraxis.",
+            )
+            if axis != doc.stagger_axis:
+                doc.set_map_settings(stagger_axis=axis)
+            index = widgets.labeled_combo(
+                "Stagger index",
+                doc.stagger_index,
+                [("odd", "Odd"), ("even", "Even")],
+                help_text="Which rows (or columns) are the shifted ones.",
+            )
+            if index != doc.stagger_index:
+                doc.set_map_settings(stagger_index=index)
+        if doc.projection == project.HEXAGONAL:
+            changed, side = controls.input_int("Hex side", int(doc.hex_side))
+            if changed:
+                doc.set_map_settings(hex_side=max(0, int(side)))
+                # It changes ``pixel_width``, so the fit is stale: a map that
+                # kept its old frame after the lattice changed shape is one
+                # whose edge is off screen with no way to tell why.
+                tab.view.fitted = False
+            widgets.help_marker(
+                "How long the hexagon's flat run is, in pixels. Zero is a "
+                "staggered diamond rather than a hexagon -- which is what a "
+                "hexagonal map made here wrote before this field existed."
+            )
 
     imgui.dummy((0, 6))
     widgets.section("Custom properties")

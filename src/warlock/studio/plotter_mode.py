@@ -869,6 +869,24 @@ def _stepped(zoom: float, direction: int) -> float:
     return next((rung for rung in reversed(rungs) if rung < zoom - 1e-6), rungs[0])
 
 
+def _shift_layer(tab: PlotterDoc, delta: int) -> bool:
+    """Move the active layer one place within its own parent. -> whether it moved."""
+    doc = tab.doc
+    uid = doc.active_layer
+    if uid is None:
+        return False
+    found = doc._locate(uid)
+    if found is None:
+        return False
+    _layer, parent_uid, index = found
+    siblings = doc.children_of(parent_uid)
+    wanted = index + int(delta)
+    if not 0 <= wanted < len(siblings):
+        return False
+    doc.move_layer(uid, wanted)
+    return True
+
+
 def store_stamp(ctx: Any, state: PlotterState, tab: PlotterDoc, slot: int) -> bool:
     """Ctrl+Shift+N: put the brush in hand into a numbered slot.
 
@@ -957,6 +975,12 @@ def _ctrl_key(
         return True
     if name == "e":
         export_map(ctx, "tmx", tab) if shift else export_library(ctx, tab)
+        return True
+    if shift and name in ("up", "down"):
+        # Tiled's Raise/Lower Layer. Ctrl+Shift rather than Ctrl+arrow: the
+        # plain arrows nudge and Ctrl+arrow is free but reads as "a bigger
+        # nudge", which is what Inker's Shift+arrow already means.
+        _shift_layer(tab, 1 if name == "up" else -1)
         return True
     if shift and name.isdigit() and name != "0":
         return store_stamp(ctx, state, tab, int(name))

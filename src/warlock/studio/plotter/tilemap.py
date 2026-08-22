@@ -276,6 +276,13 @@ class MapDoc(ProjectionOps, TilesetOps, LayerOps, PaintOps, GeometryOps, ObjectO
             "backgroundcolor": self.backgroundcolor,
             "skew_x": int(self.skew_x),
             "skew_y": int(self.skew_y),
+            # The three the offset projections read. They have round-tripped
+            # through TMX since the day those projections landed and had no UI
+            # at all, so a hexagonal map made here always wrote hex_side = 0 --
+            # a .tmx this editor produced and Tiled drew wrongly.
+            "stagger_axis": str(self.stagger_axis),
+            "stagger_index": str(self.stagger_index),
+            "hex_side": int(self.hex_side),
         }
 
     def set_map_settings(self, **values: Any) -> None:
@@ -301,11 +308,20 @@ class MapDoc(ProjectionOps, TilesetOps, LayerOps, PaintOps, GeometryOps, ObjectO
             values["backgroundcolor"], "a map background colour"
         )
         skew_x, skew_y = int(values["skew_x"]), int(values["skew_y"])
+        stagger_axis = str(values["stagger_axis"])
+        if stagger_axis not in ("x", "y"):
+            raise ValueError(f"unknown stagger axis {stagger_axis!r}")
+        stagger_index = str(values["stagger_index"])
+        if stagger_index not in ("odd", "even"):
+            raise ValueError(f"unknown stagger index {stagger_index!r}")
+        hex_side = max(0, int(values["hex_side"]))
         self.class_name = class_name
         self.parallax_origin = parallax_origin
         self.renderorder = order
         self.backgroundcolor = backgroundcolor
         self.skew_x, self.skew_y = skew_x, skew_y
+        self.stagger_axis, self.stagger_index = stagger_axis, stagger_index
+        self.hex_side = hex_side
 
     # -- history -------------------------------------------------------------
 
