@@ -603,7 +603,9 @@ def test_a_locked_layer_opens_no_path_at_all(scene):
     scene.tab.doc.stack.active.locked = True
     scene.click(BEND[0])
     assert scene.state.gesture_pts == []
-    assert scene.toasts and scene.toasts[0][1] == "warn"
+    # A tip, not a toast (W2.6): this answers the click, and it belongs under
+    # the cursor that made it rather than over the window.
+    assert scene.state.tip is not None and "locked" in scene.state.tip.text
 
 
 def test_a_tool_switch_drops_the_path(scene):

@@ -698,6 +698,27 @@ register(
 )
 register(
     Op(
+        "tile_auto",
+        "Tileset follows the drawing",
+        lambda ctx, tab, **_: setattr(tab.doc, "tile_behavior", "auto"),
+        menu="Sprite",
+        enabled=lambda state, tab: (
+            tab is not None
+            and tab.doc.active_tilemap_uid() is not None
+            and tab.doc.tile_behavior != "auto"
+        ),
+        reason=(
+            "This is not a tilemap layer, or it already updates its tileset "
+            "as you draw."
+        ),
+        hint=(
+            "Auto: painting on a tilemap layer edits the tile under the brush. "
+            "Manual leaves the tileset alone and reverts the cell instead."
+        ),
+    )
+)
+register(
+    Op(
         "convert_colour_mode",
         "Colour mode...",
         dialog("inker-convert"),
@@ -804,6 +825,19 @@ register(
         key="Ctrl+Shift+Down",
         enabled=lambda state, tab: ready(state, tab) and many_layers(state, tab),
         reason="There is only one layer.",
+    )
+)
+register(
+    Op(
+        "show_layer",
+        "Show this layer",
+        lambda ctx, tab, **_: tab.doc.set_layer_props(
+            tab.doc.stack.active_index, visible=True
+        ),
+        menu="Layer",
+        enabled=lambda state, tab: tab is not None and not tab.doc.stack.active.visible,
+        reason="This layer is already visible.",
+        separator_before=True,
     )
 )
 register(

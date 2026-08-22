@@ -374,7 +374,7 @@ def test_a_shade_press_on_a_document_with_no_palette_is_refused_out_loud(scene):
     inker_canvas._press(ctx, state, tab, (12.0, 12.0))
     assert state.drag_kind == ""
     assert tab.doc._stroke is None
-    assert ctx.toasts == [(inker_state.SHADE_REASONS["none"], "warn")]
+    assert state.tip is not None and state.tip.text == inker_state.SHADE_REASONS["none"]
 
 
 def test_the_press_hands_the_engine_the_selected_ramp_and_direction(scene):

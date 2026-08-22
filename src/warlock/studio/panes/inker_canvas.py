@@ -638,7 +638,7 @@ def _canvas(ctx: Any, state: Any, tab: Any) -> None:
         # this -- it is only ever set from inside a visible canvas.
         tab.view.pending_zoom_rung = 0
     imgui.end_child()
-    _status_bar(state, tab, origin, hovered)
+    _status_bar(ctx, state, tab, origin, hovered)
 
 
 #: The tools whose gesture is sized by the brush slider, and therefore the
@@ -709,7 +709,7 @@ def _cursor_pixel(state: Any, tab: Any, origin, hovered: bool):
     return point, tab.doc.eyedrop(point, layer_only=state.sample_layer)
 
 
-def _status_bar(state: Any, tab: Any, origin: Any, hovered: bool) -> None:
+def _status_bar(ctx: Any, state: Any, tab: Any, origin: Any, hovered: bool) -> None:
     """The numbers a paint program keeps under the canvas.
 
     It held four -- zoom, position, tool, document size -- and the four it did
@@ -778,6 +778,28 @@ def _status_bar(state: Any, tab: Any, origin: Any, hovered: bool) -> None:
         # readout for four.
         imgui.same_line()
         widgets.secondary(tip.text)
+        if tip.remedy:
+            imgui.same_line()
+            _remedy(ctx, state, tip)
+
+
+def _remedy(ctx: Any, state: Any, tip: Any) -> None:
+    """The one button a tip is allowed to offer: an op, by name.
+
+    Looked up rather than held, and dropped silently if the name has gone --
+    a tip is transient and an op is not, so a stale name means the remedy was
+    retired between the press and the frame, which is not worth a second
+    message about.
+    """
+    from .. import inker_ops
+
+    try:
+        op = inker_ops.get(tip.remedy)
+    except KeyError:  # pragma: no cover - a retired op named by an old tip
+        return
+    if widgets.ghost_button(f"{tip.remedy_label or op.label}##inkertip"):
+        inker_ops.run(ctx, op)
+        state.tip = None
 
 
 # --- input ------------------------------------------------------------------
@@ -1122,17 +1144,15 @@ def _locked_out(ctx: Any, state: Any, tab: Any) -> bool:
         # both were stacking one identical toast per press for as long as
         # they went on.
         if not doc.stack.active.visible:
-            ctx.state.toast_once(
-                "That layer is hidden, so nothing you paint on it will show. "
-                "The eye in the layers panel turns it back on.",
-                "warn",
+            state.say(
+                "That layer is hidden, so nothing you paint on it will show.",
+                remedy="show_layer",
+                remedy_label="Show it",
             )
         elif not _group_shown(doc):
-            ctx.state.toast_once(
+            state.say(
                 "That layer is inside a hidden group, so nothing you paint on "
-                "it will show. The group's eye in the layers panel turns it "
-                "back on.",
-                "warn",
+                "it will show. The group's eye is on its timeline row."
             )
         return False
     # Nudging a buffer that is already floating writes to no layer -- the hole
@@ -1140,7 +1160,9 @@ def _locked_out(ctx: Any, state: Any, tab: Any) -> bool:
     # is deliberately not refused either.
     if state.tool == "move" and doc.floating is not None:
         return False
-    ctx.toast(inker_mode.LOCKED_LAYER, "warn")
+    state.say(
+        inker_mode.LOCKED_LAYER, remedy="layer_properties", remedy_label="Unlock"
+    )
     state.drag_kind = ""
     return True
 
@@ -1222,7 +1244,14 @@ def _manual_note(ctx: Any, state: Any, doc: Any) -> None:
         return
     head, state.tile_head = state.tile_head, None
     if doc.history.head == head:
-        ctx.state.toast_once(inker_state.TILE_MANUAL_REVERTED, "warn")
+        # Aseprite's own "Disable Snap to Grid" button, in this app's words: the
+        # remedy is the *op*, so the tip cannot offer a switch the menus and
+        # the keyboard do not have.
+        state.say(
+            inker_state.TILE_MANUAL_REVERTED,
+            remedy="tile_auto",
+            remedy_label="Switch to Auto",
+        )
 
 
 def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
@@ -1324,7 +1353,7 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
         # a tool without asking the panel anything.
         refusal = inker_state.tool_reason(tool, doc)
         if refusal:
-            ctx.toast(refusal, "warn")
+            state.say(refusal)
             state.drag_kind = ""
             return
         doc.commit_floating()
@@ -1417,7 +1446,7 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
         # palette actually arrives at.
         refusal = inker_state.tool_reason(tool, doc)
         if refusal:
-            ctx.toast(refusal, "warn")
+            state.say(refusal)
             state.drag_kind = ""
             return
         doc.commit_floating()

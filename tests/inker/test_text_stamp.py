@@ -308,7 +308,7 @@ def test_a_locked_layer_is_refused_before_the_box_opens(pressed):
     pressed.tab.doc.stack.active.locked = True
     pressed.press((7.0, 9.0))
     assert pressed.opened == []
-    assert pressed.toasts and "locked" in pressed.toasts[0][0]
+    assert pressed.state.tip is not None and "locked" in pressed.state.tip.text
 
 
 def _indexed(tab) -> None:

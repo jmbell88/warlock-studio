@@ -41,3 +41,43 @@ def test_the_newest_tip_replaces_the_last_one():
     first = state.tip
     state.say("second")
     assert state.tip is not first and state.tip.text == "second"
+
+
+def test_the_canvas_raises_no_toasts_at_all():
+    """The rule, as a scan: **a tip answers a gesture; a toast reports a job.**
+
+    Every refusal in ``inker_canvas`` is an answer to something the user just
+    did with the mouse or a key, so every one of them is a tip. A toast belongs
+    to work that finished while the user was looking somewhere else -- "Saved.",
+    "Exported to ...", "Cannot export: ..." -- and none of that happens here.
+    Stated as a scan because the failure mode is one line added in a hurry.
+    """
+
+    import inspect
+
+    from warlock.studio.panes import inker_canvas
+
+    source = inspect.getsource(inker_canvas)
+    body = "\n".join(
+        line for line in source.splitlines() if not line.strip().startswith("#")
+    )
+    assert "ctx.toast(" not in body
+    assert "toast_once(" not in body
+
+
+def test_every_remedy_names_an_op_that_exists():
+    """A tip may only offer what the menus and the keyboard also have."""
+
+    import inspect
+
+    from warlock.studio import inker_mode, inker_ops
+    from warlock.studio.panes import inker_canvas
+
+    names = {op.name for op in inker_ops.OPS}
+    for module in (inker_canvas, inker_mode):
+        source = inspect.getsource(module)
+        for chunk in source.split("remedy=")[1:]:
+            name = chunk.split(",")[0].strip().strip('"').strip("'")
+            if name.startswith(("remedy", "op.")) or not name:
+                continue
+            assert name in names, f"{module.__name__} offers a remedy named {name!r}"

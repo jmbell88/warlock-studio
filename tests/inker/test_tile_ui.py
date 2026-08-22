@@ -107,7 +107,7 @@ def test_a_stamp_on_an_ordinary_layer_refuses_out_loud(scene) -> None:
     before = tab.doc.stack.active.pixels.copy()
     inker_canvas._press(ctx, state, tab, (4.0, 4.0))
     assert state.drag_kind == ""
-    assert _sent(app) == [(inker_state.TILE_REASON, "warn")]
+    assert state.tip is not None and state.tip.text == inker_state.TILE_REASON
     assert np.array_equal(tab.doc.stack.active.pixels, before)
 
 
@@ -257,11 +257,14 @@ def test_a_manual_revert_says_so_once_per_gesture(scene) -> None:
     _paint_gesture(ctx, state, tab)
 
     assert tab.doc.history.head == head, "manual mode records nothing"
-    assert _sent(app) == [(inker_state.TILE_MANUAL_REVERTED, "warn")]
-    # A second stroke while the first sentence is still on screen coalesces
-    # rather than stacking -- ``toast_once``'s whole reason.
+    assert state.tip is not None and state.tip.text == inker_state.TILE_MANUAL_REVERTED
+    # And the way out is offered by *name*: Aseprite's "Disable Snap to Grid"
+    # button, over an op the menus and the keyboard have too.
+    assert state.tip.remedy == "tile_auto"
+    # A second stroke cannot stack a second sentence: there is one tip slot.
     _paint_gesture(ctx, state, tab)
-    assert _sent(app) == [(inker_state.TILE_MANUAL_REVERTED, "warn")]
+    assert _sent(app) == []
+    assert state.tip.text == inker_state.TILE_MANUAL_REVERTED
 
 
 def test_a_stack_mode_stroke_says_nothing_because_it_recorded_something(scene) -> None:

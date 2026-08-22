@@ -1,5 +1,11 @@
 """A refusal the user can meet is a refusal the user is told about.
 
+Since W2.6 the *door a gesture arrives at* answers with a status-bar tip rather
+than a toast, and the distinction is written down in ``inker_state.Tip``: a tip
+answers a gesture, a toast reports a job. So these tests read ``state.tip``,
+which is the same claim about the same doors -- one sentence, wherever the
+user's hand came from -- said under the cursor instead of over the window.
+
 ``INVARIANTS.md`` states the split these tests guard: the engine's answer is a
 plain ``False`` because it is asked sixty times a second, and it is the *panes*
 that turn one press into one sentence. What had gone wrong is that only some of
@@ -46,6 +52,11 @@ def _sent(app) -> list[tuple[str, str]]:
     return [(t.text, t.level) for t in app.toasts]
 
 
+def _tip(state) -> str:
+    """What the status bar is saying, or ``""``."""
+    return "" if state.tip is None else state.tip.text
+
+
 def _press(monkeypatch, ctx, key):
     import pygame
 
@@ -72,7 +83,10 @@ def test_a_press_on_a_locked_layer_still_says_so() -> None:
     ctx, state, tab, app = _session()
     tab.doc.stack.active.locked = True
     assert inker_canvas._locked_out(ctx, state, tab) is True
-    assert _sent(app) == [(inker_mode.LOCKED_LAYER, "warn")]
+    assert _tip(state) == inker_mode.LOCKED_LAYER
+    # And the way out is offered as an *op name*, so the button cannot be one
+    # the menus and the keyboard do not have.
+    assert state.tip.remedy == "layer_properties"
 
 
 def test_a_nudge_onto_a_locked_layer_says_the_same_thing(monkeypatch) -> None:
@@ -82,7 +96,7 @@ def test_a_nudge_onto_a_locked_layer_says_the_same_thing(monkeypatch) -> None:
     ctx, state, tab, app = _session(tool="move")
     tab.doc.stack.active.locked = True
     _press(monkeypatch, ctx, pygame.K_RIGHT)
-    assert _sent(app) == [(inker_mode.LOCKED_LAYER, "warn")]
+    assert _tip(state) == inker_mode.LOCKED_LAYER
 
 
 def test_delete_on_a_locked_layer_says_the_same_thing(monkeypatch) -> None:
@@ -92,7 +106,7 @@ def test_delete_on_a_locked_layer_says_the_same_thing(monkeypatch) -> None:
     tab.doc.select(inker.SelectionMask.from_rect(SIZE, (2, 2, 8, 8)))
     tab.doc.stack.active.locked = True
     _press(monkeypatch, ctx, pygame.K_DELETE)
-    assert _sent(app) == [(inker_mode.LOCKED_LAYER, "warn")]
+    assert _tip(state) == inker_mode.LOCKED_LAYER
 
 
 def test_a_nudge_that_works_says_nothing(monkeypatch) -> None:
@@ -129,33 +143,38 @@ def test_painting_on_a_hidden_layer_says_why_nothing_appeared() -> None:
     ctx, state, tab, app = _session()
     tab.doc.stack.active.visible = False
     assert inker_canvas._locked_out(ctx, state, tab) is False, "not refused"
-    assert len(app.toasts) == 1
-    assert "hidden" in app.toasts[0].text
-    assert app.toasts[0].level == "warn"
+    assert "hidden" in _tip(state)
+    assert state.tip.remedy == "show_layer"
 
 
 def test_the_hidden_warning_does_not_stack_per_press() -> None:
     """A multi-click shape tool presses once per vertex and the supported
-    paint-under-a-hidden-layer workflow presses once per stroke, without limit;
-    ``AppState.toast`` appends unconditionally, so five clicks used to be five
-    identical toasts on screen at once. One sentence while it is live."""
+    paint-under-a-hidden-layer workflow presses once per stroke, without limit,
+    and ``AppState.toast`` appends unconditionally -- five clicks were five
+    identical toasts on screen at once.
+
+    A tip cannot stack **by construction**: there is one slot, and the newest
+    sentence replaces whatever was in it. That is the coalescing the toast door
+    had to be taught, and it is why a gesture's answer belongs here."""
     ctx, state, tab, app = _session(tool="polyline")
     tab.doc.stack.active.visible = False
     for _ in range(5):
         assert inker_canvas._locked_out(ctx, state, tab) is False
-    assert len(app.toasts) == 1
+    assert _sent(app) == []
+    assert "hidden" in _tip(state)
 
 
 def test_an_expired_hidden_warning_is_earned_again() -> None:
-    """A coalesce, not a once-per-session gag: the identity check runs over
-    the *live* toasts only, so once the copy on screen has expired the next
-    press explains itself afresh."""
+    """Not a once-per-session gag: a tip expires, and the next press explains
+    itself afresh with a fresh clock."""
     ctx, state, tab, app = _session()
     tab.doc.stack.active.visible = False
     inker_canvas._locked_out(ctx, state, tab)
-    app.toasts[0].born -= app.toasts[0].ttl + 1.0
+    first = state.tip
+    first.at -= inker_state.TIP_SECONDS + 1.0
+    assert not first.alive()
     inker_canvas._locked_out(ctx, state, tab)
-    assert len(app.toasts) == 2
+    assert state.tip is not first and state.tip.alive()
 
 
 def test_a_layer_inside_a_hidden_group_is_not_silent() -> None:
@@ -170,15 +189,13 @@ def test_a_layer_inside_a_hidden_group_is_not_silent() -> None:
     doc.set_group_props(node.uid, visible=False)
     assert doc.stack.active.visible, "the layer's own eye stays on"
     assert inker_canvas._locked_out(ctx, state, tab) is False, "not refused"
-    assert len(app.toasts) == 1
-    assert "hidden group" in app.toasts[0].text
-    assert app.toasts[0].level == "warn"
+    assert "hidden group" in _tip(state)
 
 
 def test_a_visible_layer_says_nothing() -> None:
     ctx, state, tab, app = _session()
     assert inker_canvas._locked_out(ctx, state, tab) is False
-    assert _sent(app) == []
+    assert _sent(app) == [] and _tip(state) == ""
 
 
 def test_a_visible_group_member_says_nothing() -> None:
@@ -186,7 +203,7 @@ def test_a_visible_group_member_says_nothing() -> None:
     node = tab.doc.group_layers([0])
     assert node is not None
     assert inker_canvas._locked_out(ctx, state, tab) is False
-    assert _sent(app) == []
+    assert _sent(app) == [] and _tip(state) == ""
 
 
 @pytest.mark.parametrize("tool", ["eyedropper", "select", "lasso", "wand"])
@@ -197,4 +214,4 @@ def test_a_read_only_tool_is_told_nothing_about_either(tool: str) -> None:
     tab.doc.stack.active.locked = True
     tab.doc.stack.active.visible = False
     assert inker_canvas._locked_out(ctx, state, tab) is False
-    assert _sent(app) == []
+    assert _sent(app) == [] and _tip(state) == ""
