@@ -3523,52 +3523,30 @@ class App:
         sidebar_w = layout_mod.sidebar_width()
         tab = None if ctx.state.inker is None else ctx.state.inker.active
         animated = tab is not None and tab.doc.anim is not None
-        # The tile panel appears with the tilesets, the way the timeline strip
-        # and the preview appear with the frames: a drawing that has never seen
-        # a tilemap layer is byte-for-byte the workspace it always was, and a
-        # fixed-height palette taken out of every Inker session for a feature
-        # most of them do not use is a cost with no matching benefit. The
-        # *verbs* that make the first tileset are not hidden with it -- they are
-        # in the bridge panel, which is always drawn.
+        # The tile panel appears with the tilesets, the way the preview appears
+        # with the frames: a drawing that has never seen a tilemap layer is
+        # byte-for-byte the workspace it always was, and a fixed-height palette
+        # taken out of every Inker session for a feature most of them do not
+        # use is a cost with no matching benefit. The *verbs* that make the
+        # first tileset are not hidden with it -- they are menu rows, which are
+        # always drawn.
         tiled_doc = tab is not None and bool(tab.doc.tilesets)
-        # **The share is a preference, not a promise.** The toolbox is a fixed
-        # grid whose height is known, and at UI scale 1.5 it is very nearly the
-        # whole 55% this pane used to be given, which left the Brush heading at
-        # the bottom edge with its first control cut in half. So the share is
-        # honoured when it is generous enough and overridden when it is not:
-        # the toolbox plus a floor of options wins, and the colour panel below
-        # keeps a floor of its own so this cannot swallow it on a short window.
-        # Same shape as the sidebar/centre give-way rule in INVARIANTS.md,
-        # applied down a column instead of across a row.
-        #
-        # The tile panel's fixed height joins the *floor* the toolbox has to
-        # give way to rather than being carved out of the colour panel: it sits
-        # between the two, so without this the give-way arithmetic would hand
-        # the toolbox room the tile panel then took, and the colour panel would
-        # end up below its own floor on a short window.
-        below_floor = inker_colors.PANEL_FLOOR + (inker_tiles.PANEL_H if tiled_doc else 0.0)
-        _split_column(
-            ctx,
-            lay,
-            split_id="inker-tools",
-            handle_length=sidebar_w,
-            width=sidebar_w,
+
+        # **The toolbox is a fixed 90 px rail** -- no share, no handle, no
+        # give-way. All three existed because the pane under the toolbox was
+        # the tool options, whose height nobody could predict; the options are
+        # a row above the canvas now (W2.4) and what is left is twelve buttons,
+        # three toggles and two colour chips, which is a *known* width and no
+        # height worth arguing about. The whole give_way/OPTIONS_FLOOR
+        # apparatus goes with them.
+        with layout_mod.pane(
+            "inker-tools",
+            (sp(inker_tools.RAIL_W), 0),
+            layout_mod.PaneRole.SIDEBAR,
             edge=layout_mod.PaneEdge.RIGHT,
-            top=("inker-tools", layout_mod.PaneRole.SIDEBAR, inker_tools.draw),
-            middle=(
-                (
-                    "inker-tiles",
-                    layout_mod.PaneRole.SIDEBAR,
-                    inker_tiles.draw,
-                    sp(inker_tiles.PANEL_H),
-                )
-                if tiled_doc
-                else None
-            ),
-            bottom=("inker-colors", layout_mod.PaneRole.SIDEBAR, inker_colors.draw),
-            wanted=sp(inker_tools.grid_height() + inker_tools.OPTIONS_FLOOR),
-            below_floor=sp(below_floor),
-        )
+        ) as visible:
+            if visible:
+                inker_tools.draw(ctx)
 
         imgui.same_line()
         width = layout_mod.centre_width()
@@ -3611,24 +3589,62 @@ class App:
         imgui.end_group()
 
         imgui.same_line()
-        # **The right column is the preview and nothing else.** The layers
-        # panel is gone: its rows are the timeline's rows now (W2.5a), which is
-        # where Aseprite has always kept them and where a row can show its cels
-        # as well as its name. The preview is a fixed height rather than a
-        # share -- it is a picture of the canvas, and one that grew with the
-        # window would have pushed the list off the bottom on a short screen,
-        # back when there was a list here to push. W2.9 gives this column the
-        # colour bar and the tile panel.
-        if animated:
+        # **Preview / Colours / Tiles**, top to bottom, with a handle between
+        # each adjacent pair. The colour panel moved here from the left column
+        # because the palette grid is a *panel* -- swatches, ramps, the indexed
+        # table -- and it always wanted the width; the two colours themselves
+        # stayed with the tools, at the foot of the rail, which is Aseprite's
+        # "Mirrored Default" shape.
+        #
+        # The tile panel is now a share with a floor rather than a fixed 240,
+        # and it is the pane ``give_way`` starves first: at the 1100x700 floor
+        # this column holds preview 180 + colours 210 + tiles 140 = 530 px of
+        # floor against 668 px of column, even with both a tileset and an
+        # animation open.
+        if tiled_doc:
+            _split_column(
+                ctx,
+                lay,
+                split_id="inker-colors",
+                handle_length=sidebar_w,
+                width=0,
+                edge=layout_mod.PaneEdge.LEFT,
+                before=(
+                    (
+                        "inker-preview",
+                        layout_mod.PaneRole.INSPECTOR,
+                        inker_preview.draw,
+                        sp(inker_preview.PREVIEW_H),
+                    )
+                    if animated
+                    else None
+                ),
+                top=("inker-colors", layout_mod.PaneRole.INSPECTOR, inker_colors.draw),
+                bottom=("inker-tiles", layout_mod.PaneRole.INSPECTOR, inker_tiles.draw),
+                wanted=sp(inker_colors.PANEL_FLOOR),
+                below_floor=sp(inker_tiles.PANEL_FLOOR),
+            )
+        else:
+            # One pane under the preview, so no handle: a splitter with nothing
+            # on the far side of it is a handle that divides nothing.
             imgui.begin_group()
+            if animated:
+                with layout_mod.pane(
+                    "inker-preview",
+                    (0, sp(inker_preview.PREVIEW_H)),
+                    layout_mod.PaneRole.INSPECTOR,
+                    edge=layout_mod.PaneEdge.LEFT,
+                ) as visible:
+                    if visible:
+                        inker_preview.draw(ctx)
             with layout_mod.pane(
-                "inker-preview",
-                (0, sp(inker_preview.PREVIEW_H)),
+                "inker-colors",
+                (0, 0),
                 layout_mod.PaneRole.INSPECTOR,
                 edge=layout_mod.PaneEdge.LEFT,
             ) as visible:
                 if visible:
-                    inker_preview.draw(ctx)
+                    inker_colors.draw(ctx)
             imgui.end_group()
 
     def _plotter_workspace(self) -> None:

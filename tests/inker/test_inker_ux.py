@@ -513,9 +513,11 @@ def test_the_blocks_that_are_the_panel_do_not_fold() -> None:
     and nothing to act on -- which is what ``widgets.header``'s own docstring
     says, and why the brush options are still a plain section."""
     source = Path(inker_tools.__file__).read_text(encoding="utf-8")
-    # "Brush" and "Selection" went with their controls -- to the context bar
-    # and to the Select menu. What is left of the panel is still plain.
-    for label in ("Tools", "Gradient", "Transform"):
+    # "Tools" went with the heading itself -- the toolbox is a 90 px rail and
+    # a section title does not fit across it. "Brush" and "Selection" went with
+    # their controls, to the context bar and to the Select menu. What is left
+    # of the panel is still plain rather than folded.
+    for label in ("Gradient", "Slices"):
         assert f'widgets.section("{label}")' in source
 
 
@@ -534,14 +536,16 @@ def test_the_inker_workspace_has_drag_handles_of_its_own() -> None:
     through ``main._split_column``, which derives the handle from the split's
     own key, and ``tests/test_layout.py`` gates that for all splits at once.
 
-    Only the left column is a split now. The right one held the layer list over
-    the bridge panel, and the bridge panel is gone (W2.2) -- one pane under a
-    handle is a handle that divides nothing, so it went with it. W2.5 gives
-    that column the colour bar and the tile panel and its handles come back.
+    The **right** column is the split now, and the left one is not a split at
+    all: the toolbox is a fixed 90 px rail with nothing under it (W2.9), and
+    the panes that used to be stacked under it -- the tool options, the colour
+    panel, the tile panel -- are a row above the canvas and two panes on the
+    right. So the handle is between colours and tiles, where there are two
+    panes whose proportion is a preference.
     """
     main = Path(inker_tools.__file__).resolve().parent.parent / "main.py"
     source = main.read_text(encoding="utf-8")
-    assert 'split_id="inker-tools"' in source
+    assert 'split_id="inker-colors"' in source
 
 
 def test_the_share_gives_way_to_the_toolboxs_own_height() -> None:
@@ -575,13 +579,20 @@ def test_give_way_answers_for_a_collapsed_column() -> None:
 
 def test_both_floors_are_named_where_the_panes_are() -> None:
     """The numbers belong to the panels that own them, not to the workspace
-    that stacks them: the workspace does not know what a colour panel needs."""
-    assert inker_tools.OPTIONS_FLOOR > 0
+    that stacks them: the workspace does not know what a colour panel needs.
+
+    The toolbox's pair went with the give-way split itself (W2.9): a fixed rail
+    reserves nothing and gives way to nothing. The two that remain are the two
+    panes that share the right column.
+    """
+    from warlock.studio.panes import inker_tiles
+
     assert inker_colors.PANEL_FLOOR > 0
+    assert inker_tiles.PANEL_FLOOR > 0
     main = Path(inker_tools.__file__).resolve().parent.parent / "main.py"
     source = main.read_text(encoding="utf-8")
-    assert "inker_tools.grid_height()" in source
     assert "inker_colors.PANEL_FLOOR" in source
+    assert "inker_tiles.PANEL_FLOOR" in source
 
 
 def test_a_pinned_give_way_handle_does_not_drive_the_share() -> None:
@@ -621,20 +632,19 @@ def test_a_give_way_drag_respects_both_ends_and_a_collapsed_column() -> None:
     assert layout.give_way_drag(0.0, 0.55, wanted, floor, 40.0) == 0.55
 
 
-def test_the_grid_reservation_is_scale_invariant() -> None:
-    """``grid_height`` mixed units: the trailing gap was counted as 6 design px
-    while ``draw`` emitted a 6-*physical*-px dummy, and the heading row was a
-    remembered 28.0 -- both right at UI scale 1.0, which is the scale the smoke
-    suite runs at, and wrong at every other. The measured parts arrive in
-    physical px; the reservation, in design px, must not depend on the scale
-    they were measured at."""
-    at_one = inker_tools._reserve(5, 28.0, 8.0, 1.0)
-    at_150 = inker_tools._reserve(5, 28.0 * 1.5, 8.0 * 1.5, 1.5)
-    assert at_150 == pytest.approx(at_one)
-    # And the design-px constants are counted through, not scaled away.
-    assert at_one == pytest.approx(
-        28.0 + 5 * (inker_tools.BUTTON_H + 8.0) + inker_tools.GRID_GAP
-    )
+def test_the_toolbox_reserves_nothing_because_it_is_a_rail() -> None:
+    """``grid_height``/``_reserve`` are gone with the give-way split (W2.9).
+
+    They existed to tell the workspace how much of the column the toolbox
+    needed before the options under it could have the rest -- an arithmetic
+    that mixed design and physical px and got it wrong twice. A fixed 90 px
+    rail with nothing under it reserves nothing, and the way to keep that
+    arithmetic correct is not to have it.
+    """
+    assert not hasattr(inker_tools, "grid_height")
+    assert not hasattr(inker_tools, "_reserve")
+    assert not hasattr(inker_tools, "OPTIONS_FLOOR")
+    assert inker_tools.RAIL_W > 0
 
 
 def test_the_trailing_gap_is_drawn_and_counted_as_one_number() -> None:

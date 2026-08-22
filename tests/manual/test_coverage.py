@@ -34,6 +34,11 @@ NO_HELP_BUTTON = {
     # documents, and a help button in the middle of a row of sliders would be
     # a fifteenth control. The options themselves are the Inker chapter's.
     "inker_context",
+    # The toolbox rail. At 90 px there is no room for a section heading, let
+    # alone a (?) beside one -- the pane is twelve glyphs, three toggles and
+    # two colour chips, each with its own tooltip. The tools are documented in
+    # the Inker chapter, which the canvas's own help button points at.
+    "inker_tools",
     # No longer a pane: the Inker's bridge panel became rows in that menu
     # strip (W2.2). What is left is the four dialogs behind them, drawn by the
     # centre pane, and a popup has no heading to hang a (?) beside. The verbs

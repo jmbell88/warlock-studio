@@ -50,6 +50,12 @@ TILE_PX = 28.0
 #: on a short screen.
 PANEL_H = 240.0
 
+#: The least of it that has to be on screen, in design px, once the panel is a
+#: share of the right column rather than a fixed height. The picker's own first
+#: row plus its heading: below this the pane is a title with a sliver of tiles
+#: under it, which reads as broken rather than as small.
+PANEL_FLOOR = 140.0
+
 #: What a tileset may be before the picker stops drawing every tile of it. Far
 #: past anything this editor authors (see the module docstring); it exists so a
 #: hand-made ``.tsx`` with four thousand tiles in it cannot cost a frame.

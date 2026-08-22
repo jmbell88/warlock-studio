@@ -276,7 +276,7 @@ def test_every_split_has_a_handle_and_every_handle_a_split():
         "clay-tools",
         "clay-outliner",
         "create-inspector",
-        "inker-tools",
+        "inker-colors",
         "packwright-sources",
         "packwright-items",
         "plotter-tools",

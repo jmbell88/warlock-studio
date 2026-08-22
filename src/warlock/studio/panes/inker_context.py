@@ -37,6 +37,7 @@ NARROW = 92.0
 COMPACT = 54.0
 
 DYNAMICS_POPUP = "inker-dynamics"
+OPTIONS_POPUP = "inker-tool-panels"
 
 #: The options that are a box rather than a number or a menu.
 _CHECKS = frozenset(
@@ -167,6 +168,22 @@ def _tool_bar(ctx: Any, state: Any, tab: Any) -> None:
     fields = [_field(ctx, state, tab, key) for key in inline]
     fields = [field for field in fields if field is not None]
     items = []
+    from . import inker_tools
+
+    if inker_tools._has_panels(state, tab):
+        # The panels a 38 px row is the wrong shape for -- a list of gradient
+        # stops, the document's slices, the image brush's verbs, the named
+        # presets -- behind one button rather than in a column that would have
+        # to exist all session for the tools that have one.
+        items.append(
+            toolbar.Item(
+                "panels",
+                inker_state.tool_label(tool),
+                icons.SETTINGS,
+                tooltip=f"{inker_state.tool_label(tool)} panels",
+                pinned=True,
+            )
+        )
     if behind:
         items.append(
             toolbar.Item(
@@ -177,9 +194,13 @@ def _tool_bar(ctx: Any, state: Any, tab: Any) -> None:
                 pinned=True,
             )
         )
-    if toolbar.toolbar("inker-context", items, fields=fields) == "dynamics":
+    hit = toolbar.toolbar("inker-context", items, fields=fields)
+    if hit == "dynamics":
         imgui.open_popup(DYNAMICS_POPUP)
+    elif hit == "panels":
+        imgui.open_popup(OPTIONS_POPUP)
     _dynamics_popup(ctx, state, tab, behind)
+    _panels_popup(ctx, state, tab)
     imgui.separator()
 
 
@@ -202,6 +223,19 @@ def _dynamics_popup(ctx: Any, state: Any, tab: Any, keys: list[str]) -> None:
             field = _field(ctx, state, tab, key)
             if field is not None:
                 field.draw(False)
+
+
+def _panels_popup(ctx: Any, state: Any, tab: Any) -> None:
+    """The tool's panels, in a popover off the bar."""
+
+    with controls.menu_popup(OPTIONS_POPUP) as opened:
+        if not opened:
+            return
+        from . import inker_tools
+
+        imgui.push_item_width(sp(200))
+        inker_tools.panels(ctx, state, tab)
+        imgui.pop_item_width()
 
 
 def _field(ctx: Any, state: Any, tab: Any, key: str) -> Any:

@@ -12,14 +12,13 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import controls, fonts, icons, inker, inker_mode, inker_state, theme, tokens, widgets
+from .. import controls, icons, inker, inker_mode, inker_state, theme, widgets
 from ..inker import brush, transform
 from ..inker_state import (
     PAINT_TOOLS,
     SHAPE_TOOLS,
     STAMP_TOOLS,
 )
-from ..manual import render as manual_render
 from ..tokens import sp
 
 # Icon-only, five across: what every paint program's toolbox looks like. The
@@ -39,54 +38,11 @@ BUTTON_H = 30.0
 #: a square of icons is the picture a user recognises a toolbox by.
 BUTTON_W = 34.0
 
-#: How much of the options block has to be reachable without scrolling, in
-#: design px, before the toolbox is allowed to claim the rest of the pane.
-#: Three rows and a heading: the Brush section's own name, ``Size`` and its
-#: slider. Not "all of it" -- the panel scrolls and is meant to -- but a
-#: section heading with its first control cut in half is not a panel that
-#: scrolls, it is one that looks broken.
-OPTIONS_FLOOR = 132.0
-
 #: The gap ``draw`` leaves under the grid, in design px. Named so the dummy
 #: that draws it and the reservation that counts it are one number: the dummy
 #: used to emit 6 *physical* px while :func:`grid_height` counted 6 design px,
 #: which is a drift of ``6 * (SCALE - 1)`` at every UI scale but 1.0.
 GRID_GAP = 6.0
-
-
-def _reserve(rows: int, heading: float, spacing: float, scale: float) -> float:
-    """The toolbox reservation in design px, from physically measured parts.
-
-    Split out so the arithmetic is assertable without a GL context: ``heading``
-    and ``spacing`` arrive in physical px exactly as the style hands them over,
-    ``BUTTON_H`` and ``GRID_GAP`` are design px, and the answer is design px
-    because ``main`` passes it back through ``sp``. The parts measured at one
-    scale must therefore reserve the same design height at every scale.
-    """
-    scale = max(scale, 0.001)
-    return heading / scale + rows * (BUTTON_H + spacing / scale) + GRID_GAP
-
-
-def grid_height() -> float:
-    """The toolbox block's height in design px: heading, rows, trailing gap.
-
-    Deterministic, because the toolbox is a fixed table laid out at a fixed
-    button height -- which is what lets the workspace reserve room for the
-    options *below* it instead of guessing a share and hoping.
-
-    The gap between rows is asked of the style for the reason ``grid_width``
-    asks for the horizontal one: a literal is right at UI scale 1.0 and wrong
-    at every other, and 1.0 is the scale the smoke suite runs at. The heading
-    row is *measured* for the same reason 28.0 was wrong: ``section`` draws
-    the label in ``fonts.label`` and the manual's help button rides the same
-    row at frame height, and both of those scale with the font.
-    """
-    rows = -(-len(inker_state.TOOL_GROUPS) // COLUMNS)
-    style = imgui.get_style()
-    with fonts.label(imgui):
-        label_h = imgui.get_text_line_height()
-    heading = max(label_h, imgui.get_frame_height()) + style.item_spacing.y
-    return _reserve(rows, heading, style.item_spacing.y, tokens.SCALE)
 
 
 TOOL_ICONS = {
@@ -177,22 +133,120 @@ SYMMETRY_LABELS = (
 )
 
 
+#: The rail's width in design px: two 34 px buttons, the gap between them and
+#: the pane's own padding. Fixed, and the whole point of the wave: the column
+#: it replaces was 300 px carrying the same twelve decisions plus fourteen
+#: controls that are now a row above the canvas.
+RAIL_W = 90.0
+
+#: The colour chips' flags: no inputs, no label, alpha shown as a split square.
+#: The full editor is the colour panel's; these two are a *picture* of what the
+#: tool writes with, and a click opens the picker anyway.
+_CHIP_FLAGS = 0
+
+
 def draw(ctx: Any) -> None:
+    """The toolbox rail: twelve groups, three view toggles, the two colours.
+
+    No heading and no help button -- at 90 px a section title does not fit and
+    would push the first row of tools off the top. The pane is exempted in
+    ``tests/manual/test_coverage.py`` for that reason, and the tools are
+    documented in the Inker chapter as they always were.
+    """
     state = inker_mode.ensure(ctx)
     tab = state.active
-    widgets.section("Tools")
-    manual_render.help_button(ctx, "inker-tools")
     _grid(state, None if tab is None else tab.doc)
-    # Through ``sp`` because ``grid_height`` counts this gap in design px --
-    # an unscaled 6 here is a reservation short by 6 * (SCALE - 1).
     imgui.dummy((0, sp(GRID_GAP)))
+    _view_toggles(ctx, state)
+    imgui.dummy((0, sp(GRID_GAP)))
+    _colour_chips(ctx, state)
+
+
+def _view_toggles(ctx: Any, state: Any) -> None:
+    """Grid, snap and rulers, as three icon toggles rather than three rows.
+
+    ``clay_tools``' idiom. Each writes through ``inker_mode.persist``: these
+    are how the user likes to *see*, and a preference that resets on the next
+    launch is a control they have to rediscover.
+    """
+    for icon, attr, tip in (
+        (icons.GRID, "grid", "Show the pixel grid"),
+        (icons.MAGNET, "grid_snap", "Snap shapes and the marquee to the grid"),
+        (icons.RULER, "rulers", "Rulers along the top and left edges"),
+    ):
+        engaged = bool(getattr(state, attr))
+        if engaged:
+            imgui.push_style_color(
+                imgui.Col_.button.value,
+                imgui.get_style().color_(imgui.Col_.button_active.value),
+            )
+        if widgets.icon_button(f"{icon}##inkview{attr}", tip):
+            setattr(state, attr, not engaged)
+            inker_mode.persist(ctx)
+        if engaged:
+            imgui.pop_style_color()
+        if attr != "rulers":
+            imgui.same_line()
+    imgui.new_line()
+
+
+def _colour_chips(ctx: Any, state: Any) -> None:
+    """The foreground and background, at the foot of the rail.
+
+    Aseprite's "Mirrored Default" shape: the two colours belong with the tools
+    because they are what the tool in your hand writes with, and the *palette*
+    -- swatches, ramps, the indexed table -- is a panel, which is why it sits
+    in the right column instead (``inker_colors``).
+    """
+    changed, value = controls.color_edit4("##inkfg", _vec(state.fg), _CHIP_FLAGS)
+    if changed:
+        state.set_fg(_rgba(value))
+    if imgui.is_item_hovered():
+        imgui.set_tooltip("Foreground -- what the tool writes with")
+    imgui.same_line()
+    changed, value = controls.color_edit4("##inkbg", _vec(state.bg), _CHIP_FLAGS)
+    if changed:
+        state.bg = _rgba(value)
+    if imgui.is_item_hovered():
+        imgui.set_tooltip("Background -- what a right-drag writes with")
+    if widgets.icon_button(f"{icons.SHUFFLE}##inkswap", "Swap the two colours (X)"):
+        state.swap_colours()
+
+
+def _vec(colour: tuple[int, int, int, int]) -> Any:
+    return imgui.ImVec4(*(channel / 255.0 for channel in colour))
+
+
+def _rgba(value: Any) -> tuple[int, int, int, int]:
+    return tuple(max(0, min(255, round(channel * 255))) for channel in value)
+
+
+def panels(ctx: Any, state: Any, tab: Any) -> bool:
+    """The tool's remaining *panels*, drawn wherever the caller wants them.
+
+    What is left once the fourteen simple options became a context bar: a list
+    (the gradient's stops, the document's slices), a block of verbs (the image
+    brush), a shading ramp, the named presets. Each is a panel rather than a
+    control, so each is drawn in a popover off the context bar rather than in a
+    column that would have to exist all session for the tools that have one.
+
+    -> whether anything was drawn, so the bar can leave the button out.
+    """
     if tab is None:
-        # The greyed grid above already says the toolbox has nothing to act on.
-        # The canvas's ``nothing_open`` is the one voice for the empty state.
-        return
-    _options(ctx, state, tab)
-    imgui.dummy((0, 6))
-    _canvas_options(ctx, state)
+        return False
+    before = _has_panels(state, tab)
+    if before:
+        _options(ctx, state, tab)
+    return before
+
+
+def _has_panels(state: Any, tab: Any) -> bool:
+    tool = state.tool
+    if tool in ("gradient", "shade", "slice") or tool in STAMP_TOOLS:
+        return True
+    if tab.doc.active_tilemap_uid() is not None:
+        return True
+    return _has_options(tool)
 
 
 def _grid(state, doc=None) -> None:
@@ -360,6 +414,13 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
     """
     tool = state.tool
     doc = tab.doc
+    # The whole block, not the two panels that happen to write: the slice list
+    # renames and deletes, the image brush reads pixels off the stack a save is
+    # walking, and the gate the canvas, the timeline and the keyboard already
+    # share is one question with two answers behind it (``busy`` is ``saving or
+    # playing``). Asking it once here is what stops a third reason being added
+    # in one place and forgotten in nine.
+    imgui.begin_disabled(tab.busy)
 
     if tool in STAMP_TOOLS:
         _image_brush(ctx, state, tab)
@@ -413,19 +474,17 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
 
     if _has_options(tool):
         _presets(ctx, state)
+    imgui.end_disabled()
 
-    # Everything above this line adjusts the *tool*, which a save does not
-    # read. Free transform changes the document -- it lifts pixels into a
-    # floating buffer and commits them -- so it waits for the save the same way
-    # the canvas, the timeline and the keyboard shortcuts already do.
+    # Free transform is the Edit menu's row and Ctrl+T, and its live handles
+    # are the context bar's Transformation state. The button that used to be
+    # here was the only way *in* when the panel was the only surface; the
+    # numbers it opened are on the bar beside the canvas they turn.
     #
     # The selection verbs that were here are the **Select menu** now, with
     # their amounts as parameter dialogs: eleven buttons and three sliders in a
     # section that drew whenever a mask existed, for operations reached once or
     # twice in a session.
-    imgui.begin_disabled(tab.busy)
-    _transform_entry(ctx, state, doc)
-    imgui.end_disabled()
 
 
 def _tile_behavior(state: Any, doc: Any) -> None:
@@ -923,7 +982,7 @@ def _transform_numbers(state: Any, doc: Any) -> None:
     )
 
 
-def _canvas_options(ctx: Any, state: Any) -> None:
+def canvas_options(ctx: Any, state: Any) -> None:
     imgui.dummy((0, 6))
     # Symmetry, the grid, snapping and the rulers: settings of the *sitting*
     # rather than of the gesture, reached once and then left for an hour.
