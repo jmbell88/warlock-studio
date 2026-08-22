@@ -2945,6 +2945,15 @@ def tick_playback(tab: InkerDoc, dt_ms: float) -> None:
     if not tab.playing or anim is None:
         return
     durations = [frame.duration_ms for frame in anim.frames]
+    if getattr(tab, "constant_rate", 0):
+        # **Constant Frame Rate** (6.7), Aseprite's own playback switch: play
+        # every frame at one rate rather than at the durations the document
+        # stores. It is a *preview* setting and it does not touch the frames --
+        # what an animator is asking is "what does this look like at 12 fps",
+        # not "make every frame 83 ms", and answering the second would be an
+        # undoable edit to every frame of the document.
+        held = max(1, round(1000.0 / float(tab.constant_rate)))
+        durations = [held] * len(durations)
     index, accum, playing, forward, cycles = animation.advance(
         durations,
         tab.play_index,

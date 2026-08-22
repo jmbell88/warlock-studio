@@ -2349,8 +2349,50 @@ def _release(ctx: Any, state: Any, tab: Any, point) -> None:
 #: Onion tints. Red behind, green ahead -- the convention every 2D animation
 #: tool has used for decades, so picking differently would be a novelty the user
 #: has to learn in exchange for nothing.
+#: The tints an onion ghost is drawn in, as *defaults* -- the live values are
+#: ``InkerState.onion_tint_back``/``_forward`` (6.7), because which colours
+#: read as "before" and "after" depends on the drawing they are ghosting.
 ONION_BACK = 0xE05050
 ONION_FORWARD = 0x50C060
+
+
+def _onion_span(state: Any, tab: Any, anim: Any, current: int) -> tuple[int, int]:
+    """The range of frames the ghosts may come from, inclusive.
+
+    The whole document, unless *wrap in tag* is on and the playhead is inside
+    one (6.7) -- in which case it is that tag's own span, because what an
+    animator working inside a walk cycle means by "the frame before this one"
+    is the tag's last frame and not the previous clip's. The tag lookup is
+    ``advance``'s own span logic, read through the same accessor, so the two
+    cannot disagree about which frames a tag holds.
+    """
+    last = len(anim.frames) - 1
+    if not getattr(state, "onion_wrap_tag", False):
+        return (0, last)
+    for tag in getattr(anim, "tags", ()) or ():
+        low, high = int(getattr(tag, "start", 0)), int(getattr(tag, "end", 0))
+        if low <= current <= high:
+            return (max(0, low), min(last, high))
+    return (0, last)
+
+
+def _onion_index(current: int, delta: int, span: tuple[int, int]) -> int | None:
+    """Which frame a ghost ``delta`` away is, or None if there is not one.
+
+    Wrapping inside the span rather than clamping: a clamp draws the same
+    ghost twice at the ends of a cycle, which reads as one ghost that stopped
+    moving -- the failure the whole feature exists to avoid.
+    """
+    low, high = span
+    width = high - low + 1
+    if width <= 0:
+        return None
+    index = current + delta
+    if low <= index <= high:
+        return index
+    if width == 1:
+        return None
+    return low + (index - low) % width
 
 
 def _onion(ctx: Any, state: Any, tab: Any, draw_list, view, origin, size) -> None:
@@ -2372,18 +2414,23 @@ def _onion(ctx: Any, state: Any, tab: Any, draw_list, view, origin, size) -> Non
         active = tab.doc.stack.active_index
         if 0 <= active < len(anim.tracks):
             track_uid = anim.tracks[active].uid
+    span = _onion_span(state, tab, anim, current)
+    tints = (
+        int(getattr(state, "onion_tint_back", ONION_BACK)),
+        int(getattr(state, "onion_tint_forward", ONION_FORWARD)),
+    )
     for offset in range(max(state.onion_before, state.onion_after), 0, -1):
-        for delta, colour in ((-offset, ONION_BACK), (offset, ONION_FORWARD)):
+        for delta, colour in ((-offset, tints[0]), (offset, tints[1])):
             limit = state.onion_before if delta < 0 else state.onion_after
-            index = current + delta
-            if offset > limit or not 0 <= index < len(anim.frames):
+            index = _onion_index(current, delta, span)
+            if offset > limit or index is None:
                 continue
             texture = inker_textures.frame_texture(
                 ctx, tab, anim.frames[index].uid, track_uid=track_uid
             )
             if texture is None:
                 continue
-            fade = state.onion_alpha / offset
+            fade = state.onion_alpha / (offset ** max(0.0, float(state.onion_falloff)))
             _blit(
                 draw_list, texture, view, origin, 0, 0, size[0], size[1],
                 colour=_u32(colour, fade),
@@ -2418,7 +2465,7 @@ def _paint(ctx: Any, state: Any, tab: Any, origin, *, hovered: bool) -> None:
     _checkerboard(ctx, draw_list, tiled_tl, tiled_br)
     # Before the composite and before its ``None`` early-out, so the strip is
     # genuinely beneath the live drawing rather than sometimes instead of it.
-    if state.onion and not tab.playing:
+    if state.onion and not tab.playing and not state.onion_in_front:
         _onion(ctx, state, tab, draw_list, view, origin, doc.size)
 
     if tab.playing:
@@ -2447,6 +2494,11 @@ def _paint(ctx: Any, state: Any, tab: Any, origin, *, hovered: bool) -> None:
         uv0=(x0 / width, y0 / height), uv1=(x1 / width, y1 / height),
     )
     _floating(ctx, tab, draw_list, origin)
+    if state.onion and not tab.playing and state.onion_in_front:
+        # **Over the drawing** (6.7). After the composite and the floating
+        # buffer, so what is checked against the ghosts is what is actually on
+        # the canvas -- including the pixels that have not landed yet.
+        _onion(ctx, state, tab, draw_list, view, origin, doc.size)
     draw_list.add_rect(top_left, bottom_right, _u32(theme.EDGE))
 
     if state.grid:

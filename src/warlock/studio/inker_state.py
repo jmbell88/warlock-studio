@@ -1141,6 +1141,12 @@ class InkerDoc:
     # clip stopped and started again plays its full count rather than
     # remembering that it already finished once.
     play_cycles: int = 0
+    #: Play every frame at this many per second, or 0 for the durations the
+    #: document stores. **A preview setting**: it changes nothing about the
+    #: frames, which is what an animator asking "what does this look like at
+    #: 12 fps" means -- the alternative is an undoable edit to every frame.
+    #: Per tab, because it is a question about *this* clip.
+    constant_rate: int = 0
 
     # Which layer groups are folded shut in the panel, by group uid. **View
     # state, and deliberately on the tab rather than on the document**: whether
@@ -1407,6 +1413,25 @@ class InkerState:
     #: background actually wants to see. App-level and unpersisted like the
     #: other four: onion is a property of the canvas, not of a tool.
     onion_current_layer: bool = False
+    #: The two ghost tints, as 0xRRGGBB (6.7). State rather than the two
+    #: constants they were, because which colours read as "before" and "after"
+    #: depends on the drawing: red and green over a red-and-green sprite is two
+    #: ghosts nobody can tell from the art.
+    onion_tint_back: int = 0xE05050
+    onion_tint_forward: int = 0x50C060
+    #: How the ghosts fade with distance. ``1.0`` is the ``alpha / offset``
+    #: falloff this always had; a higher power drops the far ones away faster,
+    #: which is what a twelve-frame onion needs to stay readable, and ``0``
+    #: makes every ghost the same strength for tracing a cycle.
+    onion_falloff: float = 1.0
+    #: Draw the ghosts **over** the live frame rather than under it. Aseprite's
+    #: own switch: under is right for drawing the next pose and over is right
+    #: for checking one you have just drawn against the last.
+    onion_in_front: bool = False
+    #: Stop at a tag's ends rather than at the document's (6.7). What an
+    #: animator working inside a walk cycle means by "the frame before this
+    #: one" is the tag's last frame, not the previous clip's.
+    onion_wrap_tag: bool = False
     fg: tuple[int, int, int, int] = (0, 0, 0, 255)
     #: Which palette **slot** the foreground came from, or None when it came
     #: from the wheel, the eyedropper or the session swatch row.

@@ -656,6 +656,117 @@ def _onion_controls(state: Any) -> None:
     )
     if changed:
         state.onion_current_layer = bool(only)
+    _onion_more(state)
+    _constant_rate(state)
+
+
+def _constant_rate(state: Any) -> None:
+    """Play at one rate rather than at the stored durations (6.7).
+
+    On the onion row because it is the other *preview* setting: neither
+    changes a frame, and both answer "what does this look like" rather than
+    "make it so". Zero is off, and the label says so rather than the control
+    disappearing -- a spin box that vanished at zero would be one the user
+    could not find again.
+    """
+    tab = state.active
+    if tab is None:
+        return
+    imgui.same_line()
+    imgui.set_next_item_width(sp(90))
+    changed, value = controls.input_int("fps", int(tab.constant_rate), 1, 1)
+    if changed:
+        tab.constant_rate = max(0, min(int(value), 120))
+    if imgui.is_item_hovered():
+        imgui.set_tooltip(
+            "Play every frame at this rate instead of its own duration. 0 uses "
+            "the durations the document stores. It changes no frame."
+        )
+
+
+ONION_POPUP = "inker-onion-more"
+
+
+def _onion_more(state: Any) -> None:
+    """The four settings of 6.7, behind one button.
+
+    Behind a popover rather than on the row for the reason the Dynamics popup
+    exists: these are the settings of a *sitting* -- what colour the ghosts
+    are, how fast they fade, whether they sit over the drawing, whether the
+    cycle wraps at the tag -- reached when a way of working changes and then
+    left, while back/ahead/fade are the three a hand moves while animating.
+    """
+    imgui.same_line()
+    if widgets.icon_button(f"{icons.SLIDERS}##onionmore", "More onion settings"):
+        imgui.open_popup(ONION_POPUP)
+    with controls.menu_popup(ONION_POPUP) as opened:
+        if not opened:
+            return
+        for attr, label, hint in (
+            (
+                "onion_tint_back",
+                "Before",
+                "Which colour the earlier frames are ghosted in.",
+            ),
+            (
+                "onion_tint_forward",
+                "After",
+                "And the later ones. Two tints rather than two constants "
+                "because red and green over a red-and-green sprite is two "
+                "ghosts nobody can tell from the art.",
+            ),
+        ):
+            packed = int(getattr(state, attr))
+            colour = (
+                (packed >> 16) & 0xFF,
+                (packed >> 8) & 0xFF,
+                packed & 0xFF,
+                255,
+            )
+            changed, value = controls.color_edit4(
+                f"{label}##{attr}",
+                imgui.ImVec4(*(channel / 255.0 for channel in colour)),
+                imgui.ColorEditFlags_.no_alpha.value,
+            )
+            if changed:
+                setattr(
+                    state,
+                    attr,
+                    (round(value.x * 255) << 16)
+                    | (round(value.y * 255) << 8)
+                    | round(value.z * 255),
+                )
+            widgets.help_marker(hint)
+        changed, falloff = widgets.labeled_slider_float(
+            "Falloff",
+            float(state.onion_falloff),
+            0.0,
+            3.0,
+            help_text=(
+                "How fast a ghost fades with distance. 1 is the even falloff "
+                "this always had; higher drops the far ones away faster, which "
+                "is what a twelve-frame onion needs to stay readable, and 0 "
+                "makes every ghost the same strength for tracing a cycle."
+            ),
+        )
+        if changed:
+            state.onion_falloff = max(0.0, float(falloff))
+        changed, front = controls.checkbox(
+            "In front of the drawing", state.onion_in_front
+        )
+        if changed:
+            state.onion_in_front = bool(front)
+        widgets.help_marker(
+            "Under is right for drawing the next pose; over is right for "
+            "checking one you have just drawn against the last."
+        )
+        changed, wrap = controls.checkbox("Wrap inside the tag", state.onion_wrap_tag)
+        if changed:
+            state.onion_wrap_tag = bool(wrap)
+        widgets.help_marker(
+            "What an animator inside a walk cycle means by the frame before "
+            "this one is the tag's last frame, not the previous clip's."
+        )
 
 
 def frame_uids(doc) -> list:

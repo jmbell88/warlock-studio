@@ -1623,3 +1623,55 @@ def test_a_repeat_survives_a_tag_edit_and_is_clamped_at_zero():
     assert doc.anim.tags[0].repeat == 3
     assert doc.set_tag(0, repeat=-2)
     assert doc.anim.tags[0].repeat == 0
+
+
+# --- 6.7: onion controls and constant frame rate -----------------------------
+
+
+def test_the_onion_span_is_the_document_unless_the_tag_is_asked_for():
+    from types import SimpleNamespace
+
+    from warlock.studio.panes import inker_canvas
+
+    anim = SimpleNamespace(
+        frames=[object()] * 10,
+        tags=[SimpleNamespace(start=3, end=6)],
+    )
+    state = SimpleNamespace(onion_wrap_tag=False)
+    assert inker_canvas._onion_span(state, None, anim, 4) == (0, 9)
+    state.onion_wrap_tag = True
+    assert inker_canvas._onion_span(state, None, anim, 4) == (3, 6)
+    # Outside every tag it is the document again, rather than nothing.
+    assert inker_canvas._onion_span(state, None, anim, 8) == (0, 9)
+
+
+def test_a_ghost_wraps_inside_the_span_rather_than_clamping():
+    """A clamp draws the same ghost twice at the ends of a cycle, which reads
+    as one ghost that stopped moving -- the failure onion skin exists to
+    avoid."""
+    from warlock.studio.panes import inker_canvas
+
+    assert inker_canvas._onion_index(4, -1, (0, 9)) == 3
+    assert inker_canvas._onion_index(0, -1, (0, 9)) == 9
+    assert inker_canvas._onion_index(9, 1, (0, 9)) == 0
+    assert inker_canvas._onion_index(6, 1, (3, 6)) == 3
+    # A span of one has no neighbour to show, which is not the same as itself.
+    assert inker_canvas._onion_index(3, 1, (3, 3)) is None
+
+
+def test_constant_frame_rate_changes_the_playback_and_not_the_frames():
+    """What an animator asking "what does this look like at 12 fps" means --
+    the alternative is an undoable edit to every frame of the document."""
+    from warlock.studio import inker, inker_mode, inker_state
+
+    doc = inker.Document.blank(4, 4)
+    doc.ensure_animation()
+    doc.add_frame()
+    doc.anim.frames[0].duration_ms = 1000
+    doc.anim.frames[1].duration_ms = 1000
+    tab = inker_state.InkerDoc(doc=doc, uid="t", title="t")
+    tab.playing = True
+    tab.constant_rate = 20  # 50 ms a frame
+    inker_mode.tick_playback(tab, 60.0)
+    assert tab.play_index == 1, "the playhead moved at the preview rate"
+    assert doc.anim.frames[0].duration_ms == 1000, "and the frame is untouched"
