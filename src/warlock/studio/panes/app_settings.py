@@ -26,6 +26,7 @@ from imgui_bundle import imgui
 
 from ... import fetch, vram
 from .. import app_ctx, controls, dialogs, forms, icons, theme, tokens, widgets
+from .. import layouts as layouts_mod
 from ..manual import render as manual_render
 from ..tokens import sp
 
@@ -163,6 +164,7 @@ def _category_body(ctx: Any, category: str) -> None:
         _storage(ctx)
     elif category == "advanced":
         _layout(ctx)
+        _layouts(ctx)
         _config(ctx)
     else:
         _interface(ctx)
@@ -303,6 +305,82 @@ def _apply_scale(ctx: Any, value: float) -> None:
 
 
 # --- effective configuration ------------------------------------------------
+
+
+def _layouts(ctx: Any) -> None:
+    """Saved workspace layouts: the administration, and **the canonical path**.
+
+    Here rather than in the switcher popup because Settings is reachable from
+    the rail in every mode and no workspace layout can touch its single-column
+    composition -- so this is the one screen that cannot be lost by a layout
+    going wrong, which is exactly where the thing that fixes a layout belongs.
+    """
+    library = getattr(ctx, "layouts", None)
+    if library is None:
+        return
+    widgets.section("Workspace layouts")
+    names = sorted(library.layouts)
+    chosen = widgets.labeled_combo(
+        "Layout",
+        library.active,
+        [
+            (
+                name,
+                name if library.layouts[name].readable else f"{name} (a newer version)",
+            )
+            for name in names
+        ],
+        sp(FIELD_W),
+        help_text=(
+            "Which panes are in which column, and how tall. It does not carry "
+            "the sidebar width, the rail, the UI scale or the theme -- those "
+            "are the app's, not a workspace's."
+        ),
+    )
+    if chosen != library.active and library.layouts[chosen].readable:
+        library.set_active(chosen)
+    width = widgets.grid_width(3)
+    if controls.button("Duplicate", (width, 0)):
+        base = f"{library.active} copy"
+        name, index = base, 2
+        while name in library.layouts:
+            name, index = f"{base} {index}", index + 1
+        library.duplicate(library.active, name)
+        library.set_active(name)
+        ctx.toast(f"Copied to {name}.")
+    imgui.same_line()
+    if widgets.disabled_button(
+        "Rename...",
+        library.active not in layouts_mod.BUILT_IN,
+        (width, 0),
+        reason="A built-in layout keeps its name -- the reset commands say it.",
+    ):
+        ctx.prompts.ask(
+            dialogs.Prompt(
+                title="Rename this layout",
+                label="Name",
+                value=library.active,
+                on_accept=lambda text: library.rename(library.active, text.strip()[:40]),
+            )
+        )
+    imgui.same_line()
+    if controls.button("Reset", (width, 0)):
+        library.reset()
+        ctx.toast(f"{library.active} is back to the built-in arrangement.")
+    if widgets.disabled_button(
+        "Delete this layout",
+        library.active not in layouts_mod.BUILT_IN,
+        (-1, 0),
+        reason=(
+            "A built-in is reset rather than deleted: there is no state in "
+            "which a pane cannot be got back."
+        ),
+    ):
+        library.delete(library.active)
+    widgets.muted_wrapped(
+        "A layout can only reorder and hide panes -- never delete one -- and a "
+        "hidden pane is always listed here with one click to bring it back."
+    )
 
 
 def _config(ctx: Any) -> None:

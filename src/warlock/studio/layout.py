@@ -1,12 +1,25 @@
 """The three-column skeleton's measurements.
 
-There is no docking and imgui's own ini file stays disabled. The two sidebars
-are a **fixed** ``SIDEBAR_W`` wide rather than draggable: they hold forms, and
-a form has one width that reads well -- what a drag bought was a way to make
-the app look broken. The one split that survives is the sidebar's *internal*
-horizontal one (``settings_share``), because the two stacked scrollers there
-genuinely trade against each other, and that is remembered through the same
-debounced :class:`Settings` machinery every other preference uses.
+This header made two claims. **One is overturned and one survives**, and which
+is which is the decision rather than a detail.
+
+*Overturned:* "there is no docking". Wave 5 gave the skeleton names
+(:mod:`~warlock.studio.layout_skeleton`, the per-workspace tables in
+``skeletons.py``) and one renderer (:func:`column`), so the panes inside a
+column can be reordered and hidden and the result kept under a name
+(``layouts.py``). It is deliberately not general docking: panes tile, never
+float, never tab, and in v1 never cross the vertical/horizontal boundary. What
+general docking would cost is named in ``docs/INVARIANTS.md`` -- :func:`fit`,
+:func:`centre_width` and ``rail.expanded_fits`` are arithmetic over exactly two
+sidebars and one centre.
+
+*Survives, and is reaffirmed:* the two sidebars are a **fixed** ``SIDEBAR_W``
+wide rather than draggable. They hold forms, and a form has one width that
+reads well -- what a drag bought was a way to make the app look broken. imgui's
+own ini file stays disabled. The splits that exist are *internal* and
+horizontal, because two stacked scrollers genuinely trade against each other,
+and they are remembered through the same debounced :class:`Settings` machinery
+every other preference uses.
 
 Sizes are in *design* pixels, multiplied by ``tokens.SCALE`` at use, so they
 keep meaning "a sidebar this wide" on a 150% monitor rather than drifting.
@@ -461,6 +474,10 @@ def pane(
         _divider(resolved_edge)
 
 
+FILL_SIZING = "fill"
+"""``layout_skeleton.FILL``, spelled here so this module imports it lazily."""
+
+
 def pane_child(
     pane_id: str, size: tuple[float, float], window_flags: int = 0
 ) -> bool:
@@ -520,6 +537,12 @@ def splitter(split_id: str, *, vertical: bool = True, length: float = 0.0) -> fl
     columns and drags horizontally. The bar is an ``invisible_button`` with a
     1px line drawn down its middle, accent-coloured while hovered or dragged.
     """
+    if _EDITING:
+        # **Suppressed while the layout editor is open** (P5.4): a resize
+        # handle and a drag target on the same two pixels is a gesture nobody
+        # can aim. Sizes are dragged in normal mode, where the handles are the
+        # only thing there.
+        return 0.0
     grip = sp(GRIP)
     if length <= 0:
         avail = imgui.get_content_region_avail()
@@ -553,3 +576,96 @@ def splitter(split_id: str, *, vertical: bool = True, length: float = 0.0) -> fl
         return 0.0
     delta = imgui.get_io().mouse_delta
     return (delta.x if vertical else delta.y) / tokens.SCALE
+
+
+#: Where every pane drawn this frame ended up, in screen px: ``id -> (x, y, w,
+#: h)``. Recorded by :func:`column` and cleared at the top of each frame by
+#: :func:`begin_frame`.
+#:
+#: The layout *editor* draws its handles and drop bars from this, in a single
+#: full-viewport overlay -- so it draws nothing inside any pane, and
+#: ``widgets.section_blocks``' double-split corruption is out of the picture by
+#: construction rather than by care.
+FRAME_PANES: dict[str, tuple[float, float, float, float]] = {}
+
+
+#: Whether the layout editor is open. Read by :func:`splitter`, written once a
+#: frame by :func:`begin_frame` -- a module-level flag rather than an argument
+#: threaded through eleven call sites, because it is a property of the *frame*
+#: and every splitter in it answers the same way.
+_EDITING = False
+
+
+def begin_frame(editing: bool = False) -> None:
+    """Forget last frame's pane rects. Called once, before anything draws."""
+
+    global _EDITING
+
+    FRAME_PANES.clear()
+    _EDITING = bool(editing)
+
+
+def column(
+    ctx: Any,
+    lay: Any,
+    slots: Any,
+    *,
+    width: float = 0.0,
+    edge: Any = None,
+    handle_length: float = 0.0,
+    on_hidden: Any = None,
+) -> None:
+    """Draw one ordered stack of :class:`~.layout_skeleton.Slot`, with handles.
+
+    The one answer to a question three different pieces of arithmetic used to
+    give (``main.py:466``, ``:3546``, ``:3649``). Heights come from
+    :func:`layout_skeleton.heights`, which is pure and tested as numbers; this
+    adds the imgui: the child per slot, a splitter between each adjacent
+    shareable pair, and the ``FRAME_PANES`` record.
+
+    **A slot with no room is dropped, not drawn at zero.** A negative child
+    height silently kills a canvas, and a zero-height one is a pane the user
+    cannot see and cannot reach; ``on_hidden`` is called with its id so a
+    workspace can clean up after it -- which is where Inker's
+    ``pending_zoom_rung = 0`` lives.
+    """
+
+    from . import layout_skeleton as skeleton
+    from . import tokens
+
+    live = [slot for slot in slots if slot.applies(ctx)]
+    if not live:
+        return
+    imgui.begin_group()
+    avail_y = imgui.get_content_region_avail().y
+    shares = {slot.share_key: lay.share(slot.share_key) for slot in live if slot.share_key}
+    tall = skeleton.heights(live, avail_y, shares, tokens.SCALE)
+    for index, (slot, height) in enumerate(zip(live, tall, strict=True)):
+        if height <= 0.0 and slot.sizing != FILL_SIZING:
+            if on_hidden is not None:
+                on_hidden(slot.id)
+            continue
+        role = slot.role or PaneRole.CONTENT
+        with pane(
+            slot.id,
+            (width, 0.0 if slot.sizing == FILL_SIZING else height),
+            role,
+            edge=slot.edge or edge or PaneEdge.NONE,
+        ) as visible:
+            if visible:
+                slot.draw(ctx)
+            elif on_hidden is not None:
+                on_hidden(slot.id)
+        low, high = imgui.get_item_rect_min(), imgui.get_item_rect_max()
+        FRAME_PANES[slot.id] = (low.x, low.y, high.x - low.x, high.y - low.y)
+        following = live[index + 1] if index + 1 < len(live) else None
+        if slot.share_key and following is not None:
+            drag = splitter(
+                f"{slot.share_key}-share", vertical=False, length=handle_length or width
+            )
+            if drag and avail_y > 0:
+                before = lay.share(slot.share_key)
+                lay.set_share(slot.share_key, before + drag * tokens.SCALE / avail_y)
+                if lay.share(slot.share_key) != before:
+                    lay.save()
+    imgui.end_group()

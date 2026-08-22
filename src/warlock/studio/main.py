@@ -695,6 +695,7 @@ class App:
         from imgui_bundle import imgui
 
         from . import dpi, fonts, imgui_backend, theme, tokens, widgets
+        from . import layouts as layouts_mod
         from .layout import Layout
         from .settings import Settings
         from .viewer_embed import Viewer
@@ -765,6 +766,12 @@ class App:
         fonts.load(imgui)
         theme.apply(imgui)
         self.layout = Layout(settings)
+        # Saved arrangements within the fixed three-column skeleton (wave 5).
+        # A separate object from ``Layout``, which owns the *proportions*: one
+        # is a preference the user drags and the other is a named thing they
+        # switch between, and the settings keys are top-level for the reason
+        # ``layouts.py`` states.
+        self.layouts = layouts_mod.Library(settings)
         widgets.attach_settings(settings)
         self.imgui_renderer = imgui_backend.ImguiRenderer(self.ctx)
         self.viewer = Viewer(self.ctx)
@@ -2587,6 +2594,13 @@ class App:
             library.delete_asset(ctx, ctx.state.selected)
         elif event.key == pygame.K_f:
             self.viewer.frame()
+        elif event.key == pygame.K_w and event.mod & pygame.KMOD_SHIFT:
+            # Shift+W: the layout editor (P5.4). Verified free -- plain W is
+            # wireframe below, and every mode that takes W takes it before this
+            # handler is reached.
+            from . import layout_edit
+
+            layout_edit.toggle(ctx.state)
         elif event.key == pygame.K_w:
             ctx.state.wireframe = not ctx.state.wireframe
             self.viewer.set_wireframe(ctx.state.wireframe)
@@ -2939,6 +2953,11 @@ class App:
             | imgui.WindowFlags_.no_saved_settings.value
         )
         imgui.begin("##host", None, flags)
+        # One frame, one record of where every pane ended up -- and one answer
+        # to "is the layout editor open", which every splitter reads (P5.4).
+        from . import layout_edit
+
+        layout_mod.begin_frame(layout_edit.ensure(ctx.state).open)
         # The rail is drawn in every mode, Home included: it is how you leave
         # wherever you are, so a mode that hides it is a dead end.
         rail.draw(self, ctx)
@@ -2950,6 +2969,9 @@ class App:
         if rail.take("diagnostics"):
             imgui.open_popup("diagnostics")
         self._diagnostics_popup(list(getattr(ctx.runtime, "checks", []) or []))
+        if rail.take("layouts"):
+            imgui.open_popup("layouts")
+        self._layouts_popup(ctx)
         # Kept behind an explicit developer environment flag; normal installs
         # never gain a design-system destination in their navigation.
         from . import component_gallery
@@ -3563,14 +3585,8 @@ class App:
         from imgui_bundle import imgui
 
         from . import layout as layout_mod
-        from .panes import (
-            inker_canvas,
-            inker_colors,
-            inker_preview,
-            inker_tiles,
-            inker_timeline,
-            inker_tools,
-        )
+        from . import skeletons
+        from .panes import inker_canvas, inker_timeline
         from .tokens import sp
 
         ctx = self.app_ctx
@@ -3585,23 +3601,27 @@ class App:
         # use is a cost with no matching benefit. The *verbs* that make the
         # first tileset are not hidden with it -- they are menu rows, which are
         # always drawn.
-        tiled_doc = tab is not None and bool(tab.doc.tilesets)
+        # (The tile panel's own ``when`` predicate answers that in the
+        # skeleton table, which is where the shape of a workspace lives now.)
 
         # **The toolbox is a fixed 90 px rail** -- no share, no handle, no
         # give-way. All three existed because the pane under the toolbox was
         # the tool options, whose height nobody could predict; the options are
         # a row above the canvas now (W2.4) and what is left is twelve buttons,
         # three toggles and two colour chips, which is a *known* width and no
-        # height worth arguing about. The whole give_way/OPTIONS_FLOOR
-        # apparatus goes with them.
-        with layout_mod.pane(
-            "inker-tools",
-            (sp(inker_tools.RAIL_W), 0),
-            layout_mod.PaneRole.SIDEBAR,
-            edge=layout_mod.PaneEdge.RIGHT,
-        ) as visible:
-            if visible:
-                inker_tools.draw(ctx)
+        # height worth arguing about.
+        #
+        # Both sidebars go through ``layout.column`` over ``skeletons.inker``
+        # (P5.1): one renderer, one height arithmetic, and a saved layout has
+        # something to be a permutation of.
+        columns = skeletons.for_mode(ctx, "inker")
+        layout_mod.column(
+            ctx,
+            lay,
+            skeletons.ordered(ctx, self.layouts, "inker", columns["left"]),
+            width=sp(columns["left"].width),
+            handle_length=sp(columns["left"].width),
+        )
 
         imgui.same_line()
         width = layout_mod.centre_width()
@@ -3645,62 +3665,21 @@ class App:
 
         imgui.same_line()
         # **Preview / Colours / Tiles**, top to bottom, with a handle between
-        # each adjacent pair. The colour panel moved here from the left column
-        # because the palette grid is a *panel* -- swatches, ramps, the indexed
-        # table -- and it always wanted the width; the two colours themselves
-        # stayed with the tools, at the foot of the rail, which is Aseprite's
-        # "Mirrored Default" shape.
+        # each adjacent shareable pair. The colour panel moved here from the
+        # left column in W2.9 because the palette grid is a *panel* and always
+        # wanted the width; the two colours themselves stayed at the foot of
+        # the rail, which is Aseprite's "Mirrored Default" shape.
         #
-        # The tile panel is now a share with a floor rather than a fixed 240,
-        # and it is the pane ``give_way`` starves first: at the 1100x700 floor
-        # this column holds preview 180 + colours 210 + tiles 140 = 530 px of
-        # floor against 668 px of column, even with both a tileset and an
-        # animation open.
-        if tiled_doc:
-            _split_column(
-                ctx,
-                lay,
-                split_id="inker-colors",
-                handle_length=sidebar_w,
-                width=0,
-                edge=layout_mod.PaneEdge.LEFT,
-                before=(
-                    (
-                        "inker-preview",
-                        layout_mod.PaneRole.INSPECTOR,
-                        inker_preview.draw,
-                        sp(inker_preview.PREVIEW_H),
-                    )
-                    if animated
-                    else None
-                ),
-                top=("inker-colors", layout_mod.PaneRole.INSPECTOR, inker_colors.draw),
-                bottom=("inker-tiles", layout_mod.PaneRole.INSPECTOR, inker_tiles.draw),
-                wanted=sp(inker_colors.PANEL_FLOOR),
-                below_floor=sp(inker_tiles.PANEL_FLOOR),
-            )
-        else:
-            # One pane under the preview, so no handle: a splitter with nothing
-            # on the far side of it is a handle that divides nothing.
-            imgui.begin_group()
-            if animated:
-                with layout_mod.pane(
-                    "inker-preview",
-                    (0, sp(inker_preview.PREVIEW_H)),
-                    layout_mod.PaneRole.INSPECTOR,
-                    edge=layout_mod.PaneEdge.LEFT,
-                ) as visible:
-                    if visible:
-                        inker_preview.draw(ctx)
-            with layout_mod.pane(
-                "inker-colors",
-                (0, 0),
-                layout_mod.PaneRole.INSPECTOR,
-                edge=layout_mod.PaneEdge.LEFT,
-            ) as visible:
-                if visible:
-                    inker_colors.draw(ctx)
-            imgui.end_group()
+        # Which panes are here, and in what order, is now the active saved
+        # layout's answer (wave 5) -- reconciled against this table every read
+        # and never written back.
+        layout_mod.column(
+            ctx,
+            lay,
+            skeletons.ordered(ctx, self.layouts, "inker", columns["right"]),
+            handle_length=sidebar_w,
+            on_hidden=lambda _slot: None,
+        )
 
     def _plotter_workspace(self) -> None:
         """The same sidebar / centre / sidebar skeleton every other mode uses:
@@ -3714,28 +3693,21 @@ class App:
         from imgui_bundle import imgui
 
         from . import layout as layout_mod
-        from .panes import (
-            plotter_bridge,
-            plotter_canvas,
-            plotter_layers,
-            plotter_tileset,
-            plotter_tileset_editor,
-            plotter_tools,
-        )
+        from . import skeletons
+        from .panes import plotter_canvas, plotter_tileset_editor
 
         ctx = self.app_ctx
         lay = self.layout
         sidebar_w = layout_mod.sidebar_width()
-
-        _split_column(
+        # Both sidebars through ``layout.column`` over ``skeletons.plotter``
+        # (wave 5), so the arrangement is data a saved layout can permute.
+        columns = skeletons.for_mode(ctx, "plotter")
+        layout_mod.column(
             ctx,
             lay,
-            split_id="plotter-tools",
-            handle_length=sidebar_w,
+            skeletons.ordered(ctx, self.layouts, "plotter", columns["left"]),
             width=sidebar_w,
-            edge=layout_mod.PaneEdge.RIGHT,
-            top=("plotter-tools", layout_mod.PaneRole.SIDEBAR, plotter_tools.draw),
-            bottom=("plotter-tileset", layout_mod.PaneRole.SIDEBAR, plotter_tileset.draw),
+            handle_length=sidebar_w,
         )
 
         imgui.same_line()
@@ -3760,15 +3732,11 @@ class App:
                     plotter_canvas.draw(ctx)
 
         imgui.same_line()
-        _split_column(
+        layout_mod.column(
             ctx,
             lay,
-            split_id="plotter-layers",
+            skeletons.ordered(ctx, self.layouts, "plotter", columns["right"]),
             handle_length=sidebar_w,
-            width=0,
-            edge=layout_mod.PaneEdge.LEFT,
-            top=("plotter-layers", layout_mod.PaneRole.INSPECTOR, plotter_layers.draw),
-            bottom=("plotter-bridge", layout_mod.PaneRole.INSPECTOR, plotter_bridge.draw),
         )
 
     def _troupe_workspace(self) -> None:
@@ -4696,6 +4664,12 @@ class App:
         from .panes import first_run, overlay, palette, settings_3d
 
         ctx = self.app_ctx
+        # The layout editor, over the workspace that has just recorded its pane
+        # rects and *outside* every pane -- see ``layout_edit``'s docstring for
+        # why that is a construction rather than a habit.
+        from . import layout_edit
+
+        layout_edit.draw(self, ctx, viewport)
         overlay.fps_meter(ctx, self.fps)
         if ctx.state.mode != "home":
             overlay.progress_card(ctx, self.eta)
@@ -4893,6 +4867,51 @@ class App:
                     imgui.table_next_column()
                     imgui.text(what)
                 imgui.end_table()
+
+    def _layouts_popup(self, ctx: Any) -> None:
+        """The rail footer's layout switcher (P5.3).
+
+        A switcher and nothing else: renaming, duplicating, deleting and
+        resetting are Settings -> Advanced, which is **the canonical path**
+        because Settings is reachable from the rail in every mode and no
+        workspace layout can touch its single-column composition. This popup
+        carries a Reset because that is the rung a user reaches for while
+        looking at the layout that went wrong.
+        """
+        from imgui_bundle import imgui
+
+        from . import controls, widgets
+
+        if not imgui.begin_popup("layouts"):
+            return
+        widgets.popup_chrome(_imgui=imgui)
+        widgets.secondary("Workspace layout")
+        imgui.separator()
+        for name, layout in sorted(self.layouts.layouts.items()):
+            selected = name == self.layouts.active
+            label = name if layout.readable else f"{name}  (a newer version)"
+            if controls.menu_item(
+                f"{label}##layout/{name}",
+                "",
+                selected,
+                layout.readable,
+                reason=(
+                    "This layout was saved by a newer build. It is kept exactly "
+                    "as it was found rather than reinterpreted."
+                ),
+            )[0] and layout.readable:
+                self.layouts.set_active(name)
+        imgui.separator()
+        if controls.menu_item_simple("Reset this layout"):
+            self.layouts.reset()
+        if controls.menu_item_simple("Manage layouts..."):
+            # Settings, rather than a second administration surface here: one
+            # place that can rename and delete is one place to look for the
+            # thing you deleted.
+            from .state import set_mode
+
+            set_mode(ctx, "settings")
+        imgui.end_popup()
 
     def _diagnostics_popup(self, checks: list[Any]) -> None:
         from imgui_bundle import imgui

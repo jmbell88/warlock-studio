@@ -86,7 +86,7 @@ _WIDTH = [RAIL_W]
 # discover that the hard way, the two popups the footer raises are flagged here
 # and opened by ``main`` after ``end_child``. The same one-shot pattern
 # ``state.shortcuts_requested`` already uses, for the same reason.
-_wants: dict[str, bool] = {"diagnostics": False}
+_wants: dict[str, bool] = {"diagnostics": False, "layouts": False}
 
 
 def request(name: str) -> None:
@@ -437,6 +437,15 @@ def draw(app: Any, ctx: Any) -> None:
         # badge nobody looks at, and colour is the fast read here even though
         # the shape carries it for anyone the colour does not reach.
         _tint_last(colour)
+    # **No footer item for the layout switcher.** The rail is full: at the
+    # 1100x700 resize floor and 1.75 UI scale the column already ends four
+    # pixels from the window edge, and
+    # ``test_the_rail_fits_the_resize_floor_at_every_scale`` catches the next
+    # item that pushes it out. The switcher is reached from the command
+    # palette and from Settings -> Advanced instead, both through
+    # ``request("layouts")`` -- the same one-shot the Issues list uses, and for
+    # the same reason: a popup opened inside this child is one nothing outside
+    # it can find.
     if _item("help",
         "Manual",
         icons.BOOK_OPEN,

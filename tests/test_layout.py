@@ -249,11 +249,34 @@ def _splitter_ids() -> list[str]:
     return found
 
 
+def _skeleton_share_keys() -> list[str]:
+    """The share keys declared in ``skeletons.py``'s slot tables.
+
+    Wave 5 moved two workspaces' columns out of ``main`` and into data, so the
+    scan has two sources -- and the *union* is what the rules below are about.
+    Declared, never derived: a key is in users' settings files forever, and
+    computing one from ``f"{workspace}/{slot}"`` would silently reset every
+    dragged proportion with no failure anywhere.
+    """
+    import ast
+    import inspect
+
+    from warlock.studio import skeletons
+
+    tree = ast.parse(inspect.getsource(skeletons))
+    found: list[str] = []
+    for node in ast.walk(tree):
+        named = isinstance(node, ast.keyword) and node.arg == "share_key"
+        if named and isinstance(node.value, ast.Constant) and node.value.value:
+            found.append(node.value.value)
+    return found
+
+
 def test_no_split_key_is_used_by_two_splits():
     """The defect this wave fixed, stated so it cannot come back by copy-paste:
     Clay, Plotter, Troupe, Packwright and Review each passed one key to both
     their left and their right column."""
-    literals = _share_literals()
+    literals = _share_literals() + _skeleton_share_keys()
     duplicates = sorted({key for key in literals if literals.count(key) > 1})
     assert not duplicates, f"one key serving two splits: {duplicates}"
 
@@ -271,7 +294,9 @@ def test_every_split_has_a_handle_and_every_handle_a_split():
         "every column's handle should come from _split_column, which derives "
         f"its id from split_id; hand-built splitters found: {sorted(set(ids))}"
     )
-    keys = set(_share_literals())
+    # ``layout.column`` derives its handle the same way, from the slot's own
+    # ``share_key``, so a declared key *is* a handle there too.
+    keys = set(_share_literals()) | set(_skeleton_share_keys())
     assert keys == {
         "clay-tools",
         "clay-outliner",

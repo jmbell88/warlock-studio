@@ -532,49 +532,20 @@ def test_the_inker_workspace_has_drag_handles_of_its_own() -> None:
     so the only way to change the split was to switch to Create and drag the
     handle there. One setting seen twice, not two settings to keep in step.
 
-    The handle ids are no longer written here to be found: every column goes
-    through ``main._split_column``, which derives the handle from the split's
-    own key, and ``tests/test_layout.py`` gates that for all splits at once.
-
-    The **right** column is the split now, and the left one is not a split at
-    all: the toolbox is a fixed 90 px rail with nothing under it (W2.9), and
-    the panes that used to be stacked under it -- the tool options, the colour
-    panel, the tile panel -- are a row above the canvas and two panes on the
-    right. So the handle is between colours and tiles, where there are two
-    panes whose proportion is a preference.
+    Inker's columns are **data** now (``skeletons.inker``, wave 5) rather than
+    a composition function, so what this pins is the same fact one layer down:
+    the right column declares a share key of its own, and ``layout.column``
+    derives the handle from it. ``tests/test_layout.py`` gates every key in
+    both sources at once.
     """
-    main = Path(inker_tools.__file__).resolve().parent.parent / "main.py"
-    source = main.read_text(encoding="utf-8")
-    assert 'split_id="inker-colors"' in source
+    from warlock.studio import skeletons
 
-
-def test_the_share_gives_way_to_the_toolboxs_own_height() -> None:
-    """A five-across grid of twenty-three buttons at UI scale 1.5 is very
-    nearly the whole 55% this pane used to be handed, which left the Brush
-    heading at the bottom edge with its first control cut in half."""
-    give_way = layout.give_way
-    # Generous share: it is honoured untouched.
-    assert give_way(1000.0, 0.55, 300.0, 200.0) == pytest.approx(550.0)
-    # Mean share, room to spare: the toolbox's own minimum wins.
-    assert give_way(1000.0, 0.25, 400.0, 200.0) == pytest.approx(400.0)
-    # No room for both: the panel below keeps its floor.
-    assert give_way(500.0, 0.9, 400.0, 200.0) == pytest.approx(300.0)
-
-
-def test_the_upper_pane_never_starves_the_lower_one() -> None:
-    """The alternative is a panel with a heading and nothing under it."""
-    for avail in (300.0, 640.0, 1080.0, 1600.0):
-        for share in (0.25, 0.55, 0.75):
-            height = layout.give_way(avail, share, 900.0, 210.0)
-            assert height <= avail
-            assert avail - height >= min(210.0, avail * (1 - layout.SHARE_MIN))
-
-
-def test_give_way_answers_for_a_collapsed_column() -> None:
-    """A pane can be laid out at zero height for a frame while the window is
-    being resized, and dividing by it is how a layout helper crashes."""
-    assert layout.give_way(0.0, 0.55, 400.0, 200.0) == 0.0
-    assert layout.give_way(-5.0, 0.55, 400.0, 200.0) == 0.0
+    columns = skeletons.inker(None)
+    keys = {slot.share_key for slot in columns["right"].slots if slot.share_key}
+    assert keys == {"inker-colors"}
+    # And the rail is not a split at all: a fixed 90 px column with one pane
+    # in it has nothing to divide (W2.9).
+    assert not any(slot.share_key for slot in columns["left"].slots)
 
 
 def test_both_floors_are_named_where_the_panes_are() -> None:
@@ -585,14 +556,19 @@ def test_both_floors_are_named_where_the_panes_are() -> None:
     reserves nothing and gives way to nothing. The two that remain are the two
     panes that share the right column.
     """
+    from warlock.studio import skeletons
     from warlock.studio.panes import inker_tiles
 
     assert inker_colors.PANEL_FLOOR > 0
     assert inker_tiles.PANEL_FLOOR > 0
-    main = Path(inker_tools.__file__).resolve().parent.parent / "main.py"
-    source = main.read_text(encoding="utf-8")
-    assert "inker_colors.PANEL_FLOOR" in source
-    assert "inker_tiles.PANEL_FLOOR" in source
+    # Read by the slot table rather than by the composition function: the
+    # workspace is data now, and the floors travel with the panes they belong
+    # to rather than with the code that stacks them.
+    floors = {
+        slot.id: slot.floor for slot in skeletons.inker(None)["right"].slots
+    }
+    assert floors["inker-colors"] == inker_colors.PANEL_FLOOR
+    assert floors["inker-tiles"] == inker_tiles.PANEL_FLOOR
 
 
 def test_a_pinned_give_way_handle_does_not_drive_the_share() -> None:

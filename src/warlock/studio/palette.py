@@ -472,6 +472,15 @@ def commands(ctx: Any) -> list[Command]:
 
         rail.request("diagnostics")
 
+    def workspace_layout(ctx: Any) -> None:
+        # The switcher, through the same one-shot: the rail's footer has no
+        # room for a tenth item (its own test catches the one that pushes the
+        # column out of the window at the resize floor), so the palette and
+        # Settings are the two doors.
+        from . import rail
+
+        rail.request("layouts")
+
     def shortcuts(ctx: Any) -> None:
         # A flag rather than a call, because a palette command cannot open an
         # imgui popup: the palette's own window is closing on this frame, and
@@ -632,6 +641,12 @@ def commands(ctx: Any) -> list[Command]:
             label="Issues",
             group="Application",
             run=diagnostics,
+        ),
+        Command(
+            key="workspace-layout",
+            label="Workspace layout...",
+            group="Application",
+            run=workspace_layout,
         ),
         Command(
             key="show-trash",
