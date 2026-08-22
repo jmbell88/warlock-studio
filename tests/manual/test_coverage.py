@@ -68,6 +68,13 @@ NO_HELP_BUTTON = {
     # downloads blocks are the installation chapter made actionable, and the
     # only exits dismiss the overlay or open the documented Models pane.
     "first_run",
+    # Not a pane either: the guided tour is an overlay drawn from
+    # ``App._overlays``, and every one of its steps already carries its own way
+    # into the manual -- a "Read more" that opens the chapter the step is
+    # about, which is a (?) with the target chosen per step instead of per
+    # pane. A pane-level help button would have to pick one chapter for all
+    # nineteen of them.
+    "tour",
     # Not a pane: one job's picture, drawn *inside* whatever card or cell asked
     # for it (the UI redesign, wave 4.3). It has no section, no heading and no
     # window of its own -- a (?) beside a thumbnail would be a help button on a

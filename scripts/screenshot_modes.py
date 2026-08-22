@@ -422,6 +422,17 @@ def main() -> int:
         ),
     )
     ap.add_argument(
+        "--tour",
+        action="store_true",
+        help=(
+            "also capture the guided tour, which is not reachable from the mode "
+            "pass for the same reason the manual is not: it is an overlay. Two "
+            "captures, one per tour, on the mode the tour's own first anchored "
+            "step is about -- so the scrim's hole has a real control in it "
+            "rather than framing an empty screen."
+        ),
+    )
+    ap.add_argument(
         "--overlays",
         action="store_true",
         help=(
@@ -526,6 +537,33 @@ def main() -> int:
                     # over every mode therefore cannot survive to its capture.
                     _stage_review_tag(app)
                 _capture(app, args.out / f"{name}-{mode}.png")
+            if args.tour:
+                from warlock.studio.panes import tour as tour_pane
+                from warlock.studio.tour import TOURS
+
+                state = app.app_ctx.state
+                # The first-run question owns the screen ahead of every other
+                # overlay, and a fresh WARLOCK_HOME is exactly what a capture
+                # run has -- so without this the whole pass photographs the
+                # setup modal and files it under the tour's name. That is the
+                # harness's own recurring failure, and the reason
+                # ``recovery_offered`` is set above.
+                app.app_ctx.first_run = False
+                for one in TOURS:
+                    # Park on the mode the tour is about before starting it.
+                    # The step's anchor is only marked by the pane that draws
+                    # it, so a tour photographed from Home rings nothing and
+                    # the picture silently shows a plain dimmed screen -- the
+                    # same class of lie as the new-map modal captured from
+                    # Create.
+                    step = next((s for s in one.steps if s.anchor and s.mode), None)
+                    state.mode = (step.mode if step else None) or "home"
+                    tour_pane.start(app.app_ctx, one.key)
+                    if step is not None:
+                        state.tour.index = one.steps.index(step)
+                    _capture(app, args.out / f"{name}-tour-{one.key}.png")
+                    tour_pane.stop(app.app_ctx)
+                state.mode = "home"
             if args.overlays:
                 from warlock.studio.manual import render as manual_render
                 from warlock.studio.panes import profiles_panel

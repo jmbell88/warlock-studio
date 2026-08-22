@@ -136,6 +136,21 @@ def download_models(ctx: Any) -> None:
         model_gate.request_install(ctx, REQUIRED_ROWS)
 
 
+def take_the_tour(ctx: Any) -> None:
+    """Close the setup question, then offer the app itself.
+
+    A separate exit rather than a checkbox on the other two, because it answers
+    a different question: those two are about *this machine*, and this is about
+    the reader. Someone who has just pressed Download has twenty-three
+    gigabytes to wait through and nothing to do, which is the best moment the
+    app will ever have to explain itself.
+    """
+    if dismiss(ctx):
+        from . import tour as tour_pane
+
+        tour_pane.start(ctx, "first-hour")
+
+
 def is_open(ctx: Any) -> bool:
     return bool(getattr(ctx, "first_run", False))
 
@@ -198,4 +213,6 @@ def draw(ctx: Any) -> None:
         download_models(ctx)
     if controls.button("Not now", (-1, 0), role=controls.ButtonRole.SECONDARY):
         dismiss(ctx)
+    if controls.button("Show me around first", (-1, 0), role=controls.ButtonRole.GHOST):
+        take_the_tour(ctx)
     imgui.end_popup()

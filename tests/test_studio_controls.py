@@ -44,6 +44,35 @@ def test_every_palette_carries_a_subtle_dedicated_divider():
         assert 1.02 < ratio < tokens.CONTRAST_UI
 
 
+def test_every_palette_carries_the_tours_scrim_and_ring():
+    """The checkerboard's lesson, applied before it costs anything.
+
+    Those two lived in the dark palette's range only, so a light-theme session
+    drew a near-black checker under a white window -- found by a screenshot,
+    because nothing compared the palettes to each other. A tour highlight is the
+    same shape of thing: colour drawn over whatever is on screen, which is a
+    different colour in every theme.
+
+    Measured on the *blend*, for ``composite``'s own reason -- the scrim is
+    drawn translucent, so the number that matters is the one on the glass. On a
+    light palette the token is darker than the text it sits near, which is why
+    a plain token-against-token contrast check reads backwards there and says
+    nothing about whether the screen actually dimmed.
+    """
+    from warlock.studio.panes.tour import VEIL_ALPHA
+
+    for name, palette in tokens.PALETTES.items():
+        assert "TOUR_VEIL" in palette, f"{name} has no tour scrim"
+        assert "TOUR_RING" in palette, f"{name} has no tour ring"
+        dimmed = tokens.composite(palette["TOUR_VEIL"], palette["BG"], VEIL_ALPHA)
+        assert tokens.luminance(dimmed) < tokens.luminance(palette["BG"]), (
+            f"{name}: the scrim does not darken this palette's background"
+        )
+        assert tokens.contrast(palette["TOUR_RING"], dimmed) >= tokens.CONTRAST_UI, (
+            f"{name}: the ring does not clear the control boundary on its own scrim"
+        )
+
+
 def test_toolbar_items_use_roles_and_explicit_selection():
     item = toolbar.Item(
         "apply", "Apply", role=controls.ButtonRole.PRIMARY, selected=True

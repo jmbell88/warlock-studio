@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import modes, state
+from .tour import scripts as tour_scripts
 
 # How many assets the quick-open section offers at once. A palette is a
 # shortlist: past a handful the eye is scanning rather than recognising, and
@@ -451,6 +452,17 @@ def commands(ctx: Any) -> list[Command]:
 
         manual_render.open_at(ctx, (ctx.state.manual.chapter, None))
 
+    def _tour(key: str) -> Any:
+        # One closure per tour rather than one command taking an argument: the
+        # palette matches on a *label*, and "Take the tour" for two different
+        # tours would be one row the query could not tell apart.
+        def run(ctx: Any) -> None:
+            from .panes import tour as tour_pane
+
+            tour_pane.start(ctx, key)
+
+        return run
+
     def profiles(ctx: Any) -> None:
         # Replaces the derived ``go:profiles``: the manager is a sheet over
         # the Reference stage's pane now rather than a mode, and it is *about*
@@ -623,6 +635,15 @@ def commands(ctx: Any) -> list[Command]:
             run=manual,
             hint="F1",
         ),
+        *[
+            Command(
+                key=f"tour:{one.key}",
+                label=f"Take the tour: {one.title}",
+                group="Application",
+                run=_tour(one.key),
+            )
+            for one in tour_scripts.TOURS
+        ],
         Command(
             key="profiles",
             label="Manage style profiles",

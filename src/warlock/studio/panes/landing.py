@@ -472,6 +472,7 @@ def draw(ctx: Any) -> None:
             # screen that is about work the user might otherwise lose, and it is
             # the only thing here that goes away once dealt with.
             _recovery(ctx)
+            _tour_offer(ctx)
             _news(ctx)
             _start(ctx)
             _status(ctx, status)
@@ -481,6 +482,41 @@ def draw(ctx: Any) -> None:
             widgets.end_section()
             _news_footer(ctx)
     imgui.end_child()
+
+
+TOUR_DISMISSED_KEY = "tour_offer_dismissed"
+
+
+def _tour_offer(ctx: Any) -> None:
+    """The way in for someone who has just installed the app.
+
+    Shown until it is taken or dismissed, and *not* as a modal on the first
+    frame: the recovery prompt above was a modal once and the argument that
+    retired it applies here too -- an offer that has to be answered before the
+    app can be used is a toll, not an offer.
+
+    It stands down once the tour it offers has been finished, so the reader is
+    not invited to a thing they have already done.
+    """
+    from ..tour import scripts as tour_scripts
+
+    state = getattr(ctx.state, "tour", None)
+    if state is None or state.running:
+        return
+    if str(ctx.settings.get(TOUR_DISMISSED_KEY, "") or ""):
+        return
+    offer = next((one for one in tour_scripts.TOURS if one.key not in state.finished), None)
+    if offer is None:
+        return
+    widgets.section("New here?")
+    imgui.text_wrapped(offer.blurb)
+    if widgets.primary_button(f"Start: {offer.title}##tour-offer"):
+        from . import tour as tour_pane
+
+        tour_pane.start(ctx, offer.key)
+    imgui.same_line()
+    if controls.button("Not now##tour-offer", role=controls.ButtonRole.GHOST):
+        ctx.settings.set(TOUR_DISMISSED_KEY, "1")
 
 
 def _header(ctx: Any) -> None:

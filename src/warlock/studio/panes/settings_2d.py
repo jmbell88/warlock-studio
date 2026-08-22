@@ -35,7 +35,18 @@ from ...service.validation import (
     MAX_UPLOAD_BYTES,
     random_seed,
 )
-from .. import controls, create_assets, dialogs, focus, forms, profiles, theme, tokens, widgets
+from .. import (
+    anchors,
+    controls,
+    create_assets,
+    dialogs,
+    focus,
+    forms,
+    profiles,
+    theme,
+    tokens,
+    widgets,
+)
 from ..manual import render as manual_render
 from ..tokens import sp
 from ..widgets import field_options as _options
@@ -540,6 +551,7 @@ def _prompt(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
             help_text="Describe the subject and the result you want to generate.",
             helper=f"{len(before)}/{MAX_PROMPT} characters",
         )
+        anchors.mark("create/prompt")
     if form["prompt"] != before:
         ctx.state.preview_dirty_at = time.monotonic()
         ctx.state.clear_field_error("prompt")
@@ -1182,6 +1194,7 @@ def _submit(ctx: Any, form: dict[str, Any]) -> None:
     enabled = not problems and not busy
     with focus.item(ctx.state, FOCUS_PANE, "generate") as focused:
         pressed = widgets.primary_button(spec.create_label, (-1, sp(34)), enabled=enabled)
+        anchors.mark("create/generate")
         # Enter on the last stop of the ring, which is what makes the whole
         # form keyboard-only: everything above it is a stock imgui control that
         # answers the keyboard once it has focus, and this is the one that

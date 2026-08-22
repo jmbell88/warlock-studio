@@ -50,7 +50,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import controls, icons, inker_mode, theme, toolbar, widgets
+from .. import anchors, controls, icons, inker_mode, theme, toolbar, widgets
 from ..inker import animation, sheetout
 from ..manual import render as manual_render
 from ..tokens import sp
@@ -161,6 +161,11 @@ def cell_index(
 
 
 def draw(ctx: Any) -> None:
+    # One window, two names: the layers panel and the timeline are the same
+    # surface here (``_track_row`` draws both), so a step about either points
+    # at the same rectangle rather than inventing a second one.
+    anchors.mark_window("inker/timeline")
+    anchors.mark_window("inker/layers")
     state = ctx.state.inker
     tab = None if state is None else state.active
     if tab is None:

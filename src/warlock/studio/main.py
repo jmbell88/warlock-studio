@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import memlog, winjob
-from . import filetypes
+from . import anchors, filetypes
 from . import fps as fps_mod
 
 log = logging.getLogger(__name__)
@@ -869,6 +869,11 @@ class App:
         # job directory, and nothing on the first frame needs the number --
         # the library's storage line simply appears when the task lands.
         self._request_storage()
+        # Which tours have already been finished. Read here rather than
+        # defaulted empty, so Home stops offering one the reader has done.
+        from .panes import tour as tour_pane
+
+        tour_pane.restore(self.app_ctx)
         self.viewer.on_pose_dirty = self._on_pose_dirty
 
     def _load_static_answers(self) -> None:
@@ -2411,6 +2416,21 @@ class App:
 
             manual_render.close(ctx)
             return
+        # Then a running tour. Below the Manual because a step's "Read more"
+        # raises the Manual over the tour, so the reference is the topmost
+        # thing an Esc is about -- and above the workspaces for the same reason
+        # the Manual is: Inker would consume the key and drop a floating
+        # selection while the tour stayed up.
+        if (
+            event.type == pygame.KEYDOWN
+            and event.key == pygame.K_ESCAPE
+            and getattr(ctx.state, "tour", None)
+            and ctx.state.tour.running
+        ):
+            from .panes import tour as tour_pane
+
+            tour_pane.stop(ctx)
+            return
         # Then the profile sheet, for the same reason and in this order: the
         # Manual can be raised *over* the manager (its (?) does exactly that),
         # so the topmost surface is the one an Esc is about. This one goes
@@ -2963,6 +2983,10 @@ class App:
         from . import layout_edit
 
         layout_mod.begin_frame(layout_edit.ensure(ctx.state).open)
+        # And one record of where every *control* that a tour can point at
+        # ended up. Cleared here rather than in ``layout`` so the two clears
+        # are visibly the same decision, made once, in one place.
+        anchors.begin_frame()
         # The rail is drawn in every mode, Home included: it is how you leave
         # wherever you are, so a mode that hides it is a dead end.
         rail.draw(self, ctx)
@@ -3118,6 +3142,7 @@ class App:
                 imgui.get_content_region_avail().x if max_width is None else max_width
             ),
         )
+        anchors.mark("create/stages")
         if picked != ctx.state.create_stage:
             create_stages.go(ctx, picked)
         imgui.dummy((0, tokens.sp(tokens.SP_2)))
@@ -4708,6 +4733,12 @@ class App:
         # itself in the same frame it runs a command, so the question it asks
         # takes the modal slot on the frame after, with nothing to contend
         # with.
+        # The tour, over the Manual so a "Read more" does not bury the card
+        # that offered it, and under the palette for the Manual's own reason:
+        # Ctrl+K is how you leave anywhere, this included.
+        from .panes import tour as tour_pane
+
+        tour_pane.draw(ctx)
         palette.draw(ctx)
         ctx.confirms.draw()
         ctx.prompts.draw()

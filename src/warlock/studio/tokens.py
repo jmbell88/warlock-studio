@@ -231,6 +231,18 @@ PALETTES: dict[str, dict[str, int]] = {
         # role, so no contrast bar applies to them -- what they answer to is
         # each *other*: the pair has to read as a checker rather than as a flat
         # field, and the hard-coded pair these replace was 14 levels apart.
+        # The guided tour's scrim and its ring. Two entries rather than
+        # reusing ACCENT and BG, because what they answer to is each *other*
+        # and to the thing underneath: the scrim has to read as "not this part"
+        # without hiding it -- the reader is still meant to see the control the
+        # ring is around, and to be able to click it -- and the ring has to
+        # separate from whatever the scrim is over rather than from a panel.
+        #
+        # A literal here instead would fail the way the checkerboard did: alive
+        # in one palette's range and invisible in another, found by a
+        # screenshot rather than by a test.
+        "TOUR_VEIL": 0x07080B,
+        "TOUR_RING": 0x9A8CFF,
         "CHECKER_A": 0x44464F,
         "CHECKER_B": 0x2C2E35,
     },
@@ -251,6 +263,8 @@ PALETTES: dict[str, dict[str, int]] = {
         # replace lived in the dark palette's range only, so a light-theme
         # session drew a near-black checkerboard under a white window -- and
         # dark artwork on it could not be seen, which is the half that mattered.
+        "TOUR_VEIL": 0x2B2C36,
+        "TOUR_RING": 0x1B1470,
         "CHECKER_A": 0xFFFFFF,
         "CHECKER_B": 0xD6D6DE,
     },
@@ -283,6 +297,8 @@ PALETTES: dict[str, dict[str, int]] = {
         "WARN": 0xE3C75E,
         # Warmed to match the ramp: a neutral-grey checker under a warm panel
         # reads as a colour cast rather than as the absence of pixels.
+        "TOUR_VEIL": 0x0E0C09,
+        "TOUR_RING": 0xFFAE4A,
         "CHECKER_A": 0x4F4A40,
         "CHECKER_B": 0x35312A,
     },

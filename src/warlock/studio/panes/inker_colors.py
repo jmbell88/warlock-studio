@@ -12,7 +12,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import controls, inker_mode, theme, widgets
+from .. import anchors, controls, inker_mode, theme, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
 from . import inker_bridge
@@ -55,6 +55,7 @@ PANEL_FLOOR = 210.0
 
 
 def draw(ctx: Any) -> None:
+    anchors.mark_window("inker/colors")
     state = inker_mode.ensure(ctx)
     widgets.section("Colour")
     # After the heading, never before it: help_button is a same_line, and

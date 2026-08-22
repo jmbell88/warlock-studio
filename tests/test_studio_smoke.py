@@ -990,6 +990,59 @@ def test_the_manual_builds_embedded(app_ctx, imgui_ctx):
     _frame(imgui_ctx, lambda: render.draw_body(app_ctx))
 
 
+def test_every_step_of_every_tour_builds(app_ctx, imgui_ctx):
+    """Nineteen steps, each drawn for real, in a real GL frame.
+
+    The tour is data plus one renderer, so the thing that can break is a step
+    the renderer cannot draw -- a body it cannot wrap, a chapter link on a step
+    with no chapter, an anchor whose rect is missing. Two of those only happen
+    on *some* steps, which is why this walks all of them rather than the first.
+
+    Drawn with no anchor recorded, deliberately: nothing has marked a control
+    in this frame, so every step takes the ``hole is None`` path. That is the
+    honest worst case -- a step pointing at a control inside a collapsed
+    section is exactly this -- and it is the path a first-step-only test would
+    never reach.
+    """
+    from warlock.studio.panes import tour as tour_pane
+    from warlock.studio.tour import TOURS
+
+    for one in TOURS:
+        tour_pane.start(app_ctx, one.key)
+        assert app_ctx.state.tour.running, one.key
+        for index in range(len(one)):
+            app_ctx.state.tour.index = index
+            _frame(imgui_ctx, lambda: tour_pane.draw(app_ctx))
+        tour_pane.stop(app_ctx)
+    assert not app_ctx.state.tour.running
+
+
+def test_the_tour_draws_nothing_when_none_is_running(app_ctx, imgui_ctx):
+    """The overlay is called every frame, from every mode, forever."""
+
+    from warlock.studio.panes import tour as tour_pane
+
+    app_ctx.state.tour.stop()
+    _frame(imgui_ctx, lambda: tour_pane.draw(app_ctx))
+    assert not tour_pane.is_open(app_ctx)
+
+
+def test_a_tour_whose_steps_went_away_stops_rather_than_raising(app_ctx, imgui_ctx):
+    """The index comes back from settings and the scripts are edited.
+
+    A saved index past the end of a shortened tour must end the tour, not take
+    the frame -- an exception here is one the user cannot dismiss, because
+    dismissing it is the frame that crashed.
+    """
+    from warlock.studio.panes import tour as tour_pane
+    from warlock.studio.tour import TOURS
+
+    tour_pane.start(app_ctx, TOURS[0].key)
+    app_ctx.state.tour.index = 9_999
+    _frame(imgui_ctx, lambda: tour_pane.draw(app_ctx))
+    assert not app_ctx.state.tour.running
+
+
 def test_a_chapter_with_a_screenshot_uploads_and_draws_it(app_ctx, imgui_ctx):
     """The manual can show a control now, not only describe it.
 

@@ -625,6 +625,54 @@ class ManualState:
 
 
 @dataclass
+class TourState:
+    """The guided tour: which one is running and how far through it is.
+
+    Deliberately not a mode and not a modal. A tour points at real controls and
+    waits for the reader to use them, so the app underneath has to stay live and
+    clickable -- which is why nothing here reaches ``App._modal_open`` and why
+    the overlay's scrim takes no input.
+
+    ``index`` can outlive the tour it counted: it comes back from settings, and
+    a tour that lost a step between releases would otherwise take the frame that
+    restored it. ``Tour.step`` returns ``None`` past the end rather than
+    raising, and :meth:`current` is where that is turned into "the tour is
+    over".
+    """
+
+    #: Which tour, or ``""`` for none running.
+    key: str = ""
+    index: int = 0
+    #: Tour keys the reader has reached the end of. Persisted, so the offer on
+    #: Home can stop offering something already done.
+    finished: tuple[str, ...] = ()
+    #: Set for one frame when a step's condition is met, so the card can say so
+    #: before it moves on rather than vanishing mid-sentence.
+    satisfied: bool = False
+
+    @property
+    def running(self) -> bool:
+        return bool(self.key)
+
+    def start(self, key: str) -> None:
+        self.key = key
+        self.index = 0
+        self.satisfied = False
+
+    def stop(self) -> None:
+        self.key = ""
+        self.index = 0
+        self.satisfied = False
+
+    def complete(self) -> None:
+        """End the running tour and remember that it was finished."""
+
+        if self.key and self.key not in self.finished:
+            self.finished = (*self.finished, self.key)
+        self.stop()
+
+
+@dataclass
 class AppState:
     """The whole UI's mutable state."""
 
@@ -912,6 +960,7 @@ class AppState:
     # claim about a file that has had a whole session to change.
     matte: Any = None
     manual: ManualState = field(default_factory=ManualState)
+    tour: TourState = field(default_factory=TourState)
     # The selected asset's parsed manifest.json, held as ((job id, mtime), data)
     # so the Export tab reads and parses it once per version of the file rather
     # than once per frame. The same (id, mtime) idiom ThumbnailCache uses, for

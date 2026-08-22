@@ -12,7 +12,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import controls, icons, inker, inker_mode, inker_state, theme, widgets
+from .. import anchors, controls, icons, inker, inker_mode, inker_state, theme, widgets
 from ..inker import brush
 from ..inker_state import (
     PAINT_TOOLS,
@@ -160,6 +160,7 @@ def draw(ctx: Any) -> None:
     ``tests/manual/test_coverage.py`` for that reason, and the tools are
     documented in the Inker chapter as they always were.
     """
+    anchors.mark_window("inker/tools")
     state = inker_mode.ensure(ctx)
     tab = state.active
     _grid(state, None if tab is None else tab.doc)

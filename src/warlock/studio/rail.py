@@ -43,7 +43,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from . import fonts, icons, modes, motion, theme, tokens
+from . import anchors, fonts, icons, modes, motion, theme, tokens
 from . import layout as layout_mod
 from .tokens import sp
 
@@ -204,6 +204,10 @@ def _item(
     height = height or sp(ITEM_H)
     origin = imgui.get_cursor_screen_pos()
     clicked = imgui.invisible_button(f"rail/{key}", (box, height))
+    # Straight after the button, because that is the only moment imgui can be
+    # asked where it went -- and every rail item is a thing a tour can point
+    # at, so this is one mark rather than eleven at the call sites.
+    anchors.mark(f"rail/{key}")
     hovered = imgui.is_item_hovered()
     focused = imgui.is_item_focused() and imgui.get_io().nav_visible
     lit = motion.value(
