@@ -1037,9 +1037,15 @@ def save_as(ctx: Any, tab: InkerDoc | None = None) -> None:
     _start(ctx, tab, f"inker-saveas:{tab.uid}", run)
 
 
-def export_png(ctx: Any, tab: InkerDoc | None = None) -> None:
+def export_png(ctx: Any, tab: InkerDoc | None = None, *, repeat: bool = False) -> None:
     """A flattened PNG. Not a save: it does not change what the tab points at,
-    so the document stays dirty against its own file."""
+    so the document stays dirty against its own file.
+
+    ``repeat`` writes straight to the recorded destination and opens no dialog
+    -- Repeat Last Export (6.9). The *destination* is what makes that safe to
+    do silently: it is a path this user chose for this document, and the toast
+    afterwards names it.
+    """
     tab = tab or active(ctx)
     if tab is None or tab.saving:
         return
@@ -1053,14 +1059,20 @@ def export_png(ctx: Any, tab: InkerDoc | None = None) -> None:
     state = ctx.state.inker
     scale = max(1, int(getattr(state, "export_scale", 1) or 1))
 
+    recorded = tab.export_dest if repeat else None
+
     def run() -> dict[str, Any] | None:
-        dest = dialogs.save_file("Export flattened PNG", f"{suggested}.png", PNG_FILTER)
+        dest = recorded or dialogs.save_file(
+            "Export flattened PNG", f"{suggested}.png", PNG_FILTER
+        )
         if dest is None:
             return None
         if dest.suffix.lower() != ".png":
             dest = dest.with_suffix(".png")
         dest.write_bytes(doc.png_bytes(scale=scale))
-        return {"exported": dest}
+        # ``dest`` and ``export_kind`` so the *next* repeat has something to
+        # repeat -- ``on_task_done`` records both.
+        return {"exported": dest, "dest": dest, "export_kind": "png"}
 
     _start(ctx, tab, f"inker-export:{tab.uid}", run)
 
@@ -1115,7 +1127,7 @@ def _slice_filenames(entries: list[Any]) -> list[str]:
     return out
 
 
-def export_slices(ctx: Any, tab: InkerDoc | None = None) -> None:
+def export_slices(ctx: Any, tab: InkerDoc | None = None, *, repeat: bool = False) -> None:
     """Every slice as its own PNG, cropped from the current frame's flatten.
 
     Each slice resolves ``at(current_frame_uid)`` -- so a keyed slice exports
@@ -1174,7 +1186,7 @@ def export_slices(ctx: Any, tab: InkerDoc | None = None) -> None:
     _start(ctx, tab, f"inker-export:{tab.uid}", run)
 
 
-def export_sheet(ctx: Any, tab: InkerDoc | None = None) -> None:
+def export_sheet(ctx: Any, tab: InkerDoc | None = None, *, repeat: bool = False) -> None:
     """An animated document as a packed PNG plus its JSON sidecar.
 
     Mirrors ``export_png`` exactly -- gated, floating buffer committed first, one
@@ -1199,10 +1211,10 @@ def export_sheet(ctx: Any, tab: InkerDoc | None = None) -> None:
     exactly the same problem -- sixteen GPU readbacks in one frame versus
     sixteen frames of one -- at a different layer.
     """
-    _begin_export(ctx, tab, "sheet")
+    _begin_export(ctx, tab, "sheet", repeat=repeat)
 
 
-def export_gif(ctx: Any, tab: InkerDoc | None = None) -> None:
+def export_gif(ctx: Any, tab: InkerDoc | None = None, *, repeat: bool = False) -> None:
     """An animated document as a GIF anyone can open.
 
     ``export_sheet``'s shape exactly, down to sharing its task key -- the two
@@ -1215,10 +1227,10 @@ def export_gif(ctx: Any, tab: InkerDoc | None = None) -> None:
     could be. Exporting a single tag is a different feature and would need to say
     which one.
     """
-    _begin_export(ctx, tab, "gif")
+    _begin_export(ctx, tab, "gif", repeat=repeat)
 
 
-def export_pngs(ctx: Any, tab: InkerDoc | None = None) -> None:
+def export_pngs(ctx: Any, tab: InkerDoc | None = None, *, repeat: bool = False) -> None:
     """Every frame as its own numbered PNG, through the same stepper.
 
     The plainest export there is, and the one an engine with its own importer
@@ -1226,7 +1238,7 @@ def export_pngs(ctx: Any, tab: InkerDoc | None = None) -> None:
     the frames are read exactly as the sheet and the GIF read them, and only
     the write differs.
     """
-    _begin_export(ctx, tab, "pngs")
+    _begin_export(ctx, tab, "pngs", repeat=repeat)
 
 
 @dataclass
@@ -1297,6 +1309,11 @@ class _Export:
     kind: str  # "sheet" | "gif" | "pngs"
     suggested: str
     legs: list[_Leg]
+    #: The destination a **repeat** is writing to, or None for the ordinary
+    #: export that asks. Carried on the export rather than read off the tab at
+    #: the dialog, because by then the tab is locked and the answer has to be
+    #: the one the click was made with (6.9).
+    recorded: Path | None = None
     #: Which leg the stepper is on. Never rewound: a finished leg's frames stay
     #: on it until the submit reads them.
     at: int = 0
@@ -1440,6 +1457,45 @@ def export_per_layer(ctx: Any, tab: InkerDoc | None = None, kind: str = "sheet")
     )
 
 
+#: Which function repeats which recorded export. A table rather than a chain
+#: of ifs, so a seventh export kind is one row and cannot be forgotten by the
+#: repeat path alone -- which is exactly how a "repeat" command goes stale.
+REPEATABLE: dict[str, str] = {
+    "png": "export_png",
+    "sheet": "export_sheet",
+    "gif": "export_gif",
+    "pngs": "export_pngs",
+    "slices": "export_slices",
+}
+
+
+def repeat_export(ctx: Any, tab: InkerDoc | None = None) -> bool:
+    """Ctrl+Shift+X: run the last export again, with no dialog.
+
+    **The hot-path escape valve**: configure once, then one key forever. It is
+    the whole reason the per-document destination memory exists, and until now
+    that memory only seeded the *dialog* -- so the user still had to answer it.
+
+    Refused out loud when this document has never been exported, because "the
+    last export" is not a thing yet and a silent key is one the user cannot
+    tell from a broken one.
+    """
+    state = ensure(ctx)
+    tab = tab or state.active
+    if tab is None:
+        return False
+    kind = getattr(tab, "export_kind", "")
+    verb = REPEATABLE.get(kind)
+    if not verb or tab.export_dest is None:
+        state.say(
+            "Nothing to repeat yet -- export once and this runs the same one "
+            "again."
+        )
+        return False
+    globals()[verb](ctx, tab, repeat=True)
+    return True
+
+
 def _begin_export(
     ctx: Any,
     tab: InkerDoc | None,
@@ -1448,6 +1504,7 @@ def _begin_export(
     span: tuple[int, int] | None = None,
     loop: bool | int = True,
     legs: list[_Leg] | None = None,
+    repeat: bool = False,
 ) -> None:
     """Lock the tab and park the stepper. The click-frame half of an export.
 
@@ -1501,7 +1558,13 @@ def _begin_export(
     # an edit landing in one of them would put half of two documents in the
     # sheet. ``saving`` is the flag ``busy`` already refuses mutation on.
     tab.saving = True
-    state.export = _Export(tab=tab, kind=kind, suggested=suggested, legs=legs)
+    state.export = _Export(
+        tab=tab,
+        kind=kind,
+        suggested=suggested,
+        legs=legs,
+        recorded=tab.export_dest if repeat else None,
+    )
 
 
 def _suggested_dialog_name(tab: InkerDoc, suggested: str, ext: str) -> str:
@@ -1713,7 +1776,14 @@ def _submit_export(ctx: Any, export: _Export) -> None:
         # ``slices_block`` keys by cell index: a span export's third cell is the
         # third frame of the span, and a whole-timeline snapshot here would hang
         # frame 0's rectangles on it.
-        slices = sheetout.slices_snapshot(doc, leg.span)
+        # **The JSON meta switches** (6.9), read here with everything else the
+        # sidecar is made of: a setting the user could change mid-encode must
+        # not decide, halfway through, what the file says about itself.
+        slices = (
+            sheetout.slices_snapshot(doc, leg.span)
+            if getattr(state, "export_meta_slices", True)
+            else []
+        )
         frames = leg.frames
         if export.kind == "sheet" and layout is not None:
             if len(frames) != layout.frame_count:
@@ -1763,7 +1833,7 @@ def _submit_export(ctx: Any, export: _Export) -> None:
                 frames=frames,
                 planes=leg.planes,
                 durations=durations,
-                tags=tags,
+                tags=tags if getattr(state, "export_meta_tags", True) else [],
                 layout=layout,
                 slices=slices,
                 loop=leg.loop,
@@ -1800,7 +1870,7 @@ def _submit_export(ctx: Any, export: _Export) -> None:
         """
         import json
 
-        dest = dialogs.save_file(
+        dest = export.recorded or dialogs.save_file(
             "Export sprite sheet", _suggested_dialog_name(tab, suggested, ".png"), PNG_FILTER
         )
         if dest is None:
@@ -1891,7 +1961,12 @@ def _submit_export(ctx: Any, export: _Export) -> None:
             )
             if first is None:
                 first = out
-        return {"exported": first, "dest": dest, "options": dict(export_options)}
+        return {
+            "exported": first,
+            "dest": dest,
+            "options": dict(export_options),
+            "export_kind": export.kind,
+        }
 
     # The document's own table when it has one, so an indexed clip exports the
     # colours that were authored rather than a per-frame quantise of them. Read
@@ -1899,7 +1974,7 @@ def _submit_export(ctx: Any, export: _Export) -> None:
     palette = list(doc.palette) if doc.palette else None
 
     def run_gif() -> dict[str, Any] | None:
-        dest = dialogs.save_file(
+        dest = export.recorded or dialogs.save_file(
             "Export animated GIF", _suggested_dialog_name(tab, suggested, ".gif"), GIF_FILTER
         )
         if dest is None:
@@ -1933,7 +2008,12 @@ def _submit_export(ctx: Any, export: _Export) -> None:
             )
             if first is None:
                 first = out
-        return {"exported": first, "dest": dest, "options": dict(export_options)}
+        return {
+            "exported": first,
+            "dest": dest,
+            "options": dict(export_options),
+            "export_kind": export.kind,
+        }
 
     def run_pngs() -> dict[str, Any] | None:
         """One PNG per frame, numbered. The plainest thing an engine can eat.
@@ -1980,7 +2060,12 @@ def _submit_export(ctx: Any, export: _Export) -> None:
                 Image.fromarray(upscale(plane, scale), "RGBA").save(out, "PNG")
                 if first is dest:
                     first = out
-        return {"exported": first, "dest": dest, "options": dict(export_options)}
+        return {
+            "exported": first,
+            "dest": dest,
+            "options": dict(export_options),
+            "export_kind": export.kind,
+        }
 
     runners = {"sheet": run_sheet, "gif": run_gif, "pngs": run_pngs}
     # ``start_save`` rather than a bare submit, so a refused key clears the lock
@@ -2377,6 +2462,13 @@ def on_task_done(ctx: Any, done: Any) -> None:
         dest = result.get("dest")
         if dest is not None:
             tab.export_dest = dest
+            # Which *kind* of export wrote it, so Repeat Last Export (6.9) can
+            # run the same one again. Recorded here rather than at the click
+            # because a click that ended in a cancelled file dialog is not an
+            # export to repeat.
+            kind = result.get("export_kind")
+            if kind:
+                tab.export_kind = str(kind)
         options = result.get("options")
         if isinstance(options, dict):
             tab.export_options = dict(options)

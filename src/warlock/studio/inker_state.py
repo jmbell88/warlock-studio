@@ -719,6 +719,16 @@ def _safe_int(value: Any, fallback: int, *, minimum: int) -> int:
 #: must leave that key at its default, not at a stranger's leftover value.
 EXPORT_OPTION_DEFAULTS: dict[str, Any] = {
     "arrange": None,
+    # **What goes in the JSON sidecar** (6.9). Three switches rather than one,
+    # because they answer three questions a pipeline asks separately: which
+    # cell is which frame is always written (it is what a sheet *is*), and
+    # these are the extras -- the tags an engine reads clips from, the layer
+    # names a compositor needs, and the slices a nine-patch or a hitbox lives
+    # in. Defaulting to on for tags and slices, which is what every export
+    # before this wrote, and off for layers, which nothing wrote.
+    "meta_tags": True,
+    "meta_slices": True,
+    "meta_layers": False,
     "wrap": 4,
     "merge": False,
     "skip_empty": False,
@@ -1166,6 +1176,10 @@ class InkerDoc:
     # export of this tab; :meth:`InkerState.apply_export_options` treats that
     # as "nothing to suggest" rather than "suggest nothing".
     export_dest: Path | None = None
+    #: Which export wrote ``export_dest``; see ``inker_mode.REPEATABLE``.
+    #: Session-scoped like the destination beside it, and set only when an
+    #: export *lands* -- a cancelled file dialog is not an export to repeat.
+    export_kind: str = ""
     export_options: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -1665,6 +1679,10 @@ class InkerState:
     # exports, and ignored (the export refuses the combination by name)
     # whenever the document itself carries a directional layout.
     export_arrange: str | None = None
+    #: The three JSON meta switches (6.9); see ``EXPORT_OPTION_DEFAULTS``.
+    export_meta_tags: bool = True
+    export_meta_slices: bool = True
+    export_meta_layers: bool = False
     # The N for ``export_arrange in ("rows", "columns")``. Kept even while
     # ``export_arrange`` names neither, so switching back to Rows/Columns does
     # not forget what the user last typed.
@@ -1962,6 +1980,9 @@ class InkerState:
         """
         return {
             "arrange": self.export_arrange,
+            "meta_tags": bool(self.export_meta_tags),
+            "meta_slices": bool(self.export_meta_slices),
+            "meta_layers": bool(self.export_meta_layers),
             "wrap": int(self.export_wrap),
             "merge": bool(self.export_merge),
             "skip_empty": bool(self.export_skip_empty),

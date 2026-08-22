@@ -22,6 +22,7 @@ grid is assertable without one; ``from_document`` is the adapter.
 
 from __future__ import annotations
 
+import math
 import re
 import string
 from collections.abc import Mapping, Sequence
@@ -281,7 +282,13 @@ def remap_tags(tags: Sequence[Any], frame_cells: Sequence[int | None]) -> list[A
 #: ``"rows"`` and ``"columns"`` are the *counted* forms -- the two that take a
 #: ``wrap`` -- and the set is checked against by name rather than inferred, so
 #: a typo refuses loudly instead of silently falling through to the row-wrap.
-ARRANGES = (None, "horizontal", "vertical", "rows", "columns")
+#: ``"packed"`` is Aseprite's own sheet type: the squarest grid the frame count
+#: allows, rather than a line or a count the user has to pick. It is a
+#: *derived* column count like every other entry here, which is what keeps it
+#: one line of arithmetic instead of a second packer -- this app's frames are
+#: all the same size, so the bin-packing Aseprite's name suggests would have
+#: nothing to solve.
+ARRANGES = (None, "horizontal", "vertical", "rows", "columns", "packed")
 #: Public (not ``_``-prefixed) because ``panes/inker_timeline.py`` needs the
 #: exact same set to decide when to draw the wrap-count field beside the
 #: Arrange combo -- one tuple, imported, rather than two copies that could
@@ -366,6 +373,18 @@ def plan_frames(
             columns = 1
         elif arrange == "rows":
             columns = -(-count // wrap)  # ceil
+        elif arrange == "packed":
+            # The squarest grid the count allows: ceil(sqrt(n)) columns, which
+            # is what "packed" means for frames that are all one size. Clamped
+            # to what the atlas can hold on the wide side, so a very large
+            # frame still lays out rather than refusing.
+            columns = max(
+                1,
+                min(
+                    math.ceil(math.sqrt(count)),
+                    max(1, sheetlib.MAX_ATLAS_PX // frame_w),
+                ),
+            )
         else:  # "columns"
             columns = wrap
         rows = -(-count // columns)  # ceil

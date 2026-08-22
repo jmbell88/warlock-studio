@@ -252,10 +252,13 @@ def test_a_fresh_tab_has_recorded_nothing():
     assert tab.export_options == {}
 
 
-def test_a_flat_png_export_does_not_touch_the_split_export_memory(monkeypatch, tmp_path):
-    """``export_png`` (the still, flattened export) hands back only
-    ``{"exported": ...}`` -- no "dest"/"options" -- so it must not clobber
-    whatever a sheet/GIF/PNG-sequence export already recorded."""
+def test_a_flat_png_export_records_where_it_wrote_and_leaves_the_options(
+    monkeypatch, tmp_path
+):
+    """The flat export records its own destination since 6.9 -- Repeat Last
+    Export needs one to repeat -- and still hands back **no options**, so the
+    nine sheet controls a sheet/GIF/PNG-sequence export recorded are not
+    clobbered by a flatten that reads none of them."""
     ctx, state, tab = _open()
     tab.export_dest = tmp_path / "old.png"
     tab.export_options = {"scale": 5}
@@ -266,8 +269,39 @@ def test_a_flat_png_export_does_not_touch_the_split_export_memory(monkeypatch, t
     result = ctx.run()
     _done(ctx, tab, result)
 
-    assert tab.export_dest == tmp_path / "old.png"
+    assert tab.export_dest == tmp_path / "flat.png"
+    assert tab.export_kind == "png"
     assert tab.export_options == {"scale": 5}
+
+
+def test_repeating_an_export_asks_no_dialog_and_writes_where_it_wrote(
+    monkeypatch, tmp_path
+):
+    """The hot-path escape valve: configure once, then one key forever."""
+    ctx, state, tab = _open()
+    from warlock.studio import dialogs
+
+    asked: list[int] = []
+
+    def save_file(*args, **kwargs):
+        asked.append(1)
+        return tmp_path / "first.png"
+
+    monkeypatch.setattr(dialogs, "save_file", save_file)
+    inker_mode.export_png(ctx, tab)
+    _done(ctx, tab, ctx.run())
+    assert asked == [1]
+
+    assert inker_mode.repeat_export(ctx, tab) is True
+    _done(ctx, tab, ctx.run())
+    assert asked == [1], "the repeat opened no dialog"
+    assert tab.export_dest == tmp_path / "first.png"
+
+
+def test_repeating_with_nothing_to_repeat_says_so():
+    ctx, state, tab = _open()
+    assert inker_mode.repeat_export(ctx, tab) is False
+    assert state.tip is not None and "export once" in state.tip.text
 
 
 # --- the next export dialog for that tab -----------------------------------------
@@ -404,3 +438,55 @@ def test_export_dest_and_options_do_not_touch_saved_head_or_dirty():
     tab.export_dest = Path("x.png")
     tab.export_options = {"scale": 2}
     assert not tab.dirty
+
+
+# --- 6.9: the packed sheet type and the JSON meta switches -------------------
+
+
+def test_the_packed_arrange_is_the_squarest_grid():
+    """What "packed" means for frames that are all one size -- the bin-packing
+    the name suggests would have nothing to solve here."""
+    from warlock.studio.inker import sheetout
+
+    for count, columns in ((4, 2), (9, 3), (10, 4), (1, 1)):
+        plan = sheetout.plan_frames(count, 16, 16, arrange="packed")
+        assert plan.columns == columns, count
+
+
+def test_packed_is_one_of_the_arranges_the_engine_names():
+    from warlock.studio.inker import sheetout
+
+    assert "packed" in sheetout.ARRANGES
+    assert "packed" not in sheetout.COUNTED_ARRANGES, "it takes no wrap count"
+
+
+def test_the_meta_switches_are_part_of_the_recorded_option_set():
+    """Or a repeat would write a different sidecar from the export it repeats."""
+    state = InkerState()
+    snapshot = state.export_options_snapshot()
+    for key in ("meta_tags", "meta_slices", "meta_layers"):
+        assert key in snapshot
+        assert key in inker_state.EXPORT_OPTION_DEFAULTS
+
+
+def test_turning_the_tag_meta_off_drops_the_tags_from_the_sidecar(monkeypatch, tmp_path):
+    import json
+
+    ctx, state, tab = _open(_tagged())
+    state.export_meta_tags = False
+    _saved(monkeypatch, tmp_path / "walk.png")
+    inker_mode.export_sheet(ctx, tab)
+    _finish(ctx, state)
+    meta = json.loads((tmp_path / "walk.json").read_text(encoding="utf-8"))
+    assert not meta["animation"].get("tags")
+
+
+def test_the_tags_are_written_by_default(monkeypatch, tmp_path):
+    import json
+
+    ctx, state, tab = _open(_tagged())
+    _saved(monkeypatch, tmp_path / "walk.png")
+    inker_mode.export_sheet(ctx, tab)
+    _finish(ctx, state)
+    meta = json.loads((tmp_path / "walk.json").read_text(encoding="utf-8"))
+    assert [tag["name"] for tag in meta["animation"]["tags"]] == ["intro", "walk"]

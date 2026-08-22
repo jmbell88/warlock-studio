@@ -413,6 +413,23 @@ register(
 )
 register(
     Op(
+        "repeat_export",
+        "Repeat last export",
+        _mode("repeat_export"),
+        menu="File",
+        key="Ctrl+Shift+X",
+        enabled=lambda state, tab: (
+            ready(state, tab) and bool(getattr(tab, "export_kind", ""))
+        ),
+        reason="Nothing to repeat yet -- export once and this runs it again.",
+        hint=(
+            "The hot-path escape valve: configure the export once, then one "
+            "key forever. It writes where it wrote and asks nothing."
+        ),
+    )
+)
+register(
+    Op(
         "import_sheet",
         "Import sprite sheet...",
         _mode_ctx("ask_import_sheet"),

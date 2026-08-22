@@ -316,6 +316,7 @@ def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
             ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
             ("Ctrl+E", "Save as a reference in the library"),
             ("Ctrl+Shift+E", "Export PNG"),
+            ("Ctrl+Shift+X", "Repeat the last export -- same file, no dialog"),
             ("Ctrl+N / O / W", "New / open / close"),
             ("Ctrl+A / D", "Select all / deselect"),
             ("Ctrl+Shift+D", "Reselect what was last dismissed"),

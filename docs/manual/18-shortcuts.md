@@ -226,6 +226,7 @@ left-drag in empty space with `Q` selected sweeps a marquee.
 | Ctrl+S / Ctrl+Shift+S | Save / save as |
 | Ctrl+E | Save the drawing into the library as a reference |
 | Ctrl+Shift+E | Export a flattened PNG |
+| Ctrl+Shift+X | Repeat the last export -- same file, no dialog |
 | Ctrl+N | New document |
 | Ctrl+O | Open a file |
 | Ctrl+W | Close the current tab |
