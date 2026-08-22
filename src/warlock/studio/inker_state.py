@@ -486,7 +486,7 @@ def _context_table() -> tuple[tuple[str, str, frozenset[str], str], ...]:
         ("pixel_perfect", "Pixel perfect", frozenset(PAINT_TOOLS - {"spray"}), ""),
         ("hardness", "Hardness", frozenset(PAINT_TOOLS), ""),
         ("opacity", "Opacity", frozenset(PAINT_TOOLS - {"shade"}), ""),
-        ("paint_ink", "Ink", frozenset({"brush"}), ""),
+        ("paint_ink", "Ink", frozenset(PAINT_TOOLS), ""),
         ("shade_dir", "Direction", frozenset({"shade"}), ""),
         ("spray_rate", "Rate", frozenset({"spray"}), ""),
         ("spacing", "Spacing", frozenset(lined), "dynamics"),
@@ -551,6 +551,78 @@ def context_group(key: str) -> str:
     return next((group for name, _l, _t, group in CONTEXT_WIDGETS if name == key), "")
 
 
+#: Aseprite's five inks, and what each one *is* in this engine.
+#:
+#: ``mode`` is the ``brush.StrokeState`` mode it opens the stroke with and
+#: ``lock`` forces the alpha lock on for the stroke. Written as a table rather
+#: than a chain of ifs at the press for the reason every other table here is:
+#: the labels, the engine modes and the tooltips cannot drift apart, and
+#: "which inks are there" is a list rather than a function body.
+#:
+#: **Lock Alpha is an ink here and a layer flag as well**, and that is not a
+#: duplicate: the flag is a property of the layer that outlives every tool, and
+#: the ink is "for this stroke, paint inside what is already there". Aseprite
+#: has both for the same reason.
+INKS: tuple[tuple[str, str, str, bool, str], ...] = (
+    (
+        "simple",
+        "Simple",
+        "replace",
+        False,
+        "Writes the colour, alpha included, at the brush's own opacity -- so it "
+        "can paint transparency down as well as up.",
+    ),
+    (
+        "alpha",
+        "Alpha",
+        "paint",
+        False,
+        "Composites the colour over what is already there. The ordinary ink.",
+    ),
+    (
+        "copy",
+        "Copy",
+        "copy",
+        False,
+        "The colour exactly, on every pixel the dab touches: no opacity, no "
+        "antialiasing, no blend. What a pixel artist reaches for when the point "
+        "is that only the chosen colours end up in the drawing.",
+    ),
+    (
+        "lock_alpha",
+        "Lock alpha",
+        "paint",
+        True,
+        "Paints inside what this layer already has and never past its edge -- "
+        "colours change, transparency does not.",
+    ),
+    (
+        "shading",
+        "Shading",
+        "shade",
+        False,
+        "Moves each pixel one step along the selected ramp instead of painting "
+        "a colour. The shading *tool* is where the ramp is chosen.",
+    ),
+)
+
+INK_LABELS = [(key, label) for key, label, _mode, _lock, _hint in INKS]
+
+
+def ink_mode(ink: str, fallback: str = "paint") -> str:
+    """The engine mode an ink opens a stroke with."""
+
+    return next((mode for key, _l, mode, _lock, _h in INKS if key == ink), fallback)
+
+
+def ink_locks_alpha(ink: str) -> bool:
+    return next((lock for key, _l, _m, lock, _h in INKS if key == ink), False)
+
+
+def ink_hint(ink: str) -> str:
+    return next((hint for key, _l, _m, _lock, hint in INKS if key == ink), "")
+
+
 TOOL_OPTION_DEFAULTS: dict[str, Any] = {
     "brush_size": 12,
     "hardness": 0.85,
@@ -570,11 +642,11 @@ TOOL_OPTION_DEFAULTS: dict[str, Any] = {
     # fringe of half-alpha nobody asked for.
     "nib": "soft",
     "pixel_perfect": False,
-    # Which ink the brush lays down: ``blend`` composites the colour over what
-    # is there, ``replace`` writes it verbatim including alpha. Per tool like
-    # everything else here, and offered on the brush alone -- this app has brush
-    # modes and layer locks instead of Aseprite's per-tool ink selector.
-    "paint_ink": "blend",
+    # Which ink this tool lays down; see :data:`INKS`. Per tool like everything
+    # else here -- and offered on *every* painting tool now (6.1), which is
+    # Aseprite's own arrangement: an ink is a property of the writing, not of
+    # one tool.
+    "paint_ink": "alpha",
     # Dabs a second, for the spray tool. A rate rather than a per-frame count,
     # so a spray lays down the same cloud on a slow machine as on a fast one.
     "spray_rate": 90,
@@ -1199,6 +1271,11 @@ class InkerState:
     #: ``inker_ops``' module docstring: a popup belongs to the window that
     #: began it, so the registry can only ask.
     pending_dialog: str = ""
+    #: **Same ink in all tools** -- Aseprite's own checkbox. Off by default,
+    #: because the per-tool table is this app's rule and an app-level override
+    #: of it should be something the user asked for. When on, every painting
+    #: tool reads (and writes) the brush's ink.
+    ink_shared: bool = False
     #: The group whose flyout strip is open, or "". Held only while the mouse
     #: is down on a group button -- it *is* the capture, in Aseprite's gesture
     #: where mouse-down selects, opens and captures in one event.
@@ -1673,6 +1750,22 @@ class InkerState:
     nib = _tool_option("nib")
     pixel_perfect = _tool_option("pixel_perfect")
     paint_ink = _tool_option("paint_ink")
+
+    @property
+    def ink(self) -> str:
+        """The ink this stroke writes with, honouring "same in all tools"."""
+
+        tool = "brush" if self.ink_shared else self.tool
+        stored = self.options_for(tool).get("paint_ink", "alpha")
+        # A settings file written before 6.1 carries the old two-value spelling.
+        # Read forward rather than migrated: the value is per tool per profile,
+        # and a migration would have to walk a dict of dicts to change a string
+        # this function can answer for.
+        return {"blend": "alpha", "replace": "simple"}.get(stored, stored)
+
+    def set_ink(self, ink: str) -> None:
+        tool = "brush" if self.ink_shared else self.tool
+        self.options_for(tool)["paint_ink"] = ink
     spray_rate = _tool_option("spray_rate")
     gradient_dither = _tool_option("gradient_dither")
     text_size = _tool_option("text_size")

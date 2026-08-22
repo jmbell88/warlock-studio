@@ -49,7 +49,7 @@ NIB_LABELS = [
     ("pixel", "Pixel"),
     ("square", "Square"),
 ]
-INK_LABELS = [("blend", "Blend"), ("replace", "Replace")]
+INK_LABELS = inker_state.INK_LABELS
 ALIGN_LABELS = [("free", "Free"), ("origin", "Origin"), ("tile", "Tile")]
 COMBINE_LABELS = [
     ("replace", "Replace"),
@@ -295,7 +295,19 @@ def _field(ctx: Any, state: Any, tab: Any, key: str) -> Any:
     if key == "opacity":
         return slider_float(0.05, 1.0)
     if key == "paint_ink":
-        return combo(INK_LABELS)
+        def draw(compact: bool) -> None:
+            changed, value = controls.combo(
+                "##ctx/paint_ink", state.ink, list(INK_LABELS)
+            )
+            if changed:
+                # Through ``set_ink``, which is where "same in all tools" is
+                # honoured -- writing ``options`` directly would set the ink on
+                # the tool in hand and leave the others behind.
+                state.set_ink(value)
+            if imgui.is_item_hovered():
+                imgui.set_tooltip(inker_state.ink_hint(state.ink))
+
+        return toolbar.Field(key, label, draw, width=WIDE, compact=NARROW)
     if key == "spray_rate":
         return slider_int(5, 400, "%d/s")
     if key in ("spacing", "stabilise", "speed_taper", "strength"):

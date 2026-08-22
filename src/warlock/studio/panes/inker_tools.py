@@ -101,11 +101,6 @@ SHADE_LABELS = (
 #: tool would be four more controls saying the same thing. The keys are
 #: ``blend`` (the composite every stroke has always done) and ``replace``,
 #: which is a member of ``brush.MODES``.
-INK_LABELS = (
-    ("blend", "Blend"),
-    ("replace", "Replace"),
-)
-
 # One entry per mode ``brush.SYMMETRY`` carries, and that is checked rather
 # than trusted: the table used to stop at ``xy``, so the radial mode the engine
 # implements, the "Ways" slider below and the manual chapter all described a
@@ -638,27 +633,6 @@ def _slice_options(ctx: Any, state: Any, tab: Any, entry: Any) -> None:
             doc.set_slice_key(entry.uid, frame_uid, clear=keyed)
     if controls.button(f"Delete##slice{entry.uid}", (-1, 0)):
         doc.remove_slice(entry.uid)
-
-
-def _ink(state: Any) -> None:
-    """Blend or replace, as a radio pair rather than a combo.
-
-    Two options that a user switches between constantly want to be two clicks
-    away from each other, not behind a dropdown -- and the pair is small enough
-    to sit on one row, which a combo plus its label is not.
-    """
-    widgets.field_label("ink")
-    for index, (key, label) in enumerate(INK_LABELS):
-        if index:
-            imgui.same_line()
-        if controls.radio_button(f"{label}##ink{key}", state.paint_ink == key):
-            state.paint_ink = key
-    widgets.help_marker(
-        "Blend composites the colour over what is already there. Replace "
-        "writes it exactly -- alpha included -- so it can paint transparency "
-        "back down as well as up, which is what recolouring flat pixel art "
-        "wants. A soft nib still feathers either way."
-    )
 
 
 def _shading(state: Any, doc: Any) -> None:

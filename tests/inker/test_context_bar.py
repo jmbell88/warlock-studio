@@ -86,3 +86,45 @@ def test_the_size_widget_covers_the_engines_whole_brush_range():
     """A slider that cannot reach ``MAX_BRUSH`` is a setting with a new cap."""
 
     assert inker.MIN_BRUSH < inker.MAX_BRUSH
+
+
+# --- 6.1: the five inks ------------------------------------------------------
+
+
+def test_the_ink_is_offered_on_every_painting_tool():
+    """An ink is a property of the writing rather than of one tool, which is
+    Aseprite's arrangement -- and it was offered on the brush alone."""
+
+    for tool in sorted(inker_state.PAINT_TOOLS):
+        assert "paint_ink" in inker_state.widgets_for(tool), tool
+
+
+def test_the_copy_ink_writes_the_colour_exactly():
+    """No opacity, no antialiasing: what a pixel artist reaches for when the
+    point is that only the chosen colours end up in the drawing."""
+
+    doc = inker.Document.blank(16, 16)
+    doc.begin_stroke((8.0, 8.0), (10, 20, 30, 255), size=4, mode="copy", opacity=0.25)
+    doc.end_stroke()
+    painted = doc.stack.active.pixels[8, 8]
+    assert tuple(int(channel) for channel in painted) == (10, 20, 30, 255)
+
+
+def test_the_lock_alpha_ink_never_widens_the_layer():
+    doc = inker.Document.blank(16, 16)
+    doc.stack.active.pixels[8, 8] = (0, 0, 0, 255)
+    doc.begin_stroke((8.0, 8.0), (255, 0, 0, 255), size=6, lock_alpha=True)
+    doc.end_stroke()
+    pixels = doc.stack.active.pixels
+    assert int(pixels[8, 8, 3]) == 255 and int(pixels[8, 8, 0]) == 255
+    # ...and the neighbour it covered stays empty, which is the whole ink.
+    assert int(pixels[7, 7, 3]) == 0
+
+
+def test_the_layer_lock_and_the_ink_cannot_switch_each_other_off():
+    doc = inker.Document.blank(16, 16)
+    doc.stack.active.pixels[8, 8] = (0, 0, 0, 255)
+    doc.stack.active.alpha_lock = True
+    doc.begin_stroke((8.0, 8.0), (255, 0, 0, 255), size=6, lock_alpha=False)
+    doc.end_stroke()
+    assert int(doc.stack.active.pixels[7, 7, 3]) == 0

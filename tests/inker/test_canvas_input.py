@@ -141,12 +141,19 @@ def test_the_tiled_combo_offers_every_mode_the_engine_implements():
     assert tuple(key for key, _label in inker_canvas.TILED_LABELS) == tiling.TILED_AXES
 
 
-def test_the_ink_radio_names_a_real_brush_mode():
-    """``blend`` is deliberately *not* a mode -- it is the composite every
-    stroke has always done -- so only the other key has to exist."""
-    keys = [key for key, _label in inker_tools.INK_LABELS]
-    assert keys == ["blend", "replace"]
-    assert "replace" in brush.MODES and "blend" not in brush.MODES
+def test_every_ink_names_a_real_brush_mode():
+    """Five inks now (6.1), and each one *is* an engine mode: the table carries
+    the mode rather than a label the press has to map, so an ink that named
+    nothing would be a control that silently painted with the default."""
+    for key, label, mode, _lock, hint in inker_state.INKS:
+        assert mode in brush.MODES, key
+        assert label and hint, key
+    keys = [key for key, _l, _m, _lock, _h in inker_state.INKS]
+    assert keys == ["simple", "alpha", "copy", "lock_alpha", "shading"]
+    # Lock Alpha is the one whose *mode* is the ordinary composite: what makes
+    # it an ink is the flag beside it.
+    assert inker_state.ink_mode("lock_alpha") == "paint"
+    assert inker_state.ink_locks_alpha("lock_alpha") is True
 
 
 def test_every_tool_has_an_icon_of_its_own():

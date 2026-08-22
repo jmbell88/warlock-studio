@@ -817,6 +817,7 @@ class PaintOps:
         shade_dir: int = 1,
         stamp: Any = None,
         stamp_align: str = "free",
+        lock_alpha: bool = False,
     ) -> bool:
         """Open a stroke on the active layer. False when the layer is locked.
 
@@ -871,7 +872,11 @@ class PaintOps:
             stabilise=stabilise,
             speed_taper=speed_taper,
             clip=self.mask,
-            alpha_lock=layer.alpha_lock,
+            # The layer's flag **or** the ink's (6.1). Or-ed rather than
+            # overridden either way round: the layer lock is a property of the
+            # layer that outlives every tool, and the Lock Alpha ink is "for
+            # this stroke" -- neither may quietly switch the other off.
+            alpha_lock=layer.alpha_lock or bool(lock_alpha),
             wrap_axes=tiling.axes_of(wrap),
             scatter=scatter,
             seed=seed,

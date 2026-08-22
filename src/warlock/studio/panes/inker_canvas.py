@@ -36,7 +36,7 @@ from .. import (
     toolbar,
     widgets,
 )
-from ..inker import textstamp
+from ..inker import STAMP_MODES, textstamp
 from ..inker.document import catmull_rom, curve_points, curve_spans
 from ..inker.indexed import shade_ramp
 from ..inker.slices import SliceKey, slice_props
@@ -1504,6 +1504,10 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
             # whether the picture is what is about to land.
             stamp=tip,
             stamp_align=state.stamp_align,
+            # Or-ed with the layer's own flag inside the engine (6.1): the ink
+            # says "for this stroke", the layer says "always", and neither may
+            # switch the other off.
+            lock_alpha=inker_state.ink_locks_alpha(state.ink),
         )
         if from_last:
             doc.stroke_to(point)
@@ -1518,27 +1522,33 @@ def _press_mode(state: Any, tool: str, tip: Any) -> str:
     bug slipped through and because a test has to be able to pin it against
     ``tip_for`` directly.
 
-    ``paint_ink`` is the brush's copy-colour toggle and it is the *only* thing
-    that can send a mode other than ``BRUSH_MODES[tool]``. But ``replace`` is
-    not a stamp mode -- a captured tip's alpha is both its shape and its
-    transparency, so a copy ink has nothing left to say about one -- and
-    ``StrokeState`` therefore drops a tip handed to it. Reading the ink
+    The ink is the *only* thing that can send a mode other than
+    ``BRUSH_MODES[tool]`` (6.1: five inks, ``inker_state.INKS``). But an image
+    tip is honoured for two modes only -- a captured tip's alpha is both its
+    shape and its transparency, so a copy ink has nothing left to say about one
+    -- and ``StrokeState`` drops a tip handed to any other. Reading the ink
     independently of the tip made that a silent, unrecoverable failure: the
-    panel hides the ink radio while a tip is loaded, the cursor draws the tip's
-    box and the checkbox stays ticked, so the stroke stamped a round replace dab
+    panel hid the ink control while a tip was loaded, the cursor drew the tip's
+    box and the setting stayed set, so the stroke stamped a round replace dab
     with nothing on screen to say why and no control left to turn the ink off.
-    Two ordinary gestures reached it -- set Replace and then capture (Ctrl+B
-    does not touch the ink), and apply a preset, since ``paint_ink`` is one of
-    the options a preset carries.
+    Two ordinary gestures reached it -- set the ink and then capture (Ctrl+B
+    does not touch it), and apply a preset, since the ink is one of the options
+    a preset carries.
 
-    So ``tip_for`` is the single source of truth: whatever it advertises is what
-    the press lays down, and a stale ink is ignored rather than obeyed. It is
-    ignored rather than *cleared* because the tip is the transient thing --
+    So ``tip_for`` is the single source of truth: whatever it advertises is
+    what the press lays down, and a stale ink is ignored rather than obeyed. It
+    is ignored rather than *cleared* because the tip is the transient thing --
     forget the tip and the ink the user chose is still theirs.
     """
-    if tool == "brush" and tip is None and state.paint_ink == "replace":
-        return "replace"
-    return inker_state.BRUSH_MODES[tool]
+    base = inker_state.BRUSH_MODES[tool]
+    if tool not in inker_state.PAINT_TOOLS:
+        return base
+    mode = inker_state.ink_mode(state.ink, base)
+    if tip is not None and mode not in STAMP_MODES:
+        return base
+    # The eraser, the blur and the smudge keep their own arithmetic: an ink
+    # says what a *colour* does to a pixel, and none of those three writes one.
+    return mode if base == "paint" else base
 
 
 def _dab_size(state: Any, spraying: bool) -> int:

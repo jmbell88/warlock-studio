@@ -604,18 +604,49 @@ def test_a_preset_carrying_a_replace_ink_cannot_disarm_a_loaded_tip():
     fresh.presets = dict(state.presets)
     fresh.stamp = brush.Stamp(_tip())
     fresh.apply_preset("copy pen")
-    assert fresh.paint_ink == "replace"
+    assert fresh.ink == "simple"
     assert fresh.tip_for("brush") is not None
     assert inker_canvas._press_mode(fresh, "brush", fresh.tip_for("brush")) == "paint"
 
 
 @pytest.mark.parametrize("tool", sorted(inker_state.PAINT_TOOLS))
-def test_no_other_tool_reads_the_brushs_ink(tool):
+def test_each_tool_reads_its_own_ink(tool):
+    """Per tool, like every other option -- and an ink is offered on every
+    painting tool now (6.1), which is Aseprite's arrangement: an ink is a
+    property of the writing rather than of one tool.
+
+    The three that decide what they write from what is already there -- erase,
+    blur, smudge -- keep their own arithmetic whatever the ink says, because an
+    ink is about what a *colour* does to a pixel and none of them writes one.
+    """
     state = inker_state.InkerState()
     state.set_tool(tool)
-    state.paint_ink = "replace"
-    expected = "replace" if tool == "brush" else inker_state.BRUSH_MODES[tool]
+    state.set_ink("simple")
+    base = inker_state.BRUSH_MODES[tool]
+    expected = "replace" if base == "paint" else base
     assert inker_canvas._press_mode(state, tool, None) == expected
+    # And the tool beside it is untouched: setting one tool's ink is not
+    # setting the app's.
+    other = inker_state.InkerState()
+    other.set_tool(tool)
+    assert other.ink == "alpha"
+
+
+def test_same_ink_in_all_tools_makes_it_app_wide():
+    """Aseprite's own checkbox, off by default: the per-tool table is this
+    app's rule, and an override of it should be something the user asked for."""
+    state = inker_state.InkerState()
+    state.set_tool("brush")
+    state.set_ink("copy")
+    state.set_tool("spray")
+    assert state.ink == "alpha"
+    state.ink_shared = True
+    assert state.ink == "copy"
+    # And writing while shared writes the brush's, so switching back agrees.
+    state.set_ink("simple")
+    state.ink_shared = False
+    state.set_tool("brush")
+    assert state.ink == "simple"
 
 
 def test_a_tool_that_cannot_stamp_never_reports_a_tip():

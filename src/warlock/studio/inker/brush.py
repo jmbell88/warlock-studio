@@ -48,7 +48,14 @@ DEFAULT_SPACING = 0.1
 #: all. It moves each pixel it covers **one step along a ramp**, so what it
 #: writes is decided by what is already there -- see
 #: :meth:`StrokeState._shade`.
-MODES = ("paint", "erase", "blur", "smudge", "replace", "shade")
+#: ``copy`` is Aseprite's *Copy Color+Alpha*, and it is a sixth mode rather
+#: than a flag on ``replace`` because it deliberately ignores **both** the
+#: stroke opacity and the dab's antialiasing: what it writes is the colour, at
+#: full strength, on every pixel the dab covers at all. That is the ink a
+#: pixel artist reaches for when the point is that the result has exactly the
+#: colours they chose in it -- and a version of it that honoured opacity would
+#: be ``replace`` again under a second name.
+MODES = ("paint", "erase", "blur", "smudge", "replace", "copy", "shade")
 
 #: How much of a pixel a dab must cover for the shading ink to shift it.
 #:
@@ -1021,6 +1028,12 @@ class StrokeState:
         elif self.mode == "replace":
             colour = np.asarray(self.colour, dtype=np.float32)
             out = before + (colour - before) * alpha
+        elif self.mode == "copy":
+            # Neither opacity nor coverage: a threshold, at the same half-pixel
+            # this package uses everywhere else for "is this pixel inside".
+            colour = np.asarray(self.colour, dtype=np.float32)
+            hit = (cov >= SHADE_COVERAGE)[..., None]
+            out = np.where(hit, colour, before)
         else:
             out = composite.paint_colour(before, self.colour, alpha[..., 0])
         if self.alpha_lock:
