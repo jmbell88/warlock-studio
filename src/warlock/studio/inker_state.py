@@ -497,6 +497,7 @@ def _context_table() -> tuple[tuple[str, str, frozenset[str], str], ...]:
         ("use_stamp", "Image brush", frozenset(STAMP_TOOLS), "dynamics"),
         ("stamp_align", "Pattern", frozenset(STAMP_TOOLS), "dynamics"),
         ("shape_filled", "Filled", frozenset(SHAPE_TOOLS - OPEN_SHAPE_TOOLS), ""),
+        ("corner_radius", "Corners", frozenset({"rect"}), ""),
         ("wand_tolerance", "Tolerance", frozenset({"fill", "wand"}), ""),
         ("wand_contiguous", "Contiguous", frozenset({"fill", "wand"}), ""),
         ("sample_layer", "This layer only", frozenset({"eyedropper"}), ""),
@@ -636,6 +637,10 @@ TOOL_OPTION_DEFAULTS: dict[str, Any] = {
     "spacing": 0.1,
     "strength": 0.5,
     "shape_filled": False,
+    #: How far a rectangle's corners are rounded, in pixels. Aseprite's
+    #: hold-``C``-while-dragging control, and a per-tool option like every
+    #: other shape setting so a rounded rectangle stays rounded next time.
+    "corner_radius": 0,
     "wand_tolerance": 32,
     "wand_contiguous": True,
     "sample_layer": False,
@@ -1768,6 +1773,7 @@ class InkerState:
     pixel_perfect = _tool_option("pixel_perfect")
     paint_ink = _tool_option("paint_ink")
     brush_angle = _tool_option("brush_angle")
+    corner_radius = _tool_option("corner_radius")
 
     @property
     def ink(self) -> str:

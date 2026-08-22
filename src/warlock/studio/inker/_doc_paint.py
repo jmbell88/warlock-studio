@@ -995,8 +995,15 @@ class PaintOps:
         *,
         filled: bool = False,
         wrap: str | tuple[bool, bool] = "off",
+        radius: int = 0,
     ) -> bool:
         """Line, rectangle or ellipse, antialiased through a coverage mask.
+
+        ``radius`` rounds a rectangle's corners, Aseprite's own hold-``C``-
+        while-dragging control. It is a *parameter of the shape* rather than a
+        fourth kind, because everything else about it -- the coverage plane,
+        the tiled fold, the brush width, the fill -- is the rectangle's, and a
+        "roundrect" kind would have to repeat all of it to change one call.
 
         The two-point door, which is what a *drag* produces. A path shape
         (:data:`PATH_SHAPES`) named here is routed to :meth:`shape_path` with
@@ -1034,11 +1041,27 @@ class PaintOps:
             draw.line([q0, q1], fill=255, width=size, joint="curve")
         else:
             x0, y0, x1, y1 = normalise_rect(q0, q1)
-            method = draw.rectangle if kind == "rect" else draw.ellipse
-            if filled:
-                method((x0, y0, x1, y1), fill=255, outline=255, width=size)
+            corner = max(0, int(radius))
+            if kind == "rect" and corner:
+                # Clamped to half the shorter side: a radius past that is a
+                # stadium, and Pillow draws it as one rather than refusing --
+                # so the clamp is what keeps the number on screen and the
+                # shape drawn in agreement.
+                corner = min(corner, (x1 - x0) // 2, (y1 - y0) // 2)
+            if kind == "rect" and corner > 0:
+                draw.rounded_rectangle(
+                    (x0, y0, x1, y1),
+                    radius=corner,
+                    fill=255 if filled else None,
+                    outline=255,
+                    width=size,
+                )
             else:
-                method((x0, y0, x1, y1), fill=None, outline=255, width=size)
+                method = draw.rectangle if kind == "rect" else draw.ellipse
+                if filled:
+                    method((x0, y0, x1, y1), fill=255, outline=255, width=size)
+                else:
+                    method((x0, y0, x1, y1), fill=None, outline=255, width=size)
 
         folded = tiling.fold_coverage(
             np.asarray(canvas, dtype=np.uint8), (ox, oy), self.size, axes

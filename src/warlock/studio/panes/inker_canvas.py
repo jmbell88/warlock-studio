@@ -432,7 +432,10 @@ def _transform_trailing(state: Any, doc: Any) -> tuple[float, Any] | None:
         + imgui.calc_text_size("X").x
         + imgui.calc_text_size("Y").x
         + widgets.button_width("Link")
-        + gap * 5
+        + sp(110) * 2
+        + imgui.calc_text_size("H").x
+        + imgui.calc_text_size("V").x
+        + gap * 7
     )
 
     def draw_it() -> None:
@@ -470,6 +473,25 @@ def _transform_trailing(state: Any, doc: Any) -> tuple[float, Any] | None:
             if state.transform_link:
                 fx = fy = fx if changed_x else fy
             doc.transform_floating(scale=(fx, fy), resample=state.resample)
+        # **Skew, as two numbers** (6.4). The engine has taken a shear since
+        # the free transform landed and nothing in the app could express one,
+        # so a document could be sheared by a script and by nothing a user
+        # could reach. Numbers rather than handles because the corner handles
+        # are already scale and rotate, and a third meaning on the same eight
+        # squares is a gesture nobody can aim -- the same argument the plan
+        # makes for suppressing splitters while the layout editor is open.
+        imgui.same_line()
+        imgui.set_next_item_width(sp(110))
+        changed_h, hx = controls.slider_float(
+            "H##inkshearx", buf.shear[0], -60.0, 60.0, "%.0f deg"
+        )
+        imgui.same_line()
+        imgui.set_next_item_width(sp(110))
+        changed_v, hy = controls.slider_float(
+            "V##inksheary", buf.shear[1], -60.0, 60.0, "%.0f deg"
+        )
+        if changed_h or changed_v:
+            doc.transform_floating(shear=(hx, hy), resample=state.resample)
 
     return (width, draw_it)
 
@@ -815,7 +837,16 @@ def _input(ctx: Any, state: Any, tab: Any, origin, *, active: bool, hovered: boo
         # wheel event so lists scroll at a sane rate, and this pane wants the
         # count the user's hand made, not a fraction of it.
         notches = io.mouse_wheel / imgui_backend.WHEEL_SCALE
-        inker_state.zoom_step(tab.view, origin, (mouse.x, mouse.y), notches, **_BOUNDS)
+        if state.tool == "rect" and imgui.is_key_down(imgui.Key.c):
+            # **Hold C and roll while dragging a rectangle**: Aseprite's own
+            # corner-radius gesture. On the wheel rather than on a drag of its
+            # own because the hand is already holding the shape out, and the
+            # only spare axis is the one the wheel turns.
+            state.corner_radius = max(0, int(state.corner_radius) + int(notches))
+        else:
+            inker_state.zoom_step(
+                tab.view, origin, (mouse.x, mouse.y), notches, **_BOUNDS
+            )
 
     _os_cursor(state, tab, hovered=hovered)
 
@@ -2251,6 +2282,10 @@ def _release(ctx: Any, state: Any, tab: Any, point) -> None:
             state.brush_size,
             filled=state.shape_filled,
             wrap=tab.tiled,
+            # The rectangle's rounded corners (6.4). Read at the commit rather
+            # than at the press, so ``C`` held mid-drag changes the shape under
+            # the cursor -- which is what Aseprite's own gesture does.
+            radius=int(state.corner_radius) if state.tool == "rect" else 0,
         )
     elif kind == "marquee":
         rect = marquee_rect(anchor, point)
