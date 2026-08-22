@@ -162,6 +162,102 @@ TOOLS = (
     ("tile", "Tile stamp", "Y"),
 )
 
+#: The toolbox's twelve slots, each holding the tools that answer one question.
+#:
+#: **Separate from :data:`TOOLS`, not a fourth element of it.** ``TOOLS`` is
+#: unpacked three-at-a-time in ``main.shortcut_sections``, the toolbox grid and
+#: two tests; a fourth element breaks all four at once. It is also the wrong
+#: shape: a group is a *set* of tools, and the row that owns a group is not a
+#: property of any one tool in it.
+#:
+#: Aseprite's own arrangement, adapted to the tools this editor has: what the
+#: hand reaches for is the group, and which member is on it is a detail the
+#: user sets once by sliding onto it. Twelve slots is two columns of six, which
+#: is what lets the toolbox be a 90 px rail instead of a 300 px column.
+TOOL_GROUPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("brush", "Brush", ("brush", "spray")),
+    ("eraser", "Eraser", ("eraser",)),
+    ("fill", "Fill", ("fill", "gradient")),
+    ("effects", "Effects", ("blur", "smudge", "shade")),
+    ("line", "Line", ("line", "curve")),
+    ("rect", "Shapes", ("rect", "ellipse")),
+    ("path", "Paths", ("polyline", "polygon")),
+    ("select", "Marquee", ("select", "select_ellipse")),
+    ("lasso", "Lasso", ("lasso", "lasso_poly")),
+    ("wand", "Wand", ("wand",)),
+    ("move", "Move", ("move", "eyedropper")),
+    ("util", "Utilities", ("text", "slice", "tile")),
+)
+
+#: Which group a tool sits in. Derived, so a tool can never be in two.
+GROUP_OF: dict[str, str] = {
+    tool: key for key, _label, tools in TOOL_GROUPS for tool in tools
+}
+
+
+def group_members(key: str) -> tuple[str, ...]:
+    """The tools in one group, or empty if there is no such group."""
+
+    return next((tools for name, _label, tools in TOOL_GROUPS if name == key), ())
+
+
+def group_label(key: str) -> str:
+    return next((label for name, label, _tools in TOOL_GROUPS if name == key), key)
+
+
+def cycle_in_group(current: str, wanted: str) -> str:
+    """Which tool a letter should select, given the tool in hand.
+
+    Aseprite's rule, and the reason key cycling is additive here rather than a
+    change to ``TOOLS``: **the first press always lands where it always did.**
+    ``U`` picks the rectangle from anywhere else; pressing it again, with the
+    rectangle already in hand, moves along its group to the ellipse. So every
+    binding that existed still means what it meant, and the second press is a
+    new fact rather than a moved one.
+    """
+
+    group = GROUP_OF.get(wanted)
+    members = group_members(group) if group else ()
+    if len(members) < 2 or current not in members:
+        return wanted
+    return members[(members.index(current) + 1) % len(members)]
+
+
+def flyout_cells(
+    rect: tuple[float, float, float, float], cell: tuple[float, float], count: int
+) -> list[tuple[float, float, float, float]]:
+    """Where a group's flyout strip draws, given the button it hangs off.
+
+    Pure, in physical pixels, and **the same function places the cells and
+    hit-tests them** (:func:`flyout_hit`) -- which is what makes it impossible
+    for the picture and the hit box to disagree, the defect every hand-rolled
+    flyout has.
+
+    To the right of the button and vertically centred on it, which is where
+    Aseprite's is: the toolbox is against the left edge of the window, so a
+    strip anywhere else would open off screen.
+    """
+
+    x, y, w, h = rect
+    cw, ch = cell
+    top = y + (h - ch) * 0.5
+    return [(x + w + index * cw, top, cw, ch) for index in range(count)]
+
+
+def flyout_hit(
+    rect: tuple[float, float, float, float],
+    cell: tuple[float, float],
+    count: int,
+    mouse: tuple[float, float],
+) -> int | None:
+    """Which cell of the strip the mouse is over, or None."""
+
+    for index, (x, y, w, h) in enumerate(flyout_cells(rect, cell, count)):
+        if x <= mouse[0] < x + w and y <= mouse[1] < y + h:
+            return index
+    return None
+
+
 def tool_label(key: str) -> str:
     """The display name for a tool key, or the key if it is not one.
 
@@ -966,6 +1062,13 @@ class InkerState:
     #: ``inker_ops``' module docstring: a popup belongs to the window that
     #: began it, so the registry can only ask.
     pending_dialog: str = ""
+    #: The group whose flyout strip is open, or "". Held only while the mouse
+    #: is down on a group button -- it *is* the capture, in Aseprite's gesture
+    #: where mouse-down selects, opens and captures in one event.
+    flyout: str = ""
+    #: Which member of each group the toolbox shows, keyed by group. Written by
+    #: sliding onto a member, so the rail keeps showing the tool you use.
+    group_tool: dict[str, str] = field(default_factory=dict)
     #: The parameterised op whose dialog is open, by name, or "". Held by
     #: name rather than as the ``Op`` for the same reason: the popup survives
     #: across frames and the registry owns the object.

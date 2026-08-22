@@ -3116,7 +3116,9 @@ def handle_key(ctx: Any, event: Any) -> bool:
         # cannot both fire on one press.
         state.set_tool(SHIFT_TOOL_KEYS[name])
     elif name in TOOL_KEYS and not shift:
-        state.set_tool(TOOL_KEYS[name])
+        # Through ``cycle_in_group``: the first press is the binding this
+        # letter has always had, and a second press moves along the group.
+        state.set_tool(inker_state.cycle_in_group(state.tool, TOOL_KEYS[name]))
     elif event.key in (pygame.K_EQUALS, pygame.K_PLUS, pygame.K_KP_PLUS):
         # Aseprite's zoom in, and ``=`` unshifted answers it too because that
         # is the same physical key on every layout this ships to.

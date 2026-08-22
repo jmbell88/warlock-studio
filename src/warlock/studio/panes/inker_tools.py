@@ -28,11 +28,18 @@ from ..tokens import sp
 # name and shortcut live in the tooltip -- three columns of bare labels
 # truncated ("Ellipse select" in a 104px button) and anything wider is taller,
 # which the canvas pays for.
-COLUMNS = 5
+COLUMNS = 2
 
 #: One toolbox button, in design px. The same number ``_grid`` draws with, said
 #: once so :func:`grid_height` cannot drift from it.
 BUTTON_H = 30.0
+
+#: One toolbox button's *width*, in design px, and the reason it is a constant
+#: rather than ``grid_width(COLUMNS)``: the toolbox is a rail, not a column. A
+#: button that took half of whatever pane it is in would be 150 px wide in a
+#: 300 px sidebar and a different shape again at every drag of the handle, and
+#: a square of icons is the picture a user recognises a toolbox by.
+BUTTON_W = 34.0
 
 #: How much of the options block has to be reachable without scrolling, in
 #: design px, before the toolbox is allowed to claim the rest of the pane.
@@ -76,7 +83,7 @@ def grid_height() -> float:
     the label in ``fonts.label`` and the manual's help button rides the same
     row at frame height, and both of those scale with the font.
     """
-    rows = -(-len(inker_state.TOOLS) // COLUMNS)
+    rows = -(-len(inker_state.TOOL_GROUPS) // COLUMNS)
     style = imgui.get_style()
     with fonts.label(imgui):
         label_h = imgui.get_text_line_height()
@@ -190,8 +197,20 @@ def draw(ctx: Any) -> None:
     _canvas_options(ctx, state)
 
 
-def _grid(state: Any, doc: Any = None) -> None:
-    """The icon grid, with any tool this document cannot use greyed out.
+def _grid(state, doc=None) -> None:
+    """Twelve groups, two across, and the flyout that picks inside one.
+
+    Aseprite's toolbox, and its gesture exactly: **mouse-down selects, opens
+    the strip and captures, all on one event**, so pressing a group and letting
+    go on the spot is simply "pick this group's tool", and pressing and sliding
+    is "pick that one". There is no click-then-click and no menu to dismiss.
+
+    The strip draws into the *foreground* draw list rather than into an imgui
+    popup, and that is the load-bearing choice: a popup is a window, and a
+    window opening under the cursor steals the capture from the button being
+    held -- which ends the slide the moment it crosses the strip's border. With
+    the button still the active item, ``is_item_active()`` **is**
+    ``captureMouse()``.
 
     Greyed rather than hidden, and the tooltip carries the reason: a toolbox
     that quietly loses a button when a document is not indexed is one where the
@@ -200,39 +219,129 @@ def _grid(state: Any, doc: Any = None) -> None:
     which is exactly the state whose explanation matters
     (``widgets.disabled_button`` has the long version of this note).
     """
-    width = widgets.grid_width(COLUMNS)
-    for index, (key, label, shortcut) in enumerate(inker_state.TOOLS):
-        selected = state.tool == key
-        reason = inker_state.tool_reason(key, doc)
+    width, height = sp(BUTTON_W), sp(BUTTON_H)
+    rects: dict[str, tuple[float, float, float, float]] = {}
+    for index, (group, label, members) in enumerate(inker_state.TOOL_GROUPS):
+        shown = _group_tool(state, group, members)
+        reason = inker_state.tool_reason(shown, doc)
+        selected = state.tool in members
+        origin = imgui.get_cursor_screen_pos()
+        rects[group] = (origin.x, origin.y, width, height)
         if selected:
             imgui.push_style_color(
-                imgui.Col_.button.value, imgui.get_style().color_(imgui.Col_.button_active.value)
+                imgui.Col_.button.value,
+                imgui.get_style().color_(imgui.Col_.button_active.value),
             )
-        icon = TOOL_ICONS.get(key) or label[:1]
+        icon = TOOL_ICONS.get(shown) or inker_state.tool_label(shown)[:1]
         if reason:
             imgui.begin_disabled()
-        clicked = controls.button(f"{icon}##tool{key}", (width, sp(30)))
+        controls.button(f"{icon}##toolgroup{group}", (width, height))
         if reason:
             imgui.end_disabled()
-        if clicked and not reason:
-            # Through ``set_tool``, like every other way of picking one: a
-            # half-drawn multi-click gesture belongs to the tool that started it.
-            state.set_tool(key)
+        if not reason and imgui.is_item_activated():
+            # The mouse-down frame, once. Selecting *here* rather than on
+            # release is what makes a press and release in place mean "this
+            # group", with no second decision to make.
+            state.set_tool(shown)
+            state.flyout = group if len(members) > 1 else ""
         if selected:
             imgui.pop_style_color()
         if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value):
-            # Both bindings, because three tools have two: the tooltip is the
-            # only place a glyph button says what it does, so it is also the
-            # only place the second chord can be found.
-            chords = shortcut
-            alt = inker_mode.ALT_TOOL_CHORDS.get(key)
-            if alt:
-                chords = f"{shortcut} or {alt}"
-            note = f"{label}  ({chords})"
-            imgui.set_tooltip(f"{note}\n{reason}" if reason else note)
+            imgui.set_tooltip(_group_tooltip(label, members, shown, reason))
         if index % COLUMNS != COLUMNS - 1:
             imgui.same_line()
     imgui.new_line()
+    _flyout(state, doc, rects)
+
+
+def _group_tool(state, group: str, members) -> str:
+    """Which member of a group the rail shows.
+
+    The tool in hand if it is in this group -- so the rail is a picture of what
+    you are holding -- and otherwise the one last slid onto, which is the
+    setting the flyout writes.
+    """
+    if state.tool in members:
+        return state.tool
+    remembered = state.group_tool.get(group)
+    return remembered if remembered in members else members[0]
+
+
+def _group_tooltip(label: str, members, shown: str, reason: str) -> str:
+    """A group button's accessible name: the tool on it, and its chords.
+
+    Both bindings, because three tools have two, and the other members' names
+    when there are any -- the tooltip is the only place a glyph button says
+    what it does, so it is also the only place "hold to reach the others" can
+    be read.
+    """
+    chords = next((key for tool, _l, key in inker_state.TOOLS if tool == shown), "")
+    alt = inker_mode.ALT_TOOL_CHORDS.get(shown)
+    if alt:
+        chords = f"{chords} or {alt}"
+    note = f"{inker_state.tool_label(shown)}  ({chords})"
+    if len(members) > 1:
+        others = ", ".join(
+            inker_state.tool_label(tool) for tool in members if tool != shown
+        )
+        note = note + "\n" + f"{label}: hold to reach {others}"
+    return note + "\n" + reason if reason else note
+
+
+def _flyout(state, doc, rects) -> None:
+    """The open group's strip, drawn over everything and hit-tested by hand.
+
+    Hit-testing is ``inker_state.flyout_hit``, which is pure, unit-tested with
+    no imgui, and **the same function that places the cells** -- so the picture
+    and the hit box cannot disagree.
+
+    Sliding across to another *group* reassigns the strip, which is Aseprite's
+    behaviour and falls out for free here: the button is still the active item,
+    so every group's rect is known and the mouse simply picks one.
+    """
+    if not state.flyout:
+        return
+    if not imgui.is_mouse_down(0):
+        state.flyout = ""
+        return
+    mouse = imgui.get_mouse_pos()
+    point = (mouse.x, mouse.y)
+    for group, (x, y, w, h) in rects.items():
+        inside = x <= point[0] < x + w and y <= point[1] < y + h
+        if inside and len(inker_state.group_members(group)) > 1:
+            state.flyout = group
+    rect = rects.get(state.flyout)
+    members = inker_state.group_members(state.flyout)
+    if rect is None or len(members) < 2:
+        return
+    cell = (sp(BUTTON_W), sp(BUTTON_H))
+    hit = inker_state.flyout_hit(rect, cell, len(members), point)
+    draw = imgui.get_foreground_draw_list()
+    for index, (x, y, w, h) in enumerate(
+        inker_state.flyout_cells(rect, cell, len(members))
+    ):
+        tool = members[index]
+        blocked = bool(inker_state.tool_reason(tool, doc))
+        colour = theme.PANEL if index != hit else theme.ACCENT
+        draw.add_rect_filled(
+            (x, y), (x + w, y + h), imgui.get_color_u32(theme.rgba(colour))
+        )
+        draw.add_rect(
+            (x, y), (x + w, y + h), imgui.get_color_u32(theme.rgba(theme.DIVIDER))
+        )
+        glyph = TOOL_ICONS.get(tool) or inker_state.tool_label(tool)[:1]
+        size = imgui.calc_text_size(glyph)
+        draw.add_text(
+            (x + (w - size.x) * 0.5, y + (h - size.y) * 0.5),
+            imgui.get_color_u32(theme.rgba(theme.MUTED if blocked else theme.TEXT)),
+            glyph,
+        )
+        if index == hit and not blocked:
+            # Live while the mouse is held, so the canvas under the strip shows
+            # the tool that would be picked. Through ``set_tool``, like every
+            # other way of picking one.
+            state.set_tool(tool)
+            state.group_tool[state.flyout] = tool
 
 
 def _options(ctx: Any, state: Any, tab: Any) -> None:
