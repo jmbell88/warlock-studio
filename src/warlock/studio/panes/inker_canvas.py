@@ -781,6 +781,19 @@ def _status_bar(state: Any, tab: Any, origin: Any, hovered: bool) -> None:
     parts.append(f"{doc.size[0]} x {doc.size[1]}")
     parts.append(f"{view.zoom * 100:.0f}%")
     widgets.muted("   ".join(parts))
+    tip = state.tip
+    if tip is not None and not tip.alive():
+        # Cleared on the frame it expires rather than on a timer: this is the
+        # only code that knows the tip is on screen, and a tip nobody drew has
+        # nothing to expire.
+        state.tip = None
+    elif tip is not None:
+        # After the readouts, not instead of them. The tip is the loud thing
+        # for six seconds; the numbers under the cursor are what the session
+        # is actually made of, and a tip that hid them would trade one missing
+        # readout for four.
+        imgui.same_line()
+        widgets.secondary(tip.text)
 
 
 # --- input ------------------------------------------------------------------

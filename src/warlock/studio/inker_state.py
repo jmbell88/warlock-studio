@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import itertools
 import math
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -919,10 +920,48 @@ def _tool_option(name: str) -> property:
 # --- everything Paint mode remembers ----------------------------------------
 
 
+
+#: How long a status-bar tip stays up, in seconds. Long enough to read a
+#: sentence and reach for the remedy, short enough that a stale one is never
+#: mistaken for a description of the state you are in now.
+TIP_SECONDS = 6.0
+
+
+@dataclass
+class Tip:
+    """One sentence under the canvas, answering a gesture that did not land.
+
+    The distinction this exists to draw, and the one the toasts had lost:
+    **a tip answers a gesture; a toast reports a job.** "This layer is locked"
+    is about the click you just made, and belongs where your eye already is --
+    under the cursor, in the status bar, gone in a moment. "Exported to
+    sprites/hero.png" is about work that finished while you were looking
+    somewhere else, and has to survive not being looked at.
+
+    ``remedy`` is an **op name, never a callable**. A tip that offers a button
+    the menu and the keyboard do not have is a second, invisible command
+    surface; naming the op means the offer cannot outlive what it offers, and
+    the button can show the op's own key.
+    """
+
+    text: str
+    remedy: str = ""
+    remedy_label: str = ""
+    at: float = field(default_factory=time.monotonic)
+
+    def alive(self, now: float | None = None) -> bool:
+        """Whether it should still be drawn."""
+
+        return (time.monotonic() if now is None else now) - self.at < TIP_SECONDS
+
+
 @dataclass
 class InkerState:
     docs: list[InkerDoc] = field(default_factory=list)
     active_uid: str = ""
+    #: The most recent status-bar tip, or None; see :class:`Tip`. Not
+    #: persisted and not per document -- it is about the gesture just made.
+    tip: Tip | None = None
     # The in-flight sheet/GIF export's frame-by-frame read of a document, or
     # None. ``inker_mode._Export``, typed loosely here because this module is
     # the state and that one is the behaviour. One at a time by construction:
@@ -1672,6 +1711,15 @@ class InkerState:
         """
         self.gesture_pts = []
         self.gesture_combine = "replace"
+
+    def say(self, text: str, *, remedy: str = "", remedy_label: str = "") -> None:
+        """Put a tip under the canvas. The refusal door for a gesture.
+
+        ``remedy`` names an op in :mod:`~warlock.studio.inker_ops`; see
+        :class:`Tip` for why it is a name and not a function.
+        """
+
+        self.tip = Tip(text, remedy=remedy, remedy_label=remedy_label)
 
     def set_tool(self, tool: str) -> None:
         """Pick a tool, dropping whatever gesture was open.

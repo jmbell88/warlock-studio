@@ -344,8 +344,7 @@ def test_escape_drops_the_polygon_and_keeps_the_selection(monkeypatch):
     tab.doc.select(inker.SelectionMask.from_rect(SIZE, (2, 2, 8, 8)))
     state.gesture_pts = list(TRIANGLE)
     ctx = SimpleNamespace(state=SimpleNamespace(inker=state))
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: 0)
-    event = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE)
+    event = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE, mod=0)
 
     assert inker_mode.handle_key(ctx, event) is True
     assert state.gesture_pts == []
@@ -363,8 +362,7 @@ def test_enter_commits_the_polygon_rather_than_starting_playback(monkeypatch):
     state.add(tab)
     state.gesture_pts = list(TRIANGLE)
     ctx = SimpleNamespace(state=SimpleNamespace(inker=state))
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: 0)
-    event = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN)
+    event = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN, mod=0)
 
     assert inker_mode.handle_key(ctx, event) is True
     assert state.gesture_pts == []

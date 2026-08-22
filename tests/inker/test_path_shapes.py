@@ -643,7 +643,6 @@ def test_committing_on_a_busy_tab_paints_nothing_and_closes_the_path():
 def test_enter_commits_the_path_and_escape_abandons_it(monkeypatch):
     import pygame
 
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: 0)
     for key, painted in ((pygame.K_RETURN, True), (pygame.K_ESCAPE, False)):
         tab = _tab(zoom=1.0)
         state = inker_state.InkerState(tool="polyline")
@@ -652,7 +651,7 @@ def test_enter_commits_the_path_and_escape_abandons_it(monkeypatch):
         state.add(tab)
         state.gesture_pts = list(BEND)
         ctx = SimpleNamespace(state=SimpleNamespace(inker=state))
-        event = pygame.event.Event(pygame.KEYDOWN, key=key)
+        event = pygame.event.Event(pygame.KEYDOWN, key=key, mod=0)
         assert inker_mode.handle_key(ctx, event) is True
         assert state.gesture_pts == []
         assert (_painted(tab.doc) > 0) is painted

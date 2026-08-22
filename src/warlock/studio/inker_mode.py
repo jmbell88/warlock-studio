@@ -3064,7 +3064,12 @@ def handle_key(ctx: Any, event: Any) -> bool:
     if event.type != pygame.KEYDOWN:
         return True
 
-    mods = pygame.key.get_mods()
+    # ``event.mod``, never ``pygame.key.get_mods()`` -- ``main._shortcut``'s
+    # rule (main.py:2340), and Inker was the last mode still breaking it.
+    # ``mod`` is the modifier state at the moment this key was *pressed*;
+    # ``get_mods()`` is the state now, after the event batch drained, so a
+    # Ctrl released between the press and this call read as never held.
+    mods = event.mod
     ctrl = bool(mods & pygame.KMOD_CTRL)
     shift = bool(mods & pygame.KMOD_SHIFT)
     name = pygame.key.name(event.key)

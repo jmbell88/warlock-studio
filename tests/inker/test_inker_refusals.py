@@ -49,8 +49,7 @@ def _sent(app) -> list[tuple[str, str]]:
 def _press(monkeypatch, ctx, key):
     import pygame
 
-    monkeypatch.setattr(pygame.key, "get_mods", lambda: 0)
-    return inker_mode.handle_key(ctx, pygame.event.Event(pygame.KEYDOWN, key=key))
+    return inker_mode.handle_key(ctx, pygame.event.Event(pygame.KEYDOWN, key=key, mod=0))
 
 
 # --- one sentence, both doors ------------------------------------------------
