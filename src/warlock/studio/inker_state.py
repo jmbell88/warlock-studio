@@ -962,6 +962,10 @@ class InkerState:
     #: The most recent status-bar tip, or None; see :class:`Tip`. Not
     #: persisted and not per document -- it is about the gesture just made.
     tip: Tip | None = None
+    #: The popup a menu row has asked a pane to open, by name, or "". See
+    #: ``inker_ops``' module docstring: a popup belongs to the window that
+    #: began it, so the registry can only ask.
+    pending_dialog: str = ""
     # The in-flight sheet/GIF export's frame-by-frame read of a document, or
     # None. ``inker_mode._Export``, typed loosely here because this module is
     # the state and that one is the behaviour. One at a time by construction:
