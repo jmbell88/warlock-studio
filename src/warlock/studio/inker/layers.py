@@ -57,6 +57,31 @@ class Layer:
     # editing aid rather than picture data: nothing about the composite reads
     # it, and a locked layer flattens exactly as an unlocked one does.
     locked: bool = False
+    #: **A real background layer** (6.5), and the re-argument of divergence #6.
+    #:
+    #: ``Document.matte`` was the stand-in: a colour composited under the stack
+    #: at flatten time, invisible to the layer model and therefore droppable on
+    #: every export -- an ``.aseprite`` written from this app said nothing
+    #: about it because there was nothing in the model to say. A flag on the
+    #: bottom layer is what Aseprite has, is what the file format carries
+    #: (layer flag ``0x08``), and is a thing the user can paint on.
+    #:
+    #: What the flag *means* here is one sentence: **a background layer is
+    #: opaque**. The composite forces its alpha to 255, so erasing on it
+    #: reveals the colour under the eraser rather than a hole -- which is
+    #: Aseprite's behaviour and the reason the type exists at all. It does not
+    #: change what any tool writes, which is what keeps every write door,
+    #: every undo patch and every blend mode exactly as they are.
+    #:
+    #: Only the bottom layer may carry it; ``LayerStack`` is the one place that
+    #: rule is enforced, so a reorder cannot leave a background in the middle
+    #: of the stack.
+    background: bool = False
+    #: A **reference layer**: drawn, never edited. Aseprite's own type, and
+    #: ``asein`` has been opening them (hidden) since the reader landed. It is
+    #: the content lock plus a statement of intent -- ``write_locked`` reads it
+    #: as well as ``locked``, so no new door has to learn about it.
+    reference: bool = False
     uid: int = field(default_factory=lambda: next(_uids))
     #: The **record**, on a document in ``color_mode == "indexed"`` -- and None
     #: on every other document, which is every document until somebody converts
@@ -136,6 +161,33 @@ class Layer:
             indices=None if self.indices is None else self.indices.copy(),
             **({} if uid is None else {"uid": uid}),
         )
+
+
+def _shown_pixels(layer: Layer) -> np.ndarray:
+    """What the compositor blends for this layer.
+
+    Its own array, except for a **background layer** (6.5), whose alpha is
+    forced opaque. That is the whole of what the flag means: erasing on a
+    background reveals the colour under the eraser rather than a hole, which is
+    Aseprite's behaviour and the reason the type exists.
+
+    Forced *here*, at the composite, rather than at every write door: a rule
+    applied at the doors would have to be taught to fifteen of them and would
+    change what undo restores, while this changes only what is shown -- so the
+    pixels the user painted are still the pixels in the file, and unmarking the
+    layer gives back exactly the drawing that was there.
+
+    A copy only when the flag is set and the layer is not already opaque, so
+    every ordinary document composites the array it always did.
+    """
+    if not getattr(layer, "background", False):
+        return layer.pixels
+    pixels = layer.pixels
+    if pixels.size and int(pixels[..., 3].min()) == 255:
+        return pixels
+    out = pixels.copy()
+    out[..., 3] = 255
+    return out
 
 
 class LayerStack:
@@ -246,7 +298,7 @@ class LayerStack:
         fold = self.group_fold
         if fold is None:
             return [
-                (layer.pixels, layer.opacity, layer.blend)
+                (_shown_pixels(layer), layer.opacity, layer.blend)
                 for layer in self.layers[lo:hi]
                 if layer.visible and layer.opacity > 0.0
             ]
@@ -258,7 +310,7 @@ class LayerStack:
             shown, opacity = fold[index] if index < len(fold) else (True, 1.0)
             opacity *= layer.opacity
             if layer.visible and shown and opacity > 0.0:
-                out.append((layer.pixels, opacity, layer.blend))
+                out.append((_shown_pixels(layer), opacity, layer.blend))
         return out
 
     def composite_region(

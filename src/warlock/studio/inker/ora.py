@@ -354,7 +354,12 @@ def _stack_xml(doc) -> bytes:
                 "opacity": f"{float(layer.opacity):.6f}",
                 "visibility": "visible" if layer.visible else "hidden",
                 "composite-op": cp.ORA_OPS.get(layer.blend, "svg:src-over"),
-                **_lock_attr(layer.alpha_lock, layer.locked),
+                **_lock_attr(
+                    layer.alpha_lock,
+                    layer.locked,
+                    getattr(layer, "background", False),
+                    getattr(layer, "reference", False),
+                ),
             },
         )
     return ElementTree.tostring(root, encoding="UTF-8", xml_declaration=True)
@@ -380,19 +385,35 @@ LOCK_ATTR = "warlock-alpha-lock"
 #: reading it correctly.
 CONTENT_LOCK_ATTR = "warlock-content-lock"
 
+#: The two layer types of 6.5, written **only when set** -- the content lock's
+#: own rule, and its reason: an ordinary document's ``stack.xml`` stays
+#: byte-identical to what this writer produced before they existed.
+BACKGROUND_ATTR = "warlock-background"
+REFERENCE_ATTR = "warlock-reference"
 
-def _lock_attr(alpha_lock: bool, locked: bool = False) -> dict[str, str]:
-    """The lock attributes, written only where they are set.
 
-    Absent rather than ``"0"``, so a document nobody has locked anything in
-    produces byte-identical XML to the one this build wrote before either
-    attribute existed -- which is what the determinism pin is measuring.
+def _lock_attr(
+    alpha_lock: bool,
+    locked: bool = False,
+    background: bool = False,
+    reference: bool = False,
+) -> dict[str, str]:
+    """The lock and layer-type attributes, written only where they are set.
+
+    Absent rather than ``"0"``, so a document nobody has locked anything in --
+    and nobody has made a background of -- produces byte-identical XML to the
+    one this build wrote before any of these attributes existed, which is what
+    the determinism pin is measuring.
     """
     out: dict[str, str] = {}
     if alpha_lock:
         out[LOCK_ATTR] = "1"
     if locked:
         out[CONTENT_LOCK_ATTR] = "1"
+    if background:
+        out[BACKGROUND_ATTR] = "1"
+    if reference:
+        out[REFERENCE_ATTR] = "1"
     return out
 
 
@@ -461,7 +482,12 @@ def _stack_xml_animated(doc, names: dict[int, str]) -> bytes:
                     # show every frame at once.
                     "visibility": "visible" if track.visible and not hidden else "hidden",
                     "composite-op": cp.ORA_OPS.get(track.blend, "svg:src-over"),
-                    **_lock_attr(track.alpha_lock, track.locked),
+                    **_lock_attr(
+                        track.alpha_lock,
+                        track.locked,
+                        getattr(track, "background", False),
+                        getattr(track, "reference", False),
+                    ),
                 },
             )
     return ElementTree.tostring(root, encoding="UTF-8", xml_declaration=True)
@@ -1726,6 +1752,8 @@ def read_ora(path: Path, *, budget: int | None = None):
                     # in it opens unlocked -- which is the answer a Krita or
                     # GIMP document should give, since neither writes ours.
                     locked=element.get(CONTENT_LOCK_ATTR) == "1",
+                    background=element.get(BACKGROUND_ATTR) == "1",
+                    reference=element.get(REFERENCE_ATTR) == "1",
                 )
             )
             if parent is not None:

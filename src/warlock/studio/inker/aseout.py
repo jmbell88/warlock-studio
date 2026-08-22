@@ -115,10 +115,12 @@ from .asein import (
     _GRAYSCALE,
     _INDEXED,
     _LAYER,
+    _LAYER_BACKGROUND,
     _LAYER_CONTINUOUS,
     _LAYER_EDITABLE,
     _LAYER_GROUP,
     _LAYER_IMAGE,
+    _LAYER_REFERENCE,
     _LAYER_TILEMAP,
     _LAYER_VISIBLE,
     _MAGIC,
@@ -339,6 +341,11 @@ class _Row:
     child_level: int = 0
     group: bool = False
     visible: bool = True
+    #: The two layer types of 6.5. Written into the chunk's own flags, which is
+    #: the whole point of having them as a model: divergence #6 said this build
+    #: had "no real background-layer type to carry the flag on", and it has one.
+    background: bool = False
+    reference: bool = False
     locked: bool = False
     opacity: float = 1.0
     blend: str = "normal"
@@ -414,6 +421,8 @@ def _members(doc) -> list[tuple[int, _Row]]:
                 _Row(
                     name=layer.name,
                     visible=bool(layer.visible),
+                    background=bool(getattr(layer, "background", False)),
+                    reference=bool(getattr(layer, "reference", False)),
                     locked=bool(layer.locked),
                     opacity=float(layer.opacity),
                     blend=str(layer.blend),
@@ -428,6 +437,8 @@ def _members(doc) -> list[tuple[int, _Row]]:
             _Row(
                 name=track.name,
                 visible=bool(track.visible),
+                background=bool(getattr(track, "background", False)),
+                reference=bool(getattr(track, "reference", False)),
                 locked=bool(track.locked),
                 opacity=float(track.opacity),
                 blend=str(track.blend),
@@ -532,6 +543,8 @@ def _layer_chunk(row: _Row) -> bytes:
         (_LAYER_VISIBLE if row.visible else 0)
         | (0 if row.locked else _LAYER_EDITABLE)
         | (_LAYER_CONTINUOUS if row.continuous else 0)
+        | (_LAYER_BACKGROUND if row.background else 0)
+        | (_LAYER_REFERENCE if row.reference else 0)
     )
     if row.group:
         blend, opacity = 0, 255

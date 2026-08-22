@@ -386,7 +386,21 @@ class Document(
         return Image.frombuffer("RGBA", (width, height), self._composite, "raw", "RGBA", 0, 1)
 
     def flatten(self, *, matte: bool = True) -> np.ndarray:
-        return cp.flatten_onto(self._composite.copy(), self.matte if matte else None)
+        """The whole document as RGBA.
+
+        ``matte`` is the *stand-in* background (divergence #6) and it is only
+        consulted when there is no real background layer (6.5): a document with
+        one already has an opaque bottom, and compositing a second colour under
+        it would be a colour nothing on screen or in any export could show.
+        """
+        under = self.matte if (matte and not self.has_background) else None
+        return cp.flatten_onto(self._composite.copy(), under)
+
+    @property
+    def has_background(self) -> bool:
+        """Whether the bottom layer is a real background layer."""
+
+        return bool(len(self.stack) and getattr(self.stack[0], "background", False))
 
     def png_bytes(self, *, scale: int = 1) -> bytes:
         """The flattened document as a PNG. Blocking; callers go off-thread.

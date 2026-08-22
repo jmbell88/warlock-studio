@@ -3121,7 +3121,7 @@ def handle_key(ctx: Any, event: Any) -> bool:
     # eleven of these branches used to be. What is left below is the bindings
     # that are not ops: the tool letters, the sizes, the nudges, the modeless
     # view keys.
-    op = inker_ops.by_key(chord_of(event, ctrl=ctrl, shift=shift), context)
+    op = inker_ops.by_key(chord_of(event, ctrl=ctrl, shift=shift, alt=alt), context)
     if op is not None:
         if not (tab.busy and ctrl and name in _MUTATING_CTRL):
             inker_ops.run(ctx, op)
@@ -3279,7 +3279,7 @@ _CHORD_NAMES: dict[str, str] = {
 }
 
 
-def chord_of(event: Any, *, ctrl: bool, shift: bool) -> str:
+def chord_of(event: Any, *, ctrl: bool, shift: bool, alt: bool = False) -> str:
     """The chord this key press *is*, in ``Op.key``'s spelling, or ``""``.
 
     One spelling, used by the binding and by the printed label, so a menu row
@@ -3297,6 +3297,8 @@ def chord_of(event: Any, *, ctrl: bool, shift: bool) -> str:
     parts = []
     if ctrl:
         parts.append("Ctrl")
+    if alt:
+        parts.append("Alt")
     if shift:
         parts.append("Shift")
     parts.append(label)

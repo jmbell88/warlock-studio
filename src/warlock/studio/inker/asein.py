@@ -237,6 +237,11 @@ class AseLayer:
     blend: str = "normal"
     group: bool = False
     background: bool = False
+    #: Aseprite's reference layer -- an underlay to trace over. Kept as read
+    #: rather than folded into ``visible``, which is a different fact: the
+    #: layer opens hidden *because* an export omits it, and the flag says what
+    #: kind of layer it is.
+    reference: bool = False
     continuous: bool = False
     child_level: int = 0
     #: The tileset chunk id this layer is bound to, or ``None`` for every
@@ -600,6 +605,7 @@ def _read_layer(state: _Parse, r: _Reader, opacity_valid: bool) -> None:
             blend=mode,
             group=kind == _LAYER_GROUP,
             background=bool(flags & _LAYER_BACKGROUND),
+            reference=bool(flags & _LAYER_REFERENCE),
             continuous=bool(flags & _LAYER_CONTINUOUS),
             child_level=child_level,
             tileset=tileset,
@@ -1168,7 +1174,17 @@ def _build_cels(
         if slots is not None:
             tight_indices[key] = slots
             indices, _ = _place(slots, size, (cel.x, cel.y), transparent)
-        made[key] = Layer(pixels=plane, name=layer.name, indices=indices)
+        made[key] = Layer(
+            pixels=plane,
+            name=layer.name,
+            # The two layer types this build gained in 6.5. Read rather than
+            # dropped now that there is somewhere for them to land -- and a
+            # reference layer's own ``visible`` was already forced off by the
+            # reader, which is the honest reading of an export that omits it.
+            background=bool(layer.background),
+            reference=bool(getattr(layer, "reference", False)),
+            indices=indices,
+        )
 
     for key, cel in by_slot.items():
         if cel.kind != _CEL_LINKED:

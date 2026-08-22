@@ -301,6 +301,7 @@ def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
             ("Alt+Shift+1 - 9", "Store the captured brush in that slot"),
             ("Tab", "Show or hide the timeline -- which is where the layers are"),
             ("Ctrl+Shift+N", "New layer"),
+            ("Alt+S", "Solo the active layer, and again to bring the rest back"),
             ("Ctrl+Shift+Up / Down", "Move the layer up / down the stack"),
             ("[ / ]", "Brush size (Shift: hardness)"),
             ("Shift+click", "Paint a line from where the last stroke ended"),

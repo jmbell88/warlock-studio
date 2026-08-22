@@ -88,7 +88,11 @@ class LayerOps:
         cel, so reading it off the layer here is reading the track.
         """
         layer = self.stack.active if layer is None else layer
-        if bool(layer.locked):
+        # A reference layer is drawn and never edited (6.5). Read here rather
+        # than at each door for the reason the group lock is: the doors are a
+        # list of fifteen and a flag they have to be taught one at a time is a
+        # flag that is on in the panel and off at one of them.
+        if bool(layer.locked) or bool(getattr(layer, "reference", False)):
             return True
         if not self.groups:
             return False
@@ -682,6 +686,80 @@ class LayerOps:
         # deliberately does not assume.
         self._stamp_all()
         self.stack = LayerStack(anim.layers_for(anim.frame, size), 0)
+
+    def to_background(self: Document) -> bool:
+        """Make the bottom layer a real background layer. -> whether it changed.
+
+        **The matte becomes pixels.** ``Document.matte`` was the stand-in
+        (divergence #6): a colour composited under the stack at flatten time,
+        with nothing in the layer model to carry it and therefore nothing for
+        an ``.aseprite`` or an ``.ora`` to record. Converting fills the
+        transparent parts of the bottom layer with it and clears it, so what
+        was a flatten-time overlay becomes a thing the user can paint on and
+        every writer already knows how to store.
+
+        Only the bottom layer, which is the rule ``LayerStack`` enforces on
+        every reorder: a background in the middle of a stack is a layer that
+        hides everything under it while claiming to be the floor.
+        """
+        if not len(self.stack) or self.stack[0].background:
+            return False
+        layer = self.stack[0]
+        before = layer.pixels.copy()
+        if self.matte is not None:
+            fill = np.asarray(self.matte, dtype=np.float32)
+            alpha = layer.pixels[..., 3:4].astype(np.float32) / 255.0
+            blended = fill[None, None, :] * (1.0 - alpha) + layer.pixels.astype(
+                np.float32
+            ) * alpha
+            layer.pixels[...] = cp.to_uint8_255(blended)
+        layer.pixels[..., 3] = 255
+        layer.background = True
+        self.matte = None
+        self._commit_patch(layer, (0, 0, *self.size), before)
+        self.invalidate_all()
+        return True
+
+    def from_background(self: Document) -> bool:
+        """Turn the background back into an ordinary layer. -> whether it did.
+
+        The pixels are left exactly as they are: what was painted stays
+        painted, and the only thing that changes is that alpha starts meaning
+        something again.
+        """
+        if not len(self.stack) or not self.stack[0].background:
+            return False
+        self.stack[0].background = False
+        self.invalidate_all()
+        self.rev += 1
+        return True
+
+    def set_reference(self: Document, index: int, value: bool) -> bool:
+        """Mark a layer as reference -- drawn, never edited."""
+
+        if not 0 <= index < len(self.stack):
+            return False
+        self.stack[index].reference = bool(value)
+        self.rev += 1
+        return True
+
+    def solo(self: Document, index: int) -> bool:
+        """Show only this layer, or show everything again. -> whether it changed.
+
+        Aseprite's solo mode, and it is deliberately **not a mode**: it writes
+        the ordinary ``visible`` flags, so there is no second visibility state
+        for the compositor, the export path or the ORA writer to learn about --
+        and pressing it again on the layer that is already alone restores the
+        rest rather than leaving the user to click eight eyes back on.
+        """
+        if not 0 <= index < len(self.stack):
+            return False
+        alone = all(
+            layer.visible == (at == index) for at, layer in enumerate(self.stack)
+        )
+        for at in range(len(self.stack)):
+            self.set_layer_props(at, visible=True if alone else at == index)
+        return True
 
     def apply_matte(self: Document, alpha: np.ndarray) -> bool:
         """Fold a cutout into the document's alpha, as one undoable step.

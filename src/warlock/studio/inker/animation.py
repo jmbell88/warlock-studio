@@ -182,6 +182,12 @@ class Track:
     #: property left out of one of them is a lock that is on in the panel and
     #: off at the door.
     locked: bool = False
+    #: The seventh and eighth track properties (6.5): a real background layer
+    #: and a reference layer. On the list for the reason the sixth is -- a
+    #: property left out of one of the four places that copy it is a flag that
+    #: is on in the panel and off at the door.
+    background: bool = False
+    reference: bool = False
     #: Whether a fresh cel on this row starts as a *copy* of the drawing before
     #: it rather than blank -- Aseprite's continuous layer, and how a held pose
     #: or a background is carried forward.
@@ -224,6 +230,8 @@ class Track:
             blend=layer.blend,
             alpha_lock=layer.alpha_lock,
             locked=layer.locked,
+            background=layer.background,
+            reference=layer.reference,
             uid=layer.uid,
         )
 
@@ -235,6 +243,8 @@ class Track:
             "blend": self.blend,
             "alpha_lock": self.alpha_lock,
             "locked": self.locked,
+            "background": self.background,
+            "reference": self.reference,
         }
 
 

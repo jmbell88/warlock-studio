@@ -917,6 +917,62 @@ register(
 )
 register(
     Op(
+        "to_background",
+        "Convert to background",
+        _doc("to_background"),
+        menu="Layer",
+        enabled=lambda state, tab: (
+            ready(state, tab) and len(tab.doc.stack) > 0 and not tab.doc.has_background
+        ),
+        reason="The bottom layer is already the background.",
+        hint=(
+            "Makes the bottom layer opaque, and folds the document's matte "
+            "colour into its pixels -- so what was a flatten-time overlay "
+            "becomes a layer you can paint on and every format can store."
+        ),
+        separator_before=True,
+    )
+)
+register(
+    Op(
+        "from_background",
+        "Layer from background",
+        _doc("from_background"),
+        menu="Layer",
+        enabled=lambda state, tab: ready(state, tab) and tab.doc.has_background,
+        reason="There is no background layer.",
+    )
+)
+register(
+    Op(
+        "toggle_reference",
+        "Reference layer",
+        lambda ctx, tab, **_: tab.doc.set_reference(
+            tab.doc.stack.active_index, not tab.doc.stack.active.reference
+        ),
+        menu="Layer",
+        enabled=has_doc,
+        reason=NO_DOC,
+        hint="Drawn, never edited: an underlay to trace over.",
+    )
+)
+register(
+    Op(
+        "solo_layer",
+        "Solo this layer",
+        lambda ctx, tab, **_: tab.doc.solo(tab.doc.stack.active_index),
+        menu="Layer",
+        key="Alt+S",
+        enabled=has_doc,
+        reason=NO_DOC,
+        hint=(
+            "Hides everything else -- and pressing it again on the layer that "
+            "is already alone brings the rest back."
+        ),
+    )
+)
+register(
+    Op(
         "layer_properties",
         "Properties...",
         dialog("inker-layer-properties"),
