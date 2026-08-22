@@ -58,4 +58,4 @@ Part IV explains how it is built.
 
 - [Architecture](42-architecture.md) — the process, the threads, the job store and the service layer.
 - [Pipelines](43-pipelines.md) — how a job travels from prompt to GLB.
-- [Extending](44-extending.md) — adding a model, a style or a skeleton.
+- [Extending Warlock Studio](44-extending.md) — adding a model, a style or a skeleton.

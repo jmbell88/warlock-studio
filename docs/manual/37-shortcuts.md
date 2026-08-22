@@ -47,9 +47,10 @@ inspector, the navigation rail. The control you are on is drawn with an accent-c
 and a button that shows only an icon puts its name in a tooltip as you arrive, so you never have to
 recognise a glyph to know what pressing it would do.
 
-**The arrow keys belong to whatever is on screen.** Home and the library move their selection with
-Up and Down, Review steps between units with Left and Right, and Inker and Plotter pan while Space
-is held. In those five the arrows do that and nothing else — they do not also step the ring, which
+**The arrow keys belong to whatever is on screen.** Home moves its selection with Up and Down and
+the library moves through its grid with all four, Review steps between units with Left and Right,
+Troupe steps a clip a frame at a time with Left and Right, and Inker and Plotter pan while Space
+is held. In those six the arrows do that and nothing else — they do not also step the ring, which
 would be two things answering one key. Tab is never taken over in this way, which is what keeps
 traversal available everywhere.
 
@@ -75,16 +76,22 @@ the pane that made it.
 
 ## Home and the Library
 
-Both screens are lists, and both take the same keys — the Resume list on Home, the asset cards in
-the Library.
+Both screens are selections you walk with the arrows and open with Enter — the Resume list on Home,
+the asset cards in the Library — but the two are shaped differently, because one is a short ring and
+the other is a grid.
 
 | Keys | Action |
 | --- | --- |
-| Up / Down | Move through the rows / the cards |
+| Up / Down | Move through the Resume rows / up and down a row of cards |
+| Left / Right | Move one card (the Library only) |
 | Enter | Open the highlighted row — a Library asset opens at the stage that made it |
 
-In the Library the arrows move through the cards exactly as they do in Create's sidebar: the
-same filtered, sorted list the cards are drawn from, clamped at the ends rather than wrapping.
+Home's Resume list is one column and **wraps** at both ends: it is a short ring rather than a list,
+so pressing Up at the top is not a dead key. The Library is a grid, so Up and Down move by a whole
+row and Left and Right by one card, over the same filtered, sorted list the cards are drawn from —
+and it is **clamped** rather than wrapped, because that list is the newest N of many and one press
+at the top landing on the oldest asset the window happens to hold is a jump the other arrow will not
+undo. Create's sidebar walks the same list with Up and Down alone, its rows being one card wide.
 
 ## Create
 
@@ -281,6 +288,7 @@ applies the transform and does not also start the clip. See
 | Keys | Action |
 | --- | --- |
 | Ctrl+Z / Ctrl+Y | Undo / redo (Ctrl+Shift+Z also redoes) |
+| Ctrl+S / Ctrl+Shift+S | Save the pose / save it under a new name |
 | Esc | Deselect the joint |
 
 The mode is otherwise mouse-shaped: joints are clicked and gizmos are dragged. The undo binding is

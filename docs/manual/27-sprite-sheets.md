@@ -23,7 +23,7 @@ runs 0, 45, 90, 135, 180, 225, 270 and 315 degrees across.
 
 The other controls:
 
-- **Frame** is the pixel size of one square cell — 64, 128 or 256.
+- **Frame** is the pixel size of one square cell — 64, 128, 256 or 512.
 - **Lighting** is `flat` or `lit`. Flat is the usual choice for sprites.
 - **Elevation** tilts the camera, from -60 to +60 degrees. Zero looks at the subject level-on.
 - **Name** is an optional label for the finished sheet, so the saved list shows something more

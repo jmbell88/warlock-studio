@@ -83,7 +83,7 @@ same values are the rail. Either way:
   into the query and puts the cursor back in the box, which is the same list the parser itself
   reads, so nothing on that row can offer a prefix the search does not understand.
 - **Status**: any status, done, running, or failed.
-- **Kind**: any kind, references, meshes, rigs, or sheets. Note that "reference" and "mesh" are
+- **Kind**: any kind, references, tiles, meshes, rigs, sheets, sprite sheets, or tile sheets. Note that "reference" and "mesh" are
   about what the job *produced*, not what was submitted — a text job that stopped at a reference and
   one that went on to a mesh are the same kind of job and two different things to look for.
 - A star toggle for favourites only.

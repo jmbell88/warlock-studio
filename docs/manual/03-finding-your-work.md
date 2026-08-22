@@ -32,7 +32,7 @@ Home is the screen the app opens on, and it is a chooser rather than a dashboard
 are worth knowing.
 
 **Resume** is a grid of thumbnails of your recent work — both documents you had open in the editors
-and finished assets from the library, newest first. Arrow keys walk it and Enter opens.
+and finished assets from the library, newest first. Up and Down walk it and Enter opens.
 
 **Unsaved work** appears only if a previous session ended badly. Warlock autosaves an open document
 after a couple of minutes of unsaved changes, and if the app did not shut down cleanly those copies

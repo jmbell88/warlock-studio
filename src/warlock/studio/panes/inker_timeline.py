@@ -1220,7 +1220,23 @@ def _reorder(ctx: Any, tab: Any, doc: Any, index: int) -> None:
     """
     if tab.busy:
         return
-    if imgui.begin_drag_drop_source(imgui.DragDropFlags_.source_no_hold_to_open_others.value):
+    # ``source_allow_null_id`` is not optional here, and its absence was a live
+    # crash rather than a missing nicety. The item this drags *from* is the
+    # layer's name, and a name is ``imgui.text`` -- an item imgui adds with id
+    # **0**. ``BeginDragDropSource`` asserts outright on a null id unless told
+    # to derive one from the item's rectangle, and it gets that far whenever
+    # the row is hovered *or* anything in the same window holds the active id
+    # -- which is to say, on the frame any timeline cell or frame header is
+    # held down. So pressing a cell asserted inside the *next* row's reorder,
+    # the exception unwound past ``layout.pane``'s ``end_child``, and what
+    # surfaced was a "Missing PopID()" naming neither the row nor the reason.
+    # Drag-reorder had therefore never worked: the one gesture it exists for
+    # took the same path.
+    flags = (
+        imgui.DragDropFlags_.source_no_hold_to_open_others.value
+        | imgui.DragDropFlags_.source_allow_null_id.value
+    )
+    if imgui.begin_drag_drop_source(flags):
         imgui.set_drag_drop_payload_py_id("inker-layer", index)
         imgui.text(doc.stack[index].name)
         imgui.end_drag_drop_source()

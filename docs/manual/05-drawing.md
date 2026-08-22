@@ -1,6 +1,6 @@
 # Drawing
 
-Inker is Warlock's raster editor: layers, a timeline, palettes, selections and twenty-six tools. It
+Inker is Warlock's raster editor: layers, a timeline, palettes, selections and twenty-four tools. It
 is a real pixel-art and painting program, not a touch-up panel bolted to a generator, and it needs
 no GPU and no model weights — everything in this chapter works on a bare install.
 
@@ -26,7 +26,7 @@ The chequerboard behind your artwork is transparency, not a colour.
 
 ## Tools
 
-Twenty-six tools in twelve groups. Each group has a letter, and **pressing that letter again cycles
+Twenty-four tools in twelve groups. Each group has a letter, and **pressing that letter again cycles
 within the group** — so `B` is the brush, `B` again is the spray, and the first press always lands
 on what that letter usually means.
 
@@ -133,9 +133,10 @@ still lands on the layer it was about. That is not something most editors promis
 
 ## Symmetry
 
-The canvas glyph in the tool rail opens a symmetry popover: off, X, Y, both, or radial. The axis is
-draggable, so symmetry does not have to be about the centre of the canvas. Strokes mirror as you
-draw them.
+The canvas glyph in the tool rail opens a symmetry popover: off, left/right, top/bottom, both,
+radial, and the two 45-degree mirrors — top-left to bottom-right, and bottom-left to top-right. The
+axis is draggable, so symmetry does not have to be about the centre of the canvas. Strokes mirror as
+you draw them.
 
 ## Saving and exporting
 

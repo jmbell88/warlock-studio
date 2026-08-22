@@ -137,7 +137,7 @@ INKER_BASICS = Tour(
             id="open-inker",
             title="Open Inker",
             body=(
-                "The raster editor: layers, a timeline, palettes and twenty-six tools. "
+                "The raster editor: layers, a timeline, palettes and twenty-four tools. "
                 "None of it needs a graphics card or a downloaded model."
             ),
             anchor="rail/inker",
@@ -154,7 +154,7 @@ INKER_BASICS = Tour(
             id="toolbox",
             title="The toolbox",
             body=(
-                "Twenty-six tools in twelve slots. Each slot has a letter, and pressing "
+                "Twenty-four tools in twelve slots. Each slot has a letter, and pressing "
                 "that letter again cycles within the slot -- so B is the brush, and B "
                 "again is the spray."
             ),

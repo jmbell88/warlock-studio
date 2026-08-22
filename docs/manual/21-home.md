@@ -35,9 +35,9 @@ appears.
 
 ## Starting something
 
-One **New…** button, and a menu behind it with the six things this app can begin from nothing: a 2D
-image, a 3D model, a drawing, a Clay model, a tile map and a sprite atlas. It used to be six equally
-loud buttons in a 3-across grid, which is a menu insisting that all six matter the same amount —
+One **New…** button, and a menu behind it with the seven things this app can begin from nothing: a
+2D image, a 3D model, a drawing, a Clay model, a tile map, a sprite atlas and a character. It used to
+be six equally loud buttons in a 3-across grid, which is a menu insisting that all of them matter the same amount —
 above the thing most people came back for.
 
 ## Status
@@ -55,7 +55,7 @@ There used to be a **Library** line here too, counting assets and disk. It went 
 grid of those same assets: a count of the thing you are looking at is not news, and the Library is
 one click away in the rail.
 
-The Issues line is a different destination from the health dot in the top-right corner, which
+The Issues line is a different destination from the health dot in the bottom-left corner, which
 opens the read-only Issues popup: the dot answers "what is wrong right now", and this line
 answers "how do I fix it". It exists because a fresh install reaches Home with no weights
 downloaded, presses New 2D, and is refused at the door with a download command in the message. That
@@ -80,7 +80,7 @@ history with a timestamp per entry, and your generated assets are folded in besi
 library — an asset row opens in the pane that made it, 2D for a reference or a tile and 3D for
 anything else.
 
-Arrow keys move between the cells and Enter opens the highlighted one — the ring wraps at both ends,
+Up and Down move between the cells and Enter opens the highlighted one — the ring wraps at both ends,
 because a dozen tiles is a menu rather than a list. Hovering moves the highlight too, so the mouse
 and the keyboard never disagree about what Enter would do.
 

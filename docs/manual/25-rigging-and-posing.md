@@ -115,8 +115,8 @@ In pose mode:
 - **Reset joint** returns the selected joint to its rest rotation; **Reset all** resets every joint.
 - **Mirror** copies the pose across the body's centre line. Over unsaved edits it asks first,
   because it rewrites every rotation at once — one press can undo it, but the confirm is there so a
-  whole pose is never replaced by a misclick. It is hidden for skeletons with no mirror pairs, such
-  as the serpent and the fish, where it could only do nothing.
+  whole pose is never replaced by a misclick. It is hidden for a skeleton with no mirror pairs —
+  the serpent, whose chain of spine joints has no left and right — where it could only do nothing.
 - A **preset** picker offers the shipped pose library for this skeleton, when one exists. Because
   fitting puts a template's joints in the same relative place on every mesh, a pose authored against
   one humanoid applies to every other humanoid.

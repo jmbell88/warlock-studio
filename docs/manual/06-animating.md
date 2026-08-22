@@ -7,9 +7,10 @@ Like the last chapter, none of this needs a GPU or any weights.
 
 ## Turning a drawing into an animation
 
-A new Inker document is a still. **Animate this drawing** turns it into a one-frame animation, and
-the timeline appears along the bottom. Nothing about your existing layers changes; they become the
-first column of the grid.
+A new Inker document is a still. **Animate this drawing** turns it into a two-frame animation — your
+drawing becomes frame one and a second, empty frame is added after it — and the timeline appears
+along the bottom. Nothing about your existing layers changes; they become the first column of the
+grid.
 
 The transport under the timeline adds frames, and there are two ways to add one, which is the single
 most important distinction in this chapter.
@@ -55,9 +56,10 @@ they belong to the preview pane, below.
 Onion skinning ghosts the frames either side of the one you are drawing, so you can see what you are
 animating between.
 
-Warlock's onion skin shows **the current layer only**, deliberately. Ghosting every layer of a
-twelve-layer character turns the canvas into soup at exactly the moment you need to see one limb
-clearly.
+By default the ghosts are the whole frame, composited. **Current layer only** is a toggle beside the
+depth controls, off until you ask for it, and it is the one to reach for on a twelve-layer character:
+ghosting every layer of one turns the canvas into soup at exactly the moment you need to see a single
+limb clearly.
 
 The controls are depth before, depth after, and fade. Behind a **More** popover: separate tints for
 past and future, a falloff exponent, whether ghosts draw in front of or behind your work, and

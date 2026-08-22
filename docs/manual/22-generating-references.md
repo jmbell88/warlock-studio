@@ -55,7 +55,7 @@ Under the prompt box, the **enrich** select turns on a local prompt expander —
 them. This is the offline form of what every hosted image service does silently: a language model
 rewrites "a sword" into a dense descriptive caption, and the image model's output improves because
 the description did. It is **off** by default and needs its own download (about 700 MB, listed in
-Settings → Models as "Prompt expander"); with expansion selected and the weights absent, the
+Settings → Models as "Prompt expander (Fooocus GPT-2)"); with expansion selected and the weights absent, the
 submit is refused with the download command.
 
 Two modes, because the right enrichment depends on what the picture is for:

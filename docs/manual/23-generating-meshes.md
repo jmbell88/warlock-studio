@@ -206,8 +206,9 @@ hides behind it. It needs the depth ControlNet downloaded (Settings → Models, 
 the button will name the download if it is missing. **Anchor strength** is how firmly each restyle
 is held; the default is the model's own.
 
-**Atlas size** is the resolution the new texture is written at. The reconstruction engine bakes at
-512 px; the views being projected in are larger than that, so 1024 is the default and is not wasted.
+**Atlas size** is the resolution the new texture is written at. The default, **Match the mesh**,
+keeps the mesh's current atlas resolution; a fixed size is offered but changes nothing a view covers
+and shrinks everything no view does, which keeps its old colour.
 
 Three things the panel tells you rather than letting you find out.
 

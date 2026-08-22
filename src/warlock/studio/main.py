@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import memlog, winjob
-from . import anchors, filetypes
+from . import anchors, filetypes, probe
 from . import fps as fps_mod
 
 log = logging.getLogger(__name__)
@@ -2987,6 +2987,11 @@ class App:
         # ended up. Cleared here rather than in ``layout`` so the two clears
         # are visibly the same decision, made once, in one place.
         anchors.begin_frame()
+        # And -- on a probe run only -- one record of every control the frame
+        # submits, for the driver that clicks them. Same clear, same place, for
+        # the same reason: a stale census points at whatever took the control's
+        # place.
+        probe.begin_frame()
         # The rail is drawn in every mode, Home included: it is how you leave
         # wherever you are, so a mode that hides it is a dead end.
         rail.draw(self, ctx)

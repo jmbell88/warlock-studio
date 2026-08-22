@@ -38,8 +38,9 @@ Posing works exactly the way the pose editor on an asset does:
 - **Reset joint** returns the selected joint to its rest rotation. It is disabled until you have
   selected one, and says why on hover.
 - **Reset all** returns every joint.
-- **Mirror** copies the pose across the body's centre line. It is hidden for skeletons with no
-  mirror pairs — the serpent and the fish — where it could only do nothing.
+- **Mirror** copies the pose across the body's centre line. It is hidden for a skeleton with no
+  mirror pairs — the serpent, whose chain of spine joints has no left and right — where it could
+  only do nothing.
 
 Poses are forward-kinematic only: no inverse kinematics, no translation on ordinary joints, no
 scaling. The one exception is the root, which is [its own section](#moving-the-root) below.

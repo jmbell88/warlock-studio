@@ -19,7 +19,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from . import fonts, motion, theme, tokens
+from . import fonts, motion, probe, theme, tokens
 from .tokens import sp
 
 
@@ -136,9 +136,28 @@ def _finish_item(
     error: bool = False,
     selected: bool = False,
     force_focus: bool = False,
+    label: str = "",
+    kind: str = "",
 ) -> None:
-    """Apply the state treatment shared by every control."""
+    """Apply the state treatment shared by every control.
 
+    ``label`` and ``kind`` are for :mod:`.probe` alone -- this is the one
+    chokepoint every studio control passes through, so a census taken here is
+    *derived* rather than hand-kept, and cannot fall behind the UI. The call is
+    first because it reads the item rect, and the state treatment below
+    submits draw commands rather than items; ordering is belt and braces
+    either way. Unset ``WARLOCK_UI_PROBE`` and it is one attribute lookup.
+    """
+
+    if probe.ENABLED:
+        probe.record(
+            label=label,
+            kind=kind,
+            enabled=enabled,
+            reason=reason,
+            selected=selected,
+            tooltip=tooltip,
+        )
     try:
         hovered = imgui.is_item_hovered(
             imgui.HoveredFlags_.allow_when_disabled.value
@@ -259,6 +278,8 @@ def button(
         error=visual is ControlState.ERROR,
         selected=selected,
         force_focus=visual is ControlState.FOCUSED,
+        label=label,
+        kind="button",
     )
     return bool(clicked and enabled)
 
@@ -321,6 +342,11 @@ def _field_call(
         reason=reason or (str(error) if isinstance(error, str) else ""),
         enabled=enabled,
         error=bool(error),
+        # The first positional is the label for every field imgui has; a call
+        # that passed something else would name itself oddly in the census
+        # rather than break.
+        label=args[0] if args and isinstance(args[0], str) else "",
+        kind=name,
     )
     return result
 
@@ -417,7 +443,14 @@ def radio_button(
 ) -> bool:
     with _disabled(enabled):
         clicked = imgui.radio_button(label, active)
-    _finish_item(tooltip=tooltip, reason=reason, enabled=enabled, selected=active)
+    _finish_item(
+        tooltip=tooltip,
+        reason=reason,
+        enabled=enabled,
+        selected=active,
+        label=label,
+        kind="radio_button",
+    )
     return bool(clicked and enabled)
 
 
@@ -450,6 +483,8 @@ def selectable(
         reason=reason,
         enabled=enabled,
         selected=False,
+        label=label,
+        kind="selectable",
     )
     return result
 
@@ -492,6 +527,8 @@ def collapsing_header(
         reason=reason,
         enabled=enabled,
         selected=selected,
+        label=label,
+        kind="collapsing_header",
     )
     return result
 
@@ -511,6 +548,8 @@ def menu_item(
         reason=reason,
         enabled=enabled,
         selected=selected,
+        label=label,
+        kind="menu_item",
     )
     return result
 
@@ -532,6 +571,8 @@ def menu_item_simple(
         reason=reason,
         enabled=enabled,
         selected=selected,
+        label=label,
+        kind="menu_item_simple",
     )
     return bool(clicked and enabled)
 
@@ -556,7 +597,9 @@ def menu(
 
     with _disabled(enabled):
         opened = bool(imgui.begin_menu(label, enabled))
-    _finish_item(tooltip=tooltip, reason=reason, enabled=enabled)
+    _finish_item(
+        tooltip=tooltip, reason=reason, enabled=enabled, label=label, kind="menu"
+    )
     try:
         yield opened
     finally:
@@ -651,6 +694,8 @@ def combo(
         reason=reason,
         enabled=enabled,
         error=bool(error),
+        label=control_id,
+        kind="combo",
     )
     if opened:
         for key, label in options:
@@ -717,7 +762,14 @@ def switch(
             imgui.get_color_u32(theme.rgba(theme.TEXT)),
             label,
         )
-    _finish_item(tooltip=tooltip, reason=reason, enabled=enabled, selected=value)
+    _finish_item(
+        tooltip=tooltip,
+        reason=reason,
+        enabled=enabled,
+        selected=value,
+        label=label or key,
+        kind="switch",
+    )
     return bool(clicked and enabled), value
 
 

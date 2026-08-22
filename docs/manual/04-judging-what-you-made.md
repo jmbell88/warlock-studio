@@ -45,7 +45,7 @@ experiments feed one pool.
 
 ## A judging pass
 
-When there is a backlog, grading one item at a time is the slow way. **Start a judging pass** walks
+When there is a backlog, grading one item at a time is the slow way. **Start judging** walks
 every outstanding item in one run, binary only: `A` accepts, `R` rejects, `S` skips, `Esc` ends the pass.
 
 Underneath, `A` and `R` file +3 and −3 — the same grades, through the same door. The eleven-point

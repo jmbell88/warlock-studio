@@ -181,14 +181,19 @@ that is only ever fully on or fully off has no falloff to shape. With a pixel ni
 **Pixel perfect**, which drops the doubled corner pixel a freehand diagonal leaves at every step,
 so the line comes out one pixel wide the whole way.
 
-The brush alone has an **ink**: **Blend** composites the colour over what is already there, which is
-what every stroke this editor drew before the option existed. **Replace** writes the colour exactly
-— alpha included — so it can paint transparency back *down* as well as up, which is what recolouring
-flat pixel art wants and what a normal brush cannot do at all. A soft nib still feathers either way:
-in this app feathering means one thing everywhere, so opacity, a soft rim and a feathered selection
-all soften a replace stroke exactly as they soften a paint one. (Aseprite's copy ink has a hard edge
-instead; with a pixel nib the two agree exactly, because coverage that is only ever 0 or 1 has
-nothing to feather.)
+Every painting tool — brush, eraser, spray, blur, smudge and shading — has an **ink**, which decides
+what the tool does with the colour rather than where it puts it. There are five. **Alpha** is the
+ordinary composite-over and the default. **Simple** writes colour and alpha exactly as given, so it
+can paint transparency back *down* as well as up, which is what recolouring flat pixel art wants and
+what a normal brush cannot do at all. **Copy** goes further and ignores stroke opacity *and* the
+dab's antialiasing — this is the pixel-art ink, and Aseprite's copy ink is the same thing. **Lock
+alpha** paints only where pixels already are, so a silhouette survives a recolour. **Shading** walks
+the active ramp instead of painting a colour, one step lighter or darker per stroke.
+
+A soft nib still feathers under Simple: in this app feathering means one thing everywhere, so
+opacity, a soft rim and a feathered selection all soften a Simple stroke exactly as they soften an
+Alpha one. Copy is the one that does not, and with a pixel nib the two agree exactly, because
+coverage that is only ever 0 or 1 has nothing to feather.
 
 The spray has a **Rate** — dabs a second, for as long as the button is held, whether or not the
 cursor is moving. Its **Size** is the width of the *cloud* rather than of one dab, which is what the
@@ -273,7 +278,8 @@ pen-like flick. Both are off by default, and with both off a stroke is the same 
 always drawn.
 
 Two canvas-wide aids sit below the tool options. **Symmetry** mirrors every stroke — off,
-left/right, top/bottom, both, or **radial**, which repeats it around a circle a set number of ways
+left/right, top/bottom, both, either 45-degree **diagonal** (top-left to bottom-right, or
+bottom-left to top-right), or **radial**, which repeats it around a circle a set number of ways
 (2 to 32) for snowflakes and mandalas. With any symmetry on you can set the **axis** the mirrors
 reflect about, in image coordinates; **Centre** puts it back, and "centred" means exactly that even
 after the canvas is resized. **Grid** overlays a grid at a spacing you set, from 2 to 512 pixels —
@@ -795,9 +801,9 @@ tileset exported as a `.tsx` behaves the same way and for the same reason — se
 
 ## Filters
 
-**Filter…** in the document panel opens thirteen whole-layer adjustments: brightness/contrast,
-hue/saturation, levels, blur, sharpen, invert, replace colour, outline, despeckle, alpha threshold,
-defringe, grow/shrink matte and remove orphans. Every one
+**Filter…** in the document panel opens fifteen whole-layer adjustments: brightness/contrast,
+hue/saturation, levels, curves, convolution, blur, sharpen, invert, replace colour, outline,
+despeckle, alpha threshold, defringe, grow/shrink matte and remove orphans. Every one
 previews live on the canvas as you drag, and the whole session — however many sliders you moved and
 however many times — records as a single undo step when you press Apply. Cancel, or clicking away
 from the popup, puts the pixels back and records nothing at all.
@@ -882,7 +888,7 @@ out of the layer it was on. Either way it is one undo step, a feathered selectio
 layer rather than a hard-edged crop of one, and the new layer joins whatever folder the one it came
 from is in.
 
-**This layer** selects what is painted on the active layer, at the coverage it is painted at — a
+**This layer's pixels** selects what is painted on the active layer, at the coverage it is painted at — a
 soft brush edge becomes a soft selection rather than a jagged one. It reads the layer's own pixels,
 so its opacity and blend mode do not enter into it.
 

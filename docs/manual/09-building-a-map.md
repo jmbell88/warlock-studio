@@ -104,8 +104,8 @@ engine.
 
 ## Layers
 
-Four kinds: tile, object, group and image. All four share six decorations — a class name, blend
-mode, tint, pixel offset, parallax factors — and groups nest, with a child's offsets summing and
+Four kinds: tile, object, group and image. All four share five decorations — a class name, blend
+mode, tint, pixel offset and parallax factors — and groups nest, with a child's offsets summing and
 opacities multiplying.
 
 Blend modes are the one thing the live canvas cannot always show. Above a size budget, mid-stroke, or
@@ -134,8 +134,8 @@ different mental model, not a switch that removes a limit.
 
 Plotter saves `.wmap` natively and exports `.tmx` / `.tmj` with `.tsx` tilesets for Tiled.
 
-Most things round-trip: every projection, infinite maps, all four layer kinds with their decorations,
-every object shape, object rotation, external and embedded and image-collection tilesets, per-tile
+Most things round-trip: every Tiled projection, infinite maps, all four layer kinds with their
+decorations, every Tiled object shape, object rotation, external and embedded and image-collection tilesets, per-tile
 animation, collision, properties, class and probability, and both blob and generic Wang sets.
 
 Some things are **Warlock dialect** — modelled and written, but no Tiled release reads them back:
