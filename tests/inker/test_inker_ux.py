@@ -307,13 +307,15 @@ def test_no_inker_pane_spells_a_tool_name_out_of_its_key(name: str) -> None:
 # --- a section names what follows it ----------------------------------------
 
 
-def test_the_image_brush_section_is_opened_after_the_brush_options() -> None:
-    """``section`` tints from its heading to the *next* one.
+def test_the_brush_controls_left_the_panel_for_the_context_bar() -> None:
+    """The ordering defect this replaces cannot recur, because the controls it
+    was about are not in this file any more.
 
-    Opened in the middle of the brush options, "Image brush" ran over the ink
-    radio, Opacity, Spacing, Smoothing and Taper -- controls it does not
-    configure, under a heading that says it does, on brush, eraser and spray,
-    i.e. the three most-used tools in the box.
+    "Image brush" opened in the middle of the brush options used to run its
+    tint over the ink radio, Opacity, Spacing, Smoothing and Taper -- controls
+    it does not configure, under a heading that says it does. Those are the
+    context bar's now (W2.4), so what is left in ``_options`` is the blocks a
+    38 px row cannot hold, and the image brush is the first of them.
     """
     source = Path(inker_tools.__file__).read_text(encoding="utf-8")
     tree = ast.parse(source)
@@ -323,28 +325,17 @@ def test_the_image_brush_section_is_opened_after_the_brush_options() -> None:
         if isinstance(node, ast.FunctionDef) and node.name == "_options"
     )
     calls = [n for n in ast.walk(options) if isinstance(n, ast.Call)]
-    stamp = [n.lineno for n in calls if _name(n) == "_image_brush"]
-    # By label, not by "every full-width control in the function": the tools
-    # after this one have their own sections (Tolerance, Gradient), they are
-    # drawn under a different branch of the same ``if`` ladder, and they never
-    # share a frame with the image brush.
-    brush_controls = {
-        "Size", "Nib", "Opacity", "Spacing", "Rate", "Strength", "Smoothing", "Taper"
-    }
-    sliders = [
-        n.lineno
-        for n in calls
-        if _name(n) in FULL_WIDTH
-        and n.args
-        and isinstance(n.args[0], ast.Constant)
-        and n.args[0].value in brush_controls
-    ]
-    assert stamp, "the image brush block left _options entirely"
-    assert sliders, "the brush controls were renamed; this test needs the new names"
-    assert max(sliders) < min(stamp), (
-        "a full-width brush control is drawn after the Image brush heading, so "
-        "it is tinted into that block and named by it"
+    assert [n.lineno for n in calls if _name(n) == "_image_brush"], (
+        "the image brush block left _options entirely"
     )
+    labels = {
+        n.args[0].value
+        for n in calls
+        if _name(n) in FULL_WIDTH and n.args and isinstance(n.args[0], ast.Constant)
+    }
+    assert not labels & {
+        "Size", "Nib", "Opacity", "Spacing", "Rate", "Strength", "Smoothing", "Taper"
+    }, "a per-tool brush control is drawn in both the sidebar and the context bar"
 
 
 def test_the_accent_line_about_a_live_transform_wraps() -> None:
@@ -522,7 +513,9 @@ def test_the_blocks_that_are_the_panel_do_not_fold() -> None:
     and nothing to act on -- which is what ``widgets.header``'s own docstring
     says, and why the brush options are still a plain section."""
     source = Path(inker_tools.__file__).read_text(encoding="utf-8")
-    for label in ("Tools", "Brush", "Selection", "Transform"):
+    # "Brush" and "Selection" went with their controls -- to the context bar
+    # and to the Select menu. What is left of the panel is still plain.
+    for label in ("Tools", "Gradient", "Transform"):
         assert f'widgets.section("{label}")' in source
 
 

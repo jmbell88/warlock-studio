@@ -15,9 +15,7 @@ from imgui_bundle import imgui
 from .. import controls, fonts, icons, inker, inker_mode, inker_state, theme, tokens, widgets
 from ..inker import brush, transform
 from ..inker_state import (
-    OPEN_SHAPE_TOOLS,
     PAINT_TOOLS,
-    SELECT_TOOLS,
     SHAPE_TOOLS,
     STAMP_TOOLS,
 )
@@ -345,178 +343,34 @@ def _flyout(state, doc, rects) -> None:
 
 
 def _options(ctx: Any, state: Any, tab: Any) -> None:
+    """What is left in the sidebar once the context bar has the tool options.
+
+    The fourteen controls that were here -- size, nib, hardness, opacity, ink,
+    rate, spacing, strength, smoothing, taper, filled, tolerance, contiguous,
+    sample, dither -- are one row above the canvas now (``inker_context``), at
+    two rows each and ~812 px of column saved. Every one of them is still
+    reachable, and ``tests/inker/test_context_bar.py`` asserts that against
+    ``TOOL_OPTION_DEFAULTS`` rather than leaving it to reading.
+
+    What could not go on a row stayed: a *list* (the gradient's stops, the
+    document's slices), a **block of verbs** (the image brush's capture and its
+    six variants), a radio row about the document rather than the tool (tile
+    behaviour), and the named presets. Those are panels, and a 38 px row is not
+    where a panel goes.
+    """
     tool = state.tool
     doc = tab.doc
 
-    if tool in PAINT_TOOLS or tool in SHAPE_TOOLS:
-        widgets.section("Brush")
-        _per_tool_note()
-        changed, size = widgets.labeled_slider_int(
-            "Size", state.brush_size, inker.MIN_BRUSH, inker.MAX_BRUSH
-        )
-        if changed:
-            state.brush_size = inker.clamp_brush(size)
-    if tool in PAINT_TOOLS:
-        # **An indexed document is offered the pixel nibs only**, and the soft
-        # one is taken off the list rather than greyed beside them. It is not a
-        # restriction the engine needs -- a soft nib is legal there and the
-        # commit funnel simply thresholds it -- which is exactly the problem: the
-        # control would go on promising a feathered edge and deliver a hard one.
-        # A menu that cannot lie is better than a slider that can. (Aseprite
-        # reaches the same place from the other direction: it has no
-        # antialiasing in indexed mode at all.)
-        indexed = bool(getattr(tab.doc, "is_indexed", False)) if tab is not None else False
-        labels = [pair for pair in NIB_LABELS if not indexed or pair[0] in inker.PIXEL_NIBS]
-        if indexed and state.nib not in inker.PIXEL_NIBS:
-            state.nib = labels[0][0]
-        state.nib = widgets.labeled_combo(
-            "Nib",
-            state.nib,
-            labels,
-            help_text=(
-                "Soft is the antialiased disc, which is what a painted reference "
-                "wants. The two pixel nibs lay down whole pixels only -- no partial "
-                "coverage anywhere -- which is what pixel art wants and what keeps "
-                "a drawing's colour count from growing along every edge."
-                + (
-                    "\n\nThis document is indexed, so every pixel is a palette slot "
-                    "and there is no partial coverage to be had: the soft nib is not "
-                    "offered because it could not do what it says."
-                    if indexed
-                    else ""
-                )
-            ),
-        )
-        if state.nib in inker.PIXEL_NIBS:
-            # Not for the spray: the corner filter is about a *line*, and the
-            # canvas forces it off there -- a ticked box that does nothing is
-            # worse than no box.
-            if tool != "spray":
-                changed, value = controls.checkbox("Pixel perfect", state.pixel_perfect)
-                if changed:
-                    state.pixel_perfect = value
-                widgets.help_marker(
-                    "Drops the doubled corner pixel a freehand diagonal leaves at "
-                    "every step, so the line is one pixel wide the whole way."
-                )
-        else:
-            # Hidden rather than disabled: a pixel nib's coverage is 0 or 1 by
-            # definition, so there is no falloff for this to shape and a greyed
-            # slider would suggest there is one somewhere.
-            changed, value = widgets.labeled_slider_float("Hardness", state.hardness, 0.0, 1.0)
-            if changed:
-                state.hardness = value
-        if tool == "brush" and state.tip_for(tool) is None:
-            # Hidden while an image tip is loaded, for the reason hardness is
-            # hidden on a pixel nib: a captured picture's alpha is both its
-            # shape and its transparency, so a copy ink has nothing left to say
-            # about it -- and a radio pair that changed nothing would read as
-            # the tool ignoring it. (The engine agrees from the other side: a
-            # tip handed to the replace mode is dropped.)
-            _ink(state)
-        if tool == "shade":
-            _shading(state, doc)
-        if tool != "shade":
-            # Hidden for shading, for the reason hardness is hidden on a pixel
-            # nib: a shift lands on the next swatch of the ramp exactly or it
-            # does not happen, so there is no partial version of it for an
-            # opacity to scale, and a slider that changed nothing would read as
-            # the tool ignoring it.
-            changed, value = widgets.labeled_slider_float(
-                "Opacity", state.opacity, 0.05, 1.0, percent=True
-            )
-            if changed:
-                state.opacity = value
-    if tool == "spray":
-        # Spacing, smoothing and the corner filter are all about a *line*, and
-        # a spray does not walk one -- the canvas forces the last two off, so
-        # showing them would be controls that do nothing.
-        changed, rate = widgets.labeled_slider_int(
-            "Rate",
-            int(state.spray_rate),
-            5,
-            400,
-            help_text=(
-                "Dabs a second while the button is held. Size is the width of the "
-                "cloud rather than of one dab, so a wide spray is thin and a "
-                "narrow one builds up fast."
-            ),
-        )
-        if changed:
-            state.spray_rate = int(rate)
-    elif tool in PAINT_TOOLS:
-        changed, value = widgets.labeled_slider_float(
-            "Spacing", state.spacing, 0.02, 1.0, percent=True
-        )
-        if changed:
-            state.spacing = value
-        if tool in ("blur", "smudge"):
-            changed, value = widgets.labeled_slider_float(
-                "Strength", state.strength, 0.05, 1.0, percent=True
-            )
-            if changed:
-                state.strength = value
-        changed, value = widgets.labeled_slider_float(
-            "Smoothing",
-            state.stabilise,
-            0.0,
-            0.95,
-            percent=True,
-            help_text=(
-                "The brush follows the cursor at a distance instead of exactly, "
-                "which turns a shaky line into a smooth one. It catches up when "
-                "you stop moving."
-            ),
-        )
-        if changed:
-            state.stabilise = value
-        changed, value = widgets.labeled_slider_float(
-            "Taper",
-            state.speed_taper,
-            0.0,
-            1.0,
-            help_text="How much a fast stroke thins, for a pen-like flick.",
-        )
-        if changed:
-            state.speed_taper = value
     if tool in STAMP_TOOLS:
-        # Last, not in the middle of the brush options. ``section`` tints from
-        # its heading to the next one, so opening this one early put the ink
-        # radio, Opacity, Spacing, Smoothing and Taper inside a block headed
-        # "Image brush" -- controls it does not configure, under a name that
-        # says it does, on the three most-used tools in the box.
         _image_brush(ctx, state, tab)
-    if tool in SHAPE_TOOLS and tool not in OPEN_SHAPE_TOOLS:
-        changed, filled = controls.checkbox("Filled", state.shape_filled)
-        if changed:
-            state.shape_filled = filled
-
-    if tool in ("fill", "wand"):
-        widgets.section("Tolerance")
-        _per_tool_note()
-        changed, value = widgets.labeled_slider_int("Tolerance", state.wand_tolerance, 0, 255)
-        if changed:
-            state.wand_tolerance = value
-        changed, value = controls.checkbox("Contiguous", state.wand_contiguous)
-        if changed:
-            state.wand_contiguous = value
-        widgets.help_marker(
-            "Off selects every similar pixel in the image, not just the ones touching."
-        )
-
-    if tool == "eyedropper":
-        widgets.section("Sample")
-        changed, value = controls.checkbox("This layer only", state.sample_layer)
-        if changed:
-            state.sample_layer = value
-        widgets.help_marker(
-            "Off reads the colour you can see, which is the blend of every "
-            "visible layer. On reads the active layer's own pixels -- what was "
-            "painted into it, before its opacity and blend mode."
-        )
+    if tool == "shade":
+        _shading(state, doc)
 
     if tool == "gradient":
         widgets.section("Gradient")
+        # The *shape* and the stops, not the dither -- that one is a per-tool
+        # option and rides the context bar with the rest of them. These two are
+        # app-level and one of them is a list, which is why they stayed.
         state.gradient_kind = widgets.labeled_combo(
             "Shape",
             state.gradient_kind,
@@ -525,18 +379,6 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
         changed, value = controls.checkbox("To transparent", state.gradient_to_transparent)
         if changed:
             state.gradient_to_transparent = value
-        # Derived from the engine's own tuple rather than written out, so the
-        # combo cannot offer a matrix ``dither`` does not have.
-        state.gradient_dither = widgets.labeled_combo(
-            "Dither",
-            state.gradient_dither,
-            [("none", "none"), *((k, k) for k in inker.DITHER_ORDERED)],
-            help_text=(
-                "Throws away the blend between stops and thresholds each pixel onto "
-                "one of them instead, so the ramp lands on exactly the colours you "
-                "chose. A selection's soft edge is not dithered."
-            ),
-        )
         _gradient_stops(state)
 
     if tool == "tile":
@@ -573,13 +415,15 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
         _presets(ctx, state)
 
     # Everything above this line adjusts the *tool*, which a save does not
-    # read. Everything below changes the document -- the selection ops each
-    # push a history step and Crop rebinds every layer's pixels -- so it waits
-    # for the save the same way the canvas, the layers panel and the keyboard
-    # shortcuts already do.
+    # read. Free transform changes the document -- it lifts pixels into a
+    # floating buffer and commits them -- so it waits for the save the same way
+    # the canvas, the timeline and the keyboard shortcuts already do.
+    #
+    # The selection verbs that were here are the **Select menu** now, with
+    # their amounts as parameter dialogs: eleven buttons and three sliders in a
+    # section that drew whenever a mask existed, for operations reached once or
+    # twice in a session.
     imgui.begin_disabled(tab.busy)
-    if tool in SELECT_TOOLS or doc.mask is not None:
-        _selection_actions(state, doc)
     _transform_entry(ctx, state, doc)
     imgui.end_disabled()
 
@@ -606,23 +450,19 @@ def _tile_behavior(state: Any, doc: Any) -> None:
     imgui.dummy((0, 6))
     widgets.section("Tiles")
     current = str(doc.tile_behavior)
-    width = widgets.grid_width(len(inker_state.TILE_BEHAVIORS))
-    for index, (key, label, why) in enumerate(inker_state.TILE_BEHAVIORS):
-        selected = current == key
-        if selected:
-            imgui.push_style_color(
-                imgui.Col_.button.value,
-                imgui.get_style().color_(imgui.Col_.button_active.value),
-            )
-        if controls.button(f"{label}##tilebehav{key}", (width, 0)):
-            doc.tile_behavior = key
-        if selected:
-            imgui.pop_style_color()
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(f"{label}\n{why}")
-        if index != len(inker_state.TILE_BEHAVIORS) - 1:
-            imgui.same_line()
-    imgui.new_line()
+    # ``segmented_choice``, not three hand-rolled buttons with a pushed style
+    # colour: this is one mutually-exclusive choice and the shared control
+    # already draws that -- including the selected pill, the compact height and
+    # the per-option tooltips, which the hand-rolled version had to repeat.
+    changed, picked = controls.segmented_choice(
+        "inker-tilebehav",
+        [(key, label) for key, label, _why in inker_state.TILE_BEHAVIORS],
+        current,
+        tooltips={key: why for key, _label, why in inker_state.TILE_BEHAVIORS},
+        compact=True,
+    )
+    if changed:
+        doc.tile_behavior = picked
     note = next(
         (why for key, _label, why in inker_state.TILE_BEHAVIORS if key == current),
         "",
@@ -1081,113 +921,6 @@ def _transform_numbers(state: Any, doc: Any) -> None:
         "each other and would squash the picture to a sliver, so a pair that "
         "extreme comes back unslanted."
     )
-
-
-def _selection_actions(state: Any, doc: Any) -> None:
-    widgets.section("Selection")
-    widgets.muted("Shift adds, Alt subtracts.")
-    if controls.button("All"):
-        doc.select_all()
-    imgui.same_line()
-    if widgets.disabled_button("None", doc.mask is not None, reason="Nothing is selected."):
-        doc.deselect()
-    imgui.same_line()
-    if controls.button("Invert"):
-        doc.invert_selection()
-    imgui.same_line()
-    # Enabled off the *memory* rather than off "there is no selection": the
-    # useful case is exactly re-selecting after something else was selected,
-    # and a mask the canvas has outgrown is refused by the engine.
-    if widgets.disabled_button(
-        "Reselect",
-        doc._last_mask is not None,
-        reason="Nothing has been deselected yet.",
-    ):
-        doc.reselect()
-    widgets.help_marker(
-        "Brings back the selection you last dismissed (Ctrl+Shift+D). A "
-        "selection from before a resize or a crop cannot come back -- it "
-        "describes a canvas that no longer exists."
-    )
-    if widgets.disabled_button(
-        "Copy to layer", doc.mask is not None, reason="Nothing is selected."
-    ):
-        doc.layer_from_selection(cut=False)
-    imgui.same_line()
-    if widgets.disabled_button(
-        "Move to layer", doc.mask is not None, reason="Nothing is selected."
-    ):
-        doc.layer_from_selection(cut=True)
-    widgets.help_marker(
-        "Ctrl+J copies the selection onto a layer of its own and leaves the "
-        "original where it was; Ctrl+Shift+J moves it, cutting it out of the "
-        "layer it came from. Either way it is one undo step, and the new layer "
-        "lines up with what it came from."
-    )
-    if controls.button("This layer"):
-        doc.select_layer_alpha()
-    widgets.help_marker(
-        "Selects what is painted on the active layer, at the coverage it is "
-        "painted at -- a soft edge becomes a soft selection."
-    )
-
-    # Colour-first where the wand is seed-first, and the *wand's* tolerance
-    # rather than ``state.wand_tolerance``: that property follows the tool in
-    # hand, and this button is in a section that is drawn whatever the tool is,
-    # so it would otherwise read the pencil's copy. Reading the wand's is the
-    # one-predicate rule kept honest -- there is one tolerance the user set and
-    # one meaning of "similar" (see ``selection.colour_distance``).
-    wand_options = state.options_for("wand")
-    imgui.set_next_item_width(-sp(110))
-    changed, value = controls.slider_int(
-        "##range_tolerance", wand_options["wand_tolerance"], 0, 255, "tolerance %d"
-    )
-    if changed:
-        wand_options["wand_tolerance"] = value
-    imgui.same_line()
-    if controls.button("Colour range"):
-        doc.select_colour_range(state.fg, tolerance=wand_options["wand_tolerance"])
-    widgets.help_marker(
-        "Selects every pixel close to the *foreground* colour, anywhere on the "
-        "canvas -- it is not contiguous, so one press selects a palette entry "
-        "wherever it was used. The tolerance beside it is the magic wand's."
-    )
-
-    imgui.set_next_item_width(-sp(80))
-    changed, value = controls.slider_float("##feather", state.feather_radius, 0.0, 32.0, "%.1f px")
-    if changed:
-        state.feather_radius = value
-    imgui.same_line()
-    if widgets.disabled_button("Feather", doc.mask is not None, reason="Nothing is selected."):
-        doc.feather_selection(state.feather_radius)
-
-    # Whole pixels, and its own control: feather softens an edge where these
-    # *move* it, and one slider serving both would have to pick a unit that is
-    # wrong for one of them.
-    imgui.set_next_item_width(-sp(80))
-    changed, steps = controls.slider_int("##selgrow", int(state.select_steps), 1, 32, "%d px")
-    if changed:
-        state.select_steps = int(steps)
-    imgui.same_line()
-    widgets.muted("by")
-    has = doc.mask is not None
-    if widgets.disabled_button("Grow", has, reason="Nothing is selected."):
-        doc.grow_selection(state.select_steps)
-    imgui.same_line()
-    if widgets.disabled_button("Shrink", has, reason="Nothing is selected."):
-        doc.shrink_selection(state.select_steps)
-    imgui.same_line()
-    if widgets.disabled_button("Border", has, reason="Nothing is selected."):
-        doc.border_selection(state.select_steps)
-    widgets.help_marker(
-        "Border replaces the selection with the band that many pixels either "
-        "side of its edge -- fill it and you have stroked the outline."
-    )
-
-    if widgets.disabled_button(
-        "Crop to selection", doc.mask is not None, reason="Nothing is selected."
-    ):
-        doc.crop_to_selection()
 
 
 def _canvas_options(ctx: Any, state: Any) -> None:

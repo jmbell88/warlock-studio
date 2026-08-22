@@ -219,10 +219,10 @@ def test_switching_the_behaviour_does_not_dirty_the_document(scene) -> None:
 
 
 def test_the_toggle_writes_the_field_and_pushes_nothing() -> None:
-    """The pane's own half of the rule, read off its source: three buttons that
-    assign the field, with no document call anywhere near them."""
+    """The pane's own half of the rule, read off its source: one choice control
+    that assigns the field, with no document call anywhere near it."""
     source = inspect.getsource(inker_tools._tile_behavior)
-    assert "doc.tile_behavior = key" in source
+    assert "doc.tile_behavior = picked" in source
     # Past the docstring, which says all this in prose. ``push_style_color`` is
     # imgui's own and is not a history push, so the check is for the *document*
     # calls a view-state toggle must never make.
