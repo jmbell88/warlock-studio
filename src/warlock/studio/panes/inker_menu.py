@@ -39,6 +39,7 @@ _opacity_drag: dict[int, float] = {}
 BAR = "inker-menu"
 PARAM_POPUP = "inker-op-params"
 PROPERTIES_POPUP = "inker-layer-properties"
+HISTORY_POPUP = "inker-undo-history"
 
 #: How wide an ``Op.hint`` wraps, in design pixels. ``clay_menu``'s number and
 #: its reason: a popup that auto-sizes past its own panel reads as a window.
@@ -63,6 +64,7 @@ def draw(ctx: Any) -> None:
                 _rows(ctx, state, tab, name)
     _params_popup(ctx, state)
     _properties_popup(ctx, state, tab)
+    _history_popup(ctx, state, tab)
 
 
 def _rows(ctx: Any, state: Any, tab: Any, name: str) -> None:
@@ -154,6 +156,47 @@ def _properties_popup(ctx: Any, state: Any, tab: Any) -> None:
         if not opened:
             return
         header_controls(ctx, tab.doc)
+
+
+def _history_popup(ctx: Any, state: Any, tab: Any) -> None:
+    """The Undo History panel (6.10), as a popover rather than a tenth pane.
+
+    A pane would be a column of one list, on screen all session, for a thing
+    reached when something has gone wrong -- and it would want a share, a
+    floor, a help target and a place in every saved layout. What it *is* is a
+    list of the stack's own steps with the head marked, and clicking one asks
+    the stack to move: it holds no list of its own, which is how an undo panel
+    goes wrong -- by drifting from the stack it claims to picture once the byte
+    budget evicts something.
+    """
+
+    if state.pending_dialog == HISTORY_POPUP:
+        state.pending_dialog = ""
+        imgui.open_popup(HISTORY_POPUP)
+    if tab is None:
+        return
+    with controls.menu_popup(HISTORY_POPUP) as opened:
+        if not opened:
+            return
+        history = tab.doc.history
+        steps = history.history()
+        widgets.secondary(f"{len(steps)} step(s)")
+        imgui.separator()
+        if controls.selectable("(the document as opened)", not any(
+            done for _label, done in steps
+        ))[0]:
+            history.step_to(tab.doc, 0)
+        for index, (label, done) in enumerate(steps):
+            # The *count of done steps* this row represents, which is the
+            # number ``step_to`` takes: row 0 is "one step done".
+            wanted = index + 1
+            at_head = done and (index + 1 == sum(1 for _l, d in steps if d))
+            row = f"{label}{'  <' if at_head else ''}"
+            if not done:
+                row = f"{label}  (undone)"
+            if controls.selectable(f"{row}##undo{index}", at_head)[0]:
+                history.step_to(tab.doc, wanted)
+                tab.doc.invalidate_all()
 
 
 def header_controls(ctx: Any, doc: Any) -> None:

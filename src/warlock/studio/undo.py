@@ -82,6 +82,14 @@ class CompoundEdit(Edit):
             edit.redo(doc)
 
 
+def _label(edit: Any) -> str:
+    """An edit's class name as words: ``LayerAddEdit`` -> "layer add"."""
+    import re
+
+    name = type(edit).__name__.removesuffix("Edit")
+    return re.sub(r"(?<!^)(?=[A-Z])", " ", name).lower() or "step"
+
+
 class UndoStack:
     """Bounded by bytes first, then by a depth floor and a depth ceiling."""
 
@@ -189,6 +197,41 @@ class UndoStack:
         if redoable:
             self._undone.append(edit)
         return True
+
+    def history(self) -> list[tuple[str, bool]]:
+        """Every step, oldest first, as ``(label, is_done)``. For the panel.
+
+        **Read-only and derived**: the panel it feeds shows what the stack
+        holds and asks the stack to move, rather than holding a list of its
+        own -- which is the way an undo panel goes wrong, by drifting from the
+        stack it claims to picture after a step is evicted by the byte budget.
+
+        The label is the edit's class name turned into words, because an
+        ``Edit`` has no name of its own and giving every one of the twenty a
+        string is twenty places for a rename to be missed. ``PatchEdit`` reads
+        as "patch", which is what an undo of one is.
+        """
+        out = [(_label(edit), True) for edit in self._done]
+        # The undone half is newest-first on its own stack; reversed here so
+        # the whole list reads as one timeline in the order it happened.
+        out.extend((_label(edit), False) for edit in reversed(self._undone))
+        return out
+
+    def step_to(self, doc: Any, index: int) -> bool:
+        """Move the head to *index* (the count of done steps). -> whether it moved.
+
+        Undo or redo, repeatedly, through the two methods that already exist --
+        never by reaching into either list. Jumping is not a third operation on
+        the stack, it is the one the panel makes easy, and an implementation
+        that spliced the lists would be a second definition of what a step is.
+        """
+        wanted = max(0, min(int(index), len(self._done) + len(self._undone)))
+        moved = False
+        while len(self._done) > wanted and self.undo(doc):
+            moved = True
+        while len(self._done) < wanted and self.redo(doc):
+            moved = True
+        return moved
 
     def revoke(self, doc: Any, edit: Edit) -> bool:
         """Reverse and forget one *named* step, wherever it sits in the stack.
