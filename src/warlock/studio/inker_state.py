@@ -258,6 +258,45 @@ def flyout_hit(
     return None
 
 
+#: The key contexts, in the order they are tested. **First match wins**, which
+#: is what makes them mutually exclusive by construction rather than by six
+#: predicates each having to know about the other five -- the way the modal
+#: arms of ``handle_key`` used to, and the way they drifted.
+#:
+#: Each entry is ``(name, predicate)`` over ``(state, tab)``. ``"Normal"`` is
+#: last and always true, so there is no such thing as no context.
+KEY_CONTEXTS: tuple[tuple[str, Any], ...] = (
+    ("Transformation", lambda state, tab: state.transforming),
+    ("Float", lambda state, tab: tab is not None and tab.doc.floating is not None),
+    ("Gesture", lambda state, tab: bool(state.gesture_pts)),
+    (
+        "FramesSelection",
+        lambda state, tab: tab is not None and getattr(tab, "range_sel", None) is not None,
+    ),
+    ("Selection", lambda state, tab: tab is not None and tab.doc.mask is not None),
+    ("MoveTool", lambda state, tab: state.tool == "move"),
+    ("ShapeTool", lambda state, tab: state.tool in SHAPE_TOOLS),
+    ("FreehandTool", lambda state, tab: state.tool in PAINT_TOOLS),
+    ("Normal", lambda state, tab: True),
+)
+
+
+def key_context(state: Any, tab: Any) -> str:
+    """Which context the keyboard is in. Pure, and the whole of the decision.
+
+    Aseprite's contexts, and the reason to have them at all: Enter means
+    "apply the transform", "close the polygon" and "play" in three different
+    situations, and the only alternative to naming the situations is three
+    branches at the top of the key handler that each have to remember the other
+    two.
+    """
+
+    for name, applies in KEY_CONTEXTS:
+        if applies(state, tab):
+            return name
+    return "Normal"  # pragma: no cover - the table's last row is always true
+
+
 def tool_label(key: str) -> str:
     """The display name for a tool key, or the key if it is not one.
 

@@ -61,14 +61,18 @@ MENUS: tuple[str, ...] = (
 #: The key contexts an op can be bound in; see ``inker_state.key_context``.
 #: ``""`` means every context, which is what a menu row wants when no modal
 #: gesture is in flight.
-CONTEXTS: tuple[str, ...] = (
-    "",
-    "Transformation",
-    "Float",
-    "Gesture",
-    "Selection",
-    "Normal",
-)
+def _contexts() -> tuple[str, ...]:
+    """The context names, read from the table that decides them.
+
+    Derived rather than written out: a name here that ``key_context`` can never
+    return is a binding that can never fire, and the failure would be silence.
+    """
+    from .inker_state import KEY_CONTEXTS
+
+    return ("", *(name for name, _applies in KEY_CONTEXTS))
+
+
+CONTEXTS: tuple[str, ...] = _contexts()
 
 
 @dataclass(frozen=True)

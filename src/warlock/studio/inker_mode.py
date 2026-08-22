@@ -3083,33 +3083,18 @@ def handle_key(ctx: Any, event: Any) -> bool:
         pygame.K_DOWN: (0, 1),
     }
 
-    if state.transforming:
-        # Modal: Enter applies, Escape cancels, and nothing else may change the
-        # tool out from under a half-finished transform.
-        if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
-            end_transform(ctx, commit=True)
-        elif event.key == pygame.K_ESCAPE or (ctrl and name == "z"):
-            # Ctrl+Z during a transform means "undo the transform", which is
-            # cancelling it -- not stepping back through the history behind it.
-            end_transform(ctx, commit=False)
+    # **The modal arms are a table now** (W2.8). Which situation the keyboard is
+    # in is ``inker_state.key_context``, first-match-wins over one tuple, so the
+    # contexts are mutually exclusive by construction instead of by three
+    # branches each remembering the other two -- which is how Enter came to mean
+    # "apply the transform", "close the polygon" and "play" in one function with
+    # the order of the ifs as the only thing keeping them apart.
+    context = inker_state.key_context(state, tab)
+    if _modal(ctx, state, tab, context, name, event, ctrl=ctrl):
         return True
 
     if ctrl:
         return _ctrl_key(ctx, state, tab, doc, name, event, shift=shift)
-
-    # An open multi-click gesture answers Enter and Escape before anything else
-    # does, and consumes them: Enter would otherwise start playback on an
-    # animated document (the branch below), and Escape would drop the *previous*
-    # selection while leaving the half-drawn polygon on screen. Both are ahead of
-    # the tool letters as well, so neither can be reached with a gesture open.
-    if state.gesture_pts:
-        if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
-            commit_gesture(state, tab)
-            return True
-        if event.key == pygame.K_ESCAPE:
-            state.clear_gesture()
-            state.clear_drag()
-            return True
 
     if name in SHIFT_TOOL_KEYS and shift:
         # Ahead of the plain branch, and gated on shift there, so the two
@@ -3214,6 +3199,46 @@ def handle_key(ctx: Any, event: Any) -> bool:
 # ``j`` joins them for the ordinary reason: layer-from-selection adds a layer
 # (a track, on an animated document) and may cut pixels out of another.
 _MUTATING_CTRL = frozenset({"z", "y", "a", "d", "x", "v", "i", "t", "e", "j"})
+
+
+def _modal(
+    ctx: Any, state: InkerState, tab: InkerDoc, context: str, name: str, event, *, ctrl: bool
+) -> bool:
+    """Enter and Escape, answered by the context they are pressed in.
+
+    -> whether the key was consumed *and* the rest of ``handle_key`` skipped.
+
+    Only the three modal contexts appear here; every other context falls
+    through to the ordinary bindings, which is what "modal" means. A
+    transformation swallows every key, not just these two: nothing may change
+    the tool out from under a half-finished one.
+    """
+    import pygame
+
+    enter = event.key in (pygame.K_RETURN, pygame.K_KP_ENTER)
+    escape = event.key == pygame.K_ESCAPE
+    if context == "Transformation":
+        if enter:
+            end_transform(ctx, commit=True)
+        elif escape or (ctrl and name == "z"):
+            # Ctrl+Z during a transform means "undo the transform", which is
+            # cancelling it -- not stepping back through the history behind it.
+            end_transform(ctx, commit=False)
+        return True
+    if context == "Gesture":
+        # An open multi-click gesture answers Enter and Escape before anything
+        # else does, and consumes them: Enter would otherwise start playback on
+        # an animated document, and Escape would drop the *previous* selection
+        # while leaving the half-drawn polygon on screen. Ahead of the tool
+        # letters as well, so neither can be reached with a gesture open.
+        if enter:
+            commit_gesture(state, tab)
+            return True
+        if escape:
+            state.clear_gesture()
+            state.clear_drag()
+            return True
+    return False
 
 
 def _ctrl_key(
