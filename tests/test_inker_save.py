@@ -367,7 +367,9 @@ def test_every_document_mutating_panel_is_gated_on_the_saving_flag():
     from warlock.studio.panes import inker_bridge, inker_timeline, inker_tools
 
     targets = (
-        inker_bridge._canvas_ops,
+        # ``_canvas_ops`` was the bridge panel's row of flips and rotates; the
+        # gate is ``inker_ops.ready`` now, and every op that reads it is
+        # checked by ``tests/inker/test_inker_ops.py``.
         inker_bridge._resize_popup,
         inker_tools._options,
         inker_timeline._frame_menu,

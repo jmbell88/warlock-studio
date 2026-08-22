@@ -966,6 +966,13 @@ class InkerState:
     #: ``inker_ops``' module docstring: a popup belongs to the window that
     #: began it, so the registry can only ask.
     pending_dialog: str = ""
+    #: The parameterised op whose dialog is open, by name, or "". Held by
+    #: name rather than as the ``Op`` for the same reason: the popup survives
+    #: across frames and the registry owns the object.
+    pending_op: str = ""
+    #: The last values each parameterised op was run with, so the common case
+    #: is two clicks rather than two clicks and a number.
+    op_params: dict[str, dict[str, float]] = field(default_factory=dict)
     # The in-flight sheet/GIF export's frame-by-frame read of a document, or
     # None. ``inker_mode._Export``, typed loosely here because this module is
     # the state and that one is the behaviour. One at a time by construction:

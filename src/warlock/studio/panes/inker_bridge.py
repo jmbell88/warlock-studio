@@ -1,13 +1,21 @@
-"""What connects a painting to the rest of the app.
+"""The Inker's dialogs, and no panel at all any more.
 
-Paint is a third mode rather than a separate program, and this is the panel
-that makes that true: a document can become a reference the pipeline accepts,
-or go straight to the mesh stage, and a document that came *from* a job can be
-saved back into it.
+This *was* the bridge panel: five blocks of buttons in the left column saying
+what a painting could become. Those verbs are now rows in ``inker_menu``,
+which is where a user coming from Aseprite looks for them and which costs the
+canvas nothing -- the panel was 300 px of column for eleven buttons pressed
+once a session.
 
-The distinction the whole panel turns on is whether the document is *linked*.
-A linked one writes back into a job's input.png (with the layered source kept
-beside it); an unlinked one is a plain file that has never been part of a job.
+What could not move is what is left: four popups -- resize, filter, sheet
+import, colour-mode convert -- and the several hundred lines of machinery
+behind them. A popup belongs to the window that began it, so they are drawn by
+:func:`popups` from inside the centre pane rather than from a pane of their
+own, and **there is no ``draw``**: this module is not in the workspace.
+
+The distinction the *linked* verbs turn on is still worth stating, because the
+ops registry encodes it: a linked document writes back into a job's input.png
+(with the layered source kept beside it); an unlinked one is a plain file that
+has never been part of a job.
 """
 
 from __future__ import annotations
@@ -16,9 +24,8 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import controls, icons, inker_mode, theme, widgets
+from .. import controls, inker_mode, theme, widgets
 from ..inker import transform
-from ..manual import render as manual_render
 from ..tokens import sp
 from . import inker_colors
 
@@ -37,274 +44,46 @@ def _busy_why(tab: Any) -> str:
     return "This document is being written; the buttons come back when it lands."
 
 
-def draw(ctx: Any) -> None:
+def popups(ctx: Any) -> None:
+    """Every dialog this module owns, drawn in the caller's window.
+
+    The whole of what is left of a pane. ``inker_menu`` and the context bar
+    replaced the five blocks of buttons; the four popups behind them -- resize,
+    filter, sheet import, colour-mode convert -- stayed, because an imgui popup
+    belongs to the window that began it and the machinery behind these is
+    several hundred lines that has nothing to do with where a button sits.
+
+    Called from ``inker_canvas.draw``, which is the window the menu strip is
+    drawn in. ``state.pending_dialog`` is how a menu row asks for one: the
+    registry names a popup, this opens it, and nothing in ``inker_ops`` has to
+    know a window exists.
+    """
     state = inker_mode.ensure(ctx)
     tab = state.active
-    # Most-touched first: Canvas, Animation, Pipeline, then Document and File
-    # with the recent list trailing -- so with the Layers pane above, the column
-    # reads Layers, Canvas, Animation, Pipeline, Document, File, Recent. The
-    # first three only exist with a document open; the help button rides the
-    # first heading actually drawn, whichever that is.
-    if tab is not None:
-        widgets.section("Canvas")
-        manual_render.help_button(ctx, "inker-bridge")
-        _canvas_ops(ctx, tab)
-        imgui.dummy((0, 8))
-        _animation(ctx, tab)
-        imgui.dummy((0, 8))
-        _pipeline(ctx, tab)
-        imgui.dummy((0, 8))
-
-    widgets.section("Document")
+    wanted, state.pending_dialog = state.pending_dialog, ""
+    if wanted and tab is not None:
+        if wanted == "inker-resize":
+            _measure_pixel_grid(ctx, tab)
+            imgui.open_popup("inker-resize")
+        elif wanted == FILTER_POPUP:
+            _open_filter(ctx, tab)
+        elif wanted == CONVERT_POPUP:
+            open_convert(ctx, tab)
+        elif wanted:
+            # Not this module's popup -- hand it back for whoever owns it
+            # (the canvas's New, the menu strip's layer properties). Rewritten
+            # rather than swallowed: a dialog request that silently evaporates
+            # is a menu row that does nothing when clicked.
+            state.pending_dialog = wanted
+    if state.sheet_import is not None and not state.sheet_import_open:
+        state.sheet_import_open = True
+        imgui.open_popup(SHEET_IMPORT_POPUP)
+    _sheet_import_popup(ctx, state)
     if tab is None:
-        manual_render.help_button(ctx, "inker-bridge")
-    # Above the tab check: importing a sheet *makes* a document, so it has to
-    # be reachable when there is none open, which is exactly the moment a user
-    # is most likely to want it.
-    _sheet_import(ctx)
-    if tab is None:
-        # The heading, the sheet import, and nothing else. "Nothing open." was
-        # the fourth thing on this screen saying so, and the File block below
-        # would have drawn a second New/Open pair against the empty canvas's.
         return
-
-    doc = tab.doc
-    width, height = doc.size
-    widgets.muted(f"{width} x {height} - {len(doc.stack)} layer(s)")
-    widgets.muted(f"{tab.view.zoom * 100:.0f}%  -  {tab.file_format.upper()}")
-    if tab.path is not None:
-        imgui.text_wrapped(str(tab.path))
-    if tab.linked:
-        widgets.text_colored(theme.OK, f"linked to job {tab.job_id[:8]}")
-    else:
-        widgets.muted("not part of a job")
-
-    imgui.dummy((0, 8))
-    widgets.section("File")
-    _file(ctx, state, tab)
-
-
-def _file_why(state: Any, tab: Any) -> str:
-    """Why the five file buttons are out, when they are.
-
-    A save commits the floating buffer, so saving mid-transform would land the
-    transform with no confirm and leave the mode pointing at nothing -- which
-    is a different sentence from "a save is already running", and the row used
-    to say neither.
-    """
-    if state.transforming:
-        return (
-            "A transform is still floating. Apply or cancel it first -- saving "
-            "would commit it with no confirm."
-        )
-    return _busy_why(tab)
-
-
-def _file(ctx: Any, state: Any, tab: Any) -> None:
-    """New/Open/Save/Save As/Export PNG, and the recent list.
-
-    Moved here from the canvas's own row in the UI redesign, wave 4.2, and shaped
-    like ``plotter_bridge``'s file block on purpose: Inker was the one document
-    mode whose file actions did not live in its bridge panel, and the row they
-    were on was the app's worst clipping case -- eight labelled buttons plus a
-    combo plus a status word chained with ``same_line``, losing "Export PNG"
-    off the right edge at 150 %. A full-width button in a fixed-width sidebar
-    cannot clip, which is the other half of why they came here.
-    """
-    from pathlib import Path
-
-    from . import inker_canvas, inker_tiles
-
-    width = widgets.grid_width(2)
-    if controls.button(f"{icons.PLUS} New", (width, 0)):
-        imgui.open_popup("new-canvas")
-    imgui.same_line()
-    if controls.button(f"{icons.FOLDER_OPEN} Open...", (width, 0)):
-        inker_mode.ask_open(ctx)
-    # This pane's own registration of the shared popup: a popup belongs to the
-    # window that begins it, so the canvas's copy is not reachable from here.
-    inker_canvas.new_popup(ctx)
-
-    if tab is not None:
-        ready = not tab.busy and not state.transforming
-        why = _file_why(state, tab)
-        imgui.dummy((0, 4))
-        if widgets.disabled_button(
-            f"{icons.SAVE} Save (Ctrl+S)", ready, (width, 0), reason=why
-        ):
-            inker_mode.save(ctx, tab)
-        imgui.same_line()
-        if widgets.disabled_button("Save As...", ready, (width, 0), reason=why):
-            inker_mode.save_as(ctx, tab)
-        if widgets.disabled_button(
-            f"{icons.UPLOAD} Export PNG", ready, (-1, 0), reason=why
-        ):
-            inker_mode.export_png(ctx, tab)
-
-        # **The two ways a drawing acquires its first tileset**, and the reason
-        # they are here rather than in the tile panel: that panel is drawn only
-        # once the document has one, so a door into it that lived there would
-        # be a door only reachable from inside the room. Everything *else*
-        # about tiles -- the picker, the layer verbs, the export, the handoff
-        # to Plotter -- is in ``inker_tiles``, which supersedes the index-0
-        # "Export tileset..." button that stood here before there was a
-        # selection to address.
-        if widgets.disabled_button(
-            "Import tileset (.tsx)...", ready, (-1, 0), reason=why
-        ):
-            inker_mode.import_tileset(ctx, tab)
-        inker_tiles.convert_row(ctx, state, tab)
-
-    widgets.recent_files(
-        inker_mode.recent_paths(ctx),
-        lambda path: inker_mode.open_path(ctx, Path(path)),
-    )
-
-
-def _animation(ctx: Any, tab: Any) -> None:
-    """The one door into animating a document.
-
-    Deliberately a button rather than a mode or a checkbox: animating is an
-    *edit* -- one undo step that turns the layers into the first frame's cels --
-    so it belongs on the same footing as adding a layer, and Ctrl+Z takes it
-    back. Once the document is animated this row goes quiet and the timeline
-    strip owns everything else.
-    """
-    widgets.section("Animation")
-    if tab.doc.anim is None:
-        # The help rides the button as ``tooltip=`` rather than trailing it as
-        # a ``help_marker``: after a ``(-1, 0)`` button there is exactly zero
-        # room on the line, so ``same_line_or_wrap`` -- correctly -- dropped
-        # the glyph onto the next control's row, where it read as that one's.
-        # ``field_label``'s docstring names the defect class; a button has no
-        # label row, so its own hover is where the sentence goes.
-        if widgets.disabled_button(
-            "Animate",
-            not tab.busy,
-            (-1, 0),
-            reason=_busy_why(tab),
-            tooltip=(
-                "Turns this drawing into frame one of an animation and adds a"
-                " second frame. The layers become tracks; Ctrl+Z undoes the"
-                " whole thing."
-            ),
-        ):
-            inker_mode.animate(ctx, tab)
-        return
-    anim = tab.doc.anim
-    widgets.muted(f"{len(anim.frames)} frames, {len(anim.tracks)} tracks")
-    widgets.muted(f"{anim.duration_ms()} ms total")
-
-
-def _pipeline(ctx: Any, tab: Any) -> None:
-    # "Take it somewhere" rather than "Pipeline", and the same heading over the
-    # same shape of button in Clay, Plotter, Packwright and Troupe: the answer
-    # to "where can this go next" was in five places under five names, so a
-    # user learned each mode's exits separately. Every entry here is an
-    # existing bridge -- nothing new is being offered.
-    widgets.section("Take it somewhere")
-    busy = tab.busy
-    why = _busy_why(tab)
-    # Help as ``tooltip=`` on each full-width button, not a trailing
-    # ``help_marker`` -- the Animation row above says why.
-    if not tab.linked and widgets.disabled_button(
-        "Save as reference",
-        not busy,
-        (-1, 0),
-        reason=why,
-        tooltip=(
-            "Adds this image to the library as a finished reference, so it"
-            " can be meshed, promoted and rerun like a generated one."
-        ),
-    ):
-        inker_mode.save_as_reference(ctx, tab)
-    # "Make 3D", not "Send to 3D": there is no 3D to send anything *to* since
-    # wave 5 folded 2D and 3D into Create's stages, and this is the same act
-    # the Mesh stage's own button performs on a reference -- so it is the same
-    # words. The function keeps its name; it is not what anybody reads.
-    if widgets.disabled_button(
-        "Make 3D",
-        not busy,
-        (-1, 0),
-        reason=why,
-        tooltip="Queues the mesh stage from the flattened image.",
-    ):
-        inker_mode.send_to_3d(ctx, tab)
-    if widgets.disabled_button(
-        "Add to Packwright",
-        not busy,
-        (-1, 0),
-        reason=why,
-        tooltip=(
-            "One sprite per frame, packed beside everything else in the atlas."
-            " Packwright's own sources pane could already pull this document"
-            " in; this is the same bridge from the near side. If no atlas is"
-            " open, one is started."
-        ),
-    ):
-        from .. import packwright_mode
-
-        packwright_mode.add_inker_document(ctx, tab)
-    if tab.linked and widgets.disabled_button(
-        "Revert to original",
-        tab.has_original and not busy,
-        (-1, 0),
-        reason=why
-        if busy
-        else "There is no original kept for this reference: it has never been edited.",
-    ):
-        inker_mode.revert(ctx, tab)
-
-
-def _canvas_ops(ctx: Any, tab: Any) -> None:
-    """The body only: ``draw`` owns the "Canvas" heading, because the help
-    button has to ride the pane's first heading row."""
-    doc = tab.doc
-    # Every control below either rebinds a layer's pixels (the geometry ops,
-    # via _map_planes) or rebinds the stack wholesale (undo, via
-    # restore_snapshot). ``write_ora`` flattens, writes stack.xml and then
-    # walks the stack writing one PNG per layer, so either one landing
-    # mid-save produces an archive whose parts disagree about the canvas size.
-    # The canvas, the layers panel and the keyboard path all gate on this
-    # flag; this panel was the hole.
-    imgui.begin_disabled(tab.busy)
-    if controls.button("Flip H"):
-        doc.flip("horizontal")
-    imgui.same_line()
-    if controls.button("Flip V"):
-        doc.flip("vertical")
-    imgui.same_line()
-    if controls.button("Rotate"):
-        doc.rotate90()
-    if controls.button("Resize..."):
-        _measure_pixel_grid(ctx, tab)
-        imgui.open_popup("inker-resize")
-    imgui.same_line()
-    if controls.button("Fit view"):
-        tab.view.fitted = False
-    if controls.button("Filter..."):
-        _open_filter(ctx, tab)
-
-    imgui.dummy((0, 6))
-    if widgets.disabled_button(
-        "Undo", doc.history.can_undo, reason="Nothing to undo yet."
-    ):
-        doc.undo()
-    imgui.same_line()
-    if widgets.disabled_button(
-        "Redo", doc.history.can_redo, reason="Nothing to redo: this is the newest step."
-    ):
-        doc.redo()
-    imgui.same_line()
-    widgets.muted(f"{len(doc.history)} step(s)")
-    imgui.end_disabled()
-
-    # Outside the disabled scope: a popup is its own window, and imgui's
-    # disabled state is not meant to span a Begin/End pair. It carries the
-    # same gate on the two buttons that actually resample the document -- a
-    # popup already open when a save starts would otherwise still fire them.
     _resize_popup(ctx, tab)
     _filter_popup(ctx, tab)
+
 
 
 def _measure_pixel_grid(ctx: Any, tab: Any) -> None:
@@ -632,49 +411,6 @@ def _apply_to_range(ctx: Any, tab: Any) -> None:
 SHEET_IMPORT_POPUP = "inker-sheet-import"
 
 
-def _sheet_import(ctx: Any) -> None:
-    """The Import sheet button, and the grid popup once a file is chosen."""
-    state = inker_mode.ensure(ctx)
-    # ``tooltip=`` rather than a trailing ``help_marker`` -- the Animation row
-    # says why a full-width button cannot be followed by one.
-    if controls.button(
-        "Import sprite sheet...",
-        (-1, 0),
-        tooltip=(
-            "Slices any image into one frame per cell, row by row. For a sheet"
-            " this app generated, opening the draft from the library carries"
-            " its directions and tags as well; this is for a sheet from"
-            " anywhere else."
-        ),
-    ):
-        inker_mode.ask_import_sheet(ctx)
-    if state.sheet_import is not None and not state.sheet_import_open:
-        state.sheet_import_open = True
-        imgui.open_popup(SHEET_IMPORT_POPUP)
-    _sheet_import_popup(ctx, state)
-    _aseprite_import(ctx)
-
-
-def _aseprite_import(ctx: Any) -> None:
-    """The other import, and no popup at all.
-
-    Beside the sheet import because the two answer the same question -- "this
-    drawing was made somewhere else" -- and it needs no popup for the reason
-    that one does: a sheet has to be told how to cut and an Aseprite file
-    already says where everything is.
-    """
-    if controls.button(
-        "Import Aseprite file...",
-        (-1, 0),
-        tooltip=(
-            "Reads an .aseprite or .ase file: layers, groups, the timeline,"
-            " tags, slices, and cels shared between frames as shared cels here"
-            " too. Reading only -- the import opens as an unsaved document, so"
-            " saving it writes an .ora and never back over the file it came"
-            " from. Anything dropped on the way in is named in a message."
-        ),
-    ):
-        inker_mode.ask_import_aseprite(ctx)
 
 
 def _pair(label: str, value: tuple[int, int], low: int = 0) -> tuple[int, int]:

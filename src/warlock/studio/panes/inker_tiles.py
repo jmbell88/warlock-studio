@@ -146,34 +146,29 @@ def _verbs(ctx: Any, state: Any, tab: Any) -> None:
         inker_mode.convert_to_raster(ctx, tab)
 
 
-def convert_row(ctx: Any, state: Any, tab: Any) -> None:
-    """"Convert to tilemap...", drawn by whichever pane asks for it.
+def can_convert(state: Any, tab: Any) -> bool:
+    """Whether "Convert to tilemap" applies. The registry's predicate.
 
-    The bridge panel does, because this verb is how a drawing gets its *first*
-    tileset and the tile pane is not on screen until it has one. Written here
-    rather than there so the button, its refusals and the size popup it opens
-    stay in one place -- ``inker_canvas.new_popup``'s arrangement, for
-    ``inker_canvas.new_popup``'s reason: a popup belongs to the window that
-    begins it, so the caller registers the popup as well as the button.
+    Written here rather than in ``inker_ops`` because the question is about
+    tiles and this module is where every other tile question is answered; the
+    registry names it, which is the whole of the coupling.
     """
-    doc = tab.doc
-    busy = tab.busy
-    tilemap = doc.active_tilemap_uid() is not None
-    if widgets.disabled_button(
-        "Convert to tilemap...",
-        not busy and not tilemap and bool(len(doc.stack)),
-        (-1, 0),
-        reason=BUSY_WHY if busy else "The active layer is already a tilemap layer.",
-        tooltip=(
-            "Cuts the active layer into tiles at the size you choose and binds "
-            "it to the new tileset. Identical cells share one tile, and an "
-            "empty cell costs no tile at all."
-        ),
-    ):
-        imgui.open_popup("inker-to-tilemap")
-    # Outside every disabled scope, ``inker_bridge._canvas_ops``' rule: a popup
-    # is its own window and imgui's disabled state is not meant to span a
-    # Begin/End pair.
+    if tab is None or tab.busy:
+        return False
+    return tab.doc.active_tilemap_uid() is None and bool(len(tab.doc.stack))
+
+
+def convert_row(ctx: Any, state: Any, tab: Any) -> None:
+    """The size popup "Convert to tilemap..." opens, registered by its window.
+
+    The verb itself is a **menu row** now (Sprite -> Convert to tilemap...),
+    because it is how a drawing gets its *first* tileset and the tile pane is
+    not on screen until it has one -- so a button for it could only live
+    somewhere that is always drawn. What has to stay a call from a pane is the
+    popup: a popup belongs to the window that begins it, so whoever hosts the
+    menu registers this too. ``inker_canvas.new_popup``'s arrangement, for
+    ``inker_canvas.new_popup``'s reason.
+    """
     _tile_size_popup(ctx, state, tab)
 
 

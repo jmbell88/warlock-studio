@@ -355,7 +355,10 @@ def test_the_gid_folds_the_three_toggles_in_one_place(scene) -> None:
 def test_every_tile_verb_is_disabled_never_hidden() -> None:
     """The Wave 2 rule: a panel that quietly loses a button when a document is
     not shaped a certain way is one where the feature looks imagined."""
-    for func in (inker_tiles._verbs, inker_tiles.convert_row):
+    # ``convert_row`` is no longer a button: the verb is a menu row, and a
+    # menu row's refusal is its ``Op.reason``, which ``tests/inker/
+    # test_inker_ops.py`` requires of every op that can be greyed out.
+    for func in (inker_tiles._verbs,):
         source = inspect.getsource(func)
         assert "widgets.disabled_button" in source
         assert "controls.button(" not in source
@@ -367,14 +370,14 @@ def test_every_tile_verb_is_disabled_never_hidden() -> None:
 
 def test_the_acquiring_verbs_live_where_they_are_always_drawn() -> None:
     """The tile panel appears only once the document has a tileset, so the two
-    doors that *make* the first one are in the bridge instead."""
-    from warlock.studio.panes import inker_bridge
+    doors that *make* the first one are menu rows instead -- the one surface
+    that is drawn whether or not the document has tiles yet."""
+    from warlock.studio import inker_ops
 
-    source = Path(inker_bridge.__file__).read_text(encoding="utf-8")
-    assert "inker_tiles.convert_row(ctx, state, tab)" in source
-    assert "import_tileset" in source
+    names = {op.name for op in inker_ops.OPS}
+    assert {"convert_to_tilemap", "import_tileset"} <= names
     # Superseded by the picker, which now addresses the selected tileset.
-    assert "export_tileset(ctx, tab, index=0)" not in source
+    assert "export_tileset" not in names
 
 
 def test_new_tilemap_layer_adds_a_bound_layer_and_says_so(scene) -> None:

@@ -28,6 +28,12 @@ NO_HELP_BUTTON = {
     "packwright_preview",  # the atlas itself; its controls are packwright-settings
     "packwright_textures",  # a texture cache, drawn by nobody
     "clay_menu",  # a menu bar
+    "inker_menu",  # a menu bar
+    # No longer a pane: the Inker's bridge panel became rows in that menu
+    # strip (W2.2). What is left is the four dialogs behind them, drawn by the
+    # centre pane, and a popup has no heading to hang a (?) beside. The verbs
+    # themselves are documented in the Inker chapter as before.
+    "inker_bridge",
     # Not a pane at all: the mtime-cache rule several panes share, kept beside
     # them because inspector already imports sheet_panel and so neither of the
     # two could host it. Nothing on screen, so nothing to document.

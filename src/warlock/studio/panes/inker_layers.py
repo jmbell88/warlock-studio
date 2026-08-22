@@ -46,7 +46,7 @@ def draw(ctx: Any) -> None:
     # The Photoshop/Krita shape: what applies to the *active* layer -- blend,
     # opacity, the locks -- reads as a header above the stack, the stack is
     # rows of eye/thumbnail/name, and the verbs sit in an icon bar underneath.
-    _header_controls(ctx, doc)
+    header_controls(ctx, doc)
     imgui.dummy((0, 4))
 
     # J86, and inside the disable for the reason everything else here is.
@@ -196,7 +196,7 @@ def _can_merge(doc: Any) -> bool:
     return not (doc.write_locked(doc.stack[index]) or doc.write_locked(doc.stack[index - 1]))
 
 
-def _header_controls(ctx: Any, doc: Any) -> None:
+def header_controls(ctx: Any, doc: Any) -> None:
     """The active layer's blend, opacity and locks -- the Photoshop header.
 
     Blend first, then opacity, which is the order every layers panel since

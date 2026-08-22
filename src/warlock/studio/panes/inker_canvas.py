@@ -49,7 +49,7 @@ from ..inker_state import (
     SHAPE_TOOLS,
 )
 from ..tokens import sp
-from . import inker_textures
+from . import inker_bridge, inker_menu, inker_textures
 
 #: The four positions of the Tiled control, one per :data:`TILED_AXES` entry.
 #: Prefixed, because in a row of icon buttons a bare "X" says nothing about
@@ -143,12 +143,18 @@ def _blit(draw_list: Any, texture: Any, view: Any, origin, x0, y0, x1, y1, **kwa
 
 def draw(ctx: Any) -> None:
     state = inker_mode.ensure(ctx)
+    # Menu, tabs, canvas, status -- Aseprite's order, and the reason the strip
+    # is drawn here rather than by the workspace: an imgui popup renders only
+    # in the id stack of the window that opened it, so every menu in it has to
+    # be begun inside this pane.
+    inker_menu.draw(ctx)
     if not state.docs:
         _empty(ctx, state)
         # Registered in this window whichever branch drew, because the empty
         # state's "New custom size..." opens it by name and a popup belongs to
         # the window that begins it.
         new_popup(ctx)
+        inker_bridge.popups(ctx)
         return
     _file_row(ctx, state)
     _tab_bar(ctx, state)
@@ -156,6 +162,9 @@ def draw(ctx: Any) -> None:
     if tab is not None:
         _canvas(ctx, state, tab)
     new_popup(ctx)
+    # The four dialogs the retired bridge panel kept, hosted here for the same
+    # reason the menu is: they are opened by name from a menu row.
+    inker_bridge.popups(ctx)
 
 
 # --- the canvas's own row ----------------------------------------------------

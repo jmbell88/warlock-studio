@@ -539,14 +539,16 @@ def test_the_inker_workspace_has_drag_handles_of_its_own() -> None:
 
     The handle ids are no longer written here to be found: every column goes
     through ``main._split_column``, which derives the handle from the split's
-    own key, and ``tests/test_layout.py`` gates that for all twelve splits at
-    once. What this still pins is that Inker's two columns are *two* keys --
-    the specific pair whose collision started the whole finding.
+    own key, and ``tests/test_layout.py`` gates that for all splits at once.
+
+    Only the left column is a split now. The right one held the layer list over
+    the bridge panel, and the bridge panel is gone (W2.2) -- one pane under a
+    handle is a handle that divides nothing, so it went with it. W2.5 gives
+    that column the colour bar and the tile panel and its handles come back.
     """
     main = Path(inker_tools.__file__).resolve().parent.parent / "main.py"
     source = main.read_text(encoding="utf-8")
     assert 'split_id="inker-tools"' in source
-    assert 'split_id="inker-layers"' in source
 
 
 def test_the_share_gives_way_to_the_toolboxs_own_height() -> None:

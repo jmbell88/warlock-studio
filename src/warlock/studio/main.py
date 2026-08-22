@@ -3509,7 +3509,6 @@ class App:
 
         from . import layout as layout_mod
         from .panes import (
-            inker_bridge,
             inker_canvas,
             inker_colors,
             inker_layers,
@@ -3614,34 +3613,36 @@ class App:
 
         imgui.same_line()
         # Above the layer panel and only for an animated document, so a still
-        # document's right column is byte-for-byte what it always was -- the
-        # same rule the timeline strip follows on the other side. A fixed
+        # document's right column is byte-for-byte what it always was. A fixed
         # height rather than a share of the column: it is a picture of the
         # canvas, and a preview that grew with the window would push the layer
         # list off the bottom on a short screen.
-        _split_column(
-            ctx,
-            lay,
-            split_id="inker-layers",
-            handle_length=sidebar_w,
-            width=0,
+        #
+        # **One pane under it, so no handle.** The bridge panel used to sit
+        # here and the split existed to keep the layer list from being pushed
+        # below the fold by it; its verbs are the menu strip's rows now (W2.2)
+        # and its four dialogs are drawn by the centre pane, so there is
+        # nothing left to divide. W2.5 gives this column the colour bar and the
+        # tile panel, and the handles come back with them.
+        imgui.begin_group()
+        if animated:
+            with layout_mod.pane(
+                "inker-preview",
+                (0, sp(inker_preview.PREVIEW_H)),
+                layout_mod.PaneRole.INSPECTOR,
+                edge=layout_mod.PaneEdge.LEFT,
+            ) as visible:
+                if visible:
+                    inker_preview.draw(ctx)
+        with layout_mod.pane(
+            "inker-layers",
+            (0, 0),
+            layout_mod.PaneRole.INSPECTOR,
             edge=layout_mod.PaneEdge.LEFT,
-            before=(
-                (
-                    "inker-preview",
-                    layout_mod.PaneRole.INSPECTOR,
-                    inker_preview.draw,
-                    sp(inker_preview.PREVIEW_H),
-                )
-                if animated
-                else None
-            ),
-            # The layer *list* is what the handle frees: at 1.5 the panel's own
-            # header, blend and opacity fill the pane and every layer is below
-            # the fold, on a panel whose entire job is picking one.
-            top=("inker-layers", layout_mod.PaneRole.INSPECTOR, inker_layers.draw),
-            bottom=("inker-bridge", layout_mod.PaneRole.INSPECTOR, inker_bridge.draw),
-        )
+        ) as visible:
+            if visible:
+                inker_layers.draw(ctx)
+        imgui.end_group()
 
     def _plotter_workspace(self) -> None:
         """The same sidebar / centre / sidebar skeleton every other mode uses:

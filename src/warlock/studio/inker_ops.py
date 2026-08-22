@@ -683,6 +683,17 @@ register(
 )
 register(
     Op(
+        "convert_to_tilemap",
+        "Convert to tilemap...",
+        dialog("inker-to-tilemap"),
+        menu="Sprite",
+        enabled=lambda state, tab: _tiles().can_convert(state, tab),
+        reason="The active layer is already a tilemap layer.",
+        separator_before=True,
+    )
+)
+register(
+    Op(
         "convert_colour_mode",
         "Colour mode...",
         dialog("inker-convert"),
@@ -1092,6 +1103,19 @@ register(
         reason=NO_DOC,
     )
 )
+
+
+def _tiles() -> Any:
+    """The tile pane's own predicate module, imported lazily.
+
+    The one place this registry reaches into ``panes/``, and only for a
+    *question*: "is the active layer already a tilemap" is a tile fact, and
+    duplicating it here is how the two would come to disagree. Lazy, because
+    ``panes`` imports imgui and this module may not.
+    """
+    from .panes import inker_tiles
+
+    return inker_tiles
 
 
 def _toggle(ctx: Any, attr: str) -> None:

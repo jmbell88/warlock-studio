@@ -451,9 +451,9 @@ def test_no_pane_continues_a_line_that_has_no_room_left(app_ctx, imgui_ctx):
         clay_outliner,
         clay_props,
         clay_tools,
-        inker_bridge,
         inker_colors,
         inker_layers,
+        inker_menu,
         inker_tools,
         inspector,
         library,
@@ -504,7 +504,7 @@ def test_no_pane_continues_a_line_that_has_no_room_left(app_ctx, imgui_ctx):
         ("inker-tools", lambda: inker_tools.draw(app_ctx)),
         ("inker-layers", lambda: inker_layers.draw(app_ctx)),
         ("inker-colors", lambda: inker_colors.draw(app_ctx)),
-        ("inker-bridge", lambda: inker_bridge.draw(app_ctx)),
+        ("inker-menu", lambda: inker_menu.draw(app_ctx)),
     ]
 
     offenders: dict[str, float] = {}
@@ -1455,18 +1455,18 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
         imgui.same_line()
         if imgui.begin_child("##paint-centre", (sp(560), 0)):
             inker_canvas.draw(app_ctx)
+            # From inside the same id stack the popup is drawn in: imgui
+            # namespaces a popup id by the stack that opened it, and the
+            # dialogs the retired bridge panel kept are drawn by the canvas
+            # (W2.2). ``open_popup`` outside a frame altogether is an access
+            # violation rather than a no-op.
+            if wants_filter:
+                wants_filter.pop()
+                inker_bridge._open_filter(app_ctx, tab)
         imgui.end_child()
         imgui.same_line()
         if imgui.begin_child("##paint-right", (sp(300), 0)):
             inker_layers.draw(app_ctx)
-            inker_bridge.draw(app_ctx)
-            # From inside the same id stack the popup is drawn in: imgui
-            # namespaces a popup id by the stack that opened it, and
-            # ``open_popup`` outside a frame altogether is an access violation
-            # rather than a no-op.
-            if wants_filter:
-                wants_filter.pop()
-                inker_bridge._open_filter(app_ctx, tab)
         imgui.end_child()
 
     # Empty first: the "nothing open" branch is what a user sees on arrival.
@@ -1693,7 +1693,6 @@ def test_the_animated_inker_builds_and_gives_its_frame_textures_back(app_ctx, im
 
     from warlock.studio import inker, inker_mode
     from warlock.studio.panes import (
-        inker_bridge,
         inker_canvas,
         inker_colors,
         inker_layers,
@@ -1728,7 +1727,6 @@ def test_the_animated_inker_builds_and_gives_its_frame_textures_back(app_ctx, im
         imgui.same_line()
         if imgui.begin_child("##smoke-right", (sp(300), 0)):
             inker_layers.draw(app_ctx)
-            inker_bridge.draw(app_ctx)
         imgui.end_child()
 
     def frame() -> None:
