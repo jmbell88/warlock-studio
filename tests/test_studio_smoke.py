@@ -1558,7 +1558,7 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
     head = tab.doc.history.head
     wants_filter.append(1)
     _frame(imgui_ctx, build)
-    assert state.filter_open
+    assert state.filter_uid == tab.uid
     state.filter_params[state.filter_name] = {"brightness": 0.4, "contrast": 0.0}
     _frame(imgui_ctx, build)  # the popup body, and one preview
     assert not np.array_equal(tab.doc.stack.active.pixels, before), "the preview shows"
@@ -1576,7 +1576,7 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
         _frame(imgui_ctx, build)
 
     tab.doc.cancel_filter()
-    state.filter_open = False
+    state.filter_uid = ""
     assert np.array_equal(tab.doc.stack.active.pixels, before)
     assert tab.doc.history.head == head
 

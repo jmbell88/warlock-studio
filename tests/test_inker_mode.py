@@ -1477,3 +1477,66 @@ def test_a_tab_switch_drops_a_half_typed_tag_rename():
     state.activate(b.uid)
     assert state.tag_editing == -1
     assert state.tag_name == ""
+
+
+# --- the filter session, and the save that used to capture it ---------------
+
+
+def test_a_save_cancels_an_open_filter_preview():
+    """``preview_filter`` writes into the layer every frame the popup is up and
+    pushes nothing, so a save that did not settle the session serialised a
+    filter the user had never approved -- and ``mark_saved`` then called the
+    tab clean against it. ``_settle`` cancels the conversion preview for
+    exactly this reason and had missed its twin."""
+    import numpy as np
+
+    tab = _tab()
+    tab.doc.stack.active.pixels[...] = (10, 20, 30, 255)
+    tab.doc.invalidate_all()
+    before = tab.doc.stack.active.pixels.copy()
+    head = tab.doc.history.head
+
+    ctx = _Ctx()
+    state = inker_mode.ensure(ctx)
+    state.add(tab)
+
+    tab.doc.begin_filter()
+    state.filter_uid = tab.uid
+    tab.doc.preview_filter("invert", red=True, green=True, blue=True)
+    assert not np.array_equal(tab.doc.stack.active.pixels, before), "the preview shows"
+
+    inker_mode._settle(ctx, tab)
+
+    assert np.array_equal(tab.doc.stack.active.pixels, before), "the save puts them back"
+    assert tab.doc.history.head == head, "and an unanswered preview is not a step"
+    assert tab.doc._filter is None
+    assert state.filter_uid == ""
+
+
+def test_a_filter_session_is_settled_on_its_owner_not_the_active_tab():
+    """The session lives on one document while ``InkerState`` is shared, so a
+    settle asked about tab B must leave tab A's session alone -- the bug
+    ``convert_uid`` was introduced to fix, in the popup it was cloned from."""
+    import numpy as np
+
+    a, b = _tab("a"), _tab("b")
+    a.doc.stack.active.pixels[...] = (10, 20, 30, 255)
+    a.doc.invalidate_all()
+    ctx = _Ctx()
+    state = inker_mode.ensure(ctx)
+    state.add(a)
+    state.add(b)
+
+    a.doc.begin_filter()
+    state.filter_uid = a.uid
+    a.doc.preview_filter("invert", red=True, green=True, blue=True)
+    previewed = a.doc.stack.active.pixels.copy()
+
+    inker_mode._settle(ctx, b)
+    assert a.doc._filter is not None, "another tab's session is left alone"
+    assert state.filter_uid == a.uid
+    assert np.array_equal(a.doc.stack.active.pixels, previewed)
+
+    inker_mode._settle(ctx, a)
+    assert a.doc._filter is None
+    assert state.filter_uid == ""

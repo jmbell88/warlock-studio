@@ -1860,7 +1860,7 @@ def _text_popup(ctx: Any, state: Any, tab: Any) -> None:
     filter and conversion sessions this is cloned from, a text stamp previews
     nothing and holds nothing on the document, so an unanswered popup is
     simply a stamp that was never made. That is the whole of why there is no
-    ``text_open`` flag beside ``filter_open``.
+    ``text_open`` flag beside ``filter_uid``.
     """
     if not imgui.begin_popup(TEXT_POPUP):
         return

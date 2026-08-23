@@ -230,7 +230,9 @@ def _open_filter(ctx: Any, tab: Any) -> None:
     if tab.doc.begin_filter() is None:
         ctx.toast("There is nothing to filter.", "warn")
         return
-    state.filter_open = True
+    # The *owner*, not a bare flag: everything below addresses the document
+    # that opened the session by name. See ``InkerState.filter_uid``.
+    state.filter_uid = tab.uid
     imgui.open_popup(FILTER_POPUP)
 
 
@@ -325,9 +327,10 @@ def _filter_popup(ctx: Any, tab: Any) -> None:
         # imgui closes a popup on a click outside, and the user did not answer
         # the question -- so the pixels on screen are a preview nobody
         # approved. Cancel, never commit.
-        if state.filter_open:
-            state.filter_open = False
-            tab.doc.cancel_filter()
+        if state.filter_uid:
+            # Through the session-ender rather than ``tab.doc``: the tab in
+            # front may not be the one that opened this.
+            inker_mode.end_filter_session(ctx)
         return
     widgets.popup_chrome(_imgui=imgui)
 
@@ -354,7 +357,7 @@ def _filter_popup(ctx: Any, tab: Any) -> None:
     imgui.begin_disabled(tab.busy)
     if controls.button("Apply", (sp(90), 0)):
         tab.doc.commit_filter()
-        state.filter_open = False
+        state.filter_uid = ""
         imgui.close_current_popup()
     imgui.end_disabled()
     imgui.same_line()
@@ -364,7 +367,7 @@ def _filter_popup(ctx: Any, tab: Any) -> None:
     # the user cannot dismiss -- the trap the params popup in Clay documents.
     if controls.button("Cancel", (sp(90), 0)):
         tab.doc.cancel_filter()
-        state.filter_open = False
+        state.filter_uid = ""
         imgui.close_current_popup()
     imgui.end_popup()
 
@@ -389,7 +392,7 @@ def _apply_to_range(ctx: Any, tab: Any) -> None:
     if controls.button("Apply to range", (sp(120), 0)):
         values = dict(_filter_values(state, state.filter_name))
         tab.doc.cancel_filter()
-        state.filter_open = False
+        state.filter_uid = ""
         tab.doc.filter_range(state.filter_name, values, *rect)
         imgui.close_current_popup()
     imgui.end_disabled()

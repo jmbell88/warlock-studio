@@ -1635,15 +1635,24 @@ class InkerState:
     spray_carry: float = 0.0
 
     # The open filter session: which filter, the values every filter was last
-    # run with, and whether the popup is up. Remembered per filter for the
+    # run with, and which tab owns the popup. Remembered per filter for the
     # reason Clay's op parameters are -- somebody applying the same levels to
-    # six layers should not retype it six times -- and ``filter_open`` is what
+    # six layers should not retype it six times -- and ``filter_uid`` is what
     # notices imgui closing the popup on a click outside, which is a cancel.
     filter_name: str = ""
     # ``Any`` and not ``float``: the FX staples brought colours (an RGBA tuple)
     # and a choice (a string) into the same per-filter bag.
     filter_params: dict[str, dict[str, Any]] = field(default_factory=dict)
-    filter_open: bool = False
+    #: **A tab uid and not a bool**, for the reason ``convert_uid`` above is one
+    #: -- this is the popup that one was cloned from, and it kept the bug the
+    #: clone was written to fix. A filter session lives on one ``Document``
+    #: (``Document._filter``) while this state is shared by every tab and the
+    #: pane draws whichever tab is *active*, so a plain "the popup is up" flag
+    #: meant a tab switch previewed into the wrong document and left the right
+    #: one holding pixels nobody would ever answer for -- pixels a save then
+    #: wrote to disk and called clean. See ``inker_mode.end_filter_session``.
+    #: Empty means no session.
+    filter_uid: str = ""
 
     # Free transform is a *state*, not a tool: it takes over the canvas until
     # it is committed or cancelled, and every other tool is unavailable while
@@ -1778,7 +1787,8 @@ class InkerState:
     # the numbers actually produce -- which is the one thing that stops a
     # mistyped cell size becoming a document the user edits for ten minutes
     # before noticing. ``sheet_import_open`` is what notices imgui closing the
-    # popup on a click outside, the ``filter_open`` idiom.
+    # popup on a click outside, the ``filter_uid`` idiom -- as a bare bool,
+    # because this popup holds nothing on any document to settle.
     sheet_import: Any = None
     sheet_import_open: bool = False
     sheet_cell: tuple[int, int] = (32, 32)

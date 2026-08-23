@@ -995,6 +995,30 @@ def end_convert_session(ctx: Any, tab: InkerDoc | None = None) -> None:
     state.convert_uid = ""
 
 
+def end_filter_session(ctx: Any, tab: InkerDoc | None = None) -> None:
+    """Close an open filter preview, on the document that owns it.
+
+    ``end_convert_session``'s twin, resolved by uid for its reasons -- the
+    session lives on one ``Document``, ``InkerState`` is shared by every tab,
+    and the popup is drawn for whichever tab is in front.
+
+    It is a *cancel*: ``Document.end_filter``'s rule, that an unanswered
+    question is not a yes. Until this existed the pixels a preview had written
+    were live in the layer with nothing on the undo stack, so a save serialised
+    a filter the user had not approved and ``mark_saved`` called the tab clean
+    against it.
+    """
+    state = ctx.state.inker
+    if state is None or not state.filter_uid:
+        return
+    owner = state.get(state.filter_uid)
+    if tab is not None and owner is not None and owner.uid != tab.uid:
+        return
+    if owner is not None:
+        owner.doc.end_filter()
+    state.filter_uid = ""
+
+
 def _settle(ctx: Any, tab: InkerDoc) -> None:
     """Fold what the canvas is showing into what the document is holding.
 
@@ -1011,8 +1035,15 @@ def _settle(ctx: Any, tab: InkerDoc) -> None:
     dither nobody asked for and the tab would go clean against it. It is
     *cancelled*, for ``end_filter``'s reason -- an unanswered question is not a
     yes.
+
+    A **filter preview** is the conversion preview's twin and was missed here
+    for as long as this function existed: ``preview_filter`` writes into the
+    layer every frame the popup is up, so the same sentence applies word for
+    word. Cancelling it is the whole of what stopped Ctrl+S with a filter popup
+    open from writing an unapproved filter to disk.
     """
     end_convert_session(ctx, tab)
+    end_filter_session(ctx, tab)
     tab.doc.commit_floating()
 
 
