@@ -175,6 +175,51 @@ def test_the_timeline_strip_is_drawn_unconditionally():
     assert "inker_timeline.draw(ctx)" in calls
 
 
+def test_the_range_drag_can_actually_ask_which_cell_it_is_over():
+    """The v0.0.28 crash, and the shape that let it ship.
+
+    ``_range_gesture`` splatted the grid's whole per-draw scratch into a
+    keyword-only signature -- ``cell_index(point, **geom)`` -- so every
+    *addition* to that scratch was a ``TypeError`` at the call rather than at
+    import. `17b8210` cached ``columns`` and ``order`` there to stop the row
+    loop rebuilding them, and the next press-and-drag in the timeline took the
+    frame loop down with ``unexpected keyword argument 'columns'``.
+
+    Nothing caught it because nothing headless drags, and this pane's own tests
+    call ``cell_index`` directly with exactly the five arguments it wants --
+    which is the one way to use it that could not fail. So what is pinned here
+    is the *mapping*: the named key tuple against the real signature, in both
+    directions, plus one call through the door the gesture actually uses.
+    """
+    import inspect
+
+    signature = inspect.signature(inker_timeline.cell_index)
+    keyword_only = tuple(
+        name
+        for name, param in signature.parameters.items()
+        if param.kind is inspect.Parameter.KEYWORD_ONLY
+    )
+    assert keyword_only == inker_timeline.CELL_GEOM_KEYS
+
+    # And the scratch dict a real ``_grid`` builds carries more than those, so
+    # the splat this replaced would still be a TypeError today.
+    geom = {
+        "x0": 0.0,
+        "tops": {0: 0.0},
+        "cell": 20.0,
+        "gutter": 2.0,
+        "frames": 3,
+        "columns": [1, 2, 3],
+        "order": [7],
+    }
+    assert set(geom) - set(inker_timeline.CELL_GEOM_KEYS) == {"columns", "order"}
+    assert inker_timeline.hit_cell(geom, (5.0, 5.0)) == (0, 0)
+    assert inker_timeline.hit_cell(geom, (45.0, 5.0)) == (0, 2)
+    # Off the end is None rather than the nearest cell, exactly as
+    # ``cell_index`` promises -- the wrapper adds no behaviour of its own.
+    assert inker_timeline.hit_cell(geom, (500.0, 5.0)) is None
+
+
 def test_the_strip_never_gets_less_than_its_floor():
     """"At minimum 150px" as arithmetic rather than as a screenshot: the share
     names the strip's portion of the centre column, and a tall window makes it

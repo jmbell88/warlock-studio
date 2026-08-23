@@ -65,6 +65,14 @@ file behind.
   reference, Add to Packwright, Revert to original — that had been File-menu
   rows and nothing else, each greyed with its reason rather than hidden.
 
+- **Fixed: a press-and-drag in the timeline crashed the frame loop.** The
+  range gesture asked which cell it was over by splatting the grid's whole
+  per-draw scratch dict into a keyword-only signature, so the two cached lists
+  added to that scratch this cycle arrived as unexpected arguments. It went
+  unnoticed because nothing headless drags and the pane's own tests call the
+  function with exactly the arguments it wants; the mapping between the two is
+  now named once and asserted against the real signature.
+
 - **A keyboard-remap dialog and an Aseprite-compatible input registry.**
   Commands, tools and held modifiers share one many-to-many binding table, so
   a chord can be rebound, aliased or given a context, and the shortcut sheet

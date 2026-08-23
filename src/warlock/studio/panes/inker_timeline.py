@@ -141,6 +141,31 @@ def track_depth(doc: Any, track_uid: int) -> list[int]:
     return gp.ancestry(doc.group_of, track_uid)
 
 
+#: The ``geom`` keys :func:`cell_index` takes, and the reason :func:`hit_cell`
+#: exists rather than a ``**geom`` splat.
+#:
+#: ``geom`` is the grid's per-draw scratch and it holds more than geometry --
+#: ``columns`` and ``order`` are cached lists the rows read. Splatting the whole
+#: dict into a keyword-only signature made every *addition* to that scratch a
+#: ``TypeError`` at the call, and on 2026-08-23 one was: `17b8210` cached those
+#: two lists to stop the row loop rebuilding them, and the next press-and-drag
+#: in the timeline took the frame loop down with
+#: ``cell_index() got an unexpected keyword argument 'columns'``. It shipped,
+#: because nothing headless drags and the pane's own tests call ``cell_index``
+#: directly with the five it wants.
+#:
+#: So the mapping is named once, and ``test_timeline_merge`` asserts it against
+#: the real signature -- a key added to either side now fails a test rather
+#: than a gesture.
+CELL_GEOM_KEYS = ("x0", "tops", "cell", "gutter", "frames")
+
+
+def hit_cell(geom: dict[str, Any], point: tuple[float, float]) -> tuple[int, int] | None:
+    """:func:`cell_index` over the grid's scratch dict. The only caller's door."""
+
+    return cell_index(point, **{key: geom[key] for key in CELL_GEOM_KEYS})
+
+
 def cell_index(
     point: tuple[float, float],
     *,
@@ -843,7 +868,7 @@ def _range_gesture(ctx: Any, tab: Any, geom: dict[str, Any]) -> None:
         return
     if state.timeline_anchor is None or not imgui.is_mouse_down(0):
         return
-    hit = cell_index(tuple(imgui.get_mouse_pos()), **geom)
+    hit = hit_cell(geom, tuple(imgui.get_mouse_pos()))
     if hit is None:
         return
     anchor_t, anchor_f = state.timeline_anchor
