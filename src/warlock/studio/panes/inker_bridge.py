@@ -196,16 +196,9 @@ def _anchor_grid(ctx: Any, tab: Any) -> str:
     for row in ANCHOR_ROWS:
         for name in row:
             selected = name == current
-            if selected:
-                imgui.push_style_color(
-                    imgui.Col_.button.value,
-                    imgui.get_style().color_(imgui.Col_.button_active.value),
-                )
-            if controls.button(f" ##anchor{name}", (sp(28), sp(24))):
+            if controls.button(f" ##anchor{name}", (sp(28), sp(24)), selected=selected):
                 ctx.state.preview[key] = name
                 current = name
-            if selected:
-                imgui.pop_style_color()
             if imgui.is_item_hovered():
                 imgui.set_tooltip(name)
             if name != row[-1]:

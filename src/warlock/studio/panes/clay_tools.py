@@ -119,15 +119,9 @@ def _tool_grid(state: Any) -> None:
     width = widgets.grid_width(COLUMNS)
     for index, (key, label, shortcut) in enumerate(clay_state.TOOLS):
         selected = state.tool == key
-        if selected:
-            imgui.push_style_color(
-                imgui.Col_.button.value, imgui.get_style().color_(imgui.Col_.button_active.value)
-            )
         icon = TOOL_ICONS.get(key) or label[:1]
-        if controls.button(f"{icon}##buildtool{key}", (width, sp(30))):
+        if controls.button(f"{icon}##buildtool{key}", (width, sp(30)), selected=selected):
             state.tool = key
-        if selected:
-            imgui.pop_style_color()
         if imgui.is_item_hovered():
             imgui.set_tooltip(f"{label}  ({shortcut})")
         if index % COLUMNS != COLUMNS - 1:
@@ -147,15 +141,8 @@ def _mode_row(doc: Any) -> None:
     width = widgets.grid_width(COLUMNS)
     for index, (mode, label, key) in enumerate(MODE_BUTTONS):
         selected = doc.element_mode == mode
-        if selected:
-            imgui.push_style_color(
-                imgui.Col_.button.value,
-                imgui.get_style().color_(imgui.Col_.button_active.value),
-            )
-        if controls.button(f"{label}##claymode{mode}", (width, sp(26))):
+        if controls.button(f"{label}##claymode{mode}", (width, sp(26)), selected=selected):
             doc.set_element_mode(mode)
-        if selected:
-            imgui.pop_style_color()
         if imgui.is_item_hovered():
             imgui.set_tooltip(f"{label} mode  ({key})")
         if index % COLUMNS != COLUMNS - 1:
@@ -290,14 +277,8 @@ def _axis_views(ctx: Any) -> None:
             imgui.set_tooltip(key)
         imgui.same_line()
     ortho = view.camera.orthographic
-    if ortho:
-        imgui.push_style_color(
-            imgui.Col_.button.value, imgui.get_style().color_(imgui.Col_.button_active.value)
-        )
-    if controls.button("Ortho##axisortho", (width, sp(24))):
+    if controls.button("Ortho##axisortho", (width, sp(24)), selected=ortho):
         view.camera.orthographic = not ortho
-    if ortho:
-        imgui.pop_style_color()
     if imgui.is_item_hovered():
         imgui.set_tooltip("Orthographic  (Ctrl+5)")
     imgui.new_line()

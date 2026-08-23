@@ -146,6 +146,37 @@ def test_a_pane_rounds_at_its_own_radius_and_the_style_says_so():
     assert surfaces.sprite(tokens.RADIUS_PANE) is None
 
 
+def test_no_tool_palette_hand_rolls_its_selection():
+    """One spelling of "this is the tool in hand", and the reason is the probe.
+
+    Every palette in the app used to state selection as
+    ``push_style_color(button, style.color_(button_active))``: the pressed
+    colour held down, with no boundary, at rgba(ACCENT, 0.4). ``controls``
+    already had a ``selected`` parameter all of them ignored -- the documented
+    treatment, an 0.14 accent wash plus a 2px boundary, themed and
+    scale-aware.
+
+    The strongest argument is not paint. ``controls._finish_item`` feeds
+    ``probe.record(..., selected=...)``, so a hand-rolled ``push_style_color``
+    is invisible to the probe the exercise harness reads: converting is what
+    makes "which tool is armed" a fact an audit can *see* rather than a colour
+    a human has to notice in a screenshot.
+    """
+    from warlock.studio.panes import (
+        clay_tools,
+        inker_bridge,
+        inker_menu,
+        inker_tools,
+        plotter_tools,
+    )
+
+    for module in (inker_tools, clay_tools, plotter_tools, inker_bridge, inker_menu):
+        source = inspect.getsource(module)
+        assert "button_active" not in source, (
+            f"{module.__name__} paints its own selection; pass selected= instead"
+        )
+
+
 # --- Phase 2: type and rhythm -----------------------------------------------
 
 

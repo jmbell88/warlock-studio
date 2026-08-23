@@ -2082,6 +2082,7 @@ def _glyph_button(
     danger: bool = False,
     enabled: bool = True,
     borderless: bool = False,
+    selected: bool = False,
 ) -> bool:
     """A square button holding one glyph, centred in it.
 
@@ -2124,6 +2125,12 @@ def _glyph_button(
     content -- while a lone icon beside a text field still wants its frame, so
     this is a flag rather than a new default. The hit area is unchanged: only
     the paint goes.
+
+    ``selected`` is the *shared* selection treatment -- an accent wash plus
+    ``controls``' boundary ring -- and not a fill of accent. It exists here so
+    that a toolbar of glyph buttons can say which one is in hand without
+    abandoning this button for ``controls.button(role=ICON)`` purely to get
+    the paint, which is what ``toolbar._draw`` used to do.
     """
     key = f"glyph/{icon}/{tooltip}"
     t = _hover_amount(key)
@@ -2133,6 +2140,10 @@ def _glyph_button(
     else:
         towards = theme.ERR if danger else theme.EDGE
         fill = theme.mix(theme.ELEV_2, towards, t, 1.0 - (0.2 if danger else 0.0) * t)
+    if selected and not danger:
+        # Over the hover, not under it: a selected control still has to answer
+        # the pointer, and the ring below is what states the selection.
+        fill = theme.mix(theme.ACCENT, theme.EDGE, t, tokens.SELECTION_WASH_ALPHA + t * 0.1)
     imgui.push_style_color(imgui.Col_.button.value, imgui.ImVec4(*fill))
     imgui.push_style_color(imgui.Col_.button_hovered.value, imgui.ImVec4(*fill))
     pushed = 2
@@ -2149,6 +2160,10 @@ def _glyph_button(
         imgui.end_disabled()
     hovered = imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value)
     imgui.pop_style_color(pushed)
+    if selected:
+        from . import controls
+
+        controls.selection_ring()
     note_hover(key, hovered and enabled)
     # Focus as well as hover (UX-02). The tooltip is the *only* place a glyph
     # button says what it does, so showing it on hover alone meant the name
@@ -2174,6 +2189,7 @@ def icon_button(
     danger: bool = False,
     enabled: bool = True,
     borderless: bool = False,
+    selected: bool = False,
 ) -> bool:
     """A square glyph button with its meaning in the tooltip.
 
@@ -2190,10 +2206,13 @@ def icon_button(
         danger=danger,
         enabled=enabled,
         borderless=borderless,
+        selected=selected,
     )
 
 
-def small_icon_button(icon: str, tooltip: str, *, borderless: bool = False) -> bool:
+def small_icon_button(
+    icon: str, tooltip: str, *, borderless: bool = False, selected: bool = False
+) -> bool:
     """The same button at ``small_button`` height, for a card's action row.
 
     Its own entry point rather than a flag, but *not* its own drawing code: the
@@ -2204,7 +2223,9 @@ def small_icon_button(icon: str, tooltip: str, *, borderless: bool = False) -> b
     makes its own height (it draws with zero vertical padding), so an icon
     still lines up with the labelled small buttons beside it.
     """
-    return _glyph_button(icon, imgui.get_text_line_height(), tooltip, borderless=borderless)
+    return _glyph_button(
+        icon, imgui.get_text_line_height(), tooltip, borderless=borderless, selected=selected
+    )
 
 
 def field_label(label: str, help_text: str | None = None) -> None:

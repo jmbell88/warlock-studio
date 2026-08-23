@@ -82,13 +82,11 @@ def _tool_grid(state: Any, layer: Any = None) -> None:
         if index % 3:
             imgui.same_line()
         active = not reason and state.tool == key
-        if active:
-            imgui.push_style_color(
-                imgui.Col_.button.value, imgui.get_style().color_(imgui.Col_.button_active.value)
-            )
         if reason:
             imgui.begin_disabled()
-        clicked = controls.button(f"{_ICONS.get(key, icons.SQUARE)}##tool-{key}", (width, 0))
+        clicked = controls.button(
+            f"{_ICONS.get(key, icons.SQUARE)}##tool-{key}", (width, 0), selected=active
+        )
         if reason:
             imgui.end_disabled()
         if clicked and not reason:
@@ -96,8 +94,6 @@ def _tool_grid(state: Any, layer: Any = None) -> None:
             shape = plotter_state.OBJECT_SHAPES.get(key)
             if shape:
                 state.object_shape = shape
-        if active:
-            imgui.pop_style_color()
         if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value):
             note = f"{label} ({letter})"
             imgui.set_tooltip(f"{note}\n{reason}" if reason else note)
@@ -123,14 +119,8 @@ def _shape_picker(state: Any) -> None:
         if index:
             imgui.same_line()
         active = state.shape_mode == key
-        if active:
-            imgui.push_style_color(
-                imgui.Col_.button.value, imgui.get_style().color_(imgui.Col_.button_active.value)
-            )
-        if controls.button(f"{glyph}##shape-{key}", (width, 0)):
+        if controls.button(f"{glyph}##shape-{key}", (width, 0), selected=active):
             state.shape_mode = key
-        if active:
-            imgui.pop_style_color()
         if imgui.is_item_hovered():
             imgui.set_tooltip(label)
 

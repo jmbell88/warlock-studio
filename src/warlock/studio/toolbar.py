@@ -263,34 +263,20 @@ def toolbar(
             # with no name is the accessible-name failure ``icon_button``'s
             # required tooltip exists to prevent, and a compacted button is
             # exactly where it would come back.
-            if item.selected:
-                role = (
-                    item.role
-                    if item.role
-                    in (
-                        controls.ButtonRole.PRIMARY,
-                        controls.ButtonRole.DESTRUCTIVE,
-                    )
-                    else controls.ButtonRole.ICON
-                )
-                hit = controls.button(
-                    f"{item.icon}{ident}",
-                    (overflow_w, 0),
-                    role=role,
-                    control_size=controls.ControlSize.COMPACT,
-                    selected=True,
-                    enabled=item.enabled,
-                    reason=item.reason,
-                    tooltip=item.tooltip or item.label,
-                )
-            else:
-                hit = widgets.icon_button(
-                    f"{item.icon}{ident}",
-                    item.tooltip or item.label,
-                    danger=item.role is controls.ButtonRole.DESTRUCTIVE,
-                    enabled=item.enabled,
-                    borderless=item.role is not controls.ButtonRole.PRIMARY,
-                )
+            # One call for both states. A selected item used to abandon this
+            # button for ``controls.button(role=ICON)`` purely to get the
+            # selection paint -- which cost the compacted item the glyph
+            # centring this button exists for, and left the two states drawn
+            # by two different widgets. ``icon_button`` carries ``selected``
+            # now, so the branch is gone rather than tidied.
+            hit = widgets.icon_button(
+                f"{item.icon}{ident}",
+                item.tooltip or item.label,
+                danger=item.role is controls.ButtonRole.DESTRUCTIVE,
+                enabled=item.enabled,
+                borderless=item.role is not controls.ButtonRole.PRIMARY,
+                selected=item.selected,
+            )
         elif item.selected:
             hit = controls.button(
                 f"{item.label}{ident}",

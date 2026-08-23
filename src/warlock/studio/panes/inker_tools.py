@@ -183,16 +183,9 @@ def _view_toggles(ctx: Any, state: Any) -> None:
         (icons.RULER, "rulers", "Rulers along the top and left edges"),
     ):
         engaged = bool(getattr(state, attr))
-        if engaged:
-            imgui.push_style_color(
-                imgui.Col_.button.value,
-                imgui.get_style().color_(imgui.Col_.button_active.value),
-            )
-        if widgets.icon_button(f"{icon}##inkview{attr}", tip):
+        if widgets.icon_button(f"{icon}##inkview{attr}", tip, selected=engaged):
             setattr(state, attr, not engaged)
             inker_mode.persist(ctx)
-        if engaged:
-            imgui.pop_style_color()
         if attr != "rulers":
             imgui.same_line()
     imgui.new_line()
@@ -305,15 +298,10 @@ def _grid(state, doc=None) -> None:
         selected = state.tool in members
         origin = imgui.get_cursor_screen_pos()
         rects[group] = (origin.x, origin.y, width, height)
-        if selected:
-            imgui.push_style_color(
-                imgui.Col_.button.value,
-                imgui.get_style().color_(imgui.Col_.button_active.value),
-            )
         icon = TOOL_ICONS.get(shown) or inker_state.tool_label(shown)[:1]
         if reason:
             imgui.begin_disabled()
-        controls.button(f"{icon}##toolgroup{group}", (width, height))
+        controls.button(f"{icon}##toolgroup{group}", (width, height), selected=selected)
         if reason:
             imgui.end_disabled()
         if not reason and imgui.is_item_activated():
@@ -322,8 +310,6 @@ def _grid(state, doc=None) -> None:
             # group", with no second decision to make.
             state.set_tool(shown)
             state.flyout = group if len(members) > 1 else ""
-        if selected:
-            imgui.pop_style_color()
         if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value):
             imgui.set_tooltip(_group_tooltip(label, members, shown, reason))
         if index % COLUMNS != COLUMNS - 1:

@@ -270,13 +270,5 @@ def header_controls(ctx: Any, doc: Any) -> None:
 
 
 def _toggle_icon(icon: str, engaged: bool, tooltip: str) -> bool:
-    """An icon button that shows its on state -- the anchor grid's idiom."""
-    if engaged:
-        imgui.push_style_color(
-            imgui.Col_.button.value,
-            imgui.get_style().color_(imgui.Col_.button_active.value),
-        )
-    clicked = widgets.icon_button(icon, tooltip)
-    if engaged:
-        imgui.pop_style_color()
-    return clicked
+    """An icon button that shows its on state -- the shared selection idiom."""
+    return widgets.icon_button(icon, tooltip, selected=engaged)

@@ -116,6 +116,19 @@ def _ring(colour: int, *, width: float, inset: float = 0.0) -> None:
         return
 
 
+def selection_ring() -> None:
+    """Draw the shared selection boundary around the item just submitted.
+
+    The public door onto ``_ring`` for the one caller that cannot go through
+    :func:`button`: ``widgets._glyph_button`` draws its own square and pushes
+    its own colours (the glyph-centring fix), so it takes the treatment rather
+    than the drawing code. One spelling of "this control is the one in hand"
+    is the whole point -- a hand-rolled ``push_style_color`` is invisible to
+    ``probe`` and drifts from this by a pixel per site.
+    """
+    _ring(theme.ACCENT, width=tokens.SELECTION_BOUNDARY_WIDTH)
+
+
 def _leading_selection() -> None:
     rect = _item_rect()
     if rect is None:
