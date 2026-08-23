@@ -6,6 +6,27 @@ record of what a version actually changed. The top heading's version must
 match `pyproject.toml` — a test asserts it, so a release bump cannot leave this
 file behind.
 
+## 0.0.27 — 2026-08-22
+
+- **Clay, Plotter and the pixel pipeline stop waiting on work that was never
+  arithmetic.** Entering element mode on a 200k-vertex mesh spent three
+  quarters of a second building one edge table; the picking tree rebuilt after
+  every mesh edit cost a second; a 200x200 three-layer map took four seconds to
+  composite; and counting which palette slots a document actually uses made one
+  pass over the whole canvas *per palette entry* — eleven seconds on a
+  2048-square drawing with a full palette, which is now 117 ms. Nothing about
+  what any of them computes has changed: every replacement is asserted equal to
+  the code it replaced, bit for bit, and the three new native kernels each keep
+  a numpy path beside them that runs on a machine with no compiler.
+
+- **The measurements are in the repo this time, rejections included.**
+  `scripts/bench_native.py` is a standing harness rather than a script written
+  and thrown away, and `docs/measurements/2026-08-22-native-batch-5.md` records
+  every candidate with the bar it had to clear written down before it was
+  measured — including the two that were rejected for being slower or less
+  exact than what they would have replaced, and the one that turned out to have
+  been fixed already.
+
 ## 0.0.26 — 2026-08-22
 
 - **A whole-tree audit, written down rather than acted on.** `AUDIT.md` records
