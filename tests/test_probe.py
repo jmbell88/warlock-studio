@@ -15,11 +15,18 @@ from pathlib import Path
 
 from warlock.studio import controls, probe
 
-#: Every raw imgui widget call outside ``controls.py``. Pinned rather than
-#: chased: each one is a control the probe cannot see, and the number belongs
-#: in a report rather than in a silent gap. Lower it when one is migrated;
-#: raising it means a new control bypassed the presentational layer.
-RAW_IMGUI_CONTROLS = 11
+#: Every raw imgui widget call outside ``controls.py`` **that the census does
+#: not see**. Pinned rather than chased: each one is a control the probe cannot
+#: see, and the number belongs in a report rather than in a silent gap. Lower it
+#: when one is migrated; raising it means a new control bypassed the
+#: presentational layer.
+#:
+#: A raw call inside a function that also calls ``probe.record`` does not count.
+#: That is not an exemption, it is the definition: ``widgets._button_with_note``
+#: draws with ``imgui.button`` because ``primary_button`` and ``ghost_button``
+#: push their own fill around it, and it records itself instead. What this
+#: number measures is what the driver cannot reach, not what avoided one import.
+RAW_IMGUI_CONTROLS = 10
 
 _RAW_WIDGETS = {
     "button",
@@ -33,6 +40,29 @@ _RAW_WIDGETS = {
 }
 
 
+def _records_itself(node: ast.AST) -> bool:
+    """Does this function hand what it drew to the census itself?"""
+    return any(
+        isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr == "record"
+        and isinstance(call.func.value, ast.Name)
+        and call.func.value.id == "probe"
+        for call in ast.walk(node)
+    )
+
+
+def _censused_lines(tree: ast.AST) -> set[int]:
+    """Line numbers inside functions that record their own control."""
+    covered: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and _records_itself(node):
+            covered.update(
+                inner.lineno for inner in ast.walk(node) if hasattr(inner, "lineno")
+            )
+    return covered
+
+
 def _raw_calls() -> list[str]:
     root = Path(inspect.getfile(controls)).resolve().parent
     found: list[str] = []
@@ -40,7 +70,10 @@ def _raw_calls() -> list[str]:
         if path.name == "controls.py":
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
+        censused = _censused_lines(tree)
         for node in ast.walk(tree):
+            if getattr(node, "lineno", None) in censused:
+                continue
             if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
                 continue
             owner = node.func.value
@@ -396,3 +429,106 @@ def test_every_field_call_reports_its_trailing_label():
         for call in sites:
             flags = [kw for kw in call.keywords if kw.arg == "trailing_label"]
             assert flags, f"{node.name} passes no trailing_label"
+
+
+class _ButtonImgui:
+    """Just enough imgui for ``widgets._button_with_note`` to run headless."""
+
+    class HoveredFlags_:  # noqa: N801 -- imgui's own spelling
+        allow_when_disabled = type("V", (), {"value": 1 << 10})()
+
+    def __init__(self):
+        self.tooltips: list[str] = []
+        self.disabled = 0
+
+    def begin_disabled(self, *_a):
+        self.disabled += 1
+
+    def end_disabled(self):
+        self.disabled -= 1
+
+    def button(self, _label, _size=(0, 0)):
+        return False
+
+    def is_item_hovered(self, _flags=0):
+        return True
+
+    def set_tooltip(self, text):
+        self.tooltips.append(text)
+
+
+def test_a_disabled_button_reaches_the_census(monkeypatch):
+    """``widgets.disabled_button`` is the only helper that carries a *reason*.
+
+    It draws with a raw ``imgui.button``, so for its whole life it was outside
+    the census -- and with it went ``primary_button`` and ``ghost_button``,
+    which share its body. The Troupe pass on 2026-08-23 is what made the cost
+    plain: "Draw the reference" and "Send to Troupe", the mode's two primary
+    actions, plus "Open in Inker" and "Add to Packwright", were all on screen
+    and in none of the 38 rows the driver saw. The ``disabled-no-reason``
+    verdict could not fire anywhere in the app, because every control able to
+    be greyed *with* a reason was invisible to the thing checking for one.
+    """
+    from warlock.studio import widgets
+
+    stub = _ButtonImgui()
+    monkeypatch.setattr(widgets, "imgui", stub)
+    monkeypatch.setattr(probe, "ENABLED", True)
+    monkeypatch.setattr(probe, "imgui", _LabelledImgui())
+    probe.begin_frame()
+    widgets.disabled_button("Draw the reference", False, reason="Describe them first.")
+    (one,) = probe.FRAME_CONTROLS
+    assert one.label == "Draw the reference"
+    assert one.kind == "button"
+    assert one.enabled is False
+    assert one.reason == "Describe them first."
+    # A button's text is inside it, so nothing is trimmed off the hit rect.
+    assert one.hit == one.rect
+
+
+def test_a_disabled_buttons_rect_is_read_before_its_tooltip(monkeypatch):
+    """``set_tooltip`` submits an item of its own and overwrites LastItemData.
+
+    The body already knew this -- it is why ``_button_with_note`` returns the
+    hover it captured -- and the census has to be taken on the same side of the
+    same line, or every greyed control reports the tooltip's rect as its own.
+    """
+    from warlock.studio import widgets
+
+    seen: list[str] = []
+
+    class _Recording(_ButtonImgui):
+        def set_tooltip(self, text):
+            seen.append(f"tooltip:{len(probe.FRAME_CONTROLS)}")
+            super().set_tooltip(text)
+
+    monkeypatch.setattr(widgets, "imgui", _Recording())
+    monkeypatch.setattr(probe, "ENABLED", True)
+    monkeypatch.setattr(probe, "imgui", _LabelledImgui())
+    probe.begin_frame()
+    widgets.disabled_button("Open in Inker", False, reason="Pick a character sheet first.")
+    assert seen == ["tooltip:1"], "the census was taken after the tooltip drew"
+
+
+def test_the_raw_count_excludes_a_button_that_records_itself():
+    """``_button_with_note`` draws raw and is still reachable by the driver.
+
+    The four other raw buttons in ``widgets.py`` -- the icon and small-button
+    helpers -- are *not* excluded and still count: they record nothing, so the
+    driver still cannot press them, and the number has to keep saying so.
+    """
+    from warlock.studio import widgets
+
+    tree = ast.parse(Path(inspect.getfile(widgets)).read_text(encoding="utf-8"))
+    body = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_button_with_note"
+    )
+    lines = {node.lineno for node in ast.walk(body) if hasattr(node, "lineno")}
+    found = _raw_calls()
+    assert not [
+        one for one in found if int(one.split(":")[1]) in lines and "widgets.py" in one
+    ], found
+    # And the ones that record nothing are still counted.
+    assert [one for one in found if "widgets.py" in one], found

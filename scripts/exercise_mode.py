@@ -731,14 +731,37 @@ def raw_imgui_controls() -> int:
 
     from warlock.studio import controls as controls_mod
 
+    def records_itself(node) -> bool:
+        return any(
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "record"
+            and isinstance(call.func.value, ast.Name)
+            and call.func.value.id == "probe"
+            for call in ast.walk(node)
+        )
+
     root = Path(controls_mod.__file__).resolve().parent
     total = 0
     for path in root.rglob("*.py"):
         if path.name == "controls.py":
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
+        # A raw call inside a function that records itself is reachable after
+        # all -- ``widgets._button_with_note`` draws with ``imgui.button`` so
+        # the primary and ghost fills it sits inside are not painted over, and
+        # hands the census its own row. Counting it would overstate the gap.
+        censused = {
+            inner.lineno
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and records_itself(node)
+            for inner in ast.walk(node)
+            if hasattr(inner, "lineno")
+        }
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            if getattr(node, "lineno", None) in censused:
                 continue
             owner = node.func.value
             if (

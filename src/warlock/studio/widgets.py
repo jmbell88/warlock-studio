@@ -15,7 +15,7 @@ from typing import Any
 from imgui_bundle import imgui
 
 from ..vectors import GRADE_MAX, GRADE_MIN
-from . import fonts, icons, motion, theme, tokens
+from . import fonts, icons, motion, probe, theme, tokens
 from . import state as app_state
 from .tokens import sp
 
@@ -1468,6 +1468,22 @@ def _button_with_note(
     clicked = imgui.button(label, size)
     if not enabled:
         imgui.end_disabled()
+    # **The census, here, before the tooltip.** This body draws with a raw
+    # ``imgui.button`` rather than through ``controls`` -- ``primary_button``
+    # and ``ghost_button`` push their own fill around this call, and routing it
+    # through a role-styled button would paint over them -- so the one
+    # chokepoint every other control passes through never saw it. That put
+    # ``disabled_button`` outside the driver's reach, and with it the only
+    # helper in the app that carries a *reason*: the ``disabled-no-reason``
+    # verdict had nothing it could ever fire on. Troupe's pass found its two
+    # primary actions, "Draw the reference" and "Send to Troupe", missing from
+    # the census entirely.
+    #
+    # Before ``set_tooltip`` for the reason this function already exists to
+    # work around: a tooltip is an item of its own and overwrites
+    # ``g.LastItemData``, so a census taken after it would record the tooltip's
+    # rect as the button's.
+    probe.record(label=label, kind="button", enabled=enabled, reason=reason, tooltip=tooltip)
     note = reason if not enabled else tooltip
     hovered = bool(imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value))
     if note and hovered:

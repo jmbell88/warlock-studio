@@ -62,8 +62,8 @@ class GenerateOps:
         from .pipelines.conditioning import Conditioning
 
         # A guide the caller drew itself, rather than a hint derived from a
-        # reference. Troupe's T-pose reference stage writes ``control.png``
-        # at the door (``spritesynth.render_tpose_guide``) and asks for it by
+        # reference. Troupe's reference stage writes ``control.png`` at the
+        # door (``spritesynth.render_reference_guide``) and asks for it by
         # name here, for the reason ``render_guide``'s docstring gives: the
         # guide is already line art in canny space, and running the detector
         # over it would return the outline of each stroke -- two lines where
@@ -124,11 +124,21 @@ class GenerateOps:
                 # drew nothing" stays an answerable question -- the same number
                 # ``write_hint`` would have written.
                 variant = str(params.get("guide_variant") or "")
+                # Defaulted here rather than required, and to the T-pose rather
+                # than to the door's own default: a row written before the pose
+                # was a choice records no ``guide_pose``, and the guide it was
+                # drawn against was the T-pose. A reroll of one of those has to
+                # redraw the figure it was conditioned on, not today's default.
+                pose = str(params.get("guide_pose") or "tpose")
 
-                def _draw(variant: str = variant, dest: Path = control_image) -> Any:
+                def _draw(
+                    variant: str = variant,
+                    pose: str = pose,
+                    dest: Path = control_image,
+                ) -> Any:
                     from .pipelines import spritesynth
 
-                    guide = spritesynth.render_tpose_guide(variant)
+                    guide = spritesynth.render_reference_guide(variant, pose)
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     tmp = dest.with_name(f".{dest.name}.tmp")
                     guide.save(tmp, format="PNG")

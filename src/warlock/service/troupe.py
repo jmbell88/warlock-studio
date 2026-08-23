@@ -42,6 +42,10 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 #: list because it owns the templates.
 TROUPE_VARIANTS: tuple[str, ...] = spritesynth.TPOSE_VARIANTS
 
+#: And in which pose. The second axis of the same choice, crossed with the
+#: variant rather than folded into it -- see ``spritesynth.REFERENCE_POSES``.
+TROUPE_POSES: tuple[str, ...] = spritesynth.REFERENCE_POSES
+
 #: The sizes a sheet may be laid out at. ``charsheet.SIZES``, which is also
 #: what ``charsheet.plan`` validates against.
 TROUPE_LOGICAL_SIZES: tuple[int, ...] = charsheet.SIZES
@@ -55,6 +59,14 @@ TROUPE_OUTLINE_MODES: tuple[str, ...] = pixelize.OUTLINE_MODES
 TROUPE_REDUCE_MODES: tuple[str, ...] = pixelize.REDUCE_MODES
 
 DEFAULT_TROUPE_VARIANT = "male"
+
+#: **A-pose, chosen 2026-08-23 over the T-pose that shipped before it.** The
+#: shipped humanoid rig template is itself an A-pose, so this is the pose whose
+#: mesh the template fits directly -- no joints measured off its vertices, and
+#: so no dependency on the ViTPose weights a bare install does not have. The
+#: T-pose is still on offer, and still the better reconstruction: it separates
+#: the limbs more, which is the one thing a single view most needs.
+DEFAULT_TROUPE_POSE = "apose"
 DEFAULT_TROUPE_LOGICAL_SIZE = 32
 DEFAULT_TROUPE_COLORS = 64
 DEFAULT_TROUPE_OUTLINE = "outer"
@@ -77,6 +89,7 @@ def troupe_options(svc: WarlockService) -> dict[str, Any]:
 
     return {
         "variants": list(TROUPE_VARIANTS),
+        "poses": list(TROUPE_POSES),
         "logical_sizes": list(TROUPE_LOGICAL_SIZES),
         "colors": list(TROUPE_COLOR_CHOICES),
         "outline_modes": list(TROUPE_OUTLINE_MODES),
@@ -101,6 +114,7 @@ def troupe_options(svc: WarlockService) -> dict[str, Any]:
         "render_size": charsheet.RENDER_SIZE,
         "defaults": {
             "variant": DEFAULT_TROUPE_VARIANT,
+            "pose": DEFAULT_TROUPE_POSE,
             "logical_size": DEFAULT_TROUPE_LOGICAL_SIZE,
             "colors": DEFAULT_TROUPE_COLORS,
             "outline": DEFAULT_TROUPE_OUTLINE,
@@ -172,6 +186,9 @@ def check_troupe(svc: WarlockService, block: Any) -> dict[str, Any]:
         raise Invalid(
             f"variant must be one of {list(TROUPE_VARIANTS)}", field="variant"
         )
+    pose = str(entries.get("pose") or DEFAULT_TROUPE_POSE)
+    if pose not in TROUPE_POSES:
+        raise Invalid(f"pose must be one of {list(TROUPE_POSES)}", field="pose")
     options = _check_options(svc, entries)
     try:
         layout = charsheet.resolve_layout(entries.get("layout"))
@@ -182,7 +199,7 @@ def check_troupe(svc: WarlockService, block: Any) -> dict[str, Any]:
     # its own door. What is checked here is the reference stage's own base,
     # because this door pins it rather than inheriting it.
     check_vram(svc, "text", "reference", {"base_model": TROUPE_BASE_MODEL})
-    return {"variant": variant, "layout": layout.as_dict(), **options}
+    return {"variant": variant, "pose": pose, "layout": layout.as_dict(), **options}
 
 
 def create_charsheet(

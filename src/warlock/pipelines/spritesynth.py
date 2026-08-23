@@ -217,31 +217,65 @@ TPOSE_GEOMETRY = _build("tpose", _TPOSE_TABLE)
 TPOSE_VARIANTS: tuple[str, ...] = ("male", "female")
 
 
-def load_tpose_guide(variant: str) -> GuideTemplate:
-    """Read and validate ``templates/sprite_guides/tpose_<variant>.json``.
+#: The reference poses on offer, and the ``kind`` each one's templates declare.
+#: A *second* axis, crossed with :data:`TPOSE_VARIANTS` rather than folded into
+#: it: sex and pose are independent choices, and four variant names spelling
+#: out a two-by-two grid is a table pretending to be a list.
+#:
+#: The T-pose is first because it is what a single-view reconstruction most
+#: wants -- limb separation, unambiguous silhouette. The A-pose is here because
+#: the shipped humanoid rig template *is* an A-pose, so a mesh built from it is
+#: fitted directly rather than needing joints measured off its own vertices.
+#: Neither dominates; both ship.
+REFERENCE_POSES: tuple[str, ...] = ("tpose", "apose")
 
-    Raises on an unknown variant rather than defaulting, for the reason
-    :func:`geometry` gives: silently conditioning on the other sex's guide is a
-    wrong character published under the caller's name.
+#: One geometry per pose. Same single 1024px cell either way -- they differ only
+#: in the ``kind`` each checks its template files against, which is what stops
+#: an A-pose file being loaded as a T-pose and drawn without complaint.
+REFERENCE_GEOMETRY = {pose: _build(pose, _TPOSE_TABLE) for pose in REFERENCE_POSES}
+
+
+def load_reference_guide(variant: str, pose: str = "tpose") -> GuideTemplate:
+    """Read and validate ``templates/sprite_guides/<pose>_<variant>.json``.
+
+    Raises on an unknown variant *or* pose rather than defaulting, for the
+    reason :func:`geometry` gives: silently conditioning on the other sex's
+    guide -- or on a pose the caller did not ask for -- is a wrong character
+    published under their name.
     """
     if variant not in TPOSE_VARIANTS:
         raise ValueError(
-            f"unknown T-pose variant {variant!r}; "
+            f"unknown reference variant {variant!r}; "
             f"this module has {', '.join(TPOSE_VARIANTS)}"
         )
-    raw = json.loads((TEMPLATE_DIR / f"tpose_{variant}.json").read_text(encoding="utf-8"))
-    return _parse_template(raw, TPOSE_GEOMETRY)
+    if pose not in REFERENCE_POSES:
+        raise ValueError(
+            f"unknown reference pose {pose!r}; "
+            f"this module has {', '.join(REFERENCE_POSES)}"
+        )
+    raw = json.loads((TEMPLATE_DIR / f"{pose}_{variant}.json").read_text(encoding="utf-8"))
+    return _parse_template(raw, REFERENCE_GEOMETRY[pose])
 
 
-def render_tpose_guide(variant: str) -> PILImage:
-    """The 1024px white-on-black T-pose stick figure for ``variant``.
+def render_reference_guide(variant: str, pose: str = "tpose") -> PILImage:
+    """The 1024px white-on-black reference stick figure for ``variant``/``pose``.
 
     Handed to the ControlNet as the hint *directly*, exactly as
     :func:`render_guide`'s docstring argues: it is already line art in canny
     space, and running the detector over it would return two lines where the
     guide means one.
     """
-    return render_guide(TPOSE_GEOMETRY, load_tpose_guide(variant))
+    return render_guide(REFERENCE_GEOMETRY[pose], load_reference_guide(variant, pose))
+
+
+def load_tpose_guide(variant: str) -> GuideTemplate:
+    """:func:`load_reference_guide` at the T-pose. Kept for its callers."""
+    return load_reference_guide(variant, "tpose")
+
+
+def render_tpose_guide(variant: str) -> PILImage:
+    """:func:`render_reference_guide` at the T-pose. Kept for its callers."""
+    return render_reference_guide(variant, "tpose")
 
 
 #: ``service.validation.MAX_SEED``, restated rather than imported: a pipeline

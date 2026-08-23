@@ -38,12 +38,22 @@ frame count would make that impossible to state.
 ## Making a character
 
 The left column has the cast at the top and the form at the bottom. Describe the character, pick a
-build, and press **Draw the reference**.
+build and a reference pose, and press **Draw the reference**.
 
-That queues **one image and then stops**. The reference is drawn against a T-pose pose guide, which
-is a stick figure fed straight to the ControlNet — arms out, legs straight, feet on one line. The
-constrained pose is not an aesthetic choice: a single-view reconstruction has to get limb separation
-right, and a folded arm is the failure it cannot recover from.
+That queues **one image and then stops**. The reference is drawn against a pose guide, which is a
+stick figure fed straight to the ControlNet — legs straight, feet on one line, and the arms held out
+at whichever of the two poses you picked. The constrained pose is not an aesthetic choice: a
+single-view reconstruction has to get limb separation right, and a folded arm is the failure it
+cannot recover from.
+
+**A-pose or T-pose.** A-pose is the default and holds the arms 45° down; T-pose holds them straight
+out. The difference is not cosmetic and it shows up two steps later, at the rig. The shipped humanoid
+rig template is itself an A-pose, so an A-posed mesh is fitted straight to it. A T-posed mesh is not
+— fitting that template to one runs the arm chain down through the ribcage — so its joints are
+*measured* off the mesh instead, which needs the pose model
+[Installation](38-installation.md) covers.
+T-pose separates the limbs further, which is the one thing a single view has the most trouble with,
+so it is the one to reach for if the arms come back fused to the body.
 
 You approve that drawing in [Create](22-generating-references.md), the same way you approve any
 reference. Only then does the rest run: the reconstruction, then an automatic rig, then the sheet.
@@ -80,7 +90,8 @@ step it is on. Nothing on this route ever waits for you.
 
 | Setting | What it does |
 | --- | --- |
-| Build | Which T-pose guide conditions the reference: male or female. They differ in shoulder width, arm length and stance. |
+| Build | Which guide conditions the reference: male or female. They differ in shoulder width, arm length and stance. |
+| Reference pose | A-pose or T-pose. A-pose matches the rig template and is the default; T-pose separates the limbs further. Both draw the same figure — only the arms move. |
 | Sprite size | How many pixels tall one cell is. 16, 24, 32, 48, 64, 96 or 128. |
 | Outline | `outer` grows the silhouette by a dark pixel, `inner` recolours the sprite's own edge, `none` leaves it alone. |
 | Palette | A palette file if you have installed one, or a palette derived from the render by median cut. |
@@ -95,11 +106,14 @@ documented resize instead. Neither is wrong, but the exact ones are crisper.
 
 ## Watching it
 
-The middle of the window plays one sprite, continuously, at a whole-number scale with no filtering.
-Both of those are deliberate. A bad frame in a walk cycle is obvious in half a second of playback
-and invisible in a contact sheet, which is why the preview does not wait to be started; and a sprite
-drawn at 6.3× through a smoothing filter is a blurred sprite, which is the one thing the whole
-pipeline exists not to produce.
+The middle of the window shows one sprite at a whole-number scale with no filtering. A sprite drawn
+at 6.3× through a smoothing filter is a blurred sprite, which is the one thing the whole pipeline
+exists not to produce.
+
+**It opens paused, on the first frame.** Press play, or `Space`, to run it. A bad frame in a walk
+cycle is obvious in half a second of playback and invisible in a contact sheet — but the first thing
+anyone does with a new sheet is look at a *frame*: a hand, a silhouette, which way the feet point.
+A clip already moving when you arrive is one you have to stop before you can look at anything.
 
 The row above the sprite carries the transport and the two selectors:
 

@@ -33,10 +33,16 @@ class TroupeState:
     animation: str = "walk"
     direction: str = "front"
 
-    #: The preview runs by default. The whole argument for a continuously
-    #: animating preview is that a bad frame becomes obvious immediately, and a
-    #: preview you have to press play on is one nobody presses play on.
-    playing: bool = True
+    #: **Paused by default.** This ran on open, and the argument for that was
+    #: that a bad frame becomes obvious immediately and a preview you have to
+    #: press play on is one nobody presses play on. Overturned on request
+    #: 2026-08-23: a clip that is already moving when you arrive is one you
+    #: have to stop before you can look at anything in it, and the first thing
+    #: anyone does with a new sheet is look at a *frame* -- checking a hand, a
+    #: silhouette, the direction the feet point. Stepping already implies
+    #: looking, which is why ``step`` clears this; opening should mean the same
+    #: thing.
+    playing: bool = False
 
     #: Seconds accumulated inside the current frame, and which frame that is.
     #: Kept as a float clock rather than a frame counter driven by the frame

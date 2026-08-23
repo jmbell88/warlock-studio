@@ -465,15 +465,22 @@ def create_job(
         # one the clip library carries a walk for.
         params["rig"] = True
         params["rig_template"] = svc_troupe.TROUPE_TEMPLATE
-        # Measured off the mesh's own vertices rather than fitted to its
-        # bounding box: the reference is a constrained T-pose by construction
-        # here, and the shipped humanoid template is an A-pose that mis-fits
-        # one badly enough to skin the arms to the chest. Where the
-        # measurement refuses -- a mesh that is in neither pose --
-        # ``jointfit`` says so and the rig falls back to the template, which
-        # is the fallback the plan asks for: the user corrects the joints in
-        # Poser and re-runs the sheet from the direct door.
-        params["rig_joints"] = "measured"
+        # **How the joints are found follows the pose that was asked for.**
+        # The shipped humanoid template is an A-pose. Against a T-posed
+        # reference it mis-fits badly enough to skin the arms to the chest, so
+        # those are measured off the mesh's own vertices instead; where the
+        # measurement refuses -- a mesh in neither pose -- ``jointfit`` says so
+        # and the rig falls back to the template, and the user corrects the
+        # joints in Poser and re-runs the sheet from the direct door.
+        #
+        # An A-posed reference *is* the pose the template is in, so there is
+        # nothing to correct for and it is fitted directly. That also drops the
+        # ViTPose weights from the path, which a bare install does not have --
+        # which is half of why the A-pose is the default.
+        params["guide_pose"] = troupe_block["pose"]
+        params["rig_joints"] = (
+            "template" if troupe_block["pose"] == "apose" else "measured"
+        )
         # Pinned, deliberately not inherited: the reference stage conditions on
         # a rendered pose guide, so it needs a base that can run a ControlNet.
         params["base_model"] = svc_troupe.TROUPE_BASE_MODEL

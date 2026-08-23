@@ -1,0 +1,117 @@
+{
+  "kind": "apose",
+  "variant": "female",
+  "comment": "The single-cell A-pose reference guide -- the T-pose's sibling, in the same normalised cell space (x and y run 0..1 across one cell, y down). Each arm is the T-pose's arm rotated 45 degrees down about its own shoulder, segment lengths preserved, so the two guides describe the same figure in two poses rather than two figures. Everything else -- head, neck, hip, knees, feet at y 0.92 -- is identical to tpose_female.json on purpose: a character drawn from either guide has to reconstruct to the same proportions. This pose exists because the shipped humanoid rig template is itself an A-pose, so a mesh built from this one is fitted by rigging.fit_template directly instead of needing joints measured off its vertices. It trades some limb separation for that, which is the one thing a single-view reconstruction most needs, and is why the T-pose remains on offer rather than being replaced. This is DATA: the pose is iterable without touching any code.",
+  "head_point": "head",
+  "head_radius": 0.052,
+  "segments": [
+    [
+      "head",
+      "neck"
+    ],
+    [
+      "neck",
+      "hip"
+    ],
+    [
+      "neck",
+      "shoulder.L"
+    ],
+    [
+      "shoulder.L",
+      "elbow.L"
+    ],
+    [
+      "elbow.L",
+      "hand.L"
+    ],
+    [
+      "neck",
+      "shoulder.R"
+    ],
+    [
+      "shoulder.R",
+      "elbow.R"
+    ],
+    [
+      "elbow.R",
+      "hand.R"
+    ],
+    [
+      "hip",
+      "knee.L"
+    ],
+    [
+      "knee.L",
+      "foot.L"
+    ],
+    [
+      "hip",
+      "knee.R"
+    ],
+    [
+      "knee.R",
+      "foot.R"
+    ]
+  ],
+  "poses": [
+    {
+      "name": "front",
+      "frame": 0,
+      "points": {
+        "head": [
+          0.5,
+          0.14
+        ],
+        "neck": [
+          0.5,
+          0.225
+        ],
+        "shoulder.L": [
+          0.425,
+          0.26
+        ],
+        "shoulder.R": [
+          0.575,
+          0.26
+        ],
+        "elbow.L": [
+          0.3401,
+          0.3449
+        ],
+        "elbow.R": [
+          0.6599,
+          0.3449
+        ],
+        "hand.L": [
+          0.2553,
+          0.4297
+        ],
+        "hand.R": [
+          0.7447,
+          0.4297
+        ],
+        "hip": [
+          0.5,
+          0.545
+        ],
+        "knee.L": [
+          0.455,
+          0.735
+        ],
+        "knee.R": [
+          0.545,
+          0.735
+        ],
+        "foot.L": [
+          0.455,
+          0.92
+        ],
+        "foot.R": [
+          0.545,
+          0.92
+        ]
+      }
+    }
+  ]
+}

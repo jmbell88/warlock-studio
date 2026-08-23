@@ -319,6 +319,7 @@ def _table():
 
 def test_a_walk_advances_one_frame_per_its_own_duration(ctx):
     state = troupe_mode.ensure(ctx)
+    state.playing = True
     state.animation = "walk"
     walk = _table().animation("walk")
     troupe_mode.advance(ctx, walk.duration_ms / 1000.0)
@@ -344,6 +345,7 @@ def test_the_frame_rate_does_not_change_the_playback_speed(ctx):
 
 def test_a_stalled_frame_skips_cells_rather_than_falling_behind(ctx):
     state = troupe_mode.ensure(ctx)
+    state.playing = True
     state.animation = "walk"
     walk = _table().animation("walk")
     troupe_mode.advance(ctx, walk.duration_ms / 1000.0 * 3)
@@ -351,9 +353,14 @@ def test_a_stalled_frame_skips_cells_rather_than_falling_behind(ctx):
 
 
 def test_a_cycle_loops_and_a_one_shot_holds_its_last_frame(ctx):
-    """A preview that stops needs a control to start it again, and the point of
-    the mode is that a bad frame is obvious without pressing anything."""
+    """A cycle wraps and a one-shot holds, once something is playing at all.
+
+    Playback is armed here rather than assumed: the preview opens paused (see
+    ``TroupeState.playing``), so what this pins is the looping rule and not the
+    default.
+    """
     state = troupe_mode.ensure(ctx)
+    state.playing = True
     for name in ("walk", "attack"):
         troupe_mode.set_animation(ctx, name)
         animation = _table().animation(name)
@@ -373,7 +380,7 @@ def test_a_paused_preview_does_not_move(ctx):
 
 def test_stepping_pauses(ctx):
     state = troupe_mode.ensure(ctx)
-    assert state.playing
+    state.playing = True
     troupe_mode.step(ctx, 1)
     assert not state.playing and state.frame == 1
 
@@ -671,3 +678,17 @@ def test_the_cap_is_on_the_reference_pass_alone(ctx, svc):
         job_id = _plain_mesh(svc)
         svc.store.create("rig", f"ranger {index}", {"source_job": job_id})
     assert len(troupe_mode.in_progress(ctx)) == troupe_mode.MAX_IN_PROGRESS + 3
+
+
+def test_the_preview_opens_paused(ctx):
+    """Overturned on request 2026-08-23, and pinned so it cannot drift back.
+
+    A clip already moving when you arrive is one you have to stop before you
+    can look at any frame in it, and looking at a frame -- a hand, a
+    silhouette, which way the feet point -- is the first thing anyone does with
+    a new sheet.
+    """
+    state = troupe_mode.ensure(ctx)
+    assert state.playing is False
+    troupe_mode.advance(ctx, 10.0)
+    assert state.frame == 0, "a paused preview advanced on its own"

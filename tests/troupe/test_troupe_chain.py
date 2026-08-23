@@ -18,6 +18,7 @@ last is machinery the repo already had. What these tests hold is the joins:
 from __future__ import annotations
 
 import asyncio
+import math
 
 import pytest
 
@@ -164,17 +165,62 @@ def test_the_reference_is_wired_to_draw_its_own_guide(svc):
     assert not (svc.job_dir(made["id"]) / "ref.png").exists()
 
 
-def test_the_rig_is_not_optional_and_is_measured(svc):
+def test_the_rig_is_not_optional(svc):
     """Every cell of a character sheet is a posed frame, so an unrigged mesh
-    would render 256 copies of one T-pose -- and the shipped humanoid template
-    is an A-pose that mis-fits a T-pose mesh."""
+    would render 256 copies of one reference pose."""
     made = svc_jobs.create_job(
         svc, kind="text", prompt="a ranger", output="reference", troupe={}
     )
     params = svc.store.get(made["id"])["params"]
     assert params["rig"] is True
     assert params["rig_template"] == svc_troupe.TROUPE_TEMPLATE
-    assert params["rig_joints"] == "measured"
+
+
+def test_the_reference_pose_decides_how_the_joints_are_found(svc):
+    """The shipped humanoid template is an A-pose, and that is the whole rule.
+
+    Against a T-posed mesh it mis-fits badly enough to skin the arms to the
+    chest, which is why those are measured off the mesh's own vertices. An
+    A-posed mesh is the pose the template is already in, so it is fitted
+    directly -- and measuring needs the ViTPose weights, which a bare install
+    does not have, so the A-pose is also the path that works without them.
+    """
+    for pose, joints in (("tpose", "measured"), ("apose", "template")):
+        made = svc_jobs.create_job(
+            svc,
+            kind="text",
+            prompt="a ranger",
+            output="reference",
+            troupe={"pose": pose},
+        )
+        params = svc.store.get(made["id"])["params"]
+        assert params["guide_pose"] == pose
+        assert params["rig_joints"] == joints, pose
+
+
+def test_a_new_character_is_a_posed_by_default(svc):
+    """Chosen on request 2026-08-23, over the T-pose that shipped before it."""
+    assert svc_troupe.DEFAULT_TROUPE_POSE == "apose"
+    made = svc_jobs.create_job(
+        svc, kind="text", prompt="a ranger", output="reference", troupe={}
+    )
+    params = svc.store.get(made["id"])["params"]
+    assert params["guide_pose"] == "apose"
+    assert params["rig_joints"] == "template"
+
+
+def test_an_unknown_pose_is_refused_at_the_door(svc):
+    from warlock.service.errors import Invalid
+
+    with pytest.raises(Invalid) as caught:
+        svc_jobs.create_job(
+            svc,
+            kind="text",
+            prompt="a ranger",
+            output="reference",
+            troupe={"pose": "crouch"},
+        )
+    assert caught.value.field == "pose"
 
 
 def test_a_character_sheet_cannot_be_asked_for_alongside_a_mesh(svc):
@@ -819,3 +865,95 @@ async def test_an_unrigged_source_fails_the_sheet_rather_than_rendering_it(
     finally:
         await worker.shutdown()
     assert worker.store.get(job_id)["status"] == "error"
+
+
+# -- the A-pose --------------------------------------------------------------
+
+
+def test_every_reference_pose_loads_and_draws():
+    for pose in spritesynth.REFERENCE_POSES:
+        for variant in svc_troupe.TROUPE_VARIANTS:
+            image = spritesynth.render_reference_guide(variant, pose)
+            assert image.size == (spritesynth.ATLAS_PX, spritesynth.ATLAS_PX)
+
+
+def test_an_unknown_pose_raises_rather_than_defaulting():
+    """``load_tpose_guide``'s rule, for the other axis: conditioning on the
+    pose the caller did not ask for is a wrong character under their name."""
+    with pytest.raises(ValueError):
+        spritesynth.load_reference_guide("male", "crouch")
+
+
+def test_the_a_pose_is_the_t_pose_with_the_arms_rotated_down():
+    """Two poses of one figure, not two figures.
+
+    Everything that is not an arm has to match to the last decimal, or a
+    character drawn from one guide and a character drawn from the other
+    reconstruct to different proportions and the choice stops being a pose.
+    """
+    for variant in svc_troupe.TROUPE_VARIANTS:
+        tpose = spritesynth.load_reference_guide(variant, "tpose").poses[0].points
+        apose = spritesynth.load_reference_guide(variant, "apose").poses[0].points
+        assert set(tpose) == set(apose)
+        for joint, point in tpose.items():
+            if joint.startswith(("elbow", "hand")):
+                continue
+            assert apose[joint] == point, joint
+        for side in ("L", "R"):
+            shoulder = apose[f"shoulder.{side}"]
+            for joint in (f"elbow.{side}", f"hand.{side}"):
+                assert apose[joint][1] > tpose[joint][1], f"{joint} did not come down"
+            # Lengths preserved: it is a rotation, not a redrawing.
+            def _span(points, a, b):
+                return math.hypot(points[a][0] - points[b][0], points[a][1] - points[b][1])
+
+            assert _span(apose, f"shoulder.{side}", f"elbow.{side}") == pytest.approx(
+                _span(tpose, f"shoulder.{side}", f"elbow.{side}"), abs=1e-3
+            )
+            assert _span(apose, f"elbow.{side}", f"hand.{side}") == pytest.approx(
+                _span(tpose, f"elbow.{side}", f"hand.{side}"), abs=1e-3
+            )
+            assert shoulder == tpose[f"shoulder.{side}"]
+
+
+def test_the_a_pose_guide_is_line_art_too():
+    from warlock.pipelines import control
+
+    fraction = control.edge_fraction(spritesynth.render_reference_guide("male", "apose"))
+    assert 0.0005 < fraction < 0.05
+
+
+def test_the_worker_draws_the_pose_the_row_asked_for():
+    """The door records ``guide_pose``; the guide is drawn in the worker.
+
+    Source-scanned because the branch lives inside ``_conditioning``, which
+    needs a queue and a job row to reach -- and the two facts worth pinning are
+    both textual: that the pose reaches the renderer at all, and what it falls
+    back to when it is absent.
+    """
+    from pathlib import Path
+
+    import warlock._q_generate as q_generate
+
+    source = Path(q_generate.__file__).read_text(encoding="utf-8")
+    assert 'params.get("guide_pose")' in source
+    assert "render_reference_guide(variant, pose)" in source
+
+
+def test_a_row_written_before_the_pose_existed_rerolls_as_a_t_pose():
+    """The back-compat rule, and it is not the door's default.
+
+    A reference queued before the pose was a choice carries no ``guide_pose``
+    and was conditioned on the T-pose. Falling back to today's default would
+    redraw it against a figure it never saw, which is a different character out
+    of the same row.
+    """
+    from pathlib import Path
+
+    import warlock._q_generate as q_generate
+
+    source = Path(q_generate.__file__).read_text(encoding="utf-8")
+    assert 'str(params.get("guide_pose") or "tpose")' in source
+    assert svc_troupe.DEFAULT_TROUPE_POSE != "tpose", (
+        "this test is only meaningful while the door's default differs"
+    )

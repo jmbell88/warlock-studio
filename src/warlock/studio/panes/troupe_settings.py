@@ -35,6 +35,21 @@ def draw(ctx: Any) -> None:
             form["variant"],
             [(v, v) for v in options.get("variants") or ()],
         )
+        # Beside the build, because the two together are the guide the
+        # reference is drawn against and neither means much alone.
+        _changed, form["pose"] = form_ui.combo(
+            "pose",
+            "Reference pose",
+            form["pose"],
+            [(name, _POSE_LABELS.get(name, name)) for name in options.get("poses") or ()],
+            help_text=(
+                "The stick figure the first drawing is conditioned on. "
+                "A-pose matches the rig template, so the joints are fitted "
+                "straight to it. T-pose separates the limbs further, which is "
+                "what the reconstruction has the least trouble with -- pick it "
+                "if the arms come back fused to the body."
+            ),
+        )
         _layout(form, form_ui, options)
         _size(form, form_ui, options)
         _palette(ctx, form, form_ui, options)
@@ -43,6 +58,10 @@ def draw(ctx: Any) -> None:
     imgui.dummy((0, 8))
     _existing_mesh(ctx, form)
 
+
+#: What each reference pose is called on the control. The keys are the door's
+#: names and are what travel in ``params``; these are only what is read.
+_POSE_LABELS = {"tpose": "T-pose", "apose": "A-pose"}
 
 #: Where the picker's current choice lives. On ``state.preview`` and not on
 #: ``TroupeState``: the mode holds a *selection* (which character and which
@@ -127,6 +146,7 @@ def _form(state: Any, options: dict[str, Any]) -> dict[str, Any]:
         state.form = {
             "prompt": "",
             "variant": str(defaults.get("variant") or "male"),
+            "pose": str(defaults.get("pose") or "apose"),
             "logical_size": int(defaults.get("logical_size") or 32),
             "colors": int(defaults.get("colors") or 64),
             "outline": str(defaults.get("outline") or "outer"),

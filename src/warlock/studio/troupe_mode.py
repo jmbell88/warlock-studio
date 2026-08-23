@@ -676,6 +676,7 @@ def start_character(ctx: Any, form: dict[str, Any]) -> bool:
         output="reference",
         troupe={
             "variant": form.get("variant"),
+            "pose": form.get("pose"),
             "logical_size": form.get("logical_size"),
             "colors": form.get("colors"),
             "outline": form.get("outline"),
