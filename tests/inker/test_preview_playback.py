@@ -169,3 +169,33 @@ def test_the_preview_index_survives_a_frame_being_deleted_under_it():
     # Clamped at use, never at store: the index named a frame that has gone and
     # the preview carries on rather than indexing off the end.
     assert 0 <= tab.preview_index < len(tab.doc.anim.frames)
+
+
+def test_the_preview_honours_constant_frame_rate():
+    """``tick_preview`` is a clone of ``tick_playback`` and had copied the plain
+    duration list without the Constant Frame Rate switch above it, so turning it
+    on left the timeline playing at 12 fps and the preview pane playing at the
+    document's stored durations -- two playheads disagreeing about one clip."""
+    from types import SimpleNamespace
+
+    from warlock.studio import inker_mode
+
+    anim = SimpleNamespace(
+        frames=[SimpleNamespace(duration_ms=100), SimpleNamespace(duration_ms=250)]
+    )
+    assert inker_mode.frame_durations(SimpleNamespace(constant_rate=0), anim) == [100, 250]
+    assert inker_mode.frame_durations(SimpleNamespace(constant_rate=12), anim) == [83, 83]
+    assert inker_mode.frame_durations(SimpleNamespace(constant_rate=4), anim) == [250, 250]
+
+
+def test_both_playheads_read_the_same_durations():
+    """The guard on the clone: if a third caller ever spells the duration list
+    by hand again, this is what says so."""
+    import inspect
+
+    from warlock.studio import inker_mode
+
+    for name in ("tick_playback", "tick_preview"):
+        source = inspect.getsource(getattr(inker_mode, name))
+        assert "frame_durations(tab, anim)" in source, name
+        assert "frame.duration_ms for frame in anim.frames" not in source, name

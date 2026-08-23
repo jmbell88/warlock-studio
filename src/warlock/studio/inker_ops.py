@@ -736,7 +736,13 @@ def _paste(ctx: Any, tab: Any, *, as_layer: bool) -> Any:
     if as_layer:
         return tab.doc.paste_as_layer()
     result = tab.doc.paste()
-    ctx.state.inker.set_tool("move")
+    if result is not False:
+        # Only on success, ``inker_mode.stamp_text``'s rule and the Ctrl+V
+        # precedent it cites. Switching unconditionally left a user holding the
+        # Move tool with nothing pasted whenever the clipboard was empty or the
+        # layer was locked -- and ``run`` discards the ``False``, so nothing was
+        # said about that either.
+        ctx.state.inker.set_tool("move")
     return result
 
 

@@ -278,3 +278,22 @@ def test_toggle_matte_greys_with_a_reason_on_a_background_document():
     op = inker_ops.get("toggle_matte")
     assert op.enabled(state, tab) is False
     assert op.reason
+
+
+def test_a_refused_paste_does_not_switch_the_tool():
+    """``stamp_text``'s rule -- switch to Move on success only. An empty
+    clipboard used to leave the user holding Move with nothing pasted, and
+    ``run`` discards the ``False`` so nothing was said either."""
+    from types import SimpleNamespace
+
+    from warlock.studio import inker, inker_ops, inker_state
+
+    state = inker_state.InkerState()
+    state.set_tool("brush")
+    tab = SimpleNamespace(doc=inker.Document.blank(8, 8), busy=False)
+    ctx = SimpleNamespace(state=SimpleNamespace(inker=state))
+
+    op = next(o for o in inker_ops.OPS if o.name == "paste")
+    assert tab.doc.paste() is False, "nothing on the clipboard to paste"
+    op.run(ctx, tab)
+    assert state.tool == "brush", "a refused paste leaves the tool alone"

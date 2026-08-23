@@ -187,6 +187,15 @@ def persist(ctx: Any) -> None:
         "grid_size": int(state.grid_size),
         "grid_snap": bool(state.grid_snap),
         "rulers": bool(state.rulers),
+        # The other three ``_toggle`` reaches for. Its docstring promises "a
+        # preference that resets on the next launch is a control they have to
+        # rediscover" and it calls ``persist`` for all six, but only the four
+        # above were ever written or read back -- so the pixel grid, the layer
+        # edges and the tile numbers paid a full settings write on every toggle
+        # and reset every launch anyway.
+        "pixel_grid": bool(state.pixel_grid),
+        "layer_edges": bool(state.layer_edges),
+        "tile_numbers": bool(state.tile_numbers),
     }
     # The last-used export controls -- app-level and shared across tabs, like
     # the canvas furniture beside it, not a per-document ``InkerDoc.
@@ -208,6 +217,9 @@ def _restore_canvas(state: InkerState, stored: Any) -> None:
         state.grid_size = max(2, min(512, size))
     state.grid_snap = bool(stored.get("grid_snap", state.grid_snap))
     state.rulers = bool(stored.get("rulers", state.rulers))
+    state.pixel_grid = bool(stored.get("pixel_grid", state.pixel_grid))
+    state.layer_edges = bool(stored.get("layer_edges", state.layer_edges))
+    state.tile_numbers = bool(stored.get("tile_numbers", state.tile_numbers))
 
 
 def _restore_export(state: InkerState, stored: Any) -> None:
@@ -2481,6 +2493,15 @@ def on_task_done(ctx: Any, done: Any) -> None:
             ctx.toast(f"Added {len(result)} colour(s).", "success")
         return
 
+    if name in ("inker-palette-export", "inker-palette-export-doc"):
+        # Said out loud. Neither key had a branch here at all, so a palette
+        # export fell through to the uid-keyed tail below, found no ``:`` in its
+        # key and returned -- reporting neither success nor failure. A write to
+        # a path the user chose is exactly the kind of thing that has to answer.
+        if result:
+            ctx.toast(f"Palette written to {Path(result).name}.", "success")
+        return
+
     if name == "inker-index":
         # The picker came back with a table for a *document*. Resolved through
         # the uid rather than through ``active``: a native picker is unbounded,
@@ -3129,6 +3150,31 @@ def stop_play(tab: InkerDoc) -> None:
     tab.play_accum_ms = 0.0
 
 
+def frame_durations(tab: InkerDoc, anim: Any) -> list[int]:
+    """The durations a playhead steps by, Constant Frame Rate included.
+
+    **Constant Frame Rate** (6.7) is Aseprite's own playback switch: play every
+    frame at one rate rather than at the durations the document stores. It is a
+    *preview* setting and it does not touch the frames -- what an animator is
+    asking is "what does this look like at 12 fps", not "make every frame
+    83 ms", and answering the second would be an undoable edit to every frame.
+
+    One function because there are two playheads. ``tick_preview`` is a clone of
+    ``tick_playback`` rather than a share, deliberately -- it must never touch
+    ``playing``, ``saving`` or ``set_current_frame`` -- but the clone had copied
+    the plain duration list and not the switch above it, so turning Constant
+    Frame Rate on left the timeline playing at 12 fps and the preview pane
+    playing at the stored durations. Two playheads disagreeing about one clip is
+    the drift a clone invites, so the one part they genuinely share lives here.
+    """
+    durations = [frame.duration_ms for frame in anim.frames]
+    rate = getattr(tab, "constant_rate", 0)
+    if rate:
+        held = max(1, round(1000.0 / float(rate)))
+        return [held] * len(durations)
+    return durations
+
+
 def tick_playback(tab: InkerDoc, dt_ms: float) -> None:
     """One frame's worth of time.
 
@@ -3141,18 +3187,8 @@ def tick_playback(tab: InkerDoc, dt_ms: float) -> None:
     anim = tab.doc.anim
     if not tab.playing or anim is None:
         return
-    durations = [frame.duration_ms for frame in anim.frames]
-    if getattr(tab, "constant_rate", 0):
-        # **Constant Frame Rate** (6.7), Aseprite's own playback switch: play
-        # every frame at one rate rather than at the durations the document
-        # stores. It is a *preview* setting and it does not touch the frames --
-        # what an animator is asking is "what does this look like at 12 fps",
-        # not "make every frame 83 ms", and answering the second would be an
-        # undoable edit to every frame of the document.
-        held = max(1, round(1000.0 / float(tab.constant_rate)))
-        durations = [held] * len(durations)
     index, accum, playing, forward, cycles = animation.advance(
-        durations,
+        frame_durations(tab, anim),
         tab.play_index,
         tab.play_accum_ms,
         min(float(dt_ms), MAX_TICK_MS),
@@ -3226,7 +3262,7 @@ def tick_preview(tab: InkerDoc, dt_ms: float) -> None:
         span, direction, repeat = (0, last, True), "forward", 0
     speed = max(MIN_PREVIEW_SPEED, min(float(tab.preview_speed), MAX_PREVIEW_SPEED))
     index, accum, playing, forward, cycles = animation.advance(
-        [frame.duration_ms for frame in anim.frames],
+        frame_durations(tab, anim),
         index,
         tab.preview_accum_ms,
         min(float(dt_ms), MAX_TICK_MS) * speed,
@@ -3678,11 +3714,17 @@ def export_palette(ctx: Any) -> None:
     state = ensure(ctx)
     colours = list(state.swatches)
 
-    def run() -> None:
+    def run() -> str | None:
         path = dialogs.save_file("Export the palette", "palette.gpl", PALETTE_FILTER)
-        if path is not None:
-            _write_palette(path, colours, "Warlock")
+        if path is None:
+            return None
+        _write_palette(path, colours, "Warlock")
+        return str(path)
 
+    # A key of its own. It used to share ``inker-palette-export`` with
+    # ``export_document_palette``, and ``tasks.submit`` refuses a duplicate key
+    # -- so whichever picker was already up made the other command do nothing at
+    # all, silently, because neither call site reads the bool it answers.
     ctx.submit("inker-palette-export", run)
 
 
@@ -3881,14 +3923,18 @@ def export_document_palette(ctx: Any) -> None:
     colours = [tuple(c) for c in tab.doc.palette]
     stem = tab.path.stem if tab.path else "palette"
 
-    def run() -> None:
+    def run() -> str | None:
         path = dialogs.save_file(
             "Export the document palette", f"{stem}.gpl", PALETTE_FILTER
         )
-        if path is not None:
-            _write_palette(path, colours, stem)
+        if path is None:
+            return None
+        _write_palette(path, colours, stem)
+        return str(path)
 
-    ctx.submit("inker-palette-export", run)
+    # Not ``inker-palette-export``: see the sibling above for why sharing it
+    # made one of the two commands inert whenever the other was open.
+    ctx.submit("inker-palette-export-doc", run)
 
 
 # --- tileset export/import (Wave 3, Chunk 3.6) --------------------------------
