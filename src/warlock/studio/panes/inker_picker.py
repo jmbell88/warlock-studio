@@ -31,7 +31,17 @@ from ..manual import render as manual_render
 
 #: The least this pane may be squeezed to, in design px: the heading, the
 #: target row, the tab strip, four sliders and the hex field.
-PICKER_FLOOR = 200.0
+#:
+#: **Measured, not estimated.** This said 200 px while naming all of that, and
+#: the two never agreed: at the app's own default 1600x950 the pane was allotted
+#: 363 px -- well clear of a 200 px floor, so ``give_way`` saw no reason to act
+#: -- and drew the hex field at y=909 against a pane ending at 902. imgui
+#: clipped it away, which made it the one control in Inker nobody could click.
+#: A floor shorter than the content it enumerates protects nothing; this is the
+#: 400 px that content actually occupies, and the Colour pane above gives way
+#: to it. On a window too short for both, ``give_way``'s own ``SHARE_MIN``
+#: ceiling still stops this pane starving the one above.
+PICKER_FLOOR = 400.0
 
 #: The two things the sliders can be pointed at. The foreground is what a
 #: left-drag writes with and the background what a right-drag does, which is

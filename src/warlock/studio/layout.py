@@ -766,6 +766,20 @@ def column(
         return
     imgui.begin_group()
     avail_y = imgui.get_content_region_avail().y
+    # **The handles come off the room before it is split.** Every splitter
+    # drawn below costs its grip plus the item spacing either side, and
+    # ``heights`` -- which promises the heights sum to the room available --
+    # never saw that: the column handed out more than it could draw, and the
+    # shortfall landed on the last pane. Inker's Picker was 23 px short of the
+    # floor it had just been granted, which is exactly one handle, and drew its
+    # hex field over its own bottom edge.
+    handles = sum(
+        1
+        for index, slot in enumerate(live)
+        if slot.share_key and index + 1 < len(live)
+    )
+    if handles:
+        avail_y = max(0.0, avail_y - handles * (sp(GRIP) + imgui.get_style().item_spacing.y * 2.0))
     shares = {slot.share_key: lay.share(slot.share_key) for slot in live if slot.share_key}
     tall = skeleton.heights(live, avail_y, shares, tokens.SCALE)
     for index, (slot, height) in enumerate(zip(live, tall, strict=True)):

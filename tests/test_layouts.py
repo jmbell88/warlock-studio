@@ -89,6 +89,36 @@ def test_a_floor_wins_over_a_mean_share():
     assert tall[0] == 210.0
 
 
+def test_a_share_gives_way_to_the_floor_of_the_fill_under_it():
+    """A share slot could squeeze a fill slot under its own stated floor.
+
+    Only the *share* slot's floor was ever read here, so a fill slot's floor
+    was a number nothing consulted. Measured in Inker on 2026-08-23 at the
+    app's default 1600x950: the Colour pane took its 0.55 of an 833 px column
+    and left the Picker 363 px against a 400 px floor, so the Picker drew its
+    hex field past its own bottom edge and imgui clipped it away. Same rule as
+    ``layout.give_way``, one rung down and applied to the whole column.
+    """
+    slots = [
+        _slot("colours", skeleton.SHARE, share="k", floor=210.0),
+        _slot("picker", floor=400.0),
+    ]
+    tall = skeleton.heights(slots, 833.0, {"k": 0.55})
+    assert tall[0] == 433.0
+    assert tall[1] == 400.0
+
+
+def test_a_share_keeps_its_own_floor_when_both_cannot_be_met():
+    """Neither pane may be given a heading and nothing under it."""
+    slots = [
+        _slot("colours", skeleton.SHARE, share="k", floor=210.0),
+        _slot("picker", floor=400.0),
+    ]
+    tall = skeleton.heights(slots, 500.0, {"k": 0.55})
+    assert tall[0] == 210.0
+    assert sum(tall) <= 500.0 + 1e-6
+
+
 def test_a_fill_never_goes_negative():
     """The failure this exists to stop: a canvas that draws nothing, uploads
     no textures and looks exactly like a hang."""

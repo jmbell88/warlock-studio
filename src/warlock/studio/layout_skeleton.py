@@ -106,6 +106,16 @@ def heights(
     fixed = sum(sp(slot.height, scale) for slot in slots if slot.sizing == FIXED)
     room = max(0.0, avail - fixed)
     fills = [slot for slot in slots if slot.sizing == FILL]
+    # **A share gives way to what the fill under it needs.** Only the share
+    # slot's own floor used to be read here, so a fill slot's floor was a
+    # number nothing consulted -- and Inker's Colour pane took its 0.55 of an
+    # 833 px column and left the Picker 363 px against a 400 px floor, which is
+    # how the Picker came to draw its hex field past its own bottom edge for
+    # imgui to clip away. The same rule ``layout.give_way`` states for one
+    # stacked pair, applied to the column. The ``max`` below still puts the
+    # share slot's own floor first when the two cannot both be met: the
+    # alternative is a pane with a heading and nothing under it.
+    fill_floors = sum(sp(slot.floor, scale) for slot in fills)
     out: list[float] = []
     taken = 0.0
     for slot in slots:
@@ -114,7 +124,8 @@ def heights(
             continue
         if slot.sizing == SHARE:
             want = room * float(shares.get(slot.share_key, 0.5))
-            want = max(sp(slot.floor, scale), min(want, max(0.0, room - taken)))
+            headroom = max(0.0, room - taken - fill_floors)
+            want = max(sp(slot.floor, scale), min(want, headroom))
             taken += want
             out.append(want)
             continue

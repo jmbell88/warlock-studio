@@ -821,3 +821,38 @@ def test_a_collapsed_palette_draws_nothing_it_would_have_to_balance() -> None:
     assert guard is not None, "the header does not guard the body"
     before = ast.unparse(ast.Module(body=node.body[:guard], type_ignores=[]))
     assert "begin_disabled" not in before and "end_disabled" not in before
+
+
+def test_the_picker_floor_is_the_height_its_own_content_needs() -> None:
+    """A floor that does not cover the pane's content protects nothing.
+
+    ``PICKER_FLOOR`` named the heading, the target row, the tab strip, the four
+    sliders *and* the hex field, and put 200 px on them. Measured at the app's
+    own default 1600x950 on 2026-08-23, that content runs 400 px: the pane was
+    allotted 363 px, which is comfortably above a 200 px floor, so ``give_way``
+    never intervened and the hex field was drawn at y=909 against a pane that
+    ended at 902 -- clipped away, unclickable, the last such control in Inker.
+    The floor has to be what the pane actually needs, or it is decoration.
+    """
+    from warlock.studio.panes import inker_picker
+
+    assert inker_picker.PICKER_FLOOR >= 400.0
+
+
+def test_the_colour_pane_gives_way_to_the_pickers_floor() -> None:
+    """The left column at 1600x950, which is what a first run gets.
+
+    833 px of column between the two panes' outer edges. The share alone would
+    hand the Colour pane 458 px and leave the Picker 375 -- 25 px short of its
+    content. ``give_way`` is the mechanism that stops it, and this is the
+    arithmetic that says it does.
+    """
+    from warlock.studio import layout
+    from warlock.studio.panes import inker_colors, inker_picker
+
+    avail = 833.0
+    share = layout.SHARE_DEFAULTS.get("inker-colors", 0.55)
+    top = layout.give_way(
+        avail, share, inker_colors.PANEL_FLOOR, inker_picker.PICKER_FLOOR
+    )
+    assert avail - top >= inker_picker.PICKER_FLOOR
