@@ -373,6 +373,18 @@ class BaseModel:
     # reuses another's weights lists the same Fetch again; warlock.fetch
     # dedupes on (repo_id, destination), never on model key.
     fetch: tuple[Fetch, ...] = ()
+    #: One sentence for the Settings table's Description column, and the long
+    #: form for its tooltip -- a blank line separates the two.
+    #:
+    #: **A field on the spec, not a table beside it.** ``fetch.KINDS``' own
+    #: comment records what a parallel table costs: the download-kind
+    #: vocabulary was hand-copied three times, "each drifted differently", and
+    #: one copy silently dropped a kind. A descriptions dict keyed on the row
+    #: key would be a fourth copy, where a renamed key leaves a blank cell and
+    #: nothing fails. Last in the field order so no positional construction
+    #: breaks, and defaulted so a new entry is legal before its prose is
+    #: written.
+    description: str = ""
 
     @property
     def download(self) -> str:
@@ -396,6 +408,7 @@ class StyleLora:
     # resident in VRAM. The default keeps every SDXL entry unedited.
     family: str = FAMILY_SDXL
     fetch: tuple[Fetch, ...] = ()
+    description: str = ""
 
     @property
     def download(self) -> str:
@@ -422,6 +435,7 @@ class IPAdapter:
     image_encoder_dir: str
     default_scale: float = 0.6
     fetch: tuple[Fetch, ...] = ()
+    description: str = ""
 
     @property
     def download(self) -> str:
@@ -455,6 +469,7 @@ class ControlNet:
     default_scale: float = 0.65
     default_end: float = 0.8
     fetch: tuple[Fetch, ...] = ()
+    description: str = ""
 
     @property
     def download(self) -> str:
@@ -469,6 +484,7 @@ class EngineModel:
     label: str
     probe: tuple[str, ...]
     fetch: tuple[Fetch, ...] = ()
+    description: str = ""
 
     @property
     def download(self) -> str:
@@ -506,6 +522,12 @@ ENGINE_MODELS: dict[str, EngineModel] = _table(
                 ignore_patterns=("q4/*", "q8/*"),
                 size_gib=16.1,
             ),
+        ),
+        description=(
+            "The reconstruction engine: one image in, a textured mesh out.\n\n"
+            "trellis-server.exe's own weights, quantised. This is the half of the "
+            "app that makes geometry -- without it the Mesh stage has nothing to "
+            "run, and every other model here is optional beside it."
         ),
     )
 )
@@ -546,6 +568,14 @@ BASE_MODELS: dict[str, BaseModel] = _table(
                 size_gib=7.0,
             ),
         ),
+        description=(
+            "The fast option: four steps at 512 px, guidance off.\n\n"
+            "Its own checkpoint rather than a recipe over the base weights, and "
+            "worth having when iteration speed matters more than fidelity -- a "
+            "draft in seconds instead of most of a minute. Style LoRAs land "
+            "weakly here: they are trained against full SDXL at 20-25 steps with "
+            "CFG. This is also the entry WARLOCK_T2I_DIR redirects."
+        ),
     ),
     BaseModel(
         # The backend where style LoRAs behave as trained: they are fitted
@@ -570,6 +600,13 @@ BASE_MODELS: dict[str, BaseModel] = _table(
                 size_gib=0.8,
             ),
         ),
+        description=(
+            "Full SDXL in four steps, where style LoRAs behave as trained.\n\n"
+            "The base weights with Hyper-SD on top. Style LoRAs are fitted "
+            "against full SDXL at 20-25 steps with CFG and apply only weakly at "
+            "Turbo's four steps at guidance 0; Hyper-SD buys the step count back "
+            "without changing the weights they were fitted to."
+        ),
     ),
     BaseModel(
         # Its own scheduler_config.json is already EDMDPMSolverMultistep, so no
@@ -592,6 +629,12 @@ BASE_MODELS: dict[str, BaseModel] = _table(
                 size_gib=7.0,
             ),
         ),
+        description=(
+            "The highest-fidelity option, and correspondingly the slowest.\n\n"
+            "Its own checkpoint, about 25 steps with CFG. Reach for it when the "
+            "reference is the deliverable rather than a step on the way to a "
+            "mesh."
+        ),
     ),
     BaseModel(
         # The same weights as "sdxl", run the way the checkpoint was trained:
@@ -608,6 +651,14 @@ BASE_MODELS: dict[str, BaseModel] = _table(
         guidance_scale=7.0,
         controlnet=True,
         fetch=(_SDXL_BASE_1_0,),
+        description=(
+            "The default: full CFG, so structure is actually controllable.\n\n"
+            "No extra download -- the same base weights as the entry above, run "
+            "the way SDXL was trained. It is the only family that takes "
+            "ControlNet, and the only one where the negative prompt carries full "
+            "weight. Slower than the distilled options and measurably better at "
+            "holding a silhouette."
+        ),
     ),
     BaseModel(
         # The same weights and recipe as sdxl_cfg with two training-free
@@ -628,6 +679,13 @@ BASE_MODELS: dict[str, BaseModel] = _table(
         pag_scale=3.0,
         guidance_rescale=0.7,
         fetch=(_SDXL_BASE_1_0,),
+        description=(
+            "The default recipe plus two training-free sampling upgrades.\n\n"
+            "No download either: perturbed-attention guidance at 3.0 and CFG "
+            "rescale at 0.7, which counters the washout high CFG produces. "
+            "Cleaner structure for the same weights, and about a third more time "
+            "per image."
+        ),
     ),
     BaseModel(
         # The pixel-art profile's null hypothesis: the same SDXL 1.0 weights as
@@ -665,6 +723,12 @@ BASE_MODELS: dict[str, BaseModel] = _table(
                 size_gib=0.4,
             ),
         ),
+        description=(
+            "The recipe the pixel-art LoRA was trained against.\n\n"
+            "The base weights again with LCM on top: eight steps at guidance 1.0. "
+            "Pair it with the pixel-art style LoRA -- alone it is simply a fast "
+            "SDXL."
+        ),
     ),
     BaseModel(
         # The second distillation arm, and the reason it is worth a row: it is
@@ -695,6 +759,12 @@ BASE_MODELS: dict[str, BaseModel] = _table(
                 size_gib=0.4,
             ),
         ),
+        description=(
+            "A second four-step distillation, for comparison with Hyper-SD.\n\n"
+            "Reuses the base weights. Adversarial where Hyper-SD is trajectory- "
+            "consistency, so the two are directly comparable with everything else "
+            "held fixed."
+        ),
     ),
     BaseModel(
         # A photoreal SDXL finetune, run at its card's own recipe: DPM++ 2M
@@ -718,6 +788,13 @@ BASE_MODELS: dict[str, BaseModel] = _table(
                 size_gib=6.9,
             ),
         ),
+        description=(
+            "A photoreal SDXL finetune.\n\n"
+            "Its own checkpoint, DPM++ 2M Karras at 35 steps with CFG 4.0 -- the "
+            "middle of the ranges its model card gives. Materials and lighting "
+            "read as photographed rather than illustrated, which suits props that "
+            "will be reconstructed and then lit in an engine."
+        ),
     ),
     BaseModel(
         # The stylised counterpart to juggernaut, and the card's own snippet is
@@ -739,6 +816,10 @@ BASE_MODELS: dict[str, BaseModel] = _table(
                 allow_patterns=_SDXL_FILES,
                 size_gib=6.9,
             ),
+        ),
+        description=(
+            "The stylised counterpart to the photoreal finetune above.\n\n"
+            "Its own checkpoint, DEIS at 25 steps per its card."
         ),
     ),
     BaseModel(
@@ -804,6 +885,14 @@ BASE_MODELS: dict[str, BaseModel] = _table(
                 size_gib=16.0,
             ),
         ),
+        description=(
+            "The one non-SDXL architecture, at full CFG.\n\n"
+            "A 4B model with a Qwen3 text encoder, so it reads long prompts far "
+            "more literally than SDXL does. The -base variant rather than the "
+            "distilled one below, because a negative prompt is inert on the "
+            "distilled weights. Large -- budget the VRAM before running it beside "
+            "a reconstruction."
+        ),
     ),
     BaseModel(
         # The distilled sibling of flux_klein above, and the other side of that
@@ -855,6 +944,12 @@ BASE_MODELS: dict[str, BaseModel] = _table(
                 size_gib=16.0,
             ),
         ),
+        description=(
+            "The same architecture at four steps; no negative prompt.\n\n"
+            "Guidance is baked in, so a negative prompt does nothing at all here "
+            "-- pick klein-base when you want one. It is here because the FLUX.2 "
+            "pixel-art LoRA was trained against these weights."
+        ),
     ),
 )
 
@@ -873,6 +968,12 @@ STYLE_LORAS: dict[str, StyleLora] = _table(
                 size_gib=0.2,
             ),
         ),
+        description=(
+            "Clean studio-lit 3D-render look. The general-purpose prop style.\n\n"
+            "The safest starting point for something that will be reconstructed: "
+            "even lighting, readable silhouette, and no painterly texture for the "
+            "mesh to interpret as geometry."
+        ),
     ),
     StyleLora(
         "redmond3d",
@@ -887,6 +988,11 @@ STYLE_LORAS: dict[str, StyleLora] = _table(
                 filenames=("3DRedmond-3DRenderStyle-3DRenderAF.safetensors",),
                 size_gib=0.2,
             ),
+        ),
+        description=(
+            "The same idea, warmer and more stylised.\n\n"
+            "A second take on the render look, for when the first reads too "
+            "clinical for the piece."
         ),
     ),
     StyleLora(
@@ -904,6 +1010,12 @@ STYLE_LORAS: dict[str, StyleLora] = _table(
                 filenames=("PS1Redmond-PS1Game-Playstation1Graphics.safetensors",),
                 size_gib=0.2,
             ),
+        ),
+        description=(
+            "Low-poly PlayStation-era game graphics.\n\n"
+            "Chunky forms and flat texturing, which reconstruct unusually cleanly "
+            "-- the style is already making the simplifications the mesh would "
+            "have to."
         ),
     ),
     StyleLora(
@@ -929,6 +1041,12 @@ STYLE_LORAS: dict[str, StyleLora] = _table(
                 filenames=("pixel-art-xl.safetensors",),
                 size_gib=0.2,
             ),
+        ),
+        description=(
+            "Draws on a pixel grid rather than being downscaled onto one.\n\n"
+            "The difference is the whole point: a downscaled render has soft, "
+            "resampled edges, and this generates the blocks. SDXL only -- pair it "
+            "with the LCM pixel recipe it was trained against."
         ),
     ),
     StyleLora(
@@ -994,6 +1112,11 @@ STYLE_LORAS: dict[str, StyleLora] = _table(
                 size_gib=0.3,
             ),
         ),
+        description=(
+            "Pixel art for the FLUX.2 klein family.\n\n"
+            "The one non-SDXL adapter here, and it is offered only on the two "
+            "klein entries because a LoRA cannot cross architectures."
+        ),
     ),
 )
 
@@ -1029,6 +1152,13 @@ IP_ADAPTERS: dict[str, IPAdapter] = _table(
                 size_gib=2.6,
             ),
         ),
+        description=(
+            "Condition a generation on a reference image's appearance.\n\n"
+            "Colour, material and general look carried across from an image you "
+            "supply, rather than described in words. Both halves of the download "
+            "are needed: the weights alone load fine and then fail at the first "
+            "call."
+        ),
     ),
 )
 
@@ -1046,6 +1176,12 @@ CONTROLNETS: dict[str, ControlNet] = _table(
                 allow_patterns=("*.json", "*fp16.safetensors"),
                 size_gib=2.5,
             ),
+        ),
+        description=(
+            "Lock the silhouette to a reference image's edges.\n\n"
+            "The strongest structural control available, and only on the full-CFG "
+            "families -- the distilled ones do not respond to it. Use it when the "
+            "shape is decided and only the treatment is in question."
         ),
     ),
     ControlNet(
@@ -1068,6 +1204,13 @@ CONTROLNETS: dict[str, ControlNet] = _table(
                 size_gib=2.5,
             ),
         ),
+        description=(
+            "Anchors a re-texture's restyle passes to the mesh's own geometry.\n\n"
+            "The depth hint is rendered by Blender from the mesh itself and never "
+            "estimated from a photo, which is why this one belongs to the re- "
+            "texture stage alone and is not offered in the reference-stage "
+            "conditioning pickers."
+        ),
     ),
 )
 
@@ -1085,6 +1228,7 @@ class MetricModel:
     label: str
     dir_name: str
     fetch: tuple[Fetch, ...] = ()
+    description: str = ""
 
     @property
     def download(self) -> str:
@@ -1104,6 +1248,12 @@ METRIC_MODELS: dict[str, MetricModel] = _table(
                 allow_patterns=("*.json", "*.safetensors"),
                 size_gib=0.4,
             ),
+        ),
+        description=(
+            "The identity metric the bench scores candidates with.\n\n"
+            "Answers 'is this the same object' between two images, which is what "
+            "makes a parameter sweep comparable. A missing one costs a number, "
+            "never a job. CPU."
         ),
     ),
     MetricModel(
@@ -1142,6 +1292,13 @@ METRIC_MODELS: dict[str, MetricModel] = _table(
                 size_gib=0.1,
             ),
         ),
+        description=(
+            "A human-preference metric: which candidate would a person pick.\n\n"
+            "A CLIP-H fine-tuned on human A/B choices over generated images. With "
+            "it, ranking a submit's candidates weighs preference beside "
+            "composition and the style anchor; without it the ranking is exactly "
+            "what it was. CPU."
+        ),
     ),
 )
 
@@ -1166,6 +1323,7 @@ class ExpanderModel:
     label: str
     dir_name: str
     fetch: tuple[Fetch, ...] = ()
+    description: str = ""
 
     @property
     def download(self) -> str:
@@ -1201,6 +1359,14 @@ EXPANDER_MODELS: dict[str, ExpanderModel] = _table(
                 size_gib=0.7,
             ),
         ),
+        description=(
+            "Enriches a short prompt with aesthetic detail before the model sees "
+            "it.\n\n"
+            "The offline form of the prompt rewriting every hosted image service "
+            "does -- a 124M GPT-2 on the CPU, so it takes no VRAM. Off by default "
+            "and turned on per job; a prompt that already carries its own "
+            "description is left as written. The weights are AGPL-3.0."
+        ),
     ),
 )
 
@@ -1223,6 +1389,7 @@ class PoseModel:
     label: str
     dir_name: str
     fetch: tuple[Fetch, ...] = ()
+    description: str = ""
 
     @property
     def download(self) -> str:
@@ -1246,6 +1413,15 @@ POSE_MODELS: dict[str, PoseModel] = _table(
                 allow_patterns=("*.json", "*.safetensors"),
                 size_gib=0.4,
             ),
+        ),
+        description=(
+            "Measures a humanoid's joints off the reference image.\n\n"
+            "Without it a humanoid rig places joints by scaling the template onto "
+            "the mesh's bounding box -- right for a subject standing in a T-pose "
+            "and progressively wrong as it departs from one. With it the "
+            "reference is read for real shoulders, elbows, hips, knees and "
+            "ankles. It engages by itself when the weights are present, and falls "
+            "back wholesale rather than partially. CPU, about a second per rig."
         ),
     ),
 )
@@ -1284,6 +1460,7 @@ class MattingModel:
     dir_name: str
     remote_code: bool = False
     fetch: tuple[Fetch, ...] = ()
+    description: str = ""
 
     @property
     def download(self) -> str:
@@ -1335,6 +1512,13 @@ MATTING_MODELS: dict[str, MattingModel] = _table(
                     "torchvision, and that extra is what supplies them"
                 ),
             ),
+        ),
+        description=(
+            "Cuts the background out of 2D exports properly.\n\n"
+            "Without it the alpha comes from a corner flood fill, with visibly "
+            "rougher edges around hair, spokes and anything thin. Runs on the "
+            "host rather than the card. Its own modelling code runs on load, so "
+            "it also needs the text2image extra installed."
         ),
     ),
 )

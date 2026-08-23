@@ -163,6 +163,40 @@ def test_a_base_row_carries_the_vram_number_not_only_the_verdict(svc):
     assert row["vram_gib"] == models.BASE_MODELS["sdxl"].vram_gib
 
 
+def test_every_registry_entry_says_what_it_is_for(svc):
+    """The Description column, and the reason it is a field rather than a table.
+
+    ``fetch.KINDS``' own comment records what a parallel table costs: the
+    download-kind vocabulary was hand-copied three times, "each drifted
+    differently", and one copy silently dropped a kind. A descriptions dict
+    keyed on ``row_key`` would be a fourth copy where a renamed key leaves a
+    blank cell and nothing fails -- so this asserts every row has prose, which
+    is the assertion that catches a new model added without any.
+    """
+    rows = svc_downloads.rows(svc)
+    assert rows
+    missing = [r["row_key"] for r in rows if not r.get("description")]
+    assert not missing, missing
+    for row in rows:
+        short, _, long = str(row["description"]).partition(chr(10) * 2)
+        # One sentence for the column, the rest for the tooltip. The column is
+        # a stretch column in a 980 px pane, so a paragraph in it would push
+        # every row two lines tall.
+        assert len(short) <= 90, (row["row_key"], short)
+        assert short.endswith((".", "?")), (row["row_key"], short)
+        assert long, f"{row['row_key']} has no long form for its tooltip"
+
+
+def test_a_description_is_absent_rather_than_empty(svc):
+    """The shape every optional key in ``rows`` already uses."""
+    from warlock import models
+
+    plain = models.MattingModel("nameless", "Nameless", "nowhere")
+    assert plain.description == ""
+    row = {"row_key": "x", "present": False}
+    assert "description" not in row
+
+
 # --- the staging sweep ----------------------------------------------------------
 
 

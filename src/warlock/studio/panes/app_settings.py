@@ -38,6 +38,10 @@ from ..tokens import sp
 #: Everything here is one column of short rows, so the column gets a measure and
 #: the window gets the rest (the UI redesign, wave 4.1).
 CONTENT_W = 640
+#: The Models category alone, because the reason ``CONTENT_W`` is 640 does not
+#: hold there: "everything here is one column of short rows" stopped being
+#: true when those rows became a four-column table with a description in it.
+MODELS_CONTENT_W = 980
 CATEGORY_W = 184
 
 #: How wide a labelled control in this pane gets. The column is 640 and the
@@ -90,7 +94,8 @@ def draw(ctx: Any) -> None:
     if imgui.begin_child("app-settings", (0, 0), imgui.ChildFlags_.always_use_window_padding.value):
         category = _category_rail(ctx)
         imgui.same_line()
-        width = min(sp(CONTENT_W), imgui.get_content_region_avail().x)
+        measure = MODELS_CONTENT_W if category == "models" else CONTENT_W
+        width = min(sp(measure), imgui.get_content_region_avail().x)
         if imgui.begin_child("app-settings-body", (width, 0)):
             # Settings draws into ``##content`` rather than through
             # ``layout.pane``, so it asks for its own section blocks. Named here
@@ -658,17 +663,37 @@ def _models(ctx: Any) -> None:
         by_kind.setdefault(str(row.get("kind")), []).append(row)
 
     ordered = [*_GROUPS, *((k, _UNGROUPED) for k in by_kind if k not in dict(_GROUPS))]
+    # Sorted by *heading*, first-appearance order, so kinds that share one are
+    # adjacent however the registry lists them. Without it the prompt expander
+    # -- which is an image model and is declared after the ControlNets --
+    # drew a second "Image models" caption and a second header row further
+    # down the pane, which reads as two different sections of the same name.
+    order: dict[str, int] = {}
+    for index, (_kind, label) in enumerate(ordered):
+        # ``setdefault``, not a comprehension: a later kind sharing a heading
+        # must not move the heading to its own position, which is how the
+        # first attempt at this put Style LoRAs above Image models.
+        order.setdefault(label, index)
+    ordered.sort(key=lambda pair: order.get(pair[1], len(order)))
     heading = ""
+    pending: list[dict[str, Any]] = []
     for kind, label in ordered:
         group = by_kind.get(kind) or []
         if not group:
             continue
         if label != heading:
+            if pending:
+                _table(ctx, heading, pending, busy)
+                pending = []
             heading = label
             imgui.dummy((0, sp(tokens.SP_1)))
             widgets.muted(label)
-        for row in group:
-            _row(ctx, row, busy)
+        # Accumulated across kinds, because a *heading* can cover more than
+        # one: Conditioning is IP-Adapter and ControlNet, and drawing a table
+        # each gave one heading two header rows.
+        pending.extend(group)
+    if pending:
+        _table(ctx, heading, pending, busy)
 
     imgui.dummy((0, sp(tokens.SP_1)))
     recommended = str(getattr(ctx, "recommended_base_label", "") or "")
@@ -702,6 +727,53 @@ def _models(ctx: Any) -> None:
     )
 
 
+#: The blank line that separates a description's short form from its long
+#: one. Named because three call sites split or join on it.
+_PARA = "\n\n"
+
+#: The four columns, and the three fixed widths. ``Description`` takes what is
+#: left, because it is the only column whose content has no natural size.
+_COLUMNS = (("Model", 300.0), ("Size", 84.0), ("Description", 0.0), ("Actions", 132.0))
+
+
+def _table(ctx: Any, heading: str, group: list[dict[str, Any]], busy: bool) -> None:
+    """One heading's rows as a table. Per heading, not per kind and not one
+    for the pane.
+
+    Per *heading* so the group captions survive between tables, which is what
+    keeps ``_GROUPS == fetch.GROUPS`` meaningful -- a single table would have
+    to fake them as spanning rows -- and so a heading that covers two kinds
+    (Conditioning is IP-Adapter and ControlNet) draws one header row rather
+    than two.
+
+    ``row_bg | borders_inner_h`` and **not** full borders: a fully ruled table
+    in a pane that removed every other border is exactly the register the
+    redesign undid. The horizontal rules are what a four-column row needs to
+    be scannable; the vertical ones are decoration.
+    """
+    flags = (
+        imgui.TableFlags_.row_bg.value
+        | imgui.TableFlags_.borders_inner_h.value
+        | imgui.TableFlags_.sizing_stretch_prop.value
+    )
+    if not imgui.begin_table(f"##models-{heading}", len(_COLUMNS), flags):
+        return
+    try:
+        for name, width in _COLUMNS:
+            if width:
+                imgui.table_setup_column(
+                    name, imgui.TableColumnFlags_.width_fixed.value, sp(width)
+                )
+            else:
+                imgui.table_setup_column(name, imgui.TableColumnFlags_.width_stretch.value)
+        imgui.table_headers_row()
+        for row in group:
+            imgui.table_next_row()
+            _row(ctx, row, busy)
+    finally:
+        imgui.end_table()
+
+
 def _fit_badge(row: dict[str, Any]) -> None:
     """The one-line "and can this card hold it" note, under a base row.
 
@@ -715,14 +787,17 @@ def _fit_badge(row: dict[str, Any]) -> None:
     # The measured figure beside the word. "tight fit" says a verdict and not
     # its evidence, and the number is what makes it checkable against a card
     # the user knows the size of.
-    need = row.get("vram_gib")
-    cost = f" ({float(need):.0f} GB VRAM)" if isinstance(need, int | float) else ""
     if verdict == vram.FIT_TIGHT:
-        widgets.text_colored(theme.WARN, f"    tight fit{cost}")
+        widgets.text_colored(theme.WARN, "tight fit")
     elif verdict == vram.FIT_NO:
-        widgets.text_colored(theme.ERR, f"    won't fit this GPU{cost}")
-    elif cost:
-        widgets.muted(f"   {cost.strip()}")
+        widgets.text_colored(theme.ERR, "won't fit")
+    else:
+        # The plain cost is not a refusal, so it rides the Model tooltip with
+        # the other reference facts -- in a 84 px column it clipped, and a
+        # figure cut off mid-word is worse than one a hover away.
+        return
+    if imgui.is_item_hovered():
+        imgui.set_tooltip(_vram_note(row))
 
 
 def _remove_control(ctx: Any, row: dict[str, Any], busy: bool) -> None:
@@ -734,7 +809,9 @@ def _remove_control(ctx: Any, row: dict[str, Any], busy: bool) -> None:
 
     The freed figure is ``removal_plan``'s, not the download size, and that is
     the whole reason it is shown: uninstalling one of the four SDXL 1.0 recipes
-    frees 0.8 GB, and a row that implied 7 would be lying about a delete.
+    frees 0.8 GB, and a row that implied 7 would be lying about a delete. It
+    is on this button's tooltip since the rows became a table, and the confirm
+    dialog repeats it before anything is removed.
     """
     row_key = str(row["row_key"])
     if not row.get("removable"):
@@ -744,11 +821,15 @@ def _remove_control(ctx: Any, row: dict[str, Any], busy: bool) -> None:
         found = ctx.progress(key)
         widgets.progress_bar(float(found.get("percent") or 0.0) if found else 0.0)
         return
-    freed = float(row.get("freed_gib") or 0.0)
-    if freed:
-        widgets.muted(f"    frees {freed:.1f} GB")
     if widgets.disabled_button(f"{icons.TRASH} Remove##{row_key}", not busy):
         _confirm_removal(ctx, row)
+    freed = float(row.get("freed_gib") or 0.0)
+    if freed and imgui.is_item_hovered():
+        # Demoted from a line to the tooltip when the rows became a table, and
+        # safe *because* ``_confirm_removal`` states the same figure in the
+        # dialog: the number is still in front of the user before anything is
+        # deleted, which is the moment it has to be.
+        imgui.set_tooltip(f"Frees about {freed:.1f} GB.")
 
 
 def _confirm_removal(ctx: Any, row: dict[str, Any]) -> None:
@@ -809,38 +890,134 @@ def _detail(row: dict[str, Any]) -> None:
 
 
 def _row(ctx: Any, row: dict[str, Any], busy: bool) -> None:
+    """One model as four cells: what it is, how big, what for, and what to do.
+
+    What stays *visible* and what moves to a tooltip is decided by whether the
+    user has to act on it. The presence glyph, the label, the size figure and
+    the fit badge stay -- the badge especially, because "won't fit this GPU"
+    is a refusal the user otherwise meets at generation time. The repository
+    list and an adapter's trigger words go to the Model tooltip: reference
+    facts, looked up once. The freed figure goes to the Remove tooltip, which
+    is safe because ``_confirm_removal`` states it again in the dialog before
+    anything is deleted.
+    """
     row_key = str(row["row_key"])
     present = bool(row.get("present"))
     label = str(row.get("label") or row_key)
+    downloadable = bool(row.get("downloadable"))
+
+    imgui.table_next_column()
     if present:
         widgets.text_colored(theme.MUTED, f"{icons.CIRCLE_CHECK} {label}")
-        _fit_badge(row)
-        _detail(row)
+    elif not downloadable:
+        widgets.text_colored(theme.WARN, f"{icons.CIRCLE} {label}")
+    else:
+        ticked = row_key in ctx.model_picks
+        changed, ticked = controls.checkbox(f"##pick-{row_key}", ticked)
+        if changed:
+            # Only a missing row can be ticked, and the set is pruned as rows
+            # arrive present, so it can never name something already on disk.
+            if ticked:
+                ctx.model_picks.add(row_key)
+            else:
+                ctx.model_picks.discard(row_key)
+        imgui.same_line()
+        widgets.text_colored(theme.WARN, f"{icons.CIRCLE} {label}")
+    _identity_tooltip(row)
+
+    imgui.table_next_column()
+    size = float(row.get("size_gib") or 0.0)
+    widgets.muted(f"{size:.1f} GB" if size else "--")
+    _fit_badge(row)
+
+    imgui.table_next_column()
+    _description(row)
+
+    imgui.table_next_column()
+    _actions(ctx, row, busy)
+
+
+def _vram_note(row: dict[str, Any]) -> str:
+    """What this model costs on the card, as a number. Empty when unmeasured.
+
+    The figure beside the word: "tight fit" states a verdict and not its
+    evidence, and the number is what makes it checkable against a card whose
+    size the user knows.
+    """
+    need = row.get("vram_gib")
+    if not isinstance(need, int | float):
+        return ""
+    return f"About {float(need):.0f} GB of VRAM while it is loaded."
+
+
+def _identity_tooltip(row: dict[str, Any]) -> None:
+    """Which weights this actually is, and what an adapter answers to.
+
+    Both are on the registry entry and neither was ever on screen before the
+    rows grew a detail line: the list showed a label, a size and a tick, so
+    "which pixel-art LoRA is this" was answerable only from MODELS.md, which
+    is a file beside the app rather than in it. They are a tooltip now rather
+    than two more lines because they are looked up once and then known.
+    """
+    if not imgui.is_item_hovered():
+        return
+    parts = [str(row.get("label") or row.get("row_key"))]
+    long = str(row.get("description") or "").split(_PARA)
+    if len(long) > 1:
+        parts.append(long[1])
+    trigger = str(row.get("trigger") or "")
+    if trigger:
+        parts.append(f"Triggers: {trigger}")
+    note = _vram_note(row)
+    if note:
+        parts.append(note)
+    trigger_repos = tuple(row.get("repos") or ())
+    if trigger_repos:
+        parts.append(", ".join(trigger_repos))
+    imgui.set_tooltip(_PARA.join(parts))
+
+
+def _description(row: dict[str, Any]) -> None:
+    """The short form in the cell; the long form is in the Model tooltip.
+
+    A row that has no prose yet says nothing rather than repeating its label:
+    ``description`` is defaulted on the spec so a new entry is legal before it
+    is written, and an empty cell is what says "not written yet".
+    """
+    text = str(row.get("description") or "").split(_PARA)[0]
+    if text:
+        widgets.muted(text)
+
+
+def downloadable_note(row: dict[str, Any]) -> str:
+    """Why a row cannot be fetched, if it cannot. Empty when it can."""
+    if row.get("present") or row.get("downloadable"):
+        return ""
+    return (
+        "These weights have no download recipe in this build -- install them "
+        "by hand; the startup diagnostics print the exact command."
+    )
+
+
+def _actions(ctx: Any, row: dict[str, Any], busy: bool) -> None:
+    """Install, Remove, a progress bar, or an inert word saying why not.
+
+    A row that cannot be downloaded stays *visible* and inert rather than
+    disappearing: a vanished row is worse than one that says it is not
+    available, because there is nothing left to ask about.
+    """
+    row_key = str(row["row_key"])
+    if bool(row.get("present")):
         _remove_control(ctx, row, busy)
         return
     if not row.get("downloadable"):
-        widgets.text_colored(theme.WARN, f"{icons.CIRCLE} {label} - weights missing")
+        widgets.muted("Unavailable")
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(downloadable_note(row))
         return
 
-    ticked = row_key in ctx.model_picks
-    changed, ticked = controls.checkbox(f"##pick-{row_key}", ticked)
-    if changed:
-        # Only a missing row can be ticked, and the set is pruned as rows
-        # arrive present, so it can never name something already on disk.
-        if ticked:
-            ctx.model_picks.add(row_key)
-        else:
-            ctx.model_picks.discard(row_key)
-    imgui.same_line()
-    size = float(row.get("size_gib") or 0.0)
-    suffix = f" ({size:.1f} GB)" if size else ""
-    widgets.text_colored(theme.WARN, f"{icons.CIRCLE} {label}{suffix}")
-    _fit_badge(row)
-    _detail(row)
-
     key = app_ctx.download_key(row_key)
-    running = ctx.tasks.is_busy(key)
-    if running:
+    if ctx.tasks.is_busy(key):
         found = ctx.progress(key)
         widgets.progress_bar(float(found.get("percent") or 0.0) if found else 0.0)
         if found and found.get("label"):
@@ -850,10 +1027,7 @@ def _row(ctx: Any, row: dict[str, Any], busy: bool) -> None:
         # the fetch. Same mechanism, same reasoning -- see ``_cancel``.
         _cancel(ctx, key)
         return
-    # Its own line rather than same_line after full-width text: the label is
-    # long and the sidebar is 300 px, and a button drawn past the edge is gone
-    # rather than squeezed.
-    if widgets.disabled_button(f"{icons.DOWNLOAD} Download##{row_key}", not busy):
+    if widgets.disabled_button(f"{icons.DOWNLOAD} Install##{row_key}", not busy):
         _start(ctx, [row_key], key=key)
 
 

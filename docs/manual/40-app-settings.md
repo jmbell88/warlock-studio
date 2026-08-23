@@ -60,28 +60,36 @@ and it still turns off spring motion along with everything else that moves.
 ## Models
 
 Every model the app knows about — image models, style LoRAs, the conditioning adapters,
-and the matting, pose and measurement models — with a tick beside the ones whose weights are on disk
-and a **Download** button beside the ones that are missing, plus whether rigging is available. It is
-the same information the startup diagnostics report, in a place you can look at without opening the
-log. Tick several rows and *Download selected* fetches them together; four of the image models share
-one set of SDXL 1.0 weights, and picking all four downloads them once.
+and the matting, pose and measurement models — as a table of four columns: **Model**, **Size**,
+**Description** and **Actions**. A tick beside the name means the weights are on disk; a hollow mark
+with a checkbox means they are not, and **Install** fetches them. It is the same information the
+startup diagnostics report, in a place you can look at without opening the log. Tick several rows
+and *Download selected* fetches them together; four of the image models share one set of SDXL 1.0
+weights, and picking all four downloads them once.
 
-Each row also names the repository its weights come from, and a style LoRA names the trigger words
-it was trained on — the words the app prepends to your prompt whenever that adapter is selected. A
+The **Description** column is one sentence saying what the model is *for* — which is the question a
+list of thirty names cannot answer, and the reason picking one used to mean reading `docs/MODELS.md`
+beside the app. Hovering the name gives the longer version, along with the repository the weights
+come from, what the model costs on the card, and, for a style LoRA, the trigger words it was trained
+on — the words the app prepends to your prompt whenever that adapter is selected. A model this build
+has no download recipe for stays in the table as an inert **Unavailable** rather than disappearing:
+a row that says it cannot be fetched is more use than a row that is not there.
+
+A
 running download shows its rate and an estimate of the time left, and carries its own **Cancel**
 beside the bar. Cancelling installs nothing: the fetch stages beside the destination and only moves
 into place once it has finished, and the staging a cancelled fetch leaves is swept the next time
 this pane is opened, which says so when it reclaims anything.
 
-Beside each image model, once the app has measured your card, sits a fit note: nothing at all when
-the model runs comfortably, **tight fit** when it will load but cannot stay resident beside the
-reconstruction engine — so every 3D job pays a stop and restart for it — and **won't fit this GPU**
-when the checkpoint alone is larger than the VRAM budget. A **Recommended for this GPU** line under
-the list names the best base model your card can actually hold. All of it is skipped on a host with
-no measurable GPU: an unknown budget is not a shortfall.
+Under each image model's size, once the app has measured your card, sits a fit note: nothing at all
+when the model runs comfortably, **tight fit** when it will load but cannot stay resident beside the
+reconstruction engine — so every 3D job pays a stop and restart for it — and **won't fit** when the
+checkpoint alone is larger than the VRAM budget. Both carry the measured figure on hover. A
+**Recommended for this GPU** line under the list names the best base model your card can actually
+hold. All of it is skipped on a host with no measurable GPU: an unknown budget is not a shortfall.
 
-**Removing a model.** A downloaded row carries a **Remove** button and the amount it would actually
-free. That figure is usually smaller than the download was, and deliberately: the four SDXL 1.0
+**Removing a model.** A downloaded row carries a **Remove** button, and hovering it says how much
+removing would actually free. That figure is usually smaller than the download was, and deliberately: the four SDXL 1.0
 recipes share one 7 GB checkpoint, so removing *SDXL 1.0 + Hyper-SD* deletes only its own 0.8 GB
 adapter and leaves the weights the other three are still standing on. The checkpoint goes when the
 last model using it does. A recipe with no files of its own — *SDXL 1.0 (full CFG)* is the plain

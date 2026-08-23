@@ -231,3 +231,12 @@ def apply(imgui: Any) -> None:
     set_color(c.table_header_bg.value, rgba(tokens.colour("PANEL")))
     set_color(c.table_border_strong.value, rgba(tokens.colour("EDGE")))
     set_color(c.table_border_light.value, rgba(tokens.colour("EDGE"), 0.5))
+    # The two row fills, which were left on imgui's defaults -- tuned for a
+    # different theme, and visibly wrong in the light and pixel palettes. The
+    # zebra is the *lighter* of the two elevation steps at a low alpha rather
+    # than a second opaque colour, so a table reads as banded rather than as
+    # two stacked surfaces, and so it stays correct on any palette where the
+    # step direction is defined. Two readers: the Settings models table and
+    # ``manual.render``, which had the same latent problem.
+    set_color(c.table_row_bg.value, (0.0, 0.0, 0.0, 0.0))
+    set_color(c.table_row_bg_alt.value, rgba(tokens.colour("ELEV_1"), 0.4))

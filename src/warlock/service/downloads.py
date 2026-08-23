@@ -97,6 +97,14 @@ def rows(svc: WarlockService) -> list[dict[str, Any]]:
         trigger = str(getattr(entry.spec, "trigger", "") or "")
         if trigger:
             row["trigger"] = trigger
+        # What the model is *for*. Absent rather than empty, in the style the
+        # keys above already use, so the pane reads it one way. It is a field
+        # on the spec (see ``models.BaseModel.description``) and not a table
+        # keyed on ``row_key``, which is the shape ``fetch.KINDS`` records
+        # having gone wrong three times.
+        description = str(getattr(entry.spec, "description", "") or "")
+        if description:
+            row["description"] = description
         # What removing *this* row alone would free, and whether it would free
         # anything at all. Only for rows that are here -- there is nothing to
         # offer against a model that is not installed -- and computed rather
