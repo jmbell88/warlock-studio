@@ -656,3 +656,44 @@ def test_an_rgb_document_is_never_offered_a_plane():
     doc = Document.blank(4, 4)
     doc.add_frame()
     assert sheetout.index_plane_one(doc, doc.anim.frames[0].uid) is None
+
+
+def test_both_funnels_resolve_indices_through_one_function():
+    """``_commit_indexed_patch`` and ``_patch_edit_for`` had the resolve written
+    out twice, identically -- the ``prefer`` computation and the order of the
+    three writes included. Two copies of arithmetic this exact is how they come
+    to disagree about a rounding, and a disagreement here is a stroke that lands
+    on one slot when previewed and another when committed."""
+    import inspect
+
+    from warlock.studio.inker.document import Document
+
+    for name in ("_commit_indexed_patch", "_patch_edit_for"):
+        source = inspect.getsource(getattr(Document, name))
+        assert "_resolve_indices(layer, rect)" in source, name
+        assert "ixp.resolve(" not in source, name
+        assert "ixp.materialize(" not in source, name
+
+
+def test_the_preferred_slot_survives_the_extraction():
+    """``paint_slot`` is what decides which of two identical swatches a stroke
+    lands in, and it is read inside the extracted helper."""
+    import numpy as np
+
+    from warlock.studio import inker
+
+    doc = inker.Document.blank(4, 4)
+    doc.convert_to_indexed([(10, 20, 30, 255), (10, 20, 30, 255), (0, 0, 0, 0)])
+    doc.transparent_index = 2
+
+    layer = doc.stack[0]
+    layer.pixels[0:2, 0:2] = (10, 20, 30, 255)
+    doc.paint_slot = 1
+    before, after = doc._resolve_indices(layer, (0, 0, 2, 2))
+    assert int(np.unique(after)[0]) == 1, "the slot the user clicked, not slot 0"
+
+    layer.pixels[0:2, 0:2] = (10, 20, 30, 255)
+    doc.paint_slot = 0
+    _, other = doc._resolve_indices(layer, (0, 0, 2, 2))
+    assert int(np.unique(other)[0]) == 0
+    assert before is not after

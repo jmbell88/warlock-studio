@@ -1211,6 +1211,41 @@ class Document(
             edits.append(release)
         self.history.push(one_step(edits))
 
+    def _resolve_indices(
+        self, layer: Layer, rect: tuple[int, int, int, int]
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Resolve a written region onto slots. -> ``(before, after)`` indices.
+
+        The indexed half of both funnels, which had it written out twice --
+        identically, down to the ``prefer`` computation and the order of the
+        three writes. Two copies of an arithmetic this exact is how they come to
+        disagree about a rounding, and a disagreement here is a stroke that
+        lands on one slot when previewed and another when committed.
+
+        The RGBA ``before`` its callers hold is deliberately unused: the indices
+        are the record, so the before-state is the index crop -- and it is still
+        sitting untouched in ``layer.indices`` at this moment, because the tool
+        wrote pixels and nothing writes indices except this method.
+
+        The materialisation happens **before** either caller's no-op test rather
+        than after it, which is the whole reason a soft nib is legal in indexed
+        mode: the tool's antialiased edge is written, resolved, and then
+        overwritten by what the slots actually say.
+        """
+        x0, y0, x1, y1 = rect
+        before = layer.indices[y0:y1, x0:x1].copy()
+        table = self._index_lut()
+        prefer = None
+        slot = self.paint_slot
+        if slot is not None and self.palette and 0 <= slot < len(self.palette):
+            prefer = (self.palette[slot], slot)
+        after = ixp.resolve(
+            layer.pixels[y0:y1, x0:x1], table, self.transparent_index, prefer=prefer
+        )
+        layer.indices[y0:y1, x0:x1] = after
+        layer.pixels[y0:y1, x0:x1] = ixp.materialize(after, table)
+        return before, after
+
     def _constrained(self, region: np.ndarray) -> np.ndarray:
         """*region* with the document's colour constraints applied.
 
@@ -1249,18 +1284,7 @@ class Document(
         its autovivified cel back out again -- the same rule the RGBA path
         follows, reached by different arithmetic.
         """
-        x0, y0, x1, y1 = rect
-        before = layer.indices[y0:y1, x0:x1].copy()
-        table = self._index_lut()
-        prefer = None
-        slot = self.paint_slot
-        if slot is not None and self.palette and 0 <= slot < len(self.palette):
-            prefer = (self.palette[slot], slot)
-        after = ixp.resolve(
-            layer.pixels[y0:y1, x0:x1], table, self.transparent_index, prefer=prefer
-        )
-        layer.indices[y0:y1, x0:x1] = after
-        layer.pixels[y0:y1, x0:x1] = ixp.materialize(after, table)
+        before, after = self._resolve_indices(layer, rect)
         if np.array_equal(before, after):
             self._discard_pending_cel()
             # Still recomposited: the tool's raw write is on screen and has just
@@ -1347,26 +1371,13 @@ class Document(
             raise ValueError("a pixel patch of a tilemap layer is not yet modeled")
         x0, y0, x1, y1 = rect
         if self.color_mode == "indexed" and layer.indices is not None:
-            # The RGBA ``before`` is deliberately unused on this path, for
-            # ``_commit_indexed_patch``'s reason: the indices are the record,
-            # and the crop of them sitting in ``layer.indices`` right now is
-            # still the before-state, because nothing but these three methods
-            # ever writes one.
-            idx_before = layer.indices[y0:y1, x0:x1].copy()
-            table = self._index_lut()
-            prefer = None
-            slot = self.paint_slot
-            if slot is not None and self.palette and 0 <= slot < len(self.palette):
-                prefer = (self.palette[slot], slot)
-            idx_after = ixp.resolve(
-                layer.pixels[y0:y1, x0:x1], table, self.transparent_index, prefer=prefer
-            )
-            layer.indices[y0:y1, x0:x1] = idx_after
-            # Materialised *before* the no-op test, as the funnel does it: a
-            # write whose every pixel resolves back to the slot it came from
+            # The RGBA ``before`` this method was handed is deliberately unused
+            # on this path: ``_resolve_indices`` reads the index crop, which is
+            # the record. Materialising before the no-op test is its rule too --
+            # a write whose every pixel resolves back to the slot it came from
             # has to leave the pixels saying what the slots say, or the caller
             # skips the cel and the drift it just made stays.
-            layer.pixels[y0:y1, x0:x1] = ixp.materialize(idx_after, table)
+            idx_before, idx_after = self._resolve_indices(layer, rect)
             if np.array_equal(idx_before, idx_after):
                 return None
             return IndexPatchEdit(layer.uid, rect, idx_before, idx_after)
