@@ -1638,3 +1638,35 @@ def test_a_text_stamp_is_refused_for_another_tabs_press():
     ctx.state.inker = state
     assert inker_mode.stamp_text(ctx, state, b) is False
     assert b.doc.floating is None
+
+
+def test_every_task_key_inker_submits_is_answered():
+    """The guard the palette export needed. Both palette commands submitted
+    under one key -- so ``tasks.submit`` refused the second, silently, since
+    neither call site reads the bool -- and *neither* had a branch in
+    ``on_task_done``: the key fell through to the uid-keyed tail, found no
+    ``:``, and returned. An export reported neither success nor failure.
+
+    A key is answered if ``on_task_done`` names it, or if it is keyed on a tab
+    uid, which is what the tail resolves. Anything else is a command that can
+    finish and say nothing."""
+    import inspect
+    import pathlib
+    import re
+
+    from warlock.studio import inker_mode
+
+    root = pathlib.Path(inker_mode.__file__).resolve().parent
+    handled = inspect.getsource(inker_mode.on_task_done)
+
+    keys: set[tuple[str, str]] = set()
+    for path in [root / "inker_mode.py", *sorted((root / "panes").glob("inker_*.py"))]:
+        source = path.read_text(encoding="utf-8")
+        for found in re.findall(r'submit\(\s*f?"(inker-[^"]*)"', source):
+            keys.add((found.split(":", 1)[0], found))
+    assert keys, "the scan has to find something or it proves nothing"
+
+    for prefix, template in sorted(keys):
+        if "{tab.uid}" in template:
+            continue  # the uid-keyed tail resolves these
+        assert f'"{prefix}"' in handled, f"{template} finishes and nothing answers it"
