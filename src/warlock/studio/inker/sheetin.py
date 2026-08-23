@@ -211,6 +211,8 @@ def _document_from_rects(
         history=UndoStack(UNDO_BYTES),
         anim=anim,
     )
+    # Always inferred: a sprite sheet is pixels and nothing else, so there is
+    # no stored answer to honour -- unlike an .ora (``ora.MATTE_ATTR``).
     doc.matte = matte_for(doc.composite)
     # ``ora`` and no path: the document is an animation, and the still-image
     # formats cannot hold one -- so the format it *would* be saved as is the

@@ -1303,6 +1303,9 @@ def _install_indexed(doc, sprite: Sprite, warn: Callable[[str], None]) -> None:
     # and one with holes in it.
     from .document import matte_for
 
+    # Always inferred: .aseprite has no field for the matte and this reader
+    # invents none, so absence here is genuinely "nobody said" -- unlike an
+    # .ora, which stores the user's answer (``ora.MATTE_ATTR``).
     doc.matte = matte_for(doc.composite)
 
 
@@ -1541,6 +1544,9 @@ def document_from_aseprite(
     # are missing. One mechanism, one set of rules about what a group is.
     _install_groups(doc, (nodes, group_of), {})
 
+    # Always inferred: .aseprite has no field for the matte and this reader
+    # invents none, so absence here is genuinely "nobody said" -- unlike an
+    # .ora, which stores the user's answer (``ora.MATTE_ATTR``).
     doc.matte = matte_for(doc.composite)
     if sprite.depth == _INDEXED:
         # Only for an indexed file. Aseprite writes a palette into every

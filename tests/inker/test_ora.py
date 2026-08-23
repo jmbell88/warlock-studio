@@ -761,3 +761,78 @@ def test_canvas_resolution_survives_a_round_trip(tmp_path):
     plain_path = tmp_path / "plain.ora"
     ora.write_ora(plain, plain_path)
     assert ora.read_ora(plain_path).dpi is None
+
+
+# --- the flatten matte (warlock-matte) ---------------------------------------
+
+
+@pytest.mark.parametrize("matte", [None, (255, 255, 255, 255), (10, 20, 30, 255)])
+def test_the_flatten_matte_round_trips(tmp_path, matte):
+    path = tmp_path / "matte.ora"
+    doc = _doc()
+    doc.matte = matte
+    inker_ora.write_ora(doc, path)
+    assert inker_ora.read_ora(path).matte == matte
+
+
+def test_the_flatten_matte_round_trips_on_an_animated_document(tmp_path):
+    path = tmp_path / "matte-anim.ora"
+    doc = _animated()
+    doc.matte = None
+    inker_ora.write_ora(doc, path)
+    assert inker_ora.read_ora(path).matte is None
+
+
+def test_the_attribute_is_written_even_when_the_matte_is_off(tmp_path):
+    """The one warlock-* attribute that is unconditional, and why.
+
+    "Off" and "nobody said" are different answers -- the second has to keep
+    meaning "infer with ``matte_for``" for Krita files -- so the writer cannot
+    express the setting by leaving the attribute out.
+    """
+    path = tmp_path / "off.ora"
+    doc = _doc()
+    doc.matte = None
+    inker_ora.write_ora(doc, path)
+    with zipfile.ZipFile(path) as zf:
+        root = ElementTree.fromstring(zf.read("stack.xml"))
+    assert root.get(inker_ora.MATTE_ATTR) == "none"
+
+
+def test_a_file_written_before_the_matte_attribute_existed_infers_one(tmp_path):
+    """Absence means "infer", the call this reader always made."""
+    src, dest = tmp_path / "new.ora", tmp_path / "old.ora"
+    doc = _doc()
+    doc.stack.active.pixels[:, :] = RED  # fully opaque: ``matte_for`` says white
+    doc.invalidate_all()
+    doc.matte = None
+    inker_ora.write_ora(doc, src)
+    _strip_matte_attr(src, dest)
+    assert inker_ora.read_ora(dest).matte == (255, 255, 255, 255)
+
+
+def test_an_unreadable_matte_attribute_degrades_rather_than_raising(tmp_path):
+    src, dest = tmp_path / "new.ora", tmp_path / "bad.ora"
+    doc = _doc()
+    doc.matte = (10, 20, 30, 255)
+    inker_ora.write_ora(doc, src)
+    _strip_matte_attr(src, dest, replacement="wobble")
+    # Degraded to the inferred answer -- ``_doc``'s canvas is opaque -- rather
+    # than raising, which is this reader's contract for every optional field.
+    assert inker_ora.read_ora(dest).matte == (255, 255, 255, 255)
+
+
+def _strip_matte_attr(src: Path, dest: Path, replacement: str | None = None) -> None:
+    """Rewrite ``stack.xml`` with the matte attribute removed or corrupted."""
+    with zipfile.ZipFile(src) as zf:
+        names = zf.namelist()
+        blobs = {name: zf.read(name) for name in names}
+    root = ElementTree.fromstring(blobs["stack.xml"])
+    if replacement is None:
+        root.attrib.pop(inker_ora.MATTE_ATTR, None)
+    else:
+        root.set(inker_ora.MATTE_ATTR, replacement)
+    blobs["stack.xml"] = ElementTree.tostring(root, encoding="UTF-8", xml_declaration=True)
+    with zipfile.ZipFile(dest, "w") as out:
+        for name in names:
+            out.writestr(name, blobs[name])

@@ -546,7 +546,11 @@ def test_a_track_blend_we_do_carry_is_kept(tmp_path: Path):
 # serialised in full would land.
 MODELESS_STACK_XML = (
     b"<?xml version='1.0' encoding='UTF-8'?>\n"
-    b'<image version="0.0.3" w="8" h="8"><stack>'
+    # Re-measured 2026-08-23: ``warlock-matte`` joined the root, and it is the
+    # one warlock-* attribute written unconditionally -- the setting is
+    # tri-state and absence has to keep meaning "infer" for foreign and older
+    # files (see ``ora.MATTE_ATTR``). Deliberate; the mode table did not move.
+    b'<image version="0.0.3" w="8" h="8" warlock-matte="none"><stack>'
     b'<layer name="Ink" src="data/layer0.png" x="0" y="0" opacity="0.500000"'
     b' visibility="visible" composite-op="svg:multiply" />'
     b'<layer name="Background" src="data/layer1.png" x="0" y="0" opacity="1.000000"'
@@ -581,6 +585,12 @@ def test_a_document_that_uses_no_new_mode_is_written_exactly_as_it_was():
     deliberate one re-measures the literal here and says so in the commit; an
     accidental one is the bug this exists to find. A **new member** in the
     archive is not this test's business and deliberately does not fail it.
+
+    Re-measured once, on 2026-08-23, when ``warlock-matte`` joined the
+    ``<image>`` root. That is exactly the "unconditional new attribute" this
+    pin describes, and it was meant: the matte is tri-state, so absence has to
+    go on meaning "infer" for Krita files and for files older than the
+    attribute. The mode table did not move.
     """
     with zipfile.ZipFile(io.BytesIO(inker.ora_bytes(_pinned_doc()))) as zf:
         assert zf.read("stack.xml") == MODELESS_STACK_XML

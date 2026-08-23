@@ -360,6 +360,9 @@ def _image_attrs(doc) -> dict[str, str]:
     dpi = getattr(doc, "dpi", None)
     if dpi:
         attrs["xres"], attrs["yres"] = str(int(dpi[0])), str(int(dpi[1]))
+    # Unconditional, unlike its siblings -- see ``MATTE_ATTR``. Both writers go
+    # through here, so the still and animated stacks agree for free.
+    attrs[MATTE_ATTR] = _matte_attr(getattr(doc, "matte", None))
     return attrs
 
 
@@ -418,6 +421,55 @@ CONTENT_LOCK_ATTR = "warlock-content-lock"
 #: byte-identical to what this writer produced before they existed.
 BACKGROUND_ATTR = "warlock-background"
 REFERENCE_ATTR = "warlock-reference"
+
+#: The document's flatten matte, on the ``<image>`` root -- it is document
+#: state, not a layer's.
+#:
+#: Written **unconditionally**, which is the one place this writer breaks the
+#: "only when set" rule its four siblings above follow, and deliberately: the
+#: setting is tri-state -- on, off, and *no stored answer* -- and absence has
+#: to go on meaning "infer with ``matte_for``" for Krita files and for files
+#: written before this attribute existed. A write-only-when-set rule cannot
+#: express the third state, so "the user turned the matte off" would be
+#: indistinguishable from "nobody said", and an opaque drawing would silently
+#: get its matte back on every reopen.
+MATTE_ATTR = "warlock-matte"
+
+
+def _matte_attr(matte) -> str:
+    """``none`` or ``#rrggbbaa``. See ``MATTE_ATTR`` for why never absent."""
+    if matte is None:
+        return "none"
+    red, green, blue, alpha = (list(matte) + [255, 255, 255, 255])[:4]
+    return f"#{int(red):02x}{int(green):02x}{int(blue):02x}{int(alpha):02x}"
+
+
+def _read_matte(doc, root) -> None:
+    """Put the stored matte back, or infer one. Never raises.
+
+    Absent -> ``matte_for``, the call this reader always made. ``none`` -> off.
+    ``#rrggbbaa`` -> that colour. Anything else warns and falls back to
+    ``matte_for``: the same degradation contract every optional member in this
+    reader follows -- a drawing whose pixels are perfectly readable must not
+    fail to open over one bad metadata attribute.
+    """
+    from .document import matte_for
+
+    raw = root.get(MATTE_ATTR)
+    if raw is None:
+        doc.matte = matte_for(doc.composite)
+        return
+    text = raw.strip().lower()
+    if text == "none":
+        doc.matte = None
+        return
+    try:
+        if not text.startswith("#") or len(text) != 9:
+            raise ValueError(raw)
+        doc.matte = tuple(int(text[at : at + 2], 16) for at in (1, 3, 5, 7))
+    except ValueError:
+        log.warning("ignoring unreadable %s=%r; inferring instead", MATTE_ATTR, raw)
+        doc.matte = matte_for(doc.composite)
 
 
 def _lock_attr(
@@ -1668,7 +1720,7 @@ def _parse_stack(data: bytes):
 def read_ora(path: Path, *, budget: int | None = None):
     from PIL import Image
 
-    from .document import Document, matte_for
+    from .document import Document
     from .undo import UNDO_BYTES, UndoStack
 
     with zipfile.ZipFile(path) as zf:
@@ -1717,7 +1769,7 @@ def read_ora(path: Path, *, budget: int | None = None):
                 slices=found_slices,
             )
             _read_groups(doc, grid_payload)
-            doc.matte = matte_for(doc.composite)
+            _read_matte(doc, root)
             doc.file_format = "ora"
             doc.dpi = found_dpi
             doc.path = Path(path)
@@ -1805,7 +1857,7 @@ def read_ora(path: Path, *, budget: int | None = None):
             slices=found_slices,
         )
         _install_groups(doc, tree, parents)
-        doc.matte = matte_for(doc.composite)
+        _read_matte(doc, root)
         doc.file_format = "ora"
         doc.dpi = found_dpi
         doc.path = Path(path)
