@@ -20,6 +20,7 @@ from __future__ import annotations
 import numpy as np
 
 from warlock.studio import inker
+from warlock.studio.inker import layers
 
 
 def _doc(**kw):
@@ -313,3 +314,102 @@ def test_the_matte_cannot_be_changed_on_a_background_document():
     assert doc.set_matte((255, 255, 255, 255)) is False
     assert doc.matte is None
     assert doc.history.head == head
+
+
+# --- the flags follow their track, and survive a copy ------------------------
+
+
+def test_cel_props_is_every_property_copied_down_onto_a_layer():
+    """The drift guard. ``background`` and ``reference`` were on ``Track`` and
+    in ``Track.props()`` but missing from three of the four lists that copy a
+    track's properties onto a materialised cel, so the flag was on in the panel
+    and off at the door. Both lists are asserted against each other here rather
+    than left to four hand-maintained copies."""
+    from warlock.studio.inker.animation import CEL_PROPS, Track
+
+    assert set(CEL_PROPS) == set(Track().props())
+    for key in CEL_PROPS:
+        assert hasattr(Track(), key), key
+        assert hasattr(inker.Layer.empty(1, 1), key), key
+
+
+def test_a_reference_track_is_write_locked_on_every_frame():
+    """``write_locked`` reads the flag off the *layer* and the track is
+    authoritative, so a cel materialised for any other frame has to carry it --
+    or the row is editable everywhere except where the flag was set."""
+    doc = inker.Document.blank(8, 8)
+    anim = doc.ensure_animation()
+    assert doc.set_reference(0, True)
+    frame = _second_frame(doc, anim)
+    doc.set_current_frame(1)
+    assert doc.stack[0].reference is True
+    assert doc.write_locked() is True
+    assert frame is anim.frames[1]
+
+
+def test_a_background_track_composites_opaque_on_every_frame():
+    doc = inker.Document.blank(8, 8)
+    anim = doc.ensure_animation()
+    assert doc.to_background()
+    _second_frame(doc, anim)
+    doc.set_current_frame(1)
+    assert doc.stack[0].background is True
+    shown = layers._shown_pixels(doc.stack[0])
+    assert int(shown[..., 3].min()) == 255
+
+
+def _second_frame(doc, anim):
+    from warlock.studio.inker.animation import Frame
+
+    frame = Frame()
+    anim.frames.append(frame)
+    width, height = doc.size
+    for track in anim.tracks:
+        anim.cels[(track.uid, frame.uid)] = inker.Layer.empty(width, height, track.name)
+    return frame
+
+
+def test_layer_copy_carries_every_field():
+    """A hand-written field list in ``Layer.copy`` dropped ``background`` and
+    ``reference``, which meant every whole-canvas op lost them: ``_replay`` and
+    ``restore_snapshot`` both snapshot with ``copy(uid=...)``."""
+    import dataclasses
+
+    layer = inker.Layer.empty(4, 4, "a")
+    layer.background = True
+    layer.reference = True
+    layer.locked = True
+    copy = layer.copy()
+    for spec in dataclasses.fields(inker.Layer):
+        if spec.name in ("pixels", "indices", "uid"):
+            continue
+        assert getattr(copy, spec.name) == getattr(layer, spec.name), spec.name
+    assert copy.uid != layer.uid, "a copy is a different layer"
+    assert layer.copy(uid=layer.uid).uid == layer.uid, "unless the snapshot says otherwise"
+
+
+def test_a_canvas_op_and_undo_keep_the_background_flag():
+    doc = inker.Document.blank(8, 8)
+    assert doc.to_background()
+    doc.rotate90(1)
+    doc.undo()
+    assert doc.stack[0].background is True
+
+
+def test_a_tilemap_cel_copy_keeps_the_layer_flags():
+    import numpy as np
+
+    from warlock.studio.inker.tiles import TilemapCel
+
+    cel = TilemapCel(
+        pixels=np.zeros((8, 8, 4), np.uint8),
+        refs=np.zeros((1, 1), np.uint32),
+        tileset_uid=1,
+    )
+    cel.background = True
+    cel.reference = True
+    copy = cel.copy()
+    assert copy.background is True
+    assert copy.reference is True
+    assert copy.tileset_uid == 1
+    assert copy.refs is not cel.refs

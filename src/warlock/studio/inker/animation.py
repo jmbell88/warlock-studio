@@ -160,6 +160,34 @@ TRACK_PROPS = frozenset(
     {"name", "opacity", "visible", "blend", "alpha_lock", "locked", "continuous"}
 )
 
+#: The track properties **copied down onto a materialised ``Layer``**, in one
+#: place because there are four sites that copy them -- :meth:`Track.of`,
+#: :meth:`Animation.placeholder`, :meth:`Animation.layers_for` and
+#: ``Document._ensure_cel_for`` -- and a hand-maintained list at each is how
+#: ``background`` and ``reference`` came to be copied by one of the four and
+#: forgotten by the other three. The consequence was not cosmetic: a reference
+#: track's cels are write-locked through ``Document.write_locked``, which reads
+#: the flag off the *layer*, so the row was editable on every frame but the one
+#: the flag was set on; and a background track composited opaque on that frame
+#: and transparent on the rest.
+#:
+#: **Not the same set as ``TRACK_PROPS``** above, and deliberately so. That one
+#: is the ``setattr`` allowlist for ``set_layer_props``; these two flags are
+#: outside it because they carry their own ``LayerFlagEdit``, and ``continuous``
+#: is in it but is never copied down (a cel has no use for what decides
+#: autovivification). The two lists answer different questions and are kept
+#: apart so neither is edited on the other's behalf.
+CEL_PROPS: tuple[str, ...] = (
+    "name",
+    "opacity",
+    "visible",
+    "blend",
+    "alpha_lock",
+    "locked",
+    "background",
+    "reference",
+)
+
 
 @dataclass
 class Track:
@@ -224,15 +252,8 @@ class Track:
         for later code to get wrong.
         """
         return cls(
-            name=layer.name,
-            opacity=layer.opacity,
-            visible=layer.visible,
-            blend=layer.blend,
-            alpha_lock=layer.alpha_lock,
-            locked=layer.locked,
-            background=layer.background,
-            reference=layer.reference,
             uid=layer.uid,
+            **{key: getattr(layer, key) for key in CEL_PROPS},
         )
 
     def props(self) -> dict[str, object]:
@@ -496,13 +517,8 @@ class Animation:
         width, height = size
         return Layer(
             pixels=self.blank_plane(width, height),
-            name=track.name,
-            opacity=track.opacity,
-            visible=track.visible,
-            blend=track.blend,
-            alpha_lock=track.alpha_lock,
-            locked=track.locked,
             uid=uid,
+            **{key: getattr(track, key) for key in CEL_PROPS},
         )
 
     def is_placeholder(self, layer: Layer) -> bool:
@@ -538,12 +554,8 @@ class Animation:
             if layer is None:
                 out.append(self.placeholder(track, frame, size))
                 continue
-            layer.name = track.name
-            layer.opacity = track.opacity
-            layer.visible = track.visible
-            layer.blend = track.blend
-            layer.alpha_lock = track.alpha_lock
-            layer.locked = track.locked
+            for key in CEL_PROPS:
+                setattr(layer, key, getattr(track, key))
             out.append(layer)
         return out
 

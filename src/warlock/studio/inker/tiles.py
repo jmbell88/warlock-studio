@@ -30,7 +30,7 @@ purpose, which is what makes ``.aseprite`` import an index-preserving copy and
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 
 import numpy as np
 
@@ -118,16 +118,14 @@ class TilemapCel(Layer):
         identity) stay in exactly one place.
         """
         base = super().copy(name=name, uid=uid)
+        # Every ``Layer`` field taken from *base* by name rather than re-listed
+        # here: the hand-written list this replaces carried nine of the eleven,
+        # so ``background`` and ``reference`` were dropped by every history
+        # snapshot and every duplicate of a tilemap cel. A list that has to be
+        # extended whenever ``Layer`` grows a field is a list that will be
+        # forgotten again.
         return TilemapCel(
-            pixels=base.pixels,
-            name=base.name,
-            opacity=base.opacity,
-            visible=base.visible,
-            blend=base.blend,
-            alpha_lock=base.alpha_lock,
-            locked=base.locked,
-            indices=base.indices,
-            uid=base.uid,
+            **{spec.name: getattr(base, spec.name) for spec in fields(Layer)},
             refs=self.refs.copy(),
             tileset_uid=self.tileset_uid,
         )

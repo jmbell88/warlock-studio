@@ -56,7 +56,7 @@ from ._doc_selection import SelectionOps
 from ._doc_slices import SliceOps
 from ._doc_tiles import TileOps
 from .anim_edits import CelSetEdit
-from .animation import Animation
+from .animation import CEL_PROPS, Animation
 from .brush import StrokeState
 from .layers import Layer, LayerStack
 from .selection import Clipboard, FloatingBuffer, SelectionMask
@@ -878,13 +878,8 @@ class Document(
                 pixels=cp.empty(width, height),
                 refs=np.zeros((grid_h, grid_w), dtype=np.uint32),
                 tileset_uid=track.tileset_uid,
-                name=track.name,
-                opacity=track.opacity,
-                visible=track.visible,
-                blend=track.blend,
-                alpha_lock=track.alpha_lock,
-                locked=track.locked,
                 uid=placeholder.uid,
+                **{key: getattr(track, key) for key in CEL_PROPS},
             )
         else:
             # A *continuous* track starts its new cels from the nearest earlier

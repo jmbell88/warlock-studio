@@ -20,7 +20,7 @@ case. See :mod:`.index_plane` for why identity, not storage, is what that buys.
 from __future__ import annotations
 
 import itertools
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 
 import numpy as np
 
@@ -37,6 +37,12 @@ def new_uid() -> int:
     uid from here once and closes over it.
     """
     return next(_uids)
+
+
+#: The fields :meth:`Layer.copy` passes explicitly -- the two planes it deep-copies
+#: and the two identity fields it may override. Everything else is carried by
+#: name, so a new ``Layer`` field is copied without anyone remembering to add it.
+_COPY_EXPLICIT = frozenset({"pixels", "indices", "name", "uid"})
 
 
 @dataclass
@@ -145,20 +151,27 @@ class Layer:
         history snapshot is not a new layer, it is the *same* layer's pixels
         held aside, and restoring it has to give back the identity every patch
         recorded before it is addressed to.
+
+        **Every field is carried by name rather than re-listed.** The hand-written
+        version this replaces named seven of the eleven and silently dropped
+        ``background`` and ``reference``, which made every whole-canvas op lose
+        them: ``_replay`` and ``restore_snapshot`` both snapshot with
+        ``copy(uid=layer.uid)``, so rotating the canvas and pressing Ctrl+Z gave
+        back a background layer that was no longer a background layer.
         """
         return Layer(
+            # Both planes are copied rather than shared, and for the same
+            # reason: a history snapshot holds them for as long as it is on the
+            # stack, and a shared array would let the next stroke rewrite what
+            # the undo is supposed to restore.
             pixels=self.pixels.copy(),
-            name=self.name if name is None else name,
-            opacity=self.opacity,
-            visible=self.visible,
-            blend=self.blend,
-            alpha_lock=self.alpha_lock,
-            locked=self.locked,
-            # Copied like the pixels, and for the same reason: a history
-            # snapshot holds this for as long as it is on the stack, and a
-            # shared plane would let the next stroke rewrite what the undo is
-            # supposed to restore.
             indices=None if self.indices is None else self.indices.copy(),
+            name=self.name if name is None else name,
+            **{
+                spec.name: getattr(self, spec.name)
+                for spec in fields(Layer)
+                if spec.name not in _COPY_EXPLICIT
+            },
             **({} if uid is None else {"uid": uid}),
         )
 
