@@ -867,6 +867,17 @@ def _input(ctx: Any, state: Any, tab: Any, origin, *, active: bool, hovered: boo
     # what every paint program does and what makes a tablet usable.
     panning = imgui.is_mouse_dragging(2) or (state.space_held and imgui.is_mouse_dragging(0))
     if (hovered or state.drag_kind == "pan") and panning:
+        # **The open gesture is closed before the pan takes the mouse.** Taking
+        # ``drag_kind`` without dispatching a release is the C12d failure below
+        # arriving by a second door: ``end_stroke``/``commit_layer_move`` never
+        # ran, so a stroke's pixels sat in the layer with no step behind them
+        # -- unundoable until the *next* ``begin_stroke`` pushed them out of
+        # band -- and a layer move was left previewed, with ``end_layer_move``
+        # (the automatic path, which does not restore) as the only thing that
+        # would ever reach it. Both are reachable without trying: press Space
+        # mid-drag, or middle-click mid-drag.
+        if state.drag_kind and state.drag_kind != "pan":
+            _release(ctx, state, tab, _snapped(state, _local(state, point)))
         button = 2 if imgui.is_mouse_dragging(2) else 0
         delta = imgui.get_mouse_drag_delta(button)
         imgui.reset_mouse_drag_delta(button)
@@ -887,6 +898,11 @@ def _input(ctx: Any, state: Any, tab: Any, origin, *, active: bool, hovered: boo
         # early, so leaving the vertices up would draw a polygon over a document
         # that is being encoded or played and finish it whenever the tab came
         # back -- against whatever the document looked like by then.
+        # The *drag* goes with the gesture, and for the same reason one line
+        # up: a live ``drag_kind`` here holds an open stroke that this early
+        # return would strand exactly as the pan above used to.
+        if state.drag_kind and state.drag_kind != "pan":
+            _release(ctx, state, tab, _snapped(state, _local(state, point)))
         state.clear_gesture()
         return
     if state.transforming and tab.doc.floating is not None:

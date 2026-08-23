@@ -68,6 +68,9 @@ class _Mouse:
         self.at = (0.0, 0.0)
         self.down = {0: False, 1: False, 2: False}
         self.clicked = {0: False, 1: False, 2: False}
+        #: Which buttons imgui reports as *dragging*, which is what arms
+        #: the pan arm -- middle-drag, or space plus left-drag.
+        self.dragging = {0: False, 1: False, 2: False}
         # As the backend delivers it -- already scaled by ``WHEEL_SCALE`` -- so
         # a test that sets it is exercising the same number the pane sees.
         self.wheel = 0.0
@@ -89,7 +92,9 @@ class _Mouse:
             get_mouse_pos=lambda: SimpleNamespace(x=self.at[0], y=self.at[1]),
             is_mouse_clicked=lambda button: self.clicked[button],
             is_mouse_down=lambda button: self.down[button],
-            is_mouse_dragging=lambda button: False,
+            is_mouse_dragging=lambda button: self.dragging[button],
+            get_mouse_drag_delta=lambda button: SimpleNamespace(x=0.0, y=0.0),
+            reset_mouse_drag_delta=lambda button: None,
             # The pointer shape ``_os_cursor`` sets. Recorded rather than
             # ignored: what the pointer says over a locked layer is the whole
             # point of that helper, so a fake that swallowed it would let the
@@ -118,13 +123,22 @@ def driven(monkeypatch):
     )
 
     def frame(
-        at, *, click=None, down=(), wheel=0.0, shift=False, ctrl=False, hovered=True
+        at,
+        *,
+        click=None,
+        down=(),
+        dragging=(),
+        wheel=0.0,
+        shift=False,
+        ctrl=False,
+        hovered=True,
     ):
         mouse.at = (float(at[0]), float(at[1]))
         mouse.clicked = {0: False, 1: False, 2: False}
         if click is not None:
             mouse.clicked[click] = True
         mouse.down = {b: b in down for b in (0, 1, 2)}
+        mouse.dragging = {b: b in dragging for b in (0, 1, 2)}
         mouse.wheel = float(wheel)
         mouse.shift = shift
         mouse.ctrl = ctrl
@@ -703,3 +717,66 @@ def test_ctrl_click_over_empty_canvas_changes_nothing(driven):
     frame((6.5, 6.5), click=0, down=(0,), ctrl=True)
 
     assert tab.doc.stack.active_index == 0
+
+
+# --- a pan must not strand the gesture it interrupts -------------------------
+
+
+def test_starting_a_pan_mid_stroke_closes_the_stroke(driven):
+    """Taking ``drag_kind`` for the pan without dispatching a release left
+    ``end_stroke`` un-run: the pixels were in the layer with no step behind
+    them, so Ctrl+Z did nothing until the *next* stroke pushed them out of
+    band. The C12d guard fixed this for the right button and not for the pan."""
+    state, tab, frame = driven
+    state.tool = "brush"
+    head = tab.doc.history.head
+
+    frame((4, 4), click=0, down=(0,))
+    frame((12, 12), down=(0,))
+    assert state.drag_kind == "paint"
+    painted = int((tab.doc.stack.active.pixels[..., 3] > 0).sum())
+    assert painted, "the stroke drew something"
+
+    # Space goes down mid-drag and the pan takes the mouse.
+    state.space_held = True
+    frame((14, 14), down=(0,), dragging=(0,))
+    assert state.drag_kind == "pan"
+
+    assert tab.doc.history.head != head, "the stroke was committed, not stranded"
+    assert tab.doc.history.can_undo
+    tab.doc.undo()
+    assert int((tab.doc.stack.active.pixels[..., 3] > 0).sum()) == 0
+
+
+def test_a_middle_drag_mid_stroke_closes_the_stroke_too(driven):
+    state, tab, frame = driven
+    state.tool = "brush"
+    head = tab.doc.history.head
+
+    frame((4, 4), click=0, down=(0,))
+    frame((10, 10), down=(0,))
+    frame((11, 11), down=(0, 2), dragging=(2,))
+
+    assert state.drag_kind == "pan"
+    assert tab.doc.history.head != head
+    tab.doc.undo()
+    assert int((tab.doc.stack.active.pixels[..., 3] > 0).sum()) == 0
+
+
+def test_a_tab_going_busy_mid_stroke_closes_the_stroke(driven):
+    """The busy gate cleared the multi-click gesture and returned, but a live
+    ``drag_kind`` survived with its stroke open -- the pan's failure by a third
+    door."""
+    state, tab, frame = driven
+    state.tool = "brush"
+    head = tab.doc.history.head
+
+    frame((4, 4), click=0, down=(0,))
+    frame((10, 10), down=(0,))
+    assert state.drag_kind == "paint"
+
+    tab.busy = True
+    frame((11, 11), down=(0,))
+
+    assert state.drag_kind == ""
+    assert tab.doc.history.head != head
