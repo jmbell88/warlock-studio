@@ -3631,33 +3631,20 @@ def _ctrl_key(
         # Ctrl+Shift+Z is redo's second spelling, which the registry does not
         # carry: an op has one key, and Ctrl+Y is the one the menu prints.
         doc.redo()
-    elif name == "e" and shift:
-        # Ctrl+E is "put this in the library" and Ctrl+Shift+E is the file on
-        # disk -- both ops. Only the *shifted* half needs a branch, because an
-        # op carries one key and the pair differ by more than a modifier: see
-        # ``export_png`` and ``save_as_reference`` in the registry.
-        export_png(ctx, tab)
-    elif name == "d" and shift:
-        # Ctrl+Shift+D brings back what Ctrl+D took away, the pair every other
-        # editor binds. Both are ops; this is the shifted half.
-        doc.reselect()
-    elif name == "j" and shift:
-        # Ctrl+J *copies* the selection onto a layer of its own and
-        # Ctrl+Shift+J *cuts* it, which is the way round Photoshop and every
-        # editor that followed it bind the pair: the plain chord is the
-        # non-destructive one. Worth stating, because the obvious reading is
-        # the opposite -- plain does the whole thing, Shift does less.
-        doc.layer_from_selection(cut=True)
     elif event.key == pygame.K_TAB:
         state.cycle(-1 if shift else 1)
-    elif name == "4":
-        # Ctrl+4 / Ctrl+Shift+4 turn the page, Ctrl+5 mirrors it. Both are
-        # *view* state -- no pixels move, nothing is pushed, nothing is saved --
-        # which is why they sit here beside the zoom keys rather than among the
-        # mutating shortcuts.
-        inker_state.rotate_view(tab.view, -1 if shift else 1)
-    elif name == "5":
-        inker_state.flip_view(tab.view)
+    # Ctrl+Shift+E, Ctrl+Shift+D and Ctrl+Shift+J used to have branches here.
+    # All three are ops (``export_png``, ``reselect``, ``move_to_layer``), and
+    # the registry is consulted before this function is reached -- so the
+    # branches had been unreachable since those ops gained their keys, and a
+    # reader would have had to check the registry to know it.
+    #
+    # Ctrl+4 and Ctrl+5 went the same way. Their *shifted* halves were the
+    # awkward part: Ctrl+Shift+4 rotated the other way and Ctrl+Shift+5 was a
+    # silent alias for Ctrl+5, neither advertised by any ``Op.key`` -- which is
+    # the one thing that field exists to prevent. The reverse rotation is now
+    # ``rotate_view_back``, printed on its menu row like every other binding,
+    # and the alias is gone.
     return True
 
 

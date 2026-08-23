@@ -333,10 +333,14 @@ def test_the_chords_are_the_photoshop_way_round():
 
     from warlock.studio import inker_ops
 
-    # The plain chord is an op; only the shifted half is still a branch, because
-    # an op carries one key and these two differ by more than a modifier.
+    # Both halves are ops. The shifted one used to be a branch in ``_ctrl_key``
+    # as well, which had been unreachable since ``move_to_layer`` gained its
+    # key -- the registry is consulted first.
+    assert inker_ops.by_key("Ctrl+J", "").name == "copy_to_layer"
+    assert inker_ops.by_key("Ctrl+Shift+J", "").name == "move_to_layer"
+
     inker_ops.run(ctx, inker_ops.get("copy_to_layer"))
-    inker_mode._ctrl_key(None, None, tab, doc, "j", None, shift=True)
+    inker_ops.run(ctx, inker_ops.get("move_to_layer"))
 
     assert calls == [False, True]  # Ctrl+J copies, Ctrl+Shift+J cuts
     assert "j" in inker_mode._MUTATING_CTRL

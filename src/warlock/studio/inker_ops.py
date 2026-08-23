@@ -1409,6 +1409,17 @@ register(
 )
 register(
     Op(
+        "rotate_view_back",
+        "Rotate the view back",
+        _view("rotate_view", -1),
+        menu="View",
+        key="Ctrl+Shift+4",
+        enabled=has_doc,
+        reason=NO_DOC,
+    )
+)
+register(
+    Op(
         "flip_view",
         "Mirror the view",
         _view("flip_view"),

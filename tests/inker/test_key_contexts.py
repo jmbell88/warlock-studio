@@ -242,3 +242,37 @@ def test_enter_on_a_still_document_says_why_with_a_brush_in_hand():
 
     assert state.tip is not None, "the refusal reached the user"
     assert "no frames yet" in str(state.tip.text)
+
+
+def test_no_ctrl_chord_has_both_an_op_and_a_branch():
+    """``_ctrl_key`` runs only after the registry has been asked, so a branch
+    for a chord some op already carries is dead code -- and a reader has to
+    check the registry to find that out. Ctrl+Shift+E, Ctrl+Shift+D and
+    Ctrl+Shift+J were all in that state; Ctrl+4 and Ctrl+5 were half in it,
+    with unadvertised shifted halves that no ``Op.key`` printed."""
+    import inspect
+    import re
+
+    from warlock.studio import inker_mode, inker_ops
+
+    source = inspect.getsource(inker_mode._ctrl_key)
+    for chord in {op.key for op in inker_ops.OPS if op.key.startswith("Ctrl+")}:
+        letter = chord.rsplit("+", 1)[-1].lower()
+        if len(letter) != 1:
+            continue
+        if "Shift" in chord:
+            pattern = rf'name == "{re.escape(letter)}" and shift'
+        else:
+            # Not followed by ``and shift``: Ctrl+Shift+Z is deliberately a
+            # branch (redo's second spelling, which no op carries because an op
+            # has one key), and it must not read as a collision with Ctrl+Z.
+            pattern = rf'name == "{re.escape(letter)}"(?! and shift)'
+        assert not re.search(pattern, source), f"{chord} has both an op and a branch"
+
+
+def test_every_view_rotation_chord_is_advertised():
+    from warlock.studio import inker_ops
+
+    assert inker_ops.by_key("Ctrl+4", "").name == "rotate_view"
+    assert inker_ops.by_key("Ctrl+Shift+4", "").name == "rotate_view_back"
+    assert inker_ops.by_key("Ctrl+5", "").name == "flip_view"
