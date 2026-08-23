@@ -327,7 +327,11 @@ def test_the_total_and_budget_overrides_parse(monkeypatch):
     assert Config().vram_total_gib is None
 
 
-def test_a_reading_never_raises(monkeypatch):
+def test_a_reading_never_raises(monkeypatch, real_device_memory):
+    """Takes the genuine reader back off ``conftest._roomy_device_memory``:
+    this is the one test that is about what the reader does, so a pinned
+    figure would answer it without the reader running at all."""
+
     class Exploding:
         class cuda:
             @staticmethod
@@ -336,6 +340,28 @@ def test_a_reading_never_raises(monkeypatch):
 
     monkeypatch.setitem(__import__("sys").modules, "torch", Exploding)
     assert vram.device_memory() is None
+
+
+def test_no_test_reads_the_real_card(request):
+    """A guard on ``conftest._roomy_device_memory``, which is easy to delete.
+
+    Without the pin a test's verdict moves with whatever else on the machine
+    holds VRAM, and the symptom is not a VRAM test failing -- it is ten tests
+    about sprite sheets and tile grids failing with an admission refusal, on
+    the runs where an xdist worker happened to import torch first. That is a
+    day to diagnose from cold and a second to catch here.
+
+    Asserted through the module the readers actually call, and against the
+    *name* rather than the value, so it still fires if the pinned figure is
+    ever retuned.
+    """
+    reading = vram.device_memory()
+    assert reading is not None, "the conftest pin is not in force"
+    assert reading.name == "Test GPU", (
+        f"device_memory() returned {reading!r} -- a real card is leaking into "
+        f"the suite; see conftest._roomy_device_memory"
+    )
+    assert "real_device_memory" not in request.fixturenames
 
 
 # -- the invariant that stops the next orphan ---------------------------------

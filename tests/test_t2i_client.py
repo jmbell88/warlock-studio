@@ -251,11 +251,17 @@ def test_trim_on_a_client_with_no_child_does_not_spawn_one(client):
 # --- the reading the parent can no longer take -------------------------------
 
 
-def test_the_childs_device_reading_reaches_vram(client, tmp_path, monkeypatch):
+def test_the_childs_device_reading_reaches_vram(
+    client, tmp_path, monkeypatch, real_device_memory
+):
     """`vram.device_memory` returns None without torch in this process.
 
     Once the pipe lives in a child, that is the app's steady state -- so the
     figure admission reads has to come from the child or it does not exist.
+
+    Takes the real reader back off ``conftest._roomy_device_memory``: this is
+    about the reader's own fallback chain, and a pinned figure would satisfy
+    the assertion without the chain being walked at all.
     """
     monkeypatch.setattr(vram, "_published", None)
     monkeypatch.delitem(sys.modules, "torch", raising=False)
@@ -267,10 +273,13 @@ def test_the_childs_device_reading_reaches_vram(client, tmp_path, monkeypatch):
     assert reading.name == "fake card"
 
 
-def test_a_live_torch_reading_still_wins_over_a_published_one(monkeypatch):
+def test_a_live_torch_reading_still_wins_over_a_published_one(
+    monkeypatch, real_device_memory
+):
     # The in-process path must be unaffected: a GPU test, or any session that
     # has torch loaded for another reason, should read the card and not a
-    # figure some child reported a minute ago.
+    # figure some child reported a minute ago. The real reader, for the same
+    # reason as the test above.
     from warlock.vram import DeviceMemory
 
     vram.publish(1.0, 2.0, "stale")

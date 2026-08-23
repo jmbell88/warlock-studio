@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from warlock import memlog
+from warlock import memlog, vram
 from warlock.db import JobStore
 from warlock.models import DEFAULT_LORA_WEIGHT
 from warlock.pipelines.text2image import JobCancelled
@@ -22,6 +22,11 @@ from warlock.pipelines.text2image import JobCancelled
 # Captured before anything can patch it, so ``real_system_memory`` can hand the
 # genuine reader back to the one test that is about what it reads.
 _REAL_SYSTEM_MEMORY = memlog.system_memory
+
+# The same, for the device side. ``real_device_memory`` hands it back to
+# ``test_vram.py``'s reading-never-raises check, which is about the reader
+# itself and would otherwise be answered by the pin below.
+_REAL_DEVICE_MEMORY = vram.device_memory
 
 # Set by ``pytest_configure`` when the gpu lane is the one selected. That lane is
 # the single exception to the WARLOCK_HOME pin below -- see ``_no_migration``.
@@ -259,6 +264,93 @@ def real_system_memory(monkeypatch):
     fabricated-looking one.
     """
     monkeypatch.setattr(memlog, "system_memory", _REAL_SYSTEM_MEMORY)
+
+
+@pytest.fixture(autouse=True)
+def _roomy_device_memory(monkeypatch):
+    """``_roomy_host_memory``'s other half: nor may a verdict depend on the card.
+
+    The host pin above closed this on commit and left the device side open, and
+    the gap behaved exactly as that fixture's own history predicts. A full
+    ``uv run pytest`` failed **a moving set of 10-14 tests** across
+    ``test_sprite_synthesis_worker.py``, ``test_tilesheet_worker.py`` and
+    ``test_queue.py``, none of them about VRAM, with an admission refusal
+    carrying a live driver reading: *"needs about 26.7 GiB of VRAM and only
+    26.4 GiB is available"*. Nothing in the suite put that 26.4 there.
+
+    **Two conditions have to meet, which is why it looked like a flake.**
+    ``vram.device_memory`` reaches torch through ``sys.modules`` and returns
+    None without it, and None means ``vram.plan`` resolves "no CUDA device
+    detected" and admission control is off entirely. So a file run on its own
+    never sees the card and always passes; a file run in an xdist worker that
+    happened to run a torch-importing test first sees it and passes or fails
+    according to what else on the machine holds VRAM. The target moves because
+    ``--dist loadfile`` does not put the same files in the same worker twice.
+
+    Pinned at ``vram.device_memory`` because that is the single reader the two
+    admission checks share -- ``queue._check_resources`` at dispatch and
+    ``service.validation._plan`` at the door, through ``vram.plan``. The other
+    two device readers are deliberately left alone: ``vram.probe`` is the
+    startup import-torch variant that only ``studio/runtime.py`` calls, and
+    ``vram.live_memory`` is the status bar's NVML meter, whose tests set
+    ``Sampler.reading`` directly and so assert nothing about a live figure.
+
+    A full card rather than a plausible one, and a 32 GiB one rather than an
+    enormous one: the budget has to clear ``COEXIST_GIB`` so the auto-selected
+    mode stays coexist, which is what the suite was written against, and a
+    figure far above any real card would put a fictional number into every
+    ``plan.reason`` string. Roomy rather than realistic is ``_roomy_host_memory``'s
+    rule and it carries over: a test that wants a refusal patches this itself
+    -- ``test_queue.py`` does, six times -- and those patches still win, being
+    applied after this one.
+
+    Exempt in the gpu lane for the third time in this file, and for the reason
+    it gives twice already: that lane runs against the real card, and a
+    real-hardware lane reading a hand-written figure measures nothing.
+    """
+    if _GPU_LANE:
+        return
+    monkeypatch.setattr(
+        vram,
+        "device_memory",
+        lambda: vram.DeviceMemory(total_gib=32.0, free_gib=32.0, name="Test GPU"),
+    )
+
+
+@pytest.fixture
+def real_device_memory(monkeypatch):
+    """The genuine reader, for the one test that is about what it reads.
+
+    ``test_a_reading_never_raises`` puts an exploding stub in ``sys.modules``
+    and asserts the reader swallows it; the pin above would answer that with a
+    figure taken from no device at all.
+    """
+    monkeypatch.setattr(vram, "device_memory", _REAL_DEVICE_MEMORY)
+
+
+@pytest.fixture(autouse=True)
+def _unpublished_device_reading(monkeypatch):
+    """``vram._published`` is a module global and ``publish`` has no undo.
+
+    Not the pin above but the same rule one level down, and it is what the pin
+    made reachable: ``real_device_memory`` hands the genuine reader back, and
+    the genuine reader *falls back* to whatever was last published. So
+    ``test_t2i_client.py`` publishing a stale ``(1.0, 2.0, "stale")`` reading
+    and never taking it away is enough to make ``test_vram.py``'s
+    reading-never-raises check see a figure where it asserts None.
+
+    Pre-existing rather than introduced: the two files fail together on
+    unmodified code too. It had simply never been observed, because
+    ``--dist loadfile`` keeps them in different workers and one file on its own
+    is clean -- which is the same reason the device pin above went unnoticed
+    for as long as it did.
+
+    ``monkeypatch.setattr`` rather than a bare assignment, so the reset happens
+    on the way in *and* the original is restored on the way out. Not exempt in
+    the gpu lane: that lane wants a real card, which is the live torch path,
+    and that path already wins over a published reading.
+    """
+    monkeypatch.setattr(vram, "_published", None, raising=False)
 
 
 @pytest.fixture
