@@ -1,6 +1,6 @@
 """Troupe's left-bottom pane: the form that starts a character.
 
-It submits the *first* link of the chain and nothing else: one cheap T-pose
+It submits the *first* link of the chain and nothing else: one cheap pose
 reference. The gate is the whole point of the shape -- the user approves the
 drawing in Create, and only then is the reconstruction spent -- so this pane
 deliberately has no "and then build everything" button. What it does have is the
@@ -41,7 +41,10 @@ def draw(ctx: Any) -> None:
             "pose",
             "Reference pose",
             form["pose"],
-            [(name, _POSE_LABELS.get(name, name)) for name in options.get("poses") or ()],
+            [
+                (name, troupe_mode.POSE_LABELS.get(name, name))
+                for name in options.get("poses") or ()
+            ],
             help_text=(
                 "The stick figure the first drawing is conditioned on. "
                 "A-pose matches the rig template, so the joints are fitted "
@@ -58,10 +61,6 @@ def draw(ctx: Any) -> None:
     imgui.dummy((0, 8))
     _existing_mesh(ctx, form)
 
-
-#: What each reference pose is called on the control. The keys are the door's
-#: names and are what travel in ``params``; these are only what is read.
-_POSE_LABELS = {"tpose": "T-pose", "apose": "A-pose"}
 
 #: Where the picker's current choice lives. On ``state.preview`` and not on
 #: ``TroupeState``: the mode holds a *selection* (which character and which

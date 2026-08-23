@@ -51,6 +51,7 @@ from _appharness import seed_asset as _seed_asset  # noqa: E402
 from _appharness import seed_matte as _seed_matte  # noqa: E402
 from _appharness import seed_review as _seed_review  # noqa: E402
 from _appharness import seed_tile as _seed_tile  # noqa: E402
+from _appharness import seed_troupe as _seed_troupe  # noqa: E402
 
 from warlock.studio import create_stages  # noqa: E402
 from warlock.studio import modes as _modes  # noqa: E402
@@ -181,6 +182,13 @@ def main() -> int:
         "draws its grade row and tag toggles rather than its empty state",
     )
     ap.add_argument(
+        "--troupe",
+        action="store_true",
+        help="seed a finished character sheet and select it, so Troupe shows a "
+        "sprite, a populated Sheet pane and live handoffs rather than four "
+        "empty-state panes",
+    )
+    ap.add_argument(
         "--floating",
         action="store_true",
         help=(
@@ -269,7 +277,23 @@ def main() -> int:
         _seed_tile(app, args.tile)
     if args.review:
         _seed_review(app)
+    if args.troupe:
+        # Troupe's four panes all answer "pick a character on the left" with
+        # nothing selected, so the set shipped three pictures of a mode with
+        # no character in it -- no sprite, no frame table, no Sheet pane, and
+        # both handoffs greyed. Everything the preview reads is a file, so
+        # this costs no GPU (see ``_appharness.seed_troupe``).
+        _seed_troupe(app)
     app.app_ctx.state.tile_preview = bool(args.tile_preview)
+    # **The doctor banner, off, before anything is photographed.** It is a
+    # property of the machine that ran the capture -- which weights happen to
+    # be on its disk -- and not of any mode, and it is a full-width strip that
+    # pushes every pane down by its own height in some pictures and not others.
+    # Worse, it prints the path it looked in: 44 of the 84 images in this repo
+    # shipped with a developer's real home directory, username and all, drawn
+    # across the top of them. ``exercise_mode`` dismisses it for the first two
+    # reasons; this one has the third.
+    app.app_ctx.state.dismiss_errors()
     try:
         for name in args.themes.split(","):
             tokens.set_theme(name)

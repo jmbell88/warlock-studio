@@ -133,6 +133,14 @@ SDXL-class pipeline, not two, so switching between jobs costs a reload. Style Lo
 opposite — adapters on the resident pipeline, switched for free.
 
 ```powershell
+# SDXL-Turbo (~7 GB): the 4-step fast option, at 512 px and guidance 0. Its own
+# checkpoint rather than a recipe over the base weights, so it is a full second
+# download -- worth it when iteration speed matters more than fidelity. This is
+# also the entry WARLOCK_T2I_DIR redirects.
+uvx hf download stabilityai/sdxl-turbo --revision 71153311d3dbb46851df1931d3ca6e939de83304 `
+  --include "*.json" --include "*.txt" --include "*fp16.safetensors" `
+  --exclude "sd_xl_turbo_1.0*" --local-dir $HOME/.warlock/models/sdxl-turbo
+
 # SDXL 1.0 + Hyper-SD (~7 GB + 787 MB). Style LoRAs are trained against full
 # SDXL at 20-25 steps with CFG, so they land noticeably stronger here than on
 # Turbo's 4 steps at guidance 0. Hyper-SD buys the step count back.
@@ -167,6 +175,22 @@ uvx hf download black-forest-labs/FLUX.2-klein-4B --revision e7b7dc27f91deacad38
 uvx hf download latent-consistency/lcm-lora-sdxl --revision a18548dd4956b174ec5b0d78d340c8dae0a129cd `
   pytorch_lora_weights.safetensors --local-dir $HOME/.warlock/models/loras
 Rename-Item $HOME/.warlock/models/loras/pytorch_lora_weights.safetensors lcm-lora-sdxl.safetensors
+
+# SDXL 1.0 + Lightning (394 MB on top of the base weights): a second 4-step
+# distillation, adversarial where Hyper-SD is trajectory-consistency -- so the
+# two are directly comparable with everything else held fixed.
+uvx hf download ByteDance/SDXL-Lightning --revision c9a24f48e1c025556787b0c58dd67a091ece2e44 `
+  sdxl_lightning_4step_lora.safetensors --local-dir $HOME/.warlock/models/loras
+
+# Juggernaut XL v9 (~6.9 GB): a photoreal SDXL finetune, DPM++ 2M Karras at 35
+# steps with CFG 4.0. Materials and lighting read as photographed rather than
+# illustrated, which suits a prop that will be reconstructed and then lit.
+uvx hf download RunDiffusion/Juggernaut-XL-v9 --revision cf419233522daa0b9ea36c3aff98fa2cab1fb0fb `
+  --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir $HOME/.warlock/models/juggernaut-xl-v9
+
+# DreamShaper XL (~6.9 GB): the stylised counterpart, DEIS at 25 steps per its card.
+uvx hf download Lykon/dreamshaper-xl-1-0 --revision 41e6644752a8c9aa63930e6043c4fd83c7708420 `
+  --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir $HOME/.warlock/models/dreamshaper-xl
 
 # Style LoRAs -> ~/.warlock/models/loras/
 uvx hf download goofyai/3d_render_style_xl --revision 5ec74a57db5e244a2157173781a7b29045f88237 3d_render_style_xl.safetensors --local-dir $HOME/.warlock/models/loras
@@ -203,6 +227,13 @@ uvx hf download h94/IP-Adapter --revision 018e402774aeeddd60609b4ecdb7e298259dc7
 # ControlNet (Canny): lock the silhouette to an image's edges.
 uvx hf download diffusers/controlnet-canny-sdxl-1.0 --revision eb115a19a10d14909256db740ed109532ab1483c `
   --include "*.json" --include "*fp16.safetensors" --local-dir $HOME/.warlock/models/controlnet-canny-sdxl
+
+# ControlNet (Depth): anchors a re-texture's restyle passes to the mesh's own
+# geometry. The hint is rendered by Blender from the mesh rather than estimated
+# from a photo, which is why this one belongs to the re-texture stage alone and
+# never appears in the reference stage's conditioning pickers.
+uvx hf download diffusers/controlnet-depth-sdxl-1.0 --revision 17bb97973f29801224cd66f192c5ffacf82648b4 `
+  --include "*.json" --include "*fp16.safetensors" --local-dir $HOME/.warlock/models/controlnet-depth-sdxl
 ```
 
 See [Conditioning on an image](22-generating-references.md#conditioning-on-an-image) for what these
@@ -210,9 +241,9 @@ actually do.
 
 ### Optional measuring and helper models
 
-These four never make a picture. They measure one, rewrite the prompt that asks for one, or place a
-skeleton — and each is absent-changes-nothing: without it the feature it powers falls back to what
-the app did before it existed, rather than failing.
+These five never make a picture. They measure one, cut one out, rewrite the prompt that asks for
+one, or place a skeleton — and each is absent-changes-nothing: without it the feature it powers
+falls back to what the app did before it existed, rather than failing.
 
 ```powershell
 # DINOv2 base (~0.4 GB): the identity embedding behind style-anchor similarity
@@ -241,9 +272,18 @@ uvx hf download LykosAI/GPT-Prompt-Expansion-Fooocus-v2 --revision a1fa8a394dc46
 # template's proportions.
 uvx hf download usyd-community/vitpose-base-simple --revision a93ac0c67e0b7e2c55287d21d4c460c8f3c54d45 `
   --include "*.json" --include "*.safetensors" --local-dir $HOME/.warlock/models/vitpose-base
+
+# BiRefNet (~1 GB): host-side background matting for 2D exports. Without it the
+# alpha comes from a corner flood fill, with visibly rougher edges around hair,
+# spokes and anything thin. Weights only -- the repo's own modelling code is
+# vendored in this app, so nothing is executed out of the downloaded directory.
+# That vendored code imports einops, kornia, timm and torchvision, so this one
+# also wants `uv sync --extra text2image`.
+uvx hf download ZhengPeng7/BiRefNet --revision e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4 `
+  --include "*.json" --include "*.safetensors" --local-dir $HOME/.warlock/models/birefnet
 ```
 
-All four run on the **CPU**, deliberately: a measurement must not take VRAM from the models making
+All five run on the **CPU**, deliberately: a measurement must not take VRAM from the models making
 the asset. What each one changes when present:
 
 | Model | Without it | With it |
@@ -252,6 +292,7 @@ the asset. What each one changes when present:
 | PickScore | Candidates rank on composition and style anchor alone. | A human-preference term joins the ranking — see [Seeds and candidates](22-generating-references.md#seeds-and-candidates). |
 | Prompt expander | The prompt is used as typed. | [Prompt enrichment](22-generating-references.md#prompt-enrichment) can rewrite it. |
 | ViTPose | Skeletons are fitted by bounding box. | Humanoid rigs start from measured joints — see [Where the joints come from](25-rigging-and-posing.md#where-the-joints-come-from). |
+| BiRefNet | A 2D export's alpha comes from a corner flood fill. | The cutout is matted properly, which shows on hair and anything thin. |
 
 **FLUX.1 is not offered; FLUX.2 klein is.** The two `FLUX.1` checkpoints — `dev` and `schnell` —
 are click-through gated on Hugging Face, and 12B parameters will not coexist with the reconstruction

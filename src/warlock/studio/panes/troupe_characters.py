@@ -32,8 +32,11 @@ def draw(ctx: Any) -> None:
         widgets.muted_wrapped(
             "Nothing to play yet -- your first character is still on its way."
             if pending
+            # No pose named: the form below is where one gets picked, and this
+            # is drawn before it has been. It promised a T-pose for its whole
+            # life, which stopped being true when A-pose became the default.
             else "No character sheets yet. Describe one below; you will approve "
-            "the T-pose drawing in Create before anything is reconstructed."
+            "the reference drawing in Create before anything is reconstructed."
         )
         _pending(ctx, pending)
         return

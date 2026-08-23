@@ -692,3 +692,67 @@ def test_the_preview_opens_paused(ctx):
     assert state.playing is False
     troupe_mode.advance(ctx, 10.0)
     assert state.frame == 0, "a paused preview advanced on its own"
+
+
+def test_a_drawing_character_is_named_by_its_own_pose(ctx, svc):
+    """The phase said "T-pose" flat, and the pose became a choice on
+    2026-08-23. A row drawn against the A-pose guide reporting itself as a
+    T-pose is the sidebar describing a different character to the one queued.
+    """
+    svc.store.create(
+        "text",
+        "a fire guardian",
+        {"troupe": {"logical_size": 32}, "rig": True, "guide_pose": "apose"},
+        stage="reference",
+        status="queued",
+    )
+    (pending,) = troupe_mode.in_progress(ctx)
+    assert "A-pose" in pending["phase"], pending["phase"]
+    assert "T-pose" not in pending["phase"]
+
+
+def test_a_row_with_no_recorded_pose_still_reads_as_a_t_pose(ctx, svc):
+    """Rows queued before the pose existed were drawn against the T-pose --
+    the same fallback ``_q_generate`` applies when it redraws one."""
+    _troupe_reference(svc, status="queued")
+    (pending,) = troupe_mode.in_progress(ctx)
+    assert "T-pose" in pending["phase"], pending["phase"]
+
+
+def test_no_pane_hard_codes_a_pose_it_cannot_know(ctx):
+    """The empty state promised a T-pose before the user had picked one.
+
+    Copy that names a pose has to get it from the row or the form. Where
+    neither exists yet -- the cast pane with nothing in it -- the honest word
+    is "reference", so this scans the two places that talk about the drawing
+    and requires the label to come from ``POSE_LABELS``.
+    """
+    import ast
+    from pathlib import Path
+
+    from warlock.studio.panes import troupe_characters
+
+    for module in (troupe_characters, troupe_mode):
+        source = Path(module.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        # Docstrings argue about the poses at length and should: they are not
+        # on screen. What this scans is the strings that are.
+        docstrings = {
+            id(node.value.value)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        }
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+                continue
+            if id(node.value) in docstrings:
+                continue
+            if "T-pose" not in node.value:
+                continue
+            # The label table itself is where the words are allowed to live.
+            assert node.value == "T-pose", (
+                f"{Path(module.__file__).name}:{node.lineno} names a pose in prose: "
+                f"{node.value!r}"
+            )

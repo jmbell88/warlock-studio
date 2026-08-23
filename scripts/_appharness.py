@@ -326,3 +326,108 @@ def seed_review(app) -> None:
     # moves you off the unit, so what you had staged for it goes with it), so
     # the harness waits rather than the rule bending.
     review_mode.scan(ctx)
+
+
+def seed_troupe(app) -> None:
+    """A finished character sheet, selected, so Troupe is not in its empty state.
+
+    Without this the mode exercises nothing it exists for: the Sheet pane, the
+    frame table and every handoff in ``sheet_panel`` are drawn only for a
+    selected character, so the 2026-08-23 pass covered the *empty* Troupe and
+    said so. Everything the preview reads is a file, not a render, which is why
+    this can exist at all -- a real character costs an image, a reconstruction,
+    a rig and 256 rendered cells behind a GPU.
+
+    **Built through the app's own builders**, not by hand-writing JSON.
+    ``clips.expand_clips`` and ``charsheet.plan`` need the shipped clip library
+    and nothing else -- no weights, no card, and about a millisecond -- so the
+    sidecar this writes is the one the worker would write, tags and runs and
+    all. A hand-rolled sidecar would be a second dialect of the format and
+    would go stale the first time the real one changed.
+
+    The PNG is drawn here rather than rendered, and deliberately *varies per
+    cell*: a flat fill would make every frame of every direction identical, and
+    a driver that presses Play, steps a frame and turns the character would
+    photograph one unchanging picture and call all three controls dead.
+    """
+    import json
+    import time
+
+    from PIL import Image, ImageDraw
+
+    from warlock import clips, rigging
+    from warlock.pipelines import charsheet
+    from warlock.pipelines import sheet as sheetlib
+    from warlock.service import troupe as svc_troupe
+    from warlock.studio import troupe_mode
+
+    ctx = app.app_ctx
+    layout = charsheet.resolve_layout()
+    # The door's own template, not the string "humanoid": it is pinned there
+    # because it is the only one the clip library carries a walk for, and a
+    # seeder that names it a second time is a second place for that to be true.
+    plan = charsheet.plan(
+        clips.expand_clips(svc_troupe.TROUPE_TEMPLATE, layout),
+        frame_size=32,
+        layout=layout,
+    )
+
+    source_id = ctx.svc.store.create(
+        "image",
+        "a fire guardian",
+        {"seed": 7},
+        stage="model",
+        status="done",
+    )
+    job_dir = ctx.svc.job_dir(source_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+
+    sheet_id = rigging.new_id()
+    png = rigging.sheet_png_path(job_dir, sheet_id)
+    image = Image.new("RGBA", (plan.width, plan.height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    for index, cell in enumerate(plan.cells):
+        x, y = cell.x, cell.y
+        size = plan.frame_size
+        # A head and a body, with the head tracking the cell index: adjacent
+        # frames differ, so stepping and playing are visible in a screenshot.
+        sway = (index % 4) - 1.5
+        cx = x + size / 2 + sway
+        draw.ellipse(
+            (cx - size * 0.14, y + size * 0.12, cx + size * 0.14, y + size * 0.40),
+            fill=(226, 232, 240, 255),
+        )
+        draw.rectangle(
+            (cx - size * 0.11, y + size * 0.42, cx + size * 0.11, y + size * 0.86),
+            fill=(148, 163, 184, 255),
+        )
+    png.parent.mkdir(parents=True, exist_ok=True)
+    image.save(png)
+
+    meta = sheetlib.sidecar(
+        plan,
+        sheet_id=sheet_id,
+        source_job=source_id,
+        image=png.name,
+        created=time.time(),
+        name="a fire guardian",
+        animation=charsheet.animation_block(layout),
+    )
+    meta["troupe"] = layout.as_dict()
+    # The sidecar is the completion marker and is written last, which is
+    # ``list_sheets``' own rule: a sidecar with no PNG beside it is skipped.
+    rigging.sheet_path(job_dir, sheet_id).write_text(
+        json.dumps(meta, indent=2), encoding="utf-8"
+    )
+
+    ctx.svc.store.create(
+        "charsheet",
+        "a fire guardian",
+        {"source_job": source_id, "sheet_id": sheet_id, "layout": layout.as_dict()},
+        stage="sheet",
+        status="done",
+        parent_id=source_id,
+    )
+    ctx.cache.invalidate()
+    ctx.cache.tick()
+    troupe_mode.open_sheet(ctx, source_id, sheet_id)

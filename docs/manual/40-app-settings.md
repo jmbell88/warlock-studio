@@ -157,7 +157,7 @@ capped on one display is offered in full again on a display with room for it.
 
 **Configuration.** *Effective configuration* lists every environment variable the app reads and what
 this process resolved it to, with the ones actually set by the environment first and named by their
-variable. It is the same table `warlock doctor` prints and the same one behind the health dot's
+variable. It is the same table `warlock doctor` prints and the same one behind the status bar's
 Issues popup, and *Copy as text* puts it on the clipboard for a bug report. It is read-only:
 every entry is consumed at import time, so an editable version would have to say "restart to apply"
 under every field.

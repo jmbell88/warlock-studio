@@ -13,8 +13,10 @@ features do not exist yet at all.
 Troupe is **four ordinary jobs and one human gate**, not a single orchestrated process. Knowing that
 explains everything about how it behaves — including why it stops in the middle and waits.
 
-1. **A reference.** One image job draws your character in a T-pose. The pose is not hoped for: a
-   T-pose guide is drawn and handed to the image model as structural conditioning.
+1. **A reference.** One image job draws your character standing in a fixed pose. The pose is not
+   hoped for: a guide figure is drawn and handed to the image model as structural conditioning.
+   **A-pose is the default** and T-pose is the alternative — see
+   [Making a character](33-troupe.md#making-a-character).
 2. **The gate.** You approve that drawing in Create, exactly as in
    [Your first asset](02-your-first-asset.md). Nothing expensive runs until you do. This is the same
    reasoning as the main pipeline, for the same reason: the reconstruction is the costly step and it
@@ -66,7 +68,7 @@ Pixel sizes are 16, 24, 32, 48, 64, 96 and 128. Only 16, 32, 64 and 128 divide t
 evenly; the other three go through a documented resize.
 
 There are male and female builds, differing in shoulder width, arm length and the stance of the
-T-pose guide.
+guide figure.
 
 One implementation detail with a visible consequence: each rendered frame is reduced to its final
 pixel size *before* the cells are packed, not after. A 256-cell sheet packed at render resolution
@@ -134,7 +136,7 @@ Without a GPU, with Blender installed:
 
 With a GPU and weights:
 
-1. Describe a character and let Troupe draw the T-pose reference.
+1. Describe a character and let Troupe draw the pose reference.
 2. Approve it in Create — and notice that nothing expensive happened until you did.
 3. Watch the mesh, rig and sheet stages go by in the in-progress list.
 4. Judge the result honestly against the "untested" note above, especially from behind.

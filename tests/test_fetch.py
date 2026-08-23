@@ -230,6 +230,13 @@ def test_the_docs_name_every_repository_the_registry_does():
     per-model recipes moved to ``docs/MODELS.md`` -- which the README links to
     for exactly this list. What the test is about is that no repository the app
     can fetch is undocumented, not which of the two documents carries it.
+
+    The installation chapter is asserted **separately**, below, and that is the
+    point of splitting them: it is not an alternative place for a repository to
+    be named, it is a third copy of the catalogue that has to be complete on its
+    own. Six entries -- Turbo, Lightning, Juggernaut, DreamShaper, the depth
+    ControlNet and BiRefNet -- drifted out of it unnoticed, because this
+    assertion was satisfied the whole time by the other two files.
     """
     root = SRC.parents[1]
     docs = (root / "README.md").read_text(encoding="utf-8")
@@ -237,6 +244,20 @@ def test_the_docs_name_every_repository_the_registry_does():
     repos = {one.repo_id for entry in fetch.entries() for one in entry.fetch}
     missing = sorted(repo for repo in repos if repo not in docs)
     assert not missing, f"in models.py but in neither README.md nor docs/MODELS.md: {missing}"
+
+
+def test_the_installation_chapter_names_every_repository_too():
+    """The manual is read *inside the app*, where docs/MODELS.md cannot be
+    opened -- which is why chapter 38 carries the commands rather than a
+    pointer, and why its completeness is a claim of its own rather than one it
+    can borrow from the two files above."""
+    root = SRC.parents[1]
+    text = (root / "docs" / "manual" / "38-installation.md").read_text(encoding="utf-8")
+    repos = {one.repo_id for entry in fetch.entries() for one in entry.fetch}
+    missing = sorted(repo for repo in repos if repo not in text)
+    assert not missing, (
+        f"in models.py but not in docs/manual/38-installation.md: {missing}"
+    )
 
 
 def test_the_readme_counts_the_registered_base_models():

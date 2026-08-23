@@ -67,9 +67,13 @@ placed against the field you are typing into.
 `Ctrl+K` opens a search box over whatever is on screen. Type a few letters — initials work, so
 `gtc` finds *Go to Clay* — then Up/Down to move and Enter to run. Esc closes it.
 
-It lists every mode, the generate action, the viewport toggles and the actions for the selected
-asset. A command that cannot run right now is still listed, greyed: an empty result would not tell
-you the command exists or which mode owns it.
+It lists every mode, the generate action, the viewport toggles, the actions for the selected asset,
+and each guided tour as **Take the tour: …** — see [New here?](21-home.md#new-here). A command that
+cannot run right now is still listed, greyed: an empty result would not tell you the command exists
+or which mode owns it.
+
+Everything in the palette is also in the menu bar, and the reverse: both are drawn from the same
+registry, so neither can offer something the other does not.
 
 Typing also searches your assets by name, prompt or job id; picking one selects it and opens it in
 the pane that made it.

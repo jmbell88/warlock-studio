@@ -57,7 +57,7 @@ Boolean variables accept `1`, `true` or `on`; anything else is off.
 ### Seeing which of these are actually set
 
 `warlock doctor` prints an **Effective configuration** block after its checks, and the diagnostics
-popup behind the health dot carries the same list. Both mark the rows that came from the
+popup behind the status bar's issue count carries the same list. Both mark the rows that came from the
 environment rather than from a default, which is the only part that diagnoses anything: an install
 whose behaviour disagrees with this table almost always disagrees because something in its
 environment says so.

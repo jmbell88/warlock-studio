@@ -47,8 +47,8 @@ thing that decides what the panes show. It is drawn in every mode, so there is n
 leave. There is no per-mode keyboard shortcut — the command palette (`Ctrl+K`) is the keyboard
 route, see [Keyboard shortcuts](37-shortcuts.md).
 
-The rail shows glyphs by default and expands to show the labels beside them; the chevron at its foot
-toggles that, and the choice is remembered. In icon-only form every item names itself in a tooltip.
+The rail shows glyphs by default and expands to show the labels beside them; **Window → Navigation
+labels** toggles that, and the choice is remembered. In icon-only form every item names itself in a tooltip.
 A window too narrow to hold the labelled rail *and* three usable columns draws the collapsed one
 until there is room again — what you chose and what fits are two different facts, so dragging the
 window wider brings the labels back.
@@ -104,6 +104,11 @@ pane's (?) button) instead of replacing it, so the control you were asking about
 you have the answer; and the style-profile manager opens as a sheet from the profile picker at the
 Reference stage — see [Profiles](35-profiles.md).
 
+The **guided tour** is a third overlay, for the same reason: it points at the controls of whatever
+mode you are in, so taking that mode away to run it would leave nothing to point at. It never
+clicks anything for you. Home offers it on a fresh install and the palette carries it thereafter —
+see [New here?](21-home.md#new-here).
+
 Each generation control belongs to exactly one stage. The one setting both Reference and Mesh need
 is **platform**, and it is deliberately two separate controls: at the Reference stage it is a hint
 that goes into the prompt ("how much fine detail should be drawn"), and at the Mesh stage it is the
@@ -136,9 +141,41 @@ Once you are in the workspace, the window is three columns:
   job you have ever run, with its filters. The divider between them can be dragged; the sidebar's
   own width is not draggable, only chosen from the three named sizes in Settings.
 
-There is no top bar. The keyboard shortcut list is `Ctrl+/` or **Keyboard shortcuts** in the command
-palette, and it is reproduced in [Keyboard shortcuts](37-shortcuts.md). The **health badge** sits in
-the rail's footer and appears only when a startup check is failing — amber for a non-fatal one
-(missing optional weights, no gltfpack, no CUDA), red when something fatal failed or the worker
-died. Hovering it names the failing checks; clicking it opens the full Issues list, which is also
-**Issues** in the palette when everything is passing and there is no badge to click.
+Above the columns is the menu bar and below them is the status bar, and both are described next.
+
+## The menu bar
+
+One menu bar across the top of the window, drawn in every mode. Its roots are **File**, **Edit**,
+**View**, **Workspace**, **Window** and **Help**, and between Edit and View sits whatever the
+current workspace contributes. For most of them that is a single menu under the mode's own name —
+*Clay*, *Plotter*, *Troupe* — holding the actions that belong to that mode alone. Inker, which has
+far more of them, contributes several: **Sprite**, **Layer**, **Frame** and **Select**, and it adds
+rows to File, Edit and View as well. Either way a mode's actions get their own place rather than
+being filed into File or Edit, which would turn the two menus everybody already understands into a
+list of everything.
+
+**Nothing in the menu is a second implementation of anything.** Every row is an adapter over the
+same command registry the palette searches and the same operation registry the keys dispatch
+through, so the menu, `Ctrl+K` and the keyboard cannot disagree about what an action does, whether
+it is available, or why it is not. A row you cannot use is greyed with the reason on hover — the
+same reason the palette gives — and a row with a keyboard binding prints it on the right.
+
+**Workspace** is the one to know about: it holds all eleven modes, so it is a third way — beside
+the rail and the palette — to change what the window is showing.
+
+## The status bar
+
+One line along the foot of the window, also in every mode. Left to right: the workspace you are in,
+then the open document and whether it has unsaved changes — plus the current tool and zoom in Inker
+— then the queue when anything is running or waiting, then an amber **N issue(s)** when a startup
+check has failed. Clicking that last one opens the Issues list; it is **Issues** in the command
+palette too, which is how you reach it when nothing is failing and there is no count to click.
+There is no green "all well" state, because a healthy install has nothing to report.
+
+When the window is too narrow to hold all of it, items drop from the *right* end, so the answer to
+"where am I" is the last thing to go. The one item anchored to the right instead is the optional
+system-resource meter — see [App settings](40-app-settings.md#appearance) — which is
+reserved before the rest is trimmed, because it is read while a generation is being decided on.
+
+The keyboard shortcut list is `Ctrl+/`, **Help → Keyboard shortcuts**, or **Keyboard shortcuts** in
+the command palette, and it is reproduced in [Keyboard shortcuts](37-shortcuts.md).

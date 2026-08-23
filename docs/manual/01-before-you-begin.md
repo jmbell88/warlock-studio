@@ -126,9 +126,10 @@ move any of it somewhere else.
 
 Two places, both worth knowing before you need them.
 
-The **health dot** in the window's bottom-left corner is the app's opinion of itself. If anything is
-wrong it becomes an **Issues** link, and clicking it lists what — a missing weight, a binary it
-cannot find, a GPU it cannot see — each with the exact command that fixes it.
+The **status bar** along the foot of the window is the app's opinion of itself. When everything
+checks out it says nothing about health at all; when something is wrong an amber **N issue(s)**
+joins it, and clicking that lists what — a missing weight, a binary it cannot find, a GPU it cannot
+see — each with the exact command that fixes it.
 
 `uv run warlock doctor` asks the same questions from a terminal and prints the same answers, which
 is the more useful of the two when the window will not open at all.

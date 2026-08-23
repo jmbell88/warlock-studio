@@ -129,6 +129,25 @@ _WAITING = "Waiting for you. Approve the drawing in Create."
 MAX_IN_PROGRESS = 5
 
 
+#: What each reference pose is called in prose. The keys are the door's names
+#: and are what travel in ``params``; these are only what is read. One table,
+#: here rather than in a pane, because the sidebar, the toast and the form all
+#: name the same thing and three spellings of it is three chances to drift.
+POSE_LABELS = {"tpose": "T-pose", "apose": "A-pose"}
+
+
+def _pose_label(row: Any) -> str:
+    """What to call the pose a job row was drawn against.
+
+    Falls back to the T-pose, and deliberately not to the door's default: a row
+    queued before the pose was a choice was drawn against that guide, and
+    ``_q_generate`` redraws it against the same one. Saying "A-pose" over it
+    would describe a character nobody queued.
+    """
+    params = (row or {}).get("params") or {}
+    return POSE_LABELS.get(str(params.get("guide_pose") or "tpose"), "reference")
+
+
 def in_progress(ctx: Any) -> list[dict[str, Any]]:
     """Characters on the chain that cannot be played yet, newest first.
 
@@ -188,7 +207,7 @@ def in_progress(ctx: Any) -> list[dict[str, Any]]:
             # one failure, in a sidebar that cannot act on it.
             continue
         if status != "done":
-            phase, waiting = "Drawing the T-pose reference...", False
+            phase, waiting = f"Drawing the {_pose_label(row)} reference...", False
         elif not kids:
             phase, waiting = _WAITING, True
         else:
@@ -654,7 +673,7 @@ def _layout_request(form: dict[str, Any]) -> dict[str, Any]:
 
 
 def start_character(ctx: Any, form: dict[str, Any]) -> bool:
-    """Submit the T-pose reference that starts a character.
+    """Submit the pose reference that starts a character.
 
     The *first* link only. The gate is the point of the shape: this queues one
     cheap image, the user approves it in Create, and only then is the
@@ -757,8 +776,12 @@ def on_task_done(ctx: Any, done: Any) -> None:
     if isinstance(result, dict) and result.get("id"):
         state.pending = str(result["id"])
     if done.key == "troupe-start":
+        # The form's own choice: this fires on the way out of the submit, and
+        # the row it queued is not readable here yet.
+        pose = str((state.form or {}).get("pose") or "")
         ctx.toast(
-            "Drawing the T-pose reference. Approve it in Create to build the mesh.",
+            f"Drawing the {POSE_LABELS.get(pose, 'pose')} reference. "
+            "Approve it in Create to build the mesh.",
             "success",
         )
         set_mode(ctx.state, "create")

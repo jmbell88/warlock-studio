@@ -56,6 +56,7 @@ from _appharness import (  # noqa: E402
     seed,
     seed_asset,
     seed_review,
+    seed_troupe,
 )
 
 from warlock.studio import create_stages  # noqa: E402
@@ -357,6 +358,14 @@ def seed_mode(app, mode: str) -> None:
         seed_asset(app)
     elif mode == "review":
         seed_review(app)
+    elif mode == "troupe":
+        # Troupe's own seed *as well as* the shared one: the shared canvases
+        # are what the rail's other modes need, and this mode's Sheet pane,
+        # frame table and handoffs are drawn only for a selected character.
+        # Without it the pass covers the empty state and reports a coverage
+        # number that reads like the whole mode.
+        seed(app)
+        seed_troupe(app)
     else:
         seed(app)
 

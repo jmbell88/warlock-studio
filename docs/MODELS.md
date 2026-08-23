@@ -121,7 +121,7 @@ Rename-Item $HOME/.warlock/models/loras/pytorch_lora_weights.safetensors pixel-a
 
 ## Conditioning, matting and measurement models
 
-Six more registry entries, none of them required to generate anything. They lived only in
+Seven more registry entries, none of them required to generate anything. They lived only in
 `models.py` until the download machinery started generating both lists from the same `Fetch`
 records; `warlock doctor` reports each one and the Settings pane can fetch it.
 
@@ -145,11 +145,13 @@ uvx hf download diffusers/controlnet-depth-sdxl-1.0 --revision 17bb97973f2980122
   --include "*.json" --include "*fp16.safetensors" --local-dir $HOME/.warlock/models/controlnet-depth-sdxl
 
 # BiRefNet (~1 GB): host-side background matting for 2D exports. Without it the
-# alpha comes from a corner flood fill, with visibly rougher edges. Its own
-# modelling code runs on load and imports einops/kornia/timm/torchvision, so it
-# also wants `uv sync --extra text2image`.
+# alpha comes from a corner flood fill, with visibly rougher edges. Weights only
+# -- the repo's own modelling code is vendored at `pipelines/birefnet/` and
+# nothing is executed out of the downloaded directory, which is why this fetch
+# carries no `*.py`. That vendored code imports einops/kornia/timm/torchvision,
+# so it still wants `uv sync --extra text2image`.
 uvx hf download ZhengPeng7/BiRefNet --revision e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4 `
-  --include "*.json" --include "*.py" --include "*.safetensors" --local-dir $HOME/.warlock/models/birefnet
+  --include "*.json" --include "*.safetensors" --local-dir $HOME/.warlock/models/birefnet
 
 # DINOv2 base (~400 MB): the identity metric `python -m warlock.bench` scores
 # with. A missing one costs a number, never a job.

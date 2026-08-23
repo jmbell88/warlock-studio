@@ -1,9 +1,12 @@
 # Architecture
 
-Warlock Studio is one operating-system process. There is no server, no browser and no local HTTP
-API — the one exception is the reconstruction engine, which is a vendored binary that happens to
-speak HTTP on a loopback port, and nothing else in the app does. What follows is how that single
-process is arranged, and why each boundary inside it is where it is.
+Warlock Studio is one window, one OpenGL context and one interactive process. There is no server,
+no browser and no local HTTP API — the one exception is the reconstruction engine, which is a
+vendored binary that happens to speak HTTP on a loopback port, and nothing else in the app does.
+Around that one process is a small family of short-lived and long-lived children, each of which
+exists because something it does cannot safely be done in the process that has to keep drawing.
+What follows is how the interactive process is arranged, why each boundary inside it is where it
+is, and what was pushed outside it.
 
 ## One process, three threads
 
@@ -43,6 +46,40 @@ The visible consequence of the split is that the app survives the worker dying. 
 job store are in different threads from the GPU pipeline, so a worker that fails takes the queue
 with it and leaves the UI standing — which is exactly why there is a banner saying so. See
 [The GPU worker stopped](41-troubleshooting.md#the-gpu-worker-stopped).
+
+## The subprocess family
+
+Threads divide work that has to share memory. A separate process is for work that must be able to
+*take memory away again* when it ends, or that can take the interpreter down with it — and the app
+has both kinds. Every one of them is put into a Windows kill-on-close job object at creation, so
+nothing outlives the app however it exits, and a scan test refuses a spawn site that skips it.
+
+| Process | Holds | Why it is not in the app |
+| --- | --- | --- |
+| The reconstruction engine | The mesh model, resident between jobs | A vendored native binary; it was never Python |
+| The image model | The SDXL or FLUX checkpoint, resident between jobs | Its host memory was never returned — see below |
+| Blender | Rigging, skinning, sheet renders | `bpy` is process-global and can take the interpreter down with it |
+| BiRefNet matting | The matting model, for one call | Same host-memory problem, at a smaller scale |
+| The load probe | A checkpoint, to measure it | Measuring a load must not perform one |
+| The `bpy` probe | Nothing; it imports Blender and prints its version | `import bpy` takes seconds and must not be one the window waits on |
+| gltfpack | One mesh optimisation | A vendored native binary, like the engine |
+| The fetch worker | One download | It is the only thing allowed online — see below |
+
+**Blender is the oldest of them and the clearest.** `bpy` keeps global state, and the non-manifold
+geometry a reconstruction sometimes produces can abort the interpreter rather than raise. A crash
+in a child costs the job; in the app it would cost every unsaved document in every workspace.
+
+**The image model is the newest, and it moved for a reason worth stating.** Unloading it returned
+the VRAM exactly as it claimed and did not return the *host* memory: a single checkpoint charged
+about 24 GiB of system commit that nothing but process exit reclaimed, so switching image models
+twice in a session ended with the app correctly refusing its own next job. Measured on both sides
+of the boundary, the child returns all of it. The pipeline object still lives across jobs — the
+child is persistent, not per-call — so nothing about warm-start behaviour changed.
+
+**What crosses a boundary is a file path, never pixels.** Every one of these children is handed
+paths and numbers and writes its output to disk, which is why moving work out of the app process
+has never required a call site to change.
+
 
 ## The service layer
 
@@ -111,8 +148,10 @@ being fetched. That is the whole reason installation has a manual download step 
 [Offline by design](38-installation.md#offline-by-design).
 
 There is one exception and it is deliberately shaped so that it changes nothing above. The Settings
-pane's **Download** button spawns a separate process, which sets `HF_HUB_OFFLINE=0` in its own
-environment, fetches one repository and exits. The app process never sets that variable to anything
+pane's **Download** button spawns the fetch worker from
+[the subprocess family](#the-subprocess-family) above, which sets `HF_HUB_OFFLINE=0` in its own
+environment, fetches one repository and exits. It is the only one of those children that goes
+online at all. The app process never sets that variable to anything
 but `1`, and nothing on the generation path can reach the fetcher. A subprocess rather than a
 temporary flag flip precisely because `huggingface_hub` reads the variable at import time: in
 process, "is this offline" would become a question about import order instead of about one line.

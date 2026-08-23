@@ -13,10 +13,28 @@ Nothing about Home is remembered. There is no "last mode" setting, and no way to
 it — a stored mode would be a value with no reader, and the app would drift into disagreeing with
 itself about where it opens.
 
-The three answers are one column, weighted by how often each is the reason you are looking: a card
-you dismiss once per release, one quiet line, and then the whole rest of the screen.
+The three answers are two columns, weighted by how often each is the reason you are looking: a
+narrow left column holding a card you dismiss once per release, the New… button and one quiet
+status line, and then the whole rest of the screen for what you were working on.
 
-![Home: the rail, the What's new card, New... and an empty Resume](img/21-home.png)
+![Home: the rail, the tour offer, the What's new card, New... and an empty Resume](img/21-home.png)
+
+## New here?
+
+Above everything else, on a fresh install, is an offer of a **guided tour** — a title, one line
+saying how long it takes, **Start** and **Not now**. There are two tours: *Around the app*, which
+walks the rail and the five stages of Create, and *Drawing in Inker*, which makes a canvas, a
+stroke, a layer and a frame. Neither needs a GPU or any downloaded weights, which is deliberate: a
+tour a fresh install cannot finish is worse than none.
+
+**The tour points and waits. It never clicks anything for you.** A step highlights one control,
+says what it is for, and either advances on **Next** or waits until you have actually done the
+thing it describes — clicked that mode, made that stroke. **Back** returns a step, **Read more**
+opens the manual chapter the step is about, and `Esc` ends the tour wherever you are. Every tour is
+also in the command palette as **Take the tour: …**, so leaving one is never losing it.
+
+The offer is not a modal and never blocks the app. It stands down on its own once you have finished
+the tour it names, moves on to the other one, and **Not now** puts it away for good.
 
 ## What's new
 
@@ -55,8 +73,8 @@ There used to be a **Library** line here too, counting assets and disk. It went 
 grid of those same assets: a count of the thing you are looking at is not news, and the Library is
 one click away in the rail.
 
-The Issues line is a different destination from the health dot in the bottom-left corner, which
-opens the read-only Issues popup: the dot answers "what is wrong right now", and this line
+The Issues line is a different destination from the amber issue count in the status bar, which
+opens the read-only Issues popup: the status bar answers "what is wrong right now", and this line
 answers "how do I fix it". It exists because a fresh install reaches Home with no weights
 downloaded, presses New 2D, and is refused at the door with a download command in the message. That
 refusal is correct, but Home offered every way to start work and no way to find out first whether

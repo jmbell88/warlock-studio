@@ -1,8 +1,8 @@
 # Troubleshooting
 
-Most things that go wrong here announce themselves: the health dot turns amber or red, a compact
-summary appears across the top of the window, and the Issues popup names the check that failed. This
-chapter is the other half — what each of those means and what to do about it.
+Most things that go wrong here announce themselves: an amber issue count appears in the status bar,
+a compact summary appears across the top of the window, and the Issues popup names the check that
+failed. This chapter is the other half — what each of those means and what to do about it.
 
 The summary holds the issue count and the leading action on one line. **Review** opens Issues for
 the complete checks, copy actions and troubleshooting route. Separately, a toast for a failure with no message
@@ -11,15 +11,15 @@ than inside the Issues popup.
 
 **Dismiss** takes the banner off the screen without destroying what it said. Each of the three
 things that write a banner message writes it exactly once — the startup check sweep and the two
-worker checks — so clearing the list would leave a coloured dot as the only surviving evidence. The
-text moves into the Issues popup under a **Dismissed** heading instead.
+worker checks — so clearing the list would leave a one-line count as the only surviving evidence.
+The text moves into the Issues popup under a **Dismissed** heading instead.
 
-## The health dot and Issues
+## The issue count and Issues
 
-The dot at the top right is green when every check passed, amber when a non-fatal one failed, and
-red for a fatal one or a dead worker. When something is failing it also carries the word *Issue* or
-*Issues*, and hovering it lists the failing rows by name — enough to tell a missing style LoRA from
-a held engine port without opening anything.
+The status bar along the foot of the window says **N issue(s)** in amber whenever a check has
+failed or an error has been recorded, and says nothing at all when everything passed — there is no
+green state to read, because a healthy install has nothing to report. Hovering it offers to open
+the health details.
 
 Clicking it opens Issues, which holds four things:
 
