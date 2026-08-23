@@ -711,6 +711,38 @@ def _cursor_pixel(state: Any, tab: Any, origin, hovered: bool):
     return point, tab.doc.eyedrop(point, layer_only=state.sample_layer)
 
 
+def _zoom_combo(tab: Any) -> None:
+    """A zoom the user can *set*, rather than only nudge -- Plotter's control.
+
+    Writes ``tab.view.pending_zoom``, which already exists and is already
+    consumed by the canvas: only the canvas knows how big the pane is, so a
+    combo cannot centre on its own.
+
+    The width is explicit because ``widgets.combo`` defaults to -1, which is
+    the whole remaining row -- the same bar-across-the-status-line the
+    screenshot pass caught in Plotter. The tooltip is the accessible name for
+    a ``##``-hidden combo, for the same reason.
+
+    Keys come from ``inker_state.zoom_key`` rather than from an int round
+    trip: this list holds 12.5%, and ``int(picked) / 100`` reads it as 12%.
+    """
+    imgui.same_line()
+    current = inker_state.zoom_key(tab.view.zoom)
+    options = [
+        (inker_state.zoom_key(z), f"{inker_state.zoom_key(z)}%")
+        for z in inker_state.ZOOM_PRESETS
+    ]
+    if current not in {key for key, _label in options}:
+        # The wheel's 5% notches land between presets constantly, and a combo
+        # showing a preset the view is not at would be the pane lying about
+        # itself.
+        options = [(current, f"{current}%"), *options]
+        options.sort(key=lambda option: float(option[0]))
+    picked = widgets.combo("##inker-zoom", current, options, sp(84), tooltip="Zoom")
+    if picked != current:
+        tab.view.pending_zoom = float(picked) / 100.0
+
+
 def _status_bar(ctx: Any, state: Any, tab: Any, origin: Any, hovered: bool) -> None:
     """The numbers a paint program keeps under the canvas.
 
@@ -727,7 +759,6 @@ def _status_bar(ctx: Any, state: Any, tab: Any, origin: Any, hovered: bool) -> N
     what is under the cursor, then what is selected, then the tool, then the
     document, then the zoom.
     """
-    view = tab.view
     doc = tab.doc
     # The status bar is drawn outside the child, so it holds imgui's own cursor
     # object rather than the pair every view helper takes.
@@ -765,8 +796,12 @@ def _status_bar(ctx: Any, state: Any, tab: Any, origin: Any, hovered: bool) -> N
     if doc.anim is not None and doc.anim.frames:
         parts.append(f"frame {doc.anim.current + 1}/{len(doc.anim.frames)}")
     parts.append(f"{doc.size[0]} x {doc.size[1]}")
-    parts.append(f"{view.zoom * 100:.0f}%")
     widgets.muted("   ".join(parts))
+    # The zoom is split out of the joined string rather than appended to it,
+    # because it is the one number here the user can *set*. It stays last, so
+    # the documented Aseprite reading order -- cursor, selection, tool,
+    # document, zoom -- is unchanged.
+    _zoom_combo(tab)
     tip = state.tip
     if tip is not None and not tip.alive():
         # Cleared on the frame it expires rather than on a timer: this is the

@@ -196,9 +196,17 @@ def _inker_bounds() -> dict[str, float]:
     return {"lo": inker_state.INKER_MIN_ZOOM, "hi": inker_state.INKER_MAX_ZOOM}
 
 
-def test_the_inker_bounds_are_narrower_than_the_shared_ones():
-    """A tile map wants 5%; a drawing at 5% is a postage stamp."""
-    assert inker_state.MIN_ZOOM < inker_state.INKER_MIN_ZOOM
+def test_only_the_ceiling_is_the_inkers_own_now():
+    """The floor was 25% and the reversal is deliberate.
+
+    The old claim was that a tile map wants 5% while a drawing at 5% is a
+    postage stamp nobody can nib -- true, and it cost Fit: a page too large to
+    fit at 25% centred and *overflowed* the pane rather than shrinking to meet
+    it, which is the one thing Fit means. Nobody nibs at 5% on purpose, and
+    the wheel notch that reaches it also leaves it. The ceiling stays Inker's
+    own: 32x is a tile map's magnifier.
+    """
+    assert inker_state.MIN_ZOOM == inker_state.INKER_MIN_ZOOM
     assert inker_state.INKER_MAX_ZOOM < inker_state.MAX_ZOOM
 
 
@@ -240,10 +248,49 @@ def test_a_step_that_changes_nothing_leaves_the_pan_alone():
 
 
 def test_fitting_under_a_floor_centres_at_the_floor_and_overflows():
-    """The stated cost of having a floor: a huge page does not shrink to meet it."""
+    """The stated cost of having a floor: a huge page does not shrink to meet it.
+
+    The document is 40 000 px rather than 8 000 because 8 000 into 400 is
+    *exactly* the new 5% floor -- the assertion would still have passed while
+    the overflow it names had stopped happening, which is a lie that stays
+    green. It is the claim that matters, so the page grew instead.
+    """
     view = PaintView()
-    inker_state.fit(view, (8000, 8000), (400.0, 400.0), **_inker_bounds())
+    inker_state.fit(view, (40000, 40000), (400.0, 400.0), **_inker_bounds())
     assert view.zoom == pytest.approx(inker_state.INKER_MIN_ZOOM)
+    # 40 000 at 5% is 2 000 px in a 400 px pane: it overflows, and that is the
+    # cost being recorded rather than a bug.
+    assert 40000 * view.zoom > 400.0
+
+
+def test_the_zoom_presets_and_the_ladder_are_two_tables_on_purpose():
+    """A "sync the two lists" tidy-up must fail here rather than land.
+
+    The combo answers *"show me exactly this number"*, so 75% belongs on it
+    even though a source pixel is then 0.75 screen pixels -- the user asked
+    for it. The ladder answers *"the next honest scale"*, so 75% must stay off
+    it, or +/- walks into banding unasked.
+    """
+    assert 0.75 in inker_state.ZOOM_PRESETS
+    assert 0.75 not in inker_state.ZOOM_LADDER
+    # Both are sorted, and both live inside the pane's own bounds -- a preset
+    # the canvas would clamp away is a menu entry that lies.
+    for table in (inker_state.ZOOM_PRESETS, inker_state.ZOOM_LADDER):
+        assert list(table) == sorted(table)
+        assert table[0] >= inker_state.INKER_MIN_ZOOM
+        assert table[-1] <= inker_state.INKER_MAX_ZOOM
+    # Every ladder rung is still whole either way up (the pixel-art rule).
+    for rung in inker_state.ZOOM_LADDER:
+        whole = rung if rung >= 1.0 else 1.0 / rung
+        assert whole == pytest.approx(round(whole))
+
+
+def test_a_preset_key_survives_the_half_percent():
+    """``int(picked) / 100`` -- Plotter's spelling -- turns 12.5% into 12%."""
+    assert inker_state.zoom_key(0.125) == "12.5"
+    assert inker_state.zoom_key(1.0) == "100"
+    keys = [inker_state.zoom_key(z) for z in inker_state.ZOOM_PRESETS]
+    assert len(set(keys)) == len(keys), "two presets sharing a key pick the wrong one"
 
 
 def test_centring_sets_an_exact_zoom():

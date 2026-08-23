@@ -29,16 +29,21 @@ MIN_ZOOM = 0.05
 MAX_ZOOM = 32.0
 ZOOM_STEP = 1.15
 
-# Inker's own, narrower bounds. Separate constants rather than a change to the
-# three above, because Plotter and Packwright import those and a tile map wants
-# to sit at 5% while a drawing at 5% is a postage stamp nobody can nib. Every
-# view function below takes ``lo``/``hi`` defaulting to the globals, so those
-# two callers are untouched and this pane passes its own pair.
+# Inker's own bounds. Separate constants rather than a change to the three
+# above, because Plotter and Packwright import those and only the *ceiling* is
+# Inker's own now: 32x is a tile map's magnifier and a drawing has a nib.
+# Every view function below takes ``lo``/``hi`` defaulting to the globals, so
+# those two callers are untouched and this pane passes its own pair.
 #
-# Known and accepted: an image too large to fit at 25% centres and overflows the
-# pane rather than shrinking to meet it. The presets top out at 2048 px, which
-# fits a 700 px pane at ~34%, so it takes a hand-opened file to reach.
-INKER_MIN_ZOOM = 0.25
+# **The floor was 25% and is now the global 5%, and that is a reversal.** The
+# argument for 25% was that a drawing at 5% is a postage stamp nobody can nib
+# -- but the paragraph making it also recorded what it cost, three lines
+# later: an image too large to fit at 25% centres and *overflows* the pane
+# rather than shrinking to meet it, so Fit does not fit. A floor that breaks
+# the one control whose entire meaning is "show me all of it" is buying the
+# wrong thing: nobody nibs at 5% on purpose, and the way you leave 5% is the
+# same wheel notch that got you there.
+INKER_MIN_ZOOM = 0.05
 INKER_MAX_ZOOM = 10.0
 
 # The wheel's granularity, in percent. Additive and *snapped* rather than the
@@ -60,7 +65,32 @@ ZOOM_PERCENT_STEP = 5
 #: The wheel keeps its 5% notches deliberately -- it is the *fine* control, and
 #: ``test_canvas_input`` pins the notch size. Aseprite splits the two the same
 #: way round.
-ZOOM_LADDER = (0.25, 0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0)
+#: Three rungs below the old 25% floor arrived with it (1/20, 1/10 and 1/8 --
+#: all whole numbers of source pixels onto one, so the rule above holds).
+#:
+#: **This is not :data:`ZOOM_PRESETS` and must not be "synced" with it.** The
+#: two tables answer two questions. The combo is *"show me exactly this
+#: number"*, and honouring 75% there is correct even though a source pixel is
+#: then 0.75 screen pixels -- the user asked. The ladder is *"the next honest
+#: scale"*, and putting 75% on it would walk +/- into banding unasked. A test
+#: asserts the divergence so a future tidy-up of the two tables fails loudly.
+ZOOM_LADDER = (0.05, 0.1, 0.125, 0.25, 0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0)
+
+#: What the zoom combo in the canvas footer offers, as whole scales.
+#:
+#: Aseprite's own list, and deliberately *wider* than the ladder: see the note
+#: there for why 75% belongs on exactly one of the two.
+ZOOM_PRESETS = (0.05, 0.125, 0.25, 0.5, 0.75, 1.0, 2.0, 4.0, 8.0)
+
+
+def zoom_key(zoom: float) -> str:
+    """A preset's stable key: its percentage, trimmed. ``0.125`` -> ``"12.5"``.
+
+    A string rather than Plotter's ``int(picked) / 100``, because this list
+    holds a half-percent (12.5%) that an int round-trip silently turns into
+    12%, which is not a rung and not what the label says.
+    """
+    return f"{round(zoom * 100, 2):g}"
 
 
 def zoom_rung(zoom: float, direction: int) -> float:

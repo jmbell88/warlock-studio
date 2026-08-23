@@ -59,12 +59,13 @@ strange one.
 
 The wheel zooms in steps of 5%, and it rounds to that step first: come out of a **Fit view** at some
 awkward 83% and the first notch takes you to 85, not to 88. That is what makes 100% a place you can
-reach from either direction rather than a number you have to type. The zoom stops at 25% and at
-1000% — far enough out to see a large page whole, far enough in to place single pixels, and no
+reach from either direction rather than a number you have to type. The zoom stops at 5% and at
+1000% — far enough out to see any page whole, far enough in to place single pixels, and no
 further in either direction, because past those the canvas is either unreadable or unusable.
 
 `+` and `-` are the other zoom, and they move differently on purpose: they step through *whole*
-scales — 25%, 50%, 100%, 200%, 300%, 400%, 500%, 600%, 800%, 1000% — rather than 5% at a time. Those
+scales — 5%, 10%, 12.5%, 25%, 50%, 100%, 200%, 300%, 400%, 500%, 600%, 800%, 1000% — rather than 5%
+at a time. Those
 are the zooms at which pixel art is being shown rather than resampled. At 135% a pixel of the drawing
 is 1.35 pixels of the screen, so some are drawn one wide and some two: a checkerboard dither comes
 out as bands, and a one-pixel line thickens and thins along its length. The wheel is the fine
@@ -79,9 +80,10 @@ Above 400% a thin outline follows the cursor around the single pixel the next da
 brush ring says how *wide* the brush is; at that zoom the question is *which* pixel, and the ring
 cannot answer it.
 
-One consequence worth knowing: an image too large to fit at 25% is centred at 25% and runs off the
-edges of the pane rather than shrinking to meet it. Every size this app makes fits comfortably; it
-takes a hand-opened file to run into.
+One consequence worth knowing: an image too large to fit at 5% is centred at 5% and runs off the
+edges of the pane rather than shrinking to meet it. That is what a floor costs, and it is why this
+one is as low as the wheel goes: at 25% it was a page of 8 000 pixels that overflowed, which is a
+size a hand-opened file reaches.
 
 ## The status bar
 
@@ -89,6 +91,12 @@ The muted line under the canvas is where the numbers live. Left to right: the co
 cursor as a swatch, then the pixel it is over, then the size of the selection if there is one, then
 the tool and its brush size, the layer you are drawing into, the frame if the document is animated,
 the document's size, and the zoom.
+
+The zoom at the end is a picker rather than a readout: open it and choose 5%, 12.5%, 25%, 50%, 75%,
+100%, 200%, 400% or 800% and the canvas goes there, centred, in one move. A zoom the wheel has left
+you on — 85%, say — is added to the top of the list so the control always says where you actually
+are. 75% is on this list and not on the `+`/`-` ladder above, and that is deliberate: asking for a
+number exactly is a different question from asking for the next honest scale.
 
 Two of those save a trip. The swatch is what `Alt`+click would pick up — the eyedropper's only other
 feedback is the foreground chip changing in a different panel — and the brush size is the number
