@@ -38,6 +38,7 @@ from .undo import (
     LayerPropsEdit,
     LayerRemoveEdit,
     MatteEdit,
+    one_step,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -184,7 +185,7 @@ class LayerOps:
     def _push_with_inheritance(self: Document, edit: Any, parent: int | None) -> None:
         """Push an add, with the membership the new row inherits folded in."""
         edits = [edit, *self.inherit_group_edits(parent)]
-        self.history.push(edits[0] if len(edits) == 1 else CompoundEdit(edits))
+        self.history.push(one_step(edits))
 
     def duplicate_layer(self: Document, index: int | None = None) -> Layer:
         self.commit_floating()
@@ -265,7 +266,7 @@ class LayerOps:
             edit = LayerRemoveEdit(index, gone)
             self.invalidate_all()
         edits = [edit, *(self._forget_member(member) if member is not None else [])]
-        self.history.push(edits[0] if len(edits) == 1 else CompoundEdit(edits))
+        self.history.push(one_step(edits))
         return True
 
     def _move_row_edit(self: Document, index: int, to: int) -> Any:
@@ -302,7 +303,7 @@ class LayerOps:
                 self._set_membership(member, after)
                 edits.append(MembershipEdit(member, before, after))
                 edits.extend(self._prune_group(before))
-        self.history.push(edits[0] if len(edits) == 1 else CompoundEdit(edits))
+        self.history.push(one_step(edits))
         return True
 
     def layer_at(self: Document, xy: tuple[int, int]) -> int | None:
@@ -470,7 +471,7 @@ class LayerOps:
             )
         if not edits:
             return False
-        self.history.push(edits[0] if len(edits) == 1 else CompoundEdit(edits))
+        self.history.push(one_step(edits))
         if anim is not None:
             self._anim_changed()
         else:

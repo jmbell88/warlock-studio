@@ -270,3 +270,52 @@ def test_clearing_empties_both_directions():
 @pytest.mark.parametrize("edit_type", [U.PatchEdit, U.LayerAddEdit])
 def test_every_edit_type_is_an_edit(edit_type):
     assert issubclass(edit_type, U.Edit)
+
+
+# --- one_step ---------------------------------------------------------------
+
+
+def test_one_step_leaves_a_lone_edit_unwrapped():
+    """Not merely tidiness. The history panel labels a step by its class name,
+    so an unwrapped step reads as what it did and a ``CompoundEdit`` of one
+    reads as "compound" -- which is why every one of the nine call sites this
+    replaces had to make the same choice, and why nine copies of a choice is how
+    one of them comes to differ."""
+    from warlock.studio.inker.undo import CompoundEdit, LayerFlagEdit, one_step
+
+    lone = LayerFlagEdit(1, {"background": False}, {"background": True})
+    assert one_step([lone]) is lone
+
+    second = LayerFlagEdit(2, {"reference": False}, {"reference": True})
+    step = one_step([lone, second])
+    assert isinstance(step, CompoundEdit)
+    assert list(step.edits) == [lone, second]
+
+
+def test_one_step_refuses_an_empty_list():
+    """A caller with nothing to push must not push: a step that changes nothing
+    moves the history head and asks the user to save a gesture that did not
+    happen."""
+    import pytest
+
+    from warlock.studio.inker.undo import one_step
+
+    with pytest.raises(ValueError):
+        one_step([])
+
+
+def test_the_idiom_is_not_written_out_anywhere_any_more():
+    import pathlib
+
+    root = (
+        pathlib.Path(__file__).resolve().parents[2]
+        / "src"
+        / "warlock"
+        / "studio"
+        / "inker"
+    )
+    for path in root.glob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        if path.name == "undo.py":
+            continue
+        assert "if len(edits) == 1 else" not in source, path.name

@@ -1,10 +1,13 @@
 """The document: a layer stack, a history, a selection, and a cached composite.
 
 This is the only module in the package that is allowed to know about all the
-others, and the only one that pushes anything onto the undo stack. Every entry
-point here follows the same three steps -- copy the region that is about to
-change, change it, push a ``PatchEdit`` -- which is what makes "one gesture is
-one Ctrl+Z" a property of the model rather than a rule the UI has to remember.
+others. ``Document`` is the only *class* that pushes anything onto the undo
+stack -- the ten ``_doc_*`` mixins push at sixty sites and are part of it, which
+is what the sentence here used to claim about the module and had not been true
+since they were split out. Every entry point follows the same three steps --
+copy the region that is about to change, change it, push a ``PatchEdit`` --
+which is what makes "one gesture is one Ctrl+Z" a property of the model rather
+than a rule the UI has to remember.
 
 The composite is cached and repaired by rectangle. ``take_dirty()`` hands the
 accumulated rectangle to whoever is uploading pixels to the GPU and clears it;
@@ -70,6 +73,7 @@ from .undo import (
     PatchEdit,
     ReplayEdit,
     UndoStack,
+    one_step,
 )
 
 RGBA = tuple[int, int, int, int]
@@ -222,7 +226,7 @@ class Document(
     #: A plain dict rather than a field on ``Frame`` so a frame carries only
     #: what a *save* carries -- a stamp is cache bookkeeping and has no
     #: business round-tripping through a file.
-    _frame_stamps: dict[int, int] = field(default_factory=dict, repr=False)
+    _frame_stamps: dict[int, int] = field(default_factory=dict, repr=False, init=False)
     _below: np.ndarray | None = field(init=False, default=None, repr=False)
     _dirty: tuple[int, int, int, int] | None = field(init=False, default=None, repr=False)
     _stroke: StrokeState | None = field(init=False, default=None, repr=False)
@@ -288,10 +292,10 @@ class Document(
     #: for a filtered flatten of a frame the unfiltered draw also asks for, and
     #: one key for both would hand each of them the other's pixels.
     _frame_cache: dict[tuple[int, int | None], tuple[int, np.ndarray]] = field(
-        default_factory=dict, repr=False
+        default_factory=dict, repr=False, init=False
     )
     _frame_order: list[tuple[int, int | None]] = field(
-        default_factory=list, repr=False
+        default_factory=list, repr=False, init=False
     )
     #: An open layer-move session: the active layer's pixels as they were when
     #: it opened, and the **uid** of the layer they came off. ``_filter``'s
@@ -303,7 +307,7 @@ class Document(
     #: Frames that have gone, for whoever is holding a *texture* keyed on one.
     #: Plain ints and a drain, so the document goes on knowing nothing about GL:
     #: see ``panes/inker_textures.release_dropped``.
-    _dropped_frames: list[int] = field(default_factory=list, repr=False)
+    _dropped_frames: list[int] = field(default_factory=list, repr=False, init=False)
     #: Per-*layer* change counters, keyed by layer uid, beside the per-frame
     #: ones above and for a different consumer: a cel thumbnail is a picture of
     #: one cel, and a frame stamp moves whenever any track on that frame does.
@@ -314,7 +318,7 @@ class Document(
     #: whole-grid paths, and deliberately **not** by ``invalidate_all``: that
     #: is the composite's cache and most of what reaches it changes no pixels
     #: at all, which is the same "stamps no frame" lesson stated there.
-    _layer_stamps: dict[int, int] = field(default_factory=dict, repr=False)
+    _layer_stamps: dict[int, int] = field(default_factory=dict, repr=False, init=False)
     #: An open palette-conversion session: ``(layer uid, pixels as they were)``
     #: for every real cel on the frame the popup was opened over. The filter
     #: session's shape one dimension wider -- a conversion is whole-*document*,
@@ -1211,7 +1215,7 @@ class Document(
         if release is not None:
             self.matte = None
             edits.append(release)
-        self.history.push(edits[0] if len(edits) == 1 else CompoundEdit(edits))
+        self.history.push(one_step(edits))
 
     def _commit_indexed_patch(self, layer: Layer, rect: tuple[int, int, int, int]) -> None:
         """The indexed half of the funnel: RGBA in, slots resolved and stored.

@@ -72,7 +72,7 @@ from .tiles import (
     strip,
     with_tiles,
 )
-from .undo import CompoundEdit, LayerAddEdit
+from .undo import CompoundEdit, LayerAddEdit, one_step
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .document import Document
@@ -581,10 +581,7 @@ class TileOps:
         for edit in edits:
             edit.redo(self)
         pending, self._pending_cels = self._pending_cels, []
-        step: Any = (
-            edits[0] if len(edits) == 1 and not pending else CompoundEdit([*pending, *edits])
-        )
-        self.history.push(step)
+        self.history.push(one_step([*pending, *edits]))
 
     # -- conversions -------------------------------------------------------------
 

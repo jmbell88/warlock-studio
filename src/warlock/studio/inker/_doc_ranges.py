@@ -50,7 +50,7 @@ from .anim_edits import (
 from .animation import TRACK_PROPS, Frame, clamp_duration
 from .tile_edits import TileRefsEdit
 from .tiles import TilemapCel
-from .undo import CompoundEdit, IndexPatchEdit, PatchEdit
+from .undo import IndexPatchEdit, PatchEdit, one_step
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .document import Document
@@ -172,7 +172,7 @@ class RangeOps:
         """One step for the whole gesture, or nothing at all."""
         if not edits:
             return False
-        self.history.push(edits[0] if len(edits) == 1 else CompoundEdit(edits))
+        self.history.push(one_step(edits))
         return True
 
     def _set_frame_order(self: Document, uids: list[int]) -> None:

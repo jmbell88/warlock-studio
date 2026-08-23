@@ -72,7 +72,27 @@ __all__ = [
     "SelectionEdit",
     "UndoStack",
     "_serials",
+    "one_step",
 ]
+
+
+def one_step(edits: list[Any]) -> Any:
+    """*edits* as a single undo step: the edit itself when there is only one.
+
+    The ``edits[0] if len(edits) == 1 else CompoundEdit(edits)`` line, which was
+    written out at nine call sites. Not merely repetition: a lone
+    ``CompoundEdit`` wrapping one edit is a real difference -- the history panel
+    labels a step by its class name, so an unwrapped step reads as what it did
+    and a wrapped one reads as "compound" -- so every site has to make the same
+    choice, and nine copies of a choice is how one of them comes to differ.
+
+    Empty is a programming error rather than a no-op: a caller with nothing to
+    push must not push, because a step that changes nothing moves the history
+    head and asks the user to save a gesture that did not happen.
+    """
+    if not edits:
+        raise ValueError("a step needs at least one edit")
+    return edits[0] if len(edits) == 1 else CompoundEdit(edits)
 
 
 def _plane_bytes(layer: Any) -> int:

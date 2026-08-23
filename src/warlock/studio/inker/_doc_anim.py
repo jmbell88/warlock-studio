@@ -29,7 +29,7 @@ from .anim_edits import (
 )
 from .animation import Animation, Frame, Tag, Track, clamp_duration
 from .layers import Layer, LayerStack
-from .undo import CompoundEdit
+from .undo import one_step
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .document import Document
@@ -283,7 +283,7 @@ class AnimOps:
         # for them again would evict real history to make room for a number that
         # describes no memory.
         edits.append(FrameAddEdit(at, frame, cels, pinned=copy))
-        self.history.push(edits[0] if len(edits) == 1 else CompoundEdit(edits))
+        self.history.push(one_step(edits))
         return frame
 
     def remove_frame(self: Document, index: int | None = None) -> bool:

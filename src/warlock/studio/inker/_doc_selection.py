@@ -27,7 +27,7 @@ from .selection import (
     render_transform,
 )
 from .tiles import TilemapCel
-from .undo import CompoundEdit, LayerAddEdit, SelectionEdit
+from .undo import CompoundEdit, LayerAddEdit, SelectionEdit, one_step
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .document import Document
@@ -968,7 +968,7 @@ class SelectionOps:
             self._add_layer_edit(taken, f"Layer {len(self.stack) + 1}", offset=(x0, y0))
         )
         edits.extend(self.inherit_group_edits(parent))
-        self.history.push(edits[0] if len(edits) == 1 else CompoundEdit(edits))
+        self.history.push(one_step(edits))
         return True
 
     def put_clipboard(self: Document, pixels: np.ndarray) -> None:

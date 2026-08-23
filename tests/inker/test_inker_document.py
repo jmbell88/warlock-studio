@@ -1071,3 +1071,37 @@ def test_the_wand_reads_the_composite_and_a_single_undo_reverses_it():
 
     doc.undo()
     assert doc.mask is None
+
+
+def test_no_private_cache_field_is_a_constructor_parameter():
+    """``Document(...)`` is public. Five of the caches -- the frame stamps, the
+    frame cache and its order, the dropped-frame list and the layer stamps --
+    were declared without ``init=False``, so they were keyword parameters on it:
+    a caller could hand a document somebody else's cache, and the signature
+    advertised private state as part of the shape."""
+    import dataclasses
+
+    from warlock.studio.inker.document import Document
+
+    on_init = [
+        f.name for f in dataclasses.fields(Document) if f.name.startswith("_") and f.init
+    ]
+    assert on_init == []
+
+
+def test_the_undo_push_sites_all_live_on_the_document_class():
+    """The module docstring used to say this module is the only one that pushes
+    onto the undo stack. It is the only *class* that does -- the ten ``_doc_*``
+    mixins are part of ``Document`` and push at sixty sites -- and the claim as
+    written stopped being true when they were split out."""
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[2] / "src" / "warlock" / "studio" / "inker"
+    pushers = sorted(
+        path.name
+        for path in root.glob("*.py")
+        if "history.push(" in path.read_text(encoding="utf-8")
+    )
+    assert pushers, "the scan has to find something or it proves nothing"
+    for name in pushers:
+        assert name == "document.py" or name.startswith("_doc_"), name
