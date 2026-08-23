@@ -279,7 +279,7 @@ class JobOps:
         """
         params = job["params"]
         block = params.get("troupe")
-        if not block or job["kind"] == "charsheet" or job["stage"] != "model":
+        if not block or job["kind"] in ("charsheet", "rig") or job["stage"] != "model":
             return
         if not (self.config.job_dir(job["id"]) / "model.glb").exists():
             await self._record_followup_failure(

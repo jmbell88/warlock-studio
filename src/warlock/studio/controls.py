@@ -98,11 +98,16 @@ def _ring(colour: int, *, width: float, inset: float = 0.0) -> None:
     low, high = rect
     try:
         draw = imgui.get_window_draw_list()
+        # The ring has to trace the *button*, and buttons round at
+        # ``frame_rounding`` (RADIUS_S, half RADIUS_M) -- drawing at RADIUS_M
+        # bulged every selection and focus ring away from its fill at all four
+        # corners. Read it off the live style rather than the token, because a
+        # caller may have pushed its own rounding before this runs.
         draw.add_rect(
             (low.x - inset, low.y - inset),
             (high.x + inset, high.y + inset),
             imgui.get_color_u32(theme.rgba(colour)),
-            sp(tokens.RADIUS_M),
+            imgui.get_style().frame_rounding + inset,
             sp(width),
             0,
         )
