@@ -12,6 +12,7 @@ them a safe migration boundary for old panes; the semantic helpers (``switch``,
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from enum import StrEnum
@@ -146,6 +147,11 @@ def _leading_selection() -> None:
         return
 
 
+#: What every slider and drag adds to its tooltip. Ctrl+click-to-type is
+#: imgui's own default and has always worked here; nothing said so.
+TYPED_ENTRY_HINT = "Ctrl+click to type a value."
+
+
 def _finish_item(
     *,
     tooltip: str = "",
@@ -186,6 +192,11 @@ def _finish_item(
         except (AttributeError, RuntimeError):
             hovered = False
     note = reason if not enabled and reason else tooltip
+    if enabled and kind.startswith(("slider_", "drag_")):
+        # Every slider says so, in one place. A rule that has to be remembered
+        # at each of 166 call sites is one that will be forgotten at the next
+        # -- the argument ``widgets.combo``'s tooltip-as-accessible-name makes.
+        note = f"{note}\n{TYPED_ENTRY_HINT}" if note else TYPED_ENTRY_HINT
     if hovered and note:
         imgui.set_tooltip(note)
     try:
@@ -341,6 +352,44 @@ def _field_colours(error: bool) -> Iterator[None]:
         imgui.pop_style_color(3)
 
 
+#: Where ``flags`` sits in the positional signature of the two field families
+#: that take :class:`imgui.SliderFlags_`, by name prefix.
+#:
+#: **Prefix-restricted deliberately.** ``input_int``'s sixth positional is an
+#: ``InputTextFlags``, not a ``SliderFlags`` -- injecting a slider flag there
+#: would silently switch on an unrelated text-field option. Sliders and drags
+#: are the two families whose typed entry can land outside the range they draw.
+_FLAGS_ARITY = {"slider_": 5, "drag_": 6}
+
+
+def _clamp_typed_entry(name: str, args: tuple, kwargs: dict) -> tuple[tuple, dict]:
+    """Add ``clamp_on_input`` to a slider/drag that has not spelled flags itself.
+
+    Ctrl+click-to-type is imgui's own default and every one of this app's
+    fields already has it -- what none of them had is a *bound* on what gets
+    typed, so 9999 into a brush-size slider set an out-of-range brush. Done
+    here rather than at 166 call sites for the reason the census is taken
+    here: this is the one place every field passes through.
+
+    **``clamp_on_input``, never ``always_clamp``.** ``always_clamp`` includes
+    ``clamp_zero_range``, which clamps a drag whose ``v_min == v_max`` -- and
+    that is exactly how ``settings_3d`` spells *unbounded*
+    (``SIZE_NO_BOUND = (0.0, 0.0)``). ``always_clamp`` there would pin the
+    asset's size to zero.
+    """
+    prefix = next((p for p in _FLAGS_ARITY if name.startswith(p)), None)
+    if prefix is None or "flags" in kwargs:
+        return args, kwargs
+    index = _FLAGS_ARITY[prefix]
+    if len(args) > index:
+        return args, kwargs
+    # Headless stubs supply the handful of functions a test drives and no
+    # enums; a missing flag is a missing clamp, not a crash.
+    with contextlib.suppress(AttributeError):
+        kwargs["flags"] = imgui.SliderFlags_.clamp_on_input.value
+    return args, kwargs
+
+
 def _field_call(
     name: str,
     *args: Any,
@@ -369,6 +418,9 @@ def _field_call(
     backend = kwargs.pop("_imgui", None)
     if backend is not None and backend is not imgui:
         return getattr(backend, name)(*args, **kwargs)
+    # After the escape hatch above, so a test stub still gets the signature it
+    # was written against.
+    args, kwargs = _clamp_typed_entry(name, args, kwargs)
     with _disabled(enabled), _field_colours(bool(error)):
         result = getattr(imgui, name)(*args, **kwargs)
     if commit:

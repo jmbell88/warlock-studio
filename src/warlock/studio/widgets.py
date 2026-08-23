@@ -2274,10 +2274,18 @@ def labeled_slider_int(
     tool and layer panes were all drawn that way, which put the user in front
     of a bare `0.850` with nothing to say it was Hardness. The value still
     reads inside the track; only the name was gone.
+
+    Drawn through ``controls`` rather than by calling imgui here: a raw call
+    gets no disabled treatment, no error ring, no ``probe`` census entry and
+    -- since the typed-entry clamp landed -- no bound on what Ctrl+click can
+    type into it. ``test_probe.RAW_IMGUI_CONTROLS``' own docstring says to
+    lower the pin when a control is migrated, which is this.
     """
+    from . import controls
+
     field_label(label, help_text)
     imgui.set_next_item_width(-1)
-    return imgui.slider_int(f"##{label}", value, low, high)
+    return controls.slider_int(f"##{label}", value, low, high)
 
 
 def labeled_drag_int(
@@ -2295,10 +2303,14 @@ def labeled_drag_int(
     meaningful from 1 to a few dozen but not bounded there, say. Click-drag
     still moves it in ``speed``-sized steps; ctrl-click still opens exact text
     entry, which is how a slider's own range would otherwise be typed around.
+
+    Through ``controls`` for the reasons ``labeled_slider_int`` gives.
     """
+    from . import controls
+
     field_label(label, help_text)
     imgui.set_next_item_width(-1)
-    return imgui.drag_int(f"##{label}", value, speed, low, high, fmt)
+    return controls.drag_int(f"##{label}", value, speed, low, high, fmt)
 
 
 def float_format(low: float, high: float, step: float | None = None) -> str:
@@ -2351,16 +2363,18 @@ def labeled_slider_float(
     :func:`float_format` picks one from the range, which is what stops a
     degrees-of-rotation slider reading ``45.000``.
     """
+    from . import controls
+
     field_label(label, help_text)
     imgui.set_next_item_width(-1)
     if percent is None:
         percent = low == 0.0 and high == 1.0
     if percent:
-        changed, shown = imgui.slider_float(
+        changed, shown = controls.slider_float(
             f"##{label}", value * 100.0, low * 100.0, high * 100.0, fmt or "%.0f%%"
         )
         return changed, shown / 100.0
-    return imgui.slider_float(f"##{label}", value, low, high, fmt or float_format(low, high))
+    return controls.slider_float(f"##{label}", value, low, high, fmt or float_format(low, high))
 
 
 def primary_button(

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from warlock.studio import toolbar, widgets
+from warlock.studio import controls, toolbar, widgets
 from warlock.studio.toolbar import FULL, ICON, MENU
 
 # Four items: two important (priority 0) and two extras (priority 1). 100 px
@@ -125,13 +125,20 @@ def test_a_step_outvotes_the_span():
 
 
 class _Slider:
-    """Enough imgui for ``labeled_slider_float`` and nothing else."""
+    """Enough imgui for ``labeled_slider_float`` and nothing else.
+
+    Patched onto ``controls`` as well as ``widgets``: the labelled helpers draw
+    through the presentational layer now (that is what gets them the disabled
+    treatment, the error ring, the probe census and the typed-entry clamp), so
+    the widget call this stub is here to observe is made from there.
+    ``flags`` is accepted because the clamp is injected as a keyword.
+    """
 
     def __init__(self, returns: float):
         self.returns = returns
         self.call: tuple = ()
 
-    def slider_float(self, label, value, low, high, fmt="%.3f"):
+    def slider_float(self, label, value, low, high, fmt="%.3f", flags=0):
         self.call = (label, value, low, high, fmt)
         return True, self.returns
 
@@ -142,6 +149,7 @@ class _Slider:
 def _slider(monkeypatch, returns, *args, **kwargs):
     stub = _Slider(returns)
     monkeypatch.setattr(widgets, "imgui", stub)
+    monkeypatch.setattr(controls, "imgui", stub)
     result = widgets.labeled_slider_float(*args, **kwargs)
     return stub, result
 

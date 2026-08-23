@@ -19,7 +19,7 @@ from warlock.studio import controls, probe
 #: chased: each one is a control the probe cannot see, and the number belongs
 #: in a report rather than in a silent gap. Lower it when one is migrated;
 #: raising it means a new control bypassed the presentational layer.
-RAW_IMGUI_CONTROLS = 15
+RAW_IMGUI_CONTROLS = 11
 
 _RAW_WIDGETS = {
     "button",

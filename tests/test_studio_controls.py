@@ -236,3 +236,71 @@ def test_divider_role_resolves_live_through_theme():
         assert tokens.PALETTES["light"]["DIVIDER"] == theme.DIVIDER
     finally:
         tokens.set_theme(before)
+
+
+def test_a_typed_slider_value_is_clamped_to_the_range_it_draws():
+    """Ctrl+click-to-type always worked; nothing bounded what was typed.
+
+    Injected in ``_field_call``, the one chokepoint every field passes
+    through, so no call site changes and none can forget.
+    """
+    from imgui_bundle import imgui as real_imgui
+
+    args, kwargs = controls._clamp_typed_entry("slider_int", ("##x", 3, 0, 10), {})
+    assert kwargs["flags"] == real_imgui.SliderFlags_.clamp_on_input.value
+    assert args == ("##x", 3, 0, 10)
+    # Drags take it too -- typing past a drag's soft range is the same defect.
+    _args, kwargs = controls._clamp_typed_entry("drag_float", ("##x", 1.0), {})
+    assert "flags" in kwargs
+
+
+def test_the_clamp_is_never_always_clamp_and_never_reaches_a_text_field():
+    """Two constraints that must not be "simplified" into one.
+
+    ``always_clamp`` includes ``clamp_zero_range``, which clamps a drag whose
+    ``v_min == v_max`` -- and that is exactly how ``settings_3d`` spells
+    *unbounded* (``SIZE_NO_BOUND = (0.0, 0.0)``), so it would pin the asset's
+    size to zero. And ``input_int``'s sixth positional is an
+    ``InputTextFlags``, not a ``SliderFlags``: injecting there would switch on
+    an unrelated text-field option.
+    """
+    # The *assignment*, not the prose: this file's style is to state a
+    # rejected alternative by name, so a raw scan would fail on its own note.
+    body = [
+        line
+        for line in inspect.getsource(controls._clamp_typed_entry).splitlines()
+        if "SliderFlags_" in line
+    ]
+    assert body and all("clamp_on_input" in line for line in body)
+    assert not any("always_clamp" in line for line in body)
+    for name in ("input_int", "input_float", "input_text", "checkbox"):
+        args, kwargs = controls._clamp_typed_entry(name, ("##x", 1), {})
+        assert kwargs == {} and args == ("##x", 1), name
+    # A caller that spelled its own flags keeps them, whole.
+    _args, kwargs = controls._clamp_typed_entry("slider_int", ("##x", 3, 0, 10), {"flags": 7})
+    assert kwargs == {"flags": 7}
+    # And so does one that passed them positionally.
+    args, kwargs = controls._clamp_typed_entry("slider_int", ("##x", 3, 0, 10, "%d", 7), {})
+    assert kwargs == {} and args[-1] == 7
+
+
+def test_every_slider_says_that_a_value_can_be_typed():
+    """One string in one place, covering all 166 sites."""
+    assert "Ctrl+click" in controls.TYPED_ENTRY_HINT
+    body = inspect.getsource(controls._finish_item)
+    assert "TYPED_ENTRY_HINT" in body
+    assert '("slider_", "drag_")' in body
+
+
+def test_ctrl_click_cannot_collide_with_a_keyboard_shortcut():
+    """The absence of a collision is exactly what gets broken silently.
+
+    ``main._shortcut`` is reached from a ``pygame.KEYDOWN`` branch; ctrl+click
+    is a mouse event and never enters that path. Nothing else in the app may
+    claim ctrl+click either -- imgui's own text-entry gesture is the only
+    reader.
+    """
+    from warlock.studio import main
+
+    assert "pygame.KEYDOWN" in inspect.getsource(main.App._events)
+    assert "config_drag_click_to_input_text" not in inspect.getsource(theme.apply)
