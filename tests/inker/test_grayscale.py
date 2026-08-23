@@ -216,3 +216,47 @@ def test_a_grayscale_document_composites_grey_end_to_end():
     flat = doc.flatten(matte=False)
     visible = flat[..., 3] > 0
     assert _is_gray(flat[..., :3][visible])
+
+
+def test_a_grayscale_document_with_a_palette_gets_both_constraints():
+    """The rule ``_constrained`` exists to hold in one place: grayscale and the
+    palette snap are two ``if``s and not an ``if``/``elif``, because a snap onto
+    a table of greys is not the same array as a snap onto the table the document
+    actually has. It was written out at three sites, each with its own comment
+    explaining it."""
+    import numpy as np
+
+    from warlock.studio import inker
+
+    doc = inker.Document.blank(4, 4)
+    doc.color_mode = "grayscale"
+    doc.palette = [(0, 0, 0, 255), (128, 128, 128, 255), (255, 255, 255, 255)]
+
+    region = np.zeros((2, 2, 4), np.uint8)
+    region[...] = (200, 30, 30, 255)
+    out = doc._constrained(region)
+
+    r, g, b, a = (int(v) for v in out[0, 0])
+    assert r == g == b, "flattened to luma"
+    assert (r, g, b, a) in [tuple(int(v) for v in c) for c in doc.palette], "and snapped"
+
+
+def test_the_constraint_rule_is_written_out_only_once():
+    import pathlib
+
+    root = (
+        pathlib.Path(__file__).resolve().parents[2]
+        / "src"
+        / "warlock"
+        / "studio"
+        / "inker"
+    )
+    # The *pairing* is the rule, not the bare mode check -- ``to_grayscale`` asks
+    # the same question to answer "already grayscale", which is a different
+    # thing. A file that calls both primitives is applying the constraint.
+    wrote = []
+    for path in sorted(root.glob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        if "ix.grayscale(" in source and "ix.snap(" in source:
+            wrote.append(path.name)
+    assert wrote == ["document.py"], wrote

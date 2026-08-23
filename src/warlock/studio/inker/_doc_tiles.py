@@ -46,7 +46,6 @@ import numpy as np
 
 from ..tilegrid import gid
 from . import composite as cp
-from . import indexed as ix
 from . import transform as tf
 from .anim_edits import CelSetEdit, TrackAddEdit
 from .animation import Track
@@ -511,12 +510,9 @@ class TileOps:
                     cx0, cy0 = max(wx0, px) - px, max(wy0, py) - py
                     cx1, cy1 = min(wx1, px + cols) - px, min(wy1, py + rows) - py
                     if cx1 > cx0 and cy1 > cy0:
-                        region = drawn[cy0:cy1, cx0:cx1]
-                        if self.color_mode == "grayscale":
-                            region = ix.grayscale(region)
-                        if self.palette:
-                            region = ix.snap(region, self.palette)
-                        drawn[cy0:cy1, cx0:cx1] = region
+                        drawn[cy0:cy1, cx0:cx1] = self._constrained(
+                            drawn[cy0:cy1, cx0:cx1]
+                        )
                 tile = np.ascontiguousarray(canonical(drawn, raw))
                 if np.array_equal(tile, current):
                     continue

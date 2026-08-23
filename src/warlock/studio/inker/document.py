@@ -1158,15 +1158,9 @@ class Document(
         if self.color_mode == "indexed" and layer.indices is not None:
             self._commit_indexed_patch(layer, rect)
             return
-        if self.color_mode == "grayscale":
-            x0, y0, x1, y1 = rect
-            region = layer.pixels[y0:y1, x0:x1]
-            layer.pixels[y0:y1, x0:x1] = ix.grayscale(region)
-        if self.palette:
-            x0, y0, x1, y1 = rect
-            region = layer.pixels[y0:y1, x0:x1]
-            layer.pixels[y0:y1, x0:x1] = ix.snap(region, self.palette)
-        after = layer.pixels[rect[1] : rect[3], rect[0] : rect[2]].copy()
+        x0, y0, x1, y1 = rect
+        layer.pixels[y0:y1, x0:x1] = self._constrained(layer.pixels[y0:y1, x0:x1])
+        after = layer.pixels[y0:y1, x0:x1].copy()
         if np.array_equal(before, after):
             self._discard_pending_cel()
             return
@@ -1216,6 +1210,26 @@ class Document(
             self.matte = None
             edits.append(release)
         self.history.push(one_step(edits))
+
+    def _constrained(self, region: np.ndarray) -> np.ndarray:
+        """*region* with the document's colour constraints applied.
+
+        **Two ``if``s and not an ``if``/``elif``**: a grayscale document with a
+        palette gets both, and a snap onto a table of greys is not the same
+        array as a snap onto the table it actually has. That one-line rule was
+        written out at three sites -- the funnel, its list-returning sibling and
+        the tilemap patch -- each with its own comment explaining it, which is
+        three places to get it wrong and three comments to keep in step.
+
+        Indexed mode is not here: it takes the whole method with it at each
+        caller, because the step it makes is an index patch rather than a pixel
+        one.
+        """
+        if self.color_mode == "grayscale":
+            region = ix.grayscale(region)
+        if self.palette:
+            region = ix.snap(region, self.palette)
+        return region
 
     def _commit_indexed_patch(self, layer: Layer, rect: tuple[int, int, int, int]) -> None:
         """The indexed half of the funnel: RGBA in, slots resolved and stored.
@@ -1356,12 +1370,7 @@ class Document(
             if np.array_equal(idx_before, idx_after):
                 return None
             return IndexPatchEdit(layer.uid, rect, idx_before, idx_after)
-        if self.color_mode == "grayscale":
-            region = layer.pixels[y0:y1, x0:x1]
-            layer.pixels[y0:y1, x0:x1] = ix.grayscale(region)
-        if self.palette:
-            region = layer.pixels[y0:y1, x0:x1]
-            layer.pixels[y0:y1, x0:x1] = ix.snap(region, self.palette)
+        layer.pixels[y0:y1, x0:x1] = self._constrained(layer.pixels[y0:y1, x0:x1])
         after = layer.pixels[y0:y1, x0:x1].copy()
         if np.array_equal(before, after):
             return None
