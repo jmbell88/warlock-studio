@@ -477,6 +477,28 @@ def test_the_navigation_control_carries_navigation_and_nothing_else():
 
     The rail is the navigation control now, and what it draws is modes, a health
     badge when something is failing, the manual and its own collapse toggle.
+
+    **A resource readout came back, and this is the record of that reversal.**
+    Not here -- ``status_bar`` -- and the wave-3 argument above stands for the
+    surface it was about. Four grounds, and it takes all four:
+
+    1. *A different surface.* The old one was in the shell header, primary
+       chrome beside navigation and a quit icon. The status bar's whole job is
+       ambient state; it already carries workspace, document, tool, zoom,
+       queue depth and health.
+    2. *A different question.* "How is the machine" is a developer question
+       with no action attached. "Can I start a 7 GB generation right now" is
+       one the app forces on the user -- ``check_vram`` refuses at the door
+       and the queue re-checks at dispatch -- and until now there was no way
+       to see the number those refusals are about.
+    3. *Opt-out and persisted*, beside "Show frame rate (F10)".
+    4. *It yields.* First thing dropped when the window narrows, which is
+       exactly what a permanent fixture does not do.
+
+    Amended in the commit that adds the meter rather than left to be found:
+    the assertions below do not fail when a meter lands in another module, and
+    an argument left standing with nothing pointing at its reversal is worse
+    than one that fails.
     """
     from warlock.studio import main, rail
 
