@@ -146,7 +146,9 @@ def test_the_harness_is_shared_rather_than_reimplemented(driver):
     assert "from _appharness import" in shots
     # The boot sequence must live in exactly one place.
     assert "app.setup_window()" not in shots
-    assert "app.setup_window()" in (SCRIPTS / "_appharness.py").read_text(encoding="utf-8")
+    assert "app.setup_window(size_override=size)" in (SCRIPTS / "_appharness.py").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_the_driver_reports_its_own_blind_spot(driver):

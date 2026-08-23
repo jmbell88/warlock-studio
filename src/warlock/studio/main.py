@@ -58,13 +58,12 @@ def _compare_key() -> str:
     from .panes import library
 
     return library.COMPARE_KEY
+
+
 DEFAULT_SIZE = (1600, 950)
 MIN_SIZE = (1100, 700)
-# Pane widths live in layout.py and are *fixed*, not draggable: three named
-# sidebar widths (260 / 300 / 360 design px, ``layout.SIDEBAR_WIDTHS``) with
-# ``default`` in force unless the settings file says otherwise. The one
-# proportion the user still drags is the sidebar's internal split,
-# ``Layout.settings_share``, which defaults to 0.55.
+# Desired pane widths and their frame-local fit live in layout.py; named
+# workspace layouts persist explicit horizontal and vertical splitter edits.
 TARGET_FPS = 60
 # The Ctrl chords a focused text field owns, spelled as ``pygame.key.name``
 # gives them. imgui's own input-text widget binds these to editing the text, so
@@ -177,8 +176,11 @@ def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
             ("Ctrl+K", "Command palette -- switch mode, or open an asset"),
             ("Ctrl+/", "This list"),
             ("F1", "Open the manual over whatever is on screen"),
-            ("Esc", "Close the topmost thing: the manual, then the profile "
-                    "sheet, then a mode you passed through"),
+            (
+                "Esc",
+                "Close the topmost thing: the manual, then the profile "
+                "sheet, then a mode you passed through",
+            ),
             ("F10", "Toggle the frame-rate readout"),
         ],
     )
@@ -287,8 +289,7 @@ def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
     # are second bindings beside the plain letters, so they are listed
     # rather than left to the tooltips.
     alt = " / ".join(
-        f"{chord} {inker_state.tool_label(tool)}"
-        for tool, chord in ALT_TOOL_CHORDS.items()
+        f"{chord} {inker_state.tool_label(tool)}" for tool, chord in ALT_TOOL_CHORDS.items()
     )
     table(
         "Inker",
@@ -549,11 +550,23 @@ def _right_column(
         lay,
         split_id=share_key,
         handle_length=sidebar_w,
-        width=0,
+        width=sidebar_w,
         edge=layout_mod.PaneEdge.LEFT,
         top=("inspector", layout_mod.PaneRole.INSPECTOR, inspector_draw),
         bottom=("library", layout_mod.PaneRole.SIDEBAR, library_draw),
     )
+
+
+def _column_boundary(library: Any, workspace: str, side: str) -> None:
+    """The draggable boundary between a side column and the centre anchor."""
+
+    from imgui_bundle import imgui
+
+    from . import layout as layout_mod
+
+    imgui.same_line()
+    layout_mod.column_splitter(library, workspace, side)
+    imgui.same_line()
 
 
 def _stage_pane(ctx: Any) -> None:
@@ -687,7 +700,7 @@ class App:
     # errors, none of them in the code that changed). A convenience method with
     # no caller is not free; this one cost a seam the tests were relying on.
 
-    def setup_window(self) -> None:
+    def setup_window(self, *, size_override: tuple[int, int] | None = None) -> None:
         """Everything that needs the main thread and the one GL context.
 
         Fast, and first: this used to run *after* ``runtime.start()``, so the
@@ -730,7 +743,8 @@ class App:
         # monitor so 1600x950 means the same amount of screen everywhere.
         first_run_scale = dpi.system_scale()
         size = tuple(
-            settings.get("window_size")
+            size_override
+            or settings.get("window_size")
             or (int(DEFAULT_SIZE[0] * first_run_scale), int(DEFAULT_SIZE[1] * first_run_scale))
         )
         self.window = pygame.display.set_mode(
@@ -850,15 +864,14 @@ class App:
         self.app_ctx.gpu_name = str(getattr(device, "name", "") or "")
         self.app_ctx.dpi_scale = monitor_scale
         self.app_ctx.layout = self.layout
+        self.app_ctx.layouts = self.layouts
         # Every ``widgets.field_error`` call site gets the Install offer at
         # once, without widgets importing a pane. Bound to this Ctx, so a
         # second App in one process replaces it rather than stacking.
         from . import widgets as widgets_mod
         from .panes import model_gate
 
-        widgets_mod.set_install_offer(
-            lambda field: model_gate.install_offer(self.app_ctx, field)
-        )
+        widgets_mod.set_install_offer(lambda field: model_gate.install_offer(self.app_ctx, field))
         self.app_ctx.load_presets = self.load_presets
         self.app_ctx.refresh_rig_data = self._refresh_rig_side_data
         self.eta = Eta()
@@ -906,9 +919,7 @@ class App:
         # is worth the same banner a fatal check gets, so it joins them here
         # rather than being promoted to fatal in doctor.
         failed = [
-            c
-            for c in self.runtime.checks
-            if not c.ok and (c.fatal or c.name == "trellis port")
+            c for c in self.runtime.checks if not c.ok and (c.fatal or c.name == "trellis port")
         ]
         for check in failed:
             ctx.state.note_error(f"{check.name}: {check.detail}")
@@ -968,9 +979,7 @@ class App:
         # is a pane, and ``recommended_base`` needs a resolved Plan. Empty when
         # there is no plan, which is the pane's "say nothing" value.
         ctx.recommended_base_label = (
-            models.BASE_MODELS[vram.recommended_base(plan_)].label
-            if plan_ is not None
-            else ""
+            models.BASE_MODELS[vram.recommended_base(plan_)].label if plan_ is not None else ""
         )
         try:
             ctx.model_rows = svc_downloads.rows(self.svc)
@@ -1039,7 +1048,8 @@ class App:
             else:
                 log.exception(
                     "the frame loop crashed mid-session after %d frames (%.1f s up)",
-                    self.fps.frames, time.perf_counter() - self._started_at,
+                    self.fps.frames,
+                    time.perf_counter() - self._started_at,
                 )
         finally:
             self.teardown()
@@ -1469,9 +1479,7 @@ class App:
                 # (C30). If it says rigging works and the ctx does not yet,
                 # re-ask for the templates -- the probe's answer is cached, so
                 # the re-ask costs a directory read.
-                blender_ok = any(
-                    c.name == "Blender (rigging)" and c.ok for c in done.result
-                )
+                blender_ok = any(c.name == "Blender (rigging)" and c.ok for c in done.result)
                 if blender_ok and not ctx.rigging_available:
                     from ..service import rig as svc_rig
 
@@ -1489,10 +1497,7 @@ class App:
             removed = done.result if isinstance(done.result, list) else []
             if removed:
                 noun = "tree" if len(removed) == 1 else "trees"
-                ctx.toast(
-                    f"Reclaimed {len(removed)} staging {noun} left by a "
-                    f"cancelled download."
-                )
+                ctx.toast(f"Reclaimed {len(removed)} staging {noun} left by a cancelled download.")
             return
         if key == "rig-templates":
             templates = done.result if isinstance(done.result, dict) else {}
@@ -1550,9 +1555,7 @@ class App:
             # leave every row exactly as it was: the plan is deduped, so
             # fetching one SDXL 1.0 recipe satisfies the other three, and
             # leaving them ticked offers to download 7 GB that is already there.
-            ctx.toast(
-                "Model removed." if key.startswith("remove:") else "Download finished."
-            )
+            ctx.toast("Model removed." if key.startswith("remove:") else "Download finished.")
             return
         if key == "upload" and done.result is not None:
             from .panes import settings_3d
@@ -1668,9 +1671,12 @@ class App:
             if done.result is not None:
                 ctx.cache.storage = done.result
             return
-        if key.startswith(
-            ("delete:", "prune", "rename:", "name:", "tags:", "fav:", "restore:", "purge:")
-        ) or key == "empty-trash":
+        if (
+            key.startswith(
+                ("delete:", "prune", "rename:", "name:", "tags:", "fav:", "restore:", "purge:")
+            )
+            or key == "empty-trash"
+        ):
             ctx.cache.invalidate()
             # ``restore:`` and ``purge:`` were missing from both lists, and each
             # absence showed differently. Restore (the toast's Undo, and the
@@ -2166,9 +2172,7 @@ class App:
                 # raw event meant next launch opened below the resize floor
                 # with no event to correct it.
                 sized = (max(event.w, self._min_size[0]), max(event.h, self._min_size[1]))
-                pygame.display.set_mode(
-                    sized, pygame.OPENGL | pygame.DOUBLEBUF | pygame.RESIZABLE
-                )
+                pygame.display.set_mode(sized, pygame.OPENGL | pygame.DOUBLEBUF | pygame.RESIZABLE)
                 ctx.settings.set("window_size", list(sized))
                 continue
             if event.type in (pygame.WINDOWDISPLAYCHANGED, pygame.WINDOWMOVED):
@@ -2412,11 +2416,7 @@ class App:
         # ``_escape_mode``: the workspace modes below consume every key they
         # are handed, so an Esc dispatched to Inker with the overlay up would
         # drop a floating selection and leave the reference open on top of it.
-        if (
-            event.type == pygame.KEYDOWN
-            and event.key == pygame.K_ESCAPE
-            and ctx.state.manual.open
-        ):
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE and ctx.state.manual.open:
             from .manual import render as manual_render
 
             manual_render.close(ctx)
@@ -2731,9 +2731,7 @@ class App:
             elif suffix in DROPPABLE_IMAGES:
                 packwright_mode.add_source_paths(ctx, [path])
             else:
-                ctx.toast(
-                    "Packwright opens .wpack documents and packs image files.", "error"
-                )
+                ctx.toast("Packwright opens .wpack documents and packs image files.", "error")
             return
         if ctx.state.mode in ("poser", "troupe"):
             # Neither mode opens a file, and neither said so: a drop here fell
@@ -2892,7 +2890,7 @@ class App:
         from imgui_bundle import imgui
 
         from . import layout as layout_mod
-        from . import modes, rail, tokens
+        from . import menus, modes, rail, status_bar, tokens
         from .panes import (
             app_settings,
             inspector,
@@ -2913,7 +2911,13 @@ class App:
         # Straight after, and before any column is drawn: how wide a sidebar
         # can be is a fact about this frame's window, and the left column must
         # not settle it for itself and leave the right one to find out (UX-01).
-        layout_mod.measure()
+        mode_for_layout = ctx.state.mode
+        self.layout.bind_workspace(self.layouts, mode_for_layout)
+        layout_mod.measure(
+            self.layouts,
+            mode_for_layout,
+            fixed_left=90.0 if mode_for_layout == "inker" else None,
+        )
         # Recomputed every frame by whoever draws the viewport image. Every
         # mode but 3D returns without drawing it, so it stays false there and
         # the viewer gets no events at all.
@@ -2981,8 +2985,12 @@ class App:
             | imgui.WindowFlags_.no_move.value
             | imgui.WindowFlags_.no_bring_to_front_on_focus.value
             | imgui.WindowFlags_.no_saved_settings.value
+            | imgui.WindowFlags_.menu_bar.value
         )
         imgui.begin("##host", None, flags)
+        # One stable command surface in every mode.  The menu rows are adapters
+        # over the same command/operation registries used by Ctrl+K and keys.
+        menus.draw(ctx, self.layout)
         # One frame, one record of where every pane ended up -- and one answer
         # to "is the layout editor open", which every splitter reads (P5.4).
         from . import layout_edit
@@ -3000,11 +3008,9 @@ class App:
         # The rail is drawn in every mode, Home included: it is how you leave
         # wherever you are, so a mode that hides it is a dead end.
         rail.draw(self, ctx)
-        # The two popups its footer can raise, opened at *host* scope. imgui
-        # registers a popup in the window that opens it and the rail is a
-        # child, so a footer that called ``open_popup`` itself would be naming
-        # a popup nothing outside the child could find. The same one-shot the
-        # shortcuts button has always used, generalised.
+        # Shell utility popups are opened at host scope. Menu/status actions
+        # can originate in child windows, while imgui resolves a popup in the
+        # window that opens it, so they communicate through one-shot requests.
         if rail.take("diagnostics"):
             imgui.open_popup("diagnostics")
         self._diagnostics_popup(list(getattr(ctx.runtime, "checks", []) or []))
@@ -3030,7 +3036,16 @@ class App:
             imgui.open_popup("shortcuts")
         self._shortcuts_popup()
         imgui.same_line()
-        imgui.begin_child("##content", (0, 0))
+        # Treat the workspace and its status as one vertical item beside the
+        # full-height rail. Without this group imgui advances below the taller
+        # rail before drawing the status, clipping it against the host edge.
+        imgui.begin_group()
+        # A negative child height leaves its magnitude below the child, but
+        # the next item also consumes the parent's item spacing. Reserve both
+        # so the shared status line is never clipped at the host's lower edge,
+        # especially when that spacing is doubled by UI scale.
+        status_reserve = tokens.sp(status_bar.STATUS_H) + imgui.get_style().item_spacing.y
+        imgui.begin_child("##content", (0, -status_reserve))
         from .panes import overlay
 
         overlay.doctor_banner(ctx)
@@ -3064,6 +3079,8 @@ class App:
             else:
                 self._inker_workspace()
             imgui.end_child()
+            status_bar.draw(ctx)
+            imgui.end_group()
             imgui.end()
             self._overlays(viewport)
             return
@@ -3075,7 +3092,8 @@ class App:
         # live on the left.
 
         lay = self.layout
-        sidebar_w = layout_mod.sidebar_width()
+        left_w = layout_mod.sidebar_width("left")
+        right_w = layout_mod.sidebar_width("right")
         # The rail first, above the columns it switches: it is a breadcrumb for
         # what is under it, and one drawn at the bottom would be a tab strip
         # that had lost its tabs.
@@ -3095,22 +3113,22 @@ class App:
         imgui.unindent(pad)
         with layout_mod.pane(
             "settings",
-            (sidebar_w, 0),
+            (left_w, 0),
             layout_mod.PaneRole.SIDEBAR,
             edge=layout_mod.PaneEdge.RIGHT,
         ) as visible:
             if visible:
                 _stage_pane(ctx)
 
-        imgui.same_line()
+        _column_boundary(self.layouts, "create", "left")
         self._viewport_pane()
-        imgui.same_line()
+        _column_boundary(self.layouts, "create", "right")
 
-        _right_column(
-            ctx, lay, sidebar_w, inspector_draw=inspector.draw, library_draw=library.draw
-        )
+        _right_column(ctx, lay, right_w, inspector_draw=inspector.draw, library_draw=library.draw)
 
         imgui.end_child()
+        status_bar.draw(ctx)
+        imgui.end_group()
         imgui.end()
         self._overlays(viewport)
 
@@ -3148,9 +3166,7 @@ class App:
             items,
             ctx.state.create_stage,
             done=create_stages.reached(job, meta, poses),
-            max_width=(
-                imgui.get_content_region_avail().x if max_width is None else max_width
-            ),
+            max_width=(imgui.get_content_region_avail().x if max_width is None else max_width),
         )
         anchors.mark("create/stages")
         if picked != ctx.state.create_stage:
@@ -3186,10 +3202,11 @@ class App:
         from .panes import poser_clips, poser_controls, poser_library
 
         ctx = self.app_ctx
-        sidebar_w = layout_mod.sidebar_width()
+        left_w = layout_mod.sidebar_width("left")
+        right_w = layout_mod.sidebar_width("right")
         with layout_mod.pane(
             "poser-library",
-            (sidebar_w, 0),
+            (left_w, 0),
             layout_mod.PaneRole.SIDEBAR,
             edge=layout_mod.PaneEdge.RIGHT,
         ) as visible:
@@ -3201,7 +3218,7 @@ class App:
                 # the actual editing surface for a key.
                 poser_clips.draw(ctx)
 
-        imgui.same_line()
+        _column_boundary(self.layouts, "poser", "left")
         width = layout_mod.centre_width()
         flags = imgui.WindowFlags_.no_scroll_with_mouse.value
         with layout_mod.pane(
@@ -3213,10 +3230,10 @@ class App:
             if visible:
                 self._poser_viewport(ctx)
 
-        imgui.same_line()
+        _column_boundary(self.layouts, "poser", "right")
         with layout_mod.pane(
             "poser-controls",
-            (0, 0),
+            (right_w, 0),
             layout_mod.PaneRole.INSPECTOR,
             edge=layout_mod.PaneEdge.LEFT,
         ) as visible:
@@ -3426,20 +3443,21 @@ class App:
 
         ctx = self.app_ctx
         lay = self.layout
-        sidebar_w = layout_mod.sidebar_width()
+        left_w = layout_mod.sidebar_width("left")
+        right_w = layout_mod.sidebar_width("right")
 
         _split_column(
             ctx,
             lay,
             split_id="clay-tools",
-            handle_length=sidebar_w,
-            width=sidebar_w,
+            handle_length=left_w,
+            width=left_w,
             edge=layout_mod.PaneEdge.RIGHT,
             top=("clay-tools", layout_mod.PaneRole.SIDEBAR, clay_tools.draw),
             bottom=("clay-props", layout_mod.PaneRole.SIDEBAR, clay_props.draw),
         )
 
-        imgui.same_line()
+        _column_boundary(self.layouts, "clay", "left")
         width = layout_mod.centre_width()
         flags = imgui.WindowFlags_.no_scroll_with_mouse.value
         with layout_mod.pane(
@@ -3451,13 +3469,13 @@ class App:
             if visible:
                 self._clay_viewport(ctx, clay_mode, widgets)
 
-        imgui.same_line()
+        _column_boundary(self.layouts, "clay", "right")
         _split_column(
             ctx,
             lay,
             split_id="clay-outliner",
-            handle_length=sidebar_w,
-            width=0,
+            handle_length=right_w,
+            width=right_w,
             edge=layout_mod.PaneEdge.LEFT,
             top=("clay-outliner", layout_mod.PaneRole.INSPECTOR, clay_outliner.draw),
             bottom=("clay-bridge", layout_mod.PaneRole.INSPECTOR, clay_bridge.draw),
@@ -3528,10 +3546,7 @@ class App:
             return
         # ``auto_select_new_tabs`` for ``inker_canvas``'s reason: without it, a
         # second opened document lands behind the first and "Open" looks inert.
-        flags = (
-            imgui.TabBarFlags_.reorderable.value
-            | imgui.TabBarFlags_.auto_select_new_tabs.value
-        )
+        flags = imgui.TabBarFlags_.reorderable.value | imgui.TabBarFlags_.auto_select_new_tabs.value
         if not imgui.begin_tab_bar("clay-tabs", flags):
             return
         for tab in list(state.docs):
@@ -3631,7 +3646,7 @@ class App:
 
         ctx = self.app_ctx
         lay = self.layout
-        sidebar_w = layout_mod.sidebar_width()
+        right_w = layout_mod.sidebar_width("right")
         tab = None if ctx.state.inker is None else ctx.state.inker.active
         animated = tab is not None and tab.doc.anim is not None
         # The tile panel appears with the tilesets, the way the preview appears
@@ -3676,7 +3691,13 @@ class App:
         centre_h = 0.0
         if animated:
             strip = sp(inker_timeline.STRIP_H)
-            centre_h = max(imgui.get_content_region_avail().y - strip, sp(120))
+            available_h = imgui.get_content_region_avail().y
+            # A high UI scale can make the timeline's preferred design-pixel
+            # height consume the whole physical window. The canvas remains the
+            # anchor in that case and the timeline becomes the compressed,
+            # scrollable pane. The ratio is frame-local, just like horizontal
+            # side-panel compression; it never rewrites a saved share.
+            centre_h = max(available_h - strip, available_h * 0.62)
         with layout_mod.pane(
             "inker-centre",
             (width, centre_h),
@@ -3703,7 +3724,7 @@ class App:
                     inker_timeline.draw(ctx)
         imgui.end_group()
 
-        imgui.same_line()
+        _column_boundary(self.layouts, "inker", "right")
         # **Preview / Colours / Tiles**, top to bottom, with a handle between
         # each adjacent shareable pair. The colour panel moved here from the
         # left column in W2.9 because the palette grid is a *panel* and always
@@ -3717,7 +3738,8 @@ class App:
             ctx,
             lay,
             skeletons.ordered(ctx, self.layouts, "inker", columns["right"]),
-            handle_length=sidebar_w,
+            width=right_w,
+            handle_length=right_w,
             on_hidden=lambda _slot: None,
         )
 
@@ -3738,7 +3760,8 @@ class App:
 
         ctx = self.app_ctx
         lay = self.layout
-        sidebar_w = layout_mod.sidebar_width()
+        left_w = layout_mod.sidebar_width("left")
+        right_w = layout_mod.sidebar_width("right")
         # Both sidebars through ``layout.column`` over ``skeletons.plotter``
         # (wave 5), so the arrangement is data a saved layout can permute.
         columns = skeletons.for_mode(ctx, "plotter")
@@ -3746,11 +3769,11 @@ class App:
             ctx,
             lay,
             skeletons.ordered(ctx, self.layouts, "plotter", columns["left"]),
-            width=sidebar_w,
-            handle_length=sidebar_w,
+            width=left_w,
+            handle_length=left_w,
         )
 
-        imgui.same_line()
+        _column_boundary(self.layouts, "plotter", "left")
         width = layout_mod.centre_width()
         flags = imgui.WindowFlags_.no_scroll_with_mouse.value
         # The tileset editor is a **sheet over the centre pane**, drawn instead
@@ -3771,12 +3794,13 @@ class App:
                 else:
                     plotter_canvas.draw(ctx)
 
-        imgui.same_line()
+        _column_boundary(self.layouts, "plotter", "right")
         layout_mod.column(
             ctx,
             lay,
             skeletons.ordered(ctx, self.layouts, "plotter", columns["right"]),
-            handle_length=sidebar_w,
+            width=right_w,
+            handle_length=right_w,
         )
 
     def _troupe_workspace(self) -> None:
@@ -3801,20 +3825,21 @@ class App:
 
         ctx = self.app_ctx
         lay = self.layout
-        sidebar_w = layout_mod.sidebar_width()
+        left_w = layout_mod.sidebar_width("left")
+        right_w = layout_mod.sidebar_width("right")
 
         _split_column(
             ctx,
             lay,
             split_id="troupe-cast",
-            handle_length=sidebar_w,
-            width=sidebar_w,
+            handle_length=left_w,
+            width=left_w,
             edge=layout_mod.PaneEdge.RIGHT,
             top=("troupe-cast", layout_mod.PaneRole.SIDEBAR, troupe_characters.draw),
             bottom=("troupe-settings", layout_mod.PaneRole.SIDEBAR, troupe_settings.draw),
         )
 
-        imgui.same_line()
+        _column_boundary(self.layouts, "troupe", "left")
         width = layout_mod.centre_width()
         # No scroll-with-mouse for the reason Plotter's centre has none: the
         # wheel belongs to the picture. It said so from the day the mode was
@@ -3831,13 +3856,13 @@ class App:
             if visible:
                 troupe_preview.draw(ctx)
 
-        imgui.same_line()
+        _column_boundary(self.layouts, "troupe", "right")
         _split_column(
             ctx,
             lay,
             split_id="troupe-sheets",
-            handle_length=sidebar_w,
-            width=0,
+            handle_length=right_w,
+            width=right_w,
             edge=layout_mod.PaneEdge.LEFT,
             top=("troupe-sheets", layout_mod.PaneRole.INSPECTOR, troupe_sheets.draw),
             bottom=("troupe-bridge", layout_mod.PaneRole.INSPECTOR, troupe_bridge.draw),
@@ -3865,20 +3890,21 @@ class App:
 
         ctx = self.app_ctx
         lay = self.layout
-        sidebar_w = layout_mod.sidebar_width()
+        left_w = layout_mod.sidebar_width("left")
+        right_w = layout_mod.sidebar_width("right")
 
         _split_column(
             ctx,
             lay,
             split_id="packwright-sources",
-            handle_length=sidebar_w,
-            width=sidebar_w,
+            handle_length=left_w,
+            width=left_w,
             edge=layout_mod.PaneEdge.RIGHT,
             top=("packwright-sources", layout_mod.PaneRole.SIDEBAR, packwright_sources.draw),
             bottom=("packwright-settings", layout_mod.PaneRole.SIDEBAR, packwright_settings.draw),
         )
 
-        imgui.same_line()
+        _column_boundary(self.layouts, "packwright", "left")
         width = layout_mod.centre_width()
         flags = imgui.WindowFlags_.no_scroll_with_mouse.value
         with layout_mod.pane(
@@ -3890,13 +3916,13 @@ class App:
             if visible:
                 packwright_preview.draw(ctx)
 
-        imgui.same_line()
+        _column_boundary(self.layouts, "packwright", "right")
         _split_column(
             ctx,
             lay,
             split_id="packwright-items",
-            handle_length=sidebar_w,
-            width=0,
+            handle_length=right_w,
+            width=right_w,
             edge=layout_mod.PaneEdge.LEFT,
             top=("packwright-items", layout_mod.PaneRole.INSPECTOR, packwright_items.draw),
             bottom=("packwright-bridge", layout_mod.PaneRole.INSPECTOR, packwright_bridge.draw),
@@ -3922,14 +3948,15 @@ class App:
         ctx = self.app_ctx
         state = review_mode.ensure(ctx)
         lay = self.layout
-        sidebar_w = layout_mod.sidebar_width()
+        left_w = layout_mod.sidebar_width("left")
+        right_w = layout_mod.sidebar_width("right")
 
         _split_column(
             ctx,
             lay,
             split_id="review-runs",
-            handle_length=sidebar_w,
-            width=sidebar_w,
+            handle_length=left_w,
+            width=left_w,
             edge=layout_mod.PaneEdge.RIGHT,
             top=(
                 "review-runs",
@@ -3943,7 +3970,7 @@ class App:
             ),
         )
 
-        imgui.same_line()
+        _column_boundary(self.layouts, "review", "left")
         width = layout_mod.centre_width()
         # The labelling grid replaces the viewport rather than sitting beside it:
         # a mesh on screen under a question about a *picture* is the mismatch that
@@ -3963,10 +3990,10 @@ class App:
                 else:
                     self._review_viewport(state, review_mode, width)
 
-        imgui.same_line()
+        _column_boundary(self.layouts, "review", "right")
         with layout_mod.pane(
             "review-verdict",
-            (0, 0),
+            (right_w, 0),
             layout_mod.PaneRole.INSPECTOR,
             edge=layout_mod.PaneEdge.LEFT,
         ) as visible:
@@ -4023,9 +4050,7 @@ class App:
             # defaults it), which is the state a headless or pre-init draw is
             # in -- every pane guards it and these three Review sites did not.
             if i < labels.uploaded and ctx.textures is not None:
-                texture = ctx.textures.get(
-                    review_mode.cache_id_for_label(row), row["image"]
-                )
+                texture = ctx.textures.get(review_mode.cache_id_for_label(row), row["image"])
             if texture is not None:
                 imgui.image(widgets.texture_ref(texture), (side, side))
             else:
@@ -4137,8 +4162,7 @@ class App:
             widgets.empty_state(
                 icons.LIST,
                 "No sweep runs found",
-                "Launch one below, or check that the bench directory is where "
-                "you expect.",
+                "Launch one below, or check that the bench directory is where you expect.",
             )
         # J86: a bench directory accumulates a run per experiment and nothing
         # ever removes one, so this is the panel list that grows fastest.
@@ -4334,9 +4358,7 @@ class App:
         # over a combo of thirty raw param names.
         widgets.field_label("what to vary")
         rows = {row["param"]: row for row in review_mode.axis_options(ctx)}
-        options = [("", "-")] + [
-            (p, settings_2d.field_label(p)) for p in sweeps_mod.axis_params()
-        ]
+        options = [("", "-")] + [(p, settings_2d.field_label(p)) for p in sweeps_mod.axis_params()]
         for i, row in enumerate(form.axes):
             imgui.push_id(f"axis-{i}")
             row["param"] = widgets.combo("##param", row.get("param", ""), options, width=-1)
@@ -4417,7 +4439,8 @@ class App:
             # verdict and no grade, so the icons stay as the fallback rather
             # than that row going blank.
             mark = review_mode.grade_text(unit.get("grade")) or {
-                "accept": icons.CHECK, "reject": icons.X
+                "accept": icons.CHECK,
+                "reject": icons.X,
             }.get(unit["verdict"] or "", " ")
             if controls.selectable(
                 f"{mark} {review_mode.label(state, unit)}##unit-{unit['job_id']}",
@@ -4549,9 +4572,7 @@ class App:
             # against the total outstanding when the pass started, which is a
             # different question from "where in this sweep am I" -- and the one
             # a reviewer who has agreed to do twenty of these is asking.
-            widgets.section(
-                f"Judging {state.judging.filed + 1} of {state.judging.total}"
-            )
+            widgets.section(f"Judging {state.judging.filed + 1} of {state.judging.total}")
             widgets.muted(review_mode.label(state, unit))
         else:
             widgets.section(review_mode.label(state, unit))
@@ -4607,9 +4628,7 @@ class App:
             if grade is not None:
                 review_mode.record(ctx, grade, state.pending_tags)
 
-            with form_ui.field(
-                "tags", "Tags", helper="Optional; S skips without filing a grade."
-            ):
+            with form_ui.field("tags", "Tags", helper="Optional; S skips without filing a grade."):
                 tag = widgets.tag_toggles("review", state.pending_tags, enabled)
             if tag is not None:
                 review_mode.toggle_tag(state, tag)
@@ -4668,8 +4687,7 @@ class App:
             imgui.separator()
         if not top:
             widgets.muted(
-                f"No whole configuration has {svc_findings.PRESET_MIN_N} "
-                "verdicts yet."
+                f"No whole configuration has {svc_findings.PRESET_MIN_N} verdicts yet."
                 if axis_lines
                 else (
                     f"Nothing yet: a configuration needs "
@@ -4817,9 +4835,7 @@ class App:
             # The row that actually got selected, so the grid scrolls to what
             # is on screen rather than to an invisible follow-up.
             job = ctx.cache.get(arg)
-            ctx.state.library_scroll_to = (
-                asset_open.route(job).job_id if job is not None else arg
-            )
+            ctx.state.library_scroll_to = asset_open.route(job).job_id if job is not None else arg
         elif name == "undo" and arg:
             from .panes import library
 
@@ -4893,6 +4909,7 @@ class App:
         from imgui_bundle import imgui
 
         from . import widgets
+
         imgui.set_next_item_width(-1)
         self._shortcuts_query = widgets.input_text(
             "##shortcuts-filter",
@@ -4915,7 +4932,7 @@ class App:
                 imgui.end_table()
 
     def _layouts_popup(self, ctx: Any) -> None:
-        """The rail footer's layout switcher (P5.3).
+        """The Window menu's layout switcher (P5.3).
 
         A switcher and nothing else: renaming, duplicating, deleting and
         resetting are Settings -> Advanced, which is **the canonical path**
@@ -4936,16 +4953,19 @@ class App:
         for name, layout in sorted(self.layouts.layouts.items()):
             selected = name == self.layouts.active
             label = name if layout.readable else f"{name}  (a newer version)"
-            if controls.menu_item(
-                f"{label}##layout/{name}",
-                "",
-                selected,
-                layout.readable,
-                reason=(
-                    "This layout was saved by a newer build. It is kept exactly "
-                    "as it was found rather than reinterpreted."
-                ),
-            )[0] and layout.readable:
+            if (
+                controls.menu_item(
+                    f"{label}##layout/{name}",
+                    "",
+                    selected,
+                    layout.readable,
+                    reason=(
+                        "This layout was saved by a newer build. It is kept exactly "
+                        "as it was found rather than reinterpreted."
+                    ),
+                )[0]
+                and layout.readable
+            ):
                 self.layouts.set_active(name)
         imgui.separator()
         if controls.menu_item_simple("Reset this layout"):
@@ -5009,9 +5029,7 @@ class App:
             imgui.same_line()
             widgets.muted("-")
             imgui.same_line()
-            imgui.push_style_color(
-                imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.MUTED))
-            )
+            imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.MUTED)))
             imgui.text_wrapped(str(check.detail))
             imgui.pop_style_color()
         if not checks:
@@ -5032,9 +5050,7 @@ class App:
         imgui.separator()
         if controls.button("Copy details", role=controls.ButtonRole.GHOST):
             imgui.set_clipboard_text(
-                "\n".join(
-                    f"{'ok' if c.ok else 'FAIL'} {c.name}: {c.detail}" for c in checks
-                )
+                "\n".join(f"{'ok' if c.ok else 'FAIL'} {c.name}: {c.detail}" for c in checks)
             )
         imgui.same_line()
         # Re-ask rather than wait out the poll (N111). The static half is only
@@ -5065,9 +5081,7 @@ class App:
 
         if component_gallery.enabled():
             imgui.same_line()
-            if controls.button(
-                "Component gallery", role=controls.ButtonRole.GHOST
-            ):
+            if controls.button("Component gallery", role=controls.ButtonRole.GHOST):
                 component_gallery.request()
         imgui.end_popup()
         imgui.pop_style_var()
@@ -5094,9 +5108,7 @@ class App:
         if not log:
             return
         imgui.separator()
-        if not controls.collapsing_header(
-            f"Notifications ({len(log)})##toast-history"
-        ):
+        if not controls.collapsing_header(f"Notifications ({len(log)})##toast-history"):
             return
         now = time.monotonic()
         if imgui.begin_child("toast-history", (0, sp(160))):
@@ -5116,12 +5128,8 @@ class App:
                 imgui.text_wrapped(entry.text)
                 imgui.pop_style_color()
         imgui.end_child()
-        if controls.small_button(
-            "Copy notifications", role=controls.ButtonRole.GHOST
-        ):
-            imgui.set_clipboard_text(
-                "\n".join(f"{e.level}: {e.text}" for e in reversed(log))
-            )
+        if controls.small_button("Copy notifications", role=controls.ButtonRole.GHOST):
+            imgui.set_clipboard_text("\n".join(f"{e.level}: {e.text}" for e in reversed(log)))
 
     def _effective_config_section(self, ctx: Any) -> None:
         """What this process is running on, with the overridden rows marked.
@@ -5203,7 +5211,9 @@ class App:
             imgui.same_line()
             imgui.image(
                 widgets.texture_ref(self.viewer.compare_viewport.texture),
-                (cell, height), (0, 1), (1, 0),
+                (cell, height),
+                (0, 1),
+                (1, 0),
             )
             self._viewport_hovered |= imgui.is_item_hovered()
 
@@ -5425,9 +5435,7 @@ def _setup_logging() -> None:
         # Written before faulthandler is armed, so any dump below it is
         # attributable: crash.log is appended to across runs, and a bare
         # traceback with no session line above it belongs to nobody.
-        _crash_log.write(
-            f"=== session {_utc_now()} pid={os.getpid()} warlock={_version()} ===\n"
-        )
+        _crash_log.write(f"=== session {_utc_now()} pid={os.getpid()} warlock={_version()} ===\n")
         _crash_log.flush()
         faulthandler.enable(file=_crash_log)
     except OSError:
@@ -5574,24 +5582,29 @@ def _note_previous_session() -> None:
             "the previous session's marker names pid %d (started %s), which is "
             "alive; the instance lock was free, so that is almost certainly a "
             "recycled pid rather than another Warlock",
-            pid, data.get("started_at", "?"),
+            pid,
+            data.get("started_at", "?"),
         )
         return
     log.warning(
         "the previous session (pid %d, started %s, warlock %s) did not shut down "
         "cleanly -- check crash.log and Windows event 2004",
-        pid, data.get("started_at", "?"), data.get("version", "?"),
+        pid,
+        data.get("started_at", "?"),
+        data.get("version", "?"),
     )
 
 
 def _write_session_marker() -> None:
     try:
         _marker_path().write_text(
-            json.dumps({
-                "pid": os.getpid(),
-                "started_at": _utc_now(),
-                "version": _version(),
-            }),
+            json.dumps(
+                {
+                    "pid": os.getpid(),
+                    "started_at": _utc_now(),
+                    "version": _version(),
+                }
+            ),
             encoding="utf-8",
         )
     except OSError:
@@ -5611,7 +5624,10 @@ def run() -> int:
     _install_excepthooks()
     log.info(
         "Warlock Studio %s starting: pid=%d python=%s argv=%s",
-        _version(), os.getpid(), sys.version.split()[0], sys.argv[1:],
+        _version(),
+        os.getpid(),
+        sys.version.split()[0],
+        sys.argv[1:],
     )
     # Before ``migrate`` is even imported, because importing it *performs* the
     # one-time move: a second instance starting mid-copy is RUN-02's window, and
@@ -5651,7 +5667,7 @@ def run() -> int:
         if lock.failure:
             log.error("instance locking failed for %s; refusing to start", lock.path)
             instance.alert(
-            "Warlock Studio cannot protect its data",
+                "Warlock Studio cannot protect its data",
                 f"{lock.failure}\n\nWarlock stopped before opening the library because "
                 "running without this protection can corrupt jobs or model files. "
                 "Fix the directory permissions and try again. For emergency recovery "

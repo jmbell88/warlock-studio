@@ -145,11 +145,6 @@ Two things worth knowing before you start:
 - [ ] **Troupe Phase 6 — the cleanup workflow.** See §6 below. It is three
       features and the hard one is a genuine design problem, not an
       implementation task. Worth a conversation before anyone writes code.
-- [ ] **Push `master`.** It is **38 commits ahead of `origin/master`** as of
-      2026-08-22; nothing has been pushed since the v0.0.25 work began. Pushing
-      is yours to authorise, not something a session decides on its own — which
-      is why this sits here rather than being done. Raised by the 2026-08-22
-      audit as C9.
 - [ ] **Decide what happens to `plotter-wave-2`.** It last moved 2026-08-14 and
       `master` has advanced 262 commits since; it holds 52 unmerged commits.
       Per the Plotter Wave 2 record it is gated on the user-authored Tiled

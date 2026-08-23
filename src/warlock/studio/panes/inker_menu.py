@@ -1,42 +1,37 @@
-"""The Inker's menu strip: seven names, and every verb the editor has.
+"""The Inker's op dialogs: the parameter sheet, layer properties and history.
 
-Drawn from ``inker_canvas.draw`` before the tab bar, which is Aseprite's own
-order -- menu, tabs, context bar, canvas, status -- and inside the centre
-window because an imgui popup only renders in the id stack of the window that
-opened it.
+**The menu strip that used to live here is gone.** Its seven names moved to the
+application menu bar (:mod:`~warlock.studio.menus`, which builds its Inker rows
+straight from ``inker_ops.MENUS`` and calls :func:`activate`), because the
+editor shell has one menu bar and a per-pane strip underneath it was the same
+verbs twice. What could not move is the dialogs: an imgui popup only renders in
+the id stack of the window that opened it, and these three are opened from
+inside the centre pane. So :func:`draw_popups` is called from
+``inker_canvas.draw`` and hosts them there, while the thing that *raises* them
+sits in the menu bar a window away -- bridged by ``state.pending_op`` rather
+than by a call, for exactly that reason.
 
-**A row is an ``inker_ops.Op`` and nothing else.** The strip decides where a
-popup opens and what a row looks like; the registry decides what exists,
-whether it can run and what to say when it cannot. That is the whole of why
-this file is short: there is no list of verbs in it.
-
-**Not ``imgui.begin_menu_bar``.** A menu bar belongs to a *window* via a flag,
-and the centre pane's flags are ``layout.pane``'s; changing the child's content
-region is exactly what the canvas's height reservation depends on, and a
-negative child height silently kills the canvas. A row of ghost buttons that
-each open an anchored popup is the same picture with none of that risk -- and
-it goes through :mod:`~warlock.studio.toolbar`, so a strip too wide for the
-pane collapses into an overflow with the menu names back rather than clipping
-"View" off the end.
+**A row is an ``inker_ops.Op`` and nothing else.** ``menus.py`` decides where a
+row appears; the registry decides what exists, whether it can run and what to
+say when it cannot. That is still the whole of why this file is short: there is
+no list of verbs in it.
 
 This pane replaced ``inker_bridge``'s five verb blocks. That module keeps its
 four popups and their dialog machinery and is no longer drawn as a pane; see
 its docstring.
 """
-
 from __future__ import annotations
 
 from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import controls, icons, inker, inker_mode, inker_ops, toolbar, widgets
+from .. import controls, icons, inker, inker_mode, inker_ops, widgets
 from ..tokens import sp
 
 #: Opacity mid-drag, per layer uid. See :func:`header_controls`.
 _opacity_drag: dict[int, float] = {}
 
-BAR = "inker-menu"
 PARAM_POPUP = "inker-op-params"
 PROPERTIES_POPUP = "inker-layer-properties"
 HISTORY_POPUP = "inker-undo-history"
@@ -46,51 +41,31 @@ HISTORY_POPUP = "inker-undo-history"
 HINT_WRAP = 300
 
 
-def draw(ctx: Any) -> None:
-    """The strip, its popups, and the parameter dialog behind them."""
+def activate(ctx: Any, op: Any) -> None:
+    """Run an operation selected from any command surface.
+
+    Parameter popups are requested by flag because the global menu and the
+    editor child are different imgui windows; the editor opens its own popup
+    on the next frame.
+    """
+
+    state = inker_mode.ensure(ctx)
+    if op.params:
+        state.pending_op = op.name
+        state.op_params.setdefault(op.name, inker_ops.defaults_for(op))
+        state.pending_dialog = PARAM_POPUP
+    else:
+        inker_ops.run(ctx, op)
+
+
+def draw_popups(ctx: Any) -> None:
+    """Host the dialogs after the menu strip moved to application scope."""
 
     state = inker_mode.ensure(ctx)
     tab = state.active
-    items = [
-        toolbar.Item(name, name, priority=index // 3, role=controls.ButtonRole.GHOST)
-        for index, name in enumerate(inker_ops.MENUS)
-    ]
-    clicked = toolbar.toolbar(BAR, items)
-    if clicked:
-        imgui.open_popup(controls.menu_bar_id(BAR, clicked))
-    for name in inker_ops.MENUS:
-        with controls.menu_popup(controls.menu_bar_id(BAR, name)) as opened:
-            if opened:
-                _rows(ctx, state, tab, name)
     _params_popup(ctx, state)
     _properties_popup(ctx, state, tab)
     _history_popup(ctx, state, tab)
-
-
-def _rows(ctx: Any, state: Any, tab: Any, name: str) -> None:
-    for op in inker_ops.menu(name):
-        if op.separator_before:
-            controls.menu_separator()
-        enabled = bool(op.enabled(state, tab))
-        hit = controls.menu_item(
-            f"{op.label}##{BAR}/{op.name}",
-            op.key,
-            False,
-            enabled,
-            reason=op.reason,
-            tooltip=op.hint,
-        )
-        if not (hit[0] if isinstance(hit, tuple) else hit):
-            continue
-        if op.params:
-            # Opened by *name*: the popup survives across frames and the
-            # registry is the only thing allowed to own the ``Op`` object.
-            state.pending_op = op.name
-            state.op_params.setdefault(op.name, inker_ops.defaults_for(op))
-            imgui.close_current_popup()
-            imgui.open_popup(PARAM_POPUP)
-        else:
-            inker_ops.run(ctx, op)
 
 
 def _params_popup(ctx: Any, state: Any) -> None:
@@ -102,6 +77,9 @@ def _params_popup(ctx: Any, state: Any) -> None:
     case is still two clicks.
     """
 
+    if state.pending_dialog == PARAM_POPUP:
+        state.pending_dialog = ""
+        imgui.open_popup(PARAM_POPUP)
     if not state.pending_op:
         return
     try:
@@ -191,9 +169,9 @@ def _history_popup(ctx: Any, state: Any, tab: Any) -> None:
         steps = history.history()
         widgets.secondary(f"{len(steps)} step(s)")
         imgui.separator()
-        if controls.selectable("(the document as opened)", not any(
-            done for _label, done in steps
-        ))[0]:
+        if controls.selectable("(the document as opened)", not any(done for _label, done in steps))[
+            0
+        ]:
             history.step_to(tab.doc, 0)
         for index, (label, done) in enumerate(steps):
             # The *count of done steps* this row represents, which is the

@@ -13,6 +13,15 @@ So a section is a *surface* now rather than a gap. The heading and everything
 under it up to the next heading sit on one tinted block, and the blocks are what
 the eye groups by. The rule is still not back: nothing here draws a line.
 
+**The blocks are opt-in per pane**, which is the one thing that changed when the
+editor shell landed. ``layout.pane`` used to open a scope for every pane it
+drew, on the argument that the tint is a property of *being* a pane; the shell
+overturned that, because a workspace canvas is a pane too and wants no tint.
+What did not change is the report above -- the four narrow sidebars it names
+still need the grouping, so they open a scope themselves and
+``test_the_four_sidebars_the_report_named_still_ask_for_blocks`` is what keeps
+them from quietly losing it again.
+
 The mechanism is the interesting part and is what this file mostly pins. A
 block's height is not known until its content has been drawn, and imgui has no
 way to insert behind what is already in a draw list -- so the scope splits the
@@ -228,9 +237,11 @@ def test_a_scope_that_draws_no_section_costs_nothing(frame):
 # carry their reasoning inline at the ``widgets.section`` call.
 
 
-def test_a_pane_opens_a_scope_for_whatever_it_draws(frame):
-    """``layout.pane`` is where the great majority of the app's headings live,
-    and hanging the scope off it is what keeps 98 call sites unchanged."""
+def test_a_pane_is_flat_until_it_asks_for_blocks(frame):
+    """``layout.pane`` opens no scope of its own -- the editor shell's panes are
+    flat, and the tint is a thing a pane *asks* for. What this pins is that the
+    ask is all it takes: one ``with`` inside the pane body and every heading
+    under it is on a block, with the scope closed on the way out."""
     from warlock.studio import layout
 
     def build():
@@ -238,14 +249,17 @@ def test_a_pane_opens_a_scope_for_whatever_it_draws(frame):
         with layout.pane("probe-pane", (300.0, 400.0)) as visible:
             depths.append(widgets.section_scope_depth())
             if visible:
-                widgets.section("Tools")
-                widgets.muted("a")
+                with widgets.section_blocks():
+                    depths.append(widgets.section_scope_depth())
+                    widgets.section("Tools")
+                    widgets.muted("a")
         depths.append(widgets.section_scope_depth())
         return depths
 
-    inside, after = frame(build)
-    assert inside == 1
-    assert after == 0, "the pane closed its scope on the way out"
+    bare, asked, after = frame(build)
+    assert bare == 0, "the pane itself opens nothing"
+    assert asked == 1, "the pane asked, so it has one"
+    assert after == 0, "and it closed on the way out"
 
 
 def test_two_sibling_panes_each_get_their_own_scope(frame):
@@ -259,9 +273,10 @@ def test_two_sibling_panes_each_get_their_own_scope(frame):
         for name in ("probe-a", "probe-b"):
             with layout.pane(name, (200.0, 300.0)) as visible:
                 if visible:
-                    widgets.section("Heading")
-                    widgets.muted("row")
-                seen.append(widgets.section_scope_depth())
+                    with widgets.section_blocks():
+                        widgets.section("Heading")
+                        widgets.muted("row")
+                        seen.append(widgets.section_scope_depth())
         return seen, widgets.section_scope_depth()
 
     seen, after = frame(build)
@@ -321,13 +336,16 @@ def test_end_section_is_harmless_with_no_block_open(frame):
 
 
 def test_a_scope_inside_a_child_window_is_a_real_second_scope(frame):
-    """The 2D pane's fix (2026-08-17). ``layout.pane`` opens a scope on the
-    pane's own draw list; the 2D form then opens a child window (``2d-form``)
-    with its *own* list and an opaque background -- so fills painted on the
-    parent's list are covered, and only the 8dp left overhang survived. The fix
-    is a second scope opened inside the child, and it is only a fix because the
-    dedup keys on the draw list's owner name (distinct per child window) rather
-    than treating any nested scope as a no-op."""
+    """The 2D pane's fix (2026-08-17). The pane opens a scope on its own draw
+    list; the 2D form then opens a child window (``2d-form``) with its *own*
+    list and an opaque background -- so fills painted on the parent's list are
+    covered, and only the 8dp left overhang survived. The fix is a second scope
+    opened inside the child, and it is only a fix because the dedup keys on the
+    draw list's owner name (distinct per child window) rather than treating any
+    nested scope as a no-op.
+
+    Unchanged by the editor shell going flat: what moved is *who* opens the
+    outer scope, not how a nested one behaves."""
     from imgui_bundle import imgui
 
     from warlock.studio import layout
@@ -337,16 +355,17 @@ def test_a_scope_inside_a_child_window_is_a_real_second_scope(frame):
         blocks = []
         with layout.pane("probe-2d", (320.0, 500.0)) as visible:
             if visible:
-                depths.append(widgets.section_scope_depth())
-                if imgui.begin_child("probe-2d-form", (0.0, 300.0)):
-                    child_left = imgui.get_cursor_screen_pos().x
-                    child_width = imgui.get_content_region_avail().x
-                    with widgets.section_blocks() as scope:
-                        depths.append(widgets.section_scope_depth())
-                        widgets.section("Output")
-                        widgets.muted("a row")
-                    blocks = list(scope.blocks)
-                imgui.end_child()
+                with widgets.section_blocks():
+                    depths.append(widgets.section_scope_depth())
+                    if imgui.begin_child("probe-2d-form", (0.0, 300.0)):
+                        child_left = imgui.get_cursor_screen_pos().x
+                        child_width = imgui.get_content_region_avail().x
+                        with widgets.section_blocks() as scope:
+                            depths.append(widgets.section_scope_depth())
+                            widgets.section("Output")
+                            widgets.muted("a row")
+                        blocks = list(scope.blocks)
+                    imgui.end_child()
         return depths, blocks, child_left, child_width
 
     depths, blocks, child_left, child_width = frame(build)
@@ -357,3 +376,41 @@ def test_a_scope_inside_a_child_window_is_a_real_second_scope(frame):
     # not a sliver at the left edge.
     assert x1 - x0 >= child_width * 0.9, (x0, x1, child_width)
     assert x0 <= child_left
+
+
+def test_the_four_sidebars_the_report_named_still_ask_for_blocks():
+    """The regression guard for the flat-pane change.
+
+    ``layout.pane`` no longer opens a scope, so the grouping these four panes
+    were given in the first place now depends on each of them asking. Nothing
+    else in the app would notice if one stopped: the headings still draw, they
+    just stop being grouped, which is precisely the failure the module docstring
+    describes and precisely the kind a screenshot test would not catch either.
+
+    Read off the source rather than rendered, because rendering four real panes
+    needs four real documents -- and what is being pinned is the *ask*, which is
+    a property of the code, not of a particular document.
+    """
+    import ast
+    import inspect
+
+    from warlock.studio.panes import clay_outliner, clay_props, clay_tools, plotter_tools
+
+    for module in (clay_tools, clay_outliner, clay_props, plotter_tools):
+        tree = ast.parse(inspect.getsource(module))
+        draw = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "draw"
+        )
+        opens = [
+            node
+            for node in ast.walk(draw)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "section_blocks"
+        ]
+        assert opens, (
+            f"{module.__name__}.draw no longer opens a section_blocks scope -- "
+            "its headings are back to being a column of gaps"
+        )

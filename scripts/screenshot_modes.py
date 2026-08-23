@@ -58,6 +58,17 @@ from warlock.studio import modes as _modes  # noqa: E402
 MODES = _modes.KEYS
 
 
+def _size(value: str) -> tuple[int, int]:
+    """Parse WIDTHxHEIGHT for deterministic minimum-size captures."""
+    try:
+        width, height = (int(part) for part in value.lower().split("x", 1))
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError("size must be WIDTHxHEIGHT") from exc
+    if width < 1 or height < 1:
+        raise argparse.ArgumentTypeError("size dimensions must be positive")
+    return width, height
+
+
 def _capture_popups(app, out: Path, theme_name: str) -> None:
     """Capture every full-size transient container, including model flow."""
     from warlock.studio import create_stages, dialogs, plotter_mode, rail
@@ -137,6 +148,11 @@ def main() -> int:
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--themes", default="dark,light,pixel")
     ap.add_argument(
+        "--modes",
+        default=None,
+        help="comma-separated workspace subset for targeted captures",
+    )
+    ap.add_argument(
         "--seed",
         action="store_true",
         help="open an Inker canvas and a Clay model before capturing",
@@ -155,14 +171,14 @@ def main() -> int:
         "--asset",
         action="store_true",
         help="seed a reference and a rigged mesh made from it, mesh selected, "
-             "so Create's five stages draw an asset rather than four empty "
-             "states",
+        "so Create's five stages draw an asset rather than four empty "
+        "states",
     )
     ap.add_argument(
         "--review",
         action="store_true",
         help="seed a finished mesh and open Review on it, so the verdict panel "
-             "draws its grade row and tag toggles rather than its empty state",
+        "draws its grade row and tag toggles rather than its empty state",
     )
     ap.add_argument(
         "--floating",
@@ -218,7 +234,23 @@ def main() -> int:
             "is the only scale the smoke suite runs at and the one nobody uses."
         ),
     )
+    ap.add_argument(
+        "--size",
+        type=_size,
+        default=None,
+        metavar="WIDTHxHEIGHT",
+        help=(
+            "capture at an exact window size, for example 1100x700; combine "
+            "with --scale to exercise narrow high-density layouts"
+        ),
+    )
     args = ap.parse_args()
+    selected_modes = MODES
+    if args.modes:
+        selected_modes = tuple(part.strip() for part in args.modes.split(",") if part.strip())
+        unknown = [mode for mode in selected_modes if mode not in MODES]
+        if unknown:
+            ap.error(f"unknown mode(s): {', '.join(unknown)}")
     args.out.mkdir(parents=True, exist_ok=True)
     if args.components:
         os.environ["WARLOCK_DEV_COMPONENTS"] = "1"
@@ -228,7 +260,7 @@ def main() -> int:
     from warlock.studio import theme as theme_mod
     from warlock.studio import tokens
 
-    app = boot(args.scale)
+    app = boot(args.scale, args.size)
     if args.seed:
         _seed(app)
     if args.asset:
@@ -243,7 +275,7 @@ def main() -> int:
             tokens.set_theme(name)
             theme_mod.apply(imgui)
             print(f"{name}:", flush=True)
-            for mode in MODES:
+            for mode in selected_modes:
                 app.app_ctx.state.mode = mode
                 if mode == create_stages.MODE:
                     # One mode, several viewports (the UI redesign, wave 5): a

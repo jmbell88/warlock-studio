@@ -294,7 +294,7 @@ settle the first question in a minute.
 | Per-tile user data | warned, tiles kept | #14 | Its own, narrower sentence ("the tiles are") — the picture survives; only the metadata about individual tiles does not. |
 | Per-frame palettes | warned | #20 | "per-frame palettes are not kept; the final table is used." |
 | Colour profile | warned | #3 | "a colour profile was dropped; this app assumes sRGB." |
-| A reference layer | warned, opens hidden | #6-adjacent | Aseprite's own export leaves a reference layer out; this reader keeps the pixels but opens the layer hidden rather than dropping it outright — a cheaper way back than reopening in Aseprite. |
+| A reference layer | warned, visibility as stated | #6-adjacent | Aseprite's own export leaves a reference layer out; this reader keeps the pixels and the layer. It used to force the layer hidden as well, on the grounds that Aseprite opens them that way — but `aseout` writes `visible` verbatim beside the REFERENCE flag, so a file can say one is showing, and the override silently discarded the user's own toggle on the next load. The VISIBLE bit now wins; only the warning remains. |
 | An unknown blend mode | warned, opens as normal | — | A future Aseprite mode this build has no number for falls back to `normal` rather than refusing the whole file. |
 | A tileset's `base_index != 1` | warned | — | Aseprite's own display-only numbering in its tileset panel; no id this reader stores is affected. |
 | A cel's precise (cropped) bounds | warned | — | "a cel's precise bounds were dropped; its pixels were not" — this package's cels are always canvas-sized, so a tight Aseprite cel is expanded to the canvas, matching `aseout`'s own full-canvas write convention. |
@@ -312,3 +312,20 @@ settle the first question in a minute.
 | A tag over a document's only frame | warned, dropped | #22 | New at Wave 5: a one-frame file opens as a **still** document (`Document.anim is None`), which has nowhere to hold a tag at all — "there is nothing to play." |
 | Palette-constrained RGB's write-constraint (reading it back) | dropped | #19 | An RGB-depth file's palette chunk is a real colour table Aseprite wrote, but installing it as a *constraint* on an ordinary RGB document would silently put the whole editor into palette-locked mode over a table nobody asked to be limited by — so it is read and then set aside; only an *indexed*-depth file's palette is installed. |
 | Everything refused outright | refused, named | — | A colour depth this build does not read; a file with no frames; a canvas smaller than 1×1; a cel that will not decompress; a tilemap cel that is not 32 bits per tile or whose bit-mask offset is not tile-aligned; a cel linking to a frame that holds none; a cel type nobody here knows. Each names the thing rather than failing generically — `sheetin`'s own argument for refusing a mis-registered atlas, restated. |
+
+## Inker ↔ ORA (Krita, GIMP, MyPaint)
+
+`ora.py` is both halves — reader and writer — so unlike the Aseprite pair there
+is no asymmetry to tabulate, only what the format carries that this document
+model has nowhere to put. Everything here is a **round-trip loss**: open in
+Warlock, save, reopen in Krita, and the column is gone for good. That is worth
+stating plainly rather than leaving in code comments, because "the pixels are
+fine" is true of every row and is not the question a user asks.
+
+| What | State | Notes |
+|---|---|---|
+| Canvas resolution (`xres`/`yres`) | **kept** | Read into `Document.dpi` and written straight back. Carried, not used: nothing here renders at a physical size. A document that never stated one still does not — no guessed 72 is invented on first save. This was a silent loss until the 2026-08-23 audit. |
+| A group's `composite-op` (blend mode on a group as a unit) | dropped | The document model has no group-level blend: a group is a membership fact, not a compositing stage. A Krita group set to Multiply therefore renders pass-through on load — visibly wrong before anything is saved — and the attribute is gone after. The drop is logged. Modelling it is a real feature (`composite.py` would need to composite a group's members into a scratch plane first), not a line of parsing. |
+| ICC colour profiles | dropped | This app is sRGB throughout — the same non-goal the Aseprite table records for colour profiles, stated here so its absence is not read as an oversight. Pixel bytes are unchanged; a colour-managed viewer will reinterpret them against sRGB. |
+| Foreign per-layer attributes (Krita `uuid`, `colorlabel`, `selected`, `collapsed`; GIMP `edit-mask`) | dropped | Editor state about a layer rather than the layer, and there is no round-trip guarantee for any of it. Unlike the group case these are dropped without a log, deliberately: they appear on every layer of every Krita file, so logging them would be noise on every open rather than a signal. |
+| `isolation` | written as `auto` always | The writer states the ORA default rather than preserving what it read, for the same reason as `composite-op`: nothing in the model distinguishes an isolated group from a pass-through one. |

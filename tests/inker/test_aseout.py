@@ -1429,3 +1429,28 @@ def test_a_key_only_pivot_document_is_byte_stable():
     first = aseout.aseprite_bytes(once)
     twice, _ = asein.document_from_aseprite(first)
     assert aseout.aseprite_bytes(twice) == first
+
+
+def test_a_visible_reference_layer_survives_a_round_trip():
+    """The regression guard for the read side's forced hide.
+
+    ``aseout`` was always capable of writing "this reference layer is showing"
+    -- it writes ``visible`` verbatim beside the REFERENCE flag -- but the
+    reader overrode it to hidden unconditionally, so the two halves disagreed
+    and a user's toggle died on the next load. A round trip is the only shape
+    of test that catches that class: either side read alone looks correct.
+    """
+    doc = _still()
+    doc.stack[1].reference = True
+    doc.stack[1].visible = True
+
+    back, _warnings = _round_trip(doc)
+
+    assert back.stack[1].reference is True
+    assert back.stack[1].visible is True, (
+        "the reader threw away the visibility the writer had just encoded"
+    )
+
+    doc.stack[1].visible = False
+    hidden, _warnings = _round_trip(doc)
+    assert hidden.stack[1].visible is False

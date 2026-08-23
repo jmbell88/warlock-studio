@@ -40,6 +40,20 @@ _DRAG_OBJECT = "clay-object"
 
 
 def draw(ctx: Any) -> None:
+    """This pane's headings, on tinted blocks.
+
+    The blocks are opened *here* rather than in :func:`layout.pane`, which is
+    flat: a pane on a wide canvas wants no tint, and this is one of the four
+    narrow sidebars the grouping was written for (see
+    ``tests/test_section_blocks.py`` for the report it came from). Wrapping
+    ``_body`` rather than inlining the ``with`` keeps every early return inside
+    the scope, and the scope closes its last block on the way out.
+    """
+    with widgets.section_blocks():
+        _body(ctx)
+
+
+def _body(ctx: Any) -> None:
     state = clay_mode.ensure(ctx)
     tab = state.active
     widgets.section("Outliner")

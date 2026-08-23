@@ -143,11 +143,9 @@ def _blit(draw_list: Any, texture: Any, view: Any, origin, x0, y0, x1, y1, **kwa
 
 def draw(ctx: Any) -> None:
     state = inker_mode.ensure(ctx)
-    # Menu, tabs, canvas, status -- Aseprite's order, and the reason the strip
-    # is drawn here rather than by the workspace: an imgui popup renders only
-    # in the id stack of the window that opened it, so every menu in it has to
-    # be begun inside this pane.
-    inker_menu.draw(ctx)
+    # The application owns the menu bar; this child still owns the parameter
+    # and document popups requested by those registry-backed rows.
+    inker_menu.draw_popups(ctx)
     if not state.docs:
         _empty(ctx, state)
         # Registered in this window whichever branch drew, because the empty
@@ -201,21 +199,15 @@ def _view_row(ctx: Any, state: Any, tab: Any) -> None:
     """
     view = tab.view
     items = [
-        toolbar.Item(
-            "rotate", "Rotate view", icons.ROTATE_CW, tooltip="Rotate the view (Ctrl+4)"
-        ),
-        toolbar.Item(
-            "flip", "Flip view", icons.FLIP_HORIZONTAL, tooltip="Flip the view (Ctrl+5)"
-        ),
+        toolbar.Item("rotate", "Rotate view", icons.ROTATE_CW, tooltip="Rotate the view (Ctrl+4)"),
+        toolbar.Item("flip", "Flip view", icons.FLIP_HORIZONTAL, tooltip="Flip the view (Ctrl+5)"),
         # Distinct from *Fit view* (Ctrl+0, and a button in the bridge panel):
         # this keeps the zoom the user chose and only puts the page back under
         # the pane. Panning far enough to lose the canvas entirely is easy and
         # the only way back was to re-fit, which threw the zoom away. (The
         # citation here used to say "the View menu"; this app has never had
         # one, and a reader looking for it found nothing.)
-        toolbar.Item(
-            "center", "Center view", icons.CROSSHAIR, tooltip="Center the page"
-        ),
+        toolbar.Item("center", "Center view", icons.CROSSHAIR, tooltip="Center the page"),
     ]
     if view.rotation or view.flipped:
         # Said out loud, because the two are invisible once you have looked
@@ -440,9 +432,7 @@ def _transform_trailing(state: Any, doc: Any) -> tuple[float, Any] | None:
 
     def draw_it() -> None:
         imgui.set_next_item_width(sp(160))
-        changed, angle = controls.slider_float(
-            "Angle", buf.angle, -180.0, 180.0, "%.1f deg"
-        )
+        changed, angle = controls.slider_float("Angle", buf.angle, -180.0, 180.0, "%.1f deg")
         if changed:
             doc.transform_floating(angle=angle, resample=state.resample)
         imgui.same_line()
@@ -453,22 +443,16 @@ def _transform_trailing(state: Any, doc: Any) -> tuple[float, Any] | None:
         # and reads as one with the unit attached, where a bare ``1.000``
         # beside an angle in degrees is a number with no stated dimension.
         imgui.set_next_item_width(sp(110))
-        changed_x, fx = controls.slider_float(
-            "X##inkscalex", buf.scale[0], 0.05, 8.0, "%.2fx"
-        )
+        changed_x, fx = controls.slider_float("X##inkscalex", buf.scale[0], 0.05, 8.0, "%.2fx")
         imgui.same_line()
         imgui.set_next_item_width(sp(110))
-        changed_y, fy = controls.slider_float(
-            "Y##inkscaley", buf.scale[1], 0.05, 8.0, "%.2fx"
-        )
+        changed_y, fy = controls.slider_float("Y##inkscaley", buf.scale[1], 0.05, 8.0, "%.2fx")
         imgui.same_line()
         linked, value = controls.checkbox("Link##inkscalelink", state.transform_link)
         if linked:
             state.transform_link = value
         if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "Scale both axes together. Shift does the same on a handle."
-            )
+            imgui.set_tooltip("Scale both axes together. Shift does the same on a handle.")
         if changed_x or changed_y:
             if state.transform_link:
                 fx = fy = fx if changed_x else fy
@@ -482,14 +466,10 @@ def _transform_trailing(state: Any, doc: Any) -> tuple[float, Any] | None:
         # makes for suppressing splitters while the layout editor is open.
         imgui.same_line()
         imgui.set_next_item_width(sp(110))
-        changed_h, hx = controls.slider_float(
-            "H##inkshearx", buf.shear[0], -60.0, 60.0, "%.0f deg"
-        )
+        changed_h, hx = controls.slider_float("H##inkshearx", buf.shear[0], -60.0, 60.0, "%.0f deg")
         imgui.same_line()
         imgui.set_next_item_width(sp(110))
-        changed_v, hy = controls.slider_float(
-            "V##inksheary", buf.shear[1], -60.0, 60.0, "%.0f deg"
-        )
+        changed_v, hy = controls.slider_float("V##inksheary", buf.shear[1], -60.0, 60.0, "%.0f deg")
         if changed_h or changed_v:
             doc.transform_floating(shear=(hx, hy), resample=state.resample)
 
@@ -691,11 +671,7 @@ def _os_cursor(state: Any, tab: Any, *, hovered: bool) -> None:
     # same exemptions: a pick or a marquee over a locked layer is not refused,
     # so it must not be shown as refused either.
     nudging_a_float = state.tool == "move" and tab.doc.floating is not None
-    if (
-        state.tool not in _READ_ONLY_TOOLS
-        and tab.doc.write_locked()
-        and not nudging_a_float
-    ):
+    if state.tool not in _READ_ONLY_TOOLS and tab.doc.write_locked() and not nudging_a_float:
         imgui.set_mouse_cursor(imgui.MouseCursor_.not_allowed.value)
         return
     if state.tool == "move":
@@ -844,9 +820,7 @@ def _input(ctx: Any, state: Any, tab: Any, origin, *, active: bool, hovered: boo
             # only spare axis is the one the wheel turns.
             state.corner_radius = max(0, int(state.corner_radius) + int(notches))
         else:
-            inker_state.zoom_step(
-                tab.view, origin, (mouse.x, mouse.y), notches, **_BOUNDS
-            )
+            inker_state.zoom_step(tab.view, origin, (mouse.x, mouse.y), notches, **_BOUNDS)
 
     _os_cursor(state, tab, hovered=hovered)
 
@@ -960,8 +934,14 @@ SYMMETRY_PIVOT_RADIUS = 7.0
 #: ``_transform_box`` cannot be one the drag code has no opinion about. The
 #: names are image-space compass points, as ``_handles`` builds them.
 HANDLE_AXES = {
-    "nw": "xy", "ne": "xy", "sw": "xy", "se": "xy",
-    "n": "y", "s": "y", "e": "x", "w": "x",
+    "nw": "xy",
+    "ne": "xy",
+    "sw": "xy",
+    "se": "xy",
+    "n": "y",
+    "s": "y",
+    "e": "x",
+    "w": "x",
 }
 
 
@@ -1059,12 +1039,8 @@ def _transform_input(state: Any, tab: Any, origin, point, *, active: bool) -> No
             # distance ratio (the same number the drag used to produce before
             # there were two axes); for an edge handle there is only one live
             # ratio, so it is simply applied to both.
-            fx = fy = (
-                math.dist(centre, (mouse.x, mouse.y)) / dist0 if axes == "xy" else fx * fy
-            )
-        doc.transform_floating(
-            scale=(scale0x * fx, scale0y * fy), resample=state.resample
-        )
+            fx = fy = math.dist(centre, (mouse.x, mouse.y)) / dist0 if axes == "xy" else fx * fy
+        doc.transform_floating(scale=(scale0x * fx, scale0y * fy), resample=state.resample)
     elif state.drag_kind == "rotate":
         bearing = math.degrees(math.atan2(mouse.y - centre[1], mouse.x - centre[0]))
         step = bearing0 - bearing  # screen y grows downward; the engine's does not
@@ -1093,14 +1069,15 @@ def _transform_box(state: Any, tab: Any, draw_list: Any, origin) -> None:
     # those names are image-space, and a turned page makes ``nw`` the bottom
     # right of what is on screen, which ``add_rect`` draws as nothing at all.
     a, b = _box(
-        tab.view, origin,
-        buf.offset[0], buf.offset[1],
-        buf.offset[0] + buf.size[0], buf.offset[1] + buf.size[1],
+        tab.view,
+        origin,
+        buf.offset[0],
+        buf.offset[1],
+        buf.offset[0] + buf.size[0],
+        buf.offset[1] + buf.size[1],
     )
     draw_list.add_rect(a, b, colour)
-    top = inker_state.to_screen(
-        tab.view, origin, buf.offset[0] + buf.size[0] / 2.0, buf.offset[1]
-    )
+    top = inker_state.to_screen(tab.view, origin, buf.offset[0] + buf.size[0] / 2.0, buf.offset[1])
     draw_list.add_line(top, handles["rotate"], colour)
     for name, point in handles.items():
         if name == "rotate":
@@ -1191,9 +1168,7 @@ def _locked_out(ctx: Any, state: Any, tab: Any) -> bool:
     # is deliberately not refused either.
     if state.tool == "move" and doc.floating is not None:
         return False
-    state.say(
-        inker_mode.LOCKED_LAYER, remedy="layer_properties", remedy_label="Unlock"
-    )
+    state.say(inker_mode.LOCKED_LAYER, remedy="layer_properties", remedy_label="Unlock")
     state.drag_kind = ""
     return True
 
@@ -1493,9 +1468,7 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
         # a Shift-*drag* carries on freehand from the end of the line. Never
         # for the spray: its advance is ``spray_at`` on a timer rather than a
         # walk down a segment, so there is no line for this to draw.
-        from_last = (
-            imgui.get_io().key_shift and not spraying and tab.view.last_paint is not None
-        )
+        from_last = imgui.get_io().key_shift and not spraying and tab.view.last_paint is not None
         opening = tab.view.last_paint if from_last else point
         # Asked once, and it decides two arguments rather than one; see
         # ``_press_mode`` for why the ink cannot be read independently of it.
@@ -1766,14 +1739,9 @@ def _gesture_preview(state: Any, tab: Any, draw_list: Any, origin) -> None:
     view = tab.view
     colour = _u32(theme.ACCENT)
     mouse = imgui.get_mouse_pos()
-    cursor = _snapped(
-        state, _local(state, inker_state.to_image(view, origin, mouse.x, mouse.y))
-    )
+    cursor = _snapped(state, _local(state, inker_state.to_image(view, origin, mouse.x, mouse.y)))
     if state.tool == "curve":
-        curve = [
-            inker_state.to_screen(view, origin, x, y)
-            for x, y in _curve_path(points, cursor)
-        ]
+        curve = [inker_state.to_screen(view, origin, x, y) for x, y in _curve_path(points, cursor)]
         for a, b in zip(curve, curve[1:], strict=False):
             draw_list.add_line(a, b, colour)
         return
@@ -1978,23 +1946,26 @@ def _slice_grab(state: Any, tab: Any, origin, point) -> tuple[str, str]:
         key = entry.at(frame_uid)
         x0, y0, x1, y1 = key.bounds
         corners = {
-            "nw": (x0, y0), "ne": (x1, y0), "sw": (x0, y1), "se": (x1, y1),
+            "nw": (x0, y0),
+            "ne": (x1, y0),
+            "sw": (x0, y1),
+            "se": (x1, y1),
         }
         grab = sp(SLICE_HANDLE) * SLICE_GRAB
         for name, (cx, cy) in corners.items():
             if _near(inker_state.to_screen(tab.view, origin, cx, cy), at, grab):
                 return "slice-resize", name
         if key.pivot is not None:
-            pivot = inker_state.to_screen(
-                tab.view, origin, x0 + key.pivot[0], y0 + key.pivot[1]
-            )
+            pivot = inker_state.to_screen(tab.view, origin, x0 + key.pivot[0], y0 + key.pivot[1])
             if _near(pivot, at, sp(SLICE_PIVOT_RADIUS) * SLICE_GRAB):
                 return "slice-pivot", ""
         if key.center is not None:
             cx0, cy0, cx1, cy1 = key.center
             inner = {
-                "nw": (x0 + cx0, y0 + cy0), "ne": (x0 + cx1, y0 + cy0),
-                "sw": (x0 + cx0, y0 + cy1), "se": (x0 + cx1, y0 + cy1),
+                "nw": (x0 + cx0, y0 + cy0),
+                "ne": (x0 + cx1, y0 + cy0),
+                "sw": (x0 + cx0, y0 + cy1),
+                "se": (x0 + cx1, y0 + cy1),
             }
             for name, (cx, cy) in inner.items():
                 if _near(inker_state.to_screen(tab.view, origin, cx, cy), at, grab):
@@ -2157,14 +2128,10 @@ def _slices(state: Any, tab: Any, draw_list: Any, origin) -> None:
         draw_list.add_rect(a, b, hot if selected else outline)
         if key.center is not None:
             cx0, cy0, cx1, cy1 = key.center
-            ca, cb = _box(
-                tab.view, origin, x0 + cx0, y0 + cy0, x0 + cx1, y0 + cy1
-            )
+            ca, cb = _box(tab.view, origin, x0 + cx0, y0 + cy0, x0 + cx1, y0 + cy1)
             _dashed_rect(draw_list, ca, cb, inner)
         if key.pivot is not None:
-            px, py = inker_state.to_screen(
-                tab.view, origin, x0 + key.pivot[0], y0 + key.pivot[1]
-            )
+            px, py = inker_state.to_screen(tab.view, origin, x0 + key.pivot[0], y0 + key.pivot[1])
             radius = sp(SLICE_PIVOT_RADIUS)
             draw_list.add_circle((px, py), radius, hot if selected else outline)
             draw_list.add_line((px - radius, py), (px + radius, py), hot)
@@ -2173,9 +2140,7 @@ def _slices(state: Any, tab: Any, draw_list: Any, origin) -> None:
             continue
         size = sp(SLICE_HANDLE)
         for cx, cy in _corners(tab.view, origin, x0, y0, x1, y1):
-            draw_list.add_rect_filled(
-                (cx - size, cy - size), (cx + size, cy + size), hot
-            )
+            draw_list.add_rect_filled((cx - size, cy - size), (cx + size, cy + size), hot)
 
 
 def _drag(state: Any, tab: Any, point) -> None:
@@ -2432,7 +2397,14 @@ def _onion(ctx: Any, state: Any, tab: Any, draw_list, view, origin, size) -> Non
                 continue
             fade = state.onion_alpha / (offset ** max(0.0, float(state.onion_falloff)))
             _blit(
-                draw_list, texture, view, origin, 0, 0, size[0], size[1],
+                draw_list,
+                texture,
+                view,
+                origin,
+                0,
+                0,
+                size[0],
+                size[1],
                 colour=_u32(colour, fade),
             )
 
@@ -2490,8 +2462,16 @@ def _paint(ctx: Any, state: Any, tab: Any, origin, *, hovered: bool) -> None:
     texture.repeat_x, texture.repeat_y = axes[0], axes[1]
     x0, y0, x1, y1 = tiled
     _blit(
-        draw_list, texture, view, origin, x0, y0, x1, y1,
-        uv0=(x0 / width, y0 / height), uv1=(x1 / width, y1 / height),
+        draw_list,
+        texture,
+        view,
+        origin,
+        x0,
+        y0,
+        x1,
+        y1,
+        uv0=(x0 / width, y0 / height),
+        uv1=(x1 / width, y1 / height),
     )
     _floating(ctx, tab, draw_list, origin)
     if state.onion and not tab.playing and state.onion_in_front:
@@ -2507,8 +2487,15 @@ def _paint(ctx: Any, state: Any, tab: Any, origin, *, hovered: bool) -> None:
         # Fainter than the tile grid and drawn after it, so where both are on
         # the tile lines still read as the stronger of the two.
         _grid(
-            state, draw_list, view, origin, doc.size, top_left, bottom_right,
-            step=1, alpha=0.25,
+            state,
+            draw_list,
+            view,
+            origin,
+            doc.size,
+            top_left,
+            bottom_right,
+            step=1,
+            alpha=0.25,
         )
     if state.layer_edges:
         _layer_edges(tab, draw_list, view, origin)
@@ -2643,9 +2630,7 @@ def _tile_numbers(state: Any, tab: Any, draw_list: Any, view: Any, origin) -> No
             local = int(refs[row, column]) & 0x1FFFFFFF
             if not local:
                 continue
-            at = inker_state.to_screen(
-                view, origin, column * tile_w + 2, row * tile_h + 2
-            )
+            at = inker_state.to_screen(view, origin, column * tile_w + 2, row * tile_h + 2)
             draw_list.add_text(at, colour, str(local))
 
 
@@ -2697,9 +2682,7 @@ def _grid(
     if left > right or top > bottom:
         return
     seen = [
-        inker_state.to_image(view, origin, sx, sy)
-        for sx in (left, right)
-        for sy in (top, bottom)
+        inker_state.to_image(view, origin, sx, sy) for sx in (left, right) for sy in (top, bottom)
     ]
     lo_x = max(0, int(min(p[0] for p in seen) / step) * step)
     hi_x = min(width, int(max(p[0] for p in seen)) + step)
@@ -2775,12 +2758,8 @@ def _rulers(tab: Any, origin, region, *, hovered: bool) -> None:
     draw_list.add_rect_filled((left, top), (right, top + thickness), back)
     draw_list.add_rect_filled((left, top), (left + thickness, bottom), back)
     with fonts.small(imgui):
-        _ruler_band(
-            draw_list, view, origin, (left, right), top, thickness, ink, horizontal=True
-        )
-        _ruler_band(
-            draw_list, view, origin, (top, bottom), left, thickness, ink, horizontal=False
-        )
+        _ruler_band(draw_list, view, origin, (left, right), top, thickness, ink, horizontal=True)
+        _ruler_band(draw_list, view, origin, (top, bottom), left, thickness, ink, horizontal=False)
     # The corner square after both bands, so neither's ticks show through it,
     # and the two edge lines after the corner so they run unbroken.
     draw_list.add_rect_filled((left, top), (left + thickness, top + thickness), back)
@@ -2882,12 +2861,8 @@ def _symmetry(state: Any, draw_list: Any, view: Any, origin, size) -> None:
         centre = inker_state.to_screen(view, origin, ax, ay)
         radius = sp(SYMMETRY_PIVOT_RADIUS)
         draw_list.add_circle(centre, radius, colour)
-        draw_list.add_line(
-            (centre[0] - radius, centre[1]), (centre[0] + radius, centre[1]), colour
-        )
-        draw_list.add_line(
-            (centre[0], centre[1] - radius), (centre[0], centre[1] + radius), colour
-        )
+        draw_list.add_line((centre[0] - radius, centre[1]), (centre[0] + radius, centre[1]), colour)
+        draw_list.add_line((centre[0], centre[1] - radius), (centre[0], centre[1] + radius), colour)
 
 
 def _mask_shift(state: Any, point: Any = None) -> tuple[int, int]:
@@ -2976,9 +2951,7 @@ def _ants(ctx: Any, tab: Any, draw_list: Any, origin, state: Any = None) -> None
         ys = [p[1] for p in corners]
         if min(xs) > clip[2] or max(xs) < clip[0] or min(ys) > clip[3] or max(ys) < clip[1]:
             continue
-        starts, ends, on = ants.dash_segments(
-            verts, cum, view.zoom, offset, phase, basis=matrix
-        )
+        starts, ends, on = ants.dash_segments(verts, cum, view.zoom, offset, phase, basis=matrix)
         starts, ends, on = ants.cull(starts, ends, on, clip)
         # One call per dash. imgui has no batched per-segment-colour API, so
         # this loop is irreducible -- but it is over dashes now rather than over
@@ -3007,9 +2980,7 @@ def _preview(state: Any, tab: Any, draw_list: Any, origin) -> None:
     # drawn from the canonical-tile anchor to a cursor two tiles away, i.e.
     # stretched across the whole 3x3 view. The shape branch had been fixed for
     # exactly this and carried the reasoning; the fix belongs above the split.
-    landing = _snapped(
-        state, _local(state, inker_state.to_image(view, origin, mouse.x, mouse.y))
-    )
+    landing = _snapped(state, _local(state, inker_state.to_image(view, origin, mouse.x, mouse.y)))
     tip = inker_state.to_screen(view, origin, *landing)
     colour = _u32(theme.ACCENT)
     kind, tool = state.drag_kind, state.tool

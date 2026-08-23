@@ -1,11 +1,10 @@
 """Saved workspace arrangements: the data half, with no imgui in it.
 
 What a layout is, and deliberately is not. It captures **arrangement,
-visibility and shares** -- which panes are in which column, in what order, and
-how tall. It does *not* capture the sidebar width, the rail, the UI scale or
-the theme: a workspace switch that collapsed your navigation is the same class
-of surprise as the eighteen-failing-tests incident, and those four are
-app-level preferences that happen to be stored nearby.
+visibility, widths and shares** -- which panes are in which column, in what
+order, how wide the side columns want to be, and how their vertical splits are
+divided.  The rail, UI scale and theme remain application preferences: a
+workspace switch that collapsed navigation would still be a surprise.
 
 **Top-level settings keys**, ``workspace_layouts`` and ``active_layout``,
 following ``profiles.py``'s pattern rather than living inside
@@ -24,11 +23,12 @@ layout quietly rewritten by an older one.
 
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
 
 #: This build's layout-blob version. Independent of ``settings.VERSION``.
-VERSION = 1
+VERSION = 2
 
 #: The two layouts every profile has. ``default`` is the built-in arrangement
 #: and ``mirrored`` is Aseprite's own second built-in -- the columns swapped --
@@ -45,11 +45,19 @@ class Arrangement:
 
     columns: dict[str, list[str]] = field(default_factory=dict)
     hidden: list[str] = field(default_factory=list)
+    widths: dict[str, float] = field(default_factory=dict)
+    shares: dict[str, float] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:
         return {
             "columns": {key: list(value) for key, value in sorted(self.columns.items())},
             "hidden": sorted(self.hidden),
+            "widths": {
+                key: round(float(value), 3)
+                for key, value in sorted(self.widths.items())
+                if key in ("left", "right")
+            },
+            "shares": {key: round(float(value), 3) for key, value in sorted(self.shares.items())},
         }
 
     @classmethod
@@ -61,7 +69,21 @@ class Arrangement:
             if isinstance(value, list):
                 columns[str(key)] = [str(item) for item in value]
         hidden = [str(item) for item in (raw.get("hidden") or []) if isinstance(item, str)]
-        return cls(columns=columns, hidden=hidden)
+        widths: dict[str, float] = {}
+        for key, value in (raw.get("widths") or {}).items():
+            if str(key) not in ("left", "right"):
+                continue
+            try:
+                widths[str(key)] = float(value)
+            except (TypeError, ValueError):
+                continue
+        shares: dict[str, float] = {}
+        for key, value in (raw.get("shares") or {}).items():
+            try:
+                shares[str(key)] = float(value)
+            except (TypeError, ValueError):
+                continue
+        return cls(columns=columns, hidden=hidden, widths=widths, shares=shares)
 
 
 @dataclass
@@ -85,9 +107,7 @@ class Layout:
             return self.opaque
         return {
             "v": VERSION,
-            "workspaces": {
-                key: value.to_json() for key, value in sorted(self.workspaces.items())
-            },
+            "workspaces": {key: value.to_json() for key, value in sorted(self.workspaces.items())},
         }
 
     @classmethod
@@ -106,6 +126,9 @@ class Layout:
             str(key): Arrangement.from_json(value)
             for key, value in (raw.get("workspaces") or {}).items()
         }
+        # Versions one and two are both readable.  A v1 object stays sparse in
+        # memory and is upgraded only when an explicit edit calls ``save``;
+        # constructing the library never rewrites settings.
         return cls(name=name, v=version, workspaces=spaces)
 
 
@@ -128,6 +151,18 @@ class Library:
             self.layouts.setdefault(name, Layout(name=name))
         wanted = str(settings.get(ACTIVE_KEY) or BUILT_IN[0])
         self.active = wanted if wanted in self.layouts else BUILT_IN[0]
+        legacy = settings.get("layout") or {}
+        sidebar_names = {"narrow": 260.0, "default": 300.0, "wide": 360.0}
+        self._width_seed = sidebar_names.get(str(legacy.get("sidebar", "default")), 300.0)
+        self._share_seed = 0.55
+        with suppress(TypeError, ValueError):
+            self._share_seed = float(legacy.get("settings_share", 0.55))
+        self._share_seeds: dict[str, float] = {}
+        for key, value in (legacy.get("settings_shares") or {}).items():
+            try:
+                self._share_seeds[str(key)] = float(value)
+            except (TypeError, ValueError):
+                continue
 
     # -- reading ------------------------------------------------------------
 
@@ -160,6 +195,32 @@ class Library:
             return set()
         return set(self.arrangement(workspace).hidden)
 
+    def width(self, workspace: str, side: str, default: float | None = None) -> float:
+        """Desired side-column width in design pixels.
+
+        Missing v1 values are seeded from the retired global sidebar choice,
+        but the seed is never materialised merely by reading it.
+        """
+
+        if side not in ("left", "right") or not self.current().readable:
+            return float(default if default is not None else self._width_seed)
+        value = self.arrangement(workspace).widths.get(side)
+        resolved = float(
+            value if value is not None else (default if default is not None else self._width_seed)
+        )
+        return min(max(resolved, 220.0), 480.0)
+
+    def share(self, workspace: str, key: str, default: float | None = None) -> float:
+        """A workspace-local vertical split, with v1 global values as seeds."""
+
+        if self.current().readable:
+            value = self.arrangement(workspace).shares.get(key)
+            if value is not None:
+                return min(max(float(value), 0.25), 0.75)
+        if key in self._share_seeds:
+            return min(max(self._share_seeds[key], 0.25), 0.75)
+        return min(max(float(self._share_seed if default is None else default), 0.25), 0.75)
+
     # -- writing ------------------------------------------------------------
 
     def set_active(self, name: str) -> None:
@@ -168,16 +229,45 @@ class Library:
         self.active = name
         self._settings.set(ACTIVE_KEY, name)
 
-    def record(self, workspace: str, columns: dict[str, list[str]], hidden: set[str]) -> None:
+    def record(
+        self,
+        workspace: str,
+        columns: dict[str, list[str]],
+        hidden: set[str],
+        *,
+        widths: dict[str, float] | None = None,
+        shares: dict[str, float] | None = None,
+    ) -> None:
         """Store an arrangement for one workspace of the active layout."""
 
         layout = self.current()
         if not layout.readable:
             return
+        previous = layout.workspaces.get(workspace) or Arrangement()
         layout.workspaces[workspace] = Arrangement(
             columns={key: list(value) for key, value in columns.items()},
             hidden=sorted(hidden),
+            widths=dict(previous.widths if widths is None else widths),
+            shares=dict(previous.shares if shares is None else shares),
         )
+        self.save()
+
+    def set_width(self, workspace: str, side: str, value: float) -> None:
+        """Persist one desired side width after a real splitter edit."""
+
+        layout = self.current()
+        if not layout.readable or side not in ("left", "right"):
+            return
+        arrangement = layout.workspaces.setdefault(workspace, Arrangement())
+        arrangement.widths[side] = min(max(float(value), 220.0), 480.0)
+        self.save()
+
+    def set_share(self, workspace: str, key: str, value: float) -> None:
+        layout = self.current()
+        if not layout.readable:
+            return
+        arrangement = layout.workspaces.setdefault(workspace, Arrangement())
+        arrangement.shares[str(key)] = min(max(float(value), 0.25), 0.75)
         self.save()
 
     def duplicate(self, name: str, into: str) -> bool:
@@ -227,6 +317,11 @@ class Library:
             self.save()
 
     def save(self) -> None:
+        # An explicit edit is the migration boundary.  Readable v1 layouts are
+        # emitted as v2; opaque future versions remain byte-for-byte intact.
+        for layout in self.layouts.values():
+            if layout.readable:
+                layout.v = VERSION
         self._settings.set(
             LAYOUTS_KEY,
             {name: layout.to_json() for name, layout in sorted(self.layouts.items())},

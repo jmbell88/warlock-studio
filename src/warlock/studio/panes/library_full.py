@@ -54,33 +54,55 @@ CELL = 160.0
 
 def draw(ctx: Any) -> None:
     jobs = ctx.cache.visible(ctx.state.filters)
-    spacing = imgui.get_style().item_spacing.x
     # Resolved before the columns are sized, because whether it resolves is
     # what decides how wide the middle one is.
     selected = ctx.cache.get(ctx.state.selected)
 
+    arrangement = getattr(ctx, "layouts", None)
+    collapsed = bool(ctx.state.preview.get("library_filters_collapsed", False))
+    left_w = (
+        sp(44)
+        if collapsed
+        else (layout.sidebar_width("left") if arrangement is not None else sp(RAIL_W))
+    )
+    right_w = layout.sidebar_width("right") if arrangement is not None else sp(INSPECTOR_W)
     with layout.pane(
         "library-full/rail",
-        (sp(RAIL_W), 0),
+        (left_w, 0),
         layout.PaneRole.SIDEBAR,
         edge=layout.PaneEdge.RIGHT,
     ) as visible:
         if visible:
-            _rail(ctx, jobs)
+            if widgets.icon_button(
+                icons.CHEVRON_RIGHT if collapsed else icons.ARROW_LEFT,
+                "Show filters" if collapsed else "Collapse filters",
+            ):
+                collapsed = not collapsed
+                ctx.state.preview["library_filters_collapsed"] = collapsed
+            if not collapsed:
+                _rail(ctx, jobs)
     imgui.same_line()
+    if arrangement is not None and not collapsed:
+        layout.column_splitter(arrangement, "library", "left")
+        imgui.same_line()
 
-    width = -(sp(INSPECTOR_W) + spacing) if selected is not None else 0.0
-    with layout.pane(
-        "library-full/grid", (width, 0), layout.PaneRole.CONTENT
-    ) as visible:
+    width = (
+        layout.centre_width()
+        if selected is not None and arrangement is not None
+        else (-(right_w + imgui.get_style().item_spacing.x) if selected is not None else 0.0)
+    )
+    with layout.pane("library-full/grid", (width, 0), layout.PaneRole.CONTENT) as visible:
         if visible:
             _grid(ctx, jobs)
 
     if selected is not None:
         imgui.same_line()
+        if arrangement is not None:
+            layout.column_splitter(arrangement, "library", "right")
+            imgui.same_line()
         with layout.pane(
             "library-full/inspector",
-            (0, 0),
+            (right_w, 0),
             layout.PaneRole.INSPECTOR,
             edge=layout.PaneEdge.LEFT,
         ) as visible:
@@ -154,8 +176,7 @@ def _rail(ctx: Any, jobs: list[Any]) -> None:
         "##library-full-sort",
         filters.sort,
         list(library.SORTS),
-        width=imgui.get_content_region_avail().x
-        - (imgui.get_frame_height() + spacing),
+        width=imgui.get_content_region_avail().x - (imgui.get_frame_height() + spacing),
     )
     imgui.same_line()
     # ASCII carets rather than lucide chevrons: the pinned 0.525.0 subset
@@ -164,9 +185,7 @@ def _rail(ctx: Any, jobs: list[Any]) -> None:
     down = filters.descending
     if widgets.icon_button(
         "v" if down else "^",
-        "Sorted the usual way - click to reverse"
-        if down
-        else "Reversed - click to restore",
+        "Sorted the usual way - click to reverse" if down else "Reversed - click to restore",
     ):
         filters.descending = not down
 
@@ -261,9 +280,7 @@ def _tools(ctx: Any, jobs: list[Any]) -> None:
     imgui.same_line()
     total = ctx.cache.total or 0
     shown = len(jobs)
-    widgets.muted(
-        f"{shown} shown" if shown == total else f"{shown} of {total} shown"
-    )
+    widgets.muted(f"{shown} shown" if shown == total else f"{shown} of {total} shown")
     imgui.same_line()
     library._failures(ctx)
 
@@ -278,9 +295,7 @@ def _footer_height(ctx: Any) -> float:
     return imgui.get_frame_height_with_spacing() + imgui.get_style().item_spacing.y
 
 
-def _cell(
-    ctx: Any, job: Any, size: tuple[float, float], thumb: float, pad: Any
-) -> None:
+def _cell(ctx: Any, job: Any, size: tuple[float, float], thumb: float, pad: Any) -> None:
     """One asset: its picture, its state on top of it, its name under it.
 
     The status pill is drawn *over* the thumbnail rather than beside the name,
@@ -335,6 +350,3 @@ def _cell(
             2.0,
         )
     imgui.pop_id()
-
-
-

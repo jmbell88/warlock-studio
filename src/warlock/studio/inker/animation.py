@@ -549,16 +549,38 @@ class Animation:
 
     # -- playback -----------------------------------------------------------
 
+    def tag_span(self, tag: Tag) -> tuple[int, int]:
+        """``tag``'s range as it applies to the timeline *now*.
+
+        Tags are clamped when they are written (``Document._clamped_tag``), but
+        deleting frames does not rewrite them -- deliberately, so that undoing
+        the deletion brings the tag back at its authored range rather than at
+        whatever survived. That leaves a stored range that can point past the
+        end, and the reason this is a method rather than a comment is what used
+        to happen when it did: ``active_tag`` compared against the raw numbers,
+        so a tag whose whole span was past the last frame contained no index at
+        all and simply stopped existing -- it never played, never highlighted,
+        and nothing anywhere said why. Clamping here brings it back to the tail
+        of the timeline instead, and it springs back the moment the frames do.
+        """
+        last = max(len(self.frames) - 1, 0)
+        start = max(0, min(int(tag.start), last))
+        end = max(0, min(int(tag.end), last))
+        return min(start, end), max(start, end)
+
     def active_tag(self, index: int) -> Tag | None:
         """The tag whose range contains a frame index, innermost first.
 
         Innermost because tags nest in practice -- a short "hit" inside a long
         "combat" -- and the narrower one is the one the user just clicked into.
+        Measured on the clamped span (:meth:`tag_span`), so a tag left pointing
+        past the end by a frame deletion is still reachable.
         """
-        containing = [tag for tag in self.tags if tag.start <= index <= tag.end]
+        spans = [(tag, self.tag_span(tag)) for tag in self.tags]
+        containing = [(tag, span) for tag, span in spans if span[0] <= index <= span[1]]
         if not containing:
             return None
-        return min(containing, key=lambda tag: tag.end - tag.start)
+        return min(containing, key=lambda item: item[1][1] - item[1][0])[0]
 
     def loop_range(self, index: int) -> tuple[int, int, bool]:
         """The span playback moves through, and whether it wraps."""
@@ -566,7 +588,8 @@ class Animation:
         tag = self.active_tag(index)
         if tag is None:
             return 0, last, True
-        return max(0, tag.start), min(last, tag.end), tag.loop
+        start, end = self.tag_span(tag)
+        return start, end, tag.loop
 
     def play_direction(self, index: int) -> str:
         """Which way the tag containing a frame plays, or forward outside one.

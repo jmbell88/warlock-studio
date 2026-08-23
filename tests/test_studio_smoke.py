@@ -364,9 +364,7 @@ def _seed_findings(ctx, param, value):
     bench = Path(ctx.svc.config.bench_dir)
     bench.mkdir(parents=True, exist_ok=True)
     (bench / "findings.json").write_text(
-        json.dumps(
-            {"params": {param: {str(value): {"n": 8, "accepts": 6, "wilson_low": 0.41}}}}
-        ),
+        json.dumps({"params": {param: {str(value): {"n": 8, "accepts": 6, "wilson_low": 0.41}}}}),
         encoding="utf-8",
     )
 
@@ -412,8 +410,7 @@ def test_an_evidence_hint_stays_inside_the_pane(app_ctx, imgui_ctx, pane, param,
         _frame(
             imgui_ctx,
             lambda: (
-                layout_mod.pane_child(pane, (sp(layout_mod.SIDEBAR_W), 0))
-                and module.draw(app_ctx),
+                layout_mod.pane_child(pane, (sp(layout_mod.SIDEBAR_W), 0)) and module.draw(app_ctx),
                 imgui.end_child(),
             ),
         )
@@ -474,8 +471,12 @@ def test_no_pane_continues_a_line_that_has_no_room_left(app_ctx, imgui_ctx):
     # An undecided candidate group, so the picker's own row (a fixed-width
     # button then ``same_line`` then its status) is measured too.
     candidate = app_ctx.svc.store.create(
-        "image", "a barrel", {"mesh_seed": 11}, stage="model",
-        candidate_group="grp", candidate_index=0,
+        "image",
+        "a barrel",
+        {"mesh_seed": 11},
+        stage="model",
+        candidate_group="grp",
+        candidate_index=0,
     )
     app_ctx.svc.store.set_status(candidate, "done")
     app_ctx.cache.invalidate()
@@ -502,7 +503,7 @@ def test_no_pane_continues_a_line_that_has_no_room_left(app_ctx, imgui_ctx):
         ("clay-bridge", lambda: clay_bridge.draw(app_ctx)),
         ("inker-tools", lambda: inker_tools.draw(app_ctx)),
         ("inker-colors", lambda: inker_colors.draw(app_ctx)),
-        ("inker-menu", lambda: inker_menu.draw(app_ctx)),
+        ("inker-menu", lambda: inker_menu.draw_popups(app_ctx)),
     ]
 
     offenders: dict[str, float] = {}
@@ -561,8 +562,12 @@ def test_the_candidate_picker_builds_running_and_finished(app_ctx, imgui_ctx):
     ids = []
     for index in range(2):
         job_id = app_ctx.svc.store.create(
-            "image", "a barrel", {"mesh_seed": 7 + index},
-            stage="model", candidate_group="grp", candidate_index=index,
+            "image",
+            "a barrel",
+            {"mesh_seed": 7 + index},
+            stage="model",
+            candidate_group="grp",
+            candidate_index=index,
         )
         ids.append(job_id)
     app_ctx.cache.invalidate()
@@ -729,8 +734,12 @@ def test_the_overlay_builds_with_a_toolbar_and_a_banner(app_ctx, imgui_ctx):
     app_ctx.state.note_error("The GPU worker is not running. Restart Warlock.")
     _frame(
         imgui_ctx,
-        lambda: (overlay.doctor_banner(app_ctx), overlay.toolbar(app_ctx),
-                 overlay.progress_card(app_ctx, eta), overlay.placeholder(app_ctx)),
+        lambda: (
+            overlay.doctor_banner(app_ctx),
+            overlay.toolbar(app_ctx),
+            overlay.progress_card(app_ctx, eta),
+            overlay.placeholder(app_ctx),
+        ),
     )
 
 
@@ -873,9 +882,7 @@ def test_the_right_sidebar_splits_inspector_and_library_by_settings_share(app_ct
     assert bottoms[0] == pytest.approx(expected_bottom, abs=1.0)
 
 
-def test_the_landing_screen_builds_empty_and_with_something_to_resume(
-    app_ctx, imgui_ctx
-):
+def test_the_landing_screen_builds_empty_and_with_something_to_resume(app_ctx, imgui_ctx):
     """Both states, because Home's empty state is the frame that shows none of
     its Resume rows -- which is the half a seeded smoke run never reaches."""
     from warlock.studio.panes import landing
@@ -897,12 +904,8 @@ def test_the_landing_screen_builds_with_unsaved_work_to_offer(app_ctx, imgui_ctx
     from warlock.studio.panes import landing
 
     app_ctx.state.recovery = [
-        journal.Recovered(
-            path=Path("sketch-pd9.ora"), kind="inker", title="sketch", at=1.0
-        ),
-        journal.Recovered(
-            path=Path("draft.profile.json"), kind="profile", title="draft", at=2.0
-        ),
+        journal.Recovered(path=Path("sketch-pd9.ora"), kind="inker", title="sketch", at=1.0),
+        journal.Recovered(path=Path("draft.profile.json"), kind="profile", title="draft", at=2.0),
         journal.Recovered(
             path=Path("mystery.bin"), kind="from-the-future", title="mystery", at=3.0
         ),
@@ -1293,9 +1296,7 @@ def test_the_settings_pane_draws_one_category_at_a_time(app_ctx, imgui_ctx, monk
 
     drawn: list[str] = []
     for name in ("_interface", "_models", "_storage", "_layout", "_config"):
-        monkeypatch.setattr(
-            app_settings, name, lambda _ctx, _n=name: drawn.append(_n)
-        )
+        monkeypatch.setattr(app_settings, name, lambda _ctx, _n=name: drawn.append(_n))
 
     for key, expected in [
         ("appearance", ["_interface"]),
@@ -1434,9 +1435,8 @@ def test_a_non_sdxl_base_disables_the_style_lora_control_and_says_why(app_ctx, i
         # keeps Generate off is the one control the user cannot see.
         assert "render3d" in [k for k, _ in settings_2d.lora_options(app_ctx, form)]
         assert settings_2d.lora_filter_note(app_ctx, form) is not None
-    assert (
-        "The style LoRA is not fitted to this model's architecture."
-        in settings_2d.validate(form)
+    assert "The style LoRA is not fitted to this model's architecture." in settings_2d.validate(
+        form
     )
     # And whichever branch it is has to draw.
     _frame(imgui_ctx, lambda: settings_2d.draw(app_ctx))
@@ -1663,9 +1663,7 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
     # -- which is the gesture, and it is why this is driven through ``_adopt``
     # rather than through ``state.activate``: the bar would put the new tab back
     # in front on the very next frame anyway.
-    other = inker_mode._adopt(
-        app_ctx, state, _Document.blank(8, 8), path=None, title="second"
-    )
+    other = inker_mode._adopt(app_ctx, state, _Document.blank(8, 8), path=None, title="second")
     other_before = other.doc.stack.active.pixels.copy()
     # imgui registers the new tab this frame and selects it on the next, so the
     # switch is two frames rather than one -- and how many is imgui's business,
@@ -1872,9 +1870,9 @@ def _reference_job(app_ctx) -> str:
 
     from PIL import Image
 
-    job_id = svc_jobs.create_job(
-        app_ctx.svc, kind="text", prompt="a barrel", output="reference"
-    )["id"]
+    job_id = svc_jobs.create_job(app_ctx.svc, kind="text", prompt="a barrel", output="reference")[
+        "id"
+    ]
     job_dir = app_ctx.svc.job_dir(job_id)
     job_dir.mkdir(parents=True, exist_ok=True)
     buf = io.BytesIO()
@@ -1986,9 +1984,7 @@ def test_a_toolbar_row_never_draws_past_the_pane_it_is_in(app_ctx, imgui_ctx, sc
 
     def build():
         imgui.begin_child("bar-host", (tokens.sp(300), tokens.sp(60)))
-        edge.append(
-            imgui.get_cursor_screen_pos().x + imgui.get_content_region_avail().x
-        )
+        edge.append(imgui.get_cursor_screen_pos().x + imgui.get_content_region_avail().x)
         toolbar_mod.toolbar("smoke-bar", items)
         imgui.end_child()
 
@@ -2027,8 +2023,13 @@ def _clay_tab(app_ctx, *, objects: int = 2):
     doc = bd.ClayDoc()
     for i in range(objects):
         doc.add_object(
-            bd.Obj(uid=bd.new_uid(), name=f"obj{i}", mesh=bp.box(), generator="box",
-                   params={"size": (1.0, 1.0, 1.0)})
+            bd.Obj(
+                uid=bd.new_uid(),
+                name=f"obj{i}",
+                mesh=bp.box(),
+                generator="box",
+                params={"size": (1.0, 1.0, 1.0)},
+            )
         )
     return clay_mode.adopt(app_ctx, doc, title="Scene")
 
@@ -2125,8 +2126,11 @@ def test_the_clay_properties_pane_builds_for_every_generator(app_ctx, imgui_ctx)
     tab = _clay_tab(app_ctx, objects=0)
     for name, (defaults, build) in bp.GENERATORS.items():
         obj = bd.Obj(
-            uid=bd.new_uid(), name=name, mesh=build(**defaults),
-            generator=name, params=dict(defaults),
+            uid=bd.new_uid(),
+            name=name,
+            mesh=build(**defaults),
+            generator=name,
+            params=dict(defaults),
         )
         tab.doc.add_object(obj)
         tab.doc.select([obj.uid])
@@ -2165,8 +2169,11 @@ def test_the_clay_properties_pane_enumerates_a_generator_it_has_never_seen(
 
     tab = _clay_tab(app_ctx, objects=0)
     obj = bd.Obj(
-        uid=bd.new_uid(), name="Wedge", mesh=wedge(**defaults),
-        generator="wedge", params=dict(defaults),
+        uid=bd.new_uid(),
+        name="Wedge",
+        mesh=wedge(**defaults),
+        generator="wedge",
+        params=dict(defaults),
     )
     tab.doc.add_object(obj)
     tab.doc.select([obj.uid])
@@ -2295,10 +2302,20 @@ def _review_state(ctx, *, with_units=True):
             }
         ]
     state.sweeps = [
-        {"id": review_mode.RECENT_ID, "label": "Recent, unreviewed",
-         "prompt": "", "units": [], "todo": 0},
-        {"id": "abcdef012345", "label": "lora sweep", "prompt": "a barrel",
-         "units": units, "todo": 0},
+        {
+            "id": review_mode.RECENT_ID,
+            "label": "Recent, unreviewed",
+            "prompt": "",
+            "units": [],
+            "todo": 0,
+        },
+        {
+            "id": "abcdef012345",
+            "label": "lora sweep",
+            "prompt": "a barrel",
+            "units": units,
+            "todo": 0,
+        },
     ]
     state.sweep_id = "abcdef012345"
     state.units = units
@@ -2504,9 +2521,15 @@ def test_the_review_pane_builds_a_findings_table(app_ctx, imgui_ctx):
                 "version": 1,
                 "params": {},
                 "vectors": [
-                    {"key": "abc123", "vector": {"lora_weight": 0.9, "platform": "pc"},
-                     "n": 8, "accepts": 6, "accept_rate": 0.75,
-                     "top_reasons": [["holes", 2]], "jobs": []}
+                    {
+                        "key": "abc123",
+                        "vector": {"lora_weight": 0.9, "platform": "pc"},
+                        "n": 8,
+                        "accepts": 6,
+                        "accept_rate": 0.75,
+                        "top_reasons": [["holes", 2]],
+                        "jobs": [],
+                    }
                 ],
             }
         ),
@@ -2523,15 +2546,11 @@ def test_the_2d_pane_builds_with_stale_vector_preset_settings(app_ctx, imgui_ctx
     # studio_settings.json still carrying old entries must not break the pane.
     from warlock.studio.panes import settings_2d
 
-    app_ctx.settings.set(
-        "vector_presets", {"chests": {"genre": "fantasy", "platform": "pc"}}
-    )
+    app_ctx.settings.set("vector_presets", {"chests": {"genre": "fantasy", "platform": "pc"}})
     _frame(imgui_ctx, lambda: settings_2d.draw(app_ctx))
 
 
-def test_the_inspector_builds_its_verdict_section_with_and_without_staged_tags(
-    app_ctx, imgui_ctx
-):
+def test_the_inspector_builds_its_verdict_section_with_and_without_staged_tags(app_ctx, imgui_ctx):
     from warlock.studio.panes import inspector
 
     app_ctx.state.mode = "create"
@@ -2651,7 +2670,7 @@ def test_the_rail_fits_the_resize_floor_at_every_scale(app_ctx, imgui_ctx, scale
     assert set(keys) >= set(modes_mod.KEYS), (
         f"missing rail items: {set(modes_mod.KEYS) - set(keys)}"
     )
-    assert "health" in keys, "a failing check must reach the footer"
+    assert "health" not in keys, "the rail contains workspace destinations only"
     for key, lo, hi in boxes:
         assert lo >= top - 1.0 and hi <= bottom + 1.0, (
             f"{key} is drawn from {lo:.0f} to {hi:.0f} outside the rail's "
@@ -2668,34 +2687,15 @@ def test_the_health_badge_is_drawn_only_when_something_is_failing(app_ctx, imgui
     the corner of every frame it ever drew. The diagnostics list stays reachable
     when it is green through the palette, which is where a thing you
     occasionally want and never need belongs."""
-    imgui, _renderer = imgui_ctx
     from warlock.doctor import Check
-    from warlock.studio import rail as rail_mod
-
-    fake = SimpleNamespace(app_ctx=app_ctx, layout=SimpleNamespace(rail="icons"))
-    fake._set_mode = lambda key: None
-    seen: list[str] = []
-    real_item = rail_mod._item
-
-    def spy(key, label, icon, box, **kwargs):
-        seen.append(key)
-        return real_item(key, label, icon, box, **kwargs)
-
-    def run() -> list[str]:
-        seen.clear()
-        rail_mod._item = spy
-        try:
-            _frame(imgui_ctx, lambda: rail_mod.draw(fake, app_ctx))
-        finally:
-            rail_mod._item = real_item
-        return list(seen)
+    from warlock.studio import status_bar
 
     app_ctx.runtime.checks = [Check("trellis-server.exe", True, "found", fatal=True)]
     app_ctx.state.errors = []
-    assert "health" not in run()
+    assert not any(item.key == "health" for item in status_bar.items(app_ctx))
 
     app_ctx.runtime.checks = [Check("CUDA", False, "unavailable", fatal=False)]
-    assert "health" in run()
+    assert any(item.key == "health" for item in status_bar.items(app_ctx))
 
 
 def test_the_rail_carries_a_door_to_the_shortcut_sheet(app_ctx, imgui_ctx):
@@ -2704,27 +2704,12 @@ def test_the_rail_carries_a_door_to_the_shortcut_sheet(app_ctx, imgui_ctx):
     went with the header, so the footer carries one -- and it sets the same
     one-shot flag, because a popup opened inside the rail child would be
     scoped to the child."""
-    imgui, _renderer = imgui_ctx
-    from warlock.studio import rail as rail_mod
+    from warlock.studio import menus
 
-    fake = SimpleNamespace(app_ctx=app_ctx, layout=SimpleNamespace(rail="labels"))
-    fake._set_mode = lambda key: None
-    seen: list[str] = []
-    real_item = rail_mod._item
-
-    def spy(key, label, icon, box, **kwargs):
-        seen.append(key)
-        # Report a click on the shortcuts row only, so the handler runs.
-        real_item(key, label, icon, box, **kwargs)
-        return key == "keys"
-
+    row = next(row for row in menus.specs(app_ctx) if row.identity == "command:shortcuts")
+    assert row.path == ("Help",)
     app_ctx.state.shortcuts_requested = False
-    rail_mod._item = spy
-    try:
-        _frame(imgui_ctx, lambda: rail_mod.draw(fake, app_ctx))
-    finally:
-        rail_mod._item = real_item
-    assert "keys" in seen
+    row.callback()
     assert app_ctx.state.shortcuts_requested
 
 
@@ -2774,9 +2759,7 @@ def test_the_expanded_rail_gives_way_before_the_columns_do(app_ctx, imgui_ctx):
     assert layout.rail == "labels", "the preference is not what gave way"
 
 
-def test_no_two_of_a_panes_icon_buttons_are_drawn_on_top_of_each_other(
-    app_ctx, imgui_ctx
-):
+def test_no_two_of_a_panes_icon_buttons_are_drawn_on_top_of_each_other(app_ctx, imgui_ctx):
     """The other half of the overflow guard, and the half that misses.
 
     ``same_line`` past the edge draws a control where it cannot be seen;
@@ -3098,9 +3081,7 @@ def test_arrow_keys_with_nothing_selected_enter_from_the_near_end(app_ctx):
     assert app_ctx.state.selected == order[-1]
 
 
-def test_the_full_window_library_builds_in_every_column_arrangement(
-    app_ctx, imgui_ctx
-):
+def test_the_full_window_library_builds_in_every_column_arrangement(app_ctx, imgui_ctx):
     """The UI redesign, wave 4.4. Four states, because the middle column's width is
     a function of whether the inspector is there and the grid is a function of
     which pile it is drawing."""
@@ -3197,9 +3178,7 @@ def test_the_toast_stack_and_its_history_build(app_ctx, imgui_ctx):
     seen: list[tuple] = []
     _frame(
         imgui_ctx,
-        lambda: widgets.toasts(
-            app_ctx.state, (1200.0, 900.0), on_action=lambda *a: seen.append(a)
-        ),
+        lambda: widgets.toasts(app_ctx.state, (1200.0, 900.0), on_action=lambda *a: seen.append(a)),
     )
     assert len(app_ctx.state.toast_log) == widgets.TOAST_VISIBLE + 5
 
@@ -3273,8 +3252,10 @@ def test_the_panel_search_boxes_build_and_hide_themselves(app_ctx, imgui_ctx):
     from warlock.studio import widgets
 
     seen: list[str] = []
+
     def build():
         seen.append(widgets.list_filter(app_ctx, "demo", 20))
+
     _frame(imgui_ctx, build)
     app_ctx.state.list_filters["demo"] = "chest"
     _frame(imgui_ctx, build)
@@ -3313,9 +3294,7 @@ def test_the_whole_frame_builds_under_every_palette(app_ctx, imgui_ctx, palette)
         theme.apply(imgui)
 
 
-def test_the_home_resume_rows_build_with_the_keyboard_cursor_on_each(
-    app_ctx, imgui_ctx
-):
+def test_the_home_resume_rows_build_with_the_keyboard_cursor_on_each(app_ctx, imgui_ctx):
     from warlock.studio import recents
     from warlock.studio.panes import landing
 
@@ -3336,9 +3315,7 @@ def test_the_3d_form_builds_with_a_custom_budget(app_ctx, imgui_ctx, monkeypatch
     app_ctx.state.mode = "create"
     app_ctx.state.create_stage = "mesh"
     _frame(imgui_ctx, lambda: settings_3d.draw(app_ctx))
-    monkeypatch.setattr(
-        settings_3d, "PROFILES", [("raw", "Raw"), ("custom", "Custom...")]
-    )
+    monkeypatch.setattr(settings_3d, "PROFILES", [("raw", "Raw"), ("custom", "Custom...")])
     app_ctx.state.form_3d["profile"] = "custom"
     _frame(imgui_ctx, lambda: settings_3d.draw(app_ctx))
 
@@ -3452,9 +3429,7 @@ def test_plotter_builds_empty_and_with_a_map(app_ctx, imgui_ctx):
     ground = tab.doc.add_tileset(terrain_tileset(tile_w=16, tile_h=16))
     state.terrain = (tab.doc.tilesets.index(ground), 0)
     tab.doc.set_active_layer(layer.uid)
-    tab.doc.write_region(
-        layer.uid, *terrainlib.paint_terrain(layer.data, 4, 4, 0, ground)
-    )
+    tab.doc.write_region(layer.uid, *terrainlib.paint_terrain(layer.data, 4, 4, 0, ground))
     for tool, _label, _letter in plotter_state.TOOLS:
         state.tool = tool
         _frame(imgui_ctx, build)
@@ -3605,9 +3580,7 @@ def test_packwright_builds_empty_and_with_an_atlas(app_ctx, imgui_ctx):
 
 
 @pytest.mark.parametrize("scale", [1.0, 1.5])
-def test_a_segmented_control_takes_its_compact_labelling_rather_than_clipping(
-    imgui_ctx, scale
-):
+def test_a_segmented_control_takes_its_compact_labelling_rather_than_clipping(imgui_ctx, scale):
     """A clipped segment is an unreachable choice.
 
     ``segmented_control`` lays its segments out from ``origin`` with no wrap and
@@ -3875,10 +3848,16 @@ def test_a_shadow_sprite_uploads_and_a_card_draws_through_it(imgui_ctx):
         imgui_mod, _renderer = imgui_ctx
         with widgets.card("smoke/shadowed", (320.0, 120.0)):
             imgui_mod.text("card")
-        drawn.append(widgets._sliced_shadow(
-            (10.0, 10.0), (330.0, 130.0), tokens.RADIUS_L, 1.0, 1.0,
-            imgui_mod.get_window_draw_list(),
-        ))
+        drawn.append(
+            widgets._sliced_shadow(
+                (10.0, 10.0),
+                (330.0, 130.0),
+                tokens.RADIUS_L,
+                1.0,
+                1.0,
+                imgui_mod.get_window_draw_list(),
+            )
+        )
 
     _frame(imgui_ctx, build)
     assert drawn == [True]
@@ -3993,9 +3972,7 @@ def test_the_model_gate_is_silent_on_a_host_that_has_everything(app_ctx, imgui_c
     app_ctx.model_rows = []
     assert model_gate.missing(app_ctx, svc_sprites.SPRITE_ROWS) == []
     locked: list[bool] = []
-    _frame(imgui_ctx, lambda: locked.append(
-        model_gate.draw(app_ctx, svc_sprites.SPRITE_ROWS)
-    ))
+    _frame(imgui_ctx, lambda: locked.append(model_gate.draw(app_ctx, svc_sprites.SPRITE_ROWS)))
     assert locked == [False]
 
 
@@ -4006,9 +3983,9 @@ def test_the_model_gate_names_only_the_absent_rows(app_ctx, imgui_ctx):
     rows = model_gate.missing(app_ctx, ("base:turbo", "lora:pixelxl", "base:nope"))
     assert [r["row_key"] for r in rows] == ["lora:pixelxl"]
     locked: list[bool] = []
-    _frame(imgui_ctx, lambda: locked.append(
-        model_gate.draw(app_ctx, ("base:turbo", "lora:pixelxl"))
-    ))
+    _frame(
+        imgui_ctx, lambda: locked.append(model_gate.draw(app_ctx, ("base:turbo", "lora:pixelxl")))
+    )
     assert locked == [True]
 
 
@@ -4035,8 +4012,12 @@ def test_the_sprite_form_locks_its_submit_while_weights_are_missing(app_ctx, img
     app_ctx.model_rows = _model_rows()
     job_id = _seeded(app_ctx)
     form = {
-        "job_id": job_id, "sheet_type": "turnaround", "logical_size": 64,
-        "colors": 32, "seed_a": 1, "seed_b": 2,
+        "job_id": job_id,
+        "sheet_type": "turnaround",
+        "logical_size": 64,
+        "colors": 32,
+        "seed_a": 1,
+        "seed_b": 2,
     }
     _frame(imgui_ctx, lambda: sprite_panel._submit(app_ctx, job_id, form))
     # Nothing was submitted: a disabled button cannot be pressed, and the frame
@@ -4159,9 +4140,7 @@ def _transport_items():
         toolbar.Item("add", "Frame", icons.PLUS, priority=1),
         toolbar.Item("copy", "Copy", icons.COPY, priority=1),
         toolbar.Item("link", "Link", priority=1),
-        toolbar.Item(
-            "remove", "Delete frame", icons.TRASH, danger=True, pinned=True, priority=1
-        ),
+        toolbar.Item("remove", "Delete frame", icons.TRASH, danger=True, pinned=True, priority=1),
     ]
     return items
 
@@ -4270,7 +4249,6 @@ def test_every_key_a_row_publishes_is_one_its_dispatcher_answers():
             assert f'"{item.key}"' in source, f"{label}: nothing answers {item.key!r}"
 
 
-
 # --- no two items may claim one imgui id --------------------------------------
 #
 # imgui addresses every item by an id hashed from its label and the id stack, and
@@ -4287,11 +4265,29 @@ def test_every_key_a_row_publishes_is_one_its_dispatcher_answers():
 # conflict is an error rather than a red rectangle nobody screenshots.
 
 _ID_WIDGETS = (
-    "button", "small_button", "invisible_button", "arrow_button", "checkbox",
-    "radio_button", "slider_int", "slider_float", "drag_int", "drag_float",
-    "input_text", "input_int", "input_float", "combo", "begin_combo",
-    "selectable", "collapsing_header", "tree_node", "color_edit3",
-    "color_edit4", "image_button", "menu_item", "begin_child",
+    "button",
+    "small_button",
+    "invisible_button",
+    "arrow_button",
+    "checkbox",
+    "radio_button",
+    "slider_int",
+    "slider_float",
+    "drag_int",
+    "drag_float",
+    "input_text",
+    "input_int",
+    "input_float",
+    "combo",
+    "begin_combo",
+    "selectable",
+    "collapsing_header",
+    "tree_node",
+    "color_edit3",
+    "color_edit4",
+    "image_button",
+    "menu_item",
+    "begin_child",
 )
 
 
@@ -4460,9 +4456,9 @@ def test_plotter_tileset_pane_leads_with_the_picker(app_ctx, imgui_ctx):
     add = _index_of(labels, "Add from a file")
     assert picker >= 0 and add >= 0, labels
     assert picker < add, f"the tileset picker must precede Add from a file: {labels}"
-    assert add < _index_of(
-        labels, "Polish in Inker"
-    ), f"the Inker row comes after the file door: {labels}"
+    assert add < _index_of(labels, "Polish in Inker"), (
+        f"the Inker row comes after the file door: {labels}"
+    )
     # Nothing in Plotter generates a tileset any more.
     assert _index_of(labels, "Generate a ground set") == -1, labels
 
@@ -4505,7 +4501,7 @@ def test_the_sheet_popup_pump_runs_before_the_empty_map_return(app_ctx, imgui_ct
     for r in range(3):
         for c in range(3):
             y, x = r * 17, c * 17
-            sheet[y:y + 16, x:x + 16, :3] = 200
+            sheet[y : y + 16, x : x + 16, :3] = 200
     grid = slicing.detect_grid(sheet)
     assert grid is not None
 
@@ -4534,7 +4530,7 @@ def test_a_frame_without_the_sheet_popup_drops_the_pixels(app_ctx, imgui_ctx):
     for r in range(3):
         for c in range(3):
             y, x = r * 17, c * 17
-            sheet[y:y + 16, x:x + 16, :3] = 200
+            sheet[y : y + 16, x : x + 16, :3] = 200
     grid = slicing.detect_grid(sheet)
 
     state = plotter_mode.ensure(app_ctx)
@@ -4577,9 +4573,7 @@ def test_the_resize_popup_shows_a_detected_pixel_grid(app_ctx):
     assert found["scale"] == 8, found
 
     # And an ordinary drawing measures nothing, so the popup is unchanged for it.
-    plain = inker_mode._adopt(
-        app_ctx, state, _Doc.blank(96, 96), path=None, title="plain"
-    )
+    plain = inker_mode._adopt(app_ctx, state, _Doc.blank(96, 96), path=None, title="plain")
     ramp = np.linspace(0, 255, 96).astype(np.uint8)
     plain.doc.stack.active.pixels[..., :3] = ramp[None, :, None]
     plain.doc.stack.active.pixels[..., 3] = 255
@@ -4602,9 +4596,7 @@ def test_the_seam_readout_and_wrap_button_appear_only_in_tiled_mode(app_ctx):
     state = inker_mode.ensure(app_ctx)
     tab = inker_mode._adopt(app_ctx, state, _Doc.blank(32, 32), path=None, title="tile")
     rng = np.random.default_rng(2)
-    tab.doc.stack.active.pixels[..., :3] = rng.integers(
-        0, 256, (32, 32, 3), dtype=np.uint8
-    )
+    tab.doc.stack.active.pixels[..., :3] = rng.integers(0, 256, (32, 32, 3), dtype=np.uint8)
     tab.doc.stack.active.pixels[..., 3] = 255
     tab.doc.invalidate_all()
 
@@ -4707,3 +4699,39 @@ def test_the_wand_row_renders_and_no_dead_generator_route_remains(app_ctx, imgui
         cwd=str(root.parent),
     )
     assert found.stdout.strip() == "", found.stdout
+
+
+def test_the_menu_bar_and_status_bar_actually_render(app_ctx, imgui_ctx):
+    """The half of the editor shell that ``test_editor_shell`` cannot reach.
+
+    That file tests ``menus.specs`` and ``status_bar.items`` -- the pure data
+    behind the two surfaces -- and nothing anywhere tested the imgui half:
+    ``begin_menu_bar``/``end_menu_bar`` pairing, the style vars pushed around
+    it, and the status bar's ``begin_child``. Every other pane in this app is
+    smoke-rendered; these two were the exception, which is a poor thing for the
+    two newest modules in the shell to be.
+
+    The assertion is the frame completing. An unbalanced style stack or a
+    missing ``end_menu_bar`` does not raise where it happens -- it corrupts the
+    draw data and surfaces later, so ``imgui.render()`` running clean over both
+    is the real check, and ``imgui.end()`` would already have thrown if the
+    window stack were wrong.
+    """
+    from warlock.studio import menus, status_bar
+
+    imgui, renderer = imgui_ctx
+    imgui.new_frame()
+    imgui.set_next_window_size((1200, 900))
+    # The menu-bar flag is the whole reason this cannot use ``_frame``:
+    # ``begin_menu_bar`` returns False in a window without it, and a test that
+    # only ever exercised the early return would be the same gap again.
+    imgui.begin("##shell-host", None, imgui.WindowFlags_.menu_bar.value)
+    menus.draw(app_ctx)
+    status_bar.draw(app_ctx)
+    imgui.end()
+    imgui.render()
+    renderer.render(imgui.get_draw_data())
+
+    # And the stacks are back where they started, which is the thing a leaked
+    # push_style_var would break for whatever drew next rather than for this.
+    assert imgui.get_current_context() is not None

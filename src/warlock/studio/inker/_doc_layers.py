@@ -421,16 +421,37 @@ class LayerOps:
         rule: hiding a stack most of which is already hidden must not make undo
         walk back through a row of no-ops.
         """
-        unknown = set(props) - TRACK_PROPS
+        rows = self.anim.tracks if self.anim is not None else self.stack
+        wanted = range(len(rows)) if indices is None else indices
+        return self._set_row_props({index: props for index in wanted}, was=was)
+
+    def _set_row_props(
+        self: Document,
+        per_row: dict[int, dict],
+        *,
+        was: dict[int, dict] | None = None,
+    ) -> bool:
+        """Write a *different* set of props to each row, as one undo step.
+
+        :meth:`set_layers_props` is this with one ``props`` shared by every row,
+        and :meth:`solo` is the reason it is not enough on its own: solo writes
+        ``visible=True`` to one row and ``False`` to the rest, which is two
+        values and so was two calls, and two calls are two undo steps -- the
+        exact ten-Ctrl+Z defect ``set_layers_props`` exists to have fixed.
+
+        Everything else is that method's, unchanged: only rows that actually
+        change contribute an edit, ``was`` supplies the "before" for a gesture
+        that already wrote the new value live, and the edits compound into one.
+        """
+        unknown = set().union(*(set(props) for props in per_row.values()), set()) - TRACK_PROPS
         if unknown:
             raise ValueError(f"unknown track property: {sorted(unknown)[0]}")
         self.commit_floating()
         anim = self.anim
         rows = list(anim.tracks) if anim is not None else list(self.stack)
-        wanted = range(len(rows)) if indices is None else indices
         sources = was or {}
         edits: list[Any] = []
-        for index in wanted:
+        for index, props in per_row.items():
             if not 0 <= index < len(rows):
                 continue
             target = rows[index]
@@ -889,9 +910,19 @@ class LayerOps:
         alone = all(
             layer.visible == (at == index) for at, layer in enumerate(self.stack)
         )
-        for at in range(len(self.stack)):
-            self.set_layer_props(at, visible=True if alone else at == index)
-        return True
+        # One step, not one per row. This used to loop ``set_layer_props``,
+        # which pushes its own edit per call that changes something -- so
+        # soloing in a ten-layer document cost nine Ctrl+Z to undo one click,
+        # and each partial state in between was independently reachable. That
+        # is the defect ``set_layers_props`` was added for; solo could not use
+        # it only because it writes two different values, which is what
+        # ``_set_row_props`` takes.
+        return self._set_row_props(
+            {
+                at: {"visible": True if alone else at == index}
+                for at in range(len(self.stack))
+            }
+        )
 
     def apply_matte(self: Document, alpha: np.ndarray) -> bool:
         """Fold a cutout into the document's alpha, as one undoable step.

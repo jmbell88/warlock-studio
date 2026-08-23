@@ -330,13 +330,35 @@ def _field_call(
     reason: str = "",
     tooltip: str = "",
     error: str | bool = False,
+    commit: bool = False,
     **kwargs: Any,
 ) -> Any:
+    """One of imgui's fields, with this app's disabled/colour/tooltip treatment.
+
+    ``commit`` changes *when* the field reports a change: off (the default) it
+    is imgui's own answer, true on every keystroke, which is what a field
+    driving live UI state wants. On, it is true only on the frame the field is
+    left after an edit -- for the fields whose writes are **undoable**, where
+    per-keystroke is not responsiveness but undo-stack spam: typing "120" into
+    a frame's duration pushed one step per character, so a single Ctrl+Z took
+    it back to "12" rather than to what it was.
+
+    Opt-in rather than the default because most fields here are the first kind:
+    onion-skin depth, the preview frame rate, an export wrap count. Gating those
+    would make them feel broken to buy nothing, since none of them writes
+    history.
+    """
     backend = kwargs.pop("_imgui", None)
     if backend is not None and backend is not imgui:
         return getattr(backend, name)(*args, **kwargs)
     with _disabled(enabled), _field_colours(bool(error)):
         result = getattr(imgui, name)(*args, **kwargs)
+    if commit:
+        # Read here, while the field is still imgui's "last item" -- before
+        # ``_finish_item`` below draws a tooltip or a marker over the answer.
+        settled = imgui.is_item_deactivated_after_edit()
+        if isinstance(result, tuple) and result:
+            result = (settled, *result[1:])
     _finish_item(
         tooltip=tooltip,
         reason=reason or (str(error) if isinstance(error, str) else ""),

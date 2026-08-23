@@ -165,6 +165,8 @@ class Ctx:
     dpi_scale: float = 1.0
     # The App's Layout, so the settings pane can reset pane sizes.
     layout: Any = None
+    # Named v2 workspace arrangements (widths, vertical shares and panes).
+    layouts: Any = None
     base_models: list[tuple[str, str]] = field(default_factory=list)
     style_loras: list[tuple[str, str]] = field(default_factory=list)
     # Every downloadable registry row, with a real ``present`` flag rather than

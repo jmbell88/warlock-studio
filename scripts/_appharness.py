@@ -25,7 +25,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 
-def boot(scale: float | None = None):
+def boot(scale: float | None = None, size: tuple[int, int] | None = None):
     """The real App, windowed, warmed and told two harness truths. -> ``App``.
 
     ``recovery_offered`` and ``first_run`` are set for the reason
@@ -46,7 +46,7 @@ def boot(scale: float | None = None):
     from warlock.studio.runtime import Runtime
 
     app = App(Runtime(get_config()))
-    app.setup_window()
+    app.setup_window(size_override=size)
     if scale is not None:
         # After the window (which samples the monitor) and before the context
         # (which makes textures): the atlas has to be re-baked at the new scale
@@ -96,9 +96,7 @@ def capture(app, path: Path) -> None:
     width, height = pygame.display.get_window_size()
     data = app.ctx.screen.read(components=3, alignment=1)
     # GL's origin is bottom-left and everybody else's is top-left.
-    image = Image.frombytes("RGB", (width, height), data).transpose(
-        Image.FLIP_TOP_BOTTOM
-    )
+    image = Image.frombytes("RGB", (width, height), data).transpose(Image.FLIP_TOP_BOTTOM)
     image.save(path)
     print(f"  {path.name}", flush=True)
 
@@ -123,9 +121,7 @@ def close_popups(app) -> None:
     # pass aborted on its final step, *after* writing its images, which is why
     # it read as a crash with a complete-looking output directory. The public
     # any-popup query is the cheap way to ask before walking.
-    any_popup = (
-        imgui.PopupFlags_.any_popup_id.value | imgui.PopupFlags_.any_popup_level.value
-    )
+    any_popup = imgui.PopupFlags_.any_popup_id.value | imgui.PopupFlags_.any_popup_level.value
     if imgui.is_popup_open("", any_popup):
         imgui.internal.close_popup_to_level(0, True)
     # Let popup owners observe the close before another owner opens one under
@@ -227,9 +223,7 @@ def seed_tile(app, png: Path) -> None:
     import shutil
 
     ctx = app.app_ctx
-    job_id = ctx.svc.store.create(
-        "text", "cobblestone", {"seed": 11}, stage="tile", status="done"
-    )
+    job_id = ctx.svc.store.create("text", "cobblestone", {"seed": 11}, stage="tile", status="done")
     job_dir = ctx.svc.job_dir(job_id)
     job_dir.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(png, job_dir / "input.png")
@@ -315,8 +309,11 @@ def seed_review(app) -> None:
 
     ctx = app.app_ctx
     job_id = ctx.svc.store.create(
-        "image", "a wooden chest", {"lora_weight": 0.9, "seed": 42},
-        stage="model", status="done",
+        "image",
+        "a wooden chest",
+        {"lora_weight": 0.9, "seed": 42},
+        stage="model",
+        status="done",
     )
     ctx.svc.job_dir(job_id).mkdir(parents=True, exist_ok=True)
     ctx.cache.invalidate()

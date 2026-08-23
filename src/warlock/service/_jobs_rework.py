@@ -28,7 +28,7 @@ from typing import Any
 from .. import models, rigging
 from ._jobs_create import resolve_profile
 from .core import WarlockService
-from .errors import Conflict, Failed, Invalid, TooLarge
+from .errors import Conflict, Failed, Invalid
 from .validation import (
     ARTIFACT_HEALTH,
     MAX_PROMPT,
@@ -216,7 +216,12 @@ def retexture_job(
     if not text:
         raise Invalid("describe the surface you want", field="prompt")
     if len(text) > MAX_PROMPT:
-        raise TooLarge(f"prompt is longer than {MAX_PROMPT} characters", field="prompt")
+        # ``Invalid``, not ``TooLarge``. Every other ``MAX_PROMPT`` check raises
+        # ``Invalid`` (``_jobs_create``, ``system``, ``sweeps``, ``tilesheets``)
+        # and every other ``TooLarge`` in the tree is a genuine byte or pixel
+        # cap on an upload, which is what ``errors.TooLarge`` documents itself
+        # as. This one line said 413 for a plain validation failure.
+        raise Invalid(f"prompt is longer than {MAX_PROMPT} characters", field="prompt")
 
     value = models.RETEXTURE_DEFAULT_STRENGTH if strength is None else float(strength)
     # The re-texture's own bounds and default, not the sheets': with the depth

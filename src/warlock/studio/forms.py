@@ -87,10 +87,17 @@ class Form:
         return explicit or str(self.errors.get(field, "") or "")
 
     def _label(self, label: str, help_text: str) -> None:
+        room = imgui.get_content_region_avail().x
         with fonts.label(imgui):
-            imgui.text(sentence_case(label))
+            shown = sentence_case(label)
+            label_width = imgui.calc_text_size(shown).x
+            imgui.text(shown)
         if help_text:
-            imgui.same_line()
+            needed = (
+                label_width + imgui.get_style().item_spacing.x + imgui.calc_text_size(icons.INFO).x
+            )
+            if needed <= room:
+                imgui.same_line()
             imgui.text_colored(imgui.ImVec4(*theme.rgba(theme.MUTED)), icons.INFO)
             if imgui.is_item_hovered():
                 imgui.set_tooltip(help_text)
@@ -147,9 +154,7 @@ class Form:
         enabled: bool = True,
         reason: str = "",
     ) -> tuple[bool, str]:
-        with self.field(
-            field, label, help_text=help_text, helper=helper, error=error
-        ) as problem:
+        with self.field(field, label, help_text=help_text, helper=helper, error=error) as problem:
             if hint and hasattr(imgui, "input_text_with_hint"):
                 result = controls._field_call(
                     "input_text_with_hint",
@@ -185,9 +190,7 @@ class Form:
         enabled: bool = True,
         reason: str = "",
     ) -> tuple[bool, str]:
-        with self.field(
-            field, label, help_text=help_text, helper=helper, error=error
-        ) as problem:
+        with self.field(field, label, help_text=help_text, helper=helper, error=error) as problem:
             result = controls.input_text_multiline(
                 f"##{field}",
                 value,
@@ -210,9 +213,7 @@ class Form:
     ) -> tuple[bool, str]:
         """Sentence-form alias with the service cap allowed positionally."""
 
-        return self.multiline_text(
-            field, label, value, max_length=max_length, **kwargs
-        )
+        return self.multiline_text(field, label, value, max_length=max_length, **kwargs)
 
     def number(
         self,
@@ -227,9 +228,7 @@ class Form:
         reason: str = "",
         fmt: str = "%.3f",
     ) -> tuple[bool, int | float]:
-        with self.field(
-            field, label, help_text=help_text, helper=helper, error=error
-        ) as problem:
+        with self.field(field, label, help_text=help_text, helper=helper, error=error) as problem:
             if isinstance(value, int) and not isinstance(value, bool):
                 result = controls.input_int(
                     f"##{field}",
@@ -264,9 +263,7 @@ class Form:
         enabled: bool = True,
         reason: str = "",
     ) -> tuple[bool, str]:
-        with self.field(
-            field, label, help_text=help_text, helper=helper, error=error
-        ) as problem:
+        with self.field(field, label, help_text=help_text, helper=helper, error=error) as problem:
             result = controls.combo(
                 f"##{field}",
                 current,
@@ -292,9 +289,7 @@ class Form:
         reason: str = "",
         fmt: str | None = None,
     ) -> tuple[bool, int | float]:
-        with self.field(
-            field, label, help_text=help_text, helper=helper, error=error
-        ) as problem:
+        with self.field(field, label, help_text=help_text, helper=helper, error=error) as problem:
             if isinstance(value, int) and isinstance(low, int) and isinstance(high, int):
                 result = controls.slider_int(
                     f"##{field}",
@@ -351,9 +346,7 @@ class Form:
         enabled: bool = True,
         reason: str = "",
     ) -> tuple[bool, bool]:
-        with self.field(
-            field, label, help_text=help_text, helper=helper, error=error
-        ) as problem:
+        with self.field(field, label, help_text=help_text, helper=helper, error=error) as problem:
             result = controls.checkbox(
                 f"##{field}",
                 value,

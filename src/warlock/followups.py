@@ -115,11 +115,15 @@ def records(params: Any, stage: Any = None) -> list[dict[str, Any]]:
 
 def persist(store: Any, parent_id: str, followup: str, error: BaseException | str) -> bool:
     """Upsert one failure into a parent's params. Return False if it vanished."""
-    parent = store.get(parent_id)
-    if parent is None:
-        return False
-    params = parent.get("params") if isinstance(parent, dict) else None
-    current = params.get(PARAM_KEY) if isinstance(params, dict) else None
-    failures = dict(current) if isinstance(current, dict) else {}
-    failures[followup] = failure_record(followup, error)
-    return store.merge_params(parent_id, {PARAM_KEY: failures}) is not None
+    # One hold of the store's lock, not two. This used to ``get`` the row, build
+    # the new ``failures`` dict from what it read, and then ``merge_params`` the
+    # whole thing back -- a read-modify-write split across two separate holds,
+    # which is precisely the last-write-wins shape ``merge_params`` exists to
+    # prevent, one level down. Two callers recording two *different* follow-up
+    # failures against the same parent would each read the same dict and the
+    # second write would drop the first. Only one caller exists today and it is
+    # awaited sequentially, so nothing was losing records yet; the invariant was
+    # broken regardless, and the next caller would have paid for it.
+    return store.merge_param_entry(
+        parent_id, PARAM_KEY, followup, failure_record(followup, error)
+    ) is not None

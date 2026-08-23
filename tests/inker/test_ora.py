@@ -733,3 +733,31 @@ def test_a_stack_xml_declaring_a_dtd_is_refused(tmp_path):
         )
     with pytest.raises(ValueError, match="DTD"):
         inker_ora.read_ora(path)
+
+
+def test_canvas_resolution_survives_a_round_trip(tmp_path):
+    """ORA's ``xres``/``yres``, carried rather than used.
+
+    Nothing in this editor renders at a physical size, which is exactly why
+    these were dropped -- and why dropping them was wrong: a 300-DPI Krita
+    document came back at Krita's default on every save, pixels intact and
+    physical size quietly gone, with no comment anywhere saying so (unlike the
+    group ``composite-op``, which is dropped on purpose and says so).
+    """
+    from warlock.studio.inker import ora
+    from warlock.studio.inker.document import Document
+
+    doc = Document.blank(4, 4)
+    doc.dpi = (300, 300)
+    path = tmp_path / "res.ora"
+    ora.write_ora(doc, path)
+
+    back = ora.read_ora(path)
+    assert back.dpi == (300, 300)
+
+    # A document that never stated one still does not, rather than acquiring a
+    # guessed 72 on its first save.
+    plain = Document.blank(4, 4)
+    plain_path = tmp_path / "plain.ora"
+    ora.write_ora(plain, plain_path)
+    assert ora.read_ora(plain_path).dpi is None

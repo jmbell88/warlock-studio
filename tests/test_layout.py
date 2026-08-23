@@ -99,19 +99,17 @@ def test_a_save_writes_no_width_key_at_all():
         # It has to be written here every time for the reason the whole test
         # exists: the dict is replaced, so a key ``save`` forgets is a
         # preference that silently resets the next time the other one changes.
-        "rail": "labels",
+        "rail": "icons",
     }
 
 
 def test_the_rail_preference_round_trips_and_survives_nonsense():
     settings = _Settings({"rail": "icons"})
     assert layout_mod.Layout(settings).rail == "icons"
-    # A name, never a width, so a value written by a build that offered a third
-    # state cannot become a size this one does not have -- and the fallback is
-    # now *labels*: a rail of unnamed glyphs is not something a first-time user
-    # should have to discover, and only an explicit stored "icons" collapses it.
-    assert layout_mod.Layout(_Settings({"rail": "enormous"})).rail == "labels"
-    assert layout_mod.Layout(_Settings({})).rail == "labels"
+    # A fresh or unknown preference uses the compact editor-first default;
+    # only an explicit stored "labels" keeps an existing expanded rail.
+    assert layout_mod.Layout(_Settings({"rail": "enormous"})).rail == "icons"
+    assert layout_mod.Layout(_Settings({})).rail == "icons"
 
     layout = layout_mod.Layout(settings)
     layout.set_rail("icons")
@@ -223,9 +221,7 @@ def _share_literals() -> list[str]:
             # ``_right_column``'s ``share_key`` default -- Create names its
             # split in the signature and hands it straight to ``split_id``.
             args = node.args
-            for name, default in zip(
-                args.kwonlyargs, args.kw_defaults, strict=True
-            ):
+            for name, default in zip(args.kwonlyargs, args.kw_defaults, strict=True):
                 if name.arg == "share_key" and isinstance(default, ast.Constant):
                     found.append(default.value)
     return found

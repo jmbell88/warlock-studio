@@ -634,6 +634,15 @@ class RangeOps:
         ``CompoundEdit``** -- the autovivify pattern one level up -- so one
         Ctrl+Z takes away the cels and the frames they needed together, rather
         than leaving a tail of empty columns nobody asked for.
+
+        **Tracks are the other axis and they do not conjure.** A frame is an
+        empty column; a track is a *layer*, with a name, a blend mode and a
+        place in the stack that nothing about a clip can supply. So a paste
+        that would run off the bottom of the track list is refused whole, the
+        same answer a size mismatch gets and for the same reason: this used to
+        drop the overflowing columns silently, so pasting a four-track clip
+        with two tracks below the cursor put down half of it and returned
+        ``True``, and nothing anywhere said which half was missing.
         """
         anim = self.anim
         if anim is None or clip is None or not clip.slots:
@@ -642,12 +651,13 @@ class RangeOps:
             return False
         t0 = max(0, min(int(t0), len(anim.tracks) - 1))
         f0 = max(0, min(int(f0), len(anim.frames) - 1))
+        if t0 + max(offset for offset, _frame in clip.slots) >= len(anim.tracks):
+            return False
         landing = [
             (t0 + track_offset, f0 + frame_offset, index)
             for (track_offset, frame_offset), index in sorted(
                 clip.slots.items(), key=lambda item: (item[0][1], item[0][0])
             )
-            if t0 + track_offset < len(anim.tracks)
         ]
         if not landing:
             return False

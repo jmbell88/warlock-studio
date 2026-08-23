@@ -1675,3 +1675,36 @@ def test_constant_frame_rate_changes_the_playback_and_not_the_frames():
     inker_mode.tick_playback(tab, 60.0)
     assert tab.play_index == 1, "the playhead moved at the preview rate"
     assert doc.anim.frames[0].duration_ms == 1000, "and the frame is untouched"
+
+
+def test_a_tag_left_past_the_end_by_a_frame_delete_is_still_reachable():
+    """It used to stop existing, silently.
+
+    Tags are clamped when written, but deleting frames does not rewrite them --
+    on purpose, so undoing the delete brings the tag back at its authored
+    range. What that left was a stored range pointing past the last frame, and
+    ``active_tag`` compared against the raw numbers: the tag contained no index
+    at all, so it never played and never highlighted, with nothing to say why.
+    """
+    from warlock.studio.inker.document import Document
+
+    doc = Document.blank(4, 4)
+    for _ in range(9):
+        doc.add_frame()
+    doc.add_tag("walk", 5, 8)
+
+    for _ in range(7):
+        doc.remove_frame(len(doc.anim.frames) - 1)
+    assert len(doc.anim.frames) == 3
+    # Untouched on disk, which is the half that was deliberate.
+    assert (doc.anim.tags[0].start, doc.anim.tags[0].end) == (5, 8)
+
+    # ...and reachable in play, clamped to the tail of what is left.
+    assert doc.anim.active_tag(2) is doc.anim.tags[0]
+    assert doc.anim.loop_range(2)[:2] == (2, 2)
+
+    # And it springs back the moment the frames do.
+    for _ in range(7):
+        doc.add_frame()
+    assert doc.anim.active_tag(6) is doc.anim.tags[0]
+    assert doc.anim.loop_range(6)[:2] == (5, 8)

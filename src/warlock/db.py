@@ -712,6 +712,40 @@ class JobStore:
             self._conn.commit()
         return params
 
+    def merge_param_entry(
+        self, job_id: str, key: str, entry_key: str, value: Any
+    ) -> dict[str, Any] | None:
+        """Put one entry into a *nested* dict inside params, under one lock hold.
+
+        :meth:`merge_params` makes a top-level key safe; this makes a key
+        *inside* one safe. The difference matters because the read-modify-write
+        moves up a level: a caller that wants to add one entry to
+        ``params["followup_failures"]`` has to read the existing dict, add to
+        it, and write the whole thing back -- and doing that through ``get``
+        then ``merge_params`` is two separate holds, so two callers adding two
+        *different* entries can each read the same dict and the second write
+        drops the first. Exactly the last-write-wins failure ``merge_params``'
+        own docstring describes, one level down.
+
+        Returns the params as written, or None if the job is gone.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT params FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            params = self._params_blob(row["params"], job_id)
+            current = params.get(key)
+            nested = dict(current) if isinstance(current, dict) else {}
+            nested[entry_key] = value
+            params[key] = nested
+            self._conn.execute(
+                "UPDATE jobs SET params = ? WHERE id = ?", (json.dumps(params), job_id)
+            )
+            self._conn.commit()
+        return params
+
     def set_meta(
         self,
         job_id: str,

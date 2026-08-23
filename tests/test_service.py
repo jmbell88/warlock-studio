@@ -722,6 +722,17 @@ def test_a_retexture_needs_a_mesh_and_a_prompt(svc):
     with pytest.raises(Invalid):
         svc_jobs.retexture_job(svc, job_id, "   ")
 
+    # And an over-long one is ``Invalid`` too, not ``TooLarge``. This branch had
+    # no test at all, which is how it drifted: ``TooLarge`` is 413 and documents
+    # itself as a byte cap on an upload, while every other ``MAX_PROMPT`` check
+    # in the service raises ``Invalid``. The pane caps the field's length, so
+    # nothing user-facing was reaching it -- an API contract wrong in the one
+    # place nothing looked.
+    with pytest.raises(Invalid):
+        from warlock.service.validation import MAX_PROMPT
+
+        svc_jobs.retexture_job(svc, job_id, "x" * (MAX_PROMPT + 1))
+
 
 def _retexturable(svc):
     job_id = _finished_job(svc)

@@ -459,7 +459,12 @@ def _frame_trailing(ctx: Any, tab: Any, index: int) -> tuple[float, Any]:
         # land on a frame that is not the one on screen.
         imgui.set_next_item_width(sp(MS_W))
         imgui.begin_disabled(tab.busy)
-        changed, value = controls.input_int("ms", anim.frames[index].duration_ms, 10, 50)
+        # ``commit=True``: this writes history. Without it every keystroke was
+        # its own undo step, so typing "120" took three Ctrl+Z to reverse and
+        # the first one landed on "12".
+        changed, value = controls.input_int(
+            "ms", anim.frames[index].duration_ms, 10, 50, commit=True
+        )
         if changed:
             tab.doc.set_frame_duration(index, value)
         imgui.end_disabled()
@@ -1676,7 +1681,10 @@ def _tag_menu(ctx: Any, tab: Any, index: int, tag: Any) -> None:
     # ``TagsEdit`` -- so a repeat count is undoable for free and needs no edit
     # type of its own. 0 hands the question back to the Loop flag above.
     imgui.set_next_item_width(sp(90))
-    changed, value = controls.input_int("repeat", repeat, 1, 1)
+    # ``commit=True``, for ``_frame_duration``'s reason: ``set_tag`` snapshots
+    # the whole tag list into a ``TagsEdit``, so a per-keystroke write is a
+    # per-keystroke undo step.
+    changed, value = controls.input_int("repeat", repeat, 1, 1, commit=True)
     if changed:
         doc.set_tag(index, repeat=max(0, int(value)))
     widgets.help_marker(

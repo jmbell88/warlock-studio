@@ -325,9 +325,7 @@ def _library_status(ctx: Any) -> Status:
     storage = getattr(cache, "storage", None)
     if isinstance(storage, dict) and storage.get("bytes"):
         parts.append(format_bytes(storage["bytes"]))
-    return Status(
-        "library", icons.FOLDER_OPEN, " - ".join(parts), theme.MUTED, "library"
-    )
+    return Status("library", icons.FOLDER_OPEN, " - ".join(parts), theme.MUTED, "library")
 
 
 def _review_status(ctx: Any) -> Status | None:
@@ -352,9 +350,7 @@ def status_rows(ctx: Any) -> list[Status]:
     return found
 
 
-def visible_home_rows(
-    rows: list[Status], *, shell_issue_visible: bool = False
-) -> list[Status]:
+def visible_home_rows(rows: list[Status], *, shell_issue_visible: bool = False) -> list[Status]:
     """Home's quiet status line.
 
     ``shell_issue_visible`` is vestigial: it existed to hide the health row
@@ -390,14 +386,9 @@ def pump(ctx: Any) -> None:
 
 # --- drawing ----------------------------------------------------------------
 #
-# One column (the UI redesign, wave 4.3). It used to be two, news and status on the
-# left and Resume on the right, which gave half of the app's first screen to a
-# changelog -- the thing a user reads once per release -- and left "what was I
-# working on" as a column of one-line selectables in the other half. The card
-# now appears only when there is a release you have not dismissed, the six
-# start-something buttons collapse into one primary and a menu, and Resume gets
-# the room: a grid of pictures, because a thumbnail is how anybody recognises
-# their own work and a filename is not.
+# Two working columns: quick starts and machine state stay stable on the left;
+# the larger right side is resumable work.  Release notes remain dismissible,
+# so the utility column never turns into a permanent changelog.
 
 
 #: Which status rows Home draws. ``status_rows`` still computes all of them --
@@ -461,26 +452,29 @@ def draw(ctx: Any) -> None:
     # ``always_use_window_padding`` with it: a *borderless* child gets zero
     # window padding by default, which put the heading's first letter and the
     # first card's left edge hard against the window's.
-    if imgui.begin_child(
-        "landing/body", (0, 0), imgui.ChildFlags_.always_use_window_padding.value
-    ):
+    if imgui.begin_child("landing/body", (0, 0), imgui.ChildFlags_.always_use_window_padding.value):
         # Home draws into ``##content`` rather than through ``layout.pane``, so
         # it asks for its own section blocks; the bracket is this child, which
         # is the only thing that knows where it ends.
-        with widgets.section_blocks():
-            # First, above even the release note: it is the only thing on this
-            # screen that is about work the user might otherwise lose, and it is
-            # the only thing here that goes away once dealt with.
-            _recovery(ctx)
-            _tour_offer(ctx)
-            _news(ctx)
-            _start(ctx)
-            _status(ctx, status)
-            _resume(ctx)
-            # Same reason as ``_recovery``'s: the "All release notes..." link
-            # under this is not part of the Resume group.
-            widgets.end_section()
-            _news_footer(ctx)
+        avail = imgui.get_content_region_avail().x
+        gap = imgui.get_style().item_spacing.x
+        left_w = min(sp(390), max(avail * 0.34, sp(260)))
+        left_w = min(left_w, max(avail - sp(300) - gap, avail * 0.48))
+        if imgui.begin_child("landing/quick", (left_w, 0)):
+            with widgets.section_blocks():
+                _recovery(ctx)
+                _tour_offer(ctx)
+                _news(ctx)
+                _start(ctx)
+                _status(ctx, status)
+                widgets.end_section()
+                _news_footer(ctx)
+        imgui.end_child()
+        imgui.same_line()
+        if imgui.begin_child("landing/resume", (0, 0)):
+            with widgets.section_blocks():
+                _resume(ctx)
+        imgui.end_child()
     imgui.end_child()
 
 
@@ -714,8 +708,7 @@ def _news(ctx: Any) -> None:
             # flag: the wrap width is the fourth argument, and passing it third
             # measures an unwrapped line.
             height += (
-                imgui.calc_text_size(f"- {bullet}", None, False, wrap).y
-                + style.item_spacing.y
+                imgui.calc_text_size(f"- {bullet}", None, False, wrap).y + style.item_spacing.y
             )
     height += pad.y * 2
     with widgets.card("landing/news", (0, height)) as visible:
@@ -804,14 +797,8 @@ def _status(ctx: Any, status: list[Status]) -> None:
     """
     gap = imgui.get_style().item_spacing.x
     first = True
-    for row in visible_home_rows(
-        status, shell_issue_visible=bool(ctx.state.errors)
-    ):
-        width = (
-            imgui.calc_text_size(row.icon).x
-            + imgui.calc_text_size(row.text).x
-            + gap * 3
-        )
+    for row in visible_home_rows(status, shell_issue_visible=bool(ctx.state.errors)):
+        width = imgui.calc_text_size(row.icon).x + imgui.calc_text_size(row.text).x + gap * 3
         if not first:
             widgets.same_line_or_wrap(width)
         first = False
@@ -822,12 +809,8 @@ def _status(ctx: Any, status: list[Status]) -> None:
             # and three filled pills across the top of Home is three calls to
             # action for "everything checks out". The ghost register, at
             # small_button height so it sits on the line rather than raising it.
-            imgui.push_style_color(
-                imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(row.colour))
-            )
-            imgui.push_style_color(
-                imgui.Col_.button.value, imgui.ImVec4(0.0, 0.0, 0.0, 0.0)
-            )
+            imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(row.colour)))
+            imgui.push_style_color(imgui.Col_.button.value, imgui.ImVec4(0.0, 0.0, 0.0, 0.0))
             imgui.push_style_color(
                 imgui.Col_.button_hovered.value,
                 imgui.ImVec4(*theme.rgba(theme.ELEV_2)),
@@ -870,9 +853,7 @@ def _resume(ctx: Any) -> None:
     for index, row in enumerate(drawn):
         if index % columns:
             imgui.same_line()
-        _resume_cell(
-            ctx, row, index, (cell_w, cell_h), thumb, pad, focused=index == focus
-        )
+        _resume_cell(ctx, row, index, (cell_w, cell_h), thumb, pad, focused=index == focus)
 
 
 def _card_margin(pad: Any) -> None:

@@ -79,8 +79,11 @@ MODES: list[tuple[str, str, str]] = [
 # it -- and two of those four are work modes while two are not.
 # A rule that cannot state the grouping is not a better version of stating it.
 #
-# The last group is the rail's *footer*, drawn against the bottom edge beside
-# the health badge and the expand toggle rather than in the column above.
+# The last group is the rail's *footer*. It used to be drawn against the bottom
+# edge beside a health badge and an expand toggle; the editor shell moved both
+# of those to the status bar and the Window menu, so the footer is now simply
+# the last group in the one column -- distinguished by carrying no caption
+# rather than by a separate drawing path.
 RAIL_GROUPS: tuple[tuple[str, ...], ...] = (
     ("home", "create", "library", "review"),
     ("inker", "clay", "poser", "plotter", "packwright", "troupe"),
@@ -88,9 +91,14 @@ RAIL_GROUPS: tuple[tuple[str, ...], ...] = (
 )
 
 #: What each group is called, when the rail is wide enough to say so. One entry
-#: per group in :data:`RAIL_GROUPS`, footer included -- its own is never drawn,
-#: because a caption over a single item pinned to the bottom edge is a label
-#: for a label. The grouping above is a *claim* ("these four are one pipeline;
+#: per group in :data:`RAIL_GROUPS`, footer included -- its own is the empty
+#: string and is never drawn, because a caption over a single item is a label
+#: for a label. ``rail._caption`` returns on an empty label rather than drawing
+#: nothing in a full row, and ``rail.draw``'s offset arithmetic skips the row
+#: for the same groups: the two loops have to agree or the selection pill lands
+#: a caption-height off the item it names.
+#:
+#: The grouping above is a *claim* ("these four are one pipeline;
 #: these six are workspaces") and until these existed the only thing asserting
 #: it was a gap, which at a glance reads as an accident of spacing.
 RAIL_GROUP_LABELS: tuple[str, ...] = ("Pipeline", "Workspaces", "")
@@ -125,9 +133,7 @@ VIEWPORT_MODES = frozenset({"create"})
 # partition KEYS exactly -- which matters because ``_build_ui``'s dispatch ends
 # in a bare ``else``, so an unlisted mode would draw one of these rather than
 # fail.
-WORKSPACE_MODES = frozenset(
-    {"inker", "clay", "poser", "review", "plotter", "packwright", "troupe"}
-)
+WORKSPACE_MODES = frozenset({"inker", "clay", "poser", "review", "plotter", "packwright", "troupe"})
 
 # The modes that bind the arrow keys or Space themselves, and so keep them from
 # imgui's keyboard navigation (UX-02). Home and the Library move a selection

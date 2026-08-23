@@ -1081,6 +1081,29 @@ def test_a_pasted_shared_plane_is_charged_once():
     assert doc.history.bytes == clip.planes[0].pixels.nbytes
 
 
+def test_pasting_off_the_bottom_of_the_track_list_is_refused_whole():
+    """Not cropped, and not half-done.
+
+    Frames autovivify because an empty column is a thing a paste can honestly
+    conjure. A track cannot be: it is a layer, and a clip carries no name, no
+    blend mode and no stack position to make one from. This used to filter the
+    overflowing columns out of ``landing`` and carry on, so a two-track clip
+    pasted onto the last track put down one column and returned ``True`` --
+    silent, partial, and undoable only back to the half that landed.
+    """
+    doc = _clip(3, tracks=2)
+    clip = doc.copy_cels(0, 1, 0, 0)
+    assert clip.tracks == 2
+    doc.history.clear()
+
+    # One track below the cursor, two tracks of clip.
+    assert doc.paste_cels(clip, 1, 0) is False
+    assert len(doc.history) == 0, "a refusal writes nothing at all"
+
+    # And it still lands where the whole thing fits.
+    assert doc.paste_cels(clip, 0, 0) is True
+
+
 def test_pasting_past_the_end_conjures_frames_inside_the_same_step():
     doc = _clip(3)
     clip = doc.copy_cels(0, 0, 0, 2)

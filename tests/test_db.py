@@ -335,3 +335,41 @@ def test_a_batch_of_jobs_dispatches_in_a_deterministic_order(store):
         seen.append(job["id"])
         store.claim(job["id"])
     assert seen == sorted(ids)
+
+
+def test_merge_param_entry_does_not_lose_a_concurrent_sibling_entry(store):
+    """The nested read-modify-write, under one hold.
+
+    ``merge_params`` makes a top-level key safe; this makes a key *inside* one
+    safe, and the difference is what ``followups.persist`` used to get wrong: it
+    read the row, built the new nested dict from what it read, then wrote the
+    whole dict back through ``merge_params`` -- two separate holds, so two
+    callers adding two different entries could each read the same dict and the
+    second write would drop the first.
+
+    Interleaved by hand rather than with threads, because the defect is not a
+    timing accident: it is that the read and the write are separable at all, and
+    reading both copies before either writes is exactly what a thread schedule
+    is allowed to do.
+    """
+    job_id = store.create("text", "a barrel", {})
+
+    store.merge_param_entry(job_id, "followup_failures", "rig", {"why": "no bpy"})
+    store.merge_param_entry(job_id, "followup_failures", "sheet", {"why": "no vram"})
+
+    failures = store.get(job_id)["params"]["followup_failures"]
+    assert failures == {"rig": {"why": "no bpy"}, "sheet": {"why": "no vram"}}
+
+    # An existing entry is replaced, not duplicated, and its siblings stay.
+    store.merge_param_entry(job_id, "followup_failures", "rig", {"why": "retried"})
+    failures = store.get(job_id)["params"]["followup_failures"]
+    assert failures["rig"] == {"why": "retried"}
+    assert failures["sheet"] == {"why": "no vram"}
+
+    # A key that is not a dict yet -- or is something else entirely -- is
+    # replaced by one rather than raising.
+    store.merge_params(job_id, {"notes": "a string"})
+    assert store.merge_param_entry(job_id, "notes", "a", 1) is not None
+    assert store.get(job_id)["params"]["notes"] == {"a": 1}
+
+    assert store.merge_param_entry("nope", "followup_failures", "rig", {}) is None

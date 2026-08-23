@@ -1,28 +1,13 @@
-"""The three-column skeleton's measurements.
+"""Measurements for Warlock's bounded, three-column editor shell.
 
-This header made two claims. **One is overturned and one survives**, and which
-is which is the decision rather than a detail.
+Side panels tile around a fixed centre canvas: they may be resized, reordered
+inside their column, or hidden, but never float, tab together, or cross through
+the canvas. Version-2 named layouts retain each workspace's desired left and
+right widths plus its internal vertical shares. Narrow windows compress those
+widths for the current frame without changing the saved preference.
 
-*Overturned:* "there is no docking". Wave 5 gave the skeleton names
-(:mod:`~warlock.studio.layout_skeleton`, the per-workspace tables in
-``skeletons.py``) and one renderer (:func:`column`), so the panes inside a
-column can be reordered and hidden and the result kept under a name
-(``layouts.py``). It is deliberately not general docking: panes tile, never
-float, never tab, and in v1 never cross the vertical/horizontal boundary. What
-general docking would cost is named in ``docs/INVARIANTS.md`` -- :func:`fit`,
-:func:`centre_width` and ``rail.expanded_fits`` are arithmetic over exactly two
-sidebars and one centre.
-
-*Survives, and is reaffirmed:* the two sidebars are a **fixed** ``SIDEBAR_W``
-wide rather than draggable. They hold forms, and a form has one width that
-reads well -- what a drag bought was a way to make the app look broken. imgui's
-own ini file stays disabled. The splits that exist are *internal* and
-horizontal, because two stacked scrollers genuinely trade against each other,
-and they are remembered through the same debounced :class:`Settings` machinery
-every other preference uses.
-
-Sizes are in *design* pixels, multiplied by ``tokens.SCALE`` at use, so they
-keep meaning "a sidebar this wide" on a 150% monitor rather than drifting.
+Sizes are design pixels and are multiplied by :data:`tokens.SCALE` at use, so
+a saved width has the same meaning on every display scale.
 """
 
 from __future__ import annotations
@@ -33,15 +18,11 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from . import motion, theme, tokens, widgets
+from . import motion, theme, tokens
 from .tokens import sp
 
-# The three sidebar widths on offer (M106), in design pixels. Three named
-# options rather than a drag, for the reason the module docstring gives: a form
-# has a width that reads well, and what a free drag bought was a way to make
-# the app look broken. What it did *not* answer is that 300 reads well on a
-# 1600-wide window and wastes a third of a 5120 one -- three sizes is enough to
-# cover that without reopening the drag.
+# Legacy global width presets remain as fallback seeds for untouched v1
+# workspaces. Explicit splitter edits are stored per workspace in layout v2.
 SIDEBAR_WIDTHS: dict[str, float] = {
     "narrow": 260.0,
     "default": 300.0,
@@ -106,6 +87,13 @@ CENTRE_FLOOR = 220.0
 # this is where squeezing stops and the centre gives instead.
 SIDEBAR_MIN = 200.0
 
+# Saved workspace widths are continuous rather than one of the legacy named
+# sidebar sizes.  The values are preferences in design pixels; the fitted
+# values below may temporarily be smaller when UI scale or the window makes
+# the preference impossible.  That temporary fit is never written back.
+PANEL_MIN = 220.0
+PANEL_MAX = 480.0
+
 # The width the two sidebars actually get this frame, in *physical* px. Module
 # state, computed once by :func:`measure` for the same reason ``SIDEBAR_W`` is
 # eased in ``tick``: the left column and the right must agree within a frame,
@@ -116,6 +104,7 @@ SIDEBAR_MIN = 200.0
 # what a sidebar is before there is a window -- get the unconstrained width
 # rather than a fit computed against a viewport of zero.
 SIDEBAR_FIT: float | None = None
+SIDE_FIT: dict[str, float | None] = {"left": None, "right": None}
 
 # What the navigation rail has taken out of the window this frame, in physical
 # px (the UI redesign, wave 3). Module state set by ``rail.tick`` immediately before
@@ -157,6 +146,60 @@ def fit(available: float, spacing: float) -> float:
     return max(min(slack, want), sp(SIDEBAR_MIN))
 
 
+def fit_widths(
+    available: float,
+    left: float,
+    right: float,
+    spacing: float,
+    *,
+    scale: float | None = None,
+    fixed_left: float | None = None,
+) -> tuple[float, float, float]:
+    """Fit independent desired side widths without changing the preferences.
+
+    Inputs ``left``/``right`` and ``fixed_left`` are design pixels; the result
+    is physical ``(left, right, centre)`` pixels.  Side columns give way down
+    to their normal 220 dp bound, then may compress further when scale makes
+    even that impossible.  The centre keeps 300 dp when it can and 220 dp
+    before anything is allowed to run off-screen.
+    """
+
+    use_scale = tokens.SCALE if scale is None else max(float(scale), 0.01)
+    content = max(float(available) - max(float(spacing), 0.0) * 2.0, 0.0)
+    centre_comfort = CENTRE_MIN * use_scale
+    centre_floor = min(CENTRE_FLOOR * use_scale, content)
+    left_want = (
+        float(fixed_left) if fixed_left is not None else min(max(float(left), PANEL_MIN), PANEL_MAX)
+    ) * use_scale
+    right_want = min(max(float(right), PANEL_MIN), PANEL_MAX) * use_scale
+
+    wanted = left_want + right_want
+    if content >= wanted + centre_comfort:
+        return left_want, right_want, content - wanted
+
+    if fixed_left is None:
+        normal_min = PANEL_MIN * use_scale * 2.0
+    else:
+        normal_min = left_want + PANEL_MIN * use_scale
+    # Keep a useful centre first.  If the normal panel floors cannot coexist
+    # with it, panel widths are a frame-local compression rather than a saved
+    # edit.  On a physically impossible window the centre gets the remainder.
+    panel_budget = max(content - centre_comfort, 0.0)
+    if panel_budget < normal_min:
+        panel_budget = max(content - centre_floor, 0.0)
+    panel_budget = min(panel_budget, wanted)
+
+    if fixed_left is not None:
+        left_fit = min(left_want, panel_budget)
+        right_fit = max(panel_budget - left_fit, 0.0)
+    elif wanted > 0.0:
+        left_fit = panel_budget * left_want / wanted
+        right_fit = panel_budget - left_fit
+    else:  # pragma: no cover - clamping above makes this defensive only
+        left_fit = right_fit = 0.0
+    return left_fit, right_fit, max(content - left_fit - right_fit, 0.0)
+
+
 def tick() -> None:
     """Advance the sidebar width one frame. Called once, before anything reads
     ``SIDEBAR_W`` -- a half-eased width read by the left column and the settled
@@ -165,7 +208,7 @@ def tick() -> None:
     SIDEBAR_W = motion.value(_SIDEBAR_KEY, SIDEBAR_TARGET, duration=tokens.DUR_BASE)
 
 
-def measure() -> float:
+def measure(library: Any = None, workspace: str = "", *, fixed_left: float | None = None) -> float:
     """Settle this frame's sidebar fit. Called once, straight after :func:`tick`.
 
     Separate from ``tick`` rather than folded into it, and the reason is not
@@ -188,7 +231,23 @@ def measure() -> float:
         # two widths: fitting against the settled figure would leave the three
         # columns wrong for the ~200 ms of every expand.
         room -= RAIL_RESERVED + style.item_spacing.x
-    SIDEBAR_FIT = fit(room, style.item_spacing.x)
+    if library is None or not workspace:
+        SIDEBAR_FIT = fit(room, style.item_spacing.x)
+        SIDE_FIT["left"] = SIDE_FIT["right"] = SIDEBAR_FIT
+        return SIDEBAR_FIT
+    left = library.width(workspace, "left")
+    right = library.width(workspace, "right")
+    left_fit, right_fit, _centre = fit_widths(
+        room, left, right, style.item_spacing.x, fixed_left=fixed_left
+    )
+    SIDE_FIT["left"], SIDE_FIT["right"] = left_fit, right_fit
+    # The left column, not the mean of the two. ``SIDE_FIT`` is what every
+    # caller actually reads (``sidebar_width`` consults it first and it is
+    # always populated by the time anything draws), so this is only the
+    # pre-measure fallback and the value ``measure`` hands back -- and an
+    # average is a width neither column has, which is a worse thing for a
+    # fallback to be than simply the side ``sidebar_width`` defaults to.
+    SIDEBAR_FIT = left_fit
     return SIDEBAR_FIT
 
 
@@ -198,7 +257,7 @@ def measure() -> float:
 # does. SP_3 rather than the window's own SP_4 (UX.md Phase 2) because a pane is
 # already inside the host window's gutter -- matching it would double the inset
 # on the two sidebars, which are the width-constrained case.
-PANE_PADDING = tokens.SP_3
+PANE_PADDING = tokens.SP_2
 SHARE_MIN, SHARE_MAX = 0.25, 0.75
 
 
@@ -224,9 +283,7 @@ def give_way(avail: float, share: float, wanted: float, floor: float) -> float:
     return min(max(avail * share, min(wanted, ceiling)), ceiling)
 
 
-def give_way_drag(
-    avail: float, share: float, wanted: float, floor: float, delta: float
-) -> float:
+def give_way_drag(avail: float, share: float, wanted: float, floor: float, delta: float) -> float:
     """The share after dragging the handle under a :func:`give_way` pane.
 
     A drag measured against the *stored* share goes dead the moment give_way
@@ -257,6 +314,9 @@ class Layout:
 
     def __init__(self, settings: Any) -> None:
         self._settings = settings
+        self._workspace_library: Any = None
+        self._workspace = ""
+        self._workspace_share_saved = False
         stored = settings.get("layout") or {}
         try:
             share = float(stored.get("settings_share", 0.55))
@@ -288,11 +348,16 @@ class Layout:
         # size this build does not offer -- and anything unrecognised reads as
         # "icons", which is the state the rail is designed around rather than a
         # degraded version of the other one.
-        # A profile that has never expressed a preference gets labels: nine of
-        # ten workspaces are a glyph with no name until you hover one, and the
-        # control that would tell you is itself an unnamed glyph. A *stored*
-        # "icons" still wins -- this moves the default, not anyone's choice.
-        self.rail = "icons" if str(stored.get("rail", "labels")) == "icons" else "labels"
+        # A profile that has never expressed a preference gets *icons*, and this
+        # is the one place that decision reversed. The old argument was that ten
+        # workspaces are a glyph with no name until you hover one; what answers
+        # it now is that every rail row has a tooltip and the editor shell put
+        # the mode names in the Window menu as well, so a first-time user has
+        # two ways to read the column without spending 188 px of a 44 px rail on
+        # it permanently. A *stored* "labels" still wins -- this moves the
+        # default, not anyone's choice.
+        stored_rail = stored.get("rail")
+        self.rail = "labels" if stored_rail == "labels" else "icons"
 
     # A workspace that stacks two panes on the left *and* two on the right is
     # two splits, and until now both read one key -- so dragging Clay's tools
@@ -332,11 +397,32 @@ class Layout:
         and they are two entries, because one value behind both is the same
         defect one rung down.
         """
+        if self._workspace_library is not None and self._workspace:
+            return min(
+                max(
+                    self._workspace_library.share(
+                        self._workspace, key, self.shares.get(key, self.settings_share)
+                    ),
+                    SHARE_MIN,
+                ),
+                SHARE_MAX,
+            )
         return self.shares.get(key, self.settings_share)
 
     def set_share(self, key: str, value: float) -> None:
         """Move one split. Clamped here so no caller has to remember to."""
-        self.shares[key] = min(max(value, SHARE_MIN), SHARE_MAX)
+        value = min(max(value, SHARE_MIN), SHARE_MAX)
+        if self._workspace_library is not None and self._workspace:
+            self._workspace_library.set_share(self._workspace, key, value)
+            self._workspace_share_saved = True
+            return
+        self.shares[key] = value
+
+    def bind_workspace(self, library: Any, workspace: str) -> None:
+        """Route vertical split reads/writes through the active arrangement."""
+
+        self._workspace_library = library
+        self._workspace = str(workspace)
 
     def set_sidebar_width(self, key: str) -> None:
         self.sidebar = set_sidebar(key, animate=True)
@@ -347,6 +433,11 @@ class Layout:
         self.save()
 
     def save(self) -> None:
+        if self._workspace_share_saved:
+            # ``layouts.Library.set_share`` already persisted the explicit
+            # workspace edit.  The legacy global blob remains only as a seed.
+            self._workspace_share_saved = False
+            return
         # Only the surviving keys: Settings.set replaces the whole dict, so the
         # stale sidebar_w/inspector_w a settings file may still carry are gone
         # the first time anything saves. ``sidebar`` is the *name* of a width,
@@ -460,15 +551,9 @@ def pane(
     imgui.pop_style_color()
     imgui.pop_style_var()
     try:
-        # Every pane drawn through here groups its headings onto tinted blocks.
-        # Here rather than in each pane because it is a property of *being a
-        # pane*, and because the scope has to bracket the child exactly: it
-        # splits this child's own draw list, which is why two panes can never
-        # collide over one splitter. A pane that draws no ``widgets.section``
-        # pays a split and a merge and gets no fills, which is free enough not
-        # to be worth a predicate. See ``widgets.section_blocks``.
-        with widgets.section_blocks():
-            yield visible
+        # Editor panes stay flat: headers and separators establish hierarchy.
+        # Card/block surfaces remain opt-in for Home, dialogs and overlays.
+        yield visible
     finally:
         imgui.end_child()
         _divider(resolved_edge)
@@ -478,9 +563,7 @@ FILL_SIZING = "fill"
 """``layout_skeleton.FILL``, spelled here so this module imports it lazily."""
 
 
-def pane_child(
-    pane_id: str, size: tuple[float, float], window_flags: int = 0
-) -> bool:
+def pane_child(pane_id: str, size: tuple[float, float], window_flags: int = 0) -> bool:
     """Compatibility entry point for third-party panes and older tests.
 
     Studio code uses :func:`pane`; this retains the old begin/end shape for
@@ -498,7 +581,7 @@ def pane_child(
     return visible
 
 
-def sidebar_width() -> float:
+def sidebar_width(side: str = "left") -> float:
     """A sidebar's width this frame, in physical px. Narrowed to fit (UX-01).
 
     What the seven workspaces call instead of ``sp(SIDEBAR_W)``. Same value
@@ -506,6 +589,9 @@ def sidebar_width() -> float:
     shows at high UI scale in a small window, which is exactly the case a user
     who enlarged the UI to read it is in.
     """
+    fitted = SIDE_FIT.get(side)
+    if fitted is not None:
+        return fitted
     return sp(SIDEBAR_W) if SIDEBAR_FIT is None else SIDEBAR_FIT
 
 
@@ -525,9 +611,31 @@ def centre_width() -> float:
     """
     spacing = imgui.get_style().item_spacing.x
     return max(
-        imgui.get_content_region_avail().x - (sidebar_width() + spacing),
+        imgui.get_content_region_avail().x - (sidebar_width("right") + sp(GRIP) + spacing * 2.0),
         sp(CENTRE_FLOOR),
     )
+
+
+def resize_side(library: Any, workspace: str, side: str, delta: float) -> bool:
+    """Apply a column-boundary drag in design pixels.  Returns whether saved."""
+
+    if side not in ("left", "right") or not delta:
+        return False
+    before = library.width(workspace, side)
+    direction = 1.0 if side == "left" else -1.0
+    after = min(max(before + direction * float(delta), PANEL_MIN), PANEL_MAX)
+    if after == before:
+        return False
+    library.set_width(workspace, side, after)
+    return True
+
+
+def column_splitter(library: Any, workspace: str, side: str, *, length: float = 0.0) -> None:
+    """Draw and persist one of the two bounded side-column splitters."""
+
+    delta = splitter(f"{workspace}-{side}-width", vertical=True, length=length)
+    if delta:
+        resize_side(library, workspace, side, delta)
 
 
 def splitter(split_id: str, *, vertical: bool = True, length: float = 0.0) -> float:

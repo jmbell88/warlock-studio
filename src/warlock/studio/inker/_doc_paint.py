@@ -891,10 +891,42 @@ class PaintOps:
         self._touch_stroke()
         return True
 
+    def _stroke_layer(self: Document) -> Layer | None:
+        """The layer an open stroke is painting into, or None if it is gone.
+
+        The stroke session's answer to ``_filter_layer``, and it exists for the
+        same reason: a session spans many calls, and between two of them the
+        layer it named can be deleted -- by a shortcut, a menu op, or an undo
+        arriving while the button is still down. ``stack.by_uid`` raises
+        ``KeyError`` on a uid nothing carries any more, and this used to be
+        called unguarded from all three of ``stroke_to``, ``spray_at`` and
+        ``end_stroke``. The last one is what made it worth fixing rather than
+        noting: with ``end_stroke`` raising, the stroke could never be closed,
+        so every later call raised too and the document was left permanently
+        mid-stroke.
+        """
+        stroke = self._stroke
+        if stroke is None:
+            return None
+        try:
+            return self.stack.by_uid(stroke.layer_uid)
+        except KeyError:
+            return None
+
+    def _abandon_stroke(self: Document) -> bool:
+        """Drop a stroke whose layer went. Nothing to put back, nothing to push."""
+        self._stroke = None
+        self._discard_pending_cel()
+        return False
+
     def stroke_to(self: Document, point: tuple[float, float]) -> None:
         if self._stroke is None:
             return
-        self._stroke.to(point, self.stack.by_uid(self._stroke.layer_uid).pixels)
+        layer = self._stroke_layer()
+        if layer is None:
+            self._abandon_stroke()
+            return
+        self._stroke.to(point, layer.pixels)
         self._touch_stroke()
 
     def spray_at(self: Document, point: tuple[float, float], count: int) -> None:
@@ -908,9 +940,11 @@ class PaintOps:
         """
         if self._stroke is None:
             return
-        self._stroke.spray(
-            point, count, self.stack.by_uid(self._stroke.layer_uid).pixels
-        )
+        layer = self._stroke_layer()
+        if layer is None:
+            self._abandon_stroke()
+            return
+        self._stroke.spray(point, count, layer.pixels)
         self._touch_stroke()
 
     def _touch_stroke(self: Document) -> None:
@@ -930,6 +964,8 @@ class PaintOps:
 
     def end_stroke(self: Document) -> bool:
         """Close the stroke and make it exactly one undo step."""
+        if self._stroke is not None and self._stroke_layer() is None:
+            return self._abandon_stroke()
         stroke, self._stroke = self._stroke, None
         if stroke is not None and stroke.pending:
             # The pixel-perfect filter holds one pixel back to see whether the

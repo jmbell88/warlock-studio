@@ -597,6 +597,12 @@ def _read_layer(state: _Parse, r: _Reader, opacity_valid: bool) -> None:
     state.sprite.layers.append(
         AseLayer(
             name=name or "Layer",
+            # The VISIBLE bit as written, including on a reference layer. This
+            # used to be overridden to False for those, on the reasoning that
+            # Aseprite opens them hidden -- but ``aseout`` writes ``visible``
+            # verbatim beside the REFERENCE flag, so a file *can* say a
+            # reference layer is showing, and forcing it hidden here threw away
+            # the user's own toggle on the next load with nothing said.
             visible=bool(flags & _LAYER_VISIBLE),
             # Aseprite stores the *editable* bit; ours is the refusal, so the
             # two are each other's inverse.
@@ -611,8 +617,6 @@ def _read_layer(state: _Parse, r: _Reader, opacity_valid: bool) -> None:
             tileset=tileset,
         )
     )
-    if flags & _LAYER_REFERENCE:
-        state.sprite.layers[-1].visible = False
 
 
 def _read_cel(state: _Parse, r: _Reader) -> None:

@@ -1,40 +1,9 @@
-"""The navigation rail: a column of glyphs down the left edge.
+"""The compact workspace navigation rail.
 
-What it replaces is a horizontal segmented control across the top of every
-frame, holding thirteen destinations. Three things were wrong with that and
-only one of them was fixable inside it.
-
-**Thirteen is too many to be a row.** The switch had already been compacted to
-glyph-only at 1.5 UI scale (a clipped segment is an unreachable mode), so on
-any scaled display it was thirteen unlabelled pictures in a line -- and it was
-drawn identically in every mode, which is to say it spent the top of the window
-on navigation that never changes. A rail costs a 52 px column instead of a full
-row, keeps its labels available on demand, and stops competing with the pane
-title underneath it.
-
-**The header carried three things that are not navigation.** A frame-rate and
-VRAM readout (developer chrome, on screen permanently), a shortcuts button and
-a power icon. The readout is gone -- F10 still raises ``overlay.fps_meter``,
-which is the tool that was always the real answer -- and the quit icon is gone
-with it: a destructive control one click from every mode was mitigated by a
-confirm rather than fixed, and the window's own X is the path that carries the
-unsaved-work chain.
-
-**Grouping had to be spacing.** The old control derived its gaps from where
-``WORK_MODES`` changed, which is a rule that renders correctly and explains
-nothing. ``modes.RAIL_GROUPS`` is written out instead: the two ways in and the
-places you look at work, the six creative workspaces, and Settings alone in the
-footer. A column can carry that as *sections*, which is a stronger statement
-than a wider gap in a row.
-
-**The rail takes no arrow keys, deliberately.** ``modes.NAV_KEY_MODES`` names
-five surfaces that bind the arrows themselves (Home's Resume list, the Library,
-Review's unit stepper, Inker's and Plotter's pan), and a shell control that
-claimed Up/Down would be a sixth claimant arbitrating against all of them. Mode
-switching is a mouse action and a ``Ctrl+K`` action, which is the doctrine
-``modes.py`` already states for the digits. If that is ever revisited, the shape
-is a focus flag OR'd into the input door (``imgui_backend._NAV_KEYS``) rather
-than a rail-specific key handler -- one arbitration point, not two.
+The 44 px rail contains destinations only. Utilities live in the global menu
+or shared status bar, leaving every row a full 44 px target with a tooltip and
+focus treatment. Fresh installs use glyphs; a saved labelled preference is
+preserved and temporarily collapses only when the editor would no longer fit.
 """
 
 from __future__ import annotations
@@ -43,18 +12,16 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from . import anchors, fonts, icons, modes, motion, theme, tokens
+from . import anchors, fonts, modes, motion, theme, tokens
 from . import layout as layout_mod
 from .tokens import sp
 
-# The two widths, in design px. 52 is a 44 px hit target plus its gutters --
-# the smallest a glyph-only column can be while every item still clears the
-# 24 px minimum a control is comfortably clickable at, with room for the
-# selected pill to inset. 188 is what the longest label ("Packwright") needs
+# The two widths, in design px. The compact column itself is one 44 px hit
+# target wide. 188 is what the longest label ("Packwright") needs
 # beside that glyph without truncating, which is the only figure an expanded
 # rail can honestly be: a rail that ellipsises its labels has spent the width
 # and not bought the words.
-RAIL_W = 52.0
+RAIL_W = 44.0
 RAIL_EXPANDED_W = 188.0
 
 # One item's height, and the gap between the groups.
@@ -81,22 +48,16 @@ _PILL_KEY = "rail/pill"
 # put one number in two places.
 _WIDTH = [RAIL_W]
 
-# What the rail asked for at host scope this frame. imgui popups are registered
-# in the window that opens them, and the rail is a child -- so rather than
-# discover that the hard way, the two popups the footer raises are flagged here
-# and opened by ``main`` after ``end_child``. The same one-shot pattern
-# ``state.shortcuts_requested`` already uses, for the same reason.
+# Host-scoped popup requests. They now originate in the global menu and status
+# bar; keeping the one-shot bridge avoids coupling those surfaces to main.
 _wants: dict[str, bool] = {"diagnostics": False, "layouts": False}
 
 
 def request(name: str) -> None:
-    """Ask ``main`` to open one of the rail's popups at host scope.
+    """Ask ``main`` to open one of the shell's popups at host scope.
 
-    Public because the rail's footer is not the only door: the health badge is
-    drawn *only* when a check is failing, so on a healthy install the
-    Issues list would be unreachable -- and "everything is fine" is
-    exactly the claim somebody occasionally wants to see the evidence for. The
-    palette's Issues command comes through here.
+    The request bridge is shared by menu, status and palette actions because
+    imgui popups must be opened in the host window that renders them.
     """
     _wants[name] = True
 
@@ -123,7 +84,12 @@ def expanded_fits() -> bool:
     style = imgui.get_style()
     need = (
         sp(RAIL_EXPANDED_W)
-        + sp(layout_mod.SIDEBAR_MIN) * 2
+        # ``PANEL_MIN``, not the older ``SIDEBAR_MIN``: the columns are fitted
+        # by ``layout.fit_widths`` now, which holds 220 dp a side and only goes
+        # under it as a last resort. Asking 200 here promised the labels fit at
+        # widths where the real columns still wanted 40 dp more each, and the
+        # 20 dp it bought back is not worth a rail that opens into a squeeze.
+        + sp(layout_mod.PANEL_MIN) * 2
         + sp(layout_mod.CENTRE_MIN)
         + style.item_spacing.x * 3
         + style.window_padding.x * 2
@@ -237,9 +203,7 @@ def _item(
         size = imgui.calc_text_size(label)
         draw.add_text(
             (origin.x + sp(RAIL_W) - sp(tokens.SP_1), origin.y + (height - size.y) * 0.5),
-            imgui.get_color_u32(
-                theme.rgba(theme.TEXT if selected else theme.MUTED, alpha * words)
-            ),
+            imgui.get_color_u32(theme.rgba(theme.TEXT if selected else theme.MUTED, alpha * words)),
             label,
         )
     # The accessible name, for as long as the glyph is the only thing drawn.
@@ -253,26 +217,6 @@ def _item(
     return clicked
 
 
-def _health(ctx: Any) -> tuple[int, str] | None:
-    """The failing-checks badge, or ``None`` when everything passes.
-
-    A permanent "OK" badge is noise -- the app said "Everything checks out" in
-    the corner of every frame -- so the footer carries this only when there is
-    something to carry. The diagnostics list stays reachable when it is green
-    through the palette, which is where a thing you occasionally want and never
-    need belongs.
-    """
-    checks = list(getattr(ctx.runtime, "checks", []) or [])
-    failing = [c for c in checks if not c.ok]
-    if not failing and not ctx.state.errors:
-        return None
-    fatal = bool(ctx.state.errors) or any(c.fatal for c in failing)
-    names = "\n".join(f"  {'!' if c.fatal else '-'} {c.name}" for c in failing[:8])
-    more = f"\n  ... and {len(failing) - 8} more" if len(failing) > 8 else ""
-    tip = "Click for details:" + (f"\n{names}{more}" if names else "")
-    return (theme.ERR if fatal else theme.WARN, tip)
-
-
 def _caption(text: str, height: float) -> None:
     """A group's name in the expanded rail, in exactly ``height`` of column.
 
@@ -282,6 +226,14 @@ def _caption(text: str, height: float) -> None:
     measure is a footer six pixels out of place. Left-aligned with the row
     labels, not with the glyphs -- it names the words, not the icons.
     """
+    if not text:
+        # The footer group's label is deliberately empty (``RAIL_GROUP_LABELS``
+        # says why), and before the shell refactor the footer was drawn by a
+        # separate path that never reached here. Now every group comes through
+        # this loop, so an empty label has to cost nothing -- a bare ``dummy``
+        # would spend a full caption row on a word that is not there, which
+        # reads as an unexplained gap above Settings.
+        return
     origin = imgui.get_cursor_screen_pos()
     with fonts.small(imgui):
         size = imgui.calc_text_size(text)
@@ -298,8 +250,6 @@ def _caption(text: str, height: float) -> None:
 
 def draw(app: Any, ctx: Any) -> None:
     """The whole column, inside the host window. Nothing else is a header."""
-    from .manual import render as manual_render
-
     box = width()
     pad = sp(tokens.SP_1)
     imgui.push_style_var(imgui.StyleVar_.window_padding.value, (pad, pad))
@@ -310,12 +260,10 @@ def draw(app: Any, ctx: Any) -> None:
         return
     item_w = imgui.get_content_region_avail().x
     labels = {key: (label, icon) for key, label, icon in modes.MODES}
-    body_groups = modes.RAIL_GROUPS[:-1]
-    footer = list(modes.RAIL_GROUPS[-1])
-    badge = _health(ctx)
-    # Help and the expand toggle are always there; the badge is not.
-    footer_rows = (["health"] if badge else []) + ["help", "keys", *footer, "expand"]
-    rows = sum(len(g) for g in body_groups) + len(footer_rows)
+    body_groups = modes.RAIL_GROUPS
+    # The rail is destinations only. Manual, shortcuts, diagnostics, layouts,
+    # Settings and the labels toggle live in the global menus/status bar.
+    rows = sum(len(g) for g in body_groups)
     avail_h = imgui.get_content_region_avail().y
     # The gaps the column will actually contain: one between each pair of rows,
     # one wider one between the body's two groups, and one more between the
@@ -380,26 +328,21 @@ def draw(app: Any, ctx: Any) -> None:
     # last frame's hover because a *colour* is needed to draw the thing that
     # would tell you; a position is not in that bind.)
     top = imgui.get_cursor_screen_pos()
-    start_y = imgui.get_cursor_pos_y()
     offsets: dict[str, float] = {}
     y = 0.0
     for index, group in enumerate(body_groups):
         if index:
             y += group_gap
-        if captions:
+        # Must agree with the drawing loop below, which skips ``_caption``
+        # entirely for an empty label: budgeting a row here that nothing draws
+        # puts the pill one caption-height below the item it is naming.
+        if captions and modes.RAIL_GROUP_LABELS[index]:
             y += caption_step
         for key in group:
             offsets[key] = y
             y += step
     # ``y`` carries a trailing gap that belongs *between* rows; the body ends
     # at its last item's bottom edge, not one spacing past it.
-    body_h = y - gap
-
-    footer_h = len(footer_rows) * item_h + (len(footer_rows) - 1) * gap
-    footer_top = max(body_h + group_gap, avail_h - footer_h)
-    for offset, key in enumerate(footer_rows):
-        offsets[key] = footer_top + offset * step
-
     current = ctx.state.mode
     pill = motion.value(_PILL_KEY, offsets.get(current, 0.0), duration=tokens.DUR_BASE)
     if current in offsets:
@@ -413,102 +356,12 @@ def draw(app: Any, ctx: Any) -> None:
     for index, group in enumerate(body_groups):
         if index:
             imgui.dummy((0, max(group_gap - gap, 0.0)))
-        if captions:
+        if captions and modes.RAIL_GROUP_LABELS[index]:
             _caption(modes.RAIL_GROUP_LABELS[index], caption_h)
         for key in group:
             label, icon = labels[key]
             if _item(key, label, icon, item_w, selected=key == current, height=item_h):
                 app._set_mode(key)
 
-    # Placed against the measured start rather than nudged from wherever the
-    # body left the cursor: a delta accumulates whatever rounding the rows
-    # above it collected, which is how a footer comes to sit six pixels past
-    # the bottom of the column it is supposed to be pinned to.
-    imgui.set_cursor_pos_y(start_y + footer_top)
-    if badge:
-        colour, tip = badge
-        if _item("health",
-            "Issues",
-            icons.TRIANGLE_ALERT,
-            item_w,
-            selected=False,
-            tooltip=tip,
-            height=item_h,
-        ):
-            request("diagnostics")
-        # The glyph again in the failing colour, over the muted one the shared
-        # item drew: a badge that is the same grey as everything above it is a
-        # badge nobody looks at, and colour is the fast read here even though
-        # the shape carries it for anyone the colour does not reach.
-        _tint_last(colour)
-    # **No footer item for the layout switcher.** The rail is full: at the
-    # 1100x700 resize floor and 1.75 UI scale the column already ends four
-    # pixels from the window edge, and
-    # ``test_the_rail_fits_the_resize_floor_at_every_scale`` catches the next
-    # item that pushes it out. The switcher is reached from the command
-    # palette and from Settings -> Advanced instead, both through
-    # ``request("layouts")`` -- the same one-shot the Issues list uses, and for
-    # the same reason: a popup opened inside this child is one nothing outside
-    # it can find.
-    if _item("help",
-        "Manual",
-        icons.BOOK_OPEN,
-        item_w,
-        selected=ctx.state.manual.open,
-        tooltip="Manual (F1)",
-        height=item_h,
-    ):
-        manual_render.toggle(ctx)
-    # The header's ``?`` button was the shortcut sheet's only visible door and
-    # went with the header. Ctrl+/ and the palette still open it, but both are
-    # things you have to already know -- so the sheet gets a door again here.
-    if _item("keys",
-        "Shortcuts",
-        icons.KEYBOARD,
-        item_w,
-        selected=False,
-        tooltip="Keyboard shortcuts (Ctrl+/)",
-        height=item_h,
-    ):
-        ctx.state.shortcuts_requested = True
-    for key in footer:
-        label, icon = labels[key]
-        if _item(key, label, icon, item_w, selected=key == current, height=item_h):
-            app._set_mode(key)
-    expanded = app.layout.rail == "labels"
-    # ``ARROW_LEFT`` rather than a chevron pointing the other way: the vendored
-    # lucide subset carries chevron-right and chevron-down and no chevron-left,
-    # and a glyph that is not in the font is a blank square. Two families in one
-    # toggle is the smaller cost -- both point the way the rail is about to move,
-    # which is the whole of what the control has to say.
-    if _item("expand",
-        "Collapse" if expanded else "Expand",
-        icons.ARROW_LEFT if expanded else icons.CHEVRON_RIGHT,
-        item_w,
-        selected=False,
-        height=item_h,
-    ):
-        app.layout.set_rail("icons" if expanded else "labels")
     imgui.pop_style_var()
     imgui.end_child()
-
-
-def _tint_last(colour: int) -> None:
-    """Redraw the previous item's glyph slot in ``colour``.
-
-    A small hack with a stated cost: it paints a filled circle rather than the
-    glyph, because the glyph was already drawn by ``_item`` and a second copy
-    over it would only thicken it. What this adds is the *colour*, which is the
-    half a monochrome rail cannot say -- and it is a dot beside a triangle
-    rather than instead of it, so the double encoding the status pills use
-    holds here too.
-    """
-    lo = imgui.get_item_rect_min()
-    imgui.get_window_draw_list().add_circle_filled(
-        (lo.x + sp(RAIL_W) - sp(tokens.SP_2), lo.y + sp(tokens.SP_3)),
-        sp(3.5),
-        imgui.get_color_u32(theme.rgba(colour)),
-        12,
-    )
-
-

@@ -100,6 +100,30 @@ def test_solo_hides_everything_else_and_then_brings_it_back():
     assert [layer.visible for layer in doc.stack] == [True, True, True]
 
 
+def test_solo_is_one_undo_step_however_many_layers_it_hides():
+    """One gesture, one Ctrl+Z -- the rule the filters, the palette conversion
+    and ``apply_matte`` all follow.
+
+    ``solo`` used to loop ``set_layer_props``, which pushes an edit per call
+    that changes something, so soloing in a ten-layer document cost nine steps
+    to reverse one click and every partial state in between was reachable. The
+    depth is asserted rather than the pixels because that is the thing that was
+    wrong: the visibility flags were always correct on the way *in*.
+    """
+    doc = _doc()
+    for _ in range(9):
+        doc.add_layer()
+    assert len(doc.stack) == 10
+
+    before = doc.history.head
+    assert doc.solo(3) is True
+    assert [layer.visible for layer in doc.stack] == [at == 3 for at in range(10)]
+
+    doc.undo()
+    assert doc.history.head == before, "one step, not nine"
+    assert all(layer.visible for layer in doc.stack)
+
+
 def test_solo_writes_the_ordinary_visibility_flags():
     """Deliberately not a mode: a second visibility state would have to be
     learnt by the compositor, every export path and the ORA writer."""

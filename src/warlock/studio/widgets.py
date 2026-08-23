@@ -415,10 +415,14 @@ def pane_header(
 
     from . import controls
 
+    room = imgui.get_content_region_avail().x
     with fonts.heading(imgui):
+        label_width = imgui.calc_text_size(label).x
         imgui.text(label)
     if help_text:
-        imgui.same_line()
+        needed = label_width + imgui.get_style().item_spacing.x + imgui.calc_text_size(icons.INFO).x
+        if needed <= room:
+            imgui.same_line()
         text_colored(theme.MUTED, icons.INFO)
         if imgui.is_item_hovered():
             imgui.set_tooltip(help_text)
@@ -771,9 +775,7 @@ def field_options(ctx: Any, field: str) -> list[tuple[str, str]]:
     nothing about this", which is a different prompt from any of the choices.
     """
     entries = (ctx.guidance.get("fields") or {}).get(field) or []
-    return [("", f"{field.replace('_', ' ')}...")] + [
-        (e["key"], e["label"]) for e in entries
-    ]
+    return [("", f"{field.replace('_', ' ')}...")] + [(e["key"], e["label"]) for e in entries]
 
 
 # Set only by the pane smoke test, which needs every section's contents built
@@ -1155,9 +1157,7 @@ def window_backdrop(*, radius: float | None = None, tint: float = 0.8) -> bool:
         # that has not come round since the window was resized. The caller has
         # already cleared this window's background on ``frosted``'s word, so
         # this paints the fill imgui would have.
-        draw.add_rect_filled(
-            low, high, imgui.get_color_u32(theme.rgba(theme.ELEV_2)), rounding
-        )
+        draw.add_rect_filled(low, high, imgui.get_color_u32(theme.rgba(theme.ELEV_2)), rounding)
         return False
     window = imgui.get_io().display_size
     uv_min, uv_max = vibrancy.uv_for(low, high, (window[0], window[1]))
@@ -1550,10 +1550,7 @@ def button_width(label: str) -> float:
     is checked. ``##``-suffixed ids are stripped, since imgui does not draw
     them.
     """
-    return (
-        imgui.calc_text_size(label.split("##")[0]).x
-        + imgui.get_style().frame_padding.x * 2
-    )
+    return imgui.calc_text_size(label.split("##")[0]).x + imgui.get_style().frame_padding.x * 2
 
 
 def grid_width(columns: int) -> float:
@@ -1619,8 +1616,12 @@ def grade_buttons(id_prefix: str, enabled: bool) -> int | None:
     for index, grade in enumerate(GRADES):
         if index % GRADES_PER_ROW:
             imgui.same_line()
-        if disabled_button(f"{grade_text(grade)}##{id_prefix}-grade{grade}", enabled,
-                           (width, 0), tooltip=grade_key_hint(grade)):
+        if disabled_button(
+            f"{grade_text(grade)}##{id_prefix}-grade{grade}",
+            enabled,
+            (width, 0),
+            tooltip=grade_key_hint(grade),
+        ):
             clicked = grade
     return clicked
 
@@ -1671,8 +1672,10 @@ def tag_toggles(id_prefix: str, pending: list[str], enabled: bool) -> str | None
     from ..service import verdicts as verdicts_mod
 
     clicked: str | None = None
-    for label, vocabulary, modifier in (("Good", verdicts_mod.GOOD_TAGS, "Ctrl"),
-                                        ("Bad", verdicts_mod.BAD_TAGS, "Shift")):
+    for label, vocabulary, modifier in (
+        ("Good", verdicts_mod.GOOD_TAGS, "Ctrl"),
+        ("Bad", verdicts_mod.BAD_TAGS, "Shift"),
+    ):
         # No colon. A ``field_label`` is small-caps chrome above the thing it
         # names, and its punctuation is the layout -- "GOOD:" was the only one
         # in the app wearing a colon, two rows under "THEME" and "SKELETON".
@@ -1697,9 +1700,7 @@ def tag_toggles(id_prefix: str, pending: list[str], enabled: bool) -> str | None
                 fill = imgui.ImVec4(*theme.rgba(theme.ACCENT))
                 imgui.push_style_color(imgui.Col_.button.value, fill)
                 imgui.push_style_color(imgui.Col_.button_hovered.value, fill)
-            if disabled_button(
-                f"{tag}##{id_prefix}-tag-{tag}", enabled, (width, 0), tooltip=hint
-            ):
+            if disabled_button(f"{tag}##{id_prefix}-tag-{tag}", enabled, (width, 0), tooltip=hint):
                 clicked = tag
             if selected:
                 imgui.pop_style_color(2)
@@ -2203,9 +2204,7 @@ def small_icon_button(icon: str, tooltip: str, *, borderless: bool = False) -> b
     makes its own height (it draws with zero vertical padding), so an icon
     still lines up with the labelled small buttons beside it.
     """
-    return _glyph_button(
-        icon, imgui.get_text_line_height(), tooltip, borderless=borderless
-    )
+    return _glyph_button(icon, imgui.get_text_line_height(), tooltip, borderless=borderless)
 
 
 def field_label(label: str, help_text: str | None = None) -> None:
@@ -2386,9 +2385,7 @@ def primary_button(
     imgui.push_style_color(imgui.Col_.button_hovered.value, fill)
     imgui.push_style_color(imgui.Col_.button_active.value, pressed)
     with fonts.label(imgui):
-        clicked, hovered = _button_with_note(
-            label, enabled, size, reason=reason, tooltip=tooltip
-        )
+        clicked, hovered = _button_with_note(label, enabled, size, reason=reason, tooltip=tooltip)
     note_hover(key, enabled and hovered)
     imgui.pop_style_color(3)
     return clicked
@@ -2426,9 +2423,7 @@ def ghost_button(
     imgui.push_style_color(imgui.Col_.button.value, fill)
     imgui.push_style_color(imgui.Col_.button_hovered.value, fill)
     with fonts.label(imgui):
-        clicked, hovered = _button_with_note(
-            label, enabled, size, reason=reason, tooltip=tooltip
-        )
+        clicked, hovered = _button_with_note(label, enabled, size, reason=reason, tooltip=tooltip)
     note_hover(key, enabled and hovered)
     imgui.pop_style_color(2)
     return clicked
@@ -2750,9 +2745,7 @@ def toast_style(level: str) -> tuple[int, str]:
     }.get(level, (theme.ELEV_2, ""))
 
 
-def toasts(
-    state: Any, viewport_size: tuple[float, float], on_action: Any = None
-) -> None:
+def toasts(state: Any, viewport_size: tuple[float, float], on_action: Any = None) -> None:
     """Stacked bottom-right, newest lowest; born sliding up, dying fading out.
 
     Info and success toasts stay ``no_inputs`` -- they never mattered enough to

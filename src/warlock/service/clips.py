@@ -37,13 +37,13 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from typing import Any
 
 from .. import poselib, rigging
 from ..pipelines import sheet as sheetlib
 from .core import WarlockService
 from .errors import Conflict, Invalid, NotFound, invalid_from
+from .files import _staged_write
 
 log = logging.getLogger(__name__)
 
@@ -313,9 +313,11 @@ def save(svc: WarlockService, template: str, payload: dict[str, Any]) -> dict[st
         previous = path.read_bytes() if path.is_file() else None
         path.parent.mkdir(parents=True, exist_ok=True)
         blob = json.dumps(document, indent=2).encode("utf-8")
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_bytes(blob)
-        os.replace(tmp, path)
+        # ``files._staged_write``'s shape (SVC-01), not a bare ``.tmp``: a fixed
+        # name and no ``finally`` stranded a visible ``<key>.json.tmp`` beside
+        # the real file forever on an ENOSPC or an antivirus lock, and nothing
+        # sweeps this directory.
+        _staged_write(path, blob)
         rigging.invalidate_clips()
         try:
             _check_renders(key)
@@ -326,9 +328,7 @@ def save(svc: WarlockService, template: str, payload: dict[str, Any]) -> dict[st
             if previous is None:
                 path.unlink(missing_ok=True)
             else:
-                back = path.with_name(path.name + ".tmp")
-                back.write_bytes(previous)
-                os.replace(back, path)
+                _staged_write(path, previous)
             rigging.invalidate_clips()
             raise
     return library(svc, key)

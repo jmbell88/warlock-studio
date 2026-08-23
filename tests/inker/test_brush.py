@@ -545,3 +545,35 @@ def test_a_spray_burst_is_bounded_in_calls():
         y = (i * 53) % 1000
         stroke._mark((x, y, x + 4, y + 4))
     assert len(stroke.take_touched()) == 1
+
+
+def test_a_stroke_whose_layer_is_deleted_under_it_abandons_cleanly():
+    """The guard the filter and move sessions already had.
+
+    A stroke spans three calls -- ``begin_stroke``, any number of ``stroke_to``
+    or ``spray_at``, then ``end_stroke`` -- and between two of them the layer it
+    named can go: a shortcut, a menu op, or an undo arriving while the button is
+    still down. ``stack.by_uid`` raises ``KeyError`` on a uid nothing carries any
+    more, and all three call sites used to do it unguarded.
+
+    ``end_stroke`` is the one that made this worth fixing rather than noting:
+    with it raising, the stroke could never be closed, so the document was left
+    permanently mid-stroke and every later paint call raised as well.
+    """
+    from warlock.studio.inker.document import Document
+
+    doc = Document.blank(8, 8)
+    doc.add_layer()
+    doc.set_active_layer(1)
+    doc.begin_stroke((1.0, 1.0), (255, 0, 0, 255))
+    doc.remove_layer(1)
+
+    doc.stroke_to((4.0, 4.0))
+    assert doc.end_stroke() is False, "nothing to commit, and nothing pushed"
+    assert doc._stroke is None, "the session is closed, not stuck open"
+
+    # And the document is still usable, which is the half a bare try/except
+    # around the crash would not have given.
+    doc.begin_stroke((1.0, 1.0), (0, 255, 0, 255))
+    doc.stroke_to((5.0, 5.0))
+    assert doc.end_stroke() is True

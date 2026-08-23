@@ -332,11 +332,39 @@ def _group_nester(doc, container):
     return element_for
 
 
-def _stack_xml(doc) -> bytes:
+def _read_resolution(root) -> tuple[int, int] | None:
+    """``(xres, yres)`` off the ``<image>`` element, or None.
+
+    ORA's physical-size fields. Anything non-numeric or non-positive reads as
+    absent rather than raising: a resolution is metadata, and a drawing whose
+    pixels are perfectly readable must not fail to open over it.
+    """
+    try:
+        xres, yres = int(root.get("xres") or 0), int(root.get("yres") or 0)
+    except (TypeError, ValueError):
+        return None
+    return (xres, yres) if xres > 0 and yres > 0 else None
+
+
+def _image_attrs(doc) -> dict[str, str]:
+    """The ``<image>`` element's attributes, resolution included when known.
+
+    ``xres``/``yres`` are ORA's physical-size fields. Nothing in this editor
+    renders at a physical size, so they are read into ``Document.dpi`` and
+    written straight back out -- carried, not used. Omitted entirely when the
+    document has none, because writing a guessed 72 would be asserting a fact
+    about a canvas nobody stated one for.
+    """
     width, height = doc.size
-    root = ElementTree.Element(
-        "image", {"version": "0.0.3", "w": str(width), "h": str(height)}
-    )
+    attrs = {"version": "0.0.3", "w": str(width), "h": str(height)}
+    dpi = getattr(doc, "dpi", None)
+    if dpi:
+        attrs["xres"], attrs["yres"] = str(int(dpi[0])), str(int(dpi[1]))
+    return attrs
+
+
+def _stack_xml(doc) -> bytes:
+    root = ElementTree.Element("image", _image_attrs(doc))
     stack = ElementTree.SubElement(root, "stack")
     parent_for = _group_nester(doc, stack)
     # Top first: ORA's document order is the painter's, reversed. Reversing
@@ -440,10 +468,7 @@ def _cel_names(anim) -> dict[int, str]:
 
 def _stack_xml_animated(doc, names: dict[int, str]) -> bytes:
     anim = doc.anim
-    width, height = doc.size
-    root = ElementTree.Element(
-        "image", {"version": "0.0.3", "w": str(width), "h": str(height)}
-    )
+    root = ElementTree.Element("image", _image_attrs(doc))
     outer = ElementTree.SubElement(root, "stack")
     for index, frame in enumerate(anim.frames):
         hidden = index > 0
@@ -1661,6 +1686,10 @@ def read_ora(path: Path, *, budget: int | None = None):
         root = _parse_stack(zf.read("stack.xml"))
         width = int(root.get("w") or 0)
         height = int(root.get("h") or 0)
+        # Carried, not used -- see ``Document.dpi``. Both axes or neither: a
+        # file that states one and not the other is stating nothing usable, and
+        # inventing the missing half would be inventing a canvas shape.
+        found_dpi = _read_resolution(root)
 
         # JSON first, and only when the XML told us how big the canvas is: the
         # grid's cels are decoded against that size, and guessing it from the
@@ -1690,6 +1719,7 @@ def read_ora(path: Path, *, budget: int | None = None):
             _read_groups(doc, grid_payload)
             doc.matte = matte_for(doc.composite)
             doc.file_format = "ora"
+            doc.dpi = found_dpi
             doc.path = Path(path)
             # ``snap=False``: the pixels in the file were written snapped, so
             # re-snapping them would cost a whole-document rewrite on every
@@ -1777,6 +1807,7 @@ def read_ora(path: Path, *, budget: int | None = None):
         _install_groups(doc, tree, parents)
         doc.matte = matte_for(doc.composite)
         doc.file_format = "ora"
+        doc.dpi = found_dpi
         doc.path = Path(path)
         if mode == "rgb":
             doc.set_palette(palette, snap=False)

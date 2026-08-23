@@ -163,6 +163,62 @@ def test_an_arrangement_round_trips():
     assert again.hidden("inker") == {"a"}
 
 
+def test_v2_arrangement_round_trips_widths_and_vertical_shares():
+    settings = _Settings()
+    library = layouts.Library(settings)
+    library.record(
+        "plotter",
+        {"left": ["tools"], "right": ["layers"]},
+        set(),
+        widths={"left": 272.0, "right": 418.0},
+        shares={"plotter-tools": 0.37, "plotter-layers": 0.61},
+    )
+    again = layouts.Library(settings)
+    assert settings.data[layouts.LAYOUTS_KEY]["default"]["v"] == 2
+    assert again.width("plotter", "left") == 272.0
+    assert again.width("plotter", "right") == 418.0
+    assert again.share("plotter", "plotter-tools") == 0.37
+
+
+def test_v1_uses_legacy_seeds_without_writing_until_an_edit():
+    settings = _Settings(
+        {
+            "layout": {
+                "sidebar": "wide",
+                "settings_shares": {"clay-tools": 0.42},
+            },
+            layouts.LAYOUTS_KEY: {"default": {"v": 1, "workspaces": {"clay": {"columns": {}}}}},
+        }
+    )
+    library = layouts.Library(settings)
+    assert library.width("clay", "left") == 360.0
+    assert library.share("clay", "clay-tools") == 0.42
+    assert settings.writes == 0
+    library.set_width("clay", "right", 410.0)
+    assert settings.data[layouts.LAYOUTS_KEY]["default"]["v"] == 2
+    assert settings.writes == 1
+
+
+def test_independent_width_fit_compresses_without_losing_the_centre_floor():
+    from warlock.studio import layout
+
+    left, right, centre = layout.fit_widths(1100.0, 300.0, 420.0, 8.0, scale=1.5)
+    assert left < right
+    assert left + right + centre + 16.0 == pytest.approx(1100.0)
+    assert centre == pytest.approx(220.0 * 1.5)
+
+
+def test_right_boundary_drag_has_the_opposite_sign_to_the_left():
+    settings = _Settings()
+    library = layouts.Library(settings)
+    from warlock.studio import layout
+
+    assert layout.resize_side(library, "clay", "left", 20.0)
+    assert layout.resize_side(library, "clay", "right", -20.0)
+    assert library.width("clay", "left") == 320.0
+    assert library.width("clay", "right") == 320.0
+
+
 def test_a_newer_blob_is_kept_verbatim_and_not_applied():
     settings = _Settings(
         {
@@ -261,9 +317,7 @@ def test_an_unknown_active_name_falls_back_rather_than_failing():
 
 def test_a_ctx_predicate_decides_whether_a_slot_is_live():
     ctx = SimpleNamespace(shown=False)
-    slot = skeleton.Slot(
-        id="tiles", label="Tiles", draw=lambda c: None, when=lambda c: c.shown
-    )
+    slot = skeleton.Slot(id="tiles", label="Tiles", draw=lambda c: None, when=lambda c: c.shown)
     assert slot.applies(ctx) is False
     ctx.shown = True
     assert slot.applies(ctx) is True

@@ -28,6 +28,7 @@ Pure numpy, no imgui and no service layer, like the rest of this package.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 
 import numpy as np
@@ -378,6 +379,19 @@ HARMONIES: dict[str, tuple[float, ...]] = {
 }
 
 
+def _round8(value: float) -> int:
+    """Round a 0-255 channel half *up*, the way the rest of this module does.
+
+    ``grayscale`` and ``ramp_between`` both spell it ``floor(x + 0.5)``;
+    Python's built-in ``round`` is half-to-even, so ``round(12.5)`` is 12 while
+    ``floor(12.5 + 0.5)`` is 13. One module producing both answers is worth a
+    line to stop, even at 1/255 and only on exact halves -- a palette is a set
+    of exact values a user matches against, and two functions here disagreeing
+    is the kind of thing that is noticed once and never explained.
+    """
+    return math.floor(value + 0.5)
+
+
 def harmony(colour: tuple[int, int, int, int], kind: str) -> list[tuple[int, int, int, int]]:
     """The colours *kind* makes of this one, the first being it.
 
@@ -398,9 +412,9 @@ def harmony(colour: tuple[int, int, int, int], kind: str) -> list[tuple[int, int
         rr, gg, bb = colorsys.hls_to_rgb(hue, light, sat)
         out.append(
             (
-                max(0, min(255, round(rr * 255))),
-                max(0, min(255, round(gg * 255))),
-                max(0, min(255, round(bb * 255))),
+                max(0, min(255, _round8(rr * 255))),
+                max(0, min(255, _round8(gg * 255))),
+                max(0, min(255, _round8(bb * 255))),
                 a,
             )
         )
@@ -422,13 +436,13 @@ def shades(colour: tuple[int, int, int, int], steps: int = 5) -> list[tuple[int,
         t = index / (steps - 1)
         if t < 0.5:
             factor = t * 2.0
-            mixed = (round(r * factor), round(g * factor), round(b * factor))
+            mixed = (_round8(r * factor), _round8(g * factor), _round8(b * factor))
         else:
             factor = (t - 0.5) * 2.0
             mixed = (
-                round(r + (255 - r) * factor),
-                round(g + (255 - g) * factor),
-                round(b + (255 - b) * factor),
+                _round8(r + (255 - r) * factor),
+                _round8(g + (255 - g) * factor),
+                _round8(b + (255 - b) * factor),
             )
         out.append((*mixed, a))
     return out

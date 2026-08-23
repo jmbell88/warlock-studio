@@ -110,12 +110,12 @@ def apply(imgui: Any) -> None:
     # named ``RADIUS_L`` by hand for exactly this reason; now the global style
     # agrees with them instead of being overridden by them.
     style.window_rounding = sp(tokens.RADIUS_L)
-    style.child_rounding = sp(tokens.RADIUS_L)
-    style.frame_rounding = sp(tokens.RADIUS_M)
+    style.child_rounding = 0.0
+    style.frame_rounding = sp(tokens.RADIUS_S)
     style.popup_rounding = sp(tokens.RADIUS_L)
     style.grab_rounding = sp(tokens.RADIUS_M)
-    style.tab_rounding = sp(tokens.RADIUS_M)
-    style.scrollbar_rounding = sp(tokens.RADIUS_M)
+    style.tab_rounding = sp(tokens.RADIUS_S)
+    style.scrollbar_rounding = sp(tokens.RADIUS_S)
     # Depth comes from the elevation ramp, not outlines -- and the child border
     # was the last place that sentence was not true. Every pane in the app is a
     # child, so a 1 px EDGE hairline on each one drew the whole layout as a set

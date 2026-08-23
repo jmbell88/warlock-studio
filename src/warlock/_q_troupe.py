@@ -280,6 +280,14 @@ class TroupeOps:
         )
         params["sheet_id"] = sheet_id
         params["cells"] = len(cells)
+        # Deliberately **not** in ``DERIVED_PARAMS``, though the worker writes
+        # it. What goes in that set is something the worker learned about the
+        # *output* -- a value a reroll must not inherit or it wears a stale
+        # verdict. This is the opposite: it is the request, normalised. A layout
+        # the user supplied is carried forward because it is what they asked
+        # for, and an absent one resolves to the immutable legacy layout
+        # (``charsheet.resolve_layout``'s documented no-payload answer), so
+        # writing the resolved form back cannot pin a default that later moves.
         params["layout"] = troupe_layout.as_dict()
         params["pixel_report"] = pixel_report
         await asyncio.to_thread(self.store.set_params, job_id, params)

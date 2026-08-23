@@ -1261,23 +1261,37 @@ def test_a_ping_pong_from_the_far_end_warns_and_plays_from_the_near_one():
     assert any("far end" in line for line in warnings)
 
 
-def test_a_reference_layer_opens_hidden_with_a_warning():
-    data = _file(
-        _header(1, 1, 1),
-        [
-            _frame(
-                [
-                    _layer("Trace", reference=True),
-                    _cel(0, _rgba(1, 1, (1, 1, 1, 255)), 1, 1),
-                    _layer("Art"),
-                    _cel(1, _rgba(1, 1, (2, 2, 2, 255)), 1, 1),
-                ]
-            )
-        ],
-    )
-    doc, warnings = asein.document_from_aseprite(data)
-    assert doc.stack[0].visible is False
+def test_a_reference_layer_keeps_the_visibility_the_file_states():
+    """The VISIBLE bit wins, on a reference layer like any other.
+
+    This used to force ``visible = False`` on the argument that Aseprite opens
+    reference layers hidden. It does -- but ``aseout`` writes ``visible``
+    verbatim beside the REFERENCE flag, so a file can perfectly well say one is
+    showing, and the override meant a user who toggled one on and saved got it
+    back hidden on the next load with nothing said. The warning stays: naming
+    the layer is the useful half, and it never depended on lying about the bit.
+    """
+    def sprite(visible: bool) -> bytes:
+        return _file(
+            _header(1, 1, 1),
+            [
+                _frame(
+                    [
+                        _layer("Trace", reference=True, visible=visible),
+                        _cel(0, _rgba(1, 1, (1, 1, 1, 255)), 1, 1),
+                        _layer("Art"),
+                        _cel(1, _rgba(1, 1, (2, 2, 2, 255)), 1, 1),
+                    ]
+                )
+            ],
+        )
+
+    shown, warnings = asein.document_from_aseprite(sprite(True))
+    assert shown.stack[0].visible is True
     assert any("reference layer" in line for line in warnings)
+
+    hidden, _warnings = asein.document_from_aseprite(sprite(False))
+    assert hidden.stack[0].visible is False
 
 
 def test_a_chunk_this_build_does_not_read_is_named_in_a_warning():

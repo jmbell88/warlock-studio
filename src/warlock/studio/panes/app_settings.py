@@ -38,6 +38,7 @@ from ..tokens import sp
 #: Everything here is one column of short rows, so the column gets a measure and
 #: the window gets the rest (the UI redesign, wave 4.1).
 CONTENT_W = 640
+CATEGORY_W = 184
 
 #: How wide a labelled control in this pane gets. The column is 640 and the
 #: values in it are a scale, a palette name and a width -- all short. A combo
@@ -86,14 +87,10 @@ def draw(ctx: Any) -> None:
     # always_use_window_padding, because a *borderless* child gets zero window
     # padding by default -- so this pane's content sat flush against the host
     # window's left edge while every bordered sidebar got the theme's gutter.
-    if imgui.begin_child(
-        "app-settings", (0, 0), imgui.ChildFlags_.always_use_window_padding.value
-    ):
-        width = _centre(sp(CONTENT_W))
-        # An inner child rather than an indent, so every row inside it measures
-        # its own ``content_region_avail`` against the column and not against
-        # the window -- which is what makes the model rows, the config table and
-        # the sliders bound themselves without being told the number.
+    if imgui.begin_child("app-settings", (0, 0), imgui.ChildFlags_.always_use_window_padding.value):
+        category = _category_rail(ctx)
+        imgui.same_line()
+        width = min(sp(CONTENT_W), imgui.get_content_region_avail().x)
         if imgui.begin_child("app-settings-body", (width, 0)):
             # Settings draws into ``##content`` rather than through
             # ``layout.pane``, so it asks for its own section blocks. Named here
@@ -101,22 +98,33 @@ def draw(ctx: Any) -> None:
             # list, and the right bracket is the child, which only the code that
             # opened it knows.
             with widgets.section_blocks():
-                # This mode is one pane filling the window, so it is the one
-                # surface in the app that has to say what it is out loud (UX.md
-                # Phase 2) -- the three-column modes are named by the rail item
-                # that is lit.
-                widgets.pane_header(
-                    "Settings",
-                    help_text="Application appearance, models, storage, and layout.",
-                )
+                category_label = dict(CATEGORIES)[category].split(" ", 1)[-1]
+                widgets.pane_header(category_label)
                 # No outer ``forms.Form`` around the dispatch: no category body
                 # ever read it -- ``_interface`` opens its own nested Form for
                 # the adaptive layout, and the rest are tables and read-only
                 # rows. All a Form contributes besides layout is an id scope,
                 # and nothing persisted keys on imgui id paths.
-                _category_body(ctx, _categories(ctx, width))
+                _category_body(ctx, category)
         imgui.end_child()
     imgui.end_child()
+
+
+def _category_rail(ctx: Any) -> str:
+    """Persistent Settings navigation, independent of content scrolling."""
+
+    current = str(ctx.state.preview.get(CATEGORY_SLOT) or CATEGORIES[0][0])
+    if current not in dict(CATEGORIES):
+        current = CATEGORIES[0][0]
+    if imgui.begin_child("app-settings-categories", (sp(CATEGORY_W), 0)):
+        widgets.pane_header("Settings")
+        manual_render.help_button(ctx, "app-settings")
+        for key, label in CATEGORIES:
+            if controls.selectable(f"{label}##settings-category/{key}", key == current)[0]:
+                current = key
+                ctx.state.preview[CATEGORY_SLOT] = key
+    imgui.end_child()
+    return current
 
 
 def _centre(width: float) -> float:
@@ -212,8 +220,8 @@ def _interface(ctx: Any, form_ui: forms.Form | None = None) -> None:
     # ``theme.NAME``, so switching is this plus a re-``apply`` -- imgui's style
     # holds *copies* of the numbers, which is the one thing the live lookup
     # cannot do for it. The options come from the table rather than from a list
-# here, so a palette added there appears without an edit in this pane; only
-# the *label* is spelled below, because a dict key is not a sentence.
+    # here, so a palette added there appears without an edit in this pane; only
+    # the *label* is spelled below, because a dict key is not a sentence.
     _changed, chosen = form_ui.combo(
         "theme",
         "Theme",
@@ -226,9 +234,7 @@ def _interface(ctx: Any, form_ui: forms.Form | None = None) -> None:
         _apply_theme(ctx, chosen)
 
     show_fps = bool(ctx.state.show_fps)
-    changed, show_fps = form_ui.switch(
-        "show_fps", "Show frame rate (F10)", show_fps
-    )
+    changed, show_fps = form_ui.switch("show_fps", "Show frame rate (F10)", show_fps)
     if changed:
         ctx.state.show_fps = show_fps
         ctx.settings.set("show_fps", show_fps)
@@ -502,9 +508,7 @@ def _model_storage(ctx: Any) -> None:
     found = getattr(ctx, "model_storage", None)
     if found:
         noun = "file" if found["files"] == 1 else "files"
-        widgets.muted(
-            f"{found['files']} model {noun} - {format_bytes(int(found['bytes']))}"
-        )
+        widgets.muted(f"{found['files']} model {noun} - {format_bytes(int(found['bytes']))}")
     else:
         widgets.muted("Measuring the model store...")
 
@@ -870,9 +874,7 @@ def _cancel(ctx: Any, key: str) -> None:
 
     if controls.small_button(f"Cancel##cancel-{key}"):
         stopped = winjob.terminate_tracked("fetch")
-        ctx.toast(
-            "Stopping the download..." if stopped else "Nothing left to stop."
-        )
+        ctx.toast("Stopping the download..." if stopped else "Nothing left to stop.")
 
 
 def _start(ctx: Any, row_keys: list[str], *, key: str) -> None:

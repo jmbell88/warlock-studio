@@ -130,6 +130,14 @@ class Document(
     rev: int = 0
     path: Path | None = None
     file_format: str = "png"
+    #: Canvas resolution in pixels per inch, ``(x, y)``, or None when the file
+    #: did not say. Carried rather than used: nothing in this editor renders at
+    #: a physical size, but ORA stores ``xres``/``yres`` on the image element
+    #: and dropping them meant a 300-DPI Krita document came back at Krita's
+    #: default on every round trip -- pixels intact, physical size quietly
+    #: gone. Construction-time state like ``matte`` and ``file_format``: no
+    #: undo op edits it, so it needs no snapshot.
+    dpi: tuple[int, int] | None = None
     mask: SelectionMask | None = None
     floating: FloatingBuffer | None = None
     clipboard: Clipboard = field(default_factory=Clipboard)
