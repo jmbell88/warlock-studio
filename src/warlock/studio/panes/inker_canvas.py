@@ -70,6 +70,19 @@ _BOUNDS = {"lo": inker_state.INKER_MIN_ZOOM, "hi": inker_state.INKER_MAX_ZOOM}
 
 
 def _u32(colour: int, alpha: float = 1.0) -> int:
+    """A packed draw-list colour, **with imgui's global alpha applied**.
+
+    ``get_color_u32`` multiplies by ``style.Alpha``, which is what
+    ``begin_disabled`` lowers -- so an overlay drawn through this dims with the
+    controls around it, which is what the canvas wants: its overlays belong to
+    the canvas and a disabled canvas should look disabled.
+
+    ``inker_timeline`` has a function of the same name that does **not** do
+    this (``color_convert_float4_to_u32``), and the two are deliberately
+    different rather than a duplication waiting to be tidied into one. Merging
+    them would either make the timeline's row tinting fade inside a disabled
+    block or stop the canvas's overlays fading with it.
+    """
     return imgui.get_color_u32(imgui.ImVec4(*theme.rgba(colour, alpha)))
 
 

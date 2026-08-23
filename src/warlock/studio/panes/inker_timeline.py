@@ -103,6 +103,18 @@ ARRANGE_OPTIONS = (
 
 
 def _u32(value: int, alpha: float = 1.0) -> int:
+    """A packed draw-list colour, **exactly the theme's own**.
+
+    ``color_convert_float4_to_u32`` packs what it is given;
+    ``imgui.get_color_u32`` would multiply by ``style.Alpha`` as well. The
+    difference is not academic here: the grid draws its row tinting and range
+    overlay inside ``begin_disabled`` blocks, and those bands are how the user
+    reads which cels are selected -- they have to stay legible while the panel
+    is waiting on a save.
+
+    ``inker_canvas._u32`` is the same name for the other choice, deliberately.
+    See it for why the canvas wants the opposite.
+    """
     return imgui.color_convert_float4_to_u32(theme.rgba(value, alpha))
 
 

@@ -237,6 +237,13 @@ def _vec(colour: tuple[int, int, int, int]) -> Any:
 
 
 def _rgba(value: Any) -> tuple[int, int, int, int]:
+    """imgui's float colour -> the 8-bit tuple the engine writes with, clamped.
+
+    ``inker_colors._to_rgba`` is the same conversion without the clamp, and the
+    two are not a duplication to fold together: this one reads a colour back out
+    of a *drag* on the swatch chips, where a value can leave 0..1 mid-gesture,
+    and an unclamped round would hand the engine a channel outside uint8.
+    """
     return tuple(max(0, min(255, round(channel * 255))) for channel in value)
 
 

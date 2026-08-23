@@ -528,3 +528,30 @@ def test_depth_still_answers_without_a_hoisted_order():
     assert inker_timeline._depth(doc, 0) == 0
     assert inker_timeline._depth(doc, 99) == 0, "off the end is not an error"
     assert inker_timeline._depth(doc, 0, doc.member_uids()) == 0
+
+
+def test_the_two_u32_helpers_are_deliberately_different():
+    """They share a name and pack a colour, and that is where the resemblance
+    stops: ``get_color_u32`` multiplies by imgui's global ``style.Alpha`` and
+    ``color_convert_float4_to_u32`` does not. The canvas wants its overlays to
+    fade inside a disabled block; the timeline needs its range bands to stay
+    legible while the panel waits on a save. Folding them into one would break
+    one or the other, so this is the guard against a tidy-up."""
+    import inspect
+
+    from warlock.studio.panes import inker_canvas, inker_timeline
+
+    canvas = inspect.getsource(inker_canvas._u32)
+    timeline = inspect.getsource(inker_timeline._u32)
+    assert "get_color_u32" in canvas
+    assert "color_convert_float4_to_u32" in timeline
+    assert "color_convert_float4_to_u32" not in canvas.split('"""')[-1]
+    assert "get_color_u32" not in timeline.split('"""')[-1]
+
+
+def test_the_two_rgba_helpers_are_deliberately_different():
+    """One clamps and one does not, and the clamping one reads a colour back
+    out of a drag where a value can leave 0..1 mid-gesture."""
+    from warlock.studio.panes import inker_tools
+
+    assert inker_tools._rgba((1.5, -0.2, 0.5, 1.0)) == (255, 0, 128, 255)
