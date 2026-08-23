@@ -331,6 +331,65 @@ class JobOps:
             return
         log.info("queued follow-up character sheet %s for job %s", sheet_id, job["id"])
 
+    async def _maybe_queue_sheet_after_rig(self: Worker, job: dict[str, Any]) -> None:
+        """The second half of "send this mesh to Troupe".
+
+        ``service.troupe.send_to_troupe`` mints one rig row carrying a nested
+        ``troupe_sheet`` block when the mesh it was handed is not rigged yet;
+        this is what mints the sheet on the finished rig. The fourth
+        ``_maybe_queue_*`` and the same shape as the three above -- one press
+        mints one row, and the follow-up is minted by the mechanism that
+        already mints rigs and sheets, so both rows cancel independently and
+        the worker stays four ordinary jobs rather than an orchestrator.
+
+        Guarded on ``kind == "rig"``, which is what keeps it off
+        ``_maybe_queue_charsheet``'s path: that one fires on a *model*-stage
+        row carrying ``troupe``, and this on a rig row carrying
+        ``troupe_sheet``. Two markers because they are two claims -- see
+        ``send_to_troupe``.
+
+        The rig is re-checked rather than assumed: a user can cancel the rig
+        row on its own, which is exactly what the two-row shape is for.
+        Everything else was refused at the door, and the block is a snapshot
+        of the settings that were on screen when the button was pressed.
+        """
+        if job["kind"] != "rig":
+            return
+        params = job["params"]
+        block = params.get("troupe_sheet")
+        if not block:
+            return
+        source_job = str(params.get("source_job") or "")
+        if not source_job:
+            return
+        source_dir = self.config.job_dir(source_job)
+        if not (source_dir / "rig.glb").exists():
+            await self._record_followup_failure(
+                source_job, "charsheet", "The rig artifact is missing."
+            )
+            return
+        sheet_params = {
+            "source_job": source_job,
+            # Minted here for ``_maybe_queue_charsheet``'s reason: the door
+            # that normally mints it is not on this path, and
+            # ``_discard_artifacts`` names this job's atlas by it, so a cancel
+            # deletes its own sheet and no earlier one of the same character.
+            "sheet_id": rigging.new_id(),
+            **{key: value for key, value in block.items() if key != "sheet_id"},
+        }
+        try:
+            sheet_id = await asyncio.to_thread(
+                self.store.create, "charsheet", job["prompt"], sheet_params, None
+            )
+        except Exception as exc:
+            # The rig is finished and on disk. A failure to queue the optional
+            # follow-up must not retroactively fail the job that produced it --
+            # the rule the three above share, verbatim.
+            log.exception("could not queue character sheet after rig %s", job["id"])
+            await self._record_followup_failure(source_job, "charsheet", exc)
+            return
+        log.info("queued character sheet %s after rig %s", sheet_id, job["id"])
+
     def _discard_artifacts(self: Worker, job: dict[str, Any]) -> None:
         """Remove what a cancelled job half-wrote -- and only that.
 

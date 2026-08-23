@@ -296,6 +296,186 @@ def create_charsheet(
     return {"id": new_id, "source_job": job_id, "sheet_id": params["sheet_id"]}
 
 
+def send_to_troupe(
+    svc: WarlockService,
+    job_id: str,
+    *,
+    logical_size: int | None = None,
+    colors: int | None = None,
+    outline: str | None = None,
+    reduce_mode: str | None = None,
+    dither: bool = False,
+    palette: str | None = None,
+    elevation: float | None = None,
+    lighting: str | None = None,
+    name: str | None = None,
+    layout: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Take a mesh the user already has into Troupe, rigging it first if needed.
+
+    The third door, and the one the *library* uses. ``create_charsheet`` above
+    is the direct one and refuses an unrigged mesh by design -- every Troupe
+    cell is a posed frame -- which left the common case ("I have a character;
+    make me a sheet") with no route at all: the user had to know to rig it
+    first, with a humanoid template, from a different pane.
+
+    Two shapes, one press:
+
+    * **Already rigged** -- delegate to ``create_charsheet`` verbatim. One row,
+      the existing path, including the humanoid refusal and the sheet cap.
+    * **Not rigged** -- mint a rig row carrying a nested ``troupe_sheet``
+      block, and let the worker mint the sheet on the finished rig
+      (``_maybe_queue_sheet_after_rig``). That keeps the "four ordinary jobs,
+      not an orchestrator" property: one press mints one row, the second is
+      minted by the same mechanism that already mints rigs and sheets, and
+      both cancel independently.
+
+    **Everything knowable is refused here**, before either row exists --
+    the options, the layout, the clip expansion and the plan -- because an
+    unrenderable request should cost the request and not a rig plus 256 EEVEE
+    frames. That is ``create_charsheet``'s own argument, applied one link
+    earlier.
+
+    **The marker is ``troupe_sheet`` and not ``troupe``.** They are different
+    claims: ``troupe`` on a reference means "run the whole chain, human gate
+    included", and this means "render this sheet once the rig lands". It is
+    also *nested*, so ``VECTOR_PARAMS`` -- an allowlist of flat settings --
+    cannot pick it up.
+
+    **The mesh row is not stamped.** Marking it would work, and it would
+    change what a reroll means: ``rerun_job``/``promote_to_model`` copy
+    everything that is not derived, so the next "Remesh" would silently spend
+    a rig and 256 rendered cells nobody asked for.
+
+    The rig template is pinned to ``humanoid`` rather than taken from the
+    user's Rig-stage preference, because the clip library this animates from
+    is humanoid; ``joints="measured"`` for the reason ``_jobs_create`` gives
+    where it sets the same flag -- the shipped template is an A-pose and
+    mis-fits a T-posed mesh badly enough to skin the arms to the chest.
+    """
+    check_job_id(job_id)
+    source = svc.require_job(job_id)
+    job_dir = svc.job_dir(job_id)
+    if source["status"] != "done" or not (job_dir / "model.glb").exists():
+        # ``create_charsheet``'s sentence, verbatim: one refusal, one wording.
+        raise Invalid("job has no finished mesh to render")
+
+    if (job_dir / "rig.glb").exists():
+        return create_charsheet(
+            svc,
+            job_id,
+            logical_size=logical_size,
+            colors=colors,
+            outline=outline,
+            reduce_mode=reduce_mode,
+            dither=dither,
+            palette=palette,
+            elevation=elevation,
+            lighting=lighting,
+            name=name,
+            layout=layout,
+        )
+
+    spec = _charsheet_spec(
+        svc,
+        logical_size=logical_size,
+        colors=colors,
+        outline=outline,
+        reduce_mode=reduce_mode,
+        dither=dither,
+        palette=palette,
+        elevation=elevation,
+        lighting=lighting,
+        name=name,
+        layout=layout,
+    )
+    from .. import doctor
+
+    if not doctor.blender_check().ok:
+        # The Rig segment's own sentence, verbatim, so the app has one wording
+        # for "this needs Blender" wherever it is met. Checked through the
+        # same probe ``rig_templates`` answers the pane with, rather than a
+        # second test of the same thing.
+        raise Invalid("Rigging needs Blender, which is not installed.")
+
+    params = {
+        "source_job": job_id,
+        # Pinned rather than taken from ``config.rig_template``: the sheet is
+        # animated from the humanoid clip library, so a quadruped rig here
+        # would produce a rig that the sheet then refuses.
+        "template": TROUPE_TEMPLATE,
+        "auto": True,
+        "joints": "measured",
+        "troupe_sheet": spec,
+    }
+    new_id = svc.store.create("rig", source["prompt"], params, uuid.uuid4().hex[:12])
+    svc.wake_worker()
+    return {"id": new_id, "source_job": job_id, "rigged": False}
+
+
+def _charsheet_spec(
+    svc: WarlockService,
+    *,
+    logical_size: int | None,
+    colors: int | None,
+    outline: str | None,
+    reduce_mode: str | None,
+    dither: bool,
+    palette: str | None,
+    elevation: float | None,
+    lighting: str | None,
+    name: str | None,
+    layout: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Validate a sheet request and freeze it as the params the worker will use.
+
+    Everything ``create_charsheet`` refuses that does not depend on the rig,
+    checked here and then *snapshotted*: the row the worker mints later must
+    describe the settings that were on screen when the button was pressed, not
+    whatever the pane holds by the time the rig finishes.
+    """
+    from ..pipelines import sheet as sheetlib
+
+    options = _check_options(
+        svc,
+        {
+            "logical_size": logical_size,
+            "colors": colors,
+            "outline": outline,
+            "reduce_mode": reduce_mode,
+            "dither": dither,
+            "palette": palette,
+        },
+    )
+    try:
+        resolved_layout = charsheet.resolve_layout(layout)
+        records = expand_clips(TROUPE_TEMPLATE, resolved_layout)
+        charsheet.plan(
+            records,
+            frame_size=options["logical_size"],
+            elevation=sheetlib.DEFAULT_ELEVATION if elevation is None else elevation,
+            lighting=lighting or "flat",
+            layout=resolved_layout,
+        )
+    except KeyError as exc:
+        raise Invalid(f"the {TROUPE_TEMPLATE} clip library is missing {exc}") from exc
+    except ValueError as exc:
+        raise invalid_from(exc, "That character sheet cannot be laid out") from exc
+
+    sheet_name = (name or "").strip()
+    if len(sheet_name) > rigging.MAX_SHEET_NAME:
+        raise Invalid(
+            f"sheet name must be at most {rigging.MAX_SHEET_NAME} characters", field="name"
+        )
+    return {
+        "template": TROUPE_TEMPLATE,
+        "elevation": sheetlib.DEFAULT_ELEVATION if elevation is None else elevation,
+        "lighting": lighting or "flat",
+        "name": sheet_name,
+        "layout": resolved_layout.as_dict(),
+        **options,
+    }
+
 # ``get_charsheet`` was deleted on 2026-08-22. It delegated to
 # ``sheets.get_sheet`` so a Troupe pane would not have to know that a Troupe
 # sheet *is* a sheet -- and all three of its would-be callers

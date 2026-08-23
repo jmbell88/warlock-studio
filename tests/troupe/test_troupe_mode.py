@@ -530,3 +530,144 @@ def test_the_transport_is_a_measured_row_not_a_same_line_chain() -> None:
     # Play/back/forward are the row's reason for existing: a Play collapsed
     # into an overflow menu is not a transport.
     assert source.count("pinned=True") == 3
+
+
+
+# --- sending a mesh in ------------------------------------------------------
+
+
+def _plain_mesh(svc, *, done=True, files=("model.glb",)):
+    job_id = svc.store.create("image", "a hooded ranger", {}, stage="model")
+    job_dir = svc.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    for name in files:
+        (job_dir / name).write_bytes(b"fake-glb")
+    if done:
+        svc.store.set_status(job_id, "done")
+    return job_id
+
+
+def _row(svc, job_id):
+    row = dict(svc.store.get(job_id))
+    row["files"] = [p.name for p in svc.job_dir(job_id).iterdir()]
+    return row
+
+
+def test_the_predicate_answers_from_the_row_and_asks_for_no_rig(ctx, svc):
+    """An unrigged mesh is exactly what the door is for.
+
+    And no filesystem call: a toolbar asks this every frame, which is
+    ``inker_mode.can_edit_job``'s rule.
+    """
+    import inspect
+
+    job_id = _plain_mesh(svc)
+    assert troupe_mode.can_send_to_troupe(ctx, _row(svc, job_id))
+
+    # The *code*, not the prose: this file's style is to name the rejected
+    # alternative, so a raw scan would fail on the docstring explaining why
+    # neither of these is read.
+    body = [
+        line
+        for line in inspect.getsource(troupe_mode.can_send_to_troupe).splitlines()
+        if not line.lstrip().startswith("#")
+    ]
+    body = chr(10).join(body).split(chr(34) * 3)[-1]
+    assert "rig.glb" not in body, "an unrigged mesh is the case this exists for"
+    assert "source.glb" not in body, "the reconstruction is not the asset"
+    for banned in ("job_dir", "exists()", "read_rig"):
+        assert banned not in body, banned
+
+
+def test_the_predicate_refuses_what_has_no_mesh_to_render(ctx, svc):
+    unfinished = _plain_mesh(svc, done=False)
+    assert not troupe_mode.can_send_to_troupe(ctx, _row(svc, unfinished))
+
+    no_mesh = _plain_mesh(svc, files=("input.png",))
+    assert not troupe_mode.can_send_to_troupe(ctx, _row(svc, no_mesh))
+
+    reference = svc.store.create("image", "a drawing", {}, stage="reference")
+    svc.store.set_status(reference, "done")
+    assert not troupe_mode.can_send_to_troupe(ctx, dict(svc.store.get(reference)))
+
+    trashed = _row(svc, _plain_mesh(svc))
+    trashed["deleted_at"] = "2026-08-23"
+    assert not troupe_mode.can_send_to_troupe(ctx, trashed)
+
+
+def test_sending_submits_under_its_own_key_and_does_not_switch_mode(ctx, svc):
+    """``start_character`` switches to Create because the gate is there and
+    the user has something to do. Here there is nothing to do, and pulling
+    somebody out of the library to watch a spinner is the opposite of the
+    affordance."""
+    job_id = _plain_mesh(svc)
+    submitted: list[str] = []
+    ctx.submit = lambda key, run, *a: (submitted.append(key), True)[1]
+
+    assert troupe_mode.send_to_troupe(ctx, _row(svc, job_id))
+    assert submitted == [f"troupe-send:{job_id}"]
+    assert ctx.state.mode == "troupe"
+
+
+def test_the_picker_never_points_the_mode_at_a_bare_mesh(ctx, svc):
+    """The trap this is written around.
+
+    ``select`` accepts any job id and ``sheets()`` returns [] for a mesh, so
+    pointing the mode at one lands on the blank arrival ``open_sheet``'s False
+    return exists to prevent. The picker holds a local choice instead, so
+    ``TroupeState`` gains no field.
+    """
+    import inspect
+
+    source = inspect.getsource(troupe_mode.send_to_troupe)
+    assert "select(" not in source
+    assert not hasattr(troupe_mode.ensure(ctx), "send_mesh")
+
+    job_id = _plain_mesh(svc)
+    assert troupe_mode.sendable_meshes(ctx)[0]["id"] == job_id
+    assert troupe_mode.sheets(ctx, job_id) == []
+    assert troupe_mode.open_sheet(ctx, job_id) is False
+
+
+def test_a_sent_mesh_shows_its_chain_rather_than_the_empty_state(ctx, svc):
+    """Without this the door is a multi-minute silent CPU spend, in front of
+    the exact "No character sheets yet" state ``in_progress`` exists to
+    eliminate."""
+    job_id = _plain_mesh(svc)
+    rig_id = svc.store.create(
+        "rig", "a hooded ranger", {"source_job": job_id, "troupe_sheet": {}}
+    )
+
+    rows = troupe_mode.in_progress(ctx)
+    assert [item["id"] for item in rows] == [job_id]
+    assert rows[0]["phase"] == "Rigging the mesh..."
+    # No human gate on this path, so nothing here is ever waiting on the user
+    # -- which is what keeps the gate the only phase that offers a button.
+    assert rows[0]["waiting"] is False
+
+    svc.store.set_status(rig_id, "done")
+    svc.store.create("charsheet", "a hooded ranger", {"source_job": job_id})
+    assert troupe_mode.in_progress(ctx)[0]["phase"] == "Rendering the character sheet..."
+
+
+def test_a_finished_or_failed_chain_leaves_the_in_progress_list(ctx, svc):
+    job_id = _plain_mesh(svc)
+    failed = svc.store.create("rig", "a ranger", {"source_job": job_id})
+    svc.store.set_status(failed, "error")
+    assert troupe_mode.in_progress(ctx) == []
+
+    sheet = svc.store.create("charsheet", "a ranger", {"source_job": job_id})
+    svc.store.set_status(sheet, "done")
+    # ``characters`` holds it now; listing it here as well would say the thing
+    # it is about to draw is not ready.
+    assert troupe_mode.in_progress(ctx) == []
+
+
+def test_the_cap_is_on_the_reference_pass_alone(ctx, svc):
+    """A reference that was never approved stays unapproved forever, which is
+    what the cap is for; a rig or a charsheet row is claimed by a serial queue
+    and terminates. Capping those would hide work that is genuinely running."""
+    for index in range(troupe_mode.MAX_IN_PROGRESS + 3):
+        job_id = _plain_mesh(svc)
+        svc.store.create("rig", f"ranger {index}", {"source_job": job_id})
+    assert len(troupe_mode.in_progress(ctx)) == troupe_mode.MAX_IN_PROGRESS + 3

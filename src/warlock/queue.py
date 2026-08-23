@@ -1414,6 +1414,12 @@ class Worker(GenerateOps, RigOps, TroupeOps, SpriteOps, TileSheetOps, MeshPostOp
                         # all fire -- a rig follows a mesh, a sprite sheet a
                         # reference, a character sheet a promoted mesh.
                         await self._maybe_queue_charsheet(job)
+                        # And the fourth: the sheet half of "send this mesh to
+                        # Troupe", which fires on the *rig* row the door minted
+                        # rather than on a mesh. It cannot overlap the three
+                        # above -- they are guarded on a mesh, a reference and
+                        # a promoted mesh respectively, and this on a rig.
+                        await self._maybe_queue_sheet_after_rig(job)
                         await self._record_observation(job_id)
                     else:
                         # An errored job too, and it is not a consolation

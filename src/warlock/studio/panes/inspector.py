@@ -244,6 +244,20 @@ def _edit_actions(ctx: Any, job: Any) -> None:
             clay_mode.edit_asset_in_clay(ctx, job)
         widgets.hint_text("Opens the authored document when there is one, else the mesh.")
 
+    from .. import troupe_mode
+
+    if troupe_mode.can_send_to_troupe(ctx, job):
+        if controls.button(f"{icons.PERSON_STANDING} Send to Troupe"):
+            troupe_mode.send_to_troupe(ctx, job)
+        # The hint has to say the rig happens: for an unrigged mesh this is
+        # minutes of CPU behind a button that is not called "Rig", and a user
+        # who is not told will read the quiet as a hang.
+        widgets.hint_text(
+            "Render a character sheet -- rigging the mesh first if it is not rigged."
+            if "rig.glb" in (job.get("files") or [])
+            else "Rigs the mesh as a humanoid, then renders a character sheet."
+        )
+
 
 def _label_of(job: Any) -> str:
     return str(job.get("name") or job.get("prompt") or job.get("id") or "asset")

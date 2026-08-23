@@ -40,6 +40,68 @@ def draw(ctx: Any) -> None:
         _palette(ctx, form, form_ui, options)
     imgui.dummy((0, 4))
     _submit(ctx, form)
+    imgui.dummy((0, 8))
+    _existing_mesh(ctx, form)
+
+
+#: Where the picker's current choice lives. On ``state.preview`` and not on
+#: ``TroupeState``: the mode holds a *selection* (which character and which
+#: sheet are on screen) and this is neither -- see :func:`_existing_mesh`.
+_PICK_SLOT = "troupe_send_mesh"
+
+
+def _existing_mesh(ctx: Any, form: dict[str, Any]) -> None:
+    """Send a mesh you already have, using the settings above.
+
+    Collapsed and *below* the form, sharing it rather than repeating it: the
+    layout, size and palette controls above are visibly the settings this will
+    use, which is how ``_rebuild`` already words the same relationship. Two
+    competing forms in one 300 px column would be the pane asking the same
+    questions twice.
+
+    **It never calls** ``troupe_mode.select``, and that is the trap it is
+    written around: ``select`` accepts any job id, and ``sheets()`` returns []
+    for a bare mesh -- so pointing the mode at one lands on the blank arrival
+    ``open_sheet``'s False return exists to prevent. The picker holds a local
+    choice and the button calls the same ``send_to_troupe`` the library item
+    calls, so nothing points the mode at anything and "Troupe holds a
+    selection" stays intact.
+    """
+    from imgui_bundle import imgui
+
+    if not widgets.header("Or use a mesh you already have", default_open=False):
+        return
+    meshes = troupe_mode.sendable_meshes(ctx)
+    if not meshes:
+        widgets.muted("No finished meshes yet. Anything with a mesh can come in here.")
+        return
+    current = str(ctx.state.preview.get(_PICK_SLOT) or "")
+    if current not in {mesh["id"] for mesh in meshes}:
+        current = meshes[0]["id"]
+    options = [(mesh["id"], _mesh_label(mesh)) for mesh in meshes]
+    picked = widgets.labeled_combo("Mesh", current, options)
+    if picked != current:
+        ctx.state.preview[_PICK_SLOT] = picked
+        current = picked
+    chosen = next((mesh for mesh in meshes if mesh["id"] == current), None)
+    busy = ctx.busy(f"troupe-send:{current}")
+    if busy:
+        widgets.busy("Sending")
+    if widgets.disabled_button("Send to Troupe", not busy, (-1, 0)):
+        troupe_mode.send_to_troupe(ctx, chosen, form)
+    widgets.cost_note(
+        "A mesh that is not rigged is rigged first, as a humanoid. Then the "
+        f"{cell_count(form)} cells above are rendered."
+    )
+    imgui.dummy((0, 4))
+
+
+def _mesh_label(mesh: dict[str, Any]) -> str:
+    """A name a person can pick from, never an empty row."""
+    text = str(mesh.get("prompt") or "").strip()
+    if not text:
+        return str(mesh["id"])[:8]
+    return text if len(text) <= 48 else f"{text[:47]}..."
 
 
 def _options(ctx: Any) -> dict[str, Any]:

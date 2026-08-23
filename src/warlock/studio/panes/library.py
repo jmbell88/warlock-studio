@@ -873,6 +873,7 @@ def _overflow(ctx: Any, job: Any) -> None:
             from . import pose_panel
 
             pose_panel.open_in_poser(ctx, job)
+        _send_to_troupe_item(ctx, job)
     imgui.separator()
     if controls.menu_item("Delete", "Delete", False)[0]:
         # No confirm (J91): the trash *is* the confirmation, and it is a better
@@ -883,8 +884,35 @@ def _overflow(ctx: Any, job: Any) -> None:
     imgui.end_popup()
 
 
+def _send_to_troupe_item(ctx: Any, job: dict[str, Any]) -> None:
+    """Take this mesh into Troupe -- rigging it first if it is not rigged.
+
+    Kept separate from :func:`_troupe_item`, which goes the other way: that
+    one opens a finished *charsheet row* in the mode that plays it, and this
+    one sends a *mesh* in to have one made. Offered for an unrigged mesh
+    deliberately -- that is the case the door exists for -- so the label is
+    not enough on its own and the hint says the rig happens, because for an
+    unrigged mesh that is minutes of CPU behind a button not called "Rig".
+    """
+    from .. import troupe_mode
+
+    if not troupe_mode.can_send_to_troupe(ctx, job):
+        return
+    rigged = "rig.glb" in (job.get("files") or [])
+    hint = (
+        "Render a character sheet from this mesh."
+        if rigged
+        else "Rig this mesh as a humanoid, then render a character sheet from it."
+    )
+    if controls.menu_item("Send to Troupe", "", False, tooltip=hint)[0]:
+        troupe_mode.send_to_troupe(ctx, job)
+
+
 def _troupe_item(ctx: Any, job: dict[str, Any]) -> None:
-    """The one route into Troupe from the library.
+    """Back into Troupe from a finished sheet.
+
+    The route *out* of the library for a charsheet row, where
+    :func:`_send_to_troupe_item` above is the route in for a mesh.
 
     Troupe's sheets *are* library assets -- a ``charsheet`` row, filed under
     the "sheet" card kind -- and there was no way to get from one back to the

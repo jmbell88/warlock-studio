@@ -468,6 +468,148 @@ def test_a_mesh_rigged_as_something_else_is_refused(svc):
     assert "fish" in str(excinfo.value)
 
 
+# -- the library door: send an existing mesh to Troupe ------------------------
+
+
+def _plain_mesh(svc):
+    """A finished mesh with no rig -- the common case the door exists for."""
+    job_id = svc.store.create("image", "a ranger", {}, stage="model")
+    job_dir = svc.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "model.glb").write_bytes(b"fake-glb")
+    svc.store.set_status(job_id, "done")
+    return job_id
+
+
+def test_sending_a_rigged_mesh_is_the_direct_door_and_nothing_else(svc):
+    """No second implementation: a rigged mesh delegates verbatim."""
+    job_id = _rigged_mesh(svc)
+    made = svc_troupe.send_to_troupe(svc, job_id, logical_size=64)
+    row = svc.store.get(made["id"])
+    assert row["kind"] == "charsheet"
+    assert row["params"]["logical_size"] == 64
+    assert row["params"]["source_job"] == job_id
+    # One row, not two: there is nothing to rig.
+    assert [j["kind"] for j in svc.store.list() if j["kind"] == "rig"] == []
+
+
+def test_sending_an_unrigged_mesh_mints_a_rig_that_carries_the_sheet(svc):
+    """One press, one row -- and the second is minted by the worker later.
+
+    That is what keeps the worker four ordinary jobs rather than an
+    orchestrator, and it is why both rows cancel independently.
+    """
+    job_id = _plain_mesh(svc)
+    made = svc_troupe.send_to_troupe(svc, job_id, logical_size=64, name="ranger")
+    row = svc.store.get(made["id"])
+    assert row["kind"] == "rig"
+    assert made["rigged"] is False
+    # Pinned humanoid rather than the user's Rig-stage preference: the sheet is
+    # animated from the humanoid clip library.
+    assert row["params"]["template"] == svc_troupe.TROUPE_TEMPLATE
+    # Measured, for the reason _jobs_create gives where it sets the same flag.
+    assert row["params"]["joints"] == "measured"
+    block = row["params"]["troupe_sheet"]
+    assert block["logical_size"] == 64 and block["name"] == "ranger"
+    # A snapshot, not a promise to re-resolve: the row the worker mints later
+    # must describe what was on screen when the button was pressed.
+    assert block["layout"]["cell_count"] > 0
+    # The mesh row is untouched. Stamping it would work as a marker and would
+    # change what a reroll means -- rerun/promote copy everything not derived,
+    # so the next Remesh would silently spend a rig and 256 rendered cells.
+    assert "troupe_sheet" not in svc.store.get(job_id)["params"]
+    assert "troupe" not in svc.store.get(job_id)["params"]
+
+
+def test_the_marker_is_its_own_key_and_is_nested(svc):
+    """``troupe`` and ``troupe_sheet`` are two claims, not one spelled twice.
+
+    ``troupe`` on a reference means "run the whole chain, human gate
+    included"; this means "render this sheet once the rig lands". Nested, so
+    ``VECTOR_PARAMS`` -- an allowlist of flat settings -- cannot pick it up.
+    """
+    from warlock import vectors
+
+    job_id = _plain_mesh(svc)
+    made = svc_troupe.send_to_troupe(svc, job_id)
+    params = svc.store.get(made["id"])["params"]
+    assert "troupe" not in params
+    assert isinstance(params["troupe_sheet"], dict)
+    assert "troupe_sheet" not in vectors.VECTOR_PARAMS
+
+
+def test_an_unrenderable_request_costs_the_request_and_not_a_rig(svc):
+    """Everything knowable is refused here, one link earlier than before.
+
+    ``create_charsheet``'s own argument: an unrenderable request should cost
+    the request, not a place in the queue plus a rig plus 256 EEVEE frames.
+    """
+    job_id = _plain_mesh(svc)
+    with pytest.raises(Invalid):
+        svc_troupe.send_to_troupe(svc, job_id, logical_size=7)
+    with pytest.raises(Invalid):
+        svc_troupe.send_to_troupe(svc, job_id, name="x" * 500)
+    assert [j for j in svc.store.list() if j["kind"] == "rig"] == []
+
+
+def test_an_unfinished_mesh_is_refused_in_the_direct_doors_words(svc):
+    job_id = _plain_mesh(svc)
+    (svc.job_dir(job_id) / "model.glb").unlink()
+    with pytest.raises(Invalid) as excinfo:
+        svc_troupe.send_to_troupe(svc, job_id)
+    assert "no finished mesh" in str(excinfo.value)
+
+
+def test_a_mesh_already_rigged_as_something_else_is_still_refused(svc):
+    """The template lives in rig.json, which only the service reads -- so the
+    predicate the pane draws with cannot know it, and this is where the answer
+    comes from. Instant, and before anything is minted."""
+    job_id = _rigged_mesh(svc, template="fish")
+    with pytest.raises(Invalid) as excinfo:
+        svc_troupe.send_to_troupe(svc, job_id)
+    assert "fish" in str(excinfo.value)
+
+
+async def test_the_worker_mints_the_sheet_when_the_rig_lands(worker):
+    """The second half, and it re-checks the rig rather than assuming it."""
+    source = worker.store.create("image", "a ranger", {}, stage="model")
+    source_dir = worker.config.job_dir(source)
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "model.glb").write_bytes(b"fake-glb")
+    block = {"logical_size": 32, "colors": 16, "layout": {"version": 1}}
+    rig_id = worker.store.create(
+        "rig", "a ranger", {"source_job": source, "troupe_sheet": block}
+    )
+
+    # The user cancelled the rig: no artifact, so no sheet, and the failure is
+    # recorded against the mesh the user is looking at.
+    await worker._maybe_queue_sheet_after_rig(worker.store.get(rig_id))
+    assert [j for j in worker.store.list() if j["kind"] == "charsheet"] == []
+
+    (source_dir / "rig.glb").write_bytes(b"fake-glb")
+    await worker._maybe_queue_sheet_after_rig(worker.store.get(rig_id))
+    row = next(j for j in worker.store.list() if j["kind"] == "charsheet")
+    assert row["params"]["source_job"] == source
+    assert row["params"]["logical_size"] == 32
+    # Its own fresh id, so a cancel deletes this sheet's atlas and no earlier
+    # one of the same character.
+    assert row["params"]["sheet_id"]
+
+
+async def test_the_two_follow_up_paths_cannot_fire_for_each_other(worker):
+    """Two markers, two guards. A rig row carrying ``troupe_sheet`` must not
+    reach ``_maybe_queue_charsheet``, and a mesh carrying ``troupe`` must not
+    reach this one."""
+    job_id = _model_job(worker)
+    await worker._maybe_queue_sheet_after_rig(worker.store.get(job_id))
+    assert [j for j in worker.store.list() if j["kind"] == "charsheet"] == []
+
+    rig_id = worker.store.create(
+        "rig", "a ranger", {"source_job": job_id, "troupe_sheet": {"logical_size": 32}}
+    )
+    await worker._maybe_queue_charsheet(worker.store.get(rig_id))
+    assert [j for j in worker.store.list() if j["kind"] == "charsheet"] == []
+
 # -- cleanup -----------------------------------------------------------------
 
 

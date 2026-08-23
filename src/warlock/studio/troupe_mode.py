@@ -150,6 +150,10 @@ def in_progress(ctx: Any) -> list[dict[str, Any]]:
     refs: list[dict[str, Any]] = []
     children: dict[str, list[dict[str, Any]]] = {}
     sheeted: set[str] = set()
+    # The mesh-sourced chain, keyed on the mesh the rows name as their source.
+    # Same page, no extra query: the rig and charsheet rows are already on the
+    # one unfiltered walk below.
+    sourced: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         # ``store.list`` does not filter the trash. A character the user threw
         # away must not come back as work they still owe -- and a trashed mesh
@@ -165,6 +169,10 @@ def in_progress(ctx: Any) -> list[dict[str, Any]]:
             children.setdefault(parent, []).append(row)
         if params.get("troupe") and row.get("stage") == "reference":
             refs.append(row)
+        if row.get("kind") in ("rig", "charsheet"):
+            source = str(params.get("source_job") or "")
+            if source:
+                sourced.setdefault(source, []).append(row)
 
     out: list[dict[str, Any]] = []
     for row in refs:
@@ -195,7 +203,158 @@ def in_progress(ctx: Any) -> list[dict[str, Any]]:
             }
         )
     out.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
-    return out[:MAX_IN_PROGRESS]
+    # The cap applies to the reference-sourced entries *only*, and the reason
+    # is the cap's own reason: a reference that was never approved stays
+    # unapproved forever, so without a limit abandoned drafts pile up above
+    # the finished cast. A rig or a charsheet row is claimed by a serial queue
+    # and terminates -- capping those would hide work that is genuinely
+    # running, which is the opposite failure. Do not "simplify" this into one
+    # cap.
+    return out[:MAX_IN_PROGRESS] + _sent_in_progress(ctx, sourced, sheeted, seen=out)
+
+
+def _sent_in_progress(
+    ctx: Any,
+    sourced: dict[str, list[dict[str, Any]]],
+    sheeted: set[str],
+    *,
+    seen: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """The characters that came in through "Send to Troupe", mid-chain.
+
+    Without this the door is a multi-minute silent CPU spend: a mesh-sourced
+    character matches no ``troupe`` reference, so the user watches a rig and
+    256 rendered cells in front of the exact "No character sheets yet" empty
+    state :func:`in_progress` exists to eliminate.
+
+    Errored rows are dropped for the reference pass's reason: the library's
+    failure card owns a failed row, with the error text and the reroll, and a
+    second account of one failure in a sidebar that cannot act on it is worse
+    than none.
+    """
+    already = {str(item.get("id") or "") for item in seen}
+    out: list[dict[str, Any]] = []
+    for source, rows in sourced.items():
+        if source in sheeted or source in already:
+            continue
+        live = [row for row in rows if str(row.get("status") or "") not in ("error", "cancelled")]
+        if not live:
+            continue
+        kinds = {str(row.get("kind") or "") for row in live}
+        # A mesh-sourced character has no human gate, so ``waiting`` is False
+        # throughout -- which is what keeps ``_WAITING``'s claim true by
+        # construction: the gate is the only phase the user can be blocking on
+        # and therefore the only one that offers a button.
+        phase = (
+            "Rendering the character sheet..."
+            if "charsheet" in kinds
+            else "Rigging the mesh..."
+        )
+        job = ctx.cache.get(source) or {}
+        if job.get("deleted_at"):
+            continue
+        newest = max(str(row.get("created_at") or "") for row in live)
+        out.append(
+            {
+                "id": source,
+                "prompt": job.get("name") or job.get("prompt") or live[0].get("prompt") or "",
+                "phase": phase,
+                "waiting": False,
+                "created_at": newest,
+            }
+        )
+    out.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+    return out
+
+
+def can_send_to_troupe(ctx: Any, job: Any) -> bool:
+    """Whether "Send to Troupe" belongs on this job's row.
+
+    From the cached row alone -- no filesystem call, because a toolbar asks
+    this every frame. ``inker_mode.can_edit_job``'s shape and its argument.
+
+    Two things are deliberately *not* in this predicate. **A rig**: an
+    unrigged mesh is exactly what the door is for, and it mints the rig
+    itself. **The rig template**: it lives only in the ``rig.json`` sidecar,
+    which is a disk read -- so the button is offered optimistically and the
+    service refuses, instantly and before anything is minted, in a sentence
+    that already reads well ("a character sheet is animated from the humanoid
+    clip library, and this mesh is rigged as quadruped"). Recording the
+    template on the mesh row instead would mean a worker writing a fact onto
+    its source's params, which then has to join ``DERIVED_PARAMS`` or a reroll
+    wears a stale template -- all to save one toast.
+
+    ``model.glb`` and never ``source.glb``: the reconstruction is not the
+    asset, and every other export is a function of the derived mesh.
+    """
+    del ctx
+    return bool(
+        job
+        and job.get("stage") == "model"
+        and job.get("status") == "done"
+        and not job.get("deleted_at")
+        and "model.glb" in (job.get("files") or [])
+    )
+
+
+def sendable_meshes(ctx: Any) -> list[dict[str, Any]]:
+    """Every mesh the picker inside Troupe may offer, newest first.
+
+    ``characters``' page cap and its argument: an unbounded walk over a corpus
+    of thousands is a frame-thread cost that grows with how long the user has
+    owned the app.
+    """
+    from ..service import jobs as svc_jobs
+
+    # Through the service's listing rather than ``store.list``: the predicate
+    # reads ``files``, which is ``attach_files``' doing and not a column.
+    out = [
+        {
+            "id": str(row["id"]),
+            "prompt": row.get("name") or row.get("prompt") or "",
+            "created_at": row.get("created_at"),
+        }
+        for row in svc_jobs.list_jobs(ctx.svc, limit=SCAN_LIMIT)
+        if can_send_to_troupe(ctx, row)
+    ]
+    out.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+    return out
+
+
+def send_to_troupe(ctx: Any, job: Any, form: dict[str, Any] | None = None) -> bool:
+    """Take an existing mesh into Troupe. -> whether the request was submitted.
+
+    **It does not switch modes**, and that is the difference from
+    :func:`start_character`, which does: there the gate lives in Create and
+    the user has something to do next. Here there is nothing to do, and
+    yanking somebody out of the library mid-review to watch a spinner is the
+    opposite of the affordance. The toast says where to watch instead.
+    """
+    from ..service import troupe as svc_troupe
+
+    job_id = str((job or {}).get("id") or "")
+    if not job_id:
+        return False
+    settings = _layout_request(form or {}) if form else {}
+    request = dict(form or {})
+
+    def run() -> Any:
+        return svc_troupe.send_to_troupe(
+            ctx.svc,
+            job_id,
+            logical_size=request.get("logical_size"),
+            colors=request.get("colors"),
+            outline=request.get("outline"),
+            reduce_mode=request.get("reduce_mode"),
+            dither=bool(request.get("dither")),
+            palette=request.get("palette") or None,
+            elevation=request.get("elevation"),
+            lighting=request.get("lighting"),
+            name=str(request.get("name") or ""),
+            layout=settings or None,
+        )
+
+    return bool(ctx.submit(f"troupe-send:{job_id}", run))
 
 
 def open_sheet(ctx: Any, job_id: str, sheet_id: str = "") -> bool:
@@ -587,7 +746,7 @@ def add_to_packwright(ctx: Any) -> bool:
 def on_task_done(ctx: Any, done: Any) -> None:
     """Adopt what a ``troupe-`` task returned.
 
-    Two of them, and neither produces anything to adopt beyond a job id: the
+    Three of them, and none produces anything to adopt beyond a job id: the
     work itself is queued behind the GPU and lands as rows the sidebar reads.
     What this does is remember the id, so the sidebar can show *this* submit's
     progress rather than whatever the queue happens to be running.
@@ -602,6 +761,18 @@ def on_task_done(ctx: Any, done: Any) -> None:
             "success",
         )
         set_mode(ctx.state, "create")
+    elif done.key.startswith("troupe-send:"):
+        # Two shapes behind one press, and the toast says which happened: an
+        # unrigged mesh is minutes of CPU behind a button that is not called
+        # "Rig", and a user who is not told that will think it hung. No mode
+        # switch -- see ``send_to_troupe``.
+        rigged = isinstance(result, dict) and result.get("rigged") is not False
+        ctx.toast(
+            "Rendering the character sheet. Watch it in Troupe."
+            if rigged
+            else "Rigging the mesh, then rendering the character sheet. Watch it in Troupe.",
+            "success",
+        )
     else:
         ctx.toast("Queued the configured character sheet; give it a few minutes.", "info")
 
