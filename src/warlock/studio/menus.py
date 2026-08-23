@@ -126,7 +126,7 @@ def _inker_specs(ctx: Any) -> list[MenuSpec]:
                 order=index,
                 label=op.label,
                 enabled=bool(op.enabled(state, tab)),
-                checked=False,
+                checked=bool(op.checked(state, tab)) if op.checked else False,
                 shortcut=op.key,
                 disabled_reason=op.reason,
                 callback=lambda op=op: inker_menu.activate(ctx, op),

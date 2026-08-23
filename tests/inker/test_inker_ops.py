@@ -53,6 +53,16 @@ def test_every_predicate_answers_with_nothing_open(op):
 
 
 @pytest.mark.parametrize(
+    "op", [op for op in inker_ops.OPS if op.checked is not None], ids=lambda op: op.name
+)
+def test_every_tick_predicate_answers_with_nothing_open(op):
+    """Same rule as ``enabled``: the strip is drawn before a document exists."""
+
+    state = inker_state.InkerState()
+    assert isinstance(op.checked(state, None), bool)
+
+
+@pytest.mark.parametrize(
     "op", [op for op in inker_ops.OPS if op.enabled is not inker_ops._always],
     ids=lambda op: op.name,
 )
@@ -236,3 +246,35 @@ def test_making_a_document_of_nothing_says_so_rather_than_making_one():
     ctx, state, tab = _session()
     assert inker_mode.new_from_selection(ctx, tab) is False
     assert state.tip is not None and "Select something" in state.tip.text
+
+
+# --- the flatten matte -------------------------------------------------------
+
+
+def test_toggle_matte_flips_the_document_matte_in_one_step():
+    ctx, _state, tab = _session()
+    assert tab.doc.matte is None
+
+    inker_ops.run(ctx, inker_ops.get("toggle_matte"))
+
+    assert tab.doc.matte == (255, 255, 255, 255)
+    assert tab.doc.undo() is True
+    assert tab.doc.matte is None
+
+
+def test_toggle_matte_ticks_when_the_matte_is_on():
+    _ctx, state, tab = _session()
+    op = inker_ops.get("toggle_matte")
+    assert op.checked is not None
+    assert op.checked(state, tab) is False
+    tab.doc.toggle_matte()
+    assert op.checked(state, tab) is True
+
+
+def test_toggle_matte_greys_with_a_reason_on_a_background_document():
+    """``flatten`` ignores the matte once there is a real background layer."""
+    _ctx, state, tab = _session()
+    assert tab.doc.to_background() is True
+    op = inker_ops.get("toggle_matte")
+    assert op.enabled(state, tab) is False
+    assert op.reason

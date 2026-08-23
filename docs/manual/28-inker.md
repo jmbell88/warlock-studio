@@ -667,6 +667,16 @@ matte — is a property of the document, applied once when the image is flattene
 you erase through is genuinely a hole until the moment you export, and changing the document's
 matte changes what every erased area exports onto without touching a single stroke.
 
+The row that changes it is **Sprite ▸ Flatten transparency onto white**, and it carries a tick so
+you can see which way it is set. It starts on for anything opened here that had no transparency of
+its own — a JPEG, a flat PNG, a photo — because a photo saved from here should still be a photo,
+and off for a canvas made with New. Turn it off and erased areas export transparent instead. The
+canvas backdrop follows the setting either way, so what you see is what the file will hold: white
+where the matte is on, the checkerboard where it is off. It is an ordinary undoable step, and it is
+saved into the `.ora`, so the choice is still there when you reopen the file. The row is greyed on a
+document that has a real background layer, because there the background is doing the job and the
+matte is not consulted at all.
+
 Undo keeps up to 64 steps, and fewer than that when they are large — the stack is bounded by bytes
 (192 MB) first and by that depth ceiling second, so a document of small dabs gets all 64 and a
 document of full-canvas crops gets a handful. Steps are addressed by layer identity rather than by position
@@ -1031,7 +1041,8 @@ Two things about it are worth knowing. A cel linked across three frames becomes 
 cells, because the engine playing it back knows nothing about links. And the cells keep their
 transparency rather than being flattened onto the document's matte, which is what a sheet wants
 almost always — a matte is what a *flattened* export puts behind transparency, and an atlas is
-composited over whatever is behind it in the game.
+composited over whatever is behind it in the game. Sheet, GIF and PNG-sequence exports therefore
+ignore **Flatten transparency onto white** entirely, however it is set.
 The **Merge** and **Skip empty** switches beside Arrange are both off by default, so an export with
 neither on is the one-cell-per-frame sheet this has always written. Merge turns that linked-cel
 repeat into an actual saving: any two frames that are pixel-identical — not just a link, any repeat —

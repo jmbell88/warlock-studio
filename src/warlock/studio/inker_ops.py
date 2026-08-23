@@ -119,6 +119,11 @@ class Op:
     separator_before: bool = False
     params: tuple[Param, ...] = field(default=())
     hint: str = ""
+    #: ``checked(state, tab)`` -> whether the row draws a tick, for the ops
+    #: that are a document *state* rather than an action. None -- the default
+    #: every other registration takes -- is "never ticked", which is what the
+    #: Inker menu adapter used to hardcode for all of them.
+    checked: Callable[[Any, Any], bool] | None = None
 
 
 OPS: list[Op] = []
@@ -829,6 +834,25 @@ register(
         enabled=ready,
         reason=BUSY,
         separator_before=True,
+    )
+)
+register(
+    Op(
+        "toggle_matte",
+        "Flatten transparency onto white",
+        _doc("toggle_matte"),
+        menu="Sprite",
+        enabled=lambda state, tab: ready(state, tab) and not tab.doc.has_background,
+        reason="A document with a background layer has no transparency to flatten.",
+        checked=lambda state, tab: tab is not None and tab.doc.matte is not None,
+        hint=(
+            "Puts white behind every erased area when this document is saved "
+            "as a flat image -- on by default for a photo or a flat PNG opened "
+            "here, so it is still a photo when it is saved. Turn it off and "
+            "erased areas export transparent instead; the canvas backdrop "
+            "follows the setting either way. Sheet, GIF and PNG-sequence "
+            "exports ignore it and always keep transparency."
+        ),
     )
 )
 

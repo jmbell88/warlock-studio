@@ -882,6 +882,35 @@ class LayerOps:
         self.rev += 1
         return True
 
+    def set_matte(self: Document, colour: Any) -> bool:
+        """Set what a flattened export puts behind transparency. -> changed?
+
+        ``matte_for`` decides this once, at load, and until this existed
+        nothing revisited it: a photo opened here flattened onto white, the
+        eraser cut alpha the export then filled back in, and the only way out
+        was the AI cutout's ``apply_matte`` or ``to_background``. That default
+        is still right -- a photo opened here is still a photo when it is
+        saved -- but it is a choice, and a choice needs somewhere to be made.
+
+        Refused on a background document, because ``flatten`` consults the
+        matte only where there is no real background layer (divergence #6.5):
+        a control that flipped it there would change nothing the user can see.
+        """
+        after = None if colour is None else tuple(colour)
+        before = None if self.matte is None else tuple(self.matte)
+        if after == before or self.has_background:
+            return False
+        self.matte = after
+        self.history.push(MatteEdit(before, after))
+        self.invalidate_all()
+        return True
+
+    def toggle_matte(self: Document) -> bool:
+        """Flip the flatten matte between opaque white and off. -> changed?"""
+        from .document import OPAQUE_WHITE
+
+        return self.set_matte(None if self.matte is not None else OPAQUE_WHITE)
+
     def set_reference(self: Document, index: int, value: bool) -> bool:
         """Mark a layer as reference -- drawn, never edited."""
 
@@ -939,12 +968,16 @@ class LayerOps:
         point of handing them a matte here rather than a finished PNG.
 
         One ``CompoundEdit``, so a single Ctrl+Z reverses the whole cutout
-        rather than one layer of it. ``matte`` is set to None outside the edit
-        on purpose: it is a property of the document (what a flatten puts
-        behind transparency), not of a region of pixels, and leaving it as the
-        opaque white ``matte_for`` gives an opaque photo would flatten every
-        cut pixel straight back to white on save -- which is exactly the file
-        this edit exists to avoid writing.
+        rather than one layer of it -- and the matte is *in* that edit, as a
+        ``MatteEdit`` appended last. Clearing it is not optional: leaving it as
+        the opaque white ``matte_for`` gives an opaque photo would flatten
+        every cut pixel straight back to white on save, which is exactly the
+        file this edit exists to avoid writing. It used to be cleared outside
+        the edit, which meant undoing a cutout put the pixels back and lost the
+        colour for good -- nothing else in the document holds it.
+        ``CompoundEdit.undo`` walks ``reversed(...)``, so appending it last
+        restores the matte before the pixels, the ordering ``to_background``
+        uses.
         """
         width, height = self.size
         if alpha.shape[:2] != (height, width):
@@ -954,6 +987,7 @@ class LayerOps:
         # at ``_patch_edit_for``, which is reached only after that cel's alpha
         # channel has already been written.
         self._refuse_tilemaps("matte")
+        matte_before = None if self.matte is None else tuple(self.matte)
         self.commit_floating()
         rect = (0, 0, width, height)
         edits: list[Any] = []
@@ -988,8 +1022,9 @@ class LayerOps:
             edits.append(edit)
         if not edits:
             return False
-        self.history.push(CompoundEdit(edits))
+        edits.append(MatteEdit(matte_before, None))
         self.matte = None
+        self.history.push(CompoundEdit(edits))
         # Every cel in the grid was written -- so this is one of the few places
         # that has to say so, ``invalidate_all`` having stopped guessing.
         self._stamp_all()

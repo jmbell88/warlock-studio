@@ -1523,3 +1523,32 @@ def test_the_default_split_templates_reproduce_the_old_split_stems():
         )
         == "walk_ink"
     )
+
+
+def test_the_flatten_matte_never_reaches_a_sheet_cell():
+    """The deliberate divergence, guarded so nobody "fixes" it.
+
+    A flat PNG export composites ``Document.matte`` under the stack; an atlas
+    must not. A sheet cell is drawn over whatever is behind it in the game, so
+    baking the matte in would put an opaque square around every frame of a
+    sprite opened from a photo. Same pixels with the matte on and off.
+    """
+    doc = Document.blank(4, 4)
+    doc.stack.active.pixels[1, 1] = RED
+    doc.invalidate_all()
+    doc.ensure_animation()
+    uid = doc.anim.frames[0].uid
+
+    doc.matte = None
+    off_planes, *_ = sheetout.snapshot(doc)
+    off_one = sheetout.flatten_one(doc, uid).copy()
+
+    doc.matte = (255, 255, 255, 255)
+    doc.invalidate_all()
+    on_planes, *_ = sheetout.snapshot(doc)
+    on_one = sheetout.flatten_one(doc, uid).copy()
+
+    assert np.array_equal(off_planes[0], on_planes[0])
+    assert np.array_equal(off_one, on_one)
+    # And they are genuinely transparent, not merely equal to each other.
+    assert int(on_planes[0][0, 0, 3]) == 0

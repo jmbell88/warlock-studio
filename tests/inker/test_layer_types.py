@@ -272,3 +272,44 @@ def test_a_conversion_on_an_animated_document_writes_the_track():
     assert [t.background for t in doc.anim.tracks if t.uid == uid] == [True]
     assert doc.undo() is True
     assert [t.background for t in doc.anim.tracks if t.uid == uid] == [False]
+
+
+# --- the flatten matte as a choice --------------------------------------------
+
+
+def test_toggling_the_matte_flips_it_between_white_and_off():
+    doc = _doc()
+    assert doc.matte is None
+    assert doc.toggle_matte() is True
+    assert doc.matte == (255, 255, 255, 255)
+    assert doc.toggle_matte() is True
+    assert doc.matte is None
+
+
+def test_one_toggle_is_one_undo():
+    """It is a document-level edit like any other, not a preference."""
+    doc = _doc()
+    doc.toggle_matte()
+    assert doc.undo() is True
+    assert doc.matte is None
+    assert doc.redo() is True
+    assert doc.matte == (255, 255, 255, 255)
+
+
+def test_setting_the_matte_to_what_it_already_is_is_not_an_edit():
+    doc = _doc(matte=(1, 2, 3, 255))
+    head = doc.history.head
+    assert doc.set_matte((1, 2, 3, 255)) is False
+    assert doc.history.head == head
+
+
+def test_the_matte_cannot_be_changed_on_a_background_document():
+    """``flatten`` ignores it there (6.5), so a control that flipped it would
+    be dead -- the refusal is what keeps the menu row honest."""
+    doc = _doc(matte=(10, 20, 30, 255))
+    assert doc.to_background() is True
+    head = doc.history.head
+    assert doc.toggle_matte() is False
+    assert doc.set_matte((255, 255, 255, 255)) is False
+    assert doc.matte is None
+    assert doc.history.head == head

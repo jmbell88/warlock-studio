@@ -204,6 +204,25 @@ def test_apply_matte_clears_the_flatten_matte_so_the_cut_survives_a_save():
     assert int(flat[..., 3].max()) == 0
 
 
+def test_undoing_a_cutout_restores_the_matte_as_well_as_the_pixels():
+    """The matte rode outside the ``CompoundEdit``, so it never came back.
+
+    Undo put the alpha back and left the document flattening onto nothing --
+    unrecoverably, since nothing else in the document holds that colour.
+    """
+    pixels = np.dstack([_subject(8), np.full((8, 8), 255, np.uint8)])
+    doc = inker.Document.from_pixels(pixels)
+    before = doc.matte
+    assert before is not None
+
+    doc.apply_matte(np.zeros((8, 8), dtype=np.uint8))
+    assert doc.matte is None
+
+    assert doc.undo() is True
+    assert doc.matte == before
+    assert int(doc.flatten(matte=False)[..., 3].min()) == 255
+
+
 def test_apply_matte_refuses_a_plane_that_is_not_the_canvas():
     doc = inker.Document.blank(8, 8)
     assert doc.apply_matte(np.zeros((4, 4), dtype=np.uint8)) is False

@@ -2434,7 +2434,7 @@ def _paint(ctx: Any, state: Any, tab: Any, origin, *, hovered: bool) -> None:
     tiled = _tiled_extent(tab, doc.size)
     tiled_tl, tiled_br = _box(view, origin, *tiled)
 
-    _checkerboard(ctx, draw_list, tiled_tl, tiled_br)
+    _backdrop(ctx, tab, draw_list, view, origin, tiled, tiled_tl, tiled_br)
     # Before the composite and before its ``None`` early-out, so the strip is
     # genuinely beneath the live drawing rather than sometimes instead of it.
     if state.onion and not tab.playing and not state.onion_in_front:
@@ -2537,6 +2537,38 @@ def _tiled_extent(tab: Any, size) -> tuple[float, float, float, float]:
     x0, x1 = (-width, 2 * width) if wrap_x else (0, width)
     y0, y1 = (-height, 2 * height) if wrap_y else (0, height)
     return (x0, y0, x1, y1)
+
+
+def _backdrop(ctx, tab, draw_list, view, origin, tiled, top_left, bottom_right) -> None:
+    """What the composite is drawn over: the matte colour, or the checkerboard.
+
+    This is the whole of "the preview tells the truth". ``Document.flatten``
+    composites ``doc.matte`` *under* the stack where there is no background
+    layer, so every flat-PNG export of a matted document fills erased areas
+    with it -- while the canvas went on showing a checkerboard there, and the
+    user only found out by reopening the file they saved.
+
+    A solid quad here is arithmetically the same picture as compositing the
+    matte under the stack, for one draw call and no pixels: the composite is
+    already drawn over this with source-over blending. The alternative --
+    matting inside ``inker_textures.composite`` -- costs a second full-canvas
+    buffer per tab, invalidated per dab, on the frame thread.
+
+    The four rotated corners rather than the screen AABB that
+    ``_checkerboard`` is content with: a checker under a quarter-turned page
+    may fill the box around it, but a white quad filling that box would paint
+    over the desk outside the page.
+    """
+    matte = tab.doc.matte
+    if matte is None or tab.doc.has_background:
+        _checkerboard(ctx, draw_list, top_left, bottom_right)
+        return
+    red, green, blue, alpha = (list(matte) + [255, 255, 255, 255])[:4]
+    colour = imgui.get_color_u32(
+        imgui.ImVec4(red / 255.0, green / 255.0, blue / 255.0, alpha / 255.0)
+    )
+    a, b, c, d = _corners(view, origin, *tiled)
+    draw_list.add_quad_filled(a, b, c, d, colour)
 
 
 def _checkerboard(ctx: Any, draw_list: Any, top_left, bottom_right) -> None:
