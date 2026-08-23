@@ -167,3 +167,36 @@ def test_resources_imports_nothing_from_the_ui():
     source = inspect.getsource(resources)
     for banned in ("imgui", "moderngl", "pygame"):
         assert banned not in source, banned
+
+
+def test_the_document_name_is_not_imguis_widget_id():
+    """An Inker tab's label carries imgui's ``##`` id suffix, which is markup
+    for the control that draws the tab -- and it was printed verbatim in the
+    status bar, so the bottom of the window read "Untitled##pd1 *"."""
+    from types import SimpleNamespace
+
+    from warlock.studio import status_bar
+
+    app_ctx = _ctx()
+    app_ctx.state.mode = "inker"
+    tab = SimpleNamespace(
+        label="Untitled##pd1", dirty=True, view=SimpleNamespace(zoom=0.5)
+    )
+    app_ctx.state.inker = SimpleNamespace(active=tab, tool="brush", tabs=[tab])
+    items = {item.key: item.text for item in status_bar.items(app_ctx)}
+    assert items["document"] == "Untitled *"
+
+
+def test_the_meter_is_ticked_where_every_frame_goes_through():
+    """``_tick`` belongs to the run loop; ``frame`` is what every path calls.
+
+    The screenshot harness calls ``frame`` directly, so a tick in ``_tick``
+    left the meter blank in every shipped picture -- which is how this was
+    found, and why the assertion is about the method rather than the number.
+    """
+    import inspect
+
+    from warlock.studio import main
+
+    assert "self.resources.tick()" in inspect.getsource(main.App.frame)
+    assert "resources.tick" not in inspect.getsource(main.App._tick)

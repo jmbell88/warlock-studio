@@ -247,11 +247,12 @@ def _interface(ctx: Any, form_ui: forms.Form | None = None) -> None:
     show_resources = bool(ctx.state.show_resources)
     changed, show_resources = form_ui.switch(
         "show_resources",
-        "Show VRAM, RAM and CPU in the status bar",
+        "System resources",
         show_resources,
         help_text=(
-            "A live reading of what the machine has left, at the right end of "
-            "the status bar. VRAM is the figure a refused generation is about."
+            "VRAM, RAM and CPU at the right end of the status bar -- a live "
+            "reading of what the machine has left. VRAM is the figure a "
+            "refused generation is about."
         ),
     )
     if changed:

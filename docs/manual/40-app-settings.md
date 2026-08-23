@@ -34,7 +34,7 @@ of the renderer rather than of the palette, and making it follow the theme means
 into the render-skip key so a theme switch triggers a redraw. It is a known gap, deliberately left
 open. *Show frame rate* is the same toggle as `F10`.
 
-*Show VRAM, RAM and CPU in the status bar* puts a live reading of the machine at the right end of
+*System resources* puts a live reading of VRAM, RAM and CPU at the right end of
 the status line, in every mode. It is there because the app already forces the question on you: a
 generation is refused at the door when there is not enough VRAM free, and re-checked when it is
 about to run, and until now nothing on screen said what the number those refusals are about

@@ -117,6 +117,12 @@ class Ctx:
     # inert, because getattr-with-a-default is exactly the spelling that turns
     # a missing wire into None rather than an AttributeError.
     clay_view: Any = None
+    # The status bar's resource sampler (``studio/resources.Sampler``), owned
+    # by the App and attached here for the pane to read. Attached rather than
+    # constructed: the CPU figure is a delta between calls, so one owner ticks
+    # it and everything else reads the last reading -- two samplers would each
+    # eat the other's interval.
+    resources: Any = None
     textures: Any = None
     confirms: dialogs.ConfirmQueue = field(default_factory=dialogs.ConfirmQueue)
     prompts: dialogs.PromptQueue = field(default_factory=dialogs.PromptQueue)

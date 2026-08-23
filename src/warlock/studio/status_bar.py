@@ -31,7 +31,11 @@ def items(ctx: Any) -> list[StatusItem]:
         tab = state.active
         if tab is not None:
             dirty = " *" if bool(getattr(tab, "dirty", False)) else ""
-            out.append(StatusItem("document", f"{tab.label}{dirty}"))
+            # Split at ``##``: an Inker tab's label carries imgui's id suffix
+            # (``Untitled##pd1``), which is markup for the widget that draws
+            # the tab and was being printed verbatim down here.
+            name = str(tab.label).split("##")[0]
+            out.append(StatusItem("document", f"{name}{dirty}"))
             out.append(StatusItem("tool", inker_state.tool_label(state.tool)))
             out.append(StatusItem("zoom", f"{tab.view.zoom * 100:.0f}%"))
     elif mode in ("clay", "plotter", "packwright", "poser"):

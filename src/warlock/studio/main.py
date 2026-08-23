@@ -872,6 +872,9 @@ class App:
         device = getattr(self.runtime, "device_memory", None)
         self.app_ctx.gpu_name = str(getattr(device, "name", "") or "")
         self.app_ctx.dpi_scale = monitor_scale
+        # The status bar reads the sampler off the Ctx; the App owns it,
+        # because the CPU figure is a delta and one owner has to tick it.
+        self.app_ctx.resources = self.resources
         self.app_ctx.layout = self.layout
         self.app_ctx.layouts = self.layouts
         # Every ``widgets.field_error`` call site gets the Install offer at
@@ -1250,11 +1253,6 @@ class App:
         dt = min(now - self._last_frame, 0.25)
         self._last_frame = now
         self.fps.record(dt)
-        # Gated on the setting, so the opt-out costs nothing at all. The
-        # sampler itself is two ctypes calls and one driver ioctl -- 0.047 ms
-        # measured; see ``resources.Sampler.sample``.
-        if self.state.show_resources:
-            self.resources.tick(now)
         self._memory_ticker(now)
         self._health_ticker(now)
         return dt
@@ -1314,6 +1312,15 @@ class App:
         from . import imgui_backend, modes
 
         self.app_ctx.textures.begin_frame()
+        # Here rather than in ``_tick``: every path that draws a frame goes
+        # through this method, and ``_tick`` belongs to the run loop alone --
+        # the screenshot harness calls ``frame`` directly, and a meter that
+        # was blank in every shipped picture is how that was found. Gated on
+        # the setting, so the opt-out costs nothing at all; the sampler itself
+        # is two ctypes calls and a driver ioctl, 0.047 ms measured, behind a
+        # one-second cadence (see ``resources.Sampler.sample``).
+        if self.app_ctx.state.show_resources:
+            self.resources.tick()
         self._collect_tasks()
         self._refresh()
         # Before ``_events``, which is where the keys are read: whether the
