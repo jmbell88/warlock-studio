@@ -449,7 +449,9 @@ def test_no_pane_continues_a_line_that_has_no_room_left(app_ctx, imgui_ctx):
         clay_props,
         clay_tools,
         inker_colors,
+        inker_generate,
         inker_menu,
+        inker_picker,
         inker_tools,
         inspector,
         library,
@@ -503,6 +505,11 @@ def test_no_pane_continues_a_line_that_has_no_room_left(app_ctx, imgui_ctx):
         ("clay-bridge", lambda: clay_bridge.draw(app_ctx)),
         ("inker-tools", lambda: inker_tools.draw(app_ctx)),
         ("inker-colors", lambda: inker_colors.draw(app_ctx)),
+        # The two panes this wave added. Both are sidebar panes with headings,
+        # a help button and full-width controls, which is exactly the shape
+        # this walk measures.
+        ("inker-picker", lambda: inker_picker.draw(app_ctx)),
+        ("inker-generate", lambda: inker_generate.draw(app_ctx)),
         ("inker-menu", lambda: inker_menu.draw_popups(app_ctx)),
     ]
 
@@ -4102,17 +4109,6 @@ SCALES = (1.0, 1.5, 1.75)
 WIDTHS = (320.0, 480.0, 720.0, 1000.0, 1600.0)
 
 
-def _canvas_items():
-    # Undo and Redo left this row in W2.4: they are the only two verbs on it
-    # that changed the drawing rather than the view, and they are menu rows.
-    return [
-        toolbar.Item("rotate", "Rotate view", icons.ROTATE_CW),
-        toolbar.Item("flip", "Flip view", icons.FLIP_HORIZONTAL),
-        toolbar.Item("center", "Center view", icons.CROSSHAIR),
-        toolbar.Item("upright", "90 deg + flipped"),
-    ]
-
-
 def _transform_items():
     return [
         toolbar.Item("fliph", "Flip H", icons.FLIP_HORIZONTAL, priority=1),
@@ -4170,7 +4166,6 @@ def _rows():
     from warlock.studio.panes import inker_canvas, inker_timeline, library
 
     return [
-        ("inker-view", _canvas_items(), inker_canvas._view_action),
         ("inker-transform", _transform_items(), inker_canvas._transform_action),
         ("inker-transport", _transport_items(), inker_timeline._frame_action),
         ("inker-timeline-out", _export_items(), inker_timeline._export_action),
@@ -4247,6 +4242,50 @@ def test_every_key_a_row_publishes_is_one_its_dispatcher_answers():
         source = inspect.getsource(dispatch)
         for item in items:
             assert f'"{item.key}"' in source, f"{label}: nothing answers {item.key!r}"
+
+
+def test_every_symmetry_button_actually_moves_the_setting():
+    """The context bar's symmetry group -- what the canvas's view row became.
+
+    Not one of ``_rows()``: it is a ``trailing`` block rather than a list of
+    ``toolbar.Item``, because ``toolbar`` draws items before fields and as
+    items these five landed in the middle of the tool's own settings. So it is
+    checked by *pressing* it rather than by scanning a dispatcher's source for
+    each key, which is the stronger check anyway.
+    """
+    from warlock.studio.inker import brush
+    from warlock.studio.panes import inker_context
+
+    # ``_symmetry_hit`` persists, and ``inker_mode.persist`` reads the whole
+    # session off the context -- so the context here carries no Inker state at
+    # all, which is its documented early return.
+    ctx = SimpleNamespace(
+        state=SimpleNamespace(inker=None),
+        settings=SimpleNamespace(get=lambda *a: None, set=lambda *a: None),
+    )
+    for axis, _label, _tip in inker_context.SYMMETRY_TOGGLES:
+        state = SimpleNamespace(
+            symmetry="none", symmetry_axis=None, radial_count=6, swatches=[]
+        )
+        inker_context._symmetry_hit(ctx, state, f"sym/{axis}")
+        assert brush.axes_of(state.symmetry) == (axis,), axis
+        # And again is off: these are toggles, not a radio group.
+        inker_context._symmetry_hit(ctx, state, f"sym/{axis}")
+        assert brush.axes_of(state.symmetry) == ()
+
+    state = SimpleNamespace(
+        symmetry="x+y+diag", symmetry_axis=(3.0, 4.0), radial_count=12, swatches=[]
+    )
+    inker_context._symmetry_hit(ctx, state, f"sym/{inker_context.SYMMETRY_RESET}")
+    assert brush.axes_of(state.symmetry) == ()
+    assert state.symmetry_axis is None
+    assert state.radial_count == brush.DEFAULT_RADIAL
+
+    # A key this dispatcher does not own is left alone rather than swallowed:
+    # it shares a toolbar with the tool's own panels and dynamics buttons.
+    state = SimpleNamespace(symmetry="x", symmetry_axis=None, radial_count=6, swatches=[])
+    inker_context._symmetry_hit(ctx, state, "panels")
+    assert state.symmetry == "x"
 
 
 # --- no two items may claim one imgui id --------------------------------------

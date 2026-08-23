@@ -1,10 +1,17 @@
-"""The timeline absorbed the layers panel: one grid, and when it shows itself.
+"""The timeline absorbed the layers panel: one grid, always on screen.
 
 The riskiest single change of the Inker wave, because it deletes a pane every
 session uses. What is testable without a frame is the part that decides whether
-a user can find their layers at all -- the auto-show rule, the ``Tab`` toggle,
-and the fact that a still document has a row per layer and exactly one frame
-column -- so that is what is pinned here.
+a user can find their layers at all -- which is now simply *always* -- and the
+fact that a still document has a row per layer and exactly one frame column.
+
+The auto-show rule and the ``Tab`` toggle were pinned here until 2026-08-23.
+Both are gone with the hiding they served: this strip holds the layer list, so
+every state in which it is off screen is a document whose layers cannot be
+seen or reached, and each of this pane's two shipped defects was an instance of
+exactly that. What replaces them is one composition assertion -- the strip is
+drawn on an unconditional path -- and the height drag, which is what hiding it
+was really being used for.
 """
 
 from __future__ import annotations
@@ -23,49 +30,6 @@ def _session():
     tab = _tab()
     state.add(tab)
     return state, tab
-
-
-def test_a_fresh_single_layer_still_shows_no_strip():
-    state, tab = _session()
-    assert inker_timeline.autoshow(state, tab) is False
-    assert state.timeline_open is False
-
-
-def test_a_second_layer_raises_the_strip_by_itself():
-    state, tab = _session()
-    tab.doc.add_layer()
-    assert inker_timeline.autoshow(state, tab) is True
-    assert state.timeline_open is True
-
-
-def test_a_second_frame_raises_it_too():
-    state, tab = _session()
-    tab.doc.ensure_animation()
-    tab.doc.add_frame()
-    assert inker_timeline.autoshow(state, tab) is True
-
-
-def test_auto_show_fires_once_per_document():
-    """Closing the strip on a five-layer drawing has to stick."""
-
-    state, tab = _session()
-    tab.doc.add_layer()
-    inker_timeline.autoshow(state, tab)
-    state.timeline_open = False
-    tab.doc.add_layer()
-    assert inker_timeline.autoshow(state, tab) is False
-    assert state.timeline_open is False
-
-
-def test_tab_toggles_it_and_stops_it_arguing_back():
-    state, tab = _session()
-    inker_timeline.toggle(state)
-    assert state.timeline_open is True
-    inker_timeline.toggle(state)
-    assert state.timeline_open is False
-    # And the close sticks: every open document counts as already shown.
-    tab.doc.add_layer()
-    assert inker_timeline.autoshow(state, tab) is False
 
 
 def test_a_still_document_is_a_one_frame_sprite():
@@ -128,58 +92,103 @@ def test_toggle_all_shows_everything_when_anything_is_hidden():
     assert "any(not layer.visible for layer in doc.stack)" in source
 
 
-def test_the_timeline_state_starts_closed_and_remembers_nothing_per_document():
-    state = inker_state.InkerState()
-    assert state.timeline_open is False
-    assert state.timeline_shown == set()
-    assert state.eye_drag is None
+def test_the_eye_drag_starts_with_nothing_in_flight():
+    assert inker_state.InkerState().eye_drag is None
 
 
-def test_hiding_the_strip_mid_playback_does_not_wedge_the_document():
-    """``_tick`` was below ``draw``'s ``timeline_open`` early return, and it is
-    the only caller of ``tick_playback`` -- the only thing that advances the
-    playhead or ends a clip.
+def test_the_playback_tick_runs_where_the_strip_is_drawn():
+    """``_tick`` is the only caller of ``tick_playback``, which is the only
+    thing that advances ``play_index`` or ends a clip naturally.
 
-    So Tab (Aseprite's own binding for hiding the strip) left ``playing`` True
-    forever and ``tab.busy`` with it, and the canvas then refused every paint
-    gesture silently: the Stop button and the "playback is running" line that
-    would have explained it are drawn inside the strip that was just hidden.
+    It used to have to sit above an early return, and then outside the pane
+    altogether, because a hidden strip left ``tab.playing`` true for ever and
+    ``tab.busy`` with it -- and the canvas then refused every gesture silently
+    while the Stop button explaining why was off screen. The strip cannot be
+    hidden any more, so the tick simply lives at the top of ``draw``; what is
+    pinned is that it is still *unconditional* within it.
     """
-
-    state, tab = _session()
-    tab.doc.ensure_animation()
-    tab.doc.add_frame()
-    state.timeline_open = True
-    tab.playing = True
-    assert tab.busy is True
-    inker_timeline.toggle(state)
-    assert state.timeline_open is False
-    assert tab.playing is False
-    assert tab.busy is False
-
-
-def test_showing_the_strip_again_leaves_playback_alone():
-    state, tab = _session()
-    tab.doc.ensure_animation()
-    tab.doc.add_frame()
-    state.timeline_open = False
-    tab.playing = True
-    inker_timeline.toggle(state)
-    assert state.timeline_open is True
-    assert tab.playing is True
-
-
-def test_the_playback_tick_runs_with_the_strip_hidden():
-    """Defence in depth for the same wedge, one layer down: any *other* route
-    to a hidden strip has to keep the clip advancing rather than freezing it
-    with ``busy`` held."""
 
     from pathlib import Path
 
     source = Path(inker_timeline.__file__).read_text(encoding="utf-8")
     body = source[source.index("def draw(ctx: Any) -> None:") :]
-    body = body[: body.index("def autoshow")]
-    assert body.index("_tick(tab)") < body.index("if not state.timeline_open:")
+    body = body[: body.index("def _tick")]
+    assert "_tick(tab)" in body
+    assert body.index("_tick(tab)") < body.index("if tab.doc.anim is not None:"), (
+        "the tick must not sit behind the animated branch"
+    )
+
+
+def test_the_strip_is_neither_hideable_nor_auto_shown_any_more():
+    """The two doors that could take the layer list off screen, kept shut."""
+
+    assert not hasattr(inker_timeline, "toggle")
+    assert not hasattr(inker_timeline, "autoshow")
+    assert not hasattr(inker_timeline, "tick_and_autoshow")
+    assert not hasattr(inker_state.InkerState(), "timeline_open")
+    assert not hasattr(inker_state.InkerState(), "timeline_shown")
+
+
+def test_the_timeline_strip_is_drawn_unconditionally():
+    """The gate that hid the layer list, pinned shut by AST.
+
+    ``2a56df6`` merged the layers panel into this strip and said "the strip is
+    always available, Tab toggles it" -- but the ``doc.anim is not None`` gate
+    in ``_inker_workspace`` predated that commit and was never lifted, so a
+    still document had no layer list at all and every headless test passed,
+    because they all call this module's functions directly rather than walking
+    the composition. A composition walk is the missing coverage class, and
+    ``tests/test_layout.py`` already pins ``main.py`` by AST the same way.
+
+    Now that the strip cannot be hidden either, the assertion is stronger: no
+    condition anywhere in the workspace may mention the animation or an open
+    flag, and the only thing the strip's own branch may ask about is whether
+    there is a document at all.
+    """
+    import ast
+    import inspect
+    from pathlib import Path
+
+    from warlock.studio import main as main_mod
+
+    source = Path(inspect.getfile(main_mod)).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    workspace = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_inker_workspace"
+    )
+    conditions = [
+        ast.unparse(node.test)
+        for node in ast.walk(workspace)
+        if isinstance(node, ast.If)
+    ]
+    assert not any("anim" in text for text in conditions), conditions
+    assert not any("timeline_open" in text for text in conditions), conditions
+    # And the strip is composed: ``inker_timeline.draw`` is reached from a
+    # branch that asks only whether a document is open.
+    calls = [
+        ast.unparse(node)
+        for node in ast.walk(workspace)
+        if isinstance(node, ast.Call)
+    ]
+    assert "inker_timeline.draw(ctx)" in calls
+
+
+def test_the_strip_never_gets_less_than_its_floor():
+    """"At minimum 150px" as arithmetic rather than as a screenshot: the share
+    names the strip's portion of the centre column, and a tall window makes it
+    bigger while a short one cannot make it smaller than ``STRIP_H``."""
+
+    def strip(available: float, share: float, scale: float = 1.0) -> float:
+        return max(inker_timeline.STRIP_H * scale, available * share)
+
+    assert inker_timeline.STRIP_H == 150.0
+    assert strip(400.0, 0.28) == 150.0
+    assert strip(1000.0, 0.28) == 280.0
+    # And the floor is design px, so it grows with the UI scale rather than
+    # becoming a smaller and smaller fraction of the window.
+    assert strip(400.0, 0.28, 1.5) == 225.0
 
 
 # -- one gesture, one undo step ----------------------------------------------

@@ -15,4 +15,4 @@ os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 # CHANGELOG.md's top heading is the third surface and tests/test_changelog.py
 # pins that one; a bump that moves fewer than all three leaves Home printing a
 # version whose "What's new" entry does not exist (2026-08-11, v0.0.22).
-__version__ = "0.0.27"
+__version__ = "0.0.28"

@@ -21,6 +21,11 @@ from typing import Any
 
 from .layout_skeleton import FILL, FIXED, SHARE, Column, Slot
 
+#: A sidebar column's design width. The same number ``layout.SIDEBAR_WIDTHS``
+#: calls "default" -- said here so a table can state a width without importing
+#: the imgui-bearing layout module.
+COLUMN_W = 300.0
+
 
 def _role(name: str) -> Any:
     from .layout import PaneRole
@@ -35,9 +40,29 @@ def _edge(name: str) -> Any:
 
 
 def inker(ctx: Any) -> dict[str, Column]:
-    """Inker's two sidebars after wave 2: a rail, and a stack of three."""
+    """Inker's two sidebars, in Aseprite's *default* arrangement.
 
-    from .panes import inker_colors, inker_preview, inker_tiles, inker_tools
+    Colour on the left with the picker under it, the toolbox on the right over
+    the preview, the tiles and the generation verbs -- and the timeline along
+    the bottom of the centre column, which the workspace composes by hand.
+
+    This reverses W2.9's "Mirrored Default" (tools left, colour right). The
+    argument that put the toolbox on the left was that moving it to the right
+    "would put the toolbox on the far side of the canvas from the hand"; what
+    answers it is that Aseprite ships the other way round and this app is
+    trying to be the program its users already have in their hands. The rail
+    also cost the toolbox its heading, its help button and two clipped rows --
+    at a full sidebar width all three come back.
+    """
+
+    from .panes import (
+        inker_colors,
+        inker_generate,
+        inker_picker,
+        inker_preview,
+        inker_tiles,
+        inker_tools,
+    )
 
     def animated(context: Any) -> bool:
         state = getattr(context.state, "inker", None)
@@ -53,20 +78,26 @@ def inker(ctx: Any) -> dict[str, Column]:
         "left",
         (
             Slot(
-                "inker-tools",
-                "Tools",
-                inker_tools.draw,
-                role=_role("sidebar"),
+                "inker-colors",
+                "Colour",
+                inker_colors.draw,
+                role=_role("inspector"),
+                edge=_edge("right"),
+                sizing=SHARE,
+                share_key="inker-colors",
+                floor=inker_colors.PANEL_FLOOR,
+            ),
+            Slot(
+                "inker-picker",
+                "Picker",
+                inker_picker.draw,
+                role=_role("inspector"),
                 edge=_edge("right"),
                 sizing=FILL,
-                # The rail is the workspace: hiding it would leave a column of
-                # nothing, and moving it into the right column would put the
-                # toolbox on the far side of the canvas from the hand.
-                movable=False,
-                hideable=False,
+                floor=inker_picker.PICKER_FLOOR,
             ),
         ),
-        width=inker_tools.RAIL_W,
+        width=COLUMN_W,
     )
     right = Column(
         "right",
@@ -82,14 +113,14 @@ def inker(ctx: Any) -> dict[str, Column]:
                 when=animated,
             ),
             Slot(
-                "inker-colors",
-                "Colour",
-                inker_colors.draw,
-                role=_role("inspector"),
+                "inker-tools",
+                "Tools",
+                inker_tools.draw,
+                role=_role("sidebar"),
                 edge=_edge("left"),
                 sizing=SHARE,
-                share_key="inker-colors",
-                floor=inker_colors.PANEL_FLOOR,
+                share_key="inker-tools",
+                floor=inker_tools.TOOLS_FLOOR,
             ),
             Slot(
                 "inker-tiles",
@@ -97,11 +128,22 @@ def inker(ctx: Any) -> dict[str, Column]:
                 inker_tiles.draw,
                 role=_role("inspector"),
                 edge=_edge("left"),
-                sizing=FILL,
+                sizing=SHARE,
+                share_key="inker-tiles",
                 floor=inker_tiles.PANEL_FLOOR,
                 when=tiled,
             ),
+            Slot(
+                "inker-generate",
+                "Generation",
+                inker_generate.draw,
+                role=_role("inspector"),
+                edge=_edge("left"),
+                sizing=FILL,
+                floor=inker_generate.GENERATE_FLOOR,
+            ),
         ),
+        width=COLUMN_W,
     )
     return {"left": left, "right": right}
 

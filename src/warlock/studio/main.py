@@ -300,7 +300,6 @@ def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
             ("1 - 0", "Brush opacity, 10% to 100%"),
             ("Alt+1 - 9", "Recall a numbered custom brush"),
             ("Alt+Shift+1 - 9", "Store the captured brush in that slot"),
-            ("Tab", "Show or hide the timeline -- which is where the layers are"),
             ("Ctrl+Shift+N", "New layer"),
             ("Alt+S", "Solo the active layer, and again to bring the rest back"),
             ("Ctrl+Shift+Up / Down", "Move the layer up / down the stack"),
@@ -2934,11 +2933,13 @@ class App:
         # not settle it for itself and leave the right one to find out (UX-01).
         mode_for_layout = ctx.state.mode
         self.layout.bind_workspace(self.layouts, mode_for_layout)
-        layout_mod.measure(
-            self.layouts,
-            mode_for_layout,
-            fixed_left=90.0 if mode_for_layout == "inker" else None,
-        )
+        # No ``fixed_left`` any more: it pinned Inker's left column to the
+        # toolbox rail's 90 px, and the rail is gone -- both of Inker's columns
+        # are ordinary sidebars whose widths are the arrangement's to state.
+        # (``fit_widths`` keeps the parameter: it is the general answer for a
+        # column that is a fixed size rather than a preference, and deleting it
+        # would have to be re-derived by the next workspace that wants one.)
+        layout_mod.measure(self.layouts, mode_for_layout)
         # Recomputed every frame by whoever draws the viewport image. Every
         # mode but 3D returns without drawing it, so it stays false there and
         # the viewer gets no events at all.
@@ -3652,7 +3653,12 @@ class App:
         draw.add_text((x, y), imgui.get_color_u32(theme.rgba(theme.TEXT)), text)
 
     def _inker_workspace(self) -> None:
-        """The same sidebar / centre / sidebar skeleton the other modes use.
+        """Colour / canvas / tools, with the timeline along the bottom.
+
+        Aseprite's default arrangement, which is what ``skeletons.inker`` now
+        declares -- the previous shape (a 90 px tool rail on the left, the
+        palette on the right, no bottom region at all) was its *Mirrored
+        Default* preset plus a bug.
 
         Deliberately not a takeover of the whole window: the progress card
         floats over every mode, so a trellis run started before switching here
@@ -3661,15 +3667,16 @@ class App:
         from imgui_bundle import imgui
 
         from . import layout as layout_mod
-        from . import skeletons
+        from . import skeletons, tokens
         from .panes import inker_canvas, inker_timeline
         from .tokens import sp
 
         ctx = self.app_ctx
         lay = self.layout
+        left_w = layout_mod.sidebar_width("left")
         right_w = layout_mod.sidebar_width("right")
-        tab = None if ctx.state.inker is None else ctx.state.inker.active
-        animated = tab is not None and tab.doc.anim is not None
+        state = ctx.state.inker
+        tab = None if state is None else state.active
         # The tile panel appears with the tilesets, the way the preview appears
         # with the frames: a drawing that has never seen a tilemap layer is
         # byte-for-byte the workspace it always was, and a fixed-height palette
@@ -3679,13 +3686,6 @@ class App:
         # always drawn.
         # (The tile panel's own ``when`` predicate answers that in the
         # skeleton table, which is where the shape of a workspace lives now.)
-
-        # **The toolbox is a fixed 90 px rail** -- no share, no handle, no
-        # give-way. All three existed because the pane under the toolbox was
-        # the tool options, whose height nobody could predict; the options are
-        # a row above the canvas now (W2.4) and what is left is twelve buttons,
-        # three toggles and two colour chips, which is a *known* width and no
-        # height worth arguing about.
         #
         # Both sidebars go through ``layout.column`` over ``skeletons.inker``
         # (P5.1): one renderer, one height arithmetic, and a saved layout has
@@ -3695,29 +3695,40 @@ class App:
             ctx,
             lay,
             skeletons.ordered(ctx, self.layouts, "inker", columns["left"]),
-            width=sp(columns["left"].width),
-            handle_length=sp(columns["left"].width),
+            width=left_w,
+            handle_length=left_w,
+            on_hidden=lambda _slot: None,
         )
 
-        imgui.same_line()
+        _column_boundary(self.layouts, "inker", "left")
         width = layout_mod.centre_width()
         flags = imgui.WindowFlags_.no_scroll_with_mouse.value
         imgui.begin_group()
-        # A *positive* height, never a bottom offset, and only when there is a
-        # timeline to reserve for: with little room left a negative height
-        # collapses the canvas child to nothing and the canvas -- and its
-        # texture uploads -- silently stops being drawn. Same rule the status
-        # bar inside ``inker_canvas`` already follows. A still document takes
-        # the untouched branch, so its layout is what it always was.
+        # A *positive* height, never a bottom offset: with little room left a
+        # negative height collapses the canvas child to nothing and the canvas
+        # -- and its texture uploads -- silently stops being drawn. Same rule
+        # the status bar inside ``inker_canvas`` already follows.
+        #
+        # **Unconditional, because the strip is unconditional.** It was gated
+        # on ``doc.anim is not None`` from 2a56df6 until 2026-08-23, which is
+        # what hid the layer list from every still document; it was then gated
+        # on ``state.timeline_open``, which is what a ``Tab`` key could hide.
+        # Both gates are gone: the strip holds the layers, so a hidden strip is
+        # a document with no visible layer list, and the height drag is the
+        # thing hiding it was really being used for.
+        available_h = imgui.get_content_region_avail().y
         centre_h = 0.0
-        if animated:
-            strip = sp(inker_timeline.STRIP_H)
-            available_h = imgui.get_content_region_avail().y
+        strip_key = "inker-timeline"
+        if tab is not None:
             # A high UI scale can make the timeline's preferred design-pixel
             # height consume the whole physical window. The canvas remains the
             # anchor in that case and the timeline becomes the compressed,
             # scrollable pane. The ratio is frame-local, just like horizontal
             # side-panel compression; it never rewrites a saved share.
+            strip = max(
+                sp(inker_timeline.STRIP_H),
+                available_h * lay.share("inker-timeline"),
+            )
             centre_h = max(available_h - strip, available_h * 0.62)
         with layout_mod.pane(
             "inker-centre",
@@ -3734,7 +3745,16 @@ class App:
                 # Dropped here for the same reason the canvas's own invisible
                 # branch drops it.
                 tab.view.pending_zoom_rung = 0
-        if animated:
+        if tab is not None:
+            # The handle between the canvas and the strip. Dragging it *down*
+            # is a smaller strip, which is why the delta is subtracted: the
+            # share names the timeline's portion, not the canvas's.
+            drag = layout_mod.splitter(f"{strip_key}-share", vertical=False, length=width)
+            if drag and available_h > 0:
+                before = lay.share(strip_key)
+                lay.set_share(strip_key, before - drag * tokens.SCALE / available_h)
+                if lay.share(strip_key) != before:
+                    lay.save()
             with layout_mod.pane(
                 "inker-timeline",
                 (width, 0),
@@ -3746,11 +3766,12 @@ class App:
         imgui.end_group()
 
         _column_boundary(self.layouts, "inker", "right")
-        # **Preview / Colours / Tiles**, top to bottom, with a handle between
-        # each adjacent shareable pair. The colour panel moved here from the
-        # left column in W2.9 because the palette grid is a *panel* and always
-        # wanted the width; the two colours themselves stayed at the foot of
-        # the rail, which is Aseprite's "Mirrored Default" shape.
+        # **Preview / Tools / Tiles / Generation**, top to bottom, with a
+        # handle between each adjacent shareable pair. The toolbox moved here
+        # from the left column in this wave: the note it used to carry said
+        # that putting it on the right "would put the toolbox on the far side
+        # of the canvas from the hand", and what answers that is Aseprite's own
+        # default, which is the program these users already have open.
         #
         # Which panes are here, and in what order, is now the active saved
         # layout's answer (wave 5) -- reconciled against this table every read

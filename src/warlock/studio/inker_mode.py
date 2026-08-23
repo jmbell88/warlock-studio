@@ -131,6 +131,12 @@ def ensure(ctx: Any) -> InkerState:
         _restore_presets(state, stored.get("presets"))
         _restore_canvas(state, stored.get("canvas"))
         _restore_export(state, stored.get("export"))
+        try:
+            state.shortcut_overrides = inker_ops.parse_shortcuts(
+                {"version": 1, "overrides": stored.get("shortcuts", {})}
+            )
+        except (TypeError, ValueError):
+            state.shortcut_overrides = {}
         ctx.state.inker = state
     return state
 
@@ -203,6 +209,12 @@ def persist(ctx: Any) -> None:
     # is what seeds a brand-new tab's controls next session, through
     # ``_restore_export`` below.
     block["export"] = state.export_options_snapshot()
+    # Only overrides, never a copy of all defaults: a future compatibility
+    # update can improve an untouched binding while an explicit user choice is
+    # stable.  Round-trip through the registry to keep hand-edited junk out.
+    block["shortcuts"] = inker_ops.parse_shortcuts(
+        inker_ops.shortcuts_json(state.shortcut_overrides)
+    )
     ctx.settings.set("inker", block)
 
 
@@ -3054,20 +3066,18 @@ def stamp_text(ctx: Any, state: Any, tab: InkerDoc) -> bool:
 #: where the tooltip and the manual read it from too.
 TOOL_KEYS = {letter.lower(): key for key, _label, letter in inker_state.TOOLS}
 
-#: Aseprite's *slot-mates*, as a second binding rather than a replacement.
+#: Compatibility view of Aseprite's shifted tool bindings.
 #:
-#: Aseprite files several tools two-to-a-slot and cycles them with Shift: the
-#: gradient sits on the paint bucket's, the ellipse on the rectangle's, the
-#: elliptical marquee on the rectangular one's. Inker gives every tool a letter
-#: of its own (one per ``TOOLS`` row, no cycling), so these
-#: are added *beside* the plain letters, not instead of them -- a hand trained
-#: on Aseprite finds what it reaches for, and a hand trained here keeps what it
-#: had. Reconstructed from Aseprite's defaults; if one is wrong it is wrong in
-#: one dict.
+#: Dispatch reads ``inker_ops.BINDINGS``; this view survives for the condensed
+#: Ctrl+/ sheet and older callers. The registry is the source of truth.
 SHIFT_TOOL_KEYS = {
+    "b": "spray",
     "g": "gradient",
+    "l": "curve",
     "u": "ellipse",
+    "d": "polygon",
     "m": "select_ellipse",
+    "c": "slice",
 }
 
 #: How the toolbox writes a second binding, tool to the chord.
@@ -3353,6 +3363,30 @@ def handle_key(ctx: Any, event: Any) -> bool:
     tab = state.active
     if tab is None:
         return False
+
+    quick_key = ""
+    if event.key in (pygame.K_LALT, pygame.K_RALT):
+        quick_key = "Alt"
+    elif event.key in (pygame.K_LCTRL, pygame.K_RCTRL):
+        quick_key = "Ctrl"
+    if quick_key:
+        if event.type == pygame.KEYUP and state.quick_key == quick_key:
+            previous = state.quick_tool
+            state.quick_key = state.quick_tool = ""
+            if previous:
+                state.set_tool(previous)
+            return True
+        if event.type == pygame.KEYDOWN and not state.quick_key:
+            quick = inker_ops.resolve_binding(
+                quick_key,
+                inker_state.key_context(state, tab),
+                state.shortcut_overrides,
+                trigger="hold",
+            )
+            if quick is not None and quick.kind == "tool":
+                state.quick_key, state.quick_tool = quick_key, state.tool
+                state.set_tool(quick.target)
+                return True
     doc = tab.doc
     if event.type != pygame.KEYDOWN:
         return True
@@ -3393,37 +3427,26 @@ def handle_key(ctx: Any, event: Any) -> bool:
     # eleven of these branches used to be. What is left below is the bindings
     # that are not ops: the tool letters, the sizes, the nudges, the modeless
     # view keys.
-    op = inker_ops.by_key(chord_of(event, ctrl=ctrl, shift=shift, alt=alt), context)
+    chord = chord_of(event, ctrl=ctrl, shift=shift, alt=alt)
+    op = inker_ops.by_key(chord, context, state.shortcut_overrides)
     if op is not None:
         if not (tab.busy and ctrl and name in _MUTATING_CTRL):
             inker_ops.run(ctx, op)
+        return True
+    binding = inker_ops.resolve_binding(chord, context, state.shortcut_overrides)
+    if binding is not None and binding.kind == "tool":
+        state.set_tool(inker_state.cycle_in_group(state.tool, binding.target))
         return True
 
     if ctrl:
         return _ctrl_key(ctx, state, tab, doc, name, event, shift=shift)
 
-    if name in SHIFT_TOOL_KEYS and shift:
-        # Ahead of the plain branch, and gated on shift there, so the two
-        # cannot both fire on one press.
-        state.set_tool(SHIFT_TOOL_KEYS[name])
-    elif name in TOOL_KEYS and not shift:
-        # Through ``cycle_in_group``: the first press is the binding this
-        # letter has always had, and a second press moves along the group.
-        state.set_tool(inker_state.cycle_in_group(state.tool, TOOL_KEYS[name]))
-    elif event.key in (pygame.K_EQUALS, pygame.K_PLUS, pygame.K_KP_PLUS):
+    if event.key in (pygame.K_EQUALS, pygame.K_PLUS, pygame.K_KP_PLUS):
         # Aseprite's zoom in, and ``=`` unshifted answers it too because that
         # is the same physical key on every layout this ships to.
         tab.view.pending_zoom_rung = 1
     elif event.key in (pygame.K_MINUS, pygame.K_KP_MINUS):
         tab.view.pending_zoom_rung = -1
-    elif event.key == pygame.K_TAB:
-        # Aseprite's binding, and the reason the timeline can be hidden at all
-        # now that it holds the layers: one key, always the same one, whether
-        # the document is animated or not. Ctrl+Tab still cycles documents --
-        # that branch is in ``_ctrl_key`` and cannot be reached from here.
-        from .panes import inker_timeline
-
-        inker_timeline.toggle(state)
     elif name == "x":
         state.swap_colours()
     elif alt and name.isdigit() and name != "0":
@@ -3548,6 +3571,9 @@ _CHORD_NAMES: dict[str, str] = {
     "]": "]",
     ",": ",",
     ".": ".",
+    "home": "Home",
+    "end": "End",
+    **{f"f{index}": f"F{index}" for index in range(1, 13)},
 }
 
 

@@ -536,12 +536,21 @@ def test_the_canvas_settings_are_reachable() -> None:
     its axis are the only writers of ``state.symmetry`` and friends, so
     symmetry was permanently off in the shipped app while the whole mirror
     engine behind it stayed live and tested. The grid's numeric step went the
-    same way. Both are the rail's canvas popover now.
+    same way. Both are the toolbox's canvas popover now -- except the four
+    mirrors, which are the context bar's toggles (2026-08-23), so what this
+    checks is that *every* writer is reachable rather than that one of them is
+    a combo.
     """
+    from warlock.studio.panes import inker_context
+
     source = Path(inker_tools.__file__).read_text(encoding="utf-8")
     assert "canvas_options(ctx, state)" in source
     assert "imgui.open_popup(CANVAS_POPUP)" in source
-    assert 'state.symmetry = widgets.labeled_combo(' in source
+    assert "state.symmetry = brush.toggled(" in source
+    assert "state.radial_count = int(count)" in source
+    assert "state.symmetry_axis = " in source
+    bar = Path(inker_context.__file__).read_text(encoding="utf-8")
+    assert "state.symmetry = brush.toggled(state.symmetry, axis)" in bar
 
 
 def test_every_folding_key_is_namespaced_to_this_pane() -> None:
@@ -565,10 +574,13 @@ def test_the_inker_workspace_has_drag_handles_of_its_own() -> None:
 
     columns = skeletons.inker(None)
     keys = {slot.share_key for slot in columns["right"].slots if slot.share_key}
-    assert keys == {"inker-colors"}
-    # And the rail is not a split at all: a fixed 90 px column with one pane
-    # in it has nothing to divide (W2.9).
-    assert not any(slot.share_key for slot in columns["left"].slots)
+    assert keys == {"inker-tools", "inker-tiles"}
+    # And the *left* column is a split now too: it was a fixed 90 px rail with
+    # one pane in it and nothing to divide (W2.9), and it is the palette over
+    # the picker after the columns swapped to Aseprite's default sides.
+    assert {slot.share_key for slot in columns["left"].slots if slot.share_key} == {
+        "inker-colors"
+    }
 
 
 def test_both_floors_are_named_where_the_panes_are() -> None:
@@ -576,21 +588,28 @@ def test_both_floors_are_named_where_the_panes_are() -> None:
     that stacks them: the workspace does not know what a colour panel needs.
 
     The toolbox's pair went with the give-way split itself (W2.9): a fixed rail
-    reserves nothing and gives way to nothing. The two that remain are the two
-    panes that share the right column.
+    reserves nothing and gives way to nothing. What is here now is one floor
+    per pane that can be squeezed, in both columns.
     """
     from warlock.studio import skeletons
-    from warlock.studio.panes import inker_tiles
+    from warlock.studio.panes import inker_generate, inker_picker, inker_tiles
 
     assert inker_colors.PANEL_FLOOR > 0
     assert inker_tiles.PANEL_FLOOR > 0
+    assert inker_picker.PICKER_FLOOR > 0
+    assert inker_generate.GENERATE_FLOOR > 0
     # Read by the slot table rather than by the composition function: the
     # workspace is data now, and the floors travel with the panes they belong
     # to rather than with the code that stacks them.
+    columns = skeletons.inker(None)
     floors = {
-        slot.id: slot.floor for slot in skeletons.inker(None)["right"].slots
+        slot.id: slot.floor
+        for column in columns.values()
+        for slot in column.slots
     }
     assert floors["inker-colors"] == inker_colors.PANEL_FLOOR
+    assert floors["inker-picker"] == inker_picker.PICKER_FLOOR
+    assert floors["inker-generate"] == inker_generate.GENERATE_FLOOR
     assert floors["inker-tiles"] == inker_tiles.PANEL_FLOOR
 
 
@@ -631,19 +650,36 @@ def test_a_give_way_drag_respects_both_ends_and_a_collapsed_column() -> None:
     assert layout.give_way_drag(0.0, 0.55, wanted, floor, 40.0) == 0.55
 
 
-def test_the_toolbox_reserves_nothing_because_it_is_a_rail() -> None:
-    """``grid_height``/``_reserve`` are gone with the give-way split (W2.9).
+def test_the_toolbox_is_a_pane_with_a_floor_rather_than_a_rail() -> None:
+    """``RAIL_W`` is gone, and so is the arithmetic it replaced.
 
-    They existed to tell the workspace how much of the column the toolbox
-    needed before the options under it could have the rest -- an arithmetic
-    that mixed design and physical px and got it wrong twice. A fixed 90 px
-    rail with nothing under it reserves nothing, and the way to keep that
-    arithmetic correct is not to have it.
+    ``grid_height``/``_reserve`` went with the give-way split (W2.9): they
+    mixed design and physical px and got it wrong twice, and the way to keep
+    that arithmetic correct was not to have it. The 90 px rail that replaced
+    them is gone in its turn -- 90 minus 16 px of pane padding left 74 px of
+    content, which fitted two buttons exactly and clipped the two rows under
+    them. What a shareable pane needs instead is a floor.
     """
     assert not hasattr(inker_tools, "grid_height")
     assert not hasattr(inker_tools, "_reserve")
     assert not hasattr(inker_tools, "OPTIONS_FLOOR")
-    assert inker_tools.RAIL_W > 0
+    assert not hasattr(inker_tools, "RAIL_W")
+    assert inker_tools.TOOLS_FLOOR > 0
+
+
+def test_the_tool_grid_widens_with_the_pane_rather_than_staying_two_across()        -> None:
+    """Two across was the rail's answer and it does not survive it: a 300 px
+    column drawing a 68 px strip of buttons down one edge is the same defect
+    the rail had, mirrored."""
+    from warlock.studio import tokens
+
+    step = inker_tools.BUTTON_W + inker_tools.GRID_GAP
+    assert inker_tools.columns_for(0.0) == inker_tools.COLUMNS
+    assert inker_tools.columns_for(step * tokens.SCALE) == inker_tools.COLUMNS
+    assert inker_tools.columns_for(step * 4 * tokens.SCALE) == 4
+    # And capped, so a very wide pane is still a square of icons rather than a
+    # single row of twelve.
+    assert inker_tools.columns_for(step * 40 * tokens.SCALE) == inker_tools.MAX_COLUMNS
 
 
 def test_the_trailing_gap_is_drawn_and_counted_as_one_number() -> None:

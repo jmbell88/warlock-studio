@@ -51,16 +51,6 @@ from ..inker_state import (
 from ..tokens import sp
 from . import inker_bridge, inker_context, inker_menu, inker_textures
 
-#: The four positions of the Tiled control, one per :data:`TILED_AXES` entry.
-#: Prefixed, because in a row of icon buttons a bare "X" says nothing about
-#: what it is an axis of.
-TILED_LABELS = (
-    ("off", "Tiled: off"),
-    ("x", "Tiled: X"),
-    ("y", "Tiled: Y"),
-    ("both", "Tiled: X+Y"),
-)
-
 #: The zoom range this pane holds its view to, splatted into every
 #: ``inker_state`` view call. Inker's own, narrower than the module globals that
 #: Plotter and Packwright share -- see ``inker_state.INKER_MIN_ZOOM``. One dict
@@ -171,10 +161,8 @@ def draw(ctx: Any) -> None:
     tab = state.active
     if tab is not None:
         # Menu, tabs, context bar, canvas, status: Aseprite's order, and the
-        # order the eye already knows. The view row -- what the *page* is
-        # doing, as against what the tool is set to -- rides the bar's trailing
-        # block; see ``_view_row``.
-        _view_row(ctx, state, tab)
+        # order the eye already knows -- and, since 2026-08-23, Aseprite's
+        # *count* as well. There is one bar above the canvas, not two.
         inker_context.draw(ctx, state, tab)
         if state.transforming:
             _transform_row(ctx, state, tab)
@@ -185,80 +173,35 @@ def draw(ctx: Any) -> None:
     inker_bridge.popups(ctx)
 
 
-# --- the canvas's own row ----------------------------------------------------
+# --- what the canvas's own row became ----------------------------------------
 #
 # New/Open/Save/Save as/Export PNG used to be here, and moved to
-# ``inker_bridge`` in the UI redesign, wave 4.2. That row was the worst clipping case
-# in the app -- eight labelled buttons plus a combo plus a status word, chained
-# with ``same_line``, losing "Export PNG" off the right edge at 150 % -- and it
-# was also the one document mode whose file actions did *not* live in its bridge
-# panel, where Plotter's and Packwright's do. Moving them fixed both at once.
+# ``inker_bridge`` in the UI redesign, wave 4.2. That row was the worst
+# clipping case in the app -- eight labelled buttons plus a combo plus a status
+# word, chained with ``same_line``, losing "Export PNG" off the right edge at
+# 150 % -- and it was also the one document mode whose file actions did *not*
+# live in its bridge panel, where Plotter's and Packwright's do.
 #
-# What stays is what acts on the canvas you are looking at: undo/redo (the
-# bridge panel's pair was three panels away from the stroke it reversed), the
-# two view turns, and the status word. Through ``toolbar`` now, so the row
-# degrades instead of clipping.
-
-
-def _view_row(ctx: Any, state: Any, tab: Any) -> None:
-    """What the *page* is doing: the turns, the centring, the tiling.
-
-    Undo and Redo were the first two items here and are menu rows now -- the
-    only two verbs on this row that changed the drawing rather than the view,
-    and the pair every user reaches for by chord anyway. What is left is one
-    honest group: nothing here writes a pixel, which is why **none of it is
-    gated on ``busy``** -- an editor that refuses to let you *look* at your
-    drawing while it writes a file is not protecting anything.
-    """
-    view = tab.view
-    items = [
-        toolbar.Item("rotate", "Rotate view", icons.ROTATE_CW, tooltip="Rotate the view (Ctrl+4)"),
-        toolbar.Item("flip", "Flip view", icons.FLIP_HORIZONTAL, tooltip="Flip the view (Ctrl+5)"),
-        # Distinct from *Fit view* (Ctrl+0, and a button in the bridge panel):
-        # this keeps the zoom the user chose and only puts the page back under
-        # the pane. Panning far enough to lose the canvas entirely is easy and
-        # the only way back was to re-fit, which threw the zoom away. (The
-        # citation here used to say "the View menu"; this app has never had
-        # one, and a reader looking for it found nothing.)
-        toolbar.Item("center", "Center view", icons.CROSSHAIR, tooltip="Center the page"),
-    ]
-    if view.rotation or view.flipped:
-        # Said out loud, because the two are invisible once you have looked
-        # away for a moment and a mirrored canvas silently teaches the wrong
-        # hand. No glyph, so it keeps its words at every tier -- the label *is*
-        # the state it is reporting.
-        parts = ([f"{view.rotation} deg"] if view.rotation else []) + (
-            ["flipped"] if view.flipped else []
-        )
-        items.append(
-            toolbar.Item(
-                "upright",
-                " + ".join(parts),
-                tooltip="The view only -- click to set it upright",
-            )
-        )
-    toolbar.toolbar(
-        "inker-canvas",
-        items,
-        lambda key: _view_action(ctx, tab, key),
-        trailing=_view_trailing(ctx, tab),
-    )
-
-
-def _view_action(ctx: Any, tab: Any, key: str) -> None:
-    view = tab.view
-    if key == "rotate":
-        inker_state.rotate_view(view, 1)
-    elif key == "flip":
-        inker_state.flip_view(view)
-    elif key == "center":
-        # ``pending_zoom`` and not ``fitted = False``, exactly as ``rotate_view``
-        # and ``flip_view`` do it: clearing ``fitted`` re-*scales* as well as
-        # re-centring, which is the one thing this button must not do.
-        view.pending_zoom = view.zoom
-    elif key == "upright":
-        view.rotation, view.flipped = 0, False
-        view.pending_zoom = view.zoom
+# What was left after that -- Rotate view, Flip view, Center view, the Tiled
+# combo, Wrap 1/2 and the seam figure -- went on 2026-08-23, and the row with
+# it. **Inker has one bar above the canvas now, and it is the context bar**,
+# which is Aseprite's shape and is the whole point: brush type, size, ink,
+# dynamics, pixel-perfect and the four symmetry toggles are what a hand
+# reaches for between strokes, and none of them had room while a second row
+# above them held six things nobody touches twice an hour.
+#
+# Where each went, and why there rather than into a popover:
+#
+# * Rotate / Flip / Fit / Actual size were *already* View-menu ops with
+#   chords (Ctrl+4, Ctrl+5, Ctrl+0, Ctrl+1); the buttons were a second door.
+# * Center view and the four Tiled modes are View-menu ops now
+#   (``center_view``, ``tiled_*``), the tiling four as **checked** rows, which
+#   says which one is on without a combo spending bar width to say so.
+# * Wrap 1/2 is ``wrap_half``, beside them, refused with a sentence when the
+#   document is not tiled -- which the button could only express by vanishing.
+# * The seam figure and the "unsaved" word are in the status bar under the
+#   canvas, with the zoom, the cursor position and the layer name. They are
+#   *readouts*, and that is the row of readouts.
 
 
 def _status(tab: Any) -> tuple[int, str] | None:
@@ -300,56 +243,6 @@ def seam_text(ctx: Any, tab: Any) -> tuple[int, str] | None:
     worst = cached[1]
     colour = theme.WARN if worst > SEAM_MAX else theme.MUTED
     return (colour, f"seam x{worst:.1f}")
-
-
-def _view_trailing(ctx: Any, tab: Any) -> tuple[float, Any]:
-    """The tiling combo and the status word, as one non-collapsible block.
-
-    ``toolbar`` subtracts this before it chooses tiers, which is what stops the
-    combo being measured after the row has already claimed the space.
-    """
-    status = _status(tab)
-    seam = seam_text(ctx, tab)
-    gap = imgui.get_style().item_spacing.x
-    width = sp(104) + (imgui.calc_text_size(status[1]).x + gap if status else 0.0)
-    if seam is not None:
-        width += sp(74) + gap + imgui.calc_text_size(seam[1]).x + gap
-
-    def draw_it() -> None:
-        # One control driving the view *and* the writes, deliberately: a canvas
-        # that showed its neighbours while the brush went on clamping at the
-        # edge would be a picture of a seamless tile you cannot paint.
-        tab.tiled = widgets.combo("##inkertiled", tab.tiled, list(TILED_LABELS), sp(104))
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "Draws the eight neighbouring tiles around this one, and wraps "
-                "every stroke, fill and shape across the seams it shows."
-            )
-        if seam is not None:
-            imgui.same_line()
-            # The classic put-the-seam-in-the-middle move, and the reason it is
-            # half rather than any amount: pressing it twice on even dimensions
-            # is the identity, so it is a look rather than an edit you undo.
-            if widgets.disabled_button("Wrap 1/2##inkerwrap", not tab.busy, (sp(74), 0)):
-                width_px, height_px = tab.doc.size
-                tab.doc.offset_layer(width_px // 2, height_px // 2)
-            if imgui.is_item_hovered():
-                imgui.set_tooltip(
-                    "Rolls this layer half a canvas in both directions, putting "
-                    "the wrap seam in the middle where you can paint over it."
-                )
-            imgui.same_line()
-            widgets.text_colored(seam[0], seam[1])
-            if imgui.is_item_hovered():
-                imgui.set_tooltip(
-                    "How hard the wrap join is against the picture's own grain. "
-                    f"Above {SEAM_MAX:.1f} it reads as a visible edge."
-                )
-        if status is not None:
-            imgui.same_line()
-            widgets.text_colored(status[0], status[1])
-
-    return (width, draw_it)
 
 
 def _transform_row(ctx: Any, state: Any, tab: Any) -> None:
@@ -742,8 +635,7 @@ def _zoom_combo(tab: Any) -> None:
     imgui.same_line()
     current = inker_state.zoom_key(tab.view.zoom)
     options = [
-        (inker_state.zoom_key(z), f"{inker_state.zoom_key(z)}%")
-        for z in inker_state.ZOOM_PRESETS
+        (inker_state.zoom_key(z), f"{inker_state.zoom_key(z)}%") for z in inker_state.ZOOM_PRESETS
     ]
     if current not in {key for key, _label in options}:
         # The wheel's 5% notches land between presets constantly, and a combo
@@ -771,6 +663,11 @@ def _status_bar(ctx: Any, state: Any, tab: Any, origin: Any, hovered: bool) -> N
     In Aseprite's order, because that is the order the eye already knows:
     what is under the cursor, then what is selected, then the tool, then the
     document, then the zoom.
+
+    The seam figure and the ``unsaved``/``saving...``/``playing...`` word
+    joined them on 2026-08-23, from the retired view row. They belong with
+    these and not on a bar: every one of these is something the editor is
+    *telling* you, and the bar above the canvas is now entirely things you set.
     """
     doc = tab.doc
     # The status bar is drawn outside the child, so it holds imgui's own cursor
@@ -810,6 +707,25 @@ def _status_bar(ctx: Any, state: Any, tab: Any, origin: Any, hovered: bool) -> N
         parts.append(f"frame {doc.anim.current + 1}/{len(doc.anim.frames)}")
     parts.append(f"{doc.size[0]} x {doc.size[1]}")
     widgets.muted("   ".join(parts))
+    # The seam figure and the one-word document state, which were the trailing
+    # block of the view row until that row became the context bar. Coloured
+    # rather than muted, and after the joined string rather than inside it: one
+    # of them is a warning and the other is a measurement, and a WARN-coloured
+    # word cannot be a member of a single ``muted`` call.
+    seam = seam_text(ctx, tab)
+    if seam is not None:
+        imgui.same_line()
+        widgets.text_colored(seam[0], seam[1])
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "How hard the wrap join is against the picture's own grain. "
+                f"Above {SEAM_MAX:.1f} it reads as a visible edge.\n"
+                "View > Roll the seam to the middle puts it where you can paint."
+            )
+    status = _status(tab)
+    if status is not None:
+        imgui.same_line()
+        widgets.text_colored(status[0], status[1])
     # The zoom is split out of the joined string rather than appended to it,
     # because it is the one number here the user can *set*. It stays last, so
     # the documented Aseprite reading order -- cursor, selection, tool,
@@ -1158,20 +1074,26 @@ def _transform_box(state: Any, tab: Any, draw_list: Any, origin) -> None:
             )
 
 
-def _combine_op() -> str:
-    """Shift adds, Alt subtracts, both intersect -- the universal convention.
+def _combine_op(overrides: Any = None) -> str:
+    """Resolve Aseprite's selection modifiers through the shortcut registry."""
+    from .. import inker_ops
 
-    The pair is checked *first*, or the Shift branch answers it and the fourth
-    of ``selection.COMBINE_OPS`` stays unreachable, which is what it was.
-    """
     io = imgui.get_io()
-    if io.key_shift and io.key_alt:
-        return "intersect"
-    if io.key_shift:
-        return "add"
-    if io.key_alt:
-        return "subtract"
-    return "replace"
+    chord = "+".join(
+        name
+        for name, held in (
+            ("Ctrl", io.key_ctrl),
+            ("Alt", io.key_alt),
+            ("Shift", io.key_shift),
+        )
+        if held
+    )
+    binding = inker_ops.resolve_binding(chord, "Selection", overrides, trigger="hold")
+    return {
+        "selection_add": "add",
+        "selection_subtract": "subtract",
+        "selection_intersect": "intersect",
+    }.get(None if binding is None else binding.target, "replace")
 
 
 # The tools that read the document rather than write to it, so a content lock
@@ -1348,7 +1270,7 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
     )
     state.drag_anchor = point
     state.last_point = point
-    state.combine = _combine_op()
+    state.combine = _combine_op(state.shortcut_overrides)
     ipoint = (int(math.floor(point[0])), int(math.floor(point[1])))
 
     # Before every paint branch, and it returns rather than falling through:
@@ -1385,7 +1307,7 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
     # whatever tool is held -- and before the Alt branch, so the two modifiers
     # never both fire on one press. Ctrl is genuinely free on this canvas:
     # panning is middle-drag or space-drag.
-    if imgui.get_io().key_ctrl:
+    if (tool == "move" or tool in PAINT_TOOLS) and imgui.get_io().key_ctrl:
         hit = doc.layer_at(ipoint)
         if hit is not None:
             doc.set_active_layer(hit)
@@ -1495,7 +1417,8 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
         doc.commit_floating()
         # An unmodified drag starting *inside* the selection moves its edges
         # rather than replacing them -- the marquee's own version of grabbing
-        # what you can see. The modifier check comes first, so Shift and Alt
+        # what you can see. The modifier check comes first, so Shift and its
+        # Aseprite combinations with Alt/Ctrl
         # still start the combine drags they have always started: a user
         # Shift-dragging to add a second region routinely starts inside the
         # first one, and reading the modifiers second would have taken that
@@ -2270,9 +2193,28 @@ def _shape_drag(state: Any, anchor, point):
     rectangle should have been a square halfway through drawing it, and the
     preview has to be able to change its mind with them.
     """
+    from .. import inker_ops
+
     io = imgui.get_io()
+    held = "+".join(
+        name
+        for name, down in (
+            ("Ctrl", io.key_ctrl),
+            ("Alt", io.key_alt),
+            ("Shift", io.key_shift),
+        )
+        if down
+    )
     return inker_state.shape_endpoints(
-        state.tool, anchor, point, constrain=io.key_shift, from_centre=io.key_alt
+        state.tool,
+        anchor,
+        point,
+        constrain=inker_ops.action_active(
+            "shape_square", held, "ShapeTool", state.shortcut_overrides
+        ),
+        from_centre=inker_ops.action_active(
+            "shape_center", held, "ShapeTool", state.shortcut_overrides
+        ),
     )
 
 
@@ -2581,7 +2523,7 @@ def _paint(ctx: Any, state: Any, tab: Any, origin, *, hovered: bool) -> None:
         _layer_edges(tab, draw_list, view, origin)
     if state.tile_numbers:
         _tile_numbers(state, tab, draw_list, view, origin)
-    if state.symmetry != "none":
+    if symmetry_axes(state):
         _symmetry(state, draw_list, view, origin, doc.size)
     _ants(ctx, tab, draw_list, origin, state)
     if slices_visible(state):
@@ -2941,6 +2883,20 @@ def _ruler_band(
                 draw_list.add_text((cross + 2.0, position + 1.0), ink, str(value))
 
 
+def symmetry_axes(state: Any) -> tuple[str, ...]:
+    """Which symmetries are on, resolved. One reader, for one reason.
+
+    ``brush.axes_of`` cannot simply be imported at module scope here: this
+    module already imports a *different* ``axes_of`` from ``inker.tiling`` --
+    tiling axes and symmetry axes are two unrelated senses of the word -- and
+    two functions of the same name in one namespace is exactly the confusion
+    that puts a tiling answer into a symmetry question.
+    """
+    from ..inker import brush
+
+    return brush.axes_of(state.symmetry)
+
+
 def _symmetry(state: Any, draw_list: Any, view: Any, origin, size) -> None:
     """The guide, drawn where the engine actually reflects.
 
@@ -2952,24 +2908,43 @@ def _symmetry(state: Any, draw_list: Any, view: Any, origin, size) -> None:
     one answer both read. Radial had no guide at all and now gets the pivot,
     which is the only thing there is to show for it: its reflections are turns
     rather than lines.
+
+    **Read through ``brush.axes_of``, never against a mode name.** Symmetry is
+    a composed set now, so ``state.symmetry in ("x", "xy")`` would draw no
+    horizontal guide for ``"x+diag"`` -- which is the same class of defect as
+    the hardcoded centre this function's first paragraph is about, one field
+    later.
     """
     from ..inker import brush
 
     width, height = size
     colour = _u32(theme.ACCENT, 0.6)
+    axes = symmetry_axes(state)
     ax, ay = brush.axis_or_default((int(width), int(height)), state.symmetry_axis)
     # Both endpoints through ``to_screen``, for ``_grid``'s reason: the axis a
     # mirror line lands on swaps with the page, so borrowing one coordinate
     # from a corner would draw it across the canvas the wrong way.
-    if state.symmetry in ("x", "xy"):
+    if "x" in axes:
         a = inker_state.to_screen(view, origin, ax, 0)
         b = inker_state.to_screen(view, origin, ax, height)
         draw_list.add_line(a, b, colour)
-    if state.symmetry in ("y", "xy"):
+    if "y" in axes:
         a = inker_state.to_screen(view, origin, 0, ay)
         b = inker_state.to_screen(view, origin, width, ay)
         draw_list.add_line(a, b, colour)
-    if state.symmetry == "radial":
+    # The two 45-degree mirrors, drawn corner to corner through the axis: the
+    # line is infinite and the canvas is what clips it, so the endpoints are
+    # simply far enough out that the visible segment is right at any pan.
+    reach = float(width + height)
+    if "diag" in axes:
+        a = inker_state.to_screen(view, origin, ax - reach, ay - reach)
+        b = inker_state.to_screen(view, origin, ax + reach, ay + reach)
+        draw_list.add_line(a, b, colour)
+    if "anti" in axes:
+        a = inker_state.to_screen(view, origin, ax - reach, ay + reach)
+        b = inker_state.to_screen(view, origin, ax + reach, ay - reach)
+        draw_list.add_line(a, b, colour)
+    if "radial" in axes:
         centre = inker_state.to_screen(view, origin, ax, ay)
         radius = sp(SYMMETRY_PIVOT_RADIUS)
         draw_list.add_circle(centre, radius, colour)

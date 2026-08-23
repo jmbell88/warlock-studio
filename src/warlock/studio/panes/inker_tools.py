@@ -19,13 +19,24 @@ from ..inker_state import (
     SHAPE_TOOLS,
     STAMP_TOOLS,
 )
+from ..manual import render as manual_render
 from ..tokens import sp
 
-# Icon-only, five across: what every paint program's toolbox looks like. The
-# name and shortcut live in the tooltip -- three columns of bare labels
-# truncated ("Ellipse select" in a 104px button) and anything wider is taller,
-# which the canvas pays for.
+# Icon-only: what every paint program's toolbox looks like. The name and
+# shortcut live in the tooltip -- three columns of bare labels truncated
+# ("Ellipse select" in a 104px button) and anything wider is taller, which the
+# canvas pays for.
+#
+# How *many* across is answered per frame by :func:`columns_for` now that the
+# toolbox is a sidebar pane rather than a 90 px rail: a fixed two would draw a
+# 68 px strip of buttons down one edge of a 300 px column with the rest of it
+# empty. This is the floor, and the value every headless caller gets.
 COLUMNS = 2
+
+#: The most buttons a row may hold. Past six the toolbox stops reading as a
+#: square of icons and starts reading as a strip of them, which is the shape a
+#: user recognises the wrong thing by.
+MAX_COLUMNS = 6
 
 #: One toolbox button, in design px. The same number ``_grid`` draws with, said
 #: once so :func:`grid_height` cannot drift from it.
@@ -121,24 +132,30 @@ STAMP_ALIGN_LABELS = (
 
 CANVAS_POPUP = "inker-canvas-options"
 
-SYMMETRY_LABELS = (
-    ("none", "off"),
-    ("x", "left / right"),
-    ("y", "top / bottom"),
-    ("xy", "both"),
-    ("radial", "radial"),
-    # The two 45-degree mirrors (6.8). Named for the line they reflect about
-    # rather than "diagonal", which does not say *which* diagonal.
-    ("diag", "diagonal, top-left to bottom-right"),
-    ("anti", "diagonal, bottom-left to top-right"),
-)
+#: The one symmetry that is **not** a mirror, and so not one of the context
+#: bar's four toggles: a radial symmetry is a set of turns about the axis, it
+#: takes a *count*, and it is reached when a mandala is being drawn rather than
+#: between strokes. It stays here in the canvas popover, beside the number it
+#: needs and the axis both it and the mirrors turn about.
+#:
+#: ``SYMMETRY_LABELS`` -- the seven-way combo this replaced -- went with the
+#: single-mode model on 2026-08-23. ``brush.SYMMETRY`` survives as the legacy
+#: spelling every stored setting still reads through; what a user picks is a
+#: *set* now (``brush.SYMMETRY_AXES``), and a combo cannot express one.
+RADIAL_AXIS = "radial"
 
 
-#: The rail's width in design px: two 34 px buttons, the gap between them and
-#: the pane's own padding. Fixed, and the whole point of the wave: the column
-#: it replaces was 300 px carrying the same twelve decisions plus fourteen
-#: controls that are now a row above the canvas.
-RAIL_W = 90.0
+#: The least this pane may be squeezed to, in design px, before the pane below
+#: it stops taking room: the heading, three rows of the tool grid, the view
+#: toggles and the two colour chips.
+#:
+#: Replaces ``RAIL_W``. The 90 px rail was the whole of W2.9 and it is what
+#: this wave reverses: 90 minus the pane's own 16 px of padding left 74 px of
+#: content, which fitted two buttons and the gap between them *exactly* and
+#: clipped both of the rows underneath -- the third view toggle and two pixels
+#: off the background chip. Those are not three defects to special-case; they
+#: are one column that was never wide enough.
+TOOLS_FLOOR = 190.0
 
 #: The colour chips' flags: no inputs, no label, alpha as a split square. The
 #: full editor is the colour panel's; these two are a *picture* of what the
@@ -152,17 +169,36 @@ _CHIP_FLAGS = (
 )
 
 
-def draw(ctx: Any) -> None:
-    """The toolbox rail: twelve groups, three view toggles, the two colours.
+def columns_for(avail: float) -> int:
+    """How many buttons fit across ``avail`` physical px. Never fewer than two.
 
-    No heading and no help button -- at 90 px a section title does not fit and
-    would push the first row of tools off the top. The pane is exempted in
-    ``tests/manual/test_coverage.py`` for that reason, and the tools are
-    documented in the Inker chapter as they always were.
+    The toolbox is a *pane* now, so its grid answers to the width the user
+    dragged rather than to a constant. Floored at :data:`COLUMNS` because a
+    one-button column is a list, not a toolbox, and capped at
+    :data:`MAX_COLUMNS` for the reason that constant gives.
+    """
+    step = sp(BUTTON_W + GRID_GAP)
+    if step <= 0:
+        return COLUMNS
+    return max(COLUMNS, min(MAX_COLUMNS, int(avail // step)))
+
+
+def draw(ctx: Any) -> None:
+    """The toolbox: twelve groups, three view toggles, the two colours.
+
+    Headed and documented, unlike the 90 px rail it replaces -- the exemption
+    in ``tests/manual/test_coverage.py`` went with the rail, because at a full
+    sidebar width there is room for a section title and the (?) beside it.
     """
     anchors.mark_window("inker/tools")
     state = inker_mode.ensure(ctx)
     tab = state.active
+    widgets.section("Tools")
+    # After the heading, never before it: ``help_button`` is a ``same_line``,
+    # which returns to the previous row unconditionally -- called first it
+    # lands on whatever the pane above drew. (``inker_colors`` has the long
+    # version of this note.)
+    manual_render.help_button(ctx, "inker-tools")
     _grid(state, None if tab is None else tab.doc)
     imgui.dummy((0, sp(GRID_GAP)))
     _view_toggles(ctx, state)
@@ -202,18 +238,19 @@ def _view_toggles(ctx: Any, state: Any) -> None:
 
 
 def _colour_chips(ctx: Any, state: Any) -> None:
-    """The foreground and background, at the foot of the rail.
+    """The foreground and background, at the foot of the toolbox.
 
-    Aseprite's "Mirrored Default" shape: the two colours belong with the tools
-    because they are what the tool in your hand writes with, and the *palette*
-    -- swatches, ramps, the indexed table -- is a panel, which is why it sits
-    in the right column instead (``inker_colors``).
+    They stay here after the columns swapped sides: the two colours are what
+    the tool in your hand writes with, so they belong beside the tools, and the
+    *palette* -- swatches, ramps, the indexed table -- is a panel, which is why
+    it is a pane of its own in the other column (``inker_colors``).
     """
     # **Sized, and drawn as swatches rather than editors.** ``color_edit4``
-    # defaults to a full-width item and to showing its inputs, so in a 90 px
-    # rail the two chips drew as coloured slivers with the picker's own strips
-    # either side -- which is what the screenshot pass at 1.5 caught. A chip is
-    # a picture of the colour; the editor is the click.
+    # defaults to a full-width item and to showing its inputs, so the two chips
+    # drew as coloured slivers with the picker's own strips either side --
+    # which is what the screenshot pass at 1.5 caught in the 90 px rail. A chip
+    # is a picture of the colour; the editor is the click, and the sliders are
+    # the pane at the foot of the other column (``inker_picker``).
     chip = sp(BUTTON_W)
     imgui.set_next_item_width(chip)
     changed, value = controls.color_edit4("##inkfg", _vec(state.fg), _CHIP_FLAGS)
@@ -298,6 +335,7 @@ def _grid(state, doc=None) -> None:
     (``widgets.disabled_button`` has the long version of this note).
     """
     width, height = sp(BUTTON_W), sp(BUTTON_H)
+    columns = columns_for(imgui.get_content_region_avail().x)
     rects: dict[str, tuple[float, float, float, float]] = {}
     for index, (group, label, members) in enumerate(inker_state.TOOL_GROUPS):
         shown = _group_tool(state, group, members)
@@ -319,7 +357,7 @@ def _grid(state, doc=None) -> None:
             state.flyout = group if len(members) > 1 else ""
         if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled.value):
             imgui.set_tooltip(_group_tooltip(label, members, shown, reason))
-        if index % COLUMNS != COLUMNS - 1:
+        if index % columns != columns - 1:
             imgui.same_line()
     imgui.new_line()
     _flyout(state, doc, rects)
@@ -346,10 +384,12 @@ def _group_tooltip(label: str, members, shown: str, reason: str) -> str:
     what it does, so it is also the only place "hold to reach the others" can
     be read.
     """
-    chords = next((key for tool, _l, key in inker_state.TOOLS if tool == shown), "")
-    alt = inker_mode.ALT_TOOL_CHORDS.get(shown)
-    if alt:
-        chords = f"{chords} or {alt}"
+    # The registry owns aliases and Aseprite-compatible primaries.  The state
+    # is not available in this pure tooltip helper, so this is the default
+    # spelling; the shortcut editor is the authoritative view of overrides.
+    from .. import inker_ops
+
+    chords = inker_ops.shortcut_for("tool", shown)
     note = f"{inker_state.tool_label(shown)}  ({chords})"
     if len(members) > 1:
         others = ", ".join(
@@ -912,22 +952,42 @@ def canvas_options(ctx: Any, state: Any) -> None:
     settings that need a *number* or a *menu* and had no other way in: the
     symmetry mode (with its ways and its axis) and the grid's step in pixels.
 
-    Symmetry lives here rather than on the context bar because it is a setting
-    of the sitting, not of the tool: it survives every tool change, the canvas
-    draws its guides beside the grid's lines, and every paint mode -- erase,
-    blur, smudge -- inherits it without asking.
+    The four *mirrors* moved to the context bar on 2026-08-23 -- Aseprite's
+    arrangement, and see ``inker_context._symmetry_items`` for the argument.
+    What stays is the radial symmetry, which needs a number rather than a
+    toggle, the axis all of them turn about, and the grid's step. Every one of
+    them survives a tool change and is inherited by every paint mode -- erase,
+    blur, smudge -- without asking.
     """
 
-    state.symmetry = widgets.labeled_combo("Symmetry", state.symmetry, list(SYMMETRY_LABELS))
-    if state.symmetry == "radial":
+    axes = brush.axes_of(state.symmetry)
+    changed, radial = controls.checkbox(
+        "Radial symmetry##symradial", RADIAL_AXIS in axes
+    )
+    if changed:
+        state.symmetry = brush.toggled(state.symmetry, RADIAL_AXIS)
+        inker_mode.persist(ctx)
+        axes = brush.axes_of(state.symmetry)
+    if imgui.is_item_hovered():
+        imgui.set_tooltip(
+            "Turns about the axis rather than mirrors across it, and composes "
+            "with the four mirrors on the context bar."
+        )
+    if RADIAL_AXIS in axes:
         imgui.set_next_item_width(sp(90))
         changed, count = controls.slider_int(
             "Ways", int(state.radial_count), brush.MIN_RADIAL, brush.MAX_RADIAL
         )
         if changed:
             state.radial_count = int(count)
-    if state.symmetry != "none":
+            inker_mode.persist(ctx)
+    if axes:
         _symmetry_axis(state)
+    else:
+        # Named rather than silent: the four mirrors moved to the context bar
+        # and this popover is where a user who remembers the old combo comes
+        # looking for them.
+        widgets.muted("The four mirrors are on the bar above the canvas.")
     # The grid's *step*. The three flags it used to sit beside are the rail's
     # toggles; this one is a number, and "Selection as Grid" -- the only other
     # way to set it -- needs a selection the exact size you meant.

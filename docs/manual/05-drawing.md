@@ -14,8 +14,10 @@ This chapter covers still images. The timeline gets [its own chapter](06-animati
 
 `Ctrl+N` starts a document, `Ctrl+O` opens one. Documents are tabs, and `Ctrl+Tab` cycles them.
 
-The window is three columns: tools on the left, canvas in the middle, layers and the pipeline
-bridges on the right.
+The window is three columns and a strip: colour on the left, canvas in the middle, the toolbox and
+the pipeline bridges on the right, and the timeline — layers down, frames across — always along the
+bottom. Above the canvas is one row, the context bar: what the tool in your hand is set to, and the
+symmetry toggles.
 
 Move around the canvas with the wheel to zoom and space-drag or middle-drag to pan. `Ctrl+0` fits
 the canvas to the window and `Ctrl+1` snaps back to 100%. Zoom and pan are *not* tools here — they
@@ -133,10 +135,11 @@ still lands on the layer it was about. That is not something most editors promis
 
 ## Symmetry
 
-The canvas glyph in the tool rail opens a symmetry popover: off, left/right, top/bottom, both,
-radial, and the two 45-degree mirrors — top-left to bottom-right, and bottom-left to top-right. The
-axis is draggable, so symmetry does not have to be about the centre of the canvas. Strokes mirror as
-you draw them.
+Four toggles at the right-hand end of the context bar: **H** (left/right), **V** (top/bottom), and
+`\` and `/`, the two 45-degree mirrors. They **compose** — switch on any combination and each one
+reflects everything the others already produced — and **Reset** beside them switches the lot off.
+**Radial** and the axis the mirrors reflect about are in the canvas popover off the toolbox, because
+each needs a number. Strokes mirror as you draw them, and every paint tool inherits it.
 
 ## Saving and exporting
 

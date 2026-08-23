@@ -194,7 +194,7 @@ left-drag in empty space with `Q` selected sweeps a marquee.
 | Keys | Action |
 | --- | --- |
 | `B` | Brush |
-| `A` | Spray |
+| `A` or `Shift+B` | Spray |
 | `E` | Eraser |
 | `G` | Fill |
 | `K` or `Shift+G` | Gradient |
@@ -202,11 +202,11 @@ left-drag in empty space with `Q` selected sweeps a marquee.
 | `N` | Smudge |
 | `H` | Shading |
 | `L` | Line |
-| `F` | Curve (Enter or a double-click finishes it, Esc abandons it) |
+| `F` or `Shift+L` | Curve (Enter or a double-click finishes it, Esc abandons it) |
 | `U` | Rect |
 | `J` or `Shift+U` | Ellipse |
 | `P` | Polyline (finished the same way as the curve) |
-| `O` | Polygon (also closes if you click back on its first point) |
+| `O` or `Shift+D` | Polygon (also closes if you click back on its first point) |
 | `M` | Marquee select |
 | `S` or `Shift+M` | Ellipse select |
 | `Q` | Lasso |
@@ -215,13 +215,12 @@ left-drag in empty space with `Q` selected sweeps a marquee.
 | `V` | Move |
 | `I` | Pick a colour from the canvas |
 | `T` | Text |
-| `C` | Slice |
+| `C` or `Shift+C` | Slice |
 | `Y` | Tile stamp |
 | `X` | Swap the two colours |
 | `1` - `0` | Brush opacity, 10% to 100% |
 | Alt+`1` - `9` | Recall a numbered custom brush |
 | Alt+Shift+1 - 9 | Store the captured brush in that slot |
-| Tab | Show or hide the timeline -- which is where the layers are |
 | Ctrl+Shift+N | New layer |
 | Alt+S | Solo the active layer, and again to bring the rest back |
 | Ctrl+Shift+Up / Down | Move the layer up / down the stack |
@@ -254,15 +253,22 @@ left-drag in empty space with `Q` selected sweeps a marquee.
 | Delete | Clear the selected pixels |
 | Esc | Cancel a floating selection, then deselect |
 
-Shift and Alt are modifiers rather than shortcuts: holding **Shift** while dragging a selection adds
-to the current one, and **Alt** subtracts. Both are described in
+Selection modifiers follow Aseprite: **Shift** adds, **Alt+Shift** subtracts, and
+**Ctrl+Shift** intersects. They are described in
 [Selections and transform](28-inker.md#selections-and-transform). With a *paint* tool Shift means
 something else — it draws a straight line from wherever the last stroke finished, so click,
 Shift+click, Shift+click walks a chain of segments in the brush already in your hand.
 
-Three tools answer to a shifted letter as well as their own, because Aseprite files them
-two-to-a-slot and a hand trained there reaches for the shifted one: `Shift+G` is the gradient,
-`Shift+U` the ellipse, `Shift+M` the elliptical marquee. The plain letters still work.
+The Aseprite bindings are primary: `Shift+B` spray, `Shift+G` gradient, `Shift+L` curve,
+`Shift+U` ellipse, `Shift+D` polygon, `Shift+M` elliptical marquee, and `Shift+C` slice.
+The earlier Inker letters remain as compatibility aliases.
+
+**Edit > Keyboard Shortcuts** (`Ctrl+Alt+Shift+K`) searches commands, tools and contextual action
+modifiers. A target can have multiple semicolon-separated bindings. **Default** restores one target;
+**Reset all** restores the complete Aseprite-compatible table. **Copy JSON** and **Paste JSON** export
+and import the persisted overrides without replacing defaults that were never changed. Holding
+`Alt` temporarily selects the eyedropper and holding `Ctrl` temporarily selects Move; releasing the
+key restores the tool you were using.
 
 `+` and `-` step through whole zoom scales — 25%, 50%, 100%, 200%, 300% and up — rather than the
 wheel's 5% notches. Pixel art wants the whole ones: at 135% a source pixel is 1.35 screen pixels, so

@@ -21,8 +21,45 @@ from warlock.studio.inker import animation, brush, selection, transform
 from warlock.studio.panes import inker_canvas, inker_timeline, inker_tools
 
 
-def test_the_symmetry_combo_offers_every_mode_the_brush_implements():
-    assert tuple(key for key, _label in inker_tools.SYMMETRY_LABELS) == brush.SYMMETRY
+def test_every_symmetry_the_engine_composes_has_a_control():
+    """The combo this replaced pinned the same fact one model earlier.
+
+    A symmetry is a *set* now (``brush.SYMMETRY_AXES``), so a seven-way combo
+    cannot express one and the control is five: the four mirrors as toggles on
+    the context bar, and the radial as a checkbox in the canvas popover, where
+    the count it needs already lives. The two directions still both matter --
+    a toggle the engine does not implement fails on the first click, and an
+    axis with no control hides the feature.
+    """
+    from warlock.studio.panes import inker_context
+
+    mirrors = tuple(axis for axis, _label, _tip in inker_context.SYMMETRY_TOGGLES)
+    assert mirrors + (inker_tools.RADIAL_AXIS,) == brush.SYMMETRY_AXES
+    # And each carries a tooltip: a bar of "H V \ /" with no words is four
+    # buttons a user has to press to find out about.
+    assert all(tip for _axis, _label, tip in inker_context.SYMMETRY_TOGGLES)
+
+
+def test_the_legacy_symmetry_names_all_still_read():
+    """``brush.SYMMETRY`` is a stored value in every settings file that has
+    ever run Warlock, so every one of its members has to keep meaning what it
+    meant -- which is what makes the composed model an addition rather than a
+    migration."""
+    assert brush.axes_of("none") == ()
+    assert brush.axes_of("xy") == ("x", "y")
+    for mode in brush.SYMMETRY:
+        axes = brush.axes_of(mode)
+        assert all(axis in brush.SYMMETRY_AXES for axis in axes), mode
+        # And it round-trips: the canonical spelling of what a legacy name
+        # means reads back as the same set.
+        assert brush.axes_of(brush.compose(axes)) == axes
+
+
+def test_a_symmetry_this_build_does_not_have_is_ignored_rather_than_fatal():
+    """The value comes out of a settings file."""
+    assert brush.axes_of("sideways") == ()
+    assert brush.axes_of("x+sideways") == ("x",)
+    assert brush.axes_of(None) == ()
 
 
 class _Lines:
@@ -100,6 +137,34 @@ def test_radial_symmetry_shows_its_pivot_rather_than_nothing(guide):
     assert len(draw.lines) == 2
 
 
+def test_the_two_diagonal_mirrors_get_guides_of_their_own(guide):
+    """They had none: the guide drew ``x`` and ``y`` and nothing else, so the
+    two 45-degree mirrors reflected with no line on screen saying where. That
+    was survivable while symmetry was one mode at a time and is not now -- a
+    composed ``x+diag`` draws one line and reflects about two."""
+    size = (64, 64)
+    ax, ay = brush.axis_or_default(size, None)
+    for mode in ("diag", "anti"):
+        (line,) = guide(mode, size).lines
+        (a, b) = line
+        # Through the axis, at 45 degrees, and in the direction the toggle's
+        # own label draws: ``diag`` descends to the right on screen.
+        assert a[0] != b[0]
+        slope = (b[1] - a[1]) / (b[0] - a[0])
+        assert slope == (1.0 if mode == "diag" else -1.0), mode
+        assert a[1] - slope * a[0] == ay - slope * ax, mode
+
+
+def test_a_composed_symmetry_draws_every_guide_it_reflects_about(guide):
+    """The whole point of the composed model, at the one place a mismatch is
+    invisible until a stroke lands somewhere unexpected."""
+    size = (64, 64)
+    assert len(guide("x+y+diag+anti", size).lines) == 4
+    assert len(guide("x+diag", size).lines) == 2
+    # And the engine agrees about how many places a dab lands: D4 is eight.
+    assert len(brush._mirror((3.0, 5.0), size, "x+y+diag+anti")) == 8
+
+
 def test_the_nib_combo_offers_every_nib_the_brush_implements():
     """The nib picker is the context bar's now (W2.4) and it gained the line
     nib in 6.1's sibling wave; a nib the engine has and no control offers is a
@@ -120,24 +185,26 @@ def test_the_default_direction_is_written_as_nothing_at_all():
     assert inker_timeline.DIRECTION_NOTES["forward"] == ""
     assert inker_timeline._tag_note(animation.Tag(name="x")) == ""
     assert inker_timeline._tag_note(animation.Tag(name="x", loop=False)) == " (once)"
-    assert (
-        inker_timeline._tag_note(animation.Tag(name="x", direction="pingpong"))
-        == " (ping-pong)"
-    )
+    assert inker_timeline._tag_note(animation.Tag(name="x", direction="pingpong")) == " (ping-pong)"
 
 
 @pytest.mark.parametrize(
-    ("shift", "alt", "expected"),
-    [(False, False, "replace"), (True, False, "add"), (False, True, "subtract"),
-     (True, True, "intersect")],
+    ("shift", "alt", "ctrl", "expected"),
+    [
+        (False, False, False, "replace"),
+        (True, False, False, "add"),
+        (False, True, False, "replace"),
+        (True, True, False, "subtract"),
+        (True, False, True, "intersect"),
+    ],
 )
-def test_every_combine_op_is_reachable_from_the_keyboard(monkeypatch, shift, alt, expected):
+def test_every_combine_op_is_reachable_from_the_keyboard(monkeypatch, shift, alt, ctrl, expected):
     """The fourth was not: the Shift branch answered the pair, so ``intersect``
     existed in the engine and in no gesture."""
     monkeypatch.setattr(
         inker_canvas.imgui,
         "get_io",
-        lambda: SimpleNamespace(key_shift=shift, key_alt=alt, key_ctrl=False),
+        lambda: SimpleNamespace(key_shift=shift, key_alt=alt, key_ctrl=ctrl),
     )
     assert inker_canvas._combine_op() == expected
 
@@ -146,10 +213,15 @@ def test_the_modifiers_cover_the_engines_whole_vocabulary():
     reachable = set()
     for shift in (False, True):
         for alt in (False, True):
-            reachable.add(
-                "intersect" if shift and alt else "add" if shift else "subtract" if alt
-                else "replace"
-            )
+            for ctrl in (False, True):
+                if shift and ctrl:
+                    reachable.add("intersect")
+                elif shift and alt:
+                    reachable.add("subtract")
+                elif shift:
+                    reachable.add("add")
+                else:
+                    reachable.add("replace")
     assert reachable == set(selection.COMBINE_OPS)
 
 
@@ -224,11 +296,11 @@ GRID = {
 @pytest.mark.parametrize(
     ("point", "expected"),
     [
-        ((100.0, 50.0), (1, 0)),          # the top-left corner of cell (1, 0)
-        ((119.0, 69.0), (1, 0)),          # its bottom-right
-        ((122.0, 55.0), (1, 1)),          # the next column across
-        ((100.0, 80.0), (0, 0)),          # the row below
-        ((180.0, 55.0), (1, 3)),          # the last column
+        ((100.0, 50.0), (1, 0)),  # the top-left corner of cell (1, 0)
+        ((119.0, 69.0), (1, 0)),  # its bottom-right
+        ((122.0, 55.0), (1, 1)),  # the next column across
+        ((100.0, 80.0), (0, 0)),  # the row below
+        ((180.0, 55.0), (1, 3)),  # the last column
     ],
 )
 def test_a_point_maps_to_the_cell_it_is_inside(point, expected):
@@ -238,10 +310,10 @@ def test_a_point_maps_to_the_cell_it_is_inside(point, expected):
 @pytest.mark.parametrize(
     "point",
     [
-        (99.0, 55.0),    # left of the first column
-        (120.5, 55.0),   # in the gutter between two columns
-        (100.0, 71.0),   # in the gap between two rows
-        (210.0, 55.0),   # past the last column
+        (99.0, 55.0),  # left of the first column
+        (120.5, 55.0),  # in the gutter between two columns
+        (100.0, 71.0),  # in the gap between two rows
+        (210.0, 55.0),  # past the last column
         (100.0, 200.0),  # below every row
     ],
 )
@@ -306,9 +378,7 @@ def test_every_transform_handle_has_axes_declared_for_it():
     doc = inker.Document.blank(16, 16)
     doc.select(selection.SelectionMask.from_rect(doc.size, (2, 2, 10, 10)))
     assert doc.lift()
-    tab = SimpleNamespace(
-        doc=doc, view=inker_state.PaintView(zoom=1.0, pan=(0.0, 0.0))
-    )
+    tab = SimpleNamespace(doc=doc, view=inker_state.PaintView(zoom=1.0, pan=(0.0, 0.0)))
     drawn = set(inker_canvas._handles(tab, (0.0, 0.0)))
     assert drawn - {"rotate"} == set(inker_canvas.HANDLE_AXES)
 
@@ -317,9 +387,7 @@ def test_the_edge_handles_sit_on_the_edge_midpoints():
     doc = inker.Document.blank(16, 16)
     doc.select(selection.SelectionMask.from_rect(doc.size, (2, 2, 10, 10)))
     assert doc.lift()
-    tab = SimpleNamespace(
-        doc=doc, view=inker_state.PaintView(zoom=1.0, pan=(0.0, 0.0))
-    )
+    tab = SimpleNamespace(doc=doc, view=inker_state.PaintView(zoom=1.0, pan=(0.0, 0.0)))
     handles = inker_canvas._handles(tab, (0.0, 0.0))
     assert handles["n"] == (6.0, 2.0)
     assert handles["s"] == (6.0, 10.0)
@@ -348,9 +416,7 @@ def _range_clip(frames: int = 3, size=(4, 4)):
     doc = inker.Document.blank(*size)
     for index in range(frames - 1):
         doc.add_frame()
-        doc.write_colour(
-            (0, 0, 2, 2), (10 * index + 5, 0, 0, 255), np.ones((2, 2), np.float32)
-        )
+        doc.write_colour((0, 0, 2, 2), (10 * index + 5, 0, 0, 255), np.ones((2, 2), np.float32))
     doc.set_current_frame(0)
     doc.write_colour((0, 0, 2, 2), (255, 0, 0, 255), np.ones((2, 2), np.float32))
     doc.history.clear()
@@ -361,10 +427,7 @@ def _range_clip(frames: int = 3, size=(4, 4)):
 def test_every_range_verb_reaches_the_document_as_one_step(label):
     doc = _range_clip()
     run = next(r for name, r, _sq in inker_timeline.RANGE_VERBS if name == label)
-    before = [
-        doc.anim.cels[(doc.anim.tracks[0].uid, f.uid)].pixels.copy()
-        for f in doc.anim.frames
-    ]
+    before = [doc.anim.cels[(doc.anim.tracks[0].uid, f.uid)].pixels.copy() for f in doc.anim.frames]
 
     run(doc, (0, 0, 0, 1))
     assert len(doc.history) == 1
@@ -458,9 +521,7 @@ def test_shift_clicking_a_layer_row_extends_the_range_over_the_whole_clip(monkey
     doc.add_frame()
     doc.set_active_layer(0)
     tab = _range_tab(doc)
-    monkeypatch.setattr(
-        inker_timeline.imgui, "get_io", lambda: SimpleNamespace(key_shift=True)
-    )
+    monkeypatch.setattr(inker_timeline.imgui, "get_io", lambda: SimpleNamespace(key_shift=True))
 
     assert inker_timeline.extend_range(tab, doc, 2)
     # Anchored on the row that *was* active, and with no range yet the frame
@@ -477,9 +538,7 @@ def test_shift_clicking_keeps_the_frame_span_a_range_already_has(monkeypatch):
     doc.add_frame()
     doc.set_active_layer(1)
     tab = _range_tab(doc, (1, 1, 1, 2))
-    monkeypatch.setattr(
-        inker_timeline.imgui, "get_io", lambda: SimpleNamespace(key_shift=True)
-    )
+    monkeypatch.setattr(inker_timeline.imgui, "get_io", lambda: SimpleNamespace(key_shift=True))
 
     assert inker_timeline.extend_range(tab, doc, 0)
     assert tab.range_sel == (0, 1, 1, 2)
@@ -492,9 +551,7 @@ def test_an_unmodified_click_does_not_extend_the_range(monkeypatch):
     doc.add_layer()
     doc.add_frame()
     tab = _range_tab(doc)
-    monkeypatch.setattr(
-        inker_timeline.imgui, "get_io", lambda: SimpleNamespace(key_shift=False)
-    )
+    monkeypatch.setattr(inker_timeline.imgui, "get_io", lambda: SimpleNamespace(key_shift=False))
 
     assert not inker_timeline.extend_range(tab, doc, 1)
     assert tab.range_sel is None

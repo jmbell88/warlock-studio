@@ -12,11 +12,18 @@ one-frame sprite**: ``doc.anim is None`` stays the stored state, and the grid
 renders a single column against the layer stack, which is the same picture with
 one frame in it.
 
-The strip is always available and ``Tab`` toggles it -- Aseprite's binding.
-Following ``general.autoshowTimeline`` it starts hidden for a fresh
-single-layer still and shows itself on the second layer or the second frame, so
-a quick drawing session pays neither the strip nor the old panel's column, and
-nobody can lose their layer list by accident.
+**The strip is always on screen**, at a floor of :data:`STRIP_H` design px.
+It was once hideable, with ``Tab`` toggling it and an ``autoshowTimeline``
+rule raising it on the second layer -- Aseprite's arrangement, ported. Both
+went on 2026-08-23, by user decision, and the argument for going is what the
+port cost: this strip holds the *layer list*, so "hidden" is a state in which
+a document has no visible layers, no eye or lock toggles and no way to reach
+either except a key with nothing on screen naming it. Every defect this pane
+has had was an instance of that -- the animation gate that hid it outright for
+seven months, and the playback wedge where a clip ran on with its Stop button
+off screen. A panel that cannot be hidden cannot be lost, and the strip's
+height is a drag (the ``inker-timeline`` share) for the case it was really
+being hidden for.
 
 **Rows run bottom-up**: the background is the bottom row, which is Aseprite's
 order, Photoshop's order, and -- the reason it changed -- the order this grid's
@@ -182,62 +189,11 @@ def draw(ctx: Any) -> None:
     tab = None if state is None else state.active
     if tab is None:
         return
-    autoshow(state, tab)
-    # **Above the early return.** ``_tick`` is the only caller of
-    # ``tick_playback``, which is the only thing that advances ``play_index``
-    # or ends a clip naturally -- so with it below the return, a strip hidden
-    # mid-playback left ``tab.playing`` True forever and ``tab.busy`` with it,
-    # and the canvas then refused every gesture silently while the Stop button
-    # explaining why was inside the strip that had just been hidden.
-    # ``toggle`` stops playback on the way out as well; this is what makes
-    # every *other* route to a hidden strip safe too.
     _tick(tab)
-    if not state.timeline_open:
-        return
     if tab.doc.anim is not None:
         _transport(ctx, tab)
         imgui.separator()
     _grid(ctx, tab)
-
-
-def autoshow(state: Any, tab: Any) -> bool:
-    """Raise the strip by itself the first time a document needs it.
-
-    Aseprite's ``general.autoshowTimeline``. The threshold is "more than one
-    layer or more than one frame", because either one is the moment the grid
-    stops being a picture of a single drawing -- and it fires **once per
-    document**, so closing it again is a decision that sticks.
-    """
-    doc = tab.doc
-    frames = len(doc.anim.frames) if doc.anim is not None else 1
-    grown = len(doc.stack) > 1 or frames > 1
-    if grown and tab.uid not in state.timeline_shown:
-        state.timeline_shown.add(tab.uid)
-        state.timeline_open = True
-        return True
-    return False
-
-
-def toggle(state: Any) -> None:
-    """``Tab``. Also marks every open document as already auto-shown.
-
-    Otherwise closing the strip on a two-layer drawing would last exactly until
-    the next layer was added, which is a toggle the app argues with.
-
-    **Hiding the strip stops playback.** Everything that says a clip is running
-    -- the Stop button, the transport, the "playback is running" line -- is
-    drawn inside the strip, and playback holds ``tab.busy``, which is what the
-    canvas silently refuses paint gestures on. A running clip whose only
-    controls are off screen is a document that has stopped accepting edits with
-    nothing on screen saying why, so Tab ends it rather than hiding it.
-    """
-    state.timeline_open = not state.timeline_open
-    if not state.timeline_open:
-        for tab in state.docs:
-            if tab.playing:
-                inker_mode.stop_play(tab)
-    for tab in state.docs:
-        state.timeline_shown.add(tab.uid)
 
 
 def _tick(tab: Any) -> None:

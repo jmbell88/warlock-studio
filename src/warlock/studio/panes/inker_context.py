@@ -59,6 +59,39 @@ COMBINE_LABELS = [
     ("intersect", "Intersect"),
 ]
 
+#: The four mirrors, as independent toggles -- Aseprite's context bar, and the
+#: reason ``brush.SYMMETRY_AXES`` exists: they *compose*, so this is four
+#: buttons rather than a seven-way combo, and "horizontal and top-left
+#: diagonal" is a state the engine can now be in.
+#:
+#: **Labelled with ASCII rather than glyphs**, which is ``inker_timeline._STEPS``'
+#: rule and its reason: ``icons.py`` is a transcription of lucide-static
+#: 0.525.0's codepoint assignments and its docstring forbids guessing one, and
+#: the vendored subset carries ``flip-horizontal`` but no ``flip-vertical`` and
+#: nothing for either diagonal. Three invented codepoints to avoid one honest
+#: character is the wrong trade, and a mirror line is a character.
+#:
+#: ``diag`` draws as ``\`` and ``anti`` as ``/`` because the *screen* y axis
+#: grows downward: the reflection ``inker`` calls top-left-to-bottom-right is
+#: the backslash on the page, and getting that pair the wrong way round is a
+#: button that mirrors the other way from the one it is drawn as.
+SYMMETRY_TOGGLES: tuple[tuple[str, str, str], ...] = (
+    ("x", "H", "Horizontal symmetry: every dab is mirrored left/right about the axis"),
+    ("y", "V", "Vertical symmetry: every dab is mirrored top/bottom about the axis"),
+    (
+        "diag",
+        "\\",
+        "Diagonal symmetry, top-left to bottom-right. Combines with the others.",
+    ),
+    (
+        "anti",
+        "/",
+        "Diagonal symmetry, bottom-left to top-right. Combines with the others.",
+    ),
+)
+
+SYMMETRY_RESET = "symreset"
+
 
 def draw(ctx: Any, state: Any, tab: Any) -> None:
     """The bar. Called by the canvas, between the tab bar and the image."""
@@ -145,7 +178,7 @@ def _selection_bar(ctx: Any, state: Any, tab: Any) -> None:
 
     Not only under a select tool, which is the change: ``state.combine`` has
     always been sampled at press and has never been visible anywhere, so
-    "Shift adds, Alt subtracts" was a line of prose in a panel rather than a
+    "Shift adds, Alt+Shift subtracts" was prose in a panel rather than a
     control with a state. A mask outlives the tool that made it, so the bar
     that says what the next one will do to it does too.
     """
@@ -195,7 +228,9 @@ def _tool_bar(ctx: Any, state: Any, tab: Any) -> None:
                 pinned=True,
             )
         )
-    hit = toolbar.toolbar("inker-context", items, fields=fields)
+    hit = toolbar.toolbar(
+        "inker-context", items, fields=fields, trailing=symmetry_trailing(ctx, state)
+    )
     if hit == "dynamics":
         imgui.open_popup(DYNAMICS_POPUP)
     elif hit == "panels":
@@ -203,6 +238,85 @@ def _tool_bar(ctx: Any, state: Any, tab: Any) -> None:
     _dynamics_popup(ctx, state, tab, behind)
     _panels_popup(ctx, state, tab)
     imgui.separator()
+
+
+def symmetry_trailing(ctx: Any, state: Any) -> tuple[float, Any]:
+    """The four mirrors and their reset, at the **end** of every tool bar.
+
+    **On the bar rather than in the toolbox popover**, which is where the old
+    seven-way combo lived and is what changed on 2026-08-23. The argument for
+    the popover was that symmetry is a setting of the *sitting* rather than of
+    the tool -- which is true, and is also true of Aseprite's, where it is on
+    the context bar anyway. What settles it is the gesture: a mirror is
+    switched on to draw one thing and off again a moment later, which is two
+    round trips through a popover per use, and the guide it draws is on the
+    canvas the bar is sitting over.
+
+    A ``trailing`` block rather than ``items``, and that is a layout decision
+    rather than a tidiness one: ``toolbar`` draws its items *before* its
+    fields, so as buttons these landed between the Dynamics glyph and the size
+    slider -- in the middle of the tool's own settings, which is the one place
+    a session-wide setting must not be. Trailing puts them past the fields, at
+    the right-hand end, which is where Aseprite's are; the cost is that they no
+    longer collapse into the overflow menu, and it is the right cost for five
+    controls that are already the width of a glyph.
+    """
+    from ..inker import brush
+
+    axes = brush.axes_of(state.symmetry)
+    style = imgui.get_style()
+    gap = style.item_spacing.x
+    side = imgui.get_frame_height()
+    reset_w = imgui.calc_text_size("Reset").x + style.frame_padding.x * 2.0
+    width = side * len(SYMMETRY_TOGGLES) + reset_w + gap * len(SYMMETRY_TOGGLES)
+    dirty = bool(axes) or state.symmetry_axis is not None or (
+        int(state.radial_count) != brush.DEFAULT_RADIAL
+    )
+
+    def draw_it() -> None:
+        for axis, label, tip in SYMMETRY_TOGGLES:
+            if controls.button(
+                f"{label}##ctxsym/{axis}", (side, side), selected=axis in axes
+            ):
+                _symmetry_hit(ctx, state, f"sym/{axis}")
+            if imgui.is_item_hovered():
+                imgui.set_tooltip(tip)
+            imgui.same_line()
+        # Disabled rather than hidden: a reset that appears only once something
+        # is set is a control the user cannot learn is there.
+        if widgets.disabled_button(
+            f"Reset##ctxsym/{SYMMETRY_RESET}",
+            dirty,
+            (reset_w, side),
+            reason="No symmetry is set.",
+            tooltip=(
+                "Switch every symmetry off, put the axis back in the middle of "
+                "the canvas and the radial count back to its default."
+            ),
+        ):
+            _symmetry_hit(ctx, state, f"sym/{SYMMETRY_RESET}")
+
+    return (width, draw_it)
+
+
+def _symmetry_hit(ctx: Any, state: Any, hit: str) -> None:
+    """One of the five symmetry buttons, or nothing this function owns."""
+
+    from ..inker import brush
+
+    if not hit.startswith("sym/"):
+        return
+    axis = hit[len("sym/") :]
+    if axis == SYMMETRY_RESET:
+        state.symmetry = "none"
+        state.symmetry_axis = None
+        state.radial_count = brush.DEFAULT_RADIAL
+    else:
+        state.symmetry = brush.toggled(state.symmetry, axis)
+    # Persisted on the press: symmetry is part of the session snapshot the
+    # colours and the grid are in, and a mirror that switches itself off at
+    # the next launch is a setting the user has to rediscover.
+    inker_mode.persist(ctx)
 
 
 def _dynamics_popup(ctx: Any, state: Any, tab: Any, keys: list[str]) -> None:

@@ -193,6 +193,20 @@ INKER_BASICS = Tour(
             chapter=("05-drawing", "colour"),
         ),
         Step(
+            id="picker",
+            title="The picker",
+            body=(
+                "RGB, HSV, HSL and Gray over the same colour, with a hex field that "
+                "takes what somebody pasted you.\n\n"
+                "On an indexed drawing, with a colour picked out of the palette, these "
+                "sliders edit that palette entry -- so every pixel painted in it "
+                "changes at once, in one undo step."
+            ),
+            mode="inker",
+            anchor="inker/picker",
+            chapter=("28-inker", "the-colour-picker"),
+        ),
+        Step(
             id="layer",
             title="Add a layer",
             body=(
@@ -239,6 +253,21 @@ INKER_BASICS = Tour(
             mode="inker",
             anchor="inker/timeline",
             chapter=("06-animating", "copy-versus-link"),
+        ),
+        Step(
+            id="generation",
+            title="Getting it out again",
+            body=(
+                "Make 3D hands the drawing to the mesh pipeline; Save as reference "
+                "puts it in the library; Add to Packwright sends it to the atlas "
+                "packer.\n\n"
+                "A verb you cannot use right now is greyed with the reason in its "
+                "tooltip rather than hidden -- Revert to original needs a document "
+                "that came out of the library in the first place."
+            ),
+            mode="inker",
+            anchor="inker/generate",
+            chapter=("28-inker", "pipeline-bridges"),
         ),
     ),
 )

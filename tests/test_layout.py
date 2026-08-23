@@ -136,7 +136,7 @@ def test_a_split_starts_at_the_shared_default_and_then_goes_its_own_way():
     lay.set_share("inker-tools", 0.7)
     assert lay.share("inker-tools") == 0.7
     assert lay.share("clay") == 0.4, "a keyed drag must not move another split"
-    assert lay.share("inker-layers") == 0.4, "Inker's two handles are two splits"
+    assert lay.share("inker-tiles") == 0.4, "Inker's handles are separate splits"
 
 
 def test_a_stored_split_is_clamped_and_junk_is_dropped():
@@ -286,7 +286,11 @@ def test_every_split_has_a_handle_and_every_handle_a_split():
     hand-built ``splitter`` with no share is a handle that moves nothing.
     """
     ids = _splitter_ids()
-    assert ids == ["<derived>"], (
+    # A *set*: Inker's timeline strip is a second hand-composed split (its
+    # height is a drag along the bottom of the centre column, which no column
+    # renderer owns), and it derives its handle from its key exactly the way
+    # ``_split_column`` does. What matters is that no id is a bare literal.
+    assert sorted(set(ids)) == ["<derived>"], (
         "every column's handle should come from _split_column, which derives "
         f"its id from split_id; hand-built splitters found: {sorted(set(ids))}"
     )
@@ -298,6 +302,12 @@ def test_every_split_has_a_handle_and_every_handle_a_split():
         "clay-outliner",
         "create-inspector",
         "inker-colors",
+        # Inker's right column stacks three shareable panes, and the strip
+        # along the bottom of its centre column is a fourth split -- keyed
+        # rather than fixed so its height is a drag that persists.
+        "inker-tools",
+        "inker-tiles",
+        "inker-timeline",
         "packwright-sources",
         "packwright-items",
         "plotter-tools",

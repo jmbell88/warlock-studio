@@ -260,6 +260,16 @@ def measure(library: Any = None, workspace: str = "", *, fixed_left: float | Non
 PANE_PADDING = tokens.SP_2
 SHARE_MIN, SHARE_MAX = 0.25, 0.75
 
+#: Splits whose sensible starting proportion is not the shared default.
+#:
+#: One entry, and it is the timeline strip: ``settings_share`` is a *sidebar*
+#: proportion, and handing it to a horizontal split along the bottom of the
+#: canvas would open every Inker document with half its centre column full of
+#: layer rows. Per key rather than per workspace, for the reason
+#: ``_SHARE_SPLITS`` exists at all -- and a stored value still wins, so this
+#: moves the starting point and nobody's drag.
+SHARE_DEFAULTS: dict[str, float] = {"inker-timeline": 0.28}
+
 
 def give_way(avail: float, share: float, wanted: float, floor: float) -> float:
     """Height for the upper of two stacked panes. -> design px.
@@ -401,13 +411,16 @@ class Layout:
             return min(
                 max(
                     self._workspace_library.share(
-                        self._workspace, key, self.shares.get(key, self.settings_share)
+                        self._workspace, key, self.shares.get(key, self._default_share(key))
                     ),
                     SHARE_MIN,
                 ),
                 SHARE_MAX,
             )
-        return self.shares.get(key, self.settings_share)
+        return self.shares.get(key, self._default_share(key))
+
+    def _default_share(self, key: str) -> float:
+        return SHARE_DEFAULTS.get(key, self.settings_share)
 
     def set_share(self, key: str, value: float) -> None:
         """Move one split. Clamped here so no caller has to remember to."""

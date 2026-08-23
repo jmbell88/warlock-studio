@@ -6,6 +6,70 @@ record of what a version actually changed. The top heading's version must
 match `pyproject.toml` — a test asserts it, so a release bump cannot leave this
 file behind.
 
+## 0.0.28 — 2026-08-23
+
+- **Inker is laid out the way Aseprite is.** Colour and the new picker on the
+  left, the toolbox on the right with the preview, the tiles and a new
+  Generation panel, and the timeline along the bottom. What was there before
+  was Aseprite's *Mirrored Default* preset — a 90 px tool rail on the left,
+  the palette on the right — and the rail cost the toolbox its heading, its
+  help button and two clipped rows: 90 px minus the pane's own padding is
+  74 px of content, which fitted two 34 px buttons and the gap between them
+  exactly. The tool grid's column count follows the pane's width now.
+
+- **The layers panel had been invisible since 0.0.26, and this is why.** The
+  commit that merged it into the timeline said "the strip is always available,
+  Tab toggles it", but the `doc.anim is not None` gate in the workspace
+  predated that merge and was never lifted — so a still document had no layer
+  list at all, no eye or lock toggles, and `Tab` toggled a flag nothing read.
+  Every headless test passed throughout, because they all call the timeline's
+  functions directly rather than walking the composition; the missing coverage
+  class is a composition walk, and there is now an assertion over the
+  workspace's own source that no condition in it mentions the animation.
+
+- **The timeline is always on screen**, at a floor of 150 px with a draggable
+  top edge, and `Tab` no longer hides it. That is the same argument one step
+  further: this strip *is* the layer list, so every state in which it is off
+  screen is a document whose layers cannot be seen or reached — and both of
+  the pane's shipped defects were instances of exactly that, the second being
+  a clip that ran on with its Stop button hidden while the canvas silently
+  refused every gesture.
+
+- **One bar above the canvas, and it is the context bar.** Brush type, size,
+  ink, dynamics, pixel-perfect and the symmetry toggles — what a hand reaches
+  for between strokes. The view row that used to sit above it is gone: Rotate,
+  Flip and Fit were already View-menu rows with chords, so the buttons were a
+  second door; Center the page, the four tiling modes (as checked rows) and
+  Roll the seam to the middle are View-menu rows now; and the seam figure and
+  the `unsaved` word moved to the status bar under the canvas, with the cursor
+  position and the zoom, because they are readouts rather than settings.
+
+- **Symmetry composes.** It was one mode at a time, which could not express
+  "horizontal and top-left diagonal" — the pair an isometric tile is drawn
+  with. The four mirrors are independent toggles on the context bar (`H`, `V`,
+  `\` and `/`) with a Reset beside them, radial keeps its own checkbox and
+  count in the canvas popover, and any combination is legal. The engine
+  reflects by iterating to a fixed point rather than by enumerating cases,
+  because two mirrors generate a third that neither of them names: horizontal
+  and vertical give the diagonal one for free — which *was* the hardcoded
+  third point of the old "both" mode — and horizontal with a 45-degree mirror
+  generates all eight. Every legacy spelling still reads, so no stored setting
+  and no existing call site changed, and the canvas draws a guide for each of
+  the four rather than for two.
+
+- **A colour picker, and a Generation panel.** The picker is RGB / HSV / HSL /
+  Gray with a slider per channel and a hex field, as a panel rather than the
+  popup that closed on the next click; on an indexed document holding a
+  palette slot it edits that entry, which is what an indexed document means.
+  The Generation panel surfaces the four pipeline verbs — Make 3D, Save as
+  reference, Add to Packwright, Revert to original — that had been File-menu
+  rows and nothing else, each greyed with its reason rather than hidden.
+
+- **A keyboard-remap dialog and an Aseprite-compatible input registry.**
+  Commands, tools and held modifiers share one many-to-many binding table, so
+  a chord can be rebound, aliased or given a context, and the shortcut sheet
+  is derived from it rather than written twice.
+
 ## 0.0.27 — 2026-08-22
 
 - **Clay, Plotter and the pixel pipeline stop waiting on work that was never

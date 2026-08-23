@@ -151,8 +151,19 @@ def driven(monkeypatch):
 # --- the tables -------------------------------------------------------------
 
 
-def test_the_tiled_combo_offers_every_mode_the_engine_implements():
-    assert tuple(key for key, _label in inker_canvas.TILED_LABELS) == tiling.TILED_AXES
+def test_the_tiled_menu_offers_every_mode_the_engine_implements():
+    """The combo this replaced pinned the same fact one surface earlier: the
+    four tiling modes were the trailing block of the canvas's view row until
+    2026-08-23, and are four checked View-menu rows now that the row above the
+    canvas is the Aseprite context bar."""
+    from warlock.studio import inker_ops
+
+    assert tuple(key for key, _label in inker_ops.TILED_MODES) == tiling.TILED_AXES
+    # And each is a registered op, so the menu cannot offer a mode nothing
+    # sets -- which is what a hand-written menu would make possible.
+    for key, _label in inker_ops.TILED_MODES:
+        op = inker_ops.get(f"tiled_{key}")
+        assert op.menu == "View" and op.checked is not None
 
 
 def test_every_ink_names_a_real_brush_mode():

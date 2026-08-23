@@ -306,18 +306,6 @@ def test_a_usage_count_is_not_shared_between_documents():
     assert state.palette_usage is None, "and the stale entry is dropped"
 
 
-def test_a_tab_close_forgets_it_was_shown_the_timeline():
-    """The one per-uid set with no teardown; uids are never reused."""
-    from warlock.studio import inker, inker_state
-
-    state = inker_state.InkerState()
-    tab = inker_state.InkerDoc(doc=inker.Document.blank(4, 4), uid="t1", title="t")
-    state.add(tab)
-    state.timeline_shown.add(tab.uid)
-    state.close(tab.uid)
-    assert tab.uid not in state.timeline_shown
-
-
 def test_matte_for_answers_none_for_a_plane_with_no_alpha():
     """The guard was the crash it was guarding against."""
     import numpy as np

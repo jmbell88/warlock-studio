@@ -1356,6 +1356,22 @@ class InkerState:
     #: The last values each parameterised op was run with, so the common case
     #: is two clicks rather than two clicks and a number.
     op_params: dict[str, dict[str, float]] = field(default_factory=dict)
+    #: Target-scoped many-to-many shortcut overrides.  Values stay as plain
+    #: JSON-shaped records so this state module does not import ``inker_ops``
+    #: (the command registry already imports the context table above).
+    #: Presence with an empty list means deliberately unbound; an absent target
+    #: inherits the Aseprite 1.3.15.5 Windows defaults.
+    shortcut_overrides: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    shortcut_query: str = ""
+    shortcut_target: str = ""
+    shortcut_draft: str = ""
+    shortcut_context: str = ""
+    shortcut_trigger: str = "press"
+    #: Previous tool and physical modifier while an Aseprite-style quick tool
+    #: is held.  Key-up restores this even if the active context changed during
+    #: the drag, which is why restoration cannot be another context lookup.
+    quick_tool: str = ""
+    quick_key: str = ""
     # The in-flight sheet/GIF export's frame-by-frame read of a document, or
     # None. ``inker_mode._Export``, typed loosely here because this module is
     # the state and that one is the behaviour. One at a time by construction:
@@ -1500,6 +1516,12 @@ class InkerState:
     #: has moved away from. :meth:`set_fg` is the one door, for that reason.
     fg_slot: int | None = None
     bg: tuple[int, int, int, int] = (255, 255, 255, 255)
+    #: Which of the two colours the picker pane's sliders edit -- ``"fg"`` or
+    #: ``"bg"``. Session state rather than a setting: it is where you happen to
+    #: be looking, not how you like the app, and a picker that reopened on the
+    #: background after a restart would be a control that lies about which
+    #: colour a drag is about to change.
+    picker_target: str = "fg"
     swatches: list[tuple[int, int, int, int]] = field(
         default_factory=lambda: list(DEFAULT_SWATCHES)
     )
@@ -1699,13 +1721,6 @@ class InkerState:
     # preference, and off by default: the cells are 20px without it and the
     # off path draws exactly what it always did.
     timeline_thumbs: bool = False
-    #: Whether the timeline strip is on screen. Aseprite's ``Tab``, and
-    #: Aseprite's ``general.autoshowTimeline``: a fresh single-layer still
-    #: starts without it, and it comes up by itself on the second layer or the
-    #: second frame -- so a quick drawing session never pays the strip and
-    #: nobody can lose their layer list by accident, the strip being where the
-    #: layers now live.
-    timeline_open: bool = False
     #: The state a drag down the eye column is painting, or None. See
     #: ``inker_timeline._drag_toggle``: the value is the one the *first* row
     #: took, so the drag paints rather than flipping each row it crosses.
@@ -1717,10 +1732,6 @@ class InkerState:
     #: drag: by release the rows already hold the new value, so reading
     #: "before" off them would compare a value against itself.
     eye_drag_was: dict[int, dict] = field(default_factory=dict)
-    #: The documents auto-show has already fired for, by uid, so a user who
-    #: closes the strip on a five-layer drawing is not shown it again on the
-    #: next frame they add.
-    timeline_shown: set[str] = field(default_factory=set)
     # Nearest-neighbour multiplier applied to sheet, GIF and PNG exports.
     export_scale: int = 1
     # How a sheet export packs its cells: None is the plain row-wrap this
@@ -2121,11 +2132,6 @@ class InkerState:
             # to where you were rather than at the far end of the bar.
             self.active_uid = self.docs[min(index, len(self.docs) - 1)].uid if self.docs else ""
         self._settle_transform()
-        # The one per-uid set with no teardown. Uids are never reused
-        # (``InkerDoc.uid`` counts up), so without this it only ever grows --
-        # small, but it is a record of tabs that no longer exist and every other
-        # per-tab collection is discarded here.
-        self.timeline_shown.discard(uid)
         self.clear_drag()
         return True
 
@@ -2459,8 +2465,8 @@ class InkerState:
 # --- shape drag constraints -------------------------------------------------
 #
 # The two modifiers every drawing program binds, and they are deliberately
-# scoped to the *shape* tools alone. Shift and Alt already mean add and subtract
-# on the four selection tools, sampled at press into ``combine``; giving them a
+# scoped to the *shape* tools alone. The selection tools use Aseprite's own
+# Shift / Alt+Shift / Ctrl+Shift combinations, sampled into ``combine``; giving them a
 # second meaning on the same drag would make one gesture ambiguous, and which
 # reading won would depend on the order the branches happen to be written in.
 # So the marquee keeps its combining modifiers and the line, rectangle and

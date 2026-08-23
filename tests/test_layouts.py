@@ -401,14 +401,30 @@ def test_the_skeleton_declares_every_inker_pane():
 
     columns = skeletons.inker(None)
     ids = {slot.id for column in columns.values() for slot in column.slots}
-    assert ids == {"inker-tools", "inker-colors", "inker-preview", "inker-tiles"}
+    assert ids == {
+        "inker-colors",
+        "inker-picker",
+        "inker-preview",
+        "inker-tools",
+        "inker-tiles",
+        "inker-generate",
+    }
 
 
-def test_the_toolbox_is_neither_movable_nor_hideable():
-    """A layout that could hide the toolbox is one that can leave a user with a
-    column of nothing and no tool in hand."""
+def test_the_toolbox_is_an_ordinary_movable_pane():
+    """The inverse of what this pinned while the toolbox was a 90 px rail.
+
+    It was neither movable nor hideable because the left column held nothing
+    else: hiding it left a column of nothing, and moving it was the one edit
+    the mirrored arrangement existed to forbid. Both reasons went with the
+    rail. The column it now sits in has three other panes, so a layout that
+    hides it is a layout with a narrower toolbox column, not an empty one --
+    and the tools are still reachable by their letters and from the Window
+    menu.
+    """
 
     from warlock.studio import skeletons
 
-    rail = skeletons.inker(None)["left"].slots[0]
-    assert rail.movable is False and rail.hideable is False
+    slots = {slot.id: slot for slot in skeletons.inker(None)["right"].slots}
+    tools = slots["inker-tools"]
+    assert tools.movable is True and tools.hideable is True

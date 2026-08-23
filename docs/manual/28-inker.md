@@ -8,10 +8,16 @@ It is a mode, not a takeover. Switching away leaves every open document exactly 
 reconstruction job started before you switched keeps running with its progress card floating over
 the canvas. Only quitting the app and closing a tab can lose pixels, and both ask first.
 
-The layout follows the rest of the app: tools and their options on the left, the canvas in the
-middle, layers and the pipeline panel on the right. Several documents stay open at once, as tabs.
+The layout is Aseprite's, which is the program most people reading this already have open: the
+**colour** panel and the **picker** on the left, the canvas in the middle, the **toolbox** on the
+right with the preview, the tiles and the generation verbs under it, and the **timeline** — layers
+down, frames across — along the bottom. Several documents stay open at once, as tabs.
 
-![Inker: tools left, canvas centre, layers and the pipeline right](img/28-inker.png)
+Every divider in that shape can be dragged, and where you leave them is remembered per workspace.
+The timeline is always on screen and at least 150 px tall; the rest of the panes are moved,
+hidden and restored from **Window > Layout**.
+
+![Inker: colour left, canvas centre, toolbox right, timeline below](img/28-inker.png)
 
 ## Starting a canvas
 
@@ -31,23 +37,21 @@ room it has, with a 3 × 3 anchor saying where the old picture sits in the new s
 
 ## Turning the page
 
-Three buttons on the canvas row change how the canvas is *shown*, and nothing else — no pixel
-moves, so there is nothing to undo and nothing to save. They are the one group on that row that stays
-live while a save is running: refusing to let you *look* at a drawing while it writes a file would
-be an odd kind of care.
+Three rows in the **View** menu change how the canvas is *shown*, and nothing else — no pixel
+moves, so there is nothing to undo and nothing to save. They are the one group in that menu that
+stays live while a save is running: refusing to let you *look* at a drawing while it writes a file
+would be an odd kind of care.
 
 - **Rotate the view** (`Ctrl+4`, `Ctrl+Shift+4` the other way) turns the canvas a quarter at a time.
 - **Flip the view** (`Ctrl+5`) mirrors it left to right. This is the oldest check there is on a
   drawing: errors you have stopped seeing are obvious in the mirror.
 - **Center the page** puts the canvas back under the middle of the pane, keeping the zoom you are
   already at. Use it when a pan has taken the drawing off screen and you do not want to lose the
-  magnification you were working at — which is what **Fit view** (`Ctrl+0`) would do instead.
+  magnification you were working at — which is what **Fit in window** (`Ctrl+0`) would do instead.
 
 Quarter turns rather than a free angle, deliberately: at a quarter turn every overlay — the grid, the
 marching ants, the symmetry lines, the transform box — stays exactly as accurate as it was, and a
-free angle would put all of them slightly wrong. While either is on, a small button beside them says
-so and sets the view back upright, because a mirrored canvas you have forgotten about quietly
-teaches the wrong hand.
+free angle would put all of them slightly wrong.
 
 Do not confuse these with **Flip H**, **Flip V** and **Rotate** in the document panel's *canvas*
 section. Those move pixels: they are edits, they are one undo step each, and they change what a save
@@ -105,9 +109,10 @@ the page, not merely over the pane.
 
 ## Tiled mode
 
-Beside those is **Tiled**, with four positions: off, X, Y and X+Y. It is the one control on that
-row that changes what a stroke *does*, and that is the point — a canvas showing its neighbours while
-the brush went on stopping at the edge would be a picture of a seamless tile you cannot paint.
+**Tiled** is four checked rows in the **View** menu: off, left and right, top and bottom, both
+ways. It is the one entry in that menu that changes what a stroke *does*, and that is the point — a
+canvas showing its neighbours while the brush went on stopping at the edge would be a picture of a
+seamless tile you cannot paint.
 
 With it on, the canvas draws the neighbouring tiles around the one you are working on — three across
 for X, three down for Y, the full nine for X+Y — so all four seams are visible at once and the
@@ -115,13 +120,13 @@ middle one is still the document. Everything that lays down colour wraps with it
 eraser, the spray, the fill (a region that runs off one edge and continues on the other is one
 region, so a tile's background is a single click), the shape tools, and the magic wand.
 
-Two controls appear beside the combo while it is on. **Wrap ½** rolls the active layer half a
-canvas in both directions, which puts the wrap seam in the middle where you can paint over it —
-press it twice on even dimensions and you are exactly back where you started, so it is a way of
-looking rather than an edit you have to undo. Beside it is **seam ×N**: how hard the join is
-against the picture's own grain, worse axis first, turning amber above 3.5, where it stops reading
-as texture and starts reading as an edge. It is measured on the whole document and only recomputed
-when you change something.
+Two things come with it. **Roll the seam to the middle**, under Tiled in the same menu, rolls the
+active layer half a canvas in both directions, which puts the wrap seam where you can paint over it
+— press it twice on even dimensions and you are exactly back where you started, so it is a way of
+looking rather than an edit you have to undo. And **seam ×N** appears in the status bar under the
+canvas: how hard the join is against the picture's own grain, worse axis first, turning amber above
+3.5, where it stops reading as texture and starts reading as an edge. It is measured on the whole
+document and only recomputed when you change something.
 
 Three things deliberately do not. **Smudge** falls back to stopping at the edge, because its pickup
 trails the brush and "the pixels it just passed over" has no answer when the brush is in two places
@@ -143,15 +148,14 @@ not a property of the picture.
 The toolbox is an icon grid; hovering a tool shows its name and its letter. Every tool is listed in
 [Keyboard shortcuts](37-shortcuts.md).
 
-The letters are Aseprite's wherever Aseprite has one to lend: `L` is the line and `U` the rectangle,
-and three tools answer to a shifted letter as well as their own — `Shift+G` for the gradient,
-`Shift+U` for the ellipse, `Shift+M` for the elliptical marquee — because Aseprite files those
-two-to-a-slot. Where Aseprite lends nothing, the letter is the first free one of the tool's own name.
+The primary letters are Aseprite's: `L` is line and `U` rectangle, while shifted letters select the
+paired tools (`Shift+B/G/L/U/D/M/C`). Earlier Inker letters remain as compatibility aliases and can
+be removed or changed under **Edit > Keyboard Shortcuts**.
 
 | Tool | Key | What it does |
 | --- | --- | --- |
 | Brush | `B` | A soft round brush. |
-| Spray | `A` | An airbrush: scattered dabs for as long as you hold the button. |
+| Spray | `A` or `Shift+B` | An airbrush: scattered dabs for as long as you hold the button. |
 | Eraser | `E` | The same brush, cutting alpha instead of adding colour. |
 | Fill | `G` | Flood-fills from where you click. |
 | Gradient | `K` or `Shift+G` | Drag to lay a gradient. |
@@ -159,11 +163,11 @@ two-to-a-slot. Where Aseprite lends nothing, the letter is the first free one of
 | Smudge | `N` | Pushes pixels along the drag. |
 | Shading | `H` | Moves what you drag over one swatch along a palette ramp. |
 | Line | `L` | A straight line. |
-| Curve | `F` | A smooth curve through the points you click. |
+| Curve | `F` or `Shift+L` | A smooth curve through the points you click. |
 | Rect | `U` | A rectangle, outlined or filled. |
 | Ellipse | `J` or `Shift+U` | An ellipse, outlined or filled. |
 | Polyline | `P` | A chain of straight segments, one click per corner. |
-| Polygon | `O` | The same, closed, and fillable. |
+| Polygon | `O` or `Shift+D` | The same, closed, and fillable. |
 | Marquee | `M` | Rectangular selection. |
 | Ellipse select | `S` or `Shift+M` | Elliptical selection. |
 | Lasso | `Q` | Freehand selection. |
@@ -285,13 +289,33 @@ when you stop moving, so a stroke still ends where you left it. Taper thins a fa
 pen-like flick. Both are off by default, and with both off a stroke is the same stroke this app has
 always drawn.
 
-Two canvas-wide aids sit below the tool options. **Symmetry** mirrors every stroke — off,
-left/right, top/bottom, both, either 45-degree **diagonal** (top-left to bottom-right, or
-bottom-left to top-right), or **radial**, which repeats it around a circle a set number of ways
-(2 to 32) for snowflakes and mandalas. With any symmetry on you can set the **axis** the mirrors
-reflect about, in image coordinates; **Centre** puts it back, and "centred" means exactly that even
-after the canvas is resized. **Grid** overlays a grid at a spacing you set, from 2 to 512 pixels —
-32 by default, the most common sprite and tile cell — and **Snap to grid** lands shapes, lines and
+### Symmetry
+
+At the right-hand end of the context bar are four toggles and a **Reset**: **H** mirrors every dab
+left to right, **V** top to bottom, and `\` and `/` are the two 45-degree mirrors — top-left to
+bottom-right and bottom-left to top-right.
+
+**They compose.** Any combination is legal, and each one you add reflects everything already there
+rather than replacing it: H and V together give four dabs, H and `\` give eight, and the guides on
+the canvas show exactly the lines the brush is reflecting about. That composition is why these are
+four buttons and not a menu — the old one-at-a-time control could not say "horizontal and top-left
+diagonal", which is what an isometric tile is drawn with.
+
+**Radial** is the fifth, and it is in the canvas popover off the toolbox instead, because it needs
+a number: it repeats a dab around a circle a set number of ways (2 to 32) for snowflakes and
+mandalas. It composes with the four mirrors like everything else.
+
+The **axis** the mirrors reflect about is in that same popover, in image coordinates, so symmetry
+does not have to be about the middle of the canvas; **Centre** puts it back, and "centred" means
+exactly that even after the canvas is resized. **Reset** on the bar switches every symmetry off,
+recentres the axis and puts the radial count back to its default, all in one press.
+
+Symmetry is a setting of the *sitting* rather than of the tool: it survives every tool change, and
+every paint mode inherits it — the eraser, blur and smudge all mirror without being told to.
+
+One more canvas-wide aid sits below the tool options. **Grid** overlays a grid at a spacing you
+set, from 2 to 512 pixels — 32 by default, the most common sprite and tile cell — and **Snap to
+grid** lands shapes, lines and
 the marquee on its intersections. Freehand strokes never snap: quantising a brush to a lattice is a
 different tool, not a drawing aid. **Rulers** draws pixel rulers along the canvas's top and left
 edges, with a marker shadowing the cursor on each; tick labels follow the decimal 1/2/5 ladder, so
@@ -299,16 +323,17 @@ the numbers you read are always round ones. The grid and the rulers remember how
 across sessions.
 
 Two modifiers apply while you drag a line, a rectangle or an ellipse. **Shift** constrains it — a
-square, a circle, or a line at a multiple of 45° — and **Alt** grows it from the point you pressed
+square, a circle, or a line at a multiple of 45° — and **Ctrl** grows it from the point you pressed
 rather than from a corner. Both can be held at once, and both change the preview as you hold them,
 so you can decide halfway through. They belong to the shape tools alone: on the four selection
-tools Shift and Alt already mean add and subtract. **Alt** over a painting tool picks the colour
+tools Shift adds, Alt+Shift subtracts, and Ctrl+Shift intersects. **Alt** over a painting tool picks the colour
 under the cursor, which saves a trip to the eyedropper.
 
 **Ctrl**+click on the canvas selects the *layer* under the cursor — the topmost visible one with
-something painted at that pixel. It is the same gesture Alt gives for colour: point at a drawing and
+something painted at that pixel while Move or a painting tool is active. It is the same gesture Alt
+gives for colour: point at a drawing and
 you are on the layer it is on, without hunting down the layers panel. It never paints, whatever tool
-you are holding, and clicking where nothing is painted does nothing at all.
+is temporarily replaced by Move, and clicking where nothing is painted does nothing at all.
 
 **The right button paints with the background colour.** It drives the brush, the eraser and the fill
 — the three where "the other colour" is unambiguous — and Alt with it picks *into* the background,
@@ -328,9 +353,10 @@ each remembers its own state across restarts. They hold the settings of a sittin
 gesture — a captured tip, a saved bundle of tool options, the symmetry axis, the grid and the rulers
 — and left open they push the brush controls off the bottom of the panel.
 
-The divider between the toolbox and the colour panel can be dragged, and so can the one between the
-layers panel and the panel under it. It is one setting shared with the other workspaces, so moving
-it here moves it there.
+Every divider in the workspace can be dragged: the two column boundaries, the handles between the
+stacked panes in each column, and the one along the top of the timeline. They are separate settings
+— dragging the toolbox taller does not resize anything in Clay or Plotter, which is what one shared
+number used to do — and each is saved with the workspace.
 
 ### Image brushes
 
@@ -431,6 +457,29 @@ swatches are written opaque, and an import **adds** to the row rather than repla
 colours are a right-click each, where a palette silently wiped has no way back.
 
 The `I` **Pick** tool samples a colour from the canvas into the foreground.
+
+### The colour picker
+
+Under the palette is the **picker**: a tab strip over **RGB**, **HSV**, **HSL** and **Gray**, a
+slider per channel, an alpha slider in every tab, and a hex field. It is a panel rather than a
+popup, which is the whole reason it exists — a swatch's own picker closes on the next click, so
+nudging a channel and looking at the canvas meant reopening it every time.
+
+**Foreground** / **Background** at the top says which of the two colours the sliders edit. The alpha
+slider is drawn in all four tabs deliberately: a semi-transparent brush is a colour here, not a
+separate mode, and a channel you have to change tabs to reach is one you forget you have.
+
+The hex field takes `#rgb`, `#rgba`, `#rrggbb` and `#rrggbbaa`, with or without the hash, and is
+applied when you press Enter rather than as you type — half a typed triple is also a colour, and
+applying it would repaint the brush three times on the way to the one you meant. Anything that is
+not a hex colour is ignored and the field goes back to showing what the colour actually is.
+
+On an **indexed** document, with a colour picked out of the palette, the sliders edit that *entry* —
+the row above them says which. That is Aseprite's behaviour and it follows from what an indexed
+document is: the pixels are slot numbers, so a colour that is not in the table is not a colour the
+drawing can hold. Every pixel painted in that slot changes with it, in one undo step. Pick a colour
+any other way — the wheel, the `I` tool, a session swatch — and the sliders go back to editing the
+brush's own colour.
 
 ### Colour modes
 
@@ -588,8 +637,18 @@ quantising each frame, so slot *n* is the same colour in every frame of the clip
 
 ## Layers
 
-The layers panel shows the stack top-first, the way every editor shows it, and is laid out the way
-Photoshop and Krita lay theirs out. At the top are the **Blend** mode, the **Opacity** slider, the
+Layers live in the **timeline**, the strip along the bottom of the canvas: rows are layers, columns
+are frames, and a cell is what that layer holds on that frame. There is no separate layers panel,
+and there is no separate panel to *get* — a drawing with one frame is a one-column grid against the
+layer stack, which is the same picture with one frame in it.
+
+**The strip is always on screen**, at a floor of 150 pixels, and its top edge drags. It used to be
+hideable, and that went with the panel it absorbed: this is where the layer list lives, so a hidden
+strip is a document whose layers cannot be seen or reached. Make it taller when you are working the
+stack and shorter when you are painting.
+
+**Rows run bottom-up**: the background is the bottom row, which is Aseprite's order and Photoshop's.
+Above the grid are the **Blend** mode, the **Opacity** slider, the
 two lock toggles and — on an animated document — the **Cels** toggle, and they always describe the
 *active* layer. Each row in the list is an eye
 (visibility), a thumbnail and the layer's name — hovering a row shows its blend, opacity and locks,
@@ -1152,8 +1211,14 @@ exactly where it was.
 
 ## Pipeline bridges
 
-Inker is wired into the pipeline in both directions. The **document** panel on the right states
-which direction you are in: a document is either **linked to a job** or **not part of a job**.
+Inker is wired into the pipeline in both directions. The **Generation** panel, at the foot of the
+right-hand column, is where that shows: four buttons — **Make 3D**, **Save as reference**, **Add to
+Packwright** and **Revert to original** — over one line saying what this document is attached to. A
+button you cannot press right now is greyed with the reason in its tooltip rather than hidden, which
+is the point of the panel: **Revert to original** is unavailable on a drawing that was never opened
+from the library, and a menu row that is simply missing does not say so.
+
+The same four verbs are in the **File** menu and do exactly the same thing from either place.
 
 **Into Inker.** With a finished reference selected at the Reference stage, **Open in Inker** appears on the
 viewport toolbar. It opens that reference as a linked document. If a layered working file already

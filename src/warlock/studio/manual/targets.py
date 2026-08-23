@@ -38,6 +38,20 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     # section.
     "inker-tiles": ("28-inker", "tilemap-layers"),
     "inker-preview": ("29-inker-animation", "preview"),
+    # The toolbox. It had no entry for as long as it was a 90 px rail with no
+    # room for a heading to hang a (?) beside; it is a sidebar pane now, so it
+    # points at the section that lists every tool and its letter.
+    "inker-tools": ("28-inker", "tools"),
+    # The slider surface under the palette. Its own anchor rather than sharing
+    # ``inker-colors``: the questions asked in front of it -- which of the two
+    # colours am I editing, why do the sliders move a palette entry in an
+    # indexed document, what does the hex field accept -- are all in that one
+    # section.
+    "inker-picker": ("28-inker", "the-colour-picker"),
+    # The four ways a drawing leaves the Inker. The bridges section is where
+    # the *directions* are explained, which is what somebody standing in front
+    # of a greyed "Revert to original" is asking about.
+    "inker-generate": ("28-inker", "pipeline-bridges"),
     "candidates": ("23-generating-meshes", "candidates"),
     # The viewport toolbar. The ~5k-LOC subsystem in the middle of the window
     # was chrome as far as this map was concerned -- exempted in

@@ -30,21 +30,36 @@ wrong one -- which is the bug where a menu row silently does nothing.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import json
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 __all__ = [
     "MENUS",
     "OPS",
+    "ACTION_MODIFIERS",
+    "BINDINGS",
+    "BINDING_CONTEXTS",
+    "ActionModifier",
+    "action_active",
+    "Binding",
     "Op",
     "Param",
     "by_key",
+    "binding_target",
+    "bindings_for",
     "defaults_for",
     "get",
     "menu",
+    "manifest",
+    "parse_shortcuts",
     "register",
+    "resolve_binding",
     "run",
+    "set_shortcuts",
+    "shortcut_for",
+    "shortcuts_json",
 ]
 
 #: The menu strip, in order -- which is Aseprite's order.
@@ -57,6 +72,7 @@ MENUS: tuple[str, ...] = (
     "Select",
     "View",
 )
+
 
 #: The key contexts an op can be bound in; see ``inker_state.key_context``.
 #: ``""`` means every context, which is what a menu row wants when no modal
@@ -131,6 +147,76 @@ class Op:
     checked: Callable[[Any, Any], bool] | None = None
 
 
+BINDING_KINDS = frozenset({"command", "tool", "action_modifier"})
+BINDING_TRIGGERS = frozenset({"press", "hold", "wheel", "drag"})
+BINDING_CONTEXTS = (
+    *CONTEXTS,
+    "TranslatingSelection",
+    "ScalingSelection",
+    "RotatingSelection",
+)
+
+
+def canonical_chord(chord: str) -> str:
+    """One platform-neutral spelling, independent of modifier press order."""
+
+    pieces = [piece.strip() for piece in str(chord).split("+") if piece.strip()]
+    modifiers = [name for name in ("Ctrl", "Alt", "Shift") if name in pieces]
+    keys = [piece for piece in pieces if piece not in {"Ctrl", "Alt", "Shift"}]
+    return "+".join((*modifiers, *keys))
+
+
+@dataclass(frozen=True)
+class Binding:
+    """One input gesture mapped to one registry target.
+
+    Commands no longer own the binding relationship.  This separate record is
+    what permits two chords for one command, the same chord in two contexts,
+    and hold/wheel/drag gestures without inventing pseudo-commands.  ``Op.key``
+    remains a compatibility view of the primary default while callers migrate.
+    """
+
+    target: str
+    chord: str
+    kind: str = "command"
+    context: str = ""
+    trigger: str = "press"
+    priority: int = 0
+
+    def __post_init__(self) -> None:
+        if self.kind not in BINDING_KINDS:
+            raise ValueError(f"unknown binding kind {self.kind!r}")
+        if self.trigger not in BINDING_TRIGGERS:
+            raise ValueError(f"unknown binding trigger {self.trigger!r}")
+        if self.context not in BINDING_CONTEXTS:
+            raise ValueError(f"unknown binding context {self.context!r}")
+        if not self.target or not self.chord:
+            raise ValueError("a binding needs a target and a chord")
+        object.__setattr__(self, "chord", canonical_chord(self.chord))
+
+
+@dataclass(frozen=True)
+class ActionModifier:
+    """A contextual held gesture which alters another action.
+
+    These records are descriptive and dispatchable data rather than commands:
+    a shape's Shift constraint only has meaning while that shape is in flight.
+    Canvas gesture code can therefore consume the same registry that the
+    shortcut editor and compatibility manifest expose.
+    """
+
+    name: str
+    label: str
+    context: str
+    description: str
+
+
+def binding_target(kind: str, target: str) -> str:
+    """Stable JSON key for a command/tool/modifier target."""
+
+    return f"{kind}:{target}"
+
+
 def reason_for(op: Op, state: Any, tab: Any) -> str:
     """*op*'s refusal sentence right now, resolving the callable form."""
     reason = op.reason
@@ -166,22 +252,239 @@ def get(name: str) -> Op:
     raise KeyError(f"no op named {name!r}")
 
 
-def by_key(key: str, context: str = "") -> Op | None:
-    """The op *key* fires, preferring one bound to *context*.
+def _coerce_binding(value: Any, *, target_key: str = "") -> Binding | None:
+    """Validate one user-authored binding without trusting settings JSON."""
 
-    Context-specific first, then the context-free ops: that ordering is what
-    lets Enter mean "close the polygon" inside a gesture and "play" outside one
-    without either binding having to know the other exists.
+    if isinstance(value, Binding):
+        return value
+    if not isinstance(value, Mapping):
+        return None
+    try:
+        kind, target = target_key.split(":", 1)
+    except ValueError:
+        kind = str(value.get("kind", ""))
+        target = str(value.get("target", ""))
+    try:
+        return Binding(
+            target=target,
+            chord=str(value.get("chord", "")),
+            kind=kind,
+            context=str(value.get("context", "")),
+            trigger=str(value.get("trigger", "press")),
+            priority=int(value.get("priority", 100 if target_key else 0)),
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalise_overrides(raw: Any) -> dict[str, tuple[Binding, ...]]:
+    """Return the valid part of a persisted shortcut override mapping.
+
+    Presence of a target with an empty list deliberately means *unbound*.
+    Unknown targets are discarded so a hand-edited settings file cannot create
+    a command surface that the application has no way to execute.
     """
 
-    if context:
-        for op in OPS:
-            if op.key == key and op.context == context:
-                return op
-    for op in OPS:
-        if op.key == key and not op.context:
-            return op
-    return None
+    if not isinstance(raw, Mapping):
+        return {}
+    known = {binding_target(item.kind, item.target) for item in BINDINGS}
+    out: dict[str, tuple[Binding, ...]] = {}
+    for target_key, values in raw.items():
+        if target_key not in known or not isinstance(values, Sequence) or isinstance(values, str):
+            continue
+        parsed = tuple(
+            binding
+            for value in values
+            if (binding := _coerce_binding(value, target_key=target_key)) is not None
+        )
+        out[str(target_key)] = parsed
+    return out
+
+
+def bindings_for(overrides: Any = None) -> tuple[Binding, ...]:
+    """The effective binding table after target-scoped user overrides."""
+
+    changed = _normalise_overrides(overrides)
+    if not changed:
+        return BINDINGS
+    out = [
+        binding
+        for binding in BINDINGS
+        if binding_target(binding.kind, binding.target) not in changed
+    ]
+    for target_key in sorted(changed):
+        out.extend(changed[target_key])
+    return tuple(out)
+
+
+def resolve_binding(
+    chord: str,
+    context: str = "",
+    overrides: Any = None,
+    *,
+    trigger: str = "press",
+) -> Binding | None:
+    """Resolve a gesture, with exact-context bindings ahead of global ones."""
+
+    candidates = [
+        binding
+        for binding in bindings_for(overrides)
+        if binding.chord == canonical_chord(chord) and binding.trigger == trigger
+    ]
+    candidates.sort(
+        key=lambda binding: (
+            binding.context == context and bool(context),
+            not binding.context,
+            binding.priority,
+        ),
+        reverse=True,
+    )
+    return next(
+        (binding for binding in candidates if binding.context == context or not binding.context),
+        None,
+    )
+
+
+def action_active(target: str, chord: str, context: str, overrides: Any = None) -> bool:
+    """Whether a held action modifier is contained in the current chord.
+
+    Shape modifiers compose (Ctrl+Shift means centre *and* square), while
+    command resolution is exact.  Keeping that distinction here avoids every
+    gesture reimplementing modifier-set arithmetic.
+    """
+
+    held = set(canonical_chord(chord).split("+"))
+    return any(
+        item.kind == "action_modifier"
+        and item.target == target
+        and item.context == context
+        and item.trigger == "hold"
+        and set(item.chord.split("+")).issubset(held)
+        for item in bindings_for(overrides)
+    )
+
+
+def by_key(key: str, context: str = "", overrides: Any = None) -> Op | None:
+    """Compatibility command lookup over the many-to-many binding registry."""
+
+    binding = resolve_binding(key, context, overrides)
+    if binding is None or binding.kind != "command":
+        return None
+    return get(binding.target)
+
+
+def shortcut_for(
+    kind: str,
+    target: str,
+    overrides: Any = None,
+    *,
+    context: str | None = None,
+    trigger: str = "press",
+) -> str:
+    """Printable effective chords for a menu row or tooltip."""
+
+    matches = [
+        item.chord
+        for item in bindings_for(overrides)
+        if item.kind == kind
+        and item.target == target
+        and item.trigger == trigger
+        and (context is None or item.context == context)
+    ]
+    return " or ".join(dict.fromkeys(matches))
+
+
+def parse_shortcuts(payload: str | bytes | Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """Read a versioned shortcut export and return validated JSON-ready overrides."""
+
+    value = json.loads(payload) if isinstance(payload, str | bytes) else payload
+    if not isinstance(value, Mapping) or value.get("version") != 1:
+        raise ValueError("not an Inker shortcut file (version 1)")
+    parsed = _normalise_overrides(value.get("overrides"))
+    return {
+        key: [
+            {
+                "chord": binding.chord,
+                "context": binding.context,
+                "trigger": binding.trigger,
+                **({"priority": binding.priority} if binding.priority else {}),
+            }
+            for binding in bindings
+        ]
+        for key, bindings in parsed.items()
+    }
+
+
+def shortcuts_json(overrides: Any = None) -> str:
+    """Portable, deterministic shortcut overrides for import/export."""
+
+    parsed = _normalise_overrides(overrides)
+    payload = {
+        "version": 1,
+        "target": "Aseprite 1.3.15.5 / Windows",
+        "overrides": {
+            key: [
+                {
+                    "chord": binding.chord,
+                    "context": binding.context,
+                    "trigger": binding.trigger,
+                    **({"priority": binding.priority} if binding.priority else {}),
+                }
+                for binding in parsed[key]
+            ]
+            for key in sorted(parsed)
+        },
+    }
+    return json.dumps(payload, indent=2, sort_keys=True) + "\n"
+
+
+def set_shortcuts(
+    overrides: Any,
+    kind: str,
+    target: str,
+    chords: Sequence[str],
+    *,
+    context: str = "",
+    trigger: str = "press",
+) -> dict[str, list[dict[str, Any]]]:
+    """Replace one target's bindings and return a validated settings delta."""
+
+    key = binding_target(kind, target)
+    known = {binding_target(item.kind, item.target) for item in BINDINGS}
+    if key not in known:
+        raise KeyError(f"unknown binding target {key!r}")
+    unique = tuple(dict.fromkeys(chord.strip() for chord in chords if chord.strip()))
+    # Constructing records is the validation door for contexts and triggers.
+    replacements = [Binding(target, chord, kind, context, trigger, 100) for chord in unique]
+    current = {
+        target_key: [
+            {
+                "chord": item.chord,
+                "context": item.context,
+                "trigger": item.trigger,
+                **({"priority": item.priority} if item.priority else {}),
+            }
+            for item in values
+        ]
+        for target_key, values in _normalise_overrides(overrides).items()
+    }
+    preserved = [
+        item
+        for item in bindings_for(overrides)
+        if item.kind == kind
+        and item.target == target
+        and (item.context != context or item.trigger != trigger)
+    ]
+    current[key] = [
+        {
+            "chord": item.chord,
+            "context": item.context,
+            "trigger": item.trigger,
+            "priority": item.priority,
+        }
+        for item in (*preserved, *replacements)
+    ]
+    return current
 
 
 def defaults_for(op: Op) -> dict[str, float]:
@@ -314,9 +617,7 @@ def can_merge_down(state: Any, tab: Any) -> bool:
     index = doc.stack.active_index
     if index <= 0:
         return False
-    return doc.group_of.get(_uid_at(doc, index)) == doc.group_of.get(
-        _uid_at(doc, index - 1)
-    )
+    return doc.group_of.get(_uid_at(doc, index)) == doc.group_of.get(_uid_at(doc, index - 1))
 
 
 def _uid_at(doc: Any, index: int) -> int | None:
@@ -472,9 +773,7 @@ register(
         _mode("repeat_export"),
         menu="File",
         key="Ctrl+Shift+X",
-        enabled=lambda state, tab: (
-            ready(state, tab) and bool(getattr(tab, "export_kind", ""))
-        ),
+        enabled=lambda state, tab: ready(state, tab) and bool(getattr(tab, "export_kind", "")),
         reason="Nothing to repeat yet -- export once and this runs it again.",
         hint=(
             "The hot-path escape valve: configure the export once, then one "
@@ -752,9 +1051,7 @@ register(
     Op(
         "shift_selected",
         "Shift pixels...",
-        lambda ctx, tab, **params: tab.doc.shift_selected(
-            int(params["dx"]), int(params["dy"])
-        ),
+        lambda ctx, tab, **params: tab.doc.shift_selected(int(params["dx"]), int(params["dy"])),
         menu="Edit",
         enabled=has_selection,
         reason=NO_SELECTION,
@@ -879,10 +1176,7 @@ register(
             and tab.doc.active_tilemap_uid() is not None
             and tab.doc.tile_behavior != "auto"
         ),
-        reason=(
-            "This is not a tilemap layer, or it already updates its tileset "
-            "as you draw."
-        ),
+        reason=("This is not a tilemap layer, or it already updates its tileset as you draw."),
         hint=(
             "Auto: painting on a tilemap layer edits the tile under the brush. "
             "Manual leaves the tileset alone and reverts the cell instead."
@@ -1022,9 +1316,7 @@ register(
     Op(
         "show_layer",
         "Show this layer",
-        lambda ctx, tab, **_: tab.doc.set_layer_props(
-            tab.doc.stack.active_index, visible=True
-        ),
+        lambda ctx, tab, **_: tab.doc.set_layer_props(tab.doc.stack.active_index, visible=True),
         menu="Layer",
         enabled=lambda state, tab: tab is not None and not tab.doc.stack.active.visible,
         reason="This layer is already visible.",
@@ -1262,6 +1554,8 @@ register(
         reason=_MOVE_LAYER[1],
     )
 )
+
+
 def _select_slots(ctx: Any, tab: Any, *, used: bool) -> bool:
     """Select every pixel drawn in the used (or unused) palette slots.
 
@@ -1429,6 +1723,105 @@ register(
         reason=NO_DOC,
     )
 )
+
+
+
+def _centre_view(ctx: Any, tab: Any, **_: Any) -> None:
+    """Put the page back under the pane, keeping the zoom the user chose.
+
+    ``pending_zoom`` and not ``fitted = False``, exactly as ``rotate_view`` and
+    ``flip_view`` do it: clearing ``fitted`` re-*scales* as well as re-centring,
+    which is the one thing this must not do. Distinct from *Fit in window*
+    above for that reason -- panning far enough to lose the canvas entirely is
+    easy, and before this the only way back threw the zoom away.
+    """
+    tab.view.pending_zoom = tab.view.zoom
+
+
+register(
+    Op(
+        "center_view",
+        "Center the page",
+        _centre_view,
+        menu="View",
+        enabled=has_doc,
+        reason=NO_DOC,
+    )
+)
+
+
+def _set_tiled(mode: str) -> Callable[..., Any]:
+    def run(ctx: Any, tab: Any, **_: Any) -> None:
+        # One setting driving the view *and* the writes, deliberately: a canvas
+        # that showed its neighbours while the brush went on clamping at the
+        # edge would be a picture of a seamless tile you cannot paint.
+        tab.tiled = mode
+
+    return run
+
+
+def _tiled_is(mode: str) -> Callable[[Any, Any], bool]:
+    return lambda state, tab: tab is not None and tab.tiled == mode
+
+
+#: The tiling modes as four checked rows rather than a combo on a bar. They
+#: were the trailing block of the canvas's view row until 2026-08-23, when that
+#: row became the Aseprite context bar; a menu is where a four-way setting
+#: nobody changes mid-stroke belongs, and a checked row says which one is on
+#: without spending bar width saying so.
+TILED_MODES: tuple[tuple[str, str], ...] = (
+    ("off", "Tiled: off"),
+    ("x", "Tiled: left and right"),
+    ("y", "Tiled: top and bottom"),
+    ("both", "Tiled: both ways"),
+)
+
+for _index, (_mode_key, _label) in enumerate(TILED_MODES):
+    register(
+        Op(
+            f"tiled_{_mode_key}",
+            _label,
+            _set_tiled(_mode_key),
+            menu="View",
+            enabled=has_doc,
+            reason=NO_DOC,
+            checked=_tiled_is(_mode_key),
+            separator_before=_index == 0,
+        )
+    )
+
+
+def _wrap_half(ctx: Any, tab: Any, **_: Any) -> None:
+    """Roll the layer half a canvas both ways, putting the seam in the middle.
+
+    The classic put-the-seam-where-you-can-paint-it move, and the reason it is
+    *half* rather than any amount: on even dimensions pressing it twice is the
+    identity, so it is a look rather than an edit that has to be undone.
+
+    In the View menu beside Tiled although it is a real edit -- it moves pixels
+    and takes an undo step. Filed by what a user is *doing* rather than by what
+    it touches: the only reason to reach for it is that the tiling preview has
+    shown a seam, and it is the one verb in that group with somewhere else it
+    could plausibly go.
+    """
+    width, height = tab.doc.size
+    tab.doc.offset_layer(width // 2, height // 2)
+
+
+register(
+    Op(
+        "wrap_half",
+        "Roll the seam to the middle",
+        _wrap_half,
+        menu="View",
+        enabled=lambda state, tab: ready(state, tab) and tab.tiled != "off",
+        reason=lambda state, tab: (
+            BUSY
+            if tab is not None and tab.busy
+            else "This document is not tiled -- there is no wrap seam to move."
+        ),
+    )
+)
 register(
     Op(
         "trim",
@@ -1575,3 +1968,261 @@ def _toggle(ctx: Any, attr: str) -> None:
     state = ctx.state.inker
     setattr(state, attr, not getattr(state, attr))
     inker_mode.persist(ctx)
+
+
+register(
+    Op(
+        "keyboard_shortcuts",
+        "Keyboard Shortcuts...",
+        dialog("inker-shortcuts"),
+        menu="Edit",
+        key="Ctrl+Alt+Shift+K",
+        separator_before=True,
+        hint=(
+            "Search commands, tools and held action modifiers; assign multiple "
+            "contextual bindings, import or export them, or restore defaults."
+        ),
+    )
+)
+
+
+# --- input registry ---------------------------------------------------------
+#
+# Kept after command registration so the command half is derived rather than
+# restated.  The first binding for a target is its Aseprite-compatible primary
+# gesture; compatibility aliases follow it and remain visible in the shortcut
+# editor instead of living as invisible branches in ``handle_key``.
+
+ACTION_MODIFIERS: tuple[ActionModifier, ...] = (
+    ActionModifier(
+        "freehand_straight",
+        "Straight line from last point",
+        "FreehandTool",
+        "Draw from the last painted pixel.",
+    ),
+    ActionModifier(
+        "freehand_angle_snap",
+        "Angle snap from last point",
+        "FreehandTool",
+        "Snap the straight-line angle.",
+    ),
+    ActionModifier(
+        "move_auto_select", "Auto-select layer", "MoveTool", "Select the layer under the cursor."
+    ),
+    ActionModifier("selection_add", "Add selection", "Selection", "Combine the gesture by union."),
+    ActionModifier(
+        "selection_subtract",
+        "Subtract selection",
+        "Selection",
+        "Remove the gesture from the selection.",
+    ),
+    ActionModifier(
+        "selection_intersect",
+        "Intersect selection",
+        "Selection",
+        "Keep only the overlap.",
+    ),
+    ActionModifier(
+        "shape_square",
+        "Square/circle constraint",
+        "ShapeTool",
+        "Constrain both axes to the same extent.",
+    ),
+    ActionModifier(
+        "shape_center",
+        "Draw from centre",
+        "ShapeTool",
+        "Use the press point as the shape centre.",
+    ),
+    ActionModifier("shape_rotate", "Rotate shape", "ShapeTool", "Rotate before committing."),
+    ActionModifier(
+        "shape_move_origin",
+        "Move shape origin",
+        "ShapeTool",
+        "Reposition the whole uncommitted shape.",
+    ),
+    ActionModifier(
+        "translate_snap_grid",
+        "Snap to grid",
+        "TranslatingSelection",
+        "Snap translation to the grid.",
+    ),
+    ActionModifier(
+        "translate_lock_axis", "Lock axis", "TranslatingSelection", "Move along one axis only."
+    ),
+    ActionModifier(
+        "translate_copy",
+        "Copy selection",
+        "TranslatingSelection",
+        "Duplicate when the move begins.",
+    ),
+    ActionModifier(
+        "translate_fine",
+        "Fine translation",
+        "TranslatingSelection",
+        "Adjust at subpixel precision.",
+    ),
+    ActionModifier(
+        "scale_aspect",
+        "Maintain aspect ratio",
+        "ScalingSelection",
+        "Keep the original aspect ratio.",
+    ),
+    ActionModifier(
+        "scale_center", "Scale from centre", "ScalingSelection", "Scale around the transform pivot."
+    ),
+    ActionModifier(
+        "scale_fine", "Fine scaling", "ScalingSelection", "Adjust at subpixel precision."
+    ),
+    ActionModifier("rotate_snap", "Angle snap", "RotatingSelection", "Snap the rotation angle."),
+)
+
+_TOOL_BINDINGS: tuple[Binding, ...] = (
+    Binding("brush", "B", "tool", priority=10),
+    Binding("spray", "Shift+B", "tool", priority=10),
+    Binding("spray", "A", "tool"),
+    Binding("eraser", "E", "tool", priority=10),
+    Binding("eyedropper", "I", "tool", priority=10),
+    Binding("move", "V", "tool", priority=10),
+    Binding("slice", "Shift+C", "tool", priority=10),
+    Binding("slice", "C", "tool"),
+    Binding("fill", "G", "tool", priority=10),
+    Binding("gradient", "Shift+G", "tool", priority=10),
+    Binding("gradient", "K", "tool"),
+    Binding("line", "L", "tool", priority=10),
+    Binding("curve", "Shift+L", "tool", priority=10),
+    Binding("curve", "F", "tool"),
+    Binding("rect", "U", "tool", priority=10),
+    Binding("ellipse", "Shift+U", "tool", priority=10),
+    Binding("ellipse", "J", "tool"),
+    Binding("polyline", "P", "tool"),
+    Binding("polygon", "Shift+D", "tool", priority=10),
+    Binding("polygon", "O", "tool"),
+    Binding("blur", "R", "tool", priority=10),
+    Binding("smudge", "N", "tool"),
+    Binding("shade", "H", "tool"),
+    Binding("select", "M", "tool", priority=10),
+    Binding("select_ellipse", "Shift+M", "tool", priority=10),
+    Binding("select_ellipse", "S", "tool"),
+    Binding("lasso", "Q", "tool"),
+    Binding("lasso_poly", "D", "tool"),
+    Binding("wand", "W", "tool", priority=10),
+    Binding("text", "T", "tool"),
+    Binding("tile", "Y", "tool"),
+)
+
+_ACTION_BINDINGS: tuple[Binding, ...] = (
+    Binding("freehand_straight", "Shift", "action_modifier", "FreehandTool", "hold", 10),
+    Binding("freehand_angle_snap", "Ctrl+Shift", "action_modifier", "FreehandTool", "hold", 20),
+    Binding("move_auto_select", "Ctrl", "action_modifier", "MoveTool", "hold", 10),
+    Binding("selection_add", "Shift", "action_modifier", "Selection", "hold", 10),
+    Binding("selection_subtract", "Shift+Alt", "action_modifier", "Selection", "hold", 10),
+    Binding("selection_intersect", "Ctrl+Shift", "action_modifier", "Selection", "hold", 20),
+    Binding("shape_square", "Shift", "action_modifier", "ShapeTool", "hold", 10),
+    Binding("shape_center", "Ctrl", "action_modifier", "ShapeTool", "hold", 10),
+    Binding("shape_rotate", "Alt", "action_modifier", "ShapeTool", "hold", 10),
+    Binding("shape_move_origin", "Space", "action_modifier", "ShapeTool", "hold", 10),
+    Binding("translate_snap_grid", "Alt", "action_modifier", "TranslatingSelection", "hold", 10),
+    Binding("translate_lock_axis", "Shift", "action_modifier", "TranslatingSelection", "hold", 10),
+    Binding("translate_copy", "Ctrl", "action_modifier", "TranslatingSelection", "hold", 10),
+    Binding("translate_fine", "Ctrl", "action_modifier", "TranslatingSelection", "hold", 5),
+    Binding("scale_aspect", "Shift", "action_modifier", "ScalingSelection", "hold", 10),
+    Binding("scale_center", "Alt", "action_modifier", "ScalingSelection", "hold", 10),
+    Binding("scale_fine", "Ctrl", "action_modifier", "ScalingSelection", "hold", 10),
+    Binding("rotate_snap", "Shift", "action_modifier", "RotatingSelection", "hold", 10),
+)
+
+_QUICK_TOOL_BINDINGS: tuple[Binding, ...] = (
+    Binding("eyedropper", "Alt", "tool", "FreehandTool", "hold", 30),
+    Binding("move", "Ctrl", "tool", "FreehandTool", "hold", 30),
+)
+
+_CONTEXT_COMMAND_BINDINGS: tuple[Binding, ...] = (
+    Binding("fill_selection", "F", context="Selection", priority=20),
+    Binding("stroke_selection", "S", context="Selection", priority=20),
+)
+
+BINDINGS: tuple[Binding, ...] = (
+    *(Binding(op.name, op.key, context=op.context) for op in OPS if op.key),
+    *_CONTEXT_COMMAND_BINDINGS,
+    *_TOOL_BINDINGS,
+    *_QUICK_TOOL_BINDINGS,
+    *_ACTION_BINDINGS,
+)
+
+
+def manifest() -> dict[str, Any]:
+    """Machine-readable frozen parity contract consumed by tests and tooling."""
+
+    effective = BINDINGS
+    return {
+        "schema": 1,
+        "target": {"application": "Aseprite", "version": "1.3.15.5", "platform": "Windows"},
+        "menus": list(MENUS),
+        "commands": [
+            {
+                "id": op.name,
+                "label": op.label,
+                "menu": op.menu,
+                "context": op.context,
+                "parameters": [
+                    {
+                        "id": param.name,
+                        "label": param.label,
+                        "default": param.default,
+                        "minimum": param.low,
+                        "maximum": param.high,
+                        "step": param.step,
+                        "integer": param.integer,
+                    }
+                    for param in op.params
+                ],
+                "bindings": [
+                    item.chord
+                    for item in effective
+                    if item.kind == "command" and item.target == op.name
+                ],
+            }
+            for op in OPS
+        ],
+        "tools": [
+            {
+                "id": tool,
+                "bindings": [
+                    item.chord for item in effective if item.kind == "tool" and item.target == tool
+                ],
+            }
+            for tool in dict.fromkeys(item.target for item in _TOOL_BINDINGS)
+        ],
+        "action_modifiers": [
+            {
+                "id": modifier.name,
+                "label": modifier.label,
+                "context": modifier.context,
+                "description": modifier.description,
+                "bindings": [
+                    item.chord
+                    for item in effective
+                    if item.kind == "action_modifier" and item.target == modifier.name
+                ],
+            }
+            for modifier in ACTION_MODIFIERS
+        ],
+        "document_fields": [
+            "canvas",
+            "color_mode",
+            "palette",
+            "layers",
+            "groups",
+            "cels",
+            "frames",
+            "tags",
+            "slices",
+            "tilesets",
+            "tilemaps",
+            "selection",
+            "grid",
+            "matte",
+            "metadata",
+        ],
+    }

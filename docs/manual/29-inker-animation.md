@@ -4,9 +4,10 @@ A drawing in the [Inker](28-inker.md) can become a frame-by-frame animation. Eve
 chapter still applies — the tools, the layers, the colour modes, the selections — and this chapter is
 the second axis the document grows: frames across, layers down, a grid of cels between them.
 
-Nothing here exists until you ask for it. A still drawing has no timeline, and the controls that
-would act on one are greyed rather than hidden, so the shape of the mode is visible before you enter
-it.
+Nothing here exists until you ask for it. A still drawing is a one-frame sprite: the strip under
+the canvas is there and lists your layers, but it has one column and no transport, and the controls
+that would act on a clip are greyed rather than hidden — so the shape of the mode is visible before
+you enter it.
 
 ## Making a document animated
 
@@ -17,9 +18,10 @@ It is a single edit — one `Ctrl+Z` turns the document back into the still imag
 
 ## The timeline
 
-Once a document is animated a **timeline** strip appears under the canvas: frames across, tracks
-down, one square per cell. A filled square is a drawing, `=` is a linked cel, and an empty outline
-is a frame that track has nothing on.
+The strip under the canvas is always there — it is where the layers live, see
+[Layers](28-inker.md#layers) — and animating a document is what gives it more than one column and a
+transport row above it: frames across, tracks down, one square per cell. A filled square is a
+drawing, `=` is a linked cel, and an empty outline is a frame that track has nothing on.
 
 Clicking a square selects that track and moves to that frame; right-clicking one offers link, unlink
 and clear. Right-clicking a frame number offers insert, duplicate, reorder and delete. `,` and `.`
