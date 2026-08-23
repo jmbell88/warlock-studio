@@ -110,7 +110,11 @@ def apply(imgui: Any) -> None:
     # named ``RADIUS_L`` by hand for exactly this reason; now the global style
     # agrees with them instead of being overridden by them.
     style.window_rounding = sp(tokens.RADIUS_L)
-    style.child_rounding = 0.0
+    # Panes round (see ``tokens.RADIUS_PANE``). Two panes push their own over
+    # the top and both are deliberate: ``inker_canvas`` pushes 0 (the canvas is
+    # the document, not chrome -- rounding it clips artwork) and ``library``
+    # pushes ``RADIUS_L`` (its cards are the card idiom, drawn by hand).
+    style.child_rounding = sp(tokens.RADIUS_PANE)
     style.frame_rounding = sp(tokens.RADIUS_S)
     style.popup_rounding = sp(tokens.RADIUS_L)
     style.grab_rounding = sp(tokens.RADIUS_M)

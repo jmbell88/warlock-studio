@@ -586,6 +586,9 @@ def _canvas(ctx: Any, state: Any, tab: Any) -> None:
     # child collapses to nothing and the canvas (and its texture uploads)
     # silently stops being drawn.
     height = max(imgui.get_content_region_avail().y - sp(26), sp(16))
+    # The canvas is the *document*, not chrome: the global pane radius
+    # (``tokens.RADIUS_PANE``) would clip the artwork's four corners.
+    imgui.push_style_var(imgui.StyleVar_.child_rounding.value, 0.0)
     if imgui.begin_child("inker-canvas", (0, height), imgui.ChildFlags_.borders.value, flags):
         origin = imgui.get_cursor_screen_pos()
         avail = imgui.get_content_region_avail()
@@ -640,6 +643,7 @@ def _canvas(ctx: Any, state: Any, tab: Any) -> None:
         # this -- it is only ever set from inside a visible canvas.
         tab.view.pending_zoom_rung = 0
     imgui.end_child()
+    imgui.pop_style_var()
     _status_bar(ctx, state, tab, origin, hovered)
 
 

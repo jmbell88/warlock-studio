@@ -587,9 +587,13 @@ def _card(ctx: Any, job: Any, queue_pos: dict[str, int] | None = None) -> None:
         imgui.set_scroll_here_y(0.5)
     origin = imgui.get_cursor_screen_pos()
     height = sp(COMPACT_HEIGHT if filters_compact(ctx) else CARD_HEIGHT)
+    # A card, not a pane: this is ``widgets.card``'s idiom drawn by hand, so it
+    # keeps the surface radius rather than taking ``tokens.RADIUS_PANE``.
+    imgui.push_style_var(imgui.StyleVar_.child_rounding.value, sp(tokens.RADIUS_L))
     if imgui.begin_child("card", (0, height), imgui.ChildFlags_.borders.value):
         _card_body(ctx, job, queue_pos)
     imgui.end_child()
+    imgui.pop_style_var()
     # The child window is the item a drag lifts, so this has to follow
     # ``end_child`` and precede the click test below -- imgui treats a started
     # drag as not-a-click, which is what stops a drag from also selecting.

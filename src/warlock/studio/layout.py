@@ -492,14 +492,21 @@ def _divider(edge: PaneEdge) -> None:
     if edge is PaneEdge.NONE:
         return
     low, high = imgui.get_item_rect_min(), imgui.get_item_rect_max()
+    # Panes round (``tokens.RADIUS_PANE``), so the fill retreats from each
+    # corner and a hairline drawn across the child's *full* rect overshoots
+    # into the window colour at both ends. Both endpoints are pulled in by the
+    # rounding actually in force -- read off the live style rather than the
+    # token, because this runs from ``pane``'s finally, where the style is
+    # whatever the caller left standing (``widgets.card`` pushes its own).
+    inset = float(getattr(imgui.get_style(), "child_rounding", 0.0))
     if edge is PaneEdge.LEFT:
-        start, end = (low.x, low.y), (low.x, high.y)
+        start, end = (low.x, low.y + inset), (low.x, high.y - inset)
     elif edge is PaneEdge.RIGHT:
-        start, end = (high.x, low.y), (high.x, high.y)
+        start, end = (high.x, low.y + inset), (high.x, high.y - inset)
     elif edge is PaneEdge.TOP:
-        start, end = (low.x, low.y), (high.x, low.y)
+        start, end = (low.x + inset, low.y), (high.x - inset, low.y)
     else:
-        start, end = (low.x, high.y), (high.x, high.y)
+        start, end = (low.x + inset, high.y), (high.x - inset, high.y)
     imgui.get_window_draw_list().add_line(
         start,
         end,

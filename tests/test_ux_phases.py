@@ -122,6 +122,30 @@ def test_the_surface_radius_arrived_with_its_readers():
     assert "RADIUS_L" in inspect.getsource(widgets.push_surface_rounding)
 
 
+def test_a_pane_rounds_at_its_own_radius_and_the_style_says_so():
+    """The third job in the radius ramp, and the one nothing asserted at all.
+
+    ``child_rounding`` was 0 and so every major region of every workspace was
+    a hard rect. It has its own token rather than borrowing one of the two
+    beside it because a pane is a *region* -- neither the control ``RADIUS_M``
+    sizes nor the card/modal surface ``RADIUS_L`` sizes -- and naming it is
+    what lets the number move without dragging tabs and grabs with it.
+
+    It is deliberately tighter than the control radius: see
+    ``tokens.RADIUS_PANE`` for why that inversion is intended here and not a
+    slip of the ordering rule the surface radius above obeys.
+    """
+    from warlock.studio import surfaces, theme
+
+    assert tokens.RADIUS_S < tokens.RADIUS_PANE < tokens.RADIUS_M
+    assert "RADIUS_PANE" in inspect.getsource(theme.apply)
+    # Panes take plain imgui rounding, and that is forced rather than chosen:
+    # the nine-patch refuses below its minimum, so a pane-radius squircle would
+    # silently draw nothing.
+    assert tokens.RADIUS_PANE < surfaces.MIN_RADIUS
+    assert surfaces.sprite(tokens.RADIUS_PANE) is None
+
+
 # --- Phase 2: type and rhythm -----------------------------------------------
 
 

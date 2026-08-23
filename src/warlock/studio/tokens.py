@@ -92,6 +92,26 @@ RADIUS_M = 8.0
 # with_its_readers`` asserts it -- because a surface rounded *tighter* than
 # the controls inside it inverts the depth story the elevation ramp tells.
 RADIUS_L = 12.0
+# The *region* radius. A third job, and named rather than folded into one of
+# the two above for the reason the ramp is named by job at all: ``RADIUS_M``
+# is what a control rounds at and ``RADIUS_L`` what a surface rounds at, and a
+# pane -- a region of the window, holding both -- is neither. Naming it is what
+# lets this number move without dragging tabs, grabs, cards and modals with it.
+#
+# Deliberately *tighter* than the control radius, which is the one place this
+# file's ordering rule is knowingly inverted: the panes that visibly round are
+# the PANEL sidebars, inspectors and sheets (a CONTENT pane is ``theme.BG``,
+# the window colour, so it rounds invisibly), and at 5 those read as softened
+# regions rather than as oversized cards. A pane is not a thing sitting *on*
+# the window in the way a card sits on a pane, so the depth story ``RADIUS_M``
+# and ``RADIUS_L`` tell each other is not the story being told here.
+#
+# Panes take plain imgui rounding and never the nine-patch: ``surfaces``
+# refuses below ``MIN_RADIUS`` (8), so ``surfaces.sprite(5)`` returns None and
+# ``widgets.surface_fill`` is a no-op at this radius *by design*. That is
+# forced rather than chosen -- recorded here so nobody "upgrades" panes to the
+# squircle later and quietly gets nothing.
+RADIUS_PANE = 5.0
 BORDER = 1.0
 
 # -- controls / interaction -------------------------------------------------
