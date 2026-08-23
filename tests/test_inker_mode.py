@@ -1540,3 +1540,45 @@ def test_a_filter_session_is_settled_on_its_owner_not_the_active_tab():
     inker_mode._settle(ctx, a)
     assert a.doc._filter is None
     assert state.filter_uid == ""
+
+
+# --- space-to-pan is a hold, and a hold has to be let go of ------------------
+
+
+def _space(down=True):
+    import pygame
+
+    return type(
+        "E", (), {"key": pygame.K_SPACE, "type": pygame.KEYDOWN if down else pygame.KEYUP,
+                  "mod": 0}
+    )()
+
+
+def test_closing_the_last_tab_with_space_held_does_not_latch_the_pan():
+    """``handle_key``'s "is there a document" guards used to sit in front of the
+    Space branch, so the release was dropped and every left-drag panned instead
+    of painting for the rest of the session."""
+    ctx = _Ctx()
+    state = inker_mode.ensure(ctx)
+    tab = _tab()
+    state.add(tab)
+
+    assert inker_mode.handle_key(ctx, _space(down=True))
+    assert state.space_held
+
+    state.close(tab.uid)
+    assert not state.docs
+    inker_mode.handle_key(ctx, _space(down=False))
+    assert not state.space_held
+
+
+def test_a_tab_switch_lets_go_of_a_held_space():
+    """The other route: ``main`` gates both key edges on ``_passes_text_field``,
+    which answers no for a plain Space, so a release arriving while a text field
+    has focus never reaches ``handle_key`` at all."""
+    a, b = _tab("a"), _tab("b")
+    state = _state(a, b)
+    state.activate(a.uid)
+    state.space_held = True
+    state.activate(b.uid)
+    assert not state.space_held

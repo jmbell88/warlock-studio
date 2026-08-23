@@ -3277,17 +3277,27 @@ def handle_key(ctx: Any, event: Any) -> bool:
     import pygame
 
     state = ctx.state.inker
-    if state is None or not state.docs:
+    if state is None:
+        return False
+
+    if event.key == pygame.K_SPACE:
+        # Seen on both edges: space-to-pan is a hold, not a toggle.
+        #
+        # **Above the "is there a document" returns below**, which is the whole
+        # of the fix: they used to sit in front of this, so holding Space and
+        # closing the last tab dropped the release and left the flag on for the
+        # rest of the session -- every left-drag panned instead of painting, and
+        # every tool press was suppressed. A release is honoured whether or not
+        # there is anything to pan, because the flag outlives the document.
+        # ``plotter_mode.handle_key`` learned the same lesson at its own door.
+        state.space_held = event.type == pygame.KEYDOWN
+        return bool(state.docs)
+    if not state.docs:
         return False
     tab = state.active
     if tab is None:
         return False
     doc = tab.doc
-
-    if event.key == pygame.K_SPACE:
-        # Seen on both edges: space-to-pan is a hold, not a toggle.
-        state.space_held = event.type == pygame.KEYDOWN
-        return True
     if event.type != pygame.KEYDOWN:
         return True
 

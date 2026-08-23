@@ -2166,6 +2166,14 @@ class InkerState:
 
     def clear_drag(self) -> None:
         self.drag_kind = ""
+        # Space-to-pan is a hold, and its release can be *dropped* rather than
+        # merely late: ``main`` gates both key edges on ``_passes_text_field``,
+        # which answers no for a plain Space, so a release that arrives while a
+        # text field has focus never reaches ``handle_key`` and the flag stays
+        # on -- every left-drag panning instead of painting. Cleared here
+        # because every tab switch, add and close comes through this method, so
+        # it is the one place a latched flag is certain to be let go of.
+        self.space_held = False
         self.drag_anchor = None
         self.last_point = None
         self.lasso = []
