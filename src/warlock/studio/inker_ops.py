@@ -1066,7 +1066,20 @@ register(
         _mode("toggle_play"),
         menu="Frame",
         key="Enter",
-        context="Normal",
+        # **Deliberately context-free.** It used to declare ``context="Normal"``,
+        # which made the binding unreachable: ``by_key`` tries the requested
+        # context and then ops with *no* context, and "Normal" is truthy -- so
+        # with any paint tool in hand (``key_context`` answers "FreehandTool",
+        # and brush is the default) Enter resolved to nothing and the op's
+        # refusal never spoke. Enter still reached ``toggle_play`` through the
+        # raw fallback in ``handle_key``, so the key worked and only the message
+        # was missing: pressing Enter on a still document said nothing with a
+        # brush in hand and toasted correctly with an eyedropper.
+        #
+        # Nothing is lost by dropping it. "Normal" is the last row of
+        # ``KEY_CONTEXTS`` and means "no other context matched", and the two
+        # contexts that must not see Enter -- ``Transformation`` and
+        # ``Gesture`` -- are consumed by ``_modal`` before ``by_key`` is asked.
         enabled=animated,
         reason="This drawing has no frames yet -- Animate it first.",
     )

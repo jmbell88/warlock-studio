@@ -170,3 +170,75 @@ def test_the_digits_set_brush_opacity_with_zero_meaning_full():
     for key, expected in ((pygame.K_3, 0.3), (pygame.K_9, 0.9), (pygame.K_0, 1.0)):
         inker_mode.handle_key(ctx, pygame.event.Event(pygame.KEYDOWN, key=key, mod=0))
         assert state.opacity == expected
+
+
+def test_every_bound_key_resolves_in_every_context_it_can_be_pressed_in():
+    """The guard the spelling check could not give. ``_contexts`` already
+    refuses a context name ``key_context`` can never return, but a *correctly
+    spelled* one that is almost never live is the same failure -- silence.
+
+    ``play`` declared ``context="Normal"``, the last row of ``KEY_CONTEXTS`` and
+    so the one that only answers when no other matched. ``by_key`` tries the
+    requested context and then ops with *no* context, and "Normal" is truthy, so
+    with any paint tool in hand the binding resolved to nothing and the op's
+    refusal never spoke."""
+    from warlock.studio import inker_ops, inker_state
+
+    live = [name for name, _applies in inker_state.KEY_CONTEXTS]
+    for op in inker_ops.OPS:
+        if not op.key or op.context:
+            continue
+        for context in live:
+            found = inker_ops.by_key(op.key, context)
+            assert found is not None, f"{op.name} ({op.key}) is unreachable in {context}"
+
+
+def test_a_context_bound_op_is_reachable_in_its_own_context():
+    """And that a context-bound op is not shadowed out of existence: if it
+    declares one, ``by_key`` has to find it there."""
+    from warlock.studio import inker_ops
+
+    for op in inker_ops.OPS:
+        if not (op.key and op.context):
+            continue
+        assert inker_ops.by_key(op.key, op.context) is not None, op.name
+
+
+def test_enter_resolves_to_play_whatever_tool_is_held():
+    from warlock.studio import inker_ops, inker_state
+
+    for name, _applies in inker_state.KEY_CONTEXTS:
+        if name in ("Transformation", "Gesture"):
+            # Consumed by ``_modal`` before ``by_key`` is asked.
+            continue
+        assert inker_ops.by_key("Enter", name).name == "play", name
+
+
+def test_enter_on_a_still_document_says_why_with_a_brush_in_hand():
+    """The user-visible half. With the binding unreachable, ``handle_key`` fell
+    through to its raw ``toggle_play`` branch, which has no refusal to give --
+    so Enter said nothing with a brush in hand and toasted correctly with an
+    eyedropper, for the same document."""
+    from types import MethodType, SimpleNamespace
+
+    import pygame
+
+    from warlock.studio import inker, inker_mode, inker_state
+    from warlock.studio import state as state_mod
+
+    doc = inker.Document.blank(8, 8)
+    assert doc.anim is None, "a still document"
+    tab = inker_state.InkerDoc(doc=doc, uid="t1", title="t")
+    state = inker_state.InkerState()
+    state.add(tab)
+    state.set_tool("brush")
+    app = SimpleNamespace(inker=state, toasts=[], toast_log=[])
+    app.toast = MethodType(state_mod.AppState.toast, app)
+    app.toast_once = MethodType(state_mod.AppState.toast_once, app)
+    ctx = SimpleNamespace(state=app, toast=app.toast)
+
+    assert inker_state.key_context(state, tab) == "FreehandTool"
+    inker_mode.handle_key(ctx, pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN, mod=0))
+
+    assert state.tip is not None, "the refusal reached the user"
+    assert "no frames yet" in str(state.tip.text)
