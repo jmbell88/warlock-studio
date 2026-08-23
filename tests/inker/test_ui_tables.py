@@ -498,3 +498,33 @@ def test_an_unmodified_click_does_not_extend_the_range(monkeypatch):
 
     assert not inker_timeline.extend_range(tab, doc, 1)
     assert tab.range_sel is None
+
+
+def test_the_timeline_builds_its_two_lists_once_per_draw():
+    """``frame_uids`` was called once per *track* and ``member_uids`` once per
+    *row*, inside the row loop -- so a twenty-track fifty-frame clip allocated
+    seventy lists a frame to answer two questions whose answers cannot change
+    while the grid is drawing. Both are hoisted into ``geom``, the per-draw
+    scratch the rows are already handed."""
+    import inspect
+
+    from warlock.studio.panes import inker_timeline
+
+    grid = inspect.getsource(inker_timeline._grid)
+    row = inspect.getsource(inker_timeline._track_row)
+
+    assert '"columns": columns' in grid
+    assert '"order": doc.member_uids()' in grid
+    assert 'geom["columns"]' in row
+    assert "doc.member_uids()" not in row
+
+
+def test_depth_still_answers_without_a_hoisted_order():
+    """The callers outside the grid pass nothing and must still work."""
+    from warlock.studio import inker
+    from warlock.studio.panes import inker_timeline
+
+    doc = inker.Document.blank(4, 4)
+    assert inker_timeline._depth(doc, 0) == 0
+    assert inker_timeline._depth(doc, 99) == 0, "off the end is not an error"
+    assert inker_timeline._depth(doc, 0, doc.member_uids()) == 0

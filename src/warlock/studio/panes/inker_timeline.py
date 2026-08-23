@@ -826,12 +826,21 @@ def _grid(ctx: Any, tab: Any) -> None:
     # Where every cell ended up, filled in as the rows draw. The marquee is
     # measured against this rather than against hover, and the numbers have to
     # be *screen* coordinates so the scrolling child maps for free.
+    # Both lists are built **once per draw** and carried in ``geom``, which is
+    # already the per-draw scratch the rows are handed. They used to be rebuilt
+    # inside the row loop: ``frame_uids`` once per *track* and ``member_uids``
+    # once per *row*, so a twenty-track fifty-frame clip allocated seventy lists
+    # a frame to answer two questions whose answers cannot change while the grid
+    # is drawing.
+    columns = frame_uids(doc)
     geom: dict[str, Any] = {
         "x0": 0.0,
         "tops": {},
         "cell": cell,
         "gutter": gutter,
-        "frames": len(frame_uids(doc)),
+        "frames": len(columns),
+        "columns": columns,
+        "order": doc.member_uids(),
     }
     # **Bottom-up**: index 0 is the background and it draws last, at the foot.
     # This is the one thing about the grid that reversed when the panel merged
@@ -1084,7 +1093,7 @@ def _track_row(
     # *absolute* offset from the window's own left edge, not from wherever the
     # indent left the cursor, so it puts the first cell at the same x either
     # way -- the indent cannot move a cell, only the text before it.
-    depth = _depth(doc, track_index)
+    depth = _depth(doc, track_index, None if geom is None else geom["order"])
     if depth:
         imgui.indent(sp(GROUP_INDENT) * depth)
     # The eye, not a checkbox: it is what every layers panel draws there, and
@@ -1128,7 +1137,8 @@ def _track_row(
         imgui.unindent(sp(GROUP_INDENT) * depth)
     imgui.same_line(sp(TRACK_LABEL_W))
 
-    for frame_index, frame in enumerate(frame_uids(doc)):
+    columns = frame_uids(doc) if geom is None else geom["columns"]
+    for frame_index, frame in enumerate(columns):
         if frame_index:
             imgui.same_line(0.0, gutter)
         imgui.push_id(frame_index if frame is None else frame.uid)
@@ -1137,9 +1147,14 @@ def _track_row(
     imgui.pop_id()
 
 
-def _depth(doc: Any, index: int) -> int:
-    """How deep in the group tree this row sits."""
-    order = doc.member_uids()
+def _depth(doc: Any, index: int, order: list[int] | None = None) -> int:
+    """How deep in the group tree this row sits.
+
+    *order* is ``member_uids()``, hoisted by :func:`_grid` because it is the
+    same list for every row of one draw and building it walks the whole stack.
+    ``None`` asks for it here, which is what the callers outside the grid want.
+    """
+    order = doc.member_uids() if order is None else order
     uid = order[index] if 0 <= index < len(order) else None
     if uid is None:
         return 0
