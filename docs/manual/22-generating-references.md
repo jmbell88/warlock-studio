@@ -304,6 +304,14 @@ rather than from the controls, because the two can disagree: switching size show
 an earlier palette setting, and a **Rebuild with these colours** button appears when that is the
 case.
 
+Two buttons sit under the controls. **Open in Inker** opens the pixels as a new, unlinked drawing:
+the artifact is derived, so it is rebuilt whenever the settings above make the copy on disk stale,
+and a document that saved back over it would have that edit thrown away — the first `Ctrl+S` is a
+Save As. **Export as PNG** writes the size selected here to wherever you choose. Both derive the
+artifact first if it does not exist yet, so neither waits on **Preview pixels**. The
+[downloads grid](34-library-and-jobs.md) exports the same files; what these add is that they act on
+the size you are looking at.
+
 Both settings are app preferences rather than properties of the job, so they persist across
 sessions and apply to whichever reference you are looking at. Changing them re-derives; it never
 touches `input.png`, so promoting the reference afterwards feeds the mesh engine the same pixels it

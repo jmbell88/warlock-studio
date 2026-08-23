@@ -724,6 +724,63 @@ def open_rendered_sheet(
     )
 
 
+def open_pixel_artifact(
+    ctx: Any,
+    job_id: str,
+    name: str,
+    *,
+    title: str,
+    pixel_colors: int,
+    pixel_palette: str | None,
+    pixel_dither: bool,
+) -> None:
+    """Open a job's derived ``pixel_NNN.png`` as an ordinary document.
+
+    :func:`open_sprite_draft`'s shape, and **unlinked for its reason**: no
+    ``job_id`` and no ``link_kind``, so the first Ctrl+S is a Save As.
+    ``open_job_reference`` would be wrong here rather than merely different --
+    it makes a linked tab whose Ctrl+S writes back, and this artifact is
+    *derived*: ``derive.get_file`` rebuilds it whenever the knobs say the copy
+    on disk is stale, so the edit would be silently thrown away.
+
+    The three pixel preferences are passed in rather than read here, because
+    this body runs on the task thread and they live in settings on the frame
+    thread -- the rule ``Ctx.save_artifact`` states. It is also what makes the
+    preview, the export and this open describe one file.
+
+    ``get_file`` derives the artifact if it is absent, so this works before
+    "Preview pixels" has ever been pressed.
+    """
+    ensure(ctx)
+    set_mode(ctx.state, "inker")
+
+    def run() -> dict[str, Any]:
+        """Blocking; task thread only."""
+        import numpy as np
+        from PIL import Image
+
+        from ..service import derive as svc_derive
+        from . import inker
+
+        path = svc_derive.get_file(
+            ctx.svc,
+            job_id,
+            name,
+            pixel_colors=pixel_colors,
+            pixel_palette=pixel_palette,
+            pixel_dither=pixel_dither,
+        )
+        with Image.open(path) as opened:
+            opened.load()
+            array = np.asarray(opened.convert("RGBA"), dtype=np.uint8).copy()
+        return {"doc": inker.Document.from_pixels(array, name="Pixels"), "title": title}
+
+    # The ``inker-open`` prefix is what makes ``on_task_done`` adopt this with
+    # no routing change; the ``pixel:`` segment stops it colliding with
+    # ``open_job_reference``'s key for a different document of the same job.
+    ctx.submit(f"inker-open:pixel:{job_id}:{name}", run)
+
+
 def sheet_grid(record: dict[str, Any]) -> tuple[tuple[int, int], int]:
     """``(cell, count)`` from a rendered sheet's sidecar.
 

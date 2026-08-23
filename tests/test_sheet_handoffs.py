@@ -292,3 +292,51 @@ def test_a_sheet_with_no_animation_block_still_opens_as_a_plain_grid(
     inker_mode.open_rendered_sheet(ctx, "j1", "s1")
     assert len(ctx.result["doc"].anim.frames) == 8
     assert not ctx.result["doc"].anim.tags
+
+
+def test_a_pixel_artifact_opens_unlinked_and_derives_itself(tmp_path, monkeypatch):
+    """The Create pixel preview's own way into the Inker.
+
+    Unlinked deliberately, and not merely by analogy with the sheets above:
+    ``pixel_128.png`` is *derived*, so ``derive.get_file`` rebuilds it whenever
+    the knobs make the copy on disk stale -- a linked tab writing back would
+    have its edit thrown away by the next re-derive.
+    """
+    png = tmp_path / "pixel_64.png"
+    Image.fromarray(np.zeros((8, 8, 4), dtype=np.uint8)).save(png)
+    seen: dict[str, Any] = {}
+
+    def _get_file(svc, job_id, name, **kwargs):
+        seen.update({"job": job_id, "name": name, **kwargs})
+        return png
+
+    monkeypatch.setattr("warlock.service.derive.get_file", _get_file)
+    ctx = _Ctx()
+
+    inker_mode.open_pixel_artifact(
+        ctx,
+        "j1",
+        "pixel_64.png",
+        title="j1 pixels 64",
+        pixel_colors=16,
+        pixel_palette="nes",
+        pixel_dither=True,
+    )
+
+    # The ``inker-open`` prefix is what gets it adopted with no routing change;
+    # the ``pixel:`` segment keeps it off ``open_job_reference``'s key for a
+    # different document of the same job.
+    assert ctx.submitted == ["inker-open:pixel:j1:pixel_64.png"]
+    # The knobs are captured on the frame thread and carried in, so the
+    # preview, the export and this open describe one file.
+    assert seen == {
+        "job": "j1",
+        "name": "pixel_64.png",
+        "pixel_colors": 16,
+        "pixel_palette": "nes",
+        "pixel_dither": True,
+    }
+    result = ctx.result
+    assert result["title"] == "j1 pixels 64"
+    assert result.get("path") is None and result.get("link_kind") is None
+    assert result["doc"].size == (8, 8)

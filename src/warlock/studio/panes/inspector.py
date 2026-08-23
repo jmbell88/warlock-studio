@@ -919,6 +919,37 @@ def _palette_names(ctx: Any) -> list[str]:
     return names
 
 
+def _pixel_handoffs(
+    ctx: Any, job_id: str, name: str, size: int, prefs: dict[str, Any]
+) -> None:
+    """Where the pixels go from here: the Inker, or a file.
+
+    Neither is a new *capability* -- ``downloads`` already exports these
+    artifacts and the Inker already opens documents. What both add is **place
+    and specificity**, which is ``_edit_actions``' own argument: this is where
+    the user is looking at the pixels, and it acts on the size selected in
+    this section, which the download grid cannot express.
+
+    The three preferences are read on the frame thread and handed over, so the
+    preview above, the export and the open all describe one file.
+    """
+    from .. import inker_mode
+
+    if controls.button("Open in Inker"):
+        inker_mode.open_pixel_artifact(
+            ctx,
+            job_id,
+            name,
+            title=f"{job_id[:8]} pixels {size}",
+            pixel_colors=int(prefs["pixel_colors"]),
+            pixel_palette=prefs["pixel_palette"],
+            pixel_dither=bool(prefs["pixel_dither"]),
+        )
+    imgui.same_line()
+    if controls.button("Export as PNG"):
+        ctx.save_artifact(job_id, name)
+
+
 def _pixel(ctx: Any, job: Any) -> None:
     """The pixel-art cutout as it will actually export, crisp on screen.
 
@@ -985,6 +1016,11 @@ def _pixel(ctx: Any, job: Any) -> None:
                 changed = True
         if changed:
             ctx.submit(key, svc_derive.get_file, ctx.svc, job_id, name, **submit_kwargs)
+
+    # Before the texture early-out below, deliberately: an export that only
+    # appears once "Preview pixels" has been pressed is a discoverability trap,
+    # and both doors derive the artifact themselves if it is absent.
+    _pixel_handoffs(ctx, job_id, name, chosen, submit_kwargs)
 
     if ctx.textures is None:
         return
