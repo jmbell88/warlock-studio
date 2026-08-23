@@ -6,7 +6,7 @@ Guidance for Claude Code in this repository. See `D:\Projects\CLAUDE.md` for how
 
 Local AI 3D asset generator: text or image prompt → SDXL 1.0 at full CFG (reference PNG; `sdxl_cfg`, with Turbo as the fast option) → `trellis-server.exe` (vendored native binary, not the Python TRELLIS package) → textured GLB, in a single-process desktop app: a pygame window, one ModernGL context, imgui panels drawn through it. No HTTP, no browser.
 
-Eleven modes (`studio/modes.py` is authoritative): the asset pipeline is Home/Create/Library/Review, the six workspaces are Inker, Clay, Poser, Plotter, Packwright and Troupe, and Settings sits in the rail's footer. Manual, Profiles and the guided tour are deliberately *not* modes — an overlay, a sheet and a second overlay respectively. Generation is one staged mode (Create), not the separate 2D/3D pair the older docs describe.
+Eleven modes (`studio/modes.py` is authoritative): the rail runs Home/Library/Create, then the six workspaces Inker, Clay, Poser, Troupe, Plotter and Packwright, then a footer holding Review and Settings. Manual, Profiles and the guided tour are deliberately *not* modes — an overlay, a sheet and a second overlay respectively. Generation is one staged mode (Create), not the separate 2D/3D pair the older docs describe.
 
 ## Commands
 

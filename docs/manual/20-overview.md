@@ -53,14 +53,15 @@ A window too narrow to hold the labelled rail *and* three usable columns draws t
 until there is room again — what you chose and what fits are two different facts, so dragging the
 window wider brings the labels back.
 
-It is drawn in three sections, and the list below is in that order. The first is the **asset
-pipeline** — start something, take it through its stages, find it again, judge it. The second is the
-**creative workspaces**. The third is the **footer**, drawn against the bottom edge: a badge that
-appears only when something is failing its startup check, then the manual, Settings, and the
-collapse toggle.
+It is drawn in three sections, and the list below is in that order. The first is where an asset
+**begins** — what you have, and making another one. The second is the **creative workspaces**. The
+third is the **footer**, the last group in the column, carrying no caption: the two destinations
+where you are not making something.
 
 - **Home.** What the app opens on: what changed in this build, what the machine is doing, and a
   single list of everything you were recently working on. Returning here is never destructive.
+- **Library.** Every asset that has ever been generated, filtered, sorted and searched, with the
+  trash and the prune. Covered in [The library and jobs](34-library-and-jobs.md).
 - **Create.** One mode for the whole asset pipeline, drawn as five **stages** on a rail above the
   settings column. **Reference** owns the prompt and every control that composes it — the
   negative prompt, the image model and style LoRA, the seed and the candidate count.
@@ -71,10 +72,6 @@ collapse toggle.
   [Generating references](22-generating-references.md),
   [Generating meshes](23-generating-meshes.md) and
   [Rigging and posing](25-rigging-and-posing.md).
-- **Library.** Every asset that has ever been generated, filtered, sorted and searched, with the
-  trash and the prune. Covered in [The library and jobs](34-library-and-jobs.md).
-- **Review.** Judging finished meshes — one at a time or as a parameter sweep — and the "what
-  works" findings the verdicts add up to. Covered in [Review](36-review.md).
 
 Then the six workspaces:
 
@@ -84,17 +81,19 @@ Then the six workspaces:
   export a `.glb` or import the document as an asset. Covered in [Clay](30-clay.md).
 - **Poser.** Authoring reusable poses against a skeleton template, kept in a global pose library
   rather than belonging to any one asset. Covered in [Poser](26-poser.md).
+- **Troupe.** A character-sprite factory: a prompt becomes a reference, a mesh, a fitted rig and
+  then a rendered, pixelised sprite sheet of the clips a character walks and swings through.
+  Covered in [Troupe](33-troupe.md).
 - **Plotter.** A tile-map editor: a grid, a layer stack, one or more tilesets, and the objects an
   engine reads as spawn points and trigger volumes — where a sheet of tiles becomes a level. It
   speaks Tiled's formats in both directions. Covered in [Plotter](31-plotter.md).
 - **Packwright.** A sprite-atlas packer: many images in, one atlas out, with a sidecar that says
   where everything landed. Covered in [Packwright](32-packwright.md).
-- **Troupe.** A character-sprite factory: a prompt becomes a reference, a mesh, a fitted rig and
-  then a rendered, pixelised sprite sheet of the clips a character walks and swings through.
-  Covered in [Troupe](33-troupe.md).
 
 And in the footer:
 
+- **Review.** Judging finished meshes — one at a time or as a parameter sweep — and the "what
+  works" findings the verdicts add up to. Covered in [Review](36-review.md).
 - **Settings.** The app's own preferences — UI scale, the frame-rate readout, layout resets, and the
   list of models it loaded, from which a missing one can be downloaded. See
   [In-app settings](39-configuration.md#in-app-settings).

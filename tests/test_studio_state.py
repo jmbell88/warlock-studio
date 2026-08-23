@@ -510,10 +510,10 @@ def test_the_rail_groups_are_the_modes_in_order():
     """Two spellings of one fact, pinned to each other.
 
     ``RAIL_GROUPS`` is hand-written (the UI redesign, wave 3) -- the reversal of the
-    derived ``GROUP_BREAKS`` it replaced, because the first group is a claim no
-    predicate over ``WORK_MODES`` can make: Home, Create, Library and Review
-    are the asset pipeline, and two of those four are work modes while two are
-    not. A rule that cannot state the grouping is not a better version of
+    derived ``GROUP_BREAKS`` it replaced, because no predicate over
+    ``WORK_MODES`` can make the grouping: the first group (Home, Library,
+    Create) is one work mode and two that are not, and the footer is one of
+    each. A rule that cannot state the grouping is not a better version of
     stating it -- but a hand-written list *can* drift from ``MODES``, so the
     flattening is asserted instead.
     """
@@ -523,9 +523,15 @@ def test_the_rail_groups_are_the_modes_in_order():
     assert tuple(flat) == modes.KEYS
     assert len(set(flat)) == len(flat), "a mode in two groups is drawn twice"
     assert all(modes.RAIL_GROUPS), "an empty group would draw as a stray gap"
-    # The last group is the footer, and Settings is what belongs there: it is
-    # about the program rather than about a piece of work.
-    assert modes.RAIL_GROUPS[-1] == ("settings",)
+    # The last group is the footer: the end matter, the destinations where you
+    # are not making something. Review joined Settings there rather than
+    # sitting among the six workspaces, because judging what came out is not
+    # one of the six things you make.
+    assert modes.RAIL_GROUPS[-1] == ("review", "settings")
+    # Whatever else the footer grows, Settings is last -- it is the one entry
+    # that is about the program rather than about a piece of work, and this is
+    # the assertion that survives the footer changing again.
+    assert modes.KEYS[-1] == "settings"
     # One caption per group, footer included: the rail indexes the two tuples
     # together, so a group added without a label is an IndexError on the frame
     # thread rather than a missing word.

@@ -35,6 +35,17 @@ from . import icons
 # stage's pane).
 MODES: list[tuple[str, str, str]] = [
     ("home", "Home", icons.HOUSE),
+    # A real mode rather than a sub-view of Home. The Library and Review were
+    # tiles on the chooser and a ``state.landing_view`` enum behind it, which
+    # is what a destination looks like when there is nowhere to put it; Home
+    # stopped being a tile grid, so they went where everything else already
+    # was. The glyph is the one ``landing._SUBVIEW_ICONS`` already assigned --
+    # moved, not re-picked, because a screen the user has seen should not
+    # change its pictures for a refactor.
+    #
+    # It sits *before* Create because that is the order of the question: what
+    # do I have, then make another one.
+    ("library", "Library", icons.FOLDER_OPEN),
     # **One mode, not two** (the UI redesign, wave 5). "2D" and "3D" were the two
     # halves of a single journey -- you write a prompt, you get a picture, you
     # turn the picture into a mesh -- presented as two destinations you had to
@@ -46,20 +57,9 @@ MODES: list[tuple[str, str, str]] = [
     # navigation. The glyph is neither of the two it replaces, deliberately:
     # IMAGE and BOX went with the stages that kept their meanings.
     ("create", "Create", icons.SPARKLES),
-    # Real modes rather than sub-views of Home. They were tiles on the chooser
-    # and a ``state.landing_view`` enum behind it, which is what a destination
-    # looks like when there is nowhere to put it; Home stopped being a tile
-    # grid, so they went where everything else already was. The glyph is the
-    # one ``landing._SUBVIEW_ICONS`` already assigned -- moved, not re-picked,
-    # because a screen the user has seen should not change its pictures for a
-    # refactor.
-    ("library", "Library", icons.FOLDER_OPEN),
-    ("review", "Review", icons.CIRCLE_CHECK),
     ("inker", "Inker", icons.PEN_TOOL),
     ("clay", "Clay", icons.RULER),
     ("poser", "Poser", icons.PERSON_STANDING),
-    ("plotter", "Plotter", icons.GRID),
-    ("packwright", "Packwright", icons.LAYERS),
     # Troupe (the Troupe programme's own mode). A workspace of its own rather
     # than a panel in Create for the reason Poser is one: what happens here is
     # *watching* -- a walk cycle plays continuously and you judge it -- and
@@ -67,27 +67,40 @@ MODES: list[tuple[str, str, str]] = [
     # The glyph is Poser's, deliberately: both are about a human figure, and
     # the rail distinguishes them by label.
     ("troupe", "Troupe", icons.PERSON_STANDING),
+    ("plotter", "Plotter", icons.GRID),
+    ("packwright", "Packwright", icons.LAYERS),
+    # Review is footer matter, beside Settings, and shares its glyph history
+    # with the Library above (both were Home tiles). It is the one place you
+    # go to *judge* rather than to make, and it is entered rarely and left
+    # again -- which is the same shape as Settings and not the shape of the
+    # six workspaces it used to sit among.
+    ("review", "Review", icons.CIRCLE_CHECK),
     ("settings", "Settings", icons.SETTINGS),
 ]
 
 # The rail's sections, hand-written. **Not derived**, and that is the reversal
 # of what ``GROUP_BREAKS`` used to be: deriving the gaps from "is this a work
 # mode" was right while the only claim being made was *workspaces are not
-# places*, and it is wrong now, because the first group is a claim the
-# predicate cannot make. Home, Create, Library and Review are the *asset*
-# pipeline -- start something, take it through its stages, find it again, judge
-# it -- and two of those four are work modes while two are not.
+# places*, and it is wrong now, because no predicate over ``WORK_MODES`` can
+# derive this grouping: the first group is one work mode and two that are not,
+# and the footer is one of each. Home, the Library and Create are where an
+# asset *begins* -- what do I have, and make another one -- and that is a
+# claim about the user's question, not about whether a pane has a form in it.
 # A rule that cannot state the grouping is not a better version of stating it.
 #
-# The last group is the rail's *footer*. It used to be drawn against the bottom
-# edge beside a health badge and an expand toggle; the editor shell moved both
-# of those to the status bar and the Window menu, so the footer is now simply
-# the last group in the one column -- distinguished by carrying no caption
-# rather than by a separate drawing path.
+# The last group is the rail's *footer*, and now that it holds two items it
+# needs a meaning: it is the end matter -- the two destinations where you are
+# not making something. Review is where you judge what came out and Settings
+# is where you configure the machine; both are entered rarely and left again.
+# It used to be drawn against the bottom edge beside a health badge and an
+# expand toggle; the editor shell moved both of those to the status bar and
+# the Window menu, so the footer is now simply the last group in the one
+# column -- distinguished by carrying no caption rather than by a separate
+# drawing path.
 RAIL_GROUPS: tuple[tuple[str, ...], ...] = (
-    ("home", "create", "library", "review"),
-    ("inker", "clay", "poser", "plotter", "packwright", "troupe"),
-    ("settings",),
+    ("home", "library", "create"),
+    ("inker", "clay", "poser", "troupe", "plotter", "packwright"),
+    ("review", "settings"),
 )
 
 #: What each group is called, when the rail is wide enough to say so. One entry
