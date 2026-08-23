@@ -26,6 +26,8 @@ from typing import Any
 
 import numpy as np
 
+from warlock import native
+
 
 def ray_sphere(
     origin: np.ndarray, direction: np.ndarray, centre: np.ndarray, radius: float
@@ -195,6 +197,10 @@ def build_bvh(positions: np.ndarray, tris: np.ndarray) -> BVH | None:
     tri_hi = corners.max(axis=1)
     centroid = (tri_lo + tri_hi) * 0.5
 
+    built = _build_bvh_native(tri_lo, tri_hi, centroid)
+    if built is not None:
+        return built
+
     order = np.arange(len(tris), dtype="i8")
     lo: list[np.ndarray] = []
     hi: list[np.ndarray] = []
@@ -244,6 +250,70 @@ def build_bvh(positions: np.ndarray, tris: np.ndarray) -> BVH | None:
         np.asarray(count, dtype="i8"),
         order,
         nodes,
+    )
+
+
+def _build_bvh_native(tri_lo, tri_hi, centroid) -> BVH | None:
+    """The same tree from ``warlockc``, or ``None`` for every way of declining.
+
+    ``None`` covers a missing DLL, a node budget the kernel overran and an
+    arithmetic overflow on the sizing -- every one of them a case where the
+    numpy body below is simply run instead.
+
+    **The tree this returns is not the one numpy builds, and that is licensed.**
+    ``np.argpartition`` is introselect: its permutation among *equal* keys is
+    unspecified, so a C median split separates coincident centroids differently
+    and produces a different, equally valid tree. The property the picking path
+    actually rests on is the pick *result*, whose tie-break (lowest triangle
+    index) is pinned so that the tree and the full linear sweep agree -- and
+    that is what ``tests/viewer/test_bvh_native.py`` asserts, together with the
+    structural invariants a tree must have whatever its shape. The argument is
+    in ``docs/INVARIANTS.md``; it is not a precedent for loosening any other
+    kernel's bar.
+    """
+    if not native.available():
+        return None
+    n_tris = len(tri_lo)
+    # A median split of a span of nine or more leaves at least four on each
+    # side, so a leaf never holds fewer than four triangles and the tree has at
+    # most ``2 * ceil(T / 4) - 1`` nodes. The slack is for the small-T corner
+    # where that bound is loosest.
+    max_nodes = 2 * (n_tris // 4 + 2) + 8
+    try:
+        lo = np.empty((max_nodes, 3), dtype="f8")
+        hi = np.empty((max_nodes, 3), dtype="f8")
+        left = np.empty(max_nodes, dtype="i8")
+        right = np.empty(max_nodes, dtype="i8")
+        first = np.empty(max_nodes, dtype="i8")
+        count = np.empty(max_nodes, dtype="i8")
+        order = np.empty(n_tris, dtype="i8")
+        stack = np.empty(max_nodes * 4, dtype="i8")
+    except (MemoryError, ValueError):
+        return None
+    n_nodes = native.bvh_build(
+        np.ascontiguousarray(tri_lo, dtype="f8"),
+        np.ascontiguousarray(tri_hi, dtype="f8"),
+        np.ascontiguousarray(centroid, dtype="f8"),
+        BVH_LEAF,
+        order,
+        lo,
+        hi,
+        left,
+        right,
+        first,
+        count,
+        stack,
+    )
+    if n_nodes < 0:
+        return None
+    return BVH(
+        lo=lo[:n_nodes].copy(),
+        hi=hi[:n_nodes].copy(),
+        left=left[:n_nodes].copy(),
+        right=right[:n_nodes].copy(),
+        first=first[:n_nodes].copy(),
+        count=count[:n_nodes].copy(),
+        order=order,
     )
 
 

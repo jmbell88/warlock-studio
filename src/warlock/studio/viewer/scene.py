@@ -238,6 +238,12 @@ def _face_normals(primitive: Primitive) -> np.ndarray:
     edge1 = positions[tri[:, 1]] - positions[tri[:, 0]]
     edge2 = positions[tri[:, 2]] - positions[tri[:, 0]]
     face = np.cross(edge1, edge2)
+    # Deliberately *not* the ``np.bincount`` scatter ``clay.mesh.accumulate``
+    # uses. That one is bit-identical because its accumulator is already f8;
+    # here ``positions`` is f4, so the loop sums in single precision and
+    # bincount would sum in double and round differently. A rare path (trellis
+    # always writes normals) is not worth a changed last bit on the one
+    # attribute the shading reads.
     out = np.zeros_like(positions)
     for i in range(3):
         np.add.at(out, tri[:, i], face)

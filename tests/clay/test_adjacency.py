@@ -299,3 +299,48 @@ def test_cached_positions_do_not_outlive_their_mesh() -> None:
     del m
     gc.collect()
     assert len(adj._F8) == 0
+
+
+def test_the_packed_edge_key_answers_exactly_what_the_axis_wise_unique_did():
+    """``_build`` packs each undirected edge into one integer and uniques on a
+    scalar, because ``np.unique(..., axis=0)`` is a lexsort through a
+    structured-void view and measures 777 ms against 130 ms on a 200k-vertex
+    mesh -- and this is the dominant cost of entering element mode.
+
+    The substitution is only sound while the packing is *order-preserving*, so
+    what is asserted is the full triple: the same edge list, in the same order,
+    with the same inverse. A packing that merely deduplicated correctly but
+    reordered would renumber every edge in the document.
+    """
+    rng = np.random.default_rng(0xED6E)
+    n_verts = 400
+    a = rng.integers(0, n_verts, size=4000)
+    b = rng.integers(0, n_verts, size=4000)
+    pairs = np.stack([np.minimum(a, b), np.maximum(a, b)], axis=1).astype("i8")
+
+    want_verts, want_inverse = np.unique(pairs, axis=0, return_inverse=True)
+
+    stride = int(pairs.max()) + 1
+    packed = pairs[:, 0] * stride + pairs[:, 1]
+    keys, got_inverse = np.unique(packed, return_inverse=True)
+    got_verts = np.stack([keys // stride, keys % stride], axis=1).astype("i8")
+
+    assert np.array_equal(got_verts, want_verts)
+    assert np.array_equal(got_inverse.reshape(-1), want_inverse.reshape(-1))
+
+
+def test_a_real_mesh_keeps_its_edge_numbering_under_the_packed_key():
+    """The same claim, made where it matters: through ``adjacency`` itself, on a
+    mesh whose corner-to-edge map every topology op indexes by."""
+    mesh = _plane_grid()
+    a = adj.adjacency(mesh)
+    pairs = np.stack(
+        [
+            np.minimum(mesh.loops, mesh.loops[a.next_corner]),
+            np.maximum(mesh.loops, mesh.loops[a.next_corner]),
+        ],
+        axis=1,
+    )
+    want_verts, want_inverse = np.unique(pairs, axis=0, return_inverse=True)
+    assert np.array_equal(a.edge_verts, want_verts)
+    assert np.array_equal(a.corner_edge, want_inverse.reshape(-1))

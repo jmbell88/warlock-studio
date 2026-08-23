@@ -379,3 +379,47 @@ def test_a_palette_too_long_for_a_gif_falls_back_rather_than_truncating(tmp_path
     gifout.write_gif(path, [_plane(4, 4, fill=RED)], [100], palette=long)
 
     assert path.exists()
+
+
+def test_the_histogram_counts_exactly_what_the_per_entry_scan_counted():
+    """``histogram`` makes one pass over the canvas rather than one per palette
+    entry -- 117 ms against 11.4 s on a 2048-square document with a full
+    256-entry palette, and flat in the palette size instead of linear in it.
+
+    The reference is the loop it replaced, written out here: the point of the
+    rewrite is that it is *the same count*, including the exactness the
+    docstring promises (a pixel belonging to a neighbouring slot is not counted
+    for this one) and the zero for an unused slot, which is what makes the
+    answer "safe to delete".
+    """
+    rng = np.random.default_rng(0x1D)
+    palette = [(int(r), int(g), int(b), 255) for r, g, b in rng.integers(0, 256, (24, 3))]
+    # Only the first sixteen are actually painted, so eight slots must report
+    # zero -- and a few pixels are given a colour in *no* slot, which the exact
+    # reading has to leave uncounted rather than assign to a nearest entry.
+    table = np.asarray([c[:3] for c in palette[:16]], dtype=np.uint8)
+    picks = rng.integers(0, 16, size=(64, 64))
+    pixels = np.dstack([table[picks], np.full((64, 64), 255, dtype=np.uint8)])
+    pixels[0, :4, :3] = (1, 2, 3)
+    pixels[1, :4, 3] = 0  # invisible: never counted, whatever its rgb says
+
+    visible = pixels[..., 3] > 0
+    rgb = pixels[..., :3][visible]
+    want = [
+        int((rgb == np.asarray(tuple(c)[:3], dtype=np.uint8)).all(axis=1).sum())
+        for c in palette
+    ]
+
+    assert ix.histogram(pixels, palette) == want
+    assert want[16:] == [0] * 8
+
+
+def test_the_histogram_reports_zero_for_a_palette_no_pixel_uses():
+    """The searchsorted lands somewhere for every entry, so "would sit here" has
+    to be turned into "is here" by an equality test -- without it every slot
+    would inherit a neighbour's count."""
+    palette = [(10, 20, 30, 255), (40, 50, 60, 255)]
+    pixels = np.zeros((4, 4, 4), dtype=np.uint8)
+    pixels[..., :3] = (99, 99, 99)
+    pixels[..., 3] = 255
+    assert ix.histogram(pixels, palette) == [0, 0]

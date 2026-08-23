@@ -18,10 +18,15 @@
  * cannot be assumed to have disabled contraction. The contract is stated here;
  * the spelling of it lives with the build.
  *
- * One kernel is deliberately not held to output identity -- the contour tracer
- * in contours.c, whose reference leaves loop order and winding unspecified. Its
- * bar is the set of unit edges, and the licence for that is written down beside
- * the tests that assert it.
+ * Two kernels are deliberately not held to output identity, and in both cases
+ * for the same reason: the reference itself leaves something unspecified, so
+ * output identity is not a property the numpy path has either. The contour
+ * tracer in contours.c leaves loop order and winding unspecified, and its bar
+ * is the set of unit edges. The BVH build in bvh.c inherits np.argpartition's
+ * unspecified permutation among equal keys, and its bar is the pick result
+ * plus the structural invariants. A loosened bar is how a kernel quietly stops
+ * being checked, so each licence is argued in docs/INVARIANTS.md and asserted
+ * beside the tests that rest on it -- and neither is a precedent for a third.
  */
 
 #ifndef WARLOCKC_H
@@ -46,7 +51,7 @@ extern "C" {
  * routinely carries a stale locally-built DLL next to newer sources -- without
  * this guard that DLL would silently compute the old behaviour, which is the
  * one failure mode a fallback path must never have. */
-#define WARLOCKC_ABI 9
+#define WARLOCKC_ABI 10
 
 WARLOCKC_API int32_t warlockc_abi(void);
 
@@ -340,6 +345,65 @@ WARLOCKC_API void warlockc_flood_u8(const uint8_t *match, int64_t match_stride,
                                     uint8_t *out, int64_t out_stride,
                                     int32_t *scratch, int64_t h, int64_t w,
                                     int64_t seed_x, int64_t seed_y);
+
+/* Median-split BVH over triangles -- viewer/picking.build_bvh's inner loop.
+ *
+ * `tri_lo`, `tri_hi` and `centroid` are each n by 3 float64, contiguous.
+ * `order` is n int64 and is written by the kernel (the caller need not fill
+ * it). `lo` and `hi` are max_nodes by 3 float64; `left`, `right`, `first` and
+ * `count` are max_nodes int64; `stack` is 4 * max_nodes int64 of caller-owned
+ * frame storage. Returns the node count, or -1 if max_nodes was too small --
+ * in which case nothing has been read back and the caller falls back.
+ *
+ * Children are linked as they are created, so there is no second pass; an
+ * interior node reports count 0, exactly as the reference's `_link` leaves it.
+ *
+ * **The one kernel besides contours.c not held to output identity.**
+ * np.argpartition is introselect and its permutation among equal keys is
+ * unspecified, so a C median split legitimately builds a different -- equally
+ * valid -- tree. The bar is the pick result (the tie-break is already pinned
+ * to the lowest triangle index so that tree and linear sweep agree) plus the
+ * structural invariants. The licence is argued in docs/INVARIANTS.md. */
+WARLOCKC_API int64_t warlockc_bvh_build(const double *tri_lo,
+                                        const double *tri_hi,
+                                        const double *centroid, int64_t n_tris,
+                                        int64_t leaf_size, int64_t *order,
+                                        double *lo, double *hi, int64_t *left,
+                                        int64_t *right, int64_t *first,
+                                        int64_t *count, int64_t max_nodes,
+                                        int64_t *stack);
+
+/* Source-over blit of many equally sized tiles -- plotter/render.render_layer.
+ *
+ * `out` is out_h by out_w by 4 uint8 with `out_stride` bytes per row; `atlas`
+ * is a contiguous stack of tiles, each tile_h by tile_w by 4 uint8, indexed by
+ * `tile_index`. `xs` and `ys` are the top-left destination of each cell and
+ * may be negative or past the edge -- the kernel clips exactly as
+ * render._blit_over does. Cells are drawn in the order given, which is the
+ * document's own draw order and matters wherever tiles overlap.
+ *
+ * **Only render._over's masked-copy branch**: binary source alpha, full
+ * opacity, normal mode. Everything else stays on the numpy path. The
+ * both-clear quirk is reproduced -- see cells.c. */
+WARLOCKC_API void warlockc_blit_cells_u8(uint8_t *out, int64_t out_h,
+                                         int64_t out_w, int64_t out_stride,
+                                         const uint8_t *atlas, int64_t tile_h,
+                                         int64_t tile_w,
+                                         const int32_t *tile_index,
+                                         const int64_t *xs, const int64_t *ys,
+                                         int64_t n_cells);
+
+/* Nearest palette entry per query colour, Euclidean in float64 Oklab.
+ *
+ * The float sibling of warlockc_palette_nearest_i32, for
+ * pipelines/pixel.map_palette. `queries` is n by 3 float64, contiguous;
+ * `palette` is p by 3 float64, contiguous; `out` is n int32. Ties go to the
+ * lowest index. The sqrt is part of the contract, not an oversight --
+ * palettef.c says why. */
+WARLOCKC_API void warlockc_palette_nearest_f64(const double *queries,
+                                               const double *palette,
+                                               int32_t *out, int64_t n,
+                                               int64_t n_palette);
 
 #ifdef __cplusplus
 }

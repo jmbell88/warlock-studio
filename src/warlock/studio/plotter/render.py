@@ -24,6 +24,7 @@ from typing import Any
 
 import numpy as np
 
+from ... import native
 from ..tilegrid import gid as gidlib
 from . import scene
 from .tilemap import OPAQUE_WHITE, ImageLayer, MapDoc, TileLayer
@@ -254,6 +255,11 @@ def render_layer(
     # megabytes against one numpy call per cell. Read-only by construction: the
     # entries are only ever passed to ``_over`` as its source.
     oriented: dict[tuple[int, int], np.ndarray] = {}
+    # Resolved first, blitted second. The loop below used to composite as it
+    # went; collecting the cell list instead is what lets the whole layer cross
+    # the native seam in one call, and costs a list of triples on the path that
+    # does not take it.
+    cells: list[tuple[tuple[int, int], int, int]] = []
     # ``draw_order`` rather than a nested range, because for an isometric map
     # row-major is not monotone in screen depth -- cell ``(width - 1, 0)`` sits
     # in front of ``(0, 1)`` and would be painted under it. It *is* row-major
@@ -294,14 +300,72 @@ def render_layer(
         # rather than refused.
         height = pixels.shape[0]
         origin_x, origin_y = doc.cell_origin(column, row)
-        _blit_over(
-            out,
-            pixels,
-            int(origin_x) + shift_x,
-            int(origin_y) + tile_h - height + shift_y,
-            opacity,
-            blend_mode,
+        cells.append(
+            (
+                (tile_id, mask),
+                int(origin_x) + shift_x,
+                int(origin_y) + tile_h - height + shift_y,
+            )
         )
+
+    if _blit_cells_native(out, cells, oriented, opacity, blend_mode):
+        return
+    for key, x, y in cells:
+        _blit_over(out, oriented[key], x, y, opacity, blend_mode)
+
+
+def _blit_cells_native(
+    out: np.ndarray,
+    cells: list[tuple[tuple[int, int], int, int]],
+    oriented: dict[tuple[int, int], np.ndarray],
+    opacity: float,
+    blend_mode: str,
+) -> bool:
+    """Composite every cell in one native call, or say it could not.
+
+    ``False`` for every way of being unable to answer -- no DLL, a non-normal
+    mode, an opacity below one, a mixture of tile sizes, or a tile whose alpha
+    is not binary -- at which point the caller runs the numpy loop unchanged.
+
+    The measurement this exists for: 4348 ms for a 200x200 three-layer map of
+    32px tiles, which is 36 us across each of 120,000 cells. That is not
+    dispatch overhead -- a 32-square tile is a thousand pixels -- so a C blit,
+    which does it in about a microsecond, is the whole difference.
+
+    **Only ``_over``'s masked-copy branch.** That branch is what a tileset
+    actually is: an opaque body with a transparent surround. The tests it has
+    to keep passing include the exact-identity quirk it documents -- where
+    source and destination are both clear, colour stored under a zero alpha is
+    discarded -- which ``cells.c`` reproduces rather than tidying up.
+
+    The binary-alpha test is one vectorised pass per *distinct oriented tile*,
+    not per cell, which is the only reason it is affordable to ask at all: a
+    map is the same handful of tiles repeated thousands of times, which is the
+    same observation the ``oriented`` memo above rests on.
+    """
+    if not cells or not native.available():
+        return False
+    if blend_mode != "normal" or float(opacity) < 1.0:
+        return False
+    keys = sorted({key for key, _, _ in cells})
+    shape = oriented[keys[0]].shape
+    for key in keys:
+        tile = oriented[key]
+        if tile.shape != shape or tile.dtype != np.uint8:
+            return False
+        alpha = tile[..., 3]
+        if not bool(((alpha == 255) | (alpha == 0)).all()):
+            return False
+    slot = {key: index for index, key in enumerate(keys)}
+    atlas = np.ascontiguousarray(np.stack([oriented[key] for key in keys]))
+    # Draw order is the order ``cells`` was built in, and it is load-bearing
+    # wherever a tile is taller than its cell: grouping by tile would be faster
+    # still and would paint the overlaps the wrong way round.
+    index = np.fromiter((slot[key] for key, _, _ in cells), dtype="i4", count=len(cells))
+    xs = np.fromiter((x for _, x, _ in cells), dtype="i8", count=len(cells))
+    ys = np.fromiter((y for _, _, y in cells), dtype="i8", count=len(cells))
+    native.blit_cells(out, atlas, index, xs, ys)
+    return True
 
 
 def repeats(origin: int, step: int, span: int, repeat: bool) -> list[int]:

@@ -65,8 +65,8 @@
     },
     {
       "path": "vendor/warlockc/warlockc.dll",
-      "size": 119296,
-      "sha256": "0dd80c7dce1ca889fdd9f0d421a807612174905c3bfe81b52724c1e4afb7edbe"
+      "size": 123392,
+      "sha256": "11e487b7bac0988ea77fb238e96532cdf3ed3ae084869ffe1bca0db7c4e34627"
     }
   ]
 }

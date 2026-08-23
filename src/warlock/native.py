@@ -46,7 +46,7 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 # Must match WARLOCKC_ABI in native/warlockc.h.
-ABI = 9
+ABI = 10
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_DLL = _PROJECT_ROOT / "vendor" / "warlockc" / "warlockc.dll"
@@ -169,6 +169,41 @@ def _bind(lib: ctypes.CDLL) -> None:
         i32,  # scratch, h*w int32 of queue storage
         i64, i64,  # h, w
         i64, i64,  # seed x, seed y
+    ]
+
+    # ``i64`` above is the *scalar* c_int64, which is what every count and
+    # stride in this header is. These two are the pointer spellings, kept
+    # distinct rather than reusing the name, because ctypes will happily accept
+    # a pointer where a scalar is declared and then read the wrong eight bytes.
+    d = ctypes.POINTER(ctypes.c_double)
+    pi64 = ctypes.POINTER(ctypes.c_int64)
+
+    lib.warlockc_bvh_build.restype = i64
+    lib.warlockc_bvh_build.argtypes = [
+        d, d, d,  # tri_lo, tri_hi, centroid -- each (n, 3) float64
+        i64,  # n_tris
+        i64,  # leaf_size
+        pi64,  # order, n int64, written by the kernel
+        d, d,  # node lo, hi -- each (max_nodes, 3) float64
+        pi64, pi64, pi64, pi64,  # left, right, first, count
+        i64,  # max_nodes
+        pi64,  # stack, 4 * max_nodes int64
+    ]
+
+    lib.warlockc_blit_cells_u8.restype = None
+    lib.warlockc_blit_cells_u8.argtypes = [
+        u8, i64, i64, i64,  # out, h, w, row stride in bytes
+        u8, i64, i64,  # atlas, tile h, tile w
+        i32,  # tile index per cell
+        pi64, pi64,  # x, y per cell
+        i64,  # n cells
+    ]
+
+    lib.warlockc_palette_nearest_f64.restype = None
+    lib.warlockc_palette_nearest_f64.argtypes = [
+        d, d,  # queries (n, 3) float64; palette (p, 3) float64
+        i32,  # out, n int32
+        i64, i64,  # n, p
     ]
 
     lib.warlockc_contours.restype = i64
@@ -553,6 +588,106 @@ def contours(
             _ptr(loop_lens, ctypes.c_int32),
             ctypes.c_int64(loop_lens.size),
         )
+    )
+
+
+def bvh_build(
+    tri_lo: Any,
+    tri_hi: Any,
+    centroid: Any,
+    leaf_size: int,
+    order: Any,
+    lo: Any,
+    hi: Any,
+    left: Any,
+    right: Any,
+    first: Any,
+    count: Any,
+    stack: Any,
+) -> int:
+    """Build a median-split BVH, returning the node count or -1.
+
+    ``tri_lo``, ``tri_hi`` and ``centroid`` are C-contiguous ``(n, 3)`` float64;
+    ``order`` is ``n`` int64 and is filled by the kernel. The node arrays are
+    ``(max_nodes, 3)`` float64 for ``lo``/``hi`` and ``max_nodes`` int64 for the
+    rest, all sized by the caller; ``stack`` is ``4 * max_nodes`` int64.
+
+    -1 means the node arrays were too small, and nothing in them is meaningful
+    -- the caller falls back to numpy rather than guessing a bigger size, which
+    is the same contract :func:`contours` has.
+    """
+    handle = lib()
+    if handle is None:  # pragma: no cover - callers check available() first
+        raise RuntimeError("warlockc is not loaded")
+    c_double = ctypes.c_double
+    c_int64 = ctypes.c_int64
+    return int(
+        handle.warlockc_bvh_build(
+            _ptr(tri_lo, c_double),
+            _ptr(tri_hi, c_double),
+            _ptr(centroid, c_double),
+            ctypes.c_int64(tri_lo.shape[0]),
+            ctypes.c_int64(int(leaf_size)),
+            _ptr(order, c_int64),
+            _ptr(lo, c_double),
+            _ptr(hi, c_double),
+            _ptr(left, c_int64),
+            _ptr(right, c_int64),
+            _ptr(first, c_int64),
+            _ptr(count, c_int64),
+            ctypes.c_int64(left.shape[0]),
+            _ptr(stack, c_int64),
+        )
+    )
+
+
+def blit_cells(
+    out: Any, atlas: Any, tile_index: Any, xs: Any, ys: Any
+) -> None:
+    """Source-over ``atlas[tile_index[i]]`` onto ``out`` at each ``(x, y)``.
+
+    ``out`` is ``(h, w, 4)`` uint8 with contiguous rows; ``atlas`` is
+    ``(n_tiles, tile_h, tile_w, 4)`` uint8 and C-contiguous; ``tile_index`` is
+    int32 and ``xs``/``ys`` are int64, one per cell, **in draw order**.
+
+    Only the binary-alpha, full-opacity, normal-mode case -- the caller decides
+    that, because "is this alpha binary" is one pass per distinct tile rather
+    than one per cell.
+    """
+    handle = lib()
+    if handle is None:  # pragma: no cover - callers check available() first
+        raise RuntimeError("warlockc is not loaded")
+    height, width = out.shape[0], out.shape[1]
+    handle.warlockc_blit_cells_u8(
+        _ptr(out, ctypes.c_uint8),
+        ctypes.c_int64(height),
+        ctypes.c_int64(width),
+        ctypes.c_int64(out.strides[0]),
+        _ptr(atlas, ctypes.c_uint8),
+        ctypes.c_int64(atlas.shape[1]),
+        ctypes.c_int64(atlas.shape[2]),
+        _ptr(tile_index, ctypes.c_int32),
+        _ptr(xs, ctypes.c_int64),
+        _ptr(ys, ctypes.c_int64),
+        ctypes.c_int64(tile_index.shape[0]),
+    )
+
+
+def palette_nearest_f64(queries: Any, palette: Any, out: Any) -> None:
+    """Nearest ``palette`` row per ``queries`` row, Euclidean in float64.
+
+    ``queries`` is ``(n, 3)`` float64 and ``palette`` ``(p, 3)`` float64, both
+    C-contiguous; ``out`` is ``n`` int32. Ties go to the lowest index.
+    """
+    handle = lib()
+    if handle is None:  # pragma: no cover - callers check available() first
+        raise RuntimeError("warlockc is not loaded")
+    handle.warlockc_palette_nearest_f64(
+        _ptr(queries, ctypes.c_double),
+        _ptr(palette, ctypes.c_double),
+        _ptr(out, ctypes.c_int32),
+        ctypes.c_int64(queries.shape[0]),
+        ctypes.c_int64(palette.shape[0]),
     )
 
 

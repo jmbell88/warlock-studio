@@ -41,7 +41,7 @@ import numpy as np
 from . import topo
 from .adjacency import adjacency
 from .elements import ElementSel, OpError, empty
-from .mesh import Mesh, face_count
+from .mesh import Mesh, accumulate, face_count
 
 __all__ = ["Subdivision", "catmull_clark", "subdivide", "subdivide_topology"]
 
@@ -233,8 +233,7 @@ def _one_level(mesh: Mesh) -> Mesh:
 
     # Edge points: the average of the two endpoints and the two face points,
     # which is the midpoint again on a boundary because there is only one face.
-    fsum = np.zeros((n_edges, 3))
-    np.add.at(fsum, a.corner_edge, face_points[a.corner_face])
+    fsum = accumulate(a.corner_edge, face_points[a.corner_face], n_edges)
     interior = a.edge_uses == 2
     edge_points = mids.copy()
     edge_points[interior] = (mids[interior] * 2.0 + fsum[interior]) / 4.0
@@ -245,21 +244,24 @@ def _one_level(mesh: Mesh) -> Mesh:
 
     # Vertex points.
     old = mesh.positions.astype("f8")
-    q_sum = np.zeros((n_verts, 3))
-    np.add.at(q_sum, mesh.loops, face_points[a.corner_face])
+    q_sum = accumulate(mesh.loops, face_points[a.corner_face], n_verts)
     q_count = np.bincount(mesh.loops, minlength=n_verts).astype("f8")
 
     ends = a.edge_verts.reshape(-1)
-    r_sum = np.zeros((n_verts, 3))
-    np.add.at(r_sum, ends, np.repeat(mids, 2, axis=0))
+    r_sum = accumulate(ends, np.repeat(mids, 2, axis=0), n_verts)
     valence = np.bincount(ends, minlength=n_verts).astype("f8")
 
     border = a.edge_verts[a.edge_uses == 1]
     b_count = np.bincount(border.reshape(-1), minlength=n_verts)
-    b_sum = np.zeros((n_verts, 3))
-    if len(border):
-        np.add.at(b_sum, border[:, 0], old[border[:, 1]])
-        np.add.at(b_sum, border[:, 1], old[border[:, 0]])
+    # One scatter over the two columns *concatenated*, not two scatters: the
+    # pair it replaces ran column 0 to completion and then column 1, so the
+    # concatenation reproduces that summation order exactly -- and adding two
+    # separate per-column totals would not, because it re-associates the sum.
+    b_sum = accumulate(
+        np.concatenate([border[:, 0], border[:, 1]]),
+        np.concatenate([old[border[:, 1]], old[border[:, 0]]]),
+        n_verts,
+    )
 
     n = np.maximum(valence, 1.0)[:, None]
     smooth = (

@@ -28,7 +28,7 @@ import numpy as np
 from . import topo
 from .adjacency import adjacency, boundary_loops
 from .elements import ElementSel, OpError, empty
-from .mesh import Mesh, face_count, face_normals, reversed_corner_perm
+from .mesh import Mesh, accumulate, face_count, face_normals, reversed_corner_perm
 
 __all__ = [
     "bridge_edges",
@@ -333,9 +333,11 @@ def _inset_region(
     verts = out.loops[corners].astype("i8")
 
     n_verts = len(out.positions)
-    total = np.zeros((n_verts, 3))
+    total = accumulate(verts, np.repeat(centroid, counts, axis=0), n_verts)
+    # The 1-D counter stays on ``np.add.at``: measured, it is the one shape
+    # where bincount *loses* (2.8 ms against 4.2 ms at 200k), because adding a
+    # scalar has a buffered fast path that adding a row does not.
     hits = np.zeros(n_verts)
-    np.add.at(total, verts, np.repeat(centroid, counts, axis=0))
     np.add.at(hits, verts, 1.0)
     touched = np.flatnonzero(hits > 0)
 
@@ -481,9 +483,8 @@ def weld(mesh: Mesh, sel: ElementSel, *, eps: float = 1e-4) -> tuple[Mesh, Eleme
 
     labels = _clusters(mesh.positions[verts].astype("f8"), float(eps))
     n_clusters = int(labels.max()) + 1 if len(labels) else 0
-    sums = np.zeros((n_clusters, 3))
+    sums = accumulate(labels, mesh.positions[verts].astype("f8"), n_clusters)
     hits = np.zeros(n_clusters)
-    np.add.at(sums, labels, mesh.positions[verts].astype("f8"))
     np.add.at(hits, labels, 1.0)
 
     positions = mesh.positions.astype("f8").copy()
@@ -538,9 +539,8 @@ def collapse(mesh: Mesh, sel: ElementSel) -> tuple[Mesh, ElementSel]:
 
     remap = np.array([find(i) for i in range(n_verts)], dtype="i8")
     positions = mesh.positions.astype("f8").copy()
-    sums = np.zeros((n_verts, 3))
+    sums = accumulate(remap, mesh.positions.astype("f8"), n_verts)
     hits = np.zeros(n_verts)
-    np.add.at(sums, remap, mesh.positions.astype("f8"))
     np.add.at(hits, remap, 1.0)
     touched = np.flatnonzero(hits > 1)
     positions[touched] = sums[touched] / hits[touched][:, None]

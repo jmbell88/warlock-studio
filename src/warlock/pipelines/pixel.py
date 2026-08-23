@@ -341,6 +341,35 @@ _BAYER4 = (
 )
 
 
+def _nearest_native(flat: Any, plab: Any) -> Any:
+    """Nearest Oklab entry per row from ``warlockc``, or ``None`` to fall back.
+
+    The chunked numpy search below builds a ``(65536, p, 3)`` difference array
+    per chunk -- about 100 MB at a 64-entry palette -- allocated, written and
+    thrown away to read one index per row. Measured: 2488 ms for a 1024-square
+    frame against 64 entries.
+
+    **The kernel keeps the sqrt, and so does this docstring.** Comparing
+    squared distances is tempting, since sqrt is monotonic -- but sqrt also
+    *rounds*, so two distinct squared values can land on the same double.
+    ``argmin`` over the rounded norms then takes the earlier index where an
+    argmin over the exact squares takes the strictly smaller one, which may sit
+    later: the same ordering, a different pick, and a visibly wrong colour on a
+    ramp with near-equidistant entries.
+    """
+    import numpy as np
+
+    from warlock import native
+
+    if not native.available() or plab.shape[0] < 1:
+        return None
+    queries = np.ascontiguousarray(flat, dtype=np.float64)
+    palette = np.ascontiguousarray(plab, dtype=np.float64)
+    out = np.empty(queries.shape[0], dtype=np.int32)
+    native.palette_nearest_f64(queries, palette, out)
+    return out
+
+
 def map_palette(
     image: PILImage, palette: tuple[RGB, ...], dither: bool = False
 ) -> PILImage:
@@ -380,14 +409,18 @@ def map_palette(
         lab = lab + tile[:, :, None] * spacing
 
     flat = lab.reshape(-1, 3)
-    # Chunked so a 1024x1024 frame against a 64-entry palette does not build a
-    # single (1M, 64, 3) intermediate.
-    out = np.empty((flat.shape[0], 3), dtype=np.uint8)
-    step = 1 << 16
-    for start in range(0, flat.shape[0], step):
-        piece = flat[start : start + step]
-        d = np.linalg.norm(piece[:, None, :] - plab[None, :, :], axis=-1)
-        out[start : start + step] = entries[np.argmin(d, axis=1)].astype(np.uint8)
+    picks = _nearest_native(flat, plab)
+    if picks is not None:
+        out = entries[picks].astype(np.uint8)
+    else:
+        # Chunked so a 1024x1024 frame against a 64-entry palette does not build
+        # a single (1M, 64, 3) intermediate.
+        out = np.empty((flat.shape[0], 3), dtype=np.uint8)
+        step = 1 << 16
+        for start in range(0, flat.shape[0], step):
+            piece = flat[start : start + step]
+            d = np.linalg.norm(piece[:, None, :] - plab[None, :, :], axis=-1)
+            out[start : start + step] = entries[np.argmin(d, axis=1)].astype(np.uint8)
     mapped = np.dstack([out.reshape(lab.shape[0], lab.shape[1], 3), alpha])
     return Image.fromarray(mapped.astype(np.uint8), "RGBA")
 

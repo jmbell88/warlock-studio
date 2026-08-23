@@ -245,3 +245,30 @@ def test_catmull_clark_keeps_the_uvs_linear() -> None:
     # The first child quad of the first face reads [corner, mid, centre, prev].
     first = out.uv[: 4 * 4].reshape(4, 4, 2)
     assert np.allclose(first[0][1], (corner_uv[0] + corner_uv[1]) * 0.5)
+
+
+def test_the_border_sum_keeps_the_summation_order_the_two_scatters_had():
+    """``b_sum`` is one ``accumulate`` over the two border columns concatenated,
+    not two accumulations added together.
+
+    The pair of ``np.add.at`` calls it replaced ran column 0 to completion and
+    *then* column 1 into the same running total, so the concatenation reproduces
+    that order exactly. Adding two separate per-column totals would re-associate
+    the sum and change the last bit of a crease position -- invisible until it
+    was not, which is the same argument ``mesh.accumulate`` carries.
+    """
+    rng = np.random.default_rng(0xB0DE)
+    n_verts = 200
+    border = rng.integers(0, n_verts, size=(500, 2)).astype("i8")
+    old = rng.random((n_verts, 3))
+
+    want = np.zeros((n_verts, 3))
+    np.add.at(want, border[:, 0], old[border[:, 1]])
+    np.add.at(want, border[:, 1], old[border[:, 0]])
+
+    got = bm.accumulate(
+        np.concatenate([border[:, 0], border[:, 1]]),
+        np.concatenate([old[border[:, 1]], old[border[:, 0]]]),
+        n_verts,
+    )
+    assert (got == want).all(), "bit-identical, not merely close"

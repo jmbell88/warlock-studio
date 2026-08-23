@@ -50,6 +50,11 @@ OUTWARD_IMPORTS = {
     # The four-connected flood kernel, with the frontier dilation beside it as
     # the reference and the fallback.
     ("tools.py", "warlock.native"),
+    # The tile-blit kernel, likewise: ``_blit_cells_native`` declines for every
+    # case it cannot answer and ``_blit_over`` is what runs then. ``native`` is
+    # a leaf -- ctypes and a DLL path, nothing from the studio -- so the edge
+    # costs this package none of the headlessness it is pinned for.
+    ("render.py", "warlock.native"),
     ("tmx.py", "warlock.studio.tilegrid"),
     ("tsx.py", "warlock.studio.tilegrid.wang"),
     ("wmap.py", "warlock.studio.tilegrid.wang"),

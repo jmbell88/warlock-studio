@@ -318,7 +318,7 @@ def _normalize(v: np.ndarray) -> np.ndarray:
     return np.divide(v, length, out=np.zeros_like(v), where=length > 0.0)
 
 
-def _accumulate(loops: np.ndarray, values: np.ndarray, n_verts: int) -> np.ndarray:
+def accumulate(loops: np.ndarray, values: np.ndarray, n_verts: int) -> np.ndarray:
     """``(n_verts, 3)`` f8 scatter-add of *values* onto vertex *loops*.
 
     ``np.bincount`` rather than ``np.add.at``: the latter is numpy's unbuffered
@@ -342,6 +342,12 @@ def _accumulate(loops: np.ndarray, values: np.ndarray, n_verts: int) -> np.ndarr
         # hands back an *integer* table -- which a mesh with no smooth face at
         # all reaches, and which ``_normalize`` then refuses to divide into.
     ).astype("f8", copy=False)
+
+
+# Compat: promoted from ``_accumulate`` when ops_topo, ops_subdiv and the
+# viewer stopped being the only callers -- the same promotion ``face_normals``
+# got above, for the same reason and with the same alias kept.
+_accumulate = accumulate
 
 
 def render_arrays(
