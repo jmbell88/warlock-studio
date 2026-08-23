@@ -226,7 +226,12 @@ property rather than a bug: Warlock is single-image-only for reconstruction, so
 subject than a prop.
 
 It matters **only for the generated-character path**. The supplied-base-mesh
-path works without it, which is why the programme did not stop for it.
+path works without it, which is why the programme did not stop for it -- and
+that path is *reachable from the UI* as of 2026-08-23: **Send to Troupe** on
+any finished mesh (the library's menu, the inspector, and a picker inside
+Troupe) rigs it as a humanoid if it is not rigged and renders the sheet. Until
+then `service.troupe.create_charsheet` was the only door and nothing could
+call it for a mesh that had no sheet yet.
 
 ### Phase 6 — the cleanup workflow
 

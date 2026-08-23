@@ -53,6 +53,29 @@ not be spent on a drawing you would not have kept.
 If the character is a disaster, the drawing is still a row you can reroll or edit. That is the point
 of the two-step shape.
 
+### From a mesh you already have
+
+The form above starts from nothing. If you already have a character — one you generated, uploaded,
+or built in Clay — **Send to Troupe** takes it in directly. It is on the mesh's right-click menu in
+the [library](34-library-and-jobs.md), on the inspector under the asset, and inside Troupe itself
+under **Or use a mesh you already have**, below the form, which is collapsed until you open it.
+
+There is no reference and no gate on this route: the mesh already exists, so the only decision left
+is what the sheet should look like — and the settings in the form above are the ones it uses, which
+is why the picker sits under them rather than repeating them.
+
+If the mesh is not rigged, it is rigged first, as a humanoid, with the joints measured off the mesh
+rather than fitted to its bounding box. That is a real cost: rigging is minutes of CPU before a
+single cell is rendered, which is why the button says so. You get two rows in the queue — the rig,
+then the sheet — and either can be cancelled on its own; cancelling the rig simply means no sheet.
+
+A mesh that is already rigged as something else is refused, immediately and before anything is
+queued: the clips are a humanoid's, and a walk cycle means nothing to a quadruped. Re-rig it as a
+humanoid from [Create's Rig stage](25-rigging-and-posing.md) and send it again.
+
+While either row is running the character appears in the cast under **In progress**, saying which
+step it is on. Nothing on this route ever waits for you.
+
 ### The options
 
 | Setting | What it does |
