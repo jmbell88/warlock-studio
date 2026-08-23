@@ -366,11 +366,21 @@ whose GPU is unknown.
 ## 8. Host commit — a model load never gives its host memory back
 
 Measured 2026-08-21 on a live session, from the app's own `warlock.log` plus
-`Get-CimInstance Win32_Process`. It is here rather than built because the first
+`Get-CimInstance Win32_Process`. It was here rather than built because the first
 defect is a **design question** with three possible shapes, and the other two
-are the instrumentation that decides which one is right — worth landing in the
-same pass, because the figure that would judge the fix is currently wrong by a
-third.
+are the instrumentation that decides which one is right.
+
+**State on 2026-08-22.** D2 is built and D3 is refuted; both were settled by a
+second session that reproduced D1 on a larger machine, plus three direct probes
+(`docs/measurements/2026-08-22-trampoline-child-pids.md`). The instrument is now
+right, and the answer it gives is worse than the figure this section was written
+against: **`flux_klein_distilled` charged +21.1 GiB of host commit and gave
+0.1 GiB back**, against the `host_peak_gib=16.0` the registry ships, on a run
+that ended with the app refusing its own sprite-sheet follow-up at 94% commit.
+D1's shape was chosen — **option 1, the t2i child process** — and it is now
+built. **Nothing in this section remains open**; it is kept as the record of a
+defect that took two sessions and three measurements to close, and the figures
+below are what the app was doing before it was.
 
 **The session that produced this.** Two reference generations, ten minutes
 apart, on a 63.46 GiB machine with a 12.6 GiB pagefile — a 76.06 GiB commit
@@ -393,7 +403,32 @@ RuntimeError: host memory is 92% committed before loading SDXL 1.0
   (full CFG, structural control), at or past the 90% ceiling.
 ```
 
-- [ ] **D1 — the t2i load path pays an unreturnable host cost in the app
+- [x] ~~**D1 — the t2i load path pays an unreturnable host cost in the app
+      process.**~~ **Built 2026-08-22 as option 1, the t2i child process.**
+      `pipelines/text2image_worker.py` holds the checkpoint,
+      `pipelines/t2i_client.Text2ImageClient` is the app-side handle presenting
+      the surface `Text2Image` presented, and `WARLOCK_T2I_IN_PROCESS=1`
+      restores the old arrangement for debugging. Measured on both sides, same
+      machine, same checkpoint, load plus one 1024x1024 sample: **in process
+      24.26 GiB charged / 0.26 returned; in the child 24.08 charged / 24.08
+      returned**, with system commit back at its baseline. Both klein entries'
+      `host_peak_gib` went 16.0 → 24.0, because the old figure priced the
+      weights and forgot the sample.
+
+      Three things the build learned that the design below did not know. The
+      boundary was **narrower than feared** — `generate()` already wrote to an
+      `output_path` and `Conditioning` is a frozen dataclass of paths and
+      floats, so no pixels cross the pipe and no call site changed. The
+      resident-pipe design was **not** the cost it was billed as: the child is
+      persistent, so a warm pipe survives between jobs exactly as before. And
+      the real cost was somewhere nobody was looking — a concurrent stdin
+      reader deadlocks the child's next native-extension import on Windows,
+      which took most of the session to find and is written up in the
+      measurement and in `docs/INVARIANTS.md`.
+
+      Original design note follows.
+
+      **D1 — the t2i load path pays an unreturnable host cost in the app
       process.** The `host_peak_gib` comment in `models.py` states the
       assumption this breaks: *"under RESIDENT the weights are read and handed
       to the device, so the host charge is **transient** and roughly the
@@ -427,12 +462,34 @@ RuntimeError: host memory is 92% committed before loading SDXL 1.0
       3. **Accept it and recycle the process** — an explicit "restart to
          reclaim" affordance, which is what the user does today unprompted.
 
-      **Do not rank these until D2 lands.** The app's reading of what it is
-      charging is wrong by a third, and choosing on a bad number is how the
-      wrong shape gets built.
+      ~~**Do not rank these until D2 lands.**~~ D2 landed 2026-08-22 and the
+      corrected number chose for us: at 21.1 GiB retained per checkpoint,
+      option 2 alone turns klein-then-anything into a refusal at the door on a
+      77 GiB machine, and option 3 is that refusal with a restart attached.
+      **Option 1 is the shape being built.**
 
-- [ ] **D2 — every child pid the app records is the wrong process, so the
-      idle-tick reports `children 0.0 GiB` against a 6.56 GiB child.**
+      Two things the second measurement changed about its cost. The boundary is
+      narrower than feared: `generate()` already writes to an `output_path` and
+      `Conditioning` is a frozen dataclass of paths and floats, so pixels cross
+      as files — `matting_worker`'s rule — and only `on_state`, `on_step` and
+      `cancel_event` need a protocol. And `vram.device_memory()` reads through
+      `sys.modules.get("torch")`, so moving the one thing that imports torch in
+      the app process out of it leaves that reading `None`; admission needs
+      device-wide free VRAM from somewhere that is not a parent torch import.
+
+- [x] ~~**D2 — every child pid the app records is the wrong process, so the
+      idle-tick reports `children 0.0 GiB` against a 6.56 GiB child.**~~
+      **Built 2026-08-22.** It reproduced exactly on a second session, on the
+      tick that then refused the next job. The fix is *not* the one sketched
+      below: no spawn site changed. The kill-on-close job already holds the
+      whole tree — a process created by a process in a job is assigned to that
+      job at creation — so the register existed and was simply never read.
+      `winjob.job_pids()` reads it, `winjob.measured_pids()` falls back to
+      `tracked()` when the job is unarmed, and the two `memlog.summary` call
+      sites take that instead. Measured [trampoline, real, …] against
+      [trampoline] alone; it is also correct under §7's installer layout, where
+      the job holds exactly one pid per worker.
+      Sketch kept below for the reasoning, which was right about the cause:
       `sys.executable` under this uv venv is a **trampoline**, not an
       interpreter: it spawns the real CPython as its own child and stays alive
       as a ~0.8 MB parent. Demonstrated directly —
@@ -459,7 +516,17 @@ RuntimeError: host memory is 92% committed before loading SDXL 1.0
       `sys.executable` as a real `{app}\python\python.exe`, so the fix must not
       assume a trampoline is always there.
 
-- [ ] **D3 — `matting.unload()` would orphan the process it means to kill.**
+- [x] ~~**D3 — `matting.unload()` would orphan the process it means to kill.**~~
+      **Refuted 2026-08-22 by direct measurement — no fix is owed.** A 200 MB
+      grandchild behind the trampoline, killed exactly the way `unload()` kills
+      it, died with its parent within 0.5 s. `TerminateProcess` does not
+      cascade, as stated; the uv trampoline does the cascading itself, holding
+      its child in a kill-on-close job of its own. A true premise carried a
+      false conclusion, so the refutation is written down
+      (`docs/measurements/2026-08-22-trampoline-child-pids.md`) rather than
+      left to be re-derived. The caveat that survives: this is a property of
+      *uv's* trampoline and not of Windows, so the guarantee to rely on remains
+      the job object rather than the kill. Original reasoning:
       Same root cause as D2, latent rather than observed. `unload()` calls
       `proc.kill()` on the trampoline, and Windows `TerminateProcess` does not
       cascade to children, so the 6.56 GiB grandchild would survive — reparented

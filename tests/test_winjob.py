@@ -209,3 +209,56 @@ def test_a_scoped_terminate_does_not_stop_the_other_live_child():
             if proc.poll() is None:
                 proc.kill()
                 proc.wait(timeout=10)
+
+
+# --- the job object as the register of what we actually spawned --------------
+#
+# `Popen.pid` is not the pid that holds the memory: under a uv venv
+# `sys.executable` is a trampoline that spawns the real interpreter as its own
+# child and stays alive as a ~0.8 MB parent. Every reading keyed on the pid
+# Popen returned therefore reports the shim -- which is how a session log came
+# to print `children 0.0 GiB` beside a worker holding 6.3 GiB
+# (docs/measurements/2026-08-22-trampoline-child-pids.md).
+#
+# The job already holds the whole tree, because a process created by a process
+# in a job is assigned to that job at creation. So the register exists; it just
+# was not being read.
+
+_KID = (
+    "import os, sys, time; sys.stdout.write(str(os.getpid()) + chr(10));"
+    " sys.stdout.flush(); time.sleep(30)"
+)
+
+
+@windows_only
+def test_job_pids_sees_the_real_interpreter_behind_the_trampoline():
+    proc = subprocess.Popen(
+        [sys.executable, "-c", _KID],
+        stdout=subprocess.PIPE,
+        text=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    try:
+        assert winjob.assign(proc.pid) is True
+        real = int(proc.stdout.readline().strip())
+        pids = winjob.job_pids()
+        assert proc.pid in pids, "the spawned pid should be in the job"
+        # The point of the whole exercise: on a trampoline venv `real` is a
+        # different process, and it is the one holding the weights. On an
+        # installer layout (a real python.exe) the two are equal and this is
+        # trivially satisfied -- which is the required behaviour there too.
+        assert real in pids, f"the real interpreter {real} is missing from {pids}"
+    finally:
+        proc.kill()
+        proc.wait(timeout=10)
+
+
+@windows_only
+def test_job_pids_is_empty_when_nothing_has_been_spawned(monkeypatch):
+    # A pure reading must not mint the job as a side effect: "nothing spawned"
+    # and "a job exists holding nobody" are the same answer, and creating a
+    # handle from a diagnostic path would make the frame loop the thing that
+    # arms the guarantee.
+    monkeypatch.setattr(winjob, "_job", None)
+    assert winjob.job_pids() == set()
+    assert winjob._job is None

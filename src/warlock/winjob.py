@@ -33,6 +33,7 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 _JobObjectExtendedLimitInformation = 9
+_JobObjectBasicProcessIdList = 3
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 _PROCESS_SET_QUOTA = 0x0100
 _PROCESS_TERMINATE = 0x0001
@@ -150,6 +151,14 @@ def _declare(kernel32: Any) -> None:
     kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
     kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
     kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    kernel32.QueryInformationJobObject.restype = wintypes.BOOL
+    kernel32.QueryInformationJobObject.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
     kernel32.SetInformationJobObject.restype = wintypes.BOOL
     kernel32.SetInformationJobObject.argtypes = [
         wintypes.HANDLE,
@@ -227,6 +236,120 @@ def tracked() -> dict[int, str]:
     """A snapshot of the live children, for diagnostics and shutdown."""
     with _children_lock:
         return dict(_children)
+
+
+# --- reading the job as the register of what we actually spawned -------------
+#
+# ``tracked()`` holds the pids ``Popen`` returned, which is the right key for
+# *bookkeeping* -- it is what ``untrack`` is called with -- and the wrong one
+# for *measurement*. Under a uv venv ``sys.executable`` is a trampoline: it
+# spawns the real interpreter as its own child and stays alive as a ~0.8 MB
+# parent, so a reading keyed on ``Popen.pid`` reports the shim. That is how a
+# session log came to print ``children 0.0 GiB`` beside a BiRefNet worker
+# holding 6.3 GiB, understating the app by a third at the moment it was
+# deciding whether to admit the next job
+# (docs/measurements/2026-08-22-trampoline-child-pids.md).
+#
+# The register already exists and was simply never read: a process created by a
+# process in a job is assigned to that job at creation, so the whole tree is in
+# here -- measured, [trampoline, real, ...] against [trampoline] alone. It is
+# also indifferent to whether a trampoline exists at all, which the installer
+# layout needs (``sys.executable`` becomes a real python.exe there, and the job
+# then holds exactly one pid per worker).
+
+_ERROR_MORE_DATA = 234
+
+_JOB_PID_ATTEMPTS = 5
+"""How many times the pid-list buffer is grown before giving up.
+
+The list is live -- a worker can spawn a grandchild between the sizing call and
+the reading one -- so one retry can lose to a tree that is genuinely growing.
+Bounded for ``listener_pid``'s reason: a set that grows on every attempt is not
+going to settle, and a diagnostic must not spin.
+"""
+
+
+def _pid_list_type(slots: int) -> Any:
+    """``JOBOBJECT_BASIC_PROCESS_ID_LIST`` with room for ``slots`` pids.
+
+    Built per call because the trailing array is variable-length and ctypes
+    fixes a structure's size at class-definition time. Cheap -- two DWORDs and
+    an array type -- and a call site tries at most ``_JOB_PID_ATTEMPTS`` sizes.
+    """
+
+    class _JOBOBJECT_BASIC_PROCESS_ID_LIST(ctypes.Structure):
+        _fields_ = [
+            ("NumberOfAssignedProcesses", wintypes.DWORD),
+            ("NumberOfProcessIdsInList", wintypes.DWORD),
+            ("ProcessIdList", ctypes.c_size_t * slots),
+        ]
+
+    return _JOBOBJECT_BASIC_PROCESS_ID_LIST
+
+
+def job_pids() -> set[int]:
+    """Every live pid in the kill-on-close job. Empty set if there is no job.
+
+    Reads ``_job`` rather than calling ``_ensure_job``: creating the handle is
+    arming the guarantee, and a diagnostic that the frame loop calls must not
+    be the thing that arms it. "Nothing has been spawned" and "a job exists
+    holding nobody" are the same answer to the question this asks, so both are
+    the empty set -- and unlike ``children_private``'s contract there is no
+    "cannot read" to distinguish, because a failed query means the caller
+    should fall back to ``tracked()``.
+
+    Never raises, like everything else here: it is read from ``finally``
+    blocks and from the frame loop.
+    """
+    if sys.platform != "win32":
+        return set()
+    with _job_lock:
+        job = _job
+    if job is None:
+        return set()
+    try:
+        kernel32 = ctypes.windll.kernel32
+        _declare(kernel32)
+        slots = 64
+        for _ in range(_JOB_PID_ATTEMPTS):
+            info = _pid_list_type(slots)()
+            returned = wintypes.DWORD(0)
+            ok = kernel32.QueryInformationJobObject(
+                job,
+                _JobObjectBasicProcessIdList,
+                ctypes.byref(info),
+                ctypes.sizeof(info),
+                ctypes.byref(returned),
+            )
+            if ok:
+                return {
+                    int(info.ProcessIdList[i])
+                    for i in range(info.NumberOfProcessIdsInList)
+                }
+            # Read immediately, before any other call can overwrite it --
+            # _ensure_job_locked's rule.
+            if kernel32.GetLastError() != _ERROR_MORE_DATA:
+                log.debug("QueryInformationJobObject failed")
+                return set()
+            # The struct is still filled in far enough to say how many there
+            # are, even when it could not list them.
+            slots = max(int(info.NumberOfAssignedProcesses) * 2, slots * 2)
+        log.debug("the job's process list kept growing; giving up")
+    except (OSError, AttributeError, ValueError):
+        log.debug("could not read the job's process list", exc_info=True)
+    return set()
+
+
+def measured_pids() -> set[int]:
+    """The pids a host-memory reading should sum over.
+
+    ``job_pids()`` when the job is armed and answered, and ``tracked()``'s keys
+    otherwise. The fallback is not decoration: assignment is best-effort by
+    this module's contract, and a host where the job could not be created must
+    still report *something* for its children rather than silently reporting
+    none -- which is the failure this whole section exists to end.
+    """
+    return job_pids() or set(tracked())
 
 
 def terminate_tracked(what_prefix: str | None = None) -> list[int]:

@@ -790,13 +790,28 @@ class GenerateOps:
         await self._evict_stale_t2i(base_key)
         if self._text2image is None:
             try:
+                # The child by default. Its ``unload()`` is a process exit,
+                # which is the only thing that returns a checkpoint's *host*
+                # commit: measured 2026-08-22, klein charged +21.1 GiB and the
+                # in-process unload gave 0.1 GiB back, because the allocator's
+                # arenas outlive every reference. The session that measured it
+                # ended with the app refusing its own follow-up job at 94%
+                # commit
+                # (docs/measurements/2026-08-22-trampoline-child-pids.md).
+                #
+                # The import is still guarded, and still names the extra: the
+                # client is import-light, but the child it spawns is not, and a
+                # host without the extra should hear the same sentence it always
+                # heard rather than a subprocess failing to start.
+                from .pipelines.t2i_client import Text2ImageClient
                 from .pipelines.text2image import Text2Image
             except ImportError as exc:
                 raise RuntimeError(
                     "text-to-3D requires the text2image extra: uv sync --extra text2image"
                 ) from exc
             spec = models.BASE_MODELS[base_key]
-            self._text2image = Text2Image(
+            build = Text2Image if self.config.t2i_in_process else Text2ImageClient
+            self._text2image = build(
                 spec,
                 self.config.t2i_model_root,
                 # Honoured for turbo only -- see Config.t2i_turbo_dir.

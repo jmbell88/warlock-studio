@@ -237,10 +237,16 @@ def _log_mem(when: str) -> None:
     mem = vram_gib()
     if mem is not None:
         log.info("vram %s: %.2f GiB allocated, %.2f GiB reserved", when, *mem)
-    # ``winjob.tracked()`` rather than nothing: the matting worker is a child,
-    # and at 6.5 GiB of private commit it was the largest single charge this
-    # app made that no ``host ...`` line in this log had ever shown.
-    host = memlog.summary(children=winjob.tracked())
+    # ``winjob.measured_pids()`` rather than nothing: the matting worker is a
+    # child, and at 6.5 GiB of private commit it was the largest single charge
+    # this app made that no ``host ...`` line in this log had ever shown.
+    #
+    # And rather than ``tracked()``, which is the pids ``Popen`` returned: under
+    # a uv venv those are trampolines, so the line read 0.8 MB of shim and
+    # printed ``children 0.0 GiB`` beside a worker holding 6.3 GiB -- on the
+    # very tick that then refused the next job for want of commit
+    # (docs/measurements/2026-08-22-trampoline-child-pids.md).
+    host = memlog.summary(children=winjob.measured_pids())
     if host is not None:
         log.info("host %s: %s", when, host)
     pressure = commit_fraction()

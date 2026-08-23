@@ -778,10 +778,16 @@ BASE_MODELS: dict[str, BaseModel] = _table(
         family=FAMILY_FLUX2_KLEIN,
         residency=OFFLOAD,
         vram_gib=10.0,
-        # The whole ~16 GiB checkpoint stays in host memory for the pipe's
-        # life -- that is what offload means, and it is why vram_gib above is
-        # 10 rather than 16. Admission has to have the host number by name.
-        host_peak_gib=16.0,
+        # The whole checkpoint stays in host memory for the pipe's life -- that
+        # is what offload means, and it is why vram_gib above is 10 rather than
+        # 16. Admission has to have the host number by name.
+        #
+        # 24.0, not the checkpoint's ~16: measured 2026-08-22 end to end, a load
+        # charged 18.3 GiB of private commit and one 1024x1024 sample took it to
+        # **24.1**, which is the figure admission is actually standing in front
+        # of. The old number priced the weights and forgot the sample
+        # (docs/measurements/2026-08-22-trampoline-child-pids.md).
+        host_peak_gib=24.0,
         probe=(
             "transformer/diffusion_pytorch_model.safetensors",
             "text_encoder/model-00001-of-00002.safetensors",
@@ -825,10 +831,16 @@ BASE_MODELS: dict[str, BaseModel] = _table(
         family=FAMILY_FLUX2_KLEIN,
         residency=OFFLOAD,
         vram_gib=10.0,
-        # The whole ~16 GiB checkpoint stays in host memory for the pipe's
-        # life -- that is what offload means, and it is why vram_gib above is
-        # 10 rather than 16. Admission has to have the host number by name.
-        host_peak_gib=16.0,
+        # The whole checkpoint stays in host memory for the pipe's life -- that
+        # is what offload means, and it is why vram_gib above is 10 rather than
+        # 16. Admission has to have the host number by name.
+        #
+        # 24.0, not the checkpoint's ~16: measured 2026-08-22 end to end, a load
+        # charged 18.3 GiB of private commit and one 1024x1024 sample took it to
+        # **24.1**, which is the figure admission is actually standing in front
+        # of. The old number priced the weights and forgot the sample
+        # (docs/measurements/2026-08-22-trampoline-child-pids.md).
+        host_peak_gib=24.0,
         probe=(
             "transformer/diffusion_pytorch_model.safetensors",
             "text_encoder/model-00001-of-00002.safetensors",

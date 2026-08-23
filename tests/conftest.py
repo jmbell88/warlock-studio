@@ -675,14 +675,23 @@ class FakeText2Image:
 def fake_pipelines(monkeypatch):
     """Patch the GPU pipeline classes at their definition. Worker.__init__
     constructs `TrellisServer(...)` via the name imported into queue.py's
-    namespace; Worker._get_text2image does `from .pipelines.text2image
-    import Text2Image` fresh on every call, so patching the attribute on
-    the text2image module is picked up immediately without touching queue.py."""
+    namespace; Worker._get_text2image does its imports fresh on every call, so
+    patching the attribute on the defining module is picked up immediately
+    without touching queue.py.
+
+    **Both t2i names, not one.** Since 2026-08-22 the queue builds a
+    `Text2ImageClient` -- a handle on a child process -- unless
+    `config.t2i_in_process` is set, and patching only `Text2Image` left the
+    fake unused: every test that reached this path spawned a real subprocess
+    and waited on it. The fixture stands in for *whatever the queue
+    constructs*, so it has to cover both sides of that switch."""
+    import warlock.pipelines.t2i_client as t2i_client_mod
     import warlock.pipelines.text2image as text2image_mod
     import warlock.queue as queue_mod
 
     monkeypatch.setattr(queue_mod, "TrellisServer", FakeTrellisServer)
     monkeypatch.setattr(text2image_mod, "Text2Image", FakeText2Image)
+    monkeypatch.setattr(t2i_client_mod, "Text2ImageClient", FakeText2Image)
 
 
 @pytest.fixture(autouse=True)

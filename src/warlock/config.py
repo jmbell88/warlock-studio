@@ -401,6 +401,20 @@ class Config:
     # card still auto-selects. True restores the stop-trellis -> run-SDXL ->
     # unload -> restart handoff for OOM situations (resolution 1536, smaller
     # GPUs, a resident Flux).
+    # Run the image pipeline in *this* process instead of a child. The escape
+    # hatch, off by default, for the one situation the child makes harder:
+    # attaching a debugger to the sampling loop, or reading a torch traceback
+    # without the marker framing in the way.
+    #
+    # It is not a performance switch. The child costs one process spawn per
+    # unload cycle and buys back what measurement showed the in-process loader
+    # cannot give: klein charged +21.1 GiB of host commit on 2026-08-22 and
+    # `unload()` returned 0.1 GiB of it, because the allocator's arenas outlive
+    # every reference. Turning this on restores that leak
+    # (docs/measurements/2026-08-22-trampoline-child-pids.md).
+    t2i_in_process: bool = field(
+        default_factory=lambda: _env_bool("WARLOCK_T2I_IN_PROCESS", False)
+    )
     vram_exclusive: bool | None = field(
         default_factory=lambda: _env_opt_bool("WARLOCK_VRAM_EXCLUSIVE")
     )
@@ -522,6 +536,7 @@ SETTINGS: tuple[tuple[str, str], ...] = (
     ("t2i_model", "WARLOCK_T2I_MODEL"),
     ("t2i_model_root", "WARLOCK_T2I_ROOT"),
     ("t2i_turbo_dir", "WARLOCK_T2I_DIR"),
+    ("t2i_in_process", "WARLOCK_T2I_IN_PROCESS"),
     ("vram_exclusive", "WARLOCK_VRAM_EXCLUSIVE"),
     ("vram_budget_gib", "WARLOCK_VRAM_BUDGET"),
     ("vram_total_gib", "WARLOCK_VRAM_TOTAL"),

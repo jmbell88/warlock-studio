@@ -137,3 +137,61 @@ def test_summary_omits_the_child_clause_when_there_are_none():
     line_default = memlog.summary()
     assert line_default is not None
     assert "children" not in line_default
+
+
+# --- the reading that was understating the app by a third --------------------
+
+
+@windows_only
+def test_child_commit_counts_the_interpreter_behind_the_trampoline():
+    """The defect the 2026-08-22 session log showed, as a test.
+
+    `sys.executable` under a uv venv is a trampoline that spawns the real
+    interpreter as its own child. Summing over the pids `Popen` returned reads
+    the ~0.8 MB shim and misses everything the worker actually holds -- which
+    is how an idle tick printed `children 0.0 GiB` while a BiRefNet worker held
+    6.3 GiB, at the moment the app was deciding whether to admit the next job
+    (docs/measurements/2026-08-22-trampoline-child-pids.md).
+
+    Asserted as a comparison rather than an absolute: what must hold is that
+    the job-derived set sees the weight and the Popen-derived one does not.
+    """
+    import subprocess
+
+    from warlock import winjob
+
+    hold = (
+        "import sys, time; buf = bytearray(400 * 1024 * 1024);"
+        " sys.stdout.write('up' + chr(10)); sys.stdout.flush(); time.sleep(30)"
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-c", hold],
+        stdout=subprocess.PIPE,
+        text=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    try:
+        winjob.assign(proc.pid)
+        winjob.track(proc.pid, "test holder")
+        assert proc.stdout.readline().strip() == "up"
+
+        measured = memlog.children_private(winjob.measured_pids())
+        assert measured is not None
+        # 400 MiB is 0.39 GiB; allow generous slack for the interpreter itself
+        # and for a machine that trims aggressively.
+        assert measured > 0.3, f"the 400 MiB holder was not counted: {measured}"
+
+        if winjob.job_pids():
+            # Only meaningful where a trampoline is genuinely in play. On an
+            # installer layout the two sets are equal and there is nothing to
+            # compare -- which is correct behaviour, not a skip-worthy gap.
+            popen_only = memlog.children_private([proc.pid])
+            assert popen_only is not None
+            if popen_only < 0.3:
+                assert measured > popen_only, (
+                    "the job-derived reading must see what the Popen pid hides"
+                )
+    finally:
+        winjob.untrack(proc.pid)
+        proc.kill()
+        proc.wait(timeout=10)

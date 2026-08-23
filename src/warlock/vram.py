@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -351,6 +352,33 @@ def _read(torch: Any) -> DeviceMemory | None:
     return DeviceMemory(total_gib=total / _GIB, free_gib=free / _GIB, name=name)
 
 
+_published: DeviceMemory | None = None
+_published_lock = threading.Lock()
+
+
+def publish(free_gib: float, total_gib: float, name: str = "") -> None:
+    """Record a device reading taken in a child process.
+
+    Since the image pipeline moved into ``text2image_worker``, the app process
+    has no reason to import torch -- and ``device_memory`` returns None without
+    it, which would leave admission with no device figure at all for the whole
+    session. The child takes the reading it is already positioned to take
+    (``mem_get_info`` reports the *device*, so its answer counts trellis-server
+    too) and ``t2i_client`` hands it here.
+
+    Last-writer-wins under a lock, and deliberately not timestamped: a stale
+    reading is what "the card as of the last time anyone looked" means, and it
+    is strictly better than the None it replaces. The live torch path below
+    still wins whenever torch is in fact loaded, so a GPU test and the
+    in-process fallback are unaffected.
+    """
+    global _published
+    with _published_lock:
+        _published = DeviceMemory(
+            total_gib=float(total_gib), free_gib=float(free_gib), name=name
+        )
+
+
 def device_memory() -> DeviceMemory | None:
     """Device-wide free/total, or None -- without importing torch.
 
@@ -359,9 +387,16 @@ def device_memory() -> DeviceMemory | None:
     Unlike ``vram_gib``, the number it returns *does* see trellis-server's
     allocation -- ``mem_get_info`` wraps ``cudaMemGetInfo``, which reports the
     device, not the process.
+
+    Falls back to the last reading ``publish`` was given. Torch first, always:
+    a reading this process can take now beats one a child took a minute ago.
     """
     torch = sys.modules.get("torch")
-    return None if torch is None else _read(torch)
+    live = None if torch is None else _read(torch)
+    if live is not None:
+        return live
+    with _published_lock:
+        return _published
 
 
 def probe() -> DeviceMemory | None:
