@@ -569,16 +569,33 @@ class SelectionOps:
         return [*pending, edit]
 
     def delete_selection(self: Document) -> bool:
-        """Cut the selection out of the active layer without floating it."""
+        """Cut the selection out of the active layer without floating it.
+
+        **The flatten matte goes with the hole**, ``Document._matte_release``'s
+        rule: this is the gesture a user means by "remove the background", and
+        a document that went on flattening onto white put every erased pixel
+        straight back in the exported file. The alpha is sampled here rather
+        than inside ``_cut_selection_patch`` because that helper's steps are
+        also folded into ``layer_from_selection``'s compound, where no hole is
+        made -- the pixels move up a layer and the flatten is unchanged -- and
+        the release has to be the last edit of the step that actually opened
+        one.
+        """
         if self.floating is not None:
             return self.delete_floating()
         if self.write_locked():
             return False
+        watching = self.matte is not None and not self.has_background
+        was = self.stack.active.pixels[..., 3].copy() if watching else None
         edits = self._cut_selection_patch()
         if edits is None:
             return False
         if edits:
-            self.history.push(edits[0] if len(edits) == 1 else CompoundEdit(edits))
+            release = None
+            if was is not None:
+                now = self.stack.active.pixels[..., 3]
+                release = self._matte_release((was == 255) & (now == 0))
+            self._push_patch(edits, release)
         return True
 
     # -- clipboard ----------------------------------------------------------

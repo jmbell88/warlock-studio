@@ -66,6 +66,7 @@ from .undo import (
     UNDO_BYTES,
     CompoundEdit,
     IndexPatchEdit,
+    MatteEdit,
     PatchEdit,
     ReplayEdit,
     UndoStack,
@@ -1159,9 +1160,51 @@ class Document(
             self._discard_pending_cel()
             return
         pending, self._pending_cels = self._pending_cels, []
-        edit: Any = PatchEdit(layer.uid, rect, before, after)
-        self.history.push(edit if not pending else CompoundEdit([*pending, edit]))
+        release = self._matte_release((before[..., 3] == 255) & (after[..., 3] == 0))
+        self._push_patch([*pending, PatchEdit(layer.uid, rect, before, after)], release)
         self.invalidate(rect, layer_uid=layer.uid)
+
+    def _matte_release(self, opened: Any) -> Any:
+        """Clearing the flatten matte, when a write has just punched a hole.
+
+        ``matte_for`` stamps ``OPAQUE_WHITE`` on any fully opaque image at load,
+        so a photo or a flat PNG flattens onto white -- which is right for a
+        photo and is what a user removing a background is trying to undo. Until
+        this existed only the AI cutout (``apply_matte``) and ``to_background``
+        cleared it, so erasing by hand cut alpha the export then filled straight
+        back in: the pixels really were transparent and the file really was
+        white, and the only way out was a menu item nobody knew to look for.
+
+        **A hole, not a soft edge.** The test is opaque-to-*fully*-transparent,
+        so an antialiased brush edge -- partial alpha, everywhere, on every
+        ordinary stroke -- does not disturb the matte of a document nobody is
+        cutting out. An eraser, ``delete_selection`` and a fill with a
+        transparent colour all reach 0 and all mean it.
+
+        Skipped on a document with a background layer, ``set_matte``'s reason:
+        ``flatten`` does not consult the matte there and ``_shown_pixels``
+        forces that layer opaque, so there is no hole to answer for and the step
+        would only be a history entry that changes nothing.
+        """
+        if self.matte is None or self.has_background:
+            return None
+        if not bool(np.any(opened)):
+            return None
+        return MatteEdit(tuple(self.matte), None)
+
+    def _push_patch(self, edits: list[Any], release: Any) -> None:
+        """One write's edits as a single step, with the matte release last.
+
+        **Last is load-bearing**: ``CompoundEdit.undo`` walks ``reversed()``, so
+        appending the ``MatteEdit`` at the end restores the colour *before* the
+        pixels come back -- the order ``apply_matte`` and ``to_background``
+        already use, and the one that stopped an undone cutout from restoring
+        the pixels and losing the colour for good.
+        """
+        if release is not None:
+            self.matte = None
+            edits.append(release)
+        self.history.push(edits[0] if len(edits) == 1 else CompoundEdit(edits))
 
     def _commit_indexed_patch(self, layer: Layer, rect: tuple[int, int, int, int]) -> None:
         """The indexed half of the funnel: RGBA in, slots resolved and stored.
@@ -1201,8 +1244,11 @@ class Document(
             self.invalidate(rect, layer_uid=layer.uid)
             return
         pending, self._pending_cels = self._pending_cels, []
-        edit: Any = IndexPatchEdit(layer.uid, rect, before, after)
-        self.history.push(edit if not pending else CompoundEdit([*pending, edit]))
+        # The indexed spelling of "a hole was punched": the transparent slot is
+        # what alpha 0 means when the plane is the record.
+        clear = self.transparent_index
+        release = self._matte_release((before != clear) & (after == clear))
+        self._push_patch([*pending, IndexPatchEdit(layer.uid, rect, before, after)], release)
         self.invalidate(rect, layer_uid=layer.uid)
 
     def _commit_permuted_indices(

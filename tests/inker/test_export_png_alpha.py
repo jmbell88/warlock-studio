@@ -100,3 +100,82 @@ def test_turning_the_matte_off_exports_the_hole_transparent(monkeypatch, tmp_pat
     assert int(out[1, 1, 3]) == 0
     # And nothing else moved: the untouched pixels are the photo.
     assert tuple(out[0, 0]) == (200, 0, 0, 255)
+
+
+# --- removing a background means removing it ---------------------------------
+
+
+def _photo(size=8):
+    """An opaque flat image, the shape ``matte_for`` stamps white."""
+    doc = inker.Document.blank(size, size)
+    px = np.zeros((size, size, 4), np.uint8)
+    px[..., 3] = 255
+    px[..., :3] = 255
+    px[3:5, 3:5, :3] = (200, 30, 30)
+    doc.stack[0].pixels[...] = px
+    doc.invalidate_all()
+    doc.matte = inker.matte_for(doc.composite)
+    assert doc.matte == (255, 255, 255, 255)
+    return doc
+
+
+def test_deleting_a_selection_clears_the_flatten_matte():
+    """The reported bug. ``matte_for`` stamps white on any opaque import, and
+    only the AI cutout and ``to_background`` used to clear it -- so selecting
+    the white and pressing Delete cut alpha the export filled straight back in.
+    The pixels really were transparent and the file really was white."""
+    doc = _photo()
+    doc.select_wand((0, 0), tolerance=8)
+    assert doc.delete_selection()
+    assert doc.matte is None
+    flat = doc.flatten(matte=True)
+    assert tuple(int(v) for v in flat[0, 0]) == (0, 0, 0, 0)
+    assert tuple(int(v) for v in flat[3, 3]) == (200, 30, 30, 255), "the subject stays"
+
+
+def test_the_eraser_clears_the_flatten_matte():
+    doc = _photo(16)
+    doc.begin_stroke((4, 4), (0, 0, 0, 0), size=6, mode="erase", nib="square", hardness=1.0)
+    doc.stroke_to((10, 10))
+    assert doc.end_stroke()
+    assert doc.matte is None
+
+
+def test_one_undo_puts_back_both_the_pixels_and_the_matte():
+    """``CompoundEdit.undo`` walks ``reversed()``, so the ``MatteEdit`` is
+    appended last and restores the colour before the pixels come back -- the
+    ordering ``apply_matte`` learned the hard way, where an undone cutout
+    restored the pixels and lost the colour for good."""
+    doc = _photo()
+    doc.select_wand((0, 0), tolerance=8)
+    assert doc.delete_selection()
+    assert doc.matte is None
+    doc.undo()
+    assert doc.matte == (255, 255, 255, 255)
+    assert int(doc.stack[0].pixels[..., 3].min()) == 255
+    assert tuple(int(v) for v in doc.flatten(matte=True)[0, 0]) == (255, 255, 255, 255)
+
+
+def test_a_soft_paint_stroke_does_not_disturb_the_matte():
+    """The test is opaque-to-*fully*-transparent, so an antialiased edge -- on
+    every ordinary stroke -- leaves a photo's matte exactly where it was."""
+    doc = _photo(16)
+    doc.begin_stroke((4, 4), (10, 20, 30, 255), size=6, hardness=0.2)
+    doc.stroke_to((10, 10))
+    assert doc.end_stroke()
+    assert doc.matte == (255, 255, 255, 255)
+
+
+def test_a_background_document_is_left_alone():
+    """``flatten`` does not consult the matte where there is a real background
+    layer and ``_shown_pixels`` forces that layer opaque, so there is no hole
+    to answer for -- the reason ``set_matte`` refuses there too."""
+    doc = _photo()
+    assert doc.to_background()
+    assert doc.matte is None, "to_background folds it into pixels"
+    doc.matte = (255, 255, 255, 255)
+    head = doc.history.head
+    doc.select_wand((0, 0), tolerance=8)
+    doc.delete_selection()
+    assert doc.matte == (255, 255, 255, 255)
+    assert doc.history.head != head, "the cut itself is still a step"
