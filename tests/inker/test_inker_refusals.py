@@ -215,3 +215,70 @@ def test_a_read_only_tool_is_told_nothing_about_either(tool: str) -> None:
     tab.doc.stack.active.visible = False
     assert inker_canvas._locked_out(ctx, state, tab) is False
     assert _sent(app) == [] and _tip(state) == ""
+
+
+# --- refusals made at the runtime door, not at the enabled gate --------------
+
+
+def _op_session():
+    from types import MethodType, SimpleNamespace
+
+    from warlock.studio import inker, inker_state
+    from warlock.studio import state as state_mod
+
+    tab = inker_state.InkerDoc(doc=inker.Document.blank(8, 8), uid="t1", title="t")
+    state = inker_state.InkerState()
+    state.add(tab)
+    app = SimpleNamespace(inker=state, toasts=[], toast_log=[])
+    app.toast = MethodType(state_mod.AppState.toast, app)
+    app.toast_once = MethodType(state_mod.AppState.toast_once, app)
+    ctx = SimpleNamespace(state=app, toast=app.toast)
+    return ctx, state, tab
+
+
+def test_a_paste_with_an_empty_clipboard_says_so():
+    """``enabled`` cannot see the clipboard, so this refusal can only be made at
+    the runtime door -- and a Ctrl+V that does nothing and says nothing is the
+    shape ``run``'s docstring calls out."""
+    from warlock.studio import inker_ops
+
+    ctx, state, tab = _op_session()
+    assert inker_ops.run(ctx, inker_ops.get("paste")) is False
+    assert state.tip is not None
+    assert "clipboard" in str(state.tip.text)
+
+
+def test_selecting_unused_colours_with_none_unused_says_so():
+    from warlock.studio import inker_ops
+
+    ctx, state, tab = _op_session()
+    tab.doc.set_palette([(1, 2, 3, 255)])
+    tab.doc.stack[0].pixels[...] = (1, 2, 3, 255)
+    tab.doc.invalidate_all()
+    assert inker_ops.run(ctx, inker_ops.get("select_unused_colours")) is False
+    assert state.tip is not None
+
+
+def test_the_restructuring_ops_are_refused_while_the_tab_is_busy():
+    """The keyboard has always refused ``_MUTATING_CTRL`` on a busy tab; the
+    menu rows for the same verbs stayed live, so a click could restructure the
+    stack while the ORA writer walked it on a task thread."""
+    from warlock.studio import inker_ops
+
+    ctx, state, tab = _op_session()
+    tab.doc.add_layer()
+    for name in (
+        "undo",
+        "redo",
+        "cut",
+        "select_all",
+        "deselect",
+        "invert_selection",
+        "copy_to_layer",
+        "move_to_layer",
+    ):
+        op = inker_ops.get(name)
+        tab.saving = True
+        assert not op.enabled(state, tab), name
+        assert inker_ops.reason_for(op, state, tab) == inker_ops.BUSY, name
+        tab.saving = False

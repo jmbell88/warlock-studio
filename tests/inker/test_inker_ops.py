@@ -74,7 +74,9 @@ def test_a_refused_op_says_why_rather_than_doing_nothing():
     ctx, state, tab = _session()
     assert inker_ops.run(ctx, inker_ops.get("undo")) is False
     assert state.tip is not None
-    assert state.tip.text == inker_ops.get("undo").reason
+    assert state.tip.text == inker_ops.reason_for(
+        inker_ops.get("undo"), state, tab
+    ), "``reason`` may be a callable now -- ``reason_for`` is the reader"
 
 
 def test_the_registry_refuses_a_duplicate_name():

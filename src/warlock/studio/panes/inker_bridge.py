@@ -61,7 +61,14 @@ def popups(ctx: Any) -> None:
     state = inker_mode.ensure(ctx)
     tab = state.active
     wanted, state.pending_dialog = state.pending_dialog, ""
-    if wanted and tab is not None:
+    if wanted and tab is None:
+        # **Handed back, not dropped.** Taken-and-cleared above, so a request
+        # arriving on a frame with no active tab used to evaporate here -- which
+        # is the failure the comment below says this branch exists to prevent,
+        # by the one route it did not cover. A tab is a frame away (an open, a
+        # recovery offer), and the request is answered then.
+        state.pending_dialog = wanted
+    elif wanted and tab is not None:
         if wanted == "inker-resize":
             _measure_pixel_grid(ctx, tab)
             imgui.open_popup("inker-resize")

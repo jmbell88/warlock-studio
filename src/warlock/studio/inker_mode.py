@@ -2734,7 +2734,7 @@ def begin_transform(ctx: Any, tab: InkerDoc | None = None) -> None:
         # The one refusal worth saying out loud from here: a transform lifts,
         # and a lift is a cut. Every other way of reaching a locked layer goes
         # through the canvas, which raises its own toast on the press.
-        ctx.toast("That layer is locked. Unlock it in the layers panel.", "warn")
+        ctx.toast(LOCKED_LAYER, "warn")
 
 
 def _warn_rotsprite(ctx: Any, state: Any, tab: InkerDoc) -> None:
@@ -3033,7 +3033,7 @@ def stamp_text(ctx: Any, state: Any, tab: InkerDoc) -> bool:
         ctx.toast("Nothing to stamp -- check the text and the font.", "warn")
         return False
     if not tab.doc.float_pixels(pixels, state.text_at):
-        ctx.toast("That layer is locked. Unlock it in the layers panel.", "warn")
+        ctx.toast(LOCKED_LAYER, "warn")
         return False
     # Through ``set_tool``: the one door, so the stamp cannot leave a
     # half-drawn poly-lasso gesture open behind the Move tool (C4).
@@ -3108,9 +3108,16 @@ def nudge(state: Any, tab: InkerDoc, dx: int, dy: int) -> bool:
 
 # --- playback ----------------------------------------------------------------
 
-#: The one sentence both doors say. It was written out at the canvas press and
-#: nowhere else, which is how the keyboard's copies of the same refusal came to
-#: be silent: there was nothing to reuse and no reason to notice.
+#: The one sentence **every** door says. It was written out at the canvas press
+#: and nowhere else, which is how the keyboard's copies of the same refusal came
+#: to be silent: there was nothing to reuse and no reason to notice.
+#:
+#: ``begin_transform`` and ``stamp_text`` used to spell their own -- "Unlock it
+#: in the layers panel" -- which was two problems at once. It was a second
+#: wording for one lock, which ``stamp_text``'s own docstring says it must not
+#: be ("a user should not have to learn that two messages mean one thing"), and
+#: it named a pane that does not exist: ``panes/inker_timeline`` opens with
+#: "There is no layers panel." The padlock is on the timeline row.
 LOCKED_LAYER = "That layer is locked. Its padlock is on its timeline row."
 
 #: A tick longer than this is treated as a stall rather than as elapsed time.

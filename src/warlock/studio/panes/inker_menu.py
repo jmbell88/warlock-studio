@@ -116,6 +116,14 @@ def _params_popup(ctx: Any, state: Any) -> None:
             inker_ops.run(ctx, op, **values)
             state.pending_op = ""
             imgui.close_current_popup()
+        imgui.same_line()
+        # **A Cancel, the shape ``clay_menu`` already has.** Without one the
+        # only way out was clicking outside, which imgui answers by closing the
+        # popup without telling anybody -- so ``pending_op`` stayed set until
+        # the next parameterised op happened to overwrite it.
+        if controls.button(f"Cancel##{PARAM_POPUP}"):
+            state.pending_op = ""
+            imgui.close_current_popup()
 
 
 def _properties_popup(ctx: Any, state: Any, tab: Any) -> None:

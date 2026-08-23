@@ -326,7 +326,9 @@ def test_the_chords_are_the_photoshop_way_round():
         layer_from_selection=lambda *, cut: calls.append(cut), mask=object()
     )
     tab = SimpleNamespace(busy=False, doc=doc)
-    state = SimpleNamespace(active=tab, tip=None, say=lambda *a, **k: None)
+    state = SimpleNamespace(
+        active=tab, tip=None, transforming=False, say=lambda *a, **k: None
+    )
     ctx = SimpleNamespace(state=SimpleNamespace(inker=state))
 
     from warlock.studio import inker_ops

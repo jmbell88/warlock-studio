@@ -115,7 +115,12 @@ class Op:
     key: str = ""
     context: str = ""
     enabled: Callable[[Any, Any], bool] = _always
-    reason: str = ""
+    #: The sentence shown when ``enabled`` says no. A **callable** is allowed
+    #: alongside a plain string for the ops that can be refused for more than
+    #: one reason: an op gated on both "there is something to undo" and "the
+    #: document is not being saved" has two answers, and a single string would
+    #: have to pick the wrong one half the time. See ``reason_for``.
+    reason: str | Callable[[Any, Any], str] = ""
     separator_before: bool = False
     params: tuple[Param, ...] = field(default=())
     hint: str = ""
@@ -124,6 +129,12 @@ class Op:
     #: every other registration takes -- is "never ticked", which is what the
     #: Inker menu adapter used to hardcode for all of them.
     checked: Callable[[Any, Any], bool] | None = None
+
+
+def reason_for(op: Op, state: Any, tab: Any) -> str:
+    """*op*'s refusal sentence right now, resolving the callable form."""
+    reason = op.reason
+    return reason(state, tab) if callable(reason) else reason
 
 
 OPS: list[Op] = []
@@ -197,8 +208,9 @@ def run(ctx: Any, op: Op, **params: Any) -> bool:
         return False
     tab = state.active
     if not op.enabled(state, tab):
-        if op.reason:
-            state.say(op.reason)
+        said = reason_for(op, state, tab)
+        if said:
+            state.say(said)
         return False
     values = defaults_for(op) | params
     for param in op.params:
@@ -232,6 +244,34 @@ def ready(state: Any, tab: Any) -> bool:
     """
 
     return tab is not None and not tab.busy and not state.transforming
+
+
+def when_ready(
+    predicate: Callable[[Any, Any], bool], reason: str
+) -> tuple[Callable[[Any, Any], bool], Callable[[Any, Any], str]]:
+    """*predicate*, and only while the document can be restructured.
+
+    Returns the ``enabled``/``reason`` pair together, because the two have to
+    agree about which of the two refusals is being made: "there is nothing to
+    undo" and "the document is being saved" are different sentences and a single
+    string would say the wrong one half the time.
+
+    This exists because the keyboard and the menu disagreed. ``handle_key``
+    refuses ``_MUTATING_CTRL`` outright on a busy tab -- undo, redo, cut,
+    select-all, deselect, invert and the two layer-from-selection verbs all
+    restructure the stack or move the history head a save has already captured
+    -- but the menu rows for those same verbs stayed live while ``ora.py`` was
+    walking ``doc.stack`` on a task thread. The gate belongs on the op, where
+    both doors read it.
+    """
+
+    def enabled(state: Any, tab: Any) -> bool:
+        return ready(state, tab) and predicate(state, tab)
+
+    def why(state: Any, tab: Any) -> str:
+        return reason if ready(state, tab) else BUSY
+
+    return enabled, why
 
 
 def has_selection(state: Any, tab: Any) -> bool:
@@ -347,6 +387,19 @@ def _view(verb: str, *args: Any) -> Callable[..., Any]:
 
 register(Op("new", "New...", dialog("new-canvas"), menu="File", key="Ctrl+N"))
 register(Op("open", "Open...", _mode_ctx("ask_open"), menu="File", key="Ctrl+O"))
+#: The eight verbs ``inker_mode._MUTATING_CTRL`` refuses on a busy tab. The
+#: keyboard has always refused them; the menu rows stayed live, so a click could
+#: restructure the stack while ``ora.py`` walked it on a task thread.
+_UNDO = when_ready(can_undo, "Nothing to undo yet.")
+_REDO = when_ready(can_redo, "Nothing to redo: this is the newest step.")
+_CUT = when_ready(has_selection, NO_SELECTION)
+_SELECT_ALL = when_ready(has_doc, NO_DOC)
+_DESELECT = when_ready(has_selection, NO_SELECTION)
+_INVERT = when_ready(has_doc, NO_DOC)
+_COPY_LAYER = when_ready(has_selection, NO_SELECTION)
+_MOVE_LAYER = when_ready(has_selection, NO_SELECTION)
+
+
 register(
     Op(
         "save",
@@ -533,8 +586,8 @@ register(
         _doc("undo"),
         menu="Edit",
         key="Ctrl+Z",
-        enabled=can_undo,
-        reason="Nothing to undo yet.",
+        enabled=_UNDO[0],
+        reason=_UNDO[1],
     )
 )
 register(
@@ -544,8 +597,8 @@ register(
         _doc("redo"),
         menu="Edit",
         key="Ctrl+Y",
-        enabled=can_redo,
-        reason="Nothing to redo: this is the newest step.",
+        enabled=_REDO[0],
+        reason=_REDO[1],
     )
 )
 register(
@@ -570,8 +623,8 @@ register(
         _doc("cut"),
         menu="Edit",
         key="Ctrl+X",
-        enabled=has_selection,
-        reason=NO_SELECTION,
+        enabled=_CUT[0],
+        reason=_CUT[1],
         separator_before=True,
     )
 )
@@ -736,6 +789,11 @@ def _paste(ctx: Any, tab: Any, *, as_layer: bool) -> Any:
     if as_layer:
         return tab.doc.paste_as_layer()
     result = tab.doc.paste()
+    if result is False:
+        # ``enabled`` cannot see the clipboard, so this is the only place the
+        # refusal can be made -- and a Ctrl+V that does nothing at all and says
+        # nothing at all is the shape ``run``'s docstring calls out.
+        ctx.state.inker.say("There is nothing on the clipboard.")
     if result is not False:
         # Only on success, ``inker_mode.stamp_text``'s rule and the Ctrl+V
         # precedent it cites. Switching unconditionally left a user holding the
@@ -1118,8 +1176,8 @@ register(
         _doc("select_all"),
         menu="Select",
         key="Ctrl+A",
-        enabled=has_doc,
-        reason=NO_DOC,
+        enabled=_SELECT_ALL[0],
+        reason=_SELECT_ALL[1],
     )
 )
 register(
@@ -1129,8 +1187,8 @@ register(
         _doc("deselect"),
         menu="Select",
         key="Ctrl+D",
-        enabled=has_selection,
-        reason=NO_SELECTION,
+        enabled=_DESELECT[0],
+        reason=_DESELECT[1],
     )
 )
 register(
@@ -1151,8 +1209,8 @@ register(
         _doc("invert_selection"),
         menu="Select",
         key="Ctrl+Shift+I",
-        enabled=has_doc,
-        reason=NO_DOC,
+        enabled=_INVERT[0],
+        reason=_INVERT[1],
     )
 )
 register(
@@ -1188,8 +1246,8 @@ register(
         _doc("layer_from_selection", cut=False),
         menu="Select",
         key="Ctrl+J",
-        enabled=has_selection,
-        reason=NO_SELECTION,
+        enabled=_COPY_LAYER[0],
+        reason=_COPY_LAYER[1],
         separator_before=True,
     )
 )
@@ -1200,8 +1258,8 @@ register(
         _doc("layer_from_selection", cut=True),
         menu="Select",
         key="Ctrl+Shift+J",
-        enabled=has_selection,
-        reason=NO_SELECTION,
+        enabled=_MOVE_LAYER[0],
+        reason=_MOVE_LAYER[1],
     )
 )
 def _select_slots(ctx: Any, tab: Any, *, used: bool) -> bool:
@@ -1212,7 +1270,18 @@ def _select_slots(ctx: Any, tab: Any, *, used: bool) -> bool:
     rows differ by a boolean rather than by a second walk of the document.
     """
     doc = tab.doc
-    return doc.select_slots(doc.used_slots() if used else doc.unused_slots())
+    slots = doc.used_slots() if used else doc.unused_slots()
+    if not slots:
+        # Said rather than answered with a silent ``False``. ``enabled`` can
+        # only ask whether there is a palette at all; whether any slot is drawn
+        # in is a walk of the document, so this refusal can only be made here --
+        # and ``run``'s promise that a refused op says why has to hold at the
+        # runtime doors too, not only at the gate.
+        ctx.state.inker.say(
+            "Every slot is in use." if not used else "No slot in this palette is used."
+        )
+        return False
+    return doc.select_slots(slots)
 
 
 register(
