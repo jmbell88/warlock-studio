@@ -297,3 +297,34 @@ def test_a_refused_paste_does_not_switch_the_tool():
     assert tab.doc.paste() is False, "nothing on the clipboard to paste"
     op.run(ctx, tab)
     assert state.tool == "brush", "a refused paste leaves the tool alone"
+
+
+def test_selecting_used_colours_is_one_undo_step():
+    """It used to call ``select_colour_range`` once per slot, and that method
+    pushes a ``SelectionEdit`` of its own -- so a sixty-colour palette cost
+    sixty-one Ctrl+Z to put back and walked the composite sixty times. One
+    gesture is one step, the rule the timeline's row ops already follow."""
+    from warlock.studio import inker
+
+    doc = inker.Document.blank(8, 8)
+    palette = [(index * 8, 0, 0, 255) for index in range(12)]
+    doc.set_palette(palette)
+    for row in range(8):
+        doc.stack[0].pixels[row, :, :] = palette[row % 12]
+    doc.invalidate_all()
+
+    used = doc.used_slots()
+    assert len(used) == 8, "the fixture draws in eight of the twelve"
+    depth = len(doc.history._done)
+    assert doc.select_slots(used)
+    assert len(doc.history._done) - depth == 1
+    assert int((doc.mask.mask > 0).sum()) == 64, "every drawn pixel"
+
+
+def test_selecting_slots_with_nothing_to_select_refuses():
+    from warlock.studio import inker
+
+    doc = inker.Document.blank(4, 4)
+    assert doc.select_slots([]) is False
+    doc.set_palette([(1, 2, 3, 255)])
+    assert doc.select_slots([99]) is False, "a slot off the end of the table"

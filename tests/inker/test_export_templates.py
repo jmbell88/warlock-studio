@@ -490,3 +490,38 @@ def test_the_tags_are_written_by_default(monkeypatch, tmp_path):
     _finish(ctx, state)
     meta = json.loads((tmp_path / "walk.json").read_text(encoding="utf-8"))
     assert [tag["name"] for tag in meta["animation"]["tags"]] == ["intro", "walk"]
+
+
+def test_a_refused_export_does_not_settle_the_document_first():
+    """``_settle`` commits the floating buffer and cancels the filter and
+    conversion previews. Running it above the span and stem checks meant an
+    export that went on to say "cannot export" had already folded a paste into
+    the layers on its way to refusing."""
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from warlock.studio import inker, inker_mode, inker_state
+
+    doc = inker.Document.blank(8, 8)
+    doc.add_frame()
+    tab = inker_state.InkerDoc(doc=doc, title="a.png", saved_head=doc.history.head)
+    state = inker_state.InkerState()
+    state.add(tab)
+    said: list[str] = []
+    ctx = SimpleNamespace(
+        state=SimpleNamespace(inker=state),
+        toast=lambda message, kind="info": said.append(message),
+    )
+
+    # Something floating, which is exactly what a settle would fold away.
+    doc.float_pixels(np.full((4, 4, 4), 255, np.uint8), (0, 0))
+    assert doc.floating is not None
+
+    # A span that holds no frames: the first of the two refusals.
+    inker_mode._begin_export(ctx, tab, "png", span=(99, 99))
+
+    assert said, "it refused"
+    assert doc.floating is not None, "and left the document exactly as it found it"
+    assert state.export is None
+    assert not tab.saving

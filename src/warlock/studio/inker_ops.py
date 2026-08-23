@@ -1199,20 +1199,7 @@ def _select_slots(ctx: Any, tab: Any, *, used: bool) -> bool:
     rows differ by a boolean rather than by a second walk of the document.
     """
     doc = tab.doc
-    slots = doc.used_slots() if used else doc.unused_slots()
-    if not slots or not doc.palette:
-        return False
-    mask = None
-    for slot in slots:
-        colour = doc.palette[slot]
-        doc.select_colour_range(colour, tolerance=0)
-        if doc.mask is None:
-            continue
-        mask = doc.mask.copy() if mask is None else mask.combined(doc.mask, "add")
-    if mask is None:
-        return False
-    doc.select(mask)
-    return True
+    return doc.select_slots(doc.used_slots() if used else doc.unused_slots())
 
 
 register(

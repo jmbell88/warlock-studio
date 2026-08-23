@@ -699,6 +699,40 @@ class IndexedOps:
         used = set(self.used_slots())
         return [slot for slot in range(len(self.palette or [])) if slot not in used]
 
+    def select_slots(self: Document, slots: Sequence[int]) -> bool:
+        """Select every pixel drawn in *slots*, as **one** undo step.
+
+        Beside :meth:`used_slots` because it is the other half of the same
+        gesture -- Aseprite's *Select Used Colors* and *Select Unused* are two
+        readings of one histogram and this is what either reading is for.
+
+        The union is built here rather than by calling
+        :meth:`~._doc_selection.SelectionOps.select_colour_range` once per slot,
+        which is what the toolbox used to do: that method pushes a
+        ``SelectionEdit`` of its own, so "Select used colours" on a sixty-colour
+        palette cost sixty-one Ctrl+Z to put back and walked the whole composite
+        sixty times. One gesture is one step, the rule the timeline's own row
+        ops already follow ("Eight rows crossed used to cost eight Ctrl+Z").
+
+        The *composite* is read, not the index plane, for
+        ``select_colour_range``'s reason: the user is pointing at what they can
+        see, and a palette-constrained RGB document has no plane to point at.
+        """
+        from .selection import colour_range
+
+        if not slots or not self.palette:
+            return False
+        found = None
+        for slot in slots:
+            if not 0 <= slot < len(self.palette):
+                continue
+            one = colour_range(self._composite, self.palette[slot], 0)
+            found = one if found is None else found.combined(one, "add")
+        if found is None:
+            return False
+        self.select(found)
+        return True
+
     def remap_palette(self: Document, colours: Sequence[RGBA]) -> bool:
         """Swap the palette and keep every index. -> whether it changed.
 

@@ -1631,7 +1631,6 @@ def _begin_export(
     if state.export_seed_uid != tab.uid:
         state.apply_export_options(tab.export_options)
         state.export_seed_uid = tab.uid
-    _settle(ctx, tab)
     suggested = tab.path.stem if tab.path else "untitled"
     if legs is None:
         legs = [_Leg(uids=[], span=span, loop=loop)]
@@ -1653,6 +1652,13 @@ def _begin_export(
     except ValueError as exc:
         ctx.toast(f"Cannot export: {exc}.", "warn")
         return
+    # **After the refusals, not before them.** Settling commits the floating
+    # buffer and cancels the filter and conversion previews, all of which change
+    # the document -- so running it above the two checks meant an export that
+    # went on to say "cannot export" had already folded a paste into the layers
+    # on its way to refusing. Nothing either check reads is affected by it: they
+    # ask which frames a span holds and whether the labels collide.
+    _settle(ctx, tab)
     # Locked before the first flatten, not at submit time: the whole point of
     # spreading the read is that frames go by between here and the encode, and
     # an edit landing in one of them would put half of two documents in the
