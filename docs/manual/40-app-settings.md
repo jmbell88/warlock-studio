@@ -34,6 +34,15 @@ of the renderer rather than of the palette, and making it follow the theme means
 into the render-skip key so a theme switch triggers a redraw. It is a known gap, deliberately left
 open. *Show frame rate* is the same toggle as `F10`.
 
+*Show VRAM, RAM and CPU in the status bar* puts a live reading of the machine at the right end of
+the status line, in every mode. It is there because the app already forces the question on you: a
+generation is refused at the door when there is not enough VRAM free, and re-checked when it is
+about to run, and until now nothing on screen said what the number those refusals are about
+actually was. The VRAM figure is read from the driver, so it counts every process on the card and
+not just this one. It updates once a second, costs about a twentieth of a millisecond to take, and
+is the first thing dropped when the window gets too narrow to hold both it and the workspace name.
+A card the driver does not report on simply leaves VRAM out rather than showing a placeholder.
+
 *Reduce motion* turns off every animation in the app at once — the mode transition, hover, the
 rail's sliding selection and its expand, a popover's rise. Nothing disappears and nothing behaves differently: things
 arrive in place instead of travelling there, and the few effects that are a *fade* rather than a

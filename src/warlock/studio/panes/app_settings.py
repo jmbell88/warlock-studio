@@ -239,6 +239,20 @@ def _interface(ctx: Any, form_ui: forms.Form | None = None) -> None:
         ctx.state.show_fps = show_fps
         ctx.settings.set("show_fps", show_fps)
 
+    show_resources = bool(ctx.state.show_resources)
+    changed, show_resources = form_ui.switch(
+        "show_resources",
+        "Show VRAM, RAM and CPU in the status bar",
+        show_resources,
+        help_text=(
+            "A live reading of what the machine has left, at the right end of "
+            "the status bar. VRAM is the figure a refused generation is about."
+        ),
+    )
+    if changed:
+        ctx.state.show_resources = show_resources
+        ctx.settings.set("show_resources", show_resources)
+
     reduced = bool(ctx.state.reduce_motion)
     changed, reduced = form_ui.switch(
         "reduce_motion",

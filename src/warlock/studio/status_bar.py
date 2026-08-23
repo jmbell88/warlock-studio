@@ -61,6 +61,26 @@ def items(ctx: Any) -> list[StatusItem]:
     return out
 
 
+def resource_item(ctx: Any) -> StatusItem | None:
+    """The machine's own line, or None when it is off or unreadable.
+
+    **Not in** :func:`items`. That list is unit-tested on its key set and is
+    drawn left to right with the tail elided, so putting the meter in it would
+    make it the *first* thing dropped as the window narrows -- which is
+    backwards for the one item that has to be readable while a generation is
+    being decided on. It is right-anchored in :func:`draw` instead, following
+    ``overlay.doctor_banner``'s rule: reserve the trailing item before
+    trimming the leading detail.
+    """
+    if not getattr(ctx.state, "show_resources", False):
+        return None
+    sampler = getattr(ctx, "resources", None)
+    if sampler is None:
+        return None
+    text = sampler.reading.text()
+    return StatusItem("resources", text) if text else None
+
+
 def draw(ctx: Any) -> None:
     """Draw a flat one-line status surface; excess secondary items elide."""
 
@@ -80,11 +100,21 @@ def draw(ctx: Any) -> None:
     if visible:
         room = imgui.get_content_region_avail().x
         used = 0.0
+        rows = items(ctx)
+        meter = resource_item(ctx)
         with fonts.small(imgui):
-            for index, item in enumerate(items(ctx)):
+            meter_w = imgui.calc_text_size(meter.text).x + pad_x if meter else 0.0
+            # **The reservation is conditional.** Room is taken for the meter
+            # only while the *first* left-hand item still fits beside it;
+            # below that the meter is dropped whole rather than truncated. A
+            # status bar reading "VRAM 9.2/32" and nothing about which
+            # workspace you are in would have the priority exactly backwards.
+            if meter and rows and meter_w + imgui.calc_text_size(rows[0].text).x > room:
+                meter, meter_w = None, 0.0
+            for index, item in enumerate(rows):
                 text = item.text if index == 0 else f"  |  {item.text}"
                 width = imgui.calc_text_size(text).x
-                if used + width > room:
+                if used + width + meter_w > room:
                     break
                 if index:
                     imgui.same_line(0.0, 0.0)
@@ -97,4 +127,14 @@ def draw(ctx: Any) -> None:
                 else:
                     imgui.text_colored(imgui.ImVec4(*theme.rgba(theme.MUTED)), text)
                 used += width
+            if meter:
+                imgui.same_line(room - meter_w + pad_x, 0.0)
+                imgui.text_colored(imgui.ImVec4(*theme.rgba(theme.MUTED)), meter.text)
+                if imgui.is_item_hovered():
+                    imgui.set_tooltip(
+                        "What this machine has left right now. VRAM is read "
+                        "from the driver, so it counts every process -- a "
+                        "generation is refused when there is not enough of it "
+                        "free. Turn it off in Settings."
+                    )
     imgui.end_child()

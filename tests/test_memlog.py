@@ -195,3 +195,42 @@ def test_child_commit_counts_the_interpreter_behind_the_trampoline():
         winjob.untrack(proc.pid)
         proc.kill()
         proc.wait(timeout=10)
+
+
+def test_physical_memory_reads_the_two_fields_the_struct_already_had(real_system_memory):
+    """A sibling of ``system_memory``, not two more fields on it.
+
+    Commit accounting is what the 2026-08-03 crash was about; physical
+    accounting is what a user-facing "RAM" figure means. They are different
+    numbers on Windows, and ``conftest`` pins the commit one for the whole
+    session -- widening it would have made the meter untestable.
+    """
+    reading = memlog.physical_memory()
+    if reading is None:  # not Windows
+        return
+    assert reading.total > 0.0
+    assert 0.0 <= reading.available <= reading.total
+    # Pages times PageSize, not bytes: a machine reporting terabytes is the
+    # arithmetic being wrong in the direction that looks plausible.
+    assert reading.total < 4096.0
+    assert 0.0 <= reading.used_fraction <= 1.0
+    assert reading.used == pytest.approx(reading.total - reading.available)
+
+
+def test_the_cpu_sampler_reports_nothing_until_it_has_an_interval():
+    """The reading is a *delta*, which is why it is a class.
+
+    Against a zero baseline the first call would report the average since
+    boot -- a plausible-looking number that answers a different question. Two
+    callers sharing one baseline would each eat the other's interval, which is
+    the reason this is not a function with a module global.
+    """
+    sampler = memlog.CpuSampler()
+    first = sampler.sample()
+    assert first is None
+    second = sampler.sample()
+    if second is None:  # not Windows, or the call failed
+        return
+    assert 0.0 <= second <= 1.0
+    # An independent sampler is independent: its own first call is None too.
+    assert memlog.CpuSampler().sample() is None

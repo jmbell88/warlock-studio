@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import memlog, winjob
-from . import anchors, filetypes, probe
+from . import anchors, filetypes, probe, resources
 from . import fps as fps_mod
 
 log = logging.getLogger(__name__)
@@ -660,6 +660,11 @@ class App:
         # logged once at teardown regardless -- the overlay answers "is it
         # smooth now", the log line is the evidence for "it ran at 60".
         self.fps = fps_mod.FpsMeter()
+        # One sampler for the app, because the CPU figure is a delta between
+        # calls: two owners sharing a baseline would each eat the other's
+        # interval. Ticked from ``_tick`` at one second, drawn by
+        # ``status_bar.draw``.
+        self.resources = resources.Sampler()
         # Set by _draw_viewport_image, read one frame later by _events. The
         # host window is fullscreen, so io.want_capture_mouse is always true
         # and cannot be the gate; imgui's own hover test on the viewport image
@@ -832,6 +837,10 @@ class App:
         # every launch (AppState's default), so a stored mode would be a key
         # with no reader that four call sites kept half-updated.
         state.show_fps = bool(settings.get("show_fps"))
+        # Absent means on: this defaults to shown, so a settings file written
+        # before it existed must not read as "the user turned it off".
+        stored_resources = settings.get("show_resources")
+        state.show_resources = True if stored_resources is None else bool(stored_resources)
         # Both halves, here rather than at the checkbox: the stored value has to
         # reach ``motion.REDUCED`` before the first frame is built, or the app
         # animates its own startup at somebody who asked it not to.
@@ -1241,6 +1250,11 @@ class App:
         dt = min(now - self._last_frame, 0.25)
         self._last_frame = now
         self.fps.record(dt)
+        # Gated on the setting, so the opt-out costs nothing at all. The
+        # sampler itself is two ctypes calls and one driver ioctl -- 0.047 ms
+        # measured; see ``resources.Sampler.sample``.
+        if self.state.show_resources:
+            self.resources.tick(now)
         self._memory_ticker(now)
         self._health_ticker(now)
         return dt
@@ -5326,6 +5340,7 @@ class App:
         from .state import filters_to_store
 
         ctx.settings.set("show_fps", ctx.state.show_fps)
+        ctx.settings.set("show_resources", ctx.state.show_resources)
         ctx.settings.set("form_2d", sanitise_form(ctx.state.form_2d))
         ctx.settings.set("form_3d", sanitise_form(ctx.state.form_3d))
         ctx.settings.set("history", ctx.state.history)

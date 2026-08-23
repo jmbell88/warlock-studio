@@ -23,6 +23,7 @@ total-minus-headroom, and treats free as a secondary, dispatch-time check.
 
 from __future__ import annotations
 
+import ctypes
 import logging
 import sys
 import threading
@@ -397,6 +398,105 @@ def device_memory() -> DeviceMemory | None:
         return live
     with _published_lock:
         return _published
+
+
+#: NVML's own success code, and the two calls this module makes. The device
+#: memory struct is three ``unsigned long long`` in bytes: total, free, used.
+_NVML_SUCCESS = 0
+
+
+#: A sentinel distinct from None, which is a *cached failure* here.
+_UNSET: Any = object()
+_NVML_SESSION: Any = _UNSET
+
+
+class _NvmlMemory(ctypes.Structure):
+    _fields_ = [
+        ("total", ctypes.c_ulonglong),
+        ("free", ctypes.c_ulonglong),
+        ("used", ctypes.c_ulonglong),
+    ]
+
+
+def live_memory() -> DeviceMemory | None:
+    """A reading taken *now*, through the driver, without torch. None if absent.
+
+    :func:`device_memory` cannot answer this. It reads ``sys.modules`` and
+    deliberately does not import torch -- and torch now lives in the
+    ``text2image`` child process, so in the app process that function is either
+    absent for a session that has never generated or is reporting the figure
+    the *last* generation ended on. ``publish``'s own docstring says so. A
+    meter drawn from it would be stale in exactly the state the user is asking
+    about: "can I start something right now".
+
+    NVML is ``nvidia-smi``'s own interface and ships with the driver, so this
+    needs no package, no import cost and no child -- the same trade
+    :mod:`~warlock.memlog` makes with psapi. NVIDIA-only: every other card
+    returns None and the caller omits the figure rather than inventing one.
+
+    **Its number may legitimately differ from admission control's.** On WDDM
+    ``nvmlDeviceGetMemoryInfo`` reports *dedicated device* memory, while
+    ``cudaMemGetInfo``'s free is the driver's virtualized view (see this
+    module's docstring) -- so the meter can read fuller than the gate does.
+    That is the meter being the better figure, not either one being broken.
+
+    :func:`device_memory` is deliberately left alone. Promoting NVML into its
+    ladder would improve admission control too, and that is a VRAM-admission
+    change belonging in its own commit, verified under ``-m gpu``.
+    """
+    session = _nvml()
+    if session is None:
+        return None
+    nvml, handle, name = session
+    try:
+        info = _NvmlMemory()
+        if nvml.nvmlDeviceGetMemoryInfo(handle, ctypes.byref(info)) != _NVML_SUCCESS:
+            return None
+    except (OSError, AttributeError, ValueError):
+        return None
+    return DeviceMemory(
+        total_gib=info.total / _GIB,
+        free_gib=info.free / _GIB,
+        name=name,
+    )
+
+
+def _nvml() -> tuple[Any, Any, str] | None:
+    """The library, device 0's handle and its name, initialised once.
+
+    **Held open deliberately.** ``nvmlInit_v2``/``nvmlShutdown`` around every
+    reading measured **15.7 ms** on this machine (RTX 5090, 2026-08-23) --
+    fifteen times the budget a frame-loop sampler has and nearly all of it the
+    init/shutdown pair, which enumerates the device set. Held, a reading is
+    ~0.02 ms. NVML is refcounted and the process is the natural scope, so
+    there is nothing to release: the driver drops the session with the
+    process, exactly as the CUDA context does.
+
+    Cached negatively as well as positively -- a machine with no NVIDIA driver
+    must not pay a failing ``CDLL`` every second.
+    """
+    global _NVML_SESSION
+
+    if _NVML_SESSION is not _UNSET:
+        return _NVML_SESSION
+    _NVML_SESSION = None
+    if sys.platform != "win32":
+        return None
+    try:
+        nvml = ctypes.CDLL("nvml.dll")
+        if nvml.nvmlInit_v2() != _NVML_SUCCESS:
+            return None
+        handle = ctypes.c_void_p()
+        if nvml.nvmlDeviceGetHandleByIndex_v2(0, ctypes.byref(handle)) != _NVML_SUCCESS:
+            nvml.nvmlShutdown()
+            return None
+        buffer = ctypes.create_string_buffer(96)
+        if nvml.nvmlDeviceGetName(handle, buffer, len(buffer)) != _NVML_SUCCESS:
+            buffer.value = b""
+    except (OSError, AttributeError, ValueError):
+        return None
+    _NVML_SESSION = (nvml, handle, buffer.value.decode("utf-8", "replace"))
+    return _NVML_SESSION
 
 
 def probe() -> DeviceMemory | None:

@@ -113,6 +113,13 @@ def _run(monkeypatch: pytest.MonkeyPatch, prompt: dialogs.Prompt, fake: _FakeImg
     from warlock.studio import widgets
 
     monkeypatch.setattr(widgets, "frosted", lambda: False)
+    # ``field_label`` is the second instance of the same leak: it draws through
+    # the *real* imgui (``text_colored``), which asserts when a context exists
+    # but no frame is open -- so whether this file passed depended on which
+    # other file xdist had put on this worker first. Pinned for the reason
+    # ``frosted`` is: the label is not what any assertion here is about, and a
+    # stub with no frame has nothing to draw it into.
+    monkeypatch.setattr(widgets, "field_label", lambda *a, **k: None)
     monkeypatch.setattr(dialogs, "imgui", fake)
     queue = dialogs.PromptQueue()
     queue.ask(prompt)

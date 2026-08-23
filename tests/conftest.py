@@ -238,6 +238,15 @@ def _roomy_host_memory(monkeypatch):
     monkeypatch.setattr(
         memlog, "system_memory", lambda: memlog.SystemMemory(commit_total=8.0, commit_limit=256.0)
     )
+    # The status bar's meter reads *physical* memory, which is a different
+    # number from commit and a separate reader -- pinned for the same reason:
+    # a status-bar test whose verdict moves with the developer's browser tabs
+    # is not testing the status bar.
+    monkeypatch.setattr(
+        memlog,
+        "physical_memory",
+        lambda: memlog.PhysicalMemory(total=64.0, available=48.0),
+    )
 
 
 @pytest.fixture

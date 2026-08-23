@@ -22,6 +22,7 @@ import sys
 from collections.abc import Iterable
 from ctypes import wintypes
 from dataclasses import dataclass
+from typing import Any
 
 _GIB = 1024**3
 
@@ -141,6 +142,111 @@ def system_memory() -> SystemMemory | None:
         commit_total=info.CommitTotal * page / _GIB,
         commit_limit=info.CommitLimit * page / _GIB,
     )
+
+
+@dataclass(frozen=True)
+class PhysicalMemory:
+    """System-wide *physical* accounting, in GiB.
+
+    A sibling of :class:`SystemMemory` rather than two more fields on it, and
+    the split is deliberate twice over. Commit accounting is what the
+    2026-08-03 crash was about and what the log exists for; physical
+    accounting is what a user-facing "RAM" figure means, and they are
+    different numbers on Windows -- a machine can be far from its commit limit
+    with almost no physical memory free, and the reverse. And ``conftest.py``
+    pins ``system_memory`` for the whole test session, so widening it would
+    make every reading a test cannot vary.
+    """
+
+    total: float
+    available: float
+
+    @property
+    def used(self) -> float:
+        return max(self.total - self.available, 0.0)
+
+    @property
+    def used_fraction(self) -> float:
+        return self.used / self.total if self.total else 0.0
+
+
+def physical_memory() -> PhysicalMemory | None:
+    """Installed and available physical memory, or None.
+
+    One field away from :func:`system_memory`: ``_PERFORMANCE_INFORMATION``
+    already declares ``PhysicalTotal``/``PhysicalAvailable`` and that function
+    already reads the struct -- it simply discards them.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        info = _PERFORMANCE_INFORMATION()
+        info.cb = ctypes.sizeof(info)
+        ok = ctypes.windll.psapi.GetPerformanceInfo(ctypes.byref(info), info.cb)
+        if not ok:
+            return None
+    except (OSError, AttributeError):
+        return None
+    # Pages, like the Commit* fields beside them.
+    page = info.PageSize
+    return PhysicalMemory(
+        total=info.PhysicalTotal * page / _GIB,
+        available=info.PhysicalAvailable * page / _GIB,
+    )
+
+
+class CpuSampler:
+    """System-wide CPU busy fraction, sampled as a delta between calls.
+
+    ``GetSystemTimes`` in ctypes rather than psutil, for this module's own
+    stated reason: psutil is not declared in pyproject, so depending on it
+    would make instrumentation break on a clean install.
+
+    A class rather than a function with a module global **because the reading
+    is a delta**: two callers sharing one baseline would each consume the
+    other's interval and both would report nonsense. One sampler, one owner.
+
+    The classic gotcha, stated because it is invisible: ``kernel`` already
+    *includes* ``idle``, so busy time is ``user + kernel - idle`` and the
+    total is ``user + kernel``.
+    """
+
+    def __init__(self) -> None:
+        self._idle = 0
+        self._total = 0
+        self._primed = False
+
+    def sample(self) -> float | None:
+        """Busy fraction in [0, 1] since the previous call, or None."""
+        if sys.platform != "win32":
+            return None
+        try:
+            idle, kernel, user = (wintypes.FILETIME() for _ in range(3))
+            ok = ctypes.windll.kernel32.GetSystemTimes(
+                ctypes.byref(idle), ctypes.byref(kernel), ctypes.byref(user)
+            )
+            if not ok:
+                return None
+        except (OSError, AttributeError):
+            return None
+        idle_ticks = _ticks(idle)
+        total = _ticks(kernel) + _ticks(user)
+        d_idle = idle_ticks - self._idle
+        d_total = total - self._total
+        primed, self._primed = self._primed, True
+        self._idle, self._total = idle_ticks, total
+        if not primed or d_total <= 0:
+            # The first call has no interval to report on -- measured against a
+            # zero baseline it would report the average since boot, which is a
+            # plausible-looking number that means something else. A clock that
+            # went backwards is not worth a figure either.
+            return None
+        return max(0.0, min(1.0, 1.0 - d_idle / d_total))
+
+
+def _ticks(value: Any) -> int:
+    """A FILETIME as one 64-bit count of 100 ns intervals."""
+    return (int(value.dwHighDateTime) << 32) | int(value.dwLowDateTime)
 
 
 #: ``PROCESS_QUERY_LIMITED_INFORMATION``. Deliberately not

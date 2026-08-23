@@ -100,3 +100,70 @@ def test_an_inker_row_that_is_a_document_state_reports_its_tick():
     assert _row().checked is False
     assert tab.doc.toggle_matte() is True
     assert _row().checked is True
+
+
+def test_the_resource_meter_is_not_one_of_the_elided_status_items():
+    """It is right-anchored, and that is the whole point.
+
+    ``items`` is drawn left to right with the tail dropped as the window
+    narrows, so a meter in that list would be the *first* thing to go --
+    backwards for the one figure a user consults while deciding whether to
+    start a generation. ``overlay.doctor_banner``'s rule instead: reserve the
+    trailing item, then trim the leading detail.
+    """
+    from warlock.studio import resources, status_bar
+
+    app_ctx = _ctx()
+    app_ctx.state.show_resources = True
+    app_ctx.resources = resources.Sampler()
+    app_ctx.resources.reading = resources.Reading(
+        vram_used_gib=9.2, vram_total_gib=32.0, ram_used_gib=23.4, ram_total_gib=64.0, cpu=0.07
+    )
+
+    assert "resources" not in {item.key for item in status_bar.items(app_ctx)}
+    item = status_bar.resource_item(app_ctx)
+    assert item is not None and item.key == "resources"
+    assert item.text == "VRAM 9.2/32   RAM 23.4/64   CPU 7%"
+    assert not item.warning, "a machine being busy is not a fault"
+
+
+def test_the_meter_is_an_opt_out_and_omits_what_it_cannot_read():
+    """Off costs nothing, and a figure absent is a figure left out."""
+    from warlock.studio import resources, status_bar
+
+    app_ctx = _ctx()
+    app_ctx.resources = resources.Sampler()
+    app_ctx.resources.reading = resources.Reading(ram_used_gib=1.0, ram_total_gib=8.0)
+
+    app_ctx.state.show_resources = False
+    assert status_bar.resource_item(app_ctx) is None
+    app_ctx.state.show_resources = True
+    # No NVIDIA card and no interval yet: RAM alone, rather than a row of
+    # dashes pretending to three readings.
+    assert status_bar.resource_item(app_ctx).text == "RAM 1.0/8"
+    # Nothing readable at all is no item, not an empty one.
+    app_ctx.resources.reading = resources.Reading()
+    assert status_bar.resource_item(app_ctx) is None
+
+
+def test_the_sampler_holds_its_cadence_and_its_own_cpu_baseline():
+    """One sampler per app: the CPU figure is a delta between calls."""
+    from warlock.studio import resources
+
+    sampler = resources.Sampler()
+    first = sampler.tick(1000.0)
+    # Inside the window: the previous reading, not a fresh syscall.
+    assert sampler.tick(1000.0 + resources.TICK_SECONDS / 2) is first
+    assert sampler.tick(1000.0 + resources.TICK_SECONDS * 2) is sampler.reading
+    assert resources.TICK_SECONDS == 1.0
+
+
+def test_resources_imports_nothing_from_the_ui():
+    """``status_bar.items``' rule: the sampling and the formatting are data."""
+    import inspect
+
+    from warlock.studio import resources
+
+    source = inspect.getsource(resources)
+    for banned in ("imgui", "moderngl", "pygame"):
+        assert banned not in source, banned

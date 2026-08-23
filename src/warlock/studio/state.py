@@ -841,6 +841,15 @@ class AppState:
     # *detailed* view -- mean and worst frame -- and the always-on strip beside
     # the mode switch is the summary; see ``overlay.fps_meter``.
     show_fps: bool = False
+    # The status bar's live VRAM / RAM / CPU meter. Persisted beside the
+    # frame-rate readout above and, like it, **opt-out rather than a fixture**:
+    # a permanent resource readout was deleted from the shell header in wave 3
+    # as developer chrome, and the four grounds on which this one is different
+    # are recorded in ``tests/test_ux_phases.py``. Default on, because the
+    # question it answers -- "can I start a 7 GB generation right now" -- is
+    # one the app forces on the user at the door (``check_vram``) and nothing
+    # on screen answered.
+    show_resources: bool = True
     # Suppress every animation in the app (accessibility: vestibular
     # sensitivity). Persisted, because it is a property of the person rather
     # than of the session. The flag itself lives in ``motion.REDUCED`` -- this
