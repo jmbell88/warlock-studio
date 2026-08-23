@@ -1409,7 +1409,6 @@ class InkerState:
     # Grow / shrink / border, in whole pixels. App-level like every other
     # tool setting, and separate from ``feather_radius`` because the two have
     # different units and mean different things to an edge.
-    select_steps: int = 2
     gradient_kind: str = "linear"
     gradient_to_transparent: bool = False
     # Extra colour stops, or empty for the foreground-to-background preset.
@@ -1570,11 +1569,16 @@ class InkerState:
     # selected and the last usage count they asked for -- neither is picture
     # data, and neither may push an undo step.
     palette_slot: int = 0
-    # ``(document rev the count was taken at, per-slot counts)``. Asked for
-    # rather than recomputed: counting is a walk over every pixel of every cel,
-    # so doing it per frame would cost a 40-frame clip's worth of scanning
+    # ``(tab uid, document rev the count was taken at, per-slot counts)``. Asked
+    # for rather than recomputed: counting is a walk over every pixel of every
+    # cel, so doing it per frame would cost a 40-frame clip's worth of scanning
     # sixty times a second to keep a number that changes on one dab.
-    palette_usage: tuple[int, list[int]] | None = None
+    #
+    # The uid is in the key because this state is shared by every tab: two open
+    # documents at the same ``rev`` with palettes of the same length used to
+    # answer each other's counts, and "0 px, safe to delete" is the one thing
+    # this number must never say wrongly.
+    palette_usage: tuple[str, int, list[int]] | None = None
     #: The slots the user has selected, in the order they picked them, with
     #: ``palette_slot`` as the anchor a Shift+click ranges from. A *list* rather
     #: than a set: "sort these five" and "ramp from this one to that one" are
@@ -2117,6 +2121,11 @@ class InkerState:
             # to where you were rather than at the far end of the bar.
             self.active_uid = self.docs[min(index, len(self.docs) - 1)].uid if self.docs else ""
         self._settle_transform()
+        # The one per-uid set with no teardown. Uids are never reused
+        # (``InkerDoc.uid`` counts up), so without this it only ever grows --
+        # small, but it is a record of tabs that no longer exist and every other
+        # per-tab collection is discarded here.
+        self.timeline_shown.discard(uid)
         self.clear_drag()
         return True
 

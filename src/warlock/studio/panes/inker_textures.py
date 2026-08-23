@@ -178,43 +178,6 @@ def frame_texture(
     return texture
 
 
-def layer_thumb(ctx: Any, tab: Any, index: int, size: int = 48) -> Any:
-    """A small preview of one layer for the layers panel.
-
-    Keyed by the layer's uid rather than its index, so a reorder does not show
-    every layer the previous layer's picture; refreshed on the document's
-    revision, which is coarse but bounded -- a handful of 48-square uploads on
-    a frame where something changed.
-    """
-    if ctx.viewer is None or index >= len(tab.doc.stack):
-        return None
-    import numpy as np
-    from PIL import Image
-
-    layer = tab.doc.stack[index]
-    key = _slot(tab.uid, f"thumb{layer.uid}")
-    rev_key = f"{key}:rev"
-    at_key = f"{key}:at"
-    stamp = (tab.doc.rev, layer.uid)
-    texture = ctx.state.preview.get(key)
-    if texture is not None and ctx.state.preview.get(rev_key) == stamp:
-        return texture
-    now = time.monotonic()
-    if texture is not None and now - float(ctx.state.preview.get(at_key) or 0.0) < (
-        THUMB_REFRESH_SECONDS
-    ):
-        # Stale but recent (B24): keep showing the last shrink and try again
-        # on a later frame -- the stamp mismatch persists until we catch up.
-        return texture
-    small = Image.fromarray(layer.pixels, "RGBA").resize((size, size), Image.BOX)
-    data = np.asarray(small, dtype=np.uint8).tobytes()
-    texture = _cached(ctx, key, (size, size), lambda: data)
-    texture.write(data)
-    ctx.state.preview[rev_key] = stamp
-    ctx.state.preview[at_key] = now
-    return texture
-
-
 #: How many cel thumbnails one tab may hold at once. A 36-square RGBA texture
 #: is 5.2 KB, so this is about 2.6 MB per tab -- and a fifty-frame clip with
 #: ten tracks is five hundred cells, which is why the cap is a number rather
@@ -315,7 +278,7 @@ def cel_thumb(ctx: Any, tab: Any, layer: Any, size: int = 36) -> Any:
     if texture is not None and now - float(ctx.state.preview.get(at_key) or 0.0) < (
         THUMB_REFRESH_SECONDS
     ):
-        # Stale but recent (B24), exactly as ``layer_thumb``: keep showing the
+        # Stale but recent (B24): keep showing the
         # last shrink while a stroke is in flight and catch up within a quarter
         # second of it ending.
         return texture
@@ -432,7 +395,20 @@ def checker(ctx: Any) -> Any:
 #: prefixes. Textures are the entries that must be *released*; these merely
 #: have to go, or a long session accumulates one marching-ants trace and one
 #: resize form per tab that was ever opened.
-_PER_TAB_KEYS = ("paint_ants:", "inker_resize:", "inker_preview:")
+#: The ``ctx.state.preview`` keys that are per tab but are *not* textures, so
+#: the ``inker_tex:{uid}:`` prefix sweep in ``release_doc`` does not reach them.
+#: Each has to be named here or a closed tab leaves its entry behind for the
+#: life of the session -- which is the accumulation this constant exists to
+#: prevent, and which four of them were quietly outside of.
+_PER_TAB_KEYS = (
+    "paint_ants:",
+    "inker_resize:",
+    "inker_preview:",
+    "inker_seam:",
+    "inker_grid:",
+    "inker_anchor:",
+    "inker_tile_size:",
+)
 
 
 def release_doc(ctx: Any, uid: str) -> None:

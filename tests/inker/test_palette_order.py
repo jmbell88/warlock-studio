@@ -278,3 +278,51 @@ def test_selected_slots_falls_back_to_the_anchor():
     state.select_slot(0)
     state.select_slot(1, ctrl=True)
     assert state.selected_slots == [0, 1]
+
+
+def test_a_usage_count_is_not_shared_between_documents():
+    """The cache is app-level and was keyed on ``doc.rev`` alone, so two open
+    documents at the same rev with palettes of the same length answered each
+    other's counts. "0 px, safe to delete" is the one thing this number must
+    never say wrongly."""
+
+    from warlock.studio import inker, inker_state
+    from warlock.studio.panes import inker_colors
+
+    state = inker_state.InkerState()
+    a = inker_state.InkerDoc(doc=inker.Document.blank(4, 4), uid="ta", title="a")
+    b = inker_state.InkerDoc(doc=inker.Document.blank(4, 4), uid="tb", title="b")
+    for tab in (a, b):
+        tab.doc.set_palette([(1, 2, 3, 255), (4, 5, 6, 255)])
+    assert a.doc.rev == b.doc.rev, "the fixture needs them level"
+
+    counts = [7, 0]
+    state.palette_usage = (a.uid, a.doc.rev, counts)
+    assert inker_colors._usage(state, a, 2) == counts
+    assert state.palette_usage is not None
+
+    state.palette_usage = (a.uid, a.doc.rev, counts)
+    assert inker_colors._usage(state, b, 2) is None, "the other document gets nothing"
+    assert state.palette_usage is None, "and the stale entry is dropped"
+
+
+def test_a_tab_close_forgets_it_was_shown_the_timeline():
+    """The one per-uid set with no teardown; uids are never reused."""
+    from warlock.studio import inker, inker_state
+
+    state = inker_state.InkerState()
+    tab = inker_state.InkerDoc(doc=inker.Document.blank(4, 4), uid="t1", title="t")
+    state.add(tab)
+    state.timeline_shown.add(tab.uid)
+    state.close(tab.uid)
+    assert tab.uid not in state.timeline_shown
+
+
+def test_matte_for_answers_none_for_a_plane_with_no_alpha():
+    """The guard was the crash it was guarding against."""
+    import numpy as np
+
+    from warlock.studio import inker
+
+    assert inker.matte_for(np.zeros((4, 4), np.uint8)) is None
+    assert inker.matte_for(np.zeros((4, 4, 3), np.uint8)) is None

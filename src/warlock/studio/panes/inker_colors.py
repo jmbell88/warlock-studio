@@ -211,7 +211,7 @@ def _slots(ctx: Any, state: Any, tab: Any) -> None:
     doc = tab.doc
     palette = list(doc.palette)
     state.clamp_slots(len(palette))
-    counts = _usage(state, doc, len(palette))
+    counts = _usage(state, tab, len(palette))
     # ``is_indexed`` and not ``bool(palette)``: a palette-constrained RGB
     # document has a table and no transparent index, and marking a slot on one
     # would be marking a meaning it does not have.
@@ -301,10 +301,10 @@ def _slots(ctx: Any, state: Any, tab: Any) -> None:
     ):
         inker_mode.set_transparent_slot(ctx, tab, slot)
 
-    _sort_and_ramp(ctx, state, doc, counts)
+    _sort_and_ramp(ctx, state, tab, counts)
 
     if controls.small_button("Count usage"):
-        state.palette_usage = (doc.rev, doc.palette_usage())
+        state.palette_usage = (tab.uid, doc.rev, doc.palette_usage())
     imgui.same_line()
     if controls.small_button("Export palette"):
         inker_mode.export_document_palette(ctx)
@@ -332,13 +332,14 @@ SORT_LABELS: tuple[tuple[str, str], ...] = (
 )
 
 
-def _sort_and_ramp(ctx: Any, state: Any, doc: Any, counts: list[int] | None) -> None:
+def _sort_and_ramp(ctx: Any, state: Any, tab: Any, counts: list[int] | None) -> None:
     """Reorder the table, and fill the gap between two slots.
 
     Neither pushes an undo step and neither moves a pixel -- order is
     presentation in an indexed document, and a new swatch is a colour you *may*
     paint with. The engine states the rule; this is only where it is reached.
     """
+    doc = tab.doc
     selection = list(state.palette_slots)
     widgets.field_label("sort")
     state.palette_sort = widgets.combo(
@@ -351,7 +352,7 @@ def _sort_and_ramp(ctx: Any, state: Any, doc: Any, counts: list[int] | None) -> 
             # for rather than kept live -- and a sort by a figure nobody has
             # taken yet has to take it, once, rather than sort by zeros.
             counts = doc.palette_usage()
-            state.palette_usage = (doc.rev, counts)
+            state.palette_usage = (tab.uid, doc.rev, counts)
         if doc.sort_palette(
             state.palette_sort,
             indices=selection or None,
@@ -381,7 +382,7 @@ def _sort_and_ramp(ctx: Any, state: Any, doc: Any, counts: list[int] | None) -> 
         ctx.toast("That ramp is already in the palette.")
 
 
-def _usage(state: Any, doc: Any, slots: int) -> list[int] | None:
+def _usage(state: Any, tab: Any, slots: int) -> list[int] | None:
     """The last usage count the user asked for, or None.
 
     Asked for rather than recomputed, and dropped the moment the document
@@ -392,10 +393,19 @@ def _usage(state: Any, doc: Any, slots: int) -> list[int] | None:
     shown greyed.
     """
     cached = state.palette_usage
-    if cached is None or cached[0] != doc.rev or len(cached[1]) != slots:
+    # The *tab* is part of the key, not only the revision. Two open documents
+    # sitting at the same ``rev`` with palettes of the same length answered each
+    # other's counts -- and this is the one number whose docstring says it must
+    # never be wrong, because "0 px, safe to delete" is a thing a user acts on.
+    if (
+        cached is None
+        or cached[0] != tab.uid
+        or cached[1] != tab.doc.rev
+        or len(cached[2]) != slots
+    ):
         state.palette_usage = None
         return None
-    return cached[1]
+    return cached[2]
 
 
 def _palette_files(ctx: Any, state: Any) -> None:

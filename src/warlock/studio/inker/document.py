@@ -114,7 +114,14 @@ def matte_for(pixels: np.ndarray) -> RGBA | None:
     opened here is still a photo when it is saved, so it flattens onto white; a
     sprite has transparency the user is thinking about, so it keeps it.
     """
-    if pixels.shape[2] < 4 or int(pixels[..., 3].min()) < 255:
+    # ``ndim`` before ``shape[2]``: the guard was the crash it was guarding
+    # against, indexing the third axis of an array that may not have one. Every
+    # caller passes a composite today, which is why this was latent rather than
+    # a bug -- but "decided once at load" means the callers are reader code,
+    # and a reader handed a 2-D plane should get "no matte", not an IndexError.
+    if pixels.ndim < 3 or pixels.shape[2] < 4:
+        return None
+    if int(pixels[..., 3].min()) < 255:
         return None
     return OPAQUE_WHITE
 
@@ -1391,6 +1398,13 @@ class Document(
         run()
 
         def replay(doc: Any) -> None:
+            # ``doc`` is asserted rather than ignored. ``run`` closes over
+            # ``self``, so replaying this step against a *different* document
+            # would silently edit the original -- there is no such caller today
+            # (a step is only ever redone on the stack it was pushed to) and
+            # this is what keeps it that way.
+            if doc is not self:
+                raise ValueError("a replay step belongs to the document that made it")
             run()
             doc.invalidate_all()
 
