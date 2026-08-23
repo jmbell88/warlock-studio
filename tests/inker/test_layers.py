@@ -222,3 +222,24 @@ def test_layer_at_is_none_off_the_canvas():
     doc = _stacked_doc()
     assert doc.layer_at((-1, 2)) is None
     assert doc.layer_at((99, 99)) is None
+
+
+def test_undoing_a_delete_selects_the_layer_it_brought_back():
+    """Pinned as a decision rather than left as a side effect of
+    ``LayerStack.insert``. A review flagged the move as an unrecorded mutation;
+    it is the behaviour every editor has, and the selection is view state, so a
+    redo does not owe the user the index they had."""
+    from warlock.studio import inker
+
+    doc = inker.Document.blank(8, 8)
+    doc.add_layer()
+    doc.add_layer()
+    doc.set_active_layer(2)
+    removed = doc.stack[2].uid
+    assert doc.remove_layer()
+
+    doc.set_active_layer(0)
+    assert doc.undo()
+
+    assert len(doc.stack) == 3
+    assert doc.stack.active.uid == removed, "back on the layer you got back"

@@ -255,6 +255,15 @@ class LayerStack:
     # -- structure ---------------------------------------------------------
 
     def insert(self, index: int, layer: Layer) -> int:
+        """Put *layer* at *index* and **select it**.
+
+        Selecting it is deliberate and is what makes undo read correctly: a
+        ``LayerRemoveEdit`` puts the layer back through here, so undoing a
+        delete leaves you on the layer you just got back rather than wherever
+        the cursor happened to be. Every editor behaves this way and it is the
+        reason the move is not itself recorded as an edit -- the selection is
+        view state, so a redo does not owe the user the index they had.
+        """
         if layer.size != self.size:
             raise ValueError("a layer is canvas-sized")
         index = max(0, min(int(index), len(self.layers)))
