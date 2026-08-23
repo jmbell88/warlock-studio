@@ -275,7 +275,7 @@ def pressed(monkeypatch):
     ctx = SimpleNamespace(toast=lambda text, kind="info": toasts.append((text, kind)))
     state = inker_state.InkerState(fg=RED)
     state.tool = "text"
-    tab = SimpleNamespace(doc=Document.blank(32, 32), tiled="off", busy=False)
+    tab = SimpleNamespace(doc=Document.blank(32, 32), tiled="off", busy=False, uid="t1")
 
     def press(point, *, button: int = 0):
         state.drag_button = button

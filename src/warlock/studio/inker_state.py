@@ -1839,6 +1839,13 @@ class InkerState:
     # a second stamp of the same word with a bigger size must not start empty.
     text_buffer: str = ""
     text_at: tuple[int, int] = (0, 0)
+    #: Which tab's press opened the text popup, ``filter_uid``'s shape and for
+    #: its reason. ``text_at`` is a point in *that* document's pixels and the
+    #: popup is drawn for whichever tab is in front, so without this an OK after
+    #: a tab switch stamped into the wrong document at the right document's
+    #: coordinates -- with the antialias default decided from the other one's
+    #: palette. Empty means no popup.
+    text_uid: str = ""
     #: Whether the user has set the Antialias box themselves. Until they have,
     #: the popup decides it from the document on every open -- off on an
     #: indexed one, on everywhere else -- which is what the manual promises,
@@ -2194,6 +2201,28 @@ class InkerState:
         # over some other document's tag of the same number.
         self.tag_editing = -1
         self.tag_name = ""
+        # The three remaining pane-owned gestures, each of which outlived a tab
+        # switch and then acted on the wrong document:
+        #
+        # ``timeline_anchor`` is an index pair into the *active* tab's grid and
+        # ``range_sel`` lives on ``InkerDoc``, so clicking a cell in one tab and
+        # Shift+clicking in another built the second tab's range from the
+        # first's coordinates. It needs no keyboard trick at all, which makes it
+        # the most reachable of the three.
+        #
+        # ``eye_drag``/``eye_drag_was`` is a visibility drag whose pre-image is
+        # keyed by row index. Ctrl+Tab is a modifier chord and passes the
+        # text-field gate, so a drag could carry on over another tab's rows and
+        # then push one ``set_layers_props`` with a pre-image belonging partly
+        # to each -- an undo that restores the wrong values.
+        #
+        # ``text_at`` is dropped with them; the popup that reads it is closed by
+        # ``text_uid`` no longer naming the tab in front.
+        self.timeline_anchor = None
+        self.eye_drag = None
+        self.eye_drag_was = {}
+        self.text_at = (0, 0)
+        self.text_uid = ""
         # An open multi-click gesture goes with it, which is what makes a tab
         # switch, a tab close and Escape cancel a half-drawn polygon for free --
         # all three already come through here. Safe *because* a gesture holds no

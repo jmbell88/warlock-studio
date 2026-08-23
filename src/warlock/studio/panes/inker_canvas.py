@@ -1361,6 +1361,7 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
     if tool == "text":
         if state.drag_button == 0 and not _locked_out(ctx, state, tab):
             state.text_at = ipoint
+            state.text_uid = tab.uid
             _open_text(state, tab)
         state.drag_kind = ""
         return
@@ -1879,6 +1880,17 @@ def _text_popup(ctx: Any, state: Any, tab: Any) -> None:
     ``text_open`` flag beside ``filter_uid``.
     """
     if not imgui.begin_popup(TEXT_POPUP):
+        state.text_uid = ""
+        return
+    if state.text_uid and state.text_uid != tab.uid:
+        # The tab changed under the popup. ``text_at`` is a point in the *other*
+        # document's pixels, so answering OK here would stamp into this one at
+        # coordinates that mean nothing -- with the antialias default decided
+        # from the other document's palette. Closed rather than redirected: the
+        # user pointed at a place on a picture that is no longer on screen.
+        state.text_uid = ""
+        imgui.close_current_popup()
+        imgui.end_popup()
         return
     widgets.popup_chrome(_imgui=imgui)
     state.text_buffer = widgets.multiline(

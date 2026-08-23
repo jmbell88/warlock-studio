@@ -3015,6 +3015,13 @@ def stamp_text(ctx: Any, state: Any, tab: InkerDoc) -> bool:
 
     if tab.busy:
         return False
+    if getattr(state, "text_uid", "") and state.text_uid != tab.uid:
+        # The press that set ``text_at`` belongs to another document. The popup
+        # closes itself on a tab switch, so this is the belt to that braces: a
+        # stamp is a write, and a write at coordinates from a different picture
+        # is the kind of thing that must be refused at the door rather than
+        # relied on being unreachable.
+        return False
     pixels = textstamp.text_stamp(
         state.text_buffer,
         font_path(state),

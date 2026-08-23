@@ -1582,3 +1582,59 @@ def test_a_tab_switch_lets_go_of_a_held_space():
     state.space_held = True
     state.activate(b.uid)
     assert not state.space_held
+
+
+# --- a gesture belongs to the tab it started on ------------------------------
+
+
+def test_a_tab_switch_drops_a_timeline_range_anchor():
+    """``timeline_anchor`` is an index pair into the *active* tab's grid while
+    ``range_sel`` lives on the tab, so clicking a cell in one document and
+    Shift+clicking in another built the second one's range from the first's
+    coordinates. The most reachable of the three -- it needs no chord at all."""
+    a, b = _tab("a"), _tab("b")
+    state = _state(a, b)
+    state.activate(a.uid)
+    state.timeline_anchor = (5, 20)
+    state.activate(b.uid)
+    assert state.timeline_anchor is None
+
+
+def test_a_tab_switch_drops_an_open_eye_drag():
+    """The pre-image is keyed by row index, so a drag carrying on over another
+    tab's rows pushed one ``set_layers_props`` with a pre-image belonging partly
+    to each -- an undo that restores the wrong values."""
+    a, b = _tab("a"), _tab("b")
+    state = _state(a, b)
+    state.activate(a.uid)
+    state.eye_drag = False
+    state.eye_drag_was = {0: {"visible": True}}
+    state.activate(b.uid)
+    assert state.eye_drag is None
+    assert state.eye_drag_was == {}
+
+
+def test_a_tab_switch_drops_the_text_stamp_target():
+    a, b = _tab("a"), _tab("b")
+    state = _state(a, b)
+    state.activate(a.uid)
+    state.text_at = (12, 9)
+    state.text_uid = a.uid
+    state.activate(b.uid)
+    assert state.text_uid == ""
+    assert state.text_at == (0, 0)
+
+
+def test_a_text_stamp_is_refused_for_another_tabs_press():
+    """The door behind the popup's own close: a stamp is a write, and a write at
+    coordinates taken from a different picture is refused rather than relied on
+    being unreachable."""
+    a, b = _tab("a"), _tab("b")
+    state = _state(a, b)
+    state.text_buffer = "hello"
+    state.text_at = (2, 2)
+    state.text_uid = a.uid
+    ctx = _Ctx()
+    ctx.state.inker = state
+    assert inker_mode.stamp_text(ctx, state, b) is False
+    assert b.doc.floating is None
