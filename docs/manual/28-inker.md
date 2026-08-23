@@ -483,9 +483,12 @@ brush's own colour.
 
 ### Colour modes
 
-Under the swatch row is the **palette** section, and it is a different thing from the swatches above
+Under the swatch row is the **Palette** section, and it is a different thing from the swatches above
 it. A swatch is a colour you keep reaching for this session; a palette slot is a colour *this file
-is made of*. At the top of it is a **Mode** row with three buttons — **RGB**, **Indexed** and
+is made of*. It is a collapsible section, and on a document that is not indexed it starts closed —
+there is no table to show yet, only ways to build one. Once the document has a table the section
+opens by default, because from then on it is the document's own storage; whichever way you leave it
+is remembered. At the top of it is a **Mode** row with three buttons — **RGB**, **Indexed** and
 **Grayscale** — and the one you are in is the one you cannot click. Each is a whole-document
 conversion and each is a single Ctrl+Z.
 
@@ -520,9 +523,10 @@ is not there.
 nothing to restore the colour from afterwards, which is why it is a mode you enter deliberately
 rather than a filter.
 
-**Index to the swatches**, **Index to a palette file...**, **Palette from an image...** and
-**Convert...** all build a table; the Mode row is what decides whether that table is a *constraint*
-or the document's storage.
+**Index to the swatches**, and the row of three under it — **File...**, **Image...** and
+**Convert...** — all build a table; the Mode row is what decides whether that table is a
+*constraint* or the document's storage. The three short labels name where the colours come from:
+a palette file on disk, any image, or this drawing's own pixels.
 
 ### Palette-constrained RGB
 
@@ -571,7 +575,7 @@ than a write: the table it installs constrains every write afterwards, everywher
 only the marquee would leave the pixels outside it off the palette they are now declared to be on.
 Aseprite does the same.
 
-**Palette from an image...** is the other half of the same idea: point it at any image and its
+**Image...** is the other half of the same idea: point it at any image and its
 colours become this document's table. An image with more than 256 distinct colours is reduced to 256
 rather than refused — a photograph would fail every time otherwise — and a toast tells you what it
 came down from.

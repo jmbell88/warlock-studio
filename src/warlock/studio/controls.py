@@ -162,6 +162,7 @@ def _finish_item(
     force_focus: bool = False,
     label: str = "",
     kind: str = "",
+    trailing_label: bool = False,
 ) -> None:
     """Apply the state treatment shared by every control.
 
@@ -181,6 +182,7 @@ def _finish_item(
             reason=reason,
             selected=selected,
             tooltip=tooltip,
+            trailing_label=trailing_label,
         )
     try:
         hovered = imgui.is_item_hovered(
@@ -434,6 +436,9 @@ def _field_call(
         reason=reason or (str(error) if isinstance(error, str) else ""),
         enabled=enabled,
         error=bool(error),
+        # imgui draws every field's label *beside* it and groups the two, so
+        # the item rect runs past the widget onto the text. See ``probe.hit``.
+        trailing_label=True,
         # The first positional is the label for every field imgui has; a call
         # that passed something else would name itself oddly in the census
         # rather than break.
@@ -542,6 +547,7 @@ def radio_button(
         selected=active,
         label=label,
         kind="radio_button",
+        trailing_label=True,
     )
     return bool(clicked and enabled)
 
@@ -788,6 +794,7 @@ def combo(
         error=bool(error),
         label=control_id,
         kind="combo",
+        trailing_label=True,
     )
     if opened:
         for key, label in options:

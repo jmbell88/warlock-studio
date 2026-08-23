@@ -702,3 +702,122 @@ def test_a_zoom_rung_cannot_outlive_an_undrawn_canvas() -> None:
     assert canvas.count("pending_zoom_rung = 0") >= 2
     main = Path(inker_tools.__file__).resolve().parent.parent / "main.py"
     assert "pending_zoom_rung = 0" in main.read_text(encoding="utf-8")
+
+
+def _function(module, name: str) -> ast.FunctionDef:
+    tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    raise AssertionError(f"{name} has moved out of {module.__name__}")
+
+
+def test_the_palette_sources_share_one_row() -> None:
+    """Four stacked buttons put three of them below the Colour pane's fold.
+
+    Measured on 2026-08-23 at 1600x950: the pane's content ran out of height
+    part-way through **Index to the swatches**, so the three palette-source
+    buttons under it were clipped away entirely -- imgui reported them not
+    visible, which means nobody could click them without scrolling first. One
+    row of three short buttons is two rows shorter, and costs no height
+    anywhere else in a column whose Picker pane is over its allotment too.
+    """
+    node = _function(inker_colors, "_not_indexed")
+    calls = [
+        call
+        for call in ast.walk(node)
+        if isinstance(call, ast.Call)
+        and _name(call) in {"button", "disabled_button", "same_line"}
+    ]
+    kinds = [_name(call) for call in calls]
+    # index-to-swatches on its own row, then three buttons joined by two
+    # same_line calls: button, same_line, button, same_line, button.
+    assert kinds == [
+        "disabled_button",
+        "button",
+        "same_line",
+        "button",
+        "same_line",
+        "button",
+    ], kinds
+
+
+def test_a_palette_source_button_is_short_enough_for_a_third_of_the_column() -> None:
+    """Three across a ~300 px column, so the words have to be single ones.
+
+    The sentence each one used to be lives on as its tooltip -- the label is
+    what has to fit, not the explanation.
+    """
+    node = _function(inker_colors, "_not_indexed")
+    labels = [
+        call.args[0].value
+        for call in ast.walk(node)
+        if isinstance(call, ast.Call)
+        and _name(call) == "button"
+        and call.args
+        and isinstance(call.args[0], ast.Constant)
+    ]
+    assert len(labels) == 3, labels
+    for label in labels:
+        assert len(label) <= 12, label
+    for call in ast.walk(node):
+        if isinstance(call, ast.Call) and _name(call) == "button":
+            assert any(
+                kw.arg == "tooltip" for kw in call.keywords
+            ), f"{call.args[0].value} lost the sentence it used to be"
+
+
+def test_the_palette_section_is_a_header_that_starts_closed_when_unindexed() -> None:
+    """The one change that actually clears the Colour pane's fold.
+
+    Compacting the palette-source buttons onto one row saved two rows and left
+    them 50 px below the pane's bottom anyway -- measured at the app's own
+    default 1600x950, where ``inker-colors`` is 470 px tall over 516 px of
+    content and the Picker under it is 37 px over its own allotment, so there
+    is no height to move between them. Collapsed, the block costs one row.
+
+    Open when the document *has* a table, because then the section is the
+    document's own storage rather than four ways to make one.
+    """
+    node = _function(inker_colors, "_indexed")
+    calls = [
+        call
+        for call in ast.walk(node)
+        if isinstance(call, ast.Call) and _name(call) in {"header", "section"}
+    ]
+    assert [_name(call) for call in calls] == ["header"], (
+        "the Palette heading must be collapsible, not a plain section"
+    )
+    (header,) = calls
+    assert header.args[0].value == "Palette"
+    keywords = {kw.arg for kw in header.keywords}
+    assert "default_open" in keywords, "the header must state its own default"
+    assert "persist_key" in keywords, "a collapse the user chose must survive a restart"
+
+
+def test_a_collapsed_palette_draws_nothing_it_would_have_to_balance() -> None:
+    """``begin_disabled`` without its ``end_disabled`` unbalances the frame.
+
+    The body is guarded by the header, so every call that has a partner has to
+    be inside the guard with it -- the failure otherwise is not a missing
+    section but a wedged imgui two panes later.
+    """
+    node = _function(inker_colors, "_indexed")
+    body = ast.unparse(node)
+    assert body.count("begin_disabled") == body.count("end_disabled") == 1
+    # ``if not header(...): return`` -- the pane's own idiom, one the Shades
+    # strip above already uses. Everything with a partner has to sit *after*
+    # that return, so a collapsed section leaves the frame balanced.
+    guard = next(
+        (
+            index
+            for index, stmt in enumerate(node.body)
+            if isinstance(stmt, ast.If)
+            and "header" in ast.unparse(stmt.test)
+            and any(isinstance(inner, ast.Return) for inner in stmt.body)
+        ),
+        None,
+    )
+    assert guard is not None, "the header does not guard the body"
+    before = ast.unparse(ast.Module(body=node.body[:guard], type_ignores=[]))
+    assert "begin_disabled" not in before and "end_disabled" not in before

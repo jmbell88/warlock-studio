@@ -539,6 +539,15 @@ def exercise(
                 "reason": control.reason,
                 "selected": control.selected,
                 "visible": control.visible,
+                # All three, because they differ: ``rect`` is the whole item,
+                # ``hit`` the part a click lands on -- not the same for a field
+                # imgui draws a label beside -- and ``click`` the point this
+                # walk actually pressed. A control the pass calls ``inert`` is
+                # diagnosed from these before anything else: a click x that
+                # sits past the widget is a click that went onto the label.
+                "rect": [round(v, 1) for v in control.rect],
+                "hit": [round(v, 1) for v in control.hit],
+                "click": [round(v, 1) for v in control.centre],
                 "round": rounds,
                 "shot": None,
                 "submitted": [],

@@ -60,6 +60,19 @@ class Control:
     kind: str
     #: ``(x, y, w, h)`` in screen px, read from imgui.
     rect: tuple[float, float, float, float]
+    #: The part of :attr:`rect` a click actually lands on, which is not the
+    #: whole of it for the widgets imgui draws a label *beside*. Equal to
+    #: ``rect`` when there is nothing to take off; :attr:`centre` is taken from
+    #: this either way.
+    #:
+    #: ``ColorEdit4``, the sliders, ``Checkbox`` and ``BeginCombo`` wrap the
+    #: widget and its trailing text in one group, so ``get_item_rect_max`` is
+    #: the right edge of the *text*. Inker's foreground swatch measured 100 px
+    #: wide over a 30 px chip: the rect centre sat on the word "Foreground",
+    #: where a click does nothing, and the exercise pass called a live control
+    #: ``inert`` for it. Reported separately rather than narrowing ``rect``
+    #: because ``rect`` is what says whether imgui clipped the item away.
+    hit: tuple[float, float, float, float] = ()
     enabled: bool = True
     reason: str = ""
     selected: bool = False
@@ -121,7 +134,7 @@ class Control:
 
     @property
     def centre(self) -> tuple[float, float]:
-        x, y, w, h = self.rect
+        x, y, w, h = self.hit or self.rect
         return (x + w * 0.5, y + h * 0.5)
 
 
@@ -150,6 +163,32 @@ def _pane_at(x: float, y: float) -> str:
     return ""
 
 
+def _hit_rect(
+    rect: tuple[float, float, float, float], label: str
+) -> tuple[float, float, float, float]:
+    """``rect`` with a trailing label's text taken off its right edge.
+
+    ``()`` -- meaning "no different from the rect" -- whenever the trim cannot
+    be made safely: a hidden ``##id`` label draws no text, and a label wider
+    than its own item would trim the target away entirely, which reads
+    downstream as a clipped control rather than as the measurement failure it
+    would be.
+    """
+    text = label.split("##", 1)[0].strip()
+    if not text:
+        return ()
+    try:
+        width = float(imgui.calc_text_size(text).x)
+        gap = float(imgui.get_style().item_inner_spacing.x)
+    except (AttributeError, RuntimeError, TypeError):
+        return ()
+    x, y, w, h = rect
+    kept = w - width - gap
+    if kept <= 0.0 or kept >= w:
+        return ()
+    return (x, y, kept, h)
+
+
 def record(
     *,
     label: str,
@@ -158,6 +197,7 @@ def record(
     reason: str = "",
     selected: bool = False,
     tooltip: str = "",
+    trailing_label: bool = False,
 ) -> None:
     """Record the item that has just been submitted. No-op unless enabled.
 
@@ -184,11 +224,13 @@ def record(
         window = str(raw).rsplit("/", 1)[-1].rsplit("_", 1)[0]
     except (AttributeError, RuntimeError, TypeError):
         window = ""
+    rect = (low.x, low.y, high.x - low.x, high.y - low.y)
     FRAME_CONTROLS.append(
         Control(
             label=str(label),
             kind=str(kind),
-            rect=(low.x, low.y, high.x - low.x, high.y - low.y),
+            rect=rect,
+            hit=(_hit_rect(rect, str(label)) if trailing_label else ()) or rect,
             enabled=bool(enabled),
             reason=str(reason),
             selected=bool(selected),

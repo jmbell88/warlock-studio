@@ -276,3 +276,123 @@ def test_every_finish_item_call_site_names_a_kind():
 def test_raw_imgui_control_count_is_pinned():
     found = _raw_calls()
     assert len(found) == RAW_IMGUI_CONTROLS, found
+
+
+class _Vec2:
+    def __init__(self, x, y):
+        self.x, self.y = x, y
+
+
+class _LabelledImgui:
+    """An imgui whose last item spans a widget *and* its trailing label.
+
+    ``ColorEdit4``, the sliders, ``Checkbox`` and ``BeginCombo`` all wrap the
+    widget and its label in one group, so ``get_item_rect_max`` is the right
+    edge of the *text*. The measured case is Inker's foreground swatch: a 30 px
+    chip at x=76 with "Foreground" beside it, one item 100 px wide.
+    """
+
+    class _Style:
+        item_inner_spacing = _Vec2(4.0, 4.0)
+
+    def get_current_context(self):
+        return object()
+
+    def get_item_rect_min(self):
+        return _Vec2(76.0, 92.0)
+
+    def get_item_rect_max(self):
+        return _Vec2(176.0, 122.0)
+
+    def is_item_visible(self):
+        return True
+
+    def get_style(self):
+        return self._Style()
+
+    def calc_text_size(self, text):
+        # "Foreground" -- the 66 px that must come off the hit rect.
+        return _Vec2(6.6 * len(text), 17.0)
+
+
+def test_a_trailing_label_is_not_part_of_the_clickable_rect(monkeypatch):
+    """The click point must land on the widget, never on the text beside it.
+
+    Measured on 2026-08-23: Inker's ``color_edit4("Foreground", ...)`` records
+    a 100 px item whose colour button is only the first 30 px, so the rect
+    centre at x=126 landed on the label -- and the exercise pass called a live
+    control ``inert`` because a click there does nothing. The label's own width
+    is what separates the two.
+    """
+    monkeypatch.setattr(probe, "ENABLED", True)
+    monkeypatch.setattr(probe, "imgui", _LabelledImgui())
+    probe.begin_frame()
+    probe.record(label="Foreground", kind="color_edit4", trailing_label=True)
+    (one,) = probe.FRAME_CONTROLS
+    # The full item is still reported: it is what says whether imgui clipped it.
+    assert one.rect == (76.0, 92.0, 100.0, 30.0)
+    # 100 - (66 + 4) = 30, the chip itself.
+    assert one.hit == (76.0, 92.0, 30.0, 30.0)
+    assert one.centre == (91.0, 107.0)
+
+
+def test_a_label_drawn_inside_the_widget_is_left_alone(monkeypatch):
+    """A button's text is *in* it, so trimming would shrink a live target."""
+
+    monkeypatch.setattr(probe, "ENABLED", True)
+    monkeypatch.setattr(probe, "imgui", _LabelledImgui())
+    probe.begin_frame()
+    probe.record(label="Swap (X)", kind="button")
+    (one,) = probe.FRAME_CONTROLS
+    assert one.hit == one.rect
+    assert one.centre == (126.0, 107.0)
+
+
+def test_a_hidden_label_trims_nothing(monkeypatch):
+    """``##inkfg`` draws no text, so the item already is the widget."""
+
+    monkeypatch.setattr(probe, "ENABLED", True)
+    monkeypatch.setattr(probe, "imgui", _LabelledImgui())
+    probe.begin_frame()
+    probe.record(label="##inkfg", kind="color_edit4", trailing_label=True)
+    (one,) = probe.FRAME_CONTROLS
+    assert one.hit == one.rect
+
+
+def test_a_label_wider_than_its_item_trims_nothing(monkeypatch):
+    """Never trim to nothing: a zero-width hit rect reads as clipped."""
+
+    monkeypatch.setattr(probe, "ENABLED", True)
+    monkeypatch.setattr(probe, "imgui", _LabelledImgui())
+    probe.begin_frame()
+    probe.record(
+        label="a label longer than the hundred pixels the item has",
+        kind="slider_int",
+        trailing_label=True,
+    )
+    (one,) = probe.FRAME_CONTROLS
+    assert one.hit == one.rect
+
+
+def test_every_field_call_reports_its_trailing_label():
+    """The fields imgui draws a label beside must say so, or the trim is dead."""
+
+    tree = ast.parse(Path(inspect.getfile(controls)).read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name not in (
+            "_field_call",
+            "combo",
+            "radio_button",
+        ):
+            continue
+        sites = [
+            call
+            for call in ast.walk(node)
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id == "_finish_item"
+        ]
+        assert sites, f"{node.name} no longer reaches the census"
+        for call in sites:
+            flags = [kw for kw in call.keywords if kw.arg == "trailing_label"]
+            assert flags, f"{node.name} passes no trailing_label"

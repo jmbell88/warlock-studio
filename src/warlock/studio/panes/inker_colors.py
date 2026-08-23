@@ -109,7 +109,19 @@ def _indexed(ctx: Any, state: Any) -> None:
     if tab is None:
         return
     doc = tab.doc
-    widgets.section("Palette")
+    # **A header, and closed until this document has a table.** As a plain
+    # section this block ran off the bottom of the pane: measured at the app's
+    # own default 1600x950, the Colour pane is 470 px over 516 px of content,
+    # so the palette-source row sat below the fold and imgui clipped it away
+    # entirely -- and the Picker under it is 37 px over its own allotment, so
+    # there is no height in the column to move across. Collapsed it costs one
+    # row. Open once the document *is* indexed, because the slots are then the
+    # document's own storage rather than four ways to make one, and
+    # ``persist_key`` keeps whichever the user settles on.
+    if not widgets.header(
+        "Palette", default_open=bool(doc.palette), persist_key="inker/palette"
+    ):
+        return
     widgets.help_marker(
         "Indexed colour constrains every write to this table: a stroke, a fill "
         "or a filter lands on the nearest colour in it. Alpha is untouched, so "
@@ -182,11 +194,22 @@ def _not_indexed(ctx: Any, state: Any, tab: Any) -> None:
         reason="The swatch row above is empty.",
     ):
         inker_mode.index_to(ctx, tab, list(state.swatches))
-    if controls.button("Index to a palette file..."):
+    # **One row, three words.** As four stacked sentences this block ran past
+    # the foot of the pane -- measured at 1600x950, the content region ended
+    # part-way through the button above, and imgui clipped these three away
+    # entirely, so the only way to reach them was to scroll a pane most people
+    # would not guess scrolls. Widening the pane is not the fix either: the
+    # Picker below it is over its own allotment already. The sentence each one
+    # used to be is its tooltip now; the label only has to name the source.
+    if controls.button("File...", tooltip="Index to a palette file on disk"):
         inker_mode.import_document_palette(ctx)
-    if controls.button("Palette from an image..."):
+    imgui.same_line()
+    if controls.button("Image...", tooltip="Build a palette out of an image"):
         inker_mode.palette_from_image(ctx)
-    if controls.button("Convert..."):
+    imgui.same_line()
+    if controls.button(
+        "Convert...", tooltip="Build a palette out of this drawing's own colours"
+    ):
         inker_bridge.open_convert(ctx, tab)
     widgets.help_marker(
         "Convert builds a palette out of this drawing's own colours and shows "
