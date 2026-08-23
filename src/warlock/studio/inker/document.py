@@ -1211,6 +1211,26 @@ class Document(
             edits.append(release)
         self.history.push(one_step(edits))
 
+    def _require_anim(self) -> Animation:
+        """The grid, or a refusal. The narrowing every undo hook needs.
+
+        ``anim = self.anim`` followed by ``assert anim is not None`` was written
+        out at eighteen sites, which is two problems in one line. It is a type
+        narrowing the reader has to re-derive each time, and ``assert`` is
+        compiled out under ``python -O`` -- so the guard would vanish and the
+        failure would become an ``AttributeError`` on ``None`` several frames
+        deep inside a stroke. Nothing ships optimised today; the installer
+        programme is exactly the kind of change that would start.
+
+        A refusal rather than a silent no-op: every caller is a hook on a step
+        that only a grid can have produced, so reaching one without a grid is a
+        bug in the caller and not a state the document can be in.
+        """
+        anim = self.anim
+        if anim is None:
+            raise ValueError("this operation belongs to an animated document")
+        return anim
+
     def _resolve_indices(
         self, layer: Layer, rect: tuple[int, int, int, int]
     ) -> tuple[np.ndarray, np.ndarray]:

@@ -1105,3 +1105,44 @@ def test_the_undo_push_sites_all_live_on_the_document_class():
     assert pushers, "the scan has to find something or it proves nothing"
     for name in pushers:
         assert name == "document.py" or name.startswith("_doc_"), name
+
+
+def test_the_engine_states_its_invariants_without_assert():
+    """``assert`` is compiled out under ``python -O``, so a guard written that
+    way vanishes and the failure it was catching becomes an ``AttributeError``
+    on ``None`` several frames deep inside a stroke. Nothing ships optimised
+    today; the installer programme is exactly the kind of change that starts."""
+    import pathlib
+
+    root = (
+        pathlib.Path(__file__).resolve().parents[2]
+        / "src"
+        / "warlock"
+        / "studio"
+        / "inker"
+    )
+    offenders = []
+    for path in sorted(root.glob("*.py")):
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if line.strip().startswith("assert "):
+                offenders.append(f"{path.name}:{number}")
+    assert offenders == [], offenders
+
+
+def test_a_grid_hook_reached_without_a_grid_refuses():
+    import pytest
+
+    from warlock.studio import inker
+
+    doc = inker.Document.blank(4, 4)
+    assert doc.anim is None
+    with pytest.raises(ValueError):
+        doc._require_anim()
+
+
+def test_require_anim_hands_back_the_grid():
+    from warlock.studio import inker
+
+    doc = inker.Document.blank(4, 4)
+    anim = doc.ensure_animation()
+    assert doc._require_anim() is anim

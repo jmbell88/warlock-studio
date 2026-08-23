@@ -958,7 +958,8 @@ class PaintOps:
         recomposite most of the canvas for a dab the size of the nib; its
         docstring carries the measurements.
         """
-        assert self._stroke is not None
+        if self._stroke is None:
+            raise ValueError("no stroke is open")
         for rect in self._stroke.take_touched():
             self.invalidate(rect)
 

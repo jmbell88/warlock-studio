@@ -186,8 +186,7 @@ class RangeOps:
         raising -- there is no frame to go back to and refusing to reorder
         would be the worse answer.
         """
-        anim = self.anim
-        assert anim is not None
+        anim = self._require_anim()
         by_uid = {frame.uid: frame for frame in anim.frames}
         current = anim.frames[max(0, min(anim.current, len(anim.frames) - 1))].uid
         named = set(uids)
@@ -429,8 +428,7 @@ class RangeOps:
         ``unique_cel_layers`` walks the grid in -- two orders would make "which
         slot is charged for this cel" depend on which helper asked.
         """
-        anim = self.anim
-        assert anim is not None
+        anim = self._require_anim()
         t0, t1, f0, f1 = rect
         return [
             (track, frame)
@@ -712,8 +710,7 @@ class RangeOps:
         every frame but the one on screen. ``layers_for`` states the rule; this
         is the door it has to hold at.
         """
-        anim = self.anim
-        assert anim is not None
+        anim = self._require_anim()
         seen: set[int] = set()
         cels: list[tuple[Any, Any]] = []
         for track, frame in self._slots_in(rect):

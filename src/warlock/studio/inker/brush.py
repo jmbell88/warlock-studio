@@ -693,7 +693,8 @@ class StrokeState:
     def _advance(
         self, goal: tuple[float, float], speed: float, target: np.ndarray
     ) -> None:
-        assert self._last is not None
+        if self._last is None:
+            raise ValueError("a spacing walk needs a previous point")
         if self.pixel:
             # Every whole pixel between here and there, and no carry: the walk
             # is the line rather than a spacing along it. The first is the one
@@ -913,7 +914,8 @@ class StrokeState:
         sittings still tiles.
         """
         stamp = self.stamp
-        assert stamp is not None
+        if stamp is None:
+            raise ValueError("a dab needs a stamp")
         width, height = stamp.size
         if self.stamp_align == "aligned":
             left = math.floor(math.floor(point[0]) / width) * width

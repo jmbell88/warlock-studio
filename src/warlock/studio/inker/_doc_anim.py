@@ -156,21 +156,20 @@ class AnimOps:
         self._anim_changed()
 
     def _put_frame(self: Document, index: int, frame: Frame, cels: dict[int, Layer]) -> None:
-        anim = self.anim
-        assert anim is not None
+        anim = self._require_anim()
         anim.frames.insert(max(0, min(index, len(anim.frames))), frame)
         for track_uid, layer in cels.items():
             anim.cels[(track_uid, frame.uid)] = layer
         self._anim_changed()
 
     def _drop_frame(self: Document, frame: Frame) -> None:
-        anim = self.anim
-        assert anim is not None
+        anim = self._require_anim()
         # The floor is the public wrappers' -- ``remove_frame`` refuses the last
         # frame, and the only other caller is ``FrameAddEdit.undo``, whose add
         # was made against a grid that already had one. Stated here because
         # everything below assumes ``anim.frame`` still answers.
-        assert len(anim.frames) > 1, "a grid keeps at least one frame"
+        if len(anim.frames) <= 1:
+            raise ValueError("a grid keeps at least one frame")
         anim.frames.pop(anim.frame_index(frame.uid))
         for key in [key for key in anim.cels if key[1] == frame.uid]:
             del anim.cels[key]
@@ -180,22 +179,19 @@ class AnimOps:
         self._anim_changed()
 
     def _move_frame(self: Document, frame_uid: int, to: int) -> None:
-        anim = self.anim
-        assert anim is not None
+        anim = self._require_anim()
         frame = anim.frames.pop(anim.frame_index(frame_uid))
         anim.frames.insert(max(0, min(to, len(anim.frames))), frame)
         anim.current = anim.frame_index(frame_uid)
         self._anim_changed()
 
     def _set_duration(self: Document, frame_uid: int, ms: int) -> None:
-        anim = self.anim
-        assert anim is not None
+        anim = self._require_anim()
         anim.frames[anim.frame_index(frame_uid)].duration_ms = clamp_duration(ms)
         self.rev += 1
 
     def _put_track(self: Document, index: int, track: Track, cels: dict[int, Layer]) -> None:
-        anim = self.anim
-        assert anim is not None
+        anim = self._require_anim()
         index = max(0, min(index, len(anim.tracks)))
         anim.tracks.insert(index, track)
         for frame_uid, layer in cels.items():
@@ -203,11 +199,11 @@ class AnimOps:
         self._anim_changed(active=index)
 
     def _drop_track(self: Document, track: Track) -> None:
-        anim = self.anim
-        assert anim is not None
+        anim = self._require_anim()
         # As in ``_drop_frame``: ``remove_layer`` refuses the last row and
         # ``TrackAddEdit.undo`` can only reverse an add made above one.
-        assert len(anim.tracks) > 1, "a grid keeps at least one track"
+        if len(anim.tracks) <= 1:
+            raise ValueError("a grid keeps at least one track")
         index = anim.track_index(track.uid)
         anim.tracks.pop(index)
         for key in [key for key in anim.cels if key[0] == track.uid]:
@@ -216,24 +212,21 @@ class AnimOps:
         self._anim_changed(active=min(index, len(anim.tracks) - 1))
 
     def _move_track(self: Document, track_uid: int, to: int) -> None:
-        anim = self.anim
-        assert anim is not None
+        anim = self._require_anim()
         track = anim.tracks.pop(anim.track_index(track_uid))
         to = max(0, min(to, len(anim.tracks)))
         anim.tracks.insert(to, track)
         self._anim_changed(active=to)
 
     def _set_track_props(self: Document, track_uid: int, props: dict) -> None:
-        anim = self.anim
-        assert anim is not None
+        anim = self._require_anim()
         track = anim.tracks[anim.track_index(track_uid)]
         for key, value in props.items():
             setattr(track, key, value)
         self._anim_changed()
 
     def _set_cel(self: Document, track_uid: int, frame_uid: int, layer: Layer | None) -> None:
-        anim = self.anim
-        assert anim is not None
+        anim = self._require_anim()
         if layer is None:
             anim.cels.pop((track_uid, frame_uid), None)
         else:
@@ -262,8 +255,7 @@ class AnimOps:
         edits: list[Any] = []
         if self.anim is None:
             edits.append(AnimateEdit(self.ensure_animation()))
-        anim = self.anim
-        assert anim is not None
+        anim = self._require_anim()
         source = anim.frame
         at = len(anim.frames) if index is None else max(0, min(int(index), len(anim.frames)))
         frame = Frame(duration_ms=source.duration_ms)
@@ -350,8 +342,7 @@ class AnimOps:
         if slot is None:
             return False
         track, frame = slot
-        assert self.anim is not None
-        before = self.anim.cels.get((track.uid, frame.uid))
+        before = self._require_anim().cels.get((track.uid, frame.uid))
         if before is None:
             return False
         self.commit_floating()
@@ -430,8 +421,7 @@ class AnimOps:
 
     def _clamped_tag(self: Document, tag: Tag) -> Tag:
         """A tag with its span inside the timeline and its ends the right way up."""
-        anim = self.anim
-        assert anim is not None
+        anim = self._require_anim()
         last = len(anim.frames) - 1
         start = max(0, min(int(tag.start), last))
         end = max(0, min(int(tag.end), last))

@@ -594,8 +594,7 @@ class TileOps:
         and each one has to be re-registered, or the conversion would unlink
         the frames it replaced.
         """
-        anim = self.anim
-        assert anim is not None
+        anim = self._require_anim()
         return [
             (frame, anim.cels[(track.uid, frame.uid)])
             for frame in anim.frames
@@ -863,8 +862,7 @@ class TileOps:
         is what ``_ensure_cel_for`` reads to decide a placeholder's eventual
         type, so the current frame's view has to be rebuilt from it.
         """
-        anim = self.anim
-        assert anim is not None
+        anim = self._require_anim()
         for track in anim.tracks:
             if track.uid == track_uid:
                 track.tileset_uid = value

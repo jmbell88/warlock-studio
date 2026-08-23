@@ -616,8 +616,7 @@ class LayerOps:
         to merge into the lower, and minting a copy of it would break its links
         and cost the grid a full plane per frame for no change.
         """
-        anim = self.anim
-        assert anim is not None
+        anim = self._require_anim()
         width, height = self.size
         upper_track, lower_track = anim.tracks[index], anim.tracks[index - 1]
 
@@ -734,8 +733,7 @@ class LayerOps:
         about the layers, and a timeline that came back at 10 fps because its
         rows were merged would be a different kind of edit.
         """
-        anim = self.anim
-        assert anim is not None
+        anim = self._require_anim()
         if len(anim.tracks) <= 1:
             return
         self.commit_floating()
@@ -753,8 +751,7 @@ class LayerOps:
     def _do_flatten_grid(
         self: Document, partition: list[list[int]], uids: list[int], track_uid: int
     ) -> None:
-        anim = self.anim
-        assert anim is not None
+        anim = self._require_anim()
         size = self.size
         track = Track(name="Flattened", uid=track_uid)
         cels: dict[tuple[int, int], Layer] = {}
