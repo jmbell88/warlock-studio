@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from warlock import guidance
 from warlock.config import Config
 from warlock.db import JobStore
 from warlock.queue import POLL_INTERVAL, Worker
@@ -227,6 +228,53 @@ async def test_worker_forwards_bg_removal_to_trellis(worker):
     await worker.shutdown()
 
     assert worker.trellis.generate_calls[0]["bg_removal"] == "birefnet"
+
+
+async def test_a_job_with_no_bg_removal_gets_the_hosts_default_not_auto(worker):
+    """The worker's fallback has to be the door's, or it silently picks the
+    mode measured at zero.
+
+    ``guidance.default_bg_removal`` is gated on ``birefnet.gguf`` being on
+    disk and answers ``birefnet`` when it is; the worker was reaching for
+    ``FALLBACK_BG_REMOVAL`` instead, which is ``auto`` unconditionally. Two
+    spellings of one default, and the wrong one is the mode the 2026-08-07
+    review measured at **0 accepts in 80** with 58 of those rejects tagged
+    ``broken`` -- because without the learned matte the server falls back to a
+    threshold cutout, which leaves background attached for TRELLIS to
+    reconstruct into a slab.
+
+    The door normally writes the key, so this fires for a job the store was
+    handed directly: a seeded row, an older job from before the key existed,
+    or any caller that is not ``service.jobs``.
+    """
+    (worker.config.trellis_models_dir).mkdir(parents=True, exist_ok=True)
+    (worker.config.trellis_models_dir / guidance.BIREFNET_WEIGHTS).write_bytes(b"x")
+
+    job_id = worker.store.create("image", None, {"seed": 1})
+    job_dir = worker.config.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "input.png").write_bytes(b"fake-png")
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert worker.trellis.generate_calls[0]["bg_removal"] == "birefnet"
+
+
+async def test_with_no_weights_the_worker_still_falls_back_to_auto(worker):
+    """The other half of the gate: ``auto`` is right when there is nothing to
+    load, and that is why the fallback constant is not simply deleted."""
+    assert not (worker.config.trellis_models_dir / guidance.BIREFNET_WEIGHTS).exists()
+
+    job_id = worker.store.create("image", None, {"seed": 1})
+    job_dir = worker.config.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "input.png").write_bytes(b"fake-png")
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    assert worker.trellis.generate_calls[0]["bg_removal"] == "auto"
 
 
 async def test_worker_passes_negative_prompt(worker):

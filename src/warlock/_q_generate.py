@@ -517,13 +517,28 @@ class GenerateOps:
         if not report.ok:
             raise RuntimeError("; ".join(report.reasons))
 
+        # **The worker's default has to be the door's.** A job normally arrives
+        # with the key already resolved by ``service.jobs``, which asks
+        # ``guidance.default_bg_removal`` and so answers ``birefnet`` on a host
+        # that has the weights. Reaching for ``FALLBACK_BG_REMOVAL`` here made a
+        # second, ungated default for one decision -- and the wrong one: ``auto``
+        # is the mode the 2026-08-07 review measured at **0 accepts in 80**, with
+        # 58 of those rejects tagged ``broken``, because without the learned
+        # matte the server falls back to a threshold cutout and a cutout on a
+        # dark brief leaves background attached for TRELLIS to reconstruct into a
+        # slab. The fallback constant survives, and is still what this resolves
+        # to when there is nothing on disk to load.
+        bg_removal = str(
+            params.get("bg_removal")
+            or guidance.default_bg_removal(self.config.trellis_models_dir)
+        )
         queue_mod._log_mem("before trellis generate")
         await self.trellis.generate(
             trellis_input,
             source_glb,
             seed=mesh_seed,
             resolution=resolution,
-            bg_removal=str(params.get("bg_removal") or guidance.FALLBACK_BG_REMOVAL),
+            bg_removal=bg_removal,
         )
         # The remesh loop, and it re-enters only the trellis half. Everything
         # above it -- the VRAM handoff, the reference measurement, the
@@ -647,7 +662,10 @@ class GenerateOps:
                         source_glb,
                         seed=mesh_seed,
                         resolution=resolution,
-                        bg_removal=str(params.get("bg_removal") or guidance.FALLBACK_BG_REMOVAL),
+                        # The same resolution the first attempt used: a remesh
+                        # that matted differently would not be the retry it
+                        # reports itself as.
+                        bg_removal=bg_removal,
                     )
                 except Exception:
                     # The best reconstruction so far is already on disk and the

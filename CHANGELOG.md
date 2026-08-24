@@ -8,6 +8,18 @@ file behind.
 
 ## 0.0.28 — 2026-08-23
 
+- **A mesh job with no matte setting no longer picks the one mode measured at
+  zero.** The door resolves `bg_removal` against this host — `birefnet` when
+  `birefnet.gguf` is on disk — and the worker was reaching past that for a flat
+  `auto`, so the two disagreed about the same default and the worker held the
+  worse half. `auto` is the mode the 2026-08-07 review scored at 0 accepts in
+  80, with 58 of those rejects tagged `broken`: without the learned matte the
+  server falls back to a threshold cutout, which leaves background attached for
+  the reconstruction to turn into a slab. The worker asks the same question the
+  door does now, and still answers `auto` on a host with no weights to load.
+  This reaches any job the store was handed directly rather than through
+  `service.jobs` — a seeded row, or one predating the key.
+
 - **Inker is laid out the way Aseprite is.** Colour and the new picker on the
   left, the toolbox on the right with the preview, the tiles and a new
   Generation panel, and the timeline along the bottom. What was there before
