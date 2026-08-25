@@ -59,13 +59,25 @@ def app_ctx(gl, svc, tmp_path, imgui_ctx):
     runtime.tasks.shutdown(wait=False)
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def imgui_ctx(gl):
     """An imgui context with a real renderer, over the standalone GL context.
 
     The renderer is needed even though nothing is presented: imgui 1.92 hands
     its font atlas to the backend, and a context whose backend never claims it
     cannot finish a frame.
+
+    **Module-scoped, not session-scoped, and that is a correctness fix rather
+    than a tuning one.** Only this file uses this fixture, so the two scopes
+    cost exactly the same -- but a session-scoped context stays alive after the
+    last test here, and the next file in this xdist worker that builds its own
+    then has *two* contexts over the one GL context, which is a Windows access
+    violation rather than a failure. It reproduced on unmodified master:
+    ``uv run pytest -n 0 tests/test_studio_smoke.py tests/test_studio_controls.py``
+    dies in ``test_component_gallery_builds_every_state``. The default run
+    never showed it because ``--dist loadfile`` happened to put those two files
+    in different workers, and "happened to" is not an invariant -- adding one
+    unrelated test file re-deals that hand.
     """
     from imgui_bundle import imgui
 
@@ -73,14 +85,21 @@ def imgui_ctx(gl):
 
     # A standalone context has no default framebuffer; the renderer targets
     # ctx.screen, so give it one that exists.
+    prev_screen = type(gl).__dict__.get("screen")
     fbo = gl.simple_framebuffer((1600, 950))
     fbo.use()
     type(gl).screen = property(lambda _self: fbo)
 
     # Every collapsing section forced open: a frame of collapsed headings would
     # build without ever touching the code this test exists to exercise.
+    #
+    # Put back on the way out, which it never used to be. It is a module global
+    # and this fixture outlived the file, so every later test in the worker drew
+    # its sections forced open -- the same shape as the ``vram._published`` leak
+    # ``tests/conftest.py`` resets, and invisible for the same reason.
     from warlock.studio import widgets
 
+    prev_force = widgets.FORCE_SECTIONS_OPEN
     widgets.FORCE_SECTIONS_OPEN = True
 
     imgui.create_context()
@@ -103,6 +122,9 @@ def imgui_ctx(gl):
     yield imgui, renderer
     renderer.shutdown()
     imgui.destroy_context()
+    widgets.FORCE_SECTIONS_OPEN = prev_force
+    if prev_screen is not None:
+        type(gl).screen = prev_screen
 
 
 def _frame(imgui_ctx, build):

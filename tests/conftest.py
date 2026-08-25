@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import os
+import sys
 import threading
 import time
 from pathlib import Path
@@ -78,6 +79,12 @@ def pytest_configure(config):
     ``not gpu and not perf``, so a plain substring test fires this refusal on
     every ordinary run -- which it duly did the first time it was written.
     """
+    # ``guard.STRICT`` is read at import time, so it has to be in the
+    # environment before the first test imports ``warlock.studio.guard``. A pane
+    # that raises must keep failing its test rather than quietly becoming a
+    # placeholder -- see ``studio/guard.py``'s note on why that matters to
+    # ``scripts/exercise_mode`` too. ``tests/test_pane_guard.py`` opts back out.
+    os.environ["WARLOCK_UI_STRICT"] = "1"
     global _GPU_LANE
 
     if not _selects_gpu(config):
@@ -183,6 +190,36 @@ def _no_migration(tmp_path_factory):
             os.environ.pop(name, None)
         else:
             os.environ[name] = was
+
+
+@pytest.fixture(autouse=True)
+def _the_pane_guard_leaves_no_state_behind():
+    """The breaker in ``studio/guard.py`` is deliberately not per-frame.
+
+    That is right in the app -- a pane that fails does so every frame, and
+    forgetting between frames would re-announce sixty times a second -- and it
+    is module state, so it is exactly the shape that leaks between tests. It is
+    the shape ``vram._published`` had.
+
+    Strictness itself is set by ``pytest_configure`` through the environment
+    rather than here: ``guard.STRICT`` is read at import, and a fixture reading
+    ``sys.modules`` cannot reach a module a test has not imported yet.
+
+    Read out of ``sys.modules`` rather than imported, for
+    ``_reset_app_settings_session_flags``'s reason: an autouse fixture that
+    imports a studio module drags imgui into every test process in the suite.
+    """
+    guard = sys.modules.get("warlock.studio.guard")
+    if guard is not None:
+        guard.reset()
+        guard.HISTORY.clear()
+        guard.FRAME_FAILURES.clear()
+    yield
+    guard = sys.modules.get("warlock.studio.guard")
+    if guard is not None:
+        guard.reset()
+        guard.HISTORY.clear()
+        guard.FRAME_FAILURES.clear()
 
 
 @pytest.fixture(autouse=True)

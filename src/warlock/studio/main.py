@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import memlog, winjob
-from . import anchors, filetypes, probe, resources
+from . import anchors, filetypes, guard, probe, resources
 from . import fps as fps_mod
 
 log = logging.getLogger(__name__)
@@ -875,6 +875,11 @@ class App:
         self.ctx = moderngl.create_context()
         imgui.create_context()
         imgui.get_io().set_ini_filename("")  # imgui's own layout file is not ours to keep
+        # Before anything can raise inside a frame. imgui's error-recovery
+        # assert defaults *on*, and under imgui-bundle an IM_ASSERT surfaces as
+        # a RuntimeError -- so left alone, the unwind that saves a broken pane
+        # is itself the exception that ends the session. See ``studio/guard.py``.
+        guard.configure()
         # Keyboard navigation, app-wide (UX-02). It was off, and the shortcut
         # sheet made support look broader than it was: Settings, Profiles, the
         # library, the inspector and the mode switch had no focus traversal at
@@ -3136,9 +3141,14 @@ class App:
             | imgui.WindowFlags_.menu_bar.value
         )
         imgui.begin("##host", None, flags)
+        # One frame, one record of what stopped drawing. Above the three clears
+        # below rather than beside them, which visibly breaks that block: the
+        # menu bar draws first *and* is itself guarded, so its census has to be
+        # empty before it runs.
+        guard.begin_frame(ctx)
         # One stable command surface in every mode.  The menu rows are adapters
         # over the same command/operation registries used by Ctrl+K and keys.
-        menus.draw(ctx, self.layout)
+        guard.run("shell/menus", menus.draw, ctx, self.layout, title="The menu bar")
         # One frame, one record of where every pane ended up -- and one answer
         # to "is the layout editor open", which every splitter reads (P5.4).
         from . import layout_edit
@@ -3155,7 +3165,7 @@ class App:
         probe.begin_frame()
         # The rail is drawn in every mode, Home included: it is how you leave
         # wherever you are, so a mode that hides it is a dead end.
-        rail.draw(self, ctx)
+        guard.run("shell/rail", rail.draw, self, ctx, title="The mode rail")
         # Shell utility popups are opened at host scope. Menu/status actions
         # can originate in child windows, while imgui resolves a popup in the
         # window that opens it, so they communicate through one-shot requests.
@@ -3196,83 +3206,94 @@ class App:
         imgui.begin_child("##content", (0, -status_reserve))
         from .panes import overlay
 
-        overlay.doctor_banner(ctx)
         mode = ctx.state.mode
-        if mode in _SINGLE_PANE_MODES or mode in modes.WORKSPACE_MODES:
-            if mode == "home":
-                landing.draw(ctx)
-            elif mode == "settings":
-                app_settings.draw(ctx)
-            elif mode == "library":
-                # The full-window composition (the UI redesign, wave 4.4), not a
-                # second card list: ``library_full`` draws the *same* filters,
-                # the same cards' actions and the same inspector, arranged for
-                # a window rather than for a 300 px sidebar. The library itself
-                # is still one implementation -- this module composes it.
-                from .panes import library_full
+        # Tier two of the same net, and the reason the two tails below became
+        # one: a single guarded region needs a single exit, so the duplicated
+        # end_child/status/end_group/end/overlays that each branch used to
+        # carry is now written once. The mark is taken inside ``##content``,
+        # so a failure in the scaffolding *between* panes -- the groups and
+        # columns no ``layout.pane`` covers -- costs the workspace and leaves
+        # the rail, the menu bar and the status line live. That is the
+        # difference between a broken workspace and a dead end.
+        with guard.surface("shell/content", title="The workspace") as live:
+            if live:
+                overlay.doctor_banner(ctx)
+                if mode in _SINGLE_PANE_MODES or mode in modes.WORKSPACE_MODES:
+                    if mode == "home":
+                        landing.draw(ctx)
+                    elif mode == "settings":
+                        app_settings.draw(ctx)
+                    elif mode == "library":
+                        # The full-window composition (the UI redesign, wave 4.4), not a
+                        # second card list: ``library_full`` draws the *same* filters,
+                        # the same cards' actions and the same inspector, arranged for
+                        # a window rather than for a 300 px sidebar. The library itself
+                        # is still one implementation -- this module composes it.
+                        from .panes import library_full
 
-                library_full.draw(ctx)
-            elif mode == "clay":
-                self._clay_workspace()
-            elif mode == "poser":
-                self._poser_workspace()
-            elif mode == "review":
-                self._review_workspace()
-            elif mode == "plotter":
-                self._plotter_workspace()
-            elif mode == "packwright":
-                self._packwright_workspace()
-            elif mode == "troupe":
-                self._troupe_workspace()
-            else:
-                self._inker_workspace()
-            imgui.end_child()
-            status_bar.draw(ctx)
-            imgui.end_group()
-            imgui.end()
-            self._overlays(viewport)
-            return
+                        library_full.draw(ctx)
+                    elif mode == "clay":
+                        self._clay_workspace()
+                    elif mode == "poser":
+                        self._poser_workspace()
+                    elif mode == "review":
+                        self._review_workspace()
+                    elif mode == "plotter":
+                        self._plotter_workspace()
+                    elif mode == "packwright":
+                        self._packwright_workspace()
+                    elif mode == "troupe":
+                        self._troupe_workspace()
+                    else:
+                        self._inker_workspace()
+                else:
 
-        # The library used to share the left sidebar with settings, split by
-        # settings_share; it shares the right sidebar with the inspector now
-        # instead, so the left column is settings alone (nothing left to split
-        # against) and the right column is the two-scroller stack that used to
-        # live on the left.
+                    # The library used to share the left sidebar with settings, split by
+                    # settings_share; it shares the right sidebar with the inspector now
+                    # instead, so the left column is settings alone (nothing left to split
+                    # against) and the right column is the two-scroller stack that used to
+                    # live on the left.
 
-        lay = self.layout
-        left_w = layout_mod.sidebar_width("left")
-        right_w = layout_mod.sidebar_width("right")
-        # The rail first, above the columns it switches: it is a breadcrumb for
-        # what is under it, and one drawn at the bottom would be a tab strip
-        # that had lost its tabs.
-        #
-        # Spanning the whole content width rather than boxed inside the 300 dp
-        # settings column, which is where it used to live. Five labelled
-        # segments measure ~304 dp; a sidebar gives the widget ~276 dp, so the
-        # fitting ladder in ``widgets.stage_rail`` was pinned to its last rung
-        # -- five anonymous icons standing in for the app's central navigation
-        # metaphor, at every realistic window size rather than only at small
-        # ones. Full width, the same widget sits on rung 1 (labels and ticks)
-        # and the ladder goes back to being a response to a narrow window.
-        pad = tokens.sp(layout_mod.PANE_PADDING)
-        rail_w = imgui.get_content_region_avail().x - pad * 2
-        imgui.indent(pad)
-        self._stage_rail(ctx, max_width=rail_w)
-        imgui.unindent(pad)
-        with layout_mod.pane(
-            "settings",
-            (left_w, 0),
-            layout_mod.PaneRole.SIDEBAR,
-            edge=layout_mod.PaneEdge.RIGHT,
-        ) as visible:
-            if visible:
-                _stage_pane(ctx)
+                    lay = self.layout
+                    left_w = layout_mod.sidebar_width("left")
+                    right_w = layout_mod.sidebar_width("right")
+                    # The rail first, above the columns it switches: it is a breadcrumb for
+                    # what is under it, and one drawn at the bottom would be a tab strip
+                    # that had lost its tabs.
+                    #
+                    # Spanning the whole content width rather than boxed inside the 300 dp
+                    # settings column, which is where it used to live. Five labelled
+                    # segments measure ~304 dp; a sidebar gives the widget ~276 dp, so the
+                    # fitting ladder in ``widgets.stage_rail`` was pinned to its last rung
+                    # -- five anonymous icons standing in for the app's central navigation
+                    # metaphor, at every realistic window size rather than only at small
+                    # ones. Full width, the same widget sits on rung 1 (labels and ticks)
+                    # and the ladder goes back to being a response to a narrow window.
+                    pad = tokens.sp(layout_mod.PANE_PADDING)
+                    rail_w = imgui.get_content_region_avail().x - pad * 2
+                    imgui.indent(pad)
+                    self._stage_rail(ctx, max_width=rail_w)
+                    imgui.unindent(pad)
+                    with layout_mod.pane(
+                        "settings",
+                        (left_w, 0),
+                        layout_mod.PaneRole.SIDEBAR,
+                        edge=layout_mod.PaneEdge.RIGHT,
+                    ) as visible:
+                        if visible:
+                            _stage_pane(ctx)
 
-        _column_boundary(self.layouts, "create", "left")
-        self._viewport_pane()
-        _column_boundary(self.layouts, "create", "right")
+                    _column_boundary(self.layouts, "create", "left")
+                    self._viewport_pane()
+                    _column_boundary(self.layouts, "create", "right")
 
-        _right_column(ctx, lay, right_w, inspector_draw=inspector.draw, library_draw=library.draw)
+                    _right_column(
+                        ctx,
+                        lay,
+                        right_w,
+                        inspector_draw=inspector.draw,
+                        library_draw=library.draw,
+                    )
 
         imgui.end_child()
         status_bar.draw(ctx)

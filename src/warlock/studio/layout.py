@@ -18,7 +18,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from . import motion, theme, tokens
+from . import guard, motion, theme, tokens
 from .tokens import sp
 
 # Legacy global width presets remain as fallback seeds for untouched v1
@@ -536,8 +536,13 @@ def pane(
     *,
     edge: PaneEdge | str = PaneEdge.NONE,
     window_flags: int = 0,
+    title: str = "",
 ):
     """Begin a role-aware major pane and close it reliably.
+
+    ``title`` is what the user is told stopped drawing when this pane raises;
+    ``column`` passes ``slot.label``, so the twenty panes drawn through the
+    layout get real names from the one table rather than a second label map.
 
     Child borders stay disabled.  A caller names at most the one edge that
     separates this pane from another major region, which avoids turning every
@@ -570,11 +575,35 @@ def pane(
     )
     imgui.pop_style_color()
     imgui.pop_style_var()
+    # The recovery mark is taken *after* ``begin_child``, and that is the one
+    # thing here it would be fatal to get backwards: the stored window-stack
+    # size then includes this child, so an unwind closes everything deeper and
+    # stops exactly on us, leaving the ``end_child`` below to fire once as it
+    # always has. Marking before ``begin_child`` would have the unwind close
+    # this child too, and that ``end_child`` would then be the unbalanced call
+    # the whole mechanism exists to prevent.
+    mark = guard.enter(pane_id)
+    live = visible and not guard.tripped(pane_id)
+    failed = False
     try:
         # Editor panes stay flat: headers and separators establish hierarchy.
         # Card/block surfaces remain opt-in for Home, dialogs and overlays.
-        yield visible
+        yield live
+    except Exception as exc:  # noqa: BLE001 -- see ``studio/guard.py``
+        # ``recover`` re-raises rather than returning for every case where
+        # carrying on would be a lie, and those land in ``App.run``'s handler
+        # exactly as they do today -- journal first, then the crash report.
+        guard.recover(mark, pane_id, title or pane_id, exc)
+        failed = True
+    else:
+        if live:
+            guard.ok(pane_id)
     finally:
+        # Skipped on the escalation path by construction: ``failed`` is only set
+        # once ``recover`` has returned, and a re-raise never records a failure,
+        # so a pane on its way to the crash dialog draws nothing extra.
+        if visible and (failed or guard.tripped(pane_id)):
+            guard.placeholder(pane_id, title or pane_id)
         imgui.end_child()
         _divider(resolved_edge)
 
@@ -793,6 +822,7 @@ def column(
             (width, 0.0 if slot.sizing == FILL_SIZING else height),
             role,
             edge=slot.edge or edge or PaneEdge.NONE,
+            title=slot.label or slot.id,
         ) as visible:
             if visible:
                 slot.draw(ctx)
