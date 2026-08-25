@@ -65,7 +65,7 @@ def _clock() -> tuple[float, int] | None:
     """
     try:
         return max(imgui.get_io().delta_time, 1e-4), imgui.get_frame_count()
-    except Exception:
+    except Exception:  # noqa: BLE001 - see the docstring: no context means snap
         return None
 
 

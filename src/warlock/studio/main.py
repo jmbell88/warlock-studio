@@ -48,6 +48,23 @@ VIEWER_KEY = "viewer-load"
 # key-dedupe while the user is watching for it (UX-09).
 VERIFY_KEY = "verify-install"
 
+#: Task keys whose **success** has nothing to do on the frame thread, listed so
+#: that everything else arriving unclaimed can be reported. Each is silent for
+#: its own reason, and the reasons are the point of the list:
+#:
+#: ``journal:``  an autosave copy. The writer moves the mark itself, and a copy
+#:               that landed changes nothing on screen; the *failure* is what
+#:               the user is owed, and ``_collect_tasks`` claims that half.
+#: ``open-log``  ``os.startfile``. The outcome is a window the OS opened.
+#: ``thumb:``    a card image written to disk. ``ThumbnailCache`` keys on
+#:               mtime, so the library picks it up without being told.
+#: ``derive:``   an artifact derived *inside* the job directory. Deliberately
+#:               not ``save:`` -- ``app_ctx.derive_key`` says why -- because
+#:               the user chose no destination and "Saved to <internal path>"
+#:               is a sentence about a file they cannot find.
+#: ``wrap:``     the wrap preview. The pane re-reads the file it asked for.
+SILENT_TASK_KEYS = ("journal:", "open-log", "thumb:", "derive:", "wrap:")
+
 
 def _compare_key() -> str:
     """``library.COMPARE_KEY``, looked up lazily.
@@ -774,6 +791,10 @@ class App:
         # logged once at teardown regardless -- the overlay answers "is it
         # smooth now", the log line is the evidence for "it ran at 60".
         self.fps = fps_mod.FpsMeter()
+        # Task keys that have already been reported as arriving with nowhere to
+        # go, so the report is once per key rather than once per arrival. See
+        # the tail of ``_on_task_done``.
+        self._unclaimed: set[str] = set()
         # One sampler for the app, because the CPU figure is a delta between
         # calls: two owners sharing a baseline would each eat the other's
         # interval. Ticked from ``_tick`` at one second, drawn by
@@ -1875,7 +1896,13 @@ class App:
             waiting = sum(1 for j in ctx.cache.jobs if j.get("status") == "queued") + 1
             ctx.toast("Queued." if waiting <= 1 else f"Queued - {waiting} jobs in line.")
             return
-        if key.startswith("save:") or key.startswith("bake:") or key.startswith("sheet-save:"):
+        if key.startswith(("save:", "bake:", "sheet-save:")) or key == "screenshot":
+            # ``screenshot`` was outside this and outside every other branch,
+            # so a viewport capture the user had just chosen a destination for
+            # finished in silence -- the one shape a save must never have,
+            # since the only other thing that looks like it is a save that did
+            # not happen. ``None`` is a cancelled picker and says nothing,
+            # which is what the other three already rely on.
             if done.result is not None:
                 ctx.toast(f"Saved to {done.result}")
             return
@@ -1983,6 +2010,26 @@ class App:
                 self.viewer.editor.dirty = False
             self._refresh_rig_side_data()
             ctx.cache.invalidate()
+            return
+        if key.startswith(SILENT_TASK_KEYS):
+            return
+        # Nothing claimed it. This module's own rule -- "the app claims results
+        # by prefix, and a key without one is a result delivered nowhere" --
+        # was enforced by nothing whatever, so a result arriving under an
+        # unclaimed key was indistinguishable from one that had been handled,
+        # in the one place where the difference is invisible from outside:
+        # the *success* path. The two ways to get here are a mode closing
+        # while its own task was in flight, and a new key whose author forgot
+        # this file exists.
+        #
+        # Once per key rather than once per arrival: several of these are
+        # resubmitted by a pane that runs every frame, and a line a frame is a
+        # log nobody can read. ``log.info`` and not a warning, because a
+        # deliberately silent key that nobody added to ``SILENT_TASK_KEYS``
+        # would otherwise cry wolf for the life of the session.
+        if key not in self._unclaimed:
+            self._unclaimed.add(key)
+            log.info("a %r task finished with nowhere to deliver its result", key)
 
     def _refresh(self) -> None:
         from . import review_mode

@@ -333,7 +333,11 @@ def _same_head(a: Any, b: Any) -> bool:
     """
     try:
         return bool(a == b)
-    except Exception:
+    except Exception:  # noqa: BLE001 - see the docstring: unequal is the safe answer
+        # Silent by design and the only one of these that is: this runs sixty
+        # times a second, and a head whose ``==`` raises is a head that has
+        # changed as far as the debounce is concerned -- which costs one extra
+        # journal write and never a missed one.
         return False
 
 
@@ -725,7 +729,10 @@ def status_line(ctx: Any) -> str:
     """
     try:
         found = recoverable(ctx)
-    except Exception:
+    except Exception:  # noqa: BLE001 - the sentence *is* the surfacing
+        # Not swallowed: the refusal is the return value. This runs inside the
+        # crash dialog, in a process on its way out, so the honest thing to
+        # say when the scan itself fails is that we do not know.
         return "Unsaved work may not have been kept."
     if not found:
         return "No unsaved work was waiting to be recovered."

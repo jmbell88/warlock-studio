@@ -315,7 +315,7 @@ def _frame_number() -> int | None:
         if imgui.get_current_context() is None:
             return None
         return int(imgui.get_frame_count())
-    except Exception:
+    except Exception:  # noqa: BLE001 - see the docstring: None means evict now
         return None
 
 

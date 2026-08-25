@@ -18,6 +18,9 @@ the release you are actually running.
 
 ## 0.0.28 — 2026-08-23
 
+- **Saving a screenshot now says where it went.** The picture was written and nothing was
+  said about it, which is exactly what a save that failed looks like.
+
 - **The resize box in Inker no longer accepts a number that would take the machine down.**
   Typing 100000 into it asked for about 40 GB per layer, immediately, holding a drawing that
   had not been saved. Growing is now capped at 8192 a side (or at whatever the drawing

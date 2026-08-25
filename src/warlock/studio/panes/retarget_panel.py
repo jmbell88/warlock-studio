@@ -128,14 +128,18 @@ _gltfpack_seen: dict[str, bool] = {}
 def _gltfpack_available(ctx: Any) -> bool:
     try:
         path = ctx.svc.config.gltfpack_exe
-    except Exception:
+    except Exception:  # noqa: BLE001 - a ctx with no config answers "no tiers"
+        # Silent on purpose, and it is the same answer as "the tool is not
+        # installed": this decides whether *optional* tiers appear, and a
+        # panel that refused to draw because it could not ask is worse than
+        # one that offers less.
         return False
     key = str(path)
     found = _gltfpack_seen.get(key)
     if found is None:
         try:
             found = bool(path.exists())
-        except Exception:
+        except Exception:  # noqa: BLE001 - an unreachable path is an absent one
             found = False
         _gltfpack_seen[key] = found
     return found
