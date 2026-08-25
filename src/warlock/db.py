@@ -398,6 +398,68 @@ def _migrate(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+class StoreUnreadable(RuntimeError):
+    """``jobs.sqlite`` exists and is not a database this build can open.
+
+    A named exception because the alternative was the *only* diagnosis this
+    file had: ``sqlite3.connect``, ``executescript`` and ``_migrate`` were
+    unguarded, so a malformed image raised a bare ``DatabaseError`` out of
+    ``Runtime._start`` and arrived as the generic "ran into a problem while
+    starting" box -- on every launch, forever, with no way into the app and
+    nothing on screen naming the file that was the problem.
+
+    The store is the app's single point of total failure and had the least
+    recovery in it of anything here. Carrying the path is what lets the caller
+    make an offer instead of a report; see ``main._offer_store_reset``.
+    """
+
+    def __init__(self, path: Path, cause: BaseException) -> None:
+        self.path = Path(path)
+        self.cause = cause
+        super().__init__(f"{path} could not be opened: {cause}")
+
+
+#: The files that make up one WAL-mode database. All three move together in
+#: :func:`set_aside`: a fresh database beside a stale ``-wal`` is a database
+#: whose first read has to decide whether that journal is its own, and the one
+#: thing known about the moment this runs is that something on this disk is not
+#: what it claims to be.
+STORE_PARTS = ("", "-wal", "-shm")
+
+
+def set_aside(path: Path) -> Path | None:
+    """Rename a broken store out of the way. -> where the main file went.
+
+    ``Settings._preserve_corrupt``'s shape and its reason, at the other end of
+    the app: timestamped rather than a single ``.corrupt`` name so a second
+    corruption cannot overwrite the evidence from the first, and a *rename*
+    rather than a delete because a database sqlite will not open is still a
+    file ``.recover`` or a newer sqlite might. The user is told the name.
+
+    ``None`` means the rename itself failed, which is the answer the caller
+    needs: recreating over a file that is still there would fail the same way
+    on the next launch, and reporting a recovery that did not happen is worse
+    than reporting the original fault.
+    """
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    moved: Path | None = None
+    for part in STORE_PARTS:
+        source = path.with_name(path.name + part)
+        if not source.exists():
+            continue
+        target = source.with_name(f"{path.stem}.corrupt-{stamp}{path.suffix}{part}")
+        try:
+            os.replace(source, target)
+        except OSError:
+            log.warning("could not set aside %s", source, exc_info=True)
+            if part == "":
+                return None
+            continue
+        if part == "":
+            moved = target
+    return moved
+
+
 class JobStore:
     """One sqlite3 connection, guarded by an RLock.
 
@@ -415,17 +477,30 @@ class JobStore:
         # a page walk to disk with this store's lock in its hand.
         self._path = path
         self._lock = threading.RLock()
-        self._conn = sqlite3.connect(path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        # WAL + NORMAL: a commit stops paying two fsyncs (the WAL append needs
-        # none at NORMAL durability -- a power cut can lose the last commit,
-        # never corrupt the file), and readers stop blocking on writers. The
-        # frame thread reads this store directly, so both halves matter.
-        # journal_mode is persistent in the file; setting it again is a no-op.
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA synchronous=NORMAL")
-        self._conn.executescript(_SCHEMA)
-        _migrate(self._conn)
+        # All four steps under one guard, and the exception is named. Any of
+        # them can be where a malformed image surfaces -- the connect itself
+        # rarely reads a page, so the fault usually lands in the schema script
+        # or in a migration -- and the caller's question is the same whichever
+        # it was: this file is not a database any more, what now.
+        try:
+            self._conn = sqlite3.connect(path, check_same_thread=False)
+            self._conn.row_factory = sqlite3.Row
+            # WAL + NORMAL: a commit stops paying two fsyncs (the WAL append
+            # needs none at NORMAL durability -- a power cut can lose the last
+            # commit, never corrupt the file), and readers stop blocking on
+            # writers. The frame thread reads this store directly, so both
+            # halves matter. journal_mode is persistent in the file; setting it
+            # again is a no-op.
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA synchronous=NORMAL")
+            self._conn.executescript(_SCHEMA)
+            _migrate(self._conn)
+        except (sqlite3.DatabaseError, OSError) as exc:
+            with contextlib.suppress(Exception):
+                # A half-opened connection is still a file handle, and the
+                # recovery the caller is about to offer *renames the file*.
+                self._conn.close()
+            raise StoreUnreadable(path, exc) from exc
         # ``list``'s params-JSON memo: raw params string -> parsed dict.
         # Bounded and cleared wholesale; see ``_row_dict``.
         self._params_cache: dict[str, dict[str, Any]] = {}

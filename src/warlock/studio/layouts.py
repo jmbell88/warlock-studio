@@ -27,6 +27,8 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
 
+from .settings import as_dict, as_list
+
 #: This build's layout-blob version. Independent of ``settings.VERSION``.
 VERSION = 2
 
@@ -65,12 +67,12 @@ class Arrangement:
         if not isinstance(raw, dict):
             return cls()
         columns = {}
-        for key, value in (raw.get("columns") or {}).items():
+        for key, value in as_dict(raw.get("columns")).items():
             if isinstance(value, list):
                 columns[str(key)] = [str(item) for item in value]
-        hidden = [str(item) for item in (raw.get("hidden") or []) if isinstance(item, str)]
+        hidden = [item for item in as_list(raw.get("hidden")) if isinstance(item, str)]
         widths: dict[str, float] = {}
-        for key, value in (raw.get("widths") or {}).items():
+        for key, value in as_dict(raw.get("widths")).items():
             if str(key) not in ("left", "right"):
                 continue
             try:
@@ -78,7 +80,7 @@ class Arrangement:
             except (TypeError, ValueError):
                 continue
         shares: dict[str, float] = {}
-        for key, value in (raw.get("shares") or {}).items():
+        for key, value in as_dict(raw.get("shares")).items():
             try:
                 shares[str(key)] = float(value)
             except (TypeError, ValueError):
@@ -142,23 +144,22 @@ class Library:
 
     def __init__(self, settings: Any) -> None:
         self._settings = settings
-        raw = settings.get(LAYOUTS_KEY) or {}
+        raw = as_dict(settings.get(LAYOUTS_KEY))
         self.layouts: dict[str, Layout] = {}
-        if isinstance(raw, dict):
-            for name, blob in raw.items():
-                self.layouts[str(name)] = Layout.from_json(str(name), blob)
+        for name, blob in raw.items():
+            self.layouts[str(name)] = Layout.from_json(str(name), blob)
         for name in BUILT_IN:
             self.layouts.setdefault(name, Layout(name=name))
         wanted = str(settings.get(ACTIVE_KEY) or BUILT_IN[0])
         self.active = wanted if wanted in self.layouts else BUILT_IN[0]
-        legacy = settings.get("layout") or {}
+        legacy = as_dict(settings.get("layout"))
         sidebar_names = {"narrow": 260.0, "default": 300.0, "wide": 360.0}
         self._width_seed = sidebar_names.get(str(legacy.get("sidebar", "default")), 300.0)
         self._share_seed = 0.55
         with suppress(TypeError, ValueError):
             self._share_seed = float(legacy.get("settings_share", 0.55))
         self._share_seeds: dict[str, float] = {}
-        for key, value in (legacy.get("settings_shares") or {}).items():
+        for key, value in as_dict(legacy.get("settings_shares")).items():
             try:
                 self._share_seeds[str(key)] = float(value)
             except (TypeError, ValueError):

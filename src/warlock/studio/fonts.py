@@ -22,6 +22,39 @@ from . import tokens
 
 FONT_DIR = Path(__file__).parent / "resources" / "fonts"
 
+#: Every file the atlas is built from, in the order :func:`load` reads them.
+FACES = ("Inter-Regular.ttf", "Inter-Medium.ttf", "Inter-SemiBold.ttf", "lucide.ttf")
+
+
+class FontsUnavailable(RuntimeError):
+    """A vendored TTF is missing or unreadable.
+
+    A named exception rather than whatever ``add_font_from_file_ttf`` does with
+    a path that is not there, which is an ``IM_ASSERT`` surfacing as a bare
+    ``RuntimeError`` with imgui's own wording in it. These files ship in the
+    wheel, so the ways to reach this are a partial install, an antivirus
+    quarantine and a half-copied directory -- all of which are worth naming,
+    and none of which the user can act on from "assertion failed".
+    """
+
+    def __init__(self, missing: list[str]) -> None:
+        self.missing = missing
+        super().__init__(
+            f"missing font files in {FONT_DIR}: {', '.join(missing)}"
+        )
+
+
+def _check_files() -> None:
+    """Refuse before imgui is asked for a file that is not there.
+
+    ``load`` had no existence check at all, and it is reachable **mid-session**:
+    the UI-scale slider re-bakes the atlas through :func:`reload`, so a font
+    file that went away while the app was running took the frame loop with it.
+    """
+    missing = [name for name in FACES if not (FONT_DIR / name).is_file()]
+    if missing:
+        raise FontsUnavailable(missing)
+
 # Lucide is upem 1000 / ascent 1000 / descent 0, with its ink flush at x=0 and
 # spanning y 0..~959; Inter's baseline sits at 0.801 of the line box (ascent
 # 1984 of 1984+494 over a 2048 upem). imgui bakes each merged source against
@@ -52,14 +85,27 @@ def reload(imgui: Any) -> None:
     button by a fraction of the difference. The glyph *shapes* would sharpen on
     their own -- imgui 1.92 rasterises per pushed size -- which is exactly why
     the old "text sharpens after a restart" note was only half the story.
+
+    ``FontsUnavailable`` is raised *before* ``clear_fonts``, so a rebuild that
+    cannot happen leaves the atlas it already had rather than an empty one. A
+    failure after that point resets the three handles to ``None``, which is the
+    documented headless state -- every helper here degrades onto imgui's own
+    default font -- so the caller can report it and keep drawing.
     """
+    _check_files()
     imgui.get_io().fonts.clear_fonts()
-    load(imgui)
+    global REGULAR, MEDIUM, SEMIBOLD
+    try:
+        load(imgui)
+    except Exception:
+        REGULAR = MEDIUM = SEMIBOLD = None
+        raise
 
 
 def load(imgui: Any) -> None:
     """Build the atlas fonts. Call between context creation and first frame."""
     global REGULAR, MEDIUM, SEMIBOLD
+    _check_files()
     io = imgui.get_io()
     base = tokens.TEXT_BODY * tokens.SCALE
 

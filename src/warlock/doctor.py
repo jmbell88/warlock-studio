@@ -128,8 +128,59 @@ def volatile_checks(
         _instance_check(config),
         _environment_check(),
         _disk_check(config),
+        _store_check(config),
         _port_check(config, trellis_running),
     ]
+
+
+def _store_check(config: Config) -> Check:
+    """Whether ``jobs.sqlite`` is still a database sqlite will open.
+
+    The store is the app's single point of total failure and had the least
+    diagnosis in it: ``JobStore.__init__`` connects, runs the schema and
+    migrates with nothing guarding any of it, so a malformed image is the
+    generic "ran into a problem while starting" box, on every launch, with no
+    way in and nothing on screen naming the file. This row is what turns that
+    into a sentence, and ``service.library.backup``'s copy is what it points
+    at -- which is also why the check is worth having while the app is *up*: a
+    database that has started to go is worth backing up before the launch that
+    cannot open it.
+
+    Volatile rather than static, because "is this file still readable" is
+    exactly the kind of answer that changes while a process runs, and because
+    a corruption that appears mid-session should not wait for a restart to be
+    reported. Its own connection, opened read-only and closed immediately: this
+    runs on a task thread and must not touch the live store's lock.
+
+    ``PRAGMA quick_check`` rather than ``integrity_check``: it is the same
+    walk minus the index cross-references, which on a database this size is
+    milliseconds either way, and the failure this exists to catch (a torn page,
+    a truncated file) shows up in both.
+    """
+    import sqlite3
+
+    path = config.db_path
+    if not path.exists():
+        # A first run, or a home the user has just pointed somewhere new. The
+        # store is created on demand, so absence is not a fault.
+        return Check("job database", True, "not created yet", fatal=False)
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            row = conn.execute("PRAGMA quick_check(1)").fetchone()
+        finally:
+            conn.close()
+    except Exception as exc:
+        return Check("job database", False, f"{path.name} cannot be opened: {exc}", fatal=False)
+    answer = str(row[0]) if row else ""
+    if answer.lower() == "ok":
+        return Check("job database", True, f"{path.name} is intact", fatal=False)
+    return Check(
+        "job database",
+        False,
+        f"{path.name} reports {answer!r}; back the library up and see warlock.log",
+        fatal=False,
+    )
 
 
 def _environment_check() -> Check:

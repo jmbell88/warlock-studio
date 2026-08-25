@@ -710,6 +710,22 @@ def _stage_pane(ctx: Any) -> None:
         settings_2d.draw(ctx)
 
 
+class StartupRefused(Exception):
+    """A named startup failure, with the sentence the user should read.
+
+    ``_run_locked`` shows any exception out of ``App.__init__`` in a native
+    dialog, which is already better than the log line it used to be -- but
+    "AttributeError: 'NoneType' object has no attribute 'clear'" is a dialog
+    the user still cannot act on. The two failures below are recoverable in
+    principle and worth explaining, so they carry their own words.
+    """
+
+    def __init__(self, title: str, body: str) -> None:
+        self.title = title
+        self.body = body
+        super().__init__(f"{title}: {body}")
+
+
 class App:
     def __init__(self, runtime: Any) -> None:
         self.runtime = runtime
@@ -851,9 +867,24 @@ class App:
             first_run_scale=first_run_scale,
             desktop=_desktop_size(pygame),
         )
-        self.window = pygame.display.set_mode(
-            size, pygame.OPENGL | pygame.DOUBLEBUF | pygame.RESIZABLE
-        )
+        try:
+            self.window = pygame.display.set_mode(
+                size, pygame.OPENGL | pygame.DOUBLEBUF | pygame.RESIZABLE
+            )
+        except Exception as exc:
+            # The GL attributes above ask for a 3.3 core context, and SDL
+            # refuses here rather than degrading if the driver cannot give one.
+            # It arrived as the generic "could not start" box, which says
+            # nothing a user can act on -- and this is one of the few startup
+            # failures that genuinely has a remedy.
+            raise StartupRefused(
+                "Warlock Studio needs OpenGL 3.3",
+                f"{exc}\n\nWarlock draws its whole interface on the GPU and "
+                "could not create an OpenGL 3.3 window.\n\nThis usually means "
+                "the graphics driver is missing or out of date. It can also "
+                "happen over Remote Desktop or in a virtual machine, where the "
+                "session offers no hardware OpenGL.",
+            ) from exc
         pygame.display.set_caption(WINDOW_TITLE)
         # Dropped files are how a reference image gets in without a dialog.
         pygame.event.set_allowed(None)
@@ -873,7 +904,22 @@ class App:
         tokens.set_theme(str(settings.get("theme") or "dark"))
         self._min_size = _min_window_size(monitor_scale)
 
-        self.ctx = moderngl.create_context()
+        try:
+            self.ctx = moderngl.create_context()
+        except Exception as exc:
+            # The window opened and the context still cannot be adopted, which
+            # is a narrower fault than the one above -- a driver that advertises
+            # 3.3 and does not deliver it. Same remedy, so the same sentence,
+            # said separately because the two fail at different lines and a
+            # log-reader should be able to tell them apart.
+            raise StartupRefused(
+                "Warlock Studio needs OpenGL 3.3",
+                f"{exc}\n\nWarlock opened a window but could not use the "
+                "OpenGL context behind it.\n\nThis usually means the graphics "
+                "driver is missing or out of date. It can also happen over "
+                "Remote Desktop or in a virtual machine, where the session "
+                "offers no hardware OpenGL.",
+            ) from exc
         imgui.create_context()
         imgui.get_io().set_ini_filename("")  # imgui's own layout file is not ours to keep
         # Before anything can raise inside a frame. imgui's error-recovery
@@ -891,7 +937,20 @@ class App:
         # arrows and Space, which five surfaces already bind -- see
         # ``_NAV_KEYS`` there for the rule and why it lives at that door.
         imgui.get_io().config_flags |= imgui.ConfigFlags_.nav_enable_keyboard.value
-        fonts.load(imgui)
+        try:
+            fonts.load(imgui)
+        except fonts.FontsUnavailable as exc:
+            # These ship in the wheel -- the offline invariant covers fonts as
+            # much as weights -- so this is a partial install, an antivirus
+            # quarantine or a half-copied directory, and every one of those is
+            # fixed by reinstalling rather than by reading a stack trace.
+            raise StartupRefused(
+                "Warlock Studio is missing part of its installation",
+                f"{exc}\n\nThese files ship with Warlock and are never "
+                "downloaded, so one going missing means the installation is "
+                "incomplete -- an interrupted install, or an antivirus tool "
+                "that quarantined them.\n\nReinstalling Warlock restores them.",
+            ) from exc
         theme.apply(imgui)
         self.layout = Layout(settings)
         # Saved arrangements within the fixed three-column skeleton (wave 5).
@@ -924,7 +983,7 @@ class App:
         from . import motion, textures
         from .app_ctx import Ctx
         from .jobs_cache import JobsCache
-        from .settings import restore_form
+        from .settings import as_list, restore_form
         from .state import (
             DEFAULT_FORM_3D,
             AppState,
@@ -952,7 +1011,7 @@ class App:
         motion.set_reduced(state.reduce_motion)
         state.form_2d = restore_form(default_form_2d(), settings.get("form_2d"))
         state.form_3d = restore_form(DEFAULT_FORM_3D, settings.get("form_3d"))
-        state.history = list(settings.get("history") or [])
+        state.history = [str(entry) for entry in as_list(settings.get("history"))]
         # The filter bar, minus the fields that are views rather than filters:
         # the app always opens on the library, never in the trash. See
         # ``state.VOLATILE_FILTERS``.
@@ -1451,7 +1510,22 @@ class App:
             from . import fonts
 
             self.app_ctx.state.fonts_dirty = False
-            fonts.reload(imgui)
+            try:
+                fonts.reload(imgui)
+            except Exception:
+                # Mid-session, from the UI-scale slider, and *not* fatal. The
+                # atlas either kept the faces it had (the files-missing check
+                # runs before ``clear_fonts``) or is empty and imgui falls back
+                # to its own default font, which is the state every headless
+                # test already runs in. Taking the session down over a type
+                # ramp -- with an unsaved document open in every editor -- is
+                # the wrong trade by a wide margin.
+                log.exception("could not re-bake the font atlas")
+                self.app_ctx.toast(
+                    "The interface font could not be reloaded at this size.",
+                    "error",
+                    "log",
+                )
         imgui.new_frame()
         self._build_ui()
         imgui.render()
@@ -5904,7 +5978,30 @@ def run() -> int:
             "    uv run warlock",
         )
         return 1
-    config = get_config()
+    try:
+        config = get_config()
+    except Exception as exc:
+        # The first thing in this process that touches the disk, and until now
+        # the only unguarded one. ``get_config`` runs ``migrate.run`` and then
+        # ``mkdir``s four directories, so a home on a disconnected network
+        # share, a read-only drive or a path the user has no rights to raises
+        # ``OSError`` **here** -- before the window, before GL, before imgui,
+        # and (under ``pythonw``) with stderr pointed at the null device. The
+        # app simply did not appear, twice in a row, with nothing anywhere but
+        # a log file in a directory that is itself the problem.
+        #
+        # ``instance.alert`` is the right tool and was already used twice in
+        # the twenty lines above: it needs no window, no GL context and no
+        # imgui, which is exactly the situation this is.
+        log.exception("could not prepare the Warlock home directory")
+        instance.alert(
+            "Warlock Studio cannot use its home directory",
+            f"{exc}\n\nWarlock keeps its library, job database and settings in "
+            "a home directory it creates on first run, and it could not "
+            "prepare that directory.\n\nCheck that the drive is connected and "
+            "writable, or point WARLOCK_HOME at a directory you own.",
+        )
+        return 1
     lock = instance.InstanceLocks(instance.lock_paths(config))
     unsafe_lock = os.environ.get("WARLOCK_ALLOW_UNSAFE_LOCK") == "1"
     if not lock.acquire(allow_unsafe=unsafe_lock):
@@ -5948,10 +6045,51 @@ def run() -> int:
     return hard_exit_if_leaked(code)
 
 
+def _offer_store_reset(exc: Any) -> bool:
+    """Offer to set a broken job database aside. -> may we start over?
+
+    The library index is a *record of jobs*, not the jobs themselves: the
+    assets live in directories under the data dir and survive this untouched.
+    What is lost is the history -- prompts, settings, verdicts, favourites --
+    which is real and is why this is a question rather than a repair.
+
+    Native, because it runs before the window exists; ``instance.ask`` answers
+    No to anything that is not an explicit Yes, which is the right default for
+    a button that moves somebody's library index.
+    """
+    from .. import db, instance
+
+    log.error("the job database could not be opened", exc_info=exc.cause)
+    agreed = instance.ask(
+        "Warlock Studio cannot open its job database",
+        f"{exc.path}\n\n{exc.cause}\n\nThis file is the library's index. Your "
+        "generated assets are stored as ordinary folders beside it and are not "
+        "affected, but the record of them -- prompts, settings, verdicts and "
+        "favourites -- is in here.\n\nStart with an empty index? The damaged "
+        "file is renamed and kept, not deleted, so it can be examined or "
+        "recovered later.\n\nChoosing No leaves everything untouched and "
+        "closes Warlock.",
+    )
+    if not agreed:
+        return False
+    moved = db.set_aside(exc.path)
+    if moved is None:
+        instance.alert(
+            "Warlock Studio could not move the damaged database",
+            f"{exc.path} could not be renamed, so a new index cannot be "
+            "created beside it.\n\nThis usually means the file is open in "
+            "another program or the directory is read-only.",
+        )
+        return False
+    log.warning("job database set aside as %s; starting with an empty index", moved)
+    return True
+
+
 def _run_locked() -> int:
     """Everything after the single-instance lock is held."""
     from .. import migrate
     from ..config import get_config
+    from ..db import StoreUnreadable
     from .runtime import Runtime
 
     if migrate.MOVED:
@@ -5962,11 +6100,41 @@ def _run_locked() -> int:
     _note_previous_session()
     _write_session_marker()
     try:
-        return App(Runtime()).run()
-    except Exception:
+        try:
+            return App(Runtime()).run()
+        except StoreUnreadable as exc:
+            # The one startup failure with an in-app way out, and it had none.
+            # Offered rather than done, and offered exactly once: a second
+            # ``StoreUnreadable`` after the rename is a fault in the *new*
+            # file, which means the disk or the directory is the problem and
+            # making another empty database would be a loop.
+            if not _offer_store_reset(exc):
+                return 1
+            return App(Runtime()).run()
+    except Exception as exc:
         # App.run reports and swallows its own failures, so anything arriving
-        # here happened before the loop existed -- constructing the Runtime.
+        # here happened before the loop existed -- constructing the Runtime,
+        # which opens the job store and claims the engine port.
         log.exception("Warlock Studio could not start")
+        # And it is said out loud. This branch logged and returned 1, which
+        # under ``pythonw`` is a process that starts, writes to a devnull
+        # stderr and vanishes: the user double-clicks the icon and nothing at
+        # all happens. ``instance.alert`` again -- there is no window to put a
+        # dialog in, which is the whole reason that function exists.
+        from .. import instance
+
+        # A refusal with words of its own says them; anything else gets the
+        # type and the message, which at least distinguishes "the port is in
+        # use" from "the database is malformed" without opening the log.
+        if isinstance(exc, StartupRefused):
+            instance.alert(exc.title, exc.body)
+        else:
+            instance.alert(
+                "Warlock Studio could not start",
+                f"{type(exc).__name__}: {exc}\n\nWarlock stopped before its "
+                "window opened. The full details are in warlock.log in your "
+                "Warlock home directory.",
+            )
         return 1
     finally:
         _clear_session_marker()

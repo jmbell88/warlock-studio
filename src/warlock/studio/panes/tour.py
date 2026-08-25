@@ -39,6 +39,7 @@ from imgui_bundle import imgui
 
 from .. import anchors, controls, icons, theme, tokens, widgets
 from ..manual import render as manual_render
+from ..settings import as_list
 from ..tokens import sp
 from ..tour import find as find_tour
 
@@ -177,7 +178,7 @@ def restore(ctx: Any) -> None:
     if settings is None:
         return
     try:
-        saved = settings.get("tours_finished", []) or []
+        saved = as_list(settings.get("tours_finished"))
     except Exception:  # pragma: no cover - a missing key is not an error
         return
     ctx.state.tour.finished = tuple(str(key) for key in saved)

@@ -271,6 +271,33 @@ def alert(title: str, message: str) -> None:
 IDYES = 6
 
 
+def ask(title: str, message: str) -> bool:
+    """A yes/no question with no window, no GL and no imgui. -> did they agree?
+
+    :func:`alert`'s shape and :func:`alert_fatal`'s buttons, for the case
+    neither covered: a startup refusal the user can *do* something about, where
+    the doing is destructive enough that it must not happen on its own. Today
+    that is one caller -- a job database sqlite will not open, which is offered
+    a rename-aside rather than repaired silently.
+
+    **No is the answer to everything that is not a Yes**: a box that could not
+    be shown, a platform without one, an exception raising out of ctypes. The
+    action behind this question moves the user's library index, so declining
+    has to be what a machine that cannot ask does.
+    """
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            # MB_YESNO | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST
+            flags = 0x4 | 0x30 | 0x10000 | 0x40000
+            return ctypes.windll.user32.MessageBoxW(None, message, title, flags) == IDYES
+        except Exception:  # noqa: BLE001 -- a dialog must never be the failure
+            log.warning("could not show a native question", exc_info=True)
+    print(f"{title}: {message}", file=sys.stderr)
+    return False
+
+
 def alert_fatal(title: str, message: str, *, log_dir: Any = None) -> bool:
     """Report a crash on the way out, and offer the log. -> did they say yes?
 

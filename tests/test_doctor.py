@@ -86,9 +86,12 @@ def test_run_checks_returns_every_check(tmp_path):
     # every WARLOCK_* value that would not parse. The fourteenth is "host
     # memory" (2026-08-21): the queue refuses jobs on a percentage of
     # system-wide commit and that refusal used to arrive with no context, on a
-    # machine with 24 GiB of RAM free.
+    # machine with 24 GiB of RAM free. The fifteenth is "job database": the
+    # store is the app's single point of total failure, and until it had a row
+    # a malformed image was the generic startup box on every launch with
+    # nothing anywhere naming the file.
     expected = (
-        14
+        15
         + len(model_registry.BASE_MODELS)
         + len(model_registry.STYLE_LORAS)
         + len(model_registry.IP_ADAPTERS)

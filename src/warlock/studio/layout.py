@@ -19,6 +19,7 @@ from typing import Any
 from imgui_bundle import imgui
 
 from . import guard, motion, theme, tokens
+from .settings import as_dict
 from .tokens import sp
 
 # Legacy global width presets remain as fallback seeds for untouched v1
@@ -327,7 +328,7 @@ class Layout:
         self._workspace_library: Any = None
         self._workspace = ""
         self._workspace_share_saved = False
-        stored = settings.get("layout") or {}
+        stored = as_dict(settings.get("layout"))
         try:
             share = float(stored.get("settings_share", 0.55))
         except (TypeError, ValueError):

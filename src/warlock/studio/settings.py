@@ -36,6 +36,29 @@ VERSION = 1
 VOLATILE = ("seed", "mesh_seed", "ref_path")
 
 
+def as_dict(value: Any, default: dict[str, Any] | None = None) -> dict[str, Any]:
+    """*value* if it is a mapping, else *default* (or ``{}``).
+
+    The free function behind :meth:`Settings.get_dict`, exported because the
+    same question is asked *inside* a stored blob as often as at the top of
+    one: ``(raw.get("columns") or {}).items()`` reads as a type guard and is
+    not one, and a stored ``"columns": "left"`` is truthy all the way to the
+    ``AttributeError``. ``layouts.Arrangement`` alone asks it four times.
+    """
+    return value if isinstance(value, dict) else dict(default or {})
+
+
+def as_list(value: Any, default: list[Any] | None = None) -> list[Any]:
+    """*value* if it is a list, else *default* (or ``[]``).
+
+    :func:`as_dict`'s twin, and the sharper of the two: ``or []`` on a stored
+    string yields the string, which then *iterates* -- one element per
+    character -- so the failure is not an exception but a hidden list of
+    single letters that every downstream ``str()`` waves through.
+    """
+    return list(value) if isinstance(value, list) else list(default or [])
+
+
 def _migrate(data: dict[str, Any]) -> dict[str, Any]:
     """Rewrite keys a previous version of the app wrote, in place.
 
@@ -93,6 +116,11 @@ class Settings:
 
     @classmethod
     def load(cls, data_dir: Path) -> Settings:
+        """Read the file, or start from defaults and say why.
+
+        Three ways this file can fail, and until this pass only the first had
+        an answer a user could see.
+        """
         out = cls(Path(data_dir) / FILENAME)
         try:
             raw = json.loads(out.path.read_text("utf-8"))
@@ -105,26 +133,74 @@ class Settings:
             # renamed aside rather than overwritten by the first save, so a
             # user who wants their layout back has something to go to.
             log.warning("ignoring an unreadable %s", out.path)
-            kept = out._preserve_corrupt()
-            out.notice = (
-                f"Your Studio preferences could not be read and have been reset "
-                f"to defaults. The old file was kept as {kept.name}."
-                if kept is not None
-                else "Your Studio preferences could not be read and have been "
-                "reset to defaults."
-            )
+            out._reset("could not be read")
             return out
-        if isinstance(raw, dict) and raw.get("version") == VERSION:
-            # Type-checked, not just present: a "data" that is a list or null
-            # passes the version gate and then takes the first get() down --
-            # before run()'s try/finally exists, so nothing tears down either.
-            data = raw.get("data")
-            out.data = _migrate(data) if isinstance(data, dict) else {}
+        if not isinstance(raw, dict) or raw.get("version") != VERSION:
+            # A version mismatch used to discard every preference in silence:
+            # no notice, no rename, and the first successful save overwrote the
+            # file. That is the *same* loss as the unreadable case above -- the
+            # theme, the UI scale, the pane layout and every remembered form
+            # field all revert -- so it gets the same treatment. Renaming aside
+            # matters more here, not less: the likeliest way to reach this
+            # branch is running an older build against a newer file, where the
+            # data is not corrupt at all and is the only copy there is.
+            found = raw.get("version") if isinstance(raw, dict) else type(raw).__name__
+            log.warning("ignoring %s: version %r", out.path, found)
+            out._reset("were written by a different version of Warlock")
+            return out
+        # Type-checked, not just present: a "data" that is a list or null
+        # passes the version gate and then takes the first get() down --
+        # before run()'s try/finally exists, so nothing tears down either.
+        data = raw.get("data")
+        if not isinstance(data, dict):
+            out._reset("could not be read")
+            return out
+        try:
+            out.data = _migrate(data)
+        except Exception:
+            # ``_migrate`` ran *outside* this try, and it reads stored values
+            # as though they were the shapes it wrote: ``settings.py``'s own
+            # legacy-asset-type branch asks ``value in ASSET_TYPES``, which on
+            # a stored ``asset_type`` of ``{}`` is ``TypeError: unhashable
+            # type``. That is an exception out of ``Settings.load``, which runs
+            # before there is a window, a GL context or an excepthook that can
+            # draw anything -- a permanent boot loop from one hand-edited byte.
+            log.exception("could not migrate %s", out.path)
+            out._reset("could not be read")
         return out
+
+    def _reset(self, why: str) -> None:
+        """Keep the old file aside, start from defaults, and say so once."""
+        kept = self._preserve_corrupt()
+        self.data = {}
+        self.notice = (
+            f"Your Studio preferences {why} and have been reset to defaults. "
+            f"The old file was kept as {kept.name}."
+            if kept is not None
+            else f"Your Studio preferences {why} and have been reset to defaults."
+        )
 
     # -- access ------------------------------------------------------------
 
     def get(self, key: str, default: Any = None) -> Any:
+        """The raw stored value. **Not a type guard.**
+
+        This returns whatever JSON held, which is the right primitive and the
+        wrong default habit: ``settings.get("panes") or {}`` reads as a type
+        guard and is not one, because a stored ``"panes": "left"`` is truthy
+        and then raises ``AttributeError`` on the ``.get`` after it. Seven
+        sites read that way, one of them inside ``widgets.section``, which most
+        panes draw every frame -- so one wrong byte in the file was a crash on
+        the first frame of the mode that read it, every launch.
+
+        Wrap it in :func:`as_dict` or :func:`as_list` instead. Free functions
+        rather than ``get_dict``/``get_list`` methods, deliberately: the same
+        question is asked *inside* a stored blob as often as at the top of one
+        (``layouts.Arrangement`` asks it four times about values that never
+        came from a ``Settings`` at all), and one spelling that works on any
+        value beats two that differ only in where the value came from. A scan
+        test refuses the ``or {}`` form.
+        """
         return self.data.get(key, default)
 
     def set(self, key: str, value: Any) -> None:

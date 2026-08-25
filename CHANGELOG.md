@@ -18,6 +18,30 @@ the release you are actually running.
 
 ## 0.0.28 — 2026-08-23
 
+- **One bad byte in the preferences file no longer stops Warlock opening.** Several settings
+  were read as though whatever was in the file had to be the right shape, so a hand-edited
+  or half-written `studio_settings.json` could crash the app on the first frame of whichever
+  workspace read it -- every launch, because nothing rewrote the offending file. Each of
+  those reads now falls back to its default. Preferences written by a *different version* of
+  Warlock were also silently thrown away; they are now kept under a timestamped name and the
+  reset is reported, the same way an unreadable file already was.
+
+- **The failures before the window exists now say something.** Warlock could not prepare its
+  home directory, could not get an OpenGL 3.3 context, or was missing one of its own font
+  files -- and in each case the app simply did not appear. All four now open a dialog naming
+  what happened, and the two with a remedy say it: update the graphics driver, or reinstall.
+  Changing the interface scale with a font file missing is no longer fatal either.
+
+- **A damaged job database can be recovered from inside Warlock.** It is the library's index,
+  and if it would not open there was no way past it: the same failure box on every launch.
+  Warlock now offers to set the damaged file aside -- renamed and kept, never deleted -- and
+  start with an empty index; your generated assets are folders beside it and are untouched.
+  Diagnostics also gained a **job database** row, so a file that has started to go can be
+  found while there is still time to back it up.
+
+- **A crash-recovery file with a malformed timestamp no longer stops the app.** It was read
+  on the first frame after a crash, which is exactly when it mattered that it did not.
+
 - **Autosave stopped believing in copies it had not written.** The journal marked a
   document as backed up the instant it *queued* the write, not when the write landed, so a
   full disk, a removed drive or a permission change left the slot recorded as saved at its

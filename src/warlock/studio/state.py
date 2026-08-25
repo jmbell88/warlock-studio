@@ -448,20 +448,34 @@ def filters_to_store(filters: Filters) -> dict[str, Any]:
 
 
 def filters_from_stored(stored: Any) -> Filters:
-    """The inverse. Unknown and volatile keys are dropped rather than carried.
+    """The inverse. Unknown, volatile and wrongly-typed keys are dropped.
 
     Volatile keys are dropped on the way *in* as well as on the way out, so a
     settings file written by an older build -- which really does carry
     ``trash: true`` -- opens on the library like every other launch.
+
+    **Types are checked, not only names.** The name filter survived as whatever
+    JSON held it: ``{"text": 5}`` built a ``Filters`` whose ``text`` is an int,
+    which then reached ``parse_query`` and imgui's ``input_text`` -- and by then
+    it is the frame loop's problem rather than a bad byte in a file. Checked
+    against the *default's* type, the rule ``settings.restore_form`` has applied
+    to every remembered form field since it was written, and for its stated
+    reason: settings are untrusted JSON read before any control can clamp them.
+    An int where a float belongs is the one widening allowed, because JSON does
+    not distinguish ``0`` from ``0.0`` and a stored ``0`` is not corruption.
     """
     values = stored if isinstance(stored, dict) else {}
-    return Filters(
-        **{
-            k: v
-            for k, v in values.items()
-            if k in Filters.__annotations__ and k not in VOLATILE_FILTERS
-        }
-    )
+    blank = Filters()
+    keep: dict[str, Any] = {}
+    for key, value in values.items():
+        if key not in Filters.__annotations__ or key in VOLATILE_FILTERS:
+            continue
+        default = getattr(blank, key)
+        if type(value) is type(default):
+            keep[key] = value
+        elif isinstance(default, float) and isinstance(value, int) and not isinstance(value, bool):
+            keep[key] = float(value)
+    return Filters(**keep)
 
 
 def set_mode(state: AppState, key: str) -> bool:

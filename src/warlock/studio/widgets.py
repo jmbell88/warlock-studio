@@ -16,6 +16,7 @@ from imgui_bundle import imgui
 
 from ..vectors import GRADE_MAX, GRADE_MIN
 from . import fonts, icons, motion, probe, theme, tokens
+from . import settings as settings_mod
 from . import state as app_state
 from .tokens import sp
 
@@ -1316,7 +1317,7 @@ def header(label: str, default_open: bool = True, persist_key: str | None = None
     """
     stored: dict[str, Any] = {}
     if persist_key and _SETTINGS is not None:
-        stored = _SETTINGS.get("panels_open") or {}
+        stored = settings_mod.as_dict(_SETTINGS.get("panels_open"))
     if FORCE_SECTIONS_OPEN:
         imgui.set_next_item_open(True, imgui.Cond_.always.value)
     elif persist_key and persist_key in _OPEN_REQUESTS:

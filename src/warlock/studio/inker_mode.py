@@ -33,6 +33,7 @@ from . import (
     journal,
     recents,
 )
+from . import settings as settings_mod
 from .inker import animation
 from .inker.asein import ASEPRITE_SUFFIXES
 from .inker_state import InkerDoc, InkerState
@@ -124,7 +125,7 @@ def ensure(ctx: Any) -> InkerState:
     state = ctx.state.inker
     if state is None:
         state = InkerState()
-        stored = ctx.settings.get("inker") or {}
+        stored = settings_mod.as_dict(ctx.settings.get("inker"))
         swatches = stored.get("swatches")
         if isinstance(swatches, list) and swatches:
             # Element types validated too, the module's doctrine for a

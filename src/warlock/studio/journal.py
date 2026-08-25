@@ -75,6 +75,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -573,6 +574,30 @@ def _read_meta(side: Path) -> dict[str, Any] | None:
     return data
 
 
+def _at_of(meta: dict[str, Any]) -> float:
+    """When the sidecar says the copy was taken, or 0.0.
+
+    ``_read_meta`` checks that the file parses, that it is a dict and that the
+    version is one this build knows -- and then every *field* was trusted.
+    ``float(meta.get("at") or 0.0)`` on a string, a list or a dict raises, and
+    the caller is ``snapshot``, which runs on the **first frame after a crash**:
+    a malformed timestamp took the app down at precisely the moment the user
+    needed it to open, and it would do so on every launch after, because
+    nothing rewrites the file on that path. ``status_line`` already wraps its
+    whole call for this reason (it runs in a process on its way out); the
+    startup offer had no such wrapper and needed one less.
+
+    0.0 rather than a refusal: ``at`` decides the sort order and the "2 hours
+    ago" label, and neither is worth withholding somebody's work over. A copy
+    with no readable timestamp sorts last and says nothing about its age.
+    """
+    try:
+        value = float(meta.get("at") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return value if math.isfinite(value) else 0.0
+
+
 def recoverable(ctx: Any) -> list[Recovered]:
     """What a previous session left, newest first. **All of it.**
 
@@ -602,7 +627,7 @@ def recoverable(ctx: Any) -> list[Recovered]:
                 path=payload,
                 kind=str(meta.get("kind") or ""),
                 title=str(meta.get("title") or payload.stem),
-                at=float(meta.get("at") or 0.0),
+                at=_at_of(meta),
                 meta=meta,
             )
         )
