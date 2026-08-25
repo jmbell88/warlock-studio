@@ -98,6 +98,11 @@ OUTWARD_IMPORTS = {
     # ``resolve`` and both of ``_ordered``'s searches, with the numpy fallback
     # beside it as the kernel's reference.
     ("index_plane.py", "warlock.native"),
+    # The shared bounded zip reader. One rule for four container doors, and a
+    # leaf for ``tilegrid``/``undo``'s reason exactly: the ``file_size`` sum
+    # each of these carried is written by whoever wrote the archive, and a
+    # fourth private copy of a security bound is a copy that stops agreeing.
+    ("ora.py", "warlock.studio.zipguard"),
     ("ora.py", "warlock.studio.tilegrid"),
     ("ora.py", "warlock.studio.tilegrid.tileset"),
     ("selection.py", "warlock.native"),

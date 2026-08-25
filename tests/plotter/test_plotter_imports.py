@@ -33,6 +33,11 @@ PACKAGE = "warlock.studio.plotter"
 #: tile vocabulary -- every module that places, flips or slices a tile reaches
 #: for one or both.
 OUTWARD_IMPORTS = {
+    # The shared bounded zip reader. One rule for four container doors, and a
+    # leaf for ``tilegrid``/``undo``'s reason exactly: the ``file_size`` sum
+    # each of these carried is written by whoever wrote the archive, and a
+    # fourth private copy of a security bound is a copy that stops agreeing.
+    ("wmap.py", "warlock.studio.zipguard"),
     ("_map_geometry.py", "warlock.studio.tilegrid"),
     ("_map_layers.py", "warlock.studio.tilegrid"),
     ("_map_layers.py", "warlock.studio.tilegrid.tileset"),

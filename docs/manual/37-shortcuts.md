@@ -22,7 +22,7 @@ sees the key, which is the one exception to the rule above.
 | Ctrl+K | Open the command palette — switch mode, or open an asset |
 | Ctrl+/ | Open this list, as a searchable popup |
 | F1 | Open this manual over whatever is on screen, or put it away again |
-| Esc | Close the manual, then the profile sheet, then leave a mode you passed through |
+| Esc | Close the manual, then a running tour, then the profile sheet, then leave a mode you passed through |
 | F10 | Toggle the frame-rate readout |
 
 **There is no per-mode digit.** There was, while there were ten modes and ten digits: `Alt+N` for
@@ -32,9 +32,10 @@ modes have no key, or something has to say which two, and that something is exac
 the positional scheme existed to avoid. Switching modes is a mouse action and a palette action, and
 the digits go back to the workspace modes that were already reaching for them.
 
-**Esc goes through what is on top first.** The manual can be raised over the profile sheet, and the
-sheet over a mode, so Esc closes the topmost of those before it means anything to the mode
-underneath. Closing the profile sheet over a half-typed profile still asks before discarding it.
+**Esc goes through what is on top first.** The manual can be raised over a running tour (a step's
+*Read more* does exactly that), a tour runs over the profile sheet, and the sheet sits over a mode —
+so Esc closes the topmost of those before it means anything to the mode underneath. Closing the
+profile sheet over a half-typed profile still asks before discarding it.
 After that: in a mode with something to drop — a comparison, a pose edit, a floating selection —
 Esc drops that and stays put, and only leaves a mode that has nothing of its own to cancel. Home is
 where it stops: the app opens there, so there is usually nothing behind it.
@@ -225,6 +226,11 @@ left-drag in empty space with `Q` selected sweeps a marquee.
 | `1` - `0` | Brush opacity, 10% to 100% |
 | Alt+`1` - `9` | Recall a numbered custom brush |
 | Alt+Shift+1 - 9 | Store the captured brush in that slot |
+| Alt+N / Alt+D | New frame / duplicate the current frame |
+| Home / End | First / last frame |
+| F3 | Onion skin on or off |
+| Ctrl+U / Ctrl+I | Hue / saturation, and Invert colours -- both open the filter popup |
+| Ctrl+Alt+C | Canvas size (the same popup scales the image) |
 | Ctrl+Shift+N | New layer |
 | Alt+S | Solo the active layer, and again to bring the rest back |
 | Ctrl+Shift+Up / Down | Move the layer up / down the stack |

@@ -162,10 +162,16 @@ class SelectionOps:
     def select_wand(
         self: Document, xy: tuple[int, int], *, tolerance: int = 32, op: str = "replace",
         contiguous: bool = True, wrap: str | tuple[bool, bool] = "off",
+        eight_connected: bool = False,
     ) -> None:
         self.select(
             magic_wand(
-                self._composite, xy, tolerance=tolerance, contiguous=contiguous, wrap=wrap
+                self._composite,
+                xy,
+                tolerance=tolerance,
+                contiguous=contiguous,
+                wrap=wrap,
+                eight_connected=eight_connected,
             ),
             op,
         )

@@ -31,11 +31,13 @@ A model store that could never be maintained because jobs keep arriving is the
 same bug from the other side, and the queue's own admission already refuses
 work while a maintenance is in flight.
 
-Deliberately process-local, and deliberately *not* re-entrant across the two
-modes. A second process mutating the same store is a different problem with a
-different answer (a per-home OS lock); a lease here would not have seen it and
-pretending otherwise would be worse than saying so.
-"""
+Deliberately process-local. ``use`` nests inside ``use`` on one thread, and a
+model operation run *by the maintainer itself* is covered by its own exclusive
+lease -- but a shared lease taken on some *other* thread still waits for the
+maintainer, which is the whole point of the mode.
+A second process mutating the same store is a different problem with a different
+answer (a per-home OS lock); a lease here would not have seen it, and pretending
+otherwise would be worse than saying so. """
 
 from __future__ import annotations
 
@@ -61,6 +63,23 @@ class ModelLease:
         self._cond = threading.Condition()
         self._users = 0
         self._maintaining = False
+        # *Which* thread is maintaining, not merely that one is. A maintainer
+        # holds the exclusive lease precisely so that nothing else is touching
+        # the store -- which makes a model operation it performs *itself*
+        # already covered, and makes ``use`` waiting on it a thread waiting for
+        # a condition only that same thread could clear.
+        #
+        # ``queue._unload_under_lease`` is the case that found this: it holds
+        # ``maintain`` (correct -- it must observe a state nothing else can be
+        # changing) and then calls ``pipe.unload()``, which takes ``use``. With
+        # the in-process image pipeline (``WARLOCK_T2I_IN_PROCESS=1``) that is
+        # the same thread taking a shared lease behind its own exclusive one,
+        # and ``use``'s ``wait_for`` has no timeout, so shutdown hung forever.
+        # The shipped default routes ``unload`` to the child-process client,
+        # which takes no lease -- so this was reachable only under the debug
+        # flag, which is exactly the configuration someone attaching a debugger
+        # is running.
+        self._maintainer: int | None = None
         self._waiting_maintainers = 0
         # Per-thread nesting depth, because ``use`` has to be re-entrant.
         # ``Text2Image.generate`` can reach ``load``, and both take the lease --
@@ -84,6 +103,13 @@ class ModelLease:
         caller that takes this on the loop has re-created the bug this module
         exists for, and will also block the frame loop's own dispatch.
         """
+        if self._maintainer == threading.get_ident():
+            # Covered by this thread's own exclusive lease -- see ``_maintainer``.
+            # No counter is touched: ``maintain``'s exit is what releases this,
+            # and incrementing ``_users`` here would leave the maintainer
+            # waiting on itself from the other direction.
+            yield
+            return
         depth = getattr(self._local, "depth", 0)
         if depth:
             # Already inside one on this thread; the outer lease covers this.
@@ -136,6 +162,7 @@ class ModelLease:
                         f"model operations still in flight after {timeout:.0f}s"
                     )
                 self._maintaining = True
+                self._maintainer = threading.get_ident()
             finally:
                 self._waiting_maintainers -= 1
                 # Notify even on the failure path: a user parked behind this
@@ -146,6 +173,7 @@ class ModelLease:
         finally:
             with self._cond:
                 self._maintaining = False
+                self._maintainer = None
                 self._cond.notify_all()
 
 

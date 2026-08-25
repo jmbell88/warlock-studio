@@ -114,6 +114,7 @@ from typing import Any, NoReturn
 
 import numpy as np
 
+from .. import zipguard
 from ..tilegrid import gid as gidlib
 from ..tilegrid.tileset import (
     Collection,
@@ -1130,7 +1131,7 @@ def read_wmap(data: bytes) -> MapDoc:
     mutators, which would push a step apiece.
     """
     try:
-        zf = zipfile.ZipFile(io.BytesIO(data))
+        zf = zipguard.BoundedZip(io.BytesIO(data))
     except zipfile.BadZipFile as exc:
         raise ValueError("this is not a Warlock map document") from exc
 

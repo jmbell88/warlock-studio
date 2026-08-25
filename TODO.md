@@ -545,6 +545,104 @@ limit is only 76.06 GiB because the pagefile is 12.6 GiB on a 63 GiB machine.
 Warlock's own ~20 GiB was the largest movable share. Any measurement of a fix
 has to name the other tenants, or it will credit itself with their departure.
 
+## 8b. Public release — what the paperwork still owes a human
+
+Added 2026-08-24 from the release-readiness audit (`REPORT.md`). Most of that
+report was closed in code the same day: the project is GPL-3.0-or-later, the
+sdist ships an allowlist, every model declares its licence in the picker,
+`THIRD-PARTY-NOTICES.md` is staged into the installer, and the real defects it
+found are fixed with regression tests. What is below is the remainder, and it is
+here because **every item needs a person, a card, a clean machine or a credit
+card** -- none of it can be closed by writing code.
+
+### The git history still holds art this project may not redistribute
+
+`examples/` was untracked and gitignored on 2026-08-24 (20 files, ~26 MB), and
+`tests/test_release_hygiene.py` refuses it coming back. **That does not make the
+repository safe to publish.** The blobs remain reachable in every earlier commit:
+
+- `examples/light_world.png` -- a rip of *A Link to the Past*, 4110x5136,
+  colour-destroyed and useful only as a look reference.
+- `examples/zelda_1.jpg` -- Nintendo material likewise.
+- `examples/*_base.obj`, `*_base.blend`, `*_spritesheet.png` -- ULPC-derived,
+  CC-BY-SA/GPL, with no attribution file anywhere in the tree.
+
+A genuine purge is `git filter-repo --path examples/ --invert-paths`, which
+rewrites every commit SHA and needs a force-push. **Do it before the repository
+is made public, not after** -- a public repo's history is cloned within minutes
+and a later rewrite cannot recall those copies. If the ULPC files are wanted
+back afterwards, they need an attribution file beside them naming source and
+licence -- `src/warlock/pipelines/birefnet/ATTRIBUTION.md` is the shape this
+repo already uses. The Nintendo pair should not come back at all.
+
+### The installer has still never been run
+
+Unchanged from §7, and the release audit rates it a blocker rather than a task:
+the installer is the only path a non-developer will ever take, and no human has
+executed it once. Build it, install on a clean Windows VM with no Python and no
+CUDA toolkit, generate one asset, uninstall, then reinstall over the top.
+
+Two things to watch for that the code review could not:
+
+- The entry point is `pythonw.exe` (`warlock.iss`), which has no console. A
+  crash *before* `_setup_logging` attaches leaves a window that closes silently
+  -- and a first-run machine in an unusual driver state is exactly the
+  population that hits it. If that happens, run `python -m warlock` from a
+  terminal to see the traceback.
+- The wizard now shows `LICENSE` as its first page. Confirm it renders.
+
+### The installer is unsigned
+
+No `SignTool=` in `warlock.iss`, no signing step in `build.ps1`. Every public
+install trips SmartScreen's "unrecognized app" wall, which for a free tool
+distributed outside a store is the single largest install-abandonment cause. An
+OV code-signing certificate is a few hundred dollars a year and reputation
+accrues from there. A decision, not a task.
+
+### The headline feature has no positive quality evidence
+
+**This is the number the product will be judged on and it does not exist.** The
+only completed graded mesh run scored **0 usable out of 20**
+(`docs/measurements/2026-08-13-tier-qualification.md`) -- on deliberately hard
+subjects, using `playground`, and root-caused to subject difficulty plus a
+tightened instrument rather than a regression. The superseded binary-era number
+was 19/41. **No graded run has ever targeted `sdxl_cfg`, which is what ships.**
+
+One GPU afternoon on a representative corpus at the shipped default. Until then
+the tool ships with no evidence for its main claim, and the honest thing is that
+the README does not make one.
+
+### Two models ship unmeasured, and one loses its own bench
+
+Decisions owed once the run above exists:
+
+- `juggernaut` and `dreamshaper` have **no hits anywhere in
+  `docs/measurements/`** and sit in the picker as peers of the default at 6.9 GB
+  each. Hide them behind an Advanced toggle, or measure them.
+- `sdxl_cfg_pag` is offered as an equal and **lost its own bench**: the control
+  won 55 of 80 paired units and PAG cost +34% sampling time
+  (`docs/measurements/2026-08-17-reference-source-bench.md`).
+- `turbo` is now labelled non-commercial in the picker, which is the disclosure
+  half. Whether it should also be labelled *draft* is an editorial call.
+
+### Tile-sheet art direction
+
+`docs/measurements/2026-08-18-tile-sheet-grid.md` says it itself: the mechanism
+works, the output is "one continuous brick wall" or "near-identical grey mush".
+The document identifies the answer -- "N materials, one grid". Ship that, mark
+the feature experimental, or hold it.
+
+### Verify the new 3.12 CI leg
+
+Added 2026-08-24 because `requires-python = ">=3.12"` had never been exercised.
+The package *compiles* under 3.12 (checked), but the suite has never run there,
+and 3.13 changed docstring dedenting -- which several source-scanning tests
+depend on. **Expect the first run to find something real.** If 3.12 turns out
+not to be supportable, the honest fix is raising the floor to 3.13, not deleting
+the leg.
+
+---
+
 ## 9. Not on this list on purpose
 
 These are decisions with arguments beside them, not backlog items waiting for

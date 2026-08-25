@@ -8,7 +8,10 @@ uv-managed CPython 3.13, and Inno Setup 6 (`iscc.exe` on `PATH`, or supplied as
 The staged application contains the locked Python runtime and dependencies,
 `src\warlock`, the manual, and the three native runtime directories under
 `vendor`. Model weights remain first-run downloads under the user's Warlock
-home. No project licence is selected or embedded by this installer input.
+home. The project is GPL-3.0-or-later: `LICENSE` is shown as the wizard's
+first page (`LicenseFile=`) and staged into the install root alongside
+`THIRD-PARTY-NOTICES.md`, which also goes beside `vendor\` because MIT and
+the NVIDIA redistributable EULA require the notice to travel with the binary.
 
 ## Native runtime pins
 

@@ -256,9 +256,19 @@ is the curve itself, resampled as you move, so what is on screen is what will be
 
 The shape tools have the size slider and, except for the open ones — the line, the polyline and the
 curve, which have no inside to fill — a **Filled**
-checkbox. Fill and the wand have **Tolerance** (0 to 255) and **Contiguous** — turning contiguous
-off acts on every similar pixel in the image, not just the ones touching where you clicked. The
-gradient tool chooses its **Shape** and whether it fades **To transparent**. Pick has **This layer
+checkbox. Fill and the wand have **Tolerance** (0 to 255), **Contiguous** — turning contiguous
+off acts on every similar pixel in the image, not just the ones touching where you clicked — and
+**Diagonals**, which decides whether a region continues through a corner touch. With diagonals off a
+45° pixel-art line is a wall; with them on the fill runs past it, which is usually what you meant.
+
+Fill has two more of its own. **Refer to** is **Canvas** or **Layer**: the canvas is the blend of
+every visible layer, which is what you can see, and the layer is the active one alone. Lineart on
+its own layer over painted flats is the case the second exists for — referring to the canvas, every
+fill stops at the paint underneath the line rather than at the line. **Stop at grid** confines the
+fill to the one grid cell you clicked in, using the grid size in the canvas settings, which is how
+you fill a single tile of a tileset without masking it first.
+
+The gradient tool chooses its **Shape** and whether it fades **To transparent**. Pick has **This layer
 only** — off, it reads the colour you can see, which is the blend of every visible layer; on, it
 reads the active layer's own pixels, before its opacity and blend mode. The second is what you want
 picking a line colour off lineart with flats underneath it, because the blend of the two is a
@@ -494,9 +504,12 @@ conversion and each is a single Ctrl+Z.
 
 **RGB** is the default and the unconstrained one: any colour, anywhere.
 
-**Indexed** makes every pixel a numbered slot in the palette. That number is what the file stores,
-and the picture you see is the palette applied to it — which has three consequences worth knowing
-before you switch:
+**Indexed** makes every pixel a numbered slot in the palette. Pressing it opens the same **Convert**
+popup described under [Converting a drawing onto a palette](#converting-a-drawing-onto-a-palette),
+so entering indexed mode is a dither like every other conversion here rather than a blind nearest
+snap: choose the matrix, watch the preview, and **Apply** enters the mode. That number is what the
+file stores, and the picture you see is the palette applied to it — which has three consequences
+worth knowing before you switch:
 
 - **Editing a slot repaints its pixels instantly**, across every layer and every frame, with nothing
   rewritten anywhere. It is a lookup table changing, so it is as fast on a forty-frame clip as on
@@ -569,6 +582,11 @@ The preview covers the frame you are on, because converting forty frames to show
 for nothing. **Apply** converts the whole document — every layer and every frame — as one undo step,
 and clicking away from the popup cancels rather than applies: a preview you did not answer is not a
 yes.
+
+The same popup answers two questions, and which one it is answering depends on how you opened it.
+**Convert...** snaps the pixels onto a table and leaves the document in RGB; the **Indexed** button
+in the Mode row above enters indexed mode when you apply. The controls, the preview and the
+refusals are the same either way — only what Apply does differs.
 
 A conversion **ignores any selection**, and that is deliberate. Indexing is a change of mode rather
 than a write: the table it installs constrains every write afterwards, everywhere, so converting
@@ -1066,7 +1084,7 @@ and write. That is the format that keeps your layers, their blend modes and thei
   an `.aseprite`/`.ase` name and Inker writes the native Aseprite format — layers, groups, links,
   tags, slices, tilesets and tilemap layers, field for field. `.ora` stays the suggested name and the
   default filter row; only choosing an Aseprite suffix opts out of it.
-- A drawing you opened from a **JPG, WebP or BMP** also asks where to put it, every time. Inker can
+- A drawing you opened from a **JPG, WebP, BMP or GIF** also asks where to put it, every time. Inker can
   read those formats but cannot write them, so `Ctrl+S` offers you an `.ora` beside the original
   rather than either putting PNG bytes into a file named `.jpg` — unreadable by its own extension —
   or re-encoding your original to JPEG and losing pixels on a keystroke that means "keep what I

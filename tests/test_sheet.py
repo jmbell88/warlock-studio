@@ -1430,3 +1430,53 @@ async def test_a_torn_sheet_sidecar_leaves_no_marker_and_no_strand(worker, monke
     assert calls, "the render never ran"
     assert not rigging.sheet_path(source_dir, sheet_id).exists()
     assert list(rigging.sheet_path(source_dir, sheet_id).parent.glob("*.tmp")) == []
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_restyle_spares_an_earlier_successful_one(worker):
+    """The bug the sibling above could not see, because it cancels the *first*.
+
+    ``sheet_pixel_path``/``sheet_pixel_png_path`` are pure functions of
+    ``(job_dir, sheet_id)``, and ``service.sheets`` deliberately allows
+    restyling the same sheet again under the same id -- so the second restyle's
+    "own pair" is byte-for-byte the same two filenames as the first one's
+    result. The discard branch deleted them unconditionally, so keeping a
+    restyle and then cancelling an experiment at a different seed destroyed the
+    one being kept.
+
+    Its three sibling branches all avoid exactly this and say so in comments:
+    ``rig`` deletes only its temps because "a cancelled re-rig must not destroy
+    the rig it corrects", ``retexture`` writes to a temp, ``sprite_synthesis``
+    mints a fresh draft id. ``pixel_sheet`` did neither.
+    """
+    source = _source_job(worker)
+    sheet_id = _rendered_sheet(worker, source)
+    source_dir = worker.config.job_dir(source)
+
+    # An earlier, successful restyle's result, written where that job left it.
+    # Fabricated rather than run, because ``_run`` shuts the worker down in its
+    # finally and the cancel below needs a live one -- and what is under test is
+    # the discard branch, which cannot tell how the pair got there.
+    png = rigging.sheet_pixel_png_path(source_dir, sheet_id)
+    doc = rigging.sheet_pixel_path(source_dir, sheet_id)
+    png.write_bytes(b"an earlier restyle the user chose to keep")
+    doc.write_text('{"restyle": {"seed": 3}}', encoding="utf-8")
+    kept_png, kept_doc = png.read_bytes(), doc.read_bytes()
+
+    second = worker.store.create(
+        "pixel_sheet", "a knight",
+        {"source_job": source, "sheet_id": sheet_id, "logical_size": 32,
+         "colors": 8, "seed": 9},
+    )
+    worker.start()
+    try:
+        await _wait_until(lambda: worker.current_job_id == second)
+        await worker.request_cancel(second)
+        worker.store.cancel(second)
+        await _wait_until(lambda: worker.current_job_id is None)
+    finally:
+        await worker.shutdown()
+
+    assert worker.store.get(second)["status"] == "cancelled"
+    assert png.read_bytes() == kept_png, "the kept restyle's PNG was destroyed"
+    assert doc.read_bytes() == kept_doc, "the kept restyle's sidecar was destroyed"

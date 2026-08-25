@@ -104,9 +104,19 @@ New-Item -ItemType Directory -Path (Join-Path $Stage "vendor") -Force | Out-Null
 foreach ($RuntimeDir in @("trellis", "gltfpack", "warlockc")) {
     Copy-Item -LiteralPath (Join-Path $Root "vendor\$RuntimeDir") -Destination (Join-Path $Stage "vendor") -Recurse -Force
 }
-foreach ($Document in @("pyproject.toml", "CHANGELOG.md", "README.md")) {
+# LICENSE and THIRD-PARTY-NOTICES.md are not optional paperwork here. This
+# installer packs GPL-3.0 `bpy` and eleven vendored binaries -- MIT trellis.cpp
+# and ggml, MIT gltfpack, and three NVIDIA CUDA redistributables -- into one
+# executable. MIT requires its notice to travel *with the binary*, the NVIDIA
+# redistributable EULA carries its own terms, and the GPL requires the licence
+# to reach whoever receives the program. Until 2026-08-24 the binaries were
+# copied bare and no licence text was staged at all.
+foreach ($Document in @("pyproject.toml", "CHANGELOG.md", "README.md", "LICENSE", "THIRD-PARTY-NOTICES.md")) {
     Copy-Item -LiteralPath (Join-Path $Root $Document) -Destination $Stage -Force
 }
+# And a copy beside the DLLs themselves, so a user who opens vendor\ finds the
+# terms without knowing to look at the install root.
+Copy-Item -LiteralPath (Join-Path $Root "THIRD-PARTY-NOTICES.md") -Destination (Join-Path $Stage "vendor") -Force
 
 # Build caches are never an input. compileall below creates only the caches that
 # match the interpreter being shipped.

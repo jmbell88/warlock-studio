@@ -164,6 +164,57 @@ NAV_KEY_MODES = frozenset({"home", "library", "review", "inker", "plotter", "tro
 
 KEYS = tuple(key for key, _label, _icon in MODES)
 
+#: One line saying what each mode is *for*, shown as the rail item's tooltip.
+#:
+#: The rail is the primary navigation and six of its eleven labels -- Inker,
+#: Clay, Poser, Troupe, Plotter, Packwright -- are invented names. A new user
+#: hovering one got a word and an icon, because ``rail._item`` suppresses its
+#: accessible-name tooltip once the label is legible (correctly: a tooltip
+#: repeating a word already on screen is noise) and no call site had anything
+#: more to say. This is the something more.
+#:
+#: A table beside ``MODES`` rather than a fourth element of it, so that the
+#: order-and-grouping tuple stays the thing every reader already knows, and a
+#: mode with nothing useful to add can simply be absent.
+PURPOSE: dict[str, str] = {
+    "home": "Start here: recent work, what needs attention, and what to make next.",
+    "library": "Every asset you have made, searchable and filterable.",
+    "create": "Prompt to reference image to 3D model — the main pipeline.",
+    "inker": "Pixel-art and image editor: layers, animation, tilesets.",
+    "clay": "Assemble and edit meshes from primitives and booleans.",
+    "poser": "Rig a mesh to a skeleton and author animation clips.",
+    "troupe": "Render a 3D character to a 256-cell sprite sheet.",
+    "plotter": "Paint tile maps and export them to Tiled.",
+    "packwright": "Pack loose sprites into an atlas with a manifest.",
+    "review": "Judge and grade finished assets side by side.",
+    "settings": "Models, folders, appearance and hardware.",
+}
+
+#: Modes whose maturity the rail says out loud, and the word it uses.
+#:
+#: **Troupe is code-complete and a user really can get a rendered sheet**, but
+#: three of its own phases are unstarted, its 22 keyframes are provisional, and
+#: its palette claim rests on a textured base mesh that does not exist.
+#: ``docs/manual/11`` and ``33`` are candid about every bit of that -- and the
+#: app was not, which is the gap this closes: the manual is read by people who
+#: already know to be careful, and the rail is read by everyone.
+#:
+#: The wording is the manual's own ("provisional", "untested"), deliberately,
+#: so a user who follows the tooltip into the chapter finds the same words
+#: rather than a second, differently-hedged account.
+MATURITY: dict[str, str] = {
+    "troupe": "Experimental",
+}
+
+#: What the chip's own tooltip adds, past the word.
+MATURITY_NOTE: dict[str, str] = {
+    "troupe": (
+        "The chain runs end to end, but the shipped animation keyframes are"
+        " provisional and humanoid reconstruction quality is untested."
+        " See the manual (Troupe)."
+    ),
+}
+
 # **There is no positional Alt+digit binding, and there deliberately is not.**
 # It existed while there were ten modes and ten digits, on the argument that the
 # binding was the picture on screen rather than a second table. That argument

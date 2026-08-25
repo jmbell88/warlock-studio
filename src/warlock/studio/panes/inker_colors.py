@@ -159,7 +159,16 @@ def _mode_row(ctx: Any, tab: Any) -> None:
             reason="Already this mode.",
             tooltip=_MODE_HELP[mode],
         ):
-            inker_mode.set_color_mode(ctx, tab, mode)
+            if mode == "indexed":
+                # Through the Convert popup rather than straight into the
+                # conversion: entering indexed mode is a dither like every
+                # other conversion in the app, and this was the only one that
+                # took ``"nearest"`` with nothing on screen to say so.
+                from . import inker_bridge
+
+                ctx.state.inker.pending_dialog = inker_bridge.CONVERT_MODE_POPUP
+            else:
+                inker_mode.set_color_mode(ctx, tab, mode)
         if mode != inker_mode.COLOR_MODES[-1]:
             imgui.same_line()
 

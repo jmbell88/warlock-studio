@@ -22,6 +22,7 @@ ENGINE_NAMES = (
     "UndoStack",
     "_serials",
     "UNDO_BYTES",
+    "UNDO_HARD_BYTES",
     "UNDO_MAX_DEPTH",
     "UNDO_MIN_DEPTH",
 )

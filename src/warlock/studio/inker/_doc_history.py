@@ -8,6 +8,7 @@ half that *reverses* it: ``undo``/``redo`` are the user-facing pair, and
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -21,6 +22,26 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 class HistoryOps:
     """Undo/redo and its callbacks, mixed into :class:`~.document.Document`."""
+
+    @contextmanager
+    def one_gesture(self: Document) -> Any:
+        """Everything pushed inside the block becomes a single undo step.
+
+        The composed ops -- delete these eight rows, merge this run -- are each
+        built out of ops that already push their own step, and eight Ctrl+Z to
+        reverse one click is exactly what ``set_layers_props`` exists to stop
+        one level down. This is that rule for a *sequence* rather than for a
+        property write.
+
+        The collapse happens on the way out even if the body raises, because a
+        half-applied gesture is still one gesture: leaving its steps loose would
+        make the user walk back through the middle of it.
+        """
+        depth = len(self.history)
+        try:
+            yield
+        finally:
+            self.history.collapse_since(depth)
 
     def undo(self: Document) -> bool:
         """One Ctrl+Z is one step -- and cancelling a float *is* that step.

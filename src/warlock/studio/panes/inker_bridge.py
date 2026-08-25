@@ -76,6 +76,8 @@ def popups(ctx: Any) -> None:
             _open_filter(ctx, tab)
         elif wanted == CONVERT_POPUP:
             open_convert(ctx, tab)
+        elif wanted == CONVERT_MODE_POPUP:
+            open_convert(ctx, tab, to_mode="indexed")
         elif wanted:
             # Not this module's popup -- hand it back for whoever owns it
             # (the canvas's New, the menu strip's layer properties). Rewritten
@@ -505,6 +507,12 @@ def _sheet_import_popup(ctx: Any, state: Any) -> None:
 # controls belong anyway.
 
 CONVERT_POPUP = "inker-convert"
+#: A second *request* key for the same popup, asking it in mode-change flavour.
+#: Two keys rather than a parameter on ``pending_dialog`` because that field is
+#: one string and the flavour has to survive the frame between the click and the
+#: dispatch -- and a flavour left on the state by a request that never opened
+#: (the tab was busy) would silently change what the next plain request did.
+CONVERT_MODE_POPUP = "inker-convert-mode"
 
 
 def _convert_table(state: Any, doc: Any) -> list[tuple[int, int, int, int]]:
@@ -522,10 +530,13 @@ def _convert_table(state: Any, doc: Any) -> list[tuple[int, int, int, int]]:
     return doc.built_palette(state.convert_max)
 
 
-def open_convert(ctx: Any, tab: Any) -> None:
+def open_convert(ctx: Any, tab: Any, *, to_mode: str = "") -> None:
     from ..inker import dither
 
     state = inker_mode.ensure(ctx)
+    # Before the busy return: whoever opens the popup decides the flavour, and
+    # a request that could not open must not leave the last one behind.
+    state.convert_mode = to_mode
     if tab.busy:
         return
     if state.convert_method not in dither.METHODS:
@@ -538,6 +549,37 @@ def open_convert(ctx: Any, tab: Any) -> None:
     state.convert_table = _convert_table(state, tab.doc)
     state.convert_uid = tab.uid
     imgui.open_popup(CONVERT_POPUP)
+
+
+def apply_convert(ctx: Any, tab: Any) -> bool:
+    """Answer the open session: snap onto a table, or enter indexed mode.
+
+    Free of imgui so the branch can be asserted without a window -- which is
+    the point of it being a function at all, since "did Apply change the mode"
+    is the whole of what distinguishes the two sessions.
+
+    A **mode** session cancels the preview before converting rather than
+    committing it, for ``commit_convert``'s own reason one level down: the
+    preview has already written converted pixels onto the current frame, and
+    ``convert_to_indexed``'s snapshot would otherwise record *those* as the
+    state to undo to -- one Ctrl+Z landing on a document that never existed.
+    """
+    state = inker_mode.ensure(ctx)
+    table = list(state.convert_table)
+    mode, state.convert_mode = state.convert_mode, ""
+    state.convert_uid = ""
+    if mode:
+        tab.doc.cancel_convert()
+        return inker_mode.set_color_mode(
+            ctx, tab, mode, method=state.convert_method, max_colours=state.convert_max
+        )
+    if not tab.doc.commit_convert(table, state.convert_method):
+        return False
+    state.palette_slot = 0
+    state.palette_slots = []
+    state.palette_usage = None
+    ctx.toast(f"Converted to {len(table)} colour(s).", "success")
+    return True
 
 
 def convert_popup(ctx: Any, tab: Any) -> None:
@@ -605,13 +647,7 @@ def convert_popup(ctx: Any, tab: Any) -> None:
     imgui.dummy((0, 4))
     imgui.begin_disabled(tab.busy)
     if controls.button("Apply##convert", (sp(90), 0)):
-        table = list(state.convert_table)
-        if tab.doc.commit_convert(table, state.convert_method):
-            state.palette_slot = 0
-            state.palette_slots = []
-            state.palette_usage = None
-            ctx.toast(f"Converted to {len(table)} colour(s).", "success")
-        state.convert_uid = ""
+        apply_convert(ctx, tab)
         imgui.close_current_popup()
     imgui.end_disabled()
     imgui.same_line()
@@ -620,5 +656,6 @@ def convert_popup(ctx: Any, tab: Any) -> None:
     if controls.button("Cancel##convert", (sp(90), 0)):
         tab.doc.cancel_convert()
         state.convert_uid = ""
+        state.convert_mode = ""
         imgui.close_current_popup()
     imgui.end_popup()

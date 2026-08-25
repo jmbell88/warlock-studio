@@ -99,9 +99,19 @@ def _resolve_source(base: Path, source: str) -> Path:
     The asymmetry is deliberate and it is Tiled's own convention that decides it:
     a tileset folder beside a maps folder is the *normal* layout, so
     ``../tilesets/grass.tsx`` is what a legitimate file says and containment to
-    the map's own directory would refuse ordinary projects. What relative
-    traversal cannot do is reach somewhere the user did not point this at: every
-    such path is still rooted at the file they opened. An absolute one is not --
+    the map's own directory would refuse ordinary projects.
+
+    **Be precise about what that costs**, because the earlier wording here was
+    not: a relative path is anchored to the opened file, but it is not *bounded*
+    by it. Enough ``..`` segments walk out of the project entirely, so a crafted
+    ``.tmx`` can name any file this user can already read. What it cannot do is
+    write anywhere, escape the user's own privileges, or send what it read
+    anywhere -- there is no network path in this build to exfiltrate over, which
+    is the property that makes this an accepted trade rather than a hole. If a
+    future build ever gains an outbound request, this refusal has to be revisited
+    before that lands, not after.
+
+    An absolute path is refused because it is not anchored at all --
     ``C:\\Windows\\...`` reads whatever it names -- and a UNC path is worse than
     absolute: ``\\\\host\\share`` is a *network* read from a build whose first
     invariant is that it never goes online, issued because a file said so.

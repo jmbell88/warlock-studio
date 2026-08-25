@@ -124,8 +124,18 @@ def draw(app: Any, ctx: Any, viewport: Any) -> None:
             x, y, w, h = rect
             inside = x <= mouse.x < x + w and y <= mouse.y < y + h
             colour = theme.ACCENT if inside else theme.DIVIDER
+            # ``thickness`` scaled, like every other highlight rect in the app.
+            # ``add_rect``'s fifth positional is ``flags`` and the sixth is the
+            # thickness, so leaving both off takes imgui's default 1.0 -- a
+            # physical hairline that stays one pixel at 200% while the rounding
+            # beside it doubles.
             draw_list.add_rect(
-                (x, y), (x + w, y + h), imgui.get_color_u32(theme.rgba(colour, 0.9)), sp(4)
+                (x, y),
+                (x + w, y + h),
+                imgui.get_color_u32(theme.rgba(colour, 0.9)),
+                sp(4),
+                0,
+                sp(1.0),
             )
             label = slot.label if slot.movable else f"{slot.label} (fixed)"
             draw_list.add_text(

@@ -8,15 +8,37 @@ from __future__ import annotations
 
 import errno
 import subprocess
+import sys
 import traceback
 from pathlib import Path
-
-import httpx
 
 # How much of an unrecognised exception reaches the DB and the inspector. Two
 # lines of wrapped text: enough to carry a real sentence, short enough that a
 # child process's whole stderr cannot become the job's error message.
 MAX_MESSAGE = 200
+
+
+def _is_transport_error(exc: BaseException) -> bool:
+    """Is this httpx's "the connection failed" -- without importing httpx.
+
+    ``vram.device_memory``'s idiom and its reason. This module is imported by
+    almost everything, and a bare ``import httpx`` at the top of it costs
+    ~160 ms of process start, ~65 ms of which is ``httpx._main`` -- the
+    *command-line interface*, which drags in ``rich``, ``click`` and
+    ``pygments`` for a CLI this app never invokes. That was the whole price of
+    one ``isinstance``.
+
+    Reading ``sys.modules`` loses nothing, and the reason it cannot is worth
+    stating: the only way an ``httpx.TransportError`` can exist is for httpx to
+    have been imported to raise it. ``pipelines/trellis.py`` imports it to make
+    the request whose failure this classifies, so on any path that can produce
+    one the module is already there. Absent from ``sys.modules``, the answer is
+    False by construction rather than by guess.
+    """
+    httpx = sys.modules.get("httpx")
+    if httpx is None:
+        return False
+    return isinstance(exc, httpx.TransportError)
 
 
 def _one_line(text: str) -> str:
@@ -75,7 +97,7 @@ def friendly(exc: Exception) -> str:
             "The 3D engine returned an invalid model — it may have run out of "
             "memory or crashed mid-reconstruction. See assets/trellis.log."
         )
-    if isinstance(exc, httpx.TransportError):
+    if _is_transport_error(exc):
         return "The 3D engine stopped unexpectedly. See assets/trellis.log."
     if isinstance(exc, subprocess.SubprocessError):
         return _subprocess_message(exc)

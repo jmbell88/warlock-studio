@@ -170,6 +170,57 @@ _INDEXED = 8
 
 RGBA = tuple[int, int, int, int]
 
+#: Bytes per pixel, keyed by the sprite's declared colour depth. Read by the
+#: three bounded-decompress call sites as well as ``_decode``/``_decode_tileset``,
+#: which is why it is a module constant rather than the literal each of those
+#: used to spell out.
+_PER_PIXEL = {_RGBA: 4, _GRAYSCALE: 2, _INDEXED: 1}
+
+#: The absolute ceiling on any one chunk's unpacked pixels, over and above the
+#: per-chunk arithmetic below. ``ora.MAX_DECOMPRESSED_BYTES`` verbatim and for
+#: its reason -- an ``.aseprite`` is explicitly *anyone's* file, routinely
+#: downloaded from asset sites -- and a second line of defence rather than a
+#: duplicate: a cel declares its own rectangle, but the rectangle is two u16s,
+#: so an honest-looking 65535x65535 RGBA cel still asks for 17 GiB before a
+#: single byte is checked. Read from module globals at call time so a test can
+#: lower it rather than building a gigabyte.
+MAX_DECOMPRESSED_BYTES = 1 << 30
+
+
+def _inflate(raw: bytes, expected: int, what: str) -> bytes:
+    """Unpack one chunk's payload, refusing anything past what it declares.
+
+    **Bounded, and the bound is the chunk's own arithmetic** --
+    ``plotter/tmx.py``'s ``_decompress`` verbatim, and this reader was the one
+    door in the tree still without it. A bare ``zlib.decompress`` allocates
+    whatever the *stream* says rather than whatever the header says: a few
+    kilobytes of crafted or simply corrupt ``.aseprite`` inflates to gigabytes,
+    and the read that discovers this is the one that has already exhausted
+    memory. The size checks this reader already carried run in ``_decode``,
+    which is far too late -- they describe the wreckage rather than preventing
+    it.
+
+    One byte past ``expected`` is already a file that does not describe itself,
+    so the tail is checked rather than the output quietly truncated: that is
+    the same refusal ``_decode`` would have raised, only now before the
+    allocation instead of after it.
+    """
+    if expected < 0 or expected > MAX_DECOMPRESSED_BYTES:
+        raise ValueError(
+            f"{what} declares {expected} bytes of pixels, past the"
+            f" {MAX_DECOMPRESSED_BYTES} this build will unpack"
+        )
+    engine = zlib.decompressobj()
+    try:
+        out = engine.decompress(raw, expected + 1)
+    except zlib.error as exc:
+        raise ValueError(f"{what} will not decompress: {exc}") from exc
+    if len(out) > expected or engine.unconsumed_tail:
+        raise ValueError(
+            f"{what} unpacks past the {expected} bytes its own header declares"
+        )
+    return out
+
 
 class _Reader:
     """A cursor over bytes that refuses rather than returning short.
@@ -550,10 +601,14 @@ def _read_tileset(state: _Parse, r: _Reader) -> None:
         )
     length = r.u32()
     compressed = r.take(length)
-    try:
-        raw = zlib.decompress(compressed)
-    except zlib.error as exc:
-        raise ValueError(f"the tileset {name!r} will not decompress: {exc}") from exc
+    # The strip is ``count`` tiles stacked vertically, still at the sprite's
+    # depth -- ``_decode_tileset``'s arithmetic exactly, hoisted ahead of the
+    # allocation it is meant to bound.
+    raw = _inflate(
+        compressed,
+        count * tile_w * tile_h * _PER_PIXEL[state.sprite.depth],
+        f"the tileset {name!r}",
+    )
     state.sprite.tilesets[tileset_id] = AseTileset(
         name=name or "tiles", tile_w=tile_w, tile_h=tile_h, count=count, data=raw
     )
@@ -644,12 +699,12 @@ def _read_cel(state: _Parse, r: _Reader) -> None:
         cel.height = r.u16()
         raw = r.rest()
         if kind == _CEL_COMPRESSED:
-            try:
-                raw = zlib.decompress(raw)
-            except zlib.error as exc:
-                raise ValueError(
-                    f"a cel on layer {layer} will not decompress: {exc}"
-                ) from exc
+            # ``_decode``'s arithmetic, hoisted ahead of the allocation.
+            raw = _inflate(
+                raw,
+                cel.width * cel.height * _PER_PIXEL[state.sprite.depth],
+                f"a cel on layer {layer}",
+            )
         cel.data = raw
     elif kind == _CEL_TILEMAP:
         grid_w = r.u16()
@@ -666,14 +721,11 @@ def _read_cel(state: _Parse, r: _Reader) -> None:
         d_mask = r.u32()
         r.take(10)
         raw = r.rest()
-        try:
-            decompressed = zlib.decompress(raw)
-        except zlib.error as exc:
-            raise ValueError(
-                f"a tilemap cel on layer {layer} will not decompress: {exc}"
-            ) from exc
         wanted = grid_w * grid_h * 4
+        decompressed = _inflate(raw, wanted, f"a tilemap cel on layer {layer}")
         if len(decompressed) != wanted:
+            # Only the *short* case survives ``_inflate`` now; the long one is
+            # refused before the bytes exist.
             raise ValueError(
                 f"a tilemap cel on layer {layer} holds {len(decompressed)} bytes"
                 f" where its {grid_w}x{grid_h} grid needs {wanted}"
@@ -937,7 +989,7 @@ def _decode(cel: AseCel, sprite: Sprite, lut: np.ndarray | None) -> np.ndarray:
     width, height = cel.width, cel.height
     if width < 1 or height < 1:
         return np.zeros((0, 0, 4), dtype=np.uint8)
-    per_pixel = {_RGBA: 4, _GRAYSCALE: 2, _INDEXED: 1}[sprite.depth]
+    per_pixel = _PER_PIXEL[sprite.depth]
     wanted = width * height * per_pixel
     if len(cel.data) != wanted:
         raise ValueError(
@@ -957,7 +1009,7 @@ def _decode_tileset(ase: AseTileset, sprite: Sprite, lut: np.ndarray | None) -> 
     that applies -- the same ``lut`` an ordinary layer's cel decodes through.
     """
     width, height = ase.tile_w, ase.tile_h * ase.count
-    per_pixel = {_RGBA: 4, _GRAYSCALE: 2, _INDEXED: 1}[sprite.depth]
+    per_pixel = _PER_PIXEL[sprite.depth]
     wanted = width * height * per_pixel
     if len(ase.data) != wanted:
         raise ValueError(

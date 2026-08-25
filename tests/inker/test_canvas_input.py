@@ -791,3 +791,71 @@ def test_a_tab_going_busy_mid_stroke_closes_the_stroke(driven):
 
     assert state.drag_kind == ""
     assert tab.doc.history.head != head
+
+
+# --- the bucket's Aseprite options reach the engine -------------------------
+
+
+def test_the_grid_option_confines_the_fill_the_pane_sends(scene):
+    """The pane owns the grid; the engine is only told its size."""
+    state, tab = scene
+    state.tool = "fill"
+    state.grid_size = 8
+    state.fill_stop_grid = True
+    _press(state, tab, (2.0, 2.0))
+    pixels = tab.doc.stack.active.pixels
+    assert tuple(int(v) for v in pixels[2, 2]) == FG
+    assert int(pixels[20, 20, 3]) == 0
+
+
+def test_the_grid_option_off_lets_the_fill_run(scene):
+    state, tab = scene
+    state.tool = "fill"
+    state.grid_size = 8
+    state.fill_stop_grid = False
+    _press(state, tab, (2.0, 2.0))
+    assert tuple(int(v) for v in tab.doc.stack.active.pixels[20, 20]) == FG
+
+
+def test_the_refer_option_reaches_the_fill(scene):
+    """Lineart above, a white layer below: referring to the canvas stops."""
+    state, tab = scene
+    doc = tab.doc
+    doc.stack.active.pixels[:, :] = (255, 255, 255, 255)
+    doc.add_layer()
+    doc.stack.active.pixels[16, :] = (0, 0, 0, 255)
+    doc.set_active_layer(0)
+    doc.invalidate_all()
+    state.tool = "fill"
+    state.wand_tolerance = 0
+    _press(state, tab, (2.0, 2.0))
+    assert tuple(int(v) for v in doc.stack[0].pixels[24, 2]) != FG
+
+    # A fresh white base: the first fill left red under the seed, and a layer
+    # refer would then have been answering a question about the red.
+    doc.stack[0].pixels[:, :] = (255, 255, 255, 255)
+    doc.invalidate_all()
+    state.fill_refer = "layer"
+    _press(state, tab, (2.0, 2.0))
+    assert tuple(int(v) for v in doc.stack[0].pixels[24, 2]) == FG
+
+
+def test_the_connectivity_option_reaches_both_the_fill_and_the_wand(scene):
+    state, tab = scene
+    doc = tab.doc
+    doc.stack.active.pixels[:, :] = (0, 0, 0, 255)
+    doc.stack.active.pixels[0:3, 0:3] = (255, 255, 255, 255)
+    doc.stack.active.pixels[3:6, 3:6] = (255, 255, 255, 255)
+    doc.invalidate_all()
+    state.tool = "wand"
+    state.wand_tolerance = 0
+    state.wand_eight = True
+    _press(state, tab, (0.0, 0.0))
+    assert doc.mask is not None and doc.mask.contains((4, 4))
+
+    doc.select(None)
+    state.tool = "fill"
+    state.wand_tolerance = 0
+    state.wand_eight = True
+    _press(state, tab, (0.0, 0.0))
+    assert tuple(int(v) for v in doc.stack.active.pixels[4, 4]) == FG

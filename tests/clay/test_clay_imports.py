@@ -30,6 +30,11 @@ PACKAGE = "warlock.studio.clay"
 #: type that would need a conversion function and a place for the two to drift,
 #: and quaternions are XYZW in exactly one place in this project.
 OUTWARD_IMPORTS = {
+    # The shared bounded zip reader. One rule for four container doors, and a
+    # leaf for ``tilegrid``/``undo``'s reason exactly: the ``file_size`` sum
+    # each of these carried is written by whoever wrote the archive, and a
+    # fourth private copy of a security bound is a copy that stops agreeing.
+    ("serialize.py", "warlock.studio.zipguard"),
     ("document.py", "warlock.studio.undo"),
     ("drag.py", "warlock.studio.viewer"),
     ("document.py", "warlock.studio.viewer"),

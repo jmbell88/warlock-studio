@@ -62,6 +62,7 @@ from .props import (
     write_properties,
 )
 from .tilemap import (
+    MAX_DIMENSION,
     OPAQUE_WHITE,
     Capsule,
     Ellipse,
@@ -303,6 +304,25 @@ def _decompress(raw: bytes, compression: str, expected: int) -> bytes:
 #: What Tiled writes. Its reader takes any size, so this is a choice about our
 #: output rather than a constraint on our input.
 CHUNK = 16
+
+
+def _chunk_side(value: Any, what: str) -> int:
+    """One ``<chunk>`` dimension, refused past the engine's own extent cap.
+
+    ``tilemap._dimension`` is not reused directly only because its message
+    names a *map* dimension, and a reader that says "width must be at most
+    4096" about a file whose map element says 64 sends the user looking in the
+    wrong place.
+    """
+    side = int(value)
+    if side < 1:
+        raise ValueError(f"a chunk's {what} must be at least 1")
+    if side > MAX_DIMENSION:
+        raise ValueError(
+            f"a chunk's {what} is {side}, past the {MAX_DIMENSION} cells a side"
+            " this build reads"
+        )
+    return side
 
 
 def chunks_from(pieces: list[tuple[int, int, np.ndarray]]) -> tuple[np.ndarray, int, int]:
@@ -741,8 +761,17 @@ def _read_tmx_layers(
             if doc.infinite:
                 pieces = []
                 for chunk in payload.findall("chunk"):
-                    cw = int(chunk.get("width", CHUNK) or CHUNK)
-                    ch = int(chunk.get("height", CHUNK) or CHUNK)
+                    # Capped, and the cap is the engine's own. These two feed
+                    # ``_decode_payload``'s bound, so an uncapped chunk was a
+                    # hole straight through the per-layer limit that bound
+                    # exists to be: a fixed map's dimensions go through
+                    # ``MapDoc.__init__``'s ``_dimension`` and stop at
+                    # ``MAX_DIMENSION``, but an infinite map's declared size is
+                    # nominal and every real dimension it has arrives here
+                    # instead. One ``<chunk width="4000000000">`` and the
+                    # "bounded" decompress is bounded at 16 GB.
+                    cw = _chunk_side(chunk.get("width", CHUNK) or CHUNK, "width")
+                    ch = _chunk_side(chunk.get("height", CHUNK) or CHUNK, "height")
                     block = (
                         _xml_tile_elements(chunk, cw, ch)
                         if not encoding and chunk.find("tile") is not None

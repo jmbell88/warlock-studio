@@ -60,6 +60,7 @@ from typing import Any
 
 import numpy as np
 
+from .. import zipguard
 from ..viewer import gltf
 from . import mesh as bm
 from .document import ClayDoc, Obj, reserve_uid
@@ -240,7 +241,7 @@ def read_view(data: bytes) -> dict[str, Any] | None:
     camera is worth one unfitted viewport and never a refused file.
     """
     try:
-        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        with zipguard.BoundedZip(io.BytesIO(data)) as zf:
             scene = json.loads(zf.read(SCENE))
     except (zipfile.BadZipFile, KeyError, UnicodeDecodeError, json.JSONDecodeError):
         return None
@@ -444,7 +445,7 @@ def read_wblk(data: bytes) -> ClayDoc:
     than through ``add_object``, which would push a step apiece.
     """
     try:
-        zf = zipfile.ZipFile(io.BytesIO(data))
+        zf = zipguard.BoundedZip(io.BytesIO(data))
     except zipfile.BadZipFile as exc:
         raise ValueError("this is not a Warlock Clay document") from exc
 

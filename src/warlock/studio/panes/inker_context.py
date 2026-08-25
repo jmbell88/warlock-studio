@@ -41,7 +41,16 @@ OPTIONS_POPUP = "inker-tool-panels"
 
 #: The options that are a box rather than a number or a menu.
 _CHECKS = frozenset(
-    {"pixel_perfect", "shape_filled", "wand_contiguous", "sample_layer", "aa", "use_stamp"}
+    {
+        "pixel_perfect",
+        "shape_filled",
+        "wand_contiguous",
+        "wand_eight",
+        "fill_stop_grid",
+        "sample_layer",
+        "aa",
+        "use_stamp",
+    }
 )
 
 NIB_LABELS = [
@@ -52,6 +61,9 @@ NIB_LABELS = [
 ]
 INK_LABELS = inker_state.INK_LABELS
 ALIGN_LABELS = [("free", "Free"), ("origin", "Origin"), ("tile", "Tile")]
+#: What the paint bucket reads its region off. Aseprite's "Refer to", and the
+#: reason lineart on its own layer is fillable at all.
+REFER_LABELS = [("canvas", "Canvas"), ("layer", "Layer")]
 COMBINE_LABELS = [
     ("replace", "Replace"),
     ("add", "Add"),
@@ -449,6 +461,8 @@ def _field(ctx: Any, state: Any, tab: Any, key: str) -> Any:
         return combo([("1", "Lighter"), ("-1", "Darker")], COMPACT)
     if key == "stamp_align":
         return combo(ALIGN_LABELS)
+    if key == "fill_refer":
+        return combo(REFER_LABELS)
     if key == "gradient_dither":
         from ..inker import dither
 

@@ -1000,6 +1000,9 @@ class PaintOps:
         thresh: int = 32,
         contiguous: bool = True,
         wrap: str | tuple[bool, bool] = "off",
+        refer: str = "canvas",
+        eight_connected: bool = False,
+        stop_at_grid: int | tuple[int, int] | None = None,
     ) -> bool:
         """Flood fill from a point, on the composite's colours.
 
@@ -1009,18 +1012,72 @@ class PaintOps:
         The region comes from the same predicate the magic wand uses, so the
         two can never disagree about what "similar" means -- ``wrap`` included,
         which is why it is threaded straight through rather than reimplemented.
+
+        Three Aseprite options ride on top of that one predicate, and each is
+        about *which pixels the flood may read or reach* rather than about what
+        similar means:
+
+        * ``refer`` is ``"canvas"`` (the composite, the default and what you
+          see) or ``"layer"`` (the active layer alone). Lineart on its own
+          layer over a painted background is the case: referring to the canvas,
+          every fill stops at the paint underneath it.
+        * ``eight_connected`` continues a region through a corner touch, which
+          is what a diagonal pixel-art line asks for.
+        * ``stop_at_grid`` confines the region to the grid cell the seed is in,
+          for filling one tile of a tileset without masking it first. It is the
+          grid's size, so the caller decides whether the grid is on; a *crop*
+          rather than a post-hoc clip, because a region that left the cell and
+          came back would otherwise count.
+
+        ``stop_at_grid`` and ``wrap`` do not combine: a cell is not a torus, so
+        the crop wins and the fold has nothing left to fold.
         """
+        if refer not in ("canvas", "layer"):
+            raise ValueError(f"unknown fill refer {refer!r}")
         if not self.in_bounds(xy):
             return False
+        source = self.stack.active.pixels if refer == "layer" else self._composite
+        seed = (int(xy[0]), int(xy[1]))
+        cell = self._grid_cell(seed, stop_at_grid)
+        if cell is not None:
+            cx0, cy0, cx1, cy1 = cell
+            source = source[cy0:cy1, cx0:cx1]
+            seed = (seed[0] - cx0, seed[1] - cy0)
+            wrap = "off"
         region = magic_wand(
-            self._composite, xy, tolerance=thresh, contiguous=contiguous, wrap=wrap
+            source,
+            seed,
+            tolerance=thresh,
+            contiguous=contiguous,
+            wrap=wrap,
+            eight_connected=eight_connected,
         )
         bounds = region.bounds
         if bounds is None:
             return False
         x0, y0, x1, y1 = bounds
         weight = region.mask[y0:y1, x0:x1].astype(np.float32) / 255.0
-        return self.write_colour(bounds, colour, weight)
+        if cell is not None:
+            x0, y0, x1, y1 = x0 + cell[0], y0 + cell[1], x1 + cell[0], y1 + cell[1]
+        return self.write_colour((x0, y0, x1, y1), colour, weight)
+
+    def _grid_cell(
+        self: Document,
+        seed: tuple[int, int],
+        grid: int | tuple[int, int] | None,
+    ) -> tuple[int, int, int, int] | None:
+        """The grid cell *seed* falls in, clipped to the canvas, or ``None``."""
+
+        if grid is None:
+            return None
+        cell_w, cell_h = (grid, grid) if isinstance(grid, int) else grid
+        cell_w, cell_h = int(cell_w), int(cell_h)
+        if cell_w <= 0 or cell_h <= 0:
+            return None
+        width, height = self.size
+        x0 = (seed[0] // cell_w) * cell_w
+        y0 = (seed[1] // cell_h) * cell_h
+        return (x0, y0, min(width, x0 + cell_w), min(height, y0 + cell_h))
 
     def shape(
         self: Document,

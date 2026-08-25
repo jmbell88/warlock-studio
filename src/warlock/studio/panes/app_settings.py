@@ -20,11 +20,14 @@ job's, and still read-only where the answer is not the user's to change.
 
 from __future__ import annotations
 
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from imgui_bundle import imgui
 
 from ... import fetch, vram
+from ...service import library as svc_library
 from .. import app_ctx, controls, dialogs, forms, icons, theme, tokens, widgets
 from .. import layouts as layouts_mod
 from ..manual import render as manual_render
@@ -578,6 +581,32 @@ def _storage(ctx: Any) -> None:
     widgets.muted(f"In the trash: {summary}" if summary else "Measuring the trash...")
 
     widgets.section("Maintenance")
+    # The two non-destructive ones first, and deliberately above Prune: this
+    # group is otherwise entirely made of buttons that remove things, and the
+    # answer to "is my library alright" should not sit below the two ways to
+    # make it less alright.
+    if controls.button("Check library"):
+        ctx.submit("library-verify", svc_library.verify, ctx.svc)
+    widgets.muted(
+        "Looks for assets whose files are gone, folders no asset claims, and "
+        "reviews whose asset was deleted. Changes nothing."
+    )
+    imgui.dummy((0, sp(tokens.SP_1)))
+    if controls.button("Back up the index"):
+        # No folder dialog. A backup nobody can be bothered to take is worth
+        # nothing, and the destination is not a decision worth a modal -- it
+        # goes to a stamped folder beside the library, which is also where a
+        # user looking for one would think to look. ``warlock library backup
+        # --to`` is the surface for putting it somewhere else.
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        dest = Path(ctx.svc.config.home) / "backups" / stamp
+        ctx.submit("library-backup", svc_library.backup, ctx.svc, dest)
+    widgets.muted(
+        "Copies the database holding every prompt, seed, name, tag and review "
+        "-- the part that cannot be regenerated from the files -- into a "
+        "stamped folder under your library."
+    )
+    imgui.dummy((0, sp(tokens.SP_1)))
     if controls.button("Prune..."):
         library.ask_prune(ctx)
     widgets.muted(
@@ -975,7 +1004,31 @@ def _identity_tooltip(row: dict[str, Any]) -> None:
     trigger_repos = tuple(row.get("repos") or ())
     if trigger_repos:
         parts.append(", ".join(trigger_repos))
+    licence = licence_note(row)
+    if licence:
+        parts.append(licence)
     imgui.set_tooltip(_PARA.join(parts))
+
+
+def licence_note(row: dict[str, Any]) -> str:
+    """What this row's weights permit. Empty when the row carries no licence.
+
+    A plain sentence rather than a badge, because the tooltip is where the
+    other reference facts already live -- but the *restricted* case also gets a
+    visible marker in the cell (see ``_description``), since a licence that
+    forbids selling the output is not a reference fact, it is a decision the
+    user has to make before spending 7 GB.
+    """
+    licence = str(row.get("license") or "")
+    if not licence:
+        return ""
+    if not row.get("commercial", True):
+        return (
+            f"Licence: {licence}. Images from this model may NOT be used "
+            f"commercially. {row.get('license_note') or ''}"
+        ).strip()
+    note = str(row.get("license_note") or "")
+    return f"Licence: {licence}. {note}".strip() if note else f"Licence: {licence}."
 
 
 def _description(row: dict[str, Any]) -> None:
@@ -988,6 +1041,14 @@ def _description(row: dict[str, Any]) -> None:
     text = str(row.get("description") or "").split(_PARA)[0]
     if text:
         widgets.muted(text)
+    # In the cell and not only in the tooltip. A tooltip is something you find
+    # after wondering; whether you are allowed to sell what this makes is not a
+    # question a user of an *asset generator* knows to wonder about, and the
+    # download button is right there in the same row.
+    if row.get("license") and not row.get("commercial", True):
+        widgets.text_colored(theme.WARN, "non-commercial")
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(licence_note(row))
 
 
 def downloadable_note(row: dict[str, Any]) -> str:

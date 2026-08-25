@@ -269,6 +269,67 @@ class LayerOps:
         self.history.push(one_step(edits))
         return True
 
+    def remove_layers(self: Document, indices: Any) -> bool:
+        """Delete several rows as one gesture. The range verb behind the menu.
+
+        **Top down**, which is the only order that does not need index
+        arithmetic: removing row 5 leaves rows 0-4 exactly where they were, and
+        removing row 1 first would make every later index refer to a different
+        layer than the one the user selected.
+
+        Refused outright when it would empty the stack, rather than stopping
+        one short: "delete these five" answered by deleting four is a different
+        op from the one that was asked for, and the row that survived would be
+        chosen by nothing.
+        """
+        rows = sorted({int(i) for i in indices if 0 <= int(i) < len(self.stack)})
+        if not rows or len(rows) >= len(self.stack):
+            return False
+        with self.one_gesture():
+            for index in reversed(rows):
+                self.remove_layer(index)
+        return True
+
+    def duplicate_layers(self: Document, indices: Any) -> bool:
+        """Duplicate several rows as one gesture.
+
+        Top down for :meth:`remove_layers`' reason, and it holds for the same
+        arithmetic: a duplicate is inserted directly *above* its source, so
+        working downwards leaves every index below it untouched.
+        """
+        rows = sorted({int(i) for i in indices if 0 <= int(i) < len(self.stack)})
+        if not rows:
+            return False
+        with self.one_gesture():
+            for index in reversed(rows):
+                self.duplicate_layer(index)
+        return True
+
+    def merge_range(self: Document, low: int, high: int) -> bool:
+        """Merge a contiguous run down into its bottom row, as one gesture.
+
+        Repeated :meth:`merge_down` from the top of the run, which is the only
+        order that preserves what the user sees: each merge honours the upper
+        row's blend mode against what is already beneath it, and merging
+        bottom-up would compose the run in the wrong order.
+
+        A one-row range is a plain merge down -- the same op, said with a range
+        selected -- and a range that starts at row 0 is refused, because there
+        is nothing under it for the run to land on.
+        """
+        low, high = sorted((int(low), int(high)))
+        if low < 1 or high >= len(self.stack):
+            return False
+        # The bottom row of the run is the survivor, so the last merge is into
+        # it and not through it -- except for a one-row range, which is a plain
+        # merge down and therefore *does* reach the row below.
+        stop = low if low == high else low + 1
+        with self.one_gesture():
+            merged = False
+            for index in range(high, stop - 1, -1):
+                merged = self.merge_down(index) or merged
+        return merged
+
     def _move_row_edit(self: Document, index: int, to: int) -> Any:
         """Move a stack row and *return* the step rather than pushing it.
 

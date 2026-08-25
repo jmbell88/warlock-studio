@@ -6,7 +6,77 @@ record of what a version actually changed. The top heading's version must
 match `pyproject.toml` — a test asserts it, so a release bump cannot leave this
 file behind.
 
+**A note on how this reads.** These entries are written for whoever maintains
+this next, which means they name the measurement that made a default wrong, the
+review score that condemned a mode, and what a crash actually was — in the
+belief that a fix nobody can audit is a fix nobody should trust. A long run of
+"fixed: X crashed" is therefore a record of things *found and closed*, usually
+by the project's own test suite or its own audits, and not a weather report on
+stability. If you want the short version, the app shows the opening sentence of
+each entry under **All release notes...** on the Home screen, and only expands
+the release you are actually running.
+
 ## 0.0.28 — 2026-08-23
+
+- **Layer groups have a header row in the timeline, and it folds.** The fold
+  triangle reads `TabDoc.collapsed_groups`, which had been declared for as long
+  as groups have existed and read by nothing — so a folder could be made and
+  never shut. The header carries the folder's own eye and a menu offering
+  Rename, Opacity, Locked and Ungroup, which gives `set_group_props` and
+  `ungroup` their first callers; dragging a layer onto it moves the layer in.
+  Folding is view state: not saved, not undoable, and swept when the group it
+  names is dissolved so a uid cannot stay folded with no header to reopen it.
+
+- **A timeline range is a selection the layer verbs honour.** `Shift`+clicking
+  a track name stretches the range across tracks — the `extend_range` the
+  panel has always had and never reached — and clicking a name selects the
+  layer, which before this needed a click on a *cel*. The row menu then acts on
+  the whole block and says so: **Duplicate 3 layers**, **Merge down 3 layers**,
+  **Delete 3 layers**, **Group 3 layers**. Each is a single Ctrl+Z however many
+  rows it touched, through a new `Document.one_gesture()` that folds a run of
+  pushed steps into one rather than threading an edit list through six ops.
+
+- **Inker opens animated GIFs.** It could write one and not read one, which
+  made the export a one-way door — the file a user had just shared was a file
+  this editor refused, and it was the only export in the app with that shape.
+  Frames arrive one per frame with their own durations, read through Pillow's
+  seek because a GIF frame is a *patch* with an offset and a disposal method
+  rather than a picture; assembling them by hand is correct on frame one and
+  increasingly wrong after it. A one-frame GIF opens as a still drawing. Saving
+  in place is refused for the reason a JPG is: Ctrl+S offers an `.ora` beside
+  it rather than flattening a layered document into 256 thresholded colours.
+
+- **Entering indexed mode is a dither like every other conversion.** It took
+  `"nearest"` with nothing on screen to say so, and was the only conversion in
+  the app with no choice of matrix. The Indexed button opens the Convert popup
+  now — same controls, same preview, same refusals — and Apply enters the mode.
+  This also settles a name that had been wrong for months: the **Colour mode…**
+  menu row opened that popup, and what the popup did was snap the pixels onto a
+  table and leave the document in RGB. One popup answers both questions and
+  which one it is answering is now a property of how it was opened.
+
+- **The paint bucket has Aseprite's three options.** **Refer to** is Canvas or
+  Layer — lineart on its own layer over painted flats is the case the second
+  exists for, since referring to the canvas makes every fill stop at the paint
+  under the line rather than at the line. **Diagonals** continues a region
+  through a corner touch, without which a 45° pixel-art line is a wall; it is
+  shared with the wand, so the two cannot disagree about what one region is.
+  **Stop at grid** confines the fill to the cell you clicked in, which is how a
+  single tile of a tileset gets filled without masking it first.
+
+- **The animation verbs are bindings rather than context menus.** `Alt+N` adds
+  a frame, `Alt+D` duplicates the current one, `Home` and `End` jump to the
+  ends, `F3` toggles onion skin, `Ctrl+U` and `Ctrl+I` open the filter popup on
+  hue/saturation and invert, and `Ctrl+Alt+C` is canvas size. Delete frame is
+  deliberately unbound — Aseprite leaves it unbound too, and a one-key drop of
+  the frame under the playhead is the one worth reaching for a menu. Because
+  bindings here are data, all of them appear in the shortcut sheet and the
+  remapper without either being told about them.
+
+- **Clicking a tag jumps to it.** The band under the grid was right-click only,
+  so the one thing a tag is for — "show me this animation" — took a menu it did
+  not have. A double-click opens the rename in place, the same field the menu
+  offers.
 
 - **A mesh job with no matte setting no longer picks the one mode measured at
   zero.** The door resolves `bg_removal` against this host — `birefnet` when

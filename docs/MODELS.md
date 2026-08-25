@@ -21,6 +21,35 @@ one-resident-at-a-time (a 32 GB card holds trellis plus a single SDXL-class pipe
 switching between jobs costs a reload; style LoRAs are adapters on the resident pipe and switch
 for free.
 
+## Licences, and what you may do with the output
+
+**Read this before you sell anything you generated.** These weights are not part
+of Warlock Studio: you download them from their publishers, under their terms,
+and two of them restrict commercial use of what they produce. The app shows the
+row below in the model picker and in **Settings → Models**, and marks the
+restricted ones; this table is the same information in full.
+
+| Model | Licence | Output may be sold? |
+|---|---|---|
+| **SDXL 1.0** (the default, and the Hyper-SD / LCM / Lightning / PAG recipes over it) | OpenRAIL++-M | Yes, subject to the licence's use restrictions |
+| **SDXL-Turbo** | Stability AI Non-Commercial Research Community License | **No** — commercial use requires a paid Stability AI membership |
+| **Playground v2.5** | Playground v2.5 Community License | Yes below 1M monthly active users, and you must ship the licence text plus its attribution string |
+| **Juggernaut XL v9** | OpenRAIL-M | Yes, subject to the use restrictions |
+| **DreamShaper XL** | OpenRAIL++-M | Yes, subject to the use restrictions |
+| **FLUX.2 klein / klein-base 4B** | Apache-2.0 | Yes |
+| **TRELLIS.2-4B** (the reconstruction engine) | MIT | Yes |
+| **BiRefNet** (matting) | MIT | Yes |
+
+The OpenRAIL family is commercially permissive but carries *use* restrictions —
+a list of things you may not generate. They are short; read them once.
+
+Style LoRAs, ControlNet, IP-Adapter, DINOv2 and ViTPose carry their own terms on
+their own repository pages. None of them is known to restrict commercial output,
+but this project has not audited each one and does not warrant them.
+
+Warlock Studio itself is GPL-3.0-or-later ([LICENSE](../LICENSE)); the components
+it bundles are in [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md).
+
 ## Image models and style LoRAs
 
 ```powershell

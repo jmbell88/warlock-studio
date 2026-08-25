@@ -385,6 +385,29 @@ class BaseModel:
     #: breaks, and defaulted so a new entry is legal before its prose is
     #: written.
     description: str = ""
+    #: What the *weights* are licensed under, and whether output may be sold.
+    #:
+    #: **A field on the spec for ``description``'s reason exactly** -- a table
+    #: keyed on the model key would be a copy where a rename leaves a blank
+    #: cell and nothing fails. This one is worse than a blank cell: the blank
+    #: is the permissive-looking answer.
+    #:
+    #: This exists because a tool whose entire purpose is producing assets
+    #: people will sell shipped two checkpoints that restrict exactly that and
+    #: said so nowhere -- not in ``docs/MODELS.md``, not at download time, not
+    #: in the picker. SDXL-Turbo is Stability's non-commercial research licence
+    #: and was promoted in the README as "the fast option"; Playground v2.5
+    #: permits commercial use only below 1M monthly users and requires shipping
+    #: its licence and attribution string.
+    #:
+    #: ``commercial`` is the field the UI actually branches on, because it is
+    #: the only question a user generating a game asset is really asking.
+    license: str = ""
+    #: False when the licence forbids commercial use of generated output, or
+    #: attaches conditions to it. Drives the picker's warning badge.
+    commercial: bool = True
+    #: The condition, when ``commercial`` is True but not unconditionally so.
+    license_note: str = ""
 
     @property
     def download(self) -> str:
@@ -576,6 +599,9 @@ BASE_MODELS: dict[str, BaseModel] = _table(
             "weakly here: they are trained against full SDXL at 20-25 steps with "
             "CFG. This is also the entry WARLOCK_T2I_DIR redirects."
         ),
+        license="Stability AI Non-Commercial Research Community License",
+        commercial=False,
+        license_note="Commercial use of generated images requires a paid Stability AI membership.",
     ),
     BaseModel(
         # The backend where style LoRAs behave as trained: they are fitted
@@ -607,6 +633,8 @@ BASE_MODELS: dict[str, BaseModel] = _table(
             "Turbo's four steps at guidance 0; Hyper-SD buys the step count back "
             "without changing the weights they were fitted to."
         ),
+        license="OpenRAIL++-M (SDXL 1.0) + OpenRAIL++-M (Hyper-SD)",
+        commercial=True,
     ),
     BaseModel(
         # Its own scheduler_config.json is already EDMDPMSolverMultistep, so no
@@ -635,6 +663,12 @@ BASE_MODELS: dict[str, BaseModel] = _table(
             "reference is the deliverable rather than a step on the way to a "
             "mesh."
         ),
+        license="Playground v2.5 Community License",
+        commercial=True,
+        license_note=(
+            "Free below 1M monthly active users. Requires shipping the licence "
+            "text and its attribution string with anything you distribute."
+        ),
     ),
     BaseModel(
         # The same weights as "sdxl", run the way the checkpoint was trained:
@@ -659,6 +693,8 @@ BASE_MODELS: dict[str, BaseModel] = _table(
             "weight. Slower than the distilled options and measurably better at "
             "holding a silhouette."
         ),
+        license="OpenRAIL++-M",
+        commercial=True,
     ),
     BaseModel(
         # The same weights and recipe as sdxl_cfg with two training-free
@@ -686,6 +722,8 @@ BASE_MODELS: dict[str, BaseModel] = _table(
             "Cleaner structure for the same weights, and about a third more time "
             "per image."
         ),
+        license="OpenRAIL++-M",
+        commercial=True,
     ),
     BaseModel(
         # The pixel-art profile's null hypothesis: the same SDXL 1.0 weights as
@@ -729,6 +767,8 @@ BASE_MODELS: dict[str, BaseModel] = _table(
             "Pair it with the pixel-art style LoRA -- alone it is simply a fast "
             "SDXL."
         ),
+        license="OpenRAIL++-M (SDXL 1.0) + OpenRAIL-M (LCM-LoRA)",
+        commercial=True,
     ),
     BaseModel(
         # The second distillation arm, and the reason it is worth a row: it is
@@ -765,6 +805,8 @@ BASE_MODELS: dict[str, BaseModel] = _table(
             "consistency, so the two are directly comparable with everything else "
             "held fixed."
         ),
+        license="OpenRAIL++-M (SDXL 1.0) + OpenRAIL++-M (SDXL-Lightning)",
+        commercial=True,
     ),
     BaseModel(
         # A photoreal SDXL finetune, run at its card's own recipe: DPM++ 2M
@@ -795,6 +837,8 @@ BASE_MODELS: dict[str, BaseModel] = _table(
             "read as photographed rather than illustrated, which suits props that "
             "will be reconstructed and then lit in an engine."
         ),
+        license="OpenRAIL-M",
+        commercial=True,
     ),
     BaseModel(
         # The stylised counterpart to juggernaut, and the card's own snippet is
@@ -821,6 +865,8 @@ BASE_MODELS: dict[str, BaseModel] = _table(
             "The stylised counterpart to the photoreal finetune above.\n\n"
             "Its own checkpoint, DEIS at 25 steps per its card."
         ),
+        license="OpenRAIL++-M",
+        commercial=True,
     ),
     BaseModel(
         # The first non-SDXL architecture in the registry, and the reason
@@ -893,6 +939,8 @@ BASE_MODELS: dict[str, BaseModel] = _table(
             "distilled weights. Large -- budget the VRAM before running it beside "
             "a reconstruction."
         ),
+        license="Apache-2.0",
+        commercial=True,
     ),
     BaseModel(
         # The distilled sibling of flux_klein above, and the other side of that
@@ -950,6 +998,8 @@ BASE_MODELS: dict[str, BaseModel] = _table(
             "-- pick klein-base when you want one. It is here because the FLUX.2 "
             "pixel-art LoRA was trained against these weights."
         ),
+        license="Apache-2.0",
+        commercial=True,
     ),
 )
 

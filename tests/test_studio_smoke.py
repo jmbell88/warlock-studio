@@ -1748,6 +1748,70 @@ def test_paint_mode_builds_and_gives_its_textures_back(app_ctx, imgui_ctx):
     inker_mode.release_all(app_ctx)
 
 
+def test_the_context_bar_draws_every_tools_own_options(app_ctx, imgui_ctx):
+    """One frame per tool, so a widget key added to ``CONTEXT_WIDGETS`` with no
+    drawing case behind it fails here rather than on the bar it belongs to.
+
+    The coverage test asserts the *table* is complete; this asserts the table
+    can be drawn. The bucket's three Aseprite options were the case that made
+    the difference matter -- the exercise pass presses tool *groups* and leaves
+    the bar showing the brush's widgets, so nothing rendered them."""
+    from warlock.studio import inker, inker_mode, inker_state
+    from warlock.studio.panes import inker_context
+
+    app_ctx.state.mode = "inker"
+    state = inker_mode.ensure(app_ctx)
+    tab = inker_mode._adopt(
+        app_ctx, state, inker.Document.blank(16, 16), path=None, title="tools"
+    )
+    for tool, _label, _key in inker_state.TOOLS:
+        state.set_tool(tool)
+        assert state.tool == tool
+        _frame(imgui_ctx, lambda: inker_context.draw(app_ctx, state, tab))
+
+
+def test_the_timeline_draws_group_headers_open_and_folded(app_ctx, imgui_ctx):
+    """The header row is the only new *widget* in the grid, and nothing else
+    renders it: the engine tests assert the row plan, and the exercise pass
+    walks a blank document, which has no folders to draw. So this draws one --
+    open, folded, nested and with a tag band under it -- because a header that
+    unbalances the id stack takes the frame loop down and the plan alone
+    cannot say."""
+
+    from warlock.studio import inker, inker_mode
+    from warlock.studio.panes import inker_timeline
+
+    app_ctx.state.mode = "inker"
+    state = inker_mode.ensure(app_ctx)
+    tab = inker_mode._adopt(
+        app_ctx, state, inker.Document.blank(16, 16), path=None, title="grouped"
+    )
+    doc = tab.doc
+    for name in ("lines", "flats", "shadow"):
+        doc.add_layer(name)
+    outer = doc.group_layers([1, 2])
+    inner = doc.group_layers([2])
+    doc.add_frame()
+    doc.anim.tags.append(inker.Tag(name="walk", start=0, end=1))
+
+    def frame() -> None:
+        _frame(imgui_ctx, lambda: inker_timeline.draw(app_ctx))
+
+    frame()
+    inker_timeline.toggle_fold(tab, inner.uid)
+    frame()
+    inker_timeline.toggle_fold(tab, outer.uid)
+    frame()
+    assert tab.collapsed_groups == {inner.uid, outer.uid}
+
+    # A dissolved group must not leave its fold behind: the next draw is what
+    # sweeps it, and a uid folded shut with no header to reopen it would hide
+    # rows for the rest of the session.
+    doc.ungroup(outer.uid)
+    frame()
+    assert outer.uid not in tab.collapsed_groups
+
+
 def test_the_animated_inker_builds_and_gives_its_frame_textures_back(app_ctx, imgui_ctx):
     """The timeline strip, onion skinning and the playback draw path.
 

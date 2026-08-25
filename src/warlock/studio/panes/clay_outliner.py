@@ -84,7 +84,7 @@ def _body(ctx: Any) -> None:
         if needle and needle not in (obj.name or "").lower():
             continue
         shown += 1
-        _row(ctx, state, doc, obj, index, filtered=bool(needle))
+        _row(ctx, state, doc, obj, index, filtered=bool(needle), saving=bool(tab.saving))
     widgets.no_matches(needle, shown)
     imgui.end_disabled()
 
@@ -134,7 +134,9 @@ def _range(doc: Any, anchor: int, uid: int) -> list[int]:
     return order[lo : hi + 1]
 
 
-def _reorder(ctx: Any, doc: Any, obj: Any, index: int, *, filtered: bool) -> None:
+def _reorder(
+    ctx: Any, doc: Any, obj: Any, index: int, *, filtered: bool, saving: bool
+) -> None:
     """Drag one row onto another to move it in the list.
 
     Display order is the order ``to_model`` and ``write_glb`` emit nodes in, so
@@ -146,8 +148,15 @@ def _reorder(ctx: Any, doc: Any, obj: Any, index: int, *, filtered: bool) -> Non
     of them names a position in the *filtered* list and there is no honest
     answer for where that is in the real one -- a drop that silently landed
     somewhere else would be a reorder the user cannot see.
+
+    **Refused outright while the tab is saving**, rather than relying on
+    ``_body``'s ``begin_disabled(tab.saving)`` -- ``inker_timeline._reorder``
+    says why in the same words: *begin_disabled does not stop a drag-drop
+    source from registering*. Every other control in this panel is genuinely
+    covered by that disable, so a drag was the one write that could still land
+    on ``doc.objects`` while ``write_glb`` was walking it on a task thread.
     """
-    if filtered:
+    if filtered or saving:
         return
     # The payload carries the *uid* rather than a row index, for the reason
     # every address in this package is one: the drop reads the list again, so a
@@ -195,7 +204,9 @@ def _context_menu(ctx: Any, state: Any, doc: Any, obj: Any) -> None:
     imgui.end_popup()
 
 
-def _row(ctx: Any, state: Any, doc: Any, obj: Any, index: int, *, filtered: bool) -> None:
+def _row(
+    ctx: Any, state: Any, doc: Any, obj: Any, index: int, *, filtered: bool, saving: bool
+) -> None:
     selected = obj.uid in doc.selection
     imgui.push_id(str(obj.uid))
 
@@ -238,7 +249,7 @@ def _row(ctx: Any, state: Any, doc: Any, obj: Any, index: int, *, filtered: bool
         # Both hang off the selectable, which is the item the user aims at --
         # the eye and the trash button are their own targets and must keep
         # doing only what they say.
-        _reorder(ctx, doc, obj, index, filtered=filtered)
+        _reorder(ctx, doc, obj, index, filtered=filtered, saving=saving)
         _context_menu(ctx, state, doc, obj)
         if imgui.is_item_hovered() and imgui.is_mouse_double_clicked(0):
             state.renaming = obj.uid

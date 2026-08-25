@@ -13,7 +13,9 @@ state (``InkerDoc.saving``) rather than a function call that returns.
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import os
 import re
 import time
 from collections.abc import Sequence
@@ -27,6 +29,33 @@ from .inker import animation
 from .inker.asein import ASEPRITE_SUFFIXES
 from .inker_state import InkerDoc, InkerState
 from .state import set_mode
+
+
+def _write_atomic(path: Path, data: bytes) -> None:
+    """Write ``data`` onto ``path`` through a staging file, never in place.
+
+    ``ora.write_ora``'s idiom, factored out because three writers here need it
+    for one reason. Two of them (the flattened-PNG and tileset exports) can be
+    pointed at a file that already exists; the third is a save straight back
+    over the ``.png`` the user opened, which ``WRITABLE_SUFFIXES`` deliberately
+    allows -- and there ``write_bytes`` truncates the user's only copy before
+    it writes a byte, so a crash or a full disk mid-write destroys the drawing
+    rather than failing the save. Every other document writer in the app
+    already stages and replaces (``ora.py``, ``aseout.py``, ``clay_mode.py``,
+    ``plotter_io.py``, ``packwright_io.py``); this file was the gap.
+
+    The temp is a dotfile beside the destination so it lands on the same
+    volume -- ``os.replace`` is only atomic within one -- and it is unlinked on
+    failure the way ``plotter_io`` and ``journal`` unlink theirs, rather than
+    left behind for the user to find.
+    """
+    tmp = path.with_name(f".{path.name}.tmp")
+    try:
+        tmp.write_bytes(data)
+        os.replace(tmp, path)
+    finally:
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
 
 log = logging.getLogger(__name__)
 
@@ -1181,7 +1210,7 @@ def export_png(ctx: Any, tab: InkerDoc | None = None, *, repeat: bool = False) -
             return None
         if dest.suffix.lower() != ".png":
             dest = dest.with_suffix(".png")
-        dest.write_bytes(doc.png_bytes(scale=scale))
+        _write_atomic(dest, doc.png_bytes(scale=scale))
         # ``dest`` and ``export_kind`` so the *next* repeat has something to
         # repeat -- ``on_task_done`` records both.
         return {"exported": dest, "dest": dest, "export_kind": "png"}
@@ -1833,6 +1862,38 @@ class _Payload:
     loop: bool | int
 
 
+def pump_undo_trim(ctx: Any) -> None:
+    """Say so, once per event, when the history dropped steps to stay in memory.
+
+    Beside ``pump_export`` and ``journal.pump``, and in every mode for their
+    reason: the press that trimmed the stack is usually the last thing the user
+    does before switching away, and the missing undo is discovered somewhere
+    else entirely.
+
+    The engine counts rather than calls back -- ``studio.undo`` imports nothing
+    and two headless packages depend on that -- so the comparison lives here,
+    against a per-tab mark.
+    """
+    state = getattr(ctx.state, "inker", None)
+    if state is None:
+        return
+    for tab in state.docs:
+        history = getattr(tab.doc, "history", None)
+        trimmed = getattr(history, "trimmed", 0)
+        if trimmed == tab.trim_seen:
+            continue
+        # The mark *is* the coalesce: this runs every frame in every mode, and
+        # a tab left unmarked would raise the same toast sixty times a second
+        # for as long as the count stayed different.
+        tab.trim_seen = trimmed
+        if trimmed:
+            ctx.toast(
+                f"Undo history trimmed on {tab.title}: that step was too large "
+                "to keep alongside the others.",
+                "warn",
+            )
+
+
 def _submit_export(ctx: Any, export: _Export) -> None:
     """The work list is read; hand it to a task. Frame thread."""
     from .inker import gifout, sheetout
@@ -2238,7 +2299,7 @@ def _write(doc: Any, path: Path, file_format: str) -> None:
         except ValueError as exc:
             raise invalid_from(exc, "This drawing could not be saved as .aseprite") from exc
     else:
-        path.write_bytes(doc.png_bytes())
+        _write_atomic(path, doc.png_bytes())
 
 
 # One rule for all four document modes: see :func:`docmodes.start_save` for why
@@ -3783,7 +3844,9 @@ COLOR_MODES = ("rgb", "indexed", "grayscale")
 COLOR_MODE_LABELS = {"rgb": "RGB", "indexed": "Indexed", "grayscale": "Grayscale"}
 
 
-def set_color_mode(ctx: Any, tab: Any, mode: str, *, max_colours: int = 32) -> bool:
+def set_color_mode(
+    ctx: Any, tab: Any, mode: str, *, max_colours: int = 32, method: str = "nearest"
+) -> bool:
     """Move a document between RGB, true indexed and grayscale. -> whether it moved.
 
     One door for all three, because they are one question and because the
@@ -3795,6 +3858,12 @@ def set_color_mode(ctx: Any, tab: Any, mode: str, *, max_colours: int = 32) -> b
     colours, exactly as ``palette_from_document`` does for constrained mode --
     two published operations and no third one. Entering it *with* a palette
     keeps the table the user authored.
+
+    ``method`` is one of ``dither.METHODS``. It defaulted to ``"nearest"`` and
+    was not a parameter at all, which made the Convert popup's matrix reachable
+    for a *snap onto a palette* and unreachable for the one operation that
+    changes mode -- so "convert to indexed" was the only conversion in the app
+    with no dither. The pane routes the popup's choice through here now.
     """
     if tab is None or tab.busy or mode not in COLOR_MODES:
         return False
@@ -3805,7 +3874,7 @@ def set_color_mode(ctx: Any, tab: Any, mode: str, *, max_colours: int = 32) -> b
     try:
         if mode == "indexed":
             moved = doc.convert_to_indexed(
-                doc.palette or None, "nearest", max_colours=max_colours
+                doc.palette or None, method, max_colours=max_colours
             )
         elif mode == "grayscale":
             moved = doc.convert_to_grayscale()
@@ -4081,8 +4150,8 @@ def export_tileset(ctx: Any, tab: InkerDoc | None = None, *, index: int) -> None
         # The ``.tsx`` names the PNG by the name it is written under here, so
         # the pair is consistent by construction rather than by two writers
         # agreeing on a convention.
-        dest.write_bytes(tsxlib.tsx_bytes(tileset, image_name=png_path.name))
-        png_path.write_bytes(pngio.png_bytes(tileset.pixels))
+        _write_atomic(dest, tsxlib.tsx_bytes(tileset, image_name=png_path.name))
+        _write_atomic(png_path, pngio.png_bytes(tileset.pixels))
         return {"exported": dest}
 
     _start(ctx, tab, f"inker-export:{tab.uid}", run)

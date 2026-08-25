@@ -500,10 +500,22 @@ def _nvml() -> tuple[Any, Any, str] | None:
 
 
 def probe() -> DeviceMemory | None:
-    """The startup variant, permitted to import torch.
+    """The variant permitted to import torch. **Not the startup path.**
 
-    ``doctor._cuda_check`` already pays that import during ``run_checks``, so
-    by the time the plan is resolved this costs nothing extra.
+    The docstring here used to say "the startup variant" and justify itself
+    with "``doctor._cuda_check`` already pays that import during
+    ``run_checks``, so this costs nothing extra". That stopped being true when
+    ``_cuda_check`` learned to defer the import (C29) and nobody revisited this
+    -- leaving ``_vram_check`` as the one row in ``run_checks`` that still
+    imported torch unconditionally, so the deferral bought nothing at all on
+    the recommended install. Measured on 2026-08-24: 1,511 ms per cold start,
+    against 47 ms for the whole check set once this stopped being called from
+    it.
+
+    ``doctor._vram_check`` now calls :func:`device_memory` instead unless it
+    has actually been asked to probe. Use this only where paying seconds for a
+    definitive answer is the right trade -- and never from the frame thread or
+    the event loop.
     """
     try:
         import torch

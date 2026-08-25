@@ -139,6 +139,104 @@ def _min_window_size(monitor_scale: float) -> tuple[int, int]:
     return (int(MIN_SIZE[0] * monitor_scale), int(MIN_SIZE[1] * monitor_scale))
 
 
+def _desktop_size(pygame: Any) -> tuple[int, int] | None:
+    """The primary display's size in physical pixels, or None if SDL cannot say.
+
+    ``get_desktop_sizes`` is the whole-display size rather than the work area,
+    so this is a ceiling on what can be *asked for*, not a promise the window
+    will not sit under the taskbar. That is the honest guarantee available: SDL
+    exposes no work area, and a window one taskbar too tall is recoverable
+    where one whose title bar is off the bottom of the screen is not.
+    """
+    try:
+        sizes = pygame.display.get_desktop_sizes()
+    except Exception:  # pragma: no cover - SDL without a display
+        return None
+    if not sizes:
+        return None
+    width, height = sizes[0]
+    if width < 1 or height < 1:
+        return None
+    return (int(width), int(height))
+
+
+def _window_size(
+    stored: Any, *, override: Any, first_run_scale: float, desktop: tuple[int, int] | None
+) -> tuple[int, int]:
+    """The size to open at: validated, then clamped to the screen.
+
+    Two separate bugs, both of which reached ``pygame.display.set_mode``.
+
+    **The stored value was trusted.** ``Settings.load`` discards the whole file
+    on a *version* mismatch, but a single malformed ``window_size`` in an
+    otherwise-valid file sailed straight through to ``set_mode`` with no shape
+    check and no floor -- and ``MIN_SIZE`` was enforced only on the live resize
+    path, which is to say after the window already existed. A junk value there
+    is not a cosmetic problem: if ``set_mode`` raises, ``run``'s handler reports
+    the crash but never rewrites the key, so it recurs on every launch and a
+    non-developer has no way back in. ``_ui_scale`` directly above already
+    states the rule this setting was skipping -- *a junk value must not brick
+    the window* -- so this is that rule, applied to the other stored geometry.
+
+    **The default was never checked against the screen.** ``DEFAULT_SIZE``
+    scaled by the monitor is 2000x1187 at the 125% Windows recommends for many
+    1080p laptops, which does not fit a 1920x1080 panel; the unscaled 1600x950
+    does not fit a 1366x768 one at all. Clamping is last so it applies to a
+    stored size too -- the display a window was closed on may not be the
+    display it reopens on.
+
+    ``override`` wins outright and unclamped: it is the screenshot harness
+    asking for an exact framebuffer, and a clamp there would silently produce
+    shots of a size nothing asked for.
+    """
+    if override:
+        return (int(override[0]), int(override[1]))
+    default = (int(DEFAULT_SIZE[0] * first_run_scale), int(DEFAULT_SIZE[1] * first_run_scale))
+    size = default
+    try:
+        width, height = (int(stored[0]), int(stored[1]))  # type: ignore[index]
+    except (TypeError, ValueError, IndexError, KeyError):
+        pass
+    else:
+        floor = _min_window_size(first_run_scale)
+        if width > 0 and height > 0:
+            size = (max(width, floor[0]), max(height, floor[1]))
+    if desktop is not None:
+        size = (min(size[0], desktop[0]), min(size[1], desktop[1]))
+    # Never zero, whatever the display claimed: ``set_mode((0, n))`` is a
+    # fullscreen request to SDL, not a small window.
+    return (max(size[0], 1), max(size[1], 1))
+
+
+def modal_open(ctx: Any) -> bool:
+    """Whether *any* modal is on screen and owns the keyboard.
+
+    It used to know about exactly two: the confirm queue and the prompt queue.
+    The matte preview is a third -- a real modal, drawn in front of the
+    promotion, with its own Accept and Cancel -- and every global shortcut
+    leaked straight through it (UX-08). Ctrl+K opened the palette behind it;
+    Ctrl+Enter submitted the form the modal was a *question about*; a mode key
+    left the app somewhere else with the modal still up. Ownership is a
+    property of "a modal is up", not of which queue happens to hold it, so the
+    predicate asks all four.
+
+    A module function with ``App._modal_open`` delegating to it, because the
+    guided tour needs the same question and is deliberately *not* one of the
+    answers: ``panes/tour.py`` suspends its scrim while a modal is up, and a
+    second copy of this list would be a copy that stopped agreeing the next
+    time a modal was added.
+    """
+    from . import matte_preview
+    from .panes import first_run
+
+    return (
+        ctx.confirms.pending is not None
+        or ctx.prompts.pending is not None
+        or matte_preview.is_open(ctx)
+        or first_run.is_open(ctx)
+    )
+
+
 def _ui_scale(settings: Any) -> float:
     """The stored multiplier, clamped. A junk value must not brick the window."""
     from . import tokens
@@ -178,8 +276,8 @@ def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
             ("F1", "Open the manual over whatever is on screen"),
             (
                 "Esc",
-                "Close the topmost thing: the manual, then the profile "
-                "sheet, then a mode you passed through",
+                "Close the topmost thing: the manual, then a running tour, "
+                "then the profile sheet, then a mode you passed through",
             ),
             ("F10", "Toggle the frame-rate readout"),
         ],
@@ -746,10 +844,11 @@ class App:
         # is already physical, and the first-run default scales by the primary
         # monitor so 1600x950 means the same amount of screen everywhere.
         first_run_scale = dpi.system_scale()
-        size = tuple(
-            size_override
-            or settings.get("window_size")
-            or (int(DEFAULT_SIZE[0] * first_run_scale), int(DEFAULT_SIZE[1] * first_run_scale))
+        size = _window_size(
+            settings.get("window_size"),
+            override=size_override,
+            first_run_scale=first_run_scale,
+            desktop=_desktop_size(pygame),
         )
         self.window = pygame.display.set_mode(
             size, pygame.OPENGL | pygame.DOUBLEBUF | pygame.RESIZABLE
@@ -1509,6 +1608,20 @@ class App:
             if isinstance(done.result, dict):
                 ctx.model_storage = done.result
             return
+        if key == "library-verify":
+            self._report_library_check(done.result)
+            return
+        if key == "library-backup":
+            out = done.result if isinstance(done.result, dict) else {}
+            if out:
+                from .state import format_bytes
+
+                ctx.toast(
+                    f"Library index backed up to {out['dir']} "
+                    f"({format_bytes(int(out['store_bytes']))}).",
+                    "success",
+                )
+            return
         if key == "sweep-staging":
             # Silent when there was nothing to reclaim, which is every launch
             # that did not follow a cancelled fetch. Said out loud when there
@@ -1839,6 +1952,10 @@ class App:
         # button was clicked, and a user who started one and switched to the
         # library must still get their file.
         inker_mode.pump_export(self.app_ctx)
+        # And beside it: the history drops its oldest steps when they get too
+        # big to hold, and the press that did it is routinely the last thing
+        # the user does in Inker before switching away.
+        inker_mode.pump_undo_trim(self.app_ctx)
         # Scanned here, on the first frame that has a Ctx, and *offered* by the
         # home screen rather than by a modal in front of it. It has to be here
         # and not in the pane: the autosave directory is also where this
@@ -1847,6 +1964,34 @@ class App:
         # no-op after the first call, which is what makes calling it per frame
         # correct rather than merely cheap.
         journal.snapshot(ctx)
+
+    def _report_library_check(self, report: Any) -> None:
+        """One line on screen, the whole report in the log.
+
+        A findings *list* wants a modal with columns and a way to act on each
+        row, and none of the five findings has an action this app should take on
+        the user's behalf -- deleting an orphan directory or a stale verdict is
+        exactly the bulk gesture that caused the 2026-08-09 loss the check
+        exists to surface. So the pane says how many and where to read them, and
+        ``warlock library verify --json`` is the surface that hands the detail
+        to something that can act.
+        """
+        ctx = self.app_ctx
+        if not isinstance(report, dict):
+            return
+        checked = report.get("checked", 0)
+        noun = "asset" if checked == 1 else "assets"
+        if report.get("ok"):
+            ctx.toast(f"Library intact - {checked} {noun} checked.", "success")
+            return
+        log.warning("library verify: %s", json.dumps(report, default=str))
+        findings = report.get("findings", 0)
+        thing = "finding" if findings == 1 else "findings"
+        ctx.toast(
+            f"{findings} {thing} across {checked} {noun}. The detail is in warlock.log.",
+            "warn",
+            action="log",
+        )
 
     def _check_worker(self) -> None:
         """Say so, once, when the GPU worker dies.
@@ -2316,27 +2461,8 @@ class App:
         return True
 
     def _modal_open(self) -> bool:
-        """Whether *any* modal is on screen and owns the keyboard.
-
-        It used to know about exactly two: the confirm queue and the prompt
-        queue. The matte preview is a third -- a real modal, drawn in front of
-        the promotion, with its own Accept and Cancel -- and every global
-        shortcut leaked straight through it (UX-08). Ctrl+K opened the palette
-        behind it; Ctrl+Enter submitted the form the modal was a *question
-        about*; a mode key left the app somewhere else with the modal still up.
-        Ownership is a property of "a modal is up", not of which queue happens
-        to hold it, so the predicate asks all three.
-        """
-        from . import matte_preview
-        from .panes import first_run
-
-        ctx = self.app_ctx
-        return (
-            ctx.confirms.pending is not None
-            or ctx.prompts.pending is not None
-            or matte_preview.is_open(ctx)
-            or first_run.is_open(ctx)
-        )
+        """Whether *any* modal is on screen and owns the keyboard."""
+        return modal_open(self.app_ctx)
 
     def _note_mode(self, state: Any) -> None:
         """Sample ``mode`` so Esc knows where it came from.

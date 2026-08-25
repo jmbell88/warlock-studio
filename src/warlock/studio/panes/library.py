@@ -899,8 +899,15 @@ def _send_to_troupe_item(ctx: Any, job: dict[str, Any]) -> None:
     if not troupe_mode.can_send_to_troupe(ctx, job):
         return
     rigged = "rig.glb" in (job.get("files") or [])
+    # Both branches name the humanoid requirement now. The unrigged one always
+    # did; the *rigged* one said only "render a character sheet", which is the
+    # case where the mesh may already be a quadruped -- Poser offers seven
+    # skeletons and Troupe's clip library carries clips for exactly one. The
+    # refusal is real, immediate and well worded, but a user who has to press
+    # the button to discover the rule has been told too late.
     hint = (
-        "Render a character sheet from this mesh."
+        "Render a character sheet from this mesh. Needs a humanoid rig -- "
+        "Troupe's clip library has no clips for the other six skeletons."
         if rigged
         else "Rig this mesh as a humanoid, then render a character sheet from it."
     )

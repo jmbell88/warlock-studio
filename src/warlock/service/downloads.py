@@ -105,6 +105,21 @@ def rows(svc: WarlockService) -> list[dict[str, Any]]:
         description = str(getattr(entry.spec, "description", "") or "")
         if description:
             row["description"] = description
+        # What the *weights* permit, carried in the same absent-rather-than-
+        # empty style. This is the one row fact that can cost the user money:
+        # two shipped checkpoints restrict commercial use of what they generate
+        # and the app used to say so nowhere, in a tool whose whole purpose is
+        # making assets people sell. Surfaced here rather than only in the 2D
+        # picker because *this* is the pane where the download is agreed to,
+        # which is the last moment before ~7 GB is spent on weights the user
+        # may not be allowed to use.
+        licence = str(getattr(entry.spec, "license", "") or "")
+        if licence:
+            row["license"] = licence
+            row["commercial"] = bool(getattr(entry.spec, "commercial", True))
+            note = str(getattr(entry.spec, "license_note", "") or "")
+            if note:
+                row["license_note"] = note
         # What removing *this* row alone would free, and whether it would free
         # anything at all. Only for rows that are here -- there is nothing to
         # offer against a model that is not installed -- and computed rather

@@ -588,6 +588,11 @@ def can_reselect(state: Any, tab: Any) -> bool:
     return tab is not None and tab.doc._last_mask is not None
 
 
+#: Said by every verb that needs frames to act on. One string, because six
+#: rows saying it slightly differently is how one of them comes to be wrong.
+NOT_ANIMATED = "This drawing has no frames yet -- Animate it first."
+
+
 def animated(state: Any, tab: Any) -> bool:
     return tab is not None and tab.doc.anim is not None
 
@@ -1101,6 +1106,23 @@ def _paste(ctx: Any, tab: Any, *, as_layer: bool) -> Any:
     return result
 
 
+def _filter(name: str) -> Callable[..., Any]:
+    """An op that opens the filter popup with one filter already chosen.
+
+    The popup has always been able to run any of ``filters.FILTERS``; what it
+    had no route to was "the one I always use". Two of them get a key for the
+    reason Aseprite gives them one -- hue/saturation and invert are the two a
+    pixel artist reaches for by muscle memory.
+    """
+
+    def _run(ctx: Any, tab: Any, **_: Any) -> None:
+        state = ctx.state.inker
+        state.filter_name = name
+        state.pending_dialog = "inker-filter"
+
+    return _run
+
+
 # --- Sprite -----------------------------------------------------------------
 
 register(
@@ -1109,6 +1131,33 @@ register(
         "Canvas size...",
         dialog("inker-resize"),
         menu="Sprite",
+        # Aseprite's Canvas Size key. Its Sprite Size (Ctrl+Alt+I) is the same
+        # popup here -- "Scale image" and "Resize canvas" are two buttons on
+        # one dialog -- and one op cannot carry two bindings, so the key is the
+        # one the row is named after.
+        key="Ctrl+Alt+C",
+        enabled=ready,
+        reason=BUSY,
+    )
+)
+register(
+    Op(
+        "filter_hue_saturation",
+        "Hue / saturation...",
+        _filter("hue / saturation"),
+        menu="Sprite",
+        key="Ctrl+U",
+        enabled=ready,
+        reason=BUSY,
+    )
+)
+register(
+    Op(
+        "filter_invert",
+        "Invert colours...",
+        _filter("invert"),
+        menu="Sprite",
+        key="Ctrl+I",
         enabled=ready,
         reason=BUSY,
     )
@@ -1455,6 +1504,84 @@ register(
         key=",",
         enabled=animated,
         reason="This drawing has no frames yet -- Animate it first.",
+    )
+)
+register(
+    Op(
+        "first_frame",
+        "First frame",
+        lambda ctx, tab, **_: tab.doc.set_current_frame(0),
+        menu="Frame",
+        key="Home",
+        enabled=animated,
+        reason=NOT_ANIMATED,
+    )
+)
+register(
+    Op(
+        "last_frame",
+        "Last frame",
+        lambda ctx, tab, **_: tab.doc.set_current_frame(len(tab.doc.anim.frames) - 1),
+        menu="Frame",
+        key="End",
+        enabled=animated,
+        reason=NOT_ANIMATED,
+    )
+)
+register(
+    Op(
+        "new_frame",
+        "New frame",
+        _doc("add_frame"),
+        menu="Frame",
+        key="Alt+N",
+        # Offered on a *still* drawing too, and that is not an oversight:
+        # ``add_frame`` folds the ``AnimateEdit`` into its own step, so this is
+        # the verb that animates a drawing as well as the one that extends a
+        # clip. Requiring "Animate this drawing" first would be a second name
+        # for one operation.
+        enabled=ready,
+        reason=BUSY,
+        separator_before=True,
+    )
+)
+register(
+    Op(
+        "duplicate_frame",
+        "Duplicate frame",
+        _doc("add_frame", copy=True),
+        menu="Frame",
+        key="Alt+D",
+        enabled=ready,
+        reason=BUSY,
+    )
+)
+register(
+    Op(
+        "delete_frame",
+        "Delete frame",
+        _doc("remove_frame"),
+        menu="Frame",
+        # **No key, deliberately.** Aseprite has none either: every other verb
+        # here is recoverable by pressing it again, and a one-key drop of the
+        # frame under the playhead is the one worth reaching for a menu.
+        enabled=lambda state, tab: (
+            ready(state, tab) and animated(state, tab) and len(tab.doc.anim.frames) > 1
+        ),
+        reason="A clip keeps at least one frame.",
+    )
+)
+register(
+    Op(
+        "toggle_onion",
+        "Onion skin",
+        lambda ctx, tab, **_: _toggle(ctx, "onion"),
+        menu="Frame",
+        key="F3",
+        checked=lambda state, tab: bool(state.onion),
+        enabled=has_doc,
+        reason=NO_DOC,
+        separator_before=True,
     )
 )
 

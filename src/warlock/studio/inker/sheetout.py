@@ -53,6 +53,7 @@ __all__ = [
     "rebase_tags",
     "remap_tags",
     "require_distinct_names",
+    "reserved_check",
     "sanitize_stem",
     "scale_slices",
     "slices_block",
@@ -184,9 +185,49 @@ def filename_for(
         values["frame"] = f"{int(frame):04d}"
 
     try:
-        return template.format(**values)
+        name = template.format(**values)
     except (KeyError, IndexError, ValueError) as exc:
         raise ValueError(f"filename template {template!r} could not be filled in") from exc
+    reserved_check(name)
+    return name
+
+
+#: The MS-DOS device names Windows still refuses as filenames, forty years on.
+#: Reserved *with any extension* -- ``CON.png`` fails exactly as ``CON`` does --
+#: and case-insensitively.
+_RESERVED = frozenset(
+    {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+    | {f"COM{n}" for n in "123456789"}
+    | {f"LPT{n}" for n in "123456789"}
+)
+
+
+def reserved_check(name: str) -> None:
+    """Refuse a composed filename Windows will not accept. Raises ``ValueError``.
+
+    ``sanitize_stem`` covers the *characters* a name may hold and says nothing
+    about the handful of whole names that are illegal regardless: a layer or a
+    tag called ``CON`` -- or ``aux``, or ``com1`` -- survives sanitising intact
+    and then fails at ``open`` with an errno the user cannot map back to the
+    tag they typed. On a sheet split into fifty files that is forty-nine
+    written and one bare OS error.
+
+    The stem before the first dot, because the reservation is on the *device*
+    name and an extension does not lift it. Trailing dots and spaces go with
+    it: Windows strips them silently, so ``walk.`` and ``walk`` become the same
+    file, which is a collision ``require_distinct_names`` cannot see coming.
+    """
+    stem = name.split(".", 1)[0]
+    if stem.upper() in _RESERVED:
+        raise ValueError(
+            f"{stem!r} is a name Windows reserves for a device and cannot give "
+            "a file; rename the tag or layer, or change the template"
+        )
+    if name != name.rstrip(". "):
+        raise ValueError(
+            f"{name!r} ends in a dot or a space, which Windows silently strips "
+            "-- two exports would collide on one file"
+        )
 
 
 def require_distinct_names(names: Sequence[str]) -> None:

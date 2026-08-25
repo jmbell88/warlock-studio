@@ -1367,6 +1367,12 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
             thresh=state.wand_tolerance,
             contiguous=state.wand_contiguous,
             wrap=tab.tiled,
+            refer=state.fill_refer,
+            eight_connected=state.wand_eight,
+            # The switch is the tool's, the size is the session's: the grid is
+            # a property of the canvas, so a bucket that carried its own would
+            # stop somewhere other than the lines on screen.
+            stop_at_grid=state.grid_size if state.fill_stop_grid else None,
         )
         # The one paint gesture that never reaches ``_release``: a fill is a
         # click, so its Manual-mode notice is due here.
@@ -1381,6 +1387,7 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
             op=state.combine,
             contiguous=state.wand_contiguous,
             wrap=tab.tiled,
+            eight_connected=state.wand_eight,
         )
         state.drag_kind = ""
         return

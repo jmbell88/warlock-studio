@@ -41,6 +41,27 @@ UNDO_BYTES = 192 * 1024 * 1024
 UNDO_MAX_DEPTH = 64
 UNDO_MIN_DEPTH = 8
 
+# The depth floor above is a floor on *steps*, and it was sized when the
+# largest imaginable step was one layer's snapshot. It is not: a canvas resize
+# or a rotate on a 4096-square document with thirty layers snapshots all of
+# them -- ~1.9 GiB in a single step -- and eight of those are just over 15 GiB,
+# reached without the byte budget ever getting a vote, because
+# ``len(self._done) > UNDO_MIN_DEPTH`` stays false the whole way up. What that
+# produces is an out-of-memory kill holding an unsaved document, which loses
+# the painting *and* everything the two-minute journal has not written yet:
+# the most expensive way this app can fail, from an ordinary gesture.
+#
+# So the floor is a floor only while the stack can afford it. Past this ceiling
+# depth loses and eviction runs down to a single step -- a one-step history is
+# still an undo, and a process that is killed is not.
+#
+# Four times the soft budget, which is what it takes to keep the floor's own
+# worst *intended* case -- eight snapshots of one 4096-square RGBA layer, 512
+# MiB -- while refusing the case it was never sized for. One step can still
+# exceed this on its own and nothing here can help that: the guarantee is
+# "one step, or under the ceiling", never both.
+UNDO_HARD_BYTES = 4 * UNDO_BYTES
+
 
 # Serial numbers handed out at push time. They exist so a caller can ask "is
 # the document where it was when I saved it" -- ``rev`` cannot answer that,
@@ -91,10 +112,25 @@ def _label(edit: Any) -> str:
 
 
 class UndoStack:
-    """Bounded by bytes first, then by a depth floor and a depth ceiling."""
+    """Bounded by bytes first, then by a depth floor and a depth ceiling.
 
-    def __init__(self, budget: int = UNDO_BYTES) -> None:
+    The floor yields to :data:`UNDO_HARD_BYTES` -- see that constant for why a
+    stack that is small in steps can still be too big to keep.
+    """
+
+    def __init__(self, budget: int = UNDO_BYTES, *, hard: int = UNDO_HARD_BYTES) -> None:
         self.budget = budget
+        self.hard = hard
+        # Steps dropped because the stack was too *big*, ever, on this stack.
+        # Depth-cap evictions are deliberately not counted: a session that runs
+        # past UNDO_MAX_DEPTH is working normally, and saying so every time is
+        # noise.
+        #
+        # A counter rather than a callback, because this module imports nothing
+        # and two headless packages depend on that. Whoever can reach a status
+        # bar compares it against what it last saw -- with ``!=`` and not
+        # ``>``, since ``clear`` puts it back to zero along with the history.
+        self.trimmed = 0
         self._done: list[Edit] = []
         self._undone: list[Edit] = []
 
@@ -167,6 +203,27 @@ class UndoStack:
         """
         return self._done[-1].serial if self._done else 0
 
+    def collapse_since(self, depth: int) -> bool:
+        """Fold every step pushed since ``depth`` into a single one.
+
+        The alternative to threading a list of edits through half a dozen ops
+        that each already know how to push their own. A caller records
+        ``len(stack)``, does whatever it does, and asks for the run to become
+        one gesture -- which is the rule the rest of this package follows and
+        could not follow for a *composed* op like "delete these eight rows".
+
+        Nothing to fold (an empty run, or a single step) is ``False`` and no
+        change: a lone ``CompoundEdit`` around one edit would read as
+        "compound" in the history panel where the edit reads as what it did,
+        which is ``one_step``'s argument one level up.
+        """
+        if depth < 0 or len(self._done) - depth < 2:
+            return False
+        tail = self._done[depth:]
+        del self._done[depth:]
+        self.push(CompoundEdit(tail))
+        return True
+
     def push(self, edit: Edit) -> None:
         edit.serial = next(_serials)
         self._done.append(edit)
@@ -180,6 +237,12 @@ class UndoStack:
             self._done.pop(0)
         while len(self._done) > UNDO_MIN_DEPTH and self.bytes > self.budget:
             self._done.pop(0)
+            self.trimmed += 1
+        # And here the floor loses. Every loop above stops at UNDO_MIN_DEPTH;
+        # this one stops at one step. See UNDO_HARD_BYTES for why.
+        while len(self._done) > 1 and self.bytes > self.hard:
+            self._done.pop(0)
+            self.trimmed += 1
 
     def undo(self, doc: Any, *, redoable: bool = True) -> bool:
         """Reverse the newest step.
@@ -296,3 +359,6 @@ class UndoStack:
     def clear(self) -> None:
         self._done.clear()
         self._undone.clear()
+        # With the history rather than alongside it: a stack that reports steps
+        # trimmed from a history it no longer holds is describing nothing.
+        self.trimmed = 0

@@ -27,6 +27,7 @@ from typing import Any
 
 import numpy as np
 
+from .. import zipguard
 from ..plotter.pngio import png_bytes
 from .document import PackDoc, Source, new_uid
 from .layout import PackSettings
@@ -150,7 +151,7 @@ def read_wpack(data: bytes) -> PackDoc:
     from . import layout as laylib
 
     try:
-        zf = zipfile.ZipFile(io.BytesIO(data))
+        zf = zipguard.BoundedZip(io.BytesIO(data))
     except zipfile.BadZipFile as exc:
         raise ValueError("this is not a Warlock atlas document") from exc
 

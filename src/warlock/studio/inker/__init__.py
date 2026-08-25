@@ -85,7 +85,7 @@ from .layers import Layer, LayerStack
 from .ora import ora_bytes, read_ora, write_ora
 from .selection import COMBINE_OPS, Clipboard, FloatingBuffer, SelectionMask, magic_wand
 from .tiles import TilemapCel, TilesetSlot
-from .undo import UNDO_BYTES, UNDO_MAX_DEPTH, UNDO_MIN_DEPTH, UndoStack
+from .undo import UNDO_BYTES, UNDO_HARD_BYTES, UNDO_MAX_DEPTH, UNDO_MIN_DEPTH, UndoStack
 
 __all__ = [
     "BLEND_MODES",
@@ -127,6 +127,7 @@ __all__ = [
     "TilesetSlot",
     "Track",
     "UNDO_BYTES",
+    "UNDO_HARD_BYTES",
     "UNDO_MAX_DEPTH",
     "UNDO_MIN_DEPTH",
     "UndoStack",

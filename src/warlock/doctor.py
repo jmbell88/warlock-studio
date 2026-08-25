@@ -79,7 +79,7 @@ def run_checks(
     and their answers are cached from then on.
     """
     s = static_checks(config, probe_slow=probe_slow) if static is None else list(static)
-    v = volatile_checks(config, trellis_running)
+    v = volatile_checks(config, trellis_running, probe_slow=probe_slow)
     # The historical display order: the install rows, then the four volatile
     # rows, then the per-model rows, then Blender (last in s). The seam is found
     # by name (VOLATILE_AFTER) rather than by a slice index, which was coupled
@@ -108,11 +108,21 @@ def static_checks(config: Config, *, probe_slow: bool = True) -> list[Check]:
     ]
 
 
-def volatile_checks(config: Config, trellis_running: bool = False) -> list[Check]:
+def volatile_checks(
+    config: Config, trellis_running: bool = False, *, probe_slow: bool = True
+) -> list[Check]:
     """The rows worth re-asking every poll: the card, the job object, the
-    disk and the port are the four answers that change while the app runs."""
+    disk and the port are the four answers that change while the app runs.
+
+    ``probe_slow`` reaches here for one row. It is documented as skipping "the
+    torch import and the bpy subprocess", and ``_cuda_check`` duly defers the
+    import -- but ``_vram_check`` sat in this list calling ``vram.probe()``,
+    which imports torch unconditionally, so startup paid the 1.57 s anyway and
+    the deferral bought nothing on the recommended install. The flag now
+    reaches both rows that can trigger it.
+    """
     return [
-        _vram_check(config),
+        _vram_check(config, probe=probe_slow),
         _commit_check(),
         _job_object_check(),
         _instance_check(config),
@@ -383,14 +393,28 @@ def _cuda_check(*, probe: bool = True) -> Check:
     return Check("CUDA", ok, detail, fatal=False)
 
 
-def _vram_check(config: Config) -> Check:
+def _vram_check(config: Config, *, probe: bool = True) -> Check:
     """How large the card is, which mode that chose, and what a job may ask for.
 
     Fatal only when the budget cannot hold even a lone trellis run: every 3D
     job on such a host fails anyway, and it is better to say so at startup than
-    two minutes into the first reconstruction.
+    two minutes into the first reconstruction. **Also fatal when the host has
+    no CUDA device at all**: the plan then reports "admission control is off"
+    and, read alone, an amber row saying a budget is not being enforced is
+    indistinguishable from good news. There is no CPU fallback for
+    reconstruction, so the honest verdict on such a host is that the 3D path
+    will not run -- and the alternative is what it used to be, a
+    ``RuntimeError("trellis-server exited during startup (code N)")`` two
+    minutes into the first attempt, which is not a sentence anyone can act on.
+
+    ``probe=False`` takes the reading without importing torch --
+    ``_cuda_check``'s rule and its reason (C29), which this row was quietly
+    exempt from. ``device_memory`` reads torch only if something else has
+    already imported it and otherwise falls back to the last published reading,
+    so on the startup pass the row is simply computed from whatever is known.
     """
-    device = vram.probe()
+    probed = probe or sys.modules.get("torch") is not None
+    device = vram.probe() if probed else vram.device_memory()
     resolved = vram.plan(
         exclusive=config.vram_exclusive,
         budget_gib=config.vram_budget_gib,
@@ -399,6 +423,28 @@ def _vram_check(config: Config) -> Check:
         explicit=config.vram_exclusive_explicit,
     )
     if not resolved.enforced:
+        # Told a total by config (WARLOCK_VRAM_TOTAL) rather than by a card:
+        # the operator has said what to assume, and contradicting them with a
+        # fatal row would refuse the very override they reached for.
+        if resolved.total_gib is None and config.vram_total_gib is None:
+            if not probed:
+                # "We have not looked yet" is not "there is no card", and
+                # conflating them put a red row on every cold start of a
+                # perfectly good machine: with the torch import deferred,
+                # ``device_memory`` has nothing to read and no published
+                # reading to fall back on until the first health poll. The
+                # still-checking wording is ``_cuda_check``'s, for its reason.
+                return Check(
+                    "VRAM budget", True,
+                    "still checking in the background (importing torch takes a moment)",
+                    fatal=False,
+                )
+            return Check(
+                "VRAM budget", False,
+                resolved.reason + " -- no CUDA device means 3D reconstruction"
+                " cannot run at all; there is no CPU fallback",
+                fatal=True,
+            )
         return Check("VRAM budget", True, resolved.reason, fatal=False)
     # Only when the plan is actually about this device: with WARLOCK_VRAM_TOTAL
     # standing in for a card, the real card's free figure describes something

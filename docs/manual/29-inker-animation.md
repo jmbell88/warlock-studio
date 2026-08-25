@@ -25,7 +25,14 @@ drawing, `=` is a linked cel, and an empty outline is a frame that track has not
 
 Clicking a square selects that track and moves to that frame; right-clicking one offers link, unlink
 and clear. Right-clicking a frame number offers insert, duplicate, reorder and delete. `,` and `.`
-step back and forward a frame.
+step back and forward a frame, `Home` and `End` jump to the first and last, `Alt+N` adds a frame and
+`Alt+D` duplicates the one you are on.
+
+Clicking a track's **name** selects that layer without moving the playhead, and `Shift`+clicking one
+stretches the selection across the tracks between it and the layer you were on. A layer that is in a
+folder draws under a **folder header** with a fold triangle: pressing it hides everything inside,
+and the header carries the folder's own eye and its right-click menu. Folding is a view setting —
+neither saved nor undoable — for the same reason the playhead is.
 
 The strip's controls are two rows. The top one is the frame you are on — the transport, the frame
 operations, the counter and that frame's duration — and the bottom one is what leaves the app: the
@@ -78,7 +85,7 @@ a fast blink live in the same clip without anything having to be a frame rate.
 ## Onion skin
 
 **Onion skin** shows the neighbouring frames beneath the one you are drawing, the previous tinted
-red and the next tinted green. Toggle it on the strip's second row; while it is on, **back**,
+red and the next tinted green. Toggle it on the strip's second row or with `F3`; while it is on, **back**,
 **ahead** and **fade** appear on a row of their own and set how many frames either side are drawn
 and how strongly. Both counts may be zero, which is how you see only what is behind or only what is
 ahead.
@@ -101,6 +108,9 @@ current frame, playback loops inside that tag rather than over the whole timelin
 **New tag here** to make a one-frame tag, then right-click the tag's name in the band under the grid
 to rename it, to set either end to wherever the playhead is, to turn its looping off, to choose
 which way it plays, or to delete it.
+
+Clicking a tag's name in the band jumps the playhead to that tag's first frame, and
+double-clicking it opens the rename in place — the same field the menu's **Rename** opens.
 
 Tags may overlap, and playback follows the innermost one containing the playhead — which is what
 makes a short **hit** inside a long **combat** the useful arrangement rather than an ambiguous one.
@@ -188,6 +198,11 @@ Its rows are the timeline's tracks, so a row inside the selection draws highligh
 `Shift`+clicking a row stretches the selection across the tracks between it and the active one, and
 clicking the eye on a row of a multi-track range hides or shows the whole range as one step.
 
+A row's right-click menu acts on the whole block as well, and says so: with three rows selected it
+reads **Duplicate 3 layers**, **Merge down 3 layers**, **Delete 3 layers** and **Group 3 layers**
+rather than naming one. Each is a single `Ctrl+Z` however many rows it touched, and deleting every
+layer is refused for the reason deleting every frame is.
+
 **Merge down** and **flatten** are not unavailable here: both run across the whole grid, every frame
 at once, and the links you have survive them — see [Layers](28-inker.md#layers).
 
@@ -251,6 +266,12 @@ the arithmetic that otherwise quietly drops a frame.
 
 An imported sheet is an ordinary animation with no directions and no tags: a *layout* is something
 the generator knows about its own output, not something a cell size can imply.
+
+**Opening a GIF** needs no cell size at all: `Ctrl+O` an animated GIF and it arrives as one frame
+per frame, on one layer, carrying each frame's own duration. GIF stores time in hundredths of a
+second, so the durations you get back are the rounded ones — a clip exported at 33 ms comes back at
+30. A GIF with a single frame opens as an ordinary still drawing. Inker cannot save a GIF in place,
+so `Ctrl+S` on one offers an `.ora` beside it; **Export GIF** is the way back out.
 
 ### Directional layouts
 

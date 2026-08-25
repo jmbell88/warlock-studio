@@ -97,10 +97,46 @@ def test_a_finite_map_never_grows():
 
 def test_the_populated_extent_is_capped():
     """An infinite map does not mean an unbounded allocation -- the same
-    on-a-slip-of-the-keyboard argument a finite map's size cap makes."""
-    doc = _doc()
+    on-a-slip-of-the-keyboard argument a finite map's size cap makes.
+
+    Reached with a map already near the cap growing a *modest* amount, because
+    the per-press cap below now refuses anything that would leap there in one
+    go: the extent cap is what stops a map arriving at 4096 a side by a hundred
+    legitimate presses, and it is still the one that fires."""
+    doc = _doc(tilemap.MAX_DIMENSION - 100, 4)
     with pytest.raises(ValueError, match="extent"):
-        doc.grow_to_hold(0, 0, 10_000, 0)
+        doc.grow_to_hold(0, 0, tilemap.MAX_DIMENSION + 10, 0)
+
+
+def test_one_press_cannot_leap_to_the_far_side_of_the_map():
+    """The click that allocated the whole window. Zoomed far enough out a
+    single pixel of cursor travel is hundreds of cells, so one misplaced click
+    asked the map to grow to meet it -- reallocating every tile layer, plus the
+    two snapshots that make it undoable, between two frames."""
+    doc = _doc()
+    with pytest.raises(ValueError, match="past the edge"):
+        doc.grow_to_hold(0, 0, tilemap.MAX_GROWTH + 10, 0)
+    assert (doc.width, doc.height) == (4, 4)
+    assert len(doc.history) == 0
+
+
+def test_the_refusal_is_per_press_and_not_per_map():
+    """Growing far is allowed; growing far *at once* is not. Two presses reach
+    what one may not, and nothing about the document forbids the destination --
+    which is what keeps this a bound on the allocation rather than on the map.
+    """
+    doc = _doc()
+    assert doc.grow_to_hold(0, 0, tilemap.MAX_GROWTH, 0) is True
+    assert doc.grow_to_hold(0, 0, tilemap.MAX_GROWTH * 2, 0) is True
+    assert doc.width == tilemap.MAX_GROWTH * 2 + 1
+
+
+def test_a_growth_inside_the_bound_is_untouched():
+    """The ordinary case, and the one the cap must not cost anything: painting
+    just past the edge grows by a cell as it always did."""
+    doc = _doc()
+    assert doc.grow_to_hold(-1, -1, 4, 4) is True
+    assert (doc.width, doc.height, doc.origin_x, doc.origin_y) == (6, 6, -1, -1)
 
 
 def test_a_growth_moves_objects_with_the_window():

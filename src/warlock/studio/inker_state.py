@@ -531,6 +531,9 @@ def _context_table() -> tuple[tuple[str, str, frozenset[str], str], ...]:
         ("corner_radius", "Corners", frozenset({"rect"}), ""),
         ("wand_tolerance", "Tolerance", frozenset({"fill", "wand"}), ""),
         ("wand_contiguous", "Contiguous", frozenset({"fill", "wand"}), ""),
+        ("wand_eight", "Diagonals", frozenset({"fill", "wand"}), ""),
+        ("fill_refer", "Refer to", frozenset({"fill"}), ""),
+        ("fill_stop_grid", "Stop at grid", frozenset({"fill"}), ""),
         ("sample_layer", "This layer only", frozenset({"eyedropper"}), ""),
         ("gradient_dither", "Dither", frozenset({"gradient"}), ""),
         ("text_size", "Size", frozenset({"text"}), ""),
@@ -674,6 +677,18 @@ TOOL_OPTION_DEFAULTS: dict[str, Any] = {
     "corner_radius": 0,
     "wand_tolerance": 32,
     "wand_contiguous": True,
+    #: Aseprite's pixel connectivity. Off is four-connected, which is what a
+    #: fill has always been here; on, a region continues through a corner
+    #: touch, which is what a diagonal pixel-art line asks for. Shared by the
+    #: bucket and the wand because they share one predicate.
+    "wand_eight": False,
+    #: ``"canvas"`` (the composite, what you see) or ``"layer"`` (the active
+    #: layer alone). Lineart over paint is the case the second exists for.
+    "fill_refer": "canvas",
+    #: Whether the bucket is confined to the grid cell it was clicked in. The
+    #: *size* is the session's ``grid_size``; this is only the switch, because
+    #: the grid is a property of the canvas and not of the tool.
+    "fill_stop_grid": False,
     "sample_layer": False,
     "stabilise": 0.0,
     "speed_taper": 0.0,
@@ -1107,6 +1122,14 @@ class InkerDoc:
     # because it counts changes and an undo is one.
     saved_head: int = 0
     saving: bool = False
+    # ``doc.history.trimmed`` as of the last time the user was told about it.
+    # The history drops its oldest steps when they get too big to hold (see
+    # ``studio.undo.UNDO_HARD_BYTES``), and a rotate on a large document can
+    # take most of the stack with it in one press -- so the undo the user
+    # reaches for a minute later is simply not there any more, with nothing
+    # having said so. Compared with ``!=`` rather than ``>``: ``clear`` puts
+    # the stack's counter back to zero along with the history.
+    trim_seen: int = 0
     # The job this document writes back into, if any. ``link_kind`` says what
     # kind of write that is; empty means the document is a plain file.
     job_id: str = ""
@@ -1629,6 +1652,13 @@ class InkerState:
     #: ``inker_mode.end_convert_session``. Empty means no session.
     convert_uid: str = ""
     convert_method: str = "nearest"
+    #: Which question the open conversion session is asking. ``""`` is the snap
+    #: this popup has always been -- adopt a table, rewrite the pixels, stay in
+    #: RGB -- and ``"indexed"`` is the *mode* change the "Colour mode..." row
+    #: that opens it has always been named after. One popup, because the
+    #: controls, the preview and the refusals are the same either way; the
+    #: difference is one call at Apply.
+    convert_mode: str = ""
     convert_max: int = 16
     #: ``convert_table`` is held rather than recomputed per frame because
     #: building one is a pass over every plane of the document, and because the
@@ -1894,6 +1924,9 @@ class InkerState:
     shape_filled = _tool_option("shape_filled")
     wand_tolerance = _tool_option("wand_tolerance")
     wand_contiguous = _tool_option("wand_contiguous")
+    wand_eight = _tool_option("wand_eight")
+    fill_refer = _tool_option("fill_refer")
+    fill_stop_grid = _tool_option("fill_stop_grid")
     sample_layer = _tool_option("sample_layer")
     stabilise = _tool_option("stabilise")
     speed_taper = _tool_option("speed_taper")

@@ -231,3 +231,49 @@ def test_the_document_holds_the_slot_the_state_was_given():
 
     state.set_fg(GREEN)
     assert state.fg_slot is None
+
+
+# --- the dither the mode change uses ----------------------------------------
+
+
+def _ramp_tab(ctx: _Ctx) -> InkerDoc:
+    """A horizontal grey ramp: something a dither has an answer for and a
+    nearest-match snap does not. Four colours because slot 0 is the transparent
+    index, so a two-entry table leaves one usable colour and no choice to make.
+    """
+    import numpy as np
+
+    doc = inker.Document.blank(16, 4)
+    ramp = np.linspace(0, 255, 16).astype("uint8")
+    doc.stack.active.pixels[:, :, :3] = ramp[None, :, None]
+    doc.stack.active.pixels[:, :, 3] = 255
+    tab = InkerDoc(doc=doc, title="ramp")
+    ctx.state.inker.add(tab)
+    return tab
+
+
+def test_the_mode_door_takes_the_dither_method():
+    """``set_color_mode`` hard-coded ``"nearest"``, so the Convert popup's
+    choice of matrix could not reach the one operation that changes mode."""
+    import numpy as np
+
+    ctx = _Ctx()
+    tab = _ramp_tab(ctx)
+    assert (
+        inker_mode.set_color_mode(ctx, tab, "indexed", method="floyd-steinberg", max_colours=4)
+        is True
+    )
+    plane = tab.doc.composite[..., 0]
+    # A nearest snap makes every row identical -- the answer depends only on
+    # the column. A diffused one does not.
+    assert not np.array_equal(plane[0], plane[1])
+
+
+def test_the_default_is_still_a_nearest_snap():
+    import numpy as np
+
+    ctx = _Ctx()
+    tab = _ramp_tab(ctx)
+    assert inker_mode.set_color_mode(ctx, tab, "indexed", max_colours=4) is True
+    plane = tab.doc.composite[..., 0]
+    assert np.array_equal(plane[0], plane[1])

@@ -67,6 +67,28 @@ DRAW_ORDERS = ("topdown", "index")
 
 MAX_DIMENSION = 4096
 
+# How far past its own edge one *painted* growth may reach, per side.
+#
+# ``MAX_DIMENSION`` bounds where an infinite map can end up; it says nothing
+# about how it gets there, and one click is enough. The canvas maps a screen
+# position to a cell, so zoomed far enough out a single pixel of cursor travel
+# is hundreds of cells: a click in the wrong place asked ``grow_to_hold`` to
+# reach it, and reaching it means reallocating every tile layer to the full
+# 4096 a side. Measured, on a 4-by-4096 map with **one** tile layer, one click
+# at cell 4095: **192 MiB peak** between two frames -- the 64 MiB grid itself,
+# plus the before and after snapshots the ``ResizeEdit`` needs to make the
+# growth undoable. Per layer, for a gesture the user did not mean. Refused, the
+# same click costs 1 KiB.
+#
+# Deliberately per *side* rather than per added area: a side is what a refusal
+# can say out loud ("you clicked N cells past the edge") and an area is not.
+# 256 columns of a 4096-tall map is ~4 MiB a layer a grid, which is a real
+# growth and not a catastrophic one -- and nothing legitimate needs it in one
+# press. A drag grows a cell at a time (``_room_for`` runs per painted cell),
+# an explicit resize goes through the form and its own cap, and a click that
+# genuinely wants to be far away can be made twice.
+MAX_GROWTH = 256
+
 
 def new_uid() -> int:
     """Mint a uid for a layer or an object. Never reused within a process.

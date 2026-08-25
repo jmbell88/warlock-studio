@@ -25,6 +25,13 @@ DiskSpanning=yes
 DiskSliceSize=2100000000
 OutputDir={#ProjectRoot}\dist
 OutputBaseFilename=WarlockSetup-v{#AppVersion}
+; Shown as the wizard's first page. Without it Inno Setup shows the user no
+; terms at all, which -- for everyone who installs rather than clones -- is the
+; same posture as having no licence. The third-party notices are not shown
+; here (a wizard pane renders Markdown as raw text); they are staged into the
+; install root and beside vendor\, which is what MIT and the NVIDIA
+; redistributable EULA actually require -- see installeruild.ps1.
+LicenseFile={#ProjectRoot}\LICENSE
 SetupIconFile={#ProjectRoot}\src\warlock\assets\icon.ico
 UninstallDisplayIcon={app}\src\warlock\assets\icon.ico
 CloseApplications=yes

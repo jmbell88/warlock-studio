@@ -373,6 +373,12 @@ class Document(
             from .ora import read_ora
 
             doc = read_ora(path, budget=budget)
+        elif path.suffix.lower() == ".gif":
+            # Before the Pillow branch, which would open a clip as its first
+            # frame -- a silent loss, and the one this editor writes itself.
+            from .gifin import read_gif
+
+            doc = read_gif(path)
         else:
             from PIL import Image
 

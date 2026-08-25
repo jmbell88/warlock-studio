@@ -175,4 +175,9 @@ def test_inno_setup_is_per_user_relocatable_and_leaves_user_data_alone() -> None
     assert "Flags: unchecked" in source
     assert r'Name: "{app}\python"' in source
     assert ".warlock" in source and "downloaded models remain" in source
-    assert "LicenseFile" not in source
+    # Inverted on 2026-08-24. This used to assert ``LicenseFile`` was *absent*,
+    # which was an accurate record of the fact that no licence had been chosen
+    # -- not a decision that the wizard should show none. The project is
+    # GPL-3.0-or-later now, and for everyone who installs rather than clones
+    # this page is the only place the terms appear at all.
+    assert r"LicenseFile={#ProjectRoot}\LICENSE" in source

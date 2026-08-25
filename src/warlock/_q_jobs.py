@@ -448,13 +448,22 @@ class JobOps:
                 if not rigging.is_valid_id(sheet_id):
                     return
                 if job["kind"] == "pixel_sheet":
-                    # Only the restyle's own pair. The render it was derived
-                    # from belongs to a different, successful job -- deleting
-                    # it because a restyle was cancelled would destroy minutes
-                    # of Blender for a job the user did not cancel.
+                    # Only the staging names, for the rig's reason exactly.
+                    # The served pair is *not* this run's by construction:
+                    # ``sheets.create_pixel_sheet`` deliberately allows
+                    # restyling the same sheet again under the same sheet_id,
+                    # so those two names may hold an earlier, successful
+                    # restyle's result -- and a cancelled re-restyle must not
+                    # destroy the result it was trying to improve on. The
+                    # worker never writes them in place either: it stages both
+                    # and renames, and commits the cancel token once the
+                    # sidecar lands, so a cancel can only ever arrive with the
+                    # served pair belonging to somebody else.
+                    png = rigging.sheet_pixel_png_path(job_dir, sheet_id)
+                    doc = rigging.sheet_pixel_path(job_dir, sheet_id)
                     paths = [
-                        rigging.sheet_pixel_path(job_dir, sheet_id),
-                        rigging.sheet_pixel_png_path(job_dir, sheet_id),
+                        png.with_name(f".{png.name}.tmp"),
+                        doc.with_name(f".{doc.name}.tmp"),
                     ]
                 else:
                     paths = [

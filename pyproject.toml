@@ -2,7 +2,23 @@
 name = "warlock"
 version = "0.0.28"
 description = "Local AI 3D asset generator (Meshy-style) for game development"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: GPU :: NVIDIA CUDA",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Graphics :: 3D Modeling",
+    "Topic :: Games/Entertainment",
+]
 dependencies = [
     # The trellis-server.exe subprocess speaks HTTP on a local port; this is
     # the client for it, not a web framework left over from the browser build.
@@ -110,6 +126,38 @@ warlock = "warlock.cli:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# **The sdist needs an explicit file list, and its absence was a licensing
+# incident rather than a tidiness problem.** hatchling's sdist default is
+# "everything git does not ignore", and ``.gitignore`` says nothing about
+# ``examples/`` -- so ``uv build`` swept 20 tracked sample files, ~26 MB, into
+# every source distribution. Among them were Nintendo-derived game art and
+# ULPC assets under CC-BY-SA/GPL with no attribution travelling beside them.
+# The wheel was always clean (``packages`` below scopes it) and so was the
+# installer (``installer/build.ps1`` stages three directories by name); the
+# sdist was the one output nobody had written a rule for, and CI builds one on
+# every push.
+#
+# An allowlist rather than an exclude list, deliberately: an exclude only stops
+# what somebody thought of, and the failure mode here is a directory nobody
+# thought of. ``tests/test_release_hygiene.py`` pins it.
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src/warlock",
+    "/tests",
+    "/docs",
+    "/scripts",
+    "/native",
+    "/installer",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/CLAUDE.md",
+    "/TODO.md",
+    "/LICENSE",
+    "/THIRD-PARTY-NOTICES.md",
+    "/pyproject.toml",
+    "/uv.lock",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/warlock"]

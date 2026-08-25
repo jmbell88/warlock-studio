@@ -2676,16 +2676,39 @@ def test_painting_past_a_finite_map_still_clips():
 
 
 def test_a_refused_growth_says_so_instead_of_stopping_silently():
-    """The extent cap reaching the user. A stroke that quietly stopped at an
-    invisible edge is the failure this toast exists to prevent."""
+    """A refusal reaching the user. A stroke that quietly stopped at an
+    invisible edge is the failure this toast exists to prevent.
+
+    A click this far out is now caught by the *per-press* cap rather than the
+    extent cap -- reaching cell 100,000 would mean reallocating every tile
+    layer to the full 4096 a side between two frames -- and the assertion here
+    is about the refusal arriving, not about which of the two it was. The
+    extent cap has its own case below."""
     from warlock.studio.panes import plotter_canvas
 
     ctx = FakeCtx()
     tab, state = _infinite(ctx)
     plotter_canvas._apply(ctx, state, tab, (100_000, 0))
     assert len(ctx.toasts) == 1
-    assert "extent" in ctx.toasts[0][0]
+    assert "past the edge" in ctx.toasts[0][0]
+    assert (tab.doc.width, tab.doc.height) == (4, 4)
     assert int((tab.doc.tile_layers()[0].data != 0).sum()) == 0
+
+
+def test_the_extent_cap_also_reaches_the_user():
+    """The other refusal out of the same door. A map already near the cap
+    growing a modest amount is what the per-press cap lets through and the
+    extent cap then stops -- so both have to say something, and they come out
+    of the one ``except ValueError`` in ``_room_for``."""
+    from warlock.studio.panes import plotter_canvas
+    from warlock.studio.plotter import tilemap
+
+    ctx = FakeCtx()
+    tab, state = _infinite(ctx)
+    tab.doc.resize(tilemap.MAX_DIMENSION - 100, 4)
+    plotter_canvas._apply(ctx, state, tab, (tilemap.MAX_DIMENSION + 10, 0))
+    assert len(ctx.toasts) == 1
+    assert "extent" in ctx.toasts[0][0]
 
 
 def test_a_growth_carries_the_selection_and_the_line_anchor_with_it():

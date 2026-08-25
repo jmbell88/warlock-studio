@@ -56,6 +56,7 @@ foreign save discards.
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import logging
@@ -65,6 +66,7 @@ from xml.etree import ElementTree
 
 import numpy as np
 
+from .. import zipguard
 from ..tilegrid import gid
 from ..tilegrid.tileset import Tileset
 from . import composite as cp
@@ -922,49 +924,58 @@ def write_ora(doc, path: Path) -> None:
     thumb.save(thumb_buf, "PNG")
 
     tmp = path.with_name(path.name + ".tmp")
-    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zf:
-        # Stored, and first: the spec makes this a magic number at a fixed
-        # offset, and a deflated one is not readable as such.
-        zf.writestr(
-            zipfile.ZipInfo("mimetype", _EPOCH), b"image/openraster", zipfile.ZIP_STORED
-        )
-        # One encoder for both paths, chosen by the document's mode rather than
-        # per layer: a document is indexed or it is not, and a mixed archive is
-        # a state no reader (ours least of all) has a sensible answer for.
-        def encode(layer) -> bytes:
-            if getattr(doc, "color_mode", "rgb") == "indexed" and layer.indices is not None:
-                return _png_indexed(layer.indices, doc.palette, doc.transparent_index)
-            return _png(layer.pixels)
+    # ``try/finally`` around the encode for ``plotter_io``/``packwright_io``/
+    # ``journal``'s reason: ``replace`` only runs on success, so a failed encode
+    # left the staging file sitting beside the user's document forever. Not data
+    # loss -- the destination is never touched -- just a stray dotfile per
+    # failure, and the unlink is a no-op once the replace has renamed it away.
+    try:
+        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zf:
+            # Stored, and first: the spec makes this a magic number at a fixed
+            # offset, and a deflated one is not readable as such.
+            zf.writestr(
+                zipfile.ZipInfo("mimetype", _EPOCH), b"image/openraster", zipfile.ZIP_STORED
+            )
+            # One encoder for both paths, chosen by the document's mode rather than
+            # per layer: a document is indexed or it is not, and a mixed archive is
+            # a state no reader (ours least of all) has a sensible answer for.
+            def encode(layer) -> bytes:
+                if getattr(doc, "color_mode", "rgb") == "indexed" and layer.indices is not None:
+                    return _png_indexed(layer.indices, doc.palette, doc.transparent_index)
+                return _png(layer.pixels)
 
-        if anim is None:
-            zf.writestr(_member("stack.xml"), _stack_xml(doc))
-            for index, layer in enumerate(reversed(list(doc.stack))):
-                zf.writestr(_member(f"data/layer{index}.png"), encode(layer))
-        else:
-            zf.writestr(_member("stack.xml"), _stack_xml_animated(doc, names))
-            # One PNG per name, with no de-duplication needed: ``_cel_names``
-            # is built from the same ``unique_cel_layers`` walk and gives each
-            # distinct cel its own name, so the two can only ever agree.
-            for layer in anim.unique_cel_layers():
-                zf.writestr(_member(names[id(layer)]), encode(layer))
-            zf.writestr(_member(ANIMATION_MEMBER), _animation_json(doc, names))
-        # Only when there is a tileset to record -- a document that has never
-        # touched one produces the exact archive this writer wrote before
-        # tilesets existed, which is what the determinism suite pins.
-        if getattr(doc, "tilesets", None):
-            _write_tiles(zf, doc, anim, names)
-        if getattr(doc, "palette", None):
-            zf.writestr(_member(PALETTE_MEMBER), gpl.dumps(doc.palette).encode("utf-8"))
-        # Only when there are slices *or* a colour mode to record. A plain RGB
-        # document with neither produces an archive byte-identical to the one
-        # this build wrote before either existed, which is what the determinism
-        # suite pins and what makes both additions invisible to every reader
-        # that has never heard of them.
-        if getattr(doc, "slices", None) or _colour_block(doc) is not None:
-            zf.writestr(_member(WARLOCK_MEMBER), _warlock_json(doc))
-        zf.writestr(_member("mergedimage.png"), _png(merged))
-        zf.writestr(_member("Thumbnails/thumbnail.png"), thumb_buf.getvalue())
-    tmp.replace(path)
+            if anim is None:
+                zf.writestr(_member("stack.xml"), _stack_xml(doc))
+                for index, layer in enumerate(reversed(list(doc.stack))):
+                    zf.writestr(_member(f"data/layer{index}.png"), encode(layer))
+            else:
+                zf.writestr(_member("stack.xml"), _stack_xml_animated(doc, names))
+                # One PNG per name, with no de-duplication needed: ``_cel_names``
+                # is built from the same ``unique_cel_layers`` walk and gives each
+                # distinct cel its own name, so the two can only ever agree.
+                for layer in anim.unique_cel_layers():
+                    zf.writestr(_member(names[id(layer)]), encode(layer))
+                zf.writestr(_member(ANIMATION_MEMBER), _animation_json(doc, names))
+            # Only when there is a tileset to record -- a document that has never
+            # touched one produces the exact archive this writer wrote before
+            # tilesets existed, which is what the determinism suite pins.
+            if getattr(doc, "tilesets", None):
+                _write_tiles(zf, doc, anim, names)
+            if getattr(doc, "palette", None):
+                zf.writestr(_member(PALETTE_MEMBER), gpl.dumps(doc.palette).encode("utf-8"))
+            # Only when there are slices *or* a colour mode to record. A plain RGB
+            # document with neither produces an archive byte-identical to the one
+            # this build wrote before either existed, which is what the determinism
+            # suite pins and what makes both additions invisible to every reader
+            # that has never heard of them.
+            if getattr(doc, "slices", None) or _colour_block(doc) is not None:
+                zf.writestr(_member(WARLOCK_MEMBER), _warlock_json(doc))
+            zf.writestr(_member("mergedimage.png"), _png(merged))
+            zf.writestr(_member("Thumbnails/thumbnail.png"), thumb_buf.getvalue())
+        tmp.replace(path)
+    finally:
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
 
 
 def ora_bytes(doc) -> bytes:
@@ -1723,7 +1734,7 @@ def read_ora(path: Path, *, budget: int | None = None):
     from .document import Document
     from .undo import UNDO_BYTES, UndoStack
 
-    with zipfile.ZipFile(path) as zf:
+    with zipguard.BoundedZip(path) as zf:
         # Before the first read, which is the only place the refusal is cheap:
         # the directory says what every member unpacks to, and a read that
         # discovers the archive lied has already spent the memory. The

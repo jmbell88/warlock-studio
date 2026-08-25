@@ -249,6 +249,17 @@ def _edit_actions(ctx: Any, job: Any) -> None:
     if troupe_mode.can_send_to_troupe(ctx, job):
         if controls.button(f"{icons.PERSON_STANDING} Send to Troupe"):
             troupe_mode.send_to_troupe(ctx, job)
+        # The library's menu item has carried this since it existed and the
+        # button beside the mesh had nothing at all -- so the one surface where
+        # the user is *looking at the mesh* was the one that did not say a
+        # humanoid rig is required, or that an unrigged mesh buys minutes of
+        # CPU behind a button not called "Rig".
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Render a character sheet from this mesh. Needs a humanoid rig"
+                " -- Troupe's clip library has no clips for the other six"
+                " skeletons -- and rigs it first if it is not rigged yet."
+            )
         # The hint has to say the rig happens: for an unrigged mesh this is
         # minutes of CPU behind a button that is not called "Rig", and a user
         # who is not told will read the quiet as a hang.
@@ -806,7 +817,17 @@ def seam_verdict(report: Any) -> tuple[int, str] | None:
         return None
     worst = float(report.get("worst") or 0.0)
     if report.get("seamless"):
-        return (theme.OK, f"seamless -- edge/grain {worst:.2f}")
+        # "likely", not "seamless", and the hedge is measured rather than
+        # cautious: ``docs/measurements/2026-08-09-seam-threshold-cfg.md``
+        # records that the edge-energy ratio *does not separate* seamless
+        # tiles from seamed ones on a CFG base -- the threshold was calibrated
+        # against sdxl-turbo at 4 steps, and a CFG base draws harder edges into
+        # the tile itself, which is the denominator. The shipped default is a
+        # CFG base, so on the recipe most users run this verdict is advisory.
+        # Stating it flatly was the pane claiming a confidence the measurement
+        # withdrew, on the one control whose whole job is to be trusted before
+        # a tile goes into a map. The wrapped view below is the real check.
+        return (theme.OK, f"likely seamless -- edge/grain {worst:.2f}; check the wrap")
     threshold = float(report.get("threshold") or 0.0)
     return (theme.WARN, f"visible seam -- edge/grain {worst:.2f}, over {threshold:.2f}")
 

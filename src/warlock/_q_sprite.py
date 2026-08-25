@@ -249,6 +249,13 @@ class SpriteOps:
             rigging.sheet_pixel_path(source_dir, sheet_id),
             json.dumps(doc, indent=2),
         )
+        # Published onto the served pair, so from here a cancel cannot take the
+        # artifact back -- ``_rig``'s reason exactly. ``_discard_artifacts``
+        # removes only this run's temps, but a row recorded "cancelled" with a
+        # perfectly good restyle sitting under it is the same lie, and
+        # ``sheets.py`` serves the pair off the sidecar that now exists.
+        if self._cancel is not None:
+            self._cancel.commit()
         log.info(
             "restyled sheet %s for job %s: %d bands, %d colours at %dpx",
             sheet_id, source_id, len(plan), len(palette), logical,

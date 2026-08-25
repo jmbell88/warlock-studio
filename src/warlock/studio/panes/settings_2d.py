@@ -973,6 +973,38 @@ def _model(ctx: Any, form: dict[str, Any], findings_doc: Any = _LOAD_FINDINGS) -
     hint = _findings_hint(ctx, "base_model", form["base_model"], findings_doc)
     if hint is not None:
         widgets.hint_text(hint)
+    _licence_note(form["base_model"])
+
+
+def _licence_note(key: str) -> None:
+    """What this checkpoint's weights permit, under the picker that chose them.
+
+    **The users of a game-asset generator will sell the output**, and this app
+    shipped two checkpoints that restrict exactly that while saying so nowhere
+    -- not here, not at download time, not in ``docs/MODELS.md``. Telling them
+    nothing is the posture most likely to hurt somebody who trusted the tool.
+
+    Drawn only when there is something to say: a permissive licence gets one
+    muted line, and eleven identical "commercially permitted" rows would train
+    the eye to skip the one row that is not.
+    """
+    spec = modelslib.BASE_MODELS.get(key or "")
+    if spec is None or not spec.license:
+        return
+    if not spec.commercial:
+        # ``wrapped`` in WARN rather than ``muted_wrapped``: this is the one
+        # line on the pane that can cost the user money, and a muted sentence
+        # among muted sentences is a sentence nobody reads.
+        widgets.wrapped(
+            theme.WARN,
+            f"Licence: {spec.license}. Images from this model may NOT be used "
+            f"commercially. {spec.license_note}".strip(),
+        )
+        return
+    if spec.license_note:
+        widgets.hint_text(f"Licence: {spec.license}. {spec.license_note}")
+        return
+    widgets.muted_wrapped(f"Licence: {spec.license} — commercial use permitted.")
 
 
 def lora_default_weight(key: str) -> float:

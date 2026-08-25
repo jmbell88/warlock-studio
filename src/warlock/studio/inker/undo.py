@@ -37,6 +37,7 @@ import numpy as np
 
 from ..undo import (
     UNDO_BYTES,
+    UNDO_HARD_BYTES,
     UNDO_MAX_DEPTH,
     UNDO_MIN_DEPTH,
     CompoundEdit,
@@ -46,13 +47,14 @@ from ..undo import (
 )
 
 # This list exists to declare the re-export above as intentional -- without it
-# every imported name is an unused import (ruff F401) -- so it names the seven
+# every imported name is an unused import (ruff F401) -- so it names the eight
 # re-exported names plus the public types defined below. ``_serials`` is in it
 # for that reason alone and not because it is public; ``_pack``/``_unpack`` are
 # defined here rather than imported, so they need no such declaration and stay
 # out, as private helpers ordinarily would.
 __all__ = [
     "UNDO_BYTES",
+    "UNDO_HARD_BYTES",
     "UNDO_MAX_DEPTH",
     "UNDO_MIN_DEPTH",
     "ColorStateEdit",

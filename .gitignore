@@ -57,3 +57,22 @@ imgui.ini
 # after the one they read did not cover them. A `git add -A` after a harness
 # run commits whatever the newest name was, so the rule is the prefix.
 /.tmp-*/
+
+# Sample inputs, deliberately untracked as of 2026-08-24 and **not** merely for
+# size. Three of these are third-party art this project has no right to
+# redistribute: `light_world.png` and `zelda_1.jpg` are Nintendo-derived (a rip
+# of A Link to the Past and a screenshot beside it, kept only as look
+# references and colour-destroyed for that purpose), and the `*_base.obj`,
+# `*_base.blend` and `*_spritesheet.png` files are ULPC-derived under
+# CC-BY-SA/GPL with no attribution travelling beside them.
+#
+# All 20 were git-tracked, so making the repository public would have published
+# them -- and hatchling's sdist default swept the whole ~26 MB into every
+# `uv build`, which CI runs on every push. `pyproject.toml`'s
+# `[tool.hatch.build.targets.sdist]` allowlist is the other half of this;
+# `tests/test_release_hygiene.py` pins both.
+#
+# **This does not rewrite history.** The blobs remain reachable in earlier
+# commits, so a genuine purge is still owed before the repository is published
+# -- see TODO.md.
+/examples/

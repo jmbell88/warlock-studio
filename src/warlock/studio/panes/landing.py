@@ -763,7 +763,24 @@ def _news_popup() -> None:
             if controls.collapsing_header(f"{headline}##news{index}", flags):
                 for bullet in release.bullets:
                     with fonts.small(imgui):
-                        widgets.muted_wrapped(f"- {bullet}")
+                        # Full text for *this* build, leads for the history --
+                        # ``lead``'s own rule, applied one surface further out.
+                        #
+                        # ``CHANGELOG.md`` is written for the person maintaining
+                        # this, and its candour is an asset: it records internal
+                        # review scores, the measurement that made a default
+                        # wrong, and what a crash actually was. That is exactly
+                        # the wrong first impression, though, and this popup put
+                        # every word of it in front of anyone who clicked "All
+                        # release notes..." -- forty releases of debugging
+                        # narrative reading as forty releases of instability.
+                        #
+                        # Truncating rather than softening the file: the fix for
+                        # tone here is a shorter surface, not less honesty in the
+                        # record.
+                        widgets.muted_wrapped(
+                            f"- {bullet if opened else changelog.lead(bullet)}"
+                        )
     imgui.end_child()
     imgui.end_popup()
 

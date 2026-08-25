@@ -49,13 +49,21 @@ def test_an_animated_document_has_a_column_per_frame():
 
 def test_the_rows_run_bottom_up():
     """Aseprite's order, Photoshop's order, and the order the grid's own frame
-    columns already implied. Read off the source, because the walk is what the
-    change was: the panel counted down and the grid now counts up."""
+    columns already implied: the panel counted down and the grid counts up.
+
+    Asserted through ``row_plan`` -- which is the walk now that group headers
+    are folded into it -- rather than off the source, plus the source check
+    that the old descending loop has not come back."""
 
     import inspect
 
+    tab = _tab()
+    for name in ("one", "two"):
+        tab.doc.add_layer(name)
+    plan = inker_timeline.row_plan(tab.doc)
+    assert [entry.index for entry in plan] == [0, 1, 2]
     source = inspect.getsource(inker_timeline._grid)
-    assert "for index in range(len(doc.stack)):" in source
+    assert "for index in range(len(doc.stack))" in source
     assert "range(len(anim.tracks) - 1, -1, -1)" not in source
 
 

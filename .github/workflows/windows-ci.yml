@@ -24,5 +24,51 @@ jobs:
         run: uv run python scripts/preflight.py --fast
       - name: Default test suite
         run: uv run pytest -q
-      - name: Build wheel
+      - name: Build wheel and sdist
         run: uv build
+      # The wheel "built" here was never proven to import, let alone run --
+      # so a packaging mistake (a missing force-include, a module outside
+      # ``packages``) shipped green. Installed into a *clean* venv rather than
+      # the development one, which is the only arrangement where the source
+      # tree cannot stand in for a file the wheel forgot.
+      - name: Wheel install smoke test
+        shell: pwsh
+        run: |
+          $wheel = (Get-ChildItem dist\*.whl | Select-Object -First 1).FullName
+          uv venv .smoke
+          uv pip install --python .smoke\Scripts\python.exe $wheel
+          # From a directory that is not the checkout, so `import warlock`
+          # cannot resolve to `src/` by accident.
+          Push-Location $env:TEMP
+          & "$env:GITHUB_WORKSPACE\.smoke\Scripts\python.exe" -c @"
+          import warlock, warlock.models, warlock.doctor, warlock.changelog
+          from warlock.studio import modes
+          assert warlock.models.BASE_MODELS, 'the registry is empty'
+          assert len(modes.KEYS) == 11, modes.KEYS
+          # The two force-includes, which are exactly what a wheel drops
+          # silently: the manual tree and the changelog.
+          from importlib.resources import files
+          assert files('warlock').joinpath('CHANGELOG.md').is_file()
+          assert files('warlock').joinpath('manual/00-index.md').is_file()
+          print('wheel import smoke test passed')
+          "@
+          Pop-Location
+
+  # The declared floor. ``pyproject.toml`` says ``requires-python = ">=3.12"``
+  # and nothing has ever run on it -- and this leg deliberately omits
+  # ``--extra rig``, both because ``bpy`` needs 3.13 and because "rig
+  # unavailable" is a documented degradation path that was equally untested.
+  floor:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install Python
+        run: uv python install 3.12
+      - name: Sync without the rig extra
+        run: uv sync --frozen --python 3.12 --extra studio --extra text2image
+      - name: Default test suite
+        run: uv run --python 3.12 pytest -q

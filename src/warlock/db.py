@@ -5,7 +5,9 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
 import re
+import secrets
 import sqlite3
 import threading
 import time
@@ -435,6 +437,45 @@ class JobStore:
         with self._lock:
             self._conn.close()
 
+    def backup_to(self, dest: Path) -> int:
+        """Copy this store to ``dest``, live. -> the destination's size in bytes.
+
+        ``sqlite3``'s online backup API rather than ``shutil.copyfile``, and the
+        difference is not tidiness. This connection runs in WAL mode, so the
+        committed database is the file *plus* whatever is still in ``-wal`` --
+        a plain copy of the ``.sqlite`` alone is a snapshot missing every
+        transaction since the last checkpoint, and copying the three files
+        separately while a writer is live copies them at three different
+        instants. ``Connection.backup`` takes a consistent snapshot of the whole
+        database under sqlite's own locking, and it is the only way to do that
+        without stopping the app.
+
+        Under ``self._lock`` like every other touch of the connection. The copy
+        is a page walk over a database measured in megabytes, not the asset
+        tree -- see ``service.library.backup`` for why those are separate
+        questions.
+
+        Staged through a temp sibling and ``os.replace``d, so an interrupted
+        backup never leaves a half-written file wearing the name of a good one.
+        That is this codebase's rule for every writer that serves a file, and a
+        backup is the one file where believing a bad copy is worst.
+        """
+        dest = Path(dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(f".{dest.name}.{secrets.token_hex(4)}.tmp")
+        try:
+            with self._lock:
+                target = sqlite3.connect(tmp)
+                try:
+                    self._conn.backup(target)
+                finally:
+                    target.close()
+            os.replace(tmp, dest)
+        finally:
+            with contextlib.suppress(OSError):
+                tmp.unlink()
+        return dest.stat().st_size
+
     @property
     def _defer_commits(self) -> bool:
         """Whether *this* thread is inside a ``deferred_commits`` block."""
@@ -646,6 +687,36 @@ class JobStore:
         """How many jobs exist, for the "showing newest N of M" row."""
         with self._lock:
             return int(self._conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0])
+
+    def unreadable_params(self) -> list[str]:
+        """Ids whose ``params`` column will not parse as a JSON object.
+
+        ``_params_blob`` deliberately answers ``{}`` for these rather than
+        raising, because one corrupt blob raising out of ``next_queued`` starved
+        every job behind it forever (CON-06) -- and a library that will not open
+        is worse than a row with default settings. The cost of that tolerance is
+        that the damage is *silent*: every reader sees a job whose settings are
+        simply empty, and nothing anywhere says the seed and the model it was
+        generated with are gone.
+
+        This is the one caller that wants to know. It reads the raw column
+        rather than a parsed row, because by the time a row is parsed the
+        distinction has already been thrown away.
+        """
+        bad: list[str] = []
+        with self._lock:
+            rows = self._conn.execute("SELECT id, params FROM jobs").fetchall()
+        for row in rows:
+            raw = row["params"]
+            if raw in (None, ""):
+                # The column default. Empty is not corrupt.
+                continue
+            try:
+                if not isinstance(json.loads(raw), dict):
+                    bad.append(row["id"])
+            except (ValueError, TypeError):
+                bad.append(row["id"])
+        return bad
 
     def set_status(self, job_id: str, status: str, error: str | None = None) -> None:
         """Update status. ``error`` is only written when explicitly given —

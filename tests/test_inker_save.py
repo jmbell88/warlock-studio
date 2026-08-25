@@ -531,7 +531,17 @@ def test_every_openable_non_writable_suffix_is_gated(tmp_path, monkeypatch):
     """
     from warlock.studio import filetypes
 
-    formats = {".jpg": "JPEG", ".jpeg": "JPEG", ".webp": "WEBP", ".bmp": "BMP"}
+    # GIF is here rather than in ``WRITABLE_SUFFIXES`` on purpose: Inker reads a
+    # clip back (``gifin``) and writes one from Export, but a Ctrl+S that
+    # flattened a layered document into 256 thresholded colours in place would
+    # be a lossy save nobody asked for.
+    formats = {
+        ".jpg": "JPEG",
+        ".jpeg": "JPEG",
+        ".webp": "WEBP",
+        ".bmp": "BMP",
+        ".gif": "GIF",
+    }
     assert set(filetypes.IMAGE_SUFFIXES) - set(inker_mode.WRITABLE_SUFFIXES) == set(formats)
 
     for suffix, encoder in formats.items():

@@ -108,11 +108,18 @@ Everything but the primary artifacts is derived lazily on first request and cach
 
 ## Requirements
 
-- Windows, NVIDIA GPU (tested: RTX 5090 / 32 GB; TRELLIS.2 alone fits in 16 GB)
+- **Windows 10/11, 64-bit, and an NVIDIA GPU with CUDA.** There is no macOS or Linux build and no CPU fallback — without a CUDA device the 3D path cannot run at all.
+- **16 GB VRAM** for 3D reconstruction (`vram.py`'s `TRELLIS_GIB = 16.0`). Tested on an RTX 5090 / 32 GB; a 4080/5080-class card or better is the comfortable range.
+- **32 GB system RAM.** More than the GPU figure suggests it should need: Windows charges trellis's ~16 GiB device allocation against *host* commit, so admission control refuses jobs at 96% commit on a 63.5 GB machine even with 24 GB physically free. 16 GB will fight you.
+- **~23 GB disk before the first asset** — 16.1 GB of TRELLIS.2 GGUF weights plus 7.0 GB for SDXL 1.0 — then roughly 35–50 MB per generated 3D job. There is no automatic age-out; pruning is manual.
+- **A 1920×1080 display or larger at 100% scaling.** The window opens at 1600×950 (scaled by your DPI setting) and is clamped to the desktop, so it fits smaller panels, but below that the six workspaces get cramped.
 - [uv](https://docs.astral.sh/uv/); Python ≥ 3.12, but **rigging needs 3.13** — `bpy` ships CPython 3.13 wheels only. On any other Python the rig extra installs nothing, `warlock doctor` reports rigging unavailable, and the app hides the rig controls; everything else works unchanged.
-- ~16 GB disk for TRELLIS.2 GGUF weights (+ ~7 GB for SDXL 1.0 if using text-to-3D)
+
+**How long a generation takes:** roughly two minutes of GPU per 3D attempt on the tested card — a reference image in seconds, then the reconstruction. Budget for more than one attempt: the approval gate exists because the first reference is often not the one you want.
 
 ## Setup
+
+Two steps in a terminal, then the app fetches its own weights.
 
 ```powershell
 # 1. Python deps. --extra studio is the app's window and renderer; add
@@ -124,21 +131,60 @@ uv sync --extra studio --extra text2image --extra rig
 # 2. trellis.cpp CUDA server binary -> vendor/trellis/
 #    https://github.com/pwilkin/trellis.cpp/releases (trellis-cuda-windows-x64.zip)
 #    vendored build: v0.5.4 (2026-07-27)
+```
 
-# 3. TRELLIS.2 GGUF weights -> ~/.warlock/models/trellis2-gguf/
+Then start the app. **It will offer you the ~23 GB of model weights on first
+run** — a first-run panel names your GPU and its VRAM, lists exactly what needs
+downloading with the combined size, and refuses up front if the disk cannot
+hold it. The same rows live in **Settings → Models** afterwards, where you can
+add or remove individual models; a removal tells you what it would actually
+free before you confirm, which matters because four of the registered recipes
+share one 7 GB checkpoint.
+
+> Some models restrict what you may do with what they generate. SDXL-Turbo is
+> under a **non-commercial** research licence and Playground v2.5 has a
+> monthly-active-user cap; both are labelled in the picker and listed in
+> [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). The default, SDXL 1.0, is
+> OpenRAIL++-M and commercially permissive.
+
+**This does not make the app online-capable, and the mechanism is the point.**
+The Download button spawns a separate `python -m warlock.pipelines.fetch_worker`
+process which sets `HF_HUB_OFFLINE=0` *in its own environment*, fetches one
+repository into a staging directory beside the destination, verifies the hub's
+recorded digests, moves the files in only if it succeeded, and exits. The app
+process keeps `HF_HUB_OFFLINE=1` for its entire life. Free disk is checked
+against the whole plan before anything is spawned, and a killed download leaves
+a partial directory that `present()` treats as absent rather than as installed.
+
+### The same downloads, from a terminal
+
+For a headless box, a scripted setup, or if you would rather see the commands:
+
+```powershell
+# TRELLIS.2 GGUF weights (16.1 GB) -> ~/.warlock/models/trellis2-gguf/
 uvx hf download ilintar/trellis2-gguf --revision a57397bd3d351599d9729fc144b3f87c3f87d65b --include "*.gguf" --exclude "q4/*" --exclude "q8/*" `
   --local-dir $HOME/.warlock/models/trellis2-gguf
 
-# 4. SDXL 1.0 weights (fp16 variant, ~7 GB) -> ~/.warlock/models/sdxl-base-1.0/  (text-to-3D only)
+# SDXL 1.0 weights (fp16 variant, 7.0 GB) -> ~/.warlock/models/sdxl-base-1.0/  (text-to-3D only)
 uvx hf download stabilityai/stable-diffusion-xl-base-1.0 --revision 462165984030d82259a11f4367a4eed129e94a7b `
   --include "*.json" --include "*.txt" --include "*fp16.safetensors" --local-dir $HOME/.warlock/models/sdxl-base-1.0
 ```
 
-This one download powers four of the registered recipes — full CFG (the default), Hyper-SD, LCM and Lightning are the same weights run four ways, so the three faster ones cost only a small LoRA each. SDXL-Turbo is a separate 7 GB checkpoint and is now optional; its command is in [docs/MODELS.md](docs/MODELS.md).
+`--include` must be **repeated per pattern**. The space-separated form is
+accepted by the CLI but only the last pattern takes effect, which fetches the
+safetensors and silently leaves out every `config.json` — producing a directory
+that looks downloaded and fails the `model_index.json` check.
 
-These downloads are the only network use there is. The generation pipeline is fully offline — the app process never downloads anything (`HF_HUB_OFFLINE=1` is set at import, all model loads are `local_files_only`), and a missing weight produces a clear error and a `doctor` warning naming the exact command rather than a silent fetch.
+This one SDXL download powers four of the registered recipes — full CFG (the
+default), Hyper-SD, LCM and Lightning are the same weights run four ways, so the
+three faster ones cost only a small LoRA each. SDXL-Turbo is a separate 7 GB
+checkpoint and is optional; its command is in [docs/MODELS.md](docs/MODELS.md).
 
-Everything below the first two steps can also be fetched from inside the app, in **Settings → Models**: tick the rows you want and press Download — and removed again from the same place, which tells you what a removal would actually free before you confirm it. That does not make the app online-capable, and the mechanism is the point — the button spawns a separate `python -m warlock.pipelines.fetch_worker` process which sets `HF_HUB_OFFLINE=0` in its own environment, fetches one repository into a staging directory beside the destination, moves the files in only if it succeeded, and exits. The app process keeps `HF_HUB_OFFLINE=1` for its entire life. Free disk is checked against the whole plan before anything is spawned, and a failed fetch leaves no half-populated model directory.
+These downloads are the only network use there is. The generation pipeline is
+fully offline — the app process never downloads anything (`HF_HUB_OFFLINE=1` is
+set at import, all model loads are `local_files_only`), and a missing weight
+produces a clear error and a `doctor` warning naming the exact command rather
+than a silent fetch.
 
 **Optional models** — alternative base models (SDXL-Turbo, the Hyper-SD/LCM/Lightning recipes over the base you already have, Playground, Juggernaut, DreamShaper, FLUX.2 klein), style LoRAs (3D render, PS1, pixel art), IP-Adapter, ControlNet, BiRefNet matting, DINOv2, ViTPose — live in [docs/MODELS.md](docs/MODELS.md) with the exact commands and the rationale for each recipe.
 
@@ -187,4 +233,26 @@ The app is a single process: a pygame window, one ModernGL context, and [imgui-b
 
 Outputs land in `~/.warlock/assets/<job_id>/` (`input.png`, `model.glb`, `rig.glb`/`rig.json`, `poses/`, `sheets/`); the SQLite job store lives at `~/.warlock/assets/jobs.sqlite`. Everything the app generates — the library, benchmark runs, palettes and model weights — sits under that one home directory rather than inside the checkout; an install that predates it has its directories moved there on the next start (copy, verify, then delete), and `WARLOCK_HOME` or `WARLOCK_NO_MIGRATE` opts out. See [Data locations](docs/manual/39-configuration.md#data-locations).
 
-Where to read more: the user manual is [docs/manual/00-index.md](docs/manual/00-index.md) (39 chapters, also embedded in the app), the hard invariants and their measured reasoning are `docs/INVARIANTS.md`, measurement write-ups are `docs/measurements/`, and `CHANGELOG.md` tracks releases.
+Where to read more: the user manual is [docs/manual/00-index.md](docs/manual/00-index.md) (38 chapters, also embedded in the app), the hard invariants and their measured reasoning are `docs/INVARIANTS.md`, measurement write-ups are `docs/measurements/`, and `CHANGELOG.md` tracks releases.
+
+## Licence
+
+Warlock Studio is **GPL-3.0-or-later** — see [LICENSE](LICENSE).
+
+GPL rather than something permissive because the Windows installer bundles
+[`bpy`](https://pypi.org/project/bpy/) (Blender as a Python module, GPL-3.0) to
+provide rigging. The subprocess boundary is real — only
+`src/warlock/pipelines/blender_worker.py` imports `bpy`, and it never runs in
+the app process — but the installer distributes both inside one executable, so
+the combined work is GPL. A source checkout without `--extra rig` contains no
+GPL dependency; the licence on this project is unchanged either way.
+
+Third-party components — the vendored `trellis-server.exe` and ggml DLLs, the
+NVIDIA CUDA redistributables, `gltfpack`, the bundled fonts and the vendored
+BiRefNet code — carry their own terms, collected in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+**Model weights are not part of this project.** They are downloaded by you, from
+Hugging Face, and licensed by their publishers — two of them restrict commercial
+use of what you generate. The app shows each model's licence in the picker and
+at download; the full table is in the notices file above.

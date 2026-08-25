@@ -25,6 +25,11 @@ ENGINE = Path(packwright.__file__).parent
 PACKAGE = "warlock.studio.packwright"
 
 OUTWARD_IMPORTS = {
+    # The shared bounded zip reader. One rule for four container doors, and a
+    # leaf for ``tilegrid``/``undo``'s reason exactly: the ``file_size`` sum
+    # each of these carried is written by whoever wrote the archive, and a
+    # fourth private copy of a security bound is a copy that stops agreeing.
+    ("wpack.py", "warlock.studio.zipguard"),
     # The shared history engine, as headless as this package is.
     ("document.py", "warlock.studio.undo"),
     # The authority on how big an atlas may be before an engine refuses it,

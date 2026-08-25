@@ -295,6 +295,24 @@ def draw(ctx: Any) -> None:
     _was_open[0] = True
     state.satisfied = satisfied(ctx, step.done.name, step.done.arg)
 
+    # Suspended -- not stopped -- while a real modal is up. The scrim is on the
+    # *foreground* draw list, which composites above every window
+    # unconditionally; that is why the card needs a hole of its own, and it is
+    # equally why a confirm, a prompt, the matte preview or the first-run sheet
+    # opening mid-tour gets dimmed by a tour that has no idea it is there. The
+    # ring is worse than the veil: it would circle a control the modal is now
+    # covering, pointing the reader at something they cannot reach.
+    #
+    # Suspending rather than holing out each modal's rect, because a hole needs
+    # a rectangle and imgui does not hand those out at foreground-draw time --
+    # and because the step is not actionable anyway while something else owns
+    # the keyboard. ``_was_open`` is left set, so the card does not replay its
+    # appear animation when the modal closes and the tour comes back.
+    from ..main import modal_open
+
+    if modal_open(ctx):
+        return
+
     viewport = imgui.get_main_viewport()
     hole = _hole(ctx, step)
     holes = [one for one in (hole, _card_rect[0]) if one is not None]

@@ -17,6 +17,7 @@ import numpy as np
 from ..tilegrid import gid as gidlib
 from ._map_model import (
     MAX_DIMENSION,
+    MAX_GROWTH,
     ObjectLayer,
     Shape,
     TileLayer,
@@ -367,6 +368,16 @@ class GeometryOps:
         bottom = max(0, y1 - self.height + 1)
         if not (left or top or right or bottom):
             return False
+        reach = max(left, top, right, bottom)
+        if reach > MAX_GROWTH:
+            # Before the allocation, not after it: the point of this cap is
+            # that the 64-MiB-a-layer reallocation never happens, so it cannot
+            # be a check on the result. See ``MAX_GROWTH``.
+            raise ValueError(
+                f"that is {reach} cells past the edge of the map, and one press "
+                f"grows it by at most {MAX_GROWTH} -- paint closer to the edge, "
+                "or resize the map"
+            )
         width = self.width + left + right
         height = self.height + top + bottom
         if width > MAX_DIMENSION or height > MAX_DIMENSION:

@@ -515,6 +515,7 @@ def magic_wand(
     tolerance: int = 32,
     contiguous: bool = True,
     wrap: str | tuple[bool, bool] = "off",
+    eight_connected: bool = False,
 ) -> SelectionMask:
     """Everything similar to the seed pixel, optionally on a torus.
 
@@ -523,6 +524,10 @@ def magic_wand(
     non-contiguous wand is the same answer tiled or not. With it on, a region
     that runs off one edge and continues on the other is one region -- which is
     what makes filling a tile's background a single click rather than four.
+
+    ``eight_connected`` is the other contiguity control, and Aseprite's: with
+    it on a region continues through a corner touch, which is what a diagonal
+    pixel-art line asks for -- four-connected, every such line is a wall.
     """
     height, width = pixels.shape[:2]
     x, y = int(seed[0]), int(seed[1])
@@ -530,12 +535,56 @@ def magic_wand(
         return SelectionMask(np.zeros((height, width), dtype=np.uint8))
     plane = similar(pixels, (x, y), tolerance)
     if contiguous:
-        plane = _contiguous(plane, (x, y), tiling.axes_of(wrap))
+        plane = _contiguous(
+            plane, (x, y), tiling.axes_of(wrap), eight=bool(eight_connected)
+        )
     return SelectionMask((plane.astype(np.uint8)) * 255)
 
 
+def _shift(plane: np.ndarray, dy: int, dx: int, axes: tuple[bool, bool]) -> np.ndarray:
+    """*plane* moved by ``(dy, dx)``, wrapping only on the tiled axes."""
+
+    out = plane
+    if axes[1]:
+        out = np.roll(out, dy, axis=0)
+    else:
+        moved = np.zeros_like(out)
+        height = out.shape[0]
+        moved[max(dy, 0) : height + min(dy, 0)] = out[max(-dy, 0) : height + min(-dy, 0)]
+        out = moved
+    if axes[0]:
+        return np.roll(out, dx, axis=1)
+    moved = np.zeros_like(out)
+    width = out.shape[1]
+    moved[:, max(dx, 0) : width + min(dx, 0)] = out[:, max(-dx, 0) : width + min(-dx, 0)]
+    return moved
+
+
+def _corner_seeds(
+    reached: np.ndarray, plane: np.ndarray, axes: tuple[bool, bool]
+) -> list[tuple[int, int]]:
+    """Candidate pixels a *corner* touch has just made reachable.
+
+    The eight-connected walk is the four-connected one run to a fixpoint, the
+    same shape the toroidal walk already uses and for the same reason: Pillow
+    decides connectivity in C, and each pass here only has to name the corners
+    that pass opened. A pass claims at least one new pixel or the loop ends, so
+    the bound is the number of diagonal steps in the region -- not its area.
+    """
+
+    frontier = np.zeros_like(reached)
+    for dy, dx in ((1, 1), (1, -1), (-1, 1), (-1, -1)):
+        frontier |= _shift(reached, dy, dx, axes)
+    ys, xs = np.nonzero(plane & frontier & ~reached)
+    return [(int(x), int(y)) for x, y in zip(xs, ys, strict=True)]
+
+
 def _contiguous(
-    plane: np.ndarray, seed: tuple[int, int], axes: tuple[bool, bool] = (False, False)
+    plane: np.ndarray,
+    seed: tuple[int, int],
+    axes: tuple[bool, bool] = (False, False),
+    *,
+    eight: bool = False,
 ) -> np.ndarray:
     """Keep only the region connected to the seed.
 
@@ -559,11 +608,13 @@ def _contiguous(
     # silently, with no exception and an empty selection to show for it.
     canvas = Image.fromarray(plane.astype(np.uint8), "L").copy()
     ImageDraw.floodfill(canvas, seed, 2, thresh=0)
-    if not (axes[0] or axes[1]):
+    if not (axes[0] or axes[1] or eight):
         return np.asarray(canvas) == 2
     while True:
         reached = np.asarray(canvas) == 2
-        seeds = tiling.seam_seeds(reached, plane, axes)
+        seeds = list(tiling.seam_seeds(reached, plane, axes)) if any(axes) else []
+        if eight:
+            seeds += _corner_seeds(reached, plane, axes)
         if not seeds:
             return reached
         for point in seeds:

@@ -231,6 +231,71 @@ def test_the_byte_budget_evicts_the_oldest_step_but_never_past_the_floor():
     assert len(stack) == U.UNDO_MIN_DEPTH
 
 
+class _Sized(U.Edit):
+    """A step of a declared cost and nothing else.
+
+    The cases below are about eight steps of a gigabyte and a ceiling that has
+    to stop them; building real buffers to prove it would be the bug rather
+    than a test of it. Nothing here calls ``undo``/``redo`` -- eviction never
+    does either, it only drops.
+    """
+
+    def __init__(self, cost: int) -> None:
+        self.cost = cost
+
+    def undo(self, doc):  # pragma: no cover - never reached by eviction
+        pass
+
+    def redo(self, doc):  # pragma: no cover - never reached by eviction
+        pass
+
+
+def test_the_hard_ceiling_evicts_past_the_depth_floor():
+    """The 15 GiB bug. Eight full-document snapshots never reached the byte
+    budget at all, because the floor is a count of *steps* and eight of them
+    are only eight steps -- so ``len(self._done) > UNDO_MIN_DEPTH`` stayed
+    false the whole way up and nothing was ever dropped."""
+    stack = U.UndoStack(hard=1000)
+    for _ in range(U.UNDO_MIN_DEPTH):
+        stack.push(_Sized(400))
+    assert len(stack) < U.UNDO_MIN_DEPTH
+    assert stack.bytes <= 1000
+
+
+def test_one_step_survives_even_when_it_alone_exceeds_the_ceiling():
+    """A canvas resize on a large document is bigger than any ceiling worth
+    setting, and a history of one step is still an undo. Over-correcting into
+    an empty stack would lose the user the thing they just did."""
+    stack = U.UndoStack(hard=1000)
+    stack.push(_Sized(10_000))
+    assert len(stack) == 1
+    assert stack.can_undo
+
+
+def test_the_ceiling_leaves_the_case_the_floor_was_sized_for_alone():
+    """Eight snapshots of one 4096-square RGBA layer -- 512 MiB -- is exactly
+    what the depth floor exists to keep, and ``UNDO_HARD_BYTES`` is set above
+    it on purpose. A ceiling that ate this would have traded one bug for
+    another."""
+    stack = U.UndoStack()
+    for _ in range(U.UNDO_MIN_DEPTH):
+        stack.push(_Sized(4096 * 4096 * 4))
+    assert len(stack) == U.UNDO_MIN_DEPTH
+    assert stack.trimmed == 0
+
+
+def test_a_trimmed_stack_says_so_and_a_cleared_one_stops():
+    """``trimmed`` is how a status bar explains a vanished step, and it goes
+    with the history: a fresh document reporting trims from the last one is
+    describing a history nobody can see."""
+    stack = U.UndoStack(hard=1000)
+    for _ in range(U.UNDO_MIN_DEPTH):
+        stack.push(_Sized(400))
+    assert stack.trimmed > 0
+    stack.clear()
+    assert stack.trimmed == 0
+
+
 def test_a_document_of_dabs_still_stops_at_the_depth_cap():
     doc = _doc(size=(4, 4))
     stack = U.UndoStack()

@@ -157,6 +157,7 @@ def _item(
     *,
     selected: bool,
     tooltip: str = "",
+    badge: str = "",
     height: float = 0.0,
 ) -> bool:
     """One row of the rail. -> whether it was clicked.
@@ -201,20 +202,67 @@ def _item(
     words = _label_alpha()
     if words > 0.0:
         size = imgui.calc_text_size(label)
+        text_x = origin.x + sp(RAIL_W) - sp(tokens.SP_1)
         draw.add_text(
-            (origin.x + sp(RAIL_W) - sp(tokens.SP_1), origin.y + (height - size.y) * 0.5),
+            (text_x, origin.y + (height - size.y) * 0.5),
             imgui.get_color_u32(theme.rgba(theme.TEXT if selected else theme.MUTED, alpha * words)),
             label,
         )
+        if badge:
+            _badge(
+                draw, badge, text_x + size.x + sp(tokens.SP_2),
+                origin, box, height, alpha * words,
+            )
     # The accessible name, for as long as the glyph is the only thing drawn.
     # Suppressed once the label is legible, because a tooltip repeating a word
     # that is already on screen is noise -- unless the caller has something
     # more to say, which is what ``tooltip`` is for.
+    #
+    # Every rail item now has something more to say (``modes.PURPOSE``), so the
+    # collapsed rail prepends the label: without it, hovering a bare glyph gave
+    # a sentence about a mode whose *name* was the one thing not on screen.
     if hovered and (tooltip or words < 0.5):
-        imgui.set_tooltip(tooltip or label)
+        text = tooltip or label
+        if tooltip and words < 0.5:
+            text = f"{label} — {tooltip}"
+        imgui.set_tooltip(text)
     if hovered:
         imgui.set_mouse_cursor(imgui.MouseCursor_.hand.value)
     return clicked
+
+
+def _badge(
+    draw: Any, text: str, x: float, origin: Any,
+    box: float, height: float, alpha: float,
+) -> None:
+    """A small chip after a rail item's label -- "Experimental" and nothing else.
+
+    Drawn onto the draw list rather than through ``widgets._chip``, for
+    :func:`_item`'s own reason: this rail's layout is arithmetic over an
+    ``invisible_button``, and a chip that emitted real imgui items would both
+    advance the cursor inside the row and steal the hover the row is built
+    around.
+
+    **Skipped rather than clipped when it does not fit.** The rail narrows to a
+    glyph column, and a chip half-drawn over the panel edge reads as a
+    rendering fault; the tooltip carries the same word at every width, so
+    nothing is lost by staying silent here.
+    """
+    with fonts.small(imgui):
+        size = imgui.calc_text_size(text)
+        pad_x, pad_y = sp(5), sp(2)
+        width = size.x + pad_x * 2
+        if x + width > origin.x + box - sp(tokens.SP_1):
+            return
+        top = origin.y + (height - (size.y + pad_y * 2)) * 0.5
+        colour = theme.rgba(theme.ACCENT, alpha)
+        draw.add_rect_filled(
+            (x, top),
+            (x + width, top + size.y + pad_y * 2),
+            imgui.get_color_u32(theme.rgba(theme.ACCENT, alpha * 0.16)),
+            (size.y + pad_y * 2) * 0.5,
+        )
+        draw.add_text((x + pad_x, top + pad_y), imgui.get_color_u32(colour), text)
 
 
 def _caption(text: str, height: float) -> None:
@@ -360,7 +408,20 @@ def draw(app: Any, ctx: Any) -> None:
             _caption(modes.RAIL_GROUP_LABELS[index], caption_h)
         for key in group:
             label, icon = labels[key]
-            if _item(key, label, icon, item_w, selected=key == current, height=item_h):
+            # ``modes`` is the authority on all three, so a mode added there
+            # arrives here with its sentence and its maturity already attached.
+            note = modes.MATURITY_NOTE.get(key, "")
+            purpose = modes.PURPOSE.get(key, "")
+            if _item(
+                key,
+                label,
+                icon,
+                item_w,
+                selected=key == current,
+                tooltip=f"{purpose} {note}".strip() if note else purpose,
+                badge=modes.MATURITY.get(key, ""),
+                height=item_h,
+            ):
                 app._set_mode(key)
 
     imgui.pop_style_var()

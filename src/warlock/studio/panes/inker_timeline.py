@@ -53,6 +53,8 @@ said they were "deliberately not here" for four months after they shipped.)
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from imgui_bundle import imgui
@@ -139,6 +141,91 @@ def track_depth(doc: Any, track_uid: int) -> list[int]:
     from ..inker import groups as gp
 
     return gp.ancestry(doc.group_of, track_uid)
+
+
+@dataclass(frozen=True)
+class RowEntry:
+    """One row of the grid: a layer, or the header of a group above it."""
+
+    kind: str
+    depth: int
+    #: The stack index a ``"track"`` row draws; ``-1`` on a header.
+    index: int = -1
+    #: The group uid a ``"group"`` row draws; ``-1`` on a track.
+    uid: int = -1
+
+
+def row_plan(
+    doc: Any,
+    indices: Sequence[int] | None = None,
+    collapsed: Any = frozenset(),
+) -> list[RowEntry]:
+    """Which rows the grid draws, in order: headers folded in, folds honoured.
+
+    Pure, for :func:`cell_index`'s reason -- a row that should not have been
+    drawn is a mistake about a *list*, and asserting it against a list is the
+    only way to know it holds. The pane walks the answer and draws it.
+
+    A header goes immediately before the first member of its group *in walk
+    order*, which is what makes the flat stack read as a tree without the
+    stack becoming one: a group's leaves are contiguous by invariant
+    (``groups`` module), so "first member" is unambiguous.
+
+    ``collapsed`` is ``TabDoc.collapsed_groups`` -- view state, per tab. A
+    collapsed group keeps its own header and loses everything under it,
+    nested headers included; there is no half-open state.
+
+    ``indices`` is the filtered row list where the name filter has one. A
+    group whose every layer was filtered away loses its header too: a folder
+    with nothing in it is a claim about a list that is not there.
+    """
+
+    order = doc.member_uids()
+    rows = list(range(len(doc.stack))) if indices is None else [int(i) for i in indices]
+    collapsed = set(collapsed or ())
+    plan: list[RowEntry] = []
+    open_chain: list[int] = []
+    for index in rows:
+        uid = order[index] if 0 <= index < len(order) else None
+        chain = list(reversed(track_depth(doc, uid))) if uid is not None else []
+        shared = 0
+        while (
+            shared < len(open_chain)
+            and shared < len(chain)
+            and open_chain[shared] == chain[shared]
+        ):
+            shared += 1
+        open_chain = chain
+        for depth in range(shared, len(chain)):
+            if any(guid in collapsed for guid in chain[:depth]):
+                continue
+            plan.append(RowEntry("group", depth, uid=chain[depth]))
+        if not any(guid in collapsed for guid in chain):
+            plan.append(RowEntry("track", len(chain), index=index))
+    return plan
+
+
+def toggle_fold(tab: Any, group_uid: int) -> None:
+    """Open or shut one group on this tab. View state; nothing is pushed."""
+
+    if group_uid in tab.collapsed_groups:
+        tab.collapsed_groups.discard(group_uid)
+    else:
+        tab.collapsed_groups.add(group_uid)
+
+
+def forget_folds(tab: Any, doc: Any) -> None:
+    """Drop folds naming groups the document no longer has.
+
+    An undo that dissolves a group, or a menu that does, would otherwise leave
+    a uid folded shut with no header on screen to reopen it -- and the uid
+    comes back on a redo still folded, which is a document that opens
+    differently for no reason the user can see.
+    """
+
+    stale = tab.collapsed_groups - set(doc.groups)
+    if stale:
+        tab.collapsed_groups -= stale
 
 
 #: The ``geom`` keys :func:`cell_index` takes, and the reason :func:`hit_cell`
@@ -839,13 +926,23 @@ def _grid(ctx: Any, tab: Any) -> None:
     # This is the one thing about the grid that reversed when the panel merged
     # in -- the panel drew top-down because Photoshop's does, and the grid has
     # always read the same way down the page as the stack does.
-    shown = 0
-    for index in range(len(doc.stack)):
-        if needle and needle not in (doc.stack[index].name or "").lower():
+    # Before the plan: a fold naming a group an undo has just dissolved would
+    # otherwise hide rows no header on screen could bring back.
+    forget_folds(tab, doc)
+    matched = [
+        index
+        for index in range(len(doc.stack))
+        if not needle or needle in (doc.stack[index].name or "").lower()
+    ]
+    for entry in row_plan(doc, matched, tab.collapsed_groups):
+        if entry.kind == "group":
+            _group_row(ctx, tab, doc, entry)
             continue
-        shown += 1
-        _track_row(ctx, tab, index, cell, gutter, geom)
-    widgets.no_matches(needle, shown)
+        _track_row(ctx, tab, entry.index, cell, gutter, geom)
+    # The *filter's* count, not the drawn one: a collapsed folder hides rows
+    # that matched perfectly well, and "no layers match" would be a lie about
+    # the filter rather than a statement about the fold.
+    widgets.no_matches(needle, len(matched))
     _range_gesture(ctx, tab, geom)
     _range_overlay(ctx, tab, geom)
     if doc.anim is not None:
@@ -1115,6 +1212,13 @@ def _track_row(
         widgets.muted(label)
     else:
         imgui.text(label)
+    # The name is the row's own hit target. Clicking it selects the layer --
+    # which before this could only be done by clicking a *cel*, so a still
+    # document's one column was the only way to change rows -- and Shift-click
+    # stretches the timeline range to here, which is what ``extend_range`` was
+    # written for and never wired to.
+    if imgui.is_item_clicked(0) and not tab.busy and not extend_range(tab, doc, track_index):
+        doc.set_active_layer(track_index)
     if imgui.is_item_hovered():
         detail = f"{layer.blend}  {layer.opacity * 100:.0f}%"
         if not layer.visible:
@@ -1138,6 +1242,122 @@ def _track_row(
         _cell(ctx, tab, track_index, frame, track_index, frame_index, cell, geom)
         imgui.pop_id()
     imgui.pop_id()
+
+
+def _group_row(ctx: Any, tab: Any, doc: Any, entry: RowEntry) -> None:
+    """A group's header: the fold, its eye, its name, and its verbs.
+
+    The row the panel never had. ``TabDoc.collapsed_groups`` was declared for
+    as long as groups have existed and read by nothing, so a folder could be
+    made and never shut -- and ``set_group_props`` and ``ungroup`` were engine
+    doors with no caller at all. All three arrive here, because a header row is
+    where a user looks for them.
+
+    No cells to the right of it. A group is pass-through (see the ``groups``
+    module): there is no group *cel* to draw, and a row of empty boxes would
+    suggest one could be painted.
+    """
+    node = doc.groups.get(entry.uid)
+    if node is None:  # pragma: no cover - a fold outlived its group
+        return
+    collapsed = entry.uid in tab.collapsed_groups
+    imgui.push_id(f"gp{entry.uid}")
+    if entry.depth:
+        imgui.indent(sp(GROUP_INDENT) * entry.depth)
+    # The fold is *not* gated on ``tab.busy``: it changes no pixels, pushes no
+    # step and touches nothing a save is walking -- it is where the user looks,
+    # and a save that greyed it out would be the panel refusing to scroll.
+    if widgets.icon_button(
+        f"{icons.CHEVRON_RIGHT if collapsed else icons.CHEVRON_DOWN}##fold",
+        "Expand this group" if collapsed else "Collapse this group",
+        borderless=True,
+    ):
+        toggle_fold(tab, entry.uid)
+    imgui.same_line()
+    imgui.begin_disabled(tab.busy)
+    if widgets.icon_button(
+        f"{icons.EYE if node.visible else icons.EYE_OFF}##gvisible",
+        "Hide this group" if node.visible else "Show this group",
+        borderless=True,
+    ):
+        doc.set_group_props(entry.uid, visible=not node.visible)
+    imgui.end_disabled()
+    imgui.same_line()
+    label = f"{icons.FOLDER_OPEN} {node.name[:11]}"
+    if node.locked:
+        label += f" {icons.LOCK}"
+    if node.visible:
+        imgui.text(label)
+    else:
+        widgets.muted(label)
+    # The header is a drop target, which is how a layer gets *into* a folder:
+    # ``_reorder``'s payload is a stack index, and ``move_into_group`` folds the
+    # membership change and the stack move that keeps the group contiguous into
+    # one step. Registered against the name for the reason the row's own source
+    # is: it is the thing the cursor is over.
+    if imgui.begin_drag_drop_target():
+        payload = imgui.accept_drag_drop_payload_py_id("inker-layer")
+        if payload is not None and not tab.busy:
+            source = int(payload.data_id)
+            if 0 <= source < len(doc.stack):
+                doc.move_into_group(source, entry.uid)
+        imgui.end_drag_drop_target()
+    if imgui.is_item_hovered():
+        detail = f"group  {node.opacity * 100:.0f}%"
+        if not node.visible:
+            detail += "  hidden"
+        if node.locked:
+            detail += "  locked"
+        imgui.set_tooltip(detail)
+    _group_menu(ctx, tab, doc, entry.uid)
+    if entry.depth:
+        imgui.unindent(sp(GROUP_INDENT) * entry.depth)
+    imgui.pop_id()
+
+
+def _group_menu(ctx: Any, tab: Any, doc: Any, group_uid: int) -> None:
+    """The header's verbs -- ``_row_menu``'s shape, one level up."""
+    if not imgui.begin_popup_context_item("group-menu"):
+        return
+    widgets.popup_chrome(_imgui=imgui)
+    node = doc.groups.get(group_uid)
+    if node is None:  # pragma: no cover - dissolved between draw and click
+        imgui.end_popup()
+        return
+    imgui.begin_disabled(tab.busy)
+    if controls.selectable("Rename", False)[0]:
+        _ask_group_rename(ctx, doc, group_uid)
+    changed, opacity = controls.slider_float(
+        "Opacity##group", float(node.opacity), 0.0, 1.0, "%.2f"
+    )
+    if changed:
+        doc.set_group_props(group_uid, opacity=float(opacity))
+    if controls.selectable("Locked", bool(node.locked))[0]:
+        doc.set_group_props(group_uid, locked=not node.locked)
+    imgui.separator()
+    if controls.selectable("Ungroup", False)[0]:
+        # The fold goes with the group: keeping it would fold the uid shut
+        # again the moment a redo brought the group back.
+        doc.ungroup(group_uid)
+        tab.collapsed_groups.discard(group_uid)
+    imgui.end_disabled()
+    imgui.end_popup()
+
+
+def _ask_group_rename(ctx: Any, doc: Any, group_uid: int) -> None:
+    from .. import dialogs
+
+    node = doc.groups.get(group_uid)
+    if node is None:  # pragma: no cover - dissolved between draw and click
+        return
+    ctx.prompts.ask(
+        dialogs.Prompt(
+            title="Rename group",
+            label="Name",
+            value=node.name,
+            on_accept=lambda text: doc.set_group_props(group_uid, name=text[:60]),
+        )
+    )
 
 
 def _depth(doc: Any, index: int, order: list[int] | None = None) -> int:
@@ -1262,11 +1482,31 @@ def _reorder(ctx: Any, tab: Any, doc: Any, index: int) -> None:
         imgui.end_drag_drop_target()
 
 
+def row_targets(tab: Any, doc: Any, index: int) -> list[int]:
+    """Which rows a verb clicked on ``index`` acts on.
+
+    The whole selected block when the click landed inside a multi-row range,
+    and that row alone otherwise -- which is exactly ``_set_visible``'s rule,
+    named once now that four more verbs need it. A range is a *selection*, and
+    a menu that ignored it while the highlight said otherwise is worse than no
+    range at all.
+    """
+    span = track_range(tab, doc)
+    if span is not None and span[0] <= index <= span[1] and span[1] > span[0]:
+        return list(range(span[0], span[1] + 1))
+    return [index]
+
+
 def _row_menu(ctx: Any, tab: Any, doc: Any, index: int) -> None:
-    """The row's own verbs. The panel's context menu, unchanged."""
+    """The row's own verbs -- over the range where there is one."""
     if not imgui.begin_popup_context_item("layer-menu"):
         return
     widgets.popup_chrome(_imgui=imgui)
+    rows = row_targets(tab, doc, index)
+    # "Delete layer" against one row and "Delete 3 layers" against a block: the
+    # label is how the user finds out the verb is about the selection before
+    # pressing it, which a menu that silently widened its scope would not say.
+    span = "" if len(rows) < 2 else f" {len(rows)} layers"
     # ``_frame_menu``'s shape: the menu opens so the user can see what is on
     # it, and every verb on it is disabled while the document is busy.
     imgui.begin_disabled(tab.busy)
@@ -1281,8 +1521,15 @@ def _row_menu(ctx: Any, tab: Any, doc: Any, index: int) -> None:
     if controls.selectable("Move down", False)[0]:
         doc.move_layer(index, index - 1)
     imgui.separator()
-    if controls.selectable("Group", False)[0]:
-        doc.group_layers([index])
+    if controls.selectable(f"Duplicate{span or ' layer'}", False)[0]:
+        doc.duplicate_layers(rows)
+    if controls.selectable(f"Merge down{span}", False)[0]:
+        doc.merge_range(min(rows), max(rows))
+    if controls.selectable(f"Delete{span or ' layer'}", False)[0]:
+        doc.remove_layers(rows)
+    imgui.separator()
+    if controls.selectable(f"Group{span}", False)[0]:
+        doc.group_layers(rows)
     if doc.group_of.get(_member_uid(doc, index)) is not None and controls.selectable(
         "Take out of group", False
     )[0]:
@@ -1606,6 +1853,13 @@ def _tag_row(ctx: Any, tab: Any, cell: float, gutter: float) -> None:
             _tag_rename(ctx, tab, index)
         else:
             widgets.muted(f"{tag.name}{_tag_note(tag)}")
+            # The band's left-click, which it did not have: a tag names an
+            # animation and clicking it is how a user asks to see that one.
+            if imgui.is_item_clicked(0) and not tab.busy:
+                if imgui.is_mouse_double_clicked(0):
+                    begin_tag_rename(state, index, tag)
+                else:
+                    tag_jump(tab.doc, tag)
             _tag_menu(ctx, tab, index, tag)
         imgui.pop_id()
 
@@ -1660,6 +1914,30 @@ def _tag_rename(ctx: Any, tab: Any, index: int) -> None:
         state.tag_editing = -1
 
 
+def tag_jump(doc: Any, tag: Any) -> bool:
+    """Move the playhead to a tag's first frame. Aseprite's left-click.
+
+    Clamped rather than trusted: a tag's ends are stored unclamped (the same
+    decision ``track_range`` names), and a start of -1 would otherwise ask the
+    animation for a frame that is not there.
+    """
+    if doc.anim is None or not doc.anim.frames:
+        return False
+    doc.set_current_frame(max(0, min(int(tag.start), len(doc.anim.frames) - 1)))
+    return True
+
+
+def begin_tag_rename(state: Any, index: int, tag: Any) -> None:
+    """Open the inline rename on one tag -- the menu's verb, on a double-click.
+
+    Double-click renames because that is what a double-click on a name does
+    everywhere else, and because the alternative for a band with no other
+    left-click meaning was a menu round trip for the commonest edit a tag has.
+    """
+    state.tag_editing = index
+    state.tag_name = tag.name
+
+
 def _tag_menu(ctx: Any, tab: Any, index: int, tag: Any) -> None:
     doc = tab.doc
     state = ctx.state.inker
@@ -1668,8 +1946,7 @@ def _tag_menu(ctx: Any, tab: Any, index: int, tag: Any) -> None:
     widgets.popup_chrome(_imgui=imgui)
     imgui.begin_disabled(tab.busy)
     if controls.menu_item_simple("Rename"):
-        state.tag_editing = index
-        state.tag_name = tag.name
+        begin_tag_rename(state, index, tag)
     # Both ends from the playhead, which is the frame the user just clicked to
     # get here: a tag is a span of the timeline and the timeline is what they
     # are looking at, so there is nothing to type.

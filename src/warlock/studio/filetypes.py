@@ -30,7 +30,7 @@ from collections.abc import Iterable
 
 # Every raster format the app will open, load or accept on a drop. Lower case
 # and dotted, so a ``Path.suffix.lower()`` compares directly.
-IMAGE_SUFFIXES: tuple[str, ...] = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
+IMAGE_SUFFIXES: tuple[str, ...] = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif")
 
 
 def _globs(suffixes: Iterable[str] = IMAGE_SUFFIXES) -> list[str]:
