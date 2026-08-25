@@ -3259,6 +3259,14 @@ class App:
         # the same reason: a stale census points at whatever took the control's
         # place.
         probe.begin_frame()
+        # And -- once every ten seconds rather than once a frame -- the
+        # interpolator forgets the keys nothing is asking for any more. Here
+        # rather than in ``motion`` itself because this is the one place that
+        # knows a frame has started, which is the same reason the four clears
+        # above it live here.
+        from . import motion as motion_mod
+
+        motion_mod.sweep()
         # The rail is drawn in every mode, Home included: it is how you leave
         # wherever you are, so a mode that hides it is a dead end.
         guard.run("shell/rail", rail.draw, self, ctx, title="The mode rail")

@@ -301,9 +301,60 @@ def forget(key: str) -> None:
     _VELOCITY.pop(key, None)
 
 
+#: How many frames a key may go unasked for before it is forgotten. Ten
+#: seconds at 60 fps, which is far longer than any animation here and far
+#: shorter than a session.
+STALE_FRAMES = 600
+
+#: How often the sweep actually walks the dictionaries. The walk is O(keys) and
+#: the keys are what it is bounding, so it runs on one frame in six hundred
+#: rather than on every one.
+SWEEP_EVERY = 600
+
+_last_sweep = 0
+
+
+def sweep(frame: int | None = None) -> int:
+    """Forget every key nothing has asked for lately. -> how many went.
+
+    These four dictionaries are keyed on strings with **job ids interpolated
+    into them** -- ``library/sel/{job_id}`` and its neighbours -- so a session
+    that browses a thousand assets leaves a thousand entries behind, and
+    ``forget`` has exactly one caller. What makes the sweep exact rather than a
+    guess is ``_FRAME``, which is already recorded for a different reason
+    entirely (the idle clamp must not be held at 60 fps by a card that stopped
+    being drawn mid-move): it is a per-key record of when something last asked,
+    which is the definition of live.
+
+    Nothing is lost by forgetting early either -- the docstring on
+    :func:`forget` says what it costs, which is that the key's next sighting
+    snaps instead of animating, and a key nobody has drawn for ten seconds has
+    no position on screen to animate away from.
+    """
+    global _last_sweep
+    if frame is None:
+        clock = _clock()
+        if clock is None:
+            return 0
+        frame = clock[1]
+    if frame - _last_sweep < SWEEP_EVERY:
+        return 0
+    _last_sweep = frame
+    dead = [key for key, seen in _FRAME.items() if frame - seen > STALE_FRAMES]
+    for key in dead:
+        forget(key)
+    # A key that was set but never *asked* for -- ``snap`` writes ``_STATE``
+    # with no ``_FRAME`` entry -- would otherwise never be swept.
+    for key in [k for k in _STATE if k not in _FRAME]:
+        forget(key)
+    return len(dead)
+
+
 def reset() -> None:
     """Forget everything; for tests and mode teardowns."""
+    global _last_sweep
     _STATE.clear()
     _TARGET.clear()
     _FRAME.clear()
     _VELOCITY.clear()
+    _last_sweep = 0

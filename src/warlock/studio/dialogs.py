@@ -27,6 +27,11 @@ from .tokens import sp
 
 log = logging.getLogger(__name__)
 
+#: The most questions either queue will hold. See ``ConfirmQueue.ask`` for why
+#: this is a backstop against a runaway caller rather than a policy about how
+#: many questions a user should be asked.
+MAX_QUEUED = 64
+
 # Filters, as portable-file-dialogs wants them: name, then patterns. The image
 # suffixes come from ``filetypes`` -- the same tuple the drop router refuses
 # against -- because a picker that offers what a drop refuses (or the reverse)
@@ -200,6 +205,26 @@ class ConfirmQueue:
         return max(0, len(self._queue) - 1)
 
     def ask(self, confirm: Confirm) -> None:
+        """Queue one question. Refuses to queue past :data:`MAX_QUEUED`.
+
+        **A cap and not a smaller queue**, which is the distinction the class
+        docstring above is about: dropping the *second* question was the bug,
+        and dropping the sixty-fifth is a backstop against a caller that has
+        started asking from somewhere it should not. Sixty-four is two orders
+        above the longest legitimate run -- a quit asks three -- so reaching it
+        means a per-frame code path is calling this, which at 60 fps is an
+        unbounded deque and a modal the user can never finish answering.
+        Refused loudly, because a question silently dropped is exactly what
+        this queue exists not to do.
+        """
+        if len(self._queue) >= MAX_QUEUED:
+            log.warning(
+                "refusing to queue a %d-th confirm (%r) -- something is asking "
+                "from a per-frame path",
+                len(self._queue) + 1,
+                confirm.title,
+            )
+            return
         self._queue.append(confirm)
 
     def dismiss(self) -> None:
@@ -328,6 +353,15 @@ class PromptQueue:
         return max(0, len(self._queue) - 1)
 
     def ask(self, prompt: Prompt) -> None:
+        """:meth:`ConfirmQueue.ask`'s cap, for its reason."""
+        if len(self._queue) >= MAX_QUEUED:
+            log.warning(
+                "refusing to queue a %d-th prompt (%r) -- something is asking "
+                "from a per-frame path",
+                len(self._queue) + 1,
+                prompt.title,
+            )
+            return
         self._queue.append(prompt)
 
     def dismiss(self) -> None:

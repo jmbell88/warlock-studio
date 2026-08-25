@@ -18,6 +18,24 @@ the release you are actually running.
 
 ## 0.0.28 — 2026-08-23
 
+- **The resize box in Inker no longer accepts a number that would take the machine down.**
+  Typing 100000 into it asked for about 40 GB per layer, immediately, holding a drawing that
+  had not been saved. Growing is now capped at 8192 a side (or at whatever the drawing
+  already is, if it came in larger); shrinking is not capped at all, because shrinking is
+  what the box is usually opened for.
+
+- **Smooth in Clay refuses to multiply a mesh past what Clay works with.** Each press
+  quadruples the face count, and there was no limit on it -- six presses on a mesh imported
+  at the maximum is eight billion faces. It now says so and does nothing, rather than
+  freezing. Packwright likewise refuses the sprite that would take a pack past its limit at
+  the moment it is added, rather than at the moment you try to pack.
+
+- **A large library is faster to scroll and uses far less video memory.** Only the cards
+  actually on screen are drawn now, thumbnails are budgeted in megabytes rather than counted,
+  and "Load older" stops offering itself once the whole loadable history is loaded -- it used
+  to keep offering, and do nothing. Inker's animation frames got the same treatment: a long
+  clip no longer holds every frame's picture on the graphics card at once.
+
 - **A document file can no longer ask Warlock for more memory than the machine has.** Every
   format the app opens -- `.ora`, `.aseprite`, `.gif`, `.wblk`, `.wmap`, `.tmx`/`.tmj`,
   `.tsx`, and a hand-supplied `.glb` -- states sizes inside itself, and in a dozen places

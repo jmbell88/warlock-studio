@@ -1970,6 +1970,17 @@ def _room_for(
     if state.tool == "stamp" and state.brush is not None:
         height, width = state.brush.shape
     before = (doc.origin_x, doc.origin_y)
+    # **This is already coalesced per drag segment**, which is worth stating
+    # because the shape of the code hides it: ``_apply`` calls this for every
+    # painted cell, but ``_apply_drag`` and ``_apply_line`` each call it once
+    # for the far end of the segment *first*, so by the time the interpolated
+    # cells arrive the window already holds them and ``grow_to_hold`` returns
+    # False before it allocates anything. What is left is one growth per frame
+    # in which a slow drag crosses the boundary, and each of those is bounded
+    # by ``MAX_GROWTH``. Padding the growth would coalesce those too and was
+    # deliberately not done: the pad would show up in the map's own width and
+    # height and in the dense window a ``.wmap`` stores, which is a visible
+    # cost paid for an invisible one.
     try:
         doc.grow_to_hold(cell[0], cell[1], cell[0] + width - 1, cell[1] + height - 1)
     except ValueError as exc:

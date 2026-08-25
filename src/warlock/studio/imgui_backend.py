@@ -17,12 +17,21 @@ base-vertex draw, and without the flag imgui never emits a non-zero one.
 from __future__ import annotations
 
 import ctypes
+import logging
 from typing import Any
 
 import moderngl
 import numpy as np
 import pygame
 from imgui_bundle import imgui
+
+log = logging.getLogger(__name__)
+
+#: Where ``_note_registry`` starts complaining. The font atlas is one, the two
+#: bounded caches account for a few hundred between them, and every other
+#: registration is paired with a ``forget_texture`` -- so anything past this is
+#: a pairing that has come undone rather than a busy session.
+TEXTURE_WARN_AT = 512
 
 VERTEX_SHADER = """
 #version 330 core
@@ -91,6 +100,10 @@ class ImguiRenderer:
         # object. Both directions are needed: imgui tells us an id to bind, and
         # only the object can bind itself.
         self._textures: dict[int, moderngl.Texture] = {}
+        # The point at which the registry's size is worth a log line. See
+        # ``_note_registry``; it starts above anything the two bounded caches
+        # plus the font atlas can account for.
+        self._warn_at = TEXTURE_WARN_AT
 
         self.io.backend_flags |= imgui.BackendFlags_.renderer_has_textures.value
         limit = ctx.info["GL_MAX_TEXTURE_SIZE"]
@@ -136,6 +149,32 @@ class ImguiRenderer:
             tex.set_tex_id(0)
             tex.status = imgui.ImTextureStatus.destroyed
 
+    def _note_registry(self) -> None:
+        """Say so, once, when the texture registry outgrows what is plausible.
+
+        There is no sweep here and there deliberately is not one: an entry is a
+        GL name mapped to a live moderngl object, and the renderer has no way
+        to ask whether the *owner* still wants it -- guessing would free a
+        texture a pane is about to draw. What was missing was any signal at
+        all. One missed ``forget_texture`` is a permanent leak of one texture
+        with nothing anywhere saying so, and the failure is silent right up to
+        the point where the driver refuses an allocation.
+
+        The threshold doubles each time it fires, so a genuinely large session
+        says this three or four times over its life rather than once a frame.
+        Every caller of ``register_texture`` pairs it with ``forget_texture``
+        through ``docmodes.forget_texture``, and both texture caches are
+        bounded, so the steady state is a few hundred at most.
+        """
+        if len(self._textures) <= self._warn_at:
+            return
+        log.warning(
+            "imgui backend holds %d registered textures -- something is "
+            "registering without forgetting",
+            len(self._textures),
+        )
+        self._warn_at = len(self._textures) * 2
+
     def register_texture(self, texture: moderngl.Texture) -> int:
         """Make a viewer-owned texture showable with ``imgui.image``.
 
@@ -146,6 +185,7 @@ class ImguiRenderer:
         handed to a different one would otherwise be bound from a stale entry.
         """
         self._textures[texture.glo] = texture
+        self._note_registry()
         return texture.glo
 
     def forget_texture(self, texture: moderngl.Texture) -> None:

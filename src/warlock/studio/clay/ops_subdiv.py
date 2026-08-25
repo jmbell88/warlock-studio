@@ -162,6 +162,38 @@ def subdivide_topology(mesh: Mesh, faces: np.ndarray) -> Subdivision:
     )
 
 
+#: What one subdivision may grow a mesh *to*, in faces. Half of
+#: ``glbimport.MAX_TRIANGLES`` because a subdivided mesh is quads and a quad is
+#: two triangles, so this is the import door's own ceiling expressed in the
+#: unit this file counts in. Restated rather than imported: ``glbimport`` pulls
+#: in the whole viewer and the document type, and this module is the pure
+#: geometry half that the topology tests exercise on a bare cube.
+#:
+#: The gap it closes: ``MAX_TRIANGLES`` gates *import* and nothing gated
+#: growth. Every press of Smooth multiplies the face count by four, so six
+#: presses on a mesh that came in at the ceiling is eight billion faces --
+#: allocated on the frame thread, one level at a time, with no way to refuse
+#: partway through because a half-subdivided mesh is not a mesh.
+MAX_SUBDIVIDED_FACES = 1_000_000
+
+
+def _refuse_growth(mesh: Mesh, verb: str) -> None:
+    """Refuse before a level runs, from the size the level will produce.
+
+    ``len(mesh.loops)`` is the count exactly: a subdivision turns every face
+    *corner* into one quad, so the corner count of the mesh going in is the
+    face count of the mesh coming out. Asked before, because the whole cost of
+    this operation is the allocation it is about to make.
+    """
+    grown = len(mesh.loops)
+    if grown > MAX_SUBDIVIDED_FACES:
+        raise OpError(
+            f"{verb} this object would make {grown:,} faces, past the "
+            f"{MAX_SUBDIVIDED_FACES:,} Clay works with. Subdivide a part of it, "
+            "or start from a simpler shape."
+        )
+
+
 def subdivide(mesh: Mesh, sel: ElementSel) -> tuple[Mesh, ElementSel]:
     """Split the selected faces (or all of them) into quads, shape unchanged.
 
@@ -174,6 +206,7 @@ def subdivide(mesh: Mesh, sel: ElementSel) -> tuple[Mesh, ElementSel]:
     faces = sel.faces if len(sel.faces) else np.arange(face_count(mesh), dtype="i4")
     if face_count(mesh) == 0:
         raise OpError("This object has no faces to subdivide.")
+    _refuse_growth(mesh, "Subdividing")
     result = subdivide_topology(mesh, np.asarray(faces, dtype="i8"))
     return result.mesh, result.children
 
@@ -217,6 +250,9 @@ def catmull_clark(
     if face_count(mesh) == 0:
         raise OpError("This object has no faces to smooth.")
     for _ in range(max(1, int(levels))):
+        # Per level, not once: the refusal has to be able to stop the *second*
+        # press as well as the first, and each level is its own allocation.
+        _refuse_growth(mesh, "Smoothing")
         mesh = _one_level(mesh)
     return mesh, empty()
 

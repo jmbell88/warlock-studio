@@ -140,14 +140,19 @@ def _resize_popup(ctx: Any, tab: Any) -> None:
         return
     widgets.popup_chrome(_imgui=imgui)
     key = f"inker_resize:{tab.uid}"
-    width, height = ctx.state.preview.get(key) or tab.doc.size
+    # Clamped on the way *in* as well as on the way out: the stored value
+    # outlives one opening of the popup, and a document that has since been
+    # cropped must not carry a size typed against the one it used to be.
+    width, height = inker_mode.clamp_resize(
+        tab.doc.size, *(ctx.state.preview.get(key) or tab.doc.size)
+    )
     imgui.set_next_item_width(sp(90))
     changed_w, width = controls.input_int("W", int(width), 0)
     imgui.same_line()
     imgui.set_next_item_width(sp(90))
     changed_h, height = controls.input_int("H", int(height), 0)
     if changed_w or changed_h:
-        ctx.state.preview[key] = (max(1, width), max(1, height))
+        ctx.state.preview[key] = inker_mode.clamp_resize(tab.doc.size, width, height)
     state = inker_mode.ensure(ctx)
     state.resample = widgets.labeled_combo(
         "Resample",
@@ -163,14 +168,17 @@ def _resize_popup(ctx: Any, tab: Any) -> None:
     imgui.dummy((0, 4))
     imgui.begin_disabled(tab.busy)
     if controls.button("Scale image", (sp(180), 0)):
-        tab.doc.scale((max(1, width), max(1, height)), resample=state.resample)
+        tab.doc.scale(inker_mode.clamp_resize(tab.doc.size, width, height),
+                      resample=state.resample)
         tab.view.fitted = False
         imgui.close_current_popup()
     # Two different operations that a single "resize" would conflate: one
     # resamples the picture, the other changes how much room it has. The anchor
     # belongs to the second: scaling has nowhere to put slack.
     if controls.button("Resize canvas", (sp(180), 0)):
-        tab.doc.resize_canvas((max(1, width), max(1, height)), anchor=anchor)
+        tab.doc.resize_canvas(
+            inker_mode.clamp_resize(tab.doc.size, width, height), anchor=anchor
+        )
         tab.view.fitted = False
         imgui.close_current_popup()
     if _descale_row(ctx, tab):

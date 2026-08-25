@@ -112,6 +112,7 @@ def draw(ctx: Any) -> None:
         if not jobs:
             _empty(ctx)
         group = ""
+        clip = _clipper(ctx, len(jobs))
         for job in jobs:
             # Date grouping (J89), and only under the date sort: a "Today"
             # heading above a list ordered by size would be a lie about what
@@ -121,6 +122,8 @@ def draw(ctx: Any) -> None:
                 if heading != group:
                     group = heading
                     widgets.section(heading)
+            if clip is not None and clip(job["id"]):
+                continue
             _card(ctx, job, queue_pos)
         _load_more(ctx)
     imgui.end_child()
@@ -241,6 +244,55 @@ def filtering(filters: Any) -> bool:
     )
 
 
+#: Below this many rows the list is drawn whole. Every card is the same height,
+#: so clipping one is exact -- the threshold is not about correctness, it is
+#: about not putting a scroll-dependent code path underneath the ordinary case:
+#: a library of thirty assets fits on screen, gains nothing from being clipped,
+#: and is what every screenshot and nearly every test draws.
+CLIP_THRESHOLD = 40
+
+
+def _clipper(ctx: Any, count: int):
+    """A predicate saying which cards are off screen, or ``None`` to draw all.
+
+    Written by hand rather than with ``ImGuiListClipper``, which was not in
+    this repo at all before now and does not fit this list: a clipper owns the
+    loop and wants a flat run of identical items, and this loop interleaves
+    date-group headings that decide where the rows after them sit. What it
+    needs from a clipper is the *arithmetic*, and that is exact here because
+    ``_card`` draws one child of a fixed height -- ``CARD_HEIGHT`` or
+    ``COMPACT_HEIGHT`` -- plus one item spacing.
+
+    Skipping a card emits a ``dummy`` of the same footprint, so the scrollbar,
+    the scroll position and every row's place in the list are what they would
+    have been. Two cards are never skipped: the one keyboard navigation has
+    asked to scroll to, because ``set_scroll_here_y`` has to be *called* on it,
+    and the selected one, so that arriving by any other route still lands.
+    """
+    if count < CLIP_THRESHOLD:
+        return None
+    view = float(imgui.get_window_size().y)
+    if view <= 0.0:
+        return None
+    scroll = float(imgui.get_scroll_y())
+    # ``dummy`` takes the same item spacing after it that ``end_child`` does,
+    # so the height alone reproduces a card's whole footprint and the spacing
+    # does not appear in this arithmetic.
+    row = sp(COMPACT_HEIGHT if filters_compact(ctx) else CARD_HEIGHT)
+    keep = {ctx.state.library_scroll_to, ctx.state.selected}
+
+    def skip(job_id: str) -> bool:
+        if job_id in keep:
+            return False
+        top = float(imgui.get_cursor_pos_y())
+        if top + row < scroll or top > scroll + view:
+            imgui.dummy((0.0, row))
+            return True
+        return False
+
+    return skip
+
+
 def _load_more(ctx: Any) -> None:
     """The window is the newest N of M -- and the filters above apply only to
     that window, so a history longer than it needs to say so rather than let a
@@ -273,10 +325,18 @@ def _load_more(ctx: Any) -> None:
         # history.
         if ctx.cache.count_error and loaded >= ctx.cache.limit:
             widgets.muted(f"Showing the newest {loaded}; could not count the rest.")
-            if controls.button("Load older##library-more", (-1, 0)):
+            if ctx.cache.can_load_more() and controls.button(
+                "Load older##library-more", (-1, 0)
+            ):
                 ctx.cache.load_more()
         return
     widgets.muted(f"Showing the newest {loaded} of {total}.")
+    if not ctx.cache.can_load_more():
+        # The window is at the service's ceiling. Offering the button here is
+        # offering an action that cannot happen, which is the one thing a
+        # button must never be -- and it read as broken rather than as full.
+        widgets.muted("This is as far back as the library loads at once.")
+        return
     if controls.button("Load older##library-more", (-1, 0)):
         ctx.cache.load_more()
 

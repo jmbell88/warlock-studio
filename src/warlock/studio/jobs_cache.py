@@ -33,6 +33,15 @@ IDLE_REFRESH_SECONDS = 3.0
 # not full the count is exact for free (total == len(jobs)).
 COUNT_SECONDS = 5.0
 LIST_LIMIT = 200
+#: The widest the window may get, whatever "Load older" is pressed. It is the
+#: service's own ``MAX_LIST_LIMIT``, read lazily below rather than imported so
+#: a test that lowers the ceiling lowers this too -- and it is a *local* cap
+#: rather than a reliance on the service's clamp, which is what the code did
+#: before and which had a visible cost: ``limit`` went on growing past 5000
+#: forever, so "Load older" kept offering to widen a window that could not
+#: widen and the press did nothing with nothing said about it. Every row in the
+#: window also costs an ``attach_files`` stat per tick on the frame thread, so
+#: the ceiling is a frame-time bound as much as a query one.
 
 
 class JobsCache:
@@ -84,15 +93,35 @@ class JobsCache:
         changes the list -- a submit, a delete, a rename."""
         self._dirty = True
 
+    def max_limit(self) -> int:
+        """The service's ceiling, read at call time.
+
+        Through the facade rather than from ``validation`` directly, for
+        ``_jobs_list.list_jobs``' reason exactly: the ceiling is patched on
+        ``service.jobs`` by tests, and this is another reader of it.
+        """
+        from ..service import jobs as _facade
+
+        return int(_facade.MAX_LIST_LIMIT)
+
+    def can_load_more(self) -> bool:
+        """Whether widening the window would do anything. -> for the button."""
+        return self.limit < self.max_limit()
+
     def load_more(self) -> None:
-        """Widen the window by one page.
+        """Widen the window by one page, up to the ceiling.
 
         A bigger single read rather than a merge of pages: tick() is one
         list_jobs call by design, and the per-row attach_files cost only grows
-        when the user asks to see further back. MAX_LIST_LIMIT is the service's
-        ceiling on a single read and clamps this.
+        when the user asks to see further back.
+
+        **Clamped here rather than left to the service.** ``list_jobs`` clamps
+        a read at ``MAX_LIST_LIMIT``, which made the query safe and left this
+        counter growing without bound -- so past the ceiling every press moved
+        ``limit`` and changed nothing else, and "Load older" stayed on screen
+        offering to do it again.
         """
-        self.limit += LIST_LIMIT
+        self.limit = min(self.limit + LIST_LIMIT, self.max_limit())
         self.invalidate()
 
     def reset_window(self) -> None:

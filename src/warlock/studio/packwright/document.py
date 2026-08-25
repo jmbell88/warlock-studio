@@ -25,7 +25,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from ..undo import Edit, UndoStack
-from .layout import Layout, PackSettings
+from .layout import MAX_SPRITES, Layout, PackSettings
 from .layout import layout as build_layout
 from .sources import Sprite
 
@@ -209,10 +209,27 @@ class PackDoc:
     # -- mutation ------------------------------------------------------------
 
     def add_source(self, sprite: Sprite, *, index: int | None = None) -> Source:
+        """Add one sprite to the document. Refuses a duplicate key and a full pack.
+
+        **The count is asked here as well as at pack time**, and the two are not
+        the same question asked twice. ``build_layout`` refuses past
+        ``MAX_SPRITES`` because MaxRects is quadratic in its free-rect list --
+        which is the right place for it, since every packer call comes through
+        that door -- but it is asked of a document that has *already* accepted
+        the sprites, so the only way past a full pack was to delete some, and
+        each of them arrived through an ``add_source`` that had nothing to say.
+        Refusing at the door means the sprite that would not fit is the one
+        named, while the user still has it in front of them.
+        """
         if self.has_key(sprite.key):
             raise ValueError(
                 f"this pack already holds {sprite.key!r} -- two sprites under one "
                 "key would pack into one slot"
+            )
+        if len(self.sources) >= MAX_SPRITES:
+            raise ValueError(
+                f"this pack already holds {MAX_SPRITES} sprites, which is the most "
+                "one atlas will take -- split it into several packs"
             )
         source = Source(uid=new_uid(), sprite=sprite)
         at = len(self.sources) if index is None else max(0, min(int(index), len(self.sources)))

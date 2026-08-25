@@ -21,11 +21,50 @@ MAX_TEXTURES = 120
 # detail the card cannot show.
 MAX_SIDE = 256
 
+#: A second bound, in bytes, because the count is not one on its own.
+#: ``max_side`` is a *per-call* argument and the manual passes
+#: ``render.IMAGE_MAX_SIDE`` -- 1600 -- so the same "limit of 120" is 31 MiB of
+#: VRAM for library cards at 256 px and 1.2 GiB for manual figures at 1600.
+#: This is the count-versus-bytes fix ``UNDO_BYTES`` already made for undo,
+#: applied to the other cache that was measuring the wrong thing. 128 MiB sits
+#: four times above a full count of 256 px cards and holds a dozen manual
+#: figures, which is more than any chapter shows at once.
+MAX_TEXTURE_BYTES = 128 * 1024 * 1024
+
+
+def _cost(texture: Any) -> int:
+    """What one entry occupies, from the texture object itself.
+
+    Read off the object rather than remembered beside it, because the two
+    insert paths mint their textures differently -- ``_load`` shrinks a decoded
+    image to ``max_side`` and ``from_pixels`` is handed a size -- and a size
+    recorded at one of them and not the other is a budget that quietly stops
+    counting half the cache. Both moderngl textures and the fakes the tests use
+    carry ``size``; ``components`` defaults to 4, which is what every caller
+    here uploads and the only direction worth erring in.
+    """
+    size = getattr(texture, "size", None) or (0, 0)
+    try:
+        return int(size[0]) * int(size[1]) * int(getattr(texture, "components", 4) or 4)
+    except (TypeError, ValueError, IndexError):
+        return 0
+
 
 class ThumbnailCache:
-    def __init__(self, ctx: Any, limit: int = MAX_TEXTURES) -> None:
+    def __init__(
+        self,
+        ctx: Any,
+        limit: int = MAX_TEXTURES,
+        budget: int = MAX_TEXTURE_BYTES,
+    ) -> None:
         self.ctx = ctx
         self.limit = limit
+        self.budget = budget
+        # Maintained beside every insert and removal rather than summed in
+        # ``_evict``: the sum is O(entries) and ``_evict`` runs on every insert,
+        # which is the cost ``_by_key`` was introduced to remove from
+        # ``_supersede``.
+        self._bytes = 0
         # Keyed (key string, mtime, unfiltered, max_side): the file's version,
         # the sampling baked into the decoded texture, and the size it was
         # decoded down to -- all three are properties of the *texture object*,
@@ -153,12 +192,14 @@ class ThumbnailCache:
     def _insert(self, key: tuple[str, float, bool], texture: Any) -> None:
         self._entries[key] = texture
         self._touched[key] = self._frame
+        self._bytes += _cost(texture)
         self._by_key.setdefault(key[0], set()).add(key)
         self._evict()
 
     def _drop_entry(self, key: tuple[str, float, bool]) -> Any:
         texture = self._entries.pop(key)
         self._touched.pop(key, None)
+        self._bytes -= _cost(texture)
         keys = self._by_key.get(key[0])
         if keys is not None:
             keys.discard(key)
@@ -223,7 +264,7 @@ class ThumbnailCache:
         scrolls.
         """
         for key in list(self._entries):
-            if len(self._entries) <= self.limit:
+            if len(self._entries) <= self.limit and self._bytes <= self.budget:
                 return
             if self._touched.get(key) == self._frame:
                 continue

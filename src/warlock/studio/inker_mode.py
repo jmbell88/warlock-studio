@@ -98,9 +98,7 @@ NEW_PRESETS = ((512, 512), (1024, 1024), (2048, 2048))
 # The largest canvas the New dialog will make. Not a limit of the engine, which
 # is happy with anything numpy can allocate -- it is a limit on what a *typed*
 # number may do: the fields step and accept free text, so one stray digit turns
-# 2048 into 20480, which is a 1.7 GiB layer allocated on the frame thread. The
-# resize popup is deliberately not capped the same way, because there the
-# document already exists and shrinking it is the usual reason to open it.
+# 2048 into 20480, which is a 1.7 GiB layer allocated on the frame thread.
 NEW_MAX = 8192
 
 
@@ -115,6 +113,34 @@ def clamp_canvas(width: Any, height: Any) -> tuple[int, int]:
             return 1
 
     return one(width), one(height)
+
+
+def clamp_resize(current: tuple[int, int], width: Any, height: Any) -> tuple[int, int]:
+    """A typed size for the *resize* popup: growth capped, shrinking free.
+
+    The popup stored ``(max(1, w), max(1, h))`` -- a floor and no ceiling --
+    and fed it straight to ``doc.scale`` or ``doc.resize_canvas``, neither of
+    which has one either. Typing ``100000`` asked for 40 GB per layer, on the
+    frame thread, holding a document that has not been saved.
+
+    ``clamp_canvas`` was not simply reused, and the comment that used to sit on
+    ``NEW_MAX`` explained why: this popup exists over a document that already
+    exists, and **shrinking it is the usual reason to open it**. So the two
+    directions are treated differently -- a value at or below what the axis
+    already is passes untouched, whatever it is, and only growth meets a
+    ceiling. That ceiling is ``NEW_MAX`` *or the document's own size*,
+    whichever is larger, which is what keeps a 12,000-pixel canvas somebody
+    imported resizable at all rather than snapping to 8192 the moment its
+    owner opens the popup to crop it.
+    """
+    def one(value: Any, now: int) -> int:
+        try:
+            asked = max(1, int(value))
+        except (TypeError, ValueError):
+            return max(1, int(now))
+        return min(asked, max(int(now), NEW_MAX))
+
+    return one(width, current[0]), one(height, current[1])
 
 
 def ensure(ctx: Any) -> InkerState:

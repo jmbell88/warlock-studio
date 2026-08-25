@@ -175,7 +175,93 @@ def frame_texture(
     ctx.state.preview[rev_key] = stamp
     mode = ctx.viewer.ctx.NEAREST
     texture.filter = (mode, mode)
+    _touch_frame_texture(ctx, tab.uid, key)
     return texture
+
+
+#: What one tab's animation-frame textures may hold on the GPU. The CPU side
+#: of exactly this picture is already bounded -- ``document.FRAME_CACHE_BYTES``
+#: -- and the GL side was not, while ``_doc_anim`` caps the frame count at
+#: nothing at all: a 2048-square clip is 16 MiB of VRAM a frame, and onion
+#: skinning plus a scrub along a long timeline asks for every one of them. The
+#: same number as the CPU cache deliberately, because it is a bound on the same
+#: pictures and two answers would drift.
+FRAME_TEXTURE_BYTES = 128 * 1024 * 1024
+
+#: And a count beside it, which is not redundant: a 64-square document is 16 KB
+#: a frame, so the byte budget alone would let eight thousand entries into the
+#: list this walks on every ask. Two bounds, each covering the case the other
+#: is loose about -- the same pairing ``gifin`` makes.
+FRAME_TEXTURE_CAP = 256
+
+
+def _frame_lru(ctx: Any, uid: str) -> list[str]:
+    """The frame textures one tab holds, least recently drawn first.
+
+    ``cel_thumb``'s pair of accessors, in the same ``inker_tex:{uid}:`` naming
+    and for the same two reasons: ``release_doc``'s prefix sweep drops it with
+    the tab, and it is not a texture so the sweep's ``hasattr(value,
+    "release")`` leaves it alone beyond the pop.
+    """
+    key = f"inker_tex:{uid}:frame-lru"
+    order = ctx.state.preview.get(key)
+    if order is None:
+        order = []
+        ctx.state.preview[key] = order
+    return order
+
+
+def _frame_touched(ctx: Any, uid: str) -> dict[str, int]:
+    key = f"inker_tex:{uid}:frame-touched"
+    touched = ctx.state.preview.get(key)
+    if touched is None:
+        touched = {}
+        ctx.state.preview[key] = touched
+    return touched
+
+
+def _texture_bytes(texture: Any) -> int:
+    size = getattr(texture, "size", None) or (0, 0)
+    try:
+        return int(size[0]) * int(size[1]) * 4
+    except (TypeError, ValueError, IndexError):
+        return 0
+
+
+def _touch_frame_texture(ctx: Any, uid: str, key: str) -> None:
+    """Record a frame texture as just drawn, then spend the budget down.
+
+    **Bytes rather than a count**, which is the one thing that had to differ
+    from ``CEL_THUMB_CAP``: a cel thumbnail is 36 square whatever the document
+    is, so counting them bounds them, and a frame texture is the whole canvas.
+    Fifty frames is 2.6 MB of thumbnails and 800 MB of frames.
+    """
+    order = _frame_lru(ctx, uid)
+    if key in order:
+        order.remove(key)
+    order.append(key)
+    frame = _frame_number()
+    touched = _frame_touched(ctx, uid)
+    if frame is not None:
+        touched[key] = frame
+    # Never one drawn this frame -- ``ThumbnailCache._evict``'s rule, restated
+    # once more: a texture handed out during this frame's UI build already has
+    # an ``add_image`` in the live draw list, and releasing it now frees
+    # something the backend is about to draw. Onion skinning shows three or
+    # four frames at once, so the overshoot that buys is bounded by the screen.
+    held = sum(_texture_bytes(ctx.state.preview.get(name)) for name in order)
+    for name in list(order):
+        if held <= FRAME_TEXTURE_BYTES and len(order) <= FRAME_TEXTURE_CAP:
+            return
+        if frame is not None and touched.get(name) == frame:
+            continue
+        order.remove(name)
+        touched.pop(name, None)
+        texture = ctx.state.preview.pop(name, None)
+        ctx.state.preview.pop(f"{name}:rev", None)
+        if texture is not None:
+            held -= _texture_bytes(texture)
+            docmodes.forget_texture(texture)
 
 
 #: How many cel thumbnails one tab may hold at once. A 36-square RGBA texture
