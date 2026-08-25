@@ -12,6 +12,7 @@ those six may block.
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import os
@@ -3296,7 +3297,7 @@ class App:
                     )
 
         imgui.end_child()
-        status_bar.draw(ctx)
+        guard.run("shell/status", status_bar.draw, ctx, title="The status bar")
         imgui.end_group()
         imgui.end()
         self._overlays(viewport)
@@ -4916,25 +4917,42 @@ class App:
         # why that is a construction rather than a habit.
         from . import layout_edit
 
-        layout_edit.draw(self, ctx, viewport)
-        overlay.fps_meter(ctx, self.fps)
+        over = functools.partial(guard.run, draw_placeholder=False)
+        over(
+            "overlay/layout-editor",
+            layout_edit.draw,
+            self,
+            ctx,
+            viewport,
+            title="The layout editor",
+        )
+        over("overlay/fps", overlay.fps_meter, ctx, self.fps, title="The frame meter")
         if ctx.state.mode != "home":
-            overlay.progress_card(ctx, self.eta)
-        widgets.toasts(
+            over(
+                "overlay/progress",
+                overlay.progress_card,
+                ctx,
+                self.eta,
+                title="The progress card",
+            )
+        over(
+            "overlay/toasts",
+            widgets.toasts,
             ctx.state,
             (viewport.work_size.x, viewport.work_size.y),
             on_action=self._toast_action,
+            title="Notifications",
         )
         # The first-run question owns the screen before any workflow modal.
         # Its two exits close it permanently, then later questions can use the
         # one popup slot on the following frame.
-        first_run.draw(ctx)
+        over("overlay/first-run", first_run.draw, ctx, title="The first-run panel")
         if first_run.is_open(ctx):
             self._transition_overlay(viewport)
             return
         # Before the confirms, because it is the same kind of thing and the
         # earlier one wins the single modal slot imgui gives a frame.
-        settings_3d.matte_modal(ctx)
+        over("overlay/matte", settings_3d.matte_modal, ctx, title="The cutout dialog")
         # The Manual, over whatever ran above (the UI redesign, wave 3). Before the
         # palette on purpose: Ctrl+K is how you leave anywhere, this included,
         # so it has to float above the reference rather than under it.
@@ -4944,8 +4962,8 @@ class App:
         # Under the Manual, because the (?) inside the manager opens the
         # manual *about* it: the reference has to land on top of the sheet it
         # was asked from, not behind it.
-        profiles_panel.draw_sheet(ctx)
-        manual_render.draw_overlay(ctx)
+        over("overlay/profiles", profiles_panel.draw_sheet, ctx, title="The profiles sheet")
+        over("overlay/manual", manual_render.draw_overlay, ctx, title="The manual")
         # Above the confirms it can raise (Delete asks): the palette closes
         # itself in the same frame it runs a command, so the question it asks
         # takes the modal slot on the frame after, with nothing to contend
@@ -4955,10 +4973,30 @@ class App:
         # Ctrl+K is how you leave anywhere, this included.
         from .panes import tour as tour_pane
 
-        tour_pane.draw(ctx)
-        palette.draw(ctx)
-        ctx.confirms.draw()
-        ctx.prompts.draw()
+        over(
+            "overlay/tour",
+            tour_pane.draw,
+            ctx,
+            title="The guided tour",
+            on_failure=lambda: tour_pane.stop(ctx),
+        )
+        over("overlay/palette", palette.draw, ctx, title="The command palette")
+        # A queue that stops drawing still reports ``modal_open``, so the
+        # keyboard would be owned by a modal nobody can see. Dismissing is the
+        # queue's own documented way out, and the reason ``pending`` is
+        # read-only.
+        over(
+            "overlay/confirms",
+            ctx.confirms.draw,
+            title="A confirmation",
+            on_failure=ctx.confirms.dismiss,
+        )
+        over(
+            "overlay/prompts",
+            ctx.prompts.draw,
+            title="A prompt",
+            on_failure=ctx.prompts.dismiss,
+        )
         # Last, and on the foreground list, so it covers everything above --
         # including the modals, which are part of the screen being crossfaded.
         self._transition_overlay(viewport)

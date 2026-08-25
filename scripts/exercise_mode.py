@@ -59,7 +59,10 @@ from _appharness import (  # noqa: E402
     seed_troupe,
 )
 
-from warlock.studio import create_stages  # noqa: E402
+from warlock.studio import (
+    create_stages,  # noqa: E402
+    guard,  # noqa: E402
+)
 from warlock.studio import modes as _modes  # noqa: E402
 
 MODES = _modes.KEYS
@@ -587,12 +590,22 @@ def exercise(
                 continue
             rec.reset()
             raised = None
+            guard.HISTORY.clear()
             try:
                 click(app, *control.centre)
                 settle(app)
             except Exception:  # noqa: BLE001 -- catching it is the whole point
                 raised = traceback.format_exc(limit=8)
                 recover_frame()
+            if raised is None and guard.HISTORY:
+                # The pane guard caught it first. Since ``studio/guard.py``
+                # landed, an exception inside a pane's draw is unwound and
+                # replaced by a placeholder rather than reaching the ``except``
+                # above -- which is right for a user and exactly wrong here,
+                # because this script exists to find controls that crash. Left
+                # unread, a control that takes its whole pane down would come
+                # back "ok" with a tidy screenshot of the placeholder.
+                raised = chr(10).join(f.traceback for f in guard.HISTORY)
             shot = f"{len(records):03d}-{safe_name(key)}.png"
             try:
                 image = shoot(app, out / shot)

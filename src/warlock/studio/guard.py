@@ -377,12 +377,20 @@ def failures() -> tuple[Failure, ...]:
 
 
 @contextmanager
-def surface(key: str, title: str = "") -> Iterator[bool]:
+def surface(key: str, title: str = "", *, draw_placeholder: bool = True) -> Iterator[bool]:
     """Guard a region that is not a :func:`layout.pane`.
 
     The menu bar, the rail, the status bar, the whole content region and each
     overlay. ``yield``s False when the breaker is open, so a caller can skip its
-    body the way ``pane`` does; the placeholder is drawn here either way.
+    body the way ``pane`` does.
+
+    ``draw_placeholder=False`` for the overlays, and it is not a preference.
+    They are drawn at host scope *after* ``imgui.end()``, so there is no window
+    to put a placeholder in -- ``empty_state`` would land in imgui's implicit
+    debug window, which is worse than saying nothing. A failed overlay is
+    announced by the toast and the doctor banner instead, and those are drawn by
+    the overlays themselves, which is exactly why the toast call is one of the
+    surfaces guarded separately rather than as a group.
     """
     mark = enter(key)
     live = not tripped(key)
@@ -395,7 +403,7 @@ def surface(key: str, title: str = "") -> Iterator[bool]:
     else:
         if live:
             ok(key)
-    if failed or tripped(key):
+    if draw_placeholder and (failed or tripped(key)):
         placeholder(key, title or key)
 
 
@@ -406,6 +414,7 @@ def run(
     *args: Any,
     title: str = "",
     on_failure: Callable[[], None] | None = None,
+    draw_placeholder: bool = True,
     **kwargs: Any,
 ) -> bool:
     """Call ``fn`` under a guard. -> did it draw?
@@ -416,7 +425,7 @@ def run(
     ``modal_open``, which would leave an invisible modal owning the keyboard.
     """
     drew = False
-    with surface(key, title) as live:
+    with surface(key, title, draw_placeholder=draw_placeholder) as live:
         if live:
             try:
                 fn(*args, **kwargs)

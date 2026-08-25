@@ -392,3 +392,125 @@ def test_the_recovery_assert_is_off_before_anything_can_recover(imgui_ctx):
     assert io.config_error_recovery_enable_assert is False
     assert io.config_error_recovery_enable_tooltip is False
     assert io.config_error_recovery_enable_debug_log is True
+
+
+# -- the rules that decay ---------------------------------------------------
+#
+# The guard is only a net while everything is inside it, and the overlays are
+# where that will rot first: the next one added is a single ``x.draw(ctx)`` line
+# in a method that is already forty lines of them.
+
+
+def _overlays_tree():
+    import ast
+    import inspect
+    import textwrap
+
+    from warlock.studio import main as main_mod
+
+    src = textwrap.dedent(inspect.getsource(main_mod.App._overlays))
+    return ast.parse(src).body[0]
+
+
+def test_every_overlay_is_drawn_through_the_guard():
+    """One bare ``draw`` in ``_overlays`` is one surface back outside the net.
+
+    ``_transition_overlay`` is the deliberate exception and is named here rather
+    than pattern-matched: it is last, it paints a veil on the foreground list and
+    submits no items, so there is nothing in it to fail and nothing a guard could
+    put back.
+    """
+    import ast
+
+    allowed_last = "_transition_overlay"
+    bare = []
+    for node in ast.walk(_overlays_tree()):
+        if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
+            continue
+        func = node.value.func
+        if isinstance(func, ast.Name) and func.id in {"over", "run"}:
+            continue
+        if isinstance(func, ast.Attribute):
+            if func.attr in {"run", "surface"}:
+                continue
+            if func.attr == allowed_last:
+                continue
+            bare.append(func.attr)
+        elif isinstance(func, ast.Name):
+            bare.append(func.id)
+    assert not bare, f"drawn outside the guard in App._overlays: {bare}"
+
+
+def test_the_guard_clears_its_census_beside_the_other_three():
+    """``FRAME_FAILURES`` is one frame's record, like ``FRAME_PANES``,
+    ``FRAME_ANCHORS`` and ``FRAME_CONTROLS``. A clear that goes missing turns it
+    into a session-long list that a harness would read as this frame's."""
+    import ast
+    import inspect
+    import textwrap
+
+    from warlock.studio import main as main_mod
+
+    src = textwrap.dedent(inspect.getsource(main_mod.App._build_ui))
+    calls = {
+        node.func.attr
+        for node in ast.walk(ast.parse(src))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "begin_frame"
+        for _ in [0]
+    }
+    assert calls == {"begin_frame"}
+    owners = {
+        node.func.value.id
+        for node in ast.walk(ast.parse(src))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "begin_frame"
+        and isinstance(node.func.value, ast.Name)
+    }
+    assert owners == {"guard", "layout_mod", "anchors", "probe"}, owners
+
+
+def test_the_guard_never_catches_baseexception():
+    """``KeyboardInterrupt`` and ``SystemExit`` are the user asking to leave, and
+    a bare ``except`` would take both. Asserted structurally rather than by the
+    two behaviour tests above, because those only cover the paths they name."""
+    import ast
+    import inspect
+
+    from warlock.studio import layout as layout_mod
+
+    for module in (guard, layout_mod):
+        tree = ast.parse(inspect.getsource(module))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ExceptHandler):
+                continue
+            assert node.type is not None, f"bare except in {module.__name__}"
+            names = (
+                {node.type.id}
+                if isinstance(node.type, ast.Name)
+                else {e.id for e in getattr(node.type, "elts", []) if isinstance(e, ast.Name)}
+            )
+            assert "BaseException" not in names, f"BaseException caught in {module.__name__}"
+
+
+def test_the_app_turns_the_recovery_assert_off_where_it_makes_its_context():
+    """The flag defaults on and an ``IM_ASSERT`` is a ``RuntimeError`` here, so a
+    context built without ``guard.configure()`` has a guard that cannot guard."""
+    import ast
+    import inspect
+    import textwrap
+
+    from warlock.studio import main as main_mod
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(main_mod.App.setup_window)))
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    ]
+    names = [f"{getattr(c.func.value, 'id', '')}.{c.func.attr}" for c in calls]
+    assert "imgui.create_context" in names
+    assert "guard.configure" in names
+    assert names.index("guard.configure") > names.index("imgui.create_context")
