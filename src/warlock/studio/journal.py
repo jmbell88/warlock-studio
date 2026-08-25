@@ -89,8 +89,16 @@ log = logging.getLogger(__name__)
 #: is the interval every editor with this feature has converged on.
 JOURNAL_SECONDS = 120.0
 
-#: How many recovered slots the startup offer lists by name. A crash with more
-#: open than this is one where the count is the useful part.
+#: How many recovered slots the offer lists **as rows at once**. A crash with
+#: more open than this is one where the count is the useful part, so the rest
+#: are named by number and surface as the listed ones are dealt with.
+#:
+#: A property of the offer rather than of the scan, and it was the other way
+#: round: ``recoverable`` returned ``out[:MAX_RECOVERY]`` and nothing pruned
+#: the remainder, so a crash with twelve documents open buried four of them --
+#: never listed, never offered, never swept -- and ``status_line``, the
+#: sentence the crash dialog shows, counted the truncated list and told the
+#: user there were eight.
 MAX_RECOVERY = 8
 
 #: The sidecar's suffix. A full second suffix rather than a replacement, so a
@@ -365,9 +373,30 @@ def write(ctx: Any, provider: Provider, slot: Any, stamp: float | None = None) -
     """Take one copy now, ignoring the debounce. -> whether it was submitted.
 
     The encode happens **here**, on the frame thread, and only the write goes
-    to a task -- see the module docstring. The mark is advanced only if the
-    submit was accepted, so a refused key is retried on the next pump rather
-    than being recorded as done.
+    to a task -- see the module docstring.
+
+    **The two halves of the mark move at two different moments**, and that
+    split is the whole of what this function is careful about.
+
+    ``name`` and ``at`` are recorded here, on a successful submit: they are the
+    debounce, and a refused key -- ``ctx.submit``'s key-dedupe, which is the
+    backpressure -- has to be retried on the next pump rather than recorded as
+    done.
+
+    ``head`` is recorded by the task, after ``_write_pair`` returns, because
+    until then it is not true. It is the field that means "a copy of *this*
+    state is on disk", and advancing it here recorded a crash copy that a full
+    disk, a yanked directory or a permission change had prevented: the slot
+    read as journalled at the current head, ``_write_if_due``'s first gate then
+    saw nothing changed, and no retry ever came. The app believed a copy
+    existed when none did -- the one thing the journal cannot be wrong about,
+    because every other promise it makes is conditional on that one.
+
+    The price of the split is that a failed write is retried
+    ``JOURNAL_SECONDS`` later rather than on the next frame, because ``at`` did
+    move. That is deliberate: a disk that has just refused a write is not a
+    disk to re-encode a document against sixty times a second, and the failure
+    is toasted by name in the meantime (``main._collect_tasks``).
     """
     stamp = time.monotonic() if stamp is None else stamp
     mark = mark_of(slot)
@@ -404,44 +433,67 @@ def write(ctx: Any, provider: Provider, slot: Any, stamp: float | None = None) -
                     # deleted pair.
                     return
             _write_pair(payload, data, meta)
+            with _drop_lock:
+                # The head, and only now that the pair is really on disk. The
+                # generation is re-read under the same lock ``drop`` resets the
+                # mark under, so a drop that ran while this write was queued
+                # cannot have its reset overwritten from here.
+                if _drop_gen.get(name, 0) == gen:
+                    set_mark(slot, Mark(name=name, head=head, at=stamp))
 
     if not ctx.submit(f"journal:{provider.kind}:{provider.uid_of(slot)}", run):
         return False
-    set_mark(slot, Mark(name=name, head=head, at=stamp))
+    # The debounce only -- ``head`` stays where it was until the write lands.
+    # See the docstring: this is what makes a failed write retry instead of
+    # reading as a copy that exists.
+    set_mark(slot, Mark(name=name, head=mark.head, at=stamp))
     return True
 
 
 def _write_pair(payload: Path, data: bytes, meta: dict[str, Any]) -> None:
-    """Payload then sidecar, each staged, the sidecar last. Task thread.
+    """Both halves staged, then both renamed in, the sidecar last. Task thread.
 
-    The ordering is the completion gate: tmp+replace makes each file whole or
-    absent, and writing the sidecar second makes the *pair* atomic. A crash
+    The rename order is the completion gate: tmp+replace makes each file whole
+    or absent, and renaming the sidecar second makes the *pair* atomic. A crash
     between them leaves a payload nothing offers, which is the right answer --
     it is a copy that was interrupted mid-write.
 
+    **Both stagings happen before either rename**, and that is not the obvious
+    order. Written the obvious way -- stage the payload, rename it, stage the
+    sidecar, rename it -- a disk that fills between the two puts a *whole*
+    first-ever copy on disk with no sidecar to offer it. ``recoverable`` is
+    sidecar-driven by design, so that work is present, permanently invisible
+    and never swept. Staging both first moves the two writes that can run out
+    of room to before anything is published, and leaves between the renames
+    only two metadata operations on one directory.
+
+    A sidecar rename that fails anyway leaves the payload **in place** rather
+    than unlinking it. It is the user's work, written in the mode's own format,
+    and this module's standing rule is that deleting somebody's work is the one
+    outcome worse than not offering it -- an unoffered file in ``autosave/``
+    can still be opened by hand, and a deleted one cannot. The failure
+    propagates, and the task that ran this now says so by name rather than
+    through the generic "something went wrong" (``main._collect_tasks``).
+
     Each staging name is unlinked in a ``finally`` -- ``service/derive.py``'s
     ``_staged`` rule, for its reason: a staging file is a dotfile and nothing
-    ever sweeps one, so a ``write_bytes`` or ``os.replace`` that raises (disk
-    full, the directory yanked) would otherwise strand it beside the journal
-    for good. The suppress is for the unlink only; the write's own failure
-    still propagates to the task's logging.
+    ever sweeps one, so a ``write_bytes`` or ``os.replace`` that raises would
+    otherwise strand it beside the journal for good. The suppress is for the
+    unlink only; the write's own failure still propagates.
     """
     payload.parent.mkdir(parents=True, exist_ok=True)
-    tmp = payload.with_name(f".{payload.name}.tmp")
-    try:
-        tmp.write_bytes(data)
-        os.replace(tmp, payload)
-    finally:
-        with contextlib.suppress(OSError):
-            tmp.unlink(missing_ok=True)
     side = meta_path(payload)
+    tmp = payload.with_name(f".{payload.name}.tmp")
     tmp_meta = side.with_name(f".{side.name}.tmp")
     try:
+        tmp.write_bytes(data)
         tmp_meta.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        os.replace(tmp, payload)
         os.replace(tmp_meta, side)
     finally:
-        with contextlib.suppress(OSError):
-            tmp_meta.unlink(missing_ok=True)
+        for staging in (tmp, tmp_meta):
+            with contextlib.suppress(OSError):
+                staging.unlink(missing_ok=True)
 
 
 def drop(ctx: Any, slot: Any) -> None:
@@ -465,7 +517,6 @@ def drop(ctx: Any, slot: Any) -> None:
     if not mark.name:
         return
     payload = directory(ctx) / mark.name
-    set_mark(slot, Mark())
     # Before the unlinks, and under *this name's* write lock: a queued write
     # for this name that has not started yet sees the new generation and
     # skips; one already inside ``_write_pair`` holds the name's lock, so the
@@ -475,6 +526,13 @@ def drop(ctx: Any, slot: Any) -> None:
     # work that is not its own.
     with _write_lock(mark.name), _drop_lock:
         _drop_gen[mark.name] = _drop_gen.get(mark.name, 0) + 1
+        # The reset is *inside* the hold rather than above it, which is the
+        # half that had to change when the mark started being advanced by the
+        # write task. A reset taken before the lock is a reset an in-flight
+        # write lands on top of: the task finishes ``_write_pair``, records a
+        # mark for a document that has just been saved and closed, and the
+        # unlinks below then leave that mark naming a payload that is gone.
+        set_mark(slot, Mark())
     for path in (meta_path(payload), payload):
         # Sidecar first: it is the completion gate, so removing it first means
         # a crash between the two unlinks leaves an unoffered payload rather
@@ -516,10 +574,15 @@ def _read_meta(side: Path) -> dict[str, Any] | None:
 
 
 def recoverable(ctx: Any) -> list[Recovered]:
-    """What a previous session left, newest first.
+    """What a previous session left, newest first. **All of it.**
 
     Driven by the **sidecars**, which is what makes the completion gate real: a
     payload whose sidecar is missing was interrupted mid-write and is not here.
+
+    Not capped. See :data:`MAX_RECOVERY` for the cap this used to apply and why
+    it belongs to the offer instead: a list truncated here is work that nothing
+    lists, nothing offers and nothing sweeps, and a count taken off it is a
+    count that under-reports the user's own unsaved documents to them.
     """
     root = directory(ctx)
     try:
@@ -544,7 +607,7 @@ def recoverable(ctx: Any) -> list[Recovered]:
             )
         )
     out.sort(key=lambda r: r.at, reverse=True)
-    return out[:MAX_RECOVERY]
+    return out
 
 
 def adopt(ctx: Any, found: list[Recovered]) -> int:

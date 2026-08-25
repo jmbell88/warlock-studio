@@ -63,7 +63,12 @@ class TroupeOps:
         if not rigging.is_valid_id(source_id):
             raise ValueError(f"source_job is not a job id: {source_id!r}")
         source_dir = self.config.job_dir(source_id)
-        sheet_id = str(params.get("sheet_id") or rigging.new_id())
+        # Refused rather than minted, for the reason ``_q_rig._sheet`` states
+        # in full: ``_discard_artifacts`` deletes this kind's *served* pair by
+        # this id, which is only safe while every door mints a fresh one.
+        sheet_id = str(params.get("sheet_id") or "")
+        if not rigging.is_valid_id(sheet_id):
+            raise ValueError(f"sheet_id is not a sheet id: {sheet_id!r}")
 
         rig_glb = source_dir / "rig.glb"
         if not rig_glb.exists():
@@ -278,6 +283,21 @@ class TroupeOps:
             rigging.sheet_path(source_dir, sheet_id),
             json.dumps(meta, indent=2),
         )
+        # The sidecar is the completion marker, so the sheet is *visible* from
+        # this line on -- ``list_sheets`` returns it and Troupe draws it. A
+        # cancel arriving in the tail below would otherwise record the row
+        # "cancelled" and send ``_discard_artifacts`` at
+        # ``sheet_path``/``sheet_png_path``, which for this kind are the served
+        # pair rather than temps: it deletes a sheet the user can already see.
+        # ``_rig`` and ``_pixel_sheet`` commit at the same instant for the same
+        # reason.
+        #
+        # Deliberately not earlier. The window between the atlas landing on
+        # ``png`` and this publish is still cancellable, and should be: with no
+        # sidecar nothing lists that atlas, so discarding it is the right
+        # answer rather than a loss.
+        if self._cancel is not None:
+            self._cancel.commit()
         params["sheet_id"] = sheet_id
         params["cells"] = len(cells)
         # Deliberately **not** in ``DERIVED_PARAMS``, though the worker writes

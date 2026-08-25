@@ -35,7 +35,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from . import clay_state, dialogs, docmodes, journal, recents
+from . import atomic, clay_state, dialogs, docmodes, journal, recents
 from .clay_state import ClayState, ClayTab
 
 log = logging.getLogger(__name__)
@@ -343,9 +343,7 @@ def save_to(ctx: Any, tab: ClayTab, path: Path) -> None:
 
     def run() -> dict[str, Any]:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_bytes(data)
-        tmp.replace(path)
+        atomic.write_bytes(path, data)
         return {"rev": rev, "path": str(path), "retitle": True}
 
     _start(ctx, tab, f"clay-save:{tab.uid}", run)
@@ -389,9 +387,7 @@ def save_as(ctx: Any, tab: ClayTab | None = None) -> None:
         # the ordinary way to overwrite one, and a write that dies partway
         # through would leave that file truncated with no copy of it anywhere.
         # No mkdir -- the picker returns a directory that exists.
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_bytes(data)
-        tmp.replace(path)
+        atomic.write_bytes(path, data)
         return {"rev": rev, "path": str(path), "retitle": True}
 
     _start(ctx, tab, f"clay-saveas:{tab.uid}", run)

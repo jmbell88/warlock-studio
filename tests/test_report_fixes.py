@@ -282,8 +282,12 @@ def test_a_display_that_reports_nothing_falls_back_to_the_default():
 def test_saving_a_png_in_place_is_staged_and_replaced(tmp_path, monkeypatch):
     """``WRITABLE_SUFFIXES`` deliberately allows saving back over an opened
     ``.png``, and that branch was a bare ``write_bytes``. Every other document
-    writer in the app stages to a temp and replaces."""
-    from warlock.studio import inker_mode
+    writer in the app stages to a temp and replaces.
+
+    The helper has since moved out of ``inker_mode`` and into ``studio.atomic``
+    -- see ``tests/test_atomic_writes.py`` for why it had to stop being one
+    module's private idiom -- but the property is this one and stays here."""
+    from warlock.studio import atomic
 
     target = tmp_path / "drawing.png"
     target.write_bytes(b"the user's only copy")
@@ -295,7 +299,7 @@ def test_saving_a_png_in_place_is_staged_and_replaced(tmp_path, monkeypatch):
 
     monkeypatch.setattr("pathlib.Path.write_bytes", explode)
     with pytest.raises(RuntimeError):
-        inker_mode._write_atomic(target, b"new content")
+        atomic.write_bytes(target, b"new content")
 
     # The point of the whole exercise: the original survived the failed write.
     assert target.read_bytes() == b"the user's only copy"
@@ -304,11 +308,11 @@ def test_saving_a_png_in_place_is_staged_and_replaced(tmp_path, monkeypatch):
 
 
 def test_a_successful_atomic_write_replaces_and_leaves_no_temp(tmp_path):
-    from warlock.studio import inker_mode
+    from warlock.studio import atomic
 
     target = tmp_path / "drawing.png"
     target.write_bytes(b"old")
-    inker_mode._write_atomic(target, b"new")
+    atomic.write_bytes(target, b"new")
     assert target.read_bytes() == b"new"
     assert [p.name for p in tmp_path.iterdir()] == ["drawing.png"]
 

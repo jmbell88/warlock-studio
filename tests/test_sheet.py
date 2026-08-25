@@ -735,6 +735,53 @@ async def test_an_unrigged_sheet_renders_the_plain_mesh(worker, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_a_sheets_atlas_is_packed_to_a_staging_name(worker, monkeypatch):
+    """The rule ``_deform_qa`` eighteen lines above it already followed.
+
+    The sidecar is the completion marker, so a re-run under the same sheet id
+    spends the whole pack writing over a PNG the *previous* run's sidecar still
+    calls ready, and a reader in that window gets a torn atlas nothing marks as
+    suspect. ``_sheet`` passed the served name, on the grounds that nothing
+    serves the atlas until its own sidecar exists -- which is true of the first
+    run and of no other.
+    """
+    import warlock._q_rig as q_rig
+
+    _fake_render(monkeypatch)
+    source = _source_job(worker, rigged=True)
+    source_dir = worker.config.job_dir(source)
+    sheet_id = rigging.new_id()
+    served = rigging.sheet_png_path(source_dir, sheet_id)
+
+    targets: list[Path] = []
+    real_atlas = q_rig.RigOps._render_sheet_atlas
+
+    async def record(self, glb, layout, cells, *, pack_target, **kwargs):
+        targets.append(Path(pack_target))
+        return await real_atlas(
+            self, glb, layout, cells, pack_target=pack_target, **kwargs
+        )
+
+    monkeypatch.setattr(q_rig.RigOps, "_render_sheet_atlas", record)
+
+    job_id = worker.store.create(
+        "sheet", None,
+        {"source_job": source, "sheet_id": sheet_id, "poses": [], "frame_size": 64},
+    )
+    worker.start()
+    try:
+        await _wait_until(lambda: worker.store.get(job_id)["status"] in ("done", "error"))
+    finally:
+        await worker.shutdown()
+
+    assert worker.store.get(job_id)["error"] is None
+    assert targets and targets[0] != served, "packed straight onto the served name"
+    assert targets[0].name.startswith(".") and targets[0].name.endswith(".tmp")
+    assert served.exists(), "and the rename still put it there"
+    assert not targets[0].exists(), "no staging file left behind"
+
+
+@pytest.mark.asyncio
 async def test_cancelling_a_sheet_never_deletes_the_source_mesh(worker, monkeypatch):
     """The sheet lives in someone else's directory; cleanup must not overreach."""
     import threading

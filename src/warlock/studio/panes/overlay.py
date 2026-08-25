@@ -193,7 +193,7 @@ def _texture_losses(viewer: Any) -> None:
 
 
 def _screenshot(ctx: Any) -> None:
-    from .. import dialogs
+    from .. import atomic, dialogs
 
     image = ctx.viewer.screenshot()
 
@@ -203,7 +203,7 @@ def _screenshot(ctx: Any) -> None:
         )
         if dest is None:
             return None
-        image.convert("RGB").save(dest)
+        atomic.save_image(dest, image.convert("RGB"))
         return dest
 
     ctx.submit("screenshot", run)

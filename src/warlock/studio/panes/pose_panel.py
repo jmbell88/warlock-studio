@@ -15,7 +15,7 @@ from typing import Any
 from imgui_bundle import imgui
 
 from ...service import rig as svc_rig
-from .. import controls, dialogs, docmodes, forms, icons, theme, widgets
+from .. import atomic, controls, dialogs, docmodes, forms, icons, theme, widgets
 from ..manual import render as manual_render
 
 log = logging.getLogger(__name__)
@@ -497,7 +497,7 @@ def _bake(ctx: Any, job_id: str, pose_id: str) -> None:
         dest = dialogs.save_file("Save posed GLB", f"{job_id}_{pose_id}.glb", dialogs.GLB_FILTER)
         if dest is None:
             return None
-        dest.write_bytes(source.read_bytes())
+        atomic.write_bytes(dest, source.read_bytes())
         return dest
 
     ctx.submit(f"bake:{job_id}:{pose_id}", run)

@@ -466,9 +466,19 @@ class JobOps:
                         doc.with_name(f".{doc.name}.tmp"),
                     ]
                 else:
+                    # The *served* pair, and safe only because every door mints
+                    # a fresh id -- so these two names can hold nothing but
+                    # this run's work. ``_q_rig._sheet`` and
+                    # ``_q_troupe._charsheet`` now refuse a row that arrives
+                    # without one rather than minting a replacement, which is
+                    # what turns that from an observation into an invariant.
+                    png = rigging.sheet_png_path(job_dir, sheet_id)
                     paths = [
                         rigging.sheet_path(job_dir, sheet_id),
-                        rigging.sheet_png_path(job_dir, sheet_id),
+                        png,
+                        # Both kinds pack to a staging name and rename in, so a
+                        # cancel or a kill mid-pack leaves one of these.
+                        png.with_name(f".{png.name}.tmp"),
                     ]
                     if job["kind"] == "charsheet":
                         # The un-quantised render the pixel-art pass reads
@@ -476,9 +486,7 @@ class JobOps:
                         # between them often -- it is the longest gap in the
                         # job -- and it is this run's leftover by construction,
                         # named off the sheet id it minted at the door.
-                        png = rigging.sheet_png_path(job_dir, sheet_id)
                         paths.append(png.with_name(f".{png.name}.render"))
-                        paths.append(png.with_name(f".{png.name}.tmp"))
         elif job["kind"] == "tile_sheet":
             # This job's own directory, unlike the five above -- a tile sheet is
             # not a derivation of anything on disk, and ``input.png`` here *is*

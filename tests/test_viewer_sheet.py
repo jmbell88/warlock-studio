@@ -131,16 +131,13 @@ def test_a_capture_is_opaque_unless_asked_otherwise(gl):
         viewport.release()
 
 
-def test_saving_a_capture_creates_its_directory(gl, tmp_path):
-    viewport = glctx.Viewport(gl, (8, 8))
-    try:
-        viewport.use()
-        viewport.draw_target.clear(0.0, 0.0, 0.0, 1.0)
-        viewport.resolve()
-        out = capture.save_png(viewport, tmp_path / "nested" / "shot.png")
-    finally:
-        viewport.release()
-    assert out.exists() and out.read_bytes().startswith(b"\x89PNG")
+# ``capture.save_png`` had a test here and nothing else: it was the only caller
+# in the repo, and what it pinned was that the helper made its parent directory
+# and wrote a PNG straight onto the path it was handed. Writing in place is the
+# opposite of the rule every real capture path follows -- they all take
+# ``png_bytes`` and hand the bytes to whoever owns the destination, which is
+# what lets those writes be staged -- so the helper went, and its only test with
+# it. ``tests/test_job_durability.py`` holds the absence.
 
 
 def test_a_strip_renders_one_cell_per_step(gl, box_model):

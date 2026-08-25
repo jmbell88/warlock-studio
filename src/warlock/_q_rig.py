@@ -342,7 +342,21 @@ class RigOps:
         if not rigging.is_valid_id(source_id):
             raise ValueError(f"source_job is not a job id: {source_id!r}")
         source_dir = self.config.job_dir(source_id)
-        sheet_id = str(params.get("sheet_id") or rigging.new_id())
+        # Refused, never minted. ``_discard_artifacts``'s sheet branch unlinks
+        # ``sheet_path``/``sheet_png_path`` -- pure functions of this id, and
+        # the *served* names rather than temps -- which is safe only because
+        # every door mints a fresh id, so a cancelled run can only ever be
+        # deleting its own atlas. A ``or new_id()`` fallback here made that
+        # invariant unenforced in the one place it could be broken silently: a
+        # row arriving without an id got one *after* the door had had its
+        # chance, and a row carrying an *older* sheet's id would have this
+        # method pack over that sheet and a cancel then delete it. The four
+        # doors (sheets.create_sheet, troupe.create_charsheet, the two
+        # follow-up queuers in _q_jobs) and the resubmit path all mint one; a
+        # row without one is a bug in a door, and a refusal names it.
+        sheet_id = str(params.get("sheet_id") or "")
+        if not rigging.is_valid_id(sheet_id):
+            raise ValueError(f"sheet_id is not a sheet id: {sheet_id!r}")
 
         records = []
         for pose_id in params.get("poses") or []:
@@ -432,6 +446,18 @@ class RigOps:
             )
 
         png = rigging.sheet_png_path(source_dir, sheet_id)
+        # Packed to a staging name and renamed in, exactly as ``_deform_qa``
+        # eighteen lines up already does and for its stated reason: the sidecar
+        # is the completion marker, so an *existing* sheet's sidecar goes on
+        # calling this PNG ready for the whole minute the pack spends writing
+        # over it, and a reader in that window gets a torn atlas that nothing
+        # marks as suspect. That window only opens when a run reuses an id, and
+        # the check above now makes that a refusal rather than a possibility --
+        # but "a write onto a served path is staged" is not a rule with an
+        # exception for "nothing should be reading it yet" (``_charsheet`` says
+        # the same thing about its own atlas), and a cancel mid-pack should not
+        # be able to leave a half-packed PNG under a name the id owns.
+        png_tmp = png.with_name(f".{png.name}.tmp")
 
         def before_pack() -> None:
             self.progress.update(
@@ -439,15 +465,20 @@ class RigOps:
                 inner_next=1.0, nominal=3.0, detail="",
             )
 
-        result, trims = await self._render_sheet_atlas(
-            source_glb,
-            layout,
-            cells,
-            prefix="warlock-sheet-",
-            on_progress=on_progress,
-            pack_target=png,
-            before_pack=before_pack,
-        )
+        try:
+            result, trims = await self._render_sheet_atlas(
+                source_glb,
+                layout,
+                cells,
+                prefix="warlock-sheet-",
+                on_progress=on_progress,
+                pack_target=png_tmp,
+                before_pack=before_pack,
+            )
+            await asyncio.to_thread(os.replace, png_tmp, png)
+        finally:
+            with contextlib.suppress(OSError):
+                png_tmp.unlink(missing_ok=True)
 
         # The sidecar is written last and is what list_sheets treats as the
         # completion marker, the same way rig.json is for a rig.
@@ -501,9 +532,12 @@ class RigOps:
 
         The two callers differ only in what they render, where they pack it and
         what they say while it happens, so those are the parameters.
-        ``pack_target`` is a staging name for ``_deform_qa`` (which renames it
-        onto the served PNG) and the served name itself for ``_sheet``, whose
-        atlas nothing is serving until its sidecar exists.
+        ``pack_target`` is a staging name for both of them: the sidecar is the
+        completion marker, so a re-run's pack would otherwise spend a minute
+        writing over a PNG a *previous* run's sidecar still calls ready.
+        ``_sheet`` used to pass the served name on the grounds that nothing is
+        serving that atlas until its own sidecar exists, which is true of the
+        first run and of no other.
         """
         from .pipelines import sheet as sheetlib
 

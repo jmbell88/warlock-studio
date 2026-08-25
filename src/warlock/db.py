@@ -411,6 +411,9 @@ class JobStore:
 
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
+        # Kept, so ``backup_to`` can open a reader of its own rather than doing
+        # a page walk to disk with this store's lock in its hand.
+        self._path = path
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
@@ -450,10 +453,23 @@ class JobStore:
         database under sqlite's own locking, and it is the only way to do that
         without stopping the app.
 
-        Under ``self._lock`` like every other touch of the connection. The copy
-        is a page walk over a database measured in megabytes, not the asset
-        tree -- see ``service.library.backup`` for why those are separate
-        questions.
+        **Through a second connection, and not under ``self._lock``.** This was
+        the one place in the store that held the lock across blocking I/O: a
+        page walk over the whole database, out to disk, with every other method
+        queued behind it -- including the ones the *frame thread* calls, which
+        read this store directly. Backing up a library froze the job list for
+        as long as the copy took. ``deferred_commits`` declines to hold the
+        lock across the caller's file writes for exactly this reason and says
+        so; this is the same argument with the I/O on the inside.
+
+        A separate read-only connection is what makes that safe rather than
+        merely faster. WAL readers do not block writers and are not blocked by
+        them, and ``Connection.backup`` takes its snapshot under sqlite's own
+        locking, so the copy is consistent without this process's lock having
+        anything to do with it. What the copy contains is the *committed*
+        database -- which is what a backup should contain, and the one visible
+        difference: rows created inside an open ``deferred_commits`` block are
+        not in it yet, the same way they are not visible to any other reader.
 
         Staged through a temp sibling and ``os.replace``d, so an interrupted
         backup never leaves a half-written file wearing the name of a good one.
@@ -464,12 +480,15 @@ class JobStore:
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest.with_name(f".{dest.name}.{secrets.token_hex(4)}.tmp")
         try:
-            with self._lock:
+            source = sqlite3.connect(self._path)
+            try:
                 target = sqlite3.connect(tmp)
                 try:
-                    self._conn.backup(target)
+                    source.backup(target)
                 finally:
                     target.close()
+            finally:
+                source.close()
             os.replace(tmp, dest)
         finally:
             with contextlib.suppress(OSError):

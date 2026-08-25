@@ -316,6 +316,46 @@ async def test_an_unknown_sheet_type_errors_rather_than_defaulting(worker):
 
 
 @pytest.mark.asyncio
+async def test_a_draft_png_is_staged_rather_than_saved_onto_its_served_name(
+    worker, monkeypatch
+):
+    """The rule this file's own restyle sibling states over
+    ``sheet_pixel_png_path``: a write onto a served path is staged.
+
+    This was the one served writer in ``_q_sprite`` not following it. Nothing
+    normally holds these names -- the draft id is minted at the door -- and
+    that is precisely the argument the restyle rejected: "a bare save tears a
+    file that is already being served" does not stop being true because today's
+    callers happen never to reuse an id, and ``_discard_artifacts`` deletes by
+    that same id on the assumption that they do not.
+    """
+    from pathlib import Path
+
+    saved: list[Path] = []
+    real_save = Image.Image.save
+
+    def record(self, fp, *args, **kwargs):
+        saved.append(Path(fp))
+        return real_save(self, fp, *args, **kwargs)
+
+    monkeypatch.setattr(Image.Image, "save", record)
+
+    source = _reference(worker)
+    job_id, draft_id = _queue(worker, source)
+    row = await _run(worker, job_id)
+    assert row["status"] == "done", row["error"]
+
+    source_dir = worker.config.job_dir(source)
+    served = {
+        rigging.sprite_draft_png_path(source_dir, draft_id, letter)
+        for letter in rigging.SPRITE_CANDIDATES
+    }
+    assert served.isdisjoint(saved), "a served draft PNG was written in place"
+    assert all(path.exists() for path in served), "and the renames still landed"
+    assert list(served.pop().parent.glob(".*.tmp")) == []
+
+
+@pytest.mark.asyncio
 async def test_a_torn_draft_sidecar_leaves_no_marker_and_no_strand(worker, monkeypatch):
     """``rigging.list_sprite_drafts`` treats the sidecar as the completion
     marker, so a half-written one advertises a draft whose record cannot be

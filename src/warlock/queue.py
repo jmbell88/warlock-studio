@@ -60,6 +60,27 @@ POLL_INTERVAL = 1.0
 IDLE_POLL_INTERVAL = 5.0
 SHUTDOWN_TIMEOUT = 20.0
 
+#: How many *consecutive* dispatch-loop iterations may fail before the worker
+#: stops and reports itself dead.
+#:
+#: The loop catches everything and sleeps, which is right for the transient
+#: case it was written for -- a DB hiccup must not kill the worker for the rest
+#: of the session. It is wrong for the persistent one. A corrupt page or a full
+#: disk left ``Runtime.alive`` True and ``fatal`` None, every job sitting in
+#: ``queued`` with nothing on screen saying why, and one traceback a second
+#: written to the disk that caused it. ``main._check_worker`` already knows how
+#: to say "the GPU worker stopped" exactly once and well; it simply had nothing
+#: to read.
+#:
+#: Five, at ``POLL_INTERVAL`` apart, so a five-second run of failures is what it
+#: takes -- comfortably past a lock contended by a backup or a checkpoint, and
+#: well short of a minute of silence.
+LOOP_FAILURE_LIMIT = 5
+
+#: How many times a terminal write is retried before the row is left stranded.
+#: See ``_finish_job``.
+FINISH_ATTEMPTS = 3
+
 # Labels for the text-to-image phases, which have no trace of their own.
 T2I_PHASES = {
     "load": ("t2i_load", "Loading image model"),
@@ -873,9 +894,18 @@ class Worker(GenerateOps, RigOps, TroupeOps, SpriteOps, TileSheetOps, MeshPostOp
     async def _run(self) -> None:
         # Widened after an unwoken timeout, reset by anything happening (C38).
         wait = POLL_INTERVAL
+        # Consecutive failures, not a total: the loop is meant to survive a
+        # hiccup and meant to give up on a wall. See LOOP_FAILURE_LIMIT.
+        failures = 0
         while not self._stop.is_set():
             try:
                 job = await asyncio.to_thread(self.store.next_queued)
+                # The store answered, so whatever went wrong last time was not
+                # permanent. Reset here rather than at the end of the block:
+                # this read is what the escalation below is really about, and a
+                # job that fails inside ``_process`` is already accounted for
+                # on its own row rather than being the queue's problem.
+                failures = 0
                 if job is None:
                     await self._maybe_evict_idle()
                     woke = await self._wait_for_work(wait)
@@ -883,11 +913,27 @@ class Worker(GenerateOps, RigOps, TroupeOps, SpriteOps, TileSheetOps, MeshPostOp
                     continue
                 wait = POLL_INTERVAL
                 await self._process(job)
-            except Exception:
+            except Exception as exc:
                 # A crash here used to kill the worker permanently and
                 # silently -- next_queued or a DB hiccup would strand every
                 # future job in 'queued' forever with no error surfaced.
-                log.exception("worker loop iteration failed")
+                failures += 1
+                log.exception("worker loop iteration failed (%d in a row)", failures)
+                if failures >= LOOP_FAILURE_LIMIT:
+                    # Catching everything and sleeping made a *persistent*
+                    # failure indistinguishable from a healthy idle worker:
+                    # alive, fatal unset, every job queued, nothing on screen.
+                    # Recorded the way the task-died callback records one --
+                    # traceback stripped, because ``fatal`` is never cleared
+                    # and the frames it holds would be kept for process life
+                    # while only ``str(fatal)`` is ever read.
+                    log.critical(
+                        "gpu worker giving up after %d consecutive loop failures",
+                        failures,
+                        exc_info=exc,
+                    )
+                    self.fatal = exc.with_traceback(None)
+                    return
                 # Bounded, or a *persistent* failure (disk full, corrupt DB
                 # page) spins this loop flat out, writing a traceback per
                 # pass to the disk that caused it.
@@ -1295,6 +1341,49 @@ class Worker(GenerateOps, RigOps, TroupeOps, SpriteOps, TileSheetOps, MeshPostOp
                 )
             )
 
+    async def _finish_job(
+        self, job_id: str, status: str, error: str | None
+    ) -> bool:
+        """``store.finish``, retried. -> whether the row was still ``running``.
+
+        The terminal write is the one DB call in a job whose failure is not
+        merely lost work: the row stays ``running``, and the next launch's
+        ``reconcile_startup`` flips it to "interrupted by shutdown". So a mesh
+        that generated perfectly is reported to the user as a crash, and the
+        only way to tell the two apart is that one of them has a model.glb.
+
+        Retried a few times because the realistic transient here is contention
+        rather than corruption: this store is one connection behind an RLock,
+        but it is no longer the only connection on the file -- ``backup_to``
+        opens its own read-only one -- and sqlite can answer a writer with
+        SQLITE_BUSY across a WAL checkpoint. A retry costs milliseconds and
+        turns that into nothing at all.
+
+        A disk that is genuinely full or a page that is genuinely corrupt still
+        fails, and then the exception propagates exactly as it did before, to
+        ``_run``'s counter -- which now escalates to ``fatal`` rather than
+        looping. The value of this function is that the failure is *visible*;
+        the retry is the cheap half.
+        """
+        for attempt in range(1, FINISH_ATTEMPTS + 1):
+            try:
+                return await asyncio.to_thread(self.store.finish, job_id, status, error)
+            except Exception:
+                if attempt == FINISH_ATTEMPTS:
+                    log.critical(
+                        "job %s finished as %r but the row could not be written; "
+                        "it will read as interrupted on the next launch",
+                        job_id,
+                        status,
+                    )
+                    raise
+                log.warning(
+                    "could not record job %s as %r (attempt %d); retrying",
+                    job_id, status, attempt, exc_info=True,
+                )
+                await asyncio.sleep(POLL_INTERVAL * attempt)
+        return False  # unreachable; the loop either returns or raises
+
     async def _process(self, job: dict[str, Any]) -> None:
         job_id = job["id"]
         claimed = await asyncio.to_thread(self.store.claim, job_id)
@@ -1380,9 +1469,7 @@ class Worker(GenerateOps, RigOps, TroupeOps, SpriteOps, TileSheetOps, MeshPostOp
                     await asyncio.to_thread(self._discard_artifacts, job)
                 else:
                     status = "error" if error is not None else "done"
-                    finished = await asyncio.to_thread(
-                        self.store.finish, job_id, status, error
-                    )
+                    finished = await self._finish_job(job_id, status, error)
                     if not finished:
                         # A cancel landed between claim() succeeding and this
                         # write (before self._cancel existed to observe it, or

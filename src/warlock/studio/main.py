@@ -1518,7 +1518,28 @@ class App:
                             # cost the user the button as well as the number.
                             log.exception("could not size a refusal's install")
                     ctx.state.note_field_error(named, done.message or "", rows, gib)
-                ctx.toast(done.message or "That did not work.", "error", done.action)
+                message = done.message or "That did not work."
+                action = done.action
+                if done.key.startswith("journal:"):
+                    # The eighth prefix, and the one nobody had claimed. A
+                    # journal write is the only task in the app the user did
+                    # not start, and since the mark stopped advancing on
+                    # *submit* (``journal.write``) its failure is also the only
+                    # signal that the crash copy the app promised does not
+                    # exist. "Something went wrong; see the log for details"
+                    # names neither half of that, and it is the sentence that
+                    # was being shown.
+                    #
+                    # No routing call beside it: the journal has no per-mode
+                    # state to unlock, and the retry is already the debounce's
+                    # -- ``_write_if_due`` comes back to this slot in
+                    # JOURNAL_SECONDS whether or not anything is told here.
+                    message = (
+                        "Autosave could not write a recovery copy. Save your "
+                        "work somewhere you choose."
+                    )
+                    action = "log"
+                ctx.toast(message, "error", action)
                 # A failed save must not leave the document locked: saving
                 # disables every editing control, so without this one bad
                 # write makes the tab read-only until it is closed. Each

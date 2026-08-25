@@ -457,12 +457,24 @@ class SpriteOps:
             await asyncio.to_thread(
                 functools.partial(sprite_dir.mkdir, parents=True, exist_ok=True)
             )
+            # Staged and renamed, never saved in place -- the rule stated a few
+            # hundred lines up over ``sheet_pixel_png_path``, which this was the
+            # one served writer in the file not following. Nothing normally
+            # holds these names (the draft id is minted at the door), and that
+            # is exactly the argument the pixel-sheet writer rejected: "a bare
+            # save tears a file that is already being served" does not stop
+            # being true because today's callers happen never to reuse an id,
+            # and ``_discard_artifacts``'s sprite branch deletes by that same
+            # id on the assumption that they do not.
             for letter, reduced, _ in assembled:
-                await asyncio.to_thread(
-                    reduced.save,
-                    rigging.sprite_draft_png_path(source_dir, draft_id, letter),
-                    "PNG",
-                )
+                out = rigging.sprite_draft_png_path(source_dir, draft_id, letter)
+                out_tmp = out.with_name(f".{out.name}.tmp")
+                try:
+                    await asyncio.to_thread(reduced.save, out_tmp, "PNG")
+                    await asyncio.to_thread(os.replace, out_tmp, out)
+                finally:
+                    with contextlib.suppress(OSError):
+                        out_tmp.unlink(missing_ok=True)
             doc = spritesynth.draft_sidecar(
                 draft_id=draft_id,
                 source_job=source_id,
@@ -729,6 +741,16 @@ class SpriteOps:
             # the next re-texture happened to overwrite it.
             with contextlib.suppress(OSError):
                 temp.unlink(missing_ok=True)
+        # The rename above is the publish, and from here a cancel cannot take it
+        # back -- ``_rig``'s reason, in the place it bites hardest. This replaced
+        # *another job's* served mesh, irreversibly: the skin the user had is
+        # gone, and the new one is what every viewer, export and thumbnail now
+        # reads. A row left saying "cancelled" over that is a lie about the file
+        # on disk, and it costs the row's own bookkeeping as well -- the report
+        # written below never lands, so nothing anywhere records what the mesh's
+        # surface now is.
+        if self._cancel is not None:
+            self._cancel.commit()
         await asyncio.to_thread(self._drop_surface_artifacts, source_dir)
 
         report["base_model"] = base_key

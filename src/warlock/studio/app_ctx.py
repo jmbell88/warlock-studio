@@ -15,7 +15,7 @@ from typing import Any
 
 from ..service import derive as svc_derive
 from ..service import files as svc_files
-from . import dialogs
+from . import atomic, dialogs
 from .state import AppState
 
 log = logging.getLogger(__name__)
@@ -289,7 +289,7 @@ class Ctx:
             if dest is None:
                 return None
             dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes(source.read_bytes())
+            atomic.write_bytes(dest, source.read_bytes())
             return dest
 
         if not self.submit(key, run, tag={"name": name}):

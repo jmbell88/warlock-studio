@@ -610,13 +610,29 @@ def _recovery(ctx: Any) -> None:
         "as it was; you still choose where to save it."
     )
     imgui.dummy((0, sp(tokens.SP_2)))
-    for entry in found:
+    # ``MAX_RECOVERY`` rows at a time, and the cap lives here rather than in
+    # the scan -- see that constant. The rest are counted rather than hidden:
+    # a row leaves the snapshot the moment it is recovered or discarded, so
+    # the next one takes its place on the following frame and every document
+    # is eventually reachable. Truncating the scan instead simply lost them.
+    shown = found[: journal.MAX_RECOVERY]
+    for entry in shown:
         _recovery_row(ctx, journal, entry)
+    waiting = len(found) - len(shown)
+    if waiting:
+        with fonts.small(imgui):
+            widgets.muted(
+                f"and {waiting} more, shown as these are dealt with. "
+                f"Discard all removes all {len(found)}."
+            )
     imgui.dummy((0, sp(tokens.SP_2)))
     # Plural regardless of the count, and last: discarding is the destructive
     # answer, so it does not sit above the rows it would delete, and it is not
     # per-row because a per-row bin next to a per-row Recover is two small
     # targets one pixel apart with opposite meanings.
+    #
+    # It discards ``found``, not ``shown``: "all" has to mean all, which is
+    # why the line above says how many that is whenever the two differ.
     if controls.button(f"{icons.TRASH} Discard all##recovery-discard"):
         for entry in found:
             journal.discard(ctx, entry)

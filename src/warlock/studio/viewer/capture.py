@@ -7,7 +7,6 @@ golden-image tests -- so a row-order or alpha bug is one bug rather than four.
 from __future__ import annotations
 
 import io
-from pathlib import Path
 from typing import Any
 
 from .glctx import Viewport
@@ -42,7 +41,9 @@ def png_bytes(viewport: Viewport, *, opaque: bool = True) -> bytes:
     return buffer.getvalue()
 
 
-def save_png(viewport: Viewport, path: Path, *, opaque: bool = True) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(png_bytes(viewport, opaque=opaque))
-    return path
+# There was a ``save_png(viewport, path)`` here, and the only caller it had
+# anywhere was the test that tested it. Every real capture path -- the
+# thumbnail, the screenshot overlay, the sheet preview, the golden-image tests
+# -- takes ``png_bytes`` and hands the bytes to whatever owns the destination,
+# which is what lets those writes be staged. This one wrote in place, which is
+# the opposite rule, so it was a trap sitting in a module four callers import.

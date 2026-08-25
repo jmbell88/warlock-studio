@@ -18,6 +18,41 @@ the release you are actually running.
 
 ## 0.0.28 — 2026-08-23
 
+- **Autosave stopped believing in copies it had not written.** The journal marked a
+  document as backed up the instant it *queued* the write, not when the write landed, so a
+  full disk, a removed drive or a permission change left the slot recorded as saved at its
+  current state, the "has it changed" gate then saw nothing to do, and no retry ever came
+  for the rest of the session — the app believed a crash copy existed when none did. The
+  mark now waits for the write, the failure is retried, and it toasts by name ("Autosave
+  could not write a recovery copy") rather than as the generic "something went wrong".
+  Relatedly, a disk that filled *between* the two halves of a copy used to leave the file
+  on disk with no marker beside it, which meant nothing would ever offer it back; both
+  halves are now written before either is published.
+
+- **The unsaved-work list on Home shows all of it.** It scanned for eight and silently
+  dropped the rest, so a crash with twelve documents open buried four of them, and the
+  count in the crash dialog under-reported by the same four. It still draws eight rows at a
+  time; the rest are counted, and take their place as the listed ones are dealt with.
+
+- **Cancelling a character sheet no longer deletes one you can already see.** The cancel
+  landing after the sheet had been published recorded the row as cancelled and then removed
+  the finished sheet with it. Re-texturing had the same shape from the other side: the mesh
+  was repainted and the row said it never happened. Both now finish normally once the
+  result is on disk — which is what a cancel there has always meant everywhere else.
+
+- **Exports no longer truncate the file you picked.** Nine exports wrote straight onto the
+  destination, so pointing one at a file that already existed and having the write fail
+  partway through destroyed it and left nothing in its place. Sprite sheets and their data,
+  posed GLBs, screenshots, palettes, PNG sequences, GIFs, sliced PNGs and the generic
+  artifact export all write beside the destination and swap it in at the end, which is what
+  Inker's document saves already did.
+
+- **A broken job database now says the worker has stopped.** The dispatch loop retried
+  forever and reported nothing, so a corrupt page or a full disk left every job queued with
+  no explanation on screen. A finished job whose completion could not be written is also
+  retried, rather than being reported as a crash on the next launch. And backing up the
+  library no longer freezes the job list while it runs.
+
 - **Layer groups have a header row in the timeline, and it folds.** The fold
   triangle reads `TabDoc.collapsed_groups`, which had been declared for as long
   as groups have existed and read by nothing — so a folder could be made and

@@ -13,9 +13,7 @@ state (``InkerDoc.saving``) rather than a function call that returns.
 
 from __future__ import annotations
 
-import contextlib
 import logging
-import os
 import re
 import time
 from collections.abc import Sequence
@@ -24,38 +22,21 @@ from pathlib import Path
 from typing import Any
 
 from ..pipelines import sheet as sheetlib
-from . import dialogs, docmodes, filetypes, fonts, inker_ops, inker_state, journal, recents
+from . import (
+    atomic,
+    dialogs,
+    docmodes,
+    filetypes,
+    fonts,
+    inker_ops,
+    inker_state,
+    journal,
+    recents,
+)
 from .inker import animation
 from .inker.asein import ASEPRITE_SUFFIXES
 from .inker_state import InkerDoc, InkerState
 from .state import set_mode
-
-
-def _write_atomic(path: Path, data: bytes) -> None:
-    """Write ``data`` onto ``path`` through a staging file, never in place.
-
-    ``ora.write_ora``'s idiom, factored out because three writers here need it
-    for one reason. Two of them (the flattened-PNG and tileset exports) can be
-    pointed at a file that already exists; the third is a save straight back
-    over the ``.png`` the user opened, which ``WRITABLE_SUFFIXES`` deliberately
-    allows -- and there ``write_bytes`` truncates the user's only copy before
-    it writes a byte, so a crash or a full disk mid-write destroys the drawing
-    rather than failing the save. Every other document writer in the app
-    already stages and replaces (``ora.py``, ``aseout.py``, ``clay_mode.py``,
-    ``plotter_io.py``, ``packwright_io.py``); this file was the gap.
-
-    The temp is a dotfile beside the destination so it lands on the same
-    volume -- ``os.replace`` is only atomic within one -- and it is unlinked on
-    failure the way ``plotter_io`` and ``journal`` unlink theirs, rather than
-    left behind for the user to find.
-    """
-    tmp = path.with_name(f".{path.name}.tmp")
-    try:
-        tmp.write_bytes(data)
-        os.replace(tmp, path)
-    finally:
-        with contextlib.suppress(OSError):
-            tmp.unlink(missing_ok=True)
 
 log = logging.getLogger(__name__)
 
@@ -1210,7 +1191,7 @@ def export_png(ctx: Any, tab: InkerDoc | None = None, *, repeat: bool = False) -
             return None
         if dest.suffix.lower() != ".png":
             dest = dest.with_suffix(".png")
-        _write_atomic(dest, doc.png_bytes(scale=scale))
+        atomic.write_bytes(dest, doc.png_bytes(scale=scale))
         # ``dest`` and ``export_kind`` so the *next* repeat has something to
         # repeat -- ``on_task_done`` records both.
         return {"exported": dest, "dest": dest, "export_kind": "png"}
@@ -1319,7 +1300,7 @@ def export_slices(ctx: Any, tab: InkerDoc | None = None, *, repeat: bool = False
         for name, (x0, y0, x1, y1) in crops:
             crop = upscale(flat[y0:y1, x0:x1], scale)
             out = dest.parent / f"{name}.png"
-            Image.fromarray(crop, "RGBA").save(out, "PNG")
+            atomic.save_image(out, Image.fromarray(crop, "RGBA"), "PNG")
             if first is None:
                 first = out
         return {"exported": first}
@@ -2127,7 +2108,7 @@ def _submit_export(ctx: Any, export: _Export) -> None:
         for stem, image, meta in composed:
             out = dest.with_name(f"{stem}.png")
             try:
-                image.save(out, "PNG")
+                atomic.save_image(out, image, "PNG")
             finally:
                 image.close()
             # ``with_name`` rather than ``with_suffix``: it spells the sidecar's
@@ -2135,8 +2116,8 @@ def _submit_export(ctx: Any, export: _Export) -> None:
             # just built two lines up, rather than leaning on ``with_suffix`` to
             # rederive that same name by parsing it back out of ``out``'s own
             # name.
-            out.with_name(f"{stem}.json").write_text(
-                json.dumps(meta, indent=2), encoding="utf-8"
+            atomic.write_text(
+                out.with_name(f"{stem}.json"), json.dumps(meta, indent=2)
             )
             if first is None:
                 first = out
@@ -2167,24 +2148,30 @@ def _submit_export(ctx: Any, export: _Export) -> None:
         first: Path | None = None
         for stem, load in zip(stems, loads, strict=True):
             out = dest.with_name(f"{stem}.gif")
-            # Upscaled before the quantiser, not after: a GIF holds palette
-            # indices, so there is no "after" -- magnifying the indexed image
-            # would be magnifying a palette lookup rather than a picture.
-            gifout.write_gif(
-                out,
-                [upscale(plane, scale) for plane in load.frames],
-                load.durations,
-                loop=load.loop,
-                palette=palette,
-                # Magnified by the same whole number as the pixels, which is
-                # exact on an index plane in a way it is on nothing else:
-                # ``upscale`` repeats each element, so a magnified slot is still
-                # that slot.
-                indices=[
-                    None if slots is None else upscale(slots, scale)
-                    for slots in load.planes
-                ],
-            )
+            # Through ``atomic.staged`` rather than one of its ``write_*``
+            # helpers, because the writer here takes a path rather than giving
+            # back bytes -- and ``write_gif`` names its own format, so a
+            # ``.tmp`` destination costs it nothing.
+            with atomic.staged(out) as tmp:
+                # Upscaled before the quantiser, not after: a GIF holds palette
+                # indices, so there is no "after" -- magnifying the indexed
+                # image would be magnifying a palette lookup rather than a
+                # picture.
+                gifout.write_gif(
+                    tmp,
+                    [upscale(plane, scale) for plane in load.frames],
+                    load.durations,
+                    loop=load.loop,
+                    palette=palette,
+                    # Magnified by the same whole number as the pixels, which is
+                    # exact on an index plane in a way it is on nothing else:
+                    # ``upscale`` repeats each element, so a magnified slot is
+                    # still that slot.
+                    indices=[
+                        None if slots is None else upscale(slots, scale)
+                        for slots in load.planes
+                    ],
+                )
             if first is None:
                 first = out
         return {
@@ -2236,7 +2223,9 @@ def _submit_export(ctx: Any, export: _Export) -> None:
             sheetout.require_distinct_names(names)
             for name, plane in zip(names, load.frames, strict=True):
                 out = dest.parent / f"{name}.png"
-                Image.fromarray(upscale(plane, scale), "RGBA").save(out, "PNG")
+                atomic.save_image(
+                    out, Image.fromarray(upscale(plane, scale), "RGBA"), "PNG"
+                )
                 if first is dest:
                     first = out
         return {
@@ -2299,7 +2288,7 @@ def _write(doc: Any, path: Path, file_format: str) -> None:
         except ValueError as exc:
             raise invalid_from(exc, "This drawing could not be saved as .aseprite") from exc
     else:
-        _write_atomic(path, doc.png_bytes())
+        atomic.write_bytes(path, doc.png_bytes())
 
 
 # One rule for all four document modes: see :func:`docmodes.start_save` for why
@@ -3785,8 +3774,8 @@ def _write_palette(path: Any, colours: list[tuple[int, int, int, int]], name: st
     dest = Path(path)
     if dest.suffix.lower() not in (".gpl", ".pal"):
         dest = dest.with_suffix(".gpl")
-    dest.write_text(
-        gpl.dumps_for(dest.suffix, colours, name), encoding="utf-8", newline=""
+    atomic.write_text(
+        dest, gpl.dumps_for(dest.suffix, colours, name), encoding="utf-8", newline=""
     )
 
 
@@ -4150,8 +4139,8 @@ def export_tileset(ctx: Any, tab: InkerDoc | None = None, *, index: int) -> None
         # The ``.tsx`` names the PNG by the name it is written under here, so
         # the pair is consistent by construction rather than by two writers
         # agreeing on a convention.
-        _write_atomic(dest, tsxlib.tsx_bytes(tileset, image_name=png_path.name))
-        _write_atomic(png_path, pngio.png_bytes(tileset.pixels))
+        atomic.write_bytes(dest, tsxlib.tsx_bytes(tileset, image_name=png_path.name))
+        atomic.write_bytes(png_path, pngio.png_bytes(tileset.pixels))
         return {"exported": dest}
 
     _start(ctx, tab, f"inker-export:{tab.uid}", run)

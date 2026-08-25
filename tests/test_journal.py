@@ -264,6 +264,123 @@ def test_an_encode_that_raises_writes_nothing_and_does_not_mark(tmp_path, kind):
     assert slot.journal_name == ""
 
 
+def test_a_failed_write_is_not_recorded_as_a_copy_that_exists(tmp_path, kind, monkeypatch):
+    """The most direct data-loss path this codebase had.
+
+    ``set_mark`` ran the instant ``ctx.submit`` was *accepted*, and the write
+    landed later on a task thread. A full disk, a yanked directory or a
+    permission change there left the slot recorded as journalled **at the
+    current head** -- so ``_write_if_due``'s first gate saw nothing changed and
+    no retry ever came, for the life of the session. The app believed a crash
+    copy existed when none did, which is the one thing it cannot be wrong
+    about: every other promise the journal makes is conditional on that one.
+
+    The head is the task's to advance now. The debounce is still the frame
+    thread's, because that is what stops a failing disk being re-encoded
+    against at the frame rate.
+    """
+    import warlock.studio.journal as mod
+
+    ctx = _Ctx(tmp_path)
+    queued: list[Any] = []
+
+    def defer(key: str, run: Any, *args: Any, **kwargs: Any) -> bool:
+        ctx.submitted.append(key)
+        queued.append(run)
+        return True
+
+    ctx.submit = defer
+    slot = _Slot()
+    kind.slots.append(slot)
+    journal.pump(ctx, now=9_000.0)  # arm
+    journal.pump(ctx, now=10_000.0)
+    assert len(queued) == 1 and slot.journal_name, "the name is the debounce's"
+    assert slot.journal_head is None, "nothing is on disk yet, so nothing is claimed"
+
+    real_write_pair = mod._write_pair
+
+    def full_disk(*_args: Any) -> None:
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(mod, "_write_pair", full_disk)
+    with pytest.raises(OSError):
+        queued[0]()
+    assert slot.journal_head is None, "a write that failed is not a copy"
+
+    # And the retry really arrives -- one interval later, not next frame.
+    monkeypatch.setattr(mod, "_write_pair", real_write_pair)
+    assert journal.pump(ctx, now=10_000.0 + journal.JOURNAL_SECONDS - 1.0) == 0
+    assert journal.pump(ctx, now=10_000.0 + journal.JOURNAL_SECONDS + 1.0) == 1
+    queued[-1]()
+    assert slot.journal_head == slot.head, "the copy that landed is the one recorded"
+
+
+def test_the_head_is_advanced_by_the_write_and_not_by_the_submit(tmp_path, kind):
+    """The other side of the same rule, in the ordinary case: an accepted
+    submit is not a copy, and the mark says so until the write returns."""
+    ctx = _Ctx(tmp_path)
+    queued: list[Any] = []
+    ctx.submit = lambda key, run, *a, **k: (queued.append(run), True)[1]
+    slot = _Slot()
+    kind.slots.append(slot)
+    journal.pump(ctx, now=9_000.0)
+    journal.pump(ctx, now=10_000.0)
+    assert slot.journal_head is None
+    queued[0]()
+    assert slot.journal_head == slot.head
+    assert (tmp_path / slot.journal_name).read_bytes() == b"a"
+
+
+def test_a_disk_that_fills_between_the_halves_publishes_neither(tmp_path, monkeypatch):
+    """The sibling of the mark bug, and the reason both stagings come first.
+
+    Written the obvious way -- stage the payload, rename it, stage the sidecar,
+    rename it -- a disk that fills between the two leaves a *whole* first-ever
+    copy on disk with no sidecar to offer it. ``recoverable`` is sidecar-driven
+    by design, so that payload is present, permanently invisible and never
+    swept: the work is there and the app will never mention it again.
+    """
+    import warlock.studio.journal as mod
+
+    payload = tmp_path / "sketch-x.probe"
+    real_write_text = Path.write_text
+
+    def full_disk(self, *args, **kwargs):
+        # The sidecar's *byte* write, which is the half that can run out of
+        # room. Its rename cannot: by then both files are already on the disk.
+        if self.name.endswith(f"{journal.META_SUFFIX}.tmp"):
+            raise OSError("no space left on device")
+        return real_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", full_disk)
+    with pytest.raises(OSError):
+        mod._write_pair(payload, b"the pixels", {"version": journal.VERSION})
+    monkeypatch.undo()
+
+    assert not payload.exists(), "an unofferable payload is not published at all"
+    assert list(tmp_path.glob("*")) == [], "and no staging file is left behind"
+
+
+def test_every_left_behind_document_is_offered_rather_than_the_first_eight(tmp_path, kind):
+    """``recoverable`` returned ``out[:MAX_RECOVERY]`` and nothing pruned the
+    rest, so a crash with twelve documents open buried four -- never listed,
+    never offered, never swept. ``status_line`` is the sharpest form of it: the
+    sentence the crash dialog shows counted the truncated list and told the
+    user there were eight."""
+    ctx = _Ctx(tmp_path)
+    for i in range(journal.MAX_RECOVERY + 4):
+        payload = tmp_path / f"doc{i}-x{i}.probe"
+        payload.write_bytes(b"x")
+        journal.meta_path(payload).write_text(
+            json.dumps(
+                {"version": journal.VERSION, "kind": "probe", "title": f"doc{i}", "at": i}
+            ),
+            encoding="utf-8",
+        )
+    assert len(journal.recoverable(ctx)) == journal.MAX_RECOVERY + 4
+    assert f"{journal.MAX_RECOVERY + 4} unsaved documents" in journal.status_line(ctx)
+
+
 # --- dropping -----------------------------------------------------------------
 
 
@@ -323,6 +440,63 @@ def test_a_write_still_queued_when_the_copy_is_dropped_does_not_resurrect_it(tmp
     payload = tmp_path / name
     assert not payload.exists()
     assert not journal.meta_path(payload).exists()
+
+
+def test_a_write_in_flight_when_the_copy_is_dropped_does_not_re_mark_it(
+    tmp_path, kind, monkeypatch
+):
+    """The half of the tombstone that moving the mark onto the write task opened.
+
+    ``drop`` bumps the generation under this name's write lock, so a write
+    already *inside* ``_write_pair`` makes it wait -- which is what lets the
+    unlinks remove what that write just put down. The reset of the mark has to
+    happen on the far side of that wait. Above it, the task's own ``set_mark``
+    lands afterwards and records a mark for a document that has just been saved
+    and closed, naming a payload the unlinks are about to remove: the slot then
+    believes it holds a crash copy that is not there, which is the bug this
+    whole batch is about, arriving by the other door.
+
+    Threaded because the ordering is the property. A queued-but-unstarted write
+    takes the generation branch and never reaches ``set_mark`` at all, so it
+    passes either way and says nothing.
+    """
+    import threading
+
+    import warlock.studio.journal as mod
+
+    ctx = _Ctx(tmp_path)
+    queued: list[Any] = []
+    ctx.submit = lambda key, run, *a, **k: (queued.append(run), True)[1]
+    slot = _Slot()
+    kind.slots.append(slot)
+    journal.pump(ctx, now=9_000.0)  # arm
+    journal.pump(ctx, now=10_000.0)
+    assert len(queued) == 1 and slot.journal_name
+
+    entered, gate = threading.Event(), threading.Event()
+    real = mod._write_pair
+
+    def slow(payload, data, meta):
+        entered.set()
+        assert gate.wait(10.0)
+        return real(payload, data, meta)
+
+    monkeypatch.setattr(mod, "_write_pair", slow)
+    writer = threading.Thread(target=queued[0], daemon=True)
+    writer.start()
+    assert entered.wait(10.0), "the write holds this name's lock"
+
+    dropped = threading.Event()
+    threading.Thread(
+        target=lambda: (journal.drop(ctx, slot), dropped.set()), daemon=True
+    ).start()
+    assert not dropped.wait(0.3), "the drop waits for its own document's write"
+    gate.set()
+    assert dropped.wait(10.0)
+    writer.join(10.0)
+
+    assert slot.journal_name == "" and slot.journal_head is None
+    assert list(tmp_path.glob("*.probe")) == [], "and the pair really went"
 
 
 def test_a_fresh_copy_taken_after_a_drop_still_writes(tmp_path, kind):

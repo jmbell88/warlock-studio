@@ -17,7 +17,7 @@ from imgui_bundle import imgui
 from ... import models, rigging
 from ...service import sheets as svc_sheets
 from ...service import validation
-from .. import asset_open, controls, dialogs, forms, icons, widgets
+from .. import asset_open, atomic, controls, dialogs, forms, icons, widgets
 from ..manual import render as manual_render
 from ..viewer import sheet as sheetlib
 from . import model_gate, stamps
@@ -648,7 +648,7 @@ def _save_pixel(ctx: Any, job_id: str, sheet_id: str) -> None:
         )
         if dest is None:
             return None
-        dest.write_bytes(source.read_bytes())
+        atomic.write_bytes(dest, source.read_bytes())
         return dest
 
     ctx.submit(f"sheet-save:{job_id}:{sheet_id}:pixel", run)
@@ -666,7 +666,7 @@ def _save_pixel_sidecar(ctx: Any, job_id: str, sheet_id: str) -> None:
         )
         if dest is None:
             return None
-        dest.write_text(json.dumps(record, indent=2), encoding="utf-8")
+        atomic.write_text(dest, json.dumps(record, indent=2))
         return dest
 
     ctx.submit(f"sheet-save:{job_id}:{sheet_id}:pixeljson", run)
@@ -680,7 +680,7 @@ def _save(ctx: Any, job_id: str, sheet_id: str) -> None:
         )
         if dest is None:
             return None
-        dest.write_bytes(source.read_bytes())
+        atomic.write_bytes(dest, source.read_bytes())
         return dest
 
     ctx.submit(f"sheet-save:{job_id}:{sheet_id}", run)
@@ -702,7 +702,7 @@ def _save_sidecar(ctx: Any, job_id: str, sheet_id: str) -> None:
         )
         if dest is None:
             return None
-        dest.write_text(json.dumps(record, indent=2), encoding="utf-8")
+        atomic.write_text(dest, json.dumps(record, indent=2))
         return dest
 
     ctx.submit(f"sheet-save:{job_id}:{sheet_id}:json", run)
