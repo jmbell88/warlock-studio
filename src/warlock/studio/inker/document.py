@@ -380,9 +380,9 @@ class Document(
 
             doc = read_gif(path)
         else:
-            from PIL import Image
+            from .. import pixelguard
 
-            with Image.open(path) as im:
+            with pixelguard.opened(path, f"{path.name}") as im:
                 im.load()
                 pixels = np.asarray(im.convert("RGBA"), dtype=np.uint8).copy()
             doc = cls.from_pixels(pixels, budget=budget)

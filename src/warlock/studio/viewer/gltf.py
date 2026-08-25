@@ -47,6 +47,16 @@ MAX_NODES = 100_000
 #: Mirrors ``service.validation.MAX_IMAGE_PIXELS`` without importing service
 #: into the viewer (the viewer imports no business-logic layer).
 MAX_TEXTURE_PIXELS = 16_000_000
+#: What one accessor may decode to. Every *other* accessor path is bounded by
+#: the BIN chunk it reads out of -- ``_check_span`` refuses a span past the end
+#: of it, so a 400-byte GLB cannot ask for more than 400 bytes of geometry. The
+#: no-``bufferView`` path is the one that allocates without touching the buffer
+#: at all, so nothing downstream of it ever gets a turn: ``count:
+#: 1_000_000_000, type: "MAT4"`` in a file that fits in a packet asks numpy for
+#: 64 GB. 256 MiB is two orders past the largest accessor this pipeline
+#: produces (a 2 M-triangle mesh's index stream is 24 MB) and four orders short
+#: of what the field can express.
+MAX_ACCESSOR_BYTES = 1 << 28
 
 
 @dataclass
@@ -351,7 +361,19 @@ class _Reader:
             raise ValueError("sparse accessors are not supported")
         dtype = _COMPONENT[acc["componentType"]]
         ncomp = _NCOMP[acc["type"]]
-        count = acc["count"]
+        count = int(acc["count"])
+        # Before the branch and not inside it, so the bound is a property of
+        # *reading an accessor* rather than a rule the zeros path below had to
+        # remember. The interleaved path pays for it twice over -- ``_check_span``
+        # will refuse it again against the real buffer -- and that is the point:
+        # the branch that has no buffer to be checked against is the one that
+        # was allocating from a number nothing had looked at.
+        if count < 0 or count * ncomp * np.dtype(dtype).itemsize > MAX_ACCESSOR_BYTES:
+            raise ValueError(
+                f"an accessor in this GLB declares {count} {acc['type']} elements,"
+                f" which is more than the {MAX_ACCESSOR_BYTES} bytes this viewer"
+                " will allocate for one"
+            )
         if "bufferView" not in acc:
             # Legal glTF: an accessor with no view reads as zeros.
             return np.zeros((count, ncomp), dtype=dtype)

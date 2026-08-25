@@ -37,7 +37,16 @@ OUTWARD_IMPORTS = {
     # leaf for ``tilegrid``/``undo``'s reason exactly: the ``file_size`` sum
     # each of these carried is written by whoever wrote the archive, and a
     # fourth private copy of a security bound is a copy that stops agreeing.
+    # The four guard leaves, and they are one finding rather than four: a bound
+    # that eighteen call sites have to remember is a bound that holds at
+    # seventeen. ``zipguard`` said so first and the rest are the same sentence
+    # about a different declared number -- an image's pixel count, a ``.npy``
+    # header's shape, an XML document's DTD and nesting depth. Shared leaves,
+    # not sibling engines, so this package is free to reach for them.
     ("wmap.py", "warlock.studio.zipguard"),
+    ("wmap.py", "warlock.studio.npyguard"),
+    ("wmap.py", "warlock.studio.pixelguard"),
+    ("tsx.py", "warlock.studio.xmlguard"),
     ("_map_geometry.py", "warlock.studio.tilegrid"),
     ("_map_layers.py", "warlock.studio.tilegrid"),
     ("_map_layers.py", "warlock.studio.tilegrid.tileset"),

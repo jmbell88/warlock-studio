@@ -768,7 +768,7 @@ def _journal_adopt(ctx: Any, path: Path, meta: dict[str, Any]) -> bool:
 
     ensure(ctx)
     try:
-        doc = wpack.read_wpack(Path(path).read_bytes())
+        doc = wpack.read_wpack(packwright_io._within_ceiling(Path(path)).read_bytes())
     except Exception:
         log.exception("could not reopen the recovered atlas at %s", path)
         ctx.toast("A recovered atlas could not be reopened.", "warn", action="log")

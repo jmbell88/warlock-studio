@@ -18,6 +18,29 @@ the release you are actually running.
 
 ## 0.0.28 — 2026-08-23
 
+- **A document file can no longer ask Warlock for more memory than the machine has.** Every
+  format the app opens -- `.ora`, `.aseprite`, `.gif`, `.wblk`, `.wmap`, `.tmx`/`.tmj`,
+  `.tsx`, and a hand-supplied `.glb` -- states sizes inside itself, and in a dozen places
+  Warlock allocated from one of those numbers before anything checked it. A four-hundred-byte
+  model file could ask for 64 GB; a two-kilobyte drawing could claim a 200,000-pixel canvas;
+  a two-hundred-byte Aseprite header could claim 65535 square. All of them are now refused by
+  name, with the size that was refused in the message, and none of the files anybody actually
+  has are affected -- the ceilings sit above the largest thing Warlock itself produces.
+
+- **Two ways of hiding a document type declaration inside a Tiled or OpenRaster file are
+  closed.** Warlock refuses these because an XML declaration can expand a few hundred bytes
+  into gigabytes as it is read. The check looked at the start of the file as bytes, which a
+  file saved as UTF-16 and a file with a long comment in front of it both walked straight
+  past; the parser itself now refuses them, whatever they are written in and wherever they
+  appear. The same door caps how deeply a file may nest -- a deeply nested map used to open
+  and then break the workspace on every frame afterwards.
+
+- **A sprite sheet export over two tags that differ only in capitals no longer loses one of
+  them.** `Walk` and `walk` are one filename on Windows and macOS, so the second export
+  silently wrote over the first; both spellings are now refused before anything is written,
+  which is what the check was there for. The same applies to accented names typed on
+  different systems.
+
 - **One bad byte in the preferences file no longer stops Warlock opening.** Several settings
   were read as though whatever was in the file had to be the right shape, so a hand-edited
   or half-written `studio_settings.json` could crash the app on the first frame of whichever

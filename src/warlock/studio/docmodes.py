@@ -46,11 +46,17 @@ def title_for(path: Path | None) -> str:
 
 
 def decode_rgba(path: Path) -> np.ndarray:
-    """One image file as RGBA. Task thread only."""
-    from PIL import Image
+    """One image file as RGBA. Task thread only.
 
-    with Image.open(path) as image:
-        return np.asarray(image.convert("RGBA"), dtype=np.uint8)
+    Through :mod:`.pixelguard` rather than a bare ``Image.open`` because the
+    ceiling has to be asked *before* ``convert``, which is the call that
+    allocates -- ``packwright/wpack.py`` states that rule verbatim at the one
+    door that already had it. This is the door every other mode reaches an
+    image through, so it is the one place the rule buys the most.
+    """
+    from . import pixelguard
+
+    return pixelguard.decode_rgba(path, f"{Path(path).name}")
 
 
 def forget_texture(texture: Any) -> None:

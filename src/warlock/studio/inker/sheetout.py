@@ -25,6 +25,7 @@ from __future__ import annotations
 import math
 import re
 import string
+import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
@@ -241,14 +242,33 @@ def require_distinct_names(names: Sequence[str]) -> None:
     refused a split's collision this way before templates existed; this is
     that same rule, generalised to the frame-numbering step that gained a
     template beside it.
+
+    **Compared as the filesystem compares them, not as Python does.** The
+    comparison was ``==`` on the exact strings, which is the one thing that
+    cannot answer the question this function exists to answer: NTFS and APFS
+    are both case-insensitive by default, so a split export over tags ``Walk``
+    and ``walk`` passed here and then wrote one file over the other -- exactly
+    the outcome the docstring above says it prevents. ``casefold`` rather than
+    ``lower`` because the rule is about equivalence and not about display, and
+    NFC because ``sanitize_stem`` preserves non-ASCII: a tag typed on macOS
+    arrives decomposed and one typed on Windows composed, and the two are one
+    filename on either. The *reported* names stay the originals -- the user has
+    to be able to find the two tags they typed.
     """
-    seen: set[str] = set()
+    seen: dict[str, str] = {}
     for name in names:
         if not name:
             raise ValueError("a filename template produced an empty name")
-        if name in seen:
-            raise ValueError(f"two outputs would both be called {name!r}")
-        seen.add(name)
+        key = unicodedata.normalize("NFC", name).casefold()
+        first = seen.get(key)
+        if first is not None:
+            if first == name:
+                raise ValueError(f"two outputs would both be called {name!r}")
+            raise ValueError(
+                f"{first!r} and {name!r} are one filename on this system, so one"
+                " export would write over the other"
+            )
+        seen[key] = name
 
 
 def rebase_tags(tags: Sequence[Any], f0: int, f1: int) -> list[Any]:

@@ -62,6 +62,7 @@ from typing import Any
 
 import numpy as np
 
+from .. import pixelguard
 from ..tilegrid import gid
 from ..tilegrid.tileset import Tileset
 from . import index_plane as ixp
@@ -451,6 +452,11 @@ def parse(data: bytes) -> Sprite:
         raise ValueError(
             f"a canvas of {sprite.width}x{sprite.height} is not one to draw on"
         )
+    # And an upper one, which the ``< 1`` floor never had. Both fields are u16
+    # and nothing downstream asks a second time: a 200-byte header saying
+    # 65535x65535 reaches ``Layer.empty`` on the first drawable row and asks for
+    # 17 GB, from a file too small to hold a single frame of it.
+    pixelguard.check(sprite.width, sprite.height, "this .aseprite's canvas")
     if declared and declared != len(data):
         state.warn(
             "this .aseprite declares a size other than the file's; it may be "

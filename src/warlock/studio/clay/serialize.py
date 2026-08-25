@@ -60,7 +60,7 @@ from typing import Any
 
 import numpy as np
 
-from .. import zipguard
+from .. import npyguard, pixelguard, zipguard
 from ..viewer import gltf
 from . import mesh as bm
 from .document import ClayDoc, Obj, reserve_uid
@@ -336,17 +336,22 @@ def _read_mesh(zf: zipfile.ZipFile, uid: int) -> bm.Mesh:
         raise ValueError(
             f"this clay document names an object whose mesh is missing ({name})"
         ) from exc
-    # ``allow_pickle=False`` is the default and is left explicit: an npz is a
-    # zip a user can be handed, and object arrays in one are arbitrary code.
-    with np.load(io.BytesIO(raw), allow_pickle=False) as npz:
-        try:
-            arrays = {name: npz[name] for name in _MESH_FIELDS}
-        except KeyError as exc:
-            raise ValueError(f"a mesh in this clay document is incomplete: {exc}") from exc
-        # Optional, and absent from every v1 file: a mesh without it simply has
-        # no texture coordinates, which is what a v1 mesh was.
-        if "uv" in npz.files:
-            arrays["uv"] = npz["uv"]
+    # Through ``npyguard`` and not ``np.load``. Two holes, one call: ``np.load``
+    # on an npz opens a **nested zip with numpy's own plain ``zipfile``**, so
+    # the ``BoundedZip`` this document was opened through is not in the path at
+    # all past the outer member; and each inner ``.npy`` is sized from its own
+    # 128-byte header, which nothing looked at before the allocation. The
+    # object-array refusal ``allow_pickle=False`` bought is still made, from
+    # that header, by name.
+    npz = npyguard.read_npz(raw, f"a mesh in this clay document ({name})")
+    try:
+        arrays = {field: npz[field] for field in _MESH_FIELDS}
+    except KeyError as exc:
+        raise ValueError(f"a mesh in this clay document is incomplete: {exc}") from exc
+    # Optional, and absent from every v1 file: a mesh without it simply has
+    # no texture coordinates, which is what a v1 mesh was.
+    if "uv" in npz:
+        arrays["uv"] = npz["uv"]
     mesh = bm.Mesh(**arrays)
     # Validate rather than trust: the CSR offsets are the one part of the file
     # that a truncated write or a hand edit makes *quietly* wrong -- ``edges``
@@ -364,8 +369,6 @@ def _read_textures(zf: zipfile.ZipFile, scene: dict[str, Any]) -> list[Any]:
     follows, and more sharply here, because a material with its map silently
     dropped looks like a deliberately untextured one.
     """
-    from PIL import Image
-
     out = []
     for entry in scene.get("textures", []):
         name = str(entry.get("file", ""))
@@ -377,9 +380,11 @@ def _read_textures(zf: zipfile.ZipFile, scene: dict[str, Any]) -> list[Any]:
             ) from exc
         # In a ``with``: ``Image.open`` is lazy and holds the file object open
         # until it is closed, and a document with twenty textures would
-        # otherwise leave twenty of them to the garbage collector.
-        with Image.open(io.BytesIO(raw)) as opened:
-            image = opened.convert("RGBA")
+        # otherwise leave twenty of them to the garbage collector. The ``with``
+        # is ``pixelguard``'s now, which is also where the pixel ceiling is
+        # asked -- before ``convert``, because that is the call that allocates.
+        with pixelguard.opened(io.BytesIO(raw), f"a texture in this clay document ({name})") as im:
+            image = im.convert("RGBA")
         out.append((image.width, image.height, image.tobytes()))
     return out
 

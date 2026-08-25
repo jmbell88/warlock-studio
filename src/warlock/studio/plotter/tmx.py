@@ -133,6 +133,55 @@ _ENCODINGS = ("", "csv", "base64")
 
 _SAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
+#: One cell of a CSV ``<data>``. A pattern rather than ``split(",")`` because
+#: ``finditer`` yields lazily and ``split`` does not; see ``_decode_payload``.
+#: Anything that is not a comma or whitespace is a cell, which is the same set
+#: the old ``if piece.strip()`` filter kept, and a non-numeric one is refused by
+#: ``_gid_array`` exactly as it was before.
+_CSV_CELL = re.compile(r"[^\s,]+")
+
+#: How many layers and how many chunks one document may declare. Neither number
+#: existed: ``_decompress`` and ``_chunk_side`` are correct *per layer* and *per
+#: chunk*, and nothing capped how many of either a file could hold. A minimal
+#: zlib-encoded 4096-square layer element is about 250 bytes of XML that decodes
+#: to 67 MB, and ``MAX_MAP_SOURCE_BYTES`` is 100 MB -- so the per-layer bound
+#: this file is careful about was, in aggregate, a bound at roughly 400,000
+#: times itself. Both are far past anything Tiled produces: a map with a
+#: thousand layers is not one anybody drew, and 65,536 chunks is a 4096-square
+#: infinite map painted solid at Tiled's own 16-cell chunk size.
+MAX_LAYERS = 1000
+MAX_CHUNKS = 65_536
+
+
+class _Budget:
+    """What one document may declare in total, counted as it is read.
+
+    A shared accumulator rather than a check per call site, and a *counter*
+    rather than a length asked afterwards: the whole point is that the refusal
+    arrives before the layer that crosses the line is decoded, and both layer
+    readers here recurse, so no single frame ever sees the total. It rides
+    beside ``placed`` for exactly that reason and is threaded through both
+    readers the same way.
+    """
+
+    def __init__(self) -> None:
+        self.layers = 0
+        self.chunks = 0
+
+    def layer(self) -> None:
+        self.layers += 1
+        if self.layers > MAX_LAYERS:
+            raise ValueError(
+                f"this map declares more than the {MAX_LAYERS} layers this build reads"
+            )
+
+    def chunk(self) -> None:
+        self.chunks += 1
+        if self.chunks > MAX_CHUNKS:
+            raise ValueError(
+                f"this map declares more than the {MAX_CHUNKS} chunks this build reads"
+            )
+
 # Tiled's hexagonal 120-degree rotation flag. See the note in :mod:`.gid` for
 # why the constant lives here and not beside the other three.
 _HEX_ROTATE = gidlib.DTYPE(0x10000000)
@@ -228,8 +277,14 @@ def _gid_array(values: Any, width: int, height: int) -> np.ndarray:
     list) because the three are one question asked in three syntaxes; two copies
     of the range test is how one spelling comes to accept what the others refuse.
     """
+    # ``islice`` to one cell past the declaration, which is what lets *values*
+    # be a generator rather than a materialised list: the size check below
+    # already refuses a layer carrying the wrong number of cells, and taking one
+    # extra is how a layer carrying far too many is refused at the cell after
+    # rather than after the whole of it has been built. ``BoundedZip``'s
+    # "declared plus one" trick, applied to a sequence.
     try:
-        flat = np.fromiter(values, dtype=np.int64)
+        flat = np.fromiter(itertools.islice(values, width * height + 1), dtype=np.int64)
     except (TypeError, ValueError) as exc:
         raise ValueError("a layer's data holds something that is not a number") from exc
     if flat.size != width * height:
@@ -390,12 +445,14 @@ def _decode_payload(
         raise TiledUnsupported(f"{compression}-compressed layer data")
 
     if encoding == "csv":
-        pieces = [piece for piece in text.replace("\n", "").split(",") if piece.strip()]
-        try:
-            values = [int(piece) for piece in pieces]
-        except ValueError as exc:
-            raise ValueError("a layer's CSV data holds something that is not a number") from exc
-        return _gid_array(values, width, height)
+        # Lazily, through ``finditer`` rather than ``split``: the old spelling
+        # built one Python string and then one Python int per cell for the whole
+        # of ``<data>`` -- a hundred-megabyte layer is sixteen million of each --
+        # and only then asked ``_gid_array`` whether that count was the one the
+        # layer declared. The refusal now arrives one cell past the declaration.
+        return _gid_array(
+            (int(cell.group()) for cell in _CSV_CELL.finditer(text)), width, height
+        )
 
     if encoding != "base64":
         # ``""`` is in ``_ENCODINGS`` because a ``<data>`` holding ``<tile>``
@@ -736,16 +793,19 @@ def _read_tmx_layers(
     *,
     image_loader: ImageLoader,
     placed: list[tuple[Any, int, int]],
+    budget: _Budget,
 ) -> list[Any]:
     """Read one XML layer list recursively, preserving paint order.
 
     ``placed`` is the one accumulator the whole recursion shares -- see
-    :func:`_settle_infinite` for why the window cannot be decided here.
+    :func:`_settle_infinite` for why the window cannot be decided here --
+    and ``budget`` is the second one, for the reason stated on it.
     """
     layers: list[Any] = []
     for node in nodes:
         if node.tag not in ("layer", "objectgroup", "imagelayer", "group"):
             continue
+        budget.layer()
         common = _xml_layer_common(node)
         name = common["name"]
         if node.tag in ("layer", "objectgroup") and (
@@ -761,6 +821,7 @@ def _read_tmx_layers(
             if doc.infinite:
                 pieces = []
                 for chunk in payload.findall("chunk"):
+                    budget.chunk()
                     # Capped, and the cap is the engine's own. These two feed
                     # ``_decode_payload``'s bound, so an uncapped chunk was a
                     # hole straight through the per-layer limit that bound
@@ -844,7 +905,11 @@ def _read_tmx_layers(
                 GroupLayer(
                     **common,
                     children=_read_tmx_layers(
-                        node, doc, image_loader=image_loader, placed=placed
+                        node,
+                        doc,
+                        image_loader=image_loader,
+                        placed=placed,
+                        budget=budget,
                     ),
                 )
             )
@@ -893,7 +958,9 @@ def read_tmx(
 
     placed: list[tuple[Any, int, int]] = []
     doc.layers.extend(
-        _read_tmx_layers(root, doc, image_loader=image_loader, placed=placed)
+        _read_tmx_layers(
+            root, doc, image_loader=image_loader, placed=placed, budget=_Budget()
+        )
     )
     _settle_infinite(doc, placed)
 
@@ -1064,11 +1131,13 @@ def _read_tmj_layer_list(
     *,
     image_loader: ImageLoader,
     placed: list[tuple[Any, int, int]],
+    budget: _Budget,
 ) -> list[Any]:
     """One JSON layer list recursively, preserving paint order.
 
-    ``placed`` is the XML reader's accumulator by the same name and for the same
-    reason; see :func:`_settle_infinite`.
+    ``placed`` and ``budget`` are the XML reader's two accumulators by the same
+    names and for the same reasons; see :func:`_settle_infinite` and
+    :class:`_Budget`.
     """
     if not isinstance(entries, list):
         raise ValueError("a Tiled JSON layer list is not an array")
@@ -1076,6 +1145,7 @@ def _read_tmj_layer_list(
     for entry in entries:
         if not isinstance(entry, dict):
             raise ValueError("a Tiled JSON layer is not an object")
+        budget.layer()
         kind = str(entry.get("type", ""))
         name = str(entry.get("name", ""))
         common = _json_layer_common(entry)
@@ -1087,8 +1157,14 @@ def _read_tmj_layer_list(
             if doc.infinite:
                 pieces = []
                 for chunk in entry.get("chunks") or ():
-                    cw = int(chunk.get("width", CHUNK) or CHUNK)
-                    ch = int(chunk.get("height", CHUNK) or CHUNK)
+                    budget.chunk()
+                    # Through ``_chunk_side``, which this half did not do. The
+                    # XML reader's note about ``<chunk width="4000000000">``
+                    # applies here verbatim -- the two spellings feed the same
+                    # ``_decode_payload`` bound -- and this one had the cap
+                    # written beside it and not called.
+                    cw = _chunk_side(chunk.get("width", CHUNK) or CHUNK, "width")
+                    ch = _chunk_side(chunk.get("height", CHUNK) or CHUNK, "height")
                     raw = chunk.get("data")
                     block = (
                         _decode_payload(
@@ -1168,6 +1244,7 @@ def _read_tmj_layer_list(
                         doc,
                         image_loader=image_loader,
                         placed=placed,
+                        budget=budget,
                     ),
                 )
             )
@@ -1184,7 +1261,11 @@ def _read_tmj_layers(
     placed: list[tuple[Any, int, int]] = []
     doc.layers.extend(
         _read_tmj_layer_list(
-            payload.get("layers", []), doc, image_loader=image_loader, placed=placed
+            payload.get("layers", []),
+            doc,
+            image_loader=image_loader,
+            placed=placed,
+            budget=_Budget(),
         )
     )
     _settle_infinite(doc, placed)

@@ -114,7 +114,7 @@ from typing import Any, NoReturn
 
 import numpy as np
 
-from .. import zipguard
+from .. import npyguard, pixelguard, zipguard
 from ..tilegrid import gid as gidlib
 from ..tilegrid.tileset import (
     Collection,
@@ -852,10 +852,12 @@ def _member(zf: zipfile.ZipFile, name: str, what: str) -> bytes:
 
 
 def _read_layer_array(raw: bytes, width: int, height: int, name: str) -> np.ndarray:
-    try:
-        array = np.lib.format.read_array(io.BytesIO(raw), allow_pickle=False)
-    except (ValueError, EOFError) as exc:
-        raise ValueError(f"layer {name!r} is unreadable: {exc}") from exc
+    # Through ``npyguard`` and not ``read_array`` directly: the shape check
+    # below is the one that would have caught a hostile header, and it runs
+    # *after* the allocation it would have refused. A 128-byte member claiming
+    # ``(2**20, 2**20)`` uint32 is a 4 TB request that ``BoundedZip`` waved
+    # through as 128 honest bytes, because the lie is a layer down.
+    array = npyguard.read_array(raw, f"layer {name!r}")
     if array.dtype != gidlib.DTYPE:
         raise ValueError(
             f"layer {name!r} is stored as {array.dtype}, not {np.dtype(gidlib.DTYPE)}"
@@ -872,10 +874,10 @@ def _read_layer_array(raw: bytes, width: int, height: int, name: str) -> np.ndar
 
 
 def _read_picture(zf: zipfile.ZipFile, name: str, what: str) -> np.ndarray:
-    from PIL import Image
-
-    image = Image.open(io.BytesIO(_member(zf, name, what))).convert("RGBA")
-    return np.asarray(image, dtype=np.uint8)
+    # ``pixelguard`` for the ceiling and, incidentally, for the ``with`` this
+    # never had: ``Image.open`` is lazy and holds its file object open, so every
+    # tileset in a document was left to the collector.
+    return pixelguard.decode_rgba(io.BytesIO(_member(zf, name, what)), what)
 
 
 def _two(entry: dict[str, Any], key: str, default: Any) -> Any:

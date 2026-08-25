@@ -30,10 +30,17 @@ from typing import Any
 
 import numpy as np
 
+from .. import pixelguard
 from .animation import DEFAULT_DURATION_MS
 from .sheetin import document_from_grid
 
 __all__ = ["frames_of_gif", "read_gif"]
+
+#: A hard stop on the loop, beside the pixel budget below. Neither number alone
+#: is enough: a 1x1 GIF of a million frames costs almost no pixels and still
+#: builds a million arrays and a million ``Frame`` objects, and a two-frame GIF
+#: at 20000 squared costs almost no frames.
+MAX_GIF_FRAMES = 4096
 
 
 def frames_of_gif(path: Any) -> tuple[list[np.ndarray], list[int]]:
@@ -44,12 +51,26 @@ def frames_of_gif(path: Any) -> tuple[list[np.ndarray], list[int]]:
     gets the timeline's own default rather than zero, because a zero-length
     frame is one no player agrees about.
     """
-    from PIL import Image, ImageSequence
+    from PIL import ImageSequence
 
     planes: list[np.ndarray] = []
     durations: list[int] = []
-    with Image.open(path) as im:
+    # **A GIF stores deltas, and this function composes them.** The file on
+    # disk is no measure of what comes back: a few megabytes of 5,000 frames at
+    # 4096 squared composes to about 335 GB here, and ``read_gif``'s
+    # ``np.concatenate`` then doubles the peak. So the budget is spent on what
+    # is *built* rather than on what was read -- one canvas' worth of pixels
+    # times as many frames as fit in it, which leaves a 64-square sprite its
+    # whole 4,096-frame allowance and a 512-square one 256 frames.
+    with pixelguard.opened(path, "this gif") as im:
+        per_frame = max(1, im.width * im.height)
+        allowed = min(MAX_GIF_FRAMES, max(1, pixelguard.MAX_DECODE_PIXELS // per_frame))
         for frame in ImageSequence.Iterator(im):
+            if len(planes) >= allowed:
+                raise ValueError(
+                    f"this gif composes to more than the {allowed} frames of"
+                    f" {im.width}x{im.height} this build will hold"
+                )
             planes.append(np.asarray(frame.convert("RGBA"), dtype=np.uint8).copy())
             duration = int(frame.info.get("duration") or 0)
             durations.append(duration if duration > 0 else DEFAULT_DURATION_MS)

@@ -35,7 +35,7 @@ from typing import Any
 
 import numpy as np
 
-from . import dialogs, docmodes, plotter_state
+from . import dialogs, docmodes, plotter_state, sizeguard
 from .plotter_state import PlotterDoc, active, ensure
 
 # One row, all three patterns on it. Written as four entries once, which
@@ -46,6 +46,11 @@ MAP_FILTER = [
     "Map documents (*.wmap *.tmx *.tmj)",
     "*.wmap *.tmx *.tmj",
 ]
+#: Windows' classic ``MAX_PATH``. Long-path support is opt-in per system and
+#: per manifest, so the conservative number is the one a refusal can be written
+#: against; a path this long is a hostile ``.tmx``, not a project layout.
+_MAX_PATH = 260
+
 WMAP_FILTER = ["Warlock map (*.wmap)", "*.wmap"]
 TMX_FILTER = ["Tiled map (*.tmx)", "*.tmx"]
 TMJ_FILTER = ["Tiled map (*.tmj)", "*.tmj"]
@@ -54,9 +59,10 @@ TMJ_FILTER = ["Tiled map (*.tmj)", "*.tmj"]
 # --- image loading ------------------------------------------------------------
 
 
-# The lazy-PIL RGBA decode is one rule for every mode that opens an image;
+# The lazy-PIL RGBA decode is one rule for every mode that opens an image --
+# and, since ``pixelguard``, the pixel ceiling is part of that one rule.
 # ``_within_ceiling`` below is *not*, because it reads the map document's own
-# ceiling.
+# byte ceiling.
 _decode = docmodes.decode_rgba
 
 
@@ -72,20 +78,20 @@ def _within_ceiling(path: Path) -> Path:
 
     A ``ServiceError`` rather than a ``ValueError``: this is the *mode's* refusal
     about a file the user picked, not the engine's about a document's contents,
-    and its text reaches the user verbatim through the task classifier.
-    ``_decode`` needs no companion ceiling -- Pillow's own ``MAX_IMAGE_PIXELS``
-    is the decompression bomb guard for an image, and a second one here would be
-    a second answer to that question too.
+    and its text reaches the user verbatim through the task classifier -- the
+    shape :mod:`.sizeguard` now holds for every mode that opens a file.
+
+    **The sentence that used to be here about ``_decode`` was wrong** and is
+    worth recording: it argued that Pillow's own ``MAX_IMAGE_PIXELS`` is the
+    decompression-bomb guard for an image and that a second ceiling here would
+    be a second answer. Nothing in this repo ever *set* Pillow's limit, and its
+    default only warns between one and two times itself -- so a 200 KB PNG
+    decoding to 715 MB passed under this ceiling and under Pillow's. See
+    :mod:`.pixelguard`, which ``_decode`` goes through now.
     """
-    from ..service.errors import TooLarge
     from ..service.files import MAX_MAP_SOURCE_BYTES
 
-    if path.stat().st_size > MAX_MAP_SOURCE_BYTES:
-        raise TooLarge(
-            f"{path.name} is past the {MAX_MAP_SOURCE_BYTES} bytes this build will open",
-            field="file",
-        )
-    return path
+    return sizeguard.within_ceiling(path, MAX_MAP_SOURCE_BYTES)
 
 
 def _resolve_source(base: Path, source: str) -> Path:
@@ -122,7 +128,28 @@ def _resolve_source(base: Path, source: str) -> Path:
         raise ValueError(
             f"this map names an absolute path ({text}), which Plotter does not follow"
         )
-    return base / text
+    if ":" in text:
+        # **An NTFS alternate data stream is not caught by the test above.**
+        # ``PureWindowsPath("sheet.png:secret").drive`` is ``''`` and its
+        # ``is_absolute()`` is False, so ``source="sheet.png:$DATA"`` walked
+        # straight through the drive/UNC filter and became an open of a stream
+        # rather than of a file. No legitimate relative path inside a ``.tmx``
+        # carries a colon -- the drive-qualified spelling that would is already
+        # refused one line up -- so the whole character is refused rather than
+        # the shapes we can think of.
+        raise ValueError(
+            f"this map names a path with a colon in it ({text}), which Plotter"
+            " does not follow"
+        )
+    resolved = base / text
+    if len(str(resolved)) > _MAX_PATH:
+        # Composed, not declared: a short ``..``-free name under a deep project
+        # still overruns, and what Windows raises for it is a bare ``OSError``
+        # that leaves this module's framed-refusal contract by the back door.
+        raise ValueError(
+            f"this map names a path too long for this system to open ({text})"
+        )
+    return resolved
 
 
 def _json(data: bytes) -> dict:
@@ -214,6 +241,18 @@ def _load(path: Path) -> dict[str, Any]:
             doc = tmxlib.read_tmj(data, **_loaders(path.parent))
         else:
             doc = wmaplib.read_wmap(data)
+    except RecursionError as exc:
+        # ``read_wmap`` catches its own -- the manifest's ``layers`` has been a
+        # tree since version 3 -- and the two Tiled readers did not, so a deeply
+        # nested ``.tmx`` left the task thread as a bare ``RecursionError`` and
+        # arrived as "Something went wrong". ``xmlguard``'s depth cap is what
+        # stops it happening at all; this is the answer for a file that finds a
+        # walker the cap did not measure.
+        raise invalid_from(
+            ValueError("this map's layers are nested deeper than this build can read"),
+            "This map could not be opened",
+            field="file",
+        ) from exc
     except ValueError as exc:
         raise invalid_from(exc, "This map could not be opened", field="file") from exc
     return {

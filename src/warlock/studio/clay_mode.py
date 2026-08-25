@@ -35,7 +35,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from . import atomic, clay_state, dialogs, docmodes, journal, recents
+from . import atomic, clay_state, dialogs, docmodes, journal, recents, sizeguard
 from .clay_state import ClayState, ClayTab
 
 log = logging.getLogger(__name__)
@@ -146,11 +146,38 @@ def new_document(ctx: Any) -> ClayTab:
     return adopt(ctx, bd.ClayDoc(), title="Untitled")
 
 
+def _within_ceiling(path: Path) -> Path:
+    """Refuse a document too big to open, before a byte of it is read.
+
+    Clay had **no size ceiling anywhere**, though
+    ``service.files.MAX_CLAY_SOURCE_BYTES`` has existed since the format did --
+    applied at exactly one place, the *upload*, and at neither of the two doors
+    a user reaches. The ceiling is that same number rather than a second one
+    invented here, for ``plotter_io``'s reason: "how big may a clay document
+    be" has one answer, and two would drift the first time either moved.
+    """
+    from ..service.files import MAX_CLAY_SOURCE_BYTES
+
+    return sizeguard.within_ceiling(path, MAX_CLAY_SOURCE_BYTES)
+
+
+def _within_mesh_ceiling(path: Path) -> Path:
+    """The same question about a GLB, which is a different number.
+
+    ``MAX_MESH_BYTES`` and not the document ceiling: an imported mesh is what
+    the service already accepts as an *uploaded* mesh, and a hundred-thousand
+    triangle ``model.glb`` is the ordinary case rather than the extreme one.
+    """
+    from ..service.validation import MAX_MESH_BYTES
+
+    return sizeguard.within_ceiling(path, MAX_MESH_BYTES)
+
+
 def _load(path: Path) -> dict[str, Any]:
     """Blocking; task thread only. Raises rather than returning a broken tab."""
     from .clay import serialize
 
-    data = Path(path).read_bytes()
+    data = _within_ceiling(Path(path)).read_bytes()
     doc = serialize.read_wblk(data)
     return {
         "doc": doc,
@@ -205,7 +232,7 @@ def import_glb_path(ctx: Any, path: Path) -> None:
     path = Path(path)
 
     def run() -> dict[str, Any]:
-        return _parse_glb(path.read_bytes(), path.stem)
+        return _parse_glb(_within_mesh_ceiling(path).read_bytes(), path.stem)
 
     ctx.submit(f"clay-import:{abs(hash(str(path)))}", run)
 
@@ -234,7 +261,7 @@ def edit_asset_in_clay(ctx: Any, job: Any) -> None:
         mesh = ctx.svc.config.job_dir(job_id) / "model.glb"
         if not mesh.exists():
             raise FileNotFoundError(f"{job_id} has no mesh to edit")
-        return _parse_glb(mesh.read_bytes(), name)
+        return _parse_glb(_within_mesh_ceiling(mesh).read_bytes(), name)
 
     ctx.submit(f"clay-import:{job_id}", run)
 
@@ -916,7 +943,7 @@ def _journal_adopt(ctx: Any, path: Path, meta: dict[str, Any]) -> bool:
 
     ensure(ctx)
     try:
-        doc = serialize.read_wblk(Path(path).read_bytes())
+        doc = serialize.read_wblk(_within_ceiling(Path(path)).read_bytes())
     except Exception:
         log.exception("could not reopen the recovered model at %s", path)
         ctx.toast("A recovered model could not be reopened.", "warn", action="log")

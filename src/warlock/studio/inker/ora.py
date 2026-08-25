@@ -66,7 +66,7 @@ from xml.etree import ElementTree
 
 import numpy as np
 
-from .. import zipguard
+from .. import pixelguard, xmlguard, zipguard
 from ..tilegrid import gid
 from ..tilegrid.tileset import Tileset
 from . import composite as cp
@@ -238,9 +238,7 @@ def _read_indexed_png(data: bytes, size: tuple[int, int]):
     duplicate-slot identity is a real cost and a much smaller one than refusing
     the file.
     """
-    from PIL import Image
-
-    with Image.open(io.BytesIO(data)) as im:
+    with pixelguard.opened(io.BytesIO(data), "a layer in this drawing") as im:
         if im.mode != "P":
             return None
         im.load()
@@ -1091,9 +1089,7 @@ def _place(pixels: np.ndarray, size: tuple[int, int], offset: tuple[int, int]) -
 
 
 def _decode(data: bytes, size: tuple[int, int]) -> np.ndarray:
-    from PIL import Image
-
-    with Image.open(io.BytesIO(data)) as im:
+    with pixelguard.opened(io.BytesIO(data), "a layer in this drawing") as im:
         im.load()
         pixels = np.asarray(im.convert("RGBA"), dtype=np.uint8).copy()
     width, height = size
@@ -1562,8 +1558,6 @@ def _read_tiles(zf: zipfile.ZipFile, doc, anim: Animation | None) -> None:
     funnel's own invariant restated for the one path that does not go through
     it.
     """
-    from PIL import Image
-
     try:
         raw = zf.read(TILES_MEMBER)
     except KeyError:
@@ -1575,7 +1569,9 @@ def _read_tiles(zf: zipfile.ZipFile, doc, anim: Animation | None) -> None:
 
         slots: list[TilesetSlot] = []
         for entry in payload["tilesets"]:
-            with Image.open(io.BytesIO(zf.read(entry["data"]))) as im:
+            with pixelguard.opened(
+                io.BytesIO(zf.read(entry["data"])), "a tileset in this drawing"
+            ) as im:
                 im.load()
                 pixels = np.asarray(im.convert("RGBA"), dtype=np.uint8).copy()
             tileset = Tileset(
@@ -1702,35 +1698,24 @@ def _read_tiles(zf: zipfile.ZipFile, doc, anim: Animation | None) -> None:
 
 
 def _parse_stack(data: bytes):
-    """``stack.xml`` parsed, with a DTD refused before the parser sees it.
+    """``stack.xml``, through the shared XML door.
 
-    ``plotter/tsx.py``'s rule and its reasoning, applied to the one door that
-    lacked it. ``ExpatParser`` expands internal entities, so the billion-laughs
-    shape -- ten nested entities each referencing the previous one ten times --
-    turns a few hundred bytes into gigabytes of string *inside*
-    ``fromstring``, where the byte ceiling above has already had its turn and
-    every ceiling below has not had one yet. No ORA writer emits a DTD, so
-    nothing legitimate is refused.
-
-    A second copy of that probe rather than a shared one, deliberately: this
-    package imports nothing from ``plotter`` (an import pin enforces the
-    outward set), so the alternative to writing it twice is a new shared leaf
-    for four lines. The two are one answer written twice on purpose, the way
-    ``MAX_SOURCE_PIXELS`` mirrors ``validation.MAX_IMAGE_PIXELS``.
-
-    The probe is a substring of the first 4 KiB rather than a parse, because
-    the declaration is part of the *prolog* -- XML requires it before the root
-    element -- and 4 KiB is far past any prolog and far short of a body.
-    Uppercased, since ``<!doctype`` is equally legal.
+    This used to be a second copy of ``plotter/tsx.py``'s four-line substring
+    probe, written twice deliberately because this package imports nothing from
+    ``plotter`` and the alternative was a new shared leaf for four lines. The
+    leaf exists now (:mod:`..xmlguard`) because the probe was wrong in both
+    copies: a UTF-16 document encodes the declaration as ``<\\x00!\\x00D...``,
+    and five thousand bytes of legal prolog comment put it past byte 4096.
+    Both were reproduced by direct execution. The refusal is on the parser's
+    own DOCTYPE event now, which sees the declaration whatever it is spelled
+    in, and the same door caps nesting depth -- a value this reader could not
+    have checked afterwards, because the walkers that would trip over it run on
+    the frame thread once a document is open.
     """
-    if b"<!DOCTYPE" in data[:4096].upper():
-        raise ValueError("this drawing declares a DTD, which Inker does not read")
-    return ElementTree.fromstring(data)
+    return xmlguard.fromstring(data, "this drawing's stack.xml")
 
 
 def read_ora(path: Path, *, budget: int | None = None):
-    from PIL import Image
-
     from .document import Document
     from .undo import UNDO_BYTES, UndoStack
 
@@ -1747,8 +1732,15 @@ def read_ora(path: Path, *, budget: int | None = None):
                 f"which is past the {ceiling}-byte ceiling"
             )
         root = _parse_stack(zf.read("stack.xml"))
+        # Checked here, where the numbers arrive, because nothing downstream
+        # ever asks: ``_read_animation``, ``_place``/``resize_canvas`` and
+        # ``Layer.empty`` all take this size as given and allocate from it, so
+        # ``w="200000" h="200000"`` in a 2 KB archive is a 160 GB request that
+        # the directory ceiling four lines up cannot see -- the archive is
+        # honest about every byte it holds, and one 1x1 PNG is all it needs.
         width = int(root.get("w") or 0)
         height = int(root.get("h") or 0)
+        pixelguard.check(width, height, "this drawing's canvas")
         # Carried, not used -- see ``Document.dpi``. Both axes or neither: a
         # file that states one and not the other is stating nothing usable, and
         # inventing the missing half would be inventing a canvas shape.
@@ -1817,7 +1809,7 @@ def read_ora(path: Path, *, budget: int | None = None):
             except KeyError:
                 continue
             try:
-                with Image.open(io.BytesIO(data)) as im:
+                with pixelguard.opened(io.BytesIO(data), "a layer in this drawing") as im:
                     im.load()
                     pixels = np.asarray(im.convert("RGBA"), dtype=np.uint8).copy()
             except OSError as exc:

@@ -32,6 +32,7 @@ from . import (
     inker_state,
     journal,
     recents,
+    sizeguard,
 )
 from . import settings as settings_mod
 from .inker import animation
@@ -603,10 +604,13 @@ def _load_aseprite(path: Path) -> dict[str, Any]:
     a destination first -- and the first Ctrl+S asks where to put it, Aseprite
     included if that is what is chosen there.
     """
+    from ..service.files import MAX_INKER_BYTES
     from .inker import asein
 
     path = Path(path)
-    doc, warnings = asein.document_from_aseprite(path.read_bytes())
+    doc, warnings = asein.document_from_aseprite(
+        sizeguard.within_ceiling(path, MAX_INKER_BYTES).read_bytes()
+    )
     return {
         "doc": doc,
         "path": None,
@@ -3780,6 +3784,23 @@ def _write_palette(path: Any, colours: list[tuple[int, int, int, int]], name: st
     )
 
 
+def _palette_text(path: Path) -> str:
+    """One palette file's text, under a ceiling. Task thread only.
+
+    A ``.gpl`` is a few hundred lines of "R G B name" and both readers of one
+    went straight to ``read_text`` -- which decodes the whole file into a
+    Python string before anything asks how big it was. ``MAX_UPLOAD_BYTES``
+    rather than Inker's own document ceiling: this is a row of swatches, not a
+    drawing, and twenty megabytes of it is already four orders past any palette
+    anyone has.
+    """
+    from ..service.files import MAX_UPLOAD_BYTES
+
+    return sizeguard.within_ceiling(path, MAX_UPLOAD_BYTES).read_text(
+        encoding="utf-8", errors="replace"
+    )
+
+
 def import_palette(ctx: Any) -> None:
     from .inker import gpl
 
@@ -3789,7 +3810,7 @@ def import_palette(ctx: Any) -> None:
         path = dialogs.open_file("Import a palette", PALETTE_FILTER)
         if path is None:
             return None
-        return gpl.parse_any(path.read_text(encoding="utf-8", errors="replace"))
+        return gpl.parse_any(_palette_text(path))
 
     ctx.submit("inker-palette", run)
 
@@ -3951,7 +3972,7 @@ def import_document_palette(ctx: Any) -> None:
         path = dialogs.open_file("Index to a palette", PALETTE_FILTER)
         if path is None:
             return None
-        return gpl.parse_any(path.read_text(encoding="utf-8", errors="replace"))
+        return gpl.parse_any(_palette_text(path))
 
     ctx.submit(f"inker-index:{tab.uid}", run)
 

@@ -32,7 +32,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from . import dialogs, docmodes, filetypes, packwright_state
+from . import dialogs, docmodes, filetypes, packwright_state, sizeguard
 from .packwright_state import PackTab, active, ensure
 
 WPACK_FILTER = ["Warlock atlas (*.wpack)", "*.wpack"]
@@ -71,15 +71,9 @@ def _within_ceiling(path: Path) -> Path:
     classifier. ``read_wpack``'s own decompressed-bytes ceiling is the second
     door, on what the archive claims rather than on what it weighs.
     """
-    from ..service.errors import TooLarge
     from ..service.files import MAX_PACK_SOURCE_BYTES
 
-    if path.stat().st_size > MAX_PACK_SOURCE_BYTES:
-        raise TooLarge(
-            f"{path.name} is past the {MAX_PACK_SOURCE_BYTES} bytes this build will open",
-            field="file",
-        )
-    return path
+    return sizeguard.within_ceiling(path, MAX_PACK_SOURCE_BYTES)
 
 
 def _load(path: Path) -> dict[str, Any]:

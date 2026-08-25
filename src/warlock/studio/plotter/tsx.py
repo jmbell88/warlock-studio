@@ -34,6 +34,7 @@ from typing import Any
 
 import numpy as np
 
+from .. import xmlguard
 from ..tilegrid import blob
 from ..tilegrid.tileset import (
     TerrainSpec,
@@ -105,24 +106,25 @@ def xml_root(data: bytes, expect: str) -> ET.Element:
     two copies were byte-identical and the *refusal* below is the reason that
     matters: a second door is a door with no lock on it.
 
-    **A DTD is refused before the parser sees it.** ``ExpatParser`` expands
-    internal entities, so the billion-laughs shape -- ten nested entities each
-    referencing the previous one ten times -- turns a few hundred bytes of file
-    into gigabytes of string inside ``fromstring``, and no ceiling downstream
-    ever gets a turn. Tiled writes no DTD, so nothing legitimate is lost.
+    **A DTD is refused, and the depth is capped, by the parser itself.** Both
+    used to be one line here: a substring probe of the first 4 KiB, argued on
+    the grounds that a DTD is part of the *prolog* and 4 KiB is far past any
+    prolog. **Both halves of that were reproduced false on this machine.** A
+    UTF-16 document spells the declaration ``<\\x00!\\x00D\\x00...``, so the
+    byte substring never matches and expat parses the entities anyway; and a
+    comment is legal prolog content, so five thousand bytes of ``<!-- -->`` put
+    the declaration past byte 4096 in an otherwise ordinary file. The refusal is
+    :mod:`..xmlguard`'s now, on the parser's own DOCTYPE event, which is a
+    property of the parser object the way a bound is a property of
+    ``zipguard.BoundedZip``.
 
-    The probe is a substring of the first 4 KiB rather than a parse, because the
-    declaration is part of the *prolog*: XML requires it before the root element,
-    a prolog is a version declaration, optional comments and processing
-    instructions, and 4 KiB is far past any of those and far short of the
-    document body. Uppercased, since ``<!doctype`` is equally legal.
+    The depth cap that came with it is the half this door never had at all.
+    ``ET.fromstring`` will build a 20,001-deep tree out of 300 KB, and the
+    shallower case is the worse one: a document nested a few hundred deep opens
+    and then blows the stack in ``scene.resolve`` and the layers pane, once a
+    frame, on the frame thread.
     """
-    if b"<!DOCTYPE" in data[:4096].upper():
-        raise ValueError("this file declares a DTD, which Plotter does not read")
-    try:
-        root = ET.fromstring(data)
-    except ET.ParseError as exc:
-        raise ValueError(f"this is not a readable Tiled {expect} file: {exc}") from exc
+    root = xmlguard.fromstring(data, f"this Tiled {expect} file")
     if root.tag != expect:
         raise ValueError(f"expected a <{expect}> document, found <{root.tag}>")
     return root
