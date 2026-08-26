@@ -406,7 +406,9 @@ class BaseModel:
     #: False when the licence forbids commercial use of generated output, or
     #: attaches conditions to it. Drives the picker's warning badge.
     commercial: bool = True
-    #: The condition, when ``commercial`` is True but not unconditionally so.
+    #: The sentence the picker appends after the licence: the condition when
+    #: ``commercial`` is True but not unconditionally so, or the reason when
+    #: it is False (``turbo`` names its non-commercial clause here).
     license_note: str = ""
 
     @property
@@ -459,6 +461,12 @@ class IPAdapter:
     default_scale: float = 0.6
     fetch: tuple[Fetch, ...] = ()
     description: str = ""
+    # The architecture the adapter's weights name, like ``StyleLora.family``
+    # and ``ControlNet.family``: every shipped adapter is an SDXL one, and the
+    # door refuses it on any other base for the same reason it refuses a
+    # cross-family LoRA -- the mismatch only surfaces after the checkpoint is
+    # resident.
+    family: str = FAMILY_SDXL
 
     @property
     def download(self) -> str:
@@ -1579,6 +1587,13 @@ def controlnet_bases() -> list[str]:
     Structure group when the chosen base is not one of these, rather than
     offering a control that cannot do anything."""
     return [m.key for m in BASE_MODELS.values() if m.controlnet]
+
+
+def ip_adapter_bases() -> list[str]:
+    """Base models some IP-Adapter is fitted to -- what the door names when it
+    refuses a cross-family pairing, and what a picker greys on."""
+    families = {a.family for a in IP_ADAPTERS.values()}
+    return [m.key for m in BASE_MODELS.values() if m.family in families]
 
 
 def cfg_bases() -> list[str]:

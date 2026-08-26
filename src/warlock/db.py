@@ -691,17 +691,6 @@ class JobStore:
             self._conn.execute("UPDATE jobs SET stage = ? WHERE id = ?", (stage, job_id))
             self._conn.commit()
 
-    def children(self, parent_id: str) -> list[dict[str, Any]]:
-        """Every job promoted from this one, oldest first. ``id`` is a
-        secondary sort key: ``time.time()`` can tie across rows created in
-        quick succession, and rowid order isn't guaranteed by SQL, so
-        created_at alone leaves ties order-undefined."""
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM jobs WHERE parent_id = ? ORDER BY created_at, id", (parent_id,)
-            ).fetchall()
-        return [self._to_dict(r) for r in rows]
-
     def get(self, job_id: str) -> dict[str, Any] | None:
         with self._lock:
             row = self._conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()

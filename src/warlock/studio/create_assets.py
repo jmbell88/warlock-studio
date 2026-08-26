@@ -94,11 +94,10 @@ def sync_legacy_fields(form: dict[str, Any]) -> AssetType:
     ``settings_2d._asset_type`` on *every frame*, so anything it writes is
     rewritten before the next draw -- which is correct while ``asset_type`` is
     the only control the user touches, and becomes a field nobody can type into
-    the moment a widget is pointed at one of them. ``_sheet``, ``_tile_fields``
-    and ``_sprite_fields`` in that pane still write ``sheet_type``,
-    ``projection`` and ``count``; they are unreachable from ``draw`` today,
-    which is the only reason the two do not collide. Wiring one back in means
-    deciding which of the two owns the field first.
+    the moment a widget is pointed at one of them. The pane's old per-type
+    field groups that wrote ``sheet_type``, ``projection`` and ``count`` were
+    unreachable from ``draw`` and are gone; wiring a control back onto one of
+    these fields means deciding which of the two owns it first.
     """
     spec = selected(form)
     form["asset_type"] = spec.key

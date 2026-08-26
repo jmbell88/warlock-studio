@@ -58,6 +58,40 @@ def list_sheets(svc: WarlockService, job_id: str) -> dict[str, Any]:
     return {"sheets": rigging.list_sheets(svc.job_dir(job_id))}
 
 
+
+def queued_sheets(svc: WarlockService, job_id: str) -> int:
+    """Rows not yet finished that will each end as one sheet of *job_id*.
+
+    Three doors mint them and they draw on one ``MAX_SHEETS`` pool:
+    ``create_sheet`` (a ``sheet`` row), ``troupe.create_charsheet`` (a
+    ``charsheet`` row) and ``troupe.send_to_troupe`` on an unrigged mesh (a
+    ``rig`` row carrying ``troupe_sheet``, which ``_maybe_queue_sheet_after_rig``
+    turns into the charsheet). Each door used to count a different subset of
+    the other two, so the pool could be reserved one past the cap through
+    whichever door was not counting -- one function, the same count at all
+    three.
+    """
+    total = 0
+    for j in svc.store.active_jobs():
+        params = j.get("params") or {}
+        if params.get("source_job") != job_id:
+            continue
+        kind = j["kind"]
+        if kind in ("sheet", "charsheet") or (kind == "rig" and params.get("troupe_sheet")):
+            total += 1
+    return total
+
+
+def check_sheet_cap(svc: WarlockService, job_id: str, job_dir: Path) -> None:
+    """Refuse the sheet that would take *job_id* past ``MAX_SHEETS``.
+
+    Called under ``svc.convert_lock(job_id, "sheets")`` by every door that
+    reserves a slot: the artifact lands minutes after the row is minted, so
+    counting files alone let N rapid submits all read the same count.
+    """
+    if len(rigging.list_sheets(job_dir)) + queued_sheets(svc, job_id) >= rigging.MAX_SHEETS:
+        raise Conflict(f"a job may hold at most {rigging.MAX_SHEETS} sheets")
+
 def create_sheet(
     svc: WarlockService,
     job_id: str,
@@ -167,14 +201,7 @@ def create_sheet(
     # same count and all pass. Count and create under one job-wide hold --
     # the pose cap's CON-03 rule, taken at this door.
     with svc.convert_lock(job_id, "sheets"):
-        queued = sum(
-            1
-            for j in svc.store.active_jobs()
-            if j["kind"] == "sheet"
-            and (j.get("params") or {}).get("source_job") == job_id
-        )
-        if len(rigging.list_sheets(job_dir)) + queued >= rigging.MAX_SHEETS:
-            raise Conflict(f"a job may hold at most {rigging.MAX_SHEETS} sheets")
+        check_sheet_cap(svc, job_id, job_dir)
         new_id = svc.store.create("sheet", source["prompt"], params, uuid.uuid4().hex[:12])
     svc.wake_worker()
     return {"id": new_id, "source_job": job_id, "sheet_id": params["sheet_id"]}

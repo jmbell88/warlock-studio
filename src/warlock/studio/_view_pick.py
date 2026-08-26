@@ -174,7 +174,19 @@ class PickOps:
                 index = None if index is not None and index < 0 else index
             if index is None:
                 continue
-            key = float(screen.depth[index]) if mode == "vertex" else 0.0
+            if mode == "vertex":
+                key = float(screen.depth[index])
+            elif mode == "edge":
+                # The mean of the endpoints' depths -- the same reading
+                # ``nearest_edge`` compared against the surface. This was a
+                # constant 0.0, so with two objects' edges under the cursor
+                # the earlier one in ``doc.objects`` always won regardless of
+                # which edge was nearer the camera.
+                a, b = adjacency(obj.mesh).edge_verts[index]
+                key = 0.5 * (float(screen.depth[a]) + float(screen.depth[b]))
+            else:
+                # A face hit names one object already; nothing to rank.
+                key = 0.0
             if best is None or key < best[0]:
                 best = (key, obj.uid, int(index))
         return None if best is None else (best[1], best[2])

@@ -765,16 +765,16 @@ def _safe_int(value: Any, fallback: int, *, minimum: int) -> int:
 #: must leave that key at its default, not at a stranger's leftover value.
 EXPORT_OPTION_DEFAULTS: dict[str, Any] = {
     "arrange": None,
-    # **What goes in the JSON sidecar** (6.9). Three switches rather than one,
-    # because they answer three questions a pipeline asks separately: which
+    # **What goes in the JSON sidecar** (6.9). Two switches rather than one,
+    # because they answer two questions a pipeline asks separately: which
     # cell is which frame is always written (it is what a sheet *is*), and
-    # these are the extras -- the tags an engine reads clips from, the layer
-    # names a compositor needs, and the slices a nine-patch or a hitbox lives
-    # in. Defaulting to on for tags and slices, which is what every export
-    # before this wrote, and off for layers, which nothing wrote.
+    # these are the extras -- the tags an engine reads clips from, and the
+    # slices a nine-patch or a hitbox lives in. Both default on, which is what
+    # every export before this wrote. A third, "layer names for a compositor",
+    # was declared here for a sidecar section nothing ever wrote and was
+    # removed with it.
     "meta_tags": True,
     "meta_slices": True,
-    "meta_layers": False,
     "wrap": 4,
     "merge": False,
     "skip_empty": False,
@@ -1444,10 +1444,6 @@ class InkerState:
     #: Named bundles of one tool's options; see :meth:`save_preset`. Persisted
     #: beside the swatches by ``inker_mode.persist``.
     presets: dict[str, dict[str, Any]] = field(default_factory=dict)
-    feather_radius: float = 2.0
-    # Grow / shrink / border, in whole pixels. App-level like every other
-    # tool setting, and separate from ``feather_radius`` because the two have
-    # different units and mean different things to an edge.
     gradient_kind: str = "linear"
     gradient_to_transparent: bool = False
     # Extra colour stops, or empty for the foreground-to-background preset.
@@ -1771,10 +1767,9 @@ class InkerState:
     # exports, and ignored (the export refuses the combination by name)
     # whenever the document itself carries a directional layout.
     export_arrange: str | None = None
-    #: The three JSON meta switches (6.9); see ``EXPORT_OPTION_DEFAULTS``.
+    #: The two JSON meta switches (6.9); see ``EXPORT_OPTION_DEFAULTS``.
     export_meta_tags: bool = True
     export_meta_slices: bool = True
-    export_meta_layers: bool = False
     # The N for ``export_arrange in ("rows", "columns")``. Kept even while
     # ``export_arrange`` names neither, so switching back to Rows/Columns does
     # not forget what the user last typed.
@@ -2085,7 +2080,6 @@ class InkerState:
             "arrange": self.export_arrange,
             "meta_tags": bool(self.export_meta_tags),
             "meta_slices": bool(self.export_meta_slices),
-            "meta_layers": bool(self.export_meta_layers),
             "wrap": int(self.export_wrap),
             "merge": bool(self.export_merge),
             "skip_empty": bool(self.export_skip_empty),
@@ -2119,6 +2113,11 @@ class InkerState:
         }
         arrange = merged["arrange"]
         self.export_arrange = arrange if arrange is None or isinstance(arrange, str) else None
+        # The meta switches were recorded by the snapshot and never read back
+        # here, so a tab switch or a restart put them back to the defaults
+        # while the rest of the recorded set was honoured.
+        self.export_meta_tags = bool(merged["meta_tags"])
+        self.export_meta_slices = bool(merged["meta_slices"])
         self.export_wrap = _safe_int(merged["wrap"], self.export_wrap, minimum=1)
         self.export_merge = bool(merged["merge"])
         self.export_skip_empty = bool(merged["skip_empty"])

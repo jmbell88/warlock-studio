@@ -767,14 +767,11 @@ def on_task_done(ctx: Any, done: Any) -> None:
     """Adopt what a ``troupe-`` task returned.
 
     Three of them, and none produces anything to adopt beyond a job id: the
-    work itself is queued behind the GPU and lands as rows the sidebar reads.
-    What this does is remember the id, so the sidebar can show *this* submit's
-    progress rather than whatever the queue happens to be running.
+    work itself is queued behind the GPU and lands as rows the sidebar reads
+    (``in_progress`` finds them by kind and source, so the id is not kept).
     """
     state = ensure(ctx)
     result = getattr(done, "result", None)
-    if isinstance(result, dict) and result.get("id"):
-        state.pending = str(result["id"])
     if done.key == "troupe-start":
         # The form's own choice: this fires on the way out of the submit, and
         # the row it queued is not readable here yet.

@@ -808,6 +808,13 @@ class FakeText2Image:
         self.unload_threads.append(threading.get_ident())
         self.loaded = False
 
+    def close(self) -> None:
+        # ``Worker.shutdown`` calls this on the real client; without it here
+        # the call was swallowed as an ``AttributeError`` on every test run
+        # and the shutdown path never met a ``close`` at all.
+        self.close_calls = getattr(self, "close_calls", 0) + 1
+        self.loaded = False
+
 
 @pytest.fixture
 def fake_pipelines(monkeypatch):

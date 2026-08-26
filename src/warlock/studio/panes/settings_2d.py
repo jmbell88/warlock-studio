@@ -50,7 +50,6 @@ from .. import (
 from ..manual import render as manual_render
 from ..tokens import sp
 from ..widgets import field_options as _options
-from . import model_gate
 
 PREVIEW_DEBOUNCE = 0.3
 
@@ -315,40 +314,6 @@ def sheet_rows(form: dict[str, Any]) -> tuple[str, ...]:
     return svc_tilesheets.TILE_SHEET_ROWS
 
 
-def _sheet(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
-    """The Sheet output's own fields, drawn only while it is selected.
-
-    Three controls at most, which is the feature: a sheet is composed from the
-    prompt every other output uses, plus the two facts the prompt cannot carry
-    -- how big a tile is and which way the grid runs. Everything else (the
-    palette, the grid, the negative prompt) is a measured default rather than a
-    control, because a form with nine fields is one nobody reaches the end of.
-    """
-    before = form.get("sheet_type", "tile")
-    keys = [key for key, _label in SHEET_TYPES]
-    with focus.item(ctx.state, FOCUS_PANE, "sheet_type") as focused:
-        form["sheet_type"] = widgets.segmented_control(
-            "sheet_type", list(SHEET_TYPES), before
-        )
-        if focused:
-            here = keys.index(form["sheet_type"]) if form["sheet_type"] in keys else 0
-            if imgui.is_key_pressed(imgui.Key.left_arrow):
-                form["sheet_type"] = keys[(here - 1) % len(keys)]
-            if imgui.is_key_pressed(imgui.Key.right_arrow):
-                form["sheet_type"] = keys[(here + 1) % len(keys)]
-    if form["sheet_type"] != before:
-        ctx.state.preview_dirty_at = time.monotonic()
-
-    # Drawn before the fields rather than after, so a user on a host missing the
-    # ControlNet reads why nothing will happen before they fill anything in.
-    model_gate.draw(ctx, sheet_rows(form), what="A sheet")
-
-    if form["sheet_type"] == "sprite":
-        _sprite_fields(ctx, form, form_ui)
-    else:
-        _tile_fields(ctx, form, form_ui)
-
-
 def _view_of(form: dict[str, Any]) -> str:
     """The form's view, in today's spelling.
 
@@ -360,98 +325,6 @@ def _view_of(form: dict[str, Any]) -> str:
     """
     stored = str(form.get("projection") or svc_tilesheets.DEFAULT_VIEW)
     return svc_tilesheets.LEGACY_VIEWS.get(stored, stored)
-
-
-def _tile_fields(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
-    options = _tile_options()
-    with focus.item(ctx.state, FOCUS_PANE, "tile_size"):
-        changed, picked = form_ui.segmented_choice(
-            "tile_size",
-            "Tile size",
-            str(form.get("tile_size", "32")),
-            tuple((str(size), str(size)) for size in options["tile_sizes"]),
-            help_text="How many pixels across one tile is.",
-            compact=True,
-        )
-    if changed:
-        form["tile_size"] = picked
-        ctx.state.clear_field_error("tile_size")
-    with focus.item(ctx.state, FOCUS_PANE, "projection"):
-        # Both the keys and the words come off the service reply. They were
-        # written out here as a literal pair, which is why a third view could
-        # not be added without editing a pane that knows nothing about what a
-        # view is -- and why the refusal below used to spell its own list too.
-        labels = options["view_labels"]
-        changed, picked = form_ui.segmented_choice(
-            "projection",
-            "View",
-            _view_of(form),
-            tuple((key, labels.get(key, key)) for key in options["views"]),
-            help_text=(
-                "Where the camera is. Top-down is flat; 3/4 tilts it so tiles "
-                "show a front face; isometric is the 2:1 diamond lattice."
-            ),
-            compact=True,
-        )
-    if changed:
-        form["projection"] = picked
-        ctx.state.clear_field_error("projection")
-    # The finished size, said rather than left to be worked out. The arithmetic
-    # is the service's (``tile_sheet_options`` returns it per size per view)
-    # precisely so this line cannot drift from what lands on disk.
-    entry = next(
-        (row for row in options["sizes"] if str(row["key"]) == str(form.get("tile_size"))),
-        None,
-    )
-    if entry is not None:
-        shape = entry["views"].get(_view_of(form)) or {}
-        if shape:
-            widgets.muted(
-                f"{options['tiles']} tiles of {shape['tile_w']}x{shape['tile_h']} "
-                f"- a {shape['sheet_w']}x{shape['sheet_h']} sheet"
-            )
-
-
-def _sprite_fields(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
-    """The sprite arm, which is two steps and says so.
-
-    The character is drawn first and kept as a row of its own; the sheet is a
-    follow-up job against it. Stated in the pane because the library will show
-    two rows for one button press, and a user who was not told that has watched
-    the app do something it did not offer to do.
-    """
-    options = _sprite_options()
-    types = tuple(
-        (row["key"], f"{row['key'].title()} ({row['columns']}x{row['rows']})")
-        for row in options["sheet_types"]
-    )
-    with focus.item(ctx.state, FOCUS_PANE, "sheet_layout"):
-        changed, picked = form_ui.segmented_choice(
-            "sheet_layout",
-            "Layout",
-            str(form.get("sheet_layout") or options["defaults"]["sheet_type"]),
-            types,
-            help_text="Four facings, or a four-frame walk cycle in each.",
-            compact=True,
-        )
-    if changed:
-        form["sheet_layout"] = picked
-    with focus.item(ctx.state, FOCUS_PANE, "cell_size"):
-        changed, picked = form_ui.segmented_choice(
-            "cell_size",
-            "Cell size",
-            str(form.get("cell_size") or options["defaults"]["logical_size"]),
-            tuple((str(size), str(size)) for size in options["logical_sizes"]),
-            help_text="How many pixels across one frame is.",
-            compact=True,
-        )
-    if changed:
-        form["cell_size"] = picked
-    widgets.muted_wrapped(
-        "Two steps: the character is drawn from the prompt and kept as its own "
-        "asset, then two candidate sheets are imagined from it. A reference "
-        "image, if you attach one, shapes the character."
-    )
 
 
 def _profiles(ctx: Any, form: dict[str, Any]) -> None:

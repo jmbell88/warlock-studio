@@ -836,3 +836,19 @@ def _strip_matte_attr(src: Path, dest: Path, replacement: str | None = None) -> 
     with zipfile.ZipFile(dest, "w") as out:
         for name in names:
             out.writestr(name, blobs[name])
+
+
+def test_an_animated_background_layer_is_still_a_background_after_a_reload(tmp_path: Path):
+    """``Track.props`` has written ``background`` and ``reference`` since 6.5
+    and the reader never read them back -- the ``Layer.copy`` bug again, at the
+    one copy site that hand-lists its fields. Every animated document lost both
+    flags on load."""
+    original = _animated()
+    assert original.to_background() is True
+    path = tmp_path / "anim.ora"
+    inker.write_ora(original, path)
+
+    doc = inker.Document.load(path)
+    assert doc.anim.tracks[0].background is True
+    assert doc.stack[0].background is True
+    assert doc.has_background is True

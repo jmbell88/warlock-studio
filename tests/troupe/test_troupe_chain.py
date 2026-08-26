@@ -22,7 +22,7 @@ import math
 
 import pytest
 
-from warlock import clips
+from warlock import clips, rigging
 from warlock.config import Config
 from warlock.db import JobStore
 from warlock.pipelines import charsheet, spritesynth
@@ -957,3 +957,24 @@ def test_a_row_written_before_the_pose_existed_rerolls_as_a_t_pose():
     assert svc_troupe.DEFAULT_TROUPE_POSE != "tpose", (
         "this test is only meaningful while the door's default differs"
     )
+
+
+def test_the_sheet_cap_counts_every_door_that_reserves_a_slot(svc, monkeypatch):
+    """Three doors mint rows that end as sheets of one job -- ``create_sheet``,
+    ``create_charsheet`` and the rig row ``send_to_troupe`` mints for an
+    unrigged mesh -- and they share one ``MAX_SHEETS`` pool. Each used to count
+    a different subset of the others' queued rows, so the pool could be
+    reserved one past the cap through whichever door was not counting."""
+    from warlock.service import sheets as svc_sheets
+    from warlock.service.errors import Conflict
+
+    monkeypatch.setattr(rigging, "MAX_SHEETS", 1)
+    plain = _plain_mesh(svc)
+    svc_troupe.send_to_troupe(svc, plain, logical_size=64)
+    with pytest.raises(Conflict, match="at most 1 sheet"):
+        svc_troupe.send_to_troupe(svc, plain, logical_size=64)
+
+    rigged = _rigged_mesh(svc)
+    svc_troupe.create_charsheet(svc, rigged, logical_size=64)
+    with pytest.raises(Conflict, match="at most 1 sheet"):
+        svc_sheets.create_sheet(svc, rigged, frame_size=64)

@@ -16,10 +16,11 @@ import json
 import logging
 import math
 import os
-import tempfile
 import time
 from pathlib import Path
 from typing import Any
+
+from . import atomic
 
 log = logging.getLogger(__name__)
 
@@ -231,10 +232,14 @@ class Settings:
         payload = json.dumps({"version": VERSION, "data": self.data}, indent=2)
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            fd, raw = tempfile.mkstemp(dir=self.path.parent, prefix=".settings.", suffix=".json")
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(payload)
-            os.replace(raw, self.path)
+            # ``atomic.staged`` rather than a hand-rolled mkstemp + replace:
+            # the temporary is unlinked in its ``finally``, where the old
+            # version left one behind on every failed replace -- and with
+            # ``_dirty`` still set, ``tick`` retried once a second, one
+            # orphaned ``.settings.*.json`` per second for as long as the
+            # directory stayed unwritable.
+            with atomic.staged(self.path) as tmp:
+                tmp.write_text(payload, encoding="utf-8")
         except OSError as exc:
             log.exception("could not save settings")
             # Latched separately from ``notice``, which ``take_notice``

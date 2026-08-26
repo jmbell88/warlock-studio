@@ -363,7 +363,7 @@ def test_a_failed_write_strands_no_temporary(tmp_path, monkeypatch):
     def boom(*_args, **_kwargs):
         raise OSError("no room")
 
-    monkeypatch.setattr(plotter_io.os, "replace", boom)
+    monkeypatch.setattr(plotter_io.atomic.os, "replace", boom)
     with pytest.raises(OSError):
         plotter_io._write({"map.wmap": b"x"}, tmp_path / "level.wmap")
     assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
@@ -383,7 +383,7 @@ def test_an_export_stages_every_file_before_replacing_any(tmp_path, monkeypatch)
     (tmp_path / "level.tmx").write_bytes(b"old map")
     (tmp_path / "tiles.tsx").write_bytes(b"old tileset")
     calls: list[str] = []
-    real = plotter_io.os.replace
+    real = plotter_io.atomic.os.replace
 
     def counted(src, dst):
         calls.append(Path(dst).name)
@@ -391,7 +391,7 @@ def test_an_export_stages_every_file_before_replacing_any(tmp_path, monkeypatch)
             raise OSError("no room")
         return real(src, dst)
 
-    monkeypatch.setattr(plotter_io.os, "replace", counted)
+    monkeypatch.setattr(plotter_io.atomic.os, "replace", counted)
     with pytest.raises(OSError):
         plotter_io._write(
             {"map.tmx": b"new map", "tiles.tsx": b"new tileset"},

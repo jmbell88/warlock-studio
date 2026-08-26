@@ -114,8 +114,7 @@ def test_home_never_draws_the_health_row():
     was this argument made halfway."""
     health = landing.Status("health", "!", "2 things need attention", 0)
     queue = landing.Status("queue", "o", "Queue idle", 0)
-    assert landing.visible_home_rows([health, queue], shell_issue_visible=True) == [queue]
-    assert landing.visible_home_rows([health, queue], shell_issue_visible=False) == [queue]
+    assert landing.visible_home_rows([health, queue]) == [queue]
 
 
 def test_component_gallery_is_developer_only():

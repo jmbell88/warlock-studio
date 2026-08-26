@@ -192,9 +192,6 @@ class _Server:
             self._t2i.trim()
         return {"kind": "done", **self._vitals()}
 
-    def op_vram(self, req: dict[str, Any], emit: Any) -> dict[str, Any]:
-        return {"kind": "done", **self._vitals()}
-
     def _vitals(self) -> dict[str, Any]:
         """The device readings the parent can no longer take for itself.
 
@@ -229,7 +226,6 @@ class _Server:
         "load": op_load,
         "generate": op_generate,
         "trim": op_trim,
-        "vram": op_vram,
     }
 
     def handle(self, req: dict[str, Any], emit: Any) -> dict[str, Any]:

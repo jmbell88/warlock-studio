@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -847,3 +848,33 @@ async def test_a_cancel_after_the_rig_is_published_still_records_it_as_done(
     assert job["status"] == "done", "a published rig must not be recorded as cancelled"
     assert (source_dir / "rig.glb").read_bytes() == b"fake-rig"
     await worker.shutdown()
+
+
+def test_a_publish_that_lands_the_glb_but_not_the_json_leaves_no_stale_marker(
+    tmp_path, monkeypatch
+):
+    """``finalize_rig`` renames GLB then JSON, and each retries on its own. If
+    the JSON rename exhausts its retries after the GLB already landed, the
+    served directory held a *new* rig.glb beside the *old* rig.json -- the
+    completion marker advertising a skeleton that no longer matched the mesh.
+    The honest state is "not rigged": the stale marker goes, and the caller's
+    ``discard_rig_temps`` takes the unpublished JSON."""
+    job_dir = tmp_path
+    (job_dir / "rig.glb").write_bytes(b"old")
+    (job_dir / "rig.json").write_text('{"old": true}')
+    (job_dir / rigging.RIG_GLB_TMP).write_bytes(b"new")
+    (job_dir / rigging.RIG_JSON_TMP).write_text('{"new": true}')
+    real_replace = os.replace
+
+    def replace(src, dst):
+        if str(dst).endswith("rig.json"):
+            raise PermissionError("mid-stream reader")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", replace)
+    monkeypatch.setattr(time, "sleep", lambda _s: None)
+    with pytest.raises(PermissionError):
+        rigging.finalize_rig(job_dir)
+    assert (job_dir / "rig.glb").read_bytes() == b"new"
+    assert not (job_dir / "rig.json").exists()
+    assert (job_dir / rigging.RIG_JSON_TMP).exists()

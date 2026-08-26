@@ -399,7 +399,7 @@ def test_the_canvas_settings_stay_app_level():
     The split is the decision in Ink2, so it is asserted rather than left to
     the comment: these names must *not* be per-tool options.
     """
-    shared = {"symmetry", "grid", "grid_size", "fg", "bg", "feather_radius", "swatches"}
+    shared = {"symmetry", "grid", "grid_size", "fg", "bg", "swatches"}
     assert shared.isdisjoint(inker_state.TOOL_OPTION_DEFAULTS)
     state = inker_state.InkerState()
     state.grid_size = 32

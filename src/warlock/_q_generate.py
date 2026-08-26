@@ -82,6 +82,14 @@ class GenerateOps:
         if ip_key is not None and ip_key not in models.IP_ADAPTERS:
             log.warning("unknown ip_adapter %r; generating without it", ip_key)
             ip_key = None
+        if ip_key is not None and models.IP_ADAPTERS[ip_key].family != spec.family:
+            # Same re-check the ControlNet gets below: reachable when a stored
+            # base_model fell back to the registry default above.
+            log.warning(
+                "ip_adapter %r is not fitted to %s; generating without it",
+                ip_key, spec.label,
+            )
+            ip_key = None
 
         control_key = params.get("control") or None
         if control_key is not None and control_key not in models.CONTROLNETS:

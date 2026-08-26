@@ -11,8 +11,8 @@ from typing import Any
 
 from .. import doctor, fetch, guidance, models
 from .core import WarlockService
-from .errors import Invalid, NotFound, invalid_from
-from .validation import MAX_PROMPT
+from .errors import NotFound, invalid_from
+from .validation import check_prompt
 
 log = logging.getLogger(__name__)
 
@@ -193,8 +193,7 @@ def prompt_preview(
     # or how a LoRA is stored would have moved every check but this one, and the
     # preview would have gone on promising a trigger the run then dropped.
     trigger = style.trigger if style and fetch.present(svc.config, "lora", style) else ""
-    if len(prompt) > MAX_PROMPT:
-        raise Invalid(f"prompt must be at most {MAX_PROMPT} characters", field="prompt")
+    check_prompt(prompt)
 
     # The expansion the worker would run, so "Prompt actually sent" stays
     # true with the mode on. Best-effort in exactly the token-count way: the

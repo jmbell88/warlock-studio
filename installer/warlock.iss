@@ -30,7 +30,7 @@ OutputBaseFilename=WarlockSetup-v{#AppVersion}
 ; same posture as having no licence. The third-party notices are not shown
 ; here (a wizard pane renders Markdown as raw text); they are staged into the
 ; install root and beside vendor\, which is what MIT and the NVIDIA
-; redistributable EULA actually require -- see installeruild.ps1.
+; redistributable EULA actually require -- see installer\build.ps1.
 LicenseFile={#ProjectRoot}\LICENSE
 SetupIconFile={#ProjectRoot}\src\warlock\assets\icon.ico
 UninstallDisplayIcon={app}\src\warlock\assets\icon.ico

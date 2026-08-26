@@ -65,9 +65,6 @@ class TroupeState:
     #: survives a trip to another mode and back.
     form: dict[str, Any] = field(default_factory=dict)
 
-    #: The last submitted job id, so the sidebar can show its progress without
-    #: hunting the queue for it.
-    pending: str = ""
 
 
 def ensure(ctx: Any) -> TroupeState:

@@ -171,10 +171,6 @@ PINNED_DOCS = (
     "docs/MODELS.md",
     "docs/manual/38-installation.md",
     "README.md",
-    # Not a document: ``doctor``'s hint for the GGUF weights, which are one of
-    # the two fatal rows and are declared as text because nothing downloads
-    # them through the registry.
-    "src/warlock/doctor.py",
 )
 
 
@@ -199,6 +195,9 @@ def test_every_documented_download_command_is_pinned(rel: str):
         if "--revision" not in text[match.end() : match.end() + 24]
     ]
     assert unpinned == [], f"{rel} downloads these without a --revision"
+    # A file with no command at all passes the list check vacuously; doctor.py
+    # sat in this list for weeks after its literal became a rendered string.
+    assert "uvx hf download" in text, f"{rel} no longer holds a download command"
 
 
 @pytest.mark.parametrize("rel", PINNED_DOCS)
@@ -1155,3 +1154,20 @@ def test_every_claim_is_something_present_would_have_looked_at(tmp_path):
             assert path.is_relative_to(cfg.t2i_model_root) or path.is_relative_to(
                 cfg.trellis_models_dir
             ), entry.row_key
+
+
+def test_the_doctors_gguf_hint_names_the_commit_the_registry_pins(tmp_path):
+    """The hint is rendered, not a literal, so the document scan above cannot
+    see it -- and the two rows that used to scan ``doctor.py`` passed on zero
+    matches once the literal went."""
+    from warlock import doctor
+    from warlock.config import Config
+
+    text = doctor.trellis_gguf_hint(Config(data_dir=tmp_path))
+    found = re.findall(
+        r"uvx hf download ([A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+) --revision (\S+)", text
+    )
+    assert found, text
+    pins = {one.repo_id: one.revision for e in fetch.entries() for one in e.fetch}
+    for repo, revision in found:
+        assert pins.get(repo) == revision, (repo, revision, pins.get(repo))

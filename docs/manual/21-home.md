@@ -22,8 +22,9 @@ status line, and then the whole rest of the screen for what you were working on.
 ## New here?
 
 Above everything else, on a fresh install, is an offer of a **guided tour** — a title, one line
-saying how long it takes, **Start** and **Not now**. There are two tours: *Around the app*, which
-walks the rail and the five stages of Create, and *Drawing in Inker*, which makes a canvas, a
+saying how long it takes, a **Start** button carrying the tour's name, and **Not now**. There are
+two tours: *Around the app*, which walks the rail and the five stages of Create, and *Drawing in
+Inker*, which makes a canvas, a
 stroke, a layer and a frame. Neither needs a GPU or any downloaded weights, which is deliberate: a
 tour a fresh install cannot finish is worse than none.
 

@@ -385,6 +385,8 @@ def assemble(
     import numpy as np
     from PIL import Image
 
+    if count <= 0:
+        return None
     colours, weights = [], []
     for index in range(count):
         colour = _read(view_dir / f"bake_{index:02d}.png", "RGB")

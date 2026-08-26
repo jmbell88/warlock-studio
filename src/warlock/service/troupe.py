@@ -32,7 +32,8 @@ from typing import TYPE_CHECKING, Any
 from .. import rigging
 from ..clips import expand_clips
 from ..pipelines import charsheet, pixelize, spritesynth
-from .errors import Conflict, Invalid, invalid_from
+from .errors import Invalid, invalid_from
+from .sheets import check_sheet_cap
 from .validation import check_job_id, check_vram
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -298,14 +299,7 @@ def create_charsheet(
     # same job-wide hold: the artifact lands minutes after the row is minted,
     # so counting files alone lets N rapid submits all read the same count.
     with svc.convert_lock(job_id, "sheets"):
-        queued = sum(
-            1
-            for j in svc.store.active_jobs()
-            if j["kind"] in ("sheet", "charsheet")
-            and (j.get("params") or {}).get("source_job") == job_id
-        )
-        if len(rigging.list_sheets(job_dir)) + queued >= rigging.MAX_SHEETS:
-            raise Conflict(f"a job may hold at most {rigging.MAX_SHEETS} sheets")
+        check_sheet_cap(svc, job_id, job_dir)
         new_id = svc.store.create(
             "charsheet", source["prompt"], params, uuid.uuid4().hex[:12]
         )
@@ -425,7 +419,12 @@ def send_to_troupe(
         "joints": "measured",
         "troupe_sheet": spec,
     }
-    new_id = svc.store.create("rig", source["prompt"], params, uuid.uuid4().hex[:12])
+    # The rig row *is* a sheet reservation -- ``_maybe_queue_sheet_after_rig``
+    # mints the charsheet from it with no door in between -- so the cap is
+    # taken here, under the same hold the direct door takes it.
+    with svc.convert_lock(job_id, "sheets"):
+        check_sheet_cap(svc, job_id, job_dir)
+        new_id = svc.store.create("rig", source["prompt"], params, uuid.uuid4().hex[:12])
     svc.wake_worker()
     return {"id": new_id, "source_job": job_id, "rigged": False}
 

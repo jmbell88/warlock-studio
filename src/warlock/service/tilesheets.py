@@ -34,9 +34,9 @@ from .errors import Invalid, TooLarge
 from .files import ImageTooLarge, to_png
 from .validation import (
     MAX_JOB_NAME,
-    MAX_PROMPT,
     MAX_UPLOAD_BYTES,
     check_base_model_weights,
+    check_prompt,
     check_seed,
     check_vram,
     install_remedy,
@@ -209,8 +209,7 @@ def create_tile_sheet(
     text = str(prompt or "").strip()
     if not text:
         raise Invalid("a tile sheet needs a prompt", field="prompt")
-    if len(text) > MAX_PROMPT:
-        raise Invalid(f"prompt must be at most {MAX_PROMPT} characters", field="prompt")
+    check_prompt(text)
 
     # ``None`` means "the form said nothing", and what the absent value means is
     # the pipeline's own default -- an empty *string* is a user explicitly
@@ -220,11 +219,7 @@ def create_tile_sheet(
         if negative_prompt is None
         else str(negative_prompt)
     )
-    if len(negative) > MAX_PROMPT:
-        raise Invalid(
-            f"negative_prompt must be at most {MAX_PROMPT} characters",
-            field="negative_prompt",
-        )
+    check_prompt(negative, field="negative_prompt")
 
     # Coerced inside a guard: these are form values, and a bare ``int()`` over
     # one turns a typo into an unhandled TypeError/ValueError rather than the

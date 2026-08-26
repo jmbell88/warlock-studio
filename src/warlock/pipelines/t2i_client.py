@@ -209,8 +209,22 @@ class Text2ImageClient:
         drops what *is* resident, this forbids what is about to become resident,
         and shutdown needs this one first or a load that starts after the unload
         is a child nothing will reap.
+
+        Killed *before* the lock is taken, not under it. ``_request`` holds the
+        lock for the whole of a sample, and ``Worker.shutdown`` calls this on
+        the loop thread before it cancels the running job -- so waiting for the
+        lock meant waiting for the sample (or the silence timeout) with every
+        other teardown queued behind it. The kill is what makes the in-flight
+        request return: its reader sees the pipe close and raises
+        ``ChildFailed``, the lock frees, and ``_stop_child`` under it then finds
+        nothing left to do. ``proc.kill`` is safe from a second thread; the
+        reference is read once so a concurrent restart cannot swap it.
         """
         self._closed.set()
+        proc = self._proc
+        if proc is not None and proc.poll() is None:
+            with contextlib.suppress(OSError):
+                proc.kill()
         with self._lock:
             self._stop_child()
 

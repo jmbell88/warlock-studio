@@ -595,10 +595,12 @@ def close_tab(ctx: Any, uid: str) -> None:
                 # a drag holds the mesh it is moving.
                 view.cancel_drag(tab.doc)
             view.clear()
-        # Keyed on object uid, and a fresh document's objects start counting
-        # from one -- so an entry left here is a manifold report about a mesh
-        # from a document that is gone, waiting for a uid to collide with.
-        state.manifold.clear()
+        # Keyed on object uid, so only this document's entries go: the uid
+        # counter is process-wide and never rewinds, so nothing can collide
+        # with a stale entry, and clearing the whole table made every other
+        # open tab redo its (adjacency-building) checks on the next draw.
+        for obj in tab.doc.objects:
+            state.manifold.pop(obj.uid, None)
         state.close(uid)
 
     if not tab.dirty:

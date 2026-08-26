@@ -3176,3 +3176,29 @@ async def test_a_happy_path_job_really_ran_its_post_processing(worker):
     assert params["transform"], "grounding did not run"
     assert params["mesh_audit"], "the silhouette audit did not run"
     assert params["mesh_report"], "the mesh report did not run"
+
+
+async def test_a_cancel_verdict_survives_a_transient_store_error(worker, monkeypatch):
+    """``_finish_job`` retries the done/error write because the one sqlite
+    connection can answer ``database is locked`` under a concurrent backup;
+    the cancelled write is the other terminal write and had no retry, so a
+    cancel that hit the same transient left the row ``running`` and the next
+    launch reported it as interrupted."""
+    real = worker.store.set_status
+    calls = {"n": 0}
+
+    def flaky(job_id, status):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise RuntimeError("database is locked")
+        return real(job_id, status)
+
+    monkeypatch.setattr(worker.store, "set_status", flaky)
+    job_id = worker.store.create("text", "a barrel", {"seed": 1, "resolution": 512})
+    worker.start()
+    await _wait_until(lambda: worker.current_job_id == job_id)
+    await worker.request_cancel(job_id)
+    await _wait_until(lambda: worker.store.get(job_id)["status"] != "running")
+    await worker.shutdown()
+    assert worker.store.get(job_id)["status"] == "cancelled"
+    assert calls["n"] >= 3

@@ -1271,3 +1271,46 @@ def test_a_projection_toggle_invalidates_the_screen_cache(view) -> None:
     assert view.screen_of(doc, uid) is before, "an unchanged camera hits"
     view.camera.orthographic = True
     assert view.screen_of(doc, uid) is not before, "the toggle misses"
+
+
+def test_the_nearer_of_two_overlapping_edges_is_picked(view) -> None:
+    """Edge mode ranked candidates with a constant key, so with two objects'
+    edges under the cursor the earlier one in ``doc.objects`` always won --
+    here the far box, added first, one twentieth of a unit behind."""
+    from warlock.studio.clay import pick as clay_pick
+    from warlock.studio.clay.adjacency import adjacency
+
+    doc = bd.ClayDoc()
+    far = doc.add_object(
+        bd.Obj(uid=bd.new_uid(), name="far", mesh=bp.box(), translation=m3.vec3(0, 0, -0.05))
+    )
+    near = doc.add_object(bd.Obj(uid=bd.new_uid(), name="near", mesh=bp.box()))
+    doc.element_mode = "edge"
+
+    view._rect = RECT
+    view.camera.set_target(m3.vec3())
+    view.camera.set_position(m3.vec3(0.0, 0.0, 8.0))
+    view.camera.aspect = RECT[2] / RECT[3]
+
+    screen = view.screen_of(doc, near.uid)
+    edges = adjacency(near.mesh).edge_verts
+    front = [
+        i
+        for i, (a, b) in enumerate(edges)
+        if near.mesh.positions[a][2] > 0 and near.mesh.positions[b][2] > 0
+    ]
+    assert front, "a box has front-face edges"
+    a, b = edges[front[0]]
+    # Three pixels outside the silhouette, so the ray misses both boxes and
+    # the occlusion test admits every edge in reach: the ranking alone decides.
+    mid = (screen.xy[a] + screen.xy[b]) * 0.5
+    centre = np.array([RECT[2] * 0.5, RECT[3] * 0.5])
+    outward = (mid - centre) / np.linalg.norm(mid - centre)
+    point = tuple(mid + outward * 3.0)
+    assert view.pick_face(doc, point) is None
+    # Both boxes offer an edge here; the test is only meaningful if they do.
+    far_screen = view.screen_of(doc, far.uid)
+    assert clay_pick.nearest_edge(far_screen, adjacency(far.mesh).edge_verts, point) is not None
+
+    picked = view.pick_element(doc, point)
+    assert picked is not None and picked[0] == near.uid

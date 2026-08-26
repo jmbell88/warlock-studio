@@ -355,6 +355,17 @@ def normalize(raw: dict[str, Any], *, bg_default: str | None = None) -> dict[str
 
     ip_adapter = chosen["ip_adapter"]
     control = chosen["control"]
+    if ip_adapter is not None and ip_adapter.family != base_model.family:
+        # The third conditioning half, gated like the other two. Without this
+        # the only refusal was ``Text2Image._conditioned``'s, which fires with
+        # the checkpoint already resident -- the failure ``lora_fits`` exists
+        # to keep in front of the load.
+        raise GuidanceError(
+            f"ip_adapter {ip_adapter.key!r} is fitted to {ip_adapter.family} "
+            f"and base_model {base_model.key!r} is {base_model.family}; "
+            f"pick one of {models.ip_adapter_bases()}",
+            field="ip_adapter",
+        )
     if control is not None and not base_model.controlnet:
         raise GuidanceError(
             f"base_model {base_model.key!r} cannot run a ControlNet; "

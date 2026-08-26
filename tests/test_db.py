@@ -175,7 +175,7 @@ def test_create_records_stage_and_parent(store):
     parent = store.create("text", "a barrel", {}, stage="reference")
     child = store.create("text", "a barrel", {}, parent_id=parent)
     assert store.get(parent)["stage"] == "reference"
-    assert [c["id"] for c in store.children(parent)] == [child]
+    assert store.get(child)["parent_id"] == parent
 
 
 def test_create_defaults_stage_to_model(store):
@@ -190,11 +190,11 @@ def test_set_stage(store):
     assert store.get(job_id)["stage"] == "reference"
 
 
-def test_children_ordered_oldest_first(store):
+def test_a_child_records_its_parent(store):
     parent = store.create("text", "x", {})
     first = store.create("text", "x", {}, parent_id=parent)
     second = store.create("text", "x", {}, parent_id=parent)
-    assert [c["id"] for c in store.children(parent)] == [first, second]
+    assert {store.get(j)["parent_id"] for j in (first, second)} == {parent}
 
 
 def test_set_meta_updates_name_tags_and_favorite(store):

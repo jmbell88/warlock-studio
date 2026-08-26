@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import logging
 import os
 import secrets
@@ -216,10 +217,12 @@ def vram_gib() -> tuple[float, float] | None:
       An image job on a machine with torch installed but not yet loaded would
       stall the whole app just to log a number.
     * The number would be zero anyway. memory_allocated() only sees this
-      process's allocations, so it is meaningful exactly when the SDXL
-      pipeline is loaded -- which is precisely when torch is already imported.
-      trellis-server's ~16 GB lives in a separate process and never appears
-      here regardless.
+      process's allocations. Since the image pipe moved into its own child
+      (``t2i_client``) that is the app's steady state: the SDXL checkpoint
+      never appears here, and neither does trellis-server's ~16 GB. torch
+      may still be in ``sys.modules`` for other reasons (``pose2d``), in
+      which case this reads a near-zero figure; with the in-process pipe
+      (``WARLOCK_T2I_IN_PROCESS=1``) it reads the checkpoint as before.
     """
     torch = sys.modules.get("torch")
     if torch is None or not torch.cuda.is_available():
@@ -833,9 +836,13 @@ class Worker(GenerateOps, RigOps, TroupeOps, SpriteOps, TileSheetOps, MeshPostOp
         # flight on a worker thread learns not to publish. Cancelling the task
         # below only cancels the coroutine awaiting it (MDL-02).
         pipe = self._text2image
-        if pipe is not None:
-            with contextlib.suppress(AttributeError):
-                pipe.close()
+        close = getattr(pipe, "close", None)
+        if close is not None:
+            # Through a thread like every other teardown here: the call is
+            # brief now that ``close`` kills before it locks, but a blocking
+            # call on the loop thread is the shape that stalled shutdown for
+            # the length of a sample once, and the thread costs nothing.
+            await asyncio.to_thread(close)
         if self.current_job_id is not None:
             await self.request_cancel(self.current_job_id)
         if self._task is not None:
@@ -959,8 +966,10 @@ class Worker(GenerateOps, RigOps, TroupeOps, SpriteOps, TileSheetOps, MeshPostOp
             # _check_resources still sees the VRAM it is holding.
             with contextlib.suppress(TrellisStopFailed):
                 await asyncio.to_thread(self.trellis.stop)
-        # In exclusive mode the per-job finally already unloaded it, so
-        # loaded is never True here and this branch is inert.
+        # Inert in both modes since 2026-08-21: every t2i stage releases its
+        # checkpoint in its own finally, coexist or exclusive, so ``loaded``
+        # is never True by the time an idle tick runs. Kept as the backstop
+        # for a stage that forgets.
         if (
             self._text2image is not None
             and self._text2image.loaded
@@ -1365,9 +1374,23 @@ class Worker(GenerateOps, RigOps, TroupeOps, SpriteOps, TileSheetOps, MeshPostOp
         looping. The value of this function is that the failure is *visible*;
         the retry is the cheap half.
         """
+        return await self._record_verdict(
+            job_id, status, functools.partial(self.store.finish, job_id, status, error)
+        )
+
+    async def _set_cancelled(self, job_id: str) -> bool:
+        """The other terminal write, with the same retry -- a cancel that hit
+        the transient ``_finish_job`` retries for left the row ``running``,
+        which the next launch reported as *interrupted*: the user's own verdict
+        rewritten as a crash."""
+        return await self._record_verdict(
+            job_id, "cancelled", functools.partial(self.store.set_status, job_id, "cancelled")
+        )
+
+    async def _record_verdict(self, job_id: str, status: str, write: Any) -> bool:
         for attempt in range(1, FINISH_ATTEMPTS + 1):
             try:
-                return await asyncio.to_thread(self.store.finish, job_id, status, error)
+                return await asyncio.to_thread(write)
             except Exception:
                 if attempt == FINISH_ATTEMPTS:
                     log.critical(
@@ -1425,6 +1448,14 @@ class Worker(GenerateOps, RigOps, TroupeOps, SpriteOps, TileSheetOps, MeshPostOp
             admitted = True
             await self._generate(job)
         except Exception as exc:
+            if self._cancel.event.is_set() and self._cancel.committed:
+                # The cancel arrived too late to take anything back -- the
+                # artifact is published and the row will read "done" -- so
+                # what raised here is not the cancel's doing. It used to be
+                # dropped with every other exception on this branch, which
+                # left a done row with the trailing ``set_params`` never
+                # landed and no line anywhere saying so.
+                log.exception("job %s failed after its cancel had committed", job_id)
             if not self._cancel.event.is_set():
                 log.exception("job %s failed", job_id)
                 # The verdict first, the log file second. Writing the log can
@@ -1459,7 +1490,7 @@ class Worker(GenerateOps, RigOps, TroupeOps, SpriteOps, TileSheetOps, MeshPostOp
         finally:
             try:
                 if self._cancel.event.is_set() and not self._cancel.committed:
-                    await asyncio.to_thread(self.store.set_status, job_id, "cancelled")
+                    await self._set_cancelled(job_id)
                     # Through a thread, like every DB write in this same
                     # ``finally``. For a cancelled re-texture this ``rmtree``s
                     # ~24 rendered and baked images, and it was running on the

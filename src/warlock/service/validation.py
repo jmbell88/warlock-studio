@@ -66,6 +66,14 @@ MAX_THUMB_BYTES = 512 * 1024
 # mistake -- refuse it rather than store it forever.
 MAX_PROMPT = 1000
 
+
+def check_prompt(text: str | None, *, field: str = "prompt") -> None:
+    """Refuse a prompt past ``MAX_PROMPT``. One spelling for the seven doors
+    that used to carry the comparison by hand -- a rule change here reaches
+    all of them, where before it reached whichever were remembered."""
+    if text is not None and len(text) > MAX_PROMPT:
+        raise Invalid(f"{field} must be at most {MAX_PROMPT} characters", field=field)
+
 # Seeds are 31-bit end to end: _random_seed generates them, and
 # sqlite/torch/trellis all take this range without surprises.
 MAX_SEED = 2**31 - 1

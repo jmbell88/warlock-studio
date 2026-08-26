@@ -331,3 +331,34 @@ def test_a_response_glued_to_a_progress_bar_is_still_read(client, tmp_path):
     )
     assert resp["kind"] == "done"
     assert steps == [(1, 2), (2, 2)], "the glued step messages were dropped"
+
+
+def test_close_does_not_wait_for_a_request_in_flight(client, tmp_path):
+    """``Worker.shutdown`` calls ``close()`` on the loop thread *before* it
+    cancels the running job, so a close that waited for the request lock would
+    wait for the whole sample -- up to the silence timeout -- and stall every
+    other teardown behind it. Closing kills the child first, which is what
+    makes the in-flight request return."""
+    started = threading.Event()
+    outcome: list[BaseException | dict] = []
+
+    def run() -> None:
+        started.set()
+        try:
+            outcome.append(
+                client._request({"op": "generate", "output": "x", "await_cancel": True})
+            )
+        except BaseException as exc:  # noqa: BLE001 - recorded, asserted below
+            outcome.append(exc)
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    assert started.wait(5)
+    time.sleep(0.5)  # the request has the lock and is waiting on the child
+    began = time.monotonic()
+    client.close()
+    assert time.monotonic() - began < 10.0
+    thread.join(10)
+    assert not thread.is_alive()
+    assert outcome and isinstance(outcome[0], ChildFailed)
+    assert client._proc is None

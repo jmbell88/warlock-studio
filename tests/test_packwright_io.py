@@ -79,7 +79,7 @@ def test_a_failed_replace_leaves_the_previous_file_intact(tmp_path, monkeypatch)
     def refuse(src, dst):
         raise OSError("the disk said no")
 
-    monkeypatch.setattr(packwright_io.os, "replace", refuse)
+    monkeypatch.setattr(packwright_io.atomic.os, "replace", refuse)
     with pytest.raises(OSError, match="the disk said no"):
         packwright_mode.save_to(ctx, tab, path)
     assert path.read_bytes() == b"the previous save"
@@ -196,7 +196,7 @@ def test_a_staged_write_uses_a_dotfile(tmp_path, monkeypatch):
         seen.append(Path(src).name)
         real(src, dst)
 
-    monkeypatch.setattr(packwright_io.os, "replace", note)
+    monkeypatch.setattr(packwright_io.atomic.os, "replace", note)
     packwright_io._write({tmp_path / "atlas.wpack": b"x"})
     assert seen == [".atlas.wpack.tmp"]
 

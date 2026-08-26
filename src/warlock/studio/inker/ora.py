@@ -1160,6 +1160,13 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int], reader=None):
                 # before the content lock existed reads as unlocked rather than
                 # failing the whole grid. That is why the version stays 1.
                 locked=bool(entry.get("locked", False)),
+                # The seventh and eighth track properties. ``Track.props``
+                # has written both since 6.5; this reader never read them
+                # back, so every animated document lost its background and
+                # reference flags on load -- the ``Layer.copy`` bug again,
+                # in the one copy site that hand-lists its fields.
+                background=bool(entry.get("background", False)),
+                reference=bool(entry.get("reference", False)),
                 # Same ``.get``, same reason -- and no ``stack.xml`` attribute
                 # to go with it: a foreign editor has no concept for "new cels
                 # start as a copy of the last one", so there is nowhere honest
@@ -1196,6 +1203,8 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int], reader=None):
                     blend=track.blend,
                     alpha_lock=track.alpha_lock,
                     locked=track.locked,
+                    background=track.background,
+                    reference=track.reference,
                 )
                 if reader is not None:
                     reader.attach(layer, data)

@@ -27,12 +27,10 @@ results by prefix: a key without one is a result delivered nowhere.
 
 from __future__ import annotations
 
-import contextlib
-import os
 from pathlib import Path
 from typing import Any
 
-from . import dialogs, docmodes, filetypes, packwright_state, sizeguard
+from . import atomic, dialogs, docmodes, filetypes, packwright_state, sizeguard
 from .packwright_state import PackTab, active, ensure
 
 WPACK_FILTER = ["Warlock atlas (*.wpack)", "*.wpack"]
@@ -135,38 +133,13 @@ def open_path(ctx: Any, path: Path) -> None:
 def _write(files: dict[Path, bytes]) -> None:
     """Write a whole set of files: stage all of them, then replace each.
 
-    ``plotter_io._write``'s rule -- a dotfile temporary and an ``os.replace``,
-    cleaned up in a ``finally`` -- with one thing added. **Every file is staged
-    before any of them is replaced.** An atlas export is up to three files, and
-    an encode that raised on the third used to leave the first two already
-    written on top of the previous export: half of one export and half of
-    another, under names that say they belong together.
-
-    What that does not close is the window *between* the replaces, and it is
-    stated rather than papered over: two of three can land and the process die
-    before the third. Closing it needs a directory-level transaction no
-    filesystem here offers, and the alternative -- staging into a temporary
-    directory and renaming that -- would take the user's chosen name off the
-    file they picked in the dialog.
-
-    The staging name is a dotfile so a temporary that does survive is out of the
-    way rather than sorted right beside the file it is a fragment of, and the
-    ``finally`` means the only file a failure leaves behind is the one that was
-    already there.
+    ``atomic.staged_set``: **every file is staged before any of them is
+    replaced.** An atlas export is up to three files, and an encode that raised
+    on the third used to leave the first two already written on top of the
+    previous export -- half of one export and half of another, under names that
+    say they belong together. The leaf carries the rest of the argument.
     """
-    staged: list[tuple[Path, Path]] = []
-    try:
-        for target, blob in files.items():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            tmp = target.with_name(f".{target.name}.tmp")
-            tmp.write_bytes(blob)
-            staged.append((tmp, target))
-        for tmp, target in staged:
-            os.replace(tmp, target)
-    finally:
-        for tmp, _target in staged:
-            with contextlib.suppress(OSError):
-                tmp.unlink(missing_ok=True)
+    atomic.staged_set(files)
 
 
 # --- saving -------------------------------------------------------------------

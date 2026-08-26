@@ -464,7 +464,7 @@ def test_the_meta_switches_are_part_of_the_recorded_option_set():
     """Or a repeat would write a different sidecar from the export it repeats."""
     state = InkerState()
     snapshot = state.export_options_snapshot()
-    for key in ("meta_tags", "meta_slices", "meta_layers"):
+    for key in ("meta_tags", "meta_slices"):
         assert key in snapshot
         assert key in inker_state.EXPORT_OPTION_DEFAULTS
 

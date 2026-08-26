@@ -35,7 +35,7 @@ def test_a_save_that_cannot_be_written_says_so_once(tmp_path, monkeypatch):
     def _boom(*_a, **_kw):
         raise OSError(13, "Permission denied")
 
-    monkeypatch.setattr(settings_mod.tempfile, "mkstemp", _boom)
+    monkeypatch.setattr(settings_mod.atomic.os, "replace", _boom)
     assert settings.flush() is False
     notice = settings.take_notice()
     assert notice is not None and "cannot be saved" in notice
@@ -44,3 +44,24 @@ def test_a_save_that_cannot_be_written_says_so_once(tmp_path, monkeypatch):
     # would otherwise toast once a second forever.
     assert settings.flush() is False
     assert settings.take_notice() is None
+
+
+def test_a_failed_save_leaves_no_staging_file_behind(tmp_path, monkeypatch):
+    """The write went through a hand-rolled mkstemp + replace, and a replace
+    that raised left the temporary where it was -- with ``_dirty`` still set,
+    ``tick`` then retried once a second, one orphaned ``.settings.*.json``
+    per second for as long as the directory stayed unwritable."""
+    from warlock.studio import settings as settings_mod
+    from warlock.studio.settings import Settings
+
+    settings = Settings.load(tmp_path)
+    settings.set("theme", "light")
+
+    def _boom(*_a, **_kw):
+        raise OSError(13, "Permission denied")
+
+    monkeypatch.setattr(settings_mod.atomic.os, "replace", _boom)
+    for _ in range(3):
+        assert settings.flush() is False
+    strays = [p.name for p in tmp_path.iterdir() if p.name.startswith(".")]
+    assert strays == []

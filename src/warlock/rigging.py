@@ -877,6 +877,13 @@ def finalize_rig(job_dir: Path) -> None:
     FileResponse is mid-stream from it raises PermissionError (files open
     without FILE_SHARE_DELETE), and failing an otherwise successful re-rig
     at the last step over a transient reader is the wrong trade.
+
+    The pair is not atomic, and the failure that matters is the second half:
+    once the GLB has landed, a JSON rename that exhausts its retries would leave
+    the *new* rig.glb beside the *old* rig.json -- a completion marker
+    advertising a skeleton the mesh no longer has. So that failure takes the
+    stale marker with it: the directory then reads as "not rigged", which is
+    true, and the caller's ``discard_rig_temps`` removes the unpublished JSON.
     """
     for src, dest in ((RIG_GLB_TMP, "rig.glb"), (RIG_JSON_TMP, "rig.json")):
         for attempt in range(10):
@@ -885,6 +892,9 @@ def finalize_rig(job_dir: Path) -> None:
                 break
             except PermissionError:
                 if attempt == 9:
+                    if dest == "rig.json":
+                        with contextlib.suppress(OSError):
+                            (job_dir / "rig.json").unlink()
                     raise
                 time.sleep(0.5)
 

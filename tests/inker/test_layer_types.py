@@ -413,3 +413,16 @@ def test_a_tilemap_cel_copy_keeps_the_layer_flags():
     assert copy.reference is True
     assert copy.tileset_uid == 1
     assert copy.refs is not cel.refs
+
+
+def test_converting_a_background_layer_to_a_tilemap_and_back_keeps_the_flag():
+    """Both conversions built their replacement from a hand-written field list
+    -- the list ``Layer.copy`` was rewritten to stop carrying -- and dropped
+    ``background`` each way."""
+    doc = _doc()
+    assert doc.to_background() is True
+    uid = doc.stack[0].uid
+    assert doc.convert_layer_to_tilemap(uid, 4, 4) is True
+    assert doc.stack.by_uid(uid).background is True
+    assert doc.convert_layer_to_raster(uid) is True
+    assert doc.stack.by_uid(uid).background is True

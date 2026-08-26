@@ -220,8 +220,9 @@ The markdown accepted is a strict subset:
 | Code | fenced blocks, with an optional language |
 | Lists | `-` and `1.`, nested by two spaces |
 | Tables | pipe rows with a `---` separator row |
+| Images | `![alt](path)` on a line of its own, the path relative to the chapter |
 
-Everything else is rejected, including images, raw HTML and blockquotes. Two consequences catch
+Everything else is rejected, including inline images, raw HTML and blockquotes. Two consequences catch
 people out. A bare angle bracket followed by a letter reads as HTML, so a placeholder like a job id
 in angle brackets has to sit inside a code span. And a table cell cannot contain a pipe character,
 because the row is split on pipes before anything else is parsed.

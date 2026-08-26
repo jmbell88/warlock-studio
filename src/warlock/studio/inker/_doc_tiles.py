@@ -718,6 +718,11 @@ class TileOps:
                     blend=cel.blend,
                     alpha_lock=cel.alpha_lock,
                     locked=cel.locked,
+                    # Both flags, for ``Layer.copy``'s reason: a hand-written
+                    # field list dropped them, so converting a background
+                    # layer un-backgrounded it.
+                    background=cel.background,
+                    reference=cel.reference,
                     uid=cel.uid,
                 )
                 replacements[id(cel)] = new
@@ -780,6 +785,8 @@ class TileOps:
                     blend=cel.blend,
                     alpha_lock=cel.alpha_lock,
                     locked=cel.locked,
+                    background=cel.background,
+                    reference=cel.reference,
                     uid=cel.uid,
                 )
                 replacements[id(cel)] = new

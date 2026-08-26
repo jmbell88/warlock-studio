@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import contextlib
 import os
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -64,6 +64,37 @@ def staged(path: Path) -> Iterator[Path]:
     finally:
         with contextlib.suppress(OSError):
             tmp.unlink(missing_ok=True)
+
+
+def staged_set(files: Mapping[Path, bytes]) -> None:
+    """Write a set of files that belong together: stage all, then replace each.
+
+    ``plotter_io`` and ``packwright_io`` each carried this loop -- a dotfile
+    temporary per target, every file staged before any is replaced, the
+    temporaries unlinked in a ``finally`` -- and the second was written by
+    porting a fix into the first, which is what a shared leaf exists to stop.
+    An encode that raises on the third file leaves the first two untouched.
+
+    What this does not close is the window *between* the replaces: two of
+    three can land and the process die before the third. Stated rather than
+    papered over -- closing it needs a directory-level transaction no
+    filesystem here offers, and staging into a temporary directory and renaming
+    that would take the user's chosen name off the file they picked.
+    """
+    staged: list[tuple[Path, Path]] = []
+    try:
+        for target, blob in files.items():
+            target = Path(target)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp = target.with_name(f".{target.name}.tmp")
+            tmp.write_bytes(blob)
+            staged.append((tmp, target))
+        for tmp, target in staged:
+            os.replace(tmp, target)
+    finally:
+        for tmp, _target in staged:
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)
 
 
 def write_bytes(path: Path, data: bytes) -> None:

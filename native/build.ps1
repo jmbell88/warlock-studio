@@ -91,7 +91,17 @@ if (-not $built) {
         } else {
             & zig cc -O2 -ffp-contract=off -std=c11 -shared -I"$here" -o "$outDll" @sources
         }
-        if ($LASTEXITCODE -eq 0) { $built = $true; break }
+        if ($LASTEXITCODE -eq 0) {
+            # MSVC is told /IMPLIB:$objDir; the other three write the import
+            # library (and clang-cl an .exp) beside the DLL, and
+            # installer\verify_runtime.py refuses any file under vendor\warlockc
+            # the manifest does not pin. Nothing loads the DLL through an
+            # import library, so they go.
+            Get-ChildItem (Split-Path $outDll) -Filter 'warlockc.*' |
+                Where-Object { $_.Extension -in '.lib', '.exp' } |
+                Remove-Item -Force
+            $built = $true; break
+        }
         Write-Warning "$alt failed ($LASTEXITCODE)"
     }
 }

@@ -191,7 +191,16 @@ def _submit(ctx: Any, job_id: str, form: dict[str, Any]) -> None:
     if busy:
         widgets.spinner()
         imgui.same_line()
-    if widgets.disabled_button("Re-texture mesh", not problems and not busy, (-1, 0)):
+    if widgets.disabled_button(
+        "Re-texture mesh",
+        not problems and not busy,
+        (-1, 0),
+        # ``retarget_panel``'s rule: the problems are listed above, so the
+        # reason names the other gate and defers to the list otherwise.
+        reason="A re-texture is already running for this asset."
+        if busy
+        else "; ".join(problems),
+    ):
         ctx.submit(
             key,
             svc_jobs.retexture_job,

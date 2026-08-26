@@ -350,14 +350,12 @@ def status_rows(ctx: Any) -> list[Status]:
     return found
 
 
-def visible_home_rows(rows: list[Status], *, shell_issue_visible: bool = False) -> list[Status]:
+def visible_home_rows(rows: list[Status]) -> list[Status]:
     """Home's quiet status line.
 
-    ``shell_issue_visible`` is vestigial: it existed to hide the health row
-    behind the doctor banner, and the health row is no longer one of Home's --
-    the rail's badge and the banner already say it, and three renderings of one
-    fact is what the parameter was half-admitting. Kept as a defaulted keyword
-    so the two callers that pass it are not a wiring change.
+    The health row is not one of Home's: the rail's badge and the doctor banner
+    already say it, and a third rendering of one fact is what the keyword this
+    used to take was half-admitting.
     """
 
     return [row for row in rows if row.key in HOME_STATUS]
@@ -830,7 +828,7 @@ def _status(ctx: Any, status: list[Status]) -> None:
     """
     gap = imgui.get_style().item_spacing.x
     first = True
-    for row in visible_home_rows(status, shell_issue_visible=bool(ctx.state.errors)):
+    for row in visible_home_rows(status):
         width = imgui.calc_text_size(row.icon).x + imgui.calc_text_size(row.text).x + gap * 3
         if not first:
             widgets.same_line_or_wrap(width)

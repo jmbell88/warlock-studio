@@ -28,14 +28,12 @@ by prefix: a key without one is a result delivered nowhere.
 
 from __future__ import annotations
 
-import contextlib
-import os
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
 import numpy as np
 
-from . import dialogs, docmodes, plotter_state, sizeguard
+from . import atomic, dialogs, docmodes, plotter_state, sizeguard
 from .plotter_state import PlotterDoc, active, ensure
 
 # One row, all three patterns on it. Written as four entries once, which
@@ -363,53 +361,23 @@ def _write(files: dict[str, bytes], path: Path) -> None:
     ``os.replace``, so a crash mid-write cannot leave a half-written map where a
     whole one was.
 
-    **Every file is staged before any of them is replaced**, which is the rule
-    ``packwright_io._write`` was written to add to this one and which this one
-    was never brought up to. A Tiled export is ``map.tmx`` plus a ``.tsx`` and a
-    ``.png`` per tileset, and replacing them one at a time meant a failure after
-    the map landed left it pointing at tilesets that were stale or not there --
-    a set of files that say they belong together and do not. Staging first turns
-    every failure that can be caught into "nothing was written".
-
-    What that does not close is the window *between* the replaces: two of three
-    can land and the process die before the third. Stated rather than papered
-    over, for ``packwright_io``'s reason -- closing it needs a directory-level
-    transaction no filesystem here offers, and staging into a temporary
-    directory and renaming that would take the user's chosen name off the file
-    they picked in the dialog.
-
-    **The staging name is a dotfile and the cleanup is a ``finally``.** The
-    temporary used to be ``level.wmap.tmp`` -- visible in the folder the user
-    picked, sorted right beside the file it is a fragment of -- and it was
-    abandoned there by any failing write, because nothing removed it when the
-    replace never happened. A leading dot keeps it out of the way while it
-    exists, and ``finally`` means the only file left behind by a failure is the
-    one that was already there.
+    **Every file is staged before any of them is replaced** -- ``atomic.staged_set``,
+    the same leaf ``packwright_io._write`` uses. A Tiled export is ``map.tmx``
+    plus a ``.tsx`` and a ``.png`` per tileset, and replacing them one at a time
+    meant a failure after the map landed left it pointing at tilesets that were
+    stale or not there. The rule, its staging dotfile and its ``finally`` used
+    to be spelled out here and in ``packwright_io`` separately, the second
+    written by porting a fix into the first; the leaf holds the argument now.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    staged: list[tuple[Path, Path]] = []
-    try:
-        for name, blob in files.items():
-            # The main artifact by its exact exporter-chosen name, not by
-            # prefix: ``startswith("map.")`` also matched an image layer whose
-            # source happened to be ``map.png``, which then overwrote the map
-            # at the user's chosen path with the picture (or the other way
-            # round, depending on dict order).
-            target = (
-                path
-                if name in ("map.wmap", "map.tmx", "map.tmj")
-                else path.parent / name
-            )
-            target.parent.mkdir(parents=True, exist_ok=True)
-            tmp = target.with_name(f".{target.name}.tmp")
-            tmp.write_bytes(blob)
-            staged.append((tmp, target))
-        for tmp, target in staged:
-            os.replace(tmp, target)
-    finally:
-        for tmp, _target in staged:
-            with contextlib.suppress(OSError):
-                tmp.unlink(missing_ok=True)
+    targets: dict[Path, bytes] = {}
+    for name, blob in files.items():
+        # The main artifact by its exact exporter-chosen name, not by prefix:
+        # ``startswith("map.")`` also matched an image layer whose source
+        # happened to be ``map.png``, which then overwrote the map at the
+        # user's chosen path with the picture (or the other way round,
+        # depending on dict order).
+        targets[path if name in ("map.wmap", "map.tmx", "map.tmj") else path.parent / name] = blob
+    atomic.staged_set(targets)
 
 
 def save_to(ctx: Any, tab: PlotterDoc, path: Path, file_format: str) -> None:

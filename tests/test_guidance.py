@@ -424,3 +424,12 @@ def test_the_composed_prompt_never_sees_a_conditioning_field():
     assert guidance.compose_prompt("a crate", plain) == guidance.compose_prompt(
         "a crate", conditioned
     )
+
+
+def test_an_ip_adapter_on_a_non_sdxl_base_is_refused_at_the_door():
+    """The two other conditioning halves are gated by base family here; the
+    IP-Adapter was not, and the only guard was ``Text2Image._conditioned``,
+    which fires with the checkpoint already resident. Same rule, same door."""
+    with pytest.raises(ValueError, match="ip_adapter") as excinfo:
+        guidance.normalize({"base_model": "flux_klein", "ip_adapter": "plus"})
+    assert excinfo.value.field == "ip_adapter"

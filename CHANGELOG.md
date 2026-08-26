@@ -16,6 +16,67 @@ stability. If you want the short version, the app shows the opening sentence of
 each entry under **All release notes...** on the Home screen, and only expands
 the release you are actually running.
 
+## 0.0.29 — 2026-08-25
+
+- **Closing Warlock while a picture was being generated no longer hangs it.** Shutdown
+  closed the image worker's handle while the running sample still held it, so it waited for
+  the sample -- up to fifteen minutes -- before it could even ask the job to stop. The close
+  now stops the worker process first, which is what makes the sample return.
+
+- **An IP-Adapter is refused at the door on a base model it does not fit.** A ControlNet or
+  a style LoRA on the wrong base was refused before anything loaded; the IP-Adapter was not,
+  so the refusal arrived with a 7 GB checkpoint already on the card. Same rule for all three
+  now.
+
+- **Rigging from the inspector's Pose tab uses the skeleton you picked.** The Rig stage and
+  the library row already did; this one door passed the configuration default, so choosing
+  "quadruped" and then pressing *Rig this mesh* in the Pose tab rigged with the humanoid.
+
+- **Animated drawings keep their background and reference layers across a save.** The
+  `.ora` writer recorded both flags and the reader never read them back, so every animated
+  document opened with neither. Converting a layer to a tilemap and back dropped the flag
+  the same way.
+
+- **A cancel that hit a busy database is still a cancel.** The finished/failed verdict was
+  retried when the one sqlite connection was mid-backup; the cancelled verdict was not, so
+  a job you stopped could come back on the next launch reading "interrupted".
+
+- **A re-rig whose second file cannot be published leaves no stale marker.** Publishing
+  renames the mesh and then its rig record; if the record's rename failed after the mesh
+  had landed, the asset advertised a skeleton it no longer had. It now reads as unrigged.
+
+- **The sheet cap is one count at every door.** Sprite sheets, character sheets and *Send
+  to Troupe* on an unrigged mesh all draw on the same 200-per-asset pool and each counted a
+  different subset of the others, so the pool could be reserved past the cap. Troupe's
+  unrigged path did not check it at all.
+
+- **Clay: edge picking chooses the nearer edge.** With two objects' edges under the cursor
+  the earlier one in the document always won; vertex picking already compared depth and
+  edge picking now does too. Closing a Clay tab also no longer throws away every other open
+  tab's manifold checks.
+
+- **Plotter: a closed map releases its minimap.** The composited minimap (and a handful of
+  smaller per-map form caches) stayed in memory for the life of the session after the tab
+  closed.
+
+- **Inker: the export sidecar switches are remembered.** *Tags* and *Slices* were recorded
+  with the rest of the export options and silently reset to their defaults on the way back.
+  A third switch that nothing ever read was removed.
+
+- **Studio preferences that cannot be saved no longer litter the data folder.** A failed
+  save left its staging file behind, and the once-a-second retry left another each time.
+
+- **Housekeeping.** Dead code out: three unreachable field groups in the 2D settings pane,
+  an unused per-tab job id in Troupe, an unread feather setting, a store method only tests
+  called, an unreachable worker op. One helper each for the prompt-length check (seven
+  copies) and the stage-everything-then-replace file write (two copies). The installer
+  script's comment carried a literal backspace byte where `` was meant; the native build
+  removes the import library the non-MSVC linkers leave beside the DLL, which the installer's
+  manifest check would refuse. Three manual chapters and four docstrings brought back in
+  line with the code, and a download-pin test that had been passing on zero matches now
+  checks the rendered text. `REPORT.md` deleted; `TODO.md` rewritten as a priority list of
+  what only a human can close.
+
 ## 0.0.28 — 2026-08-23
 
 - **Saving a screenshot now says where it went.** The picture was written and nothing was

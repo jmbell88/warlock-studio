@@ -49,7 +49,7 @@ from .core import WarlockService
 from .errors import Invalid, NotFound, invalid_from
 from .validation import (
     ALLOWED_RESOLUTIONS,
-    MAX_PROMPT,
+    check_prompt,
     check_seed,
     check_trellis_band,
     check_trellis_tex_res,
@@ -308,11 +308,10 @@ def _check_unit(svc: WarlockService, plan: SweepPlan, unit: UnitPlan) -> str:
 def _validate(svc: WarlockService, plan: SweepPlan, units: list[UnitPlan]) -> None:
     if not plan.prompt.strip():
         raise Invalid("a sweep needs a prompt", field="prompt")
-    if len(plan.prompt) > MAX_PROMPT:
-        # create_job would refuse it too, but only after the sweep row was
-        # minted and the rollback ran; all-or-nothing admission means the
-        # refusal happens before anything exists.
-        raise Invalid(f"prompt must be at most {MAX_PROMPT} characters", field="prompt")
+    # create_job would refuse it too, but only after the sweep row was minted
+    # and the rollback ran; all-or-nothing admission means the refusal happens
+    # before anything exists.
+    check_prompt(plan.prompt)
     if plan.stage not in ("reference", "model"):
         raise Invalid("stage must be 'reference' or 'model'", field="stage")
     if not plan.seeds:

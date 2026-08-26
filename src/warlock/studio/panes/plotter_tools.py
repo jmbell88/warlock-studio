@@ -338,94 +338,92 @@ def map_settings_popup(ctx: Any, state: Any, tab: Any) -> None:
         imgui.end_popup()
         return
     widgets.section("Metadata")
-    if True:
-        class_name = widgets.input_text(
-            "##map-class", doc.class_name, max_length=64, hint="map class"
-        )
-        if class_name != doc.class_name:
-            doc.set_map_settings(class_name=class_name)
-        background = widgets.input_text(
-            "##map-background",
-            doc.backgroundcolor or "",
-            max_length=9,
-            hint="#RRGGBB or #AARRGGBB",
-        )
-        if background != (doc.backgroundcolor or ""):
-            try:
-                doc.set_map_settings(backgroundcolor=background or None)
-            except ValueError:
-                # Said in place rather than toasted. A text field is re-read on
-                # every frame, and "#4a7" on the way to "#4a7c3f" is refused on
-                # every one of them -- so the toast fired sixty times a second
-                # for as long as the caret sat in the middle of a colour, which
-                # is the exact failure ``ground_watch``'s docstring names. A
-                # half-typed value is not an error, it is a value in progress:
-                # the document keeps what it had until the text is a colour.
-                widgets.muted("Not a colour yet - #RRGGBB or #AARRGGBB.")
-        order = widgets.labeled_combo(
-            "Render order",
-            doc.renderorder,
-            [(value, value) for value in project.RENDER_ORDERS],
-        )
-        if order != doc.renderorder:
-            doc.set_map_settings(renderorder=order)
-        changed, origin = controls.input_float2(
-            "Parallax origin", [float(value) for value in doc.parallax_origin]
+    class_name = widgets.input_text(
+        "##map-class", doc.class_name, max_length=64, hint="map class"
+    )
+    if class_name != doc.class_name:
+        doc.set_map_settings(class_name=class_name)
+    background = widgets.input_text(
+        "##map-background",
+        doc.backgroundcolor or "",
+        max_length=9,
+        hint="#RRGGBB or #AARRGGBB",
+    )
+    if background != (doc.backgroundcolor or ""):
+        try:
+            doc.set_map_settings(backgroundcolor=background or None)
+        except ValueError:
+            # Said in place rather than toasted. A text field is re-read on
+            # every frame, and "#4a7" on the way to "#4a7c3f" is refused on
+            # every one of them -- so the toast fired sixty times a second
+            # for as long as the caret sat in the middle of a colour, which
+            # is the exact failure ``ground_watch``'s docstring names. A
+            # half-typed value is not an error, it is a value in progress:
+            # the document keeps what it had until the text is a colour.
+            widgets.muted("Not a colour yet - #RRGGBB or #AARRGGBB.")
+    order = widgets.labeled_combo(
+        "Render order",
+        doc.renderorder,
+        [(value, value) for value in project.RENDER_ORDERS],
+    )
+    if order != doc.renderorder:
+        doc.set_map_settings(renderorder=order)
+    changed, origin = controls.input_float2(
+        "Parallax origin", [float(value) for value in doc.parallax_origin]
+    )
+    if changed:
+        doc.set_map_settings(parallax_origin=(float(origin[0]), float(origin[1])))
+    if doc.projection == project.OBLIQUE:
+        changed, skew = controls.input_float2(
+            "Skew", [float(doc.skew_x), float(doc.skew_y)]
         )
         if changed:
-            doc.set_map_settings(parallax_origin=(float(origin[0]), float(origin[1])))
-        if doc.projection == project.OBLIQUE:
-            changed, skew = controls.input_float2(
-                "Skew", [float(doc.skew_x), float(doc.skew_y)]
-            )
-            if changed:
-                doc.set_map_settings(skew_x=int(skew[0]), skew_y=int(skew[1]))
-        if doc.projection in (project.STAGGERED, project.HEXAGONAL):
-            # Shown only for the two projections that read them, which is the
-            # same rule Skew follows above: a field that means nothing on an
-            # orthogonal map is a question with no answer.
-            axis = widgets.labeled_combo(
-                "Stagger axis",
-                doc.stagger_axis,
-                [("y", "Rows (y)"), ("x", "Columns (x)")],
-                help_text="Which way the offset runs. Tiled's staggeraxis.",
-            )
-            if axis != doc.stagger_axis:
-                doc.set_map_settings(stagger_axis=axis)
-            index = widgets.labeled_combo(
-                "Stagger index",
-                doc.stagger_index,
-                [("odd", "Odd"), ("even", "Even")],
-                help_text="Which rows (or columns) are the shifted ones.",
-            )
-            if index != doc.stagger_index:
-                doc.set_map_settings(stagger_index=index)
-        if doc.projection == project.HEXAGONAL:
-            changed, side = controls.input_int("Hex side", int(doc.hex_side))
-            if changed:
-                doc.set_map_settings(hex_side=max(0, int(side)))
-                # It changes ``pixel_width``, so the fit is stale: a map that
-                # kept its old frame after the lattice changed shape is one
-                # whose edge is off screen with no way to tell why.
-                tab.view.fitted = False
-            widgets.help_marker(
-                "How long the hexagon's flat run is, in pixels. Zero is a "
-                "staggered diamond rather than a hexagon -- which is what a "
-                "hexagonal map made here wrote before this field existed."
-            )
+            doc.set_map_settings(skew_x=int(skew[0]), skew_y=int(skew[1]))
+    if doc.projection in (project.STAGGERED, project.HEXAGONAL):
+        # Shown only for the two projections that read them, which is the
+        # same rule Skew follows above: a field that means nothing on an
+        # orthogonal map is a question with no answer.
+        axis = widgets.labeled_combo(
+            "Stagger axis",
+            doc.stagger_axis,
+            [("y", "Rows (y)"), ("x", "Columns (x)")],
+            help_text="Which way the offset runs. Tiled's staggeraxis.",
+        )
+        if axis != doc.stagger_axis:
+            doc.set_map_settings(stagger_axis=axis)
+        index = widgets.labeled_combo(
+            "Stagger index",
+            doc.stagger_index,
+            [("odd", "Odd"), ("even", "Even")],
+            help_text="Which rows (or columns) are the shifted ones.",
+        )
+        if index != doc.stagger_index:
+            doc.set_map_settings(stagger_index=index)
+    if doc.projection == project.HEXAGONAL:
+        changed, side = controls.input_int("Hex side", int(doc.hex_side))
+        if changed:
+            doc.set_map_settings(hex_side=max(0, int(side)))
+            # It changes ``pixel_width``, so the fit is stale: a map that
+            # kept its old frame after the lattice changed shape is one
+            # whose edge is off screen with no way to tell why.
+            tab.view.fitted = False
+        widgets.help_marker(
+            "How long the hexagon's flat run is, in pixels. Zero is a "
+            "staggered diamond rather than a hexagon -- which is what a "
+            "hexagonal map made here wrote before this field existed."
+        )
 
     imgui.dummy((0, 6))
     widgets.section("Custom properties")
-    if True:
-        # The map's own custom properties. They survive a Tiled round trip and
-        # always have; this is the first way to set one without a text editor.
-        plotter_layers.property_editor(
-            ctx,
-            f"plotter_map_prop:{tab.uid}",
-            doc.properties,
-            doc.set_map_properties,
-            object_options=plotter_layers.object_options(doc),
-        )
+    # The map's own custom properties. They survive a Tiled round trip and
+    # always have; this is the first way to set one without a text editor.
+    plotter_layers.property_editor(
+        ctx,
+        f"plotter_map_prop:{tab.uid}",
+        doc.properties,
+        doc.set_map_properties,
+        object_options=plotter_layers.object_options(doc),
+    )
     imgui.end_popup()
 
 

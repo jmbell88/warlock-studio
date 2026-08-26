@@ -375,6 +375,40 @@ def guard(ctx: Any, verb: str, proceed: Any) -> bool:
     return docmodes.guard(ctx, "plotter", "map", "maps", verb, proceed)
 
 
+#: ``ctx.state.preview`` keys the Plotter panes mint per tab, per layer and
+#: per object. Tab uids are never reused, so an entry left behind is held for
+#: the life of the process -- and the minimap's is a whole-map RGBA composite,
+#: which is ``plotter_textures.PREFIX``'s own reason for existing. Listed here
+#: rather than found by prefix because the layer and object keys carry *their*
+#: uids, not the tab's.
+_TAB_PREVIEW_PREFIXES = (
+    "plotter_minimap:",
+    "plotter_resize:",
+    "plotter_offset:",
+    "plotter_tile_px:",
+    "tilemeta:",
+    "tsedit:",
+)
+
+
+def _forget_preview(ctx: Any, tab: Any) -> None:
+    preview = getattr(ctx.state, "preview", None)
+    if not isinstance(preview, dict):
+        return
+    layer_uids = {layer.uid for layer in tab.doc.all_layers()}
+    object_uids = {
+        obj.uid for layer in tab.doc.all_layers() for obj in getattr(layer, "objects", ())
+    }
+    for key in list(preview):
+        head, _, rest = key.partition(":")
+        if (
+            any(key.startswith(f"{p}{tab.uid}") for p in _TAB_PREVIEW_PREFIXES)
+            or (head == "plotter_layer_prop" and rest.isdigit() and int(rest) in layer_uids)
+            or (head == "plotter_prop" and rest.isdigit() and int(rest) in object_uids)
+        ):
+            preview.pop(key, None)
+
+
 def close_tab(ctx: Any, uid: str) -> None:
     state = ensure(ctx)
     tab = state.get(uid)
@@ -392,6 +426,7 @@ def close_tab(ctx: Any, uid: str) -> None:
 
         plotter_textures.release_doc(ctx, uid)
         plotter_canvas.forget_doc(uid)
+        _forget_preview(ctx, tab)
         state.close(uid)
 
     if not tab.dirty:

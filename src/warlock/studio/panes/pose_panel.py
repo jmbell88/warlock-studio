@@ -17,6 +17,7 @@ from imgui_bundle import imgui
 from ...service import rig as svc_rig
 from .. import atomic, controls, dialogs, docmodes, forms, icons, theme, widgets
 from ..manual import render as manual_render
+from . import stage_rig
 
 log = logging.getLogger(__name__)
 
@@ -55,10 +56,16 @@ def draw(ctx: Any, job: Any, *, hosted: bool = False) -> None:
             "Rigging is queued like a generation: it runs Blender in a separate "
             "process and waits behind anything already running."
         )
-        rig_key = f"rig:{job['id']}"
-        if widgets.disabled_button("Rig this mesh", not ctx.busy(rig_key)):
+        rig_key = stage_rig.rig_key(job)
+        if widgets.disabled_button(
+            "Rig this mesh", not ctx.busy(rig_key), reason="This mesh is already being rigged."
+        ):
+            # ``stage_rig.skeleton``, like the library row and the Rig stage
+            # itself: this was the one door that passed the config default,
+            # so picking "quadruped" in the Rig stage and rigging from the
+            # inspector's Pose tab silently rigged with the wrong skeleton.
             ctx.submit(
-                rig_key, svc_rig.create_rig, ctx.svc, job["id"], template=ctx.rig_default or None
+                rig_key, svc_rig.create_rig, ctx.svc, job["id"], template=stage_rig.skeleton(ctx)
             )
         return
 

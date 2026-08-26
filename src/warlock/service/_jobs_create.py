@@ -32,10 +32,10 @@ from .validation import (
     ALLOWED_RESOLUTIONS,
     MAX_JOB_NAME,
     MAX_MESH_BYTES,
-    MAX_PROMPT,
     MAX_REFERENCE_COUNT,
     MAX_UPLOAD_BYTES,
     check_glb,
+    check_prompt,
     check_seed,
     check_trellis_band,
     check_trellis_tex_res,
@@ -342,8 +342,7 @@ def create_job(
         )
     if kind == "text" and not (prompt and prompt.strip()):
         raise Invalid("text jobs require a prompt", field="prompt")
-    if prompt is not None and len(prompt) > MAX_PROMPT:
-        raise Invalid(f"prompt must be at most {MAX_PROMPT} characters", field="prompt")
+    check_prompt(prompt)
     if kind == "image" and image is None:
         raise Invalid("image jobs require an image upload", field="image")
     if reference is not None and kind != "text":
@@ -641,8 +640,7 @@ def import_reference(
         raise Invalid(str(exc), field="image") from exc
     except Exception as exc:
         raise Invalid("could not decode the painted image", field="image") from exc
-    if prompt is not None and len(prompt) > MAX_PROMPT:
-        raise Invalid(f"prompt must be at most {MAX_PROMPT} characters", field="prompt")
+    check_prompt(prompt)
 
     params: dict[str, Any] = {
         "seed": 0,
@@ -703,8 +701,7 @@ def import_mesh(
     if len(glb) > MAX_MESH_BYTES:
         raise TooLarge("mesh is over 100 MB")
     check_glb(glb)
-    if prompt is not None and len(prompt) > MAX_PROMPT:
-        raise Invalid(f"prompt must be at most {MAX_PROMPT} characters", field="prompt")
+    check_prompt(prompt)
 
     params: dict[str, Any] = {
         "seed": 0,
