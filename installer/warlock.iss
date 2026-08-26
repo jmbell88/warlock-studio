@@ -21,7 +21,7 @@ DisableProgramGroupPage=yes
 WizardStyle=modern
 Compression=lzma2
 SolidCompression=yes
-DiskSpanning=yes
+DiskSpanning=no
 DiskSliceSize=2100000000
 OutputDir={#ProjectRoot}\dist
 OutputBaseFilename=WarlockSetup-v{#AppVersion}
@@ -32,8 +32,17 @@ OutputBaseFilename=WarlockSetup-v{#AppVersion}
 ; install root and beside vendor\, which is what MIT and the NVIDIA
 ; redistributable EULA actually require -- see installer\build.ps1.
 LicenseFile={#ProjectRoot}\LICENSE
-SetupIconFile={#ProjectRoot}\src\warlock\assets\icon.ico
-UninstallDisplayIcon={app}\src\warlock\assets\icon.ico
+; A genuine multi-size Windows ICO (16-256 px), and it has to be a separate
+; file: src\warlock\assets\icon.ico is a 1024x1024 PNG despite its extension,
+; which pygame loads happily (it reads content, not names) and Inno Setup
+; cannot turn into an icon resource at all -- it failed the first-ever compile
+; with "Resource update error: File is too large". The two cannot be merged:
+; SDL2's ICO loader rejects 32-bit RGBA ICOs, so a real .ico would leave the
+; app window with no icon. Regenerate with Pillow from the PNG beside it.
+SetupIconFile={#ProjectRoot}\installer\warlock.ico
+; Staged into the install root by installer\build.ps1, so Add/Remove Programs
+; has an icon to show -- it previously pointed at the PNG above and showed none.
+UninstallDisplayIcon={app}\warlock.ico
 CloseApplications=yes
 
 [Tasks]
@@ -47,9 +56,9 @@ Type: filesandordirs; Name: "{app}\src"
 Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\Warlock Studio"; Filename: "{app}\python\pythonw.exe"; Parameters: "-m warlock"; WorkingDir: "{app}"
+Name: "{group}\Warlock Studio"; Filename: "{app}\python\pythonw.exe"; Parameters: "-m warlock"; WorkingDir: "{app}"; IconFilename: "{app}\warlock.ico"
 Name: "{group}\Warlock Doctor"; Filename: "{app}\bin\warlock-doctor.cmd"; WorkingDir: "{app}"
-Name: "{userdesktop}\Warlock Studio"; Filename: "{app}\python\pythonw.exe"; Parameters: "-m warlock"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{userdesktop}\Warlock Studio"; Filename: "{app}\python\pythonw.exe"; Parameters: "-m warlock"; WorkingDir: "{app}"; IconFilename: "{app}\warlock.ico"; Tasks: desktopicon
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\src"

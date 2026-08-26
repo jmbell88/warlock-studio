@@ -55,6 +55,23 @@ Assert-LastExit "uv python find 3.13"
 if (-not (Test-Path -LiteralPath $ManagedPython -PathType Leaf)) {
     throw "uv did not return a usable managed CPython 3.13"
 }
+# `uv python find` returns the project virtualenv when it is run from inside the
+# checkout -- `--no-project` stops uv reading pyproject.toml, it does not stop
+# .venv discovery. A venv's parent directory is `Scripts`, which holds console
+# shims and no stdlib, and staging that produced a `stage\python` that satisfied
+# every guard below while being unusable. Resolve the real installation through
+# sys.base_prefix, which is a no-op when uv already returned an installation.
+$ManagedRoot = (& $ManagedPython -c "import sys; print(sys.base_prefix)" | Out-String).Trim()
+Assert-LastExit "managed Python base prefix"
+$ManagedPython = Join-Path $ManagedRoot "python.exe"
+if (-not (Test-Path -LiteralPath $ManagedPython -PathType Leaf)) {
+    throw "no python.exe under the resolved interpreter root $ManagedRoot"
+}
+# The stdlib is what separates an installation from a `Scripts` directory, and
+# its absence is the assertion whose absence let the venv through.
+if (-not (Test-Path -LiteralPath (Join-Path $ManagedRoot "Lib\os.py") -PathType Leaf)) {
+    throw "the resolved interpreter root has no stdlib (Lib\os.py): $ManagedRoot"
+}
 & $ManagedPython -c "import platform, sys; assert sys.version_info[:2] == (3, 13); assert platform.machine().lower() in ('amd64', 'x86_64')"
 Assert-LastExit "managed Python 3.13 check"
 
@@ -69,12 +86,23 @@ if (Test-Path -LiteralPath $Stage) {
 }
 New-Item -ItemType Directory -Path $Stage -Force | Out-Null
 
-$ManagedRoot = Split-Path -Parent $ManagedPython
 New-Item -ItemType Directory -Path (Join-Path $Stage "python") -Force | Out-Null
 Copy-Item -Path (Join-Path $ManagedRoot "*") -Destination (Join-Path $Stage "python") -Recurse -Force
 $StagedPython = Join-Path $Stage "python\python.exe"
 if (-not (Test-Path -LiteralPath $StagedPython -PathType Leaf)) {
     throw "the managed Python copy did not produce stage\python\python.exe"
+}
+if (-not (Test-Path -LiteralPath (Join-Path $Stage "python\Lib\os.py") -PathType Leaf)) {
+    throw "the managed Python copy did not produce a stdlib at stage\python\Lib\os.py"
+}
+# A uv-managed CPython carries Lib\EXTERNALLY-MANAGED, and `uv pip sync` refuses
+# to install into an interpreter that declares it. The marker is a true statement
+# about uv's own copy under AppData and a false one about this staged tree, which
+# is Warlock's private application runtime and is never managed by uv again --
+# leaving it would also refuse anyone installing into the shipped runtime later.
+$ExternallyManaged = Join-Path $Stage "python\Lib\EXTERNALLY-MANAGED"
+if (Test-Path -LiteralPath $ExternallyManaged -PathType Leaf) {
+    Remove-Item -LiteralPath $ExternallyManaged -Force
 }
 
 & uv export --frozen --no-dev --no-emit-project --extra studio --extra text2image --extra rig -o $Requirements
@@ -117,6 +145,9 @@ foreach ($Document in @("pyproject.toml", "CHANGELOG.md", "README.md", "LICENSE"
 # And a copy beside the DLLs themselves, so a user who opens vendor\ finds the
 # terms without knowing to look at the install root.
 Copy-Item -LiteralPath (Join-Path $Root "THIRD-PARTY-NOTICES.md") -Destination (Join-Path $Stage "vendor") -Force
+
+# warlock.iss points UninstallDisplayIcon and both shortcuts at {app}\warlock.ico.
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot "warlock.ico") -Destination $Stage -Force
 
 # Build caches are never an input. compileall below creates only the caches that
 # match the interpreter being shipped.
