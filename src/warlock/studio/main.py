@@ -532,10 +532,17 @@ def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
             # than twenty-four bindings, and a sheet that listed each letter
             # would be a sheet nobody could read past.
             ("zsxdcvgbhnjm / q2w3er5t6y7u", "The two piano rows, in the note column"),
+            ("Backtick / Shift+Backtick", "Note-off (cuts) / release (plays the tail)"),
+            # The three key cells below are deliberately prose. Which hex digit
+            # or which letter is not a binding -- the *column the caret is in*
+            # is what decides what the key means, and a sheet listing sixteen
+            # digits twice would be a sheet nobody reads past.
+            ("Hex digits", "Instrument and parameter: two digits. Volume: one"),
+            ("An effect's letter", "The effect column -- only letters the engine has"),
             ("- / =", "Octave down / up"),
             ("Shift+1 / Shift+2", "Transpose the selection down / up a semitone"),
             ("Page Up / Page Down", "Move sixteen rows -- four beats"),
-            ("Delete", "Clear the selection"),
+            ("Delete", "Clear the column under the caret, or the whole selection"),
             ("Esc", "Drop the selection"),
             ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
             ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),

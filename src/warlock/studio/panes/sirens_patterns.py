@@ -133,6 +133,23 @@ def _cell_text(cells: Any, row: int, channel: int) -> tuple[str, ...]:
     )
 
 
+def _caret_span(column: int, digit: int, part: str) -> tuple[int, int]:
+    """Which characters of a cell's text the caret rings, as ``(start, count)``.
+
+    A column typed one nibble at a time gets a caret over the **nibble**,
+    because two-digit entry is otherwise invisible: the first key changes one
+    character of the cell and nothing anywhere says a second key is still owed,
+    so an entry interrupted by an arrow key looks exactly like an entry that
+    finished. The columns taken in a single keystroke -- the note, the volume,
+    the effect letter -- keep the whole-cell caret, since they have no
+    sub-position to show and a caret narrower than the value it is over would
+    be pointing at half a thing.
+    """
+    if sirens_mode.COLUMN_DIGITS[column] > 1 and 0 <= digit < len(part):
+        return (digit, 1)
+    return (0, len(part))
+
+
 def _grid(ctx: Any, state: Any, tab: Any, pattern: Any) -> None:
     from imgui_bundle import imgui
 
@@ -192,7 +209,9 @@ def _grid(ctx: Any, state: Any, tab: Any, pattern: Any) -> None:
                 colour = text if part[0] not in "." else muted
                 draw_list.add_text((cx, y), colour, part)
                 if row == state.row and channel == state.channel and column == state.column:
-                    width = imgui.calc_text_size(part).x
+                    start, count = _caret_span(column, state.digit, part)
+                    lead = imgui.calc_text_size(part[:start]).x if start else 0.0
+                    width = imgui.calc_text_size(part[start : start + count]).x
                     # ``add_rect`` is (p_min, p_max, col, rounding, thickness,
                     # flags), and the thickness comes *before* the flags. The
                     # other order type-errors, and only on the frames that draw
@@ -200,7 +219,11 @@ def _grid(ctx: Any, state: Any, tab: Any, pattern: Any) -> None:
                     # which nothing caught until the panes were drawn under a
                     # test (``tests/test_sirens_panes_smoke.py``).
                     draw_list.add_rect(
-                        (cx - 1, y), (cx + width + 1, y + row_h), caret, 0.0, 1.5
+                        (cx + lead - 1, y),
+                        (cx + lead + width + 1, y + row_h),
+                        caret,
+                        0.0,
+                        1.5,
                     )
                 cx += imgui.calc_text_size(part).x + sp(6)
 

@@ -68,6 +68,7 @@ from .sirens_io import (  # noqa: F401
     save_to,
 )
 from .sirens_state import (  # noqa: F401
+    COLUMN_DIGITS,
     SirensState,
     SongTab,
     active,
@@ -173,6 +174,11 @@ def clamp_caret(ctx: Any, tab: SongTab | None = None) -> None:
     state.row = max(0, min(state.row, rows - 1))
     state.channel = max(0, min(state.channel, chans - 1))
     state.column = max(0, min(state.column, D.COLUMNS - 1))
+    # Whatever half-typed byte was in flight belonged to a cell that may not be
+    # under the caret any more. Cleared here as well as in :func:`move_caret`
+    # because this is the arrival every *other* route takes -- a click through
+    # :func:`set_caret`, a pattern resized under the caret, an undo of either.
+    state.digit = 0
     if state.instrument is not None and doc.instrument(state.instrument) is None:
         state.instrument = doc.instruments[0].uid if doc.instruments else None
     if state.oneshot is not None and doc.oneshot(state.oneshot) is None:
@@ -203,6 +209,10 @@ def move_caret(ctx: Any, drow: int = 0, dchannel: int = 0, dcolumn: int = 0,
     pattern = caret_pattern(ctx)
     if pattern is None:
         return
+    # A step of any size ends the byte being typed. Without this the second
+    # nibble of ``4_`` lands in whatever cell the arrow key moved to, which is
+    # a value nobody typed in a cell nobody was looking at.
+    state.digit = 0
     if select:
         if state.anchor is None:
             state.anchor = (state.row, state.channel)
@@ -253,8 +263,25 @@ def _touch(tab: SongTab, changed: bool) -> bool:
     return changed
 
 
-def write_cell(ctx: Any, value: int, column: int | None = None) -> bool:
-    """Put one value in the cell under the caret, and step by the edit step."""
+def write_cell(
+    ctx: Any, value: int, column: int | None = None, *, advance: bool = True
+) -> bool:
+    """Put one value in the cell under the caret, and step by the edit step.
+
+    **The one door every keystroke that changes a cell goes through**, whichever
+    column it lands in: a note, a hex nibble, an effect letter and a blanking
+    Delete all arrive here, because every one of them owes the same three
+    things -- the document's refusal framed as a toast rather than a traceback,
+    the renderer re-armed through :func:`_touch`, and the caret stepped. A
+    second path grown for the numeric columns would be a second place to forget
+    one of the three, and an edit that forgets ``_touch`` is an edit you cannot
+    hear, which is indistinguishable from an edit that did not happen.
+
+    ``advance`` is what a half-finished entry passes. The high nibble of a
+    two-digit column writes a real value into the cell -- it is not a keystroke
+    held in a buffer somewhere -- and must nevertheless *not* drop the caret by
+    the edit step, or the low nibble would land a row further down.
+    """
     state = ensure(ctx)
     tab = state.active
     if tab is None or tab.busy or state.pattern is None:
@@ -266,8 +293,13 @@ def write_cell(ctx: Any, value: int, column: int | None = None) -> bool:
         ctx.toast(f"That note was not written: {exc}", "error")
         return False
     _touch(tab, changed)
-    if state.step:
-        move_caret(ctx, drow=state.step)
+    if advance:
+        # The entry is finished, so the next hex key starts a fresh byte.
+        # Cleared here as well as in :func:`move_caret` because a step of zero
+        # leaves the caret exactly where it is and never reaches that one.
+        state.digit = 0
+        if state.step:
+            move_caret(ctx, drow=state.step)
     # Deliberately True even for a no-op write: retyping the note that is
     # already there is a real user action and the caret still steps, so the key
     # was consumed. ``SongDoc``'s False means "no history step", not "ignored".
@@ -301,6 +333,114 @@ def write_note(ctx: Any, semitone: int) -> bool:
             tab.doc.set_cell(state.pattern, row, channel, D.INSTRUMENT, state.instrument),
         )
     return written
+
+
+def _column_ceiling(column: int) -> int:
+    """The largest value ``column`` may hold, read off the engine not copied.
+
+    The instrument column is the one that matters. Ids are minted out of a
+    per-document space bounded by ``document.MAX_INSTRUMENTS``, so ``80`` and
+    upwards name a slot no song can contain: a cell that renders as silence and
+    reads, to the person who typed it, as the synthesiser being broken. The
+    volume column is the engine's own ``0..15``, and the parameter column is a
+    byte because that is exactly what every effect's ``xx`` is.
+    """
+    from .sirens import document as D
+    from .sirens import instruments as inst
+
+    if column == D.INSTRUMENT:
+        return D.MAX_INSTRUMENTS - 1
+    if column == D.VOLUME:
+        return inst.MAX_VOLUME
+    return 0xFF
+
+
+def write_hex(ctx: Any, value: int) -> bool:
+    """Type one hex digit into the caret's column. -> whether it was taken.
+
+    Tracker entry, which is nibble-at-a-time and **in place**: the digit
+    replaces one nibble of whatever the cell already holds rather than starting
+    a fresh byte, so correcting the low half of ``4F`` is one keystroke on the
+    second character instead of retyping both. An empty cell counts as ``00``
+    for that purpose, which is what makes the first digit of a fresh entry land
+    in the high nibble and read back the way it was typed.
+
+    A digit that would take the cell past :func:`_column_ceiling` writes
+    **nothing at all** -- ``8`` in the high nibble of the instrument column
+    names a slot no song has -- for the same reason an unknown effect letter
+    writes nothing: a value the engine cannot use is worse in the cell than
+    absent, because the grid then shows the user something the song does not
+    play.
+    """
+    state = ensure(ctx)
+    tab = state.active
+    if tab is None or tab.busy or state.pattern is None:
+        return False
+    column = state.column
+    width = COLUMN_DIGITS[column]
+    if width == 0:
+        return False
+    pattern = caret_pattern(ctx, tab)
+    if pattern is None:
+        return False
+    # An empty cell is ``00`` for the purpose of a nibble write; anything else
+    # would make the first digit of a fresh entry depend on ``EMPTY``'s value.
+    current = int(pattern.cells[state.row, state.channel, column])
+    current = 0 if current < 0 else current & 0xFF
+    if width == 1:
+        wanted = int(value)
+    elif state.digit == 0:
+        wanted = (int(value) << 4) | (current & 0x0F)
+    else:
+        wanted = (current & 0xF0) | int(value)
+    if wanted > _column_ceiling(column):
+        return False
+    last = state.digit >= width - 1
+    written = write_cell(ctx, wanted, column=column, advance=last)
+    if written and not last:
+        state.digit = 1
+    return written
+
+
+def write_effect(ctx: Any, letter: str) -> bool:
+    """Type an effect letter into the effect column. -> whether it was taken.
+
+    ``synth.EFFECT_NAMES`` is the authority and is **read rather than copied**,
+    so a tenth effect added to the engine becomes typable by existing and a
+    letter that is not in the table writes nothing. The refusal is the point: an
+    effect id the tick loop has no handler for draws as ``?`` and plays as
+    silence, which the person who typed it cannot tell from a bug in the
+    synthesiser.
+    """
+    from .sirens import document as D
+    from .sirens import synth
+
+    state = ensure(ctx)
+    if state.column != D.EFFECT:
+        return False
+    for effect, (name, _description) in synth.EFFECT_NAMES.items():
+        if name.lower() == letter.lower():
+            return write_cell(ctx, effect, column=D.EFFECT)
+    return False
+
+
+def clear_cell(ctx: Any) -> bool:
+    """Blank the block, or -- with no block -- the one column under the caret.
+
+    Delete narrows to a column when nothing is selected, which is the tracker
+    convention and is the half that makes the other four columns *editable*
+    rather than merely writable: a wrong instrument number is taken back by
+    clearing two characters, not by clearing the note beside them as well. A
+    block is still blanked across every column, because a selection is a
+    rectangle over rows and channels and has never had a column axis to narrow
+    along.
+    """
+    from .sirens import notes
+
+    state = ensure(ctx)
+    if state.anchor is not None:
+        return clear_selection(ctx)
+    return write_cell(ctx, notes.EMPTY)
 
 
 def clear_selection(ctx: Any) -> bool:
@@ -798,6 +938,8 @@ def handle_key(ctx: Any, event: Any) -> bool:
     afterwards either way, as it does for every workspace mode."""
     import pygame
 
+    from .sirens import document as D
+
     if event.type != pygame.KEYDOWN:
         return False
     state = ensure(ctx)
@@ -840,7 +982,7 @@ def handle_key(ctx: Any, event: Any) -> bool:
         move_caret(ctx, drow=16 if event.key == pygame.K_PAGEDOWN else -16, select=shift)
         return True
     if event.key in (pygame.K_DELETE, pygame.K_BACKSPACE):
-        clear_selection(ctx)
+        clear_cell(ctx)
         return True
     if event.key == pygame.K_ESCAPE:
         state.anchor = None
@@ -859,17 +1001,39 @@ def handle_key(ctx: Any, event: Any) -> bool:
     if event.key == pygame.K_2 and shift:
         transpose(ctx, 1)
         return True
-    if state.column == 0 and name in PIANO_KEYS:
-        # Only in the note column: ``e`` in the effect column is the letter of
-        # an effect, not an E-natural, and a piano row that fired everywhere
-        # would make four of the five columns untypable.
-        write_note(ctx, PIANO_KEYS[name])
-        return True
-    if state.column == 0 and event.key == pygame.K_BACKQUOTE:
-        from .sirens import notes
+    # The five columns take five different alphabets, and which one is live is
+    # decided *here* rather than inside each writer, because the columns overlap
+    # on the keyboard and nowhere else: ``c`` is a note in the first column, the
+    # hex digit twelve in the third and fifth, and the halt effect in the
+    # fourth. One dispatch on ``state.column`` is what keeps that from being
+    # four guards that have to agree with each other.
+    if state.column == D.NOTE:
+        # ``e`` in the effect column is the letter of an effect, not an
+        # E-natural, and a piano row that fired everywhere would make four of
+        # the five columns untypable. That guard is unchanged; what changed is
+        # that the other four columns now have alphabets of their own below,
+        # rather than nothing at all.
+        if name in PIANO_KEYS:
+            write_note(ctx, PIANO_KEYS[name])
+            return True
+        if event.key == pygame.K_BACKQUOTE:
+            from .sirens import notes
 
-        write_cell(ctx, notes.NOTE_OFF, column=0)
-        return True
+            # Backtick cuts (``===``), Shift+backtick releases (``~~~``). They
+            # are one physical key because they are one gesture with two
+            # endings, and the shifted half is the character the cell itself
+            # draws -- the tilde is on that key on the layout this piano row is
+            # already spelled for. FamiTracker puts release beside cut for the
+            # same reason; it does not agree with this repo about *which* key
+            # cut is on, and moving cut now would retrain the one binding
+            # somebody may already have in their hands.
+            write_cell(ctx, notes.NOTE_RELEASE if shift else notes.NOTE_OFF, column=D.NOTE)
+            return True
+        return False
+    if state.column == D.EFFECT:
+        return write_effect(ctx, name)
+    if len(name) == 1 and name in "0123456789abcdef":
+        return write_hex(ctx, int(name, 16))
     return False
 
 

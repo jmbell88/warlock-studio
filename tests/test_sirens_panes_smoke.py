@@ -158,6 +158,30 @@ def test_the_grid_draws_its_caret(frames):
     frames(lambda: sirens_patterns.draw(ctx))
 
 
+@pytest.mark.parametrize("column", sorted(range(D.COLUMNS)))
+def test_the_grid_draws_a_caret_in_every_column(column, frames):
+    """Every column takes keys now, so every column is somewhere the caret can
+    stop -- and the caret is drawn from the cell's *text*, whose width is a
+    different number in each of the five."""
+    ctx = FakeCtx()
+    _loaded(ctx)
+    sirens_mode.set_caret(ctx, row=0, channel=0, column=column)
+    frames(lambda: sirens_patterns.draw(ctx))
+
+
+@pytest.mark.parametrize("column", sorted(range(D.COLUMNS)))
+def test_the_grid_draws_a_caret_over_a_half_typed_nibble(column, frames):
+    """Mid-entry the caret rings one character rather than the cell, which is
+    the only thing on screen that says a second keystroke is still owed. Drawn
+    for every column, because ``state.digit`` is one number and an empty cell's
+    text is shorter than a full one's."""
+    ctx = FakeCtx()
+    _loaded(ctx)
+    sirens_mode.set_caret(ctx, row=0, channel=0, column=column)
+    sirens_mode.ensure(ctx).digit = 1
+    frames(lambda: sirens_patterns.draw(ctx))
+
+
 def test_the_envelope_editor_draws_an_instrument_with_no_sequences(frames):
     """``default`` gives a new instrument a volume curve and nothing else, and
     three of the four graphs are then empty -- which is the ordinary case, not

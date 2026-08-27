@@ -249,13 +249,15 @@ MATURITY_NOTE: dict[str, str] = {
         " provisional and humanoid reconstruction quality is untested."
         " See the manual (Troupe)."
     ),
-    # Narrowed rather than removed at every landing, and narrowest here: the
-    # sound-effect pane, the WAV export, the manual chapter and the tour all
-    # exist now. What is left is one thing and it is nameable in a sentence.
+    # Narrowed rather than removed at every landing, and narrowest here. The
+    # sound-effect pane, the WAV export, the manual chapter, the tour and -- as
+    # of the sixth landing -- a keyboard for all five columns exist now. What
+    # is left is one thing and it is nameable in a sentence, which is the bar
+    # this note has been held to since the second landing.
     "sirens": (
-        "Instruments, playback and WAV export all work, but only notes and a"
-        " note-off can be typed: volume, the effect column and the release note"
-        " have no key yet. See the manual (Sirens)."
+        "Every column can be typed into and every effect played, but a block"
+        " selection can only be transposed or cleared: there is no copy and no"
+        " paste, so a repeated bar is retyped. See the manual (Sirens)."
     ),
 }
 

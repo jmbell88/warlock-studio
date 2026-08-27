@@ -4,9 +4,9 @@ Sirens is the tracker: pattern grid, five NES-shaped voices, one `.wsng` documen
 Inker and Packwright it needs no GPU, no weights and nothing downloaded — but unlike them it needs a
 sound card if you want to hear anything. Everything else in this chapter works without one.
 
-The mode carries an *Experimental* chip on the rail, and one thing in this chapter runs into the
-reason: only the note column of the grid can be typed into, so volume and the effect column are not
-yet editable. Everything else here is finished.
+The mode carries an *Experimental* chip on the rail, for one reason this chapter never runs into: a
+block selection can be transposed and cleared but not copied or pasted, so a bar that repeats is
+retyped. Everything this chapter does is finished.
 
 This walks one path: a new song, a bassline, a lead, a hat, an envelope, a sound effect, an export.
 Fifteen minutes, and at the end you have a looping track and a coin pickup on disk.
@@ -63,8 +63,9 @@ it over the bass.
 Two keys worth having now:
 
 - The backtick key writes `===`, a note-off. Put one where you want the lead to stop rather than
-  ring into the next note. It cuts rather than fades — the fade is the instrument's release half,
-  and reaching that mid-song needs a `~~~` this build has no key for.
+  ring into the next note. It **cuts**. `Shift+Backtick` writes `~~~` instead, which lets go of the
+  note and plays the instrument's release tail — the gentler of the two, and the one to reach for at
+  the end of a phrase.
 - `Shift+1` and `Shift+2` transpose a selection down and up a semitone. Hold `Shift` with the arrow
   keys to make one first, and `Esc` to drop it.
 
@@ -75,10 +76,10 @@ the note mostly chooses how bright the hiss is.
 
 Set **Step** to **2** and type `z` eight times. That is a hat on every other sixteenth.
 
-It is probably too loud, and this is where you meet the mode's one real gap: **only the note column
-can be typed into in this build.** The volume column is drawn, the caret moves into it, and no key
-writes there — which is why Sirens still wears an *Experimental* chip on the rail. The fix is the
-envelope, and it is the better fix anyway. Keep reading.
+It is probably too loud. There are two ways to fix that and they are worth telling apart. Press the
+right arrow twice to put the caret in the **volume** column and type a single hex digit — `8` is
+about half, `4` quieter still — and that row alone is quieter. Or shape the instrument itself, which
+is the better fix for a hat because it fixes every note at once. Keep reading.
 
 ## An envelope
 
@@ -98,9 +99,9 @@ Some things worth knowing while you are in here:
 - The graph has **two draggable markers**. The **loop** point is where a held note repeats from. The
   **release** point splits the sequence: everything before it is what a held note plays, everything
   from it is the tail after the note is let go, and **the tail never loops**. The editor draws the
-  tail on its own ground in its own colour so you can see which half is which. In this build you
-  hear that tail at the *end of the song* — every voice still sounding is released there — rather
-  than mid-song, which would need the `~~~` note this build has no key for.
+  tail on its own ground in its own colour so you can see which half is which. You hear it wherever
+  you write a `~~~` (`Shift+Backtick`), and at the *end of the song* whether you asked for it or
+  not — every voice still sounding is released there.
 
 For a plucked lead, try the same shape on the pulse instrument: full volume for one tick, then a fall
 to about a third, then a loop point so it sustains there.

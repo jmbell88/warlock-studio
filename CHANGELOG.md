@@ -75,8 +75,8 @@ the release you are actually running.
   voice: a stem rendered from a wiped grid would run at a different tempo than the mix it is
   supposed to line up with.
 
-- **Sirens is documented and toured, and it keeps its Experimental chip — for a reason
-  writing the documentation is what found.** Two manual chapters (a tutorial that walks one
+- **Sirens is documented and toured, and writing the documentation is what found the gap the
+  entry below closes.** Two manual chapters (a tutorial that walks one
   song from an empty document to an exported WAV, and the reference chapter) plus a
   `sirens-basics` guided tour that needs no GPU, no weights and no sound card to finish.
   Adding the reference chapter renumbered eleven chapters after it, which is what a chapter's
@@ -84,19 +84,33 @@ the release you are actually running.
   `Ctrl+/` sheet gains a Sirens group, which it had been silent about while the mode had
   twenty bindings.
 
-- **Known, and named on the rail: only notes and a hard note-off can be typed into the
-  grid.** The keyboard answers the piano row and the backtick in the note column and nothing
-  anywhere else, so the instrument, volume, effect and parameter columns are drawn, are
-  reachable with the arrow keys, and take no input — which means every effect the synthesiser
-  implements (`Fxx`, `Bxx`, the slides, the arpeggio) is unreachable from the UI. Nor is the
-  release note `~~~`, so an instrument's release tail is heard at the end of a song, where
-  every voice still sounding is let go, rather than wherever you would put one. The instrument
-  column is stamped for you when you type a note and a volume shape can go in the instrument's
-  envelope instead, so the mode is usable; it is not finished. Found by writing the manual
-  chapter — the effect table was documented from the synthesiser and then checked against the
-  keyboard. The Experimental chip's tooltip names this and nothing else, and the chapter says
-  it in the section where a reader would otherwise discover it by pressing keys that do
-  nothing.
+- **Every column of the pattern grid can be typed into, and every effect the synthesiser
+  implements is now reachable from the keyboard.** The instrument and parameter columns take
+  two hex digits, entered left to right and replacing one nibble at a time, with the caret
+  narrowed to the character still owed so a half-finished entry is visible; the volume column
+  takes one digit; and the effect column takes an effect's letter, read out of the engine's own
+  `EFFECT_NAMES` so that a letter it has no handler for writes nothing rather than a value the
+  song cannot play. `Shift+Backtick` writes the release note `~~~` beside the backtick's
+  `===`, which is what makes an instrument's release tail audible where it is written instead
+  of only at the end of a song. `Delete` narrows to the column under the caret when nothing is
+  selected, and still clears every column of a block. Every one of these goes through the same
+  `write_cell` the note column always did, so each owes the same three things — the refusal
+  framed as a toast, the renderer re-armed, the caret stepped by the edit step.
+
+  Which column the caret is in decides what a key means, which is the rule that had to hold:
+  `c` is a note in the first column and the hex digit twelve in the third, and the piano row
+  still fires in the note column alone. The gap this closes was found on 2026-08-27 by writing
+  the manual chapter, and it had survived three green landings because nothing in the suite
+  asserted that a keystroke reached a non-note column. `tests/test_sirens_keys.py` closes that
+  properly: parametrised over every column the document has, and ending in two assertions made
+  against **rendered audio** rather than against a cell — a tempo effect typed through the key
+  handler has to change the song's length, and a released note has to sound where a cut one is
+  silent.
+
+- **Sirens keeps its Experimental chip, narrowed again.** What is left is a block selection
+  that can be transposed and cleared but not copied, cut or pasted, so a bar that repeats is
+  retyped or is a second entry in the order list. The tooltip, the reference chapter's limits
+  section and the tutorial's opening all name that and nothing else.
 
 - **Closing Warlock while a picture was being generated no longer hangs it.** Shutdown
   closed the image worker's handle while the running sample still held it, so it waited for

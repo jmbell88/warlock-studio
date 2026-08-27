@@ -45,6 +45,18 @@ _uids = itertools.count(1)
 #: is the document's order and a test asserts it rather than a comment.
 COLUMN_LABELS: tuple[str, ...] = ("Note", "Instrument", "Volume", "Effect", "Param")
 
+#: How many hex digits each column takes from the keyboard, in the document's
+#: column order. ``0`` means the column is not hex at all -- the note column is
+#: the piano row and the effect column is one letter out of
+#: ``synth.EFFECT_NAMES`` -- and ``2`` is the pair of nibbles a byte is typed
+#: as, which is what :attr:`SirensState.digit` counts through.
+#:
+#: Here beside the labels rather than in the mode, because it is the same kind
+#: of fact about the same five columns and the grid pane needs it too: the
+#: caret narrows to one character exactly where a second keystroke is still
+#: owed, and a pane deriving that from its own table would be a second table.
+COLUMN_DIGITS: tuple[int, ...] = (0, 2, 1, 0, 2)
+
 #: What ``+``/``-`` move between, and where a new document's caret starts. Two
 #: octaves below the note names' midpoint, which is where a bassline and a lead
 #: are both one key away.
@@ -152,6 +164,18 @@ class SirensState:
     row: int = 0
     channel: int = 0
     column: int = 0
+
+    #: Which nibble of a multi-digit column the *next* hex key fills: ``0`` is
+    #: the high one, ``1`` the low. A fifth number rather than a field on the
+    #: pane, for the reason the other four are here: a pane is rebuilt from
+    #: scratch every frame and owns nothing that outlives one, while a
+    #: half-finished entry is by definition the thing that spans frames.
+    #:
+    #: **Every function that moves the caret clears it**, and that is not
+    #: tidiness: the second nibble of one cell landing in the next is a value
+    #: the user never typed, in a cell they were not looking at, under an undo
+    #: step they will not recognise.
+    digit: int = 0
 
     #: Which octave a letter key types into, and how far the caret falls after.
     octave: int = DEFAULT_OCTAVE
@@ -268,6 +292,7 @@ class SirensState:
         """
         self.anchor = None
         self.row = self.channel = self.column = 0
+        self.digit = 0
         self.oneshot = None
         if tab is None:
             self.pattern = None

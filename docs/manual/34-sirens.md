@@ -66,32 +66,25 @@ five columns:
 | --- | --- | --- |
 | Note | 3 | `C-4`, `D#5`, `===` for a note-off, `~~~` for a release. `...` is nothing at all. |
 | Instrument | 2 | Which instrument the note is played on, by its number. |
-| Volume | 2 | `00` to `0F`. Empty means "whatever it already was". |
+| Volume | 2 | `00` to `0F` — one hex digit typed. Empty means "whatever it already was". |
 | Effect | 1 | One letter. See [Effects](#effects). |
 | Parameter | 2 | That effect's two hex digits. |
 
 A run of dots is not decoration: it is how the eye finds the rows where something actually happens.
 Every fourth row — one beat — carries a stripe behind it, so counting to the downbeat is not manual.
 
-**Only the note column can be typed into in this build, and that is the mode's one real gap.** The
-other four are drawn, the caret moves into them with the arrow keys, and no key writes anything
-there. The instrument column is filled in for you when you type a note; the volume, effect and
-parameter columns stay empty. Everything the [Effects](#effects) table describes is played by the
-synthesiser and reaches an export, so a `.wsng` that carries an `F78` will change tempo — there is
-simply nothing in this build that puts one there. It is why Sirens still wears an **Experimental**
-chip on the rail. Volume is reachable another way in the meantime: put the shape you want into the
-instrument's volume envelope, or make a second instrument that is quieter.
+**Which column the caret is in decides what a key means.** That is the one thing to know about
+typing here, and it is why the same letters do different jobs in different columns: `c` is a note in
+the first column and the hex digit twelve in the third, and `b` is a note in the first column and
+the jump effect in the fourth. Move between columns with the left and right arrow keys.
 
 **Typing notes.** The keyboard is a piano in two rows, FamiTracker's layout: `zsxdcvgbhnjm` is the
 octave the Octave field names, and `q2w3er5t6y7u` is the one above it. The piano only fires in the
 note column, because `e` in the effect column is the letter of an effect rather than an E natural.
-The backtick key writes a note-off (`===`), which **cuts** the voice dead. `Delete` clears the
-selection.
-
-The gentler `~~~` — let go of the note and play the instrument's release tail — has no key in this
-build either. A `.wsng` can carry one and the synthesiser plays it, and every voice still sounding
-at the end of a song is released automatically, so an envelope's release half is what you hear
-there. Mid-song, a note either rings or is cut.
+The backtick key writes a note-off (`===`), which **cuts** the voice dead; `Shift+Backtick` writes a
+release (`~~~`), which lets go of the note and plays the instrument's release tail instead. They are
+one key with and without Shift because they are one gesture with two endings, and the tilde is the
+character the cell itself draws.
 
 Those are *letter* positions rather than physical key positions, which is right for anyone arriving
 from another tracker and wrong on an AZERTY keyboard. Serving one of the two means not serving the
@@ -99,6 +92,23 @@ other, and the tracker convention won.
 
 A typed note also stamps the currently selected instrument into the instrument column. Every tracker
 does this, and without it a typed note is silent for a reason that is invisible.
+
+**Typing everything else.** The instrument and parameter columns take **two hex digits**: the first
+fills the left-hand digit and the second the right, and while an entry is half done the caret rings
+the one character it is waiting for rather than the whole cell. The volume column takes **one** digit,
+`0` to `F`. The effect column takes an effect's **letter**, from the table below.
+
+A digit replaces one half of what is already there rather than starting a fresh value, so fixing the
+right-hand digit of `4F` is one keystroke on the second character. Moving the caret — an arrow key, a
+click, anything — ends a half-finished entry, so the second digit can never land in a cell you have
+left. Two things are refused rather than written: a letter the engine has no effect for, and an
+instrument number past `7F`, which is a slot no song can hold. In both cases nothing happens at all,
+because a value the synthesiser cannot use is worse in the cell than an empty one — it would draw as
+something the song does not play.
+
+`Delete` and `Backspace` blank the column the caret is in, so a wrong instrument number is taken back
+without losing the note beside it. With a block selected they blank the whole block, across every
+column.
 
 **The toolbar over the grid** carries the caret's own state rather than any setting: **Octave** is
 which octave the lower piano row plays (`-` and `=` move it), **Step** is how far the caret drops
@@ -116,10 +126,9 @@ Clicking anywhere in the grid moves the caret there.
 One letter and two hex digits, in the last two columns. The letters are the tracker convention
 rather than an invention — someone arriving from FamiTracker or DefleMask already knows all of them.
 
-**This is what the synthesiser plays, not what you can type.** As the section above says, this build
-has no way to enter a value into the effect column; the table is here because these are what a
-`.wsng` means, what a stem preserves and what an export renders, and because it is the list the
-column editor will answer to when it exists.
+Put the caret in the effect column and press the letter; the two digits go in the column after it.
+A letter that is not in this table writes nothing, so the table is also the whole list of what the
+effect column will accept.
 
 | Letter | What it does |
 | --- | --- |
@@ -190,12 +199,11 @@ That split is the one rule about envelopes that is invisible in a list of number
 draws the tail on its own ground, in its own colour, with the loop's span underlined along the
 bottom of the held half. You should be able to see which half is which without being told.
 
-**Where you will actually hear the tail, in this build, is at the end of a song** — every voice
-still sounding when the order runs out is released, so the last chord decays through its release
-half rather than stopping dead. Mid-song it needs a `~~~` in the note column, which has no key yet
-(see [The pattern grid](#the-pattern-grid)); the note-off you *can* type cuts instead. That does not
-make the release half decorative — it decides how a track ends — but it is worth knowing before you
-spend an afternoon on one.
+**Two things reach the tail.** `Shift+Backtick` writes a `~~~` under a note, which lets go of it and
+plays the tail where you put it; and every voice still sounding when the order runs out is released
+anyway, so the last chord of a song decays through its release half rather than stopping dead. The
+plain backtick's `===` is the other choice, and it cuts. Which of the two you want is a musical
+decision and the grid shows you which one is there.
 
 **Duty** means different things to different voices, and that is worth knowing before you drag it.
 On a pulse it is the square's width, one of four. On a **noise** instrument it is not a duty cycle at
@@ -316,10 +324,10 @@ you might reach for are absent on purpose rather than pending:
 
 And two limits of the current build, stated plainly rather than left to be discovered:
 
-- **Four of a cell's five columns cannot be typed into, and the note column takes only two things.**
-  Notes and a hard note-off; volume, effect and parameter stay empty, the instrument column is
-  filled in for you, and the release note `~~~` has no key. This is the unfinished part of the mode
-  and the reason for the Experimental chip. See [The pattern grid](#the-pattern-grid).
+- **A block cannot be copied or pasted.** A selection can be transposed and it can be cleared, and
+  that is all it can do — there is no copy, no cut and no paste, so a bar that repeats is retyped or
+  is a second entry in the order list pointing at the same pattern. This is the unfinished part of
+  the mode and the reason for the **Experimental** chip on the rail.
 - **Playback has no scrub and no start-from-here.** `Space` plays the song from the beginning and
   stops it. To hear one section, put it at the top of the order.
 
@@ -334,12 +342,17 @@ selected, so nothing was stamped into the instrument column; the instrument name
 whose sample has been removed; or the pattern you are typing into is not in the order list, so the
 song never reaches it.
 
-**Nothing happens when I type in the volume or effect column.** Nothing is meant to yet — those
-columns take no keyboard input in this build. See [The pattern grid](#the-pattern-grid).
+**Nothing happens when I type in the effect column.** That letter is not one the engine has an
+effect for, and a letter it cannot play is refused rather than written. The [Effects](#effects) table
+is the whole list. The same is true of an instrument number past `7F`: no song has that slot.
 
-**My note stops dead instead of fading.** The backtick writes `===`, which cuts. The fade is what
-the instrument's release half does, and reaching it mid-song needs a `~~~` that this build has no
-key for. At the end of the song it happens by itself.
+**A digit landed in the wrong cell.** The instrument and parameter columns take two digits, and the
+caret rings the one it is waiting for. If you moved between them the entry was ended, and the digit
+you typed next started a new one where the caret then was.
+
+**My note stops dead instead of fading.** The backtick writes `===`, which cuts. The fade is the
+instrument's release half, and reaching it needs `Shift+Backtick` — a `~~~` — instead. At the end of
+the song it happens by itself either way.
 
 **The song plays nothing at all.** The order list is empty. Add a pattern to it from the Order panel.
 

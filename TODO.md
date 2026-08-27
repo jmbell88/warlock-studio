@@ -333,7 +333,7 @@ value of this entry is that nobody re-plans it.
 ## P14. Listen to Sirens, on a machine with a sound card
 
 **Why it is yours:** hardware, and the plainest instance of it in this file.
-Sirens landed complete on 2026-08-27 across five phases and **nobody has ever
+Sirens landed complete on 2026-08-27 across six landings and **nobody has ever
 heard it**. Every box it was built on is headless and silent, so the synthesis
 is proved the only way it could be — a byte-identical render corpus, a
 `wavout` reader that is exactly its writer's inverse, a perf budget, and a
@@ -353,6 +353,15 @@ tutorial (`docs/manual/14-making-a-soundtrack.md`) as written, out loud:
   reference pitch? Is the tempo the BPM the transport claims?
 - Drag a decay into a volume envelope and hear the shape change. Drag the
   release marker and hold a long note — the tail should take over audibly.
+  Then write `Shift+Backtick` (`~~~`) under one note and a backtick (`===`)
+  under another: the first should let go into that tail, the second should stop
+  dead. That pair is the whole argument for the release half of an envelope and
+  the difference is not something a test can hear.
+- Type into the other four columns, which only became possible in the sixth
+  landing. A volume digit should make one row quieter; an `F` and two digits in
+  the effect and parameter columns should change the tempo *from that row on*
+  and not from the top; an arpeggio or a vibrato should sound like the thing it
+  is named after rather than merely different.
 - Drop a `.wav` on the window, point a sample instrument at it, and play it
   from the grid at three different pitches.
 - Audition a sound effect. Confirm the song's own buffer is untouched: play the

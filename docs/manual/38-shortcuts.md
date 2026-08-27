@@ -400,7 +400,10 @@ lives in that job's directory — so there is no save, no undo and no tab to clo
 | Space | Play the song, or stop it if it is sounding |
 | `zsxdcvgbhnjm` | The lower piano row — the octave the Octave field names |
 | `q2w3er5t6y7u` | The upper piano row — one octave above it |
-| Backtick | Write a note-off (`===`) — cuts the voice. There is no key for `~~~`, the release |
+| Backtick | Write a note-off (`===`) — cuts the voice dead |
+| Shift+Backtick | Write a release (`~~~`) — plays the instrument's release tail |
+| `0`–`9`, `A`–`F` | Hex digits, in the instrument, volume and parameter columns |
+| An effect's letter | In the effect column — only the letters the engine has |
 | `-` / `=` | Octave down / up |
 | Up / Down | Move the caret a row |
 | Left / Right | Move the caret a column |
@@ -408,7 +411,7 @@ lives in that job's directory — so there is no save, no undo and no tab to clo
 | Shift+Left / Shift+Right | Extend the selection by a channel |
 | Page Up / Page Down | Move sixteen rows — four beats |
 | Shift+1 / Shift+2 | Transpose the selection down / up a semitone |
-| Delete / Backspace | Clear the selection |
+| Delete / Backspace | Clear the column under the caret, or the whole selection |
 | Esc | Drop the selection |
 | Ctrl+Z / Ctrl+Y | Undo / redo |
 | Ctrl+Shift+Z | Redo as well |
@@ -418,10 +421,12 @@ lives in that job's directory — so there is no save, no undo and no tab to clo
 | Ctrl+W | Close the current tab |
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous song |
 
-The piano rows only fire in the **note** column: `e` in the effect column is the letter of an effect
-rather than an E natural, and a piano that fired everywhere would make four of the five columns
-untypable. Those four columns take **no** keyboard input in this build — the caret moves into them
-and nothing writes there. See [Sirens](34-sirens.md#the-pattern-grid).
+**Which column the caret is in decides what a key means**, which is why the same letters appear
+twice above. The piano rows fire in the **note** column only: `e` in the effect column is the letter
+of an effect rather than an E natural, and `c` in the volume column is the hex digit twelve. The
+instrument and parameter columns take two digits — the first fills the high nibble, the second the
+low, and the caret rings whichever one is next — while volume takes one. See
+[Sirens](34-sirens.md#the-pattern-grid).
 
 Those are *letter* positions rather than physical key positions, so the layout is right for anyone
 arriving from another tracker and wrong on an AZERTY keyboard.

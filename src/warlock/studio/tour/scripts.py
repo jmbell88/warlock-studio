@@ -317,8 +317,9 @@ SIRENS_BASICS = Tour(
                 "row -- one beat -- has a stripe behind it.\n\n"
                 "The dots are not decoration. A run of them is how the eye finds the rows "
                 "where something happens.\n\n"
-                "One thing to know before you try it: only the note column takes typing in "
-                "this build. That is what the Experimental chip on the rail is about."
+                "One thing to know before you try it: which column the caret is in decides "
+                "what a key means. c is a note in the first column and the hex digit twelve "
+                "in the third."
             ),
             mode="sirens",
             chapter=("34-sirens", "the-pattern-grid"),
