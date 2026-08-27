@@ -523,6 +523,26 @@ def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
             ("Left / Right", "Step one frame, and pause"),
         ],
     )
+    table(
+        "Sirens",
+        [
+            ("Space", "Play the song, or stop it if it is sounding"),
+            # The two piano rows as one row rather than twenty-four, and spelled
+            # exactly as the chapter spells them: they are a *layout* rather
+            # than twenty-four bindings, and a sheet that listed each letter
+            # would be a sheet nobody could read past.
+            ("zsxdcvgbhnjm / q2w3er5t6y7u", "The two piano rows, in the note column"),
+            ("- / =", "Octave down / up"),
+            ("Shift+1 / Shift+2", "Transpose the selection down / up a semitone"),
+            ("Page Up / Page Down", "Move sixteen rows -- four beats"),
+            ("Delete", "Clear the selection"),
+            ("Esc", "Drop the selection"),
+            ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
+            ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
+            ("Ctrl+N / O / W", "New song / open a file / close the tab"),
+            ("Ctrl+Tab / Ctrl+Shift+Tab", "Next / previous song"),
+        ],
+    )
     return sections
 
 

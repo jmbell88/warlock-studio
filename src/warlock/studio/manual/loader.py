@@ -67,14 +67,21 @@ from . import parser
 # The gap is legal because ``chapters()`` globs and sorts -- nothing here
 # requires the numbers to be dense, only ordered.
 #
+# Sirens joined Part I as chapter 34 on 2026-08-27, moving everything from the
+# old 34 onward by one -- eleven renames, for the same reason Troupe's was one:
+# the grouping in Part I is the *rail's*, and the tracker is in the rail's
+# second group, so it belongs after Troupe rather than after the library. The
+# tutorial series was untouched by it, which is what reserving 01-19 as a block
+# bought: its own new chapter that day was a file and an ``EXPECTED_KEYS`` line.
+#
 # They go first because they are written for the reader who has just installed
 # the app and has never seen it. Appended, they would have sat behind
 # Architecture, which is written for the reader changing its code.
 PARTS: tuple[tuple[str, range], ...] = (
     ("Tutorials", range(1, 20)),
-    ("Using Warlock Studio", range(20, 38)),
-    ("Setup & operations", range(38, 42)),
-    ("Architecture", range(42, 45)),
+    ("Using Warlock Studio", range(20, 39)),
+    ("Setup & operations", range(39, 43)),
+    ("Architecture", range(43, 46)),
 )
 
 _H1 = re.compile(r"^# +(.+)$", re.MULTILINE)

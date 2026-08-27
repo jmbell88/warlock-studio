@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import controls, icons, sirens_audio, sirens_mode, widgets
+from .. import anchors, controls, icons, sirens_audio, sirens_mode, widgets
 from ..manual import render as manual_render
 from ..sirens import document as D
 from ..sirens import instruments as inst
@@ -46,6 +46,7 @@ NEW_ROWS = 8
 def draw(ctx: Any) -> None:
     from imgui_bundle import imgui
 
+    anchors.mark_window("sirens/effects")
     state = sirens_mode.ensure(ctx)
     tab = state.active
     widgets.section("Sound effects")

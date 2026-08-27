@@ -42,7 +42,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from .. import controls, sirens_mode, theme, widgets
+from .. import anchors, controls, sirens_mode, theme, widgets
 from ..manual import render as manual_render
 from ..sirens import instruments as inst
 from ..sirens import notes
@@ -229,6 +229,7 @@ def _bar_top(value: int, low: int, high: int, height: float) -> float:
 def draw(ctx: Any) -> None:
     from imgui_bundle import imgui
 
+    anchors.mark_window("sirens/envelopes")
     state = sirens_mode.ensure(ctx)
     tab = state.active
     widgets.section("Envelopes")

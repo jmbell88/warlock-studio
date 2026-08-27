@@ -392,3 +392,39 @@ Packing is automatic — `R` is only there for when you want it now rather than 
 
 There is nothing else. Troupe holds no document — the sheet it plays was published by a job and
 lives in that job's directory — so there is no save, no undo and no tab to close.
+
+## Sirens
+
+| Keys | Action |
+| --- | --- |
+| Space | Play the song, or stop it if it is sounding |
+| `zsxdcvgbhnjm` | The lower piano row — the octave the Octave field names |
+| `q2w3er5t6y7u` | The upper piano row — one octave above it |
+| Backtick | Write a note-off (`===`) — cuts the voice. There is no key for `~~~`, the release |
+| `-` / `=` | Octave down / up |
+| Up / Down | Move the caret a row |
+| Left / Right | Move the caret a column |
+| Shift+Up / Shift+Down | Extend the selection by a row |
+| Shift+Left / Shift+Right | Extend the selection by a channel |
+| Page Up / Page Down | Move sixteen rows — four beats |
+| Shift+1 / Shift+2 | Transpose the selection down / up a semitone |
+| Delete / Backspace | Clear the selection |
+| Esc | Drop the selection |
+| Ctrl+Z / Ctrl+Y | Undo / redo |
+| Ctrl+Shift+Z | Redo as well |
+| Ctrl+S / Ctrl+Shift+S | Save / save as |
+| Ctrl+N | New song |
+| Ctrl+O | Open a file |
+| Ctrl+W | Close the current tab |
+| Ctrl+Tab / Ctrl+Shift+Tab | Next / previous song |
+
+The piano rows only fire in the **note** column: `e` in the effect column is the letter of an effect
+rather than an E natural, and a piano that fired everywhere would make four of the five columns
+untypable. Those four columns take **no** keyboard input in this build — the caret moves into them
+and nothing writes there. See [Sirens](34-sirens.md#the-pattern-grid).
+
+Those are *letter* positions rather than physical key positions, so the layout is right for anyone
+arriving from another tracker and wrong on an AZERTY keyboard.
+
+There is no binding for the export — it opens a folder picker, and it is the **Export audio...**
+button on the Song file panel.

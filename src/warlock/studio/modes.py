@@ -219,13 +219,26 @@ PURPOSE: dict[str, str] = {
 #: The wording is the manual's own ("provisional", "untested"), deliberately,
 #: so a user who follows the tooltip into the chapter finds the same words
 #: rather than a second, differently-hedged account.
+# **Sirens' chip was narrowed at every landing and it did not come off at the
+# last one.** It went on because the mode shipped in halves and the note was
+# rewritten each time a gap closed, because a chip whose sentence names what is
+# already there teaches the reader to ignore the chip. By phase 5 the note said
+# only "no manual chapter or guided tour", and both of those now exist
+# (``docs/manual/14`` and ``34``, and the ``sirens-basics`` tour) -- but writing
+# the chapter is what found the gap that was never in the note at all: **four of
+# a cell's five columns cannot be typed into.** ``sirens_mode.handle_key``
+# answers the piano row and the note-off in column 0 and nothing anywhere else,
+# so the instrument, volume, effect and parameter columns are drawn, are
+# reachable with Left/Right, and take no input; ``write_cell`` has exactly two
+# callers and both pass ``column=0``. Every effect the synth implements --
+# ``Fxx``, ``Bxx``, the slides, the arpeggio -- is therefore unreachable from
+# the UI, and so is ``notes.NOTE_RELEASE``: the backtick writes ``NOTE_OFF``,
+# which cuts, so an instrument's release half is reachable mid-song only from a
+# document that already carries a ``~~~``. That is a bigger absence than either
+# of the two the note used to name, and a chip removed on the same day it was
+# found would be the badge doing the opposite of its job.
 MATURITY: dict[str, str] = {
     "troupe": "Experimental",
-    # Sirens landed in two halves: a complete, tested synthesis engine and a
-    # minimal editor over it. A user really can write a pattern and hear it,
-    # and three of the things they will reach for next do not exist yet -- so
-    # the rail says so, for the reason Troupe's does: the manual is read by
-    # people who already know to be careful, and the rail is read by everyone.
     "sirens": "Experimental",
 }
 
@@ -236,14 +249,13 @@ MATURITY_NOTE: dict[str, str] = {
         " provisional and humanoid reconstruction quality is untested."
         " See the manual (Troupe)."
     ),
-    # Narrowed rather than removed as each gap closed: the sound-effect pane and
-    # the WAV export the note used to name both landed, and a chip whose sentence
-    # describes things that now exist teaches the reader to ignore the chip. What
-    # is left is documentation, which is the honest thing to warn about.
+    # Narrowed rather than removed at every landing, and narrowest here: the
+    # sound-effect pane, the WAV export, the manual chapter and the tour all
+    # exist now. What is left is one thing and it is nameable in a sentence.
     "sirens": (
-        "Everything works end to end -- writing, instruments, sound effects,"
-        " playback and WAV export -- but the mode has no manual chapter or"
-        " guided tour yet."
+        "Instruments, playback and WAV export all work, but only notes and a"
+        " note-off can be typed: volume, the effect column and the release note"
+        " have no key yet. See the manual (Sirens)."
     ),
 }
 

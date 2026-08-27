@@ -20,7 +20,7 @@ Beside the box, a **Recent** button opens your last twenty prompts, most recent 
 deduplicated — it appears once you have generated at least one reference, so there is history to
 show. Picking one replaces what is in the box. The history is per session and per prompt
 text only — if you want a whole recipe back, use **Copy settings to form** from a job's overflow
-menu instead, which is described in [Rerun and promotion](34-library-and-jobs.md#rerun-and-promotion).
+menu instead, which is described in [Rerun and promotion](35-library-and-jobs.md#rerun-and-promotion).
 
 Under **Negative prompt**, further down the pane, is a second box listing what the image must not
 contain. It is pre-filled with the things that most often ruin a reconstruction:
@@ -199,14 +199,14 @@ leaves the score exactly what it would have been without it:
   one term that predicts whether the mesh stage can succeed at all: a subject cropped at the edge of
   the frame reconstructs badly however handsome it is.
 - **Style anchor** — how close the image looks to the active profile's anchor, when it has one. See
-  [The style anchor](35-profiles.md#the-style-anchor).
+  [The style anchor](36-profiles.md#the-style-anchor).
 - **Human preference** — how likely a person is to pick this image for this prompt, from PickScore.
   Optional; see [Optional measuring and helper
-  models](38-installation.md#optional-measuring-and-helper-models).
+  models](39-installation.md#optional-measuring-and-helper-models).
 
 **Nothing here rejects anything.** The score sorts, and that is all it does — a low-scoring
 candidate is still generated, still kept, and still promotable to a mesh. Turn the whole thing off
-with `WARLOCK_RANK=off` (see [Configuration](39-configuration.md#environment-variables)) and the
+with `WARLOCK_RANK=off` (see [Configuration](40-configuration.md#environment-variables)) and the
 gallery falls back to submission order.
 
 ## Conditioning on an image
@@ -287,7 +287,7 @@ supplied, and **Dither** (offered only with one) mixes two nearby entries where 
 pick one.
 
 A palette is a file you drop into the palette directory (`~/.warlock/palettes/` by default — see
-[Configuration](39-configuration.md)), in either of the two formats palette sites publish: Lospec's
+[Configuration](40-configuration.md)), in either of the two formats palette sites publish: Lospec's
 `.hex`, one `rrggbb` per line, or GIMP's `.gpl`. Nothing ships with the app, because a palette is
 art direction rather than a default. Colours are matched perceptually (in Oklab) rather than by raw
 RGB arithmetic, which is what stops a dark grey being mapped to black and a whole shadow being
@@ -309,7 +309,7 @@ the artifact is derived, so it is rebuilt whenever the settings above make the c
 and a document that saved back over it would have that edit thrown away — the first `Ctrl+S` is a
 Save As. **Export as PNG** writes the size selected here to wherever you choose. Both derive the
 artifact first if it does not exist yet, so neither waits on **Preview pixels**. The
-[downloads grid](34-library-and-jobs.md) exports the same files; what these add is that they act on
+[downloads grid](35-library-and-jobs.md) exports the same files; what these add is that they act on
 the size you are looking at.
 
 Both settings are app preferences rather than properties of the job, so they persist across

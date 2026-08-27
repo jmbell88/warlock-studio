@@ -18,6 +18,86 @@ the release you are actually running.
 
 ## 0.0.29 — 2026-08-25
 
+- **New mode: Sirens, a chiptune tracker.** Twelve modes now. NES-shaped pulse, triangle,
+  noise and sample voices; a pattern grid you type into; an order list; instruments whose four
+  envelope sequences you drag into shape; sound effects in the same document as the music; and
+  an export that writes `song.wav`, one WAV per channel under `stems/` and one per effect under
+  `sfx/`. It is offline, needs no GPU and no downloaded weights, and its document is a `.wsng`.
+  Two departures from the hardware are deliberate and audible: tuning is equal-tempered rather
+  than a period table, because a track from here has to sit under modern music without beating
+  against it; and `Fxx` sets a tempo in BPM rather than ticks per row, because with a row fixed
+  at a sixteenth note the FamiTracker spelling is a control that appears to do nothing. Voices
+  are synthesised at four times the output rate and filtered back down — a naive square at
+  44.1 kHz folds its harmonics down and reads to a listener as being *out of tune* rather than
+  as brightness.
+
+- **A machine with no sound card can still use the whole mode.** Writing, editing, saving,
+  loading and exporting a WAV all work with no audio device; only playback does not, and the
+  transport prints the reason beside the greyed button rather than leaving a dead control to
+  read as a broken app. That is also what makes the mode testable: the audio device is confined
+  to one module, so the tests do not all skip on a machine without one.
+
+- **Playback is render-then-play rather than a real-time callback.** The song is synthesised
+  into a buffer off the frame thread and the buffer is played, so what you hear is the same
+  samples the export writes and a busy machine cannot click. The cost is that an edit is heard
+  on the next render, which the transport says out loud; a stale buffer is refused rather than
+  played, because hearing the version of a bar you have just replaced is the one outcome that
+  makes everything else you heard suspect.
+
+- **Fixed before shipping, in the pattern grid: a `TypeError` on every frame that drew a
+  caret.** `add_rect` takes thickness before flags and the call had them the other way round —
+  so every frame with a grid on screen, which is every frame in the mode. Nothing caught it,
+  because every existing pane smoke test builds a real renderer and *skips* where there is
+  none, which is CI and every remote shell. There is now a pane test that draws all seven
+  Sirens panes through a bare imgui context with no backend at all, into a window of a stated
+  size — at the default size the grid drew no channels and passed while the bug was there.
+
+- **Fixed before shipping, in the envelope editor: one undo step per column crossed.**
+  Painting a decay across twenty columns pushed twenty edits, so taking back one drag was
+  twenty presses of Ctrl+Z. The drag is opened and closed as one collapsed step now, which is
+  the mechanism a sound effect and its pattern already used.
+
+- **Fixed before shipping, and it was data loss: the 256th object minted in a session
+  rewrote a song's instruments.** A pattern cell is `int16` and its instrument column held a
+  process-global uid, which the file reader then clipped to 255 across *every* column — so a
+  song saved after enough objects had been created came back playing a different instrument, or
+  none. Instrument ids are now a per-document space bounded at 128 and minted as the lowest
+  free slot, which is also the number the grid shows and the user types; a file whose ids
+  predate that is renumbered on read rather than refused, because refusing loses the song and
+  clipping lands the note on whatever instrument is in slot 127.
+
+- **The `.wsng` is the composition and every WAV is derived from it.** Exporting an untouched
+  document twice writes byte-identical files — no timestamp, no writer string, no randomness —
+  so an exported track is something a build script regenerates rather than an artefact to keep.
+  Nothing is written until every file has been encoded, so a refusal partway through leaves no
+  half-populated `stems/` to be mistaken for an export. Stems keep the other channels' effect
+  column, because jumps, halts, breaks and tempo changes belong to the player rather than to a
+  voice: a stem rendered from a wiped grid would run at a different tempo than the mix it is
+  supposed to line up with.
+
+- **Sirens is documented and toured, and it keeps its Experimental chip — for a reason
+  writing the documentation is what found.** Two manual chapters (a tutorial that walks one
+  song from an empty document to an exported WAV, and the reference chapter) plus a
+  `sirens-basics` guided tour that needs no GPU, no weights and no sound card to finish.
+  Adding the reference chapter renumbered eleven chapters after it, which is what a chapter's
+  number deciding its part costs and what the manual's tests check in both directions. The
+  `Ctrl+/` sheet gains a Sirens group, which it had been silent about while the mode had
+  twenty bindings.
+
+- **Known, and named on the rail: only notes and a hard note-off can be typed into the
+  grid.** The keyboard answers the piano row and the backtick in the note column and nothing
+  anywhere else, so the instrument, volume, effect and parameter columns are drawn, are
+  reachable with the arrow keys, and take no input — which means every effect the synthesiser
+  implements (`Fxx`, `Bxx`, the slides, the arpeggio) is unreachable from the UI. Nor is the
+  release note `~~~`, so an instrument's release tail is heard at the end of a song, where
+  every voice still sounding is let go, rather than wherever you would put one. The instrument
+  column is stamped for you when you type a note and a volume shape can go in the instrument's
+  envelope instead, so the mode is usable; it is not finished. Found by writing the manual
+  chapter — the effect table was documented from the synthesiser and then checked against the
+  keyboard. The Experimental chip's tooltip names this and nothing else, and the chapter says
+  it in the section where a reader would otherwise discover it by pressing keys that do
+  nothing.
+
 - **Closing Warlock while a picture was being generated no longer hangs it.** Shutdown
   closed the image worker's handle while the running sample still held it, so it waited for
   the sample -- up to fifteen minutes -- before it could even ask the job to stop. The close

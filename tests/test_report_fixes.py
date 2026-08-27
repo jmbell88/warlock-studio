@@ -354,10 +354,12 @@ def test_troupe_is_the_mode_marked_experimental():
     three of its own phases are unstarted and its keyframes are provisional.
     ``docs/manual/11`` is candid about that and the app was not.
 
-    Sirens joins it: the engine is complete and tested and songs really play,
-    while the instrument editor, the sound-effect pane and WAV export are not
-    built. The rail says so for the same reason -- the manual is read by people
-    who already know to be careful, and the rail is read by everyone.
+    **Sirens stayed on the list**, and what kept it there was writing its
+    manual chapter: four of a cell's five columns are drawn and take no
+    keyboard input, so every effect the synth implements is unreachable from
+    the UI. Asserting the exact dict rather than membership is the point -- a
+    mode joining or leaving this list is a claim about the app that should have
+    to be written down twice.
     """
     from warlock.studio import modes
 

@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import controls, icons, sirens_mode, widgets
+from .. import anchors, controls, icons, sirens_mode, widgets
 from ..manual import render as manual_render
 from ..sirens import instruments as inst
 
@@ -34,6 +34,7 @@ from ..sirens import instruments as inst
 def draw(ctx: Any) -> None:
     from imgui_bundle import imgui
 
+    anchors.mark_window("sirens/instruments")
     state = sirens_mode.ensure(ctx)
     tab = state.active
     widgets.section("Instruments")

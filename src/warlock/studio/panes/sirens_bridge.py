@@ -18,13 +18,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import icons, sirens_mode, widgets
+from .. import anchors, icons, sirens_mode, widgets
 from ..manual import render as manual_render
 
 
 def draw(ctx: Any) -> None:
     from imgui_bundle import imgui
 
+    anchors.mark_window("sirens/bridge")
     state = sirens_mode.ensure(ctx)
     tab = state.active
     widgets.section("Song file")

@@ -23,10 +23,12 @@ status line, and then the whole rest of the screen for what you were working on.
 
 Above everything else, on a fresh install, is an offer of a **guided tour** — a title, one line
 saying how long it takes, a **Start** button carrying the tour's name, and **Not now**. There are
-two tours: *Around the app*, which walks the rail and the five stages of Create, and *Drawing in
-Inker*, which makes a canvas, a
-stroke, a layer and a frame. Neither needs a GPU or any downloaded weights, which is deliberate: a
-tour a fresh install cannot finish is worse than none.
+three tours: *Around the app*, which walks the rail and the five stages of Create; *Drawing in
+Inker*, which makes a canvas, a stroke, a layer and a frame; and *Writing a tune in Sirens*, which
+goes from an empty song to an exported WAV. None of the three needs a GPU or any downloaded weights,
+which is deliberate: a tour a fresh install cannot finish is worse than none. The Sirens one adds a
+second half of that rule — no step of it waits on hearing anything, so a machine with no sound
+device can finish it too.
 
 **The tour points and waits. It never clicks anything for you.** A step highlights one control,
 says what it is for, and either advances on **Next** or waits until you have actually done the
@@ -35,7 +37,7 @@ opens the manual chapter the step is about, and `Esc` ends the tour wherever you
 also in the command palette as **Take the tour: …**, so leaving one is never losing it.
 
 The offer is not a modal and never blocks the app. It stands down on its own once you have finished
-the tour it names, moves on to the other one, and **Not now** puts it away for good.
+the tour it names, moves on to the next one, and **Not now** puts it away for good.
 
 ## What's new
 
@@ -66,9 +68,9 @@ to go is clickable.
 
 | Line | What it says | Where it goes |
 |---|---|---|
-| Issues | "Everything checks out", "still checking" for the first second or two after launch, or "N things need attention" — amber for a warning, red for something fatal. While the shell setup summary is visible this item is omitted instead of repeating it. | [App settings](40-app-settings.md), where the model list and its Download buttons are. |
+| Issues | "Everything checks out", "still checking" for the first second or two after launch, or "N things need attention" — amber for a warning, red for something fatal. While the shell setup summary is visible this item is omitted instead of repeating it. | [App settings](41-app-settings.md), where the model list and its Download buttons are. |
 | Queue | What is running or queued, with a percentage when the worker is reporting one, or "Queue idle". | — |
-| Unreviewed | How many finished meshes nobody has judged, when there are any. | [Review](36-review.md). |
+| Unreviewed | How many finished meshes nobody has judged, when there are any. | [Review](37-review.md). |
 
 There used to be a **Library** line here too, counting assets and disk. It went when Resume became a
 grid of those same assets: a count of the thing you are looking at is not news, and the Library is
@@ -113,4 +115,4 @@ title as well as in the banner across the top of every mode. Dismissing the bann
 the text: it moves into the Issues popup under a **Dismissed** heading, which is the only copy
 there is.
 
-See [Troubleshooting](41-troubleshooting.md) for what the individual checks mean.
+See [Troubleshooting](42-troubleshooting.md) for what the individual checks mean.

@@ -16,13 +16,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import controls, icons, sirens_mode, widgets
+from .. import anchors, controls, icons, sirens_mode, widgets
 from ..manual import render as manual_render
 
 
 def draw(ctx: Any) -> None:
     from imgui_bundle import imgui
 
+    anchors.mark_window("sirens/orders")
     state = sirens_mode.ensure(ctx)
     tab = state.active
     widgets.section("Order")
