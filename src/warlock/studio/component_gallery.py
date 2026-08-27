@@ -95,7 +95,7 @@ def _choices() -> None:
 
 
 def draw() -> None:
-    """Draw the gallery popup when requested from Issues."""
+    """Draw the gallery popup when requested by the developer build."""
 
     global _requested
     if not enabled():

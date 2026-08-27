@@ -219,8 +219,12 @@ def record(
     window = ""
     try:
         # ``ImGuiWindow.name`` is the full id path -- ``##host/.../inker-tools``
-        # -- so the last segment is the pane's own id, minus imgui's hash.
-        raw = imgui.internal.get_current_window().name
+        # -- so the last segment is the pane's own id, minus imgui's hash. The
+        # *read* accessor for ``guard._window``'s reason: ``GetCurrentWindow``
+        # sets ``WriteAccessed``, which is what makes imgui render its implicit
+        # ``Debug##Default`` window, and asking a control where it lives must
+        # not conjure a window of its own.
+        raw = imgui.internal.get_current_window_read().name
         window = str(raw).rsplit("/", 1)[-1].rsplit("_", 1)[0]
     except (AttributeError, RuntimeError, TypeError):
         window = ""

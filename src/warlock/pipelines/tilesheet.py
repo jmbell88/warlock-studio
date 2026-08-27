@@ -488,6 +488,11 @@ def sheet_sidecar(
     palette: Any,
     recipe: Any,
     created: float,
+    working_cell_px: tuple[int, int] | None = None,
+    target_cell_px: int | None = None,
+    reduction: str | None = None,
+    source_seed: int | None = None,
+    workflow: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The sheet's own record: what was asked for, and what actually ran.
 
@@ -521,4 +526,11 @@ def sheet_sidecar(
         "colors": int(colors),
         "palette": [str(entry) for entry in palette],
         "recipe": dict(recipe),
+        # Added fields are optional so sidecars written by older workers keep
+        # their original shape and remain readable.
+        "working_cell_px": list(working_cell_px or (128, 64 if normalize_view(view) == ISOMETRIC else 128)),
+        "target_cell_px": target_cell_px,
+        "reduction": reduction if target_cell_px is not None else None,
+        "source_seed": int(source_seed) if source_seed is not None else None,
+        **({"workflow": dict(workflow)} if workflow is not None else {}),
     }

@@ -241,7 +241,11 @@ def create_tile_sheet(
         "three_quarter": "tileset_three_quarter",
         "isometric": "tileset_isometric",
     }[resolved]
-    if asset_type is not None and asset_type != expected_asset_type:
+    # ``tileset`` is the consolidated Create vocabulary. The directional
+    # aliases remain accepted for old service clients and still validate the
+    # view they name.
+    accepted_asset_types = {"tileset", expected_asset_type}
+    if asset_type is not None and asset_type not in accepted_asset_types:
         raise Invalid("asset_type does not match the tile-set view", field="asset_type")
     if asset_intent is not None and asset_intent != "tileset":
         raise Invalid("a tile set must use asset_intent='tileset'", field="asset_intent")
@@ -302,9 +306,10 @@ def create_tile_sheet(
         },
     }
     if asset_type in {
+        "tileset",
         "tileset_top_down", "tileset_three_quarter", "tileset_isometric"
     }:
-        params["asset_type"] = asset_type
+        params["asset_type"] = "tileset" if asset_type == "tileset" else asset_type
     if asset_intent == "tileset":
         params["asset_intent"] = asset_intent
     if reference is not None:

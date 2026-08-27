@@ -593,38 +593,16 @@ def test_a_pending_task_carries_no_unread_timestamp():
     assert "started" not in _Pending.__dataclass_fields__
 
 
-# --- H74: the popup stops stat-ing the log file per frame --------------------
+# --- H74: the diagnostics popup is gone ------------------------------------
 
 
-def test_the_log_probe_stats_once_and_then_answers_from_the_cache(tmp_path, monkeypatch):
-    """The popup draws every frame while it is open; the answer changes once a
-    session, when the first line is written."""
-    calls: list[str] = []
-    real_exists = main.Path.exists
+def test_the_diagnostics_popup_is_not_exposed():
+    """Health warnings remain visible, but no modal or command opens them."""
+    from warlock.studio import menus
 
-    def counting_exists(self):
-        calls.append(str(self))
-        return real_exists(self)
-
-    monkeypatch.setattr(main.Path, "exists", counting_exists)
-    monkeypatch.setattr(main, "_LOG_PROBE", ("", 0.0, False))
-
-    assert main._log_exists(tmp_path) is False
-    (tmp_path / "warlock.log").write_text("x")
-    # Still the cached answer -- one stat, not two.
-    assert main._log_exists(tmp_path) is False
-    assert len(calls) == 1
-
-    # And it is a *cache*, not a one-shot: the first line arrives after the
-    # window does, so an answer frozen forever would grey the button for good.
-    monkeypatch.setattr(main, "_LOG_PROBE", ("", 0.0, False))
-    assert main._log_exists(tmp_path) is True
-
-
-def test_the_diagnostics_popup_does_not_touch_the_filesystem_itself():
-    source = inspect.getsource(main.App._diagnostics_popup)
-    assert "_log_exists" in source
-    assert ".exists()" not in source
+    assert not hasattr(main.App, "_diagnostics_popup")
+    assert "diagnostics" not in inspect.getsource(palette.commands)
+    assert '"diagnostics"' not in inspect.getsource(menus)
 
 
 # --- H61: the icon catalogue is deliberate -----------------------------------

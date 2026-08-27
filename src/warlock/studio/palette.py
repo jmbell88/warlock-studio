@@ -474,16 +474,6 @@ def commands(ctx: Any) -> list[Command]:
         create_stages.go(ctx, "reference")
         profiles_panel.open_sheet(ctx)
 
-    def diagnostics(ctx: Any) -> None:
-        # The rail's badge is drawn only when a check is failing, so on a
-        # healthy install there is nothing to click -- and "everything is fine"
-        # is exactly the claim somebody occasionally wants the evidence for.
-        # A one-shot for ``shortcuts``' reason: a palette command is not inside
-        # the window the popup is registered in.
-        from . import rail
-
-        rail.request("diagnostics")
-
     def workspace_layout(ctx: Any) -> None:
         # The switcher, through the same one-shot: the rail's footer has no
         # room for a tenth item (its own test catches the one that pushes the
@@ -656,12 +646,6 @@ def commands(ctx: Any) -> list[Command]:
             group="Application",
             run=shortcuts,
             hint="Ctrl+/",
-        ),
-        Command(
-            key="diagnostics",
-            label="Issues",
-            group="Application",
-            run=diagnostics,
         ),
         Command(
             key="workspace-layout",

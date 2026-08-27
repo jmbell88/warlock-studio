@@ -52,7 +52,6 @@ _COMMAND_PATHS: dict[str, tuple[str, ...]] = {
     "empty-trash": ("Window",),
     "manual": ("Help",),
     "shortcuts": ("Help",),
-    "diagnostics": ("Help",),
     "open-log": ("Help",),
 }
 

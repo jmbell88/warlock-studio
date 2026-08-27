@@ -847,6 +847,7 @@ class Text2Image:
         lora_weight: float = models.DEFAULT_LORA_WEIGHT,
         negative_prompt: str | None = None,
         conditioning: Any | None = None,
+        reference_images: list[Any] | tuple[Any, ...] | None = None,
         on_state: Callable[[str], None] | None = None,
         on_step: Callable[[int, int], None] | None = None,
         cancel_event: threading.Event | None = None,
@@ -898,6 +899,7 @@ class Text2Image:
                 lora_weight=lora_weight,
                 negative_prompt=negative_prompt,
                 conditioning=conditioning,
+                reference_images=reference_images,
                 on_state=on_state,
                 on_step=on_step,
                 cancel_event=cancel_event,
@@ -918,6 +920,7 @@ class Text2Image:
         lora_weight: float = models.DEFAULT_LORA_WEIGHT,
         negative_prompt: str | None = None,
         conditioning: Any | None = None,
+        reference_images: list[Any] | tuple[Any, ...] | None = None,
         on_state: Callable[[str], None] | None = None,
         on_step: Callable[[int, int], None] | None = None,
         cancel_event: threading.Event | None = None,
@@ -1039,7 +1042,7 @@ class Text2Image:
                 else self._sample_sdxl
             )
             image, chunks = sample(
-                target, extra, text, negative_prompt, seed, step_cb, self._frame(size)
+                target, extra, text, negative_prompt, seed, step_cb, self._frame(size), reference_images
             )
         finally:
             stack.close()
@@ -1091,7 +1094,8 @@ class Text2Image:
         return (width, height)
 
     def _sample_sdxl(
-        self, target, extra, text, negative_prompt, seed, step_cb, frame=None
+        self, target, extra, text, negative_prompt, seed, step_cb, frame=None,
+        reference_images=None,
     ):
         """The SDXL sample: chunked CLIP encoding, then the pipeline call.
 
@@ -1160,7 +1164,8 @@ class Text2Image:
         return image, len(positive_chunks)
 
     def _sample_flux2(
-        self, target, extra, text, negative_prompt, seed, step_cb, frame=None
+        self, target, extra, text, negative_prompt, seed, step_cb, frame=None,
+        reference_images=None,
     ):
         """The FLUX.2 klein sample. Four things differ, all forced by the
         pipeline's real signature rather than chosen:
@@ -1197,6 +1202,14 @@ class Text2Image:
                 num_images_per_prompt=1,
                 max_sequence_length=FLUX2_MAX_SEQUENCE,
             )[0]
+        native_refs = list(reference_images or ())
+        # FLUX.2 Klein's native editing API calls the input ``image`` and
+        # accepts one image or a list of images. Keep references out of the
+        # SDXL conditioning path entirely: it has different adapters and this
+        # branch is the explicit capability boundary.
+        reference_kwargs = {}
+        if native_refs:
+            reference_kwargs["image"] = native_refs[0] if len(native_refs) == 1 else native_refs
         image = target(
             prompt=text,
             negative_prompt_embeds=negative_embeds,
@@ -1207,6 +1220,7 @@ class Text2Image:
             max_sequence_length=FLUX2_MAX_SEQUENCE,
             generator=torch.Generator("cuda").manual_seed(seed),
             callback_on_step_end=step_cb,
+            **reference_kwargs,
         ).images[0]
         return image, 1
 

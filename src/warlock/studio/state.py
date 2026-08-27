@@ -62,6 +62,12 @@ def default_form_2d() -> dict[str, Any]:
         # bridge to the generation services and are synchronised from this by
         # create_assets.sync_legacy_fields.
         "asset_type": DEFAULT_ASSET_TYPE,
+        # New normalized vocabulary. ``asset_type`` remains in the form as a
+        # compatibility alias for profiles and old service adapters.
+        "generation_type": DEFAULT_ASSET_TYPE,
+        "quality": "quality",
+        "model_mode": "auto",
+        "model_override": "",
         "output": "reference",
         # The Sheet output's three fields. Strings, including the tile size,
         # because ``restore_form`` gates on ``type(value) is type(default)`` and
@@ -90,6 +96,7 @@ def default_form_2d() -> dict[str, Any]:
         # guide, and both of those differ, which is the difference between the
         # two cases.
         "projection": "top_down",
+        "target_cell_px": "",
         # Conditioning. Every number is a float literal on purpose:
         # restore_form gates on `type(value) is type(default)`, so an int here
         # would make a persisted 0.6 fail to restore.
@@ -134,11 +141,16 @@ def form_from_params(params: dict[str, Any]) -> dict[str, Any]:
     form["asset_type"] = (
         create_assets.asset_type_from_params(params) or form["asset_type"]
     )
+    form["generation_type"] = form["asset_type"]
     create_assets.sync_legacy_fields(form)
     return form
 
 
 DEFAULT_FORM_3D: dict[str, Any] = {
+    "backend": "trellis_single_view",
+    "texture_mode": "pbr",
+    "view_assets": {},
+    "hunyuan_license_ack": False,
     "platform": "",
     "profile": "raw",
     # Deliberately without a widget. A triangle budget only means anything for
@@ -572,8 +584,8 @@ class Toast:
     born: float = field(default_factory=time.monotonic)
     # A route the toast offers alongside its text. Only "log" today: an
     # unexpected exception's toast says "see the log for details" and the one
-    # button that opens it lives inside the diagnostics popup, which is further
-    # away than eight seconds. Named rather than a bool so the widget's label
+    # button that opens it lives in the global command surfaces, which is
+    # further away than eight seconds. Named rather than a bool so the widget's label
     # is a function of the toast; an unrecognised name simply draws nothing.
     action: str | None = None
     # What the action acts *on* -- a job id for "show", a sweep id for
@@ -903,8 +915,8 @@ class AppState:
     # of ``errors`` fires exactly once -- the startup doctor sweep, and the two
     # one-shot worker checks -- so clearing the list destroyed the only copy of
     # the text, and the sole remaining trace of a launch that failed two checks
-    # was a coloured dot. The diagnostics popup shows these, which is what makes
-    # Dismiss "put it away" rather than "forget it".
+    # was a coloured dot. Keeping these makes Dismiss "put it away" rather than
+    # "forget it" for the session log and support tooling.
     dismissed_errors: list[str] = field(default_factory=list)
     # Whether the style-profile manager is up (the UI redesign, wave 3). It was a
     # mode, which put a shelf of saved settings in the top-level navigation
@@ -1167,7 +1179,34 @@ ACTIONS = {
     "inker": "Open in Inker",
     "clay": "Open in Clay",
     "plotter": "Add to Plotter",
+    "variation": "Variation",
+    "revise": "Revise with prompt",
+    "settings": "Use settings",
+    "reference": "Use as reference",
 }
+
+
+def result_actions(job: dict[str, Any], *, rigging_available: bool = True) -> tuple[str, ...]:
+    """Actions a finished result may expose in its result surface.
+
+    This is intentionally a pure policy function.  The card and a future
+    result viewer can render the same actions without each inventing a subtly
+    different set of valid follow-ups.
+    """
+    if job.get("status") != "done":
+        return ()
+    files = set(job.get("files") or ())
+    params = job.get("params") if isinstance(job.get("params"), dict) else {}
+    actions: list[str] = []
+    if "input.png" in files:
+        actions.extend(("variation", "revise", "settings", "reference"))
+    actions.append(primary_action(job, rigging_available=rigging_available) or "open")
+    if params.get("asset_intent") == "tileset" or job.get("kind") == "tile_sheet":
+        actions.append("plotter")
+    elif "model.glb" in files and rigging_available:
+        actions.append("clay")
+    # Preserve order while avoiding a duplicate primary action.
+    return tuple(dict.fromkeys(actions))
 
 
 def primary_action(job: dict[str, Any], *, rigging_available: bool = True) -> str | None:

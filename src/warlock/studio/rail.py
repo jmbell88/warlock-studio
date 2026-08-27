@@ -48,17 +48,13 @@ _PILL_KEY = "rail/pill"
 # put one number in two places.
 _WIDTH = [RAIL_W]
 
-# Host-scoped popup requests. They now originate in the global menu and status
-# bar; keeping the one-shot bridge avoids coupling those surfaces to main.
-_wants: dict[str, bool] = {"diagnostics": False, "layouts": False}
+# Host-scoped popup requests. They originate in the global menu and avoid
+# coupling those surfaces to main.
+_wants: dict[str, bool] = {"layouts": False}
 
 
 def request(name: str) -> None:
-    """Ask ``main`` to open one of the shell's popups at host scope.
-
-    The request bridge is shared by menu, status and palette actions because
-    imgui popups must be opened in the host window that renders them.
-    """
+    """Ask ``main`` to open a shell popup at host scope."""
     _wants[name] = True
 
 
@@ -309,8 +305,8 @@ def draw(app: Any, ctx: Any) -> None:
     item_w = imgui.get_content_region_avail().x
     labels = {key: (label, icon) for key, label, icon in modes.MODES}
     body_groups = modes.RAIL_GROUPS
-    # The rail is destinations only. Manual, shortcuts, diagnostics, layouts,
-    # Settings and the labels toggle live in the global menus/status bar.
+    # The rail is destinations only. Manual, shortcuts, layouts, Settings and
+    # the labels toggle live in the global menus/status bar.
     rows = sum(len(g) for g in body_groups)
     avail_h = imgui.get_content_region_avail().y
     # The gaps the column will actually contain: one between each pair of rows,

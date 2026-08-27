@@ -153,6 +153,15 @@ class _Server:
 
         t2i = self.pipe()
         size = req.get("size")
+        reference_images = None
+        reference_paths = req.get("reference_images") or ()
+        if reference_paths:
+            from PIL import Image
+
+            reference_images = []
+            for raw_path in reference_paths:
+                with Image.open(Path(raw_path)) as image:
+                    reference_images.append(image.convert("RGB").copy())
         try:
             path = t2i.generate(
                 str(req["prompt"]),
@@ -162,6 +171,7 @@ class _Server:
                 lora_weight=float(req["lora_weight"]),
                 negative_prompt=req.get("negative_prompt"),
                 conditioning=_conditioning(req.get("conditioning")),
+                reference_images=reference_images,
                 on_state=lambda text: emit({"kind": "state", "text": text}),
                 on_step=lambda step, total: emit(
                     {"kind": "step", "step": step, "total": total}

@@ -1,0 +1,12 @@
+{
+  "key": "pixel-klein",
+  "label": "FLUX.2 klein 4B distilled + pixel-art-klein LoRA",
+  "notes": "The non-SDXL pixel arm, and the counterpart to pixel-lcm-xl. Run on flux_klein_distilled rather than flux_klein because that is the base the adapter was trained against and the one the registry entry exists for -- klein-base expresses the style too, but on a band shifted down again (2026-08-10-pixel-art-klein.md). lora_weight is the adapter's measured default_weight of 0.0625, not the model card's 0.85-1.4: the file declares use_rslora, so peft restores alpha/sqrt(r) = 16.0 and the card's range is an 8x overdose that renders black frames. 0.0625 is effective 1.0.",
+  "guidance": {
+    "base_model": "flux_klein_distilled",
+    "style_lora": "pixelklein",
+    "platform": "2d"
+  },
+  "lora_weight": 0.0625,
+  "profile": "raw"
+}

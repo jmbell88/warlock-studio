@@ -168,17 +168,44 @@ def enter(key: str) -> Mark | None:
     checks are asserts compiled out of the release build, so calling in with no
     context is an access violation rather than an exception, and
     ``get_current_context`` is the one entry point safe to ask.
+
+    Everything here reads the current window through :func:`_window`, never
+    ``GetCurrentWindow``/``GetWindowDrawList``; see that function.
     """
     if imgui.get_current_context() is None:
         return None
     try:
         state = imgui.internal.ErrorRecoveryState()
         imgui.internal.error_recovery_store_state(state)
-        window = imgui.internal.get_current_window().name
+        # Not ``_window_name``: its "" fallback is right for the landing check
+        # below, where a name that cannot be read must not be an exception --
+        # but here it would arm the guard against a window it never identified,
+        # and a mark that cannot say where it started cannot be landed against.
+        window = str(_window().name)
     except Exception:  # noqa: BLE001 -- a guard that fails to arm must not raise
         log.exception("could not take a recovery mark for %s", key)
         return None
     return Mark(state=state, clips=_clip_depth(), window=window)
+
+
+def _window() -> Any:
+    """The current window, **without** telling imgui it was written to.
+
+    ``GetCurrentWindow`` sets ``window->WriteAccessed``, and every overlay is
+    guarded at host scope -- after ``imgui.end()``, where the current window is
+    the implicit ``Debug##Default`` fallback imgui opens in ``NewFrame`` so that
+    a stray call cannot crash. ``EndFrame`` deactivates that window only if
+    nobody wrote to it, so the mark this guard takes for eleven overlays a frame
+    was enough to keep it alive: an empty 400x400 "Debug" window over the app,
+    every frame, drawn by the one module whose job is to be invisible.
+    ``GetCurrentWindowRead`` is the same pointer with no flag, so the guard can
+    ask what it needs without answering for it.
+
+    It is also the safer of the two off-frame: between ``render`` and the next
+    ``new_frame`` there is no current window, and the read accessor returns it
+    as ``None`` where ``GetCurrentWindow`` dereferences it.
+    """
+    return imgui.internal.get_current_window_read()
 
 
 def _clip_depth() -> int | None:
@@ -190,7 +217,7 @@ def _clip_depth() -> int | None:
     must lose the clip repair, not stop working.
     """
     try:
-        return len(imgui.get_window_draw_list()._clip_rect_stack)
+        return len(_window().draw_list._clip_rect_stack)
     except Exception:  # noqa: BLE001
         return None
 
@@ -243,7 +270,7 @@ def _pop_clips(depth: int | None) -> None:
     """Pop back to the recorded clip depth. imgui does not do this one."""
     if depth is None:
         return
-    draw_list = imgui.get_window_draw_list()
+    draw_list = _window().draw_list
     # Bounded rather than ``while``: this repairs a leak, and a leak deep enough
     # to need more than sixteen pops is a bug this loop should not hide.
     for _ in range(16):
@@ -254,7 +281,7 @@ def _pop_clips(depth: int | None) -> None:
 
 def _window_name() -> str:
     try:
-        return imgui.internal.get_current_window().name
+        return str(_window().name)
     except Exception:  # noqa: BLE001
         return ""
 

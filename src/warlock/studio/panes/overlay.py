@@ -15,7 +15,7 @@ from typing import Any
 from imgui_bundle import imgui
 
 from ...service import jobs as svc_jobs
-from .. import controls, fonts, icons, rail, theme, tokens, widgets
+from .. import controls, fonts, icons, theme, tokens, widgets
 from ..manual import render as manual_render
 from ..state import format_duration
 
@@ -381,7 +381,7 @@ def doctor_summary(errors: list[str]) -> tuple[str, str]:
 
 
 def doctor_banner(ctx: Any) -> None:
-    """One quiet shell summary; full commands and details stay in Issues."""
+    """One quiet shell summary for setup problems."""
 
     if not ctx.state.errors:
         return
@@ -394,14 +394,11 @@ def doctor_banner(ctx: Any) -> None:
     if imgui.begin_child("doctor", (-1, 0), flags):
         widgets.text_colored(theme.WARN, f"{icons.TRIANGLE_ALERT} {title}")
         imgui.same_line()
-        # Reserve the two trailing actions before trimming the leading detail.
-        action_width = widgets.button_width("Review") + widgets.button_width("Dismiss")
-        action_width += imgui.get_style().item_spacing.x * 2
+        # Reserve the trailing action before trimming the leading detail.
+        action_width = widgets.button_width("Dismiss")
+        action_width += imgui.get_style().item_spacing.x
         detail_width = max(imgui.get_content_region_avail().x - action_width, 0)
         widgets.muted(widgets.fit_text(leading, detail_width))
-        imgui.same_line()
-        if controls.small_button("Review", role=controls.ButtonRole.GHOST):
-            rail.request("diagnostics")
         imgui.same_line()
         if controls.small_button("Dismiss", role=controls.ButtonRole.GHOST):
             ctx.state.dismiss_errors()

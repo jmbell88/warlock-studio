@@ -36,19 +36,31 @@ so that "done" is recognisable without re-deriving it.
 ## P1. Run the installer end to end, then on a clean machine
 
 **Why it is yours:** hardware. `installer/build.ps1`, `installer/warlock.iss`,
-the runtime manifest and `verify_runtime.py` were built on 2026-08-22 and have
-**never been executed**. The installer is the only path a non-developer will
-ever take, and the release audit rated this the single blocker.
+the runtime manifest and `verify_runtime.py` were built on 2026-08-22. **They
+were executed for the first time on 2026-08-26** and the first two bullets
+below are settled; everything from the relocated install down is still owed,
+and none of it has been seen on a machine that is not this one.
 
 **Do:**
-- `pwsh installer\build.ps1` on a Windows machine with `uv`, a uv-managed
+- ~~`pwsh installer\build.ps1` on a Windows machine with `uv`, a uv-managed
   CPython 3.13 and Inno Setup 6. Confirm the staged smoke test and the
   `torch.version.cuda == "12.8"` assert pass; record payload size and compile
-  time.
-- Settle single-exe versus disk spanning: `warlock.iss` sets `DiskSpanning=yes`
-  with a 2.1 GB slice for a ~4 GB payload. Decide at the first compile; drop the
-  spanning if one exe compiles.
-- Install per-user, then once with `/DIR=C:\Temp\WarlockApp /SILENT`. With
+  time.~~ **Done 2026-08-26.** Staged smoke test and CUDA assert both pass, but
+  the assert only passes on the *retry* path: the default index does not serve
+  cu128, so the first `uv pip sync` always fails and the pinned-index retry is
+  load-bearing rather than a fallback. `iscc` was not on PATH (it is under
+  `%LOCALAPPDATA%\Programs\Inno Setup 6`), so `-Iscc` was needed. **2.91 GB
+  payload, 855 s compile, 6.16 GB installed.**
+- ~~Settle single-exe versus disk spanning.~~ **Decided 2026-08-26: single
+  exe.** The ~4 GB payload compresses to one 2.91 GB executable, so
+  `DiskSpanning=no`. `DiskSliceSize` stays in `warlock.iss`, inert, so the
+  decision is one line to reverse. `INSTALL.md` and `tests/test_installer.py`
+  were both rewritten off the three-file assumption.
+- Install per-user, then once with `/DIR=C:\Temp\WarlockApp /SILENT`. A default
+  per-user `/SILENT` install was proved on 2026-08-26 (shortcuts, uninstall
+  entry, and `warlock doctor` exiting 0 from `{app}` against the real model
+  library) — but a *silent* install shows no wizard, so the relocated `/DIR`
+  case and every wizard-page claim below remain unseen. With
   `$env:WARLOCK_HOME` at a scratch directory: the Start Menu shortcut launches
   under `pythonw`, the checkout-shape gate passes, the fatal banners name the
   two missing-weights rows, the first-run overlay shows correct GPU verdicts,
@@ -68,9 +80,11 @@ crash *before* `_setup_logging` attaches closes silently — if that happens, ru
 `python -m warlock` from a terminal to see it. And an unsigned exe means
 SmartScreen's "More info → Run anyway" (see P9).
 
-**Expected outcome:** a recorded build (size, time, one-exe-or-spanning
-decision) and a first non-developer install that generated an asset. Until
-then the project has no shippable artifact, whatever the tree says.
+**Expected outcome:** ~~a recorded build (size, time, one-exe-or-spanning
+decision)~~ — recorded above — and a first **non-developer** install that
+generated an asset. The build half is done; the half that matters is not. Until
+a machine without `uv`, Python or a CUDA toolkit has installed this and made
+something, the project has no shippable artifact, whatever the tree says.
 
 ## P2. Purge `examples/` from git history before the repository goes public
 

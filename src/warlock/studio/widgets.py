@@ -1415,7 +1415,7 @@ _POPUPS_OPEN: set[str] = set()
 def popup_enter(name: str) -> tuple[float, float]:
     """:func:`popover_enter` for a popup that has no open flag of its own.
 
-    The header's shortcuts and diagnostics popups are opened by ``open_popup``
+    The header's shortcuts popup is opened by ``open_popup``
     and closed by imgui itself, so there is nothing to read "is this the frame
     it appeared" off. imgui knows -- but only through ``is_window_appearing``,
     which answers *after* ``begin``, and the alpha is needed before it, because
@@ -2895,7 +2895,7 @@ def toasts(state: Any, viewport_size: tuple[float, float], on_action: Any = None
     if hidden:
         # Above the stack, in the direction the older ones went. A count rather
         # than a scrollable list: the full record is the history in the
-        # diagnostics popup, and this line exists to say the stack is a window
+        # notification history, and this line exists to say the stack is a window
         # onto something rather than the whole of it.
         imgui.set_next_window_bg_alpha(0.0)
         imgui.set_next_window_pos((viewport_size[0] - margin, y), imgui.Cond_.always.value, (1, 1))

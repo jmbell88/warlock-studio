@@ -514,3 +514,60 @@ def test_the_app_turns_the_recovery_assert_off_where_it_makes_its_context():
     assert "imgui.create_context" in names
     assert "guard.configure" in names
     assert names.index("guard.configure") > names.index("imgui.create_context")
+
+
+def test_guarding_an_overlay_does_not_raise_imguis_implicit_debug_window(imgui_ctx):
+    """The overlays are guarded at *host* scope -- ``main._overlays`` runs after
+    ``imgui.end()`` -- and the mark the guard takes there used to be written
+    against imgui's implicit ``Debug##Default`` window.
+
+    ``NewFrame`` opens that fallback so a stray call cannot crash, and
+    ``EndFrame`` closes it again *only if* ``WriteAccessed`` is still false.
+    ``GetCurrentWindow`` sets that flag; ``GetCurrentWindowRead`` does not. With
+    the write accessor a clean, failure-free frame rendered an empty 400x400
+    "Debug" window over the app -- the state this asserts against, which is why
+    the body below raises nothing.
+    """
+    imgui, _renderer = imgui_ctx
+    imgui.new_frame()
+    imgui.set_next_window_size((420.0, 900.0))
+    imgui.begin("##host-overlay-scope")
+    imgui.text("the workspace")
+    imgui.end()
+    # Host scope, exactly as ``_overlays`` runs: no window on the stack, and an
+    # overlay that draws nothing this frame (a toast queue with no toasts).
+    assert guard.run("overlay/quiet", lambda: None, draw_placeholder=False)
+    imgui.render()
+
+    fallback = imgui.internal.find_window_by_name("Debug##Default")
+    assert fallback is None or not fallback.active, "the guard woke imgui's Debug window"
+    drawn = {
+        cmd_list.owner_name if hasattr(cmd_list, "owner_name") else ""
+        for cmd_list in imgui.get_draw_data().cmd_lists
+    }
+    assert "Debug##Default" not in drawn
+
+
+def test_no_studio_module_uses_the_write_marking_current_window_accessor():
+    """``imgui.internal.get_current_window()`` is the one that sets
+    ``WriteAccessed``. Anything asking at host scope -- the guard's mark, the
+    probe's window column -- makes imgui render its implicit Debug window, so
+    the read accessor is the only one this package may use.
+    """
+    import ast
+    import pathlib
+
+    import warlock.studio as studio_pkg
+
+    root = pathlib.Path(studio_pkg.__file__).parent
+    offenders = []
+    for path in root.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get_current_window"
+            ):
+                offenders.append(f"{path.relative_to(root)}:{node.lineno}")
+    assert not offenders, f"use get_current_window_read instead: {offenders}"

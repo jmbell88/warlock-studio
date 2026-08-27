@@ -211,8 +211,8 @@ class Ctx:
     def open_log(self) -> None:
         """Hand ``warlock.log`` to whatever the user reads text files in.
 
-        One owner, because two callers want it: the diagnostics popup's button
-        and the toast for a failure whose message defers to the log. Silent
+        One owner, because callers want the same behavior: the log command and
+        the toast for a failure whose message defers to the log. Silent
         when there is no log yet -- it is written on the first line logged, so
         its absence means there is nothing to show rather than a fault.
 

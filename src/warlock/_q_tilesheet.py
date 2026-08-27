@@ -75,6 +75,7 @@ class TileSheetOps:
         from .pipelines import control, tilesheet
         from .pipelines.conditioning import Conditioning
         from .pipelines.pixelsheet import quantize_shared
+        from .asset_workflows import tile_plan
 
         job_id = job["id"]
         params = job["params"]
@@ -97,6 +98,25 @@ class TileSheetOps:
         # block the door would refuse today costs the request rather than
         # sixty-four cells of nothing.
         geom = tilesheet.geometry(tile_w, projection)
+        normalized_plan = None
+        request_payload = params.get("generation_request")
+        if isinstance(request_payload, dict) and request_payload.get("generation_type") == "tileset":
+            request_tile = request_payload.get("tile") or {}
+            normalized_plan = tile_plan(
+                mode=str(request_tile.get("mode") or "collection"),
+                view=str(request_tile.get("view") or projection),
+                prompt_items=request_tile.get("prompt_items") or (),
+                variants=int(request_tile.get("variants") or 1),
+                inner_terrain=str(request_tile.get("inner_terrain") or ""),
+                outer_terrain=str(request_tile.get("outer_terrain") or ""),
+                boundary=str(request_tile.get("boundary") or ""),
+                ground=str(request_tile.get("ground") or ""),
+                path=str(request_tile.get("path") or ""),
+                edge=str(request_tile.get("edge") or ""),
+                target_cell_px=request_tile.get("target_cell_px"),
+            )
+            params["tile_plan"] = normalized_plan
+            await asyncio.to_thread(self.store.set_params, job_id, params)
         colors = int(params.get("colors", 64))
         seed = int(params.get("seed", 42))
         subject = tilesheet.sheet_subject(job["prompt"] or "", geom.view)
@@ -282,6 +302,11 @@ class TileSheetOps:
             palette=palette,
             recipe=recipe,
             created=time.time(),
+            working_cell_px=(geom.cell_w, geom.cell_h),
+            target_cell_px=job.get("params", {}).get("target_cell_px"),
+            reduction=(job.get("params", {}).get("reduction_method") or "measured_pixel_reducer"),
+            source_seed=seed,
+            workflow=normalized_plan,
         )
         # Last, and only after the sheet: this file is the completion marker, so
         # publishing it first would advertise a sheet still being written.

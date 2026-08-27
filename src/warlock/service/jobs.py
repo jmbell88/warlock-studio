@@ -32,6 +32,8 @@ that learned that spelling should not have to learn another.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
+from typing import Any
 
 from . import verdicts as verdicts_mod  # noqa: F401  -- historically importable
 from ._jobs_create import (  # noqa: F401  -- the facade's re-export
@@ -118,3 +120,164 @@ from .validation import (  # noqa: F401  -- historically importable from here
 # ``jobs.log`` has always been importable, and the sibling modules each have
 # their own (``warlock.service._jobs_*``). Nothing asserts a logger name.
 log = logging.getLogger(__name__)
+
+
+def create_generation_request(svc: WarlockService, request: Any, **uploads: Any) -> dict[str, Any]:
+    """Queue a normalized :class:`warlock.generation.GenerationRequest`.
+
+    The historical ``create_job`` function remains the persistence boundary;
+    this adapter translates the new document once and keeps old rows and
+    sidecars readable.
+    """
+    from .. import generation
+
+    if not isinstance(request, generation.GenerationRequest):
+        request = generation.GenerationRequest.from_dict(request)
+    resolved = generation.resolve_recipe(request, svc.config)
+    issues = generation.validate_request(request, resolved)
+    if issues:
+        raise Invalid(issues[0].message, field=issues[0].field)
+    legacy = generation.request_to_legacy(request)
+    native_payloads: list[bytes] = []
+    if request.references:
+        from .files import to_png
+
+        for name in request.references:
+            try:
+                native_payloads.append(to_png(Path(name).read_bytes()))
+            except OSError as exc:
+                raise Invalid(f"could not read reference {name!r}: {exc}", field="references") from exc
+            except Exception as exc:
+                raise Invalid(f"could not decode reference {name!r}", field="references") from exc
+    model_view_payloads: dict[str, bytes] = {}
+    if request.generation_type == "3d_model" and request.model.backend == "hunyuan3d_multiview":
+        for view_name, view_path in request.model.views.items():
+            try:
+                model_view_payloads[view_name] = to_png(Path(view_path).read_bytes())
+            except OSError as exc:
+                raise Invalid(f"could not read {view_name} view {view_path!r}: {exc}", field="model.views") from exc
+            except Exception as exc:
+                raise Invalid(f"could not decode {view_name} view", field="model.views") from exc
+    reference = uploads.get("reference")
+    if reference is None and native_payloads:
+        try:
+            reference = native_payloads[0]
+        except IndexError:
+            reference = None
+    guidance_fields = {"base_model": resolved.base_model}
+    if resolved.style_lora:
+        guidance_fields["style_lora"] = resolved.style_lora
+    # Keep the two historical follow-up doors intact while making the new
+    # request document authoritative.  A sprite starts as an approved
+    # reference and then queues its sheet; a tileset uses the dedicated sheet
+    # worker, which owns atomic atlas publication and palette quantization.
+    if request.generation_type == "tileset":
+        from . import tilesheets
+
+        target = request.tile.target_cell_px
+        # The legacy worker accepts its established output sizes.  The full
+        # high-resolution target remains in the normalized request and sidecar;
+        # this compatibility choice keeps old installations runnable while the
+        # structural planner supplies the new collection/Wang/path layout.
+        tile_size = target if target in tilesheets.TILE_SIZES else tilesheets.DEFAULT_TILE_SIZE
+        tile_prompt = request.prompt
+        if request.tile.mode == "collection" and request.tile.prompt_items:
+            tile_prompt = "\n".join(request.tile.prompt_items)
+        elif request.tile.mode == "terrain_transition":
+            tile_prompt = f"inner terrain: {request.tile.inner_terrain}; outer terrain: {request.tile.outer_terrain}; {request.tile.boundary}".strip()
+        elif request.tile.mode == "path":
+            tile_prompt = f"ground: {request.tile.ground}; path: {request.tile.path}; {request.tile.edge}".strip()
+        result = tilesheets.create_tile_sheet(
+            svc,
+            prompt=tile_prompt,
+            tile_size=tile_size,
+            view=request.tile.view,
+            seed=request.seed,
+            negative_prompt=request.negative_prompt or None,
+            reference=reference,
+            asset_type="tileset",
+            asset_intent="tileset",
+        )
+    else:
+        sprite_block = None
+        if request.generation_type == "sprite_sheet":
+            from . import sprites as svc_sprites
+
+            sprite = request.sprite
+            legacy_size = (
+                sprite.target_cell_px
+                if sprite.target_cell_px in svc_sprites.SPRITE_LOGICAL_SIZES
+                else svc_sprites.DEFAULT_SPRITE_LOGICAL_SIZE
+            )
+            sprite_block = {
+                "sheet_type": "turnaround" if sprite.mode == "turnaround" else "walk",
+                "logical_size": legacy_size,
+                "colors": svc_sprites.DEFAULT_SPRITE_COLORS,
+            }
+        result = create_job(
+            svc,
+            kind="text",
+            prompt=request.prompt,
+            output=legacy["output"],
+            count=request.count,
+            seed=request.seed,
+            negative_prompt=request.negative_prompt or None,
+            reference=reference,
+            guidance_fields=guidance_fields,
+            asset_type=request.generation_type,
+            asset_intent=legacy["asset_intent"],
+            lora_weight=(
+                request.lora_weight
+                if request.lora_weight is not None
+                else next(
+                    (
+                        row["tuned_weight"]
+                        for row in generation.lora_catalog(svc.config)
+                        if row["key"] == resolved.style_lora
+                    ),
+                    None,
+                )
+            ),
+            sprite_sheet=sprite_block,
+        )
+    # ``guidance.normalize`` intentionally rejects unknown fields, so recipe
+    # provenance is merged after the legacy door has normalized its settings.
+    recipe_payload = {"version": generation.RECIPE_REGISTRY_VERSION, **resolved.to_dict()}
+    for job_id in result.get("ids", [result["id"]]):
+        extra = {
+            "generation_request": request.to_dict(),
+            "resolved_recipe": recipe_payload,
+            # These copies make the new contract inspectable by old result
+            # views and by rerun tools without requiring them to deserialize
+            # the entire request first.
+            "quality": request.quality,
+            "model_mode": request.model_mode,
+            "target_cell_px": (
+                request.tile.target_cell_px
+                if request.generation_type == "tileset"
+                else request.sprite.target_cell_px
+                if request.generation_type == "sprite_sheet"
+                else None
+            ),
+        }
+        if request.references:
+            native_files = []
+            for index, data in enumerate(native_payloads):
+                native_name = f"native_reference_{index}.png"
+                Path(svc.config.job_dir(job_id), native_name).write_bytes(data)
+                native_files.append(native_name)
+            extra["native_reference_files"] = native_files
+        if request.generation_type == "3d_model" and request.model.backend == "hunyuan3d_multiview":
+            view_files: dict[str, str] = {}
+            for view_name, view_bytes in model_view_payloads.items():
+                filename = f"view_{view_name}.png"
+                Path(svc.config.job_dir(job_id), filename).write_bytes(view_bytes)
+                view_files[view_name] = filename
+            extra.update({
+                "backend": "hunyuan3d_multiview",
+                "texture_mode": request.model.texture_mode,
+                "view_assets": view_files,
+                "license_acknowledged": True,
+            })
+        svc.store.merge_params(job_id, extra)
+    return result

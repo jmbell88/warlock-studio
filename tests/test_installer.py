@@ -170,7 +170,16 @@ def test_inno_setup_is_per_user_relocatable_and_leaves_user_data_alone() -> None
     assert "PrivilegesRequired=lowest" in source
     assert r"DefaultDirName={localappdata}\Programs\Warlock Studio" in source
     assert "Compression=lzma2" in source and "SolidCompression=yes" in source
-    assert "DiskSpanning=yes" in source and "DiskSliceSize=2100000000" in source
+    # Inverted on 2026-08-26, by the first compile this file ever described.
+    # The spanning was a prediction -- a ~4 GB payload was assumed not to fit
+    # one executable, so the slices were set at 2.1 GB. Measured, the payload
+    # compresses to a single 2.91 GB exe in 855 s, and a one-file download is
+    # strictly better for the people this installer exists for: the three-file
+    # variant fails partway through if any .bin is renamed or left behind.
+    # DiskSliceSize is deliberately left in warlock.iss and deliberately not
+    # asserted here -- it is inert while spanning is off, and keeping it makes
+    # the decision one line to reverse if the payload ever outgrows one file.
+    assert "DiskSpanning=no" in source
     assert r'Filename: "{app}\python\pythonw.exe"; Parameters: "-m warlock"' in source
     assert "Flags: unchecked" in source
     assert r'Name: "{app}\python"' in source

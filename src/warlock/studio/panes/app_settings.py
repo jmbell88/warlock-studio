@@ -436,7 +436,7 @@ def _config(ctx: Any) -> None:
 
 
 def config_table(ctx: Any) -> None:
-    """The rows themselves, shared with the diagnostics popup.
+    """The rows themselves, shared with the health/reporting surfaces.
 
     Overridden rows first (S140). The two or three a host has actually changed
     are the whole diagnostic value, so they are what is visible when the

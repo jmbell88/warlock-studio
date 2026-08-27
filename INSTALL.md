@@ -9,31 +9,24 @@ This covers the packaged Windows installer only. If you want to run Warlock Stud
 - **Windows 10 or 11, 64-bit.** There is no macOS or Linux build, and no CPU-only mode — an NVIDIA GPU is required, not optional.
 - **An NVIDIA GPU with CUDA, 16 GB VRAM or more.** Tested on an RTX 5090 (32 GB); a 4080/5080-class card or better is a comfortable fit. Keep your NVIDIA driver up to date via the NVIDIA app or GeForce Experience.
 - **32 GB of system RAM**, recommended. Windows counts the GPU's memory allocation against your system RAM as well as VRAM, so a low-RAM machine can refuse to start jobs even when VRAM is free.
-- **About 30 GB of free disk space** — roughly 2.9 GB for the installer itself, plus about 23 GB for the two AI model downloads on first launch.
+- **About 35 GB of free disk space** — the installed program takes about 6.2 GB (it unpacks to roughly twice the size of the 2.9 GB download), plus about 23 GB for the two AI model downloads on first launch, plus room for the download itself while it installs.
 - **A 1920×1080 or larger display** at 100% scaling. The app window opens at 1600×950.
 - You do **not** need to install Python, `uv`, or any other developer tools — the installer bundles its own Python runtime and everything else it needs to run.
 
 ## Step 1: Download Warlock Studio
 
 1. Go to the **Releases** page of the [Warlock Studio GitHub repository](https://github.com/jmbell88/warlock-studio) and open the latest release.
-2. Under **Assets**, download all three files into the same folder (for example, your `Downloads` folder) — don't rename or separate them:
-   - `WarlockSetup-v0.0.29.exe` (~5.4 MB) — the installer program
-   - `WarlockSetup-v0.0.29-1.bin` (~1.95 GB)
-   - `WarlockSetup-v0.0.29-2.bin` (~778 MB)
-
-   Total download: about **2.9 GB**.
-
-   **All three files must sit in the same folder before you run the installer.** The `.exe` is only a small setup stub — the two `.bin` files carry the actual program data. If you run the `.exe` without the `.bin` files beside it, the install will fail partway through. Large installers are sometimes split into pieces like this; it's normal, and nothing is wrong with your download.
-3. Wait for all three downloads to finish before opening anything.
+2. Under **Assets**, download `WarlockSetup-v0.0.29.exe` — a single file of about **2.9 GB**. There is nothing to unzip and no other file to fetch alongside it.
+3. Wait for the download to finish before opening it. Your browser may warn that a file this large is unusual; it isn't, for an installer that carries its own Python runtime and GPU libraries.
 
 ## Step 2: Install Warlock Studio
 
-1. Open the folder holding all three files and double-click `WarlockSetup-v0.0.29.exe`. The two `.bin` files are just data — you never open them directly.
+1. Double-click `WarlockSetup-v0.0.29.exe`.
 2. **Windows will very likely show a blue "Windows protected your PC" screen. This is expected — it is not a virus warning.** Windows SmartScreen flags installers from publishers who haven't paid for code-signing, regardless of whether the software is safe. Click **More info**, then click **Run anyway** to continue.
 3. The first wizard page is the **license agreement** (GPL-3.0-or-later). Read it if you like, then accept and continue.
 4. Optional: tick **Create a desktop shortcut** if you'd like one. It's unchecked by default — a Start Menu shortcut is created either way.
 5. You won't be asked for an administrator password. Warlock Studio installs just for your Windows user account, into `%LOCALAPPDATA%\Programs\Warlock Studio`.
-6. Click **Install** and wait — it's copying close to 3 GB, so this can take a minute or two depending on your disk speed.
+6. Click **Install** and wait — it's unpacking about 6 GB, so this can take a few minutes depending on your disk speed.
 7. Click **Finish**. Two new Start Menu shortcuts now exist:
    - **Warlock Studio** — the app itself
    - **Warlock Doctor** — a diagnostic tool that checks your install, GPU, and models (more on this under Troubleshooting below)

@@ -31,6 +31,7 @@ import logging
 import queue as _queue
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Callable
@@ -128,6 +129,7 @@ class Text2ImageClient:
         lora_weight: float = models.DEFAULT_LORA_WEIGHT,
         negative_prompt: str | None = None,
         conditioning: Any | None = None,
+        reference_images: list[Any] | tuple[Any, ...] | None = None,
         on_state: Callable[[str], None] | None = None,
         on_step: Callable[[int, int], None] | None = None,
         cancel_event: threading.Event | None = None,
@@ -162,10 +164,25 @@ class Text2ImageClient:
             "tilesheet": bool(tilesheet),
             "size": [int(size[0]), int(size[1])] if size is not None else None,
         }
-        with self._lock:
-            resp = self._request(
-                payload, on_state=on_state, on_step=on_step, cancel_event=cancel_event
-            )
+        # PIL images cannot cross the JSON process boundary.  Keep the files
+        # alive for the duration of the request; the child opens them before it
+        # answers, while path-like references can be passed through directly.
+        references = list(reference_images or ())
+        with tempfile.TemporaryDirectory(prefix="warlock-t2i-ref-") if references else contextlib.nullcontext() as temp:
+            if references:
+                paths = []
+                for index, reference in enumerate(references):
+                    if isinstance(reference, (str, Path)):
+                        paths.append(str(reference))
+                        continue
+                    path = Path(temp) / f"reference_{index}.png"
+                    reference.save(path, format="PNG")
+                    paths.append(str(path))
+                payload["reference_images"] = paths
+            with self._lock:
+                resp = self._request(
+                    payload, on_state=on_state, on_step=on_step, cancel_event=cancel_event
+                )
         if resp.get("cancelled"):
             # The same exception the in-process pipeline raised, so the queue's
             # cancel handling is untouched by where the sampling happened.

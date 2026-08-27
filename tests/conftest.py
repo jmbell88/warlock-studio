@@ -693,6 +693,9 @@ class FakeText2Image:
         # asserted at this boundary -- an unconditioned job must hand the
         # pipeline conditioning=None, not an empty Conditioning.
         self.conditionings: list = []
+        # Same contract one level out: a job with no reference image must hand
+        # the pipeline reference_images=None rather than an empty list.
+        self.references: list = []
         self.tiles: list[bool] = []
         self.sheets: list[bool] = []
         self.scenes: list[bool] = []
@@ -714,6 +717,7 @@ class FakeText2Image:
         lora_weight=DEFAULT_LORA_WEIGHT,
         negative_prompt=None,
         conditioning=None,
+        reference_images=None,
         on_state=None,
         on_step=None,
         cancel_event=None,
@@ -733,6 +737,7 @@ class FakeText2Image:
         self.lora_calls.append((lora, lora_weight))
         self.negatives.append(negative_prompt)
         self.conditionings.append(conditioning)
+        self.references.append(reference_images)
         self.seeds.append(seed)
         if on_state is not None:
             on_state("load")

@@ -236,6 +236,7 @@ def create_job(
     if kind not in ("text", "image"):
         raise Invalid("kind must be 'text' or 'image'", field="kind")
     if asset_type is not None and asset_type not in {
+        "image", "3d_model", "seamless_material", "tileset", "sprite_sheet",
         "image_2d", "model_3d", "seamless_tile",
         "tileset_top_down", "tileset_three_quarter", "tileset_isometric",
         "sprite_turnaround", "sprite_walk",
@@ -246,6 +247,11 @@ def create_job(
     }:
         raise Invalid("asset_intent is not recognised", field="asset_intent")
     expected_intent = {
+        "image": "refine_2d",
+        "3d_model": "reconstruct_3d",
+        "seamless_material": "refine_2d",
+        "tileset": "tileset",
+        "sprite_sheet": "sprite",
         "image_2d": "refine_2d",
         "model_3d": "reconstruct_3d",
         "seamless_tile": "refine_2d",
@@ -259,9 +265,9 @@ def create_job(
         raise Invalid("asset_intent does not match asset_type", field="asset_type")
     if output not in ("reference", "model", "tile"):
         raise Invalid("output must be 'reference', 'model' or 'tile'", field="output")
-    if asset_type == "seamless_tile" and output != "tile":
-        raise Invalid("a seamless_tile must use output='tile'", field="asset_type")
-    if asset_type and asset_type != "seamless_tile" and output == "tile":
+    if asset_type in ("seamless_tile", "seamless_material") and output != "tile":
+        raise Invalid("a seamless material must use output='tile'", field="asset_type")
+    if asset_type and asset_type not in ("seamless_tile", "seamless_material") and output == "tile":
         raise Invalid("this asset_type cannot use output='tile'", field="asset_type")
     if output in ("reference", "tile") and kind != "text":
         # An image job's reference is the upload; there is nothing to approve.

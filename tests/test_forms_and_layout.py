@@ -182,9 +182,6 @@ def test_the_scale_slider_only_asks_for_a_rebake_on_release():
 
 
 def test_the_config_table_is_one_function_drawn_in_two_places():
-    from warlock.studio import main
-
-    assert "config_table" in inspect.getsource(main.App._effective_config_section)
     assert "config_table" in inspect.getsource(app_settings._config)
     # And the data source is still the one doctor prints.
     assert "effective(" in inspect.getsource(app_settings.config_table)

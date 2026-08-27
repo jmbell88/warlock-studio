@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from . import atomic
+from .. import generation
 
 log = logging.getLogger(__name__)
 
@@ -89,6 +90,7 @@ def _migrate(data: dict[str, Any]) -> dict[str, Any]:
             # alternate source of truth. A corrupt value falls back safely;
             # it must not resurrect a contradictory legacy selection.
             form["asset_type"] = create_assets.DEFAULT_ASSET_TYPE
+        form["generation_type"] = create_assets.asset_type_from_params(form)
         if form.get("projection") == "orthogonal":
             form["projection"] = "top_down"
     return data
@@ -307,6 +309,8 @@ def restore_form(defaults: dict[str, Any], stored: Any) -> dict[str, Any]:
                 values["asset_type"] = create_assets.DEFAULT_ASSET_TYPE
             if values.get("projection") == "orthogonal":
                 values["projection"] = "top_down"
+            if "generation_type" not in values:
+                values["generation_type"] = create_assets.legacy_asset_type(values)
         for key, value in values.items():
             if (
                 key in out
@@ -320,6 +324,8 @@ def restore_form(defaults: dict[str, Any], stored: Any) -> dict[str, Any]:
     if "asset_type" in out:
         from . import create_assets
 
+        if out.get("generation_type") not in create_assets.ASSET_TYPES:
+            out["generation_type"] = create_assets.legacy_asset_type(out)
         create_assets.sync_legacy_fields(out)
     return out
 
@@ -342,12 +348,23 @@ def _safe_form_value(key: str, value: Any) -> bool:
         "tile_size": {"16", "32", "48", "64"},
         "cell_size": {"32", "48", "64"},
         "expand": {"off", "asset", "scene"},
+        "generation_type": {"image", "model_3d", "seamless_material", "tileset", "sprite_sheet"},
+        "quality": {"fast", "quality"},
+        "model_mode": {"auto", "advanced"},
+        "target_cell_px": {"", "8", "16", "24", "32", "48", "64", "96", "128", "256"},
     }
     if key == "asset_type":
         from .create_assets import ASSET_TYPES
 
         return value in ASSET_TYPES
     if key in choices:
+        if key == "target_cell_px":
+            if value == "":
+                return True
+            try:
+                return generation.TARGET_CELL_MIN <= int(value) <= generation.TARGET_CELL_MAX
+            except (TypeError, ValueError):
+                return False
         return value in choices[key]
     if key == "base_model":
         from ..models import BASE_MODELS

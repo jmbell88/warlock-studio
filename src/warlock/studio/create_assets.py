@@ -1,4 +1,4 @@
-"""The user-facing asset types in Studio's Create form.
+"""The user-facing generation types in Studio's Create form.
 
 The generation services still have three older switches (``output``,
 ``sheet_type`` and ``projection``).  They describe implementation doors, not
@@ -26,34 +26,27 @@ class AssetType:
 
 
 _ORDERED = (
-    AssetType("image_2d", "2D Image", "refine_2d", "Create image", "reference"),
+    AssetType("image", "Image", "refine_2d", "Create image", "reference"),
     AssetType("model_3d", "3D Model", "reconstruct_3d", "Generate reference", "reference"),
-    AssetType("seamless_tile", "Seamless Tile", "refine_2d", "Create tile", "tile"),
-    AssetType(
-        "tileset_top_down", "Top-Down Tileset", "tileset", "Create tile set",
-        "sheet", projection="top_down",
-    ),
-    AssetType(
-        "tileset_three_quarter", "3/4 Tileset", "tileset", "Create tile set",
-        "sheet", projection="three_quarter",
-    ),
-    AssetType(
-        "tileset_isometric", "Isometric Tileset", "tileset", "Create tile set",
-        "sheet", projection="isometric",
-    ),
-    AssetType(
-        "sprite_turnaround", "Sprite Turnaround", "sprite",
-        "Draw character and make sheet", "sheet", sheet_type="sprite",
-        sheet_layout="turnaround",
-    ),
-    AssetType(
-        "sprite_walk", "Sprite Walk Cycle", "sprite",
-        "Draw character and make sheet", "sheet", sheet_type="sprite",
-        sheet_layout="walk",
-    ),
+    AssetType("seamless_material", "Seamless Material", "refine_2d", "Create material", "tile"),
+    AssetType("tileset", "Tileset", "tileset", "Create tileset", "sheet"),
+    AssetType("sprite_sheet", "Sprite Sheet", "sprite", "Create sprite sheet", "sheet", sheet_type="sprite"),
 )
 
+# Old keys remain readable by settings and service adapters. They are not
+# offered in the Create selector, so saved jobs do not become unopenable just
+# because the product vocabulary was consolidated.
+_ALIASES = {
+    "image_2d": "image",
+    "seamless_tile": "seamless_material",
+    "tileset_top_down": "tileset",
+    "tileset_three_quarter": "tileset",
+    "tileset_isometric": "tileset",
+    "sprite_turnaround": "sprite_sheet",
+    "sprite_walk": "sprite_sheet",
+}
 ASSET_TYPES: dict[str, AssetType] = {item.key: item for item in _ORDERED}
+ASSET_TYPES.update({key: ASSET_TYPES[value] for key, value in _ALIASES.items()})
 ASSET_TYPE_OPTIONS: tuple[tuple[str, str], ...] = tuple(
     (item.key, item.label) for item in _ORDERED
 )
@@ -66,24 +59,23 @@ def legacy_asset_type(form: Any) -> str:
         return DEFAULT_ASSET_TYPE
     output = form.get("output")
     if output == "tile":
-        return "seamless_tile"
+        return "seamless_material"
     if output == "sheet":
         if form.get("sheet_type") == "sprite":
-            return "sprite_walk" if form.get("sheet_layout") == "walk" else "sprite_turnaround"
-        view = str(form.get("projection") or "top_down")
-        if view == "orthogonal":
-            view = "top_down"
-        return {
-            "top_down": "tileset_top_down",
-            "three_quarter": "tileset_three_quarter",
-            "isometric": "tileset_isometric",
-        }.get(view, "tileset_top_down")
+            return "sprite_sheet"
+        return "tileset"
     # Old "Object" meant a reconstruction reference, not a standalone image.
     return "model_3d"
 
 
 def selected(form: Any) -> AssetType:
     key = form.get("asset_type") if isinstance(form, dict) else None
+    generation = form.get("generation_type") if isinstance(form, dict) else None
+    # A pre-migration in-memory caller may have the new default generation
+    # field but an old asset_type override. Prefer the explicit old override in
+    # that narrow case; migrated/settings-backed forms carry both consistently.
+    if generation in ASSET_TYPES and not (key in _ALIASES and generation == DEFAULT_ASSET_TYPE):
+        key = generation
     return ASSET_TYPES.get(str(key), ASSET_TYPES[DEFAULT_ASSET_TYPE])
 
 
@@ -101,10 +93,20 @@ def sync_legacy_fields(form: dict[str, Any]) -> AssetType:
     """
     spec = selected(form)
     form["asset_type"] = spec.key
+    form["generation_type"] = spec.key
     form["output"] = spec.output
-    form["sheet_type"] = spec.sheet_type
-    form["projection"] = spec.projection
-    form["sheet_layout"] = spec.sheet_layout
+    if spec.key == "tileset":
+        form["sheet_type"] = "tile"
+        form["projection"] = form.get("projection") or "top_down"
+        form["sheet_layout"] = "turnaround"
+    elif spec.key == "sprite_sheet":
+        form["sheet_type"] = "sprite"
+        form["sheet_layout"] = form.get("sheet_layout") or "turnaround"
+        form["projection"] = "top_down"
+    else:
+        form["sheet_type"] = spec.sheet_type
+        form["projection"] = spec.projection
+        form["sheet_layout"] = spec.sheet_layout
     if spec.output == "sheet":
         # A sheet is one operation.  In particular, prevent a count restored
         # from an ordinary image request from multiplying a sprite chain.
@@ -120,15 +122,20 @@ def persisted_intent(form: Any) -> dict[str, str]:
 
 def asset_type_from_params(params: Any, *, stage: str = "") -> str:
     """Read today's identity, with a conservative answer for legacy jobs."""
+    if isinstance(params, dict) and "generation_type" in params:
+        key = str(params.get("generation_type") or "")
+        return key if key in ASSET_TYPES else DEFAULT_ASSET_TYPE
     if isinstance(params, dict) and "asset_type" in params:
         key = str(params.get("asset_type") or "")
-        return key if key in ASSET_TYPES else DEFAULT_ASSET_TYPE
+        return ASSET_TYPES.get(key, ASSET_TYPES[DEFAULT_ASSET_TYPE]).key
     if stage == "tile":
-        return "seamless_tile"
+        return "seamless_material"
+    if stage in ("tilesheet", "tile_sheet"):
+        return "tileset"
     if isinstance(params, dict) and params.get("sprite_sheet"):
         layout = (params.get("sprite_sheet") or {}).get("sheet_type")
-        return "sprite_walk" if layout == "walk" else "sprite_turnaround"
+        return "sprite_sheet"
     if isinstance(params, dict) and params.get("sheet"):
         projection = (params.get("sheet") or {}).get("projection", "top_down")
-        return legacy_asset_type({"output": "sheet", "projection": projection})
+        return "tileset"
     return ""

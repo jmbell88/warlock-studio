@@ -34,10 +34,6 @@ WINDOW_TITLE = "Warlock Studio"
 # How often the frame loop samples host memory. Long enough to be free, short
 # enough that a 30-minute idle session yields 60 points to fit a slope through.
 MEMORY_TICK_SECONDS = 30.0
-# How often the diagnostics popup re-stats the log file. Long enough that the
-# popup costs no syscall per frame, short enough that the button ungreys within
-# a second of the first line being written.
-LOG_STAT_SECONDS = 1.0
 # The task key the selection's GLB is parsed under. One key, so a selection
 # moving faster than the disk cannot pile up loads: a refused submit is simply
 # retried on the next tick, and a landed result is checked against
@@ -114,21 +110,6 @@ _SINGLE_PANE_MODES = ("home", "settings", "library")
 # is why the list itself lives in ``filetypes`` and this is a name for it
 # rather than a copy of it.
 DROPPABLE_IMAGES = filetypes.IMAGE_SUFFIXES
-
-
-def _ago(seconds: float) -> str:
-    """``12s`` / ``4m`` / ``2h``, for the notification history (H67).
-
-    Coarse on purpose: the question it answers is "was that the one from just
-    now", and a figure with more precision than that invites reading it as a
-    measurement.
-    """
-    seconds = max(0.0, seconds)
-    if seconds < 60:
-        return f"{int(seconds)}s"
-    if seconds < 3600:
-        return f"{int(seconds // 60)}m"
-    return f"{int(seconds // 3600)}h"
 
 
 # The two image-labelling passes, named as the questions they are. Wording is the
@@ -1673,7 +1654,7 @@ class App:
                     # Re-probing costs a few stats and is the only thing that
                     # stops the pane staying optimistic about a download that
                     # did not happen. (Only the rows, not doctor's whole
-                    # suite -- nothing succeeded, so the diagnostics have
+                    # suite -- nothing succeeded, so the health state has
                     # nothing new to say.)
                     #
                     # A failed *removal* is the same fact from the other side,
@@ -1712,8 +1693,8 @@ class App:
             ctx.state.preview.update(done.result)
             return
         if key == "health":
-            # The dot and the diagnostics popup read runtime.checks each
-            # frame; replacing the list wholesale is atomic enough for both.
+            # The status surfaces read runtime.checks each frame; replacing the
+            # list wholesale is atomic enough for all of them.
             if isinstance(done.result, list):
                 self.runtime.checks = done.result
                 # The first poll is also what pays for the deferred bpy probe
@@ -3317,12 +3298,9 @@ class App:
         # The rail is drawn in every mode, Home included: it is how you leave
         # wherever you are, so a mode that hides it is a dead end.
         guard.run("shell/rail", rail.draw, self, ctx, title="The mode rail")
-        # Shell utility popups are opened at host scope. Menu/status actions
-        # can originate in child windows, while imgui resolves a popup in the
+        # Shell utility popups are opened at host scope. Menu actions can
+        # originate in child windows, while imgui resolves a popup in the
         # window that opens it, so they communicate through one-shot requests.
-        if rail.take("diagnostics"):
-            imgui.open_popup("diagnostics")
-        self._diagnostics_popup(list(getattr(ctx.runtime, "checks", []) or []))
         if rail.take("layouts"):
             imgui.open_popup("layouts")
         self._layouts_popup(ctx)
@@ -5356,185 +5334,6 @@ class App:
             set_mode(ctx, "settings")
         imgui.end_popup()
 
-    def _diagnostics_popup(self, checks: list[Any]) -> None:
-        from imgui_bundle import imgui
-
-        from . import controls, icons, theme, widgets
-        from .tokens import sp
-
-        ctx = self.app_ctx
-        viewport = imgui.get_main_viewport()
-        popup_width = min(sp(480), viewport.work_size.x - sp(32))
-        popup_height = min(sp(720), viewport.work_size.y - sp(64))
-        imgui.set_next_window_pos(
-            (
-                viewport.work_pos.x + viewport.work_size.x - sp(16),
-                viewport.work_pos.y + sp(48),
-            ),
-            imgui.Cond_.appearing.value,
-            (1.0, 0.0),
-        )
-        imgui.set_next_window_size((popup_width, popup_height))
-        alpha, rise = widgets.popup_enter("diagnostics")
-        # Translucent (UX.md Phase 5): cleared before ``begin`` paints it,
-        # painted back below as a blur of the app or as the solid fill.
-        frosted = widgets.frosted()
-        if frosted:
-            imgui.set_next_window_bg_alpha(0.0)
-        imgui.push_style_var(imgui.StyleVar_.alpha.value, alpha)
-        if not imgui.begin_popup("diagnostics"):
-            imgui.pop_style_var()
-            return
-        rounding = imgui.get_style().popup_rounding
-        widgets.window_shadow("raised", radius=rounding)
-        if frosted:
-            widgets.window_backdrop(radius=rounding)
-        if rise > 0.0:
-            imgui.dummy((0, rise))
-        widgets.pane_header(
-            "Issues",
-            actions=(("close", f"{icons.X} Close", imgui.close_current_popup),),
-        )
-        for check in checks:
-            colour = theme.OK if check.ok else (theme.ERR if check.fatal else theme.WARN)
-            # Lucide, as the status pills now are (UX.md Phase 2): "o" and "x"
-            # were the last hand-spelled state glyphs in the app, and a lowercase
-            # o at 11 px beside a red x is two letters rather than two shapes.
-            widgets.text_colored(colour, icons.CHECK if check.ok else icons.CIRCLE_X)
-            imgui.same_line()
-            imgui.text(check.name)
-            imgui.same_line()
-            widgets.muted("-")
-            imgui.same_line()
-            imgui.push_style_color(imgui.Col_.text.value, imgui.ImVec4(*theme.rgba(theme.MUTED)))
-            imgui.text_wrapped(str(check.detail))
-            imgui.pop_style_color()
-        if not checks:
-            widgets.muted("No checks ran.")
-        self._effective_config_section(ctx)
-        self._toast_history_section(ctx)
-        if ctx.state.dismissed_errors:
-            # What Dismiss took off the banner (F59). Here rather than nowhere:
-            # every writer of ``state.errors`` fires once, so clearing the list
-            # used to destroy the only copy of the text -- and a dead worker is
-            # reported through that list and through no doctor row at all, so it
-            # was recoverable from nothing.
-            widgets.section("Dismissed")
-            for message in ctx.state.dismissed_errors:
-                widgets.text_colored(theme.ERR, icons.TRIANGLE_ALERT)
-                imgui.same_line()
-                imgui.text_wrapped(message)
-        imgui.separator()
-        if controls.button("Copy details", role=controls.ButtonRole.GHOST):
-            imgui.set_clipboard_text(
-                "\n".join(f"{'ok' if c.ok else 'FAIL'} {c.name}: {c.detail}" for c in checks)
-            )
-        imgui.same_line()
-        # Re-ask rather than wait out the poll (N111). The static half is only
-        # recomputed on ``force``, which is what makes this button worth having
-        # at all: having just installed the missing weights the popup names,
-        # nothing short of a restart would otherwise change its mind.
-        if controls.button("Run checks again", role=controls.ButtonRole.GHOST):
-            from ..service import system as svc_system
-
-            ctx.submit("health", svc_system.current_checks, ctx.svc, force=True)
-        imgui.same_line()
-        if widgets.disabled_button(
-            "Open the log",
-            _log_exists(ctx.runtime.config.data_dir),
-            # The log is written on the first line logged, so its absence is
-            # "nothing has gone wrong yet" rather than a fault to report.
-            reason="There is no log file yet: nothing has been logged this install.",
-        ):
-            ctx.open_log()
-        imgui.same_line()
-        # Chapter 12 (F57). The popup names the failing rows and their remedies;
-        # what it cannot hold is what to do when a remedy does not take.
-        from .manual import render as manual_render
-
-        if manual_render.troubleshooting_button(ctx):
-            imgui.close_current_popup()
-        from . import component_gallery
-
-        if component_gallery.enabled():
-            imgui.same_line()
-            if controls.button("Component gallery", role=controls.ButtonRole.GHOST):
-                component_gallery.request()
-        imgui.end_popup()
-        imgui.pop_style_var()
-
-    def _toast_history_section(self, ctx: Any) -> None:
-        """Every notice this session raised, newest first (H67).
-
-        In the diagnostics popup rather than behind a bell of its own: this is
-        the same question as "what is wrong with my install" asked about the
-        last ten seconds instead of about the machine, and a second icon in the
-        top bar for it would be a second place to look. It sits *below* the
-        checks for that reason -- the checks are the standing answer and this is
-        the transient one.
-
-        Collapsed by default, because on a healthy session it is a list of
-        things that went right.
-        """
-        from imgui_bundle import imgui
-
-        from . import controls, theme, widgets
-        from .tokens import sp
-
-        log = ctx.state.toast_log
-        if not log:
-            return
-        imgui.separator()
-        if not controls.collapsing_header(f"Notifications ({len(log)})##toast-history"):
-            return
-        now = time.monotonic()
-        if imgui.begin_child("toast-history", (0, sp(160))):
-            for entry in log:
-                colour, glyph = widgets.toast_style(entry.level)
-                widgets.text_colored(colour, glyph or "-")
-                imgui.same_line()
-                # Relative, not a clock time: what a reader wants from this
-                # list is "was that the one from just now", and a wall clock
-                # makes them do the subtraction.
-                widgets.muted(_ago(now - entry.born))
-                imgui.same_line()
-                imgui.push_style_color(
-                    imgui.Col_.text.value,
-                    imgui.ImVec4(*theme.rgba(theme.TEXT if entry.level != "info" else theme.MUTED)),
-                )
-                imgui.text_wrapped(entry.text)
-                imgui.pop_style_color()
-        imgui.end_child()
-        if controls.small_button("Copy notifications", role=controls.ButtonRole.GHOST):
-            imgui.set_clipboard_text("\n".join(f"{e.level}: {e.text}" for e in reversed(log)))
-
-    def _effective_config_section(self, ctx: Any) -> None:
-        """What this process is running on, with the overridden rows marked.
-
-        Collapsed by default and overridden rows first (S140). Thirty settings
-        is a wall of text nobody reads; the two or three a host has actually
-        changed are the whole diagnostic value, so they are what is visible when
-        the section is opened, and the rest is there to confirm a suspicion
-        rather than to be read through.
-
-        Shares ``config.effective`` with ``warlock doctor``, which is the point
-        of building the data source once: the copy a user pastes into an issue
-        and the list they read on screen are the same answer.
-        """
-
-        from . import controls
-        from .panes import app_settings
-
-        if not controls.collapsing_header("Effective configuration"):
-            return
-        # The table itself lives in the app-Settings pane (K100), which is
-        # where a user looking for configuration goes. It is drawn from here
-        # too because this popup is where a user looking at a *failure* is,
-        # and those are the same thirty rows -- so it is one function called
-        # twice rather than two lists that would drift the first time a
-        # variable was added.
-        app_settings.config_table(ctx)
-
     def _viewport_pane(self) -> None:
         from imgui_bundle import imgui
 
@@ -5730,35 +5529,6 @@ class App:
         from . import packwright_mode
 
         packwright_mode.persist(ctx)
-
-
-# The diagnostics popup's log-file probe: (data dir, deadline, answer). One
-# slot rather than a map -- a process has exactly one data directory, and a
-# dict keyed by path would be a cache with no eviction for no benefit.
-_LOG_PROBE: tuple[str, float, bool] = ("", 0.0, False)
-
-
-def _log_exists(data_dir: Any) -> bool:
-    """Whether there is a log file to open, re-stated at most once a second.
-
-    The popup draws every frame while it is open, and this was a ``stat`` per
-    frame for an answer that changes once per session -- when the first line is
-    written. Cached rather than answered once, because on a clean data
-    directory that first line lands *after* the window does, and a button
-    permanently greyed because the popup happened to be open early is a worse
-    failure than a second of staleness.
-
-    A module function rather than a method: it needs no App, and the popup is
-    drawn against stand-ins in the smoke suite.
-    """
-    global _LOG_PROBE
-    key = str(data_dir)
-    cached_key, deadline, exists = _LOG_PROBE
-    now = time.monotonic()
-    if key != cached_key or now >= deadline:
-        exists = (Path(data_dir) / "warlock.log").exists()
-        _LOG_PROBE = (key, now + LOG_STAT_SECONDS, exists)
-    return exists
 
 
 def _step(label: str, fn: Any) -> None:

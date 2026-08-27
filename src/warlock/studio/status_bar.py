@@ -90,7 +90,7 @@ def draw(ctx: Any) -> None:
 
     from imgui_bundle import imgui
 
-    from . import fonts, rail, theme, tokens
+    from . import fonts, theme, tokens
 
     pad_x = tokens.sp(tokens.SP_2)
     imgui.push_style_var(
@@ -124,10 +124,8 @@ def draw(ctx: Any) -> None:
                     imgui.same_line(0.0, 0.0)
                 if item.warning:
                     imgui.text_colored(imgui.ImVec4(*theme.rgba(theme.WARN)), text)
-                    if imgui.is_item_clicked():
-                        rail.request("diagnostics")
                     if imgui.is_item_hovered():
-                        imgui.set_tooltip("Open health details")
+                        imgui.set_tooltip("Health checks need attention")
                 else:
                     imgui.text_colored(imgui.ImVec4(*theme.rgba(theme.MUTED)), text)
                 used += width

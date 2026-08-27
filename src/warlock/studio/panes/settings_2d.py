@@ -20,6 +20,7 @@ from typing import Any
 from imgui_bundle import imgui
 
 from ... import guidance as guidancelib
+from ... import generation
 from ... import models as modelslib
 from ... import vectors
 from ...bench import findings as findings_lib
@@ -79,7 +80,9 @@ def draw(ctx: Any) -> None:
     # this bridge.
     if "asset_type" not in form:
         form["asset_type"] = create_assets.legacy_asset_type(form)
-        create_assets.sync_legacy_fields(form)
+    if form.get("generation_type") not in generation.GENERATION_TYPES:
+        form["generation_type"] = create_assets.legacy_asset_type(form)
+    create_assets.sync_legacy_fields(form)
     # Form.errors now places the rings and copy beneath the owning controls;
     # these are the routes it replaces and keeps wired by the same field keys:
     # field_error(ctx.state, "prompt")
@@ -104,6 +107,9 @@ def draw(ctx: Any) -> None:
                 widgets.section("Prompt")
                 manual_render.help_button(ctx, "settings-2d")
                 _prompt(ctx, form, form_ui)
+                if _negative_supported(ctx, form):
+                    widgets.section("Negative prompt / Avoid")
+                    _negative(ctx, form)
                 _history(ctx, form)
                 widgets.section("Image model")
                 if create_assets.selected(form).intent == "tileset":
@@ -140,8 +146,7 @@ def draw(ctx: Any) -> None:
                             _sprite_size(ctx, form, form_ui)
                         else:
                             _tile_size(ctx, form, form_ui)
-                    widgets.section("Negative prompt")
-                    _negative(ctx, form)
+                        _target_cell(ctx, form, form_ui)
                     widgets.section("Profiles")
                     _profiles(ctx, form)
                     widgets.section("Prompt enrichment")
@@ -173,13 +178,25 @@ def _asset_type(ctx: Any, form: dict[str, Any]) -> None:
     """The one top-level choice; legacy service switches follow it."""
     before = create_assets.selected(form).key
     picked = widgets.combo(
-        "##asset_type", before, list(create_assets.ASSET_TYPE_OPTIONS)
+        "##generation_type", before, list(generation.GENERATION_TYPE_OPTIONS)
     )
-    form["asset_type"] = picked if picked in create_assets.ASSET_TYPES else before
+    form["asset_type"] = picked if picked in generation.GENERATION_TYPES else before
+    form["generation_type"] = form["asset_type"]
     spec = create_assets.sync_legacy_fields(form)
     if spec.key != before:
         ctx.state.preview_dirty_at = time.monotonic()
         ctx.state.clear_field_error("asset_type")
+
+
+def _quality(ctx: Any, form: dict[str, Any]) -> None:
+    """Fast/Quality is a recipe choice, not a checkpoint choice."""
+    if create_assets.selected(form).intent == "tileset":
+        return
+    before = str(form.get("quality") or "quality")
+    picked = widgets.combo("##quality", before, [("fast", "Fast"), ("quality", "Quality")])
+    form["quality"] = picked if picked in generation.QUALITY_TIERS else before
+    if form["quality"] != before:
+        ctx.state.preview_dirty_at = time.monotonic()
 
 
 def _locked_sheet_recipe(
@@ -224,6 +241,27 @@ def _sprite_size(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
     )
     if changed:
         form["cell_size"] = picked
+
+
+def _target_cell(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
+    """Optional final reduction; blank means keep the high-resolution cell."""
+    values = [("", "Keep working resolution")]
+    values.extend((str(size), f"{size}px") for size in generation.TARGET_CELL_PRESETS)
+    values.append(("custom", "Custom (8–256px)"))
+    current = str(form.get("target_cell_px") or "")
+    selected = widgets.combo("##target_cell_px", current if current in {x[0] for x in values} else "custom", values)
+    if selected != "custom":
+        form["target_cell_px"] = selected
+        return
+    raw = form.get("target_cell_px")
+    try:
+        number = int(raw)
+    except (TypeError, ValueError):
+        number = generation.TARGET_CELL_PRESETS[-1]
+    changed, number = form_ui.number("target_cell_px_custom", "Custom cell size", number)
+    if changed:
+        form["target_cell_px"] = str(number)
+    widgets.muted("Blank preserves the 256px/512px working cell; reduction never upscales.")
 
 
 def _findings_hint(
@@ -824,6 +862,21 @@ def clear_unusable(ctx: Any, form: dict[str, Any]) -> list[str]:
 
 
 def _model(ctx: Any, form: dict[str, Any], findings_doc: Any = _LOAD_FINDINGS) -> None:
+    widgets.field_label("Recipe")
+    _quality(ctx, form)
+    mode_before = str(form.get("model_mode") or "auto")
+    mode = widgets.combo("##model_mode", mode_before, [("auto", "Automatic"), ("advanced", "Advanced")])
+    form["model_mode"] = mode if mode in generation.MODEL_MODES else mode_before
+    if form["model_mode"] == "auto":
+        request = generation.request_from_legacy(form)
+        resolved = generation.resolve_recipe(request, ctx.svc.config)
+        if resolved is None:
+            widgets.muted_wrapped("No compatible installed recipe is available. Install a model in Settings or open Advanced.")
+        else:
+            imgui.text_wrapped(f"{resolved.recipe.label} · {resolved.base_model}")
+            if resolved.warning:
+                widgets.wrapped(theme.WARN, resolved.warning)
+        return
     # The section heading is the label; a labeled_combo here would say
     # "Model" twice in two type styles.
     before = form["base_model"]
@@ -834,6 +887,7 @@ def _model(ctx: Any, form: dict[str, Any], findings_doc: Any = _LOAD_FINDINGS) -
     # was pressed. See ``widgets.field_error``.
     widgets.field_error(ctx.state, "base_model")
     if form["base_model"] != before:
+        form["model_override"] = form["base_model"]
         ctx.state.preview[CLEARED_KEY] = clear_unusable(ctx, form)
         ctx.state.clear_field_error("base_model")
     # Under the Model combo rather than beside each control it emptied: this is
@@ -977,6 +1031,19 @@ def _negative(ctx: Any, form: dict[str, Any]) -> None:
     if inert is not None:
         imgui.end_disabled()
         widgets.muted_wrapped(inert)
+
+
+def _negative_supported(ctx: Any, form: dict[str, Any]) -> bool:
+    """Show Avoid only when the resolved recipe will actually consume it."""
+    try:
+        request = generation.request_from_legacy(form)
+        resolved = generation.resolve_recipe(request, ctx.svc.config)
+        return generation.capability_controls(request, resolved)["negative_prompt"]
+    except Exception:
+        # The service remains the final compatibility gate.  During a partially
+        # restored form, hiding an unresolved control is safer than presenting
+        # an active field whose text would be silently discarded.
+        return False
 
 
 def _run_controls(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
@@ -1235,6 +1302,13 @@ def validate(form: dict[str, Any]) -> list[widgets.Problem]:
                     f"View must be one of {list(svc_tilesheets.VIEWS)}.", "projection"
                 )
             )
+        if grid or form.get("sheet_type") == "sprite":
+            raw_target = form.get("target_cell_px") or ""
+            target = None if raw_target == "" else _safe_int(raw_target, -1)
+            for issue in generation.validate_target_cell(
+                target, isometric=grid and _view_of(form) == "isometric"
+            ):
+                problems.append(widgets.Problem(issue.message, issue.field))
     return problems
 
 
@@ -1269,6 +1343,10 @@ def submit_kwargs(form: dict[str, Any]) -> dict[str, Any]:
             "sheet_type": form.get("sheet_layout") or "turnaround",
             "logical_size": int(form.get("cell_size") or 64),
             "colors": svc_sprites.DEFAULT_SPRITE_COLORS,
+            "target_cell_px": (
+                None if form.get("target_cell_px") in (None, "")
+                else _safe_int(form.get("target_cell_px"), 0)
+            ),
         }
     return {
         "kind": "text",
@@ -1506,7 +1584,20 @@ def generate(ctx: Any, form: dict[str, Any]) -> None:
         # this is the only branch here.
         _generate_tile_sheet(ctx, form)
         return
+    resolved = None
+    if create_assets.selected(form).key in {"image", "model_3d", "seamless_material"}:
+        request = generation.request_from_legacy(form)
+        resolved = generation.resolve_recipe(request, ctx.svc.config)
+        recipe_issues = generation.validate_request(request, resolved)
+        if recipe_issues:
+            refuse(ctx, [widgets.Problem(item.message, item.field) for item in recipe_issues])
+            return
     kwargs = submit_kwargs(form)
+    if resolved is not None:
+        # Automatic routing is resolved at submit time. The selected recipe is
+        # copied after the legacy door accepts the request so reruns retain the
+        # exact model/checksum even if the registry changes later.
+        kwargs["guidance_fields"]["base_model"] = resolved.base_model
     ref_path = form.get("ref_path") or anchor_kwargs(ctx, form, kwargs)
 
     # The form values are read here, on the frame thread, because they are UI
@@ -1526,6 +1617,11 @@ def generate(ctx: Any, form: dict[str, Any]) -> None:
                 raise Invalid(
                     f"could not read {Path(ref_path).name}: {exc}", field="ref_path"
                 ) from exc
-        return svc_jobs.create_job(ctx.svc, **kwargs)
+        result = svc_jobs.create_job(ctx.svc, **kwargs)
+        if resolved is not None:
+            payload = {"version": generation.RECIPE_REGISTRY_VERSION, **resolved.to_dict()}
+            for job_id in result.get("ids", [result["id"]]):
+                ctx.svc.store.merge_params(job_id, {"generation_request": request.to_dict(), "resolved_recipe": payload})
+        return result
 
     ctx.submit("submit", run)
