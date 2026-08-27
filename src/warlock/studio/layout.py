@@ -388,6 +388,7 @@ class Layout:
         "plotter": ("plotter-tools", "plotter-layers"),
         "troupe": ("troupe-cast", "troupe-sheets"),
         "packwright": ("packwright-sources", "packwright-items"),
+        "sirens": ("sirens-transport", "sirens-instruments"),
         "review": ("review-runs",),
         "create": ("create-inspector",),
     }

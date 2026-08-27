@@ -42,7 +42,7 @@ If you already have a picture, you can skip the first stage entirely and upload 
 
 ## The modes
 
-A rail down the left edge of the window chooses between eleven modes, and that rail is the single
+A rail down the left edge of the window chooses between twelve modes, and that rail is the single
 thing that decides what the panes show. It is drawn in every mode, so there is no screen you cannot
 leave. There is no per-mode keyboard shortcut — the command palette (`Ctrl+K`) is the keyboard
 route, see [Keyboard shortcuts](37-shortcuts.md).
@@ -89,6 +89,10 @@ Then the six workspaces:
   speaks Tiled's formats in both directions. Covered in [Plotter](31-plotter.md).
 - **Packwright.** A sprite-atlas packer: many images in, one atlas out, with a sidecar that says
   where everything landed. Covered in [Packwright](32-packwright.md).
+- **Sirens.** A chiptune tracker: NES-era pulse, triangle, noise and sample voices written into a
+  pattern grid, stitched into a song by an order list, and saved as a `.wsng`. Experimental — the
+  synthesis engine is complete, and the instrument editor, the sound-effect pane and WAV export
+  are not built yet, so it has no chapter of its own.
 
 And in the footer:
 
@@ -160,7 +164,7 @@ through, so the menu, `Ctrl+K` and the keyboard cannot disagree about what an ac
 it is available, or why it is not. A row you cannot use is greyed with the reason on hover — the
 same reason the palette gives — and a row with a keyboard binding prints it on the right.
 
-**Workspace** is the one to know about: it holds all eleven modes, so it is a third way — beside
+**Workspace** is the one to know about: it holds all twelve modes, so it is a third way — beside
 the rail and the palette — to change what the window is showing.
 
 ## The status bar

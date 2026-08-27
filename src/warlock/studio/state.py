@@ -946,6 +946,10 @@ class AppState:
     # and deliberately knows nothing about what a mode keeps.
     plotter: Any = None
     packwright: Any = None
+    # Sirens' open songs, its caret and the last audio each tab rendered to,
+    # built on first use by ``sirens_mode.ensure``. Untyped and None for the
+    # reason the four above are.
+    sirens: Any = None
     # Troupe's selection and its preview clock, built on first use by
     # ``troupe_mode.ensure``. Untyped and None for the reason the others are --
     # and the only one of them that holds no document: it is a selection over

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 ACTIVITY = "\uE038"  # activity
 ARROW_LEFT = "\uE04C"  # arrow-left
+AUDIO_WAVEFORM = "\uE560"  # audio-waveform
 BLEND = "\uE5A1"  # blend
 BONE = "\uE35C"  # bone
 BOOK_OPEN = "\uE063"  # book-open

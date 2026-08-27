@@ -340,6 +340,10 @@ def test_the_document_dispatch_covers_every_document_mode():
         "plotter",
         "packwright",
         "poser",
+        # Sirens joins with an empty export label, the rule Poser's row states:
+        # save, save-as and undo are all real here, and exporting a WAV is not
+        # built yet.
+        "sirens",
     }
 
 

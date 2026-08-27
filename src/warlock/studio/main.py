@@ -1658,6 +1658,13 @@ class App:
                     # to clear ``packing`` and record why, or the items
                     # pane shows an empty list that reads as success.
                     packwright_mode.on_task_failed(ctx, done)
+                elif done.key.startswith("sirens-"):
+                    from . import sirens_mode
+
+                    # Same rule, plus one of its own: a failed *render* has to
+                    # clear ``rendering`` and record why, or the transport
+                    # shows a dead Play button with nothing beside it.
+                    sirens_mode.on_task_failed(ctx, done)
                 elif done.key.startswith("troupe-"):
                     from . import troupe_mode
 
@@ -1862,6 +1869,11 @@ class App:
             packwright_mode.on_task_done(ctx, done)
             if isinstance(done.result, dict) and done.result.get("exported_asset"):
                 self._capture_clay_thumbnail(done.result["job_id"])
+            return
+        if key.startswith("sirens-"):
+            from . import sirens_mode
+
+            sirens_mode.on_task_done(ctx, done)
             return
         if key.startswith("troupe-"):
             from . import troupe_mode
@@ -2849,6 +2861,17 @@ class App:
             # ahead of it; a scan test now pins every workspace mode's arm.
             packwright_mode.handle_key(ctx, event)
             return
+        if ctx.state.mode == "sirens":
+            from . import sirens_mode
+
+            # Unconditional and returning, for the reason every workspace arm
+            # above is: ``handle_key`` answers False for every key it does not
+            # bind, and letting that fall through would let the shared 2D/3D
+            # block act on a library and a viewport Sirens has replaced --
+            # Delete would trash the selected *library* asset, from a tracker.
+            # A scan test pins every workspace mode's arm.
+            sirens_mode.handle_key(ctx, event)
+            return
         if ctx.state.mode == "troupe":
             from . import troupe_mode
 
@@ -3027,6 +3050,22 @@ class App:
             else:
                 ctx.toast("Packwright opens .wpack documents and packs image files.", "error")
             return
+        if ctx.state.mode == "sirens":
+            from . import sirens_mode, sirens_state
+
+            suffix = path.suffix.lower()
+            if suffix == sirens_state.WSNG_SUFFIX:
+                sirens_mode.open_path(ctx, path)
+            elif suffix == ".wav":
+                # A WAV dropped here is a *sample*, not a song -- the Plotter
+                # rule that a refusal and an accept both have to say what a
+                # drop would do in this mode. Importing one is Phase 3, so the
+                # sentence says which half exists rather than silently doing
+                # nothing with the file.
+                ctx.toast("Importing samples is not built yet.", "warn")
+            else:
+                ctx.toast("Sirens opens .wsng songs and .wav samples.", "error")
+            return
         if ctx.state.mode in ("poser", "troupe"):
             # Neither mode opens a file, and neither said so: a drop here fell
             # through to Create's branches below, which would either refuse it
@@ -3147,7 +3186,7 @@ class App:
         clicking "Keep editing" on the first still left two more questions to
         dismiss, after the user has already said they are not quitting.
         """
-        from . import clay_mode, inker_mode, packwright_mode, plotter_mode, poser_mode
+        from . import clay_mode, inker_mode, packwright_mode, plotter_mode, poser_mode, sirens_mode
         from .panes import pose_panel, profiles_panel
 
         ctx = self.app_ctx
@@ -3159,6 +3198,7 @@ class App:
             clay_mode.guard,
             plotter_mode.guard,
             packwright_mode.guard,
+            sirens_mode.guard,
             pose_panel.guard,
             poser_mode.guard,
             # A profile draft is a document too -- nine fields and an anchor
@@ -3393,6 +3433,8 @@ class App:
                         self._plotter_workspace()
                     elif mode == "packwright":
                         self._packwright_workspace()
+                    elif mode == "sirens":
+                        self._sirens_workspace()
                     elif mode == "troupe":
                         self._troupe_workspace()
                     else:
@@ -4139,6 +4181,61 @@ class App:
             ctx,
             lay,
             skeletons.ordered(ctx, self.layouts, "plotter", columns["right"]),
+            width=right_w,
+            handle_length=right_w,
+        )
+
+    def _sirens_workspace(self) -> None:
+        """The same sidebar / centre / sidebar skeleton every other mode uses:
+
+            [ sirens-transport ]                 [ sirens-instruments ]
+            [ sirens-orders    ]  the grid       [ sirens-bridge      ]
+
+        Both sidebars through ``layout.column`` over ``skeletons.sirens``,
+        which is the direction of travel: Packwright still composes its columns
+        by hand here, and a table is what a saved layout can permute.
+
+        The centre column is one pane: the tab bar, the caret strip and the
+        grid, in that order, all of which ``sirens_patterns.draw`` composes --
+        the grid sizes its row count from what is left of the content region,
+        so the strip has to be drawn before it rather than beside it here.
+        """
+        from imgui_bundle import imgui
+
+        from . import layout as layout_mod
+        from . import skeletons
+        from .panes import sirens_patterns
+
+        ctx = self.app_ctx
+        lay = self.layout
+        left_w = layout_mod.sidebar_width("left")
+        right_w = layout_mod.sidebar_width("right")
+        columns = skeletons.for_mode(ctx, "sirens")
+        layout_mod.column(
+            ctx,
+            lay,
+            skeletons.ordered(ctx, self.layouts, "sirens", columns["left"]),
+            width=left_w,
+            handle_length=left_w,
+        )
+
+        _column_boundary(self.layouts, "sirens", "left")
+        width = layout_mod.centre_width()
+        flags = imgui.WindowFlags_.no_scroll_with_mouse.value
+        with layout_mod.pane(
+            "sirens-centre",
+            (width, 0),
+            layout_mod.PaneRole.CONTENT,
+            window_flags=flags,
+        ) as visible:
+            if visible:
+                sirens_patterns.draw(ctx)
+
+        _column_boundary(self.layouts, "sirens", "right")
+        layout_mod.column(
+            ctx,
+            lay,
+            skeletons.ordered(ctx, self.layouts, "sirens", columns["right"]),
             width=right_w,
             handle_length=right_w,
         )

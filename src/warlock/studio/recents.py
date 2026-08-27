@@ -29,7 +29,7 @@ SETTING = "recents"
 # The document modes that have files to remember. Not ``modes.WORK_MODES``:
 # 2D, 3D and Review own no document, and importing ``modes`` here would be a
 # dependency this module does not otherwise need.
-KINDS: tuple[str, ...] = ("inker", "clay", "plotter", "packwright")
+KINDS: tuple[str, ...] = ("inker", "clay", "plotter", "packwright", "sirens")
 
 # One screenful of a menu, per kind. The merged list is bounded by the sum
 # rather than by this, because a session spent entirely in Clay should not push

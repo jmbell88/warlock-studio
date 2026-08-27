@@ -298,7 +298,9 @@ def test_the_quit_chain_stops_at_the_first_cancel():
 
     quit_calls: list[str] = []
     ctx = SimpleNamespace(
-        state=SimpleNamespace(inker=None, clay=None, plotter=None, packwright=None),
+        state=SimpleNamespace(
+            inker=None, clay=None, plotter=None, packwright=None, sirens=None
+        ),
         confirms=dialogs.ConfirmQueue(),
         viewer=None,
         poser_viewer=None,
@@ -459,6 +461,7 @@ _WORKSPACE_ARMS = {
     "plotter": "plotter_mode",
     "packwright": "packwright_mode",
     "troupe": "troupe_mode",
+    "sirens": "sirens_mode",
 }
 
 # The keys the shared block binds, each with the modifier that arms it. A key

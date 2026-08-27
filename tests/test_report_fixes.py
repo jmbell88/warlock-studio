@@ -352,10 +352,16 @@ def test_every_mode_says_what_it_is_for():
 def test_troupe_is_the_mode_marked_experimental():
     """It is code-complete and a user really can get a rendered sheet -- but
     three of its own phases are unstarted and its keyframes are provisional.
-    ``docs/manual/11`` is candid about that and the app was not."""
+    ``docs/manual/11`` is candid about that and the app was not.
+
+    Sirens joins it: the engine is complete and tested and songs really play,
+    while the instrument editor, the sound-effect pane and WAV export are not
+    built. The rail says so for the same reason -- the manual is read by people
+    who already know to be careful, and the rail is read by everyone.
+    """
     from warlock.studio import modes
 
-    assert modes.MATURITY == {"troupe": "Experimental"}
+    assert modes.MATURITY == {"troupe": "Experimental", "sirens": "Experimental"}
     assert set(modes.MATURITY_NOTE) == set(modes.MATURITY)
     assert set(modes.MATURITY) <= set(modes.KEYS)
 

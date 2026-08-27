@@ -17,7 +17,7 @@ from . import icons
 # (key, label, icon). The key is what lands in ``AppState.mode``.
 #
 # **The order is the rail's order** (the UI redesign, wave 3): where you start and
-# what you look at, then the six creative workspaces, then Settings. It used to
+# what you look at, then the seven creative workspaces, then Settings. It used to
 # be the *segmented control's* order, grouped by a predicate over
 # ``WORK_MODES`` -- a rule that rendered correctly and explained nothing, and
 # which put Library and Review on the far side of a break from the panes they
@@ -30,7 +30,7 @@ from . import icons
 # show it answered the question by removing it -- it is
 # ``manual.render.draw_overlay`` now, raised by F1 and by every
 # ``help_button``) and ``profiles`` (a shelf of saved settings in the top-level
-# navigation beside six creative workspaces said that "manage my styles" is a
+# navigation beside seven creative workspaces said that "manage my styles" is a
 # place you travel to -- it is ``profiles_panel.draw_sheet`` over the Reference
 # stage's pane).
 MODES: list[tuple[str, str, str]] = [
@@ -69,11 +69,19 @@ MODES: list[tuple[str, str, str]] = [
     ("troupe", "Troupe", icons.PERSON_STANDING),
     ("plotter", "Plotter", icons.GRID),
     ("packwright", "Packwright", icons.LAYERS),
+    # Sirens: the twelfth mode, and the first thing in this app that makes a
+    # sound. A workspace rather than a stage of Create for the reason Plotter
+    # and Packwright are: it owns a document type (``.wsng``), it has its own
+    # tabs and its own undo stack, and nothing it produces is a job row. It
+    # sits at the end of the Workspaces group because it is the newest and
+    # because the group has no other ordering to respect -- the six before it
+    # are not a pipeline.
+    ("sirens", "Sirens", icons.AUDIO_WAVEFORM),
     # Review is footer matter, beside Settings, and shares its glyph history
     # with the Library above (both were Home tiles). It is the one place you
     # go to *judge* rather than to make, and it is entered rarely and left
     # again -- which is the same shape as Settings and not the shape of the
-    # six workspaces it used to sit among.
+    # seven workspaces it used to sit among.
     ("review", "Review", icons.CIRCLE_CHECK),
     ("settings", "Settings", icons.SETTINGS),
 ]
@@ -99,7 +107,7 @@ MODES: list[tuple[str, str, str]] = [
 # drawing path.
 RAIL_GROUPS: tuple[tuple[str, ...], ...] = (
     ("home", "library", "create"),
-    ("inker", "clay", "poser", "troupe", "plotter", "packwright"),
+    ("inker", "clay", "poser", "troupe", "plotter", "packwright", "sirens"),
     ("review", "settings"),
 )
 
@@ -112,7 +120,7 @@ RAIL_GROUPS: tuple[tuple[str, ...], ...] = (
 #: a caption-height off the item it names.
 #:
 #: The grouping above is a *claim* ("these four are one pipeline;
-#: these six are workspaces") and until these existed the only thing asserting
+#: these seven are workspaces") and until these existed the only thing asserting
 #: it was a gap, which at a glance reads as an accident of spacing.
 RAIL_GROUP_LABELS: tuple[str, ...] = ("Pipeline", "Workspaces", "")
 
@@ -121,7 +129,7 @@ RAIL_GROUP_LABELS: tuple[str, ...] = ("Pipeline", "Workspaces", "")
 # submit and no viewport to frame, which is why they take no keyboard
 # shortcuts at all.
 WORK_MODES = frozenset(
-    {"create", "inker", "clay", "poser", "review", "plotter", "packwright", "troupe"}
+    {"create", "inker", "clay", "poser", "review", "plotter", "packwright", "troupe", "sirens"}
 )
 
 # The subset that draws the *asset* viewport, and therefore the only modes
@@ -141,12 +149,14 @@ VIEWPORT_MODES = frozenset({"create"})
 
 # Neither one pane nor the asset viewport: a mode that fills the window with
 # its own three-column workspace. Inker, Clay, Poser, Review, Plotter,
-# Packwright and Troupe are the seven; Library and Profiles are single panes, not
-# workspaces, and join Home/Manual/Settings there. The three categories
+# Packwright, Troupe and Sirens are the eight; Library and Profiles are single
+# panes, not workspaces, and join Home/Manual/Settings there. The three categories
 # partition KEYS exactly -- which matters because ``_build_ui``'s dispatch ends
 # in a bare ``else``, so an unlisted mode would draw one of these rather than
 # fail.
-WORKSPACE_MODES = frozenset({"inker", "clay", "poser", "review", "plotter", "packwright", "troupe"})
+WORKSPACE_MODES = frozenset(
+    {"inker", "clay", "poser", "review", "plotter", "packwright", "troupe", "sirens"}
+)
 
 # The modes that bind the arrow keys or Space themselves, and so keep them from
 # imgui's keyboard navigation (UX-02). Home and the Library move a selection
@@ -160,14 +170,20 @@ WORKSPACE_MODES = frozenset({"inker", "clay", "poser", "review", "plotter", "pac
 # Troupe joins them for its own version of the same clash: Space toggles
 # playback and Left/Right step one frame of a clip, so one press must not also
 # move a focus ring through the direction buttons.
-NAV_KEY_MODES = frozenset({"home", "library", "review", "inker", "plotter", "troupe"})
+# Sirens joins them for the sharpest version of the clash: all four arrows move
+# the pattern caret, Space starts and stops playback, and Page Up/Down move a
+# bar -- so every key imgui would use to walk a focus ring is a key the grid
+# has already spoken for.
+NAV_KEY_MODES = frozenset(
+    {"home", "library", "review", "inker", "plotter", "troupe", "sirens"}
+)
 
 KEYS = tuple(key for key, _label, _icon in MODES)
 
 #: One line saying what each mode is *for*, shown as the rail item's tooltip.
 #:
-#: The rail is the primary navigation and six of its eleven labels -- Inker,
-#: Clay, Poser, Troupe, Plotter, Packwright -- are invented names. A new user
+#: The rail is the primary navigation and seven of its twelve labels -- Inker,
+#: Clay, Poser, Troupe, Plotter, Packwright, Sirens -- are invented names. A new user
 #: hovering one got a word and an icon, because ``rail._item`` suppresses its
 #: accessible-name tooltip once the label is legible (correctly: a tooltip
 #: repeating a word already on screen is noise) and no call site had anything
@@ -186,6 +202,7 @@ PURPOSE: dict[str, str] = {
     "troupe": "Render a 3D character to a 256-cell sprite sheet.",
     "plotter": "Paint tile maps and export them to Tiled.",
     "packwright": "Pack loose sprites into an atlas with a manifest.",
+    "sirens": "Write chiptune music and sound effects in a tracker grid.",
     "review": "Judge and grade finished assets side by side.",
     "settings": "Models, folders, appearance and hardware.",
 }
@@ -204,6 +221,12 @@ PURPOSE: dict[str, str] = {
 #: rather than a second, differently-hedged account.
 MATURITY: dict[str, str] = {
     "troupe": "Experimental",
+    # Sirens landed in two halves: a complete, tested synthesis engine and a
+    # minimal editor over it. A user really can write a pattern and hear it,
+    # and three of the things they will reach for next do not exist yet -- so
+    # the rail says so, for the reason Troupe's does: the manual is read by
+    # people who already know to be careful, and the rail is read by everyone.
+    "sirens": "Experimental",
 }
 
 #: What the chip's own tooltip adds, past the word.
@@ -212,6 +235,10 @@ MATURITY_NOTE: dict[str, str] = {
         "The chain runs end to end, but the shipped animation keyframes are"
         " provisional and humanoid reconstruction quality is untested."
         " See the manual (Troupe)."
+    ),
+    "sirens": (
+        "The engine is complete and songs play and save, but there is no"
+        " instrument editor, no sound-effect pane and no WAV export yet."
     ),
 }
 

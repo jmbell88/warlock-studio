@@ -73,6 +73,14 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "packwright-settings": ("32-packwright", "settings"),
     "packwright-items": ("32-packwright", "when-it-does-not-fit"),
     "packwright-bridge": ("32-packwright", "exporting"),
+    # Sirens has no chapter yet -- it lands in the same wave as the mode's
+    # documentation pass. The panes still carry help buttons, because a button
+    # that appears later is a button users learn to look for later; every one
+    # of them points at the workspace overview until the chapter exists.
+    "sirens-transport": ("20-overview", "the-modes"),
+    "sirens-orders": ("20-overview", "the-modes"),
+    "sirens-instruments": ("20-overview", "the-modes"),
+    "sirens-bridge": ("20-overview", "the-modes"),
     # Troupe's four panes. Four entries rather than one chapter-wide target
     # because the questions differ per pane: what a sheet *is* is the cast's
     # question, what the options mean is the form's, why the preview never

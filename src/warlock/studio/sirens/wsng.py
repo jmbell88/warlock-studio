@@ -326,8 +326,25 @@ def _patterns_from(zf: Any, manifest: dict, channels: int) -> list[D.Pattern]:
         # Clipped rather than trusted: every column has a range, and a
         # hand-edited array can hold anything an ``int16`` can. A note of 9000
         # would index past the end of the frequency table at render time.
+        #
+        # **The instrument column is clipped to the int16 ceiling, not to 255**,
+        # and the difference is a data-loss bug rather than a nicety: that
+        # column holds an instrument *uid*, and ``document.new_uid`` is a
+        # process-global counter, so the 256th object minted in a session gets
+        # a uid a 255 clip silently rewrites. The symptom is a song that opens
+        # playing a different instrument -- or none -- and only after the
+        # session that wrote it was a long one, which is why nothing caught it
+        # until a second document mode started minting uids beside it.
         grid = np.ascontiguousarray(cells, dtype=np.int16).copy()
-        np.clip(grid, notes.EMPTY, 255, out=grid)
+        #
+        # One basic-index slice per column, deliberately: ``grid[:, :, [a, b]]``
+        # is advanced indexing and hands back a *copy*, so a clip written
+        # through it lands nowhere and every bound here would be decoration.
+        for column in (D.NOTE, D.VOLUME, D.EFFECT, D.PARAM):
+            plane = grid[:, :, column]
+            np.clip(plane, notes.EMPTY, 255, out=plane)
+        plane = grid[:, :, D.INSTRUMENT]
+        np.clip(plane, notes.EMPTY, np.iinfo(np.int16).max, out=plane)
         out.append(
             D.Pattern(
                 uid=int(entry.get("uid", D.new_uid())),

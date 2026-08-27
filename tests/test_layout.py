@@ -313,6 +313,8 @@ def test_every_split_has_a_handle_and_every_handle_a_split():
         "plotter-tools",
         "plotter-layers",
         "review-runs",
+        "sirens-transport",
+        "sirens-instruments",
         "troupe-cast",
         "troupe-sheets",
     }

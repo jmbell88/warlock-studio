@@ -193,6 +193,11 @@ _DOC_MODES: dict[str, tuple[str, str]] = {
     "clay": ("clay_mode", "Export to the library"),
     "plotter": ("plotter_mode", "Export .tmx"),
     "packwright": ("packwright_mode", "Export atlas + JSON"),
+    # **The empty export label suppresses the command**, the rule Poser's row
+    # states: exporting a WAV is not built yet, and a row that has to refuse is
+    # worse than no row. It joins the table anyway, because save, save-as and
+    # undo are all real here and all four commands would be missing without it.
+    "sirens": ("sirens_mode", ""),
     # **An empty export label suppresses the command** rather than forcing a
     # fake one: a pose *is* a library record, so it is saved and never
     # exported, and offering "Export" here would be a row that has to refuse.
@@ -201,7 +206,7 @@ _DOC_MODES: dict[str, tuple[str, str]] = {
     "poser": ("poser_mode", ""),
 }
 
-_DOC_WHY = "Open a drawing, model, map or atlas first."
+_DOC_WHY = "Open a drawing, model, map, atlas or song first."
 
 
 def _doc_mode(ctx: Any):
@@ -381,6 +386,11 @@ def commands(ctx: Any) -> list[Command]:
 
         packwright_mode.new_document(ctx)
 
+    def new_song(ctx: Any) -> None:
+        from . import sirens_mode
+
+        sirens_mode.new_document(ctx)
+
     def wireframe(ctx: Any) -> None:
         ctx.state.wireframe = not ctx.state.wireframe
         if ctx.viewer is not None:
@@ -519,6 +529,7 @@ def commands(ctx: Any) -> list[Command]:
         # document modes could be started from here and the map editor could
         # not, which reads as Plotter not having a New at all.
         Command(key="new-map", label="New map", group="Actions", run=new_map),
+        Command(key="new-song", label="New song", group="Actions", run=new_song),
         Command(
             key="reroll",
             label="Reroll the selected asset",
