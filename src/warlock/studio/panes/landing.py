@@ -253,6 +253,11 @@ class Status:
     #: nowhere else in the app -- there is no job list -- and the Library's
     #: status filter is the nearest thing to one.
     status_filter: str = ""
+    #: A Settings category to open on the way, or "" to leave it alone. Only
+    #: the health row uses one: it counts checks that are listed on exactly one
+    #: page, and landing on Appearance because that is the remembered tab would
+    #: send the reader somewhere the number they clicked is not explained.
+    settings_category: str = ""
 
 
 def _health_status(ctx: Any) -> Status:
@@ -263,15 +268,21 @@ def _health_status(ctx: Any) -> Status:
         return Status("health", icons.LOADER, "Issues - still checking", theme.MUTED)
     if not failing:
         return Status(
-            "health", icons.CIRCLE_CHECK, "Everything checks out", theme.MUTED, "settings"
+            "health",
+            icons.CIRCLE_CHECK,
+            "Everything checks out",
+            theme.MUTED,
+            "settings",
+            settings_category="health",
         )
     what = "1 thing needs" if len(failing) == 1 else f"{len(failing)} things need"
     return Status(
         "health",
         icons.TRIANGLE_ALERT if not fatal else icons.CIRCLE_ALERT,
-        f"{what} attention - set up models",
+        f"{what} attention - see Health",
         theme.ERR if fatal else theme.WARN,
         "settings",
+        settings_category="health",
     )
 
 
@@ -854,6 +865,10 @@ def _status(ctx: Any, status: list[Status]) -> None:
             if clicked:
                 if row.status_filter:
                     ctx.state.filters.status = row.status_filter
+                if row.settings_category:
+                    from .app_settings import CATEGORY_SLOT
+
+                    ctx.state.preview[CATEGORY_SLOT] = row.settings_category
                 set_mode(ctx.state, row.target)
         else:
             widgets.text_colored(row.colour, row.text)

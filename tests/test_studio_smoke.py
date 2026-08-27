@@ -511,8 +511,42 @@ def test_no_pane_continues_a_line_that_has_no_room_left(app_ctx, imgui_ctx):
     app_ctx.cache.tick()
     app_ctx.state.select(candidate)
     app_ctx.model_rows = _model_rows()
+    def _settings_health() -> None:
+        """The Health category, with rows in it.
+
+        Its own entry because the walk draws whichever category is remembered,
+        and the default is Appearance -- so the two shapes this test exists for
+        would never be reached. A check row chains an icon, a name, a dash and
+        a wrapped detail with ``same_line``, and the actions under it are a row
+        of buttons in a 640-wide column.
+        """
+        from warlock.doctor import Check
+
+        before = app_ctx.state.preview.get(app_settings.CATEGORY_SLOT)
+        app_ctx.state.preview[app_settings.CATEGORY_SLOT] = "health"
+        app_ctx.runtime.checks = [
+            Check("trellis-server.exe", True, "found", fatal=False),
+            Check(
+                "Blender (rigging)",
+                False,
+                "bpy is not installed; rigging, posing and sprite sheets are unavailable",
+                fatal=False,
+            ),
+            Check("trellis port", False, "already in use", fatal=True),
+        ]
+        app_ctx.state.note_error("the worker exited before it reported anything")
+        app_ctx.state.dismiss_errors()
+        try:
+            app_settings.draw(app_ctx)
+        finally:
+            if before is None:
+                app_ctx.state.preview.pop(app_settings.CATEGORY_SLOT, None)
+            else:
+                app_ctx.state.preview[app_settings.CATEGORY_SLOT] = before
+
     panes = [
         ("candidates", lambda: candidates_panel.draw(app_ctx)),
+        ("app-settings-health", _settings_health),
         # Joined the list when its model list stopped being read-only: a row is
         # now a checkbox, a coloured label and a button, and the sidebar it is
         # drawn in is 300 px.
@@ -1319,22 +1353,23 @@ def test_the_settings_pane_help_button_stays_inside_the_pane(app_ctx, imgui_ctx,
 
 
 def test_the_settings_pane_draws_one_category_at_a_time(app_ctx, imgui_ctx, monkeypatch):
-    """The UI redesign, wave 4.1. Four categories, and exactly one body per frame.
+    """The UI redesign, wave 4.1. One category body per frame, whatever the count.
 
-    The pane used to draw all four stacked, which is the shape the segmented
+    The pane used to draw them all stacked, which is the shape the segmented
     control replaced -- so the assertion worth making is not that the switch
-    renders but that the *other three bodies do not run*.
+    renders but that the *other bodies do not run*.
     """
     from warlock.studio.panes import app_settings
 
     drawn: list[str] = []
-    for name in ("_interface", "_models", "_storage", "_layout", "_config"):
+    for name in ("_interface", "_models", "_storage", "_health", "_layout", "_config"):
         monkeypatch.setattr(app_settings, name, lambda _ctx, _n=name: drawn.append(_n))
 
     for key, expected in [
         ("appearance", ["_interface"]),
         ("models", ["_models"]),
         ("storage", ["_storage"]),
+        ("health", ["_health"]),
         ("advanced", ["_layout", "_config"]),
     ]:
         drawn.clear()

@@ -431,3 +431,26 @@ def test_the_recovery_section_draws_nothing_with_an_empty_snapshot():
     ctx = _ctx()
     ctx.state.recovery = []
     landing._recovery(ctx)  # no imgui frame needed: it returns before drawing
+
+
+def test_the_health_row_opens_the_page_that_explains_its_number():
+    """Both health rows carry the Settings category, not just the failing one.
+
+    The row counts checks that are listed on exactly one page. Sending the
+    reader to Settings and letting the remembered tab decide where they land is
+    how a click on "2 things need attention" arrives at the theme picker.
+    """
+    failing = _ctx(checks=[_check("weights", False, fatal=False)])
+    healthy = _ctx(checks=[_check("weights", True)])
+    for ctx in (failing, healthy):
+        row = {r.key: r for r in landing.status_rows(ctx)}["health"]
+        assert row.target == "settings"
+        assert row.settings_category == "health"
+
+
+def test_a_row_with_no_category_leaves_the_remembered_tab_alone():
+    """The default stays "": only health has a page it must land on, and a
+    queue row that reset the Settings tab on its way to the Library would be
+    changing something it has no opinion about."""
+    row = landing.Status("queue", "!", "Queue idle", 0, "library")
+    assert row.settings_category == ""

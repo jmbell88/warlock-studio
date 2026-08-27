@@ -72,15 +72,30 @@ def _size(value: str) -> tuple[int, int]:
 
 def _capture_popups(app, out: Path, theme_name: str) -> None:
     """Capture every full-size transient container, including model flow."""
-    from warlock.studio import create_stages, dialogs, plotter_mode, rail
+    from warlock.studio import create_stages, dialogs, plotter_mode
 
     ctx = app.app_ctx
     ctx.state.mode = create_stages.MODE
     ctx.state.create_stage = "mesh"
 
-    rail.request("diagnostics")
-    _capture(app, out / f"{theme_name}-popup-diagnostics.png")
-    _close_popups(app)
+    # The diagnostics popup is gone and its list is Settings -> Health now, so
+    # this is a mode capture rather than a popup one. Still made here rather
+    # than left to the mode walk: that walk draws whichever category is
+    # remembered, and the remembered one is Appearance -- which would have put
+    # the theme picker under a filename claiming to be the health page, the
+    # failure this function's own comment further down warns about.
+    #
+    # ``rail.request("diagnostics")`` used to stand here. It kept working after
+    # the popup went, silently: ``request`` assigns into ``_wants`` rather than
+    # looking a key up, so it set a flag nothing reads and the capture was an
+    # ordinary picture of Create.
+    from warlock.studio.panes.app_settings import CATEGORY_SLOT
+
+    ctx.state.mode = "settings"
+    ctx.state.preview[CATEGORY_SLOT] = "health"
+    _capture(app, out / f"{theme_name}-settings-health.png")
+    ctx.state.preview.pop(CATEGORY_SLOT, None)
+    ctx.state.mode = create_stages.MODE
 
     ctx.confirms.ask(
         dialogs.Confirm(

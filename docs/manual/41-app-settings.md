@@ -4,8 +4,8 @@
 job's. They are stored in `studio_settings.json` beside everything else the app remembers, and none
 of them need a variable set before launch.
 
-The pane is one centred column with four categories across the top — **Appearance**, **Models**,
-**Storage** and **Advanced**. The column keeps its width however wide the window is: everything here
+The pane is one centred column with five categories across the top — **Appearance**, **Models**,
+**Storage**, **Health** and **Advanced**. The column keeps its width however wide the window is: everything here
 is a short labelled row, and a form stretched across a 5K display leaves the label and the control it
 belongs to at opposite ends of the desk. Which category you last had open is not remembered between
 launches — it is where you were, not something you chose.
@@ -134,6 +134,28 @@ Both used to sit at the foot of the library, under the list of assets, which is 
 "clean library" reads as an action on the assets you can see rather than on all of them.
 [Library and jobs](35-library-and-jobs.md#storage-and-pruning) has the longer account of what
 each one deletes and why prune removes from disk rather than trashing.
+
+## Health
+
+Every check `warlock doctor` runs, as a list: a tick or a cross, the check's name, and the one line
+of detail saying what it found. Green is passing, amber is a warning, red is fatal. The line above
+the list counts the failures, which is the same number Home's health row shows — clicking that row
+opens this page.
+
+This is the only place in the app that names a *non-fatal* failure. A fatal one also raises the
+error banner across the top of the window, but a style LoRA whose file has been moved, or Blender
+missing so rigging is unavailable, is otherwise a count and a tooltip.
+
+**Copy details** puts the whole list on the clipboard in the form `FAIL name: detail`, which is what
+to paste into a bug report. **Run checks again** re-runs every probe including the slow ones the
+startup path defers — worth pressing after installing something a row complained about, because the
+static checks are otherwise only recomputed at launch. **Troubleshooting** opens
+[chapter 12](42-troubleshooting.md), which is where a check that keeps failing after its remedy is
+covered.
+
+**Dismissed** appears only when you have dismissed something from the error banner. The banner's
+Dismiss moves a message here rather than deleting it: a worker that died is reported through the
+banner and through no check row at all, so this is the only copy.
 
 ## Advanced
 

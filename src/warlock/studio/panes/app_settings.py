@@ -20,6 +20,8 @@ job's, and still read-only where the answer is not the user's to change.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -53,7 +55,7 @@ CATEGORY_W = 184
 #: it can contain, and it pushes its own ``help_marker`` onto the next line.
 FIELD_W = 260
 
-#: The four things this pane is, and the order they are offered in.
+#: The five things this pane is, and the order they are offered in.
 #:
 #: Appearance first because it is the one most people came for; Advanced last
 #: because it is read-only diagnostics. The keys are stable ids -- they are in
@@ -74,6 +76,7 @@ CATEGORIES = [
     ("appearance", f"{icons.PALETTE} Appearance"),
     ("models", f"{icons.BOX} Models"),
     ("storage", f"{icons.FOLDER_OPEN} Storage"),
+    ("health", f"{icons.ACTIVITY} Health"),
     ("advanced", f"{icons.SETTINGS} Advanced"),
 ]
 
@@ -178,6 +181,8 @@ def _category_body(ctx: Any, category: str) -> None:
         _models(ctx)
     elif category == "storage":
         _storage(ctx)
+    elif category == "health":
+        _health(ctx)
     elif category == "advanced":
         _layout(ctx)
         _layouts(ctx)
@@ -467,6 +472,175 @@ def config_table(ctx: Any) -> None:
             widgets.muted(setting.name)
         imgui.same_line()
         imgui.text_wrapped(setting.value)
+
+
+# --- health -----------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class HealthRow:
+    """One check, resolved to what is drawn for it."""
+
+    name: str
+    detail: str
+    glyph: str
+    colour: int
+    ok: bool
+    #: What happens *if* it fails, so it is set on passing rows too. Only
+    #: meaningful alongside ``ok``; see ``health_rows``' band.
+    fatal: bool = False
+
+
+def health_rows(checks: Iterable[Any]) -> list[HealthRow]:
+    """Every check as a row.
+
+    Pure, so the wording is assertable without a window -- which is the half of
+    the old diagnostics popup that was never covered, and the half that had to
+    be read off a screenshot to know whether a failing check said anything at
+    all. Attributes are read defensively because this also renders the static
+    checks a partially-started runtime carries.
+
+    **Failures first, fatal before warning** -- the same rule and the same
+    reason as ``config_table``'s overridden rows (S140). A healthy install runs
+    past thirty checks, so a reader who arrived by clicking "2 things need
+    attention" was being asked to find those two in a wall of green ticks. The
+    order within each band is doctor's own, which is roughly the order things
+    are needed in.
+    """
+    rows: list[HealthRow] = []
+    for check in checks:
+        ok = bool(getattr(check, "ok", False))
+        fatal = bool(getattr(check, "fatal", False))
+        rows.append(
+            HealthRow(
+                name=str(getattr(check, "name", "")),
+                detail=str(getattr(check, "detail", "")),
+                # Lucide, as the status pills are: "o" and "x" were the last
+                # hand-spelled state glyphs in the app, and a lowercase o at
+                # 11 px beside a red x is two letters rather than two shapes.
+                glyph=icons.CHECK if ok else icons.CIRCLE_X,
+                colour=theme.OK if ok else (theme.ERR if fatal else theme.WARN),
+                ok=ok,
+                fatal=fatal,
+            )
+        )
+
+    def band(row: HealthRow) -> int:
+        # Not keyed on the colour: a *passing* check still carries the fatal
+        # flag -- it says what happens if it ever fails -- so anything reading
+        # "fatal" without "not ok" first would reorder the green band too.
+        if row.ok:
+            return 2
+        return 0 if row.fatal else 1
+
+    # ``sorted`` is stable, so doctor's own order survives inside each band.
+    return sorted(rows, key=band)
+
+
+def health_summary(rows: list[HealthRow]) -> str:
+    """The line above the list, which is the number Home's health row shows."""
+    if not rows:
+        # Not an error state: the first poll lands a moment after the window
+        # opens, so an empty list means "not yet" and never "nothing to say".
+        return "No checks have run yet."
+    failing = [row for row in rows if not row.ok]
+    if not failing:
+        return "Everything checks out."
+    return f"{len(failing)} of {len(rows)} need attention."
+
+
+def health_report(rows: list[HealthRow]) -> str:
+    """What *Copy details* puts on the clipboard: the list, as pasteable text."""
+    return "\n".join(f"{'ok' if row.ok else 'FAIL'} {row.name}: {row.detail}" for row in rows)
+
+
+def _health(ctx: Any) -> None:
+    """What doctor found, named -- a category rather than the old popup.
+
+    The checks were readable in one place: a popup opened from the rail's
+    Issues badge and from the status bar. When that popup went, so did the only
+    surface that said *which* check failed and why. A fatal one still reaches
+    the error banner, but a non-fatal one -- "Blender (rigging)", a style LoRA
+    whose file is missing -- became a number on Home's health row and a
+    tooltip, and `warlock doctor` in a terminal was the only way to read it.
+
+    A category and not a popup because Home's health row already points here,
+    because it is the same question as the Models table beside it, and because
+    a modal that has to be closed before the Settings it names can be changed
+    was the popup's own worst habit.
+    """
+    rows = health_rows(getattr(ctx.runtime, "checks", []) or [])
+    widgets.section("Checks")
+    widgets.muted(health_summary(rows))
+    for row in rows:
+        widgets.text_colored(row.colour, row.glyph)
+        imgui.same_line()
+        imgui.text(row.name)
+        # The detail under the name rather than chained onto it. The popup
+        # these rows come from was 480 px of its own and still ran a glyph, a
+        # name, a dash and a sentence across one line; in a settings column
+        # beside a category rail there is no room for the fourth, and
+        # ``same_line`` past the content edge clips rather than wraps.
+        if row.detail:
+            imgui.indent()
+            widgets.muted_wrapped(row.detail)
+            imgui.unindent()
+    _dismissed(ctx)
+    _health_actions(ctx, rows)
+
+
+def _dismissed(ctx: Any) -> None:
+    """What Dismiss took off the error banner (F59).
+
+    Every writer of ``state.errors`` fires once, so clearing the list is the
+    only copy gone: a worker that died is reported through that list and
+    through no doctor row at all. ``dismiss_errors`` moves rather than deletes
+    for this reader's sake, and without one it was deleting.
+    """
+    messages = list(getattr(ctx.state, "dismissed_errors", []) or [])
+    if not messages:
+        return
+    widgets.section("Dismissed")
+    for message in messages:
+        widgets.text_colored(theme.ERR, icons.TRIANGLE_ALERT)
+        imgui.same_line()
+        imgui.text_wrapped(str(message))
+
+
+def _health_actions(ctx: Any, rows: list[HealthRow]) -> None:
+    """The three things a reader of a failing row wants next.
+
+    Laid out through ``same_line_or_wrap`` rather than a bare ``same_line``:
+    four buttons is more than a settings column holds beside a category rail,
+    and the popup these came from was a window of its own. The helper asks the
+    layout whether the next one fits and starts a row when it does not, which
+    is the one exemption the overflow walk allows.
+    """
+    # These act on the whole page rather than on the "Dismissed" block that may
+    # precede them, and inventing a heading to say so would be labelling a
+    # thing to fix a rectangle -- so the block ends and they belong to nothing.
+    widgets.end_section()
+    if controls.button("Copy details", role=controls.ButtonRole.GHOST):
+        imgui.set_clipboard_text(health_report(rows))
+    # Re-ask rather than wait out the poll (N111). The static half is only
+    # recomputed on ``force``, which is what makes this worth having at all:
+    # having just installed the weights a row names, nothing short of a restart
+    # would otherwise change its mind.
+    widgets.same_line_or_wrap(sp(160))
+    if controls.button("Run checks again", role=controls.ButtonRole.GHOST):
+        from ...service import system as svc_system
+
+        ctx.submit("health", svc_system.current_checks, ctx.svc, force=True)
+    # Chapter 12. The rows name the failure and its remedy; what they cannot
+    # hold is what to do when the remedy does not take.
+    widgets.same_line_or_wrap(sp(160))
+    manual_render.troubleshooting_button(ctx)
+    from .. import component_gallery
+
+    if component_gallery.enabled():
+        widgets.same_line_or_wrap(sp(180))
+        if controls.button("Component gallery", role=controls.ButtonRole.GHOST):
+            component_gallery.request()
 
 
 # --- layout -----------------------------------------------------------------

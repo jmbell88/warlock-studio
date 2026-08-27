@@ -1067,7 +1067,7 @@ class AppState:
             self.errors.append(text)
 
     def dismiss_errors(self) -> None:
-        """Off the banner, into the popup -- never out of existence (F59)."""
+        """Off the banner, into Settings -> Health -- never out of existence (F59)."""
         self.dismissed_errors.extend(m for m in self.errors if m not in self.dismissed_errors)
         self.errors.clear()
 

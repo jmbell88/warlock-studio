@@ -68,7 +68,7 @@ to go is clickable.
 
 | Line | What it says | Where it goes |
 |---|---|---|
-| Issues | "Everything checks out", "still checking" for the first second or two after launch, or "N things need attention" — amber for a warning, red for something fatal. While the shell setup summary is visible this item is omitted instead of repeating it. | [App settings](41-app-settings.md), where the model list and its Download buttons are. |
+| Issues | "Everything checks out", "still checking" for the first second or two after launch, or "N things need attention" — amber for a warning, red for something fatal. While the shell setup summary is visible this item is omitted instead of repeating it. | [App settings](41-app-settings.md), opened on **Health**, which names each failing check. |
 | Queue | What is running or queued, with a percentage when the worker is reporting one, or "Queue idle". | — |
 | Unreviewed | How many finished meshes nobody has judged, when there are any. | [Review](37-review.md). |
 
