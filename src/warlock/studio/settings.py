@@ -20,8 +20,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import atomic
 from .. import generation
+from . import atomic
 
 log = logging.getLogger(__name__)
 

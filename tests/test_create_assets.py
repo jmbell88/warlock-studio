@@ -13,29 +13,53 @@ from warlock.studio.state import default_form_2d, primary_action
 
 
 def test_the_asset_registry_is_the_approved_flat_list():
+    """Five offered types, not eight.
+
+    The three tilesets differed only by projection and the two sprite sheets
+    only by layout, and both of those are fields on the form already -- so the
+    selector was asking the same question twice and the answers could
+    contradict each other. Projection and layout stayed; the types folded.
+    """
     assert create_assets.ASSET_TYPE_OPTIONS == (
-        ("image_2d", "2D Image"),
+        ("image", "Image"),
         ("model_3d", "3D Model"),
-        ("seamless_tile", "Seamless Tile"),
-        ("tileset_top_down", "Top-Down Tileset"),
-        ("tileset_three_quarter", "3/4 Tileset"),
-        ("tileset_isometric", "Isometric Tileset"),
-        ("sprite_turnaround", "Sprite Turnaround"),
-        ("sprite_walk", "Sprite Walk Cycle"),
+        ("seamless_material", "Seamless Material"),
+        ("tileset", "Tileset"),
+        ("sprite_sheet", "Sprite Sheet"),
     )
+
+
+def test_the_retired_keys_still_resolve():
+    """A saved job or a restored form naming an old key must still open. They
+    are aliases, not options: readable, never offered."""
+    for old, new in {
+        "image_2d": "image",
+        "seamless_tile": "seamless_material",
+        "tileset_top_down": "tileset",
+        "tileset_three_quarter": "tileset",
+        "tileset_isometric": "tileset",
+        "sprite_turnaround": "sprite_sheet",
+        "sprite_walk": "sprite_sheet",
+    }.items():
+        assert create_assets.ASSET_TYPES[old].key == new
+        assert old not in dict(create_assets.ASSET_TYPE_OPTIONS)
 
 
 @pytest.mark.parametrize(
     ("legacy", "expected"),
     [
-        ({"output": "tile"}, "seamless_tile"),
-        ({"output": "sheet", "projection": "orthogonal"}, "tileset_top_down"),
-        ({"output": "sheet", "projection": "three_quarter"}, "tileset_three_quarter"),
-        ({"output": "sheet", "projection": "isometric"}, "tileset_isometric"),
+        ({"output": "tile"}, "seamless_material"),
+        # Projection no longer picks the type -- it is its own field, and the
+        # three tileset keys it used to choose between are one key now.
+        ({"output": "sheet", "projection": "orthogonal"}, "tileset"),
+        ({"output": "sheet", "projection": "three_quarter"}, "tileset"),
+        ({"output": "sheet", "projection": "isometric"}, "tileset"),
         (
             {"output": "sheet", "sheet_type": "sprite", "sheet_layout": "walk"},
-            "sprite_walk",
+            "sprite_sheet",
         ),
+        # Old "Object" meant a reconstruction reference, not a standalone image.
+        ({"output": "reference"}, "model_3d"),
     ],
 )
 def test_legacy_switches_migrate_without_guessing(legacy, expected):
@@ -43,12 +67,28 @@ def test_legacy_switches_migrate_without_guessing(legacy, expected):
 
 
 def test_a_new_asset_type_overrides_contradictory_legacy_switches():
+    """The type owns the door it opens; projection is no longer part of it.
+
+    ``output`` is derived from the type and is corrected. ``projection`` is a
+    field the user sets, so a retired key that used to carry one no longer
+    speaks for it -- the form's own value stands.
+    """
     form = default_form_2d()
     form.update(asset_type="tileset_isometric", output="reference", projection="top_down")
     create_assets.sync_legacy_fields(form)
     assert (form["output"], form["projection"], form["count"]) == (
-        "sheet", "isometric", 1,
+        "sheet", "top_down", 1,
     )
+    assert form["asset_type"] == "tileset"
+
+
+def test_a_retired_tileset_key_does_not_overwrite_a_real_projection():
+    """The other half of the same rule: folding the key must not cost a job
+    the projection it was actually saved with."""
+    form = default_form_2d()
+    form.update(asset_type="tileset_isometric", projection="isometric")
+    create_assets.sync_legacy_fields(form)
+    assert (form["asset_type"], form["projection"]) == ("tileset", "isometric")
 
 
 def test_a_corrupt_new_asset_type_does_not_resurrect_legacy_switches(tmp_path):
@@ -87,7 +127,8 @@ def test_submit_persists_type_and_intent():
     form = default_form_2d()
     form.update(prompt="a barrel", asset_type="image_2d")
     kwargs = settings_2d.submit_kwargs(form)
-    assert kwargs["asset_type"] == "image_2d"
+    # Persisted under today's key, not the retired one it was written with.
+    assert kwargs["asset_type"] == "image"
     assert kwargs["asset_intent"] == "refine_2d"
 
 

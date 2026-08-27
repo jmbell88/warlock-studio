@@ -148,7 +148,10 @@ def test_the_window_is_read_at_submission_time(monkeypatch):
         name = "##host/##content_F65/inker-timeline_9AAF9373"
 
     class _Internal:
-        def get_current_window(self):
+        # The *read* accessor only: ``GetCurrentWindow`` sets WriteAccessed and
+        # would have imgui render its implicit ``Debug##Default`` window, so
+        # ``probe.record`` must not call it and this stub must not offer it.
+        def get_current_window_read(self):
             return _Window()
 
     class _Imgui:

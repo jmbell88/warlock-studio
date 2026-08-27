@@ -146,7 +146,9 @@ def create_generation_request(svc: WarlockService, request: Any, **uploads: Any)
             try:
                 native_payloads.append(to_png(Path(name).read_bytes()))
             except OSError as exc:
-                raise Invalid(f"could not read reference {name!r}: {exc}", field="references") from exc
+                raise Invalid(
+                    f"could not read reference {name!r}: {exc}", field="references"
+                ) from exc
             except Exception as exc:
                 raise Invalid(f"could not decode reference {name!r}", field="references") from exc
     model_view_payloads: dict[str, bytes] = {}
@@ -155,7 +157,10 @@ def create_generation_request(svc: WarlockService, request: Any, **uploads: Any)
             try:
                 model_view_payloads[view_name] = to_png(Path(view_path).read_bytes())
             except OSError as exc:
-                raise Invalid(f"could not read {view_name} view {view_path!r}: {exc}", field="model.views") from exc
+                raise Invalid(
+                    f"could not read {view_name} view {view_path!r}: {exc}",
+                    field="model.views",
+                ) from exc
             except Exception as exc:
                 raise Invalid(f"could not decode {view_name} view", field="model.views") from exc
     reference = uploads.get("reference")
@@ -184,9 +189,16 @@ def create_generation_request(svc: WarlockService, request: Any, **uploads: Any)
         if request.tile.mode == "collection" and request.tile.prompt_items:
             tile_prompt = "\n".join(request.tile.prompt_items)
         elif request.tile.mode == "terrain_transition":
-            tile_prompt = f"inner terrain: {request.tile.inner_terrain}; outer terrain: {request.tile.outer_terrain}; {request.tile.boundary}".strip()
+            tile_prompt = (
+                f"inner terrain: {request.tile.inner_terrain}; "
+                f"outer terrain: {request.tile.outer_terrain}; "
+                f"{request.tile.boundary}"
+            ).strip()
         elif request.tile.mode == "path":
-            tile_prompt = f"ground: {request.tile.ground}; path: {request.tile.path}; {request.tile.edge}".strip()
+            tile_prompt = (
+                f"ground: {request.tile.ground}; path: {request.tile.path}; "
+                f"{request.tile.edge}"
+            ).strip()
         result = tilesheets.create_tile_sheet(
             svc,
             prompt=tile_prompt,

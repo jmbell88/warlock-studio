@@ -15,8 +15,8 @@ from typing import Any
 from imgui_bundle import imgui
 
 from ... import vectors
-from ...pipelines import hunyuan
 from ...bench import findings as findings_lib
+from ...pipelines import hunyuan
 from ...service import jobs as svc_jobs
 from ...service.errors import Invalid
 from ...service.validation import MAX_MESH_CANDIDATES, MAX_UPLOAD_BYTES, random_seed
@@ -191,7 +191,10 @@ def _backend(ctx: Any, form: dict[str, Any]) -> None:
     form["backend"] = selected if selected in {x[0] for x in options} else before
     if form["backend"] != hunyuan.BACKEND:
         return
-    widgets.wrapped(theme.WARN, "Experimental backend. It is never selected automatically or used as a fallback.")
+    widgets.wrapped(
+        theme.WARN,
+        "Experimental backend. It is never selected automatically or used as a fallback.",
+    )
     widgets.muted_wrapped(
         "Requires an isolated Python 3.10/CUDA worker, named Front/Left/Right/Back views, "
         "and approximately 10 GiB shape, 21 GiB texture, or 29 GiB combined VRAM."

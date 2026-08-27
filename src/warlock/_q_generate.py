@@ -252,7 +252,9 @@ class GenerateOps:
                             native_reference_images.append(image.convert("RGB").copy())
                 except Exception:
                     log.exception("could not load native FLUX.2 references for %s", job_id)
-                    raise RuntimeError("one or more native reference images could not be read")
+                    raise RuntimeError(
+                        "one or more native reference images could not be read"
+                    ) from None
             # The one preamble, with this branch's real `cond` -- the only
             # caller that has one. `handoff` is kept for the finally below.
             t2i, handoff = await self._acquire_t2i(spec, base_key, cond)

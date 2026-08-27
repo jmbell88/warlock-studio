@@ -21,7 +21,12 @@ from warlock.studio.state import default_form_2d
 def ctx(tmp_path):
     return SimpleNamespace(
         settings=FakeSettings(),
-        svc=SimpleNamespace(config=SimpleNamespace(data_dir=tmp_path)),
+        svc=SimpleNamespace(
+            config=SimpleNamespace(data_dir=tmp_path),
+            # ``generate`` records the resolved recipe onto each id the
+            # create door answers with.
+            store=SimpleNamespace(merge_params=lambda job_id, params: None),
+        ),
     )
 
 
@@ -73,14 +78,16 @@ def test_a_profile_without_an_anchor_changes_nothing(ctx):
     assert settings_2d.anchor_kwargs(ctx, form, kwargs) == ""
 
 
-def test_generate_reads_the_anchor_on_a_task_thread(ctx, monkeypatch):
+def test_generate_reads_the_anchor_on_a_task_thread(ctx, monkeypatch, installed_recipes):
     # The same contract the manual picker follows: the form is read on the
     # frame thread because it is UI state, the file inside the task because a
     # large one would freeze the window.
     _with_anchor(ctx)
     seen = {}
     monkeypatch.setattr(
-        settings_2d.svc_jobs, "create_job", lambda svc, **kw: seen.update(kw) or "id"
+        settings_2d.svc_jobs,
+        "create_job",
+        lambda svc, **kw: seen.update(kw) or {"id": "id", "ids": ["id"]},
     )
     submitted = []
     # A real ``AppState``: ``generate`` also clears the field-error rings

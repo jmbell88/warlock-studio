@@ -875,3 +875,22 @@ def _reset_app_settings_session_flags():
     reset()
     yield
     reset()
+
+
+@pytest.fixture
+def installed_recipes(monkeypatch):
+    """Answer "is this download present?" with yes, for the recipe resolver.
+
+    ``generation.resolve_recipe`` refuses in automatic mode when a recipe's
+    downloads are missing. That is right on a real machine and it is true of
+    every test machine: ``WARLOCK_HOME`` is a throwaway directory with no
+    weights under it, so *nothing* resolves and every submit becomes a refusal.
+    A test about what a submit carries would then be asserting against the
+    refusal instead of against the job.
+
+    Patches the download probe rather than ``resolve_recipe`` itself, so the
+    recipe the pane sees is the one the registry really would have chosen.
+    """
+    from warlock import generation
+
+    monkeypatch.setattr(generation, "_present", lambda key, config: True)

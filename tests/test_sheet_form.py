@@ -165,6 +165,9 @@ def test_a_sprite_sheet_is_a_reference_job_carrying_a_follow_up():
         "sheet_type": "turnaround",
         "logical_size": 64,
         "colors": svc_sprites.DEFAULT_SPRITE_COLORS,
+        # Blank by default: the optional final reduction, which never upscales
+        # and so means "keep the working cell" when nothing asked for one.
+        "target_cell_px": None,
     }
 
 

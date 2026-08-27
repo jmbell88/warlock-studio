@@ -19,10 +19,9 @@ from typing import Any
 
 from imgui_bundle import imgui
 
+from ... import generation, vectors
 from ... import guidance as guidancelib
-from ... import generation
 from ... import models as modelslib
-from ... import vectors
 from ...bench import findings as findings_lib
 from ...pipelines import tilesheet as tilesheetlib
 from ...service import jobs as svc_jobs
@@ -249,7 +248,8 @@ def _target_cell(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
     values.extend((str(size), f"{size}px") for size in generation.TARGET_CELL_PRESETS)
     values.append(("custom", "Custom (8–256px)"))
     current = str(form.get("target_cell_px") or "")
-    selected = widgets.combo("##target_cell_px", current if current in {x[0] for x in values} else "custom", values)
+    known = current if current in {x[0] for x in values} else "custom"
+    selected = widgets.combo("##target_cell_px", known, values)
     if selected != "custom":
         form["target_cell_px"] = selected
         return
@@ -865,13 +865,18 @@ def _model(ctx: Any, form: dict[str, Any], findings_doc: Any = _LOAD_FINDINGS) -
     widgets.field_label("Recipe")
     _quality(ctx, form)
     mode_before = str(form.get("model_mode") or "auto")
-    mode = widgets.combo("##model_mode", mode_before, [("auto", "Automatic"), ("advanced", "Advanced")])
+    mode = widgets.combo(
+        "##model_mode", mode_before, [("auto", "Automatic"), ("advanced", "Advanced")]
+    )
     form["model_mode"] = mode if mode in generation.MODEL_MODES else mode_before
     if form["model_mode"] == "auto":
         request = generation.request_from_legacy(form)
         resolved = generation.resolve_recipe(request, ctx.svc.config)
         if resolved is None:
-            widgets.muted_wrapped("No compatible installed recipe is available. Install a model in Settings or open Advanced.")
+            widgets.muted_wrapped(
+                "No compatible installed recipe is available. "
+                "Install a model in Settings or open Advanced."
+            )
         else:
             imgui.text_wrapped(f"{resolved.recipe.label} · {resolved.base_model}")
             if resolved.warning:
@@ -1621,7 +1626,10 @@ def generate(ctx: Any, form: dict[str, Any]) -> None:
         if resolved is not None:
             payload = {"version": generation.RECIPE_REGISTRY_VERSION, **resolved.to_dict()}
             for job_id in result.get("ids", [result["id"]]):
-                ctx.svc.store.merge_params(job_id, {"generation_request": request.to_dict(), "resolved_recipe": payload})
+                ctx.svc.store.merge_params(
+                    job_id,
+                    {"generation_request": request.to_dict(), "resolved_recipe": payload},
+                )
         return result
 
     ctx.submit("submit", run)

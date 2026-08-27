@@ -571,11 +571,6 @@ TOAST_LEVELS: dict[str, float] = {
 # cursor. See ``widgets.toasts``.
 TOAST_STICKY = frozenset({"warn", "error"})
 
-# How many past toasts the history keeps. A session's worth of notices, not a
-# log file: the log file is the log file, and this is the thing you check
-# because something flashed past while you were looking at the viewport.
-TOAST_LOG_MAX = 100
-
 
 @dataclass
 class Toast:
@@ -852,13 +847,6 @@ class AppState:
     history: list[str] = field(default_factory=list)
     checked: set[str] = field(default_factory=set)
     toasts: list[Toast] = field(default_factory=list)
-    # Every toast raised this session, newest first, capped (H67). A toast is
-    # the app's only channel for "that worked" and "that did not", and it is
-    # gone in four seconds -- which for anything that happens while the user is
-    # looking elsewhere means it never happened at all. Not persisted: it is a
-    # record of *this* run, and one restored from disk would be a list of
-    # things that are no longer true.
-    toast_log: list[Toast] = field(default_factory=list)
     # The composed-prompt preview, refreshed off-thread as the prompt is typed.
     preview: dict[str, Any] = field(default_factory=dict)
     preview_dirty_at: float = 0.0
@@ -1036,12 +1024,6 @@ class AppState:
     ) -> None:
         entry = Toast(text=text, level=level, action=action, action_arg=action_arg)
         self.toasts.append(entry)
-        # And into the history, which is the same object rather than a copy of
-        # its text (H67): the history has to be able to say what *level* a
-        # message was and when, and a list of strings cannot. Newest first, so
-        # the popup that draws it needs no reversal and no scroll to the end.
-        self.toast_log.insert(0, entry)
-        del self.toast_log[TOAST_LOG_MAX:]
 
     def toast_once(
         self,

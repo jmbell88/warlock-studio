@@ -26,8 +26,7 @@ import shutil
 import uuid
 from typing import Any
 
-from .. import guidance
-from .. import vram
+from .. import guidance, vram
 from . import matte
 from ._jobs_create import _normalize_guidance, resolve_profile
 from .core import WarlockService

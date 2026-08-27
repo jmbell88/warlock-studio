@@ -72,10 +72,10 @@ class TileSheetOps:
         from PIL import Image
 
         from . import queue as queue_mod
+        from .asset_workflows import tile_plan
         from .pipelines import control, tilesheet
         from .pipelines.conditioning import Conditioning
         from .pipelines.pixelsheet import quantize_shared
-        from .asset_workflows import tile_plan
 
         job_id = job["id"]
         params = job["params"]
@@ -100,7 +100,10 @@ class TileSheetOps:
         geom = tilesheet.geometry(tile_w, projection)
         normalized_plan = None
         request_payload = params.get("generation_request")
-        if isinstance(request_payload, dict) and request_payload.get("generation_type") == "tileset":
+        if (
+            isinstance(request_payload, dict)
+            and request_payload.get("generation_type") == "tileset"
+        ):
             request_tile = request_payload.get("tile") or {}
             normalized_plan = tile_plan(
                 mode=str(request_tile.get("mode") or "collection"),

@@ -30,7 +30,10 @@ _ORDERED = (
     AssetType("model_3d", "3D Model", "reconstruct_3d", "Generate reference", "reference"),
     AssetType("seamless_material", "Seamless Material", "refine_2d", "Create material", "tile"),
     AssetType("tileset", "Tileset", "tileset", "Create tileset", "sheet"),
-    AssetType("sprite_sheet", "Sprite Sheet", "sprite", "Create sprite sheet", "sheet", sheet_type="sprite"),
+    AssetType(
+        "sprite_sheet", "Sprite Sheet", "sprite", "Create sprite sheet", "sheet",
+        sheet_type="sprite",
+    ),
 )
 
 # Old keys remain readable by settings and service adapters. They are not
@@ -69,14 +72,26 @@ def legacy_asset_type(form: Any) -> str:
 
 
 def selected(form: Any) -> AssetType:
-    key = form.get("asset_type") if isinstance(form, dict) else None
-    generation = form.get("generation_type") if isinstance(form, dict) else None
-    # A pre-migration in-memory caller may have the new default generation
-    # field but an old asset_type override. Prefer the explicit old override in
-    # that narrow case; migrated/settings-backed forms carry both consistently.
-    if generation in ASSET_TYPES and not (key in _ALIASES and generation == DEFAULT_ASSET_TYPE):
-        key = generation
-    return ASSET_TYPES.get(str(key), ASSET_TYPES[DEFAULT_ASSET_TYPE])
+    """The one choice behind the form's two names for it.
+
+    ``asset_type`` and ``generation_type`` are the same choice: the selector
+    writes both and ``sync_legacy_fields`` rewrites both, so on any form that
+    has been through either they agree and the order does not matter.
+
+    They only disagree on a form that one writer touched and the other did not
+    -- the library's "copy settings", a restored pre-migration form -- and
+    there ``asset_type`` is the field that was set and ``generation_type`` is
+    whatever the default happened to be. Preferring ``generation_type`` there
+    threw the answer away: copying a *tile* job's settings resolved back to the
+    default 3D Model, which reopened it as a mesh of a texture.
+    """
+    if not isinstance(form, dict):
+        return ASSET_TYPES[DEFAULT_ASSET_TYPE]
+    for name in ("asset_type", "generation_type"):
+        spec = ASSET_TYPES.get(str(form.get(name)))
+        if spec is not None:
+            return spec
+    return ASSET_TYPES[DEFAULT_ASSET_TYPE]
 
 
 def sync_legacy_fields(form: dict[str, Any]) -> AssetType:
@@ -132,10 +147,11 @@ def asset_type_from_params(params: Any, *, stage: str = "") -> str:
         return "seamless_material"
     if stage in ("tilesheet", "tile_sheet"):
         return "tileset"
+    # The sprite block's layout and the sheet block's projection used to pick
+    # between two sprite keys and three tileset keys. They are fields in their
+    # own right now, so the block's *presence* is the whole answer.
     if isinstance(params, dict) and params.get("sprite_sheet"):
-        layout = (params.get("sprite_sheet") or {}).get("sheet_type")
         return "sprite_sheet"
     if isinstance(params, dict) and params.get("sheet"):
-        projection = (params.get("sheet") or {}).get("projection", "top_down")
         return "tileset"
     return ""

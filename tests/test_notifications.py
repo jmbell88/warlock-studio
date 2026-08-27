@@ -12,10 +12,8 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 from warlock.studio import jobs_cache, widgets
-from warlock.studio.state import TOAST_LEVELS, TOAST_LOG_MAX, TOAST_STICKY, AppState
+from warlock.studio.state import TOAST_LEVELS, TOAST_STICKY, AppState
 
 # --- H68: levels -------------------------------------------------------------
 
@@ -57,53 +55,14 @@ def test_no_toast_glyph_needs_a_font_the_atlas_does_not_have():
         assert glyph == "" or glyph in known
 
 
-# --- H67: the history --------------------------------------------------------
-
-
-def test_the_history_outlives_the_toast():
-    """A toast is the app's only channel for "that worked", and it is gone in
-    four seconds -- which for anything that happens while the user is looking
-    elsewhere means it never happened."""
-    state = AppState()
-    state.toast("first", "success")
-    state.toasts[0].born -= 100  # long expired
-    state.expire_toasts()
-    assert state.toasts == []
-    assert [entry.text for entry in state.toast_log] == ["first"]
-
-
-def test_the_history_is_newest_first_and_capped():
-    state = AppState()
-    for index in range(TOAST_LOG_MAX + 10):
-        state.toast(f"m{index}")
-    assert len(state.toast_log) == TOAST_LOG_MAX
-    assert state.toast_log[0].text == f"m{TOAST_LOG_MAX + 9}"
-
-
-def test_the_history_keeps_the_level_not_just_the_text():
-    """A list of strings could not say whether a message was a success or a
-    refusal, which is most of what the reader is checking."""
-    state = AppState()
-    state.toast("bad", "error")
-    assert state.toast_log[0].level == "error"
-
-
-def test_the_history_is_never_persisted():
-    """It is a record of *this* run; one restored from disk would be a list of
-    things that are no longer true."""
-    from warlock.studio import main
-
-    assert 'settings.set("toast_log"' not in inspect.getsource(main)
-
-
-@pytest.mark.parametrize(
-    ("seconds", "text"),
-    [(0.0, "0s"), (12.4, "12s"), (59.9, "59s"), (60, "1m"), (3599, "59m"), (7200, "2h")],
-)
-def test_the_history_stamps_are_relative_and_coarse(seconds, text):
-    from warlock.studio.main import _ago
-
-    assert _ago(seconds) == text
+# --- H67: the history ---------------------------------------------------------
+#
+# Gone. The history had exactly one reader -- the notification list inside the
+# diagnostics popup -- and when that popup was removed the state behind it was
+# written on every toast and read by nothing. ``AppState.toast_log``,
+# ``TOAST_LOG_MAX`` and ``main._ago`` (which formatted its stamps) went with it,
+# and so did the four tests that described them. The visible cap below is a
+# separate rule and still applies.
 
 
 # --- H69: the visible cap ----------------------------------------------------

@@ -528,7 +528,9 @@ def sheet_sidecar(
         "recipe": dict(recipe),
         # Added fields are optional so sidecars written by older workers keep
         # their original shape and remain readable.
-        "working_cell_px": list(working_cell_px or (128, 64 if normalize_view(view) == ISOMETRIC else 128)),
+        "working_cell_px": list(
+            working_cell_px or (128, 64 if normalize_view(view) == ISOMETRIC else 128)
+        ),
         "target_cell_px": target_cell_px,
         "reduction": reduction if target_cell_px is not None else None,
         "source_seed": int(source_seed) if source_seed is not None else None,

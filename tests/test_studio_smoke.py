@@ -411,6 +411,10 @@ def test_an_evidence_hint_stays_inside_the_pane(app_ctx, imgui_ctx, pane, param,
     module = importlib.import_module(f"warlock.studio.panes.{pane}")
     _seed_findings(app_ctx, param, value)
     (app_ctx.state.form_2d if pane == "settings_2d" else app_ctx.state.form_3d)[param] = value
+    # The base-model combo -- and so the hint attached to it -- is an Advanced
+    # control now: automatic routing names the resolved recipe and returns
+    # before the combo is reached, so the hint has nothing to hang off.
+    app_ctx.state.form_2d["model_mode"] = "advanced"
 
     measured: list[float] = []
     # The 3D pane draws its hints through hint_text; the 2D pane's surviving
@@ -3273,7 +3277,7 @@ def test_the_toast_stack_and_its_history_build(app_ctx, imgui_ctx):
         imgui_ctx,
         lambda: widgets.toasts(app_ctx.state, (1200.0, 900.0), on_action=lambda *a: seen.append(a)),
     )
-    assert len(app_ctx.state.toast_log) == widgets.TOAST_VISIBLE + 5
+    assert len(app_ctx.state.toasts) == widgets.TOAST_VISIBLE + 5
 
 
 def test_the_placeholder_builds_in_every_mode(app_ctx, imgui_ctx):

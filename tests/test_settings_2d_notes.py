@@ -233,7 +233,29 @@ def test_a_restored_form_is_not_rewritten_merely_by_being_opened():
         if "clear_unusable(" in line and not line.lstrip().startswith("def ")
     ]
     assert len(calls) == 1, "one call site, or the guard is not the only path"
-    assert re.search(r'if form\["base_model"\] != before:', lines[calls[0] - 1])
+    # Inside the guard's block, not necessarily on the line under it: changing
+    # the base does other work in the same branch. Walk up to the comparison
+    # and require the call to be indented beneath it, which is the actual rule
+    # -- "only reachable when the base changed" -- rather than a line offset
+    # that any statement added to the branch would break.
+    call = calls[0]
+    guard = next(
+        (
+            i
+            for i in range(call - 1, max(call - 8, -1), -1)
+            if re.search(r'if form\["base_model"\] != before:', lines[i])
+        ),
+        None,
+    )
+    assert guard is not None, "the call site is not under the base-model guard"
+
+    def _indent(line: str) -> int:
+        return len(line) - len(line.lstrip())
+
+    assert _indent(lines[call]) > _indent(lines[guard])
+    # Nothing between the guard and the call may leave the branch.
+    for line in lines[guard + 1 : call]:
+        assert not line.strip() or _indent(line) > _indent(lines[guard])
     # And nothing else in the pane reaches it: the notes stay pure reads.
     base_key, lora_key = _mismatched_pair()
     form = _form(style_lora=lora_key, base_model=base_key)

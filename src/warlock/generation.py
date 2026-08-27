@@ -17,9 +17,10 @@ import json
 import re
 import shutil
 import tempfile
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 from . import models
 
@@ -111,7 +112,7 @@ class GenerationRequest:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, raw: Mapping[str, Any]) -> "GenerationRequest":
+    def from_dict(cls, raw: Mapping[str, Any]) -> GenerationRequest:
         tile = raw.get("tile") if isinstance(raw.get("tile"), Mapping) else {}
         sprite = raw.get("sprite") if isinstance(raw.get("sprite"), Mapping) else {}
         model = raw.get("model") if isinstance(raw.get("model"), Mapping) else {}
@@ -131,9 +132,19 @@ class GenerationRequest:
             reference_mode=str(raw.get("reference_mode") or "none"),
             seed=int(raw.get("seed") or 0),
             count=int(raw.get("count") or 1),
-            tile=TileSettings(**{k: (tuple(v) if k == "prompt_items" else v) for k, v in tile.items() if k in TileSettings.__dataclass_fields__}),
-            sprite=SpriteSettings(**{k: v for k, v in sprite.items() if k in SpriteSettings.__dataclass_fields__}),
-            model=ModelSettings(**{k: v for k, v in model.items() if k in ModelSettings.__dataclass_fields__}),
+            tile=TileSettings(
+                **{
+                    k: (tuple(v) if k == "prompt_items" else v)
+                    for k, v in tile.items()
+                    if k in TileSettings.__dataclass_fields__
+                }
+            ),
+            sprite=SpriteSettings(
+                **{k: v for k, v in sprite.items() if k in SpriteSettings.__dataclass_fields__}
+            ),
+            model=ModelSettings(
+                **{k: v for k, v in model.items() if k in ModelSettings.__dataclass_fields__}
+            ),
             schema_version=int(raw.get("schema_version") or 1),
         )
 
@@ -195,16 +206,92 @@ def _recipe_table() -> tuple[Recipe, ...]:
     run; this table describes which asset outcome that run is qualified for.
     """
     return (
-        Recipe("image_fast", "Fast image", ("image",), "fast", "sdxl_cfg", working_resolution=(1024, 1024), negative_prompt=True, vram_gib=7, ram_gib=8, required_downloads=("base:sdxl_cfg",), rank=20),
-        Recipe("image_quality", "Quality image", ("image", "3d_model"), "quality", "sdxl_cfg", working_resolution=(1024, 1024), negative_prompt=True, vram_gib=7, ram_gib=8, required_downloads=("base:sdxl_cfg",), rank=30),
-        Recipe("material_sdxl", "Seamless material", ("seamless_material",), "quality", "sdxl_cfg", working_resolution=(1024, 1024), reference_modes=("none", "single"), negative_prompt=True, vram_gib=7, ram_gib=8, required_downloads=("base:sdxl_cfg",), rank=40),
-        Recipe("tileset_sdxl", "Tileset", ("tileset",), "quality", "sdxl_cfg", working_resolution=(1024, 1024), reference_modes=("none", "single"), negative_prompt=True, vram_gib=7, ram_gib=8, required_downloads=("base:sdxl_cfg",), rank=40),
-        Recipe("sprite_sdxl", "Sprite sheet", ("sprite_sheet",), "quality", "sdxl_cfg", working_resolution=(1024, 1024), reference_modes=("none", "single", "multi"), negative_prompt=True, vram_gib=7, ram_gib=8, required_downloads=("base:sdxl_cfg", "adapter:plus", "control:canny", "lora:pixelxl"), rank=40),
+        Recipe(
+            "image_fast",
+            "Fast image",
+            ("image",),
+            "fast",
+            "sdxl_cfg",
+            working_resolution=(1024, 1024),
+            negative_prompt=True,
+            vram_gib=7,
+            ram_gib=8,
+            required_downloads=("base:sdxl_cfg",),
+            rank=20,
+        ),
+        Recipe(
+            "image_quality",
+            "Quality image",
+            ("image", "3d_model"),
+            "quality",
+            "sdxl_cfg",
+            working_resolution=(1024, 1024),
+            negative_prompt=True,
+            vram_gib=7,
+            ram_gib=8,
+            required_downloads=("base:sdxl_cfg",),
+            rank=30,
+        ),
+        Recipe(
+            "material_sdxl",
+            "Seamless material",
+            ("seamless_material",),
+            "quality",
+            "sdxl_cfg",
+            working_resolution=(1024, 1024),
+            reference_modes=("none", "single"),
+            negative_prompt=True,
+            vram_gib=7,
+            ram_gib=8,
+            required_downloads=("base:sdxl_cfg",),
+            rank=40,
+        ),
+        Recipe(
+            "tileset_sdxl",
+            "Tileset",
+            ("tileset",),
+            "quality",
+            "sdxl_cfg",
+            working_resolution=(1024, 1024),
+            reference_modes=("none", "single"),
+            negative_prompt=True,
+            vram_gib=7,
+            ram_gib=8,
+            required_downloads=("base:sdxl_cfg",),
+            rank=40,
+        ),
+        Recipe(
+            "sprite_sdxl",
+            "Sprite sheet",
+            ("sprite_sheet",),
+            "quality",
+            "sdxl_cfg",
+            working_resolution=(1024, 1024),
+            reference_modes=("none", "single", "multi"),
+            negative_prompt=True,
+            vram_gib=7,
+            ram_gib=8,
+            required_downloads=("base:sdxl_cfg", "adapter:plus", "control:canny", "lora:pixelxl"),
+            rank=40,
+        ),
         # SDXL remains the default qualified recipe. FLUX.2 is selected when
         # it is the only installed candidate, or explicitly in Advanced; its
         # native reference path is still available without changing the
         # existing SDXL default.
-        Recipe("image_flux2", "FLUX.2 Klein image", ("image", "3d_model"), "quality", "flux_klein", working_resolution=(1024, 1024), reference_modes=("none", "single", "multi"), negative_prompt=True, vram_gib=10, ram_gib=16, required_downloads=("base:flux_klein",), rank=25),
+        Recipe(
+            "image_flux2",
+            "FLUX.2 Klein image",
+            ("image", "3d_model"),
+            "quality",
+            "flux_klein",
+            working_resolution=(1024, 1024),
+            reference_modes=("none", "single", "multi"),
+            negative_prompt=True,
+            vram_gib=10,
+            ram_gib=16,
+            required_downloads=("base:flux_klein",),
+            rank=25,
+        ),
     )
 
 
@@ -260,7 +347,11 @@ def resolve_recipe(
     caller.
     """
     register_imported_loras(config)
-    candidates = [r for r in RECIPES if request.generation_type in r.generation_types and r.quality == request.quality]
+    candidates = [
+        r
+        for r in RECIPES
+        if request.generation_type in r.generation_types and r.quality == request.quality
+    ]
     available = set(installed) if installed is not None else None
     if request.model_mode == "advanced" or request.model_override:
         key = request.model_override or request.model.backend
@@ -269,13 +360,40 @@ def resolve_recipe(
             return None
         candidate = next((r for r in candidates if r.base_model == key), None)
         if candidate is None:
-            candidate = Recipe(f"advanced_{key}", base.label, (request.generation_type,), request.quality, key, working_resolution=(base.image_size, base.image_size), reference_modes=("none", "single"), negative_prompt=base.guidance_scale > 1, vram_gib=base.vram_gib, ram_gib=base.host_peak_gib or base.vram_gib, license=base.license or "", commercial=base.commercial, rank=0)
-        warning = "" if base.commercial else f"{base.license or 'This model'} does not permit commercial use."
-        lora_checksum = _checksum(f"lora:{request.style_lora}", config) if request.style_lora else None
+            candidate = Recipe(
+                f"advanced_{key}",
+                base.label,
+                (request.generation_type,),
+                request.quality,
+                key,
+                working_resolution=(base.image_size, base.image_size),
+                reference_modes=("none", "single"),
+                negative_prompt=base.guidance_scale > 1,
+                vram_gib=base.vram_gib,
+                ram_gib=base.host_peak_gib or base.vram_gib,
+                license=base.license or "",
+                commercial=base.commercial,
+                rank=0,
+            )
+        warning = (
+            ""
+            if base.commercial
+            else f"{base.license or 'This model'} does not permit commercial use."
+        )
+        lora_checksum = (
+            _checksum(f"lora:{request.style_lora}", config) if request.style_lora else None
+        )
         manifest = imported_lora(config, request.style_lora or "")
         if manifest is not None:
             lora_checksum = manifest.checksum
-        return ResolvedRecipe(candidate, key, request.style_lora or candidate.default_lora, _checksum(f"base:{key}", config), lora_checksum, warning)
+        return ResolvedRecipe(
+            candidate,
+            key,
+            request.style_lora or candidate.default_lora,
+            _checksum(f"base:{key}", config),
+            lora_checksum,
+            warning,
+        )
     for candidate in sorted(candidates, key=lambda r: r.rank, reverse=True):
         if not candidate.commercial:
             continue
@@ -288,18 +406,30 @@ def resolve_recipe(
         manifest = imported_lora(config, request.style_lora or "")
         if manifest is not None:
             lora_checksum = manifest.checksum
-        return ResolvedRecipe(candidate, candidate.base_model, request.style_lora or candidate.default_lora, _checksum(f"base:{candidate.base_model}", config), lora_checksum)
+        return ResolvedRecipe(
+            candidate,
+            candidate.base_model,
+            request.style_lora or candidate.default_lora,
+            _checksum(f"base:{candidate.base_model}", config),
+            lora_checksum,
+        )
     return None
 
 
-def capability_controls(request: GenerationRequest, resolved: ResolvedRecipe | None) -> dict[str, bool]:
+def capability_controls(
+    request: GenerationRequest, resolved: ResolvedRecipe | None
+) -> dict[str, bool]:
     """Return visibility/availability for adaptive controls."""
     recipe = resolved.recipe if resolved else None
     return {
         "negative_prompt": bool(recipe and recipe.supports_negative_prompt),
         "references": bool(recipe and recipe.reference_modes != ("none",)),
         "multi_reference": bool(recipe and "multi" in recipe.reference_modes),
-        "controlnet": bool(recipe and models.BASE_MODELS.get(recipe.base_model, None) and models.BASE_MODELS[recipe.base_model].controlnet),
+        "controlnet": bool(
+            recipe
+            and models.BASE_MODELS.get(recipe.base_model, None)
+            and models.BASE_MODELS[recipe.base_model].controlnet
+        ),
         "style_lora": bool(recipe and recipe.base_model in models.lora_bases()),
         "tile": request.generation_type == "seamless_material",
         "tiles": request.generation_type == "tileset",
@@ -308,7 +438,9 @@ def capability_controls(request: GenerationRequest, resolved: ResolvedRecipe | N
     }
 
 
-def validate_target_cell(target_cell_px: int | None, *, isometric: bool = False) -> list[CompatibilityIssue]:
+def validate_target_cell(
+    target_cell_px: int | None, *, isometric: bool = False
+) -> list[CompatibilityIssue]:
     if target_cell_px is None:
         return []
     try:
@@ -316,13 +448,25 @@ def validate_target_cell(target_cell_px: int | None, *, isometric: bool = False)
     except (TypeError, ValueError):
         return [CompatibilityIssue("target_cell_px", "Cell target must be a whole number.")]
     if not TARGET_CELL_MIN <= value <= TARGET_CELL_MAX:
-        return [CompatibilityIssue("target_cell_px", f"Cell target must be between {TARGET_CELL_MIN} and {TARGET_CELL_MAX} pixels.")]
+        return [
+            CompatibilityIssue(
+                "target_cell_px",
+                f"Cell target must be between {TARGET_CELL_MIN} and {TARGET_CELL_MAX} pixels.",
+            )
+        ]
     if isometric and value % 2:
-        return [CompatibilityIssue("target_cell_px", "Isometric cell widths must be even so height can be exactly half the width.")]
+        return [
+            CompatibilityIssue(
+                "target_cell_px",
+                "Isometric cell widths must be even so height can be exactly half the width.",
+            )
+        ]
     return []
 
 
-def cell_dimensions(working: tuple[int, int], target_cell_px: int | None, *, isometric: bool = False) -> tuple[int, int]:
+def cell_dimensions(
+    working: tuple[int, int], target_cell_px: int | None, *, isometric: bool = False
+) -> tuple[int, int]:
     """Return output dimensions; a blank target never reduces or upscales."""
     if target_cell_px is None:
         return int(working[0]), int(working[1])
@@ -332,14 +476,20 @@ def cell_dimensions(working: tuple[int, int], target_cell_px: int | None, *, iso
     width = int(target_cell_px)
     height = width // 2 if isometric else width
     if width > working[0] or height > working[1]:
-        raise ValueError("target cell size is larger than the working cell; generation will not upscale")
+        raise ValueError(
+            "target cell size is larger than the working cell; generation will not upscale"
+        )
     return width, height
 
 
-def validate_request(request: GenerationRequest, resolved: ResolvedRecipe | None = None) -> list[CompatibilityIssue]:
+def validate_request(
+    request: GenerationRequest, resolved: ResolvedRecipe | None = None
+) -> list[CompatibilityIssue]:
     issues: list[CompatibilityIssue] = []
     if request.generation_type not in GENERATION_TYPES:
-        issues.append(CompatibilityIssue("generation_type", "Choose one of the supported generation types."))
+        issues.append(
+            CompatibilityIssue("generation_type", "Choose one of the supported generation types.")
+        )
     if not request.prompt.strip():
         issues.append(CompatibilityIssue("prompt", "A prompt is required."))
     if request.quality not in QUALITY_TIERS:
@@ -349,57 +499,128 @@ def validate_request(request: GenerationRequest, resolved: ResolvedRecipe | None
     if request.reference_mode not in REFERENCE_MODES:
         issues.append(CompatibilityIssue("reference_mode", "Unknown reference mode."))
     if request.reference_mode == "multi" and len(request.references) < 2:
-        issues.append(CompatibilityIssue("references", "Multi-reference mode needs at least two images."))
+        issues.append(
+            CompatibilityIssue("references", "Multi-reference mode needs at least two images.")
+        )
     if request.count < 1:
         issues.append(CompatibilityIssue("count", "Count must be at least one."))
     if request.generation_type == "tileset":
         t = request.tile
         if t.mode not in ("collection", "terrain_transition", "path"):
-            issues.append(CompatibilityIssue("tile.mode", "Tilesets support Collection, Terrain transition, and Path modes."))
+            issues.append(
+                CompatibilityIssue(
+                    "tile.mode", "Tilesets support Collection, Terrain transition, and Path modes."
+                )
+            )
         if t.mode == "collection":
             if not 1 <= len(t.prompt_items) <= 16:
-                issues.append(CompatibilityIssue("tile.prompt_items", "Collection tilesets accept 1–16 prompt lines."))
+                issues.append(
+                    CompatibilityIssue(
+                        "tile.prompt_items", "Collection tilesets accept 1–16 prompt lines."
+                    )
+                )
             if not 1 <= t.variants <= 4 or len(t.prompt_items) * t.variants > 64:
-                issues.append(CompatibilityIssue("tile.variants", "Collection variants must be 1–4 and total no more than 64 cells."))
-        elif t.mode == "terrain_transition" and (not t.inner_terrain.strip() or not t.outer_terrain.strip()):
-            issues.append(CompatibilityIssue("tile.terrain", "Terrain transitions need inner and outer terrain descriptions."))
+                issues.append(
+                    CompatibilityIssue(
+                        "tile.variants",
+                        "Collection variants must be 1–4 and total no more than 64 cells.",
+                    )
+                )
+        elif t.mode == "terrain_transition" and (
+            not t.inner_terrain.strip() or not t.outer_terrain.strip()
+        ):
+            issues.append(
+                CompatibilityIssue(
+                    "tile.terrain", "Terrain transitions need inner and outer terrain descriptions."
+                )
+            )
         elif t.mode == "path" and (not t.ground.strip() or not t.path.strip()):
-            issues.append(CompatibilityIssue("tile.path", "Path sets need ground and path descriptions."))
+            issues.append(
+                CompatibilityIssue("tile.path", "Path sets need ground and path descriptions.")
+            )
         issues.extend(validate_target_cell(t.target_cell_px, isometric=t.view == "isometric"))
     if request.generation_type == "sprite_sheet":
         s = request.sprite
         if s.mode not in ("turnaround", "action"):
-            issues.append(CompatibilityIssue("sprite.mode", "Sprites support Turnaround and action sheets."))
+            issues.append(
+                CompatibilityIssue("sprite.mode", "Sprites support Turnaround and action sheets.")
+            )
         if s.mode == "action" and s.action not in SPRITE_ACTIONS:
             issues.append(CompatibilityIssue("sprite.action", "Unknown sprite action."))
         if s.directions not in (4, 8):
-            issues.append(CompatibilityIssue("sprite.directions", "Sprites support 4 or 8 directions."))
+            issues.append(
+                CompatibilityIssue("sprite.directions", "Sprites support 4 or 8 directions.")
+            )
         if not 1 <= s.candidate_count <= 2:
-            issues.append(CompatibilityIssue("sprite.candidate_count", "Sprite candidate count must be 1 or 2."))
+            issues.append(
+                CompatibilityIssue(
+                    "sprite.candidate_count", "Sprite candidate count must be 1 or 2."
+                )
+            )
         issues.extend(validate_target_cell(s.target_cell_px))
     if request.generation_type == "3d_model":
         if request.model.backend not in ("trellis_single_view", "hunyuan3d_multiview"):
-            issues.append(CompatibilityIssue("model.backend", "Choose TRELLIS or the experimental Hunyuan3D backend."))
+            issues.append(
+                CompatibilityIssue(
+                    "model.backend", "Choose TRELLIS or the experimental Hunyuan3D backend."
+                )
+            )
         if request.model.backend == "hunyuan3d_multiview":
             view_errors = [name for name in VIEW_NAMES if not request.model.views.get(name)]
             if view_errors:
-                issues.append(CompatibilityIssue("model.views", "Approve Front, Left, Right, and Back views before using Hunyuan3D."))
+                issues.append(
+                    CompatibilityIssue(
+                        "model.views",
+                        "Approve Front, Left, Right, and Back views before using Hunyuan3D.",
+                    )
+                )
             if not request.model.license_acknowledged:
-                issues.append(CompatibilityIssue("model.license_acknowledged", "Acknowledge the Hunyuan3D regional license exclusions before use."))
+                issues.append(
+                    CompatibilityIssue(
+                        "model.license_acknowledged",
+                        "Acknowledge the Hunyuan3D regional license exclusions before use.",
+                    )
+                )
     if resolved is None:
-        issues.append(CompatibilityIssue("recipe", "No compatible installed recipe is available. Install a qualified recipe or choose a compatible Advanced model."))
+        issues.append(
+            CompatibilityIssue(
+                "recipe",
+                "No compatible installed recipe is available. Install a qualified "
+                "recipe or choose a compatible Advanced model.",
+            )
+        )
     else:
         if request.reference_mode not in resolved.recipe.reference_modes:
-            issues.append(CompatibilityIssue("reference_mode", f"{resolved.recipe.label} does not support {request.reference_mode} references."))
+            issues.append(
+                CompatibilityIssue(
+                    "reference_mode",
+                    f"{resolved.recipe.label} does not support "
+                    f"{request.reference_mode} references.",
+                )
+            )
         if request.negative_prompt.strip() and not resolved.recipe.supports_negative_prompt:
-            issues.append(CompatibilityIssue("negative_prompt", f"{resolved.recipe.label} does not support negative prompts; remove Avoid text or choose another model."))
+            issues.append(
+                CompatibilityIssue(
+                    "negative_prompt",
+                    f"{resolved.recipe.label} does not support negative prompts; "
+                    "remove Avoid text or choose another model.",
+                )
+            )
         if request.style_lora:
             lora = models.STYLE_LORAS.get(request.style_lora)
             base = models.BASE_MODELS.get(resolved.base_model)
             if lora is None:
-                issues.append(CompatibilityIssue("style_lora", "The selected style LoRA is not in the catalog."))
+                issues.append(
+                    CompatibilityIssue(
+                        "style_lora", "The selected style LoRA is not in the catalog."
+                    )
+                )
             elif base is not None and not models.lora_fits(base, lora):
-                issues.append(CompatibilityIssue("style_lora", "The selected style LoRA is not fitted to the resolved model."))
+                issues.append(
+                    CompatibilityIssue(
+                        "style_lora", "The selected style LoRA is not fitted to the resolved model."
+                    )
+                )
     return issues
 
 
@@ -434,7 +655,10 @@ def request_from_legacy(form: Mapping[str, Any]) -> GenerationRequest:
         negative_prompt=str(form.get("negative_prompt") or ""),
         quality=str(form.get("quality") or "quality"),
         model_mode=str(form.get("model_mode") or "auto"),
-        model_override=str(form["model_override"] or form["base_model"]) if form.get("model_mode") == "advanced" and (form.get("model_override") or form.get("base_model")) else None,
+        model_override=str(form["model_override"] or form["base_model"])
+        if form.get("model_mode") == "advanced"
+        and (form.get("model_override") or form.get("base_model"))
+        else None,
         style_lora=str(form["style_lora"]) if form.get("style_lora") else None,
         lora_weight=form.get("lora_weight"),
         references=(str(form["ref_path"]),) if form.get("ref_path") else (),
@@ -448,10 +672,22 @@ def request_from_legacy(form: Mapping[str, Any]) -> GenerationRequest:
 
 def request_to_legacy(request: GenerationRequest) -> dict[str, Any]:
     """Compatibility adapter for existing ``create_job`` doors."""
-    output = {"image": "reference", "3d_model": "reference", "seamless_material": "tile", "tileset": "sheet", "sprite_sheet": "sheet"}[request.generation_type]
+    output = {
+        "image": "reference",
+        "3d_model": "reference",
+        "seamless_material": "tile",
+        "tileset": "sheet",
+        "sprite_sheet": "sheet",
+    }[request.generation_type]
     out: dict[str, Any] = {
         "asset_type": request.generation_type,
-        "asset_intent": {"image": "refine_2d", "3d_model": "reconstruct_3d", "seamless_material": "refine_2d", "tileset": "tileset", "sprite_sheet": "sprite"}[request.generation_type],
+        "asset_intent": {
+            "image": "refine_2d",
+            "3d_model": "reconstruct_3d",
+            "seamless_material": "refine_2d",
+            "tileset": "tileset",
+            "sprite_sheet": "sprite",
+        }[request.generation_type],
         "output": output,
         "prompt": request.prompt,
         "negative_prompt": request.negative_prompt or None,
@@ -545,13 +781,37 @@ def register_imported_loras(config: Any | None) -> None:
 
 def lora_catalog(config: Any | None = None) -> list[dict[str, Any]]:
     register_imported_loras(config)
-    out = [{"key": x.key, "label": x.label, "family": x.family, "trigger_text": x.trigger, "tuned_weight": x.default_weight, "license": "", "commercial": True, "source": "built-in", "checksum": ""} for x in models.STYLE_LORAS.values()]
+    out = [
+        {
+            "key": x.key,
+            "label": x.label,
+            "family": x.family,
+            "trigger_text": x.trigger,
+            "tuned_weight": x.default_weight,
+            "license": "",
+            "commercial": True,
+            "source": "built-in",
+            "checksum": "",
+        }
+        for x in models.STYLE_LORAS.values()
+    ]
     if config is not None:
         out.extend(asdict(x) for x in load_lora_manifests(config))
     return out
 
 
-def import_lora(config: Any, source: Path | str, *, label: str, family: str = models.FAMILY_SDXL, trigger_text: str = "", tuned_weight: float = models.DEFAULT_LORA_WEIGHT, license: str = "", commercial: bool = False, source_url: str = "local file") -> LoraManifest:
+def import_lora(
+    config: Any,
+    source: Path | str,
+    *,
+    label: str,
+    family: str = models.FAMILY_SDXL,
+    trigger_text: str = "",
+    tuned_weight: float = models.DEFAULT_LORA_WEIGHT,
+    license: str = "",
+    commercial: bool = False,
+    source_url: str = "local file",
+) -> LoraManifest:
     """Copy one local safetensors adapter into managed storage and register it."""
     source_path = Path(source)
     if source_path.suffix.lower() != ".safetensors":
@@ -567,12 +827,27 @@ def import_lora(config: Any, source: Path | str, *, label: str, family: str = mo
     destination = root / filename
     if not destination.exists() or destination.stat().st_size != source_path.stat().st_size:
         shutil.copy2(source_path, destination)
-    manifest = LoraManifest(key, label, family, trigger_text, float(tuned_weight), license, bool(commercial), source_url, digest, filename)
+    manifest = LoraManifest(
+        key,
+        label,
+        family,
+        trigger_text,
+        float(tuned_weight),
+        license,
+        bool(commercial),
+        source_url,
+        digest,
+        filename,
+    )
     path = lora_manifest_path(config)
     manifests = [x for x in load_lora_manifests(config) if x.key != key]
     manifests.append(manifest)
-    payload = json.dumps({"version": 1, "manifests": [asdict(x) for x in manifests]}, indent=2, sort_keys=True)
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=root, delete=False, prefix=".manifests-", suffix=".tmp") as fh:
+    payload = json.dumps(
+        {"version": 1, "manifests": [asdict(x) for x in manifests]}, indent=2, sort_keys=True
+    )
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=root, delete=False, prefix=".manifests-", suffix=".tmp"
+    ) as fh:
         fh.write(payload)
         temp = Path(fh.name)
     temp.replace(path)

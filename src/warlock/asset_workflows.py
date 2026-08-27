@@ -8,8 +8,9 @@ rewrite neighboring pixels.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 from .generation import (
     SPRITE_ACTIONS,
@@ -28,7 +29,20 @@ class TileRole:
     edges: tuple[str, str, str, str]
 
 
-def tile_plan(*, mode: str, view: str = "top_down", prompt_items: Iterable[str] = (), variants: int = 1, inner_terrain: str = "", outer_terrain: str = "", boundary: str = "", ground: str = "", path: str = "", edge: str = "", target_cell_px: int | None = None) -> dict[str, Any]:
+def tile_plan(
+    *,
+    mode: str,
+    view: str = "top_down",
+    prompt_items: Iterable[str] = (),
+    variants: int = 1,
+    inner_terrain: str = "",
+    outer_terrain: str = "",
+    boundary: str = "",
+    ground: str = "",
+    path: str = "",
+    edge: str = "",
+    target_cell_px: int | None = None,
+) -> dict[str, Any]:
     """Compile a structural tileset request before any model call."""
     isometric = view == "isometric"
     working = (256, 128) if isometric else (256, 256)
@@ -48,7 +62,27 @@ def tile_plan(*, mode: str, view: str = "top_down", prompt_items: Iterable[str] 
         roles = path_roles()
     else:
         raise ValueError("unknown tileset mode")
-    return {"version": 1, "mode": mode, "view": view, "working_cell_px": list(working), "target_cell_px": target_cell_px, "output_cell_px": list(target), "cells": cells, "roles": [{"index": r.index, "mask": r.mask, "name": r.name, "edges": list(r.edges)} for r in roles], "descriptions": {"inner": inner_terrain, "outer": outer_terrain, "boundary": boundary, "ground": ground, "path": path, "edge": edge}}
+    return {
+        "version": 1,
+        "mode": mode,
+        "view": view,
+        "working_cell_px": list(working),
+        "target_cell_px": target_cell_px,
+        "output_cell_px": list(target),
+        "cells": cells,
+        "roles": [
+            {"index": r.index, "mask": r.mask, "name": r.name, "edges": list(r.edges)}
+            for r in roles
+        ],
+        "descriptions": {
+            "inner": inner_terrain,
+            "outer": outer_terrain,
+            "boundary": boundary,
+            "ground": ground,
+            "path": path,
+            "edge": edge,
+        },
+    }
 
 
 def collection_cells(prompt_items: Iterable[str], variants: int = 1) -> tuple[dict[str, Any], ...]:
@@ -59,9 +93,12 @@ def collection_cells(prompt_items: Iterable[str], variants: int = 1) -> tuple[di
         raise ValueError("collection variants must be between 1 and 4")
     if len(items) * int(variants) > 64:
         raise ValueError("a tile collection is capped at 64 cells")
-    return tuple({"index": i, "prompt": prompt, "variant": v + 1} for i, (prompt, v) in enumerate((
-        (prompt, variant) for prompt in items for variant in range(int(variants))
-    )))
+    return tuple(
+        {"index": i, "prompt": prompt, "variant": v + 1}
+        for i, (prompt, v) in enumerate(
+            (prompt, variant) for prompt in items for variant in range(int(variants))
+        )
+    )
 
 
 def wang_roles() -> tuple[TileRole, ...]:
@@ -81,7 +118,12 @@ def path_roles() -> tuple[TileRole, ...]:
     explicit end caps used by the existing path layout.
     """
     roles = list(wang_roles())
-    roles.extend((TileRole(16, 16, "cap_horizontal", ("path", "ground", "path", "ground")), TileRole(17, 17, "cap_vertical", ("ground", "path", "ground", "path"))))
+    roles.extend(
+        (
+            TileRole(16, 16, "cap_horizontal", ("path", "ground", "path", "ground")),
+            TileRole(17, 17, "cap_vertical", ("ground", "path", "ground", "path")),
+        )
+    )
     return tuple(roles)
 
 
@@ -100,7 +142,9 @@ def compatible_edges(roles: Iterable[TileRole]) -> tuple[tuple[int, int, str], .
     return tuple(result)
 
 
-def validate_edge_pixels(atlas: Any, roles: Iterable[TileRole], cell_w: int, cell_h: int) -> list[str]:
+def validate_edge_pixels(
+    atlas: Any, roles: Iterable[TileRole], cell_w: int, cell_h: int
+) -> list[str]:
     """Check matching guard-band pixels in an atlas-shaped array."""
     import numpy as np
 
@@ -111,7 +155,7 @@ def validate_edge_pixels(atlas: Any, roles: Iterable[TileRole], cell_w: int, cel
     errors: list[str] = []
     # Role order is the deterministic row-major layout. Compare the right and
     # bottom guard bands of every adjacent pair; never compare unrelated cells.
-    for index, left in enumerate(rows):
+    for index in range(len(rows)):
         col = index % 8
         row = index // 8
         if col < 7 and index + 1 < len(rows):
@@ -129,7 +173,17 @@ def validate_edge_pixels(atlas: Any, roles: Iterable[TileRole], cell_w: int, cel
     return errors
 
 
-def sheet_manifest(*, generation_type: str, mode: str, working_cell: tuple[int, int], target_cell_px: int | None, reduction: str | None, palette: Any, seed: int, roles: Iterable[TileRole] = ()) -> dict[str, Any]:
+def sheet_manifest(
+    *,
+    generation_type: str,
+    mode: str,
+    working_cell: tuple[int, int],
+    target_cell_px: int | None,
+    reduction: str | None,
+    palette: Any,
+    seed: int,
+    roles: Iterable[TileRole] = (),
+) -> dict[str, Any]:
     return {
         "version": 1,
         "generation_type": generation_type,
@@ -139,11 +193,21 @@ def sheet_manifest(*, generation_type: str, mode: str, working_cell: tuple[int, 
         "reduction": reduction if target_cell_px is not None else None,
         "palette": palette,
         "source_seed": int(seed),
-        "roles": [{"index": r.index, "mask": r.mask, "name": r.name, "edges": list(r.edges)} for r in roles],
+        "roles": [
+            {"index": r.index, "mask": r.mask, "name": r.name, "edges": list(r.edges)}
+            for r in roles
+        ],
     }
 
 
-def sprite_plan(*, mode: str = "turnaround", action: str = "idle", directions: int = 4, candidates: int = 2, target_cell_px: int | None = None) -> dict[str, Any]:
+def sprite_plan(
+    *,
+    mode: str = "turnaround",
+    action: str = "idle",
+    directions: int = 4,
+    candidates: int = 2,
+    target_cell_px: int | None = None,
+) -> dict[str, Any]:
     if mode not in ("turnaround", "action"):
         raise ValueError("sprite mode must be turnaround or action")
     if mode == "action" and action not in SPRITE_ACTIONS:
@@ -155,7 +219,16 @@ def sprite_plan(*, mode: str = "turnaround", action: str = "idle", directions: i
     frame_count = 4 if mode == "turnaround" else SPRITE_FRAME_COUNTS[action]
     if target_cell_px is not None and not TARGET_CELL_MIN <= int(target_cell_px) <= TARGET_CELL_MAX:
         raise ValueError(f"target cell must be between {TARGET_CELL_MIN} and {TARGET_CELL_MAX}")
-    return {"version": 1, "mode": mode, "action": action, "directions": directions, "frame_count": frame_count, "candidate_count": candidates, "target_cell_px": target_cell_px, "working_cell_px": 512 if mode == "turnaround" else 256}
+    return {
+        "version": 1,
+        "mode": mode,
+        "action": action,
+        "directions": directions,
+        "frame_count": frame_count,
+        "candidate_count": candidates,
+        "target_cell_px": target_cell_px,
+        "working_cell_px": 512 if mode == "turnaround" else 256,
+    }
 
 
 def repair_atlas(atlas: Any, replacements: Mapping[int, Any], *, cell_w: int, cell_h: int) -> Any:
@@ -167,12 +240,22 @@ def repair_atlas(atlas: Any, replacements: Mapping[int, Any], *, cell_w: int, ce
         row, col = divmod(int(index), 8)
         value = np.asarray(replacement)
         if value.shape != (cell_h, cell_w, *result.shape[2:]):
-            raise ValueError(f"replacement for cell {index} has shape {value.shape}, expected {(cell_h, cell_w, *result.shape[2:])}")
+            raise ValueError(
+                f"replacement for cell {index} has shape {value.shape}, "
+                f"expected {(cell_h, cell_w, *result.shape[2:])}"
+            )
         result[row * cell_h : (row + 1) * cell_h, col * cell_w : (col + 1) * cell_w] = value
     return result
 
 
-def atlas_warnings(atlas: Any, *, cell_w: int, cell_h: int, expected_cells: int, palette: Iterable[Any] | None = None) -> list[str]:
+def atlas_warnings(
+    atlas: Any,
+    *,
+    cell_w: int,
+    cell_h: int,
+    expected_cells: int,
+    palette: Iterable[Any] | None = None,
+) -> list[str]:
     """Inspectable QA warnings for generated sheets."""
     import numpy as np
 
@@ -186,7 +269,9 @@ def atlas_warnings(atlas: Any, *, cell_w: int, cell_h: int, expected_cells: int,
     for index in range(expected_cells):
         row, col = divmod(index, 8)
         cell = pixels[row * cell_h : (row + 1) * cell_h, col * cell_w : (col + 1) * cell_w]
-        if cell.size == 0 or not np.any(cell[..., -1] if cell.shape[-1] == 4 else np.any(cell != 0, axis=-1)):
+        if cell.size == 0 or not np.any(
+            cell[..., -1] if cell.shape[-1] == 4 else np.any(cell != 0, axis=-1)
+        ):
             warnings.append(f"cell {index} is empty")
     if palette is not None:
         allowed = {tuple(int(v) for v in colour) for colour in palette}

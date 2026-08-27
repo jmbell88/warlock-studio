@@ -64,10 +64,11 @@ not be in `warlock.log`. Look in `crash.log` instead — see
 
 ## Missing weights
 
-**What you see.** The **Issues** badge in the rail's footer is amber. The diagnostics list has one
-`x` row per missing download, and at the Reference stage the model combo shows an entry as "weights
-missing". Submitting anyway is refused, and the refusal itself carries an **Install** button that
-ticks exactly the downloads that job needed.
+**What you see.** Home's health row is amber and reads "*n* things need attention — set up
+models"; clicking it opens Settings, where the **Models** table marks every download that is not on
+disk. At the Reference stage the model combo shows an entry as "weights missing". Submitting
+anyway is refused, and the refusal itself carries an **Install** button that ticks exactly the
+downloads that job needed.
 
 **Why.** Every image model, style LoRA, IP-Adapter, ControlNet and metric model is an optional
 one-time download. The app never fetches anything at runtime, by design — only a button you press
@@ -97,8 +98,9 @@ knew at startup.
 
 **What you see.** The rig controls are simply not there: no rig checkbox on the generate form, no
 sprite sheets, and the FBX export button explains itself with "needs Blender". The **Pose** panel
-is not hidden, though — it says "Posing needs Blender, which is not installed." Diagnostics shows
-"Blender (rigging)" failed.
+is not hidden, though — it says "Posing needs Blender, which is not installed." Home's health row
+counts it among the things needing attention; `warlock doctor` is what names the failing check,
+"Blender (rigging)", and prints its detail.
 
 **Why.** Almost always the Python version. `bpy` ships CPython 3.13 wheels only, so on Python 3.12
 `uv sync --extra rig` installs nothing at all and the probe finds no `bpy`. The other cause is a

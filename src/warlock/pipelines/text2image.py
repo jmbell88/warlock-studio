@@ -1042,7 +1042,14 @@ class Text2Image:
                 else self._sample_sdxl
             )
             image, chunks = sample(
-                target, extra, text, negative_prompt, seed, step_cb, self._frame(size), reference_images
+                target,
+                extra,
+                text,
+                negative_prompt,
+                seed,
+                step_cb,
+                self._frame(size),
+                reference_images,
             )
         finally:
             stack.close()

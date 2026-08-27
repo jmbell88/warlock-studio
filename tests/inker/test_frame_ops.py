@@ -25,7 +25,7 @@ def _session(frames=1):
     tab = inker_state.InkerDoc(doc=doc, uid="t1", title="Untitled")
     state = inker_state.InkerState()
     state.add(tab)
-    app = SimpleNamespace(inker=state, toasts=[], toast_log=[])
+    app = SimpleNamespace(inker=state, toasts=[])
     app.toast = MethodType(state_mod.AppState.toast, app)
     app.toast_once = MethodType(state_mod.AppState.toast_once, app)
     # ``_toggle`` writes the preference down, so the session needs the settings

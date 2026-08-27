@@ -12,9 +12,10 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from dataclasses import dataclass, asdict
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from .. import winjob
 
@@ -64,7 +65,9 @@ def validate_install(
 ) -> list[str]:
     errors: list[str] = []
     if not license_acknowledged:
-        errors.append("Hunyuan3D requires explicit license acknowledgement before installation or use.")
+        errors.append(
+            "Hunyuan3D requires explicit license acknowledgement before installation or use."
+        )
     if executable is None or not Path(executable).is_file():
         errors.append("Hunyuan3D's isolated Python 3.10 worker is not installed.")
     if weights is None or not Path(weights).exists():
@@ -73,7 +76,10 @@ def validate_install(
         errors.append(f"texture_mode must be one of {TEXTURE_MODES}")
     required = SHAPE_VRAM_GIB if texture_mode == "geometry" else COMBINED_VRAM_GIB
     if available_vram_gib is not None and available_vram_gib < required:
-        errors.append(f"Hunyuan3D needs approximately {required:g} GiB VRAM for this run (available: {available_vram_gib:g} GiB).")
+        errors.append(
+            f"Hunyuan3D needs approximately {required:g} GiB VRAM for this run "
+            f"(available: {available_vram_gib:g} GiB)."
+        )
     return errors
 
 

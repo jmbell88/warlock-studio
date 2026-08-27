@@ -168,7 +168,12 @@ class Text2ImageClient:
         # alive for the duration of the request; the child opens them before it
         # answers, while path-like references can be passed through directly.
         references = list(reference_images or ())
-        with tempfile.TemporaryDirectory(prefix="warlock-t2i-ref-") if references else contextlib.nullcontext() as temp:
+        staging = (
+            tempfile.TemporaryDirectory(prefix="warlock-t2i-ref-")
+            if references
+            else contextlib.nullcontext()
+        )
+        with staging as temp:
             if references:
                 paths = []
                 for index, reference in enumerate(references):
