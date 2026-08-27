@@ -37,10 +37,10 @@ from .sirens_state import SongTab, active, ensure
 #: holds every ``*_FILTER`` in the app to this shape.
 SONG_FILTER = [filetypes.describe("Warlock song", (".wsng",)), filetypes.pattern((".wsng",))]
 
-#: What a ``.wav`` drop is offered through, and what sample import will use in
-#: Phase 3. Here rather than in the pane so the drop router and the picker
-#: cannot advertise different formats.
-WAV_FILTER = [filetypes.describe("WAV audio", (".wav",)), filetypes.pattern((".wav",))]
+#: What a ``.wav`` drop is offered through, and what the instrument pane's
+#: sample picker opens. Here rather than in the pane so the drop router and the
+#: picker cannot advertise different formats.
+SAMPLE_FILTER = [filetypes.describe("WAV audio", (".wav",)), filetypes.pattern((".wav",))]
 
 #: A song document is small -- patterns are int16 and samples are the only bulk
 #: -- so the ceiling is the one the untrusted-zip door already uses rather than
@@ -109,6 +109,107 @@ def open_path(ctx: Any, path: Path) -> None:
         state.activate(existing.uid)
         return
     ctx.submit(f"{OPEN_PREFIX}{path}", _load, path)
+
+
+# --- samples ------------------------------------------------------------------
+
+
+#: The key prefix a sample decode carries. The rest of the key is the *tab*'s
+#: uid rather than the file's, because that is what ``on_task_done`` looks a tab
+#: up by -- and because one tab decoding two samples at once is a race over the
+#: same sample table rather than a feature.
+SAMPLE_PREFIX = "sirens-sample:"
+
+
+def _sample_ceiling(path: Path) -> Path:
+    """Refuse a file too big to be a sample, before a byte of it is read.
+
+    ``wavout.MAX_SAMPLE_FRAMES`` is the engine's door on how many frames it will
+    decode; this is the door on what the file *weighs*, which is a different
+    question and has to be answered first -- the frame count is in a header the
+    file has to be read to reach. The number is the engine's own, times the
+    widest frame this build decodes (stereo 32-bit), rather than a second
+    figure invented here.
+    """
+    from .sirens import wavout
+
+    return sizeguard.within_ceiling(path, wavout.MAX_SAMPLE_FRAMES * 8)
+
+
+def _decode_sample(path: Path, instrument: int | None) -> dict[str, Any]:
+    """Blocking; task thread only. A ``.wav`` as the engine's own float mono.
+
+    ``wavout.read_wav`` is the whole conversion -- mono, ``float32`` in
+    ``[-1, 1]``, resampled to the render rate, and refused past
+    ``MAX_SAMPLE_FRAMES`` -- so there is no second decoder here to disagree with
+    the one that reads a sample back out of a ``.wsng``.
+
+    **It returns the name rather than the key.** Which key a sample lands under
+    depends on what the document already holds, and the document is the frame
+    thread's; deciding here would mean reading it from a task.
+    """
+    from ..service.errors import invalid_from
+    from .sirens import synth, wavout
+
+    path = _sample_ceiling(Path(path))
+    try:
+        pcm = wavout.read_wav(path.read_bytes(), synth.SAMPLE_RATE)
+    except ValueError as exc:
+        raise invalid_from(exc, "This sample could not be loaded", field="file") from exc
+    if not pcm.size:
+        raise invalid_from(
+            ValueError("it has no audio in it"), "This sample could not be loaded", field="file"
+        )
+    return {"pcm": pcm, "name": path.stem, "instrument": instrument}
+
+
+def import_sample(ctx: Any, tab: SongTab, path: Path, instrument: int | None = None) -> None:
+    """Decode a ``.wav`` into the tab's sample table. What a drop does.
+
+    Decoding is task work and not frame work: a minute of 48 kHz stereo is a
+    resample over three million frames, which is not something to do between
+    two draws.
+    """
+    if tab is None or tab.busy:
+        return
+    ctx.submit(f"{SAMPLE_PREFIX}{tab.uid}", _decode_sample, Path(path), instrument)
+
+
+def ask_sample(ctx: Any, tab: SongTab, instrument: int | None = None) -> None:
+    """The picker, for the instrument pane's ``sample`` field.
+
+    The dialog runs *inside* the task for the reason every other picker here
+    does: a native file dialog is modal to the OS and blocks until it is
+    dismissed, which on the frame thread is a frozen window.
+    """
+    if tab is None or tab.busy:
+        return
+
+    def run() -> dict[str, Any] | None:
+        path = dialogs.open_file("Add a sample", SAMPLE_FILTER)
+        return None if path is None else _decode_sample(path, instrument)
+
+    ctx.submit(f"{SAMPLE_PREFIX}{tab.uid}", run)
+
+
+def free_sample_key(doc: Any, name: str) -> str:
+    """A sample-table key based on ``name`` that nothing in ``doc`` holds yet.
+
+    Two files called ``kick.wav`` from two folders are two samples, and landing
+    the second on the first's key would silently retune every note that used it.
+    Suffixed rather than refused, because the user's answer to "that name is
+    taken" is always "then use another one".
+    """
+    from .sirens import instruments as inst
+
+    stem = (name or "sample").strip()[: inst.MAX_NAME_LEN] or "sample"
+    if stem not in doc.samples:
+        return stem
+    for index in range(2, len(doc.samples) + 3):
+        candidate = f"{stem[: inst.MAX_NAME_LEN - 4]} {index}"
+        if candidate not in doc.samples:
+            return candidate
+    return stem
 
 
 # --- writing ------------------------------------------------------------------

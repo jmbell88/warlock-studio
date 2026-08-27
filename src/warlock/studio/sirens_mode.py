@@ -45,11 +45,15 @@ from . import dialogs, docmodes, journal, recents, sirens_audio, sirens_io, sire
 # every pane, every key binding and every test says ``sirens_mode.save(ctx)``:
 # a wrapper would be a second object where the callers reach for one.
 from .sirens_io import (  # noqa: F401
+    SAMPLE_FILTER,
+    SAMPLE_PREFIX,
     SONG_FILTER,
-    WAV_FILTER,
     _load,
     _start,
     ask_open,
+    ask_sample,
+    free_sample_key,
+    import_sample,
     open_path,
     save,
     save_as,
@@ -304,6 +308,113 @@ def transpose(ctx: Any, by: int) -> bool:
     return _touch(tab, tab.doc.transpose(state.pattern, *block, by))
 
 
+# --- instruments --------------------------------------------------------------
+
+#: The four sequences an instrument is made of, in the order the editor stacks
+#: them. Named here rather than in the pane because the pane is not the only
+#: caller: a test asserting "a drag is one step" walks them, and a fifth
+#: sequence added to the engine has to reach both through one list.
+ENVELOPE_FIELDS: tuple[str, ...] = ("volume", "arpeggio", "pitch", "duty")
+
+
+def set_sequence(ctx: Any, tab: SongTab | None, uid: int, field: str, sequence: Any) -> bool:
+    """Put one sequence on one instrument. -> whether the document moved.
+
+    Through ``update_instrument`` rather than by assignment, which is what makes
+    it one reversible ``InstrumentEdit`` and what refuses a no-op -- a pointer
+    held still over a bar it has already painted is a stream of frames, and
+    every one of them would otherwise be an undo step.
+    """
+    if tab is None or tab.busy or field not in ENVELOPE_FIELDS:
+        return False
+    try:
+        changed = tab.doc.update_instrument(uid, **{field: sequence})
+    except ValueError as exc:
+        ctx.toast(f"That envelope was not changed: {exc}", "error")
+        return False
+    return _touch(tab, changed)
+
+
+def begin_envelope_drag(ctx: Any, tab: SongTab | None, field: str, grip: str) -> None:
+    """Open a gesture, recording where the history stood when it started.
+
+    The depth is the whole mechanism: painting a decay curve is one edit per
+    column the pointer crosses, and forty of them in the stack means forty
+    Ctrl+Z presses to undo one drag. ``document.add_oneshot`` records a depth
+    for the same reason and folds at the same place.
+    """
+    state = ensure(ctx)
+    if tab is None or tab.busy:
+        return
+    state.env_field, state.env_grip = field, grip
+    state.env_depth = len(tab.doc.history)
+    state.env_step = -1
+
+
+def end_envelope_drag(ctx: Any, tab: SongTab | None) -> bool:
+    """Close the gesture and fold its run into one step. -> whether it folded.
+
+    False for a drag that changed nothing (``update_instrument`` refused every
+    frame of it) and for one that changed exactly one thing -- see
+    ``UndoStack.collapse_since``, which leaves a lone step reading as what it
+    did rather than as a compound of one.
+    """
+    state = ensure(ctx)
+    depth = state.env_depth
+    state.env_field, state.env_grip, state.env_depth, state.env_step = "", "", -1, -1
+    if tab is None or depth < 0:
+        return False
+    return tab.doc.history.collapse_since(depth)
+
+
+def adopt_sample(ctx: Any, tab: SongTab, result: dict[str, Any]) -> str:
+    """Land a decoded ``.wav`` in the document. -> the key it went under.
+
+    On the frame thread, and that is the point: which key is free depends on the
+    sample table, ``doc.set_sample`` pushes an undo step, and both of those are
+    the document's -- so the task decodes bytes and this decides what to do with
+    them.
+
+    **The sample and the instrument that asked for it are one step.** A picker
+    opened from an instrument's ``sample`` field is one action by the user, and
+    an undo that took the assignment back while leaving an orphan sample in the
+    table would be a second press to finish a single mistake --
+    ``document.add_oneshot``'s rule, at the same depth-and-collapse.
+    """
+    doc = tab.doc
+    key = free_sample_key(doc, str(result.get("name", "")))
+    depth = len(doc.history)
+    try:
+        doc.set_sample(key, result["pcm"])
+    except ValueError as exc:
+        ctx.toast(f"That sample was not added: {exc}", "error")
+        return ""
+    instrument = result.get("instrument")
+    if instrument is not None and doc.instrument(instrument) is not None:
+        doc.update_instrument(instrument, sample=key)
+        doc.history.collapse_since(depth)
+    tab.render_dirty = True
+    ctx.toast(f"Added the sample {key}.")
+    return key
+
+
+def remove_sample(ctx: Any, tab: SongTab, key: str) -> bool:
+    """Drop one entry of the sample table. -> whether anything went.
+
+    The instruments that named it are **left alone**, which is
+    ``remove_instrument``'s rule one level down and for its reason: a sample
+    instrument pointing at a key nothing answers to is silent and can be put
+    back by an undo, while rewriting every instrument that used it cannot.
+    """
+    if tab is None or tab.busy:
+        return False
+    try:
+        return _touch(tab, tab.doc.set_sample(key, None))
+    except ValueError as exc:
+        ctx.toast(f"That sample was not removed: {exc}", "error")
+        return False
+
+
 def undo(ctx: Any, tab: Any) -> None:
     """One step back, whichever surface asked for it.
 
@@ -479,6 +590,11 @@ def on_task_done(ctx: Any, done: Any) -> None:
             tab.rendering = False
         return
 
+    if name == "sirens-sample":
+        if isinstance(result, dict):
+            adopt_sample(ctx, tab, result)
+        return
+
     tab.saving = False
     if not isinstance(result, dict):
         return  # a cancelled dialog
@@ -504,6 +620,12 @@ def on_task_failed(ctx: Any, done: Any) -> None:
         # it has is a path that does not open, and a Resume list that keeps
         # offering one is worse than a short one.
         forget_path(ctx, done.key.split(":", 1)[1])
+        return
+    if done.key.startswith(sirens_io.SAMPLE_PREFIX):
+        # A refused sample has nothing to unlock: the tab was never locked for
+        # it, and clearing ``saving`` here would unlock a *save* that happened
+        # to be running alongside. The sentence the user is owed is already the
+        # toast the classifier drew before this was called.
         return
     state = ctx.state.sirens
     if state is None or ":" not in done.key:

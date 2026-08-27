@@ -142,6 +142,12 @@ class Instrument:
     instrument at the top of the list must not retune the song, which is exactly
     what an index would do. The rest of this package addresses everything the
     same way, for the reason ``studio/undo.py`` states once for all of them.
+
+    It is the one uid in this engine that is **per document and bounded** --
+    ``0 <= uid < document.MAX_INSTRUMENTS``, minted by
+    ``document._free_instrument_id`` -- because it is the one uid a pattern cell
+    has to hold, and a cell is an ``int16``. Everything else keeps
+    ``document.new_uid``. That file's docstring carries the argument.
     """
 
     uid: int

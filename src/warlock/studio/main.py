@@ -3059,10 +3059,17 @@ class App:
             elif suffix == ".wav":
                 # A WAV dropped here is a *sample*, not a song -- the Plotter
                 # rule that a refusal and an accept both have to say what a
-                # drop would do in this mode. Importing one is Phase 3, so the
-                # sentence says which half exists rather than silently doing
-                # nothing with the file.
-                ctx.toast("Importing samples is not built yet.", "warn")
+                # drop would do in this mode. It lands in the open song's sample
+                # table; with no song open there is nowhere to put it, and
+                # opening one silently to hold a drum hit would be a document
+                # the user did not ask for.
+                tab = sirens_mode.active(ctx)
+                if tab is None:
+                    ctx.toast(
+                        "Open or start a song first: a sample belongs to one.", "error"
+                    )
+                else:
+                    sirens_mode.import_sample(ctx, tab, path)
             else:
                 ctx.toast("Sirens opens .wsng songs and .wav samples.", "error")
             return

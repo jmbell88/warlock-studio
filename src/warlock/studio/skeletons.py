@@ -203,8 +203,8 @@ def plotter(ctx: Any) -> dict[str, Column]:
 
 
 def sirens(ctx: Any) -> dict[str, Column]:
-    """Sirens' two sidebars: the transport over the order list, the instruments
-    over the song file.
+    """Sirens' two sidebars: the transport over the order list, the instrument
+    list and its envelopes over the song file.
 
     Plotter's shape, deliberately, so the editors do not drift into looking
     like different applications -- what you *do* on the left, what the document
@@ -216,7 +216,13 @@ def sirens(ctx: Any) -> dict[str, Column]:
     the reason ``layout_skeleton`` states once.
     """
 
-    from .panes import sirens_bridge, sirens_instruments, sirens_orders, sirens_transport
+    from .panes import (
+        sirens_bridge,
+        sirens_envelopes,
+        sirens_instruments,
+        sirens_orders,
+        sirens_transport,
+    )
 
     left = Column(
         "left",
@@ -251,6 +257,16 @@ def sirens(ctx: Any) -> dict[str, Column]:
                 edge=_edge("left"),
                 sizing=SHARE,
                 share_key="sirens-instruments",
+            ),
+            Slot(
+                "sirens-envelopes",
+                "Envelopes",
+                sirens_envelopes.draw,
+                role=_role("inspector"),
+                edge=_edge("left"),
+                sizing=SHARE,
+                share_key="sirens-envelopes",
+                floor=sirens_envelopes.ENVELOPES_FLOOR,
             ),
             Slot(
                 "sirens-bridge",

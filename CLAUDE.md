@@ -6,7 +6,7 @@ Guidance for Claude Code in this repository. See `D:\Projects\CLAUDE.md` for how
 
 Local AI 3D asset generator: text or image prompt → SDXL 1.0 at full CFG (reference PNG; `sdxl_cfg`, with Turbo as the fast option) → `trellis-server.exe` (vendored native binary, not the Python TRELLIS package) → textured GLB, in a single-process desktop app: a pygame window, one ModernGL context, imgui panels drawn through it. No HTTP, no browser.
 
-Twelve modes (`studio/modes.py` is authoritative): the rail runs Home/Library/Create, then the seven workspaces Inker, Clay, Poser, Troupe, Plotter, Packwright and Sirens, then a footer holding Review and Settings. Sirens is the chiptune tracker — marked Experimental, since its engine is complete while the instrument editor, the sound-effect pane and WAV export are not. Manual, Profiles and the guided tour are deliberately *not* modes — an overlay, a sheet and a second overlay respectively. Generation is one staged mode (Create), not the separate 2D/3D pair the older docs describe.
+Twelve modes (`studio/modes.py` is authoritative): the rail runs Home/Library/Create, then the seven workspaces Inker, Clay, Poser, Troupe, Plotter, Packwright and Sirens, then a footer holding Review and Settings. Sirens is the chiptune tracker — marked Experimental, since its engine, envelope editor and sample import are complete while the sound-effect pane and WAV export are not. Manual, Profiles and the guided tour are deliberately *not* modes — an overlay, a sheet and a second overlay respectively. Generation is one staged mode (Create), not the separate 2D/3D pair the older docs describe.
 
 ## Commands
 

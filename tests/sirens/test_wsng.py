@@ -230,3 +230,89 @@ def test_a_song_with_no_channels_opens_on_the_defaults():
     doc = D.new_song()
     raw = _repack(doc, lambda m: m.__setitem__("channels", []))
     assert len(wsng.read_wsng(raw).channels) == len(D.default_channels())
+
+
+# --- the instrument id space --------------------------------------------------
+
+
+def _repack_all(doc: D.SongDoc, edit) -> bytes:
+    """``_repack``, but ``edit`` gets the pattern arrays as well as the manifest.
+
+    Needed to forge a file an older build would have written: its instrument ids
+    came from the process-global counter, so both the manifest *and* the cells
+    that name them are out of the id space this build reads.
+    """
+    raw = wsng.wsng_bytes(doc)
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        members = {name: zf.read(name) for name in zf.namelist()}
+    manifest = json.loads(members[wsng.MANIFEST])
+    arrays = {
+        name: np.load(io.BytesIO(payload))
+        for name, payload in members.items()
+        if name.endswith(".npy")
+    }
+    edit(manifest, arrays)
+    members[wsng.MANIFEST] = json.dumps(manifest).encode()
+    for name, array in arrays.items():
+        buffer = io.BytesIO()
+        np.lib.format.write_array(buffer, np.ascontiguousarray(array), version=(1, 0))
+        members[name] = buffer.getvalue()
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, payload in members.items():
+            zf.writestr(name, payload)
+    return out.getvalue()
+
+
+def test_an_id_outside_the_space_is_renumbered_and_its_cells_come_with_it():
+    """A file from a build that minted instrument ids globally still plays the
+    instruments it names: refusing it would lose the song, and renumbering the
+    list without the cells would lose which instrument every note used."""
+    doc = _song()
+    was = doc.instruments[0].uid
+
+    def edit(manifest, arrays):
+        manifest["instruments"][0]["uid"] = 20_000
+        plane = arrays["patterns/0.npy"][:, :, D.INSTRUMENT]
+        plane[plane == was] = 20_000
+
+    back = wsng.read_wsng(_repack_all(doc, edit))
+    assert [one.uid for one in back.instruments] == list(range(len(back.instruments)))
+    named = back.patterns[0].cells[0, 0, D.INSTRUMENT]
+    assert named == 0 and back.instrument(named).name == "Lead"
+
+
+def test_a_file_this_build_wrote_is_not_renumbered_at_all():
+    """The map is empty when every id is already legal, so a save/open/save
+    round trip stays byte-identical and a ``.wsng`` stays diffable."""
+    doc = _song()
+    raw = wsng.wsng_bytes(doc)
+    assert wsng.wsng_bytes(wsng.read_wsng(raw)) == raw
+
+
+def test_a_cell_naming_no_instrument_in_a_renumbered_file_is_blanked():
+    """Left as a raw number it would land on whichever slot the renumbering
+    has since put in its place -- a note playing an instrument nobody chose."""
+    doc = _song()
+
+    def edit(manifest, arrays):
+        manifest["instruments"][0]["uid"] = 9_000
+        arrays["patterns/0.npy"][0, 0, D.INSTRUMENT] = 4_242
+
+    back = wsng.read_wsng(_repack_all(doc, edit))
+    assert back.patterns[0].cells[0, 0, D.INSTRUMENT] == -1
+
+
+def test_the_reserved_uid_high_water_mark_ignores_the_instruments(monkeypatch):
+    """Their ids never came out of the global counter, so reserving above one
+    would walk that counter toward its own ceiling for nothing -- which is the
+    walk the instrument column could not survive in the first place."""
+    doc = _song()
+    raw = _repack_all(
+        doc, lambda m, a: m["instruments"][0].__setitem__("uid", 20_000)
+    )
+    # Set directly, and restored after: the counter is a process global, and a
+    # test that moved it would be reaching into every test that ran later.
+    monkeypatch.setattr(D, "_next_uid", 100)
+    wsng.read_wsng(raw)
+    assert D.new_uid() < 20_000

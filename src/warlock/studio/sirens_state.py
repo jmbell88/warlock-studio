@@ -173,6 +173,28 @@ class SirensState:
     #: document has none yet, which a fresh song never is.
     instrument: int | None = None
 
+    # --- an envelope gesture in flight ---------------------------------------
+    #
+    # Four fields rather than a drag object, and here rather than in the pane,
+    # for the reason the caret is four numbers: the pane is redrawn from
+    # scratch every frame and owns nothing that outlives one, while a drag is
+    # by definition the thing that spans frames. Keeping it here is also what
+    # lets ``sirens_mode`` open and close the gesture without imgui, which is
+    # what makes "a drag is one undo step" a testable claim on a box with no
+    # display.
+    #
+    #: Which sequence the gesture is editing (``"volume"``...), or ``""``.
+    env_field: str = ""
+    #: What it has hold of: ``"paint"``, ``"loop"`` or ``"release"``.
+    env_grip: str = ""
+    #: ``len(doc.history)`` when the button went down, so the whole run can be
+    #: folded into one step when it comes back up. ``-1`` means no gesture.
+    env_depth: int = -1
+    #: The last step this drag painted. A pointer moves further than one column
+    #: per frame, and without it a fast drag leaves a comb of untouched steps
+    #: between the ones the mouse happened to be over on a frame boundary.
+    env_step: int = -1
+
     @property
     def active(self) -> SongTab | None:
         for doc in self.docs:

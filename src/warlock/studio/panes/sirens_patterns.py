@@ -193,8 +193,14 @@ def _grid(ctx: Any, state: Any, tab: Any, pattern: Any) -> None:
                 draw_list.add_text((cx, y), colour, part)
                 if row == state.row and channel == state.channel and column == state.column:
                     width = imgui.calc_text_size(part).x
+                    # ``add_rect`` is (p_min, p_max, col, rounding, thickness,
+                    # flags), and the thickness comes *before* the flags. The
+                    # other order type-errors, and only on the frames that draw
+                    # a caret -- which is every frame with a grid on screen, and
+                    # which nothing caught until the panes were drawn under a
+                    # test (``tests/test_sirens_panes_smoke.py``).
                     draw_list.add_rect(
-                        (cx - 1, y), (cx + width + 1, y + row_h), caret, 0.0, 0, 1.5
+                        (cx - 1, y), (cx + width + 1, y + row_h), caret, 0.0, 1.5
                     )
                 cx += imgui.calc_text_size(part).x + sp(6)
 

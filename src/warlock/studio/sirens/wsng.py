@@ -206,8 +206,8 @@ def read_wsng(data: bytes) -> D.SongDoc:
             )
 
         channels = _channels_from(manifest)
-        instruments = _instruments_from(manifest)
-        patterns = _patterns_from(zf, manifest, len(channels))
+        instruments, remap = _instruments_from(manifest)
+        patterns = _patterns_from(zf, manifest, len(channels), remap)
         samples = _samples_from(zf, manifest)
         known = {one.uid for one in patterns}
         order = [int(one) for one in _list(manifest, "order")][: D.MAX_ORDER]
@@ -234,10 +234,15 @@ def read_wsng(data: bytes) -> D.SongDoc:
         doc.loop_order = -1
     # See ``document.reserve_uid``: without this, the first pattern added after
     # an open collides with one the file already used.
+    #
+    # **The instruments are deliberately not in this maximum.** Their ids are a
+    # per-document space bounded by ``MAX_INSTRUMENTS`` and have nothing to do
+    # with the global counter (``document``'s docstring); reserving above one
+    # would walk the counter toward its own ceiling on behalf of a number that
+    # never came out of it.
     highest = max(
         [0]
         + [one.uid for one in doc.channels]
-        + [one.uid for one in doc.instruments]
         + [one.uid for one in doc.patterns]
         + [one.uid for one in doc.oneshots]
     )
@@ -281,17 +286,44 @@ def _channels_from(manifest: dict) -> list[D.Channel]:
     return out or D.default_channels()
 
 
-def _instruments_from(manifest: dict) -> list[inst.Instrument]:
-    out: list[inst.Instrument] = []
-    for entry in _list(manifest, "instruments")[: D.MAX_INSTRUMENTS]:
+def _instruments_from(manifest: dict) -> tuple[list[inst.Instrument], dict[int, int]]:
+    """The instrument list, and the renumbering the file needed -- usually none.
+
+    An instrument id is bounded by ``document.MAX_INSTRUMENTS`` and unique
+    within the document (see ``document._free_instrument_id``), because it is
+    what an ``int16`` cell holds. A file can say otherwise: one written by an
+    earlier build minted instrument ids from the process-global counter, and a
+    hand-edited manifest can say anything at all.
+
+    Such a file is **renumbered rather than refused**, and the pattern cells are
+    carried through the same map (:func:`_patterns_from`) so the song still
+    plays the instruments it named. The list is already capped at
+    ``MAX_INSTRUMENTS``, so numbering by position always fits.
+
+    The map is empty when every id was already legal and distinct, which is the
+    only case a file this build wrote can be in -- so a save/open/save round
+    trip stays byte-identical and a ``.wsng`` in a repository stays diffable.
+    """
+    entries = _list(manifest, "instruments")[: D.MAX_INSTRUMENTS]
+    stored: list[int] = []
+    for index, entry in enumerate(entries):
         if not isinstance(entry, dict):
             raise ValueError(_MALFORMED)
+        try:
+            stored.append(int(entry.get("uid", index)))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(_MALFORMED) from exc
+    legal = all(0 <= uid < D.MAX_INSTRUMENTS for uid in stored) and len(set(stored)) == len(stored)
+    remap: dict[int, int] = {} if legal else {uid: i for i, uid in enumerate(stored)}
+
+    out: list[inst.Instrument] = []
+    for index, entry in enumerate(entries):
         kind = str(entry.get("kind", "pulse"))
         if kind not in inst.KINDS:
             raise ValueError(f"this song has a {kind!r} instrument, which this build cannot play")
         out.append(
             inst.Instrument(
-                uid=int(entry.get("uid", D.new_uid())),
+                uid=stored[index] if legal else index,
                 name=str(entry.get("name", "")),
                 kind=kind,
                 sample=str(entry.get("sample", "")),
@@ -301,10 +333,12 @@ def _instruments_from(manifest: dict) -> list[inst.Instrument]:
                 duty=_sequence_from(entry.get("duty")),
             )
         )
-    return out
+    return out, remap
 
 
-def _patterns_from(zf: Any, manifest: dict, channels: int) -> list[D.Pattern]:
+def _patterns_from(
+    zf: Any, manifest: dict, channels: int, remap: dict[int, int] | None = None
+) -> list[D.Pattern]:
     out: list[D.Pattern] = []
     for entry in _list(manifest, "patterns")[: D.MAX_PATTERNS]:
         if not isinstance(entry, dict):
@@ -326,15 +360,6 @@ def _patterns_from(zf: Any, manifest: dict, channels: int) -> list[D.Pattern]:
         # Clipped rather than trusted: every column has a range, and a
         # hand-edited array can hold anything an ``int16`` can. A note of 9000
         # would index past the end of the frequency table at render time.
-        #
-        # **The instrument column is clipped to the int16 ceiling, not to 255**,
-        # and the difference is a data-loss bug rather than a nicety: that
-        # column holds an instrument *uid*, and ``document.new_uid`` is a
-        # process-global counter, so the 256th object minted in a session gets
-        # a uid a 255 clip silently rewrites. The symptom is a song that opens
-        # playing a different instrument -- or none -- and only after the
-        # session that wrote it was a long one, which is why nothing caught it
-        # until a second document mode started minting uids beside it.
         grid = np.ascontiguousarray(cells, dtype=np.int16).copy()
         #
         # One basic-index slice per column, deliberately: ``grid[:, :, [a, b]]``
@@ -343,8 +368,23 @@ def _patterns_from(zf: Any, manifest: dict, channels: int) -> list[D.Pattern]:
         for column in (D.NOTE, D.VOLUME, D.EFFECT, D.PARAM):
             plane = grid[:, :, column]
             np.clip(plane, notes.EMPTY, 255, out=plane)
+        # **The instrument column's range is the instrument id space**, which
+        # is ``0..MAX_INSTRUMENTS-1`` and per document (``document``'s
+        # docstring). The 255 this used to be was nearly that number and not
+        # quite; the int16 ceiling that replaced it was right only while ids
+        # came from the process-global counter, which is the ceiling this
+        # phase removed. A file whose ids needed renumbering is carried
+        # through the same map its instrument list was, so the cells still
+        # name the instruments they named -- and a value that matched *no*
+        # instrument in that file is blanked rather than left to land on
+        # whichever slot the renumbering has since put in its place.
         plane = grid[:, :, D.INSTRUMENT]
-        np.clip(plane, notes.EMPTY, np.iinfo(np.int16).max, out=plane)
+        if remap:
+            stored = plane.copy()
+            plane[:] = notes.EMPTY
+            for old, new in remap.items():
+                plane[stored == old] = new
+        np.clip(plane, notes.EMPTY, D.MAX_INSTRUMENTS - 1, out=plane)
         out.append(
             D.Pattern(
                 uid=int(entry.get("uid", D.new_uid())),

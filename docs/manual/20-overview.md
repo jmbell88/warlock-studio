@@ -90,9 +90,10 @@ Then the six workspaces:
 - **Packwright.** A sprite-atlas packer: many images in, one atlas out, with a sidecar that says
   where everything landed. Covered in [Packwright](32-packwright.md).
 - **Sirens.** A chiptune tracker: NES-era pulse, triangle, noise and sample voices written into a
-  pattern grid, stitched into a song by an order list, and saved as a `.wsng`. Experimental — the
-  synthesis engine is complete, and the instrument editor, the sound-effect pane and WAV export
-  are not built yet, so it has no chapter of its own.
+  pattern grid, stitched into a song by an order list, and saved as a `.wsng`. Instruments carry
+  four envelope sequences you drag into shape, and a `.wav` dropped on the window becomes a
+  sample. Experimental — the sound-effect pane and WAV export are not built yet, so it has no
+  chapter of its own.
 
 And in the footer:
 

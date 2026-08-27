@@ -237,8 +237,9 @@ MATURITY_NOTE: dict[str, str] = {
         " See the manual (Troupe)."
     ),
     "sirens": (
-        "The engine is complete and songs play and save, but there is no"
-        " instrument editor, no sound-effect pane and no WAV export yet."
+        "The engine is complete, songs play and save, and instruments have an"
+        " envelope editor and sample import -- but there is no sound-effect"
+        " pane and no WAV export yet."
     ),
 }
 

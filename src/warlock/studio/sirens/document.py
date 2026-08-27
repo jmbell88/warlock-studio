@@ -20,6 +20,26 @@ Not indices into :attr:`SongDoc.patterns`. Deleting pattern 3 must not silently
 turn every ``3`` in the order into whatever is now third -- which is the classic
 tracker data-loss bug, and it is an ``index`` away in either direction.
 
+## An instrument id is per-document and bounded; every other uid is global
+
+The instrument column of a cell is one plane of that ``int16`` array, so what it
+holds has to fit in one. :func:`new_uid` is a *process*-global counter, which
+means the 32,768th object minted in a session is a number ``set_cell`` cannot
+store: numpy 2 raises an ``OverflowError`` from inside a mutator documented to
+raise ``ValueError``, and numpy 1.x -- which this build still permits -- wraps
+the value silently and writes a different instrument into the song.
+
+So an instrument's id comes from a per-document space bounded by
+:data:`MAX_INSTRUMENTS`, minted as the lowest free id (:func:`_free_instrument_id`).
+Channels, patterns and one-shots keep the global uid: **none of them is ever
+stored in a cell**, so none of them has the ceiling, and a bounded id would only
+be a second numbering to keep in step. A bounded id is also what a tracker shows
+the user anyway -- slot ``03`` is slot ``03``.
+
+This does not weaken the uid rule; see :func:`_free_instrument_id` for why it
+satisfies it exactly, and why reusing a freed id is safe under this history
+model rather than merely unlikely.
+
 ## One-shots are patterns
 
 A sound effect is a pattern with its own speed and tempo, rendered on the same
@@ -72,6 +92,12 @@ MISSING_PATTERN = "that pattern is not in this song"
 MISSING_INSTRUMENT = "that instrument is not in this song"
 MISSING_CHANNEL = "that channel is not in this song"
 MISSING_ONESHOT = "that sound effect is not in this song"
+#: The other kind of refusal this module makes, and the only ceiling a user can
+#: reach by working rather than by hand-editing a file. Named beside the
+#: ``MISSING_*`` sentences because it is framed the same way: a 129th instrument
+#: has to arrive at the mode as a ``ValueError`` it can turn into a toast, not
+#: as whatever an exhausted id space would otherwise raise.
+FULL_INSTRUMENTS = f"a song holds {MAX_INSTRUMENTS} instruments"
 
 _next_uid = 0
 
@@ -97,6 +123,38 @@ def reserve_uid(above: int) -> None:
     """
     global _next_uid
     _next_uid = max(_next_uid, int(above))
+
+
+def _free_instrument_id(instruments: Any) -> int:
+    """The lowest id in ``0..MAX_INSTRUMENTS-1`` no instrument here holds.
+
+    **The uid rule survives this.** That rule exists so that reordering a list
+    cannot retarget an edit -- an index would move under every insert, and the
+    song would retune itself -- and a per-document id satisfies it exactly: it
+    is still an identity the instrument carries, still what a cell stores, and
+    still unrelated to where in the list the instrument is drawn. What it drops
+    is the *process*-global part of :func:`new_uid`, which the instrument column
+    cannot store (see this module's docstring) and which nothing here needed.
+
+    **Reusing a freed id is safe under this history model**, and it is worth
+    saying why rather than leaving it to be discovered. ``UndoStack.push``
+    clears the redo branch, so a step that took a freed id has already
+    discarded every step that could have referred to the previous holder. The
+    only route back to a freed id is undoing *in order*: remove frees 3, add
+    takes 3, undoing the add frees 3 again, and undoing the remove restores the
+    original 3 to an id nothing else holds. A collision would need a redo across
+    a branch ``push`` has already thrown away, which is not a reachable state.
+
+    Lowest-free rather than highest-plus-one because a tracker's instrument
+    numbers are slots the user reads and types: a song that has used and
+    dropped a hundred instruments should still add the next one at ``00`` if
+    ``00`` is empty, not at ``64``.
+    """
+    taken = {int(one.uid) for one in instruments}
+    for candidate in range(MAX_INSTRUMENTS):
+        if candidate not in taken:
+            return candidate
+    raise ValueError(FULL_INSTRUMENTS)
 
 
 def empty_cells(rows: int, channels: int) -> np.ndarray:
@@ -454,8 +512,8 @@ class SongDoc:
 
     def add_instrument(self, kind: str = "pulse", name: str = "") -> inst.Instrument:
         if len(self.instruments) >= MAX_INSTRUMENTS:
-            raise ValueError(f"a song holds {MAX_INSTRUMENTS} instruments")
-        instrument = inst.default(new_uid(), kind=kind, name=name)
+            raise ValueError(FULL_INSTRUMENTS)
+        instrument = inst.default(_free_instrument_id(self.instruments), kind=kind, name=name)
         index = len(self.instruments)
         self.history.push(E.InstrumentAddEdit(instrument=instrument, index=index))
         self._attach_instrument(instrument, index)
@@ -707,7 +765,12 @@ def new_song() -> SongDoc:
     for channel in channels:
         if channel.kind not in seen:
             seen.append(channel.kind)
-            instruments.append(inst.default(new_uid(), kind=channel.kind))
+            # The bounded per-document id, not ``new_uid`` -- see this module's
+            # docstring. Built through the same helper ``add_instrument`` uses,
+            # so a new song's slots are numbered by the one rule.
+            instruments.append(
+                inst.default(_free_instrument_id(instruments), kind=channel.kind)
+            )
     return SongDoc(
         channels=channels,
         instruments=instruments,

@@ -20,7 +20,7 @@ from typing import Any
 
 import pytest
 
-from warlock.studio import sirens_mode
+from warlock.studio import sirens_io, sirens_mode
 from warlock.studio.sirens import document as D
 from warlock.studio.sirens import notes, wsng
 
@@ -527,5 +527,171 @@ def test_the_workspace_has_a_skeleton_with_declared_share_keys():
         "sirens-transport",
         "sirens-orders",
         "sirens-instruments",
+        "sirens-envelopes",
         "sirens-bridge",
     ]
+
+
+# --- samples ------------------------------------------------------------------
+
+
+def _wav(path: Path, *, seconds: float = 0.05, rate: int = 44100) -> Path:
+    """A short real WAV on disk. ``wavout`` writes it, because a second encoder
+    here would be a second answer to what this build reads back."""
+    import numpy as np
+
+    from warlock.studio.sirens import wavout
+
+    count = max(1, int(rate * seconds))
+    tone = np.sin(np.linspace(0.0, 40.0, count, dtype=np.float64)).astype(np.float32)
+    wavout.write(path, tone, rate)
+    return path
+
+
+def _import(ctx: FakeCtx, tab: Any, path: Path, instrument: int | None = None) -> str:
+    sirens_mode.import_sample(ctx, tab, path, instrument)
+    sirens_mode.on_task_done(ctx, _Done(f"sirens-sample:{tab.uid}", ctx.result))
+    return ctx.result.get("name", "") if isinstance(ctx.result, dict) else ""
+
+
+def test_a_dropped_wav_lands_in_the_sample_table(tmp_path):
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    _import(ctx, tab, _wav(tmp_path / "kick.wav"))
+    assert ctx.submitted == [f"sirens-sample:{tab.uid}"]
+    assert "kick" in tab.doc.samples
+    assert tab.doc.samples["kick"].dtype.name == "float32"
+
+
+def test_an_imported_sample_is_resampled_to_the_render_rate(tmp_path):
+    """``read_wav`` is the whole conversion and the only one: the synth advances
+    a sample's phase in output samples, so a 22 kHz source would otherwise play
+    an octave out."""
+    from warlock.studio.sirens import synth
+
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    _import(ctx, tab, _wav(tmp_path / "hat.wav", seconds=0.1, rate=22050))
+    frames = tab.doc.samples["hat"].size
+    assert abs(frames - int(0.1 * synth.SAMPLE_RATE)) <= 2
+
+
+def test_a_sample_instrument_makes_a_sound_once_it_has_one(tmp_path):
+    import numpy as np
+
+    from warlock.studio.sirens import document as D
+    from warlock.studio.sirens import synth
+
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    doc = tab.doc
+    channel = next(i for i, one in enumerate(doc.channels) if one.kind == "sample")
+    instrument = next(one for one in doc.instruments if one.kind == "sample")
+    pattern = doc.patterns[0]
+    doc.set_cell(pattern.uid, 0, channel, D.NOTE, notes.SAMPLE_BASE_NOTE)
+    doc.set_cell(pattern.uid, 0, channel, D.INSTRUMENT, instrument.uid)
+
+    silent = synth.render_pattern(doc, pattern.uid)
+    assert np.abs(silent).max() < 1e-6, "a sample instrument with no sample is silent"
+
+    key = _import(ctx, tab, _wav(tmp_path / "snare.wav"), instrument.uid)
+    assert doc.instrument(instrument.uid).sample == key
+    assert np.abs(synth.render_pattern(doc, pattern.uid)).max() > 0.01
+
+
+def test_the_sample_and_the_instrument_that_asked_for_it_are_one_step(tmp_path):
+    """A picker opened from an instrument's sample field is one action; an undo
+    that took the assignment back and left the sample behind would be a second
+    press to finish one mistake."""
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    instrument = next(one for one in tab.doc.instruments if one.kind == "sample")
+    depth = len(tab.doc.history)
+    key = _import(ctx, tab, _wav(tmp_path / "clap.wav"), instrument.uid)
+    assert len(tab.doc.history) == depth + 1
+    tab.doc.undo()
+    assert key not in tab.doc.samples
+    assert tab.doc.instrument(instrument.uid).sample == ""
+
+
+def test_two_files_with_one_name_are_two_samples(tmp_path):
+    """Landing the second on the first's key would silently retune every note
+    that used it."""
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    first = tmp_path / "a"
+    second = tmp_path / "b"
+    first.mkdir()
+    second.mkdir()
+    _import(ctx, tab, _wav(first / "kick.wav"))
+    _import(ctx, tab, _wav(second / "kick.wav", seconds=0.08))
+    assert len(tab.doc.samples) == 2
+
+
+def test_removing_a_sample_leaves_the_instruments_that_named_it(tmp_path):
+    """``remove_instrument``'s rule one level down: an instrument pointing at a
+    key nothing answers to is silent and can be put back by an undo, while
+    rewriting every instrument that used it cannot."""
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    instrument = next(one for one in tab.doc.instruments if one.kind == "sample")
+    key = _import(ctx, tab, _wav(tmp_path / "tom.wav"), instrument.uid)
+    assert sirens_mode.remove_sample(ctx, tab, key)
+    assert key not in tab.doc.samples
+    assert tab.doc.instrument(instrument.uid).sample == key
+    assert tab.render_dirty
+
+
+def test_a_sample_import_re_arms_the_renderer(tmp_path):
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    tab.render_dirty = False
+    _import(ctx, tab, _wav(tmp_path / "rim.wav"))
+    assert tab.render_dirty
+
+
+def test_a_file_that_is_not_a_wav_is_refused_by_name(tmp_path):
+    from warlock.service.errors import ServiceError
+
+    path = tmp_path / "notes.wav"
+    path.write_bytes(b"this is not a RIFF file")
+    with pytest.raises(ServiceError, match="This sample could not be loaded"):
+        sirens_io._decode_sample(path, None)
+
+
+def test_a_refused_sample_does_not_unlock_a_save_running_beside_it():
+    """The tab was never locked for a decode, and clearing ``saving`` here
+    would hand the editing controls back mid-write."""
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    tab.saving = True
+    sirens_mode.on_task_failed(
+        ctx, _Done(f"sirens-sample:{tab.uid}", message="that is not a WAV")
+    )
+    assert tab.saving
+
+
+def test_a_sample_is_not_imported_into_a_tab_that_is_being_written(tmp_path):
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    tab.saving = True
+    sirens_mode.import_sample(ctx, tab, _wav(tmp_path / "shk.wav"))
+    assert not ctx.submitted
+
+
+def test_the_sample_filter_is_the_one_the_drop_router_advertises():
+    """One list, so the picker and the drop cannot disagree about formats."""
+    assert sirens_mode.SAMPLE_FILTER is sirens_io.SAMPLE_FILTER
+    assert "*.wav" in sirens_mode.SAMPLE_FILTER[1]
+
+
+def test_the_drop_router_imports_a_wav_rather_than_saying_it_cannot():
+    import inspect
+
+    from warlock.studio import main
+
+    source = inspect.getsource(main.App._on_drop)
+    sirens_branch = source.split('ctx.state.mode == "sirens"', 1)[1]
+    branch = sirens_branch.split('ctx.state.mode in ("poser"', 1)[0]
+    assert "sirens_mode.import_sample" in branch
+    assert "not built yet" not in branch

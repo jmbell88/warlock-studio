@@ -314,7 +314,10 @@ def test_every_split_has_a_handle_and_every_handle_a_split():
         "plotter-layers",
         "review-runs",
         "sirens-transport",
+        # The right column stacks the instrument list over the envelope editor
+        # over the song file, so it carries two split handles as Inker's does.
         "sirens-instruments",
+        "sirens-envelopes",
         "troupe-cast",
         "troupe-sheets",
     }

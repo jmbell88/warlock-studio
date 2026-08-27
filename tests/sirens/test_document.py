@@ -266,3 +266,71 @@ def test_an_edit_owns_its_data_rather_than_a_view_of_the_pattern():
     doc.set_cell(doc.patterns[0].uid, 0, 0, D.NOTE, 48)
     step = doc.history.top
     assert step.before.base is None and step.after.base is None
+
+
+# --- the instrument id space --------------------------------------------------
+
+
+def test_the_instrument_id_ceiling_is_unreachable(monkeypatch):
+    """The bug this replaces, reproduced at the boundary that used to hold it.
+
+    A cell is ``int16`` and the instrument column holds an instrument's id. When
+    that id came from the process-global counter, the 32,768th object minted in
+    a session was a number ``set_cell`` could not store: numpy 2 raised an
+    ``OverflowError`` out of a mutator documented to raise ``ValueError``, and
+    numpy 1.x -- which this build still permits -- wrapped it silently and wrote
+    a different instrument into the song.
+    """
+    # Where ``reserve_uid`` puts the counter after a long session, set directly
+    # so it is put *back*: the counter is a process global and a test that left
+    # it at 32,767 would be reaching into every test that ran after it.
+    monkeypatch.setattr(D, "_next_uid", int(np.iinfo(np.int16).max))
+    doc = _song()
+    instrument = doc.add_instrument(kind="pulse")
+    assert 0 <= instrument.uid < D.MAX_INSTRUMENTS
+    assert doc.set_cell(doc.patterns[0].uid, 0, 0, D.INSTRUMENT, instrument.uid)
+    assert doc.patterns[0].cells[0, 0, D.INSTRUMENT] == instrument.uid
+
+
+def test_a_new_song_numbers_its_instruments_from_zero():
+    """A tracker's instrument numbers are slots the user reads and types, and
+    a fresh song's have to start where the list does."""
+    doc = _song()
+    assert [one.uid for one in doc.instruments] == list(range(len(doc.instruments)))
+
+
+def test_the_hundred_and_twenty_ninth_instrument_is_a_framed_refusal():
+    doc = _song()
+    while len(doc.instruments) < D.MAX_INSTRUMENTS:
+        doc.add_instrument()
+    assert len({one.uid for one in doc.instruments}) == D.MAX_INSTRUMENTS
+    with pytest.raises(ValueError, match=D.FULL_INSTRUMENTS):
+        doc.add_instrument()
+
+
+def test_a_freed_id_is_reused_at_the_lowest_slot():
+    doc = _song()
+    freed = doc.instruments[1].uid
+    doc.remove_instrument(freed)
+    assert doc.add_instrument().uid == freed
+
+
+def test_reusing_a_freed_id_cannot_collide_with_what_the_undo_stack_holds():
+    """``UndoStack.push`` clears the redo branch, so the only route back to a
+    freed id is undoing *in order* -- and each step of that walk restores the
+    instrument the id belonged to at that point. A collision would need a redo
+    across a branch ``push`` has already discarded.
+    """
+    doc = _song()
+    original = doc.instruments[0]
+    doc.remove_instrument(original.uid)
+    taken = doc.add_instrument(kind="noise", name="Reused")
+    assert taken.uid == original.uid
+
+    doc.undo()  # the add: the id is free again
+    assert doc.instrument(original.uid) is None
+    doc.undo()  # the remove: the original comes back to its own id
+    restored = doc.instrument(original.uid)
+    assert restored is not None
+    assert restored.name == original.name and restored.kind == original.kind
+    assert len({one.uid for one in doc.instruments}) == len(doc.instruments)
