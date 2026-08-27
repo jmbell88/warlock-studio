@@ -500,10 +500,14 @@ def lora_manifest_path(config: Any) -> Path:
 
 
 def load_lora_manifests(config: Any) -> list[LoraManifest]:
-    path = lora_manifest_path(config)
+    # Total by construction: managed adapters are an optional extra, and
+    # ``resolve_recipe`` calls this on every submit. A config that cannot say
+    # where the model root is -- a partial one, or a stub -- means "no imported
+    # adapters", never a failed generate. The *write* path above still requires
+    # the root, because there is nowhere to put the file without it.
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, OSError, ValueError):
+        raw = json.loads(lora_manifest_path(config).read_text(encoding="utf-8"))
+    except (AttributeError, TypeError, FileNotFoundError, OSError, ValueError):
         return []
     rows = raw.get("manifests", raw) if isinstance(raw, Mapping) else []
     out: list[LoraManifest] = []
