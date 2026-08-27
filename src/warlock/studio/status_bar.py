@@ -38,7 +38,7 @@ def items(ctx: Any) -> list[StatusItem]:
             out.append(StatusItem("document", f"{name}{dirty}"))
             out.append(StatusItem("tool", inker_state.tool_label(state.tool)))
             out.append(StatusItem("zoom", f"{tab.view.zoom * 100:.0f}%"))
-    elif mode in ("clay", "plotter", "packwright", "poser"):
+    elif mode in ("clay", "plotter", "packwright", "poser", "sirens"):
         try:
             from importlib import import_module
 

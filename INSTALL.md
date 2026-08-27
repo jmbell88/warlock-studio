@@ -79,4 +79,4 @@ Everything you make and download lives at `%USERPROFILE%\.warlock` (`assets/`, `
 
 - **Warlock Doctor**, in the Start Menu, re-runs the same first-run diagnostic checks any time you want to check your setup again.
 - If the SmartScreen prompt during installation is what's worrying you, that's expected — see Step 2 above.
-- For anything else — crashes, out-of-memory errors, missing weights, a stuck GPU worker — see the full guide at `docs/manual/41-troubleshooting.md`.
+- For anything else — crashes, out-of-memory errors, missing weights, a stuck GPU worker — see the full guide at `docs/manual/42-troubleshooting.md`.

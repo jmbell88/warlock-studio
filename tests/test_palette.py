@@ -340,6 +340,9 @@ def test_the_document_dispatch_covers_every_document_mode():
         "plotter",
         "packwright",
         "poser",
+        # Sirens exports a folder rather than a file -- song.wav, stems/ and
+        # sfx/ -- so its label names the folder's contents.
+        "sirens",
     }
 
 

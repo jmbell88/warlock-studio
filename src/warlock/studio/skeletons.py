@@ -202,12 +202,105 @@ def plotter(ctx: Any) -> dict[str, Column]:
     return {"left": left, "right": right}
 
 
+def sirens(ctx: Any) -> dict[str, Column]:
+    """Sirens' two sidebars: the transport over the order list, the instrument
+    list and its envelopes over the song file.
+
+    Plotter's shape, deliberately, so the editors do not drift into looking
+    like different applications -- what you *do* on the left, what the document
+    *is* on the right.
+
+    **The share keys are declared, not derived.** A key derived from the slot
+    id would tie a saved layout to a pane's name, so renaming a pane would
+    silently reset every user's column heights; these four are written out for
+    the reason ``layout_skeleton`` states once.
+    """
+
+    from .panes import (
+        sirens_bridge,
+        sirens_effects,
+        sirens_envelopes,
+        sirens_instruments,
+        sirens_orders,
+        sirens_transport,
+    )
+
+    left = Column(
+        "left",
+        (
+            Slot(
+                "sirens-transport",
+                "Transport",
+                sirens_transport.draw,
+                role=_role("sidebar"),
+                edge=_edge("right"),
+                sizing=SHARE,
+                share_key="sirens-transport",
+            ),
+            Slot(
+                "sirens-orders",
+                "Order",
+                sirens_orders.draw,
+                role=_role("sidebar"),
+                edge=_edge("right"),
+                sizing=FILL,
+            ),
+        ),
+    )
+    right = Column(
+        "right",
+        (
+            Slot(
+                "sirens-instruments",
+                "Instruments",
+                sirens_instruments.draw,
+                role=_role("inspector"),
+                edge=_edge("left"),
+                sizing=SHARE,
+                share_key="sirens-instruments",
+            ),
+            Slot(
+                "sirens-envelopes",
+                "Envelopes",
+                sirens_envelopes.draw,
+                role=_role("inspector"),
+                edge=_edge("left"),
+                sizing=SHARE,
+                share_key="sirens-envelopes",
+                floor=sirens_envelopes.ENVELOPES_FLOOR,
+            ),
+            Slot(
+                # Under the instrument that plays it and over the file it is
+                # written into: a sound effect is a little song, so it belongs
+                # with the things a song is made of rather than beside Save.
+                "sirens-effects",
+                "Sound effects",
+                sirens_effects.draw,
+                role=_role("inspector"),
+                edge=_edge("left"),
+                sizing=SHARE,
+                share_key="sirens-effects",
+            ),
+            Slot(
+                "sirens-bridge",
+                "Song file",
+                sirens_bridge.draw,
+                role=_role("inspector"),
+                edge=_edge("left"),
+                sizing=FILL,
+            ),
+        ),
+    )
+    return {"left": left, "right": right}
+
+
 #: Which builder serves which workspace. A workspace with no entry keeps its
 #: hand-written composition, which is what the centre-heavy ones (Create,
 #: Review, Troupe, Poser) still have.
 BUILDERS = {
     "inker": inker,
     "plotter": plotter,
+    "sirens": sirens,
 }
 
 

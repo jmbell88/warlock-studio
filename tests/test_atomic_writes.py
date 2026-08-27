@@ -32,6 +32,15 @@ def _studio_files() -> list[Path]:
     return sorted(SRC.rglob("*.py"))
 
 
+#: The pickers that hand back a destination the user chose. ``select_folder``
+#: joined them with Sirens' export: it is the one picker in the app that returns
+#: a *directory*, and every file written under one is as much "a path the user
+#: named" as a file they typed the name of -- more so, since the names inside it
+#: are chosen by the exporter and so are the ones that collide with a previous
+#: export.
+PICKERS = {"save_file", "select_folder"}
+
+
 def _picked_names(node: ast.AST) -> set[str]:
     """Every local name that holds a path the user chose in a save dialog.
 
@@ -51,7 +60,7 @@ def _picked_names(node: ast.AST) -> set[str]:
             continue
         assigns.append((target.id, child.value))
         for call in ast.walk(child.value):
-            if isinstance(call, ast.Call) and _called_name(call) == "save_file":
+            if isinstance(call, ast.Call) and _called_name(call) in PICKERS:
                 picked.add(target.id)
     grew = True
     while grew:

@@ -161,6 +161,7 @@ _PROVIDER_MODULES = (
     "clay_mode",
     "plotter_mode",
     "packwright_mode",
+    "sirens_mode",
     "poser_mode",
     # A pane rather than a mode: the profiles panel owns the draft, and there
     # is no ``profiles_mode`` for it to live in.

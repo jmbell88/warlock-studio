@@ -352,10 +352,21 @@ def test_every_mode_says_what_it_is_for():
 def test_troupe_is_the_mode_marked_experimental():
     """It is code-complete and a user really can get a rendered sheet -- but
     three of its own phases are unstarted and its keyframes are provisional.
-    ``docs/manual/11`` is candid about that and the app was not."""
+    ``docs/manual/11`` is candid about that and the app was not.
+
+    **Sirens stayed on the list**, and the reason has been narrowed at every
+    landing rather than left standing. What kept it there through phase 5 --
+    four of a cell's five columns drawn and taking no keyboard input -- was
+    closed on 2026-08-27 (``tests/test_sirens_keys.py``). What is left is the
+    block clipboard: a selection can be transposed and cleared, and there is no
+    copy, no cut and no paste, so a bar that repeats is retyped. Asserting the
+    exact dict rather than membership is the point -- a mode joining or leaving
+    this list is a claim about the app that should have to be written down
+    twice.
+    """
     from warlock.studio import modes
 
-    assert modes.MATURITY == {"troupe": "Experimental"}
+    assert modes.MATURITY == {"troupe": "Experimental", "sirens": "Experimental"}
     assert set(modes.MATURITY_NOTE) == set(modes.MATURITY)
     assert set(modes.MATURITY) <= set(modes.KEYS)
 

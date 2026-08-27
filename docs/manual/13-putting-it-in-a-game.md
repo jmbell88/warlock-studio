@@ -112,8 +112,11 @@ than seven.
 
 ## What to read next
 
-That is the tutorial. From here the reference chapters go deeper on everything touched here —
+One tutorial left, and it is the only one that makes a sound:
+[Making a soundtrack](14-making-a-soundtrack.md) — Sirens, the tracker.
+
+After that the reference chapters go deeper on everything touched here —
 [Overview](20-overview.md) is the front door to them, and each workspace has its own.
 
-If something is not behaving, [Troubleshooting](41-troubleshooting.md) is organised by symptom, and
+If something is not behaving, [Troubleshooting](42-troubleshooting.md) is organised by symptom, and
 `uv run warlock doctor` answers the same questions from a terminal.

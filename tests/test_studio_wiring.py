@@ -35,6 +35,8 @@ from warlock.studio import (
     plotter_mode,
     plotter_tilesets,
     review_mode,
+    sirens_io,
+    sirens_mode,
     theme,
     tokens,
     viewer_embed,
@@ -450,6 +452,11 @@ def _declared_filters():
         plotter_io,
         plotter_mode,
         plotter_tilesets,
+        # Sirens owns two: the song picker and the sample one. Both are
+        # re-exported through ``sirens_mode``, which the dedup by identity
+        # below folds back into one row each.
+        sirens_io,
+        sirens_mode,
     )
     seen: dict[int, tuple[str, list[str]]] = {}
     for module in modules:

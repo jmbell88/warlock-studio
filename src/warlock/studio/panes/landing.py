@@ -580,6 +580,7 @@ _KIND_MODES = {
     "clay": "clay",
     "plotter": "plotter",
     "packwright": "packwright",
+    "sirens": "sirens",
     "pose": "poser",
     "profile": "",
 }

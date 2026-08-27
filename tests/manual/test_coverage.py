@@ -24,6 +24,10 @@ NO_HELP_BUTTON = {
     "inker_canvas",  # the canvas itself; its tools are inker-tools
     "inker_textures",  # a texture cache, drawn by nobody
     "plotter_canvas",  # the map itself; its tools are plotter-tools
+    # The pattern grid itself; its controls are sirens-transport and
+    # sirens-orders. Same rule as the two canvases above: it is the surface the
+    # mode is about rather than a panel with a heading to hang a (?) beside.
+    "sirens_patterns",
     "plotter_textures",  # a texture cache, drawn by nobody
     "packwright_preview",  # the atlas itself; its controls are packwright-settings
     "packwright_textures",  # a texture cache, drawn by nobody

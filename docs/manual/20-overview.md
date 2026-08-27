@@ -42,10 +42,10 @@ If you already have a picture, you can skip the first stage entirely and upload 
 
 ## The modes
 
-A rail down the left edge of the window chooses between eleven modes, and that rail is the single
+A rail down the left edge of the window chooses between twelve modes, and that rail is the single
 thing that decides what the panes show. It is drawn in every mode, so there is no screen you cannot
 leave. There is no per-mode keyboard shortcut — the command palette (`Ctrl+K`) is the keyboard
-route, see [Keyboard shortcuts](37-shortcuts.md).
+route, see [Keyboard shortcuts](38-shortcuts.md).
 
 The rail shows glyphs by default and expands to show the labels beside them; **Window → Navigation
 labels** toggles that, and the choice is remembered. In icon-only form every item names itself in a tooltip.
@@ -61,7 +61,7 @@ where you are not making something.
 - **Home.** What the app opens on: what changed in this build, what the machine is doing, and a
   single list of everything you were recently working on. Returning here is never destructive.
 - **Library.** Every asset that has ever been generated, filtered, sorted and searched, with the
-  trash and the prune. Covered in [The library and jobs](34-library-and-jobs.md).
+  trash and the prune. Covered in [The library and jobs](35-library-and-jobs.md).
 - **Create.** One mode for the whole asset pipeline, drawn as five **stages** on a rail above the
   settings column. **Reference** owns the prompt and every control that composes it — the
   negative prompt, the image model and style LoRA, the seed and the candidate count.
@@ -89,20 +89,26 @@ Then the six workspaces:
   speaks Tiled's formats in both directions. Covered in [Plotter](31-plotter.md).
 - **Packwright.** A sprite-atlas packer: many images in, one atlas out, with a sidecar that says
   where everything landed. Covered in [Packwright](32-packwright.md).
+- **Sirens.** A chiptune tracker: NES-era pulse, triangle, noise and sample voices written into a
+  pattern grid, stitched into a song by an order list, and saved as a `.wsng`. Instruments carry
+  four envelope sequences you drag into shape, a `.wav` dropped on the window becomes a sample, and
+  the whole thing exports as a mix, one WAV per channel and one per sound effect. Experimental —
+  only the note column of the grid can be typed into, so volume and the effect column are not yet
+  editable. Covered in [Sirens](34-sirens.md).
 
 And in the footer:
 
 - **Review.** Judging finished meshes — one at a time or as a parameter sweep — and the "what
-  works" findings the verdicts add up to. Covered in [Review](36-review.md).
+  works" findings the verdicts add up to. Covered in [Review](37-review.md).
 - **Settings.** The app's own preferences — UI scale, the frame-rate readout, layout resets, and the
   list of models it loaded, from which a missing one can be downloaded. See
-  [In-app settings](39-configuration.md#in-app-settings).
+  [In-app settings](40-configuration.md#in-app-settings).
 
 Two things that used to be modes are not, and both moved for the same reason: they are *about* the
 screen you are on rather than places to go. This documentation opens over the window (`F1`, or any
 pane's (?) button) instead of replacing it, so the control you were asking about is still there when
 you have the answer; and the style-profile manager opens as a sheet from the profile picker at the
-Reference stage — see [Profiles](35-profiles.md).
+Reference stage — see [Profiles](36-profiles.md).
 
 The **guided tour** is a third overlay, for the same reason: it points at the controls of whatever
 mode you are in, so taking that mode away to run it would leave nothing to point at. It never
@@ -160,7 +166,7 @@ through, so the menu, `Ctrl+K` and the keyboard cannot disagree about what an ac
 it is available, or why it is not. A row you cannot use is greyed with the reason on hover — the
 same reason the palette gives — and a row with a keyboard binding prints it on the right.
 
-**Workspace** is the one to know about: it holds all eleven modes, so it is a third way — beside
+**Workspace** is the one to know about: it holds all twelve modes, so it is a third way — beside
 the rail and the palette — to change what the window is showing.
 
 ## The status bar
@@ -174,8 +180,8 @@ There is no green "all well" state, because a healthy install has nothing to rep
 
 When the window is too narrow to hold all of it, items drop from the *right* end, so the answer to
 "where am I" is the last thing to go. The one item anchored to the right instead is the optional
-system-resource meter — see [App settings](40-app-settings.md#appearance) — which is
+system-resource meter — see [App settings](41-app-settings.md#appearance) — which is
 reserved before the rest is trimmed, because it is read while a generation is being decided on.
 
 The keyboard shortcut list is `Ctrl+/`, **Help → Keyboard shortcuts**, or **Keyboard shortcuts** in
-the command palette, and it is reproduced in [Keyboard shortcuts](37-shortcuts.md).
+the command palette, and it is reproduced in [Keyboard shortcuts](38-shortcuts.md).

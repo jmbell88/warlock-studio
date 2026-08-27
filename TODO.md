@@ -344,6 +344,53 @@ a working catalog, only local weights through `fetch_worker`, following the
 **Expected outcome:** none until P11 and P12 say the programme continues; the
 value of this entry is that nobody re-plans it.
 
+## P14. Listen to Sirens, on a machine with a sound card
+
+**Why it is yours:** hardware, and the plainest instance of it in this file.
+Sirens landed complete on 2026-08-27 across six landings and **nobody has ever
+heard it**. Every box it was built on is headless and silent, so the synthesis
+is proved the only way it could be — a byte-identical render corpus, a
+`wavout` reader that is exactly its writer's inverse, a perf budget, and a
+pane-draw test with no GPU behind it — and none of that is the same as a person
+saying "that is a pulse wave and it is in tune". The device path
+(`studio/sirens_audio.py`, `pygame.mixer`) has been exercised by tests that
+assert it *degrades* when there is no device, which is the opposite half of the
+question. It belongs beside P5, P6 and P7 — the three entries that are "run
+this against the real thing" — and it sits last only because inserting it in
+place would renumber twelve entries and thirty-seven cross-references, in a file
+whose own rule is that a plan disagreeing with the tree is worse than none.
+
+**Do:** open Sirens on a machine with audio and a display, and go through the
+tutorial (`docs/manual/14-making-a-soundtrack.md`) as written, out loud:
+
+- Write a bar on the triangle and press Space. Is it in tune against a
+  reference pitch? Is the tempo the BPM the transport claims?
+- Drag a decay into a volume envelope and hear the shape change. Drag the
+  release marker and hold a long note — the tail should take over audibly.
+  Then write `Shift+Backtick` (`~~~`) under one note and a backtick (`===`)
+  under another: the first should let go into that tail, the second should stop
+  dead. That pair is the whole argument for the release half of an envelope and
+  the difference is not something a test can hear.
+- Type into the other four columns, which only became possible in the sixth
+  landing. A volume digit should make one row quieter; an `F` and two digits in
+  the effect and parameter columns should change the tempo *from that row on*
+  and not from the top; an arpeggio or a vibrato should sound like the thing it
+  is named after rather than merely different.
+- Drop a `.wav` on the window, point a sample instrument at it, and play it
+  from the grid at three different pitches.
+- Audition a sound effect. Confirm the song's own buffer is untouched: play the
+  song again straight afterwards and hear the song rather than the effect.
+- Export into an empty folder. Open `song.wav`, a stem and an `sfx/` file in
+  something that is **not** this app. Confirm the loop points in `song.wav`
+  actually loop in a player that reads `smpl`, and that a stem lines up
+  sample-for-sample with the mix.
+- Save, close, reopen. Confirm the song is the song.
+
+**Expected outcome:** either the mode is what the manual says it is, or the
+first defect that only a listener could find — a panning error, a tuning
+error, a click at a loop point, a mixer that opens at the wrong rate. The tests
+cannot produce either verdict, which is exactly why this is here.
+
 ---
 
 ## Also owed, smaller

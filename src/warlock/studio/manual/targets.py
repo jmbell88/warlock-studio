@@ -17,7 +17,7 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     # The Rig stage's own column (the UI redesign, wave 5). Rigging was three
     # buttons in three places and no pane of its own, so it had no (?) either.
     "settings-rig": ("25-rigging-and-posing", "rigging-a-mesh"),
-    "library": ("34-library-and-jobs", None),
+    "library": ("35-library-and-jobs", None),
     "inspector": ("23-generating-meshes", "exports"),
     "retarget": ("23-generating-meshes", "triangle-budget"),
     "retexture": ("23-generating-meshes", "surface-texture"),
@@ -73,6 +73,22 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "packwright-settings": ("32-packwright", "settings"),
     "packwright-items": ("32-packwright", "when-it-does-not-fit"),
     "packwright-bridge": ("32-packwright", "exporting"),
+    # Sirens' six panes, pointed at the chapter that now exists. Every one of
+    # them sat on ``20-overview#the-modes`` between phases 2 and 5 -- a
+    # placeholder rather than a missing button, because a (?) that appears
+    # later is one users learn to look for later. Six entries rather than one
+    # chapter-wide target for Troupe's reason: the question differs per pane.
+    # What a render is and why Play is greyed is the transport's; what an order
+    # list is *for* is the order panel's; which number a cell holds is the
+    # instrument list's; what a release point splits is the envelope editor's;
+    # why an effect keeps its own tempo is the effects panel's; and what a
+    # folder of WAVs contains is the bridge's.
+    "sirens-transport": ("34-sirens", "playing-it"),
+    "sirens-orders": ("34-sirens", "patterns-and-the-order"),
+    "sirens-instruments": ("34-sirens", "instruments"),
+    "sirens-envelopes": ("34-sirens", "the-envelope-editor"),
+    "sirens-effects": ("34-sirens", "sound-effects"),
+    "sirens-bridge": ("34-sirens", "exporting-the-audio"),
     # Troupe's four panes. Four entries rather than one chapter-wide target
     # because the questions differ per pane: what a sheet *is* is the cast's
     # question, what the options mean is the form's, why the preview never
@@ -83,9 +99,9 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "troupe-preview": ("33-troupe", "watching-it"),
     "troupe-sheets": ("33-troupe", "the-sheet-panel"),
     "troupe-bridge": ("33-troupe", "taking-it-somewhere"),
-    "profiles": ("35-profiles", None),
-    "review": ("36-review", None),
-    "app-settings": ("40-app-settings", None),
+    "profiles": ("36-profiles", None),
+    "review": ("37-review", None),
+    "app-settings": ("41-app-settings", None),
     # The chooser the app opens on (F56/O118): the one pane a first run
     # certainly sees, and the only one that had no way into the manual at all.
     "home": ("21-home", None),
@@ -100,4 +116,4 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
 # are a red banner, a popup and a Home row, none of which is a pane with a (?).
 # Named once rather than spelled at each of the three, so a chapter that moved
 # does not have to be found in three places (F57).
-TROUBLESHOOTING: tuple[str, str | None] = ("41-troubleshooting", None)
+TROUBLESHOOTING: tuple[str, str | None] = ("42-troubleshooting", None)

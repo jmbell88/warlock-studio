@@ -1,6 +1,6 @@
 """The tours themselves. Data, not code.
 
-Two of them in this wave, and the pair is chosen rather than convenient.
+Three of them, and each is chosen rather than convenient.
 
 ``first-hour`` orients someone who has just opened the app, and **every step of
 it runs on a machine with no GPU and no weights** -- the one step that could ask
@@ -11,6 +11,13 @@ rather than a lesson.
 ``inker-basics`` proves the same machinery against a real document editor, and
 it was picked over Create for the same reason: drawing needs no card, no weights
 and no subprocess, so every reader can finish it and so can the smoke test.
+
+``sirens-basics`` is beside it and for that same reason -- a tracker needs no
+GPU, no weights and no subprocess either -- with one honest difference: the mode
+is about a *sound*, and a machine with no audio device cannot make one. So no
+step of it waits on hearing anything. Every ``done`` condition here is a mode, a
+document or the reader's own Next, which is what lets somebody on a silent box
+finish the tour and still have written a bar.
 
 Each tour ends by handing the reader to the chapter that goes deeper. The link
 runs one way -- a step names a chapter, a chapter never names a step -- which is
@@ -272,8 +279,158 @@ INKER_BASICS = Tour(
     ),
 )
 
+SIRENS_BASICS = Tour(
+    key="sirens-basics",
+    title="Writing a tune in Sirens",
+    blurb="Five minutes. A pattern, an instrument, an envelope and a WAV. No GPU needed.",
+    steps=(
+        Step(
+            id="open-sirens",
+            title="Open Sirens",
+            body=(
+                "The chiptune tracker: five NES-shaped voices, a grid you type notes into, "
+                "and a song that exports as WAV. No graphics card and no downloaded model.\n\n"
+                "If this machine has no sound device you can still do every step of this "
+                "tour -- you simply will not hear it, and the transport says so."
+            ),
+            anchor="rail/sirens",
+            done=Condition("mode_is", "sirens"),
+        ),
+        Step(
+            id="new-song",
+            title="Start a song",
+            body=(
+                "Ctrl+N.\n\n"
+                "It is not an empty document. Five channels, one 64-row pattern, one "
+                "instrument per voice kind, and an order that already points at the "
+                "pattern -- so the first note you type makes a sound."
+            ),
+            mode="sirens",
+            done=Condition("doc_open", "sirens"),
+        ),
+        Step(
+            id="the-grid",
+            title="The grid",
+            body=(
+                "One pattern at a time, five columns per channel: note, instrument, "
+                "volume, effect, parameter. A row is a sixteenth note, and every fourth "
+                "row -- one beat -- has a stripe behind it.\n\n"
+                "The dots are not decoration. A run of them is how the eye finds the rows "
+                "where something happens.\n\n"
+                "One thing to know before you try it: which column the caret is in decides "
+                "what a key means. c is a note in the first column and the hex digit twelve "
+                "in the third."
+            ),
+            mode="sirens",
+            chapter=("34-sirens", "the-pattern-grid"),
+        ),
+        Step(
+            id="type-a-bar",
+            title="Type a bassline",
+            body=(
+                "Click into the Triangle channel's note column. Set Octave to 3 and Step "
+                "to 4 in the strip over the grid, then type z z v x.\n\n"
+                "The keyboard is a piano: zsxdcvgbhnjm is the octave Octave names, and "
+                "q2w3er5t6y7u is the one above it. It only fires in the note column -- "
+                "e in the effect column is the letter of an effect."
+            ),
+            mode="sirens",
+            chapter=("14-making-a-soundtrack", "a-bassline-on-the-triangle"),
+        ),
+        Step(
+            id="transport",
+            title="Play it",
+            body=(
+                "Space, or the button here.\n\n"
+                "The first press may say it is still rendering. That is the design rather "
+                "than a delay to apologise for: the whole song is synthesised into a "
+                "buffer and the buffer is played, so what you hear is bit-for-bit what "
+                "the exported WAV will contain."
+            ),
+            mode="sirens",
+            anchor="sirens/transport",
+            chapter=("34-sirens", "playing-it"),
+        ),
+        Step(
+            id="instruments",
+            title="Instruments are numbered, and the number is in the cell",
+            body=(
+                "A typed note stamps whichever instrument is selected here into the "
+                "grid's instrument column -- without that, a typed note is silent for a "
+                "reason nothing on screen explains.\n\n"
+                "The number on each row is what the cell holds. It is a slot rather than "
+                "a position, so removing one does not renumber the notes that named the "
+                "others."
+            ),
+            mode="sirens",
+            anchor="sirens/instruments",
+            chapter=("34-sirens", "instruments"),
+        ),
+        Step(
+            id="envelopes",
+            title="Drag a shape into one",
+            body=(
+                "A chiptune instrument is four short lists of numbers stepped once a "
+                "tick, and the shape of the list is the sound. Drag across the Volume "
+                "graph, high on the left falling to nothing.\n\n"
+                "The whole drag is one undo step, and painting past the end lengthens "
+                "the sequence. The release marker splits it: everything from there is "
+                "the tail after the note ends, and the tail never loops."
+            ),
+            mode="sirens",
+            anchor="sirens/envelopes",
+            chapter=("34-sirens", "the-envelope-editor"),
+        ),
+        Step(
+            id="order",
+            title="Patterns and the order are two lists",
+            body=(
+                "Adding a pattern does not add it to the order, and removing an order "
+                "entry does not delete the pattern. That is the point: one pattern can "
+                "appear in the order three times.\n\n"
+                "Tick Loop at the end. The render then carries loop points, and they go "
+                "into the exported WAV's smpl chunk -- which is what makes a track a "
+                "soundtrack rather than something that restarts."
+            ),
+            mode="sirens",
+            anchor="sirens/orders",
+            chapter=("34-sirens", "patterns-and-the-order"),
+        ),
+        Step(
+            id="effects",
+            title="Sound effects live in the same document",
+            body=(
+                "Press Add. You get an effect, a little pattern of its own, and the grid "
+                "pointing straight at it -- so the grid is the effect editor and there is "
+                "no second one to learn.\n\n"
+                "An effect keeps its own tempo, because a coin pickup is forty "
+                "milliseconds whatever the music is doing. The play button on the row "
+                "auditions it without touching the song's own buffer."
+            ),
+            mode="sirens",
+            anchor="sirens/effects",
+            chapter=("34-sirens", "sound-effects"),
+        ),
+        Step(
+            id="export",
+            title="Getting the audio out",
+            body=(
+                "Export audio... asks for a folder rather than a filename, because it "
+                "writes song.wav, one WAV per channel under stems/ and one per sound "
+                "effect under sfx/.\n\n"
+                "The .wsng is the composition and every WAV is derived from it: export "
+                "an untouched document twice and the files are byte-identical, so a "
+                "build script can regenerate them."
+            ),
+            mode="sirens",
+            anchor="sirens/bridge",
+            chapter=("34-sirens", "exporting-the-audio"),
+        ),
+    ),
+)
+
 #: Every tour, in offer order.
-TOURS: tuple[Tour, ...] = (FIRST_HOUR, INKER_BASICS)
+TOURS: tuple[Tour, ...] = (FIRST_HOUR, INKER_BASICS, SIRENS_BASICS)
 
 
 def find(key: str) -> Tour | None:
@@ -285,4 +442,4 @@ def find(key: str) -> Tour | None:
     return next((tour for tour in TOURS if tour.key == key), None)
 
 
-__all__ = ["FIRST_HOUR", "INKER_BASICS", "TOURS", "find"]
+__all__ = ["FIRST_HOUR", "INKER_BASICS", "SIRENS_BASICS", "TOURS", "find"]
