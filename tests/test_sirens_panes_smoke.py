@@ -30,6 +30,7 @@ from test_sirens_mode import FakeCtx, _tab
 from warlock.studio import sirens_mode
 from warlock.studio.panes import (
     sirens_bridge,
+    sirens_effects,
     sirens_envelopes,
     sirens_instruments,
     sirens_orders,
@@ -45,6 +46,7 @@ PANES = (
     ("sirens-orders", sirens_orders),
     ("sirens-instruments", sirens_instruments),
     ("sirens-envelopes", sirens_envelopes),
+    ("sirens-effects", sirens_effects),
     ("sirens-bridge", sirens_bridge),
 )
 
@@ -119,10 +121,14 @@ def _loaded(ctx: FakeCtx) -> Any:
         pitch=inst.Sequence(values=(-40, 0, 40)),
         duty=inst.Sequence(values=(0, 1, 2, 3), loop=0),
     )
+    effect = doc.add_oneshot("coin", rows=2)
+    doc.set_cell(effect.pattern, 0, 0, D.NOTE, 60)
+    doc.set_cell(effect.pattern, 0, 0, D.INSTRUMENT, doc.instruments[0].uid)
     doc.set_sample("kick", np.zeros(128, dtype=np.float32))
     sample = next(one for one in doc.instruments if one.kind == "sample")
     doc.update_instrument(sample.uid, sample="kick")
     state = sirens_mode.ensure(ctx)
+    state.oneshot = effect.uid
     state.anchor = (0, 0)
     state.row, state.channel = 4, 1
     return tab
@@ -178,3 +184,15 @@ def test_the_envelope_editor_draws_a_sequence_at_the_engines_ceiling(frames):
     )
     sirens_mode.ensure(ctx).instrument = uid
     frames(lambda: sirens_envelopes.draw(ctx))
+
+
+def test_the_effects_pane_draws_an_effect_whose_pattern_is_gone(frames):
+    """Unreachable through the app -- ``add_oneshot`` mints the pattern and the
+    pair is one undo step -- but a hand-edited ``.wsng`` can carry it, and a row
+    that renders as an exception is worse than one that says what is wrong."""
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    one = tab.doc.add_oneshot("orphan", rows=2)
+    tab.doc.remove_pattern(one.pattern)
+    sirens_mode.ensure(ctx).oneshot = one.uid
+    frames(lambda: sirens_effects.draw(ctx))

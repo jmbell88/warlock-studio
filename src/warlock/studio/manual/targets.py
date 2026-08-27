@@ -81,6 +81,7 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "sirens-orders": ("20-overview", "the-modes"),
     "sirens-instruments": ("20-overview", "the-modes"),
     "sirens-envelopes": ("20-overview", "the-modes"),
+    "sirens-effects": ("20-overview", "the-modes"),
     "sirens-bridge": ("20-overview", "the-modes"),
     # Troupe's four panes. Four entries rather than one chapter-wide target
     # because the questions differ per pane: what a sheet *is* is the cast's

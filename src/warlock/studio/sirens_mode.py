@@ -45,13 +45,21 @@ from . import dialogs, docmodes, journal, recents, sirens_audio, sirens_io, sire
 # every pane, every key binding and every test says ``sirens_mode.save(ctx)``:
 # a wrapper would be a second object where the callers reach for one.
 from .sirens_io import (  # noqa: F401
+    EXPORT_PREFIX,
     SAMPLE_FILTER,
     SAMPLE_PREFIX,
+    SFX_DIR,
     SONG_FILTER,
+    SONG_NAME,
+    STEM_DIR,
+    WAV_FILTER,
     _load,
     _start,
     ask_open,
     ask_sample,
+    export_files,
+    export_plan,
+    export_to,
     free_sample_key,
     import_sample,
     open_path,
@@ -167,6 +175,13 @@ def clamp_caret(ctx: Any, tab: SongTab | None = None) -> None:
     state.column = max(0, min(state.column, D.COLUMNS - 1))
     if state.instrument is not None and doc.instrument(state.instrument) is None:
         state.instrument = doc.instruments[0].uid if doc.instruments else None
+    if state.oneshot is not None and doc.oneshot(state.oneshot) is None:
+        # Cleared rather than moved to a neighbour, unlike the instrument above:
+        # an instrument is what the *next note* is stamped with and needs some
+        # answer, while a selected effect is what the grid is editing -- and
+        # silently switching the grid to a different effect after an undo is
+        # the caret bug this function exists to prevent, one level up.
+        state.oneshot = None
 
 
 def move_caret(ctx: Any, drow: int = 0, dchannel: int = 0, dcolumn: int = 0,
@@ -499,6 +514,59 @@ def pump(ctx: Any) -> None:
     request_render(ctx)
 
 
+#: The key prefix an audition carries. **Not ``sirens-render:``**, and that is
+#: the decision in this pair of functions: ``TaskRunner.submit`` refuses a key
+#: already in flight, so sharing the song's key would make a press of Audition
+#: during a re-render do nothing -- and the arm that adopts a ``sirens-render``
+#: result puts the samples on ``SongTab.pcm``, which is the buffer Space plays.
+#: An effect landing there would replace the song with a coin pickup until the
+#: next edit re-armed the renderer, which is the sort of thing a user reports as
+#: "the song vanished". So: its own key, its own arm, and the tab's buffer is
+#: never touched.
+AUDITION_PREFIX = "sirens-audition:"
+
+
+def audition(ctx: Any, tab: SongTab | None, uid: int) -> bool:
+    """Render one sound effect and play it. -> whether the render started.
+
+    The song's render shape, one document object smaller: the snapshot is taken
+    on the frame thread, ``synth.render_oneshot`` runs on the task thread, and
+    :func:`on_task_done` hands the result straight to the mixer rather than
+    storing it. Nothing about an audition outlives the sound, so there is
+    nothing on the tab for it to live in.
+
+    The device is checked *before* the submit, because a machine with no card
+    would otherwise spend seconds of numpy on a buffer with nowhere to go and
+    say nothing about why.
+    """
+    tab = tab or active(ctx)
+    if tab is None or tab.busy:
+        return False
+    if tab.doc.oneshot(uid) is None:
+        return False
+    if not sirens_audio.available():
+        ctx.toast(sirens_audio.unavailable_reason(), "warn")
+        return False
+
+    from .sirens import wsng
+
+    data = wsng.wsng_bytes(tab.doc)
+    effect = int(uid)
+
+    def run() -> dict[str, Any]:
+        from ..service.errors import invalid_from
+        from .sirens import synth, wavout
+
+        try:
+            doc = wsng.read_wsng(data)
+            samples = synth.render_oneshot(doc, effect)
+        except ValueError as exc:
+            raise invalid_from(exc, "That sound effect did not render") from exc
+        return {"pcm": wavout.to_int16(samples), "oneshot": effect}
+
+    return bool(ctx.submit(f"{AUDITION_PREFIX}{tab.uid}", run))
+
+
 # --- playback -----------------------------------------------------------------
 
 
@@ -590,9 +658,27 @@ def on_task_done(ctx: Any, done: Any) -> None:
             tab.rendering = False
         return
 
+    if name == "sirens-audition":
+        # Straight to the mixer. Deliberately not through :func:`play`, which
+        # is about ``tab.pcm`` -- see :data:`AUDITION_PREFIX` for why an effect
+        # never lands there.
+        if isinstance(result, dict) and not sirens_audio.play(result["pcm"]):
+            ctx.toast("That sound effect could not be played; see the log.", "error")
+        return
+
     if name == "sirens-sample":
         if isinstance(result, dict):
             adopt_sample(ctx, tab, result)
+        return
+
+    if name == "sirens-export":
+        # Its own arm rather than the fall-through below, because an export is
+        # not a save: it writes files *derived* from the document and leaves the
+        # document exactly as dirty as it was. Falling through would call
+        # ``mark_saved`` and drop the crash copy of work still only in memory.
+        tab.saving = False
+        if isinstance(result, dict):
+            ctx.toast(f"Exported {result['files']} file(s) to {result['directory']}")
         return
 
     tab.saving = False
@@ -621,11 +707,13 @@ def on_task_failed(ctx: Any, done: Any) -> None:
         # offering one is worse than a short one.
         forget_path(ctx, done.key.split(":", 1)[1])
         return
-    if done.key.startswith(sirens_io.SAMPLE_PREFIX):
-        # A refused sample has nothing to unlock: the tab was never locked for
-        # it, and clearing ``saving`` here would unlock a *save* that happened
-        # to be running alongside. The sentence the user is owed is already the
-        # toast the classifier drew before this was called.
+    if done.key.startswith(AUDITION_PREFIX) or done.key.startswith(sirens_io.SAMPLE_PREFIX):
+        # A refused sample or audition has nothing to unlock: the tab was never
+        # locked for either, and clearing ``saving`` here would unlock a *save*
+        # that happened to be running alongside. The sentence the user is owed
+        # is already the toast the classifier drew before this was called. An
+        # *export* is not in this clause, deliberately -- it does lock the tab
+        # (``docmodes.start_save``), so it falls through to the unlock below.
         return
     state = ctx.state.sirens
     if state is None or ":" not in done.key:

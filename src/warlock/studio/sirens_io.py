@@ -218,10 +218,12 @@ def free_sample_key(doc: Any, name: str) -> str:
 def _write(files: dict[Path, bytes]) -> None:
     """Write a whole set of files: stage all of them, then replace each.
 
-    One file today and more in Phase 4 (``song.wav`` beside ``stems/``), and
-    ``atomic.staged_set`` is what makes that a set that lands together rather
-    than an export whose third file leaves the first two on top of an older
-    one.
+    ``atomic.staged_set``: **every file is staged before any of them is
+    replaced.** A song document saves as one file and exports as many --
+    ``song.wav`` beside a ``stems/`` and an ``sfx/`` directory -- and an encode
+    that raised on the ninth would otherwise leave eight new WAVs on top of a
+    previous export's other twelve, under names that say they belong together.
+    The leaf carries the rest of the argument.
     """
     atomic.staged_set(files)
 
@@ -274,3 +276,281 @@ def save_as(ctx: Any, tab: SongTab | None = None) -> None:
         return {"head": head, "path": str(path), "retitle": True}
 
     _start(ctx, tab, f"sirens-saveas:{tab.uid}", run)
+
+
+# --- exporting ----------------------------------------------------------------
+#
+# **The ``.wsng`` is the composition and every WAV is a pure function of it**
+# (``docs/INVARIANTS.md``). That is what :func:`export_plan` is: a document and
+# a destination in, a complete ``{path: bytes}`` map out, with no clock, no
+# randomness and no filesystem read anywhere in it -- so re-exporting a document
+# nobody has touched writes the same bytes it wrote last time, and a test can
+# say so without a disk. ``wavout`` already holds up its half (no timestamps, no
+# writer string); this holds up the half above it by deciding every filename
+# from the document alone.
+#
+# **Nothing is written until every file has been encoded.** The plan is built
+# whole and handed to :func:`_write` in one call, which is what makes a refusal
+# -- a hostile name, a song past the render ceiling -- leave no half-populated
+# ``stems/`` behind for the user to wonder about.
+
+
+#: What the export picker offers. Its own list rather than :data:`SAMPLE_FILTER`
+#: even though the patterns are identical: that one is the *import* door and is
+#: what a ``.wav`` drop is matched against, and one list serving both would tie
+#: what this build can read to what it can write.
+WAV_FILTER = [filetypes.describe("WAV audio", (".wav",)), filetypes.pattern((".wav",))]
+
+#: The whole mix, at the root of the chosen directory. A fixed name rather than
+#: the document's title: the title is a ``.wsng`` filename that may hold
+#: anything, the stems and effects beside it are named after their own parts of
+#: the document, and a folder whose four names come from four different places
+#: is a folder nobody can write a build script against.
+SONG_NAME = "song.wav"
+
+#: The two subdirectories. Named here because :func:`export_plan` and the pane
+#: that reports what landed both spell them, and two spellings of a directory
+#: name is how a report comes to describe a folder that does not exist.
+STEM_DIR = "stems"
+SFX_DIR = "sfx"
+
+#: The key prefix an export carries. The rest of it is the tab's uid, which is
+#: what ``on_task_done`` looks a tab up by -- and one tab exporting twice at
+#: once is two encodes racing onto one directory rather than a feature.
+EXPORT_PREFIX = "sirens-export:"
+
+
+def safe_stem(name: str, fallback: str) -> str:
+    """``name`` as a filename stem, or ``fallback`` when it cannot be one.
+
+    Channel names and sound-effect names are **user-supplied text that becomes a
+    path**, which is the one shape ``wsng.py`` refused outright: a ``.wsng``
+    numbers its archive members and keeps the names in the manifest, precisely
+    so that ``../`` and ``CON`` cannot reach a filesystem through them. An
+    export cannot take that way out -- ``sfx/coin.wav`` is the whole point of
+    the directory, and a folder of ``sfx/1.wav`` with a sidecar mapping is a
+    format nobody's build script reads -- so the names come through, sanitised.
+
+    ``inker.sheetout``'s two rules rather than a third copy of them: its
+    character class (letters, digits, dot, dash, underscore) and its list of the
+    device names Windows still reserves. Both are exported from there for
+    exactly this reason, and a second regex here would be the one that failed to
+    learn about ``CONIN$``.
+
+    **Falls back rather than refusing.** ``sheetout`` raises because an Inker
+    sheet split is one export per tag and a name that cannot be a file means the
+    user has to go and fix a tag; here the name is one of forty in a document
+    where nothing else is wrong, and taking the whole export down over an effect
+    somebody called ``...`` would be a refusal about the wrong thing. The
+    fallback is positional (``effect3``), so the file is still findable.
+    """
+    from .inker import sheetout
+
+    # ``strip(" .-")`` on top of the character class. A dot is legal *inside* a
+    # filename and illegal at either end of one on Windows, which silently
+    # strips it -- so ``fx.`` and ``fx`` would land on one file; ``sheetout``
+    # refuses that case, and here it is simply trimmed off first. The dash goes
+    # with it because ``../evil`` sanitises to ``..-evil``, and a file whose
+    # name starts with a dash is one every shell reads as a flag.
+    stem = sheetout.sanitize_stem(str(name)).strip(" .-")
+    if not stem:
+        return fallback
+    try:
+        sheetout.reserved_check(stem)
+    except ValueError:
+        return fallback
+    return stem
+
+
+def _unique(stems: list[str]) -> list[str]:
+    """Suffix any stem that is already taken, in order. -> the same length.
+
+    Two channels called ``Pulse 1`` -- or a ``Pulse/1`` and a ``Pulse-1``, which
+    sanitise to one name -- are two files, and letting the second land on the
+    first's name is one export silently overwriting another. ``sheetout``
+    refuses a collision because a template that collides is a template the user
+    should fix; a channel list is not a template, and the fix here is simply a
+    number.
+    """
+    seen: dict[str, int] = {}
+    out: list[str] = []
+    for stem in stems:
+        count = seen.get(stem, 0) + 1
+        seen[stem] = count
+        out.append(stem if count == 1 else f"{stem}-{count}")
+    return out
+
+
+def _under(root: Path, *parts: str) -> Path:
+    """``root`` joined with ``parts``, refusing anything that escapes it.
+
+    Belt and braces over :func:`safe_stem`, and deliberately so: that function
+    decides what a name *becomes* and this one checks where the result *lands*,
+    which are two different mistakes. A sanitiser is one regex away from letting
+    a separator through and the consequence would be a file written outside the
+    directory the user picked -- so the answer is checked rather than argued
+    from, once, at the only place a path is built.
+    """
+    path = root.joinpath(*parts)
+    if root.resolve() not in path.resolve().parents:
+        raise ValueError(f"{'/'.join(parts)!r} is not a name inside the export folder")
+    return path
+
+
+def channel_stems(doc: Any) -> list[str]:
+    """One filename stem per channel, in the document's channel order."""
+    return _unique(
+        [
+            safe_stem(one.name, f"channel{index + 1}")
+            for index, one in enumerate(doc.channels)
+        ]
+    )
+
+
+def oneshot_stems(doc: Any) -> list[str]:
+    """One filename stem per sound effect, in the document's own order."""
+    return _unique(
+        [
+            safe_stem(one.name, f"effect{index + 1}")
+            for index, one in enumerate(doc.oneshots)
+        ]
+    )
+
+
+def _stem_render(doc: Any, index: int) -> tuple[Any, tuple[int, int] | None]:
+    """The mix with every channel but ``index`` silenced. -> ``synth.render``'s pair.
+
+    **Not a second rendering path.** There is one tick loop in this build and a
+    per-channel variant of it would be a second thing to keep in step with the
+    first; what a stem is, is the same render of a document with the other
+    channels' notes taken out. So the note, instrument and volume columns are
+    blanked on a *copy* of each pattern's cells and ``synth.render`` runs
+    unchanged.
+
+    **The effect column survives, and that is the whole subtlety.** ``Bxx``,
+    ``Cxx``, ``Dxx`` and ``Fxx`` are the player's rather than the voice's, and
+    any channel may carry them -- so a stem rendered from a grid with the other
+    channels wiped clean would jump differently, halt somewhere else and run at
+    a different tempo than the mix it is supposed to line up with. Left in, the
+    stems are sample-aligned with ``song.wav`` and carry its loop points. The
+    voice effects that survive alongside them (a slide, a vibrato) act on a
+    voice that was never triggered, which is silence.
+    """
+    from .sirens import document as D
+    from .sirens import notes, synth
+
+    saved = {pattern.uid: pattern.cells for pattern in doc.patterns}
+    try:
+        for pattern in doc.patterns:
+            cells = pattern.cells.copy()
+            for channel in range(pattern.channels):
+                if channel != index:
+                    cells[:, channel, : D.EFFECT] = notes.EMPTY
+            pattern.cells = cells
+        return synth.render(doc)
+    finally:
+        for pattern in doc.patterns:
+            pattern.cells = saved[pattern.uid]
+
+
+def export_plan(doc: Any, directory: Path) -> dict[Path, bytes]:
+    """Every file an export writes, encoded. Pure; blocking; task thread only.
+
+    Separated from the task and the picker because it is the half worth
+    asserting: byte-identity across two exports, a stem holding one channel and
+    a hostile name landing inside the folder are all statements about this
+    function, and none of them needs a dialog or a ``ctx`` to be true.
+
+    The loop points go into ``song.wav``'s ``smpl`` chunk and into every stem's,
+    which is why ``wavout`` was written by hand -- a soundtrack whose loop is in
+    a sidecar the engine does not read is a soundtrack that does not loop.
+    """
+    from .sirens import synth, wavout
+
+    directory = Path(directory)
+    rate = synth.SAMPLE_RATE
+    pcm, loop = synth.render(doc)
+    files: dict[Path, bytes] = {
+        _under(directory, SONG_NAME): wavout.wav_bytes(pcm, rate, loop=loop)
+    }
+    for index, stem in enumerate(channel_stems(doc)):
+        samples, stem_loop = _stem_render(doc, index)
+        files[_under(directory, STEM_DIR, f"{stem}.wav")] = wavout.wav_bytes(
+            samples, rate, loop=stem_loop
+        )
+    for one, stem in zip(doc.oneshots, oneshot_stems(doc), strict=True):
+        files[_under(directory, SFX_DIR, f"{stem}.wav")] = wavout.wav_bytes(
+            synth.render_oneshot(doc, one.uid), rate
+        )
+    return files
+
+
+def _export(data: bytes, directory: Path) -> dict[str, Any]:
+    """Blocking; task thread only. The snapshot in, the report out.
+
+    ``read_wsng`` rather than the live document, which is ``request_render``'s
+    rule and its reason: a numpy view handed to a thread is a view of an array
+    the caret is writing into, and rendering a song is seconds. The zip round
+    trip is the price of an export that cannot tear.
+    """
+    from ..service.errors import invalid_from
+    from .sirens import wsng
+
+    directory = Path(directory)
+    try:
+        doc = wsng.read_wsng(data)
+        files = export_plan(doc, directory)
+    except ValueError as exc:
+        # Framed: only a ``ServiceError``'s text survives the task classifier,
+        # and the engine's own sentence -- a song past the render ceiling names
+        # the ceiling -- is the half that says what to do about it.
+        raise invalid_from(exc, "That song did not export", field="file") from exc
+    _write(files)
+    return {"directory": str(directory), "files": len(files)}
+
+
+def export_to(ctx: Any, tab: SongTab, directory: Path) -> None:
+    """Export into a directory already chosen. The door a test comes through.
+
+    The snapshot is taken here, on the frame thread, for the reason
+    :func:`~.sirens_mode.request_render` takes its own here: this is where the
+    document is safe to read.
+    """
+    from .sirens import wsng
+
+    if tab is None or tab.saving:
+        return
+    data = wsng.wsng_bytes(tab.doc)
+    _start(ctx, tab, f"{EXPORT_PREFIX}{tab.uid}", lambda: _export(data, Path(directory)))
+
+
+def export_files(ctx: Any, tab: SongTab | None = None) -> None:
+    """``song.wav``, ``stems/`` and ``sfx/`` into a folder the user picks.
+
+    A **folder** picker rather than a save dialog, alone among this app's
+    exports, because alone among them this one writes a family of files under
+    names it chooses: a typed filename would land on ``song.wav`` and be
+    ignored by the twelve files beside it. See ``dialogs.select_folder``.
+
+    The picker runs *inside* the task, which is every picker in this module: a
+    native dialog is modal to the OS and blocks until dismissed, and on the
+    frame thread that is a frozen window.
+    """
+    from .sirens import wsng
+
+    tab = tab or active(ctx)
+    if tab is None or tab.saving:
+        return
+    if not tab.doc.order and not tab.doc.oneshots:
+        # Refused at the door rather than exporting a folder of empty WAVs. An
+        # order list with nothing in it is what a brand-new document has, and
+        # ``request_render`` already refuses it for the same reason.
+        ctx.toast("There is nothing in the order list to export yet.", "error")
+        return
+    data = wsng.wsng_bytes(tab.doc)
+
+    def run() -> dict[str, Any] | None:
+        directory = dialogs.select_folder("Export the song")
+        return None if directory is None else _export(data, directory)
+
+    _start(ctx, tab, f"{EXPORT_PREFIX}{tab.uid}", run)

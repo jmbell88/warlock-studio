@@ -528,6 +528,7 @@ def test_the_workspace_has_a_skeleton_with_declared_share_keys():
         "sirens-orders",
         "sirens-instruments",
         "sirens-envelopes",
+        "sirens-effects",
         "sirens-bridge",
     ]
 
@@ -695,3 +696,110 @@ def test_the_drop_router_imports_a_wav_rather_than_saying_it_cannot():
     branch = sirens_branch.split('ctx.state.mode in ("poser"', 1)[0]
     assert "sirens_mode.import_sample" in branch
     assert "not built yet" not in branch
+
+
+# --- sound effects ------------------------------------------------------------
+#
+# A one-shot has been part of the document since Phase 1; what is asserted here
+# is the *mode*'s half of it -- auditioning, and the selection that points the
+# grid at an effect's pattern rather than at the song's.
+
+
+def _oneshot(tab: Any, name: str = "coin") -> Any:
+    doc = tab.doc
+    one = doc.add_oneshot(name, rows=2)
+    doc.set_cell(one.pattern, 0, 0, D.NOTE, 60)
+    doc.set_cell(one.pattern, 0, 0, D.INSTRUMENT, doc.instruments[0].uid)
+    return one
+
+
+@pytest.fixture
+def _device(monkeypatch):
+    """A mixer that answers, and remembers what it was handed."""
+    from warlock.studio import sirens_audio
+
+    played: list[Any] = []
+    monkeypatch.setattr(sirens_audio, "available", lambda: True)
+    monkeypatch.setattr(sirens_audio, "play", lambda pcm, *_a, **_k: played.append(pcm) or True)
+    return played
+
+
+def test_auditioning_an_effect_renders_that_effect_rather_than_the_song(_device):
+    """The one thing an Audition button must not do is play the music."""
+    from warlock.studio.sirens import synth, wavout
+
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    one = _oneshot(tab)
+    assert sirens_mode.audition(ctx, tab, one.uid)
+    sirens_mode.on_task_done(ctx, _Done(f"{sirens_mode.AUDITION_PREFIX}{tab.uid}", ctx.result))
+    expected = wavout.to_int16(synth.render_oneshot(tab.doc, one.uid))
+    assert _device and (_device[0] == expected).all()
+
+
+def test_an_audition_never_lands_on_the_songs_buffer(_device):
+    """``sirens-render:`` is the song's key and its arm writes ``tab.pcm``, which
+    is what Space plays. An effect adopted there would replace the song until
+    the next edit re-armed the renderer."""
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    _render(ctx, tab)
+    song = tab.pcm
+    generation = tab.render_generation
+    one = _oneshot(tab)
+    sirens_mode.audition(ctx, tab, one.uid)
+    sirens_mode.on_task_done(ctx, _Done(f"{sirens_mode.AUDITION_PREFIX}{tab.uid}", ctx.result))
+    assert tab.pcm is song and tab.render_generation == generation
+
+
+def test_an_audition_with_no_device_says_so_rather_than_rendering():
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    one = _oneshot(tab)
+    assert not sirens_mode.audition(ctx, tab, one.uid)
+    assert ctx.submitted == []
+    assert ctx.toasts and ctx.toasts[-1][1] == "warn"
+
+
+def test_an_effect_that_is_not_in_the_song_is_not_auditioned(_device):
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    assert not sirens_mode.audition(ctx, tab, 9999)
+    assert ctx.submitted == []
+
+
+def test_a_failed_audition_does_not_unlock_a_save_running_beside_it():
+    """``sirens-sample``'s clause, for the same reason: the tab was never locked
+    for an audition, so clearing ``saving`` here would unlock a save."""
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    tab.saving = True
+    sirens_mode.on_task_failed(
+        ctx, _Done(f"{sirens_mode.AUDITION_PREFIX}{tab.uid}", message="nope")
+    )
+    assert tab.saving
+
+
+def test_an_effect_removed_under_the_selection_clears_it_rather_than_moving_it():
+    """Unlike the instrument, which needs *some* answer for the next note: a
+    selected effect is what the grid is editing, and silently switching the grid
+    to a different one after an undo is the caret bug ``clamp_caret`` exists to
+    prevent, one level up."""
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    one = _oneshot(tab)
+    state = sirens_mode.ensure(ctx)
+    state.oneshot = one.uid
+    tab.doc.remove_oneshot(one.uid)
+    sirens_mode.clamp_caret(ctx, tab)
+    assert state.oneshot is None
+
+
+def test_a_tab_switch_drops_the_effect_selection():
+    ctx = FakeCtx()
+    first = _tab(ctx)
+    one = _oneshot(first)
+    state = sirens_mode.ensure(ctx)
+    state.oneshot = one.uid
+    sirens_mode.new_document(ctx)
+    assert state.oneshot is None

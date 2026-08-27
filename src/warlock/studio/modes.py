@@ -236,10 +236,14 @@ MATURITY_NOTE: dict[str, str] = {
         " provisional and humanoid reconstruction quality is untested."
         " See the manual (Troupe)."
     ),
+    # Narrowed rather than removed as each gap closed: the sound-effect pane and
+    # the WAV export the note used to name both landed, and a chip whose sentence
+    # describes things that now exist teaches the reader to ignore the chip. What
+    # is left is documentation, which is the honest thing to warn about.
     "sirens": (
-        "The engine is complete, songs play and save, and instruments have an"
-        " envelope editor and sample import -- but there is no sound-effect"
-        " pane and no WAV export yet."
+        "Everything works end to end -- writing, instruments, sound effects,"
+        " playback and WAV export -- but the mode has no manual chapter or"
+        " guided tour yet."
     ),
 }
 

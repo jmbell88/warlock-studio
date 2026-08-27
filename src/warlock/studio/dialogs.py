@@ -88,6 +88,28 @@ def save_file(title: str, default_name: str, filters: list[str] | None = None) -
     return Path(picked) if picked else None
 
 
+def select_folder(title: str, default_path: str = "") -> Path | None:
+    """A directory the user picked. Blocking; call from a task thread.
+
+    The third picker, and it exists because one export in the app writes a
+    *family* of files under names it chooses rather than one file under a name
+    the user chooses: Sirens' export lays down ``song.wav`` beside ``stems/``
+    and ``sfx/``, and asking for that through :func:`save_file` would put the
+    user's typed filename on one of the four and silently ignore it for the
+    rest. What is actually being chosen there is the destination folder, so
+    that is what is asked for.
+
+    ``None`` means **the user cancelled** and nothing else, and a picker that
+    failed to open raises -- :func:`open_file`'s rule, for its reason.
+    """
+    try:
+        picked = pfd.select_folder(title, default_path).result()
+    except Exception as exc:
+        log.exception("the folder picker failed")
+        raise Failed("The folder picker did not open. See the log for details.") from exc
+    return Path(picked) if picked else None
+
+
 def filters_for(name: str) -> list[str]:
     return ARTIFACT_FILTERS.get(Path(name).suffix.lower(), ["All files", "*"])
 

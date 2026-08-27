@@ -218,6 +218,7 @@ def sirens(ctx: Any) -> dict[str, Column]:
 
     from .panes import (
         sirens_bridge,
+        sirens_effects,
         sirens_envelopes,
         sirens_instruments,
         sirens_orders,
@@ -267,6 +268,18 @@ def sirens(ctx: Any) -> dict[str, Column]:
                 sizing=SHARE,
                 share_key="sirens-envelopes",
                 floor=sirens_envelopes.ENVELOPES_FLOOR,
+            ),
+            Slot(
+                # Under the instrument that plays it and over the file it is
+                # written into: a sound effect is a little song, so it belongs
+                # with the things a song is made of rather than beside Save.
+                "sirens-effects",
+                "Sound effects",
+                sirens_effects.draw,
+                role=_role("inspector"),
+                edge=_edge("left"),
+                sizing=SHARE,
+                share_key="sirens-effects",
             ),
             Slot(
                 "sirens-bridge",

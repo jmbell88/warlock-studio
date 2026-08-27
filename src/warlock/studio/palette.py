@@ -193,11 +193,10 @@ _DOC_MODES: dict[str, tuple[str, str]] = {
     "clay": ("clay_mode", "Export to the library"),
     "plotter": ("plotter_mode", "Export .tmx"),
     "packwright": ("packwright_mode", "Export atlas + JSON"),
-    # **The empty export label suppresses the command**, the rule Poser's row
-    # states: exporting a WAV is not built yet, and a row that has to refuse is
-    # worse than no row. It joins the table anyway, because save, save-as and
-    # undo are all real here and all four commands would be missing without it.
-    "sirens": ("sirens_mode", ""),
+    # Named for the folder rather than for a file: this is the one export in
+    # the app that writes a family (song.wav, stems/, sfx/) into a directory the
+    # user picks, so "Export WAV" would describe a third of what happens.
+    "sirens": ("sirens_mode", "Export WAV + stems"),
     # **An empty export label suppresses the command** rather than forcing a
     # fake one: a pose *is* a library record, so it is saved and never
     # exported, and offering "Export" here would be a row that has to refuse.

@@ -173,6 +173,14 @@ class SirensState:
     #: document has none yet, which a fresh song never is.
     instrument: int | None = None
 
+    #: Which sound effect the effects pane has selected, by uid, or ``None``.
+    #: Beside ``instrument`` rather than on the pane because it is the same kind
+    #: of state for the same reason -- a pane is rebuilt from scratch every
+    #: frame and owns nothing that outlives one -- and because the *grid* is the
+    #: effect editor: selecting an effect moves the caret into its pattern, so
+    #: the selection and the caret have to be clamped together.
+    oneshot: int | None = None
+
     # --- an envelope gesture in flight ---------------------------------------
     #
     # Four fields rather than a drag object, and here rather than in the pane,
@@ -260,6 +268,7 @@ class SirensState:
         """
         self.anchor = None
         self.row = self.channel = self.column = 0
+        self.oneshot = None
         if tab is None:
             self.pattern = None
             self.instrument = None
