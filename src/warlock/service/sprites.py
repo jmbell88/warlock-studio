@@ -29,7 +29,22 @@ from .validation import (
     random_seed,
 )
 
-SPRITE_SHEET_TYPES = ("turnaround", "walk")
+#: The two fixed-atlas kinds, which are always on offer: their guides ship and
+#: every draft on disk is one of them. Deliberately *not* the whole menu any
+#: more -- :func:`sprite_sheet_types` adds the planned kinds that have a pose
+#: guide behind them, discovered on disk rather than listed here.
+SPRITE_LEGACY_SHEET_TYPES = ("turnaround", "walk")
+
+#: Historical spelling, kept because it is what several callers and tests import
+#: and because it still names exactly what it always did.
+SPRITE_SHEET_TYPES = SPRITE_LEGACY_SHEET_TYPES
+
+#: What one band of one direction costs, in seconds, for the "about N minutes"
+#: line a form draws before anything is queued. The worker's own ``nominal`` for
+#: one SDXL generation on this path, restated rather than guessed at, and it is
+#: an over-estimate for a band smaller than a full frame -- which is the right
+#: direction for a promise about how long somebody will be waiting.
+SECONDS_PER_GENERATION = 20.0
 
 # Its own tuple rather than ``sheets.PIXEL_LOGICAL_SIZES``, deliberately. That
 # one is the set of sizes that divide a *rendered* sheet's frame exactly, which
@@ -81,19 +96,107 @@ SPRITE_ROWS: tuple[str, ...] = (
 )
 
 
+def sprite_sheet_types() -> tuple[str, ...]:
+    """Every sheet kind this host can actually draw, in menu order.
+
+    The two legacy atlases, then every planned kind with a pose guide *on this
+    installation's disk*. Discovered rather than listed, and that is the whole
+    point: the remaining poses are art and they land one file at a time, so a
+    hardcoded menu is wrong on both sides -- it offers an action with no guide
+    behind it, which is eight bands of an unposed character conditioned on
+    nothing, and it hides one somebody has just authored.
+    """
+    return (*SPRITE_LEGACY_SHEET_TYPES, *spritesynth.available_kinds())
+
+
+def sprite_kind(action: str, directions: int) -> str:
+    """The sheet kind two form controls name between them."""
+    return f"{action}{int(directions)}"
+
+
+def kind_logical_sizes(kind: str) -> tuple[int, ...]:
+    """Which of this door's cell sizes ``kind`` can actually be drawn at.
+
+    The whole ladder for the two fixed atlases: they are one 1024px generation
+    however small the published cell is, so the band arithmetic has nothing to
+    say about them. For a planned kind it is
+    ``spritesynth.sizes_for_action`` -- one direction is one generation, so an
+    eight-frame action at 64px would want a 2048px-wide band and there is no
+    such thing.
+    """
+    if kind in SPRITE_LEGACY_SHEET_TYPES:
+        return tuple(SPRITE_LOGICAL_SIZES)
+    action = spritesynth.KIND_ACTIONS.get(kind, "")
+    if not action:
+        return ()
+    return spritesynth.sizes_for_action(action, SPRITE_LOGICAL_SIZES)
+
+
+def _action_entry(action: str, counts: tuple[int, ...]) -> dict[str, Any]:
+    """One action's row of :func:`sprite_options`, with the arithmetic done.
+
+    The counts, the cells, the bands and the size ladder come from
+    ``spritesynth`` and are *not* recomputed by the pane: the form draws a line
+    saying "8 directions x 4 frames = 32 cells, 8 generations, about 3 minutes"
+    before anything is queued, and a second copy of that arithmetic is a promise
+    that goes stale the first time a frame count moves.
+    """
+    frames = spritesynth.ACTION_FRAMES[action]
+    sizes = spritesynth.sizes_for_action(action, SPRITE_LOGICAL_SIZES)
+    return {
+        "key": action,
+        "label": action.title(),
+        "frames": frames,
+        # The sizes this action fits a band at, out of the ones this door
+        # offers. Empty is possible in principle (an action with more frames
+        # than any rung takes) and is the honest rendering of "this action
+        # cannot be drawn at any size on the menu" rather than a crash later.
+        "logical_sizes": list(sizes),
+        "directions": [
+            {
+                "count": count,
+                "kind": sprite_kind(action, count),
+                "cells": count * frames,
+                "columns": frames,
+                "rows": count,
+                # One band is one whole direction, so this is also how many
+                # generations one candidate costs.
+                "bands": count,
+                "seconds_per_candidate": count * SECONDS_PER_GENERATION,
+                "candidates": spritesynth.default_candidates(count * frames),
+            }
+            for count in counts
+        ],
+    }
+
+
 def sprite_options() -> dict[str, Any]:
     """What a sprite sheet request may ask for. One source for the form.
 
-    The grid summary comes from ``spritesynth.GEOMETRY`` rather than being
-    written out again here: the pane says "4 cells, 2x2" under the combo, and a
-    second copy of that arithmetic is a label that would go stale the first
-    time a sheet type was added.
+    The grid summary comes from ``spritesynth`` rather than being written out
+    again here: the pane says "4 cells, 2x2" under the combo, and a second copy
+    of that arithmetic is a label that would go stale the first time a sheet
+    type was added.
+
+    ``actions`` carries only the actions with a guide template on disk -- see
+    :func:`sprite_sheet_types` -- with, per action, the direction counts it can
+    be drawn as and the *size ladder it allows*. A six- or eight-frame action
+    does not fit one band at 48 or 64px (``spritesynth.plan_sheet`` names both
+    numbers and refuses), so a size picker that did not gate on the action would
+    be a control whose only outcome is a refusal after the press.
     """
     from ..pipelines import pixelize
 
     types = []
-    for key in SPRITE_SHEET_TYPES:
-        geom = spritesynth.geometry(key)
+    for key in sprite_sheet_types():
+        sizes = kind_logical_sizes(key)
+        if not sizes:
+            # An action with more frames than the smallest rung on this door's
+            # ladder takes. Not offered rather than offered-and-refused, which
+            # is the same rule the missing-guide filter follows: a menu entry
+            # whose only outcome is a refusal is not a menu entry.
+            continue
+        geom = spritesynth.sheet_geometry(key, max(sizes))
         types.append(
             {
                 "key": key,
@@ -101,13 +204,24 @@ def sprite_options() -> dict[str, Any]:
                 "rows": geom.rows,
                 "cells": len(geom.cells),
                 "frames_per_direction": geom.frames_per_direction,
+                "directions": list(geom.directions),
+                "logical_sizes": list(sizes),
             }
         )
+    available = spritesynth.available_actions()
     return {
         "sheet_types": types,
+        "actions": [
+            _action_entry(action, counts)
+            for action, counts in sorted(
+                available.items(),
+                key=lambda item: list(spritesynth.ACTION_FRAMES).index(item[0]),
+            )
+        ],
         "logical_sizes": list(SPRITE_LOGICAL_SIZES),
         "colors": list(SPRITE_COLOR_CHOICES),
         "directions": list(spritesynth.DIRECTION_ORDER),
+        "seconds_per_generation": SECONDS_PER_GENERATION,
         # From ``pixelize`` for the reason the grids come from ``spritesynth``:
         # a form offering a mode the assembler refuses is a control that fails
         # at the door it was drawn from.
@@ -174,6 +288,88 @@ def _check_options(svc: WarlockService, entries: dict[str, Any]) -> dict[str, An
     )
 
 
+def resolve_sheet_kind(
+    sheet_type: Any = None, action: Any = None, directions: Any = None
+) -> str:
+    """The one kind name behind the two vocabularies a request may use.
+
+    Two callers speak two languages and neither is wrong. A form has an Action
+    combo and a Directions control, because those are the two things a person
+    chooses; a stored params blob has ``sheet_type``, because that is what every
+    draft on disk carries and what ``spritesynth.sheet_geometry`` is addressed
+    by. This is the only place they are reconciled, so that exactly one spelling
+    -- the kind -- is ever written down.
+
+    An explicit ``action`` wins over a ``sheet_type`` sent beside it: a request
+    carrying both came from a form whose controls are the action pair, and the
+    ``sheet_type`` in it is the stale half.
+    """
+    if action:
+        count = int(directions) if directions else spritesynth.DIRECTION_COUNTS[-1]
+        return sprite_kind(str(action), count)
+    return str(sheet_type or DEFAULT_SPRITE_SHEET_TYPE)
+
+
+def check_sheet_kind(kind: str, logical: int) -> None:
+    """Refuse a sheet nothing can draw, before the row exists.
+
+    Three refusals and each one costs the request rather than an hour:
+
+    * a kind this module does not name at all;
+    * a planned kind with **no pose guide on disk**. The guide *is* the pose --
+      the ControlNet hint is the only thing that decides where the limbs go --
+      so without one the request is eight generations of an unposed character
+      described by the right sentence, which is the failure that is invisible
+      until somebody looks at the sheet;
+    * a direction whose frames do not fit one band at this size.
+      ``spritesynth.plan_sheet`` owns that arithmetic and names both numbers,
+      so its sentence is re-raised rather than re-written: the door and the
+      pipeline refusing in two wordings is how they come to refuse two
+      different sets.
+    """
+    if kind in SPRITE_LEGACY_SHEET_TYPES:
+        return
+    if kind not in spritesynth.PLANNED_KINDS:
+        raise Invalid(
+            f"sheet_type must be one of {list(sprite_sheet_types())}",
+            field="sheet_type",
+        )
+    if not spritesynth.has_guide_template(kind):
+        offered = ", ".join(sprite_sheet_types())
+        raise Invalid(
+            f"there is no pose guide for a {kind!r} sheet, and the guide is what "
+            f"decides where the limbs go -- without one the sheet would be an "
+            f"unposed character in every cell. This build draws {offered}.",
+            field="sheet_type",
+        )
+    try:
+        spritesynth.plan_kind(kind, int(logical))
+    except ValueError as exc:
+        raise Invalid(str(exc), field="logical_size") from exc
+
+
+def check_candidates(count: Any, cells: int) -> int:
+    """How many candidates to draw, refused if it is not one or two.
+
+    ``None`` is not a value: it is "nobody said", and what the path does then is
+    ``spritesynth.default_candidates``' decision rather than this door's -- a
+    pair for a small sheet, one draft for a big one.
+    """
+    if count is None:
+        return spritesynth.default_candidates(cells)
+    try:
+        wanted = int(count)
+    except (TypeError, ValueError):
+        wanted = 0
+    if wanted not in (1, 2):
+        raise Invalid(
+            "a sprite draft is one candidate or two; two of a sheet this size is "
+            f"{2 * cells} generated cells",
+            field="candidates",
+        )
+    return wanted
+
+
 def _check_weights(svc: WarlockService) -> None:
     """Everything a synthesis loads, refused by name with its download line.
 
@@ -214,6 +410,9 @@ def create_sprite_synthesis(
     job_id: str,
     *,
     sheet_type: str = DEFAULT_SPRITE_SHEET_TYPE,
+    action: str | None = None,
+    directions: int | None = None,
+    candidates: int | None = None,
     logical_size: int = DEFAULT_SPRITE_LOGICAL_SIZE,
     colors: int = DEFAULT_SPRITE_COLORS,
     palette: str | None = None,
@@ -222,12 +421,19 @@ def create_sprite_synthesis(
     seed_a: int | None = None,
     seed_b: int | None = None,
 ) -> dict[str, Any]:
-    """Queue two candidate sprite atlases from one finished reference.
+    """Queue candidate sprite atlases from one finished reference.
 
-    Two, not one, and that is the whole shape of the feature: what the model
-    imagines for the three views it has never seen is a guess, and a pair the
+    Two candidates, not one, is the shape the feature was written in: what the
+    model imagines for the views it has never seen is a guess, and a pair the
     user picks between is a far better use of the same minute than one draft
-    they have to decide about in the abstract.
+    they have to decide about in the abstract. It stops being the default once a
+    sheet is bigger than the atlas kinds -- see
+    ``spritesynth.default_candidates`` -- because a pair of an eight-direction
+    sheet is sixteen generations, and ``candidates`` may pin either.
+
+    ``action`` and ``directions`` are the pair a form asks with;
+    :func:`resolve_sheet_kind` turns them into the one ``sheet_type`` that is
+    stored, so a params blob has one spelling of what it is.
     """
     from .. import models
 
@@ -241,10 +447,7 @@ def create_sprite_synthesis(
     if not (job_dir / "input.png").exists():
         raise Invalid("reference has no image")
 
-    if str(sheet_type) not in SPRITE_SHEET_TYPES:
-        raise Invalid(
-            f"sheet_type must be one of {list(SPRITE_SHEET_TYPES)}", field="sheet_type"
-        )
+    kind = resolve_sheet_kind(sheet_type, action, directions)
     # Through the shared checker, which is also what ``_check_sprite_sheet``
     # calls: the two doors have to refuse the same values in the same sentences
     # on the same fields, and the only way to be sure of that is for there to be
@@ -259,6 +462,12 @@ def create_sprite_synthesis(
             "outline": outline,
         },
     )
+    # After the size is on the ladder and before anything is queued: the band
+    # refusal is *about* the size, so refusing an off-ladder one first keeps the
+    # two sentences from arriving in the wrong order.
+    check_sheet_kind(kind, options["logical_size"])
+    geom = spritesynth.sheet_geometry(kind, options["logical_size"])
+    wanted = check_candidates(candidates, len(geom.cells))
 
     if seed_a is not None:
         check_seed("seed_a", seed_a)
@@ -307,7 +516,11 @@ def create_sprite_synthesis(
         # ran is recorded in the draft's own sidecar recipe, so nothing here is
         # derived and a rerun copies it verbatim.
         "source_job": job_id,
-        "sheet_type": str(sheet_type),
+        "sheet_type": kind,
+        # How many of the pair to draw. Written always rather than only when
+        # asked for, because absent means "whatever the path defaults to today"
+        # and a stored request should say what it was admitted as.
+        "candidates": wanted,
         # Normalised by the checker, not by this function: the palette name is
         # stripped and the outline defaulted there, and writing the raw
         # arguments back would put an unstripped name in a params blob the

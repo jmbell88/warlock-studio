@@ -27,6 +27,7 @@ from types import SimpleNamespace
 import pytest
 
 from warlock.pipelines import tileatlas, tilesheet
+from warlock.service import jobs as svc_jobs
 from warlock.service import sprites as svc_sprites
 from warlock.service import tilesheets as svc_tilesheets
 from warlock.service.errors import Invalid
@@ -209,6 +210,9 @@ def test_a_sprite_sheet_is_a_reference_job_carrying_a_follow_up():
     assert kwargs["output"] == "reference"
     assert kwargs["sprite_sheet"] == {
         "sheet_type": "turnaround",
+        # The number the form's own summary line promised, not a default the
+        # worker would pick separately: see ``sprite_sheet_kwargs``.
+        "candidates": 2,
         "logical_size": 64,
         "colors": svc_sprites.DEFAULT_SPRITE_COLORS,
         # Blank by default: the optional final reduction, which never upscales
@@ -940,3 +944,267 @@ def test_a_genuinely_fresh_form_opens_on_materials(tmp_path):
     assert default_form_2d()["tile_mode"] == MATERIALS
     assert settings.restore_form(default_form_2d(), None)["tile_mode"] == MATERIALS
     assert settings.Settings.load(tmp_path).get("form_2d") is None
+
+
+# -- the sprite arm's action and directions ----------------------------------
+#
+# Every assertion here is on the submit path or on the pure function the pane
+# draws its line from, rather than on a widget: a control that sets a form key
+# nothing sends is an unreachable capability with an extra step.
+
+
+@pytest.fixture
+def sprite_weights(monkeypatch):
+    """Every weight a synthesis loads, present. The Create door checks all of
+    them for the *follow-up* before it will take the reference."""
+    from warlock import fetch
+
+    monkeypatch.setattr(fetch, "base_model_state", lambda *a, **k: (True, None))
+    monkeypatch.setattr(fetch, "present", lambda *a, **k: True)
+
+
+def _sprite_form(**overrides):
+    """A sprite-sheet form as the pane would have it. ``_sheet_form``'s rule:
+    through ``sync_legacy_fields``, because those keys are derived every frame.
+    """
+    form = default_form_2d()
+    form["prompt"] = "a hooded ranger"
+    form["asset_type"] = "sprite_sheet"
+    create_assets.sync_legacy_fields(form)
+    form.update(overrides)
+    return form
+
+
+def test_a_new_sprite_form_is_the_turnaround_it_has_always_been():
+    """The default is not moved by the actions arriving: a stored form and a new
+    one have to mean the same sheet."""
+    plan = settings_2d.sprite_plan(_sprite_form())
+
+    assert plan["layout"] == "turnaround"
+    assert plan["cells"] == 4
+    assert plan["candidates"] == 2
+
+
+def test_the_action_combo_offers_the_turnaround_and_what_has_a_guide():
+    options = svc_sprites.sprite_options()
+    entries = settings_2d.sprite_action_options(options, "legacy:turnaround")
+
+    keys = [key for key, _label in entries]
+    assert keys[0] == "legacy:turnaround"
+    assert keys[1:] == [a["key"] for a in options["actions"]]
+    # Actions, never kinds: the direction count is the *other* control.
+    assert not any(key[-1].isdigit() for key in keys)
+
+
+def test_a_legacy_kind_and_an_action_of_the_same_name_are_different_entries():
+    """The trap in this combo. Legacy ``walk`` is a four-frame cycle and the
+    action ``walk`` is eight, so one key meaning both would show a stored legacy
+    walk as the action -- and selecting it would silently double the cycle."""
+    options = svc_sprites.sprite_options()
+
+    assert settings_2d.sprite_action_key("walk") == "legacy:walk"
+    assert settings_2d.sprite_action_key("walk8") == "walk"
+    assert settings_2d.sprite_action_key("turnaround") == "legacy:turnaround"
+
+    entries = dict(settings_2d.sprite_action_options(options, "legacy:walk"))
+    assert entries["legacy:walk"] == "Walk (legacy, 4 frames)"
+    assert entries["walk"] == "Walk"
+    # And each resolves back to the sheet it names.
+    assert settings_2d.sprite_layout_for(options, "legacy:walk", 8) == "walk"
+    assert settings_2d.sprite_layout_for(options, "walk", 8) == "walk8"
+
+
+def test_a_stored_layout_the_menu_cannot_offer_is_named_rather_than_dropped():
+    """``palette_options``' rule: silently moving a form off the thing it says
+    it is set to is how a user comes to submit something they did not choose."""
+    options = svc_sprites.sprite_options()
+
+    unknown = dict(settings_2d.sprite_action_options(options, "dance4"))
+    assert unknown["dance4"] == "dance4 (unavailable)"
+
+
+def test_picking_an_action_composes_the_kind_from_the_pair():
+    options = svc_sprites.sprite_options()
+
+    assert settings_2d.sprite_layout_for(options, "idle", 8) == "idle8"
+    # An action with no four-direction guide falls back to a count it *has*,
+    # because the two controls move independently: picking an action while the
+    # Directions control still says four must land on a sheet that exists.
+    assert settings_2d.sprite_layout_for(options, "walk", 4) == "walk8"
+    assert settings_2d.sprite_layout_for(options, "legacy:turnaround", 8) == "turnaround"
+
+
+def test_the_plan_is_the_arithmetic_the_line_and_the_block_both_read():
+    form = _sprite_form(sheet_layout="walk8")
+    plan = settings_2d.sprite_plan(form)
+
+    assert plan == {
+        "layout": "walk8",
+        "action": "walk",
+        "directions": 8,
+        "frames": 8,
+        "cells": 64,
+        "bands": 8,
+        "candidates": 1,
+        "generations": 8,
+        "sizes": (32,),
+        "logical_size": 32,
+    }
+
+
+def test_the_cost_line_names_the_grid_the_generations_and_the_wait():
+    line = settings_2d._sprite_cost(settings_2d.sprite_plan(_sprite_form(sheet_layout="idle8")))
+
+    assert "8 directions x 4 frames = 32 cells" in line
+    assert "8 generations for one draft" in line
+    assert "about 3 minutes" in line
+
+
+def test_the_turnaround_line_still_describes_a_pair():
+    line = settings_2d._sprite_cost(settings_2d.sprite_plan(_sprite_form()))
+
+    assert "4 directions x 1 frames = 4 cells" in line
+    assert "2 generations for 2 drafts" in line
+
+
+def test_the_submit_block_carries_the_action_the_form_chose():
+    kwargs = settings_2d.submit_kwargs(_sprite_form(sheet_layout="idle8", cell_size="32"))
+
+    assert kwargs["sprite_sheet"]["sheet_type"] == "idle8"
+    assert kwargs["sprite_sheet"]["logical_size"] == 32
+    # The number the cost line promised, not one the worker would pick
+    # separately -- a form that says eight and spends sixteen is the defect.
+    assert kwargs["sprite_sheet"]["candidates"] == 1
+
+
+def test_the_size_picker_moves_off_a_size_the_chosen_action_cannot_take():
+    """The gate. A 64px cell is the form's default and an eight-frame walk does
+    not fit a band at it, so the picker draws the ladder that is left and the
+    form is moved onto it -- rather than composing a request refused after the
+    press."""
+    form = _sprite_form(sheet_layout="walk8", cell_size="64")
+
+    assert settings_2d.sprite_plan(form)["sizes"] == (32,)
+    assert settings_2d.sprite_plan(form)["logical_size"] == 32
+    # And the *submit* is what carries it, not the picker: the Action control is
+    # always on screen and the size picker lives inside Advanced, so a clamp
+    # that only ran while that section was drawn would not run at all for a user
+    # who never opened it.
+    assert settings_2d.submit_kwargs(form)["sprite_sheet"]["logical_size"] == 32
+
+
+def test_a_size_the_chosen_action_does_allow_is_left_alone():
+    for size in ("32", "48", "64"):
+        form = _sprite_form(sheet_layout="idle8", cell_size=size)
+        assert settings_2d.sprite_plan(form)["logical_size"] == int(size)
+
+
+def test_an_action_sheet_press_is_admitted_by_the_real_door(svc, sprite_weights):
+    """The end of the wire, ``test_every_layout_the_form_offers_is_queued_by_
+    the_real_door``'s reason: everything above is a dict, and only a call that
+    reaches ``create_job`` can tell a carried setting from a button that does
+    nothing. The follow-up block is validated *here*, at the reference door."""
+    form = _sprite_form(sheet_layout="idle8", cell_size="32")
+    made = svc_jobs.create_job(svc, **settings_2d.submit_kwargs(form))
+
+    block = svc.store.get(made["id"])["params"]["sprite_sheet"]
+    assert block["sheet_type"] == "idle8"
+    assert block["logical_size"] == 32
+    assert block["candidates"] == 1
+
+
+def test_a_press_the_size_gate_would_have_stopped_is_refused_at_that_door(
+    svc, sprite_weights
+):
+    """The same refusal from the other side: if the picker ever offered a size
+    the action cannot take, this is what the press would meet -- a sentence
+    naming both numbers, on the field the control is drawn under."""
+    form = _sprite_form(sheet_layout="walk8", cell_size="64")
+    kwargs = settings_2d.submit_kwargs(form)
+    kwargs["sprite_sheet"]["logical_size"] = 64
+
+    with pytest.raises(Invalid) as caught:
+        svc_jobs.create_job(svc, **kwargs)
+
+    assert "8 frames of 512px" in str(caught.value)
+    assert caught.value.field == "logical_size"
+
+
+def test_a_sprite_form_sends_only_arguments_the_door_accepts():
+    """The contract check the tile arm has, on the arm that grew two controls:
+    the failure when the pane's kwargs and the door's parameters drift is a
+    ``TypeError`` on a background thread, reported as a toast with no field."""
+    kwargs = settings_2d.submit_kwargs(_sprite_form(sheet_layout="idle8"))
+    signature = inspect.signature(svc_jobs.create_job)
+    signature.bind(object(), **kwargs)
+
+    block = kwargs["sprite_sheet"]
+    checker = inspect.signature(svc_sprites.create_sprite_synthesis)
+    # Every key of the block is a name the *direct* door takes too, or the two
+    # ways of making a synthesis row would admit different requests.
+    for key in block:
+        if key == "target_cell_px":
+            continue  # the optional final reduction, which is not a sheet option
+        assert key in checker.parameters, key
+
+
+def test_a_restored_layout_from_settings_survives_the_round_trip():
+    """The persisted field carries a kind now, so the boundary check has to know
+    the planned ones -- an unrecognised value is dropped, which would silently
+    reopen an action sheet as a turnaround."""
+    for layout in ("turnaround", "walk", "idle8", "walk8"):
+        assert settings._safe_form_value("sheet_layout", layout) is True
+    assert settings._safe_form_value("sheet_layout", "dance9") is False
+
+
+def test_the_request_document_and_the_form_field_are_the_same_choice():
+    """``sheet_layout`` is a kind; ``SpriteSettings`` is a mode plus a pair. The
+    two legacy kinds name themselves rather than pretending to be an action
+    whose frame count they do not have."""
+    from warlock import generation as gen
+
+    assert gen.sprite_from_layout("idle8") == ("action", "idle", 8)
+    assert gen.sprite_from_layout("walk") == ("walk", "idle", 4)
+    assert gen.sprite_from_layout("turnaround") == ("turnaround", "idle", 4)
+    assert gen.sprite_from_layout("dance9") == ("turnaround", "idle", 4)
+    for layout in ("turnaround", "walk", "idle8", "walk4"):
+        mode, action, directions = gen.sprite_from_layout(layout)
+        assert gen.sprite_layout_of(
+            gen.SpriteSettings(mode=mode, action=action, directions=directions)
+        ) == layout
+
+
+def test_a_structured_request_no_longer_collapses_every_action_onto_walk(
+    svc, sprite_weights
+):
+    """It read ``"turnaround" if mode == "turnaround" else "walk"``, which
+    answered all seven actions and both direction counts with the legacy 4x4
+    walk -- admitted, queued and published as a sheet nobody asked for, with the
+    request document still saying "idle" beside it."""
+    from warlock import generation as gen
+
+    request = gen.GenerationRequest(
+        generation_type="sprite_sheet",
+        prompt="a hooded ranger",
+        sprite=gen.SpriteSettings(mode="action", action="idle", directions=8),
+    )
+    made = svc_jobs.create_generation_request(svc, request)
+
+    block = svc.store.get(made["id"])["params"]["sprite_sheet"]
+    assert block["sheet_type"] == "idle8"
+
+
+def test_a_structured_request_can_still_name_the_two_legacy_atlases(
+    svc, sprite_weights
+):
+    from warlock import generation as gen
+
+    for mode in gen.SPRITE_LEGACY_MODES:
+        request = gen.GenerationRequest(
+            generation_type="sprite_sheet",
+            prompt="a hooded ranger",
+            sprite=gen.SpriteSettings(mode=mode),
+        )
+        made = svc_jobs.create_generation_request(svc, request)
+        block = svc.store.get(made["id"])["params"]["sprite_sheet"]
+        assert block["sheet_type"] == mode

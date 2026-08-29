@@ -28,8 +28,8 @@ from typing import Any
 import numpy as np
 
 from .animation import (
+    ACTION_OF_KIND,
     DEFAULT_DURATION_MS,
-    DIRECTION_ORDER,
     Animation,
     DirectionalLayout,
     Frame,
@@ -85,26 +85,37 @@ def span_tags(spans: Sequence[Mapping[str, Any]]) -> list[Tag]:
     return tags
 
 
-def walk_tags() -> list[Tag]:
+def walk_tags(layout: DirectionalLayout | None = None) -> list[Tag]:
     """One looping tag per direction: ``walk_front`` 0-3, ``walk_left`` 4-7...
 
     Named with the direction rather than left as bare ``front``/``left``,
     because a document can carry several tagged spans and "left" alone stops
     meaning anything the moment a second cycle is added to it.
 
-    The 4x4 spritesynth layout stated in the general form above, so there is
-    one tag builder rather than two that can drift about what ``loop`` means.
+    The sheet's own layout stated in the general form above, so there is one tag
+    builder rather than two that can drift about what ``loop`` means. It used to
+    hardcode ``per = 4`` over the four-direction table, which was true of the
+    one kind it was written for and of nothing since: an eight-frame,
+    eight-direction sheet tagged that way names four of its eight directions and
+    puts every span on the wrong half of the timeline. The default keeps the
+    legacy ``walk``, which is what every caller passing nothing means.
+
+    The action is taken from the layout's kind, so an ``idle8`` sheet is tagged
+    ``idle_front`` rather than ``walk_front``: a tag that names the wrong action
+    is worse than no tag, because an importer believes it.
     """
-    per = 4
+    resolved = layout or DirectionalLayout("walk")
+    per = resolved.frames_per_direction
+    action = ACTION_OF_KIND.get(resolved.kind, resolved.kind)
     return span_tags(
         [
             {
-                "name": f"walk_{direction}",
+                "name": f"{action}_{direction}",
                 "start": index * per,
                 "end": index * per + per - 1,
                 "loop": True,
             }
-            for index, direction in enumerate(DIRECTION_ORDER)
+            for index, direction in enumerate(resolved.directions)
         ]
     )
 
@@ -146,8 +157,10 @@ def document_from_atlas(
         atlas_rgba,
         [_cell_rect(cell) for cell in cells],
         # A turnaround is four still views, not a cycle: tagging it would put
-        # four one-frame loops in the timeline that mean nothing to play.
-        tags=walk_tags() if layout.kind == "walk" else [],
+        # four one-frame loops in the timeline that mean nothing to play. Every
+        # other kind *is* an action -- which is what ``ACTION_OF_KIND`` says --
+        # and gets one looping tag per direction, named for its own action.
+        tags=walk_tags(layout) if layout.kind in ACTION_OF_KIND else [],
         layout=layout,
         track_name=track_name,
     )

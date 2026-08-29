@@ -335,7 +335,10 @@ async def test_an_unknown_sheet_type_errors_rather_than_defaulting(worker):
     row = await _run(worker, job_id)
 
     assert row["status"] == "error"
-    assert "unknown sprite sheet type" in (row["error"] or "")
+    # The planned-kind refusal, because ``sheet_geometry`` tries the fixed
+    # atlases first and everything else is a kind it plans -- and either way it
+    # names what it does draw rather than defaulting to a sheet nobody asked for.
+    assert "unknown sprite sheet kind" in (row["error"] or "")
 
 
 @pytest.mark.asyncio
@@ -546,3 +549,355 @@ async def test_an_outer_outline_is_only_ever_drawn_when_asked_for(worker):
         rigging.read_sprite_draft(source_dir, default_draft)["outline"] == "inner"
     )
     assert rigging.read_sprite_draft(source_dir, outer_draft)["outline"] == "outer"
+
+
+# --- a planned kind: one generation per direction ----------------------------
+#
+# Everything in this section is a claim about the worker's *control flow* --
+# how many generations it asks for, with which seed, at which size, in which
+# bracket, and what it publishes. Nothing here reads a pixel's colour, and that
+# is deliberate: ``fake_pipelines`` paints one flat colour, so every cell comes
+# back unmatted and a claim about colour would be a fact about the fake. The
+# pixel claims live in ``tests/test_spritesynth.py``, against a drawn atlas.
+
+
+def _plan_queue(worker, source, kind="idle8", **overrides):
+    """A planned-kind job at a size that kind actually fits."""
+    from warlock.service import sprites as svc_sprites
+
+    sizes = svc_sprites.kind_logical_sizes(kind)
+    params = {"sheet_type": kind, "logical_size": max(sizes)}
+    params.update(overrides)
+    return _queue(worker, source, **params)
+
+
+@pytest.mark.asyncio
+async def test_one_generation_per_direction_all_on_one_seed(worker):
+    """One band is one whole direction, and every band of a candidate shares a
+    seed -- ``_pixel_sheet``'s rule: a multi-band sheet keeps one identity all
+    the way down the atlas, because there is no shared denoise to hold it."""
+    source = _reference(worker)
+    job_id, _ = _plan_queue(worker, source, candidates=1)
+
+    row = await _run(worker, job_id)
+
+    assert row["error"] is None and row["status"] == "done"
+    pipe = worker._text2image
+    assert len(pipe.seeds) == 8
+    assert pipe.seeds == [11] * 8
+
+
+@pytest.mark.asyncio
+async def test_each_band_is_asked_for_at_its_own_rectangle(worker):
+    """The size is the plan's, not the pipe's default. A four-frame direction
+    at 64px is 2x2 cells of 512px, and nothing but the plan knows that."""
+    from warlock.pipelines import spritesynth
+
+    source = _reference(worker)
+    job_id, _ = _plan_queue(worker, source, candidates=1)
+
+    await _run(worker, job_id)
+
+    geom = spritesynth.plan_kind("idle8", 64)
+    assert worker._text2image.sizes == [band.size for band in geom.bands]
+    assert worker._text2image.sizes == [(1024, 1024)] * 8
+
+
+@pytest.mark.asyncio
+async def test_a_legacy_kind_still_asks_for_no_size_at_all(worker):
+    """One square SDXL frame, taking the pipe's own sheet size -- the byte
+    contract every draft on disk was made under."""
+    source = _reference(worker)
+    job_id, _ = _queue(worker, source)
+
+    await _run(worker, job_id)
+
+    assert worker._text2image.sizes == [None, None]
+
+
+@pytest.mark.asyncio
+async def test_each_band_is_conditioned_on_its_own_guide_and_its_own_subject(worker):
+    """Eight bands conditioned on one guide would draw the front view eight
+    times; eight bands prompted with one subject would ask for it eight times.
+    """
+    source = _reference(worker)
+    job_id, _ = _plan_queue(worker, source, candidates=1)
+
+    await _run(worker, job_id)
+
+    pipe = worker._text2image
+    hints = [cond.control_image for cond in pipe.conditionings]
+    assert len(set(hints)) == 8
+    assert len(set(pipe.prompts)) == 8
+    # The direction clause of each band, in the order the sheet lays them out.
+    from warlock.pipelines import spritesynth
+
+    for prompt, name in zip(pipe.prompts, spritesynth.SPRITE_DIRECTIONS[8], strict=True):
+        assert spritesynth._DIRECTION_CLAUSE[name] in prompt
+
+
+@pytest.mark.asyncio
+async def test_two_candidates_of_a_planned_sheet_are_sixteen_generations(worker):
+    source = _reference(worker)
+    job_id, _ = _plan_queue(worker, source, candidates=2)
+
+    await _run(worker, job_id)
+
+    # Eight on A's seed then eight on B's: the pair is two whole sheets, not
+    # two halves of one.
+    assert worker._text2image.seeds == [11] * 8 + [22] * 8
+
+
+@pytest.mark.asyncio
+async def test_a_big_sheet_defaults_to_one_candidate(worker):
+    """``candidates`` absent means the path's own answer, because params outlive
+    the door that wrote them -- and for a 32-cell sheet that answer is one."""
+    source = _reference(worker)
+    job_id, draft_id = _plan_queue(worker, source)
+
+    await _run(worker, job_id)
+
+    assert worker._text2image.seeds == [11] * 8
+    record = rigging.read_sprite_draft(worker.config.job_dir(source), draft_id)
+    assert [c["seed"] for c in record["candidates"]] == [11]
+
+
+@pytest.mark.asyncio
+async def test_the_checkpoint_is_taken_once_and_given_back_once(worker, monkeypatch):
+    """Eight bands inside one acquire/release bracket. A handoff per band would
+    unload and reload the checkpoint eight times for one sheet."""
+    calls: list[str] = []
+    acquire = Worker._acquire_t2i
+    release = Worker._release_t2i
+
+    async def _acquire(self, spec, key):
+        calls.append("acquire")
+        return await acquire(self, spec, key)
+
+    async def _release(self, pipe, spec):
+        calls.append("release")
+        return await release(self, pipe, spec)
+
+    monkeypatch.setattr(Worker, "_acquire_t2i", _acquire)
+    monkeypatch.setattr(Worker, "_release_t2i", _release)
+    source = _reference(worker)
+    job_id, _ = _plan_queue(worker, source, candidates=2)
+
+    row = await _run(worker, job_id)
+
+    assert row["status"] == "done"
+    assert len(worker._text2image.seeds) == 16
+    assert calls == ["acquire", "release"]
+
+
+@pytest.mark.asyncio
+async def test_the_sheet_is_matted_aligned_and_reduced_once_over_the_whole_atlas(
+    worker, monkeypatch
+):
+    """``baseline_align`` takes the median bottom across cells. Run per band,
+    eight bands get eight baselines and the character's feet move as it turns --
+    which is precisely what that function exists to prevent. So it runs once,
+    on the composed atlas, and the geometry it is handed is the composed one.
+    """
+    from warlock.pipelines import spritesynth
+
+    seen: list[tuple[tuple[int, int], int]] = []
+    real = spritesynth.baseline_align
+
+    def _align(atlas, geom):
+        seen.append((atlas.size, len(geom.cells)))
+        return real(atlas, geom)
+
+    monkeypatch.setattr(spritesynth, "baseline_align", _align)
+    source = _reference(worker)
+    job_id, _ = _plan_queue(worker, source, candidates=1)
+
+    row = await _run(worker, job_id)
+
+    assert row["status"] == "done"
+    # Once, over the 4x8 composed atlas of 512px cells -- not eight times over
+    # a 1024x1024 band of four.
+    assert seen == [((4 * 512, 8 * 512), 32)]
+
+
+@pytest.mark.asyncio
+async def test_the_published_atlas_is_frames_across_by_directions_down(worker):
+    """A plumbing claim about the published *shape*, which the flat fake can
+    still answer: the PNG has to be the grid the sidecar says it is, or Inker
+    slices a document out of a disagreement."""
+    source = _reference(worker)
+    job_id, draft_id = _plan_queue(worker, source, logical_size=32, candidates=1)
+
+    await _run(worker, job_id)
+
+    source_dir = worker.config.job_dir(source)
+    record = rigging.read_sprite_draft(source_dir, draft_id)
+    with Image.open(rigging.sprite_draft_png_path(source_dir, draft_id, "a")) as out:
+        assert out.size == (4 * 32, 8 * 32)
+        assert out.size == (
+            record["columns"] * record["cell_w"],
+            record["rows"] * record["cell_h"],
+        )
+    assert (record["columns"], record["rows"]) == (4, 8)
+
+
+@pytest.mark.asyncio
+async def test_the_published_record_carries_the_animation_block(worker):
+    """The gap this closes for the 2D path: a sprite draft used to reach an
+    engine as frame indices with no fps and no loop tags."""
+    from warlock.pipelines import spritesynth
+
+    source = _reference(worker)
+    job_id, draft_id = _plan_queue(worker, source, candidates=1)
+
+    await _run(worker, job_id)
+
+    record = rigging.read_sprite_draft(worker.config.job_dir(source), draft_id)
+    geom = spritesynth.plan_kind("idle8", 64)
+    assert record["version"] == 3
+    assert record["action"] == "idle"
+    assert record["directions"] == list(geom.directions)
+    assert record["animation"] == spritesynth.animation_block(geom)
+    assert record["animation"]["tags"][0]["name"] == "idle_front"
+    assert len(record["bands"]) == 8
+
+
+@pytest.mark.asyncio
+async def test_the_recipe_records_the_bands_and_a_guide_reading_for_each(worker):
+    """One number for one guide and a list for N: an average over eight bands
+    is exactly the shape that hides one that drew nothing."""
+    source = _reference(worker)
+    job_id, draft_id = _plan_queue(worker, source, candidates=1)
+
+    await _run(worker, job_id)
+
+    record = rigging.read_sprite_draft(worker.config.job_dir(source), draft_id)
+    recipe = record["recipe"]
+    assert recipe["bands"] == 8
+    assert recipe["candidates"] == 1
+    assert len(recipe["guide_edge_fractions"]) == 8
+    assert all(f > 0 for f in recipe["guide_edge_fractions"])
+    assert "guide_edge_fraction" not in recipe
+    # And the per-band lattice, for the same reason: there is no single one.
+    assert [g["band"] for g in record["candidates"][0]["grids"]] == list(range(8))
+
+
+@pytest.mark.asyncio
+async def test_a_legacy_draft_still_records_one_guide_reading_and_one_lattice(worker):
+    source = _reference(worker)
+    job_id, draft_id = _queue(worker, source)
+
+    await _run(worker, job_id)
+
+    record = rigging.read_sprite_draft(worker.config.job_dir(source), draft_id)
+    assert record["recipe"]["bands"] == 0
+    assert isinstance(record["recipe"]["guide_edge_fraction"], float)
+    assert "grids" not in record["candidates"][0]
+
+
+@pytest.mark.asyncio
+async def test_a_cancel_between_bands_publishes_nothing(worker, monkeypatch):
+    """Between bands and not only between candidates: eight bands is minutes of
+    GPU, and a cancel read only once a whole sheet was drawn would spend all of
+    them. Nothing is published, because the trio is written at the very end.
+    Asked deterministically, through the per-band lattice measurement: it runs
+    once, immediately after a band comes back, so setting the cancel event there
+    is a cancel that arrives exactly between two bands. ``request_cancel`` sets
+    the same event for this phase, and racing a real one against a fake pipe
+    would test the sleep rather than the check.
+    """
+    from warlock.pipelines import pixel
+
+    source = _reference(worker)
+    job_id, draft_id = _plan_queue(worker, source, candidates=1)
+    real = pixel.lattice
+
+    def _lattice(image):
+        if worker._cancel is not None:
+            worker._cancel.event.set()
+        return real(image)
+
+    monkeypatch.setattr(pixel, "lattice", _lattice)
+
+    row = await _run(worker, job_id)
+
+    assert row["status"] == "cancelled"
+    source_dir = worker.config.job_dir(source)
+    assert not rigging.sprite_draft_path(source_dir, draft_id).exists()
+    assert rigging.list_sprite_drafts(source_dir) == []
+    # One generation, not eight: the check at the top of the band loop is what
+    # stopped it, rather than the eighth ``generate`` refusing on its own.
+    assert len(worker._text2image.seeds) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_single_candidate_draft_is_listed_rather_than_hidden(worker):
+    """The listing gate used to demand *both* letters, which made every
+    eight-direction draft complete on disk, correct in its sidecar, and
+    invisible in the pane."""
+    source = _reference(worker)
+    job_id, draft_id = _plan_queue(worker, source, candidates=1)
+
+    await _run(worker, job_id)
+
+    source_dir = worker.config.job_dir(source)
+    assert rigging.sprite_draft_png_path(source_dir, draft_id, "a").exists()
+    assert not rigging.sprite_draft_png_path(source_dir, draft_id, "b").exists()
+    listed = rigging.list_sprite_drafts(source_dir)
+    assert [d["id"] for d in listed] == [draft_id]
+
+
+@pytest.mark.asyncio
+async def test_a_draft_missing_a_png_it_claims_is_still_not_listed(worker):
+    """The check got stricter as well as truer: a record naming a candidate
+    whose image never landed is a half-published draft either way."""
+    source = _reference(worker)
+    job_id, draft_id = _queue(worker, source)
+
+    await _run(worker, job_id)
+
+    source_dir = worker.config.job_dir(source)
+    rigging.sprite_draft_png_path(source_dir, draft_id, "b").unlink()
+    assert rigging.list_sprite_drafts(source_dir) == []
+
+
+@pytest.mark.asyncio
+async def test_the_bar_walks_one_window_across_every_band(worker):
+    """``PHASES_SPRITE`` is three phases and none of them per candidate: it was
+    ``generate_a``/``generate_b``, so a single-candidate sheet finished at 52%
+    and a multi-band one had nowhere to say which band it was on."""
+    from warlock.pipelines import spritesynth
+    from warlock.progress import phases_for
+
+    seen: list[tuple[str, str]] = []
+    real = worker.progress.update
+
+    def _update(job_id, **kwargs):
+        if "phase" in kwargs:
+            seen.append((kwargs["phase"], str(kwargs.get("detail") or "")))
+        return real(job_id, **kwargs)
+
+    worker.progress.update = _update  # type: ignore[method-assign]
+    source = _reference(worker)
+    job_id, _ = _plan_queue(worker, source, candidates=1)
+
+    row = await _run(worker, job_id)
+
+    assert row["status"] == "done"
+    assert {phase for phase, _d in seen} <= set(phases_for("sprite_synthesis"))
+    # The sampling steps are counted across the *whole job* rather than within
+    # one generation: eight bands of three steps is one window of 24. Raw
+    # (i, n) per band walks the whole window on band one and the never-regress
+    # floor then pins the bar there for every band after it.
+    steps = [d for p, d in seen if p == "generate" and d.startswith("step ")]
+    assert steps[0] == "step 1/24" and steps[-1] == "step 24/24"
+    # Eight band updates, each naming its own direction, plus the sampling
+    # steps that walk the same window -- and one assembly for the one candidate.
+    assert [
+        d for p, d in seen if p == "generate" and d and not d.startswith("step ")
+    ] == [
+        f"{name} ({i + 1}/8)"
+        for i, name in enumerate(spritesynth.SPRITE_DIRECTIONS[8])
+    ]
+    assert sum(1 for p, _d in seen if p == "assemble") == 1
+    assert [p for p, _d in seen][0] == "condition"

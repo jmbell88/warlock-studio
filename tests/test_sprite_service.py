@@ -72,20 +72,25 @@ def _draft_on_disk(svc, job_id, *, draft_id=None, created=1.0, sidecar=True):
 # --- the options ------------------------------------------------------------
 
 
-def test_the_options_describe_both_grids_from_the_geometry():
+def test_the_options_describe_every_grid_from_the_geometry():
+    """Both legacy atlases, plus every planned kind whose pose guide is on
+    disk -- which is the whole point of the menu being discovered rather than
+    listed: an action with no guide behind it is not one this build can draw."""
     options = svc_sprites.sprite_options()
     keys = {entry["key"] for entry in options["sheet_types"]}
-    assert keys == set(svc_sprites.SPRITE_SHEET_TYPES)
+    assert keys == set(svc_sprites.sprite_sheet_types())
+    assert set(svc_sprites.SPRITE_LEGACY_SHEET_TYPES) <= keys
     for entry in options["sheet_types"]:
-        geom = ss.geometry(entry["key"])
+        geom = ss.sheet_geometry(entry["key"], max(entry["logical_sizes"]))
         assert (entry["columns"], entry["rows"]) == (geom.columns, geom.rows)
         assert entry["cells"] == len(geom.cells)
+        assert entry["directions"] == list(geom.directions)
 
 
 def test_the_defaults_are_offered_choices():
     options = svc_sprites.sprite_options()
     defaults = options["defaults"]
-    assert defaults["sheet_type"] in svc_sprites.SPRITE_SHEET_TYPES
+    assert defaults["sheet_type"] in svc_sprites.sprite_sheet_types()
     assert defaults["logical_size"] in svc_sprites.SPRITE_LOGICAL_SIZES
     assert defaults["colors"] in svc_sprites.SPRITE_COLOR_CHOICES
 
@@ -184,6 +189,9 @@ def test_a_submit_records_every_input_and_names_the_draft(svc, weights):
     assert row["params"] == {
         "source_job": job_id,
         "sheet_type": "walk",
+        # Sixteen cells, so the pair the feature was written around; the number
+        # is recorded rather than left for the worker to decide later.
+        "candidates": 2,
         "logical_size": 48,
         "colors": 16,
         # Normalised by ``_check_options`` and written whether or not the
@@ -395,3 +403,147 @@ def test_the_offered_outlines_are_the_ones_the_assembler_draws():
     # Troupe's: a synthesised cell has no guaranteed margin.
     assert options["defaults"]["outline"] == "inner"
     assert svc_sprites.DEFAULT_SPRITE_OUTLINE == ss.DEFAULT_SPRITE_OUTLINE
+
+
+# --- the action menu, and the gate on the size picker ------------------------
+
+
+def test_only_actions_with_a_pose_guide_on_disk_are_offered(monkeypatch, tmp_path):
+    """The guide *is* the pose -- it is the ControlNet hint, and it is the only
+    thing that decides where the limbs go. An action offered without one is a
+    control whose result is eight bands of an unposed character."""
+    monkeypatch.setattr(ss, "TEMPLATE_DIR", tmp_path)
+    assert svc_sprites.sprite_options()["actions"] == []
+    assert svc_sprites.sprite_sheet_types() == svc_sprites.SPRITE_LEGACY_SHEET_TYPES
+
+    (tmp_path / "idle8.json").write_text("{}", encoding="utf-8")
+    options = svc_sprites.sprite_options()
+    assert [a["key"] for a in options["actions"]] == ["idle"]
+    assert [d["count"] for d in options["actions"][0]["directions"]] == [8]
+    assert "idle8" in svc_sprites.sprite_sheet_types()
+
+
+def test_the_actions_carry_the_arithmetic_the_form_draws_its_line_from():
+    """From the door and not recomputed by the pane: a second copy of a cell
+    count is a label that goes stale the first time a frame count moves."""
+    options = svc_sprites.sprite_options()
+    walk = next(a for a in options["actions"] if a["key"] == "walk")
+    eight = next(d for d in walk["directions"] if d["count"] == 8)
+
+    assert walk["frames"] == 8
+    assert eight["kind"] == "walk8"
+    assert eight["cells"] == 64
+    assert (eight["columns"], eight["rows"]) == (8, 8)
+    # One band is one whole direction, so this is also how many generations one
+    # candidate costs.
+    assert eight["bands"] == 8
+    assert eight["candidates"] == 1
+    assert eight["seconds_per_candidate"] == 8 * svc_sprites.SECONDS_PER_GENERATION
+
+
+def test_an_eight_frame_action_is_offered_only_at_the_size_it_fits():
+    """One direction of an eight-frame walk at 64px would want a 2048px band and
+    there is no such thing, so the menu says 32 and the door refuses the rest."""
+    options = svc_sprites.sprite_options()
+    by_key = {a["key"]: a for a in options["actions"]}
+
+    assert by_key["walk"]["logical_sizes"] == [32]
+    assert by_key["idle"]["logical_sizes"] == list(svc_sprites.SPRITE_LOGICAL_SIZES)
+    # And the legacy atlases are unaffected: they are one 1024px generation
+    # however small the published cell is.
+    for entry in options["sheet_types"]:
+        if entry["key"] in svc_sprites.SPRITE_LEGACY_SHEET_TYPES:
+            assert entry["logical_sizes"] == list(svc_sprites.SPRITE_LOGICAL_SIZES)
+
+
+@pytest.mark.parametrize("action", ["walk", "run", "attack"])
+@pytest.mark.parametrize("size", [48, 64])
+def test_a_multi_frame_action_at_a_big_cell_is_refused_naming_both_numbers(
+    svc, weights, action, size
+):
+    """Refused at the door rather than after the press, and in a sentence with
+    the frame count *and* the band size in it -- the pipeline's own words, so
+    the two cannot come to refuse two different sets."""
+    job_id = _reference(svc)
+    with pytest.raises(Invalid) as caught:
+        svc_sprites.create_sprite_synthesis(
+            svc, job_id, action=action, directions=8, logical_size=size
+        )
+
+    message = str(caught.value)
+    frames = ss.ACTION_FRAMES[action]
+    assert f"is {frames} frames of {size * ss.PX_PER_ART_PIXEL}px" in message
+    assert "1024x1024" in message
+    assert caught.value.field == "logical_size"
+    assert svc.store.active_jobs() == []
+
+
+def test_the_same_action_at_the_size_it_fits_is_admitted(svc, weights):
+    job_id = _reference(svc)
+    result = svc_sprites.create_sprite_synthesis(
+        svc, job_id, action="walk", directions=8, logical_size=32
+    )
+
+    params = svc.store.get(result["id"])["params"]
+    assert params["sheet_type"] == "walk8"
+    assert params["logical_size"] == 32
+    # 64 cells, so one draft rather than the pair: two of these is sixteen
+    # generations.
+    assert params["candidates"] == 1
+
+
+def test_an_action_with_no_guide_on_disk_is_refused_by_name(
+    svc, weights, monkeypatch, tmp_path
+):
+    """The other half of "not offered": the two have to agree, or a request the
+    menu would never make is one the door quietly accepts. Reached by emptying
+    the guide directory, because every planned kind ships a guide today -- which
+    is exactly why the refusal needs a test of its own rather than a kind that
+    happens to be missing."""
+    monkeypatch.setattr(ss, "TEMPLATE_DIR", tmp_path)
+    job_id = _reference(svc)
+    with pytest.raises(Invalid, match="no pose guide"):
+        svc_sprites.create_sprite_synthesis(svc, job_id, action="idle", directions=8)
+
+
+def test_an_unknown_action_is_refused_before_anything_is_queued(svc, weights):
+    job_id = _reference(svc)
+    with pytest.raises(Invalid, match="sheet_type must be one of"):
+        svc_sprites.create_sprite_synthesis(svc, job_id, action="dance", directions=8)
+    assert svc.store.active_jobs() == []
+
+
+def test_the_action_pair_and_the_stored_kind_are_the_same_choice():
+    """Two callers speak two languages -- a form has an Action combo, a params
+    blob has a ``sheet_type`` -- and exactly one spelling is ever written down.
+    """
+    assert svc_sprites.resolve_sheet_kind("turnaround", None, None) == "turnaround"
+    assert svc_sprites.resolve_sheet_kind(None, "walk", 8) == "walk8"
+    assert svc_sprites.resolve_sheet_kind(None, "idle", 4) == "idle4"
+    # An explicit action wins over a sheet_type sent beside it: that request came
+    # from a form whose controls are the pair, and the sheet_type is the stale
+    # half.
+    assert svc_sprites.resolve_sheet_kind("turnaround", "idle", 8) == "idle8"
+    # Nothing at all is the door's own default rather than a crash.
+    assert (
+        svc_sprites.resolve_sheet_kind(None, None, None)
+        == svc_sprites.DEFAULT_SPRITE_SHEET_TYPE
+    )
+
+
+@pytest.mark.parametrize("asked", [0, 3, "two"])
+def test_a_candidate_count_that_is_not_one_or_two_is_refused(svc, weights, asked):
+    job_id = _reference(svc)
+    with pytest.raises(Invalid, match="one candidate or two"):
+        svc_sprites.create_sprite_synthesis(svc, job_id, candidates=asked)
+
+
+def test_a_pinned_pair_is_honoured_even_on_a_big_sheet(svc, weights):
+    """The default drops to one past the legacy sheet size; it is a default and
+    not a cap, and a user who asks for the pair gets it."""
+    job_id = _reference(svc)
+    result = svc_sprites.create_sprite_synthesis(
+        svc, job_id, action="walk", directions=8, logical_size=32, candidates=2
+    )
+
+    assert svc.store.get(result["id"])["params"]["candidates"] == 2

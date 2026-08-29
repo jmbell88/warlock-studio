@@ -33,7 +33,7 @@ from typing import Any
 import numpy as np
 
 from ...pipelines import sheet as sheetlib
-from .animation import DIRECTION_ORDER, DirectionalLayout
+from .animation import DirectionalLayout
 
 __all__ = [
     "ARRANGES",
@@ -491,7 +491,12 @@ def plan_frames(
             )
             for i, (row, col, direction, yaw, frame) in enumerate(placed)
         )
-        poses = tuple({"id": None, "name": d} for d in DIRECTION_ORDER)
+        # ``layout.directions`` and not the four-direction ``DIRECTION_ORDER``:
+        # this branch runs for every sheet kind, and an eight-direction sheet
+        # exported through the constant listed four poses for eight rows of
+        # cells -- so the sidecar named half its own directions and named them
+        # in the wrong order.
+        poses = tuple({"id": None, "name": d} for d in layout.directions)
         yaws = tuple(float(y) for y in dict.fromkeys(y for _, _, _, y, _ in placed))
     return sheetlib.Plan(
         # Zero, not ``frame_w``: see ``sidecar``. A square-only importer must
@@ -612,7 +617,10 @@ def animation_block(
         # pinned square path never reaches this branch, and the contents here
         # are unpinned, so a reader that has never heard of the key is still
         # correct about the file.
-        block["layout"] = {"kind": layout.kind, "directions": list(DIRECTION_ORDER)}
+        # The layout's own directions, for the reason the ``poses`` list above
+        # takes them: ``DIRECTION_ORDER`` is the four-direction table, and this
+        # key is read as "what the rows of this sheet are".
+        block["layout"] = {"kind": layout.kind, "directions": list(layout.directions)}
     if arrange is not None:
         # Same placement as ``layout`` above and for the same reason: this
         # says how the sheet was packed, which is what the ``animation`` key is

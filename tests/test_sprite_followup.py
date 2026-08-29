@@ -81,6 +81,9 @@ def test_the_block_is_stored_on_the_reference_job(svc):
 
     assert params["sprite_sheet"] == {
         "sheet_type": "walk",
+        # Admitted rather than left to the worker: a sixteen-cell sheet is a
+        # pair, and the door records what it let through.
+        "candidates": 2,
         "logical_size": 32,
         "colors": 16,
         # The same three ``create_sprite_synthesis`` writes, from the same

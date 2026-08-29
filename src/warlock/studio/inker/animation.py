@@ -52,6 +52,7 @@ MAX_DURATION_MS = 60_000
 
 __all__ = [
     "ACTION_FRAMES",
+    "ACTION_OF_KIND",
     "DEFAULT_DURATION_MS",
     "DIRECTIONS",
     "DIRECTION_COUNTS",
@@ -155,6 +156,23 @@ SHEET_KINDS: dict[str, tuple[int, int, int, int]] = {
     **{
         f"{action}{count}": (frames, count, frames, count)
         for action, frames in ACTION_FRAMES.items()
+        for count in DIRECTION_COUNTS
+    },
+}
+
+
+#: Which action each sheet kind depicts. ``pipelines.spritesynth.KIND_ACTIONS``
+#: again, for the reason every table in this file is here twice.
+#:
+#: ``turnaround`` is absent rather than mapped, and the absence is what
+#: ``sheetin.document_from_atlas`` reads to decide whether to tag a sheet at
+#: all: four still views are not a cycle, and tagging one would put four
+#: one-frame loops in the timeline that mean nothing to play.
+ACTION_OF_KIND: dict[str, str] = {
+    "walk": "walk",
+    **{
+        f"{action}{count}": action
+        for action in ACTION_FRAMES
         for count in DIRECTION_COUNTS
     },
 }

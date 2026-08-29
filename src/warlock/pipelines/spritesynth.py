@@ -86,16 +86,25 @@ from . import charsheet
 
 log = logging.getLogger(__name__)
 
-#: 2 since 2026-08-29: the reduction changed. Every draft up to version 1 was
-#: cut by :func:`reduce_atlas`, a single ``Image.NEAREST`` resize of the whole
-#: atlas; from 2 the queue reduces with ``pixelize.reduce``'s alpha-weighted box
+#: 3 since 2026-08-29: the record grew the four keys a multi-band sheet needs to
+#: be read back -- ``action``, ``directions``, ``frames_per_direction`` and the
+#: ``bands`` list -- plus an ``animation`` block, so a 2D draft finally reaches
+#: an engine with an fps and loop tags instead of bare frame indices. A version
+#: rather than four optional keys because ``sheet_type`` alone no longer says
+#: what the file is: ``walk`` and ``walk4`` are different sheets, and a reader
+#: that has to guess which era a draft is from is the disagreement the version
+#: exists to end.
+#:
+#: 2 was the reduction change. Every draft up to version 1 was cut by
+#: :func:`reduce_atlas`, a single ``Image.NEAREST`` resize of the whole atlas;
+#: from 2 the queue reduces with ``pixelize.reduce``'s alpha-weighted box
 #: supersample, which at this path's integral strides (1024 / (4 * 32) = 8)
 #: averages all 64 samples under an output pixel instead of keeping one and
 #: discarding 63 -- and, being alpha-weighted, stops the transparent background
 #: bleeding into the silhouette. The bytes move, so the sidecar has to say which
 #: compiler drew the sheet: a bump that changes nothing is waste, and a change
 #: that moves bytes without one leaves two different sheets claiming one format.
-SPRITE_DRAFT_VERSION = 2
+SPRITE_DRAFT_VERSION = 3
 
 #: ``inner`` and never ``outer`` on this path, which is the opposite of Troupe's
 #: default and is forced by the geometry rather than by taste.
@@ -201,6 +210,21 @@ ACTIONS: tuple[tuple[str, int], ...] = (
 )
 ACTION_FRAMES: dict[str, int] = dict(ACTIONS)
 
+#: ``action -> (loops, milliseconds a frame is held)``. What a sheet is *played*
+#: at, which is the half of an animation the frame table cannot say.
+#:
+#: The five shared names take Troupe's numbers rather than a second opinion of
+#: them -- a walk is 100 ms a frame in both halves of this program or the same
+#: character moves at two speeds -- and only ``cast`` and ``hurt``, which
+#: ``charsheet.ANIMATIONS`` deliberately does not carry (they have no clip file
+#: behind them), are stated here. A one-shot either way: neither is a cycle, and
+#: a looping hurt is a character stuck flinching.
+ACTION_PLAYBACK: dict[str, tuple[bool, int]] = {
+    **{name: (loop, ms) for name, _frames, loop, ms in charsheet.ANIMATIONS},
+    "cast": (False, 90),
+    "hurt": (False, 90),
+}
+
 SHEET_TYPES = ("turnaround", "walk")
 
 #: Every kind :func:`plan_sheet` can name, as ``f"{action}{directions}"``.
@@ -221,6 +245,21 @@ _KIND_SPEC: dict[str, tuple[str, int]] = {
     f"{action}{count}": (action, count)
     for action, _frames in ACTIONS
     for count in DIRECTION_COUNTS
+}
+
+#: Which action every kind this module names depicts, legacy kinds included.
+#:
+#: ``turnaround`` is deliberately absent rather than mapped to something: four
+#: still views are not an action, and ``inker.sheetin`` refuses to tag one for
+#: that exact reason ("tagging it would put four one-frame loops in the timeline
+#: that mean nothing to play"). Absent is what :func:`animation_block` reads as
+#: "this sheet has nothing to say about playback", which is the truth about it.
+#:
+#: Legacy ``walk`` *is* a walk -- a four-frame cycle rather than this table's
+#: eight, which is why it keeps its own entry instead of aliasing ``walk4``.
+KIND_ACTIONS: dict[str, str] = {
+    "walk": "walk",
+    **{kind: action for kind, (action, _count) in _KIND_SPEC.items()},
 }
 
 #: Rows in a band. Two, always, and the argument is aspect rather than area: a
@@ -431,6 +470,88 @@ def band_grid(frames: int) -> tuple[int, int]:
         raise ValueError("a direction needs at least one frame")
     rows = 1 if frames == 1 else BAND_ROWS
     return (-(-frames // rows), rows)
+
+
+def max_band_frames(logical: int) -> int:
+    """How many frames of a ``logical``px sprite fit one band. See :func:`plan_sheet`.
+
+    The refusal below states this as an inequality over one request; this states
+    it as a number, because a *door* has to gate a size picker before the user
+    presses anything, and "which sizes may this action be drawn at" is that
+    question turned around.
+
+    Two branches rather than ``2 * (ATLAS_PX // cell_px)``, and the second one
+    is the whole reason this is a function: :func:`band_grid` gives a
+    single-frame band **one** row, so at 96 and 128px -- where two rows of cells
+    are already past one SDXL frame -- exactly one frame still fits. The tidy
+    formula answers 2 there, which is a size picker offering a two-frame action
+    that ``plan_sheet`` then refuses.
+    """
+    size = int(logical)
+    if size < 1:
+        raise ValueError("the logical cell size must be at least 1")
+    cell_px = PX_PER_ART_PIXEL * size
+    columns = ATLAS_PX // cell_px
+    if columns < 1:
+        return 0
+    if BAND_ROWS * cell_px > ATLAS_PX:
+        return 1
+    return BAND_ROWS * columns
+
+
+def sizes_for_action(action: str, sizes: tuple[int, ...] | list[int]) -> tuple[int, ...]:
+    """Those of ``sizes`` a whole direction of ``action`` fits a band at.
+
+    The gating half of :func:`max_band_frames`, and it takes the ladder rather
+    than owning one: which sizes are *on offer* is a door's decision (the sprite
+    door's ladder is not Troupe's and neither is ``TARGET_CELL_PRESETS``), while
+    which of them can actually be drawn is this module's arithmetic.
+    """
+    frames = ACTION_FRAMES.get(action)
+    if frames is None:
+        raise ValueError(
+            f"unknown sprite action {action!r}; "
+            f"this module draws {', '.join(ACTION_FRAMES)}"
+        )
+    return tuple(size for size in sizes if max_band_frames(size) >= frames)
+
+
+def guide_template_path(kind: str) -> Path:
+    """Where ``kind``'s pose guide lives, whether or not anything is there."""
+    return TEMPLATE_DIR / f"{kind}.json"
+
+
+def has_guide_template(kind: str) -> bool:
+    """Whether ``kind``'s pose guide is on disk.
+
+    Asked of the filesystem every time rather than answered from a table, and
+    that is the point of the function: the remaining poses are *art*, they land
+    one file at a time, and a hardcoded list of "actions we have" is a list that
+    is wrong on both sides -- it offers a user an action with no guide behind it
+    (eight bands of an unposed character, the failure this whole path's
+    ControlNet exists to prevent) and it hides one somebody has just authored.
+    """
+    return guide_template_path(kind).is_file()
+
+
+def available_kinds() -> tuple[str, ...]:
+    """Every planned kind with a pose guide behind it, in :data:`PLANNED_KINDS` order."""
+    return tuple(kind for kind in PLANNED_KINDS if has_guide_template(kind))
+
+
+def available_actions() -> dict[str, tuple[int, ...]]:
+    """``action -> the direction counts it has a guide for``, guides only.
+
+    Keyed by action rather than returning kinds, because that is the shape a
+    form needs: an Action combo whose entries are actions, and a Directions
+    control whose entries are what *that* action can be drawn as. An action with
+    no guide at any direction count is simply absent.
+    """
+    out: dict[str, tuple[int, ...]] = {}
+    for kind in available_kinds():
+        action, count = _KIND_SPEC[kind]
+        out[action] = (*out.get(action, ()), count)
+    return out
 
 
 def plan_sheet(
@@ -737,6 +858,25 @@ MAX_SEED = 2**31 - 1
 #: them. ``rigging.SPRITE_CANDIDATES`` is the same tuple and is deliberately not
 #: imported: that module knows about paths and this one may not.
 CANDIDATES: tuple[str, ...] = ("a", "b")
+
+
+#: Past this many cells a draft is one candidate rather than two. Sixteen is the
+#: largest legacy sheet (the 4x4 ``walk``), so every sheet this path drew before
+#: it grew bands keeps the pair it has always had, and every sheet that is
+#: bigger than one of those gets the arithmetic instead: a pair is *two* passes
+#: over every band, and eight bands twice is a job long enough that the second
+#: guess costs more than it is worth. The user may still ask for two.
+PAIR_CELL_LIMIT = 16
+
+
+def default_candidates(cells: int) -> int:
+    """How many candidates a sheet of ``cells`` draws when nobody said.
+
+    Two is the feature -- "a user comparing two guesses at three views they have
+    never seen is the entire point" -- and it stays the default at the sizes it
+    was written for. See :data:`PAIR_CELL_LIMIT`.
+    """
+    return 2 if int(cells) <= PAIR_CELL_LIMIT else 1
 
 
 def candidate_seed(base_seed: int, letter: str) -> int:
@@ -1092,6 +1232,108 @@ def render_band_guide(band: Band, template: GuideTemplate) -> PILImage:
     return canvas
 
 
+# --- composing the bands back into one atlas ---------------------------------
+
+
+def composed_geometry(geom: SheetGeometry) -> SheetGeometry:
+    """The **generation-pixel** grid a planned sheet's bands compose into.
+
+    :attr:`SheetGeometry.cells` of a planned sheet are logical rectangles -- the
+    pixels the published PNG is cut to -- and every step between the model and
+    that PNG (the corner mattes, the warnings, the shared baseline) has to
+    address the cells at the size they were *drawn* at. So the bands are pasted
+    side by side into one atlas of ``columns * cell_px`` by ``rows * cell_px``
+    and this is the grid over it.
+
+    Which makes the band path's tail the legacy path's tail exactly: one
+    ``matte_cells``, one ``structural_warnings``, one ``baseline_align`` and one
+    reduction, over one atlas, with no per-band variant of any of them. That is
+    the point of composing before finishing rather than finishing before
+    composing -- eight baselines is a character whose feet move as it turns.
+
+    The reduction that follows is exact by construction here in a way it never
+    was for the legacy kinds: ``cell_px`` is :data:`PX_PER_ART_PIXEL` times the
+    logical size, so the stride is always 8 and ``pixelize.reduce`` never falls
+    back to the single NEAREST resize (which is what 48px out of 1024 did).
+
+    Raises on a legacy geometry rather than answering: an empty ``bands`` means
+    "this kind is one generation, laid out the way every draft on disk already
+    is", and there is nothing to compose.
+    """
+    if not geom.bands:
+        raise ValueError(
+            f"the {geom.kind!r} sheet is generated as one atlas, so it has no "
+            "bands to compose"
+        )
+    cell_px = geom.bands[0].cell_px
+    cells = tuple(
+        Cell(
+            name=cell.name,
+            frame=cell.frame,
+            yaw=cell.yaw,
+            row=band.index,
+            col=cell.frame,
+            x=cell.frame * cell_px,
+            y=band.index * cell_px,
+            w=cell_px,
+            h=cell_px,
+        )
+        for band in geom.bands
+        for cell in band.cells
+    )
+    return SheetGeometry(
+        kind=geom.kind,
+        columns=geom.columns,
+        rows=geom.rows,
+        cell_w=cell_px,
+        cell_h=cell_px,
+        cells=cells,
+    )
+
+
+def compose_bands(images: list[PILImage], geom: SheetGeometry) -> PILImage:
+    """The bands' own frames, laid into one atlas on :func:`composed_geometry`.
+
+    Cell by cell rather than band by band, because a band's internal grid and
+    the published one are different shapes: a six-frame direction is drawn 3x2
+    and is published 6x1, so pasting the band whole would put frames 3-5 of
+    every direction on a row of their own.
+
+    No resampling of any kind happens here -- every cell is cropped at
+    ``cell_px`` and pasted at ``cell_px``. ``sheet.pack`` is deliberately not
+    used for this: it LANCZOS-resizes a frame whose size does not match, which
+    ``pixelize.reduce_frames`` refuses in as many words -- "a filtered downscale
+    is precisely the soft, fringed result the alpha snap then has to guess
+    about".
+
+    Refuses a band image of the wrong size rather than fitting it, for
+    :func:`split`'s reason: the grid is never re-detected from pixels, and a
+    band that came back at another size means the generation and the plan
+    disagree, which is not something a paste can repair.
+    """
+    from PIL import Image
+
+    if len(images) != len(geom.bands):
+        raise ValueError(
+            f"a {geom.kind!r} sheet is {len(geom.bands)} bands and "
+            f"{len(images)} were drawn"
+        )
+    target = composed_geometry(geom)
+    canvas = Image.new("RGB", (target.columns * target.cell_w, target.rows * target.cell_h))
+    for band, image in zip(geom.bands, images, strict=True):
+        if image.size != band.size:
+            raise ValueError(
+                f"the {band.direction!r} band was drawn {image.width}x"
+                f"{image.height} and its plan is {band.size[0]}x{band.size[1]}"
+            )
+        rgb = image.convert("RGB")
+        for cell in band.cells:
+            canvas.paste(
+                rgb.crop(cell.box), (cell.frame * band.cell_px, band.index * band.cell_px)
+            )
+    return canvas
+
+
 # --- slicing, matting, alignment --------------------------------------------
 
 
@@ -1422,6 +1664,48 @@ def preserve_front(
 # --- the sidecar ------------------------------------------------------------
 
 
+def animation_block(geom: SheetGeometry) -> dict[str, Any] | None:
+    """How to *play* this sheet: durations and per-direction loop tags.
+
+    ``None`` for a turnaround, which is the honest answer rather than a gap:
+    four still views are not a cycle, and ``inker.sheetin`` refuses to tag one
+    for exactly that reason -- "tagging it would put four one-frame loops in the
+    timeline that mean nothing to play".
+
+    **Built by ``charsheet.animation_block`` rather than by a third emitter.**
+    ``sheet.sidecar`` is explicit that this format has two writers -- Inker's
+    exporter for a drawn clip and Troupe's for a rendered sheet -- and that "a
+    third writer should extend one of those rather than appear". So the sprite
+    grid is expressed as the one-movement Troupe layout it already is and handed
+    to that function: ``frame_table`` walks a movement direction-major and
+    frame-minor, which is cell for cell the order :func:`plan_sheet` lays a
+    sheet out in, so cell index *i* means the same frame on both sides.
+
+    A :class:`~charsheet.LayoutSpec` is constructed directly and not through
+    ``charsheet.resolve_layout``, because that function validates against
+    ``charsheet.ANIMATIONS`` -- which does not carry ``cast`` or ``hurt``, for
+    the reason :data:`ACTIONS` states (they have no Blender clip behind them).
+    Routing through it would refuse two of this module's seven actions for a
+    property of the *other* half of the program.
+    """
+    action = KIND_ACTIONS.get(geom.kind)
+    if action is None:
+        return None
+    loop, duration_ms = ACTION_PLAYBACK[action]
+    movement = charsheet.MovementSpec(
+        name=action,
+        frames=geom.frames_per_direction,
+        loop=loop,
+        duration_ms=duration_ms,
+        directions=tuple(
+            (name, float(DIRECTION_YAWS_8[name])) for name in geom.directions
+        ),
+    )
+    return charsheet.animation_block(
+        charsheet.LayoutSpec(charsheet.LAYOUT_VERSION, geom.columns, (movement,))
+    )
+
+
 def draft_sidecar(
     *,
     draft_id: str,
@@ -1465,6 +1749,21 @@ def draft_sidecar(
     name, which is exactly why ``derive._pixel_current`` compares digests rather
     than names to decide whether an artifact on disk was cut the way the caller
     now wants.
+
+    Four keys say what the sheet *is* rather than where its pixels are, and they
+    exist because ``sheet_type`` stopped being able to say it: ``walk`` and
+    ``walk4`` are different sheets, so ``action``, ``directions`` and
+    ``frames_per_direction`` are written out rather than inferred from the name.
+    ``bands`` records how it was *drawn* -- one entry per generation, with the
+    rectangle each was asked for -- and is empty for the two legacy kinds, which
+    is the same "one atlas, the legacy way" signal :attr:`SheetGeometry.bands`
+    is. ``action`` is empty for a turnaround, for :func:`animation_block`'s
+    reason: four still views are not one.
+
+    ``animation`` is present whenever there is an action, and closes for this
+    path the gap ``charsheet.animation_block`` closed for the rendered one: a
+    sprite draft used to reach an engine as frame indices with no fps and no
+    loop tags, and the fps was the one thing this end knew.
     """
     cells = [
         {
@@ -1480,12 +1779,29 @@ def draft_sidecar(
         }
         for cell in geom.cells
     ]
+    animation = animation_block(geom)
     return {
         "version": SPRITE_DRAFT_VERSION,
         "id": draft_id,
         "source_job": source_job,
         "created": created,
         "sheet_type": geom.kind,
+        "action": KIND_ACTIONS.get(geom.kind, ""),
+        "directions": list(geom.directions),
+        "frames_per_direction": geom.frames_per_direction,
+        "bands": [
+            {
+                "index": band.index,
+                "direction": band.direction,
+                "columns": band.columns,
+                "rows": band.rows,
+                "cell_px": band.cell_px,
+                "width": band.size[0],
+                "height": band.size[1],
+            }
+            for band in geom.bands
+        ],
+        **({"animation": animation} if animation is not None else {}),
         "logical_size": int(logical_size),
         "colors": int(colors),
         "palette": str(palette),

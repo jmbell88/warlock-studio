@@ -772,10 +772,11 @@ def open_rendered_sheet(
     **Sliced by** :func:`sheetin.document_from_grid`, **not**
     ``document_from_atlas``. The render's sidecar fully describes a uniform grid
     -- columns, rows, frame size, cells -- but it is not a
-    ``DirectionalLayout`` *kind*: ``animation.SHEET_KINDS`` is ``turnaround``
-    and ``walk`` only, so ``DirectionalLayout.of()`` would return ``None`` and
-    the whole door would refuse. The grid slicer wants only the geometry, which
-    the sidecar has.
+    ``DirectionalLayout`` *kind*: ``animation.SHEET_KINDS`` names the two legacy
+    sprite atlases and the planned ``f"{action}{directions}"`` sheets, and a
+    Blender render is none of them, so ``DirectionalLayout.of()`` would return
+    ``None`` and the whole door would refuse. The grid slicer wants only the
+    geometry, which the sidecar has.
     """
     ensure(ctx)
     set_mode(ctx.state, "inker")

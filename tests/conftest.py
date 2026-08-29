@@ -807,9 +807,19 @@ class FakeText2Image:
             # one path has to produce a decodable image rather than a marker.
             # Deliberately a flat colour no source render uses, so a test can
             # tell "the generation landed here" from "the render did".
+            #
+            # ``size`` is honoured, and the default is what it always wrote.
+            # This branch was a hardcoded 1024x1024 -- a size production does not
+            # always produce: a sprite sheet drawn one *band* at a time asks for
+            # the band's own rectangle (a four-frame 32px direction is 512x512),
+            # and ``spritesynth.compose_bands`` refuses a band that came back at
+            # another size, because a generation that disagrees with the plan is
+            # not something a paste can repair. A fake that ignored the ask
+            # would make every band test fail on the fake's own number.
             from PIL import Image
 
-            Image.new("RGB", (1024, 1024), (10, 200, 90)).save(output_path, "PNG")
+            width, height = size or (1024, 1024)
+            Image.new("RGB", (width, height), (10, 200, 90)).save(output_path, "PNG")
         else:
             from PIL import Image, ImageDraw
 

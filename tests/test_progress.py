@@ -451,7 +451,10 @@ def test_every_phase_the_sprite_worker_emits_is_declared():
     from warlock.progress import phases_for
 
     table = phases_for("sprite_synthesis")
-    for phase in ("condition", "generate_a", "assemble_a", "generate_b", "assemble_b"):
+    # Three, and none of them per candidate: a sheet may be drawn as one
+    # candidate or two, and each candidate as one generation or eight, so a
+    # phase named after either count is a bar that stops early.
+    for phase in ("condition", "generate", "assemble"):
         assert phase in table, phase
     assert "t2i_load" not in table and "t2i_sample" not in table
 

@@ -224,6 +224,11 @@ class JobOps:
             "palette": block.get("palette"),
             "dither": block.get("dither"),
             "outline": block.get("outline"),
+            # Carried across for the same reason as the three above, and this
+            # one decides how much GPU the follow-up spends: a block that
+            # dropped it would draw a pair of an eight-direction sheet --
+            # sixteen generations -- from a form that offered one.
+            "candidates": block.get("candidates"),
             "seed_a": seed_a,
             "seed_b": seed_b,
             # Minted here because the door that normally mints it is not on this

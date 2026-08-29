@@ -141,15 +141,17 @@ def _check_sprite_sheet(svc: WarlockService, block: Any) -> dict[str, Any]:
     are in the same layer, so the drift argument that makes ``grounds.py``
     restate the plotter's numbers does not apply.
     """
+    from ..pipelines import spritesynth
     from . import sprites as svc_sprites
 
     entries = dict(block or {})
-    sheet_type = str(entries.get("sheet_type") or svc_sprites.DEFAULT_SPRITE_SHEET_TYPE)
-    if sheet_type not in svc_sprites.SPRITE_SHEET_TYPES:
-        raise Invalid(
-            f"sheet_type must be one of {list(svc_sprites.SPRITE_SHEET_TYPES)}",
-            field="sheet_type",
-        )
+    # The action/directions pair and the stored ``sheet_type`` are the same
+    # choice in two vocabularies, and ``resolve_sheet_kind`` is the one place
+    # they meet -- so this door and ``create_sprite_synthesis`` cannot end up
+    # admitting two different sheets from one request.
+    sheet_type = svc_sprites.resolve_sheet_kind(
+        entries.get("sheet_type"), entries.get("action"), entries.get("directions")
+    )
     # The same function ``create_sprite_synthesis`` calls, which is the whole
     # point: there are exactly two ways a ``sprite_synthesis`` row comes to
     # exist, and a value one door takes and the other refuses is a request that
@@ -157,6 +159,18 @@ def _check_sprite_sheet(svc: WarlockService, block: Any) -> dict[str, Any]:
     # hand-copied refusals until 2026-08-29 and is now the door's own checker,
     # so the palette, the dither and the outline arrive here already refused.
     options = svc_sprites._check_options(svc, entries)
+    # And the three refusals about the *sheet* -- an unknown kind, an action
+    # with no pose guide behind it, and a direction whose frames do not fit one
+    # band at this size -- in the same order and the same sentences the direct
+    # door uses. Identically, which is this function's whole reason for being:
+    # the follow-up row is minted by the worker and never passes through that
+    # door, so a bad option discovered there would be a refusal an hour later on
+    # a row the user never submitted.
+    svc_sprites.check_sheet_kind(sheet_type, options["logical_size"])
+    geom = spritesynth.sheet_geometry(sheet_type, options["logical_size"])
+    candidates = svc_sprites.check_candidates(
+        entries.get("candidates"), len(geom.cells)
+    )
     # The weights the *follow-up* will load, refused now. Both adapters are
     # mandatory for a synthesis -- the pose guide is the ControlNet and the
     # identity is the IP-Adapter -- so a host missing either would draw the
@@ -176,7 +190,7 @@ def _check_sprite_sheet(svc: WarlockService, block: Any) -> dict[str, Any]:
         "model",
         {"base_model": svc_sprites.SPRITE_BASE_MODEL},
     )
-    return {"sheet_type": sheet_type, **options}
+    return {"sheet_type": sheet_type, "candidates": candidates, **options}
 
 
 def create_job(

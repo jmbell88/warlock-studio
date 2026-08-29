@@ -118,6 +118,13 @@ def draw(ctx: Any) -> None:
                     # in this section rather than in the Prompt one above it.
                     widgets.section("Tile layout")
                     _tile_layout(ctx, form, form_ui)
+                elif form.get("output") == "sheet":
+                    # The sprite arm's own layout, in the same place and for the
+                    # same reason: which action and how many directions is what
+                    # the sheet depicts, and it is also what decides whether the
+                    # press is one generation or sixteen.
+                    widgets.section("Sprite layout")
+                    _sprite_layout(ctx, form, form_ui)
                 widgets.section("Image model")
                 if create_assets.selected(form).intent == "tileset":
                     _locked_sheet_recipe(ctx, "Tile-set recipe", part="model")
@@ -500,16 +507,270 @@ def _tile_description_note() -> None:
     )
 
 
-def _sprite_size(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
-    """Only the editable dimension of a sprite asset type."""
+#: The Action combo's own key space, and why it is not simply the action name.
+#:
+#: **A legacy kind and an action can be spelled the same and mean different
+#: sheets.** Legacy ``walk`` is a four-frame cycle over four directions; the
+#: action ``walk`` is eight frames, and picking it composes ``walk8``. One combo
+#: cannot carry both under the key ``"walk"`` -- a stored legacy walk would show
+#: as the action, and selecting it would silently double the user's cycle. So
+#: every entry that names a *kind* is prefixed, every entry that names an action
+#: is bare, and the two are converted at exactly one place each.
+LEGACY_KEY_PREFIX = "legacy:"
+
+#: What a legacy sheet kind is called in that combo. The ``walk`` is labelled
+#: with its frame count because that is the whole trap; the turnaround is the
+#: first entry and needs no disambiguation.
+LEGACY_LAYOUT_LABELS: dict[str, str] = {
+    "turnaround": "Turnaround (still views)",
+    "walk": "Walk (legacy, 4 frames)",
+}
+
+
+def sprite_action_key(layout: str) -> str:
+    """The Action combo's key for a stored ``sheet_layout``. See
+    :data:`LEGACY_KEY_PREFIX`."""
+    mode, action, _directions = generation.sprite_from_layout(layout)
+    if mode in generation.SPRITE_LEGACY_MODES:
+        return f"{LEGACY_KEY_PREFIX}{mode}"
+    if layout not in generation.SPRITE_SHEET_KINDS:
+        # A kind from some other build: named as itself, so the combo can show
+        # what the form is actually set to rather than moving it.
+        return layout
+    return action
+
+
+def sprite_action_options(
+    options: dict[str, Any], current: str
+) -> tuple[tuple[str, str], ...]:
+    """The Action combo's entries: the turnaround, then what has a guide.
+
+    An action is offered **only if its pose guide is on this disk**, which is
+    ``sprite_options``' own filter and the whole reason that key exists: the
+    guide is what decides where the limbs go, so an action offered without one
+    is a control whose result is eight bands of an unposed character -- or, once
+    the doors refuse it, a control whose only outcome is that refusal.
+
+    A stored layout the menu does not carry is appended rather than dropped,
+    which is :func:`palette_options`' rule and its reason: silently moving a
+    form off the thing it says it is set to is how a user comes to submit
+    something they did not choose. That covers both the legacy ``walk`` -- a
+    real sheet this build still draws -- and a kind from some other build, which
+    is not.
+
+    ``current`` is a :func:`sprite_action_key`, not a layout.
+    """
+    out = [(f"{LEGACY_KEY_PREFIX}turnaround", LEGACY_LAYOUT_LABELS["turnaround"])]
+    out.extend((entry["key"], entry["label"]) for entry in options["actions"])
+    if current not in {key for key, _label in out}:
+        bare = current.removeprefix(LEGACY_KEY_PREFIX)
+        out.append((current, LEGACY_LAYOUT_LABELS.get(bare, f"{bare} (unavailable)")))
+    return tuple(out)
+
+
+def sprite_action_entry(options: dict[str, Any], action: str) -> dict[str, Any] | None:
+    """``sprite_options()['actions']``' row for ``action``, or None for a
+    turnaround or a legacy kind -- neither of which is one."""
+    for entry in options["actions"]:
+        if entry["key"] == action:
+            return entry
+    return None
+
+
+def sprite_layout_for(
+    options: dict[str, Any], action: str, directions: int
+) -> str:
+    """The ``sheet_layout`` an Action/Directions pair names.
+
+    Takes a :func:`sprite_action_key`, so a prefixed legacy entry resolves to the
+    kind it names and the Directions control has nothing to say about it.
+
+    Falls back to the action's *first available* direction count rather than to
+    the asked-for one, because the two controls move independently: picking an
+    action that has no eight-direction guide while the Directions control still
+    says eight must land on a sheet that exists.
+    """
+    if action.startswith(LEGACY_KEY_PREFIX):
+        return action.removeprefix(LEGACY_KEY_PREFIX)
+    entry = sprite_action_entry(options, action)
+    if entry is None:
+        return action
+    counts = [row["count"] for row in entry["directions"]]
+    if not counts:
+        return action
+    return f"{action}{directions if directions in counts else counts[0]}"
+
+
+def _sprite_logical(form: dict[str, Any], sizes: tuple[int, ...]) -> int:
+    """The cell size this form will actually be submitted at.
+
+    Clamped **here** rather than only in the picker, and that is the difference
+    between a gate and a decoration: the Action control is always on screen and
+    the size picker is inside Advanced, so a user who picks an eight-frame walk
+    without ever opening Advanced would otherwise compile a 64px request that
+    the door refuses -- a press that does nothing, decided by a section they
+    never looked at.
+    """
+    if not sizes:
+        return _safe_int(form.get("cell_size"), 64)
+    asked = _safe_int(form.get("cell_size"), max(sizes))
+    return asked if asked in sizes else max(sizes)
+
+
+def sprite_plan(form: dict[str, Any]) -> dict[str, Any]:
+    """What this form's sprite arm will actually draw, arithmetic included.
+
+    One function, read by the Dimensions section's summary line, by the size
+    picker's ladder and by :func:`sprite_sheet_kwargs`, so what the user is told
+    and what is submitted are the same numbers rather than two calculations of
+    them. Every one of them comes from ``sprite_options()`` -- the door's own --
+    for the reason the tile arm's do: a pane that recomputes a cell count is a
+    label that goes stale the first time a frame count moves.
+    """
     options = _sprite_options()
+    layout = str(form.get("sheet_layout") or "turnaround")
+    _mode, action, directions = generation.sprite_from_layout(layout)
+    entry = sprite_action_entry(options, action)
+    row = None
+    if entry is not None and layout not in generation.SPRITE_LEGACY_MODES:
+        row = next(
+            (r for r in entry["directions"] if r["count"] == directions), None
+        )
+    if row is None:
+        # A turnaround or a legacy walk: one generation of one fixed atlas, and
+        # its grid is the ``sheet_types`` table's rather than an action's.
+        fixed = next(
+            (t for t in options["sheet_types"] if t["key"] == layout),
+            options["sheet_types"][0],
+        )
+        sizes = tuple(fixed["logical_sizes"])
+        return {
+            "layout": layout,
+            "action": "",
+            "directions": len(fixed["directions"]),
+            "frames": int(fixed["frames_per_direction"]),
+            "cells": int(fixed["cells"]),
+            "bands": 1,
+            "candidates": 2,
+            "generations": 2,
+            "sizes": sizes,
+            "logical_size": _sprite_logical(form, sizes),
+        }
+    candidates = int(row["candidates"])
+    sizes = tuple(entry["logical_sizes"])
+    return {
+        "layout": layout,
+        "action": action,
+        "directions": int(row["count"]),
+        "frames": int(entry["frames"]),
+        "cells": int(row["cells"]),
+        "bands": int(row["bands"]),
+        "candidates": candidates,
+        "generations": int(row["bands"]) * candidates,
+        "sizes": sizes,
+        "logical_size": _sprite_logical(form, sizes),
+    }
+
+
+def _sprite_cost(plan: dict[str, Any]) -> str:
+    """The one sentence under the sprite controls, from :func:`sprite_plan`."""
+    seconds = plan["generations"] * float(_sprite_options()["seconds_per_generation"])
+    when = (
+        f"about {round(seconds / 60.0)} minutes"
+        if seconds >= 90
+        else f"about {round(seconds / 10.0) * 10} seconds"
+    )
+    draft = "one draft" if plan["candidates"] == 1 else f"{plan['candidates']} drafts"
+    return (
+        f"{plan['directions']} directions x {plan['frames']} frames = "
+        f"{plan['cells']} cells, {plan['generations']} generations for "
+        f"{draft}, {when}."
+    )
+
+
+def _sprite_layout(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
+    """What the sheet depicts: an action, and how many ways it is drawn.
+
+    Above the model and not under Advanced, for the reason the tile arm's layout
+    is: it decides what the sheet is a sheet *of*, and it is the choice that
+    decides how long the press will take -- eight directions is eight
+    generations, which is a fact a user is owed before pressing rather than
+    after.
+    """
+    options = _sprite_options()
+    layout = str(form.get("sheet_layout") or "turnaround")
+    _mode, action, directions = generation.sprite_from_layout(layout)
+    current = sprite_action_key(layout)
+    changed, picked = form_ui.combo(
+        "sprite_action",
+        "Action",
+        current,
+        sprite_action_options(options, current),
+        help_text=(
+            "What the character is doing. Only the actions this install has a "
+            "pose guide for are offered -- the guide is what puts the limbs "
+            "where they belong."
+        ),
+    )
+    if changed:
+        form["sheet_layout"] = sprite_layout_for(options, picked, directions)
+        ctx.state.clear_field_error("sheet_type")
+        ctx.state.preview_dirty_at = time.monotonic()
+        layout = str(form["sheet_layout"])
+        _mode, action, directions = generation.sprite_from_layout(layout)
+    entry = sprite_action_entry(options, action)
+    if entry is not None and layout not in generation.SPRITE_LEGACY_MODES:
+        counts = [row["count"] for row in entry["directions"]]
+        changed, count = form_ui.segmented_choice(
+            "sprite_directions",
+            "Directions",
+            str(directions),
+            tuple((str(c), f"{c} ways") for c in counts),
+            help_text=(
+                "How many ways the character is drawn facing. One direction is "
+                "one generation, so eight of them is eight."
+            ),
+            compact=True,
+        )
+        if changed:
+            form["sheet_layout"] = sprite_layout_for(options, action, int(count))
+    widgets.muted_wrapped(_sprite_cost(sprite_plan(form)))
+
+
+def _sprite_size(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
+    """Only the editable dimension of a sprite asset type.
+
+    **The ladder is gated on the action**, which is the difference between a
+    refusal the user can act on and one they meet after pressing. One direction
+    of an eight-frame walk is eight cells of ``PX_PER_ART_PIXEL`` times the
+    logical size, and above 32px that band is past one SDXL frame -- so
+    ``spritesynth.plan_sheet`` refuses it, naming both numbers, and both service
+    doors re-raise that sentence. A picker still offering 48 and 64 there would
+    be three sizes of which two are a refusal.
+    """
+    options = _sprite_options()
+    plan = sprite_plan(form)
+    sizes = plan["sizes"] or tuple(options["logical_sizes"])
+    current = str(plan["logical_size"])
+    if str(form.get("cell_size", "")) != current:
+        # Written back so the control shows what the submit will send. The clamp
+        # itself is ``_sprite_logical``'s, above -- a picker that was the only
+        # thing holding the line would not hold it for a user who never opened
+        # this section.
+        form["cell_size"] = current
     changed, picked = form_ui.segmented_choice(
-        "cell_size", "Cell size", str(form.get("cell_size", "64")),
-        tuple((str(size), str(size)) for size in options["logical_sizes"]),
+        "cell_size", "Cell size", current,
+        tuple((str(size), str(size)) for size in sizes),
         help_text="How many pixels across one frame is.", compact=True,
     )
     if changed:
         form["cell_size"] = picked
+    if len(sizes) < len(options["logical_sizes"]):
+        widgets.muted_wrapped(
+            f"A {plan['frames']}-frame {plan['action']} is drawn one whole "
+            f"direction at a time, and only {max(sizes)}px and below fit one "
+            "generation."
+        )
 
 
 def _pixel_look(
@@ -1704,11 +1965,17 @@ def _submit(ctx: Any, form: dict[str, Any]) -> None:
         # Its own sentence rather than a third noun in the line below: a sheet
         # is one press and either one generation or three, which "One sheet - a
         # few seconds" would misreport in the sprite case by a factor of three.
-        widgets.muted(
-            "One sheet - about a minute"
-            if form.get("sheet_type") != "sprite"
-            else "A character and two candidate sheets - a few minutes"
-        )
+        if form.get("sheet_type") != "sprite":
+            widgets.muted("One sheet - about a minute")
+        else:
+            # The arithmetic rather than "a few minutes", which was written when
+            # a sprite sheet was always one generation twice and is a factor of
+            # eight out for an eight-direction one. Same numbers as the line
+            # under the layout controls, from the same function.
+            plan = sprite_plan(form)
+            widgets.muted(
+                f"A character, then {plan['generations']} generations of sheet"
+            )
     else:
         noun = {
             "image_2d": "image",
@@ -2018,10 +2285,18 @@ def sprite_sheet_kwargs(form: dict[str, Any]) -> dict[str, Any]:
     *reference* door rather than when the follow-up is minted, so a palette
     that has been deleted since the form listed it costs the request instead of
     an SDXL generation and an hour.
+
+    ``candidates`` is sent rather than left to the door's own default, and that
+    is not belt-and-braces: the Dimensions section has already told the user how
+    many generations this press costs, and a block that let the worker decide
+    the number separately is how a form comes to promise eight and spend
+    sixteen. It is :func:`sprite_plan`'s number, which is the line's number.
     """
+    plan = sprite_plan(form)
     return {
-        "sheet_type": form.get("sheet_layout") or "turnaround",
-        "logical_size": int(form.get("cell_size") or 64),
+        "sheet_type": plan["layout"],
+        "candidates": plan["candidates"],
+        "logical_size": plan["logical_size"],
         "colors": svc_sprites.DEFAULT_SPRITE_COLORS,
         "target_cell_px": (
             None if form.get("target_cell_px") in (None, "")

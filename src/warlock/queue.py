@@ -438,6 +438,7 @@ def _sprite_assemble(
     designed: tuple[tuple[int, int, int], ...] = (),
     dither: bool = False,
     outline: str | None = None,
+    grids: list[dict[str, Any]] | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     """One generated atlas turned into a publishable candidate.
 
@@ -469,14 +470,30 @@ def _sprite_assemble(
     # reduces it. Per candidate rather than per draft, because each candidate is
     # its own generation and the two seeds can plainly land on different
     # lattices -- which is a large part of what the number is for.
-    grid = pixel.lattice(atlas)
+    #
+    # ``grids`` is that same measurement taken by the caller, once per band,
+    # and it arrives measured because by the time a multi-band candidate gets
+    # here it is a *mosaic* of N generations: there is no single lattice over it
+    # to find, which is exactly what ``_pixel_sheet`` says about its own bands.
+    grid = pixel.lattice(atlas) if grids is None else None
 
     matted, took = spritesynth.matte_cells(atlas, geom)
     warnings = spritesynth.structural_warnings(matted, geom, took)
     aligned = spritesynth.baseline_align(matted, geom)
 
     front_preserved = False
-    front_note = ""
+    # An action sheet's front cell is a *posed frame*, not the reference, so
+    # pasting the drawing into it would put a standing character in the middle
+    # of a walk cycle. ``spritesynth.preserve_front`` refuses anything but a
+    # turnaround by name and that refusal is left alone; what is owed is the
+    # sentence, because "front_preserved: false" with nothing beside it reads as
+    # a step that was tried and failed rather than one that does not apply.
+    front_note = (
+        ""
+        if geom.kind == "turnaround"
+        else "The front view of an action sheet is a drawn frame of the action, "
+        "so the reference was not pasted into it."
+    )
     if geom.kind == "turnaround":
         front = geom.cells[0]
         ok, front_note = spritesynth.front_fits(
@@ -556,7 +573,11 @@ def _sprite_assemble(
             # Advisory, in the sense every measurement in this tree is: nothing
             # reads it back, and it is here so that a later calibration of
             # ``pixel.GRID_RESIDUAL_MAX`` has real generations to calibrate from.
-            "grid": grid,
+            # One key or the other and never both: a one-generation candidate
+            # has a lattice and a multi-band one has N of them, and a reader
+            # that found ``grid`` on a mosaic would be reading a measurement of
+            # nothing.
+            **({"grid": grid} if grids is None else {"grids": list(grids)}),
         },
     )
 

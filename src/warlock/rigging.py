@@ -1261,7 +1261,18 @@ def read_sprite_draft(job_dir: Path, draft_id: str) -> dict[str, Any] | None:
 
 
 def list_sprite_drafts(job_dir: Path) -> list[dict[str, Any]]:
-    """Every finished draft, oldest first. A draft missing a PNG is not one."""
+    """Every finished draft, oldest first. A draft missing a PNG is not one.
+
+    Missing *which* PNG is the sidecar's answer and not this function's, which
+    is the one thing here that is not obvious. It used to demand both letters of
+    :data:`SPRITE_CANDIDATES`, and that was a hidden cap: a big sheet is drawn
+    as a single candidate (``spritesynth.default_candidates``), so every
+    eight-direction draft ever made would have been complete on disk, correct in
+    its sidecar, and invisible in the pane. The record is read first and its own
+    ``candidates`` list says which images it claims -- which is a stricter check
+    than the old one as well as a truer one, since it also catches a draft
+    claiming a candidate whose PNG never landed.
+    """
     directory = sprite_dir(job_dir)
     if not directory.is_dir():
         return []
@@ -1269,13 +1280,21 @@ def list_sprite_drafts(job_dir: Path) -> list[dict[str, Any]]:
     for path in sorted(directory.glob("*.json")):
         if not is_valid_id(path.stem):
             continue
-        if not all(
-            path.with_suffix(f".{c}.png").exists() for c in SPRITE_CANDIDATES
-        ):
-            continue
         record = read_sprite_draft(job_dir, path.stem)
-        if record is not None:
-            drafts.append(record)
+        if record is None:
+            continue
+        claimed = record.get("candidates")
+        # A record with no usable list falls back to demanding both, which is
+        # what every draft written before the count was a choice carries anyway
+        # -- untrusted JSON does not get to shrink the check to nothing.
+        letters = (
+            SPRITE_CANDIDATES[: len(claimed)]
+            if isinstance(claimed, list) and claimed
+            else SPRITE_CANDIDATES
+        )
+        if not all(path.with_suffix(f".{c}.png").exists() for c in letters):
+            continue
+        drafts.append(record)
     drafts.sort(key=lambda d: d.get("created", 0.0))
     return drafts
 

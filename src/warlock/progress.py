@@ -71,18 +71,27 @@ PHASES_SHEET: dict[str, tuple[float, float]] = {
     "pack": (0.95, 1.00),
 }
 
-# A sprite synthesis is two full SDXL generations of one atlas each, with a
-# short CPU assembly (matte, baseline, reduce, quantize) after each. The two
-# generations get equal, dominant slices because they are equal work; the
-# assembly slices are narrow but non-zero, unlike "optimize" above, because a
-# 16-cell flood fill is seconds rather than milliseconds and a bar that sat at
-# exactly 48% twice would read as a hang rather than as a handover.
+# A sprite synthesis is N SDXL generations -- one per candidate for the legacy
+# kinds, one per candidate *per direction* for a planned one -- followed by a
+# short CPU assembly (matte, baseline, reduce, quantize) per candidate. The
+# generations get the dominant slice because they are the work; the assembly
+# slice is narrow but non-zero, unlike "optimize" above, because a 64-cell flood
+# fill is seconds rather than milliseconds and a bar that sat still at the
+# handover would read as a hang.
+#
+# **One window for every generation, not one phase per candidate.** It was
+# ``generate_a``/``assemble_a``/``generate_b``/``assemble_b``, which hard-coded
+# the pair into the bar: a sheet drawn as a single candidate -- which is the
+# default past ``spritesynth.PAIR_CELL_LIMIT`` cells, and therefore the common
+# case for every eight-direction sheet -- finished at 52% and jumped, and a
+# candidate drawn as eight bands had nowhere to say which band it was on. The
+# worker walks this window with (k*n + i) / (N*n) across every candidate and
+# band at once, which is ``PHASES_PIXEL_SHEET``'s arithmetic and generalises to
+# any count of either.
 PHASES_SPRITE: dict[str, tuple[float, float]] = {
     "condition": (0.00, 0.08),
-    "generate_a": (0.08, 0.48),
-    "assemble_a": (0.48, 0.52),
-    "generate_b": (0.52, 0.92),
-    "assemble_b": (0.92, 1.00),
+    "generate": (0.08, 0.92),
+    "assemble": (0.92, 1.00),
 }
 
 # A pixel sheet is one img2img pass per *band* of the atlas, through the

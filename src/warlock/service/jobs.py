@@ -256,7 +256,21 @@ def create_generation_request(svc: WarlockService, request: Any, **uploads: Any)
                 else svc_sprites.DEFAULT_SPRITE_LOGICAL_SIZE
             )
             sprite_block = {
-                "sheet_type": "turnaround" if sprite.mode == "turnaround" else "walk",
+                # The request's own action and direction count, not a collapse
+                # of them. This read ``"turnaround" if mode == "turnaround" else
+                # "walk"``, which answered every one of the seven actions and
+                # both direction counts with the legacy four-by-four walk: a
+                # request for an eight-direction idle was admitted, queued and
+                # published as a sheet nobody asked for, with the request
+                # document still saying "idle" beside it. The door composes the
+                # kind from the pair (``sprites.resolve_sheet_kind``) and
+                # refuses an action with no pose guide behind it.
+                **(
+                    {"sheet_type": sprite.mode}
+                    if sprite.mode in generation.SPRITE_LEGACY_MODES
+                    else {"action": sprite.action, "directions": sprite.directions}
+                ),
+                "candidates": sprite.candidate_count,
                 "logical_size": legacy_size,
                 "colors": svc_sprites.DEFAULT_SPRITE_COLORS,
                 # ``_check_sprite_sheet`` validates these at *this* door through

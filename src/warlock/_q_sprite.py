@@ -357,7 +357,7 @@ class SpriteOps:
         )
 
     async def _sprite_synthesis(self: Worker, job: dict[str, Any]) -> None:
-        """Two candidate sprite atlases from one finished 2D reference.
+        """Candidate sprite atlases from one finished 2D reference.
 
         A queue job for ``_pixel_sheet``'s reason exactly -- it needs the
         resident SDXL pipe, and a TaskRunner thread racing the worker for VRAM
@@ -370,11 +370,23 @@ class SpriteOps:
         and the pair is the deliverable: a user comparing two guesses at three
         views they have never seen is the entire point, and two rows that could
         be dispatched minutes apart behind different work would not be a pair.
+        Past ``spritesynth.PAIR_CELL_LIMIT`` cells the default drops to one --
+        see that constant -- and the door may pin either.
 
-        Nothing is written until both candidates are assembled. A draft is a
-        trio -- two PNGs then the sidecar last, which is the completion marker
-        -- and a half-published draft is one the pane would list and the user
-        would open.
+        Nothing is written until every candidate is assembled. A draft is its
+        PNGs and then the sidecar last, which is the completion marker, and a
+        half-published draft is one the pane would list and the user would open.
+
+        **A planned kind is drawn one band at a time**, one band being one whole
+        direction, and the loop below is the only structural difference between
+        the two eras. ``spritesynth``'s module docstring owns the argument for
+        why a direction is never split and never shares a denoise with another;
+        what this method owns is the consequences -- one seed across every band
+        of a candidate, a cancel check between bands rather than only between
+        candidates, and every step that takes a *median* over the sheet
+        (the shared baseline, the palette) run once on the composed atlas rather
+        than once per band. Eight baselines is a character whose feet move as it
+        turns, and eight median cuts is one colour meaning eight things.
         """
         from PIL import Image
 
@@ -391,18 +403,32 @@ class SpriteOps:
         if not rigging.is_valid_id(draft_id):
             raise ValueError(f"draft_id is not a draft id: {draft_id!r}")
         sheet_type = str(params.get("sheet_type") or "")
+        logical = int(params.get("logical_size", 64))
+        colors = int(params.get("colors", 32))
         # Re-derived rather than trusted: this raises on an unknown type, and
-        # params outlive the door that validated them.
-        geom = spritesynth.geometry(sheet_type)
+        # params outlive the door that validated them. Through ``sheet_geometry``
+        # rather than ``geometry`` so a planned kind resolves too -- and at the
+        # logical size, which is what decides how big a band's cells are.
+        geom = spritesynth.sheet_geometry(sheet_type, logical)
 
         source_dir = self.config.job_dir(source_id)
         src_png = source_dir / "input.png"
         if not src_png.exists():
             raise RuntimeError(f"reference {source_id} no longer has an image")
 
-        logical = int(params.get("logical_size", 64))
-        colors = int(params.get("colors", 32))
         seeds = (("a", int(params.get("seed_a", 42))), ("b", int(params.get("seed_b", 43))))
+        # Absent means "as many as this size is worth", which is the door's own
+        # default and is restated here for the reason every default on this path
+        # is: params outlive the door that wrote them, and a blob written before
+        # the option existed must get the number the path is specified to have
+        # rather than the largest one.
+        asked = params.get("candidates")
+        wanted = (
+            spritesynth.default_candidates(len(geom.cells))
+            if asked is None
+            else max(1, min(len(seeds), int(asked)))
+        )
+        seeds = seeds[:wanted]
         palette_name = str(params.get("palette") or "")
         dither = bool(params.get("dither"))
         # ``or None`` rather than ``or "inner"``: ``_sprite_assemble`` owns the
@@ -454,14 +480,51 @@ class SpriteOps:
             template = await asyncio.to_thread(
                 spritesynth.load_guide_template, sheet_type
             )
-            guide_path = scratch / "guide.png"
-            guide = await asyncio.to_thread(spritesynth.render_guide, geom, template)
-            await asyncio.to_thread(guide.save, guide_path, "PNG")
-            guide_edges = await asyncio.to_thread(control.edge_fraction, guide)
+            prompt = guidance.compose_prompt(job["prompt"] or "", params)
+            # One entry per generation a candidate needs: what to draw, what to
+            # condition it on, and how big to ask for it. Built once and reused
+            # by every candidate, because a guide is a function of the geometry
+            # alone -- rendering it per candidate would be the same black-and-
+            # white stick figure drawn twice.
+            #
+            # A single entry whose band is ``None`` is the legacy kinds: one
+            # generation of the whole atlas, at the size the pipe defaults a
+            # sheet to, described by the job's own prompt. Everything below is
+            # written against this list rather than against ``geom.bands``, so
+            # there is one loop and not two.
+            passes: list[tuple[Any, str, Path, tuple[int, int] | None]] = []
+            guide_edges: list[float] = []
+            if geom.bands:
+                action = spritesynth.KIND_ACTIONS[geom.kind]
+                for band in geom.bands:
+                    path = scratch / f"guide.{band.index}.png"
+                    drawn = await asyncio.to_thread(
+                        spritesynth.render_band_guide, band, template
+                    )
+                    await asyncio.to_thread(drawn.save, path, "PNG")
+                    guide_edges.append(
+                        await asyncio.to_thread(control.edge_fraction, drawn)
+                    )
+                    passes.append(
+                        (
+                            band,
+                            spritesynth.action_subject(prompt, action, band.direction),
+                            path,
+                            band.size,
+                        )
+                    )
+            else:
+                guide_path = scratch / "guide.png"
+                guide = await asyncio.to_thread(spritesynth.render_guide, geom, template)
+                await asyncio.to_thread(guide.save, guide_path, "PNG")
+                guide_edges.append(await asyncio.to_thread(control.edge_fraction, guide))
+                passes.append((None, prompt, guide_path, None))
+            # Every generation of the job in one number, because the progress
+            # window is one: see the ``on_step`` comment below.
+            total_passes = len(seeds) * len(passes)
 
             t2i, _handoff = await self._acquire_t2i(spec, base_key)
 
-            prompt = guidance.compose_prompt(job["prompt"] or "", params)
             ip_scale = float(params.get("ip_scale", models.DEFAULT_IP_SCALE))
             control_scale = float(
                 params.get("control_scale", models.DEFAULT_CONTROL_SCALE)
@@ -470,65 +533,134 @@ class SpriteOps:
 
             assembled: list[tuple[str, Any, dict[str, Any]]] = []
             try:
-                for letter, seed in seeds:
+                for index, (letter, seed) in enumerate(seeds):
                     if self._cancel is not None and self._cancel.event.is_set():
                         # Before B, not only at the end: the first generation is
                         # ~20 s of GPU that a cancelled job should not spend.
                         return
-                    phase = f"generate_{letter}"
-                    self.progress.update(
-                        job_id, phase=phase, label="Drawing the sheet",
-                        inner=0.0, inner_next=0.05, nominal=20.0, detail="",
-                    )
-                    out_path = scratch / f"{letter}.png"
-                    cond = Conditioning(
-                        # Both adapters at once: the IP-Adapter carries who the
-                        # character is and the ControlNet carries where the
-                        # limbs go. Deliberately no init image -- an img2img
-                        # start from the reference would fight the pose guides
-                        # in fifteen of the sixteen cells, and there is no
-                        # strength axis on this kind for exactly that reason.
-                        ip_adapter="plus",
-                        ip_image=ip_path,
-                        ip_scale=ip_scale,
-                        control="canny",
-                        control_image=guide_path,
-                        control_scale=control_scale,
-                        control_end=control_end,
-                    )
-                    await asyncio.to_thread(
-                        functools.partial(
-                            t2i.generate,
-                            prompt,
-                            out_path,
-                            seed=seed,
-                            lora=lora,
-                            lora_weight=pixel_style.default_weight,
-                            conditioning=cond,
-                            # Deliberately not self._t2i_state: it emits
-                            # "t2i_load"/"t2i_sample", which are not in
-                            # PHASES_SPRITE, and update() falls back to
-                            # (0.0, 1.0) for an unknown phase -- which would
-                            # drag the bar back to zero twice per job.
-                            on_step=functools.partial(
-                                self._sprite_step, job_id, phase
+                    drawn_bands: list[Any] = []
+                    grids: list[dict[str, Any]] = []
+                    for order, (band, subject, guide_file, size) in enumerate(passes):
+                        if self._cancel is not None and self._cancel.event.is_set():
+                            # Between bands and not only between candidates:
+                            # eight bands is minutes of GPU, and a cancel that
+                            # was only read once a whole sheet was drawn would
+                            # spend every one of them.
+                            return
+                        step = index * len(passes) + order
+                        self.progress.update(
+                            job_id, phase="generate", label="Drawing the sheet",
+                            inner=step / total_passes,
+                            inner_next=(step + 1) / total_passes,
+                            nominal=20.0,
+                            detail=(
+                                ""
+                                if band is None
+                                else f"{band.direction} ({order + 1}/{len(passes)})"
                             ),
-                            cancel_event=self._cancel.event if self._cancel else None,
-                            sheet=True,
                         )
-                    )
+                        out_path = scratch / f"{letter}.{order}.png"
+                        cond = Conditioning(
+                            # Both adapters at once: the IP-Adapter carries who
+                            # the character is and the ControlNet carries where
+                            # the limbs go. Deliberately no init image -- an
+                            # img2img start from the reference would fight the
+                            # pose guides in fifteen of the sixteen cells, and
+                            # there is no strength axis on this kind for exactly
+                            # that reason.
+                            ip_adapter="plus",
+                            ip_image=ip_path,
+                            ip_scale=ip_scale,
+                            control="canny",
+                            control_image=guide_file,
+                            control_scale=control_scale,
+                            control_end=control_end,
+                        )
+                        await asyncio.to_thread(
+                            functools.partial(
+                                t2i.generate,
+                                subject,
+                                out_path,
+                                # One seed for every band of a candidate, which
+                                # is ``_pixel_sheet``'s rule and ``_retexture``'s
+                                # -- a multi-band sheet keeps one identity all
+                                # the way down the atlas. What holds a character
+                                # together across the seam between two
+                                # directions is this, the shared reference and
+                                # the IP-Adapter; there is no shared denoise to
+                                # do it, by construction.
+                                seed=seed,
+                                lora=lora,
+                                lora_weight=pixel_style.default_weight,
+                                conditioning=cond,
+                                # Deliberately not self._t2i_state: it emits
+                                # "t2i_load"/"t2i_sample", which are not in
+                                # PHASES_SPRITE, and update() falls back to
+                                # (0.0, 1.0) for an unknown phase -- which would
+                                # drag the bar back to zero once per generation.
+                                #
+                                # Pass k's steps *inside* the one "generate"
+                                # window -- (k*n + i) / (N*n), ``_pixel_sheet``'s
+                                # CON-02 arithmetic. Raw (i, n) per pass walks
+                                # the whole window on the first band and the
+                                # never-regress floor then pins the bar there
+                                # for every band after it.
+                                on_step=lambda i, n, k=step: self._sprite_step(
+                                    job_id, k * n + i, total_passes * n
+                                ),
+                                cancel_event=(
+                                    self._cancel.event if self._cancel else None
+                                ),
+                                sheet=True,
+                                # Absent for the legacy kinds, which are one
+                                # square SDXL frame and take the pipe's own
+                                # sheet size. A band is asked for by name: its
+                                # cells are ``PX_PER_ART_PIXEL`` per authored
+                                # pixel, so a four-frame 32px direction is a
+                                # 512x512 ask and nothing but the plan knows it.
+                                **({} if size is None else {"size": size}),
+                            )
+                        )
+                        with Image.open(out_path) as generated:
+                            generated.load()
+                            drawn = generated.convert("RGB")
+                        if band is None:
+                            drawn_bands = [drawn]
+                            break
+                        # On the frame the model returned, before the compose:
+                        # one band is one generation, so there is one lattice per
+                        # band and none over the mosaic they make.
+                        grids.append(
+                            {
+                                "band": band.index,
+                                **await asyncio.to_thread(pixel.lattice, drawn),
+                            }
+                        )
+                        drawn_bands.append(drawn)
                     self.progress.update(
-                        job_id, phase=f"assemble_{letter}", label="Cutting the sheet up",
-                        inner=0.0, inner_next=1.0, nominal=6.0, detail="",
+                        job_id, phase="assemble", label="Cutting the sheet up",
+                        inner=index / len(seeds),
+                        inner_next=(index + 1) / len(seeds),
+                        nominal=6.0, detail="",
                     )
-                    with Image.open(out_path) as generated:
-                        generated.load()
-                        atlas = generated.convert("RGB")
+                    if geom.bands:
+                        # Composed *before* anything is matted, aligned, reduced
+                        # or quantised, so every one of those steps sees the
+                        # whole sheet exactly as the legacy path does. The
+                        # geometry it is addressed through is the generation-
+                        # pixel one; ``composed_geometry`` argues why.
+                        atlas = await asyncio.to_thread(
+                            spritesynth.compose_bands, drawn_bands, geom
+                        )
+                        assemble_geom = spritesynth.composed_geometry(geom)
+                    else:
+                        atlas = drawn_bands[0]
+                        assemble_geom = geom
                     reduced, record = await asyncio.to_thread(
                         functools.partial(
                             queue_mod._sprite_assemble,
                             atlas,
-                            geom,
+                            assemble_geom,
                             logical,
                             colors,
                             source_rgba,
@@ -536,6 +668,7 @@ class SpriteOps:
                             designed=designed,
                             dither=dither,
                             outline=outline,
+                            grids=grids or None,
                         )
                     )
                     record["image"] = f"{draft_id}.{letter}.png"
@@ -560,9 +693,24 @@ class SpriteOps:
                 "control_scale": control_scale,
                 "control_end": control_end,
                 "guide_template": sheet_type,
-                "guide_edge_fraction": guide_edges,
+                # One number for one guide, a list for a sheet drawn from N of
+                # them, and never a mean of the two: this exists so that "the
+                # guide drew nothing" is an answerable question, and an average
+                # over eight bands is exactly the shape that hides one empty
+                # one. Same rule as the candidates' ``grid``/``grids``.
+                **(
+                    {"guide_edge_fraction": guide_edges[0]}
+                    if len(guide_edges) == 1
+                    else {"guide_edge_fractions": list(guide_edges)}
+                ),
                 "matte_source": matte_source,
                 "colors": colors,
+                # What was actually drawn, per the rule below: how many
+                # generations went into one candidate, and how many candidates
+                # there were. Both are decisions the door or this method may
+                # have made rather than values the user typed.
+                "bands": len(geom.bands),
+                "candidates": len(assembled),
             }
             # What ran, not what was asked for -- the rule this file's restyle
             # sibling states. ``outline`` in particular: ``None`` in params means
@@ -630,13 +778,21 @@ class SpriteOps:
             )
 
         log.info(
-            "synthesised sprite draft %s for job %s: %s, %d cells at %dpx",
+            "synthesised sprite draft %s for job %s: %s, %d cells at %dpx, "
+            "%d candidate(s) of %d generation(s)",
             draft_id, source_id, sheet_type, len(geom.cells), logical,
+            len(assembled), len(passes),
         )
 
-    def _sprite_step(self: Worker, job_id: str, phase: str, step: int, total: int) -> None:
-        """``_t2i_step`` for a phase table that has no ``t2i_sample``."""
-        self._step_progress(job_id, phase, "Drawing the sheet", step, total)
+    def _sprite_step(self: Worker, job_id: str, step: int, total: int) -> None:
+        """``_t2i_step`` for a phase table that has no ``t2i_sample``.
+
+        ``step``/``total`` are across the *whole job* rather than within one
+        generation, which is why this takes no phase: every candidate and every
+        band walks the one ``generate`` window, exactly as ``_pixel_sheet``'s
+        bands walk its ``t2i_sample``.
+        """
+        self._step_progress(job_id, "generate", "Drawing the sheet", step, total)
 
     async def _retexture(self: Worker, job: dict[str, Any]) -> None:
         """Give a finished mesh a new skin: render, restyle, project, swap.

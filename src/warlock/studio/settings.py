@@ -381,7 +381,12 @@ def _safe_form_value(key: str, value: Any) -> bool:
         "output": {"reference", "tile", "sheet"},
         "sheet_type": {"tile", "sprite"},
         "projection": {"top_down", "three_quarter", "isometric", "orthogonal"},
-        "sheet_layout": {"turnaround", "walk"},
+        # The two fixed atlases plus every planned kind. Restored values are
+        # only *boundary*-checked here -- an action whose pose guide is not on
+        # this install still restores, and the pane's own combo is what says so
+        # (``sprite_action_options`` names a stored layout it cannot offer
+        # rather than moving the form off it silently).
+        "sheet_layout": {"turnaround", "walk", *generation.SPRITE_SHEET_KINDS},
         "tile_size": {"16", "32", "48", "64"},
         "cell_size": {"32", "48", "64"},
         "expand": {"off", "asset", "scene"},

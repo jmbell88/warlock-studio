@@ -347,7 +347,12 @@ def test_recording_the_lattice_moved_no_sidecar_version():
     # that is the case where the rule cuts the other way: a reader has to be
     # able to tell which compiler drew the sheet. The lattice block still rode
     # in for free; what bought the bump was the pixels.
-    assert spritesynth.SPRITE_DRAFT_VERSION == 2
+    # 3 now, and the lattice still did not buy it either time. 2 was the
+    # reduction; 3 is the record growing what a multi-band sheet needs to be
+    # read back -- an action, a direction list, the bands it was drawn in and an
+    # animation block -- at the point where ``sheet_type`` alone stopped being
+    # able to say what the file is.
+    assert spritesynth.SPRITE_DRAFT_VERSION == 3
     assert tileatlas.TILE_ATLAS_VERSION == 1
     # 2 is the tile-sheet vocabulary widening, taken before any of this.
     assert tilesheet.TILE_SHEET_VERSION == 2

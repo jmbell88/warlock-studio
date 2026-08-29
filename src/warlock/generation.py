@@ -38,8 +38,49 @@ REFERENCE_MODES = ("none", "single", "multi")
 TARGET_CELL_PRESETS = (16, 24, 32, 48, 64, 96, 128, 256)
 TARGET_CELL_MIN = 8
 TARGET_CELL_MAX = 256
-SPRITE_ACTIONS = ("idle", "walk", "run", "attack", "jump")
-SPRITE_FRAME_COUNTS = {"idle": 4, "walk": 8, "run": 8, "attack": 6, "jump": 6}
+#: The seven actions a sprite sheet can depict, and how many frames each is.
+#:
+#: ``pipelines.spritesynth.ACTIONS``' table, restated rather than imported for
+#: this module's stated reason -- it is the request *document*, and naming its
+#: own vocabulary should not cost it an import of a pipeline. It had five, and
+#: the two it was missing were not idle curiosities: ``cast`` and ``hurt`` are
+#: the pair that exist **only** on this path (they have no Blender clip behind
+#: them), so the one table that could not name them was the one a request is
+#: written in. ``tests/test_sprite_geometry_agreement.py`` owns the agreement.
+SPRITE_ACTIONS = ("idle", "walk", "run", "attack", "cast", "hurt", "jump")
+SPRITE_FRAME_COUNTS = {
+    "idle": 4,
+    "walk": 8,
+    "run": 8,
+    "attack": 6,
+    "cast": 6,
+    "hurt": 4,
+    "jump": 6,
+}
+
+#: How many directions a sprite sheet may carry. ``spritesynth.DIRECTION_COUNTS``.
+SPRITE_DIRECTION_COUNTS = (4, 8)
+
+#: The shapes a sprite request comes in. Two of them name a *sheet* and one
+#: names a kind of sheet: ``turnaround`` and ``walk`` are the two fixed atlases
+#: this path has always drawn -- the second being a four-frame cycle over four
+#: directions, which is emphatically not the eight-frame ``walk4`` the action
+#: table plans -- and ``action`` is "the action and direction count named
+#: below". A mode that names itself is how a legacy kind stays requestable
+#: without pretending to be an action whose frame count it does not have.
+SPRITE_MODES = ("turnaround", "walk", "action")
+SPRITE_LEGACY_MODES = ("turnaround", "walk")
+
+#: ``kind -> (action, directions)`` for every sheet the action table plans. A
+#: table and not a parse of the trailing digits, for ``spritesynth.plan_kind``'s
+#: reason: an action is free to be named ``dash2`` one day, and a parser would
+#: quietly read that as a two-direction ``dash``.
+SPRITE_SHEET_KINDS: dict[str, tuple[str, int]] = {
+    f"{action}{count}": (action, count)
+    for action in SPRITE_ACTIONS
+    for count in SPRITE_DIRECTION_COUNTS
+}
+
 VIEW_NAMES = ("front", "left", "right", "back")
 
 
@@ -110,7 +151,13 @@ class SpriteSettings:
     action: str = "idle"
     directions: int = 4
     frame_count: int | None = None
-    candidate_count: int = 2
+    #: ``None`` is "nobody said", exactly as :attr:`frame_count` and
+    #: :attr:`target_cell_px` mean it, and it is the default because the right
+    #: answer depends on how big the sheet is: a pair of a four-cell turnaround
+    #: is the feature, and a pair of an eight-direction walk is sixteen
+    #: generations. ``spritesynth.default_candidates`` decides at the door; a
+    #: request that names 1 or 2 is honoured.
+    candidate_count: int | None = None
     target_cell_px: int | None = None
     #: :attr:`TileSettings.palette` and :attr:`TileSettings.dither`, for the
     #: sprite half of the same gap: the follow-up block this request compiles
@@ -609,17 +656,17 @@ def validate_request(
         issues.extend(validate_target_cell(t.target_cell_px, isometric=t.view == "isometric"))
     if request.generation_type == "sprite_sheet":
         s = request.sprite
-        if s.mode not in ("turnaround", "action"):
+        if s.mode not in SPRITE_MODES:
             issues.append(
                 CompatibilityIssue("sprite.mode", "Sprites support Turnaround and action sheets.")
             )
         if s.mode == "action" and s.action not in SPRITE_ACTIONS:
             issues.append(CompatibilityIssue("sprite.action", "Unknown sprite action."))
-        if s.directions not in (4, 8):
+        if s.directions not in SPRITE_DIRECTION_COUNTS:
             issues.append(
                 CompatibilityIssue("sprite.directions", "Sprites support 4 or 8 directions.")
             )
-        if not 1 <= s.candidate_count <= 2:
+        if s.candidate_count is not None and not 1 <= s.candidate_count <= 2:
             issues.append(
                 CompatibilityIssue(
                     "sprite.candidate_count", "Sprite candidate count must be 1 or 2."
@@ -706,6 +753,37 @@ def legacy_asset_type(form: Mapping[str, Any]) -> str:
     return "3d_model" if form.get("asset_type") != "image_2d" else "image"
 
 
+def sprite_from_layout(layout: Any) -> tuple[str, str, int]:
+    """``(mode, action, directions)`` for a form's stored ``sheet_layout``.
+
+    That field holds a *sheet kind* -- one of the two legacy atlases, or one of
+    the planned ``f"{action}{directions}"`` names -- and this is the one place
+    it is taken apart. Unknown falls back to the turnaround rather than raising,
+    which is this whole adapter's contract: it reads settings written by an
+    older or newer build, and a form is not the place a bad enum should stop
+    the app. The doors refuse what they cannot draw.
+    """
+    key = str(layout or "turnaround")
+    if key in SPRITE_LEGACY_MODES:
+        # The legacy kinds name themselves. ``action``/``directions`` are the
+        # fields of the *other* mode and are left at their defaults rather than
+        # filled with a plausible lie -- a legacy ``walk`` is four frames, and
+        # writing ``action="walk"`` beside it would make a request that reads as
+        # the eight-frame ``walk4`` to anything consulting SPRITE_FRAME_COUNTS.
+        return (key, "idle", 4)
+    spec = SPRITE_SHEET_KINDS.get(key)
+    if spec is None:
+        return ("turnaround", "idle", 4)
+    return ("action", spec[0], spec[1])
+
+
+def sprite_layout_of(sprite: SpriteSettings) -> str:
+    """:func:`sprite_from_layout` the other way: the kind a request names."""
+    if sprite.mode in SPRITE_LEGACY_MODES:
+        return sprite.mode
+    return f"{sprite.action}{sprite.directions}"
+
+
 def request_from_legacy(form: Mapping[str, Any]) -> GenerationRequest:
     generation_type = legacy_asset_type(form)
     projection = str(form.get("projection") or "top_down")
@@ -734,9 +812,12 @@ def request_from_legacy(form: Mapping[str, Any]) -> GenerationRequest:
         palette=str(form.get("palette") or ""),
         dither=bool(form.get("dither")),
     )
+    mode, action, sprite_directions = sprite_from_layout(form.get("sheet_layout"))
     sprite = SpriteSettings(
-        mode="turnaround" if form.get("sheet_layout", "turnaround") == "turnaround" else "action",
-        action="walk" if form.get("sheet_layout") == "walk" else "idle",
+        mode=mode,
+        action=action,
+        directions=sprite_directions,
+        candidate_count=_optional_int(form.get("sprite_candidates")),
         target_cell_px=_optional_int(form.get("target_cell_px") or form.get("cell_size")),
         palette=str(form.get("palette") or ""),
         dither=bool(form.get("dither")),
@@ -763,13 +844,26 @@ def request_from_legacy(form: Mapping[str, Any]) -> GenerationRequest:
 
 
 def request_to_legacy(request: GenerationRequest) -> dict[str, Any]:
-    """Compatibility adapter for existing ``create_job`` doors."""
+    """Compatibility adapter for existing ``create_job`` doors.
+
+    ``sprite_sheet`` is ``reference`` and not ``sheet``, which looks like a
+    mismatch and is the correction: a sprite sheet **is** an ordinary reference
+    job carrying a follow-up request -- the rig checkbox's shape, so the
+    character is a row in its own right and a sheet the user hates still leaves
+    them the drawing. ``create_job`` takes ``reference``, ``model`` or ``tile``
+    and nothing else, so this said ``sheet`` and every structured sprite request
+    was refused at ``field="output"`` before it reached the sprite block at all.
+
+    ``tileset`` keeps ``sheet`` because that arm never reaches ``create_job``:
+    ``create_generation_request`` sends it to ``create_tile_sheet``, which is
+    its own job kind with its own door.
+    """
     output = {
         "image": "reference",
         "3d_model": "reference",
         "seamless_material": "tile",
         "tileset": "sheet",
-        "sprite_sheet": "sheet",
+        "sprite_sheet": "reference",
     }[request.generation_type]
     out: dict[str, Any] = {
         "asset_type": request.generation_type,

@@ -166,9 +166,10 @@ def test_the_pixel_restyle_opens_through_its_own_sidecar(tmp_path, monkeypatch):
 def test_a_rendered_sheet_is_sliced_as_a_plain_grid_not_a_directional_layout(
     tmp_path, monkeypatch
 ):
-    """``animation.SHEET_KINDS`` is turnaround/walk only, so
-    ``DirectionalLayout.of()`` would return ``None`` for a render's sidecar and
-    ``document_from_atlas`` would refuse the whole door."""
+    """``animation.SHEET_KINDS`` names the sprite atlases and the planned action
+    sheets, and a Blender render is none of them -- so ``DirectionalLayout.of()``
+    returns ``None`` for a render's sidecar and ``document_from_atlas`` would
+    refuse the whole door."""
     ctx = _Ctx()
     _serve(monkeypatch, tmp_path, _sheet(tmp_path))
     inker_mode.open_rendered_sheet(ctx, "j1", "s1")

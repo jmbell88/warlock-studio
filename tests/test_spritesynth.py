@@ -1281,3 +1281,381 @@ def test_an_atlas_with_nothing_in_it_is_named_rather_than_published(monkeypatch)
     for designed in ((), RAMP):
         with pytest.raises(RuntimeError, match="empty in every cell"):
             _assemble(geom, blank, designed=designed)
+
+
+# --- bands: the arithmetic that gates a size picker --------------------------
+
+
+@pytest.mark.parametrize(
+    ("logical", "frames"),
+    # 1024 / (8 * logical) columns, doubled by BAND_ROWS -- except where two
+    # rows of cells are already past one SDXL frame, which is the branch the
+    # tidy formula gets wrong: at 96 and 128 a *single* frame still fits,
+    # because band_grid gives a one-frame band one row.
+    [(16, 16), (32, 8), (48, 4), (64, 4), (96, 1), (128, 1), (256, 0)],
+)
+def test_how_many_frames_fit_one_band_at_each_size(logical, frames):
+    assert ss.max_band_frames(logical) == frames
+
+
+def test_the_size_ladder_an_action_allows_is_its_frame_count_asked_backwards():
+    """The gate a door puts on its size picker. An eight-frame walk fits a band
+    only at 32px; a four-frame idle fits at every rung this ladder offers."""
+    ladder = (32, 48, 64)
+    assert ss.sizes_for_action("walk", ladder) == (32,)
+    assert ss.sizes_for_action("run", ladder) == (32,)
+    assert ss.sizes_for_action("attack", ladder) == (32,)
+    assert ss.sizes_for_action("idle", ladder) == (32, 48, 64)
+    assert ss.sizes_for_action("hurt", ladder) == (32, 48, 64)
+
+
+@pytest.mark.parametrize("action", ["walk", "run", "attack", "jump", "cast"])
+def test_every_size_the_ladder_excludes_is_a_size_plan_sheet_refuses(action):
+    """The two are the same claim from both ends: a picker that offered a size
+    ``plan_sheet`` refuses would be a control whose only outcome is a refusal.
+    """
+    ladder = (32, 48, 64)
+    allowed = set(ss.sizes_for_action(action, ladder))
+    for size in ladder:
+        if size in allowed:
+            ss.plan_sheet(action, 8, None, size)  # does not raise
+            continue
+        with pytest.raises(ValueError, match="never split across two"):
+            ss.plan_sheet(action, 8, None, size)
+
+
+def test_an_unknown_action_has_no_size_ladder_rather_than_an_empty_one():
+    with pytest.raises(ValueError, match="unknown sprite action"):
+        ss.sizes_for_action("dance", (32,))
+
+
+# --- bands: which kinds this install can actually draw -----------------------
+
+
+def test_a_kind_is_available_only_when_its_pose_guide_is_on_disk(tmp_path, monkeypatch):
+    """Discovered rather than listed, which is the whole point: the guide *is*
+    the pose, so an action offered without one is eight bands of an unposed
+    character conditioned on nothing."""
+    monkeypatch.setattr(ss, "TEMPLATE_DIR", tmp_path)
+    assert ss.available_kinds() == ()
+    assert ss.available_actions() == {}
+    assert ss.has_guide_template("idle8") is False
+
+    (tmp_path / "idle8.json").write_text("{}", encoding="utf-8")
+    assert ss.has_guide_template("idle8") is True
+    assert ss.available_kinds() == ("idle8",)
+    assert ss.available_actions() == {"idle": (8,)}
+
+
+def test_the_shipped_guides_are_all_named_by_the_kind_table():
+    """A template file whose stem is not a kind is a guide nothing can load."""
+    stems = {p.stem for p in ss.TEMPLATE_DIR.glob("*.json")}
+    known = (
+        set(ss.PLANNED_KINDS)
+        | set(ss.SHEET_TYPES)
+        | {f"{pose}_{v}" for pose in ss.REFERENCE_POSES for v in ss.TPOSE_VARIANTS}
+    )
+    assert stems <= known, sorted(stems - known)
+
+
+def test_every_available_kind_loads_and_covers_its_own_grid():
+    """Loading validates every pose against the grid, so this is also the check
+    that a shipped guide has a pose for every cell of the sheet it names."""
+    for kind in ss.available_kinds():
+        template = ss.load_guide_template(kind)
+        geom = ss.sheet_geometry(kind)
+        assert len(template.poses) == len(geom.cells)
+        assert {(p.name, p.frame) for p in template.poses} == {
+            (c.name, c.frame) for c in geom.cells
+        }
+
+
+# --- bands: composing them back into one atlas -------------------------------
+
+
+def _band_images(geom):
+    """One drawn image per band, each cell a colour that names it.
+
+    A *drawn* fixture, deliberately: every claim below is about which pixels
+    ended up where, and a flat image cannot answer that question.
+    """
+    out = []
+    for band in geom.bands:
+        im = Image.new("RGB", band.size, BG)
+        draw = ImageDraw.Draw(im)
+        for cell in band.cells:
+            draw.rectangle(
+                (cell.x, cell.y, cell.x + cell.w - 1, cell.y + cell.h - 1),
+                fill=(20 + band.index * 25, 40 + cell.frame * 30, 90),
+            )
+        out.append(im)
+    return out
+
+
+def test_the_composed_grid_is_generation_pixels_and_the_published_one_is_not():
+    geom = ss.plan_sheet("idle", 8, None, 32)
+    composed = ss.composed_geometry(geom)
+
+    assert (geom.cell_w, geom.cell_h) == (32, 32)
+    assert (composed.cell_w, composed.cell_h) == (256, 256)
+    assert (composed.columns, composed.rows) == (geom.columns, geom.rows)
+    assert [(c.name, c.frame) for c in composed.cells] == [
+        (c.name, c.frame) for c in geom.cells
+    ]
+    # The stride the reduction will take is exactly PX_PER_ART_PIXEL, at every
+    # rung -- which is what the legacy path could not say at 48px.
+    assert composed.cell_w // geom.cell_w == ss.PX_PER_ART_PIXEL
+
+
+def test_a_legacy_kind_has_no_composed_grid_because_it_has_no_bands():
+    with pytest.raises(ValueError, match="generated as one atlas"):
+        ss.composed_geometry(ss.geometry("turnaround"))
+
+
+def test_each_bands_cells_land_on_the_published_row_and_column():
+    """A *pixel* claim, against a drawn fixture: band k's frame f must end up at
+    (f, k) of the composed atlas. Pasting the band whole instead of cell by cell
+    puts frames 3-5 of a six-frame direction on a row of their own."""
+    geom = ss.plan_sheet("attack", 8, None, 32)
+    images = _band_images(geom)
+    atlas = ss.compose_bands(images, geom)
+    composed = ss.composed_geometry(geom)
+
+    assert atlas.size == (composed.columns * 256, composed.rows * 256)
+    arr = np.asarray(atlas)
+    for band, image in zip(geom.bands, images, strict=True):
+        for cell in band.cells:
+            expected = image.getpixel((cell.x + 1, cell.y + 1))
+            landed = arr[band.index * 256 + 1, cell.frame * 256 + 1]
+            assert tuple(int(c) for c in landed) == expected, (
+                band.direction,
+                cell.frame,
+            )
+
+
+def test_no_band_is_resampled_on_the_way_in():
+    """Every cell is cropped at cell_px and pasted at cell_px, so the composed
+    atlas is a *rearrangement* of the bands' own pixels -- ``sheet.pack``'s
+    LANCZOS resize of a mismatched frame is what this avoids."""
+    geom = ss.plan_sheet("idle", 8, None, 32)
+    images = _band_images(geom)
+    atlas = ss.compose_bands(images, geom)
+
+    source = {
+        tuple(int(c) for c in px)
+        for im in images
+        for px in np.asarray(im).reshape(-1, 3)
+    }
+    landed = {
+        tuple(int(c) for c in px) for px in np.asarray(atlas).reshape(-1, 3)
+    }
+    assert landed <= source
+
+
+def test_a_band_that_came_back_the_wrong_size_is_refused_rather_than_fitted():
+    geom = ss.plan_sheet("idle", 8, None, 32)
+    images = _band_images(geom)
+    images[3] = images[3].resize((256, 256))
+
+    with pytest.raises(ValueError, match="was drawn 256x256 and its plan is 512x512"):
+        ss.compose_bands(images, geom)
+
+
+def test_a_missing_band_is_refused_by_count():
+    geom = ss.plan_sheet("idle", 8, None, 32)
+    with pytest.raises(ValueError, match="is 8 bands and 7 were drawn"):
+        ss.compose_bands(_band_images(geom)[:-1], geom)
+
+
+# --- bands: the whole tail, on a drawn atlas ---------------------------------
+
+
+def test_the_composed_atlas_assembles_to_the_published_grid():
+    """The band path's tail is the legacy path's tail: one matte, one baseline,
+    one reduction, one palette, over one atlas. A *pixel*-level claim -- the
+    output size and the shared palette are both facts about what was drawn."""
+    geom = ss.plan_sheet("idle", 8, None, 32)
+    atlas = ss.compose_bands(_band_images(geom), geom)
+    composed = ss.composed_geometry(geom)
+
+    out, record = _assemble(composed, atlas, logical=32, colors=8)
+
+    assert out.size == (geom.columns * 32, geom.rows * 32)
+    assert out.size == (4 * 32, 8 * 32)
+    # The stride divides at every rung on this path, which is what the legacy
+    # 48px case could never say.
+    assert record["exact_stride"] is True
+    assert len(record["palette"]) <= 8
+
+
+def test_the_front_cell_of_an_action_sheet_says_why_it_kept_the_drawn_frame():
+    """``preserve_front`` is turnaround-only and stays that way: an action
+    sheet's front cell is a posed frame, not the reference. What is owed is the
+    sentence -- a bare ``front_preserved: false`` reads as a step that failed."""
+    geom = ss.plan_sheet("idle", 8, None, 32)
+    composed = ss.composed_geometry(geom)
+    atlas = ss.compose_bands(_band_images(geom), geom)
+
+    _out, record = _assemble(composed, atlas, logical=32)
+
+    assert record["front_preserved"] is False
+    assert "drawn frame of the action" in record["front_note"]
+
+
+def test_a_multi_band_candidate_records_a_lattice_per_band_and_no_single_one():
+    """One band is one generation, so there are N lattices and no single one
+    over the mosaic they make -- ``_pixel_sheet`` says the same about its own."""
+    geom = ss.plan_sheet("idle", 8, None, 32)
+    composed = ss.composed_geometry(geom)
+    atlas = ss.compose_bands(_band_images(geom), geom)
+    grids = [{"band": b.index, "period": 8, "residual": 0.0} for b in geom.bands]
+
+    _out, record = _assemble(composed, atlas, logical=32, grids=grids)
+
+    assert "grid" not in record
+    assert [g["band"] for g in record["grids"]] == list(range(8))
+
+
+def test_a_one_generation_candidate_still_records_its_single_lattice():
+    geom, atlas = _colour_atlas()
+    _out, record = _assemble(geom, atlas)
+
+    assert "grids" not in record
+    assert isinstance(record["grid"], dict)
+
+
+# --- how many candidates ------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("cells", "candidates"),
+    # 16 is the largest legacy sheet (the 4x4 walk), so every sheet this path
+    # drew before it grew bands keeps the pair it has always had.
+    [(4, 2), (16, 2), (17, 1), (32, 1), (64, 1)],
+)
+def test_the_default_candidate_count_turns_on_the_legacy_sheet_size(cells, candidates):
+    assert ss.default_candidates(cells) == candidates
+
+
+# --- the sidecar --------------------------------------------------------------
+
+
+def _sidecar(kind, logical=32):
+    geom = ss.sheet_geometry(kind, logical)
+    return geom, ss.draft_sidecar(
+        draft_id="d" * 12,
+        source_job="j" * 12,
+        created=1.0,
+        geom=geom,
+        logical_size=logical,
+        colors=16,
+        candidates=[],
+        recipe={},
+    )
+
+
+def test_the_record_says_what_the_sheet_is_rather_than_only_where_its_cells_are():
+    geom, doc = _sidecar("walk8")
+
+    assert doc["version"] == 3
+    assert doc["sheet_type"] == "walk8"
+    assert doc["action"] == "walk"
+    assert doc["directions"] == list(geom.directions)
+    assert len(doc["directions"]) == 8
+    assert doc["frames_per_direction"] == 8
+    assert [b["index"] for b in doc["bands"]] == list(range(8))
+    assert doc["bands"][0] == {
+        "index": 0,
+        "direction": "front",
+        "columns": 4,
+        "rows": 2,
+        "cell_px": 256,
+        "width": 1024,
+        "height": 512,
+    }
+
+
+def test_a_legacy_draft_records_no_bands_because_it_is_one_generation():
+    for kind in ss.SHEET_TYPES:
+        _geom, doc = _sidecar(kind)
+        assert doc["bands"] == []
+
+
+def test_the_animation_block_is_charsheets_and_not_a_third_emitter():
+    """``sheet.sidecar``'s rule: two writers of this format, and a third should
+    extend one rather than appear. The sprite grid is expressed as the
+    one-movement Troupe layout it already is."""
+    from warlock.pipelines import charsheet
+
+    geom, doc = _sidecar("idle8")
+    block = doc["animation"]
+
+    movement = charsheet.MovementSpec(
+        name="idle",
+        frames=4,
+        loop=True,
+        duration_ms=150,
+        directions=tuple((n, float(ss.DIRECTION_YAWS_8[n])) for n in geom.directions),
+    )
+    assert block == charsheet.animation_block(
+        charsheet.LayoutSpec(charsheet.LAYOUT_VERSION, geom.columns, (movement,))
+    )
+
+
+def test_the_animation_blocks_cell_indices_are_the_sheets_own_cells():
+    """The two orders have to be the same one: ``frame_table`` walks a movement
+    direction-major and frame-minor, which is how ``plan_sheet`` lays a sheet
+    out -- and if they ever diverge, tag ``walk_left`` names the back row."""
+    geom, doc = _sidecar("walk8")
+    frames = doc["animation"]["frames"]
+
+    assert [f["cell_index"] for f in frames] == list(range(len(geom.cells)))
+    for tag in doc["animation"]["tags"]:
+        action, _, direction = tag["name"].partition("_")
+        assert action == "walk"
+        span = geom.cells[tag["start"] : tag["end"] + 1]
+        assert {c.name for c in span} == {direction}
+        assert [c.frame for c in span] == list(range(geom.frames_per_direction))
+
+
+def test_a_one_shot_action_is_tagged_as_one_and_a_cycle_is_not():
+    """``repeat: 1`` is Inker's own spelling for play-once, so the two writers
+    produce one format rather than two dialects of it."""
+    _geom, looping = _sidecar("walk8")
+    _geom, once = _sidecar("attack8")
+
+    assert all(t["loop"] and "repeat" not in t for t in looping["animation"]["tags"])
+    assert all(not t["loop"] and t["repeat"] == 1 for t in once["animation"]["tags"])
+
+
+def test_the_two_actions_troupe_cannot_name_still_get_played():
+    """``cast`` and ``hurt`` have no Blender clip, so ``charsheet.ANIMATIONS``
+    does not carry them and ``resolve_layout`` would refuse both -- which is why
+    the LayoutSpec is constructed rather than resolved."""
+    for kind in ("cast8", "hurt8"):
+        _geom, doc = _sidecar(kind)
+        assert doc["animation"]["tags"], kind
+        assert all(f["duration_ms"] == 90 for f in doc["animation"]["frames"])
+
+
+def test_a_turnaround_gets_no_animation_block_at_all():
+    """Four still views are not a cycle. ``sheetin`` refuses to tag one for the
+    same reason: four one-frame loops in a timeline mean nothing to play."""
+    _geom, doc = _sidecar("turnaround")
+
+    assert "animation" not in doc
+    assert doc["action"] == ""
+
+
+def test_the_legacy_walk_is_played_as_the_four_frame_cycle_it_is():
+    """Legacy ``walk`` is four frames over four directions and ``walk4`` is
+    eight over the same four, so aliasing one onto the other would silently
+    halve or double a stored cycle."""
+    _geom, legacy = _sidecar("walk")
+    _geom, planned = _sidecar("walk4")
+
+    assert legacy["frames_per_direction"] == 4
+    assert planned["frames_per_direction"] == 8
+    assert len(legacy["animation"]["frames"]) == 16
+    assert len(planned["animation"]["frames"]) == 32
+    assert legacy["animation"]["tags"][0]["end"] == 3
