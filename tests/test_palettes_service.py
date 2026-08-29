@@ -113,3 +113,68 @@ def test_a_palette_deleted_after_the_door_is_named_in_the_failure(svc, paldir):
 
     with pytest.raises(RuntimeError, match="palette 'gone' is no longer installed"):
         queue_mod._palette_entries(svc.config, "gone")
+
+
+# --- and what the picker says the folder takes ---------------------------------
+#
+# The failure this closes was silent in the worst way available to a form: the
+# Palette combo's helper advertised ``.pal`` and ``.txt``, ``SUFFIXES`` has never
+# carried either, and both the listing and the load are keyed on it -- so a user
+# who dropped a JASC .pal in the folder was told it would work and then got no
+# error, no row, and nothing to look at.
+
+
+def test_the_helper_names_exactly_the_suffixes_the_loader_accepts():
+    """Computed from ``SUFFIXES``, so it cannot name a format that never loads.
+
+    Both directions: every suffix appears, and no other dotted token does. The
+    second half is the one that would have caught the original defect.
+    """
+    import re
+
+    for suffix in palettes.SUFFIXES:
+        assert suffix in palettes.SUFFIX_HELP
+    assert set(re.findall(r"\.[a-z]+", palettes.SUFFIX_HELP)) == set(palettes.SUFFIXES)
+
+
+def test_the_2d_form_draws_that_helper_rather_than_a_list_of_its_own(svc, paldir):
+    """Through the real ``_pixel_look``, with a recording form.
+
+    The precondition is asserted rather than assumed: the palette combo is only
+    drawn when there is something to pick, so a fixture with an empty folder and
+    no chosen palette would make every assertion below vacuous by simply never
+    reaching the control.
+    """
+    from types import SimpleNamespace
+
+    from warlock.studio.panes import settings_2d
+
+    (paldir / "duo.hex").write_text("#1a1c2c\n#f4f4f4\n")
+
+    class _Recorder:
+        def __init__(self):
+            self.calls = {}
+
+        def combo(self, field, label, current, options, **kw):
+            self.calls[field] = kw
+            return (False, current)
+
+        def checkbox(self, field, label, value, **kw):
+            self.calls[field] = kw
+            return (False, value)
+
+        def segmented_choice(self, field, label, current, options, **kw):
+            self.calls[field] = kw
+            return (False, current)
+
+    ctx = SimpleNamespace(
+        svc=svc, state=SimpleNamespace(palettes=None, clear_field_error=lambda _f: None)
+    )
+    form_ui = _Recorder()
+    form = {"palette": "duo"}
+    settings_2d._pixel_look(ctx, form, form_ui, sprite=True)
+
+    # Precondition: the control this test is about was actually drawn.
+    assert "palette" in form_ui.calls
+    assert form_ui.calls["palette"]["helper"] == palettes.SUFFIX_HELP
+    assert ".pal" not in form_ui.calls["palette"]["helper"]

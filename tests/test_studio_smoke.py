@@ -4243,6 +4243,66 @@ def test_the_sprite_form_locks_its_submit_while_weights_are_missing(app_ctx, img
     assert not app_ctx.busy(f"sprite:{job_id}")
 
 
+def test_the_sprite_button_and_note_state_what_the_door_will_actually_do(
+    app_ctx, imgui_ctx
+):
+    """The two shapes the old literals were wrong about, drawn for real.
+
+    A turnaround at 64px is the pair the panel always claimed; an eight-direction
+    action at 32px is **one** draft of **eight** generations. Both are drawn
+    through ``_submit`` as well as asserted as strings, because a note nothing
+    draws is a note that can go stale unnoticed.
+    """
+    from warlock.service import sprites as svc_sprites
+    from warlock.studio.panes import sprite_panel
+
+    app_ctx.model_rows = []
+    job_id = _seeded(app_ctx)
+    offered = [t["key"] for t in svc_sprites.sprite_options()["sheet_types"]]
+    # The precondition, asserted: the planned kinds are discovered from the guide
+    # templates on disk, so without this the action half of the test could pass
+    # by testing a menu that has only turnarounds in it.
+    assert "attack8" in offered, f"attack8 is not offered; the menu is {offered}"
+
+    pair = svc_sprites.sprite_cost("turnaround", 64)
+    single = svc_sprites.sprite_cost("attack8", 32)
+
+    assert sprite_panel.submit_label(pair) == "Generate 2 drafts"
+    assert sprite_panel.submit_label(single) == "Generate 1 draft"
+    assert sprite_panel.submit_label(pair) != sprite_panel.submit_label(single)
+
+    pair_note = sprite_panel.cost_text(pair)
+    single_note = sprite_panel.cost_text(single)
+    assert pair_note != single_note
+    assert "2 full image generations" in pair_note
+    assert "about 40 seconds" in pair_note
+    assert "8 full image generations" in single_note
+    assert "one per direction" in single_note
+    assert "about 3 minutes" in single_note
+    # The sentence the button contradicted: one draft must never say "two".
+    assert "two" not in single_note.lower()
+
+    for sheet_type, size in (("turnaround", 64), ("attack8", 32), ("attack8", 64)):
+        form = {
+            "job_id": job_id,
+            "sheet_type": sheet_type,
+            "logical_size": size,
+            "colors": 32,
+            "seed_a": 1,
+            "seed_b": 2,
+        }
+        _frame(imgui_ctx, lambda f=form: sprite_panel._submit(app_ctx, job_id, f))
+    assert not app_ctx.busy(f"sprite:{job_id}")
+
+    # The third shape above: a size this action cannot be drawn at says so and
+    # promises no number at all.
+    plan = svc_sprites.sprite_cost("attack8", 64)
+    assert not plan["drawable"]
+    assert sprite_panel.cost_text(plan) == plan["refusal"]
+    assert "1536x1024 band" in plan["refusal"]
+    assert sprite_panel.submit_label(plan) == "Generate"
+
+
 def test_the_settings_pane_draws_a_fit_badge_and_a_recommendation(app_ctx, imgui_ctx):
     """The two W4 surfaces, in the pane that owns them. What is asserted is
     that the pane builds with a ``vram`` verdict on one row and none on the

@@ -7,6 +7,13 @@ guess -- so the deliverable is a *pair* the user picks between, and drafts
 accumulate rather than overwriting each other. Nothing here throws a candidate
 away; the only way one leaves is the Delete button beside it.
 
+A pair up to sixteen cells, that is: past it a draft is one candidate, because
+a pair of an eight-direction action is sixteen generations rather than two.
+Which is why the button's label and the cost note under it are *derived* --
+:func:`submit_label` and :func:`cost_text` over ``sprites.sprite_cost`` -- and
+were literals promising "two drafts" and "two generations" until 2026-08-29,
+both of which the panel's own Type combo could make false in either direction.
+
 Drafts are write-once (``rigging.sprite_draft_path``), which is what makes the
 directory-mtime stamp on the listing sound: a record can appear or disappear,
 but never change under a cached copy of itself.
@@ -138,21 +145,73 @@ def _controls(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
         imgui.pop_id()
 
 
+def submit_label(plan: dict[str, Any]) -> str:
+    """What the button promises, from the door's own count of drafts.
+
+    A literal "two" here was wrong for half the menu above it:
+    ``spritesynth.default_candidates`` draws a pair only up to sixteen cells, so
+    an eight-direction action is one draft and the button was naming a number
+    the press could not produce.
+    """
+    if not plan.get("drawable"):
+        return "Generate"
+    drafts = int(plan["candidates"])
+    return "Generate 1 draft" if drafts == 1 else f"Generate {drafts} drafts"
+
+
+def cost_text(plan: dict[str, Any]) -> str:
+    """The sentence under the button: generations, wait, and what lands.
+
+    Every number is :func:`svc_sprites.sprite_cost`'s, including the wait --
+    the pane states what the door computed, which is the rule the Create form's
+    own cost line follows. The old literal claimed "two full image generations"
+    for every sheet on the menu; one direction is one generation, so an
+    eight-direction action is eight of them per draft.
+    """
+    if not plan.get("drawable"):
+        return str(plan.get("refusal") or "This sheet cannot be drawn at this size.")
+    generations = int(plan["generations"])
+    count = (
+        "One full image generation"
+        if generations == 1
+        else f"{generations} full image generations"
+    )
+    if plan["bands"] > 1:
+        count += (
+            f" ({plan['bands']} directions x {plan['candidates']} drafts)"
+            if plan["candidates"] > 1
+            else " (one per direction)"
+        )
+    tail = (
+        "Both land as one draft you choose between."
+        if plan["candidates"] > 1
+        else "A sheet this size draws one draft rather than a pair."
+    )
+    return f"{count}, queued behind the GPU, {plan['duration']}. {tail}"
+
+
 def _submit(ctx: Any, job_id: str, form: dict[str, Any]) -> None:
     key = f"sprite:{job_id}"
     busy = ctx.busy(key)
     # Said before the button rather than after it is pressed: a synthesis needs
     # four registry rows and the door refuses one at a time.
     locked = model_gate.draw(ctx, svc_sprites.SPRITE_ROWS, what="A sprite sheet")
+    # The plan for what is *currently selected*, so the label and the note below
+    # move with the two combos rather than describing the default forever.
+    plan = svc_sprites.sprite_cost(form["sheet_type"], form["logical_size"])
     if busy:
         widgets.spinner()
         imgui.same_line()
     if widgets.disabled_button(
-        "Generate two drafts",
-        not busy and not locked,
+        submit_label(plan),
+        not busy and not locked and bool(plan["drawable"]),
         reason="A synthesis is already running for this drawing."
         if busy
-        else "The weights this needs are not installed; see the note above.",
+        else (
+            "The weights this needs are not installed; see the note above."
+            if locked
+            else plan["refusal"]
+        ),
     ):
         ctx.submit(
             key,
@@ -165,10 +224,7 @@ def _submit(ctx: Any, job_id: str, form: dict[str, Any]) -> None:
             seed_a=form["seed_a"],
             seed_b=form["seed_b"],
         )
-    widgets.cost_note(
-        "Two full image generations, queued behind the GPU. Both land as one "
-        "draft you choose between."
-    )
+    widgets.cost_note(cost_text(plan))
 
 
 def _running(ctx: Any, job_id: str) -> None:

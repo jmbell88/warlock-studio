@@ -237,6 +237,93 @@ def sprite_options() -> dict[str, Any]:
     }
 
 
+def generation_time_phrase(generations: int) -> str:
+    """"about N minutes" for a press that costs ``generations`` of them.
+
+    Here rather than in either pane, which is the same rule the counts follow:
+    two forms draw this sentence -- the Create form's sprite arm and the
+    reference panel's Sprite sheet section -- and a second copy of the
+    arithmetic is two promises about one wait, which drift the first time
+    :data:`SECONDS_PER_GENERATION` moves.
+
+    Rounded to ten seconds below 90 and to whole minutes above it, because the
+    number is a nominal per generation and a form that said "163 seconds" would
+    be claiming a precision this estimate does not have.
+    """
+    seconds = max(0, int(generations)) * SECONDS_PER_GENERATION
+    if seconds >= 90:
+        return f"about {round(seconds / 60.0)} minutes"
+    return f"about {round(seconds / 10.0) * 10} seconds"
+
+
+def sprite_cost(
+    sheet_type: str,
+    logical_size: int = DEFAULT_SPRITE_LOGICAL_SIZE,
+    candidates: Any = None,
+) -> dict[str, Any]:
+    """What one press of Generate draws for this kind at this size, and its cost.
+
+    The reference panel's counterpart to ``settings_2d.sprite_plan``, and it is
+    here for the reason that one's docstring gives about its own numbers: what
+    the user is told and what is submitted have to be the same arithmetic rather
+    than two of it. The panel had neither -- it stated "two drafts" and "two full
+    image generations" as literals, and both are wrong for most of the menu it
+    draws. A 32px eight-direction action is **one** draft (see
+    ``spritesynth.default_candidates``) of **eight** generations, one per band,
+    which is minutes rather than seconds.
+
+    ``candidates`` is what the caller would pass to
+    :func:`create_sprite_synthesis`, so ``None`` -- nobody said -- answers with
+    what that door would land on rather than with a guess.
+
+    ``drawable`` is False for a combination the door would refuse, carrying that
+    door's own sentence in ``refusal``: the panel's size picker offers the whole
+    ladder while a six-frame action fits a band at 32px only, so "this cannot be
+    drawn" is a state the form can be in and a cost note claiming a number for
+    it would be the same defect one layer down.
+    """
+    kind = str(sheet_type or DEFAULT_SPRITE_SHEET_TYPE)
+    size = int(logical_size)
+    try:
+        check_sheet_kind(kind, size)
+        geom = spritesynth.sheet_geometry(kind, size)
+        wanted = check_candidates(candidates, len(geom.cells))
+    except (Invalid, ValueError) as exc:
+        return {
+            "kind": kind,
+            "logical_size": size,
+            "drawable": False,
+            "refusal": str(exc),
+            "cells": 0,
+            "directions": 0,
+            "frames": 0,
+            "bands": 0,
+            "candidates": 0,
+            "generations": 0,
+            "seconds": 0.0,
+            "duration": "",
+        }
+    # One band is one whole direction, so the band count *is* how many
+    # generations one candidate costs. Empty bands is the legacy atlas kinds
+    # saying "I am one generation" -- see ``SheetGeometry.bands``.
+    bands = len(geom.bands) or 1
+    generations = bands * wanted
+    return {
+        "kind": kind,
+        "logical_size": size,
+        "drawable": True,
+        "refusal": "",
+        "cells": len(geom.cells),
+        "directions": len(geom.directions),
+        "frames": geom.frames_per_direction,
+        "bands": bands,
+        "candidates": wanted,
+        "generations": generations,
+        "seconds": generations * SECONDS_PER_GENERATION,
+        "duration": generation_time_phrase(generations),
+    }
+
+
 def sprite_palettes(svc: WarlockService) -> list[str]:
     """Every authored palette a sprite sheet may be drawn on, by stem, sorted.
 

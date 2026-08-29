@@ -547,3 +547,68 @@ def test_a_pinned_pair_is_honoured_even_on_a_big_sheet(svc, weights):
     )
 
     assert svc.store.get(result["id"])["params"]["candidates"] == 2
+
+
+# --- what a press costs, before it is pressed ----------------------------------
+#
+# The panel above this door stated "two drafts" and "two full image generations"
+# as literals. Neither survives its own Type combo: ``default_candidates`` drops
+# to one past sixteen cells, and one band is one direction, so an eight-direction
+# action is eight generations per candidate. Both numbers are computed here so
+# there is one of each.
+
+
+def test_the_pair_default_and_the_one_generation_of_a_legacy_atlas():
+    plan = svc_sprites.sprite_cost("turnaround", 64)
+
+    assert plan["drawable"]
+    assert (plan["cells"], plan["candidates"], plan["bands"]) == (4, 2, 1)
+    assert plan["generations"] == 2
+    assert plan["duration"] == "about 40 seconds"
+
+
+def test_an_eight_direction_action_is_one_draft_of_eight_generations():
+    """The shape the literals were wrong about in both directions at once."""
+    kind = "attack8"
+    offered = [t["key"] for t in svc_sprites.sprite_options()["sheet_types"]]
+    # Asserted rather than assumed: the planned kinds are discovered from the
+    # guide templates on disk, so a test that silently skipped a missing one
+    # would assert nothing at all.
+    assert kind in offered, f"{kind} is not offered; the menu is {offered}"
+
+    plan = svc_sprites.sprite_cost(kind, 32)
+
+    assert plan["drawable"]
+    # 8 directions x 6 frames, one band per direction, one candidate past the
+    # sixteen-cell pair limit.
+    assert (plan["cells"], plan["bands"], plan["candidates"]) == (48, 8, 1)
+    assert plan["generations"] == 8
+    assert plan["duration"] == "about 3 minutes"
+    # And the numbers are the ones the door would actually admit.
+    assert plan["candidates"] == ss.default_candidates(plan["cells"])
+
+
+def test_a_pinned_pair_doubles_the_generations_rather_than_the_bands():
+    plan = svc_sprites.sprite_cost("attack8", 32, candidates=2)
+
+    assert (plan["bands"], plan["candidates"], plan["generations"]) == (8, 2, 16)
+
+
+def test_a_size_the_door_would_refuse_is_not_drawable_and_carries_the_refusal():
+    """A cost note claiming a number for an impossible request would be the same
+    defect one layer down, so the plan says so and quotes the door."""
+    plan = svc_sprites.sprite_cost("attack8", 64)
+
+    assert not plan["drawable"]
+    assert plan["generations"] == 0
+    assert "1536x1024 band" in plan["refusal"]
+
+
+def test_the_wait_is_rounded_to_ten_seconds_then_to_minutes():
+    assert svc_sprites.generation_time_phrase(1) == "about 20 seconds"
+    assert svc_sprites.generation_time_phrase(4) == "about 80 seconds"
+    assert svc_sprites.generation_time_phrase(8) == "about 3 minutes"
+    # From the constant, not from a second table of seconds.
+    assert svc_sprites.sprite_cost("turnaround", 64)["seconds"] == (
+        2 * svc_sprites.SECONDS_PER_GENERATION
+    )

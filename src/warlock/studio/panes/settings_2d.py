@@ -26,6 +26,7 @@ from ...bench import findings as findings_lib
 from ...pipelines import tileatlas as tileatlaslib
 from ...pipelines import tilesheet as tilesheetlib
 from ...service import jobs as svc_jobs
+from ...service import palettes as svc_palettes
 from ...service import sprites as svc_sprites
 from ...service import system as svc_system
 from ...service import tilesheets as svc_tilesheets
@@ -773,12 +774,10 @@ def sprite_plan(form: dict[str, Any]) -> dict[str, Any]:
 
 def _sprite_cost(plan: dict[str, Any]) -> str:
     """The one sentence under the sprite controls, from :func:`sprite_plan`."""
-    seconds = plan["generations"] * float(_sprite_options()["seconds_per_generation"])
-    when = (
-        f"about {round(seconds / 60.0)} minutes"
-        if seconds >= 90
-        else f"about {round(seconds / 10.0) * 10} seconds"
-    )
+    # The wait comes from the door, not from a second multiplication of
+    # ``seconds_per_generation`` here: the sprite panel draws the same sentence
+    # about the same press, and two copies of the arithmetic is two promises.
+    when = svc_sprites.generation_time_phrase(plan["generations"])
     draft = "one draft" if plan["candidates"] == 1 else f"{plan['candidates']} drafts"
     return (
         f"{plan['directions']} directions x {plan['frames']} frames = "
@@ -934,7 +933,12 @@ def _pixel_look(
                 "authored, instead of to the colours this render happened to "
                 "contain."
             ),
-            helper="Files in the palette folder: .hex, .gpl, .pal, .txt.",
+            # From the loader's own tuple, never restated. This line named
+            # ``.pal`` and ``.txt`` until 2026-08-29 and ``palettes.SUFFIXES``
+            # has never carried either, so a user who dropped one in the folder
+            # was told it would work and then watched it not appear -- no error,
+            # no row, nothing to see.
+            helper=svc_palettes.SUFFIX_HELP,
         )
         if changed:
             form["palette"] = picked

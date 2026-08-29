@@ -25,6 +25,25 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 SUFFIXES = (".hex", ".gpl")
 
+# ``.pal`` (JASC/Paint Shop Pro) and ``.txt`` (Paint.NET) are real palette
+# formats and are deliberately *absent* rather than forgotten:
+# ``pipelines.pixel.parse_palette`` has a reader for neither, and this tuple is
+# what both the listing and the load are keyed on, so a file with either suffix
+# is not refused -- it never appears at all. The picker's helper advertised both
+# until 2026-08-29, which is why :data:`SUFFIX_HELP` below is derived from this
+# tuple and not written out beside it.
+#
+# Adding them is a small job rather than a research one: ``studio/inker/gpl.py``
+# already parses a JASC ``.pal`` for the Inker's own import, so the honest fix
+# may well be a parser in ``pipelines.pixel`` and two more entries here rather
+# than a shorter sentence. Until that happens the sentence stays true by
+# construction.
+
+#: The one line a palette picker draws under itself, naming exactly what the
+#: loader accepts. Derived, so a format added above cannot be one a form forgets
+#: to mention -- and a format the loader drops cannot go on being advertised.
+SUFFIX_HELP = f"Files in the palette folder: {', '.join(SUFFIXES)}."
+
 
 def available(config: Config) -> list[str]:
     """Every palette the directory offers, by stem, sorted.
