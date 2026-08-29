@@ -29,6 +29,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from .pixel import RGB
 from .sheet import SHEET_VERSION
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -243,6 +244,51 @@ def quantize_shared(atlas: PILImage, colors: int) -> tuple[PILImage, list[str]]:
     used = {tuple(int(c) for c in p) for p in mapped[opaque]}
     palette = [f"#{r:02x}{g:02x}{b:02x}" for r, g, b in sorted(used)]
     return (Image.fromarray(out, "RGBA"), palette)
+
+
+def resolve_palette(
+    atlas: PILImage,
+    *,
+    colors: int,
+    entries: tuple[RGB, ...] | None = None,
+) -> tuple[tuple[RGB, ...], str]:
+    """The colour set one sheet is mapped to, and where it came from.
+
+    Two sources, one answer: an authored palette is returned verbatim as
+    ``"designed"``, and with none given the median cut above picks one off the
+    atlas and it comes back as ``"derived"``. ``None`` is how a caller says "I
+    have no palette"; an empty tuple is not -- it is a palette of no colours,
+    and ``pixel.map_palette`` refuses it, which is the right answer to a
+    palette file somebody emptied.
+
+    **The insight this whole shape rests on: a palette file does not replace
+    the shared-across-cells property.** It is tempting to read "designed"
+    against "derived" as a choice between an authored palette and
+    ``quantize_shared``, and so to think naming a palette gives up whatever
+    the median cut was doing for the sheet. It gives up nothing.
+    ``quantize_shared`` stops being a **mapper** and becomes a **palette
+    source**: the thing that made it shared was never the median cut, it is
+    that one entry set is applied over the whole atlas in one pass. That
+    property survives verbatim here, because ``pixel.map_palette`` maps
+    whole-atlas and ``pixelize.pixelize_atlas`` already maps before its
+    per-cell loop -- so the same shirt is the same shade in every direction
+    whichever branch produced the entries.
+
+    Which is also why the derived branch parses the hex list back to triples
+    rather than handing on the mapped image ``quantize_shared`` returns: the
+    caller wants *the colours*, and taking the pixels too would run the
+    mapping twice and make a derived sheet a second code path with its own
+    bugs.
+    """
+    if entries is not None:
+        return (tuple(entries), "designed")
+    _mapped, hexes = quantize_shared(atlas, colors)
+    return (
+        tuple(
+            (int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16)) for h in hexes
+        ),
+        "derived",
+    )
 
 
 def pixel_sidecar(

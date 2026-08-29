@@ -214,6 +214,16 @@ class JobOps:
             "sheet_type": block.get("sheet_type"),
             "logical_size": block.get("logical_size"),
             "colors": block.get("colors"),
+            # Carried across, not defaulted here. ``_check_sprite_sheet``
+            # validated and normalised all three at the Create door, and a
+            # setting the door refuses for but this method drops is a control
+            # that silently does nothing -- which is exactly the failure the
+            # door was written to prevent, one link further on. A block stored
+            # before these existed yields ``None``, which the worker reads as
+            # "the path's default" rather than as a value.
+            "palette": block.get("palette"),
+            "dither": block.get("dither"),
+            "outline": block.get("outline"),
             "seed_a": seed_a,
             "seed_b": seed_b,
             # Minted here because the door that normally mints it is not on this

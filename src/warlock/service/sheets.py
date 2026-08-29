@@ -248,14 +248,49 @@ PIXEL_LOGICAL_SIZES = (16, 24, 32, 48, 64, 128)
 PIXEL_COLOR_CHOICES = (8, 16, 32, 64)
 
 
+# ``"none"``, and not the sprite path's ``inner``. Not a taste difference: the
+# default restyle has to keep producing the bytes ``PIXEL_SHEET_VERSION``
+# already claims for every pixel sheet on disk, and an outline is a pixel this
+# path did not draw before. Somebody who wants one asks for one.
+DEFAULT_PIXEL_SHEET_OUTLINE = "none"
+
+
+def _check_options(svc: WarlockService, entries: dict[str, Any]) -> dict[str, Any]:
+    """The restyle's pixelisation options, validated once for its one door.
+
+    ``troupe._check_options``' shape: the shared refusals from ``pixelopts``,
+    with this path's two ladders and its ``none`` default as the parameters.
+
+    ``allow_reduce_mode=False`` because this path has no reduce mode to offer.
+    The reduction is ``pixelsheet.downscale`` -- an integer NEAREST stride,
+    fixed by the requirement that a cell boundary stay on an output pixel
+    boundary -- and by the time the worker's new branch runs, the atlas is
+    already at the logical size. Offering the choice would be the dead field
+    ``check_pixel_options`` refuses to create.
+    """
+    from .pixelopts import check_pixel_options
+
+    return check_pixel_options(
+        svc,
+        entries,
+        sizes=PIXEL_LOGICAL_SIZES,
+        size_default=32,
+        colors=PIXEL_COLOR_CHOICES,
+        colors_default=32,
+        outline_default=DEFAULT_PIXEL_SHEET_OUTLINE,
+        allow_reduce_mode=False,
+    )
+
+
 def pixel_sheet_options() -> dict[str, Any]:
     """What a restyle request may ask for, from one source, as with the render
     above -- the pane never hardcodes a size or a strength range."""
-    from ..pipelines import pixelsheet
+    from ..pipelines import pixelize, pixelsheet
 
     return {
         "logical_sizes": list(PIXEL_LOGICAL_SIZES),
         "colors": list(PIXEL_COLOR_CHOICES),
+        "outlines": list(pixelize.OUTLINE_MODES),
         "strength_range": [
             models.IMG2IMG_STRENGTH_MIN,
             models.IMG2IMG_STRENGTH_MAX,
@@ -263,6 +298,9 @@ def pixel_sheet_options() -> dict[str, Any]:
         "defaults": {
             "logical_size": 32,
             "colors": 32,
+            "outline": DEFAULT_PIXEL_SHEET_OUTLINE,
+            "dither": False,
+            "palette": "",
             "strength": models.DEFAULT_IMG2IMG_STRENGTH,
             "structure_lock": True,
         },
@@ -314,6 +352,9 @@ def create_pixel_sheet(
     *,
     logical_size: int = 32,
     colors: int = 32,
+    palette: str | None = None,
+    dither: bool = False,
+    outline: str | None = None,
     strength: float | None = None,
     seed: int | None = None,
     structure_lock: bool = True,
@@ -335,15 +376,25 @@ def create_pixel_sheet(
     if meta is None or not rigging.sheet_png_path(job_dir, sheet_id).exists():
         raise NotFound("no such sheet")
 
-    if int(logical_size) not in PIXEL_LOGICAL_SIZES:
-        raise Invalid(
-            f"logical_size must be one of {list(PIXEL_LOGICAL_SIZES)}",
-            field="logical_size",
-        )
-    if int(colors) not in PIXEL_COLOR_CHOICES:
-        raise Invalid(
-            f"colors must be one of {list(PIXEL_COLOR_CHOICES)}", field="colors"
-        )
+    # Through the shared checker, in the same sentences on the same fields as
+    # every other pixel path -- ``pixelopts``' whole reason. Two of its options
+    # are new here and one is deliberately absent: this path has no reduce mode
+    # to offer, because the reduction is ``pixelsheet.downscale``'s integer
+    # NEAREST stride and the worker's new branch leaves it already done.
+    # ``outline_default="none"`` and not the sprite path's ``inner``: the
+    # default request has to keep producing the bytes every restyled sheet
+    # already on disk claims.
+    options = _check_options(
+        svc,
+        {
+            "logical_size": logical_size,
+            "colors": colors,
+            "palette": palette,
+            "dither": dither,
+            "outline": outline,
+        },
+    )
+    logical_size = options["logical_size"]
     try:
         pixelsheet.check_restylable(meta, int(logical_size))
     except pixelsheet.NotRestylable as exc:
@@ -395,8 +446,10 @@ def create_pixel_sheet(
         # this kind its input.
         "source_job": job_id,
         "sheet_id": sheet_id,
-        "logical_size": int(logical_size),
-        "colors": int(colors),
+        # Normalised by the checker rather than by this function: the palette
+        # name is stripped there, and the worker re-resolves it against the
+        # filesystem exactly as written.
+        **options,
         "strength": value,
         "structure_lock": bool(structure_lock),
         "seed": random_seed() if seed is None else int(seed),

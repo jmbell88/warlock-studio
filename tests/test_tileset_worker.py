@@ -391,6 +391,34 @@ async def test_the_sidecar_says_what_it_is_rather_than_leaving_it_to_be_seen(wor
 
 
 @pytest.mark.asyncio
+async def test_the_sidecar_records_one_lattice_per_generated_material(worker):
+    """Per material, because a material is one generation and a cell is a crop
+    out of one. Measurement only -- nothing reduces on it, and recording it
+    does not bump ``TILE_ATLAS_VERSION``."""
+    job_id = _materials_job(worker, prompts=("moss", "gravel", "water"))
+    await _run(worker, job_id)
+
+    doc = json.loads((worker.config.job_dir(job_id) / "sheet.json").read_text())
+    assert [entry["material"] for entry in doc["grids"]] == [0, 1, 2]
+    for entry in doc["grids"]:
+        assert set(entry) == {"material", "scale", "residual"}
+        assert entry["scale"] is None or isinstance(entry["scale"], int)
+    assert doc["version"] == tileatlas.TILE_ATLAS_VERSION
+
+
+@pytest.mark.asyncio
+async def test_a_terrain_set_records_the_two_generations_and_not_its_cells(worker):
+    """Forty-seven cells composited from two frames: the count says which of
+    the two things is being measured."""
+    job_id = _terrain_job(worker, tile_w=32)
+    await _run(worker, job_id)
+
+    doc = json.loads((worker.config.job_dir(job_id) / "sheet.json").read_text())
+    assert len(doc["grids"]) == 2
+    assert len(doc["materials"]) == 47
+
+
+@pytest.mark.asyncio
 async def test_the_seam_measurement_is_recorded_and_never_a_rejection(worker):
     """``SEAM_MAX`` was measured on turbo at four steps and ``seam.py`` says
     outright to re-measure per checkpoint, so a verdict from it cannot be
@@ -636,3 +664,193 @@ def test_a_cancelled_tileset_leaves_no_materials_behind(worker, tmp_path):
     assert not materials.exists()
     assert not (job_dir / "input.png").exists()
     assert (job_dir / "ref.png").exists()
+
+
+# --- the palette tail -------------------------------------------------------
+#
+# The same three claims ``test_tilesheet_worker`` makes about the grid, made
+# again about the two seamless modes -- because the three of them share one
+# quantize tail (``tilesheet.quantize_tiles``) and a claim about a shared tail
+# that is only tested through one of its callers is a claim about one caller.
+# The reconstructions below go through ``reduce_material`` and then through
+# ``assemble`` or ``blob_atlas``, so they pin the measured reduction in front of
+# the quantiser at the same time.
+
+
+@pytest.fixture
+def paldir(worker, tmp_path):
+    directory = tmp_path / "palettes"
+    directory.mkdir(exist_ok=True)
+    worker.config.palette_dir = directory
+    return directory
+
+
+_QUAD = ((26, 28, 44), (93, 39, 93), (239, 125, 87), (255, 205, 117))
+
+
+def _write_quad(paldir):
+    (paldir / "quad.hex").write_text(
+        "".join(f"#{r:02x}{g:02x}{b:02x}\n" for r, g, b in _QUAD)
+    )
+
+
+def _published(worker, job_id):
+    import numpy as np
+
+    with Image.open(worker.config.job_dir(job_id) / "input.png") as sheet:
+        sheet.load()
+        return np.asarray(sheet.convert("RGBA"))
+
+
+def _reduced_materials(worker, job_id, geom):
+    """The provenance copies put back through the measured reducer.
+
+    The materials directory is byte-for-byte what the model returned, which is
+    the entire point of keeping it -- so a reconstruction from it is a
+    reconstruction from the generation and not from anything this path did to
+    it afterwards.
+    """
+    import numpy as np
+
+    directory = worker.config.job_dir(job_id) / "materials"
+    out = []
+    for path in sorted(directory.glob("*.png")):
+        with Image.open(path) as raw:
+            raw.load()
+            frame = raw.convert("RGBA")
+        out.append(
+            tileatlas.reduce_material(np.asarray(frame), geom.tile_w, geom.tile_h)
+        )
+    return out
+
+
+@pytest.mark.asyncio
+async def test_a_default_materials_atlas_is_the_median_cut_it_always_was(worker):
+    import numpy as np
+
+    from warlock.pipelines.pixelsheet import quantize_shared
+
+    job_id = _materials_job(worker, tile_w=32, colors=16)
+    await _run(worker, job_id)
+
+    geom = tileatlas.material_geometry(32, "top_down", 3)
+    atlas = tileatlas.assemble(_reduced_materials(worker, job_id, geom), geom)
+    want, _hexes = quantize_shared(Image.fromarray(atlas, "RGBA"), 16)
+    assert np.array_equal(_published(worker, job_id), np.asarray(want))
+
+
+@pytest.mark.asyncio
+async def test_a_default_terrain_set_is_the_median_cut_it_always_was(worker):
+    import numpy as np
+
+    from warlock.pipelines.pixelsheet import quantize_shared
+
+    job_id = _terrain_job(worker, tile_w=32, colors=16)
+    await _run(worker, job_id)
+
+    geom = tileatlas.terrain_geometry(32, "top_down")
+    tiles = _reduced_materials(worker, job_id, geom)
+    atlas = tilemask.blob_atlas(
+        tiles[0], tiles[1], geom.tile_w, seed=5, inset=None, amplitude=None, feather=None
+    )
+    want, _hexes = quantize_shared(Image.fromarray(atlas, "RGBA"), 16)
+    assert np.array_equal(_published(worker, job_id), np.asarray(want))
+
+
+@pytest.mark.asyncio
+async def test_the_measured_reducer_still_runs_once_per_material(worker, monkeypatch):
+    """``pixelize.reduce``'s single box mean is what
+    ``docs/measurements/2026-08-17-ground-reduction.md`` rejected, so this path
+    keeps ``reduce_material`` and only the quantisation moved. Once per
+    *material*, never per cell: a terrain set is forty-seven composites of two
+    generations."""
+    real = tileatlas.reduce_material
+    calls: list[tuple[int, int]] = []
+
+    def spy(pixels, out_w, out_h):
+        calls.append((int(out_w), int(out_h)))
+        return real(pixels, out_w, out_h)
+
+    monkeypatch.setattr(tileatlas, "reduce_material", spy)
+    await _run(worker, _terrain_job(worker, tile_w=32))
+
+    assert calls == [(32, 32), (32, 32)]
+
+
+@pytest.mark.asyncio
+async def test_a_designed_palette_is_one_table_over_every_material_cell(worker, paldir):
+    """The assertion a per-cell quantisation fails. Each material comes back a
+    flat colour of its own, so quantized separately every cell would keep its
+    own three bytes rather than land on the table."""
+    _write_quad(paldir)
+    job_id = _materials_job(worker, tile_w=32, colors=16, palette="quad")
+    await _run(worker, job_id)
+
+    atlas = _published(worker, job_id)
+    geom = tileatlas.material_geometry(32, "top_down", 3)
+    for cell in geom.cells:
+        top, left = cell.row * geom.tile_h, cell.col * geom.tile_w
+        block = atlas[top : top + geom.tile_h, left : left + geom.tile_w, :3]
+        used = {tuple(int(c) for c in p) for p in block.reshape(-1, 3)}
+        assert used <= set(_QUAD), f"cell {cell.index} left the palette"
+
+
+@pytest.mark.asyncio
+async def test_a_designed_palette_covers_all_forty_seven_terrain_cells(worker, paldir):
+    _write_quad(paldir)
+    job_id = _terrain_job(worker, tile_w=32, colors=16, palette="quad")
+    await _run(worker, job_id)
+
+    atlas = _published(worker, job_id)
+    geom = tileatlas.terrain_geometry(32, "top_down")
+    assert geom.tiles == 47
+    for cell in geom.cells:
+        top, left = cell.row * geom.tile_h, cell.col * geom.tile_w
+        block = atlas[top : top + geom.tile_h, left : left + geom.tile_w, :3]
+        used = {tuple(int(c) for c in p) for p in block.reshape(-1, 3)}
+        assert used <= set(_QUAD), f"cell {cell.index} left the palette"
+
+
+@pytest.mark.asyncio
+async def test_the_recipe_names_the_palette_file_and_a_digest_of_its_colours(
+    worker, paldir
+):
+    from warlock.pipelines import pixel
+
+    _write_quad(paldir)
+    job_id = _materials_job(worker, palette="quad", dither=True)
+    await _run(worker, job_id)
+
+    recipe = json.loads(
+        (worker.config.job_dir(job_id) / "sheet.json").read_text()
+    )["recipe"]
+    assert recipe["palette_source"] == "designed"
+    assert recipe["palette_file"] == "quad"
+    assert recipe["palette_hash"] == pixel.palette_digest(_QUAD)
+    assert recipe["dither"] is True
+    # The budget is still recorded -- it is what the row asked for and a reroll
+    # copies it -- and ``palette_source`` is what says it was superseded.
+    assert "colors" in recipe
+
+
+@pytest.mark.asyncio
+async def test_a_default_set_records_no_palette_keys_at_all(worker):
+    job_id = _materials_job(worker)
+    await _run(worker, job_id)
+
+    doc = json.loads((worker.config.job_dir(job_id) / "sheet.json").read_text())
+    assert not {
+        "palette_source", "palette_file", "palette_hash", "dither"
+    } & set(doc["recipe"])
+    assert json.loads(json.dumps(doc)) == doc
+
+
+@pytest.mark.asyncio
+async def test_a_palette_deleted_after_the_door_costs_no_generations(worker):
+    """N generations, not one -- which is why this path resolves the palette
+    before the bracket rather than at the quantize phase where it is used."""
+    row = await _run(worker, _materials_job(worker, palette="gone"))
+
+    assert row["status"] == "error"
+    assert "no longer installed" in (row["error"] or "")
+    assert worker._text2image is None or not worker._text2image.prompts

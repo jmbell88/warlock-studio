@@ -62,7 +62,7 @@ class SpriteOps:
         from PIL import Image
 
         from . import queue as queue_mod
-        from .pipelines import pixelsheet
+        from .pipelines import pixel, pixelize, pixelsheet
         from .pipelines.conditioning import Conditioning
 
         job_id = job["id"]
@@ -87,6 +87,19 @@ class SpriteOps:
 
         logical = int(params.get("logical_size", 32))
         colors = int(params.get("colors", 32))
+        palette_name = str(params.get("palette") or "")
+        dither = bool(params.get("dither"))
+        # ``"none"`` and not this file's sprite default: the restyle's default
+        # path has to stay byte-identical, and an outline is a pixel this path
+        # did not draw before today.
+        outline = str(params.get("outline") or "none")
+        # Resolved before the GPU is asked for anything -- a palette deleted
+        # since the door should cost the second before the checkpoint loads, not
+        # the minute after it. Costs nothing when no palette was named: an empty
+        # name is ``()`` with no file touched at all.
+        designed = await asyncio.to_thread(
+            queue_mod._palette_entries, self.config, palette_name
+        )
         strength = float(params.get("strength", models.DEFAULT_IMG2IMG_STRENGTH))
         structure = bool(params.get("structure_lock", True))
         seed = int(params.get("seed", 42))
@@ -120,6 +133,12 @@ class SpriteOps:
         prompt = guidance.compose_prompt(job["prompt"] or "", params)
         plan = pixelsheet.bands(meta)
         styled = Image.new("RGBA", atlas.size, (0, 0, 0, 0))
+        # One lattice measurement per band, because one band is one generation:
+        # ``pixel.lattice`` is measuring what the model drew, and this kind draws
+        # a sheet taller than 1024 in several passes. Recorded in the recipe
+        # below and read by nothing -- see ``pixel.lattice`` for why acting on it
+        # has to wait for a calibration run.
+        grids: list[dict[str, Any]] = []
         try:
             for band in plan:
                 self.progress.update(
@@ -182,6 +201,15 @@ class SpriteOps:
                     )
                     with Image.open(out_path) as generated:
                         generated.load()
+                        # On the square the model returned, before the crop back
+                        # out: the phase is only meaningful against the frame the
+                        # lattice was drawn on, and the crop moves it.
+                        grids.append(
+                            {
+                                "band": band.index,
+                                **await asyncio.to_thread(pixel.lattice, generated),
+                            }
+                        )
                         piece = pixelsheet.crop_back(generated, band)
                 top = band.first_row * band.frame
                 source_band = atlas.crop((0, top, band.width, top + band.height))
@@ -195,9 +223,60 @@ class SpriteOps:
         )
         factor = int(meta["frame_size"]) // logical
         small = await asyncio.to_thread(pixelsheet.downscale, styled, factor)
-        reduced, palette = await asyncio.to_thread(
-            pixelsheet.quantize_shared, small, colors
-        )
+
+        def _styled_pixels() -> tuple[Any, list[str], str]:
+            """The three new options, applied. Only reached when one is set.
+
+            **A branch and not a switch**, which is the whole shape of this
+            change. ``PIXEL_SHEET_VERSION`` is recorded in every restyled sheet
+            already on disk, and the default request has to keep producing the
+            bytes those sheets claim -- so the two lines below stay exactly as
+            they were and this runs only when the user actually asked for a
+            palette, a dither or an outline. ``asset2d.pixel`` set the
+            precedent: "with ``opts`` left at its default the result is
+            byte-identical ... which is pinned by a test".
+
+            ``reduce_mode="point"`` for honesty in the report and nothing else:
+            ``small`` is already at the logical size, so ``pixelize.reduce``
+            returns it untouched whatever the mode says, and calling that a box
+            supersample would be a report claiming an average that never
+            happened.
+
+            And no lattice-aware reduction here, deliberately. Each band is a
+            separate generation pasted at its own ``y``, so the phase differs
+            per band and there is no single lattice over the assembled sheet to
+            reduce on.
+            """
+            import numpy as np
+
+            entries, source = pixelsheet.resolve_palette(
+                small, colors=colors, entries=designed or None
+            )
+            out, _report = pixelize.pixelize_atlas(
+                small,
+                columns=int(meta["columns"]),
+                rows=int(meta["rows"]),
+                cell=logical,
+                palette=entries,
+                dither=dither,
+                reduce_mode="point",
+                outline_mode=outline,
+            )
+            arr = np.asarray(out)
+            used = {tuple(int(c) for c in p) for p in arr[arr[:, :, 3] > 0][:, :3]}
+            return (
+                out,
+                [f"#{r:02x}{g:02x}{b:02x}" for r, g, b in sorted(used)],
+                source,
+            )
+
+        if not palette_name and not dither and outline == "none":
+            reduced, palette = await asyncio.to_thread(
+                pixelsheet.quantize_shared, small, colors
+            )
+            palette_source = "derived"
+        else:
+            reduced, palette, palette_source = await asyncio.to_thread(_styled_pixels)
 
         if self._cancel is not None and self._cancel.event.is_set():
             # Nothing is published for a cancelled restyle. The run loop is
@@ -228,8 +307,24 @@ class SpriteOps:
             "structure_lock": bool(structure and spec.controlnet),
             "seed": seed,
             "colors": colors,
+            # Always recorded, on both branches, and additive rather than a
+            # format change -- the argument ``draft_sidecar``'s ``grid`` block
+            # makes: a new optional key readers may ignore is not a new format,
+            # and ``PIXEL_SHEET_VERSION`` describes the sidecar's shape rather
+            # than the recipe's contents. Recording them only when set would
+            # make "no outline" and "an older Warlock" the same reading.
+            "palette": palette_name,
+            "palette_source": palette_source,
+            "palette_hash": pixel.palette_digest(designed) if designed else "",
+            "dither": dither,
+            "outline": outline,
             "prompt": t2i.last_prompt or prompt,
             "bands": len(plan),
+            # In the recipe rather than at the top of the sidecar because it is
+            # a fact about what ran, which is what a recipe records -- and there
+            # is one per band, so there is no single number a top-level key
+            # could honestly hold.
+            "grids": grids,
         }
         if lora is not None:
             recipe["style_lora"] = lora
@@ -284,7 +379,7 @@ class SpriteOps:
         from PIL import Image
 
         from . import queue as queue_mod
-        from .pipelines import spritesynth
+        from .pipelines import pixel, spritesynth
         from .pipelines.conditioning import Conditioning
 
         job_id = job["id"]
@@ -308,6 +403,21 @@ class SpriteOps:
         logical = int(params.get("logical_size", 64))
         colors = int(params.get("colors", 32))
         seeds = (("a", int(params.get("seed_a", 42))), ("b", int(params.get("seed_b", 43))))
+        palette_name = str(params.get("palette") or "")
+        dither = bool(params.get("dither"))
+        # ``or None`` rather than ``or "inner"``: ``_sprite_assemble`` owns the
+        # default, so a params blob written before the option existed and one
+        # that names the default land on the same code path instead of two.
+        outline = str(params.get("outline") or "") or None
+        # Once per job, before the first generation, and deliberately not once
+        # per candidate: the pair is the deliverable, and two candidates read
+        # from a file somebody edited between them would be a pair that cannot
+        # be compared. It also fails the job in the second before the GPU is
+        # asked for anything, which is what a palette deleted since the door
+        # should cost.
+        designed = await asyncio.to_thread(
+            queue_mod._palette_entries, self.config, palette_name
+        )
 
         base_key = self._resolve_base_key(params, default="sdxl_cfg")
         spec = models.BASE_MODELS[base_key]
@@ -415,13 +525,18 @@ class SpriteOps:
                         generated.load()
                         atlas = generated.convert("RGB")
                     reduced, record = await asyncio.to_thread(
-                        queue_mod._sprite_assemble,
-                        atlas,
-                        geom,
-                        logical,
-                        colors,
-                        source_rgba,
-                        source_report,
+                        functools.partial(
+                            queue_mod._sprite_assemble,
+                            atlas,
+                            geom,
+                            logical,
+                            colors,
+                            source_rgba,
+                            source_report,
+                            designed=designed,
+                            dither=dither,
+                            outline=outline,
+                        )
                     )
                     record["image"] = f"{draft_id}.{letter}.png"
                     record["seed"] = seed
@@ -449,6 +564,13 @@ class SpriteOps:
                 "matte_source": matte_source,
                 "colors": colors,
             }
+            # What ran, not what was asked for -- the rule this file's restyle
+            # sibling states. ``outline`` in particular: ``None`` in params means
+            # "the path's default", and the recipe has to name the mode the
+            # pixels were actually drawn with.
+            drawn_outline = (
+                spritesynth.DEFAULT_SPRITE_OUTLINE if outline is None else outline
+            )
             if lora is not None:
                 recipe["style_lora"] = lora
                 recipe["lora_weight"] = pixel_style.default_weight
@@ -482,6 +604,20 @@ class SpriteOps:
                 geom=geom,
                 logical_size=logical,
                 colors=colors,
+                palette=palette_name,
+                # Off the two candidates rather than off ``designed``: which
+                # branch of ``resolve_palette`` ran is the assembler's answer,
+                # and reading it back is how the sidecar cannot disagree with
+                # the pixels. Both candidates take the same branch by
+                # construction -- it is decided by whether a file was named.
+                palette_source=assembled[0][2]["palette_source"],
+                # Of the colours, not of the file: ``pixel.palette_digest``'s
+                # own rule, and the reason this key exists at all -- a palette
+                # edited in place keeps its name, so the name alone cannot tell
+                # a reader whether two drafts were cut the same way.
+                palette_hash=pixel.palette_digest(designed) if designed else "",
+                dither=dither,
+                outline=drawn_outline,
                 candidates=[record for _, _, record in assembled],
                 recipe=recipe,
             )

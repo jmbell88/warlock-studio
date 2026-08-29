@@ -150,26 +150,13 @@ def _check_sprite_sheet(svc: WarlockService, block: Any) -> dict[str, Any]:
             f"sheet_type must be one of {list(svc_sprites.SPRITE_SHEET_TYPES)}",
             field="sheet_type",
         )
-    try:
-        logical = int(
-            entries.get("logical_size") or svc_sprites.DEFAULT_SPRITE_LOGICAL_SIZE
-        )
-    except (TypeError, ValueError):
-        raise Invalid("logical_size must be a whole number", field="logical_size") from None
-    try:
-        colors = int(entries.get("colors") or svc_sprites.DEFAULT_SPRITE_COLORS)
-    except (TypeError, ValueError):
-        raise Invalid("colors must be a whole number", field="colors") from None
-    if logical not in svc_sprites.SPRITE_LOGICAL_SIZES:
-        raise Invalid(
-            f"logical_size must be one of {list(svc_sprites.SPRITE_LOGICAL_SIZES)}",
-            field="logical_size",
-        )
-    if colors not in svc_sprites.SPRITE_COLOR_CHOICES:
-        raise Invalid(
-            f"colors must be one of {list(svc_sprites.SPRITE_COLOR_CHOICES)}",
-            field="colors",
-        )
+    # The same function ``create_sprite_synthesis`` calls, which is the whole
+    # point: there are exactly two ways a ``sprite_synthesis`` row comes to
+    # exist, and a value one door takes and the other refuses is a request that
+    # fails an hour later depending on which button made it. This was four
+    # hand-copied refusals until 2026-08-29 and is now the door's own checker,
+    # so the palette, the dither and the outline arrive here already refused.
+    options = svc_sprites._check_options(svc, entries)
     # The weights the *follow-up* will load, refused now. Both adapters are
     # mandatory for a synthesis -- the pose guide is the ControlNet and the
     # identity is the IP-Adapter -- so a host missing either would draw the
@@ -189,7 +176,7 @@ def _check_sprite_sheet(svc: WarlockService, block: Any) -> dict[str, Any]:
         "model",
         {"base_model": svc_sprites.SPRITE_BASE_MODEL},
     )
-    return {"sheet_type": sheet_type, "logical_size": logical, "colors": colors}
+    return {"sheet_type": sheet_type, **options}
 
 
 def create_job(

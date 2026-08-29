@@ -694,6 +694,7 @@ def atlas_sidecar(
     terrains: Any = (),
     mask: dict[str, Any] | None = None,
     recipe: Any = None,
+    grids: Any = (),
 ) -> dict[str, Any]:
     """The atlas's own record: what it is, not what it looks like.
 
@@ -711,6 +712,15 @@ def atlas_sidecar(
 
     Written last, after the PNG, because it is the job's completion marker --
     ``sheet_sidecar``'s rule and ``_pixel_sheet``'s before it.
+
+    ``grids`` is ``pixel.lattice``'s two numbers per generated material,
+    measured once on each whole frame and never per cell. Additive, written
+    only when there is one, and it does **not** bump ``TILE_ATLAS_VERSION``:
+    a new optional key a reader has never heard of leaves it seeing exactly
+    the file it saw before (``sheet.py``'s sidecar rule), and a bump that
+    changes nothing would invalidate every stored benchmark comparison for
+    free. Recorded and acted on by nothing; see ``pixel.lattice`` for why
+    acting on it waits for a calibration run.
 
     Every value is a plain builtin, coerced here rather than at the call site:
     this is ``json.dumps``-ed *after* the atlas is on disk, and a numpy scalar
@@ -767,4 +777,11 @@ def atlas_sidecar(
         "terrains": [_terrain_record(entry) for entry in terrain_specs],
         "mask": None if mask is None else _mask_record(mask),
         "recipe": dict(recipe) if recipe is not None else None,
+        # One per *material*, not per cell: a material is one generation and a
+        # cell is a crop out of one, and ``pixel.lattice`` measures generations.
+        # A terrain set is forty-seven cells composited from two of them, which
+        # is exactly why this cannot ride on the ``materials`` list. Written
+        # only when there is one, so a sidecar from before it existed and a
+        # sidecar that measured nothing are the same file.
+        **({"grids": [dict(entry) for entry in grids]} if grids else {}),
     }

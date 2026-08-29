@@ -36,8 +36,13 @@ bracket and the publish ordering are invariants; two copies of them is how they
 would come to disagree.
 
 This module reaches into no other layer: everything it needs to think with is in
-``pipelines.tileatlas`` and ``pipelines.tilemask``, which is where the queue is
-allowed to look.
+``pipelines.tileatlas``, ``pipelines.tilemask`` and -- for the quantize tail the
+two tile kinds share -- ``pipelines.tilesheet``, which is where the queue is
+allowed to look. That last one is the grid path's module and is imported here on
+purpose: the one-palette-across-the-whole-atlas property is the same property in
+both kinds and is not about how the cells were produced, so it is written once
+in ``tilesheet.quantize_tiles`` rather than twice in the two ``_q_`` modules
+that would then be free to disagree.
 """
 
 from __future__ import annotations
@@ -127,9 +132,8 @@ class TileSetOps:
         from PIL import Image
 
         from . import queue as queue_mod
-        from .pipelines import seam, tileatlas, tilemask
+        from .pipelines import pixel, seam, tileatlas, tilemask, tilesheet
         from .pipelines.conditioning import Conditioning
-        from .pipelines.pixelsheet import quantize_shared
 
         job_id = job["id"]
         params = job["params"]
@@ -142,6 +146,18 @@ class TileSetOps:
         geom, entries, seeds, subjects = _plan(block, mode)
 
         colors = int(params.get("colors", 64))
+        palette_name = str(params.get("palette") or "")
+        dither = bool(params.get("dither"))
+        # Read from disk **here**, before the card is spent, and not down at the
+        # quantize phase where it is used. It is one small text file, and the
+        # alternative is a set that runs N full generations and then fails on a
+        # palette the user deleted after submitting it -- ``_plan``'s rule three
+        # lines up, for its reason: params outlive the door that wrote them.
+        # ``()`` when no palette was named, which is what the common request
+        # says.
+        designed = await asyncio.to_thread(
+            queue_mod._palette_entries, self.config, palette_name
+        )
         # The request's own seed, recorded so the set is reproducible as a set.
         # The seeds that actually run are the per-material ones above --
         # ``tileatlas.material_seeds`` derives them from this one so that
@@ -301,10 +317,20 @@ class TileSetOps:
                 inner=0.0, inner_next=1.0, nominal=2.0, detail="",
             )
             tiles = []
-            for path in paths:
+            grids: list[dict[str, Any]] = []
+            for index, path in enumerate(paths):
                 with Image.open(path) as generated:
                     generated.load()
                     full = generated.convert("RGBA")
+                # Per material, on the whole frame, before ``reduce_material``
+                # resamples it: each material is its own generation and can
+                # plainly land on its own lattice.
+                grids.append(
+                    {
+                        "material": index,
+                        **await asyncio.to_thread(pixel.lattice, full),
+                    }
+                )
                 tiles.append(
                     await asyncio.to_thread(
                         tileatlas.reduce_material,
@@ -336,13 +362,21 @@ class TileSetOps:
                 job_id, phase="quantize", label="Sharing one palette",
                 inner=0.0, inner_next=1.0, nominal=2.0, detail="",
             )
-            # One palette across every tile, for ``quantize_shared``'s reason on
-            # this axis: materials quantized separately read as N pictures
-            # pasted together, which is exactly what a tileset must not. It
-            # matters more here than on the grid path, where the cells at least
-            # came out of one frame.
-            reduced, palette = await asyncio.to_thread(
-                quantize_shared, Image.fromarray(atlas, "RGBA"), colors
+            # One palette across every tile -- authored or derived, the property
+            # is the same and ``quantize_tiles`` carries the argument: materials
+            # quantized separately read as N pictures pasted together, which is
+            # exactly what a tileset must not. It matters more here than on the
+            # grid path, where the cells at least came out of one frame. With no
+            # palette and no dither this is byte-for-byte the median cut it has
+            # always been.
+            reduced, palette, palette_source = await asyncio.to_thread(
+                functools.partial(
+                    tilesheet.quantize_tiles,
+                    Image.fromarray(atlas, "RGBA"),
+                    colors=colors,
+                    entries=designed,
+                    dither=dither,
+                )
             )
 
             if self._cancel is not None and self._cancel.event.is_set():
@@ -406,6 +440,16 @@ class TileSetOps:
             # the tile somebody notices.
             "seam_worst": max((entry["worst"] for entry in seams), default=0.0),
             "seam_threshold": seam.SEAM_MAX,
+            # Empty unless a palette was named or dither asked for, so a set
+            # drawn the way every set before today was drawn writes the sidecar
+            # it wrote before. ``palette_record`` holds that rule and the reason
+            # ``colors`` stays beside these keys.
+            **tilesheet.palette_record(
+                name=palette_name,
+                entries=designed,
+                source=palette_source,
+                dither=dither,
+            ),
         }
         if has_reference:
             recipe["ip_adapter"] = "plus"
@@ -429,6 +473,7 @@ class TileSetOps:
             terrains=(block.get("terrains") or ()) if mode == tileatlas.MODE_TERRAIN else (),
             mask=mask,
             recipe=recipe,
+            grids=grids,
         )
         # Last, and only after the atlas: this file is the completion marker, so
         # publishing it first would advertise a set still being written.

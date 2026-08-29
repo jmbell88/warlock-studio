@@ -487,6 +487,37 @@ def test_a_materials_sidecar_records_the_grid_and_every_cell():
     assert [entry["seed"] for entry in card["materials"]] == [7, 8, 9]
     assert card["terrains"] == []
     assert card["mask"] is None
+    # Additive, and absent altogether when nothing was measured.
+    assert "grids" not in card
+
+
+def test_a_sidecar_records_one_lattice_per_generated_material():
+    """One per *material*, not per cell: a material is one generation and a
+    cell is a crop out of one. A terrain set is forty-seven cells composited
+    from two generations, which is why this cannot ride on ``materials``.
+
+    Measurement only -- nothing reduces on it (see ``pixel.lattice``) -- and it
+    does **not** bump ``TILE_ATLAS_VERSION``, since a new optional key readers
+    may ignore is not a new format.
+    """
+    geom = tileatlas.terrain_geometry(32, "top_down")
+    cells = _bind(geom, ["grass"] * len(geom.cells))
+    card = tileatlas.atlas_sidecar(
+        geom,
+        created=1.5,
+        materials=cells,
+        terrains=[_terrain()],
+        mask={"seed": 1, "inset": 6.0, "amplitude": 2.0, "feather": 1.0},
+        grids=[
+            {"material": 0, "scale": 8, "residual": 0.01},
+            {"material": 1, "scale": None, "residual": 0.9},
+        ],
+    )
+    assert [entry["material"] for entry in card["grids"]] == [0, 1]
+    assert card["grids"][0]["scale"] == 8
+    assert card["grids"][1]["scale"] is None
+    assert len(card["grids"]) == 2 != len(card["materials"])
+    assert json.loads(json.dumps(card)) == card
 
 
 def test_two_variants_of_one_line_are_two_cells_told_apart_by_variant():

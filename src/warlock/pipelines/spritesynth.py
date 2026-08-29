@@ -15,8 +15,10 @@ independently-imagined poses from disagreeing with each other:
   requested. The guide is already line art in canny space, so it is handed to
   the ControlNet *directly* -- running ``cv2.Canny`` over it would outline every
   stroke and double it.
-* **One palette across the atlas**, via ``pixelsheet.quantize_shared``, for the
-  reason that function's docstring gives.
+* **One palette across the atlas**, via ``pixelsheet.resolve_palette``, whether
+  the user named one or the median cut picked it -- for the reason that
+  function's docstring gives: what makes a palette shared was never the median
+  cut, it is that one entry set is applied over the whole atlas in one pass.
 * **A shared baseline**, because the thing that reads as a broken animation is
   not a slightly wrong arm, it is a character whose feet move between frames.
 
@@ -49,7 +51,27 @@ else:  # pragma: no cover - runtime alias
 
 log = logging.getLogger(__name__)
 
-SPRITE_DRAFT_VERSION = 1
+#: 2 since 2026-08-29: the reduction changed. Every draft up to version 1 was
+#: cut by :func:`reduce_atlas`, a single ``Image.NEAREST`` resize of the whole
+#: atlas; from 2 the queue reduces with ``pixelize.reduce``'s alpha-weighted box
+#: supersample, which at this path's integral strides (1024 / (4 * 32) = 8)
+#: averages all 64 samples under an output pixel instead of keeping one and
+#: discarding 63 -- and, being alpha-weighted, stops the transparent background
+#: bleeding into the silhouette. The bytes move, so the sidecar has to say which
+#: compiler drew the sheet: a bump that changes nothing is waste, and a change
+#: that moves bytes without one leaves two different sheets claiming one format.
+SPRITE_DRAFT_VERSION = 2
+
+#: ``inner`` and never ``outer`` on this path, which is the opposite of Troupe's
+#: default and is forced by the geometry rather than by taste.
+#: :func:`structural_warnings` emits ``clipped`` routinely here -- a synthesised
+#: cell is 256 or 512px of a 1024px atlas the model filled as it liked, and the
+#: subject runs off its cell edge often enough to be a standing warning code.
+#: ``pixelize.OUTLINE_MODES`` says ``outer`` "grows the silhouette by a pixel ...
+#: and can clip at a cell edge -- so it is opt-in and never the default". Troupe
+#: can afford it because a 512px orthographic render leaves margin by
+#: construction; nothing here does.
+DEFAULT_SPRITE_OUTLINE = "inner"
 
 # One SDXL frame, and the reason the cell sizes below are what they are.
 ATLAS_PX = 1024
@@ -551,6 +573,16 @@ def baseline_align(atlas_rgba: PILImage, geom: SheetGeometry) -> PILImage:
 def reduce_atlas(atlas: PILImage, geom: SheetGeometry, logical_size: int) -> PILImage:
     """One NEAREST resize of the whole atlas to ``logical_size`` cells.
 
+    **No longer the queue's reduction** -- since ``SPRITE_DRAFT_VERSION`` 2 the
+    synthesis path reduces through ``pixelize.reduce``'s alpha-weighted box, for
+    the reason that constant states. Kept rather than deleted because this is
+    the named home of the whole-atlas boundary argument below, which
+    ``pixelize``'s module docstring, :func:`pixelize.reduce` and
+    :func:`pixelize.reduce_frames` all cite by this name -- and because
+    ``pixelize.reduce``'s own fallback for a target that does not divide (48 out
+    of 1024) is this function's single NEAREST resize, so what it does is still
+    what happens on those rungs.
+
     Whole-atlas and not per cell, so a cell boundary in the output is at the
     same place whichever side of it you compute from. ``pixelsheet.downscale``
     cannot serve here: it takes an integer stride, and 48 does not divide 512
@@ -686,9 +718,9 @@ def preserve_front(
     """Paste the matted reference into the front cell, on the shared baseline.
 
     Before reduction and quantization, never after: the paste has to go through
-    the same NEAREST reduction and share the same median-cut palette as the
-    other cells, or the one cell that is definitely the right character is also
-    the one cell that does not match the sheet.
+    the same reduction and share the same palette as the other cells, or the one
+    cell that is definitely the right character is also the one cell that does
+    not match the sheet.
     """
     import numpy as np
     from PIL import Image
@@ -721,9 +753,12 @@ def preserve_front(
     scale = target_h / max(1, src.height)
     nw = max(1, round(src.width * scale))
     nh = max(1, round(src.height * scale))
-    # NEAREST like everything else on this path: the reduction that follows is
-    # NEAREST, and a LANCZOS pass here would put a soft rim into the one cell
-    # that is meant to be the crispest.
+    # NEAREST, and deliberately still NEAREST now that the reduction which
+    # follows is an alpha-weighted box: this is a resize at an arbitrary ratio
+    # (the scale is a median height over the source's own), so there is no
+    # supersample to be had, and a LANCZOS pass here would put a soft rim into
+    # the one cell that is meant to be the crispest -- which the box mean would
+    # then average outward rather than remove.
     src = src.resize((nw, nh), Image.NEAREST)
     if nw > front.w:
         # front_fits admits sources up to a third wider than the generated
@@ -757,6 +792,11 @@ def draft_sidecar(
     colors: int,
     candidates: list[dict[str, Any]],
     recipe: dict[str, Any],
+    palette: str = "",
+    palette_source: str = "derived",
+    palette_hash: str = "",
+    dither: bool = False,
+    outline: str = DEFAULT_SPRITE_OUTLINE,
 ) -> dict[str, Any]:
     """The draft record: the one file that says a draft finished.
 
@@ -765,6 +805,26 @@ def draft_sidecar(
     slices on these rectangles and never re-detects the grid from pixels, which
     is what makes a slightly mis-registered generation an editable sheet rather
     than an unopenable one.
+
+    Each ``candidates`` record carries a ``grid`` block -- ``pixel.lattice``'s
+    two numbers for that candidate's own generation, measured once on the whole
+    frame the model returned. Per candidate rather than per draft because each
+    is a separate generation; additive, and it does **not** bump
+    ``SPRITE_DRAFT_VERSION``, since a new optional key readers may ignore is not
+    a new format and a bump that changes nothing would invalidate every stored
+    benchmark comparison for free. Recorded and acted on by nothing; see
+    ``pixel.lattice``.
+
+    The five palette keys are draft-level rather than per candidate, because
+    every one of them is a *request* the two candidates share -- and the colours
+    each candidate actually ended up with are already in its own ``palette``
+    list. ``palette_source`` says which branch of ``pixelsheet.resolve_palette``
+    ran; ``palette``/``palette_hash`` name the authored file and fingerprint its
+    colours, and are empty on the derived branch because there is no file to
+    name. **The hash is not decoration**: a palette edited in place keeps its
+    name, which is exactly why ``derive._pixel_current`` compares digests rather
+    than names to decide whether an artifact on disk was cut the way the caller
+    now wants.
     """
     cells = [
         {
@@ -788,6 +848,11 @@ def draft_sidecar(
         "sheet_type": geom.kind,
         "logical_size": int(logical_size),
         "colors": int(colors),
+        "palette": str(palette),
+        "palette_source": str(palette_source),
+        "palette_hash": str(palette_hash),
+        "dither": bool(dither),
+        "outline": str(outline),
         "columns": geom.columns,
         "rows": geom.rows,
         "cell_w": int(logical_size),

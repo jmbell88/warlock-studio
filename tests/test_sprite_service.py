@@ -186,6 +186,12 @@ def test_a_submit_records_every_input_and_names_the_draft(svc, weights):
         "sheet_type": "walk",
         "logical_size": 48,
         "colors": 16,
+        # Normalised by ``_check_options`` and written whether or not the
+        # caller named them: the worker reads params, not the door's defaults,
+        # and a key that is present only sometimes is a second code path.
+        "palette": "",
+        "dither": False,
+        "outline": svc_sprites.DEFAULT_SPRITE_OUTLINE,
         "seed_a": 3,
         "seed_b": 4,
         "draft_id": result["draft"],
@@ -306,3 +312,86 @@ def test_the_created_stamp_orders_a_listing_written_out_of_order(svc):
         early,
         late,
     ]
+
+
+# --- the two doors, held to one answer ----------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("block", "field"),
+    [
+        ({"logical_size": 96}, "logical_size"),
+        ({"colors": 7}, "colors"),
+        ({"outline": "glow"}, "outline"),
+        ({"palette": "never-installed"}, "palette"),
+    ],
+)
+def test_the_two_doors_refuse_the_same_values_in_the_same_words(
+    svc, weights, block, field
+):
+    """There are exactly two ways a ``sprite_synthesis`` row comes to exist --
+    this door, and the Create form's follow-up block, which the worker mints
+    itself and which therefore never passes through here. A value one takes and
+    the other refuses is a request that succeeds or fails depending on which
+    button made it.
+
+    Both go through ``sprites._check_options`` since 2026-08-29, so this pins
+    the *message* and the field rather than merely "both raised": a refusal is a
+    sentence somebody reads and a field a form highlights, and two doors saying
+    it differently is the drift the shared checker exists to stop.
+    """
+    job_id = _reference(svc)
+
+    with pytest.raises(Invalid) as direct:
+        svc_sprites.create_sprite_synthesis(svc, job_id, **block)
+    with pytest.raises(Invalid) as followup:
+        svc_jobs.create_job(
+            svc, kind="text", prompt="a ranger", output="reference", sprite_sheet=block
+        )
+
+    assert direct.value.field == followup.value.field == field
+    assert direct.value.message == followup.value.message
+
+
+def test_a_palette_is_read_at_the_door_and_only_its_name_is_stored(
+    svc, weights, tmp_path
+):
+    """The reason ``check_pixel_options`` loads a file it then throws away: an
+    unreadable palette should cost the request, not two SDXL generations and a
+    pair of sheets that came back the wrong colours.
+
+    Only the name is carried, so the worker re-reads the file -- an edit between
+    queueing and running is the user's edit rather than a stale snapshot.
+    """
+    directory = tmp_path / "palettes"
+    directory.mkdir(exist_ok=True)
+    svc.config.palette_dir = directory
+    (directory / "ramp.hex").write_text("#1a1c2c\n#f4f4f4\n")
+    (directory / "broken.hex").write_text("this is not a palette\n")
+    job_id = _reference(svc)
+
+    with pytest.raises(Invalid) as excinfo:
+        svc_sprites.create_sprite_synthesis(svc, job_id, palette="broken")
+    assert excinfo.value.field == "palette"
+
+    result = svc_sprites.create_sprite_synthesis(
+        svc, job_id, palette=" ramp ", dither=True, outline="outer"
+    )
+    params = svc.store.get(result["id"])["params"]
+    assert params["palette"] == "ramp"
+    assert params["dither"] is True
+    assert params["outline"] == "outer"
+
+
+def test_the_offered_outlines_are_the_ones_the_assembler_draws():
+    """A form offering a mode the pixeliser refuses is a control that fails at
+    the door it was drawn from."""
+    from warlock.pipelines import pixelize
+
+    options = svc_sprites.sprite_options()
+    assert options["outlines"] == list(pixelize.OUTLINE_MODES)
+    assert options["defaults"]["outline"] in options["outlines"]
+    # ``inner`` and not ``outer``, which is this path's whole departure from
+    # Troupe's: a synthesised cell has no guaranteed margin.
+    assert options["defaults"]["outline"] == "inner"
+    assert svc_sprites.DEFAULT_SPRITE_OUTLINE == ss.DEFAULT_SPRITE_OUTLINE

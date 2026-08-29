@@ -523,3 +523,228 @@ def test_the_sidecar_cells_are_in_timeline_order_with_their_yaws():
     ]
     assert all(c["yaw"] == ss.DIRECTION_YAWS[c["name"]] for c in sidecar["cells"])
     assert sidecar["recipe"]["base_model"] == "sdxl_cfg"
+
+
+# --- the assembler's palette, dither and outline -------------------------------
+#
+# ``queue._sprite_assemble`` rather than a ``spritesynth`` function, and here
+# rather than in a worker test, because it is the *pure* half of this feature by
+# every test in this file's standard: a Pillow-drawn atlas in, an atlas out, no
+# GPU, no filesystem, no service. It is also where the three new options are
+# actually spent -- the worker only reads params and hands them over -- so a
+# wrong colour, a grown silhouette or a per-cell quantisation is decided here
+# and nowhere else.
+
+#: A designed ramp with four unmistakable entries. Deliberately nothing the
+#: fixture atlas contains, so "these are the palette's colours" cannot pass by
+#: the source having happened to be that colour already.
+RAMP = ((16, 16, 32), (90, 40, 120), (200, 90, 60), (245, 240, 210))
+
+
+def _colour_atlas(kind="walk"):
+    """One atlas whose cells are deliberately *different* colours.
+
+    Which is the fixture the per-cell-quantisation assertion needs: with every
+    cell the same colour, a per-cell median cut and a shared palette are
+    indistinguishable.
+    """
+    geom = ss.geometry(kind)
+    im = Image.new("RGB", (ss.ATLAS_PX, ss.ATLAS_PX), BG)
+    draw = ImageDraw.Draw(im)
+    for index, cell in enumerate(geom.cells):
+        pad = cell.w // 6
+        draw.rectangle(
+            (cell.x + pad, cell.y + pad, cell.x + cell.w - pad, cell.y + cell.h - pad),
+            fill=(20 + index * 12, 60 + index * 9, 140 - index * 6),
+        )
+    return geom, im
+
+
+def _assemble(geom, atlas, *, logical=32, colors=8, **options):
+    from warlock import queue as queue_mod
+
+    # ``source_rgba``/``source_report`` are read only by the turnaround's
+    # front-cell paste, so the walk grid may pass None for both -- which keeps
+    # this fixture about the palette rather than about front preservation.
+    return queue_mod._sprite_assemble(
+        atlas, geom, logical, colors, None, None, **options
+    )
+
+
+def _cell_colours(image, geom, logical):
+    """Every occupied cell's colour set, keyed by cell index."""
+    arr = np.asarray(image)
+    out = {}
+    for index, cell in enumerate(geom.cells):
+        y, x = cell.row * logical, cell.col * logical
+        block = arr[y : y + logical, x : x + logical]
+        out[index] = {
+            tuple(int(c) for c in p) for p in block[block[:, :, 3] > 0][:, :3]
+        }
+    return out
+
+
+def test_a_designed_palette_is_the_only_colours_in_every_cell():
+    """The assertion that catches per-cell quantisation, which is the artefact
+    this whole path exists to avoid: not "the atlas has few colours" but "every
+    cell drew from the same set", checked cell by cell."""
+    geom, atlas = _colour_atlas()
+    out, record = _assemble(geom, atlas, designed=RAMP, outline="none")
+
+    allowed = set(RAMP)
+    per_cell = _cell_colours(out, geom, 32)
+    assert per_cell, "the fixture produced no occupied cells"
+    for index, colours in per_cell.items():
+        assert colours, f"cell {index} came out empty"
+        assert colours <= allowed, f"cell {index} invented {colours - allowed}"
+    assert record["palette_source"] == "designed"
+    # And more than one entry is genuinely in use, or the subset assertion above
+    # would pass on a sheet that had collapsed to a single colour.
+    assert len(set().union(*per_cell.values())) > 1
+
+
+def test_a_named_palette_does_not_cost_the_shared_across_cells_property():
+    """``resolve_palette``'s claim, made concrete. A colour drawn in every cell
+    must come out the same colour in every cell -- which is what a per-cell
+    median cut breaks, and what naming a palette is often assumed to give up.
+    """
+    geom = ss.geometry("walk")
+    atlas = Image.new("RGB", (ss.ATLAS_PX, ss.ATLAS_PX), BG)
+    draw = ImageDraw.Draw(atlas)
+    for index, cell in enumerate(geom.cells):
+        pad = cell.w // 6
+        # The same shirt colour in every cell, and one distinguishing stripe so
+        # the cells are not literally identical images.
+        draw.rectangle(
+            (cell.x + pad, cell.y + pad, cell.x + cell.w - pad, cell.y + cell.h - pad),
+            fill=(40, 110, 170),
+        )
+        draw.rectangle(
+            (
+                cell.x + pad,
+                cell.y + pad,
+                cell.x + pad + 24,
+                cell.y + pad + 24 + index * 4,
+            ),
+            fill=(230, 40, 40),
+        )
+    for designed in (RAMP, ()):
+        out, _record = _assemble(geom, atlas, designed=designed, outline="none")
+        per_cell = _cell_colours(out, geom, 32)
+        shared = set.intersection(*per_cell.values())
+        assert shared, "no colour survived into every cell"
+        for index, colours in per_cell.items():
+            assert shared <= colours, f"cell {index} lost a shared colour"
+
+
+def test_a_derived_palette_stays_within_the_colour_budget():
+    geom, atlas = _colour_atlas()
+    out, record = _assemble(geom, atlas, colors=8, outline="none")
+
+    assert record["palette_source"] == "derived"
+    arr = np.asarray(out)
+    colours = {tuple(int(c) for c in p) for p in arr[arr[:, :, 3] > 0][:, :3]}
+    assert 0 < len(colours) <= 8
+    assert record["palette"] == sorted(f"#{r:02x}{g:02x}{b:02x}" for r, g, b in colours)
+
+
+def test_an_inner_outline_cannot_change_the_silhouette_and_is_the_default():
+    """``pixelize.OUTLINE_MODES``' own distinction, and the reason this path
+    defaults to ``inner`` where Troupe defaults to ``outer``: a synthesised cell
+    has no guaranteed margin, and ``outer`` grows into whatever is at the edge.
+    """
+    geom, atlas = _colour_atlas()
+    plain, _ = _assemble(geom, atlas, designed=RAMP, outline="none")
+    inner, _ = _assemble(geom, atlas, designed=RAMP, outline="inner")
+    outer, _ = _assemble(geom, atlas, designed=RAMP, outline="outer")
+    default, _ = _assemble(geom, atlas, designed=RAMP)
+
+    def alpha(image):
+        return np.asarray(image)[:, :, 3]
+
+    assert inner.size == plain.size == outer.size
+    # Silhouette, size and trim are all one fact about the alpha plane, and
+    # ``inner`` only ever recolours pixels that were already opaque.
+    assert np.array_equal(alpha(inner), alpha(plain))
+    assert not np.array_equal(alpha(outer), alpha(plain))
+    assert int(alpha(outer).sum()) > int(alpha(plain).sum())
+    # It did something -- an outline that changed no pixel would pass the
+    # assertion above trivially.
+    assert inner.tobytes() != plain.tobytes()
+    # The default is ``inner``, stated twice: once as the constant a door reads
+    # and once as the bytes the assembler actually draws with no option given.
+    assert ss.DEFAULT_SPRITE_OUTLINE == "inner"
+    assert default.tobytes() == inner.tobytes()
+    assert default.tobytes() != outer.tobytes()
+
+
+def test_dither_is_off_unless_asked_for():
+    geom, atlas = _colour_atlas()
+    plain, _ = _assemble(geom, atlas, designed=RAMP, outline="none")
+    dithered, _ = _assemble(geom, atlas, designed=RAMP, outline="none", dither=True)
+
+    assert dithered.tobytes() != plain.tobytes()
+    # Still only the palette's colours: a dither trades resolution for shades it
+    # already has, it does not mix new ones.
+    arr = np.asarray(dithered)
+    colours = {tuple(int(c) for c in p) for p in arr[arr[:, :, 3] > 0][:, :3]}
+    assert colours <= set(RAMP)
+
+
+@pytest.mark.parametrize("options", ({}, {"designed": RAMP, "dither": True}))
+def test_the_same_inputs_twice_are_byte_identical(options):
+    """No RNG anywhere on this path -- the bar ``tests/troupe/test_pixelize.py``
+    sets for the pixeliser, held one caller up."""
+    geom, atlas = _colour_atlas()
+    first, first_record = _assemble(geom, atlas, **options)
+    second, second_record = _assemble(geom, atlas, **options)
+
+    assert first.tobytes() == second.tobytes()
+    assert first_record == second_record
+
+
+@pytest.mark.parametrize(
+    ("logical", "exact"),
+    # 1024 / (4 * 32) = 8 and 1024 / (4 * 64) = 4, so the walk grid supersamples
+    # at 32 and 64 -- which is the whole reason SPRITE_DRAFT_VERSION moved to 2.
+    # Nothing divides 1024 into 4 * 48, so 48 keeps the NEAREST fallback that
+    # ``reduce_atlas`` always was.
+    [(32, True), (48, False), (64, True)],
+)
+def test_the_report_names_the_reduction_that_actually_happened(logical, exact):
+    """``pixelize_atlas`` sees an atlas already at the target and answers
+    ``True`` unconditionally, so this field has to be measured against the real
+    reduction -- the same correction ``_q_troupe`` makes one path along."""
+    geom, atlas = _colour_atlas()
+    out, record = _assemble(geom, atlas, logical=logical, designed=RAMP)
+
+    assert out.size == (geom.columns * logical, geom.rows * logical)
+    assert record["exact_stride"] is exact
+
+
+def test_an_atlas_with_nothing_in_it_is_named_rather_than_published(monkeypatch):
+    """Asked of both palette branches. ``quantize_shared`` used to be the only
+    thing standing here, and it does not run when a palette was named -- so a
+    designed request would have published two blank PNGs as a finished pair.
+
+    Reached by replacing ``matte_cells``, because today it cannot be reached any
+    other way and that is worth writing down: a cell whose fill covers less than
+    ``MIN_MATTE_FRACTION`` is left **opaque** rather than published with a hole,
+    and a cell that clears the floor has opaque pixels by definition -- so the
+    two branches of that floor between them guarantee an opaque atlas. The guard
+    is therefore about the day that floor changes, and this is the only way to
+    ask it a question now.
+    """
+    geom = ss.geometry("walk")
+    monkeypatch.setattr(
+        ss,
+        "matte_cells",
+        lambda atlas, geom: (
+            Image.new("RGBA", (ss.ATLAS_PX, ss.ATLAS_PX), (0, 0, 0, 0)),
+            (False,) * len(geom.cells),
+        ),
+    )
+    blank = Image.new("RGB", (ss.ATLAS_PX, ss.ATLAS_PX), (0, 0, 0))
+    for designed in ((), RAMP):
+        with pytest.raises(RuntimeError, match="empty in every cell"):
+            _assemble(geom, blank, designed=designed)

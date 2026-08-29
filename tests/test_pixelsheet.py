@@ -185,6 +185,92 @@ def test_an_empty_atlas_says_so_rather_than_quantizing_nothing():
         pixelsheet.quantize_shared(Image.new("RGBA", (32, 32), (0, 0, 0, 0)), 8)
 
 
+# --- where a palette comes from -------------------------------------------------
+
+
+RAMP = ((16, 16, 24), (72, 56, 48), (168, 120, 88), (232, 216, 184))
+
+
+def test_a_designed_palette_is_returned_verbatim_and_never_requantised():
+    """The whole point of naming a palette: those colours, unchanged.
+
+    A median cut run over the atlas "as well" would silently substitute the
+    render's own muddy colours for the ones the artist chose, which is the
+    failure an authored ramp exists to fix.
+    """
+    entries, source = pixelsheet.resolve_palette(
+        _atlas(_meta(columns=2)), colors=8, entries=RAMP
+    )
+    assert source == "designed"
+    assert entries == RAMP
+
+
+def test_a_designed_palette_is_taken_without_looking_at_the_atlas():
+    """No pixels are read on that branch, so an atlas ``quantize_shared`` would
+    refuse outright is still fine to map with a palette."""
+    empty = Image.new("RGBA", (32, 32), (0, 0, 0, 0))
+    entries, source = pixelsheet.resolve_palette(empty, colors=8, entries=RAMP)
+    assert (entries, source) == (RAMP, "designed")
+
+
+def test_with_no_palette_the_median_cut_becomes_the_palette_source():
+    meta = _meta(columns=2)
+    entries, source = pixelsheet.resolve_palette(_atlas(meta), colors=4, entries=None)
+    assert source == "derived"
+    assert 0 < len(entries) <= 4
+    assert all(len(e) == 3 and all(0 <= c <= 255 for c in e) for e in entries)
+
+
+def test_the_derived_branch_is_exactly_the_hex_list_parsed_back():
+    """The collapse ``_q_troupe._quantise`` was refactored onto, pinned: the
+    triples are ``quantize_shared``'s own answer and nothing else."""
+    atlas = _atlas(_meta(columns=2))
+    _mapped, hexes = pixelsheet.quantize_shared(atlas, 8)
+    old = tuple(
+        (int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16)) for h in hexes
+    )
+    entries, source = pixelsheet.resolve_palette(atlas, colors=8, entries=None)
+    assert (entries, source) == (old, "derived")
+
+
+def test_an_empty_tuple_is_a_palette_of_no_colours_and_not_an_absent_one():
+    """``None`` is how a caller says "I have no palette". ``()`` is a palette
+    file somebody emptied, and passing it through is what lets
+    ``map_palette``'s "an empty palette maps nothing" be the refusal the user
+    sees rather than a silent median cut."""
+    entries, source = pixelsheet.resolve_palette(
+        _atlas(_meta(columns=2)), colors=8, entries=()
+    )
+    assert (entries, source) == ((), "designed")
+
+
+def test_the_shared_property_survives_a_designed_palette():
+    """The insight ``resolve_palette``'s docstring carries, as a test.
+
+    What made ``quantize_shared`` shared was never the median cut -- it is that
+    one entry set is applied over the whole atlas in one pass. So four cells
+    that differ by a hair still collapse onto the same entries when the palette
+    is designed, exactly as they do when it is derived.
+    """
+    from warlock.pipelines import pixel
+
+    meta = _meta(columns=4)
+    atlas = Image.new("RGBA", (meta["width"], meta["height"]), (0, 0, 0, 0))
+    frame = meta["frame_size"]
+    for column in range(4):
+        block = Image.new("RGBA", (frame, frame), (200 + column, 60, 60, 255))
+        atlas.paste(block, (column * frame, 0))
+
+    entries, _ = pixelsheet.resolve_palette(atlas, colors=8, entries=RAMP)
+    mapped = np.asarray(pixel.map_palette(atlas, entries))
+    cells = [
+        {tuple(p) for p in mapped[:, column * frame : (column + 1) * frame, :3]
+         .reshape(-1, 3).tolist()}
+        for column in range(4)
+    ]
+    assert cells[0] == cells[1] == cells[2] == cells[3]
+
+
 # --- the sidecar ---------------------------------------------------------------
 
 
@@ -237,3 +323,31 @@ def test_the_sidecar_carries_the_render_grids_own_version():
     # that one, and it says which one it was made from.
     assert doc["sheet_version"] == pixelsheet.SHEET_VERSION
     assert doc["version"] == pixelsheet.PIXEL_SHEET_VERSION
+
+
+# --- the constants the stored artifacts are keyed on ----------------------------
+
+
+def test_recording_the_lattice_moved_no_sidecar_version():
+    """The 2026-08-29 pass added a lattice measurement to four sidecars and
+    bumped none of their versions, on purpose.
+
+    A new optional key readers may ignore is not a new format -- ``sheet.py``'s
+    sidecar docstring states that rule -- and the default bytes did not move.
+    A bump that changes nothing would invalidate every stored benchmark
+    comparison for free, which is a real cost paid for a tidier-looking number.
+    The literals are the pin: they are what fails if somebody bumps one.
+    """
+    from warlock.pipelines import spritesynth, tileatlas, tilesheet
+
+    assert pixelsheet.PIXEL_SHEET_VERSION == 1
+    # 2, and *not* because of the lattice. The sprite draft's reduction changed
+    # from ``reduce_atlas``' single NEAREST resize to ``pixelize.reduce``'s
+    # alpha-weighted box on the same day, which moves the published bytes -- and
+    # that is the case where the rule cuts the other way: a reader has to be
+    # able to tell which compiler drew the sheet. The lattice block still rode
+    # in for free; what bought the bump was the pixels.
+    assert spritesynth.SPRITE_DRAFT_VERSION == 2
+    assert tileatlas.TILE_ATLAS_VERSION == 1
+    # 2 is the tile-sheet vocabulary widening, taken before any of this.
+    assert tilesheet.TILE_SHEET_VERSION == 2

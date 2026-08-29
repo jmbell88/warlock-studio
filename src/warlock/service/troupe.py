@@ -126,51 +126,27 @@ def troupe_options(svc: WarlockService) -> dict[str, Any]:
 
 
 def _check_options(svc: WarlockService, entries: dict[str, Any]) -> dict[str, Any]:
-    """The pixelisation options every Troupe path shares, validated once."""
-    from . import palettes
+    """The pixelisation options every Troupe path shares, validated once.
 
-    try:
-        logical = int(entries.get("logical_size") or DEFAULT_TROUPE_LOGICAL_SIZE)
-    except (TypeError, ValueError):
-        raise Invalid("logical_size must be a whole number", field="logical_size") from None
-    if logical not in TROUPE_LOGICAL_SIZES:
-        raise Invalid(
-            f"logical_size must be one of {list(TROUPE_LOGICAL_SIZES)}",
-            field="logical_size",
-        )
-    try:
-        colors = int(entries.get("colors") or DEFAULT_TROUPE_COLORS)
-    except (TypeError, ValueError):
-        raise Invalid("colors must be a whole number", field="colors") from None
-    if colors not in TROUPE_COLOR_CHOICES:
-        raise Invalid(
-            f"colors must be one of {list(TROUPE_COLOR_CHOICES)}", field="colors"
-        )
-    outline = str(entries.get("outline") or DEFAULT_TROUPE_OUTLINE)
-    if outline not in TROUPE_OUTLINE_MODES:
-        raise Invalid(
-            f"outline must be one of {list(TROUPE_OUTLINE_MODES)}", field="outline"
-        )
-    reduce_mode = str(entries.get("reduce_mode") or TROUPE_REDUCE_MODES[0])
-    if reduce_mode not in TROUPE_REDUCE_MODES:
-        raise Invalid(
-            f"reduce_mode must be one of {list(TROUPE_REDUCE_MODES)}",
-            field="reduce_mode",
-        )
-    palette = str(entries.get("palette") or "").strip()
-    if palette:
-        # Loaded and thrown away, so an unreadable palette costs the request
-        # rather than 256 rendered frames. ``palettes.load`` raises Invalid
-        # with the field already set.
-        palettes.load(svc.config, palette)
-    return {
-        "logical_size": logical,
-        "colors": colors,
-        "outline": outline,
-        "reduce_mode": reduce_mode,
-        "dither": bool(entries.get("dither")),
-        "palette": palette,
-    }
+    A thin wrapper over ``pixelopts.check_pixel_options`` since 2026-08-29:
+    the body was the same four refusals every other pixel path needs, and the
+    only Troupe-shaped things in it were the two ladders and the default
+    outline, which are the parameters. Kept as a name here rather than having
+    the three doors below call the shared function directly, because *this* is
+    where the Troupe defaults live and a door should not have to restate them
+    -- the delegation rule this module's docstring states, applied to itself.
+    """
+    from .pixelopts import check_pixel_options
+
+    return check_pixel_options(
+        svc,
+        entries,
+        sizes=TROUPE_LOGICAL_SIZES,
+        size_default=DEFAULT_TROUPE_LOGICAL_SIZE,
+        colors=TROUPE_COLOR_CHOICES,
+        colors_default=DEFAULT_TROUPE_COLORS,
+        outline_default=DEFAULT_TROUPE_OUTLINE,
+    )
 
 
 def check_troupe(svc: WarlockService, block: Any) -> dict[str, Any]:

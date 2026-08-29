@@ -84,6 +84,31 @@ def test_a_smooth_image_has_no_grid():
     assert grid["scale"] is None
 
 
+def test_the_lattice_record_is_the_two_numbers_a_sidecar_carries():
+    """``lattice`` is ``detect_grid`` narrowed for storage, and the narrowing
+    is deliberate: the phase is meaningful only against the exact frame it was
+    measured on, so a stored one could only be misused."""
+    import json
+
+    canvas = _blown_up(_authored(), 8, (5, 3))
+    record = pixel.lattice(canvas)
+    full = pixel.detect_grid(canvas)
+    assert set(record) == {"scale", "residual"}
+    assert record["scale"] == full["scale"] == 8
+    assert record["residual"] == float(full["residual"])
+    # Every sidecar that carries this is written with ``json.dumps`` after its
+    # artifact is already on disk.
+    assert json.loads(json.dumps(record)) == record
+
+
+def test_an_ordinary_render_records_no_lattice_rather_than_a_wrong_one():
+    x = np.linspace(0, 255, 256)
+    ramp = np.dstack([np.tile(x, (256, 1))] * 3).astype(np.uint8)
+    record = pixel.lattice(Image.fromarray(ramp, "RGB"))
+    assert record["scale"] is None
+    assert record["residual"] > pixel.GRID_RESIDUAL_MAX
+
+
 # --------------------------------------------------------------------------
 # Palette files
 # --------------------------------------------------------------------------

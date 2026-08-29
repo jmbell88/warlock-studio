@@ -434,6 +434,10 @@ def _sprite_assemble(
     colors: int,
     source_rgba: Any,
     source_report: Any,
+    *,
+    designed: tuple[tuple[int, int, int], ...] = (),
+    dither: bool = False,
+    outline: str | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     """One generated atlas turned into a publishable candidate.
 
@@ -443,8 +447,29 @@ def _sprite_assemble(
     front paste happens before the reduction and the palette (so the one cell
     that is definitely the right character is not also the one that does not
     match the sheet).
+
+    ``designed`` is the authored palette's colours, already resolved and
+    traversal-checked by ``_palette_entries`` in the caller -- once per job
+    rather than once per candidate, so the two candidates cannot end up mapped
+    to two different reads of a file somebody edited between them. Empty means
+    "no palette", which ``resolve_palette`` turns into the median cut.
+
+    ``outline`` defaults to ``spritesynth.DEFAULT_SPRITE_OUTLINE`` rather than to
+    ``"none"``, and ``None`` here means "the path's default" rather than "no
+    outline": params outlive the door that wrote them, and a draft synthesised
+    from a params blob written before the option existed should get the look the
+    path is specified to have, not a silently different one.
     """
-    from .pipelines import pixelsheet, spritesynth
+    import numpy as np
+
+    from .pipelines import pixel, pixelize, pixelsheet, spritesynth
+
+    # First, on the frame exactly as the model returned it: ``pixel.lattice``
+    # measures the *generation*, and every step below crops, mattes, nudges or
+    # reduces it. Per candidate rather than per draft, because each candidate is
+    # its own generation and the two seeds can plainly land on different
+    # lattices -- which is a large part of what the number is for.
+    grid = pixel.lattice(atlas)
 
     matted, took = spritesynth.matte_cells(atlas, geom)
     warnings = spritesynth.structural_warnings(matted, geom, took)
@@ -461,25 +486,111 @@ def _sprite_assemble(
             aligned = spritesynth.preserve_front(aligned, geom, source_rgba)
             front_preserved = True
 
-    reduced = spritesynth.reduce_atlas(aligned, geom, logical)
-    try:
-        quantized, palette = pixelsheet.quantize_shared(reduced, colors)
-    except ValueError as exc:
-        # quantize_shared refuses an atlas with no opaque pixels at all, which
-        # here means the model drew nothing anywhere -- worth a sentence naming
-        # that rather than the sheet-shaped message it was written for.
-        raise RuntimeError(
-            "the generated sprite sheet came out empty in every cell"
-        ) from exc
+    # The reduction, and it is *not* ``spritesynth.reduce_atlas`` any more --
+    # see ``SPRITE_DRAFT_VERSION`` 2 for why the bytes moved. At the rungs where
+    # the stride divides (32 and 64: 1024 / (4 * 32) = 8) this averages all 64
+    # samples under an output pixel instead of keeping one and throwing 63 away,
+    # weighted by alpha so the transparent background stops bleeding into the
+    # silhouette; at 48, where nothing divides 1024, ``pixelize.reduce`` falls
+    # back to exactly the single NEAREST resize ``reduce_atlas`` was.
+    #
+    # Separately here rather than inside ``pixelize_atlas`` because the palette
+    # is derived from the *reduced* atlas, as it always has been: the median cut
+    # answers a different question over 1024x1024 pixels than over the 128x128
+    # that will actually be published, and the published one is the one being
+    # asked about.
+    small = pixelize.reduce(
+        aligned, (geom.columns * logical, geom.rows * logical), mode="box"
+    )
+    if not (np.asarray(small)[:, :, 3] >= pixel.ALPHA_THRESHOLD).any():
+        # ``quantize_shared`` refuses an empty atlas and used to be the only
+        # thing standing here; with a designed palette nothing downstream would,
+        # and two blank PNGs would be published as a finished pair. Asked once,
+        # of both branches, in the sentence this path means rather than the
+        # sheet-shaped one ``quantize_shared`` was written for.
+        raise RuntimeError("the generated sprite sheet came out empty in every cell")
+    entries, palette_source = pixelsheet.resolve_palette(
+        small, colors=colors, entries=designed or None
+    )
+    quantized, report = pixelize.pixelize_atlas(
+        small,
+        columns=geom.columns,
+        rows=geom.rows,
+        cell=logical,
+        palette=entries,
+        dither=dither,
+        # The reduce above already happened, so this one is the identity --
+        # ``pixelize.reduce`` returns the image unchanged when it is already at
+        # the target size. Named ``box`` rather than ``point`` because the
+        # report below is what a reader is told the reduction was, and it was a
+        # box.
+        reduce_mode="box",
+        outline_mode=(
+            spritesynth.DEFAULT_SPRITE_OUTLINE if outline is None else str(outline)
+        ),
+    )
+    # What is in the PNG, which is what the pane shows under the thumbnail --
+    # not ``entries``, which is what was on offer. A designed ramp the sheet
+    # only used half of should read as the half it used.
+    arr = np.asarray(quantized)
+    used = {tuple(int(c) for c in p) for p in arr[arr[:, :, 3] > 0][:, :3]}
+    palette = [f"#{r:02x}{g:02x}{b:02x}" for r, g, b in sorted(used)]
     return (
         quantized,
         {
             "palette": palette,
+            "palette_source": palette_source,
+            "orphans": report["orphans"],
+            # Measured against the reduction that actually happened, not taken
+            # from ``report``: ``pixelize_atlas`` saw an atlas already at the
+            # target and answered ``True`` unconditionally -- including at 48px,
+            # where nothing divides 1024 and the real reduction was the NEAREST
+            # fallback. ``_q_troupe`` corrects the same field for the same
+            # reason, one path along.
+            "exact_stride": not (
+                aligned.width % small.width or aligned.height % small.height
+            ),
             "warnings": warnings,
             "front_preserved": front_preserved,
             "front_note": front_note,
+            # Advisory, in the sense every measurement in this tree is: nothing
+            # reads it back, and it is here so that a later calibration of
+            # ``pixel.GRID_RESIDUAL_MAX`` has real generations to calibrate from.
+            "grid": grid,
         },
     )
+
+
+def _palette_entries(config: Config, name: str) -> tuple[tuple[int, int, int], ...]:
+    """One installed palette's colours, re-resolved in the worker.
+
+    ``service.palettes`` owns the lookup and the traversal check, and the queue
+    may not import the service -- so this restates the *narrow* half: the name
+    reached a door, was validated there, and is re-joined here under the same
+    directory with the same containment check, because params outlive the door
+    that wrote them. **The containment check is the security property and not a
+    formality**: ``name`` arrives from a params blob, and "../../etc/hosts" is a
+    palette name as far as string concatenation is concerned.
+
+    Here rather than in each ``_q_*`` module for ``_sprite_source``'s reason,
+    one step further along: three stages are about to want this, and three
+    copies of a traversal check is two chances to fix only one of them. An
+    empty name is ``()`` rather than a refusal -- "no palette" is what most
+    requests say, and the caller distinguishes it from a real palette by
+    emptiness rather than by catching.
+    """
+    from .pipelines import pixel
+
+    if not name:
+        return ()
+    directory = Path(config.palette_dir)
+    for suffix in (".hex", ".gpl"):
+        candidate = directory / f"{name}{suffix}"
+        if candidate.is_file() and candidate.resolve().parent == directory.resolve():
+            return pixel.parse_palette(
+                candidate.read_text("utf-8"), candidate.suffix
+            )
+    raise RuntimeError(f"palette {name!r} is no longer installed")
 
 
 def _require_commit_headroom(when: str, remedy: str, need_gib: float = 0.0) -> None:

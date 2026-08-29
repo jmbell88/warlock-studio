@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import models, rigging
+from ..pipelines import spritesynth
 from .core import WarlockService
 from .errors import Conflict, Invalid, NotFound
 from .validation import (
@@ -43,6 +44,13 @@ SPRITE_COLOR_CHOICES = (8, 16, 32, 64)
 DEFAULT_SPRITE_SHEET_TYPE = "turnaround"
 DEFAULT_SPRITE_LOGICAL_SIZE = 64
 DEFAULT_SPRITE_COLORS = 32
+
+# Taken from the pipeline rather than restated, the rule this module already
+# follows for the grids: a synthesised cell has no guaranteed margin and
+# ``outer`` clips at a cell edge, and the whole argument lives beside the code
+# that has to live with it. A second copy here would be one edit away from a
+# door offering a look the assembler does not draw.
+DEFAULT_SPRITE_OUTLINE = spritesynth.DEFAULT_SPRITE_OUTLINE
 
 # The base every draft generates on today. Named here, and written into params,
 # for the reason ``create_pixel_sheet`` gives: params outlive today's UI, and
@@ -81,7 +89,7 @@ def sprite_options() -> dict[str, Any]:
     second copy of that arithmetic is a label that would go stale the first
     time a sheet type was added.
     """
-    from ..pipelines import spritesynth
+    from ..pipelines import pixelize
 
     types = []
     for key in SPRITE_SHEET_TYPES:
@@ -100,12 +108,49 @@ def sprite_options() -> dict[str, Any]:
         "logical_sizes": list(SPRITE_LOGICAL_SIZES),
         "colors": list(SPRITE_COLOR_CHOICES),
         "directions": list(spritesynth.DIRECTION_ORDER),
+        # From ``pixelize`` for the reason the grids come from ``spritesynth``:
+        # a form offering a mode the assembler refuses is a control that fails
+        # at the door it was drawn from.
+        "outlines": list(pixelize.OUTLINE_MODES),
         "defaults": {
             "sheet_type": DEFAULT_SPRITE_SHEET_TYPE,
             "logical_size": DEFAULT_SPRITE_LOGICAL_SIZE,
             "colors": DEFAULT_SPRITE_COLORS,
+            "outline": DEFAULT_SPRITE_OUTLINE,
+            "dither": False,
+            "palette": "",
         },
     }
+
+
+def _check_options(svc: WarlockService, entries: dict[str, Any]) -> dict[str, Any]:
+    """The pixelisation options a sprite request may carry, validated once.
+
+    ``troupe._check_options``' shape and its reason: this is where the sprite
+    path's ladders and its ``inner`` default live, so neither of the two doors
+    below has to restate them -- and there are exactly two, which is why a
+    shared function rather than a copy is the difference between "both refuse
+    the same value" and "both happened to today".
+
+    ``allow_reduce_mode=False`` because this path does not *have* a reduce mode:
+    ``_sprite_assemble`` reduces the whole atlas with the alpha-weighted box and
+    nothing offers the alternative. That is deliberately stronger than
+    validating one and dropping it, for the reason ``check_pixel_options``
+    gives -- a params blob quietly carrying a setting nothing reads is a dead
+    field.
+    """
+    from .pixelopts import check_pixel_options
+
+    return check_pixel_options(
+        svc,
+        entries,
+        sizes=SPRITE_LOGICAL_SIZES,
+        size_default=DEFAULT_SPRITE_LOGICAL_SIZE,
+        colors=SPRITE_COLOR_CHOICES,
+        colors_default=DEFAULT_SPRITE_COLORS,
+        outline_default=DEFAULT_SPRITE_OUTLINE,
+        allow_reduce_mode=False,
+    )
 
 
 def _check_weights(svc: WarlockService) -> None:
@@ -150,6 +195,9 @@ def create_sprite_synthesis(
     sheet_type: str = DEFAULT_SPRITE_SHEET_TYPE,
     logical_size: int = DEFAULT_SPRITE_LOGICAL_SIZE,
     colors: int = DEFAULT_SPRITE_COLORS,
+    palette: str | None = None,
+    dither: bool = False,
+    outline: str | None = None,
     seed_a: int | None = None,
     seed_b: int | None = None,
 ) -> dict[str, Any]:
@@ -176,15 +224,20 @@ def create_sprite_synthesis(
         raise Invalid(
             f"sheet_type must be one of {list(SPRITE_SHEET_TYPES)}", field="sheet_type"
         )
-    if int(logical_size) not in SPRITE_LOGICAL_SIZES:
-        raise Invalid(
-            f"logical_size must be one of {list(SPRITE_LOGICAL_SIZES)}",
-            field="logical_size",
-        )
-    if int(colors) not in SPRITE_COLOR_CHOICES:
-        raise Invalid(
-            f"colors must be one of {list(SPRITE_COLOR_CHOICES)}", field="colors"
-        )
+    # Through the shared checker, which is also what ``_check_sprite_sheet``
+    # calls: the two doors have to refuse the same values in the same sentences
+    # on the same fields, and the only way to be sure of that is for there to be
+    # one of them.
+    options = _check_options(
+        svc,
+        {
+            "logical_size": logical_size,
+            "colors": colors,
+            "palette": palette,
+            "dither": dither,
+            "outline": outline,
+        },
+    )
 
     if seed_a is not None:
         check_seed("seed_a", seed_a)
@@ -234,8 +287,11 @@ def create_sprite_synthesis(
         # derived and a rerun copies it verbatim.
         "source_job": job_id,
         "sheet_type": str(sheet_type),
-        "logical_size": int(logical_size),
-        "colors": int(colors),
+        # Normalised by the checker, not by this function: the palette name is
+        # stripped and the outline defaulted there, and writing the raw
+        # arguments back would put an unstripped name in a params blob the
+        # worker re-resolves against the filesystem.
+        **options,
         "seed_a": first,
         "seed_b": second,
         # Minted at the door so the create result can name the draft the pane

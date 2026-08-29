@@ -191,6 +191,50 @@ def test_an_atlas_is_byte_identical_run_to_run():
     assert a.tobytes() == b.tobytes()
 
 
+# --- the palette-resolution collapse ------------------------------------------
+#
+# ``_q_troupe._quantise`` used to inline both halves of "where do the colours
+# come from"; it now calls ``pixelsheet.resolve_palette``. That is a pure
+# refactor, so the bar is this file's own: the same atlas must come out
+# byte-identical through the new path. These reproduce the old inline code
+# verbatim and compare, which is the only form of that assertion that can fail
+# if the collapse changed anything.
+
+
+def _old_troupe_palette(atlas, palette, colors):
+    """``_q_troupe._quantise``'s palette branch as it stood before 2026-08-29."""
+    from warlock.pipelines import pixelsheet
+
+    if palette:
+        return (palette, "designed")
+    _mapped, hexes = pixelsheet.quantize_shared(atlas, colors)
+    return (
+        tuple((int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16)) for h in hexes),
+        "derived",
+    )
+
+
+@pytest.mark.parametrize("palette", [None, RAMP])
+def test_the_troupe_collapse_is_byte_identical(palette):
+    from warlock.pipelines import pixelsheet
+
+    atlas = _atlas(columns=2, rows=2, cell=32)
+    old_entries, old_source = _old_troupe_palette(atlas, palette, 8)
+    new_entries, new_source = pixelsheet.resolve_palette(
+        atlas, colors=8, entries=palette
+    )
+    assert (new_entries, new_source) == (old_entries, old_source)
+
+    old_out, old_report = pixelize.pixelize_atlas(
+        atlas, columns=2, rows=2, cell=8, palette=old_entries, outline_mode="outer"
+    )
+    new_out, new_report = pixelize.pixelize_atlas(
+        atlas, columns=2, rows=2, cell=8, palette=new_entries, outline_mode="outer"
+    )
+    assert new_out.tobytes() == old_out.tobytes()
+    assert new_report == old_report
+
+
 # --- reducing rendered frames before they are packed --------------------------
 
 

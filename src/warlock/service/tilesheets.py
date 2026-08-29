@@ -211,6 +211,15 @@ def sheet_colors(cells: int) -> int:
     in particular whether the saturation point rises linearly with the material
     count at all, which is the assumption the ``32 *`` encodes and nothing has
     yet tested.
+
+    **A named palette supersedes this entirely.** ``palette`` and this number
+    are not two halves of one setting and never combine: with a palette file
+    the median cut does not run, so there is no budget for it to bound and this
+    function's provisionality stops mattering to that request. It is still
+    computed and still stored, because it is what the row asked for and a reroll
+    that later drops the palette needs an answer -- ``tilesheet.palette_record``
+    is where the two meet on the way out, and its ``palette_source`` key is what
+    says which one actually ran.
     """
     return min(256, max(SHEET_COLORS, 32 * int(cells)))
 
@@ -259,6 +268,15 @@ def tile_sheet_options() -> dict[str, Any]:
     out again here -- ``sprite_options``' rule: the pane says "64 tiles, 8x8"
     under the control, and a second copy of that arithmetic is a label that
     goes stale the first time the grid moves.
+
+    **The installed palettes are deliberately not in here**; they are
+    :func:`tile_sheet_palettes`. This function takes no ``svc`` and reads no
+    disk, and ``studio.panes.settings_2d`` caches its answer for the process
+    lifetime in a one-slot list on exactly that ground -- "there is nothing for
+    them to go stale against: neither reads config, disk or state". A palette is
+    a *file the user dropped in a directory*, so folding the listing in here
+    would make that comment false and cache a directory listing until the app
+    restarts: drop in a palette, and it would not appear.
     """
     from ..pipelines import tileatlas, tilesheet
 
@@ -332,6 +350,27 @@ def tile_sheet_options() -> dict[str, Any]:
             "style_lock": False,
         },
     }
+
+
+def tile_sheet_palettes(svc: WarlockService) -> list[str]:
+    """Every authored palette a tile sheet may be drawn on, by stem, sorted.
+
+    Its own call rather than a key in :func:`tile_sheet_options` because it is
+    the one answer on this door that can change without the process changing:
+    the source is a directory the user drops files into, and the pane caches
+    the options blob forever precisely because nothing in it reads disk. Asked
+    per open of the form, which is what makes a palette dropped in five minutes
+    ago appear -- it is one ``iterdir`` of a directory of small text files, not
+    something to hold a cache over.
+
+    Empty on a host with no palette directory, which is not an error: the whole
+    feature is optional and a form that offers nothing is the correct rendering
+    of "none installed" -- ``palettes.available``'s rule, not restated here
+    because this delegates to it.
+    """
+    from . import palettes
+
+    return palettes.available(svc.config)
 
 
 def _check_weights(
@@ -432,6 +471,9 @@ def create_tile_sheet(
     boundary: str = "",
     terrain_layout: str = DEFAULT_TERRAIN_LAYOUT,
     style_lock: bool = False,
+    palette: str = "",
+    dither: bool = False,
+    outline: str | None = None,
     allow_grid: bool = False,
 ) -> dict[str, Any]:
     """Queue a sheet of generated tiles. Three shapes -- see the module docstring.
@@ -450,6 +492,17 @@ def create_tile_sheet(
     *drawn* edge inside a tile that the field then cuts across -- which is the
     one defect the composited path exists to make impossible. Anything
     "improving" this into a drawing request is reintroducing it.
+
+    ``palette`` is the stem of an authored palette file -- ``""`` means "derive
+    one", which is what every sheet before today did and still does. ``dither``
+    turns on the ordered 4x4 offset in ``pixel.map_palette``. The two are
+    independent: a dithered sheet with no palette named still derives its own
+    table by median cut and then dithers against it.
+
+    ``outline`` exists only to be **refused by name**. A tile sheet has no
+    outline pass, and a caller that hands one over has misunderstood what this
+    kind is rather than asked for something unavailable -- see the refusal
+    below, which carries the reason.
 
     ``allow_grid`` is the escape hatch on the one refusal here that is about a
     measurement rather than about an impossibility: the grid mode still builds,
@@ -677,6 +730,59 @@ def create_tile_sheet(
         )
         colors = SHEET_COLORS
 
+    # -- the pixelisation options, through the shared door ---------------------
+    #
+    # ``check_pixel_options`` rather than four more refusals here, for the
+    # reason that module exists: two paths refusing the same value in two
+    # different sentences is the drift it was written to stop. What is actually
+    # wanted from it on this path is the palette, which it **loads and throws
+    # away** -- a palette file deleted, emptied or corrupted since the form
+    # listed it costs the request, rather than N full generations and a sheet
+    # that merely came back the wrong colours.
+    #
+    # Both ladders are this path's own already-validated values rather than the
+    # menus they came from, and that is deliberate. A tile sheet has no
+    # ``logical_size`` control -- its size is ``tile_size``, refused twenty
+    # lines above under that name -- and no colour control at all, since
+    # ``colors`` is computed from the cell count. Passing the real ladders would
+    # let a refusal name ``logical_size``, a field this form does not draw; a
+    # ladder of one already-valid value cannot refuse, which is the honest
+    # encoding of "this path checks its own".
+    from .pixelopts import check_pixel_options
+
+    pixel_opts = check_pixel_options(
+        svc,
+        {"logical_size": size, "colors": colors, "palette": palette, "dither": dither},
+        sizes=(size,),
+        size_default=size,
+        colors=(colors,),
+        colors_default=colors,
+        # No outline pass and no reduction mode on this kind. ``False`` means
+        # neither key is validated nor returned, so nothing reaches params that
+        # nothing reads.
+        allow_outline=False,
+        allow_reduce_mode=False,
+    )
+    if outline is not None and str(outline) != "none":
+        # Refused here and not by ``check_pixel_options``, whose ``False``
+        # *drops* the key silently -- which is the right answer for a path that
+        # simply has no such pass, and the wrong one for a caller that asked.
+        # Named rather than ignored because the request is not merely
+        # unavailable, it is a misunderstanding of what a tile sheet is:
+        # ``pixelize._edge_mask`` pads with ``constant_values=False``, so on a
+        # cell that is opaque edge to edge -- which every tile is -- every
+        # border pixel has a "transparent" neighbour and ``inner`` returns the
+        # outer ring of *each cell*. An outline on a tile sheet is a grid line
+        # around all sixty-four tiles, not an outline of anything in them.
+        raise Invalid(
+            "a tile sheet has no outline pass: a tile is opaque edge to edge, "
+            "so an outline finds the edge of every cell and draws a grid line "
+            "around all of them rather than around anything in them. Gutters "
+            "between tiles, if they are ever wanted, are a different feature "
+            "and would be named as one.",
+            field="outline",
+        )
+
     # The sheet's identity is the pixel-art LoRA on a base that can take it, so
     # a mismatch is refused here rather than queued -- the worker would drop the
     # style and paint sixty-four photographs of gravel. Written as a guard on a
@@ -741,6 +847,17 @@ def create_tile_sheet(
             "style_lock": bool(style_lock),
         },
     }
+    # Flat, beside ``colors``, and matching Troupe's spelling exactly -- the
+    # worker reads ``params["palette"]`` and ``params["dither"]`` by those names
+    # on every path that has them. Written only when they were asked for, the
+    # ``ip_adapter`` rule two blocks down: a request that named no palette and
+    # asked for no dither stores the params blob it stored yesterday, so every
+    # stored vector, every reroll comparison and every sheet already on disk is
+    # untouched by this feature existing.
+    if pixel_opts["palette"]:
+        params["palette"] = pixel_opts["palette"]
+    if pixel_opts["dither"]:
+        params["dither"] = True
     if mode_key == MODE_GRID:
         # Written in grid mode and nowhere else. The guide *is* the grid, and a
         # seamless request that carried this key would charge a ControlNet it

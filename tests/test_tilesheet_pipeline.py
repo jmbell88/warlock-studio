@@ -385,6 +385,35 @@ def test_the_sidecar_records_what_was_asked_for_and_what_ran():
     # sheets by it. The vocabulary widened; the key did not move.
     assert doc["projection"] == tilesheet.TOP_DOWN
     assert doc["recipe"] == {"base_model": "sdxl_cfg"}
+    # Additive, and absent altogether from a request that measured nothing --
+    # so a reader that never heard of the key sees the file it saw before.
+    assert "grid" not in doc
+
+
+def test_the_sidecar_carries_the_lattice_the_generation_was_drawn_on():
+    """Measurement only. Nothing reduces on this number -- see
+    ``pixel.lattice`` -- and recording it does **not** bump
+    ``TILE_SHEET_VERSION``, because a new optional key readers may ignore is
+    not a new format."""
+    import json
+
+    from PIL import Image
+
+    from warlock.pipelines import pixel
+
+    doc = tilesheet.sheet_sidecar(
+        prompt="brick",
+        tile_w=32,
+        tile_h=32,
+        view=tilesheet.TOP_DOWN,
+        colors=64,
+        palette=["#000000"],
+        recipe={},
+        created=1.0,
+        grid=pixel.lattice(Image.fromarray(_noise(256, 256, seed=3), "RGBA")),
+    )
+    assert set(doc["grid"]) == {"scale", "residual"}
+    assert json.loads(json.dumps(doc)) == doc
 
 
 def test_the_sidecar_is_plain_json_values():
@@ -412,3 +441,170 @@ def test_the_seed_ceiling_matches_the_service_door():
     """A pipeline may not import the service layer, so the ceiling is restated
     -- and pinned here, so the copy cannot drift."""
     assert tilesheet.MAX_SEED == MAX_SEED
+
+
+# -- the palette tail, shared by all three tile modes -------------------------
+#
+# ``quantize_tiles`` is the one place the grid path and the two seamless modes
+# meet, so the byte-identity claim is pinned once here on the function and again
+# per mode in the two worker files, where it also pins that the *reduction* in
+# front of it is still the measured two-stage one.
+
+
+def _atlas(width: int = 64, height: int = 64, seed: int = 11):
+    from PIL import Image
+
+    array = _noise(width, height, seed=seed).copy()
+    array[:, :, 3] = 255
+    return Image.fromarray(array, "RGBA")
+
+
+def test_no_palette_and_no_dither_is_quantize_shared_byte_for_byte():
+    """The whole compatibility claim. ``resolve_palette`` + ``map_palette`` is
+    *not* the identity on this branch -- PIL's median cut publishes its own
+    assignment and a nearest-in-Oklab remap of the same table lands a pixel near
+    a box boundary on a different entry -- so a default sheet has to go through
+    the old call itself, not through the new pair."""
+    from warlock.pipelines.pixelsheet import quantize_shared
+
+    atlas = _atlas()
+    want, want_palette = quantize_shared(atlas, 16)
+    got, palette, source = tilesheet.quantize_tiles(atlas, colors=16)
+
+    assert np.array_equal(np.asarray(got), np.asarray(want))
+    assert palette == want_palette
+    assert source == "derived"
+
+
+def test_a_designed_palette_puts_nothing_else_in_the_atlas():
+    entries = ((26, 28, 44), (244, 244, 244), (180, 60, 60))
+    got, palette, source = tilesheet.quantize_tiles(
+        _atlas(), colors=16, entries=entries
+    )
+
+    assert source == "designed"
+    used = {tuple(int(c) for c in row) for row in np.asarray(got)[:, :, :3].reshape(-1, 3)}
+    assert used <= set(entries)
+    # And the *reported* palette is what the sheet contains, not what was
+    # offered: an entry this atlas never reached is not a colour of this file.
+    assert set(palette) <= {f"#{r:02x}{g:02x}{b:02x}" for r, g, b in entries}
+
+
+def test_the_reported_palette_is_the_colours_present_not_the_entries_offered():
+    """A one-colour atlas on a three-colour palette is a one-colour file, and
+    ``len(palette)`` is what the row report and the log line both call
+    "colours"."""
+    from PIL import Image
+
+    flat = Image.new("RGBA", (16, 16), (250, 250, 250, 255))
+    _got, palette, _source = tilesheet.quantize_tiles(
+        flat, colors=16, entries=((0, 0, 0), (250, 250, 250), (120, 10, 10))
+    )
+    assert palette == ["#fafafa"]
+
+
+def test_dither_with_no_palette_still_derives_one_and_says_so():
+    """The two settings are independent: a dithered sheet that named no palette
+    median-cuts its own table and then dithers against it."""
+    atlas = _atlas()
+    plain, _p, _s = tilesheet.quantize_tiles(atlas, colors=8)
+    dithered, _palette, source = tilesheet.quantize_tiles(atlas, colors=8, dither=True)
+
+    assert source == "derived"
+    # Dither has to actually reach the mapping. It is an offset added before the
+    # nearest search, so on a 8-entry table over noise it must move pixels.
+    assert not np.array_equal(np.asarray(dithered), np.asarray(plain))
+
+
+def test_dither_changes_the_bytes_on_a_designed_palette_too():
+    entries = ((0, 0, 0), (255, 255, 255))
+    atlas = _atlas()
+    plain, _p, _s = tilesheet.quantize_tiles(atlas, colors=8, entries=entries)
+    dithered, _q, _t = tilesheet.quantize_tiles(
+        atlas, colors=8, entries=entries, dither=True
+    )
+    assert not np.array_equal(np.asarray(dithered), np.asarray(plain))
+
+
+def test_an_atlas_with_no_opaque_pixels_is_refused_on_either_branch():
+    """Asked on the input rather than left to ``quantize_shared``, so which
+    answer an empty atlas gets does not depend on whether a palette was named --
+    a setting that has nothing to do with the question."""
+    from PIL import Image
+
+    empty = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
+    with pytest.raises(ValueError, match="cells are empty"):
+        tilesheet.quantize_tiles(empty, colors=8)
+    with pytest.raises(ValueError, match="cells are empty"):
+        tilesheet.quantize_tiles(empty, colors=8, entries=((1, 2, 3),))
+
+
+def test_the_transparent_padding_of_a_partial_row_stays_transparent():
+    """``tileatlas.assemble`` zero-fills the slots a partial last row leaves, and
+    a mapped atlas must not turn them opaque -- ``map_palette`` carries alpha
+    through untouched, which is what makes the snap ``quantize_shared`` does
+    unnecessary here."""
+    from PIL import Image
+
+    array = _noise(32, 32, seed=5).copy()
+    array[:, :, 3] = 255
+    array[16:, :, 3] = 0
+    padded = Image.fromarray(array, "RGBA")
+    got, _palette, _source = tilesheet.quantize_tiles(
+        padded, colors=8, entries=((10, 20, 30), (200, 210, 220))
+    )
+    assert np.array_equal(np.asarray(got)[:, :, 3], array[:, :, 3])
+
+
+# -- what the recipe records about the palette --------------------------------
+
+
+def test_a_sheet_that_asked_for_neither_records_neither():
+    """The sidecar rule: a reader that never heard of these keys sees exactly
+    the file it saw before, and the bytes beside it are unchanged too."""
+    assert (
+        tilesheet.palette_record(name="", entries=(), source="derived", dither=False)
+        == {}
+    )
+
+
+def test_dither_alone_records_the_source_and_the_flag_and_no_file():
+    record = tilesheet.palette_record(
+        name="", entries=(), source="derived", dither=True
+    )
+    assert record == {"palette_source": "derived", "dither": True}
+
+
+def test_a_named_palette_records_its_file_and_a_digest_of_its_colours():
+    from warlock.pipelines import pixel
+
+    entries = ((26, 28, 44), (244, 244, 244))
+    record = tilesheet.palette_record(
+        name="duo", entries=entries, source="designed", dither=False
+    )
+    assert record == {
+        "palette_source": "designed",
+        "palette_file": "duo",
+        "palette_hash": pixel.palette_digest(entries),
+    }
+    # Of the *colours*, not of the file: reformatting a palette or converting it
+    # from .hex to .gpl must not re-derive anything, and one changed channel
+    # must.
+    assert (
+        tilesheet.palette_record(
+            name="duo",
+            entries=((26, 28, 44), (244, 244, 245)),
+            source="designed",
+            dither=False,
+        )["palette_hash"]
+        != record["palette_hash"]
+    )
+
+
+def test_the_palette_record_is_plain_json_values():
+    import json
+
+    record = tilesheet.palette_record(
+        name="duo", entries=((1, 2, 3),), source="designed", dither=True
+    )
+    assert json.loads(json.dumps(record)) == record

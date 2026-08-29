@@ -222,3 +222,32 @@ async def test_the_default_base_still_records_the_style_that_ran(worker):
     assert {lora for lora, _weight in pipe.lora_calls} == {models.PIXEL_SHEET_LORA}
     doc = rigging.read_sheet_pixel(worker.config.job_dir(source), sheet_id)
     assert doc["restyle"]["style_lora"] == models.PIXEL_SHEET_LORA
+
+
+@pytest.mark.asyncio
+async def test_the_recipe_records_one_lattice_per_band(worker):
+    """One band is one generation, so there is one measurement per band and no
+    single number a top-level key could honestly hold. Measurement only:
+    nothing reduces on it, and recording it does not bump
+    ``PIXEL_SHEET_VERSION``."""
+    from warlock.pipelines import pixelsheet
+
+    source = _source_job(worker)
+    sheet_id = _rendered_sheet(worker, source)
+    job_id = worker.store.create(
+        "pixel_sheet", "a knight",
+        {"source_job": source, "sheet_id": sheet_id, "logical_size": 32,
+         "colors": 8, "seed": 3},
+    )
+
+    row = await _run(worker, job_id)
+
+    assert row["error"] is None and row["status"] == "done"
+    doc = rigging.read_sheet_pixel(worker.config.job_dir(source), sheet_id)
+    assert doc["version"] == pixelsheet.PIXEL_SHEET_VERSION
+    grids = doc["restyle"]["grids"]
+    assert len(grids) == doc["restyle"]["bands"]
+    assert [entry["band"] for entry in grids] == list(range(len(grids)))
+    for entry in grids:
+        assert set(entry) == {"band", "scale", "residual"}
+        assert entry["scale"] is None or isinstance(entry["scale"], int)

@@ -73,9 +73,8 @@ class TileSheetOps:
 
         from . import queue as queue_mod
         from .asset_workflows import tile_plan
-        from .pipelines import control, tilesheet
+        from .pipelines import control, pixel, tilesheet
         from .pipelines.conditioning import Conditioning
-        from .pipelines.pixelsheet import quantize_shared
 
         job_id = job["id"]
         params = job["params"]
@@ -121,6 +120,18 @@ class TileSheetOps:
             params["tile_plan"] = normalized_plan
             await asyncio.to_thread(self.store.set_params, job_id, params)
         colors = int(params.get("colors", 64))
+        palette_name = str(params.get("palette") or "")
+        dither = bool(params.get("dither"))
+        # Read from disk **here**, before the card is spent, and not down at the
+        # quantize phase where it is used. It is one small text file, and the
+        # alternative is a job that generates the whole sheet and then fails on
+        # a palette the user deleted after submitting it -- the same rule the
+        # geometry above obeys, for the same reason: params outlive the door
+        # that wrote them. ``()`` when no palette was named, which is what the
+        # common request says.
+        designed = await asyncio.to_thread(
+            queue_mod._palette_entries, self.config, palette_name
+        )
         seed = int(params.get("seed", 42))
         subject = tilesheet.sheet_subject(job["prompt"] or "", geom.view)
 
@@ -242,6 +253,10 @@ class TileSheetOps:
             with Image.open(out_path) as generated:
                 generated.load()
                 full = generated.convert("RGBA")
+            # On the whole generated frame and before the reduction, which is
+            # the only place the number means anything: the lattice belongs to
+            # the generation, and ``reduce_sheet`` is about to resample it away.
+            grid = await asyncio.to_thread(pixel.lattice, full)
             reduced_array = await asyncio.to_thread(
                 tilesheet.reduce_sheet, np.asarray(full), geom
             )
@@ -250,12 +265,19 @@ class TileSheetOps:
             job_id, phase="quantize", label="Sharing one palette",
             inner=0.0, inner_next=1.0, nominal=2.0, detail="",
         )
-        # One palette across every tile, for ``quantize_shared``'s reason
-        # applied to a different axis: sixty-four tiles quantized separately
-        # read as sixty-four pictures pasted together, which is exactly what a
-        # tile sheet must not.
-        reduced, palette = await asyncio.to_thread(
-            quantize_shared, Image.fromarray(reduced_array, "RGBA"), colors
+        # One palette across every tile -- authored or derived, the property is
+        # the same and ``quantize_tiles`` carries the argument: sixty-four tiles
+        # quantized separately read as sixty-four pictures pasted together,
+        # which is exactly what a tile sheet must not. With no palette and no
+        # dither this is byte-for-byte the median cut it has always been.
+        reduced, palette, palette_source = await asyncio.to_thread(
+            functools.partial(
+                tilesheet.quantize_tiles,
+                Image.fromarray(reduced_array, "RGBA"),
+                colors=colors,
+                entries=designed,
+                dither=dither,
+            )
         )
 
         if self._cancel is not None and self._cancel.event.is_set():
@@ -289,6 +311,16 @@ class TileSheetOps:
             "control_end": control_end,
             "guide_edge_fraction": guide_edges,
             "colors": colors,
+            # Empty unless a palette was named or dither asked for, so a sheet
+            # drawn the way every sheet before today was drawn writes the
+            # sidecar it wrote before. ``palette_record`` holds that rule and
+            # the reason ``colors`` stays beside these keys.
+            **tilesheet.palette_record(
+                name=palette_name,
+                entries=designed,
+                source=palette_source,
+                dither=dither,
+            ),
         }
         if has_reference:
             recipe["ip_adapter"] = "plus"
@@ -310,6 +342,7 @@ class TileSheetOps:
             reduction=(job.get("params", {}).get("reduction_method") or "measured_pixel_reducer"),
             source_seed=seed,
             workflow=normalized_plan,
+            grid=grid,
         )
         # Last, and only after the sheet: this file is the completion marker, so
         # publishing it first would advertise a sheet still being written.

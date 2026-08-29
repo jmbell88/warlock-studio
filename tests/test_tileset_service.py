@@ -825,3 +825,48 @@ def test_the_request_documents_mode_words_reach_this_door():
         asset_workflows.TILE_MODE_ALIASES[generation.TileSettings().mode]
         == tilesheets.MODE_MATERIALS
     )
+
+
+# -- the authored palette, on the two seamless modes --------------------------
+#
+# One door, so the refusals themselves are pinned in the grid file. What is
+# worth stating here is that the seamless modes reach the same block -- and
+# that a named palette meets ``sheet_colors``' provisional budget rather than
+# combining with it.
+
+
+@pytest.fixture
+def paldir(svc, tmp_path):
+    directory = tmp_path / "palettes"
+    directory.mkdir(exist_ok=True)
+    svc.config.palette_dir = directory
+    return directory
+
+
+def test_a_materials_request_carries_the_palette_and_the_dither(svc, paldir):
+    (paldir / "duo.hex").write_text("#1a1c2c\n#f4f4f4\n")
+    params = svc.store.get(_materials(svc, palette="duo", dither=True)["id"])["params"]
+    assert params["palette"] == "duo"
+    assert params["dither"] is True
+
+
+def test_a_terrain_request_carries_them_too(svc, paldir):
+    (paldir / "duo.hex").write_text("#1a1c2c\n#f4f4f4\n")
+    params = svc.store.get(_terrain(svc, palette="duo")["id"])["params"]
+    assert params["palette"] == "duo"
+
+
+def test_a_named_palette_does_not_change_the_stored_colour_budget(svc, paldir):
+    """They are not two halves of one setting. ``colors`` is still what the row
+    asked for -- a reroll that later drops the palette needs an answer -- and
+    ``palette_source`` in the sidecar is what says the median cut never ran."""
+    (paldir / "duo.hex").write_text("#1a1c2c\n#f4f4f4\n")
+    plain = svc.store.get(_materials(svc)["id"])["params"]["colors"]
+    with_palette = svc.store.get(_materials(svc, palette="duo")["id"])["params"]["colors"]
+    assert plain == with_palette == tilesheets.sheet_colors(len(MATERIALS))
+
+
+def test_the_seamless_modes_refuse_an_outline_by_name_as_well(svc):
+    with pytest.raises(Invalid) as excinfo:
+        _terrain(svc, outline="inner")
+    assert excinfo.value.field == "outline"

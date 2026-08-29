@@ -77,10 +77,19 @@ def test_the_block_is_stored_on_the_reference_job(svc):
         sprite_sheet={"sheet_type": "walk", "logical_size": 32, "colors": 16},
     )
     params = svc.store.get(made["id"])["params"]
+    from warlock.service import sprites as svc_sprites
+
     assert params["sprite_sheet"] == {
         "sheet_type": "walk",
         "logical_size": 32,
         "colors": 16,
+        # The same three ``create_sprite_synthesis`` writes, from the same
+        # checker: the block is the follow-up's params, and a door that
+        # validated an option the block then dropped would be a control that
+        # silently does nothing.
+        "palette": "",
+        "dither": False,
+        "outline": svc_sprites.DEFAULT_SPRITE_OUTLINE,
     }
 
 
@@ -139,6 +148,8 @@ def test_a_batch_of_characters_is_refused(svc):
         # would have put the ring on the block's own switch and left the bad
         # row unmarked.
         ({"logical_size": "big"}, "logical_size"),
+        ({"outline": "glow"}, "outline"),
+        ({"palette": "never-installed"}, "palette"),
     ],
 )
 def test_a_bad_option_is_refused_at_the_references_door(svc, block, field):

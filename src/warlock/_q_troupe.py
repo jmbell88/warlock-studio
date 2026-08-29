@@ -51,7 +51,7 @@ class TroupeOps:
 
     async def _charsheet(self: Worker, job: dict[str, Any]) -> None:
         from . import queue as queue_mod
-        from .pipelines import charsheet, pixel, pixelize, pixelsheet
+        from .pipelines import charsheet, pixelize, pixelsheet
         from .pipelines import sheet as sheetlib
 
         job_id = job["id"]
@@ -171,23 +171,17 @@ class TroupeOps:
             with Image.open(atlas_path) as opened:
                 opened.load()
                 atlas = opened.convert("RGBA")
-            if palette_name:
-                entries = pixel.parse_palette(
-                    _palette_path(self.config, palette_name).read_text("utf-8"),
-                    _palette_path(self.config, palette_name).suffix,
-                )
-                chosen = "designed"
-            else:
-                # Median cut over the whole atlas, then handed to
-                # ``pixelize_atlas`` as an ordinary palette -- so the outline
-                # and orphan passes run identically whether the colours were
-                # designed or derived, and a derived sheet is not a second code
-                # path with its own bugs.
-                _mapped, hexes = pixelsheet.quantize_shared(atlas, colors)
-                entries = tuple(
-                    (int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16)) for h in hexes
-                )
-                chosen = "derived"
+            # Designed or median-cut, the colours are then handed to
+            # ``pixelize_atlas`` as one ordinary palette -- so the outline and
+            # orphan passes run identically whichever branch produced them, and
+            # a derived sheet is not a second code path with its own bugs.
+            # ``resolve_palette`` is that branch, and its docstring carries the
+            # reason a palette file does not cost the shared-across-cells
+            # property.
+            designed = queue_mod._palette_entries(self.config, palette_name)
+            entries, chosen = pixelsheet.resolve_palette(
+                atlas, colors=colors, entries=designed or None
+            )
             out, report = pixelize.pixelize_atlas(
                 atlas,
                 columns=layout.columns,
@@ -422,19 +416,9 @@ class TroupeOps:
             trims = await asyncio.to_thread(sheetlib.pack, layout, reduced, pack_target)
         return result, trims
 
-
-def _palette_path(config: Any, name: str) -> Path:
-    """The palette file, re-resolved in the worker.
-
-    ``service.palettes`` owns the lookup and the traversal check, and the queue
-    may not import the service -- so this restates the *narrow* half: the name
-    reached the door, was validated there, and is re-joined here under the same
-    directory with the same containment check, because params outlive the door
-    that wrote them.
-    """
-    directory = Path(config.palette_dir)
-    for suffix in (".hex", ".gpl"):
-        candidate = directory / f"{name}{suffix}"
-        if candidate.is_file() and candidate.resolve().parent == directory.resolve():
-            return candidate
-    raise RuntimeError(f"palette {name!r} is no longer installed")
+# ``_palette_path`` was lifted to ``queue._palette_entries`` on 2026-08-29. It
+# was this file's own restatement of ``service.palettes._path``'s traversal
+# check, and two more stages are about to want the same lookup -- three copies
+# of a containment check being two chances to fix only one of them.
+# ``_sprite_source``'s rule: a helper the ``_q_*`` modules share lives at
+# ``queue`` module scope and is reached through ``queue_mod``.

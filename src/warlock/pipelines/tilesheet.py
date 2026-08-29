@@ -42,8 +42,11 @@ file goes. The queue owns the model calls and the paths.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+
+from .pixel import RGB
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from PIL import Image as _ImageModule
@@ -478,6 +481,132 @@ def reduce_sheet(pixels: Any, geom: SheetGeometry) -> Any:
     return out
 
 
+def _used_colors(image: PILImage) -> list[str]:
+    """The colours actually present in an atlas's opaque pixels, sorted.
+
+    ``quantize_shared``'s own three lines, deliberately repeated rather than
+    approximated: ``len(palette)`` is what the row report and the log line both
+    call "colours", and the two branches of :func:`quantize_tiles` have to mean
+    the same thing by it or that number changes meaning with a setting.
+    """
+    import numpy as np
+
+    from . import pixel as pixelmod
+
+    rgba = np.asarray(image.convert("RGBA"))
+    opaque = rgba[:, :, 3] >= pixelmod.ALPHA_THRESHOLD
+    used = {tuple(int(c) for c in p) for p in rgba[:, :, :3][opaque]}
+    return [f"#{r:02x}{g:02x}{b:02x}" for r, g, b in sorted(used)]
+
+
+def quantize_tiles(
+    atlas: PILImage,
+    *,
+    colors: int,
+    entries: tuple[RGB, ...] = (),
+    dither: bool = False,
+) -> tuple[PILImage, list[str], str]:
+    """One palette across the whole atlas: the image, its colours, its source.
+
+    Shared by both tile paths -- the grid's sixty-four cells cut out of one
+    frame and the seamless modes' N generations laid out side by side -- because
+    the property being defended is the same on both and is not about how the
+    cells were made: **one entry set applied over the whole atlas in one pass**.
+    Quantized per cell, the same moss is two greens in two tiles, which is the
+    one defect a tile sheet cannot have.
+
+    **The default branch is ``quantize_shared`` verbatim, and that is the
+    point.** It is tempting to express it as ``resolve_palette`` (derive) plus
+    ``pixel.map_palette`` (apply), which is how the sprite paths read -- but
+    those two are not the identity on this one. ``quantize_shared`` publishes
+    PIL's *own* median-cut assignment; re-mapping the source pixels to the
+    nearest of the same entries in Oklab is a different assignment of the same
+    table, and a pixel near a box boundary lands on a different entry. Routing
+    the default through the pair would silently re-colour every tile sheet in
+    the library the next time it was rerolled, for a request nobody made. So
+    with no palette and no dither the bytes are the bytes already on disk.
+
+    The other difference between the two is alpha: ``quantize_shared`` snaps it
+    to 0/255 and ``map_palette`` carries it through untouched. Nothing is owed
+    here, because a tile atlas' alpha is already binary -- a tile is opaque edge
+    to edge, and the only transparency on this path is ``tileatlas.assemble``
+    zero-filling the trailing slots of a partial last row.
+
+    **No outline pass and no orphan cleanup, and both are refusals rather than
+    omissions.** ``pixelize._edge_mask`` pads with ``constant_values=False``, so
+    on a fully opaque cell every border pixel has a "transparent" neighbour and
+    ``mode="inner"`` returns the outer ring of *every cell*: an outline on a
+    tile sheet is a grid line drawn around all sixty-four tiles, not an outline
+    of anything in them. And at a 16px tile, single-pixel variation is the
+    texture -- ``pixel.clean_orphans``' own justification is that "the generator
+    does not place single-pixel detail at that size", which is an argument about
+    a sprite's silhouette and false about a surface.
+
+    The returned palette is the colours **in the published sheet**, never the
+    entries that were offered: a designed palette whose last six entries this
+    particular atlas never reached would otherwise report six colours the file
+    does not contain. Which file the entries came from is
+    :func:`palette_record`'s job.
+    """
+    import numpy as np
+
+    from . import pixel as pixelmod
+    from .pixelsheet import quantize_shared, resolve_palette
+
+    rgba = np.asarray(atlas.convert("RGBA"))
+    if not (rgba[:, :, 3] >= pixelmod.ALPHA_THRESHOLD).any():
+        # Asked here rather than left to ``quantize_shared``, which asks it for
+        # itself: otherwise the same atlas of nothing refuses on a derived
+        # palette and publishes silently on a designed one, and which of those
+        # a user gets would depend on a setting that has nothing to do with it.
+        raise ValueError("that sheet's cells are empty")
+    if not entries and not dither:
+        mapped, palette = quantize_shared(atlas, colors)
+        return (mapped, palette, "derived")
+    chosen, source = resolve_palette(
+        atlas, colors=colors, entries=tuple(entries) or None
+    )
+    mapped = pixelmod.map_palette(atlas, chosen, dither)
+    return (mapped, _used_colors(mapped), source)
+
+
+def palette_record(
+    *, name: str, entries: tuple[RGB, ...], source: str, dither: bool
+) -> dict[str, Any]:
+    """The palette keys a tile recipe carries -- and none that it does not.
+
+    Every key is written only when it says something, which is ``sheet.py``'s
+    sidecar rule: a reader that never heard of these keys sees exactly the file
+    it saw before. A sheet drawn the way every sheet before today was drawn --
+    no palette named, no dither -- adds nothing at all, so the record matches
+    the bytes, which are also unchanged.
+
+    ``palette_hash`` is a digest of the *colours* and not of the file, which is
+    ``pixel.palette_digest``'s own rule: reformatting a palette or converting it
+    from ``.hex`` to ``.gpl`` is the same palette and must not re-derive
+    anything, while one changed channel is a different one.
+
+    **Where the palette and the colour budget meet.** ``colors`` stays in the
+    recipe beside these keys because it is what the row asked for and a reroll
+    copies it -- but a named palette supersedes it entirely: no median cut runs,
+    the budget bounds nothing, and ``palette_source: "designed"`` is the key
+    that says so. See ``service.tilesheets.sheet_colors``, which is the
+    provisional number this supersedes.
+    """
+    from . import pixel as pixelmod
+
+    out: dict[str, Any] = {}
+    if not name and not dither:
+        return out
+    out["palette_source"] = str(source)
+    if dither:
+        out["dither"] = True
+    if name:
+        out["palette_file"] = str(name)
+        out["palette_hash"] = pixelmod.palette_digest(tuple(entries))
+    return out
+
+
 def sheet_sidecar(
     *,
     prompt: str,
@@ -493,6 +622,7 @@ def sheet_sidecar(
     reduction: str | None = None,
     source_seed: int | None = None,
     workflow: dict[str, Any] | None = None,
+    grid: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The sheet's own record: what was asked for, and what actually ran.
 
@@ -505,6 +635,15 @@ def sheet_sidecar(
     site: this is written with ``json.dumps`` *after* the sheet is on disk, and
     a numpy scalar that survived would fail the write with the artifact already
     published and no marker to say so.
+
+    ``grid`` is ``pixel.lattice``'s two numbers for the frame the model drew,
+    measured once on that whole frame and never per cell. Additive, written
+    only when there is one, and it does **not** bump ``TILE_SHEET_VERSION``:
+    ``sheet.py``'s sidecar docstring states that rule and the reason -- a
+    reader that has never heard of the key sees exactly the file it saw
+    before -- and a bump that changes nothing would invalidate every stored
+    benchmark comparison for free. Recorded and acted on by nothing; see
+    ``pixel.lattice``.
 
     **The key on disk is still ``"projection"``** while the value is a *view*.
     The rename is a Python one: every sidecar already written carries that key,
@@ -535,4 +674,5 @@ def sheet_sidecar(
         "reduction": reduction if target_cell_px is not None else None,
         "source_seed": int(source_seed) if source_seed is not None else None,
         **({"workflow": dict(workflow)} if workflow is not None else {}),
+        **({"grid": dict(grid)} if grid is not None else {}),
     }

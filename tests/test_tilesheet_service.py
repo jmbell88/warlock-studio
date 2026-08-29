@@ -385,3 +385,115 @@ def test_the_worker_recorded_report_is_stripped_on_a_rerun():
     """Anything the worker records about its artifacts joins DERIVED_PARAMS, or
     a reroll wears a stale verdict."""
     assert "sheet_report" in DERIVED_PARAMS
+
+
+# -- the authored palette and the dither -------------------------------------
+#
+# Two settings and one refusal. The palette is loaded and thrown away at the
+# door, which is the whole reason it is validated here: a file deleted, emptied
+# or corrupted since the form listed it has to cost the *request* rather than a
+# minute of GPU and a sheet that merely came back the wrong colours.
+
+
+@pytest.fixture
+def paldir(svc, tmp_path):
+    directory = tmp_path / "palettes"
+    directory.mkdir(exist_ok=True)
+    svc.config.palette_dir = directory
+    return directory
+
+
+def test_a_request_that_names_neither_stores_the_row_it_always_stored(svc):
+    """Written only when asked for. A sheet that named no palette and asked for
+    no dither must store the params blob it stored yesterday, or every stored
+    vector and every reroll comparison moves for a feature it did not use."""
+    params = svc.store.get(_create(svc)["id"])["params"]
+    assert "palette" not in params
+    assert "dither" not in params
+
+
+def test_a_named_palette_reaches_params_by_its_stem(svc, paldir):
+    (paldir / "duo.hex").write_text("#1a1c2c\n#f4f4f4\n")
+    params = svc.store.get(_create(svc, palette="duo")["id"])["params"]
+    assert params["palette"] == "duo"
+    assert "dither" not in params
+
+
+def test_dither_reaches_params_only_when_it_is_on(svc):
+    assert svc.store.get(_create(svc, dither=True)["id"])["params"]["dither"] is True
+    assert "dither" not in svc.store.get(_create(svc, dither=False)["id"])["params"]
+
+
+def test_an_unknown_palette_is_refused_before_a_row_exists(svc, paldir):
+    (paldir / "nord.hex").write_text("#000000\n")
+    before = len(svc.store.list())
+    with pytest.raises(Invalid) as excinfo:
+        _create(svc, palette="solarized")
+    assert excinfo.value.field == "palette"
+    assert "nord" in excinfo.value.message
+    assert len(svc.store.list()) == before
+
+
+def test_a_palette_that_is_not_readable_as_one_costs_the_request(svc, paldir):
+    """The point of loading it here and throwing it away: the alternative is a
+    minute of GPU and a sheet that came back the wrong colours."""
+    (paldir / "broken.hex").write_text("this is not a palette\n")
+    with pytest.raises(Invalid) as excinfo:
+        _create(svc, palette="broken")
+    assert "broken.hex" in excinfo.value.message
+
+
+def test_a_palette_name_cannot_escape_the_palette_directory(svc, paldir, tmp_path):
+    (tmp_path / "outside.hex").write_text("#000000\n")
+    with pytest.raises(Invalid):
+        _create(svc, palette="../outside")
+
+
+def test_an_outline_is_refused_by_name_rather_than_silently_dropped(svc):
+    """``allow_outline=False`` in ``check_pixel_options`` *drops* the key, which
+    is right for a path that has no such pass and wrong for a caller that asked
+    for one. A tile is opaque edge to edge, so an outline finds every cell's
+    border and draws a grid line around all sixty-four tiles."""
+    with pytest.raises(Invalid) as excinfo:
+        _create(svc, outline="inner")
+    assert excinfo.value.field == "outline"
+    assert "grid line" in excinfo.value.message
+
+
+def test_no_outline_is_not_an_outline_request(svc):
+    """The word the other doors spell "off". Passing it is not a mistake, and
+    nothing about it reaches params."""
+    params = svc.store.get(_create(svc, outline="none")["id"])["params"]
+    assert "outline" not in params
+
+
+def test_an_outline_never_reaches_params_even_when_it_is_accepted(svc):
+    params = svc.store.get(_create(svc)["id"])["params"]
+    assert "outline" not in params
+    assert "reduce_mode" not in params
+
+
+# -- what the form is told about palettes ------------------------------------
+
+
+def test_the_options_blob_carries_no_palettes_and_reads_no_disk(svc, paldir):
+    """``studio.panes.settings_2d`` caches this for the process lifetime on the
+    stated ground that it "reads config, disk or state" -- so a directory
+    listing in here would be cached until the app restarts, and a palette
+    dropped in afterwards would never appear."""
+    (paldir / "duo.hex").write_text("#1a1c2c\n#f4f4f4\n")
+    options = tilesheets.tile_sheet_options()
+    assert "palettes" not in options
+
+
+def test_the_palette_listing_is_its_own_uncached_call(svc, paldir):
+    assert tilesheets.tile_sheet_palettes(svc) == []
+    (paldir / "duo.hex").write_text("#1a1c2c\n#f4f4f4\n")
+    (paldir / "aaa.gpl").write_text("GIMP Palette\n0 0 0\n")
+    # Asked again, and answered again: the whole reason it is not in the blob.
+    assert tilesheets.tile_sheet_palettes(svc) == ["aaa", "duo"]
+
+
+def test_a_host_with_no_palette_directory_is_offered_nothing_not_an_error(svc, tmp_path):
+    svc.config.palette_dir = tmp_path / "never-created"
+    assert tilesheets.tile_sheet_palettes(svc) == []

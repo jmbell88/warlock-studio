@@ -183,6 +183,29 @@ async def test_a_candidate_with_warnings_is_still_published(worker):
     assert len(record["candidates"]) == 2
 
 
+@pytest.mark.asyncio
+async def test_each_candidate_records_the_lattice_its_own_generation_drew_on(worker):
+    """Per candidate rather than per draft: each is a separate generation and
+    the two seeds can land on different lattices, which is a large part of what
+    the number is for. Measurement only -- nothing reduces on it, and recording
+    it does not bump ``SPRITE_DRAFT_VERSION``."""
+    from warlock.pipelines import spritesynth
+
+    source = _reference(worker)
+    job_id, draft_id = _queue(worker, source)
+
+    await _run(worker, job_id)
+
+    record = rigging.read_sprite_draft(worker.config.job_dir(source), draft_id)
+    assert record["version"] == spritesynth.SPRITE_DRAFT_VERSION
+    for candidate in record["candidates"]:
+        assert set(candidate["grid"]) == {"scale", "residual"}
+        assert candidate["grid"]["scale"] is None or isinstance(
+            candidate["grid"]["scale"], int
+        )
+        assert 0.0 <= candidate["grid"]["residual"] <= 1.0
+
+
 # --- the awkward paths ------------------------------------------------------
 
 
@@ -381,3 +404,145 @@ async def test_a_torn_draft_sidecar_leaves_no_marker_and_no_strand(worker, monke
     source_dir = worker.config.job_dir(source)
     assert not rigging.sprite_draft_path(source_dir, draft_id).exists()
     assert list(rigging.sprite_draft_path(source_dir, draft_id).parent.glob("*.tmp")) == []
+
+
+# --- the three pixel options, end to end --------------------------------------
+
+
+RAMP = ("#101020", "#5a2878", "#c85a3c", "#f5f0d2")
+
+
+@pytest.fixture
+def palettes(worker, tmp_path):
+    """A palette directory the worker's own lookup will find.
+
+    Pointed at ``tmp_path`` rather than left at the default, which is the real
+    user's ``~/.warlock/palettes`` -- a test that read that would pass or fail
+    on what the machine happens to have in it.
+    """
+    directory = tmp_path / "palettes"
+    directory.mkdir(exist_ok=True)
+    worker.config.palette_dir = directory
+    (directory / "ramp.hex").write_text("\n".join(RAMP) + "\n", encoding="utf-8")
+    return directory
+
+
+@pytest.mark.asyncio
+async def test_a_named_palette_is_the_only_colours_in_either_candidate(
+    worker, palettes
+):
+    """Re-read in the worker, not carried from the door: params outlive the
+    door that wrote them, so the name is what travels and the file is what is
+    read."""
+    from warlock.pipelines import pixel
+
+    source = _reference(worker)
+    job_id, draft_id = _queue(worker, source, palette="ramp", outline="none")
+
+    row = await _run(worker, job_id)
+    assert row["error"] is None and row["status"] == "done", row["error"]
+
+    source_dir = worker.config.job_dir(source)
+    record = rigging.read_sprite_draft(source_dir, draft_id)
+    assert record["palette"] == "ramp"
+    assert record["palette_source"] == "designed"
+    # Of the colours and not of the file: a palette edited in place keeps its
+    # name, which is the whole reason this key is here and not just the name.
+    assert record["palette_hash"] == pixel.palette_digest(
+        tuple((int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16)) for h in RAMP)
+    )
+    allowed = set(RAMP)
+    for letter in rigging.SPRITE_CANDIDATES:
+        path = rigging.sprite_draft_png_path(source_dir, draft_id, letter)
+        with Image.open(path) as png:
+            colours = {
+                f"#{r:02x}{g:02x}{b:02x}"
+                for _count, (r, g, b, a) in png.convert("RGBA").getcolors(1 << 24)
+                if a > 0
+            }
+        assert colours, f"candidate {letter} came out empty"
+        assert colours <= allowed, f"candidate {letter} invented {colours - allowed}"
+
+
+@pytest.mark.asyncio
+async def test_a_palette_deleted_since_the_door_fails_before_the_gpu(
+    worker, palettes
+):
+    """Named in the failure, and *before* the checkpoint is asked for: the door
+    read this file, and a minute of GPU spent on a sheet that cannot be
+    quantised the way the request said is the cost the early read exists to
+    avoid."""
+    source = _reference(worker)
+    job_id, _draft_id = _queue(worker, source, palette="gone")
+
+    row = await _run(worker, job_id)
+
+    assert row["status"] == "error"
+    assert "palette 'gone' is no longer installed" in (row["error"] or "")
+    assert worker._text2image is None or worker._text2image.seeds == []
+
+
+@pytest.mark.asyncio
+async def test_the_sidecar_records_the_options_that_actually_ran(worker):
+    """Including the ones nobody asked for. ``outline`` absent from params means
+    "the path's default", and a sidecar that left the key out would make "no
+    outline" and "an older Warlock" the same reading."""
+    from warlock.pipelines import spritesynth
+
+    source = _reference(worker)
+    job_id, draft_id = _queue(worker, source)
+
+    row = await _run(worker, job_id)
+    assert row["error"] is None, row["error"]
+
+    record = rigging.read_sprite_draft(worker.config.job_dir(source), draft_id)
+    assert record["palette"] == "" and record["palette_hash"] == ""
+    assert record["palette_source"] == "derived"
+    assert record["dither"] is False
+    assert record["outline"] == spritesynth.DEFAULT_SPRITE_OUTLINE == "inner"
+
+
+@pytest.mark.asyncio
+async def test_an_outer_outline_is_only_ever_drawn_when_asked_for(worker):
+    """``outer`` grows the silhouette by a pixel and can clip at a cell edge,
+    and a synthesised cell has no guaranteed margin -- ``structural_warnings``
+    reports ``clipped`` routinely. So it is opt-in, and never what a request
+    that did not name it gets.
+
+    The plumbing only. What the two modes do to *pixels* is pinned in
+    ``tests/test_spritesynth.py`` against a drawn atlas, and deliberately not
+    here: the fake pipeline paints one flat colour, so every cell comes back
+    unmatted -- which is to say fully opaque -- and a derived palette over a
+    single-colour atlas is one entry. ``outer`` then has no transparent pixel to
+    claim and ``inner`` has only the palette's one colour to draw with, so both
+    modes are no-ops and the two PNGs are byte-identical. That is a fact about
+    the fixture, not about the feature.
+    """
+    source = _reference(worker)
+    default_job, default_draft = _queue(worker, source)
+    outer_job, outer_draft = _queue(worker, source, outline="outer")
+    # Both rows behind one ``start``/``shutdown``: ``_run`` shuts the worker
+    # down on its way out, so a second call to it would wait on a queue nothing
+    # is draining.
+    worker.start()
+    try:
+        deadline = time.monotonic() + 180.0
+        while time.monotonic() < deadline:
+            statuses = {
+                worker.store.get(job)["status"] for job in (default_job, outer_job)
+            }
+            if statuses <= {"done", "error", "cancelled"}:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            pytest.fail("the two jobs did not finish before timeout")
+    finally:
+        await worker.shutdown()
+    for job in (default_job, outer_job):
+        assert worker.store.get(job)["error"] is None
+
+    source_dir = worker.config.job_dir(source)
+    assert (
+        rigging.read_sprite_draft(source_dir, default_draft)["outline"] == "inner"
+    )
+    assert rigging.read_sprite_draft(source_dir, outer_draft)["outline"] == "outer"

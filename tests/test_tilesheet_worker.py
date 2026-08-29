@@ -267,6 +267,23 @@ async def test_the_sidecar_says_what_ran(worker):
 
 
 @pytest.mark.asyncio
+async def test_the_sidecar_records_the_lattice_the_model_drew_on(worker):
+    """Measurement only: nothing here reduces on the number, and recording it
+    does not bump ``TILE_SHEET_VERSION``. It is measured once on the whole
+    generated frame -- the lattice is a property of the generation, not of any
+    one tile -- and it is what a later calibration of
+    ``pixel.GRID_RESIDUAL_MAX`` will be run against."""
+    job_id = _sheet_job(worker)
+    await _run(worker, job_id)
+
+    doc = json.loads((worker.config.job_dir(job_id) / "sheet.json").read_text())
+    assert set(doc["grid"]) == {"scale", "residual"}
+    assert doc["grid"]["scale"] is None or isinstance(doc["grid"]["scale"], int)
+    assert 0.0 <= doc["grid"]["residual"] <= 1.0
+    assert doc["version"] == tilesheet.TILE_SHEET_VERSION
+
+
+@pytest.mark.asyncio
 async def test_the_row_records_what_it_drew(worker):
     job_id = _sheet_job(worker, tile_w=32)
     row = await _run(worker, job_id)
@@ -369,3 +386,168 @@ async def test_a_cancelled_draw_publishes_nothing(worker):
     assert not (job_dir / "input.png").exists()
     assert not (job_dir / "sheet.png").exists()
     assert not (job_dir / "sheet.json").exists()
+
+
+# --- the palette tail -------------------------------------------------------
+#
+# Three claims. A sheet that names no palette and asks for no dither is the
+# file it has always been, byte for byte -- reconstructed here from the
+# provenance copy the job keeps beside it, which pins the *reduction* in front
+# of the quantiser at the same time. A named palette is one table over every
+# cell, which is the assertion a per-cell quantisation would fail. And a palette
+# that has gone missing since the door costs no generation at all.
+
+
+@pytest.fixture
+def paldir(worker, tmp_path):
+    directory = tmp_path / "palettes"
+    directory.mkdir(exist_ok=True)
+    worker.config.palette_dir = directory
+    return directory
+
+
+_QUAD = ((26, 28, 44), (93, 39, 93), (239, 125, 87), (255, 205, 117))
+
+
+def _published(worker, job_id):
+    import numpy as np
+
+    with Image.open(worker.config.job_dir(job_id) / "input.png") as sheet:
+        sheet.load()
+        return np.asarray(sheet.convert("RGBA"))
+
+
+@pytest.mark.asyncio
+async def test_a_default_sheet_is_the_median_cut_it_has_always_been(worker):
+    """The compatibility claim, reconstructed from ``sheet.png`` -- which is the
+    byte-for-byte generation -- through the two steps that are supposed to have
+    run: the measured two-stage reduction, then ``quantize_shared`` itself. Not
+    ``resolve_palette`` + ``map_palette``: those are a different assignment of
+    the same table, and routing the default through them would silently
+    re-colour every sheet already in the library."""
+    import numpy as np
+
+    from warlock.pipelines.pixelsheet import quantize_shared
+
+    job_id = _sheet_job(worker, tile_w=32, colors=8)
+    await _run(worker, job_id)
+
+    geom = tilesheet.geometry(32, "top_down")
+    with Image.open(worker.config.job_dir(job_id) / "sheet.png") as raw:
+        raw.load()
+        full = raw.convert("RGBA")
+    want, _hexes = quantize_shared(
+        Image.fromarray(tilesheet.reduce_sheet(np.asarray(full), geom), "RGBA"), 8
+    )
+    assert np.array_equal(_published(worker, job_id), np.asarray(want))
+
+
+@pytest.mark.asyncio
+async def test_the_measured_two_stage_reducer_still_runs_on_every_cell(
+    worker, monkeypatch
+):
+    """``pixelize.reduce``'s single box mean is precisely what
+    ``docs/measurements/2026-08-17-ground-reduction.md`` rejected -- it
+    regressed every tile to its mean colour -- so this path keeps
+    ``reduce_cell`` and only the quantisation moved."""
+    real = tilesheet.reduce_cell
+    calls: list[tuple[int, int]] = []
+
+    def spy(pixels, out_w, out_h):
+        calls.append((int(out_w), int(out_h)))
+        return real(pixels, out_w, out_h)
+
+    monkeypatch.setattr(tilesheet, "reduce_cell", spy)
+    await _run(worker, _sheet_job(worker, tile_w=32))
+
+    assert len(calls) == 64
+    assert set(calls) == {(32, 32)}
+
+
+@pytest.mark.asyncio
+async def test_a_designed_palette_is_one_table_over_every_cell(worker, paldir):
+    """The assertion that catches per-cell quantisation. Checked cell by cell
+    rather than over the sheet: a per-cell median cut would put each cell's own
+    colours in it, and a union over the whole sheet is exactly the check that
+    would not notice."""
+    import numpy as np
+
+    (paldir / "quad.hex").write_text(
+        "".join(f"#{r:02x}{g:02x}{b:02x}\n" for r, g, b in _QUAD)
+    )
+    job_id = _sheet_job(worker, tile_w=16, colors=8, palette="quad")
+    await _run(worker, job_id)
+
+    sheet = _published(worker, job_id)
+    geom = tilesheet.geometry(16, "top_down")
+    seen: set[tuple[int, int, int]] = set()
+    for cell in geom.cells:
+        top, left = cell.row * geom.tile_h, cell.col * geom.tile_w
+        block = sheet[top : top + geom.tile_h, left : left + geom.tile_w, :3]
+        used = {tuple(int(c) for c in p) for p in block.reshape(-1, 3)}
+        assert used <= set(_QUAD), f"cell {cell.row},{cell.col} left the palette"
+        seen |= used
+    # And not vacuous: the sixty-four guide cells are distinguishable shades, so
+    # a sheet that came back one colour would be a different bug passing this.
+    assert len(seen) > 1
+    assert np.asarray(sheet).shape[:2] == (128, 128)
+
+
+@pytest.mark.asyncio
+async def test_the_recipe_names_the_palette_file_and_a_digest_of_its_colours(
+    worker, paldir
+):
+    from warlock.pipelines import pixel
+
+    (paldir / "quad.hex").write_text(
+        "".join(f"#{r:02x}{g:02x}{b:02x}\n" for r, g, b in _QUAD)
+    )
+    job_id = _sheet_job(worker, tile_w=16, palette="quad", dither=True)
+    await _run(worker, job_id)
+
+    recipe = json.loads(
+        (worker.config.job_dir(job_id) / "sheet.json").read_text()
+    )["recipe"]
+    assert recipe["palette_source"] == "designed"
+    assert recipe["palette_file"] == "quad"
+    assert recipe["palette_hash"] == pixel.palette_digest(_QUAD)
+    assert recipe["dither"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_default_sheet_records_no_palette_keys_at_all(worker):
+    """A reader that never heard of these keys sees exactly the file it saw
+    before, which is the same promise the bytes make."""
+    job_id = _sheet_job(worker)
+    await _run(worker, job_id)
+
+    doc = json.loads((worker.config.job_dir(job_id) / "sheet.json").read_text())
+    assert not {
+        "palette_source", "palette_file", "palette_hash", "dither"
+    } & set(doc["recipe"])
+    assert json.loads(json.dumps(doc)) == doc
+
+
+@pytest.mark.asyncio
+async def test_dither_alone_records_a_derived_source_and_no_file(worker):
+    job_id = _sheet_job(worker, dither=True)
+    await _run(worker, job_id)
+
+    recipe = json.loads(
+        (worker.config.job_dir(job_id) / "sheet.json").read_text()
+    )["recipe"]
+    assert recipe == {**recipe, "palette_source": "derived", "dither": True}
+    assert "palette_file" not in recipe
+
+
+@pytest.mark.asyncio
+async def test_a_palette_deleted_after_the_door_costs_no_generation(worker, paldir):
+    """Resolved before the card is spent, not at the quantize phase where it is
+    used: params outlive the door that wrote them, and the alternative is a
+    whole sheet generated and then thrown away."""
+    job_id = _sheet_job(worker, palette="gone")
+    row = await _run(worker, job_id)
+
+    assert row["status"] == "error"
+    assert "no longer installed" in (row["error"] or "")
+    assert worker._text2image is None or not worker._text2image.prompts

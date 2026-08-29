@@ -275,6 +275,34 @@ def detect_grid(image: PILImage) -> dict[str, Any]:
     }
 
 
+def lattice(image: PILImage) -> dict[str, Any]:
+    """The block lattice a generation was drawn on, as a record and no more.
+
+    ``detect_grid`` narrowed to the two numbers a sidecar should carry: the
+    period the generator drew on, and the residual that decided it. The phase
+    is deliberately left out -- it is only meaningful against the exact frame
+    it was measured on, so a stored one is a number a later reader could only
+    misuse.
+
+    **Measured once, on the whole generated frame, never per cell.** The
+    lattice is a property of the *generation* and not of the subject, which is
+    ``detect_grid``'s own sentence: a cell is a crop, a crop moves the phase
+    before it is ever measured, and sixty-four per-cell answers would be
+    sixty-four measurements of one thing taken wrongly.
+
+    **Recorded, not acted on.** No reduction anywhere reads this. The threshold
+    that would decide such a thing, ``GRID_RESIDUAL_MAX``, is provisional --
+    see the constant, and ``docs/measurements/2026-08-06-pixel-art-xl.md``,
+    whose procedure was pre-registered and whose run has never been taken.
+    Rewiring a path's reduction onto an uncalibrated threshold is the mistake
+    that document exists to prevent; shipping the measurement is what makes the
+    run possible, because it is the field data the calibration needs. Field
+    data first, calibration second, rewiring third.
+    """
+    grid = detect_grid(image)
+    return {"scale": grid["scale"], "residual": float(grid["residual"])}
+
+
 def downscale_grid(image: PILImage, scale: int, phase: tuple[int, int]) -> PILImage:
     """One output pixel per lattice cell, sampled at the cell's centre.
 
