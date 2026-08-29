@@ -180,35 +180,62 @@ def create_generation_request(svc: WarlockService, request: Any, **uploads: Any)
         from . import tilesheets
 
         target = request.tile.target_cell_px
-        # The legacy worker accepts its established output sizes.  The full
-        # high-resolution target remains in the normalized request and sidecar;
-        # this compatibility choice keeps old installations runnable while the
-        # structural planner supplies the new collection/Wang/path layout.
-        tile_size = target if target in tilesheets.TILE_SIZES else tilesheets.DEFAULT_TILE_SIZE
-        tile_prompt = request.prompt
-        if request.tile.mode == "collection" and request.tile.prompt_items:
-            tile_prompt = "\n".join(request.tile.prompt_items)
-        elif request.tile.mode == "terrain_transition":
-            tile_prompt = (
-                f"inner terrain: {request.tile.inner_terrain}; "
-                f"outer terrain: {request.tile.outer_terrain}; "
-                f"{request.tile.boundary}"
-            ).strip()
-        elif request.tile.mode == "path":
-            tile_prompt = (
-                f"ground: {request.tile.ground}; path: {request.tile.path}; "
-                f"{request.tile.edge}"
-            ).strip()
+        # Refused rather than coerced. This used to read
+        # ``target if target in TILE_SIZES else DEFAULT_TILE_SIZE``, which
+        # answered "make me 96px tiles" with a sheet of 32px tiles and told
+        # nobody -- the request document went on saying 96, so the row, the
+        # sidecar and the pane all agreed about a number the pixels did not
+        # have. ``tilesheet.geometry`` and ``sheet_subject`` both refuse an
+        # unbuildable ask for this reason; so does this.
+        if target is None:
+            tile_size = tilesheets.DEFAULT_TILE_SIZE
+        elif int(target) in tilesheets.TILE_SIZES:
+            tile_size = int(target)
+        else:
+            raise Invalid(
+                f"a tile sheet cannot publish {int(target)}px tiles; "
+                f"choose one of {list(tilesheets.TILE_SIZES)}",
+                field="tile.target_cell_px",
+            )
+        # The structured request goes through whole. It used to be flattened
+        # into one prompt string -- "inner terrain: X; outer terrain: Y; Z" --
+        # and handed to a single generation, which is what made the planner
+        # decorative: the mode, the material list and the two terrain
+        # descriptions were compiled into a sentence and the door then had no
+        # way to tell a materials sheet from a terrain set. The sheet-level
+        # prompt is the style sentence; the materials are their own lines.
+        from ..asset_workflows import TILE_MODE_ALIASES
+
+        tile = request.tile
+        # ``validate_request`` has already refused a mode that is not in the
+        # table, so the fallback is unreachable rather than a tolerance; it is
+        # here because a ``KeyError`` out of a door is not a sentence.
+        mode = TILE_MODE_ALIASES.get(tile.mode, tilesheets.DEFAULT_MODE)
+        if tile.mode == "path":
+            # A path *is* a terrain transition with the two surfaces named
+            # differently: the path is what appears as the blob shapes and the
+            # ground is what surrounds it, which is exactly ``inner``/``outer``.
+            inner, outer, boundary = tile.path, tile.ground, tile.edge
+        else:
+            inner, outer, boundary = tile.inner_terrain, tile.outer_terrain, tile.boundary
         result = tilesheets.create_tile_sheet(
             svc,
-            prompt=tile_prompt,
+            prompt=request.prompt,
             tile_size=tile_size,
-            view=request.tile.view,
+            view=tile.view,
             seed=request.seed,
             negative_prompt=request.negative_prompt or None,
             reference=reference,
             asset_type="tileset",
             asset_intent="tileset",
+            mode=mode,
+            prompt_items=tile.prompt_items,
+            variants=tile.variants,
+            inner_terrain=inner,
+            outer_terrain=outer,
+            boundary=boundary,
+            terrain_layout=tile.terrain_layout,
+            style_lock=tile.style_lock,
         )
     else:
         sprite_block = None

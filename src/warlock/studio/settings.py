@@ -78,6 +78,7 @@ def _migrate(data: dict[str, Any]) -> dict[str, Any]:
         data["inker"] = data.pop("paint")
     form = data.get("form_2d")
     if isinstance(form, dict):
+        _migrate_tile_mode(form)
         # asset_type is authoritative from this release forward.  Older files
         # expressed it as three coupled switches; translate that combination
         # once, retaining every unrelated field verbatim.
@@ -94,6 +95,42 @@ def _migrate(data: dict[str, Any]) -> dict[str, Any]:
         if form.get("projection") == "orthogonal":
             form["projection"] = "top_down"
     return data
+
+
+def _migrate_tile_mode(form: dict[str, Any]) -> None:
+    """A stored 2D form saved before the layout control reopens on the grid.
+
+    The tile arm had one layout until the seamless pair landed: one frame
+    painted through a guide and cut into sixty-four cells. So a stored form with
+    no ``tile_mode`` in it is not a form with no opinion -- it is a form that
+    described an **8x8 grid** request, back when that was the only request the
+    arm compiled. ``grid`` is the layout that still draws exactly that, down to
+    the 48 px tile and the 3/4 and isometric views the seamless layouts refuse,
+    which makes it the honest reading of what was saved.
+
+    Resolving it to the door's default instead would silently reinterpret a
+    saved request as a different one *and* one it cannot satisfy: a materials
+    sheet is the list of surfaces you type, the stored form has no such list, so
+    the first Generate of every upgrading user is refused at
+    ``field="prompt_items"`` over a control they never chose.
+
+    Only genuinely stored forms are migrated. A missing ``form_2d`` and an empty
+    one both describe no request at all, so they stay fresh and open on
+    :data:`service.tilesheets.DEFAULT_MODE` -- and once the key is present, for
+    whatever value, this is a no-op, which is what keeps an explicit *Materials*
+    from being dragged back to the grid on the next launch.
+
+    Deliberately the first thing ``_migrate`` does to a form, and deliberately
+    total: every stored value reaches a decision and nothing here can raise. A
+    migration that threw would be caught by ``load`` and answered by resetting
+    the whole file aside -- which is how the settings-reset defect of
+    2026-08-28 stayed invisible -- so this one must not be able to need that
+    net, and ``test_studio_settings`` pins that it did not use it.
+    """
+    if form and "tile_mode" not in form:
+        from ..service.tilesheets import MODE_GRID
+
+        form["tile_mode"] = MODE_GRID
 
 
 class Settings:
@@ -357,6 +394,20 @@ def _safe_form_value(key: str, value: Any) -> bool:
         from .create_assets import ASSET_TYPES
 
         return value in ASSET_TYPES
+    if key == "tile_mode":
+        # Read from the door rather than listed here: it is the thing that
+        # refuses a layout it does not build, and this file already holds four
+        # copies of somebody else's menu.
+        from ..service.tilesheets import TILE_MODES
+
+        return value in TILE_MODES
+    if key == "variants":
+        from ..service.tilesheets import MAX_VARIANTS
+
+        try:
+            return 1 <= int(value) <= MAX_VARIANTS
+        except (TypeError, ValueError):
+            return False
     if key in choices:
         if key == "target_cell_px":
             if value == "":

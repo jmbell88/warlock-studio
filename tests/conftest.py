@@ -779,6 +779,29 @@ class FakeText2Image:
                         fill=(shade, 255 - shade, (shade * 7) % 256),
                     )
             image.save(output_path, "PNG")
+        elif tile:
+            # A seamless material, and the one path whose caller runs *several*
+            # of them and then has to say which came back where. So two things
+            # are honoured that the fallback below ignores: the ``size``, because
+            # ``tileatlas.reduce_material`` refuses any factor that is not exact
+            # and would fail on a 512px frame reduced to a 32px tile; and the
+            # seed, because a flat frame of one colour per seed is what lets a
+            # test read the published atlas and name the material in each cell.
+            #
+            # Flat rather than patterned, deliberately. A material is reduced by
+            # a box mean and then quantized against a shared palette, so any
+            # pattern here comes back as a blur nobody can identify -- whereas a
+            # flat colour survives both stages exactly and is still a *seamless*
+            # picture, which is the one property this arm's callers assert on.
+            from PIL import Image
+
+            width, height = size or (1024, 1024)
+            # Three coprime multipliers modulo three different primes: material
+            # seeds are consecutive (``material_seeds`` is ``seed + i``), so
+            # neighbouring seeds have to land far apart in all three channels or
+            # a shared-palette quantization would merge two cells into one.
+            colour = ((seed * 71) % 251, (seed * 131) % 241, (seed * 197) % 239)
+            Image.new("RGB", (width, height), colour).save(output_path, "PNG")
         elif sheet:
             # A sheet restyle's caller reopens and crops what it wrote, so this
             # one path has to produce a decodable image rather than a marker.

@@ -43,8 +43,21 @@ SPRITE_FRAME_COUNTS = {"idle": 4, "walk": 8, "run": 8, "attack": 6, "jump": 6}
 VIEW_NAMES = ("front", "left", "right", "back")
 
 
+#: The mode words a tile request may carry, and the two shapes they name.
+#:
+#: ``asset_workflows.TILE_MODE_ALIASES``' own table, restated here rather than
+#: imported because ``asset_workflows`` imports *this* module and the cycle is
+#: not worth the single dictionary. ``tests/test_tileset_service.py`` pins the
+#: two copies together.
+TILE_MODES = ("collection", "materials", "terrain_transition", "terrain", "path")
+
+
 @dataclass(frozen=True, slots=True)
 class TileSettings:
+    #: ``"collection"`` and not ``"materials"``: this default is what
+    #: ``from_dict`` fills in for every stored row that predates the field, and
+    #: moving it would silently re-read old rows as a different mode. The two
+    #: words mean the same shape -- see :data:`TILE_MODES`.
     mode: str = "collection"
     view: str = "top_down"
     content_kind: str = "terrain"
@@ -56,6 +69,20 @@ class TileSettings:
     path: str = ""
     edge: str = ""
     variants: int = 1
+    #: Which layout a terrain set is laid out on. One value ships --
+    #: ``pipelines.tilemask``'s forty-seven blob cases -- and it is a field
+    #: rather than a constant because it is *recorded*: a set's layout is what
+    #: says which column means which coverage case, and a reader of a stored row
+    #: must not have to infer it from the year it was made.
+    terrain_layout: str = "blob47"
+    #: Whether the cells of one request are held to a single sampler seed so N
+    #: separately generated materials read as one sheet, rather than each taking
+    #: its own seed from ``tileatlas.material_seeds``' derived family. Recorded
+    #: here and acted on by the worker; the door's only job is to carry it, so a
+    #: stored row can say which of the two a set was made under. Off by default,
+    #: because the derived family is what makes "reroll material 3 only"
+    #: reproducible and that is the commoner ask.
+    style_lock: bool = False
     target_cell_px: int | None = None
 
 
@@ -506,13 +533,14 @@ def validate_request(
         issues.append(CompatibilityIssue("count", "Count must be at least one."))
     if request.generation_type == "tileset":
         t = request.tile
-        if t.mode not in ("collection", "terrain_transition", "path"):
+        if t.mode not in TILE_MODES:
             issues.append(
                 CompatibilityIssue(
-                    "tile.mode", "Tilesets support Collection, Terrain transition, and Path modes."
+                    "tile.mode",
+                    "Tilesets support Materials and Terrain modes.",
                 )
             )
-        if t.mode == "collection":
+        if t.mode in ("collection", "materials"):
             if not 1 <= len(t.prompt_items) <= 16:
                 issues.append(
                     CompatibilityIssue(
@@ -526,17 +554,29 @@ def validate_request(
                         "Collection variants must be 1–4 and total no more than 64 cells.",
                     )
                 )
-        elif t.mode == "terrain_transition" and (
+        elif t.mode in ("terrain", "terrain_transition") and (
             not t.inner_terrain.strip() or not t.outer_terrain.strip()
         ):
+            # Both halves, because both are generated: a terrain set is two
+            # seamless materials composited through a coverage field, so a
+            # request that describes one of them has nothing to put on the other
+            # side of every boundary.
             issues.append(
                 CompatibilityIssue(
-                    "tile.terrain", "Terrain transitions need inner and outer terrain descriptions."
+                    "tile.terrain", "Terrain sets need inner and outer terrain descriptions."
                 )
             )
         elif t.mode == "path" and (not t.ground.strip() or not t.path.strip()):
             issues.append(
                 CompatibilityIssue("tile.path", "Path sets need ground and path descriptions.")
+            )
+        if t.mode in ("terrain", "terrain_transition", "path") and t.terrain_layout != "blob47":
+            issues.append(
+                CompatibilityIssue(
+                    "tile.terrain_layout",
+                    f"{t.terrain_layout!r} is not a terrain layout; the blob-47 "
+                    "autotile set is the one that ships.",
+                )
             )
         issues.extend(validate_target_cell(t.target_cell_px, isometric=t.view == "isometric"))
     if request.generation_type == "sprite_sheet":
@@ -643,7 +683,27 @@ def request_from_legacy(form: Mapping[str, Any]) -> GenerationRequest:
     projection = str(form.get("projection") or "top_down")
     if projection == "orthogonal":
         projection = "top_down"
-    tile = TileSettings(view=projection, target_cell_px=_optional_int(form.get("target_cell_px")))
+    # Every field of the tile document, not just the two that used to be here.
+    # ``TileSettings(view=..., target_cell_px=...)`` was the whole of it, which
+    # is why ``mode`` has been unreachable from the UI since it was written: the
+    # form could carry a mode, a material list and two terrain descriptions and
+    # this adapter dropped all four on the floor, so every request arrived as
+    # the default collection of nothing.
+    tile = TileSettings(
+        mode=str(form.get("tile_mode") or "collection"),
+        view=projection,
+        prompt_items=_prompt_lines(form.get("prompt_items")),
+        inner_terrain=str(form.get("inner_terrain") or ""),
+        outer_terrain=str(form.get("outer_terrain") or ""),
+        boundary=str(form.get("boundary") or ""),
+        ground=str(form.get("ground") or ""),
+        path=str(form.get("path") or ""),
+        edge=str(form.get("edge") or ""),
+        variants=int(form.get("variants") or 1),
+        terrain_layout=str(form.get("terrain_layout") or "blob47"),
+        style_lock=bool(form.get("style_lock")),
+        target_cell_px=_optional_int(form.get("target_cell_px")),
+    )
     sprite = SpriteSettings(
         mode="turnaround" if form.get("sheet_layout", "turnaround") == "turnaround" else "action",
         action="walk" if form.get("sheet_layout") == "walk" else "idle",
@@ -705,6 +765,26 @@ def request_to_legacy(request: GenerationRequest) -> dict[str, Any]:
     if request.generation_type == "sprite_sheet":
         out["sprite_settings"] = asdict(request.sprite)
     return out
+
+
+def _prompt_lines(value: Any) -> tuple[str, ...]:
+    """A material list from whatever the form is holding.
+
+    A multi-line text control gives one string with newlines in it and a list
+    control gives a list, and both spellings reach here from persisted profiles
+    of different ages. Blank lines are dropped rather than kept as empty
+    materials -- a trailing newline is what a text box has, not a material
+    somebody asked for and forgot to describe.
+    """
+    if value in (None, ""):
+        return ()
+    if isinstance(value, str):
+        parts: Iterable[Any] = value.splitlines()
+    elif isinstance(value, Iterable):
+        parts = value
+    else:
+        return ()
+    return tuple(text for text in (str(part).strip() for part in parts) if text)
 
 
 def _optional_int(value: Any) -> int | None:

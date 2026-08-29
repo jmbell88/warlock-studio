@@ -224,6 +224,53 @@ def test_the_blob_preset_matches_the_exporters_own_table_exactly() -> None:
         assert made.tiles[local] == tuple(int(part) for part in text.split(","))
 
 
+def test_the_blob_preset_matches_the_xml_a_tsx_export_actually_writes() -> None:
+    """The same claim, made against the *file* rather than against the helper.
+
+    ``_expected_wangids`` is shared by the reader and the writer, so the test
+    above pins the two derivations of the table and nothing pins the element the
+    exporter emits from it: the attribute names, the colour derived from a
+    terrain's fill, and the order the colours are written in. Those are what a
+    Tiled user's brush is built from, and they are the half a generated terrain
+    set now depends on -- the set is landed from a record, so nobody looks at
+    these tiles until Tiled opens them.
+    """
+    import xml.etree.ElementTree as ET
+
+    from warlock.studio.plotter.tsx import write_wangsets
+    from warlock.studio.tilegrid.tileset import TerrainSpec
+
+    terrains = (
+        TerrainSpec(name="wet grass", fill=(106, 153, 78, 255), outline=(63, 91, 46, 255)),
+        TerrainSpec(name="dark water", fill=(58, 92, 140, 255), outline=(34, 55, 84, 255)),
+    )
+    root = ET.Element("tileset")
+    write_wangsets(root, terrains)
+    wangset = root.find("wangsets/wangset")
+    assert wangset is not None
+
+    written_colours = [
+        (node.get("name"), node.get("color")) for node in wangset.findall("wangcolor")
+    ]
+    made = wang.blob_wangset(
+        [name for name, _ in written_colours], [colour for _, colour in written_colours]
+    )
+    # The colours are the terrains, in order and by name -- a wangid slot is a
+    # 1-based index into this list, so an order that differed would paint one
+    # terrain's tiles for the other.
+    assert [colour.name for colour in made.colours] == [t.name for t in terrains]
+    assert written_colours[0][1] == "#6a994e"
+    assert wangset.get("type") == made.kind
+
+    written_tiles = {
+        int(node.get("tileid")): tuple(
+            int(part) for part in (node.get("wangid") or "").split(",")
+        )
+        for node in wangset.findall("wangtile")
+    }
+    assert written_tiles == made.tiles
+
+
 def test_the_blob_presets_interior_fill_is_every_slot_set() -> None:
     made = wang.blob_wangset(["a"], ["#ff0000"])
     assert made.tiles[blob.FULL] == (1,) * 8

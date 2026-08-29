@@ -197,7 +197,29 @@ class GenerateOps:
             await self._retexture(job)
             return
         if job["kind"] == "tile_sheet":
-            await self._tile_sheet(job)
+            # One kind, three tails. The mode is read off the stored block
+            # rather than off a second kind, because everything a tile sheet is
+            # keyed by -- ``vram.estimate_parts``, ``progress.PHASES_TILE_SHEET``
+            # and ``_discard_artifacts`` -- is the same for all three, and a new
+            # kind would have had to be taught to each of them.
+            #
+            # **Absent reads as "grid", and that is the compatibility rule.**
+            # ``rerun_job`` copies params forward, so every row written before
+            # the seamless path existed carries a version-2 block with no mode
+            # at all -- and a stricter reading here would fail every one of them
+            # on re-run. An unknown mode is a different thing and raises below:
+            # it means a row from a *newer* build, which this worker cannot draw
+            # and must not draw as a grid.
+            sheet = job["params"].get("sheet") or {}
+            mode = str(sheet.get("mode") or "grid")
+            if mode == "grid":
+                await self._tile_sheet(job)
+            elif mode == "materials":
+                await self._tile_sheet_materials(job)
+            elif mode == "terrain":
+                await self._tile_sheet_terrain(job)
+            else:
+                raise ValueError(f"unknown tile sheet mode {mode!r}")
             return
         job_dir = self.config.job_dir(job["id"])
         job_dir.mkdir(parents=True, exist_ok=True)

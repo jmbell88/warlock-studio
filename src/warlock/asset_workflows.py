@@ -1,24 +1,61 @@
-"""Pure planning and validation helpers for tilesets and sprite sheets.
+"""Pure planning and validation helpers for tilesets.
 
 Generation itself remains in the existing queue.  These helpers make the
 structural part deterministic: a model may decorate a cell, but it cannot
-change which Wang/path role that cell represents or make an untouched repair
-rewrite neighboring pixels.
+change which Wang/path role that cell represents.
+
+**What used to be here and is not any more.** Six functions --
+``compatible_edges``, ``validate_edge_pixels``, ``repair_atlas``,
+``atlas_warnings``, ``sheet_manifest`` and ``sprite_plan`` -- were written for a
+tileset path that never shipped, and every one of them had zero callers in
+``src/`` and ``tests/``.  ``validate_edge_pixels`` is the one worth naming,
+because it is the one somebody would be tempted to revive: it compares the guard
+bands of cells that are adjacent *in an eight-wide atlas*, which is only the
+same thing as "adjacent on a map" when the atlas order happens to be the map
+order.  In a forty-seven column blob layout it is not -- neighbouring columns
+are unrelated coverage cases -- so the check would pass on a wrong set and fail
+on a right one.  A generated set is landed by its record
+(``pipelines.tileatlas.atlas_sidecar``), not by measuring its pixels.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from .generation import (
-    SPRITE_ACTIONS,
-    SPRITE_FRAME_COUNTS,
-    TARGET_CELL_MAX,
-    TARGET_CELL_MIN,
-    cell_dimensions,
-)
+from .generation import cell_dimensions
+
+#: How many distinct *prompt lines* one collection may name, how many draws of
+#: each it may ask for, and the ceiling on their product.
+#:
+#: Named constants rather than literals in the guard below because they are one
+#: half of a pair: ``pipelines.tileatlas`` enforces the product (it is all a
+#: geometry can still see by the time the lines have become cells) and
+#: ``service.tilesheets`` enforces the lines and the variants (it is the last
+#: place they still exist as lines).  Both read these, and
+#: ``tests/test_tileset_service.py`` pins them against
+#: ``tileatlas.MAX_MATERIALS``/``MAX_CELLS`` so three enforcement points cannot
+#: come to disagree about one rule.
+MAX_COLLECTION_LINES = 16
+MAX_COLLECTION_VARIANTS = 4
+MAX_COLLECTION_CELLS = 64
+
+#: The mode words this module accepts, mapped onto the two it plans for.
+#:
+#: ``collection``/``terrain_transition``/``path`` are the stored spellings --
+#: rows and profiles carry them and a request naming one is not an error -- and
+#: ``materials``/``terrain`` are what ``pipelines.tileatlas`` calls the same two
+#: shapes.  ``path`` folds onto ``terrain`` because a path *is* a terrain
+#: transition: one surface laid through another, which is exactly the pair the
+#: blob field composites.
+TILE_MODE_ALIASES: dict[str, str] = {
+    "collection": "materials",
+    "materials": "materials",
+    "terrain_transition": "terrain",
+    "terrain": "terrain",
+    "path": "terrain",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,30 +78,51 @@ def tile_plan(
     ground: str = "",
     path: str = "",
     edge: str = "",
+    seed: int = 0,
     target_cell_px: int | None = None,
 ) -> dict[str, Any]:
-    """Compile a structural tileset request before any model call."""
+    """Compile a structural tileset request before any model call.
+
+    ``mode`` is read through :data:`TILE_MODE_ALIASES`, so both vocabularies
+    work: a stored row saying ``collection`` and a new request saying
+    ``materials`` compile to the same plan.
+
+    The role table below is the sixteen-corner Wang set, which is what the
+    older grid path lays out.  It is **not** the blob-47 layout the seamless
+    terrain path uses -- that one is ``pipelines.tilemask``'s, is forty-seven
+    cases rather than sixteen, and is described by
+    ``pipelines.tileatlas.atlas_sidecar`` rather than by anything here.
+    """
     isometric = view == "isometric"
     working = (256, 128) if isometric else (256, 256)
     target = cell_dimensions(working, target_cell_px, isometric=isometric)
-    if mode == "collection":
-        cells = collection_cells(prompt_items, variants)
+    resolved = TILE_MODE_ALIASES.get(str(mode), "")
+    if resolved == "materials":
+        cells = collection_cells(prompt_items, variants, seed=seed)
         roles = ()
-    elif mode == "terrain_transition":
-        if not inner_terrain.strip() or not outer_terrain.strip():
-            raise ValueError("terrain transitions need inner and outer terrain descriptions")
-        cells = tuple({"index": r.index, "role": r.name} for r in wang_roles())
-        roles = wang_roles()
-    elif mode == "path":
+    elif resolved == "terrain" and mode == "path":
         if not ground.strip() or not path.strip():
             raise ValueError("path sets need ground and path descriptions")
         cells = tuple({"index": r.index, "role": r.name} for r in path_roles())
         roles = path_roles()
+    elif resolved == "terrain":
+        if not inner_terrain.strip() or not outer_terrain.strip():
+            raise ValueError("terrain sets need inner and outer terrain descriptions")
+        cells = tuple({"index": r.index, "role": r.name} for r in wang_roles())
+        roles = wang_roles()
     else:
-        raise ValueError("unknown tileset mode")
+        raise ValueError(
+            f"unknown tileset mode {mode!r}; this plans "
+            f"{', '.join(sorted(set(TILE_MODE_ALIASES)))}"
+        )
     return {
-        "version": 1,
+        # 2: cells carry a seed, and ``materials``/``terrain`` read as mode
+        # words.  Bumped because the worker consumes this block now rather than
+        # merely recording it, so "which shape are these cells" is a question
+        # something asks rather than a comment.
+        "version": 2,
         "mode": mode,
+        "resolved_mode": resolved,
         "view": view,
         "working_cell_px": list(working),
         "target_cell_px": target_cell_px,
@@ -85,19 +143,39 @@ def tile_plan(
     }
 
 
-def collection_cells(prompt_items: Iterable[str], variants: int = 1) -> tuple[dict[str, Any], ...]:
+def collection_cells(
+    prompt_items: Iterable[str], variants: int = 1, *, seed: int = 0
+) -> tuple[dict[str, Any], ...]:
+    """N prompt lines by V draws, expanded into cells in reading order.
+
+    Each cell carries the seed its generation runs on, derived from the one
+    request seed by :func:`pipelines.tileatlas.material_seeds` rather than drawn
+    here.  Derived, so re-running the request reproduces every cell and cell
+    ``i`` is reproducible on its own from the pair ``(seed, i)``; and derived
+    *there* rather than restated here, because two implementations of "cell
+    ``i``'s seed" is how a reroll of one material comes back as a different
+    picture from the one it is rerolling.
+    """
     items = tuple(str(x).strip() for x in prompt_items if str(x).strip())
-    if not 1 <= len(items) <= 16:
-        raise ValueError("a tile collection needs 1–16 prompt lines")
-    if not 1 <= int(variants) <= 4:
-        raise ValueError("collection variants must be between 1 and 4")
-    if len(items) * int(variants) > 64:
-        raise ValueError("a tile collection is capped at 64 cells")
-    return tuple(
-        {"index": i, "prompt": prompt, "variant": v + 1}
-        for i, (prompt, v) in enumerate(
-            (prompt, variant) for prompt in items for variant in range(int(variants))
+    count = int(variants)
+    if not 1 <= len(items) <= MAX_COLLECTION_LINES:
+        raise ValueError(f"a tile collection needs 1-{MAX_COLLECTION_LINES} prompt lines")
+    if not 1 <= count <= MAX_COLLECTION_VARIANTS:
+        raise ValueError(
+            f"collection variants must be between 1 and {MAX_COLLECTION_VARIANTS}"
         )
+    if len(items) * count > MAX_COLLECTION_CELLS:
+        raise ValueError(f"a tile collection is capped at {MAX_COLLECTION_CELLS} cells")
+    # Imported here rather than at module scope: this module is imported by the
+    # service layer's door and by the worker, and only this one function needs
+    # the pipeline.
+    from .pipelines.tileatlas import material_seeds
+
+    pairs = [(prompt, variant) for prompt in items for variant in range(count)]
+    seeds = material_seeds(seed, len(pairs))
+    return tuple(
+        {"index": i, "prompt": prompt, "variant": variant + 1, "seed": int(cell_seed)}
+        for i, ((prompt, variant), cell_seed) in enumerate(zip(pairs, seeds, strict=True))
     )
 
 
@@ -125,157 +203,3 @@ def path_roles() -> tuple[TileRole, ...]:
         )
     )
     return tuple(roles)
-
-
-def compatible_edges(roles: Iterable[TileRole]) -> tuple[tuple[int, int, str], ...]:
-    """Return adjacent role pairs whose shared edge must be pixel-identical."""
-    rows = tuple(roles)
-    result = []
-    for left in rows:
-        for right in rows:
-            if left is right:
-                continue
-            if left.edges[1] == right.edges[3]:
-                result.append((left.index, right.index, "vertical"))
-            if left.edges[2] == right.edges[0]:
-                result.append((left.index, right.index, "horizontal"))
-    return tuple(result)
-
-
-def validate_edge_pixels(
-    atlas: Any, roles: Iterable[TileRole], cell_w: int, cell_h: int
-) -> list[str]:
-    """Check matching guard-band pixels in an atlas-shaped array."""
-    import numpy as np
-
-    pixels = np.asarray(atlas)
-    if pixels.ndim < 3:
-        raise ValueError("atlas must be (height, width, channels)")
-    rows = tuple(roles)
-    errors: list[str] = []
-    # Role order is the deterministic row-major layout. Compare the right and
-    # bottom guard bands of every adjacent pair; never compare unrelated cells.
-    for index in range(len(rows)):
-        col = index % 8
-        row = index // 8
-        if col < 7 and index + 1 < len(rows):
-            right = index + 1
-            a = pixels[row * cell_h : (row + 1) * cell_h, (col + 1) * cell_w - 1]
-            b = pixels[(right // 8) * cell_h : (right // 8 + 1) * cell_h, (right % 8) * cell_w]
-            if not np.array_equal(a, b):
-                errors.append(f"edge mismatch between cells {index} and {right}")
-        if row < 7 and index + 8 < len(rows):
-            down = index + 8
-            a = pixels[(row + 1) * cell_h - 1, col * cell_w : (col + 1) * cell_w]
-            b = pixels[(down // 8) * cell_h, (down % 8) * cell_w : (down % 8 + 1) * cell_w]
-            if not np.array_equal(a, b):
-                errors.append(f"edge mismatch between cells {index} and {down}")
-    return errors
-
-
-def sheet_manifest(
-    *,
-    generation_type: str,
-    mode: str,
-    working_cell: tuple[int, int],
-    target_cell_px: int | None,
-    reduction: str | None,
-    palette: Any,
-    seed: int,
-    roles: Iterable[TileRole] = (),
-) -> dict[str, Any]:
-    return {
-        "version": 1,
-        "generation_type": generation_type,
-        "mode": mode,
-        "working_cell_px": list(working_cell),
-        "target_cell_px": target_cell_px,
-        "reduction": reduction if target_cell_px is not None else None,
-        "palette": palette,
-        "source_seed": int(seed),
-        "roles": [
-            {"index": r.index, "mask": r.mask, "name": r.name, "edges": list(r.edges)}
-            for r in roles
-        ],
-    }
-
-
-def sprite_plan(
-    *,
-    mode: str = "turnaround",
-    action: str = "idle",
-    directions: int = 4,
-    candidates: int = 2,
-    target_cell_px: int | None = None,
-) -> dict[str, Any]:
-    if mode not in ("turnaround", "action"):
-        raise ValueError("sprite mode must be turnaround or action")
-    if mode == "action" and action not in SPRITE_ACTIONS:
-        raise ValueError(f"unknown sprite action {action!r}")
-    if directions not in (4, 8):
-        raise ValueError("sprite sheets support 4 or 8 directions")
-    if candidates not in (1, 2):
-        raise ValueError("sprite sheets support one or two candidates")
-    frame_count = 4 if mode == "turnaround" else SPRITE_FRAME_COUNTS[action]
-    if target_cell_px is not None and not TARGET_CELL_MIN <= int(target_cell_px) <= TARGET_CELL_MAX:
-        raise ValueError(f"target cell must be between {TARGET_CELL_MIN} and {TARGET_CELL_MAX}")
-    return {
-        "version": 1,
-        "mode": mode,
-        "action": action,
-        "directions": directions,
-        "frame_count": frame_count,
-        "candidate_count": candidates,
-        "target_cell_px": target_cell_px,
-        "working_cell_px": 512 if mode == "turnaround" else 256,
-    }
-
-
-def repair_atlas(atlas: Any, replacements: Mapping[int, Any], *, cell_w: int, cell_h: int) -> Any:
-    """Replace selected cells while preserving all untouched bytes."""
-    import numpy as np
-
-    result = np.array(atlas, copy=True)
-    for index, replacement in replacements.items():
-        row, col = divmod(int(index), 8)
-        value = np.asarray(replacement)
-        if value.shape != (cell_h, cell_w, *result.shape[2:]):
-            raise ValueError(
-                f"replacement for cell {index} has shape {value.shape}, "
-                f"expected {(cell_h, cell_w, *result.shape[2:])}"
-            )
-        result[row * cell_h : (row + 1) * cell_h, col * cell_w : (col + 1) * cell_w] = value
-    return result
-
-
-def atlas_warnings(
-    atlas: Any,
-    *,
-    cell_w: int,
-    cell_h: int,
-    expected_cells: int,
-    palette: Iterable[Any] | None = None,
-) -> list[str]:
-    """Inspectable QA warnings for generated sheets."""
-    import numpy as np
-
-    pixels = np.asarray(atlas)
-    warnings: list[str] = []
-    if pixels.ndim < 3:
-        return ["atlas does not have pixel channels"]
-    rows, cols = divmod(expected_cells - 1, 8)
-    if pixels.shape[0] < (rows + 1) * cell_h or pixels.shape[1] < (cols + 1) * cell_w:
-        warnings.append("atlas is clipped or smaller than its declared cell layout")
-    for index in range(expected_cells):
-        row, col = divmod(index, 8)
-        cell = pixels[row * cell_h : (row + 1) * cell_h, col * cell_w : (col + 1) * cell_w]
-        if cell.size == 0 or not np.any(
-            cell[..., -1] if cell.shape[-1] == 4 else np.any(cell != 0, axis=-1)
-        ):
-            warnings.append(f"cell {index} is empty")
-    if palette is not None:
-        allowed = {tuple(int(v) for v in colour) for colour in palette}
-        colours = np.unique(pixels.reshape(-1, pixels.shape[-1]), axis=0)
-        if any(tuple(int(v) for v in colour) not in allowed for colour in colours):
-            warnings.append("atlas contains colours outside the shared palette")
-    return warnings

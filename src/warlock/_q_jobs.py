@@ -509,6 +509,15 @@ class JobOps:
                 job_dir / "sheet.json",
                 job_dir / ".sheet.json.tmp",
             ]
+            # The seamless path's provenance copies, which the grid path's
+            # single ``sheet.png`` is the one-frame version of. A directory, so
+            # it needs the tree removal rather than the unlink loop below --
+            # and it is on the list for that loop's reason exactly: these are
+            # this run's output, written under a name only this job uses, and a
+            # cancelled tileset that left N un-reduced materials behind would be
+            # a row recorded "cancelled" with most of its work still on disk.
+            with contextlib.suppress(OSError):
+                shutil.rmtree(job_dir / "materials")
         else:
             # Both halves of the contract: model.glb is what the user would
             # see, source.glb is what it was derived from. Leaving the source

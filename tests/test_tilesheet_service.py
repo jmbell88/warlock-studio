@@ -26,7 +26,20 @@ from warlock.service.validation import DERIVED_PARAMS
 
 
 def _create(svc, **overrides):
-    kwargs = {"prompt": "mossy dungeon", "tile_size": 32, "view": "top_down"}
+    """A *grid* request, which is what every test in this file is about.
+
+    ``allow_grid`` because the grid mode is refused for a new request now --
+    ``docs/measurements/2026-08-18-tile-sheet-grid.md`` -- and every assertion
+    below is about the path that still builds it: the sixty-four cell geometry,
+    the canny guide, the three views. The seamless modes have their own file.
+    """
+    kwargs = {
+        "prompt": "mossy dungeon",
+        "tile_size": 32,
+        "view": "top_down",
+        "mode": tilesheets.MODE_GRID,
+        "allow_grid": True,
+    }
     kwargs.update(overrides)
     return tilesheets.create_tile_sheet(svc, **kwargs)
 
@@ -141,7 +154,12 @@ def test_the_old_orthogonal_spelling_is_accepted_and_stored_as_top_down(svc):
     made = _create(svc, view="orthogonal")
     block = svc.store.get(made["id"])["params"]["sheet"]
     assert block["projection"] == "top_down"
-    assert block["version"] == 2
+    # 3 now: the block says which shape it describes. Version 2 is what a row
+    # written before the seamless modes carries, and it has no ``mode`` key --
+    # which is exactly why the number, and not the key, is what tells them
+    # apart.
+    assert block["version"] == 3
+    assert block["mode"] == tilesheets.MODE_GRID
 
 
 @pytest.mark.parametrize("view", ["hexagonal", "oblique", "", None])

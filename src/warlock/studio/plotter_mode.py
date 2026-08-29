@@ -73,9 +73,11 @@ from .plotter_state import (  # noqa: F401
 # module. ``TILESET_FILTER`` is re-exported as the *same list object*, which a
 # wiring test parametrizes over by identity.
 from .plotter_tilesets import (  # noqa: F401
+    BLOB_LAYOUT,
     TILESET_FILTER,
     SheetLattice,
     SheetMismatch,
+    SheetRecord,
     SheetTerrain,
     add_tileset_path,
     ask_add_tileset,

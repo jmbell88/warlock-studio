@@ -271,25 +271,39 @@ def estimate_parts(
         sprite = image + CONTROLNET_GIB + IP_ENCODER_GIB
         return (sprite if exclusive else sprite + TRELLIS_GIB), image
     if kind == "tile_sheet":
-        # One txt2img pass through the resident pipe, carrying the grid guide's
-        # ControlNet -- so the peak is that one pass. The sixty-four tiles are
-        # a *slicing* of it, not sixty-four generations, which is why the grid
-        # is deliberately not a term here any more than the terrain count was
-        # for a job with no mesh anywhere near it.
+        # One txt2img pass through the resident pipe -- or N of them, one after
+        # the other, on the seamless path. Either way the peak is *one* pass:
+        # the grid mode slices sixty-four tiles out of a single frame, and the
+        # materials mode runs its N generations sequentially through one pipe
+        # with ``num_images_per_prompt`` pinned at 1. So neither the grid nor
+        # the material count is a term here.
         #
-        # The IP-Adapter is params-gated rather than unconditional, unlike
-        # ``sprite_synthesis`` above: a reference is optional on this kind, and
-        # charging its encoder to the common prompt-only request would refuse
-        # jobs on a card that fits them. The door writes ``ip_adapter`` only
-        # when a reference is actually attached, which is what makes the gate
-        # sound.
+        # **The ControlNet is params-gated, not unconditional.** It was
+        # unconditional while the grid guide was the only mechanism this kind
+        # had, and that stopped being true when the seamless modes landed: they
+        # impose nothing and attach no hint, so a job drawn through
+        # ``text2image``'s circular-padding path would be charged 2.5 GiB for a
+        # module it never loads -- refusing it on a card that fits it. The door
+        # writes ``control`` only in grid mode, which is what makes the gate
+        # sound; it is the same gate ``retexture`` and ``text`` already use.
+        #
+        # The IP-Adapter is gated the same way and for the same reason: a
+        # reference is optional on this kind. ``style_lock`` is the second way
+        # to reach the encoder -- it hands the first material to the adapter as
+        # the reference for every pass after it -- and the door has no
+        # ``ip_adapter`` to write for that case, because the image does not
+        # exist until the job is half over.
         #
         # The reduction and the palette are numpy and Pillow in this process,
         # so neither costs this budget anything. Never trellis: a tile sheet
         # has no mesh anywhere near it.
         image = _image_model_cost(params)
-        sheet = image + CONTROLNET_GIB
-        if params.get("ip_adapter"):
+        sheet = image
+        if params.get("control"):
+            sheet += CONTROLNET_GIB
+        sheet_block = params.get("sheet")
+        locked = bool(isinstance(sheet_block, dict) and sheet_block.get("style_lock"))
+        if params.get("ip_adapter") or locked:
             sheet += IP_ENCODER_GIB
         return (sheet if exclusive else sheet + TRELLIS_GIB), image
     if kind not in ("text", "image"):

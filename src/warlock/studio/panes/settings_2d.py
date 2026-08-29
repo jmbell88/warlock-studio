@@ -23,6 +23,7 @@ from ... import generation, vectors
 from ... import guidance as guidancelib
 from ... import models as modelslib
 from ...bench import findings as findings_lib
+from ...pipelines import tileatlas as tileatlaslib
 from ...pipelines import tilesheet as tilesheetlib
 from ...service import jobs as svc_jobs
 from ...service import sprites as svc_sprites
@@ -110,6 +111,13 @@ def draw(ctx: Any) -> None:
                     widgets.section("Negative prompt / Avoid")
                     _negative(ctx, form)
                 _history(ctx, form)
+                if _is_tile_arm(form):
+                    # Above the model and not under Advanced: it decides what
+                    # the sheet is a sheet *of*, and in two of its three
+                    # layouts the words that are actually generated are typed
+                    # in this section rather than in the Prompt one above it.
+                    widgets.section("Tile layout")
+                    _tile_layout(ctx, form, form_ui)
                 widgets.section("Image model")
                 if create_assets.selected(form).intent == "tileset":
                     _locked_sheet_recipe(ctx, "Tile-set recipe", part="model")
@@ -219,15 +227,275 @@ def _locked_sheet_recipe(
 
 def _tile_size(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
     """Only the editable dimension of a tileset asset type."""
-    options = _tile_options()
+    sizes = tile_sizes_for(form)
     changed, picked = form_ui.segmented_choice(
         "tile_size", "Tile size", str(form.get("tile_size", "32")),
-        tuple((str(size), str(size)) for size in options["tile_sizes"]),
-        help_text="How many pixels across one tile is.", compact=True,
+        tuple((str(size), str(size)) for size in sizes),
+        help_text="How many pixels across one tile is.",
+        # Why the menu is shorter here than it is for the grid layout. Said
+        # rather than left as an absence: 48 px is offered for a grid sheet and
+        # is missing from this row, and an unexplained gap reads as a bug.
+        helper=(
+            f"A seamless material is drawn at {tileatlaslib.MATERIAL_PX} px and "
+            f"reduced, so its tile size has to divide that exactly."
+            if is_seamless(form)
+            else ""
+        ),
+        compact=True,
     )
     if changed:
         form["tile_size"] = picked
         ctx.state.clear_field_error("tile_size")
+
+
+#: Where the sentences explaining a layout change's clears are kept between
+#: frames. :data:`CLEARED_KEY`'s sibling and for its reason -- the notice belongs
+#: to the change the user just made, not to the form that outlives the session.
+TILE_MODE_CLEARED_KEY = "tile_mode_cleared"
+
+
+def clear_for_layout(form: dict[str, Any]) -> list[str]:
+    """Drop the geometry the newly chosen layout cannot draw.
+
+    -> one sentence per value moved, for the pane to show.
+
+    :func:`clear_unusable`'s rule applied to the tile arm, and for its reason: a
+    control that ``validate`` refuses while offering only legal values is a dead
+    end unless the illegal value is cleared, and the two things a seamless layout
+    cannot keep -- a 48 px tile and a view that does not wrap -- are both
+    persisted, so both survive a switch of layout.
+
+    Called only when the layout changes, never per frame. A form *restored* with
+    a size the layout refuses keeps it: ``validate`` names it above Generate, the
+    control offers the sizes that work, and rewriting a stored value on the way
+    in would change a request nobody touched.
+    """
+    if not is_seamless(form):
+        return []
+    options = _tile_options()
+    cleared: list[str] = []
+    sizes = tile_sizes_for(form)
+    if str(form.get("tile_size") or "") not in {str(size) for size in sizes}:
+        form["tile_size"] = str(options["defaults"]["tile_size"])
+        cleared.append(
+            f"The tile size moved to {form['tile_size']} px: a seamless material "
+            f"is reduced from one {tileatlaslib.MATERIAL_PX} px frame, and only "
+            f"{sizes} divide it exactly."
+        )
+    views = views_for(form)
+    if _view_of(form) not in views:
+        form["projection"] = views[0]
+        label = options["view_labels"].get(views[0], views[0])
+        cleared.append(
+            f"The view moved to {label}: a seamless material wraps a square, and "
+            f"neither an isometric diamond nor a 3/4 tile's visible front face is "
+            f"one."
+        )
+    return cleared
+
+
+def _tile_layout(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
+    """What this sheet is a sheet *of*, and therefore which request it compiles.
+
+    Three layouts, and the pane never holds a second opinion about any of their
+    ceilings: the list of them, their labels, the material and cell limits and
+    the two geometry menus all come from ``svc_tilesheets.tile_sheet_options``,
+    which is the door that enforces them.
+    """
+    options = _tile_options()
+    before = tile_mode_of(form)
+    changed, picked = form_ui.combo(
+        "mode",
+        "Layout",
+        before,
+        tuple((key, options["mode_labels"].get(key, key)) for key in options["modes"]),
+        help_text=(
+            "Materials and Terrain set draw each surface on its own, seamlessly, "
+            "and lay the results out. Grid paints one frame through a guide and "
+            "cuts it into sixty-four cells."
+        ),
+    )
+    if changed and picked != before:
+        form["tile_mode"] = picked
+        # The geometry a seamless layout cannot keep, dropped with a sentence --
+        # and the preview recomposed, because the words that will be sent are a
+        # different set of words now.
+        ctx.state.preview[TILE_MODE_CLEARED_KEY] = clear_for_layout(form)
+        ctx.state.preview_dirty_at = time.monotonic()
+        for field in _TILE_FIELDS:
+            ctx.state.clear_field_error(field)
+    for note in ctx.state.preview.get(TILE_MODE_CLEARED_KEY) or ():
+        widgets.muted_wrapped(note)
+    mode = tile_mode_of(form)
+    if mode == svc_tilesheets.MODE_MATERIALS:
+        _tile_materials(ctx, form, form_ui, options)
+    elif mode == svc_tilesheets.MODE_TERRAIN:
+        _tile_terrain(ctx, form, form_ui)
+    else:
+        _tile_grid(ctx, form, form_ui, options)
+
+
+#: Every field this section owns, for the one thing that has to name them
+#: together: clearing last submit's rings when the layout changes, since a
+#: refusal about a material list is not about the request the user is now
+#: composing.
+_TILE_FIELDS = (
+    "mode",
+    "prompt_items",
+    "variants",
+    "inner_terrain",
+    "outer_terrain",
+    "boundary",
+    "tile_size",
+    "projection",
+)
+
+
+def _tile_materials(
+    ctx: Any, form: dict[str, Any], form_ui: forms.Form, options: dict[str, Any]
+) -> None:
+    """The list of surfaces, and how many draws of each.
+
+    One generation per cell, which is why the count is said out loud beside the
+    field rather than left to be discovered when the queue takes four minutes.
+    """
+    lines = material_lines(form)
+    variants = _safe_int(form.get("variants"), 1)
+    cells = len(lines) * max(variants, 1)
+    before = str(form.get("materials") or "")
+    changed, text = form_ui.multiline_text(
+        "prompt_items",
+        "Materials",
+        before,
+        height=90,
+        max_length=MAX_PROMPT * int(options["max_materials"]),
+        help_text=(
+            "One surface per line. Each line is generated on its own as a "
+            "seamless tile, so this list is where the variety comes from."
+        ),
+        helper=(
+            f"{len(lines)}/{options['max_materials']} materials - "
+            f"{len(lines)} x {variants} = {cells} cells, "
+            f"{options['max_cells']} at most"
+        ),
+    )
+    if changed:
+        form["materials"] = text
+        ctx.state.preview_dirty_at = time.monotonic()
+        ctx.state.clear_field_error("prompt_items")
+    changed, picked = form_ui.segmented_choice(
+        "variants",
+        "Draws of each",
+        str(variants),
+        tuple((str(count), str(count)) for count in range(1, int(options["max_variants"]) + 1)),
+        help_text=(
+            "How many times each line is drawn. Every draw is its own full "
+            "generation, on its own seed."
+        ),
+        compact=True,
+    )
+    if changed:
+        form["variants"] = picked
+        ctx.state.clear_field_error("variants")
+    _tile_description_note()
+
+
+def _tile_terrain(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
+    """Two surfaces and the world they share.
+
+    The forty-seven cases are composited from the pair by a computed coverage
+    field, so neither field here describes an edge -- see :func:`_tile_terrain`'s
+    boundary helper and ``pipelines.tilemask``.
+    """
+    for key, label, help_text in (
+        (
+            "inner_terrain",
+            "Inside",
+            "The surface the forty-seven cases are pictures of: the islands, "
+            "coastlines and peninsulas a stroke paints.",
+        ),
+        (
+            "outer_terrain",
+            "Outside",
+            "What surrounds it. Generated too, so it is described too.",
+        ),
+    ):
+        changed, text = form_ui.text(
+            key, label, str(form.get(key) or ""), help_text=help_text, max_length=MAX_PROMPT
+        )
+        if changed:
+            form[key] = text
+            ctx.state.preview_dirty_at = time.monotonic()
+            ctx.state.clear_field_error(key)
+    changed, text = form_ui.text(
+        "boundary",
+        "Shared setting",
+        str(form.get("boundary") or ""),
+        help_text=(
+            "Words added to both surfaces so two separate generations come back "
+            "sharing a world and a palette -- 'a temperate coastline'. Optional."
+        ),
+        # Named for the *place*, and the helper says why: the boundary itself is
+        # a computed field, and a drawn edge inside a tile is the one defect this
+        # layout exists to make impossible.
+        helper=(
+            "Not a description of the join. The join is computed, and a drawn "
+            "edge would be cut across by it."
+        ),
+        max_length=MAX_PROMPT,
+    )
+    if changed:
+        form["boundary"] = text
+        ctx.state.preview_dirty_at = time.monotonic()
+        ctx.state.clear_field_error("boundary")
+    _tile_description_note()
+
+
+def _tile_grid(
+    ctx: Any, form: dict[str, Any], form_ui: forms.Form, options: dict[str, Any]
+) -> None:
+    """The original layout: one frame, one guide, sixty-four cells.
+
+    Kept reachable and described honestly rather than hidden. It is the only
+    layout that draws a 3/4 or an isometric tile, which is why the view lives
+    here -- the other two accept one view and would draw a picker with nothing
+    to pick.
+    """
+    before = _view_of(form)
+    changed, picked = form_ui.combo(
+        "projection",
+        "View",
+        before,
+        tuple((key, options["view_labels"].get(key, key)) for key in options["views"]),
+        help_text="Where the camera is. Only this layout draws the other two.",
+    )
+    if changed and picked != before:
+        form["projection"] = picked
+        ctx.state.preview_dirty_at = time.monotonic()
+        ctx.state.clear_field_error("projection")
+    widgets.muted_wrapped(
+        "One 1024 px frame is painted through a grid guide and cut into "
+        f"{options['tiles']} cells. Every cell of the guide is identical, so the "
+        "cells tend to come back as one scene cut up or as one tile repeated "
+        "(docs/measurements/2026-08-18-tile-sheet-grid.md). Materials and Terrain "
+        "set were built to replace it; it stays for 3/4 and isometric, and for "
+        "rerunning a sheet made under it."
+    )
+
+
+def _tile_description_note() -> None:
+    """What the Description above actually does in the two seamless layouts.
+
+    It names the sheet and is recorded with it; the words that reach the model
+    are the ones typed in this section. Said out loud because the alternative is
+    a form with two prompt-shaped fields, one of which silently does nothing to
+    the picture -- which is the failure a preview of the wrong template would
+    also produce.
+    """
+    widgets.muted_wrapped(
+        "The Description above names this sheet in the library. What each tile is "
+        "painted from is what you type here."
+    )
 
 
 def _sprite_size(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
@@ -335,6 +603,18 @@ def _sprite_options() -> dict[str, Any]:
     return _sheet_options[1]
 
 
+def _is_tile_arm(form: dict[str, Any]) -> bool:
+    """Whether this form is the Sheet output's *tile* arm.
+
+    The expression six places in this file were spelling out, given a name once
+    the tile arm grew three layouts of its own: "not a sprite sheet" and "the
+    grid layout" stopped being the same sentence, and a local called ``grid``
+    that meant the first is exactly how the submit came to compile a materials
+    request with no materials in it.
+    """
+    return form.get("output") == "sheet" and form.get("sheet_type") != "sprite"
+
+
 def sheet_rows(form: dict[str, Any]) -> tuple[str, ...]:
     """Which registry rows the Sheet output currently needs.
 
@@ -344,12 +624,85 @@ def sheet_rows(form: dict[str, Any]) -> tuple[str, ...]:
     tell a user with everything the common request uses that they are missing a
     download. Shared with :func:`weights_problem` so the note above the button
     and the gate inside the section cannot disagree.
+
+    **And on the layout**, since the tile arm grew three of them: the grid guide
+    *is* a ControlNet and the two seamless layouts never open one, so asking for
+    the grid's rows under a materials sheet told a user with everything that
+    request uses to download canny weights it will never load. The per-mode maps
+    are ``tile_sheet_options``' own, which is where :func:`rows_needed` publishes
+    them.
     """
     if form.get("sheet_type") == "sprite":
         return svc_sprites.SPRITE_ROWS
-    if form.get("ref_path"):
-        return svc_tilesheets.TILE_SHEET_REFERENCE_ROWS
-    return svc_tilesheets.TILE_SHEET_ROWS
+    key = "mode_reference_rows_needed" if form.get("ref_path") else "mode_rows_needed"
+    return tuple(_tile_options()[key][tile_mode_of(form)])
+
+
+def tile_mode_of(form: dict[str, Any]) -> str:
+    """The tile layout this form is asking for, in the service's own spelling.
+
+    An unrecognised stored value reads as the default rather than as a refusal,
+    which is this pane's standing rule for a settings-file value: the field is
+    persisted, the menu can change between releases, and a form that resolved to
+    nothing would disable Generate over a control whose value the user cannot
+    see.
+
+    **The default is not ``grid``.** The door refuses the grid layout unless the
+    request explicitly asks for it -- see ``create_tile_sheet``'s ``allow_grid``
+    -- precisely so that a default nobody chose can never land on the one layout
+    a measurement says does not work.
+    """
+    stored = str(form.get("tile_mode") or svc_tilesheets.DEFAULT_MODE)
+    return stored if stored in svc_tilesheets.TILE_MODES else svc_tilesheets.DEFAULT_MODE
+
+
+def is_seamless(form: dict[str, Any]) -> bool:
+    """Whether this form draws each tile as its own seamless material.
+
+    The two layouts ``pipelines.tileatlas`` builds, asked as one question,
+    because everything that differs between them and the grid -- the tile sizes
+    that divide a 1024px material, the one view that wraps, what the preview
+    composes -- differs the same way for both.
+    """
+    return tile_mode_of(form) != svc_tilesheets.MODE_GRID
+
+
+def tile_sizes_for(form: dict[str, Any]) -> list[int]:
+    """Which tile sizes this layout can publish.
+
+    Sourced from the service rather than filtered here: a seamless material is
+    reduced from one 1024px frame on an exact partition, so 48 is on the grid's
+    menu and not on this one -- and the day that frame size changes, this list
+    changes with it because ``tile_sheet_options`` derives it by asking
+    ``pipelines.tileatlas``.
+    """
+    options = _tile_options()
+    return list(options["seamless_tile_sizes" if is_seamless(form) else "tile_sizes"])
+
+
+def views_for(form: dict[str, Any]) -> list[str]:
+    """Which views this layout can draw. One, for the seamless pair.
+
+    ``tileatlas``' own list, for :func:`tile_sizes_for`'s reason: an isometric
+    tile is a diamond and a 3/4 tile has a visible front face, so neither wraps,
+    and the sentences explaining that live in the pipeline that refuses them.
+    """
+    options = _tile_options()
+    return list(options["seamless_views" if is_seamless(form) else "views"])
+
+
+def material_lines(form: dict[str, Any]) -> tuple[str, ...]:
+    """The materials field as the door takes it: one surface per non-blank line.
+
+    Blank lines are dropped rather than counted, which is what makes a trailing
+    newline harmless -- the door drops them too, and a form that counted them
+    would report a cell total the request will not produce.
+    """
+    return tuple(
+        line
+        for line in (raw.strip() for raw in str(form.get("materials") or "").splitlines())
+        if line
+    )
 
 
 def _view_of(form: dict[str, Any]) -> str:
@@ -363,6 +716,33 @@ def _view_of(form: dict[str, Any]) -> str:
     """
     stored = str(form.get("projection") or svc_tilesheets.DEFAULT_VIEW)
     return svc_tilesheets.LEGACY_VIEWS.get(stored, stored)
+
+
+def seamless_subject(form: dict[str, Any]) -> str | None:
+    """The subject the *first* cell of a seamless layout will be generated from.
+
+    ``None`` when the request does not describe one yet, which is a real answer
+    rather than a failure: a materials sheet with no lines and a terrain set
+    with no inner surface have no first material, and the honest preview of a
+    request that names nothing is no preview at all.
+
+    Composed by ``pipelines.tileatlas`` rather than here -- the style clause both
+    layouts append and the context a terrain set shares between its two halves
+    are that module's, and a second copy of either would be a preview of a
+    sentence nothing sends.
+    """
+    mode = tile_mode_of(form)
+    try:
+        if mode == svc_tilesheets.MODE_TERRAIN:
+            return tileatlaslib.terrain_subjects(
+                str(form.get("inner_terrain") or ""),
+                str(form.get("outer_terrain") or ""),
+                str(form.get("boundary") or ""),
+            )[0]
+        lines = material_lines(form)
+        return tileatlaslib.material_subject(lines[0], index=0, total=len(lines))
+    except (IndexError, ValueError):
+        return None
 
 
 def _profiles(ctx: Any, form: dict[str, Any]) -> None:
@@ -523,13 +903,36 @@ def _expand(ctx: Any, form: dict[str, Any]) -> None:
                 "A seamless tile is never expanded: the enrichment describes "
                 "subjects, and a tile has none."
             )
-        if form.get("output") == "sheet" and form.get("sheet_type") != "sprite":
+        if _is_tile_arm(form):
             # The sprite arm is exempt: its first step is an ordinary reference
             # of one character, which is exactly what the enrichment describes.
             widgets.muted_wrapped(
-                "A tile grid is never expanded: the enrichment describes one "
-                "subject, and a sheet is sixty-four."
+                "A tileset is never expanded: each tile is generated from the "
+                "line typed for it, and the enrichment describes one subject."
+                if is_seamless(form)
+                else "A tile grid is never expanded: the enrichment describes "
+                "one subject, and a sheet is sixty-four."
             )
+
+
+def _preview_nothing(state: Any) -> None:
+    """Drop the composition on screen and stop asking for a new one.
+
+    For the one case where "what would be sent" has no answer: a seamless layout
+    that names no material yet. Leaving the last preview up would show a
+    composition of words that are no longer in the form, which is the same
+    untruth as previewing the wrong template.
+
+    The two *cleared* notices survive it. They are not the preview -- they
+    belong to a change the user just made and are only kept in this dict because
+    it is the frame-scratch namespace (see :data:`CLEARED_KEY`).
+    """
+    state.preview = {
+        key: value
+        for key, value in (state.preview or {}).items()
+        if key in (CLEARED_KEY, TILE_MODE_CLEARED_KEY)
+    }
+    state.preview_dirty_at = 0.0
 
 
 def _preview(ctx: Any) -> None:
@@ -538,18 +941,31 @@ def _preview(ctx: Any) -> None:
     if state.preview_dirty_at and time.monotonic() - state.preview_dirty_at > PREVIEW_DEBOUNCE:
         raw = {k: v for k, v in state.form_2d.items() if v not in ("", None)}
         form = state.form_2d
-        grid = form.get("output") == "sheet" and form.get("sheet_type") != "sprite"
+        grid = _is_tile_arm(form) and not is_seamless(form)
+        seamless = _is_tile_arm(form) and is_seamless(form)
         # The *subject*, not the raw prompt, for a grid: the projection and
         # detail clauses are the pipeline's and are appended before the
         # template, so a preview built from the bare prompt would be missing
         # the half of the composition that this output kind adds.
-        subject = (
-            tilesheetlib.sheet_subject(
-                form["prompt"], _view_of(form)
-            )
-            if grid
-            else form["prompt"]
-        )
+        #
+        # And for the two seamless layouts, the *first material* through the
+        # tile template -- which is the sentence that will actually run. The
+        # grid's own subject previewed here would be a composition no generation
+        # on this path ever sees: they compose one material at a time and the
+        # Description is not part of any of them.
+        subject = form["prompt"]
+        if grid:
+            subject = tilesheetlib.sheet_subject(form["prompt"], _view_of(form))
+        elif seamless:
+            first = seamless_subject(form)
+            if first is None:
+                # Nothing describable yet, so nothing is previewed: a request
+                # with no material has no first material, and showing the
+                # Description here would show a sentence this layout never
+                # sends.
+                _preview_nothing(state)
+                return
+            subject = first
         # Only stop asking once the request was actually taken. ``submit``
         # refuses a key that is already in flight, and the first preview runs a
         # CLIP tokenizer -- so clearing the flag unconditionally dropped the
@@ -563,8 +979,11 @@ def _preview(ctx: Any) -> None:
             subject,
             # Threaded rather than inferred: the output kind is not a guidance
             # field, so without it a tile would be previewed through the
-            # single-centred-object framing its job will never use.
-            tile=form.get("output") == "tile",
+            # single-centred-object framing its job will never use. A seamless
+            # layout's cells go through ``prompt.TILE_TEMPLATE`` -- the very
+            # template ``text2image.generate(tile=True)`` selects -- which is why
+            # it previews as a tile and not as a sheet.
+            tile=form.get("output") == "tile" or seamless,
             tilesheet=grid,
         ):
             state.preview_dirty_at = 0.0
@@ -1218,16 +1637,22 @@ def validate(form: dict[str, Any]) -> list[widgets.Problem]:
                 f"References must be between 1 and {MAX_REFERENCE_COUNT}.", "count"
             )
         )
-    grid = form.get("output") == "sheet" and form.get("sheet_type") != "sprite"
+    # The *tile arm*, which is not the same question as the *grid layout* -- see
+    # :func:`_is_tile_arm`. Every check below that was written when the two were
+    # one thing is about the arm, because what makes a tile set exempt from them
+    # is that its door pins its own recipe, which all three layouts do.
+    tileset = _is_tile_arm(form)
     base = form.get("base_model")
     style = form.get("style_lora")
     # A tile set's fixed recipe does not read either selection. It validates
     # its pinned pair at its own service door.
-    if not grid and (not isinstance(base, str) or base not in modelslib.BASE_MODELS):
+    if not tileset and (not isinstance(base, str) or base not in modelslib.BASE_MODELS):
         problems.append(widgets.Problem("Choose a recognised image model.", "base_model"))
-    if not grid and (not isinstance(style, str) or (style and style not in modelslib.STYLE_LORAS)):
+    if not tileset and (
+        not isinstance(style, str) or (style and style not in modelslib.STYLE_LORAS)
+    ):
         problems.append(widgets.Problem("Choose a recognised style LoRA.", "style_lora"))
-    if not grid and style:
+    if not tileset and style:
         try:
             weight = float(form.get("lora_weight"))
         except (TypeError, ValueError, OverflowError):
@@ -1240,7 +1665,7 @@ def validate(form: dict[str, Any]) -> list[widgets.Problem]:
                     "style_lora",
                 )
             )
-    # The tile-grid arm is the one output that does not go through
+    # The tile arm is the one output that does not go through
     # ``create_job``: ``create_tile_sheet`` pins its own base, its own LoRA and
     # its own ControlNet and reads none of the four fields below. So the three
     # checks after this are skipped for it -- not as a tolerance, but because a
@@ -1255,12 +1680,16 @@ def validate(form: dict[str, Any]) -> list[widgets.Problem]:
     # widgets are drawn: a persisted selection outlives the ref_path that
     # justified it (ref_path is VOLATILE), and the base model can be changed
     # under Advanced after a control was picked.
-    if not grid and not form.get("ref_path") and (form.get("ip_adapter") or form.get("control")):
+    if (
+        not tileset
+        and not form.get("ref_path")
+        and (form.get("ip_adapter") or form.get("control"))
+    ):
         problems.append(
             widgets.Problem("Conditioning needs a reference image.", "ref_path")
         )
     if (
-        not grid
+        not tileset
         and form.get("control")
         and base not in modelslib.controlnet_bases()
     ):
@@ -1270,7 +1699,7 @@ def validate(form: dict[str, Any]) -> list[widgets.Problem]:
     # Reachable the same way: a style picked under one base survives a change
     # of base under Advanced, and the service refuses the submit outright
     # rather than generating without it.
-    if not grid and form.get("style_lora") and form["style_lora"] not in (
+    if not tileset and form.get("style_lora") and form["style_lora"] not in (
         modelslib.loras_by_base().get(base) or []
     ):
         problems.append(
@@ -1288,32 +1717,112 @@ def validate(form: dict[str, Any]) -> list[widgets.Problem]:
         # sheet is short of on this host is a different question, and
         # ``weights_problem`` asks it against the rows a sheet actually loads.
         size = str(form.get("tile_size") or "")
-        if grid and size not in {str(s) for s in svc_tilesheets.TILE_SIZES}:
+        # Both menus are asked for *this layout*: a seamless material is reduced
+        # from one 1024px frame on an exact partition and wraps a square, so 48
+        # px and two of the three views are on the grid's menu and not on
+        # theirs. The lists come from the service so the pane holds no second
+        # opinion about either ceiling.
+        sizes = tile_sizes_for(form)
+        views = views_for(form)
+        if tileset and size not in {str(s) for s in sizes}:
             # Reachable from a restored form rather than from this frame's
             # control: the value is persisted, and the menu it came from can
-            # change between releases.
+            # change between releases -- or between layouts.
             problems.append(
-                widgets.Problem(
-                    f"Tile size must be one of {list(svc_tilesheets.TILE_SIZES)}.",
-                    "tile_size",
-                )
+                widgets.Problem(f"Tile size must be one of {sizes}.", "tile_size")
             )
-        if grid and _view_of(form) not in svc_tilesheets.VIEWS:
+        if tileset and _view_of(form) not in views:
             # Interpolated rather than spelled out. The sentence used to name
             # its two values, so the day a third arrived the form would have
             # refused it with a list that did not contain it.
             problems.append(
-                widgets.Problem(
-                    f"View must be one of {list(svc_tilesheets.VIEWS)}.", "projection"
-                )
+                widgets.Problem(f"View must be one of {views}.", "projection")
             )
-        if grid or form.get("sheet_type") == "sprite":
+        if tileset:
+            problems.extend(_layout_problems(form))
+        if tileset or form.get("sheet_type") == "sprite":
             raw_target = form.get("target_cell_px") or ""
             target = None if raw_target == "" else _safe_int(raw_target, -1)
             for issue in generation.validate_target_cell(
-                target, isometric=grid and _view_of(form) == "isometric"
+                target, isometric=tileset and _view_of(form) == "isometric"
             ):
                 problems.append(widgets.Problem(issue.message, issue.field))
+    return problems
+
+
+def _layout_problems(form: dict[str, Any]) -> list[widgets.Problem]:
+    """What the chosen tile layout is still short of.
+
+    The door's own refusals, asked before the request exists. Each one names the
+    control it is about, and each ceiling is read from
+    ``tile_sheet_options`` rather than written here -- the door enforces them
+    against ``asset_workflows.collection_cells``, and a second set of numbers in
+    a pane is a form that accepts what the door then refuses.
+
+    The grid layout contributes nothing: everything it needs is the prompt and
+    the geometry, both checked above.
+    """
+    options = _tile_options()
+    mode = tile_mode_of(form)
+    problems: list[widgets.Problem] = []
+    if mode == svc_tilesheets.MODE_MATERIALS:
+        lines = material_lines(form)
+        variants = _safe_int(form.get("variants"), 0)
+        if not lines:
+            problems.append(
+                widgets.Problem(
+                    "A materials sheet is the list of surfaces you type; describe "
+                    "at least one, one per line.",
+                    "prompt_items",
+                )
+            )
+        if len(lines) > int(options["max_materials"]):
+            problems.append(
+                widgets.Problem(
+                    f"{len(lines)} materials is past the {options['max_materials']} "
+                    f"one sheet can name.",
+                    "prompt_items",
+                )
+            )
+        if any(len(line) > MAX_PROMPT for line in lines):
+            problems.append(
+                widgets.Problem(
+                    f"One material is over {MAX_PROMPT} characters.", "prompt_items"
+                )
+            )
+        if not 1 <= variants <= int(options["max_variants"]):
+            problems.append(
+                widgets.Problem(
+                    f"Draws of each material must be between 1 and "
+                    f"{options['max_variants']}.",
+                    "variants",
+                )
+            )
+        elif len(lines) * variants > int(options["max_cells"]):
+            problems.append(
+                widgets.Problem(
+                    f"{len(lines)} materials by {variants} draws is "
+                    f"{len(lines) * variants} cells, past the "
+                    f"{options['max_cells']} one sheet can hold; each cell is its "
+                    f"own full generation.",
+                    "variants",
+                )
+            )
+    elif mode == svc_tilesheets.MODE_TERRAIN:
+        for field in ("inner_terrain", "outer_terrain"):
+            if not str(form.get(field) or "").strip():
+                problems.append(
+                    widgets.Problem(
+                        "A terrain set is two surfaces and both are generated, so "
+                        "both have to be described.",
+                        field,
+                    )
+                )
+        for field in ("inner_terrain", "outer_terrain", "boundary"):
+            if len(str(form.get(field) or "")) > MAX_PROMPT:
+                problems.append(
+                    widgets.Problem(f"That is over {MAX_PROMPT} characters.", field)
+                )
     return problems
 
 
@@ -1372,8 +1881,47 @@ def submit_kwargs(form: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def tile_sheet_kwargs(form: dict[str, Any]) -> dict[str, Any]:
+    """The 2D form as ``create_tile_sheet`` takes it, minus the reference bytes.
+
+    :func:`submit_kwargs`' opposite number, and it exists for the reason that
+    one does: the tile arm is the only output that does not go through
+    ``create_job``, so the compilation of its request had no name and lived
+    inside a closure -- where no test could reach it. The submit then went on
+    sending a request with no layout in it, against a door whose default layout
+    is ``materials``, and every press was refused at ``field="prompt_items"``
+    with nothing in the form saying why.
+
+    **``allow_grid`` is sent when, and only when, the user picked the grid.**
+    That flag is the door's escape hatch on a refusal about a measurement rather
+    than about an impossibility, so an explicit choice is exactly what it is for
+    -- and a default that carried it would put every unconsidered press back on
+    the layout the measurement is about.
+    """
+    mode = tile_mode_of(form)
+    kwargs: dict[str, Any] = {
+        "prompt": str(form.get("prompt") or "").strip(),
+        "tile_size": _safe_int(form.get("tile_size"), 32),
+        "view": _view_of(form),
+        "seed": int(form["seed"]),
+        "negative_prompt": form.get("negative_prompt") or None,
+        "mode": mode,
+        **create_assets.persisted_intent(form),
+    }
+    if mode == svc_tilesheets.MODE_MATERIALS:
+        kwargs["prompt_items"] = list(material_lines(form))
+        kwargs["variants"] = _safe_int(form.get("variants"), 1)
+    elif mode == svc_tilesheets.MODE_TERRAIN:
+        kwargs["inner_terrain"] = str(form.get("inner_terrain") or "").strip()
+        kwargs["outer_terrain"] = str(form.get("outer_terrain") or "").strip()
+        kwargs["boundary"] = str(form.get("boundary") or "").strip()
+    else:
+        kwargs["allow_grid"] = True
+    return kwargs
+
+
 def _generate_tile_sheet(ctx: Any, form: dict[str, Any]) -> None:
-    """Submit the tile grid, on the shared ``submit`` key.
+    """Submit the tile set, on the shared ``submit`` key.
 
     The same key every other output uses, deliberately: it is one form and one
     Generate button, so two submits in flight from it is the thing the key
@@ -1385,11 +1933,7 @@ def _generate_tile_sheet(ctx: Any, form: dict[str, Any]) -> None:
     freeze the window for as long as the disk took. ``generate``'s own split,
     kept.
     """
-    prompt = form["prompt"].strip()
-    tile_size = int(form.get("tile_size") or 32)
-    view = _view_of(form)
-    seed = int(form["seed"])
-    negative = form.get("negative_prompt") or None
+    kwargs = tile_sheet_kwargs(form)
     ref_path = form.get("ref_path") or ""
 
     def run():
@@ -1404,16 +1948,7 @@ def _generate_tile_sheet(ctx: Any, form: dict[str, Any]) -> None:
                 raise Invalid(
                     f"could not read {Path(ref_path).name}: {exc}", field="ref_path"
                 ) from exc
-        return svc_tilesheets.create_tile_sheet(
-            ctx.svc,
-            prompt=prompt,
-            tile_size=tile_size,
-            view=view,
-            seed=seed,
-            negative_prompt=negative,
-            reference=reference,
-            **create_assets.persisted_intent(form),
-        )
+        return svc_tilesheets.create_tile_sheet(ctx.svc, reference=reference, **kwargs)
 
     ctx.submit("submit", run)
 
@@ -1476,8 +2011,7 @@ def weights_problem(ctx: Any, form: dict[str, Any]) -> widgets.Problem | None:
     by_key = {str(row.get("row_key")): row for row in (getattr(ctx, "model_rows", None) or [])}
     if not by_key:
         return None
-    grid = form.get("output") == "sheet" and form.get("sheet_type") != "sprite"
-    if grid:
+    if _is_tile_arm(form):
         # A tile set's door pins its own base and LoRA and ignores the form's,
         # so walking ``_WEIGHT_FIELDS`` here would point at a selection the run
         # never reads. Sprite sheets are different: their preliminary
@@ -1582,8 +2116,8 @@ def generate(ctx: Any, form: dict[str, Any]) -> None:
         # otherwise produce the identical image twice and read as a no-op.
         form["seed"] = random_seed()
     ctx.state.remember_prompt(form["prompt"])
-    if form.get("output") == "sheet" and form.get("sheet_type") != "sprite":
-        # The one output that does not go through ``create_job``: a tile grid is
+    if _is_tile_arm(form):
+        # The one output that does not go through ``create_job``: a tile set is
         # its own job kind, with its own door and its own admission. The sprite
         # arm deliberately *does* go through it -- see ``submit_kwargs`` -- so
         # this is the only branch here.

@@ -226,10 +226,22 @@ def rerun_job(
         # never loaded. Gated on the *stored* reference rather than the params'
         # adapter, because ``carry_ref`` below is what decides whether the new
         # row will actually have one.
+        from .tilesheets import MODE_GRID, TILE_MODES
         from .tilesheets import _check_weights as _check_sheet_weights
 
+        # Which weights this row needs is a property of its *mode*, not of the
+        # kind: the grid guide is a ControlNet and the two seamless modes never
+        # open one. Read from the stored block, and grid whenever it cannot be
+        # read -- a block with no ``mode`` key is a version-2 block, which is
+        # the grid path by definition, and grid is also the mode that needs the
+        # most, so the unreadable case asks for a superset rather than admitting
+        # a job whose weights are missing.
+        sheet_block = source["params"].get("sheet")
+        sheet_mode = str(sheet_block.get("mode", "")) if isinstance(sheet_block, dict) else ""
         _check_sheet_weights(
-            svc, with_reference=(svc.job_dir(job_id) / "ref.png").exists()
+            svc,
+            mode=sheet_mode if sheet_mode in TILE_MODES else MODE_GRID,
+            with_reference=(svc.job_dir(job_id) / "ref.png").exists(),
         )
     if kind == "pixel_sheet":
         # The same door ``create_pixel_sheet`` holds, held again on the way

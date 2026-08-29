@@ -248,6 +248,31 @@ def test_the_2d_pane_builds_both_arms_of_the_sheet_output(app_ctx, imgui_ctx):
         _frame(imgui_ctx, lambda: settings_2d.draw(app_ctx))
 
 
+def test_the_2d_pane_builds_every_tile_layout(app_ctx, imgui_ctx):
+    """Three layouts, three different sets of controls, drawn in a real frame.
+
+    Off the service's own list rather than a literal here, for the reason the
+    view sweep above gives -- and with Advanced open, because the tile size is
+    the one control whose *menu* is a function of the layout and a segmented row
+    whose current value is off its own menu is the failure no pure test sees.
+    """
+    from warlock.service import tilesheets as svc_tilesheets
+    from warlock.studio.panes import settings_2d
+
+    app_ctx.state.form_2d["prompt"] = "mossy dungeon"
+    app_ctx.state.form_2d["asset_type"] = "tileset"
+    app_ctx.state.form_2d["materials"] = "mossy stone\ncracked earth"
+    app_ctx.state.form_2d["inner_terrain"] = "wet grass"
+    app_ctx.state.form_2d["outer_terrain"] = "dark water"
+    app_ctx.state.create_advanced = True
+    for mode in svc_tilesheets.TILE_MODES:
+        app_ctx.state.form_2d["tile_mode"] = mode
+        # A 48 px tile is legal for the grid and not for the other two: the
+        # stored value the seamless layouts have to survive drawing.
+        app_ctx.state.form_2d["tile_size"] = "48"
+        _frame(imgui_ctx, lambda: settings_2d.draw(app_ctx))
+
+
 def test_the_sheet_output_pins_the_count_to_one(app_ctx, imgui_ctx):
     """Both doors refuse a batch, so the radios are not drawn -- and the value
     is persisted, so a 4 left over from the Object output has to be written

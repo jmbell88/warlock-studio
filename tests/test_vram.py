@@ -109,19 +109,38 @@ def test_a_pixel_sheet_restyle_costs_sdxl_plus_a_controlnet():
 
 def test_a_tile_sheet_costs_one_txt2img_pass_and_its_grid_guide():
     """Sixty-four tiles are a *slicing* of one generation, not sixty-four
-    generations, so the grid is not a term in the peak. The ControlNet always
-    is -- the guide is the whole mechanism. Never trellis: there is no mesh
-    anywhere near it."""
-    exclusive = vram.estimate("tile_sheet", "tilesheet", {}, exclusive=True)
+    generations, so the grid is not a term in the peak. Never trellis: there is
+    no mesh anywhere near it."""
+    grid = {"control": "canny"}
+    exclusive = vram.estimate("tile_sheet", "tilesheet", grid, exclusive=True)
     assert exclusive == pytest.approx(vram.SDXL_GIB + vram.CONTROLNET_GIB)
     assert vram.estimate(
-        "tile_sheet", "tilesheet", {}, exclusive=False
+        "tile_sheet", "tilesheet", grid, exclusive=False
     ) == pytest.approx(exclusive + vram.TRELLIS_GIB)
     # The grid genuinely does not move it.
-    big = {"sheet": {"tile_w": 64, "tile_h": 64, "columns": 8, "rows": 8}}
+    big = {"control": "canny", "sheet": {"tile_w": 64, "tile_h": 64, "columns": 8, "rows": 8}}
     assert vram.estimate(
         "tile_sheet", "tilesheet", big, exclusive=True
     ) == pytest.approx(exclusive)
+
+
+def test_a_seamless_tileset_is_not_charged_for_a_controlnet_it_never_loads():
+    """The ControlNet term was unconditional while the grid guide was the only
+    mechanism this kind had. The seamless modes impose nothing and attach no
+    hint -- they wrap the convolutions instead -- so charging 2.5 GiB for a
+    module that is never loaded would refuse jobs on a card that fits them. The
+    door writes ``control`` only in grid mode, which is what makes the gate
+    sound."""
+    seamless = {"sheet": {"mode": "materials", "tile_w": 32, "style_lock": False}}
+    assert vram.estimate(
+        "tile_sheet", "tilesheet", seamless, exclusive=True
+    ) == pytest.approx(vram.SDXL_GIB)
+    # And N materials are N *sequential* passes through one pipe, so the count
+    # is not a term any more than the grid is.
+    seamless["sheet"]["materials"] = [{"prompt": "moss"}] * 16
+    assert vram.estimate(
+        "tile_sheet", "tilesheet", seamless, exclusive=True
+    ) == pytest.approx(vram.SDXL_GIB)
 
 
 def test_a_tile_sheets_reference_encoder_is_gated_on_the_reference():
@@ -133,6 +152,17 @@ def test_a_tile_sheets_reference_encoder_is_gated_on_the_reference():
         "tile_sheet", "tilesheet", {"ip_adapter": "plus"}, exclusive=True
     )
     assert conditioned == pytest.approx(plain + vram.IP_ENCODER_GIB)
+
+
+def test_a_style_locked_tileset_is_charged_for_the_encoder_it_will_load():
+    """The second way to reach the IP-Adapter on this kind, and the one the door
+    has no ``ip_adapter`` key for: style lock hands the *first material* to the
+    adapter as the reference for every pass after it, and that image does not
+    exist until the job is half over."""
+    locked = {"sheet": {"mode": "materials", "tile_w": 32, "style_lock": True}}
+    assert vram.estimate(
+        "tile_sheet", "tilesheet", locked, exclusive=True
+    ) == pytest.approx(vram.SDXL_GIB + vram.IP_ENCODER_GIB)
 
 
 def test_a_retexture_costs_one_img2img_pass_and_never_trellis():

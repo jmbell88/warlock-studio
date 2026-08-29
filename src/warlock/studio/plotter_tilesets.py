@@ -156,6 +156,58 @@ class SheetLattice:
     lattice: str
 
 
+#: The layout a *generated* terrain set declares in its own sidecar, and the
+#: only value that means "these forty-seven columns are blob cases in ascending
+#: ``tilemask.BLOB_MASKS`` order". ``pipelines.tileatlas._LAYOUTS``' spelling,
+#: restated here because ``studio`` reads it off a file rather than importing a
+#: pipeline's private table -- and ``tests/test_plotter_mode.py`` pins the pair.
+BLOB_LAYOUT = "blob47"
+
+
+@dataclass(frozen=True)
+class SheetRecord:
+    """What a generated sheet's own ``sheet.json`` says it is.
+
+    A record and not a measurement, which is the whole reason it exists --
+    :class:`SheetMismatch` says it for the cell size and it is *sharper* for a
+    generated terrain set. ``roles.infer_roles`` finds a background from
+    transparency or from one dominant ring colour and matches every cell's
+    silhouette against the forty-seven masks; a generated terrain set is two
+    opaque textures composited edge to edge, so it has neither, the silhouettes
+    read as noise and the inference returns ``None`` on a set that is perfectly
+    formed. No threshold fixes that, because there is nothing in the pixels to
+    threshold. The sidecar is the only thing that can land such a set, and
+    ``pipelines.tileatlas.atlas_sidecar``'s docstring is the other half of this
+    sentence.
+
+    ``layout`` is a promise about *positions* and ``terrains`` is what the
+    palette will show; both are absent from an ordinary sheet's sidecar, and
+    absence means "an ordinary sheet" rather than "a set that failed a check".
+    """
+
+    tile_w: int
+    tile_h: int
+    lattice: str = ""
+    layout: str = ""
+    terrains: tuple[Any, ...] = ()
+
+    @property
+    def cell(self) -> tuple[int, int]:
+        return (int(self.tile_w), int(self.tile_h))
+
+    @property
+    def is_terrain_set(self) -> bool:
+        """Whether this record describes a landable blob-47 terrain set.
+
+        Both halves, because either alone is not a set: the layout says the
+        columns are blob cases, and the terrains are what a cell's role is
+        *about* -- an atlas declaring the layout and no terrain would be a plain
+        grid wearing a terrain's shape, with every gid valid and every role
+        wrong.
+        """
+        return self.layout == BLOB_LAYOUT and bool(self.terrains)
+
+
 @dataclass(frozen=True)
 class SheetTerrain:
     """A sheet whose cells look like a complete 47-case blob terrain set.
@@ -189,6 +241,45 @@ def _terrain_from(pixels: Any, tile_w: int, tile_h: int) -> Any:
     return None if found is None else SheetTerrain((int(tile_w), int(tile_h)), found)
 
 
+def _declared_terrain_set(
+    name: str, pixels: Any, record: SheetRecord, tile_w: int, tile_h: int
+) -> Any:
+    """The :class:`Tileset` a blob-47 record describes, or ``None``.
+
+    Cut on the *record's* cell size and, when the map's differs, redrawn at the
+    map's -- the shape :class:`SheetMismatch` already takes through
+    ``slicing.recompose``, on a grid that is known rather than detected. It is
+    known because the record says so: forty-seven columns by one row per
+    terrain, which is what ``Tileset.__post_init__`` then enforces.
+
+    ``None`` rather than a refusal when the pixels do not fit the record. That
+    is a self-inconsistent file -- a sidecar from one job beside another job's
+    image -- and this module's posture at every import door is that a record it
+    cannot use is a record it ignores: the caller falls through to the ordinary
+    path and the sheet still lands, sliced blind, exactly as it would with no
+    sidecar at all.
+    """
+    from .tilegrid import slicing
+    from .tilegrid.tileset import Tileset
+
+    array = pixels
+    if record.cell != (int(tile_w), int(tile_h)):
+        grid = slicing.uniform_grid(pixels.shape[:2], record.tile_w, record.tile_h)
+        if grid is None:
+            return None
+        array = slicing.recompose(pixels, grid, int(tile_w), int(tile_h))
+    try:
+        return Tileset(
+            name=name,
+            pixels=array,
+            tile_w=int(tile_w),
+            tile_h=int(tile_h),
+            terrains=tuple(record.terrains),
+        )
+    except ValueError:
+        return None
+
+
 def _sheet_or_tileset(
     name: str,
     source: str,
@@ -197,8 +288,7 @@ def _sheet_or_tileset(
     tile_w: int,
     tile_h: int,
     *,
-    recorded: tuple[int, int] | None = None,
-    recorded_lattice: str = "",
+    record: SheetRecord | None = None,
     lattice: str = "",
     unpainted: bool = False,
 ) -> dict[str, Any]:
@@ -212,22 +302,38 @@ def _sheet_or_tileset(
     at the map's tile size, which is also the right fallback for a sheet that
     was generated on imposed rectangles and has no rules to find.
 
-    ``recorded`` is the cell size the sheet's own sidecar declares, which only
-    the library door has. Equal to the map's, it changes nothing at all --
+    ``record`` is what the sheet's own sidecar declares, which only the library
+    door has. Its cell size, equal to the map's, changes nothing at all --
     today's path exactly. Different, it parks a :class:`SheetMismatch` instead,
     because a blind slice at the map's size would cut every tile in half with
     nothing anywhere to say so.
 
-    ``recorded_lattice`` is the same record's *view*, resolved to the lattice it
-    is drawn for. Against ``lattice`` -- the map's -- it answers a question the
-    cell size cannot: a 32x32 isometric sheet and a 32x32 top-down one measure
-    identically and are not interchangeable. On an ``unpainted`` map the sheet
-    simply brings its lattice with it; on a painted one the lattice is fixed and
-    a :class:`SheetLattice` is parked for the user to rule on.
+    The record's *lattice* -- its view, resolved to the grid it is drawn for --
+    answers against ``lattice``, the map's, a question the cell size cannot: a
+    32x32 isometric sheet and a 32x32 top-down one measure identically and are
+    not interchangeable. On an ``unpainted`` map the sheet simply brings its
+    lattice with it; on a painted one the lattice is fixed and a
+    :class:`SheetLattice` is parked for the user to rule on.
+
+    **A declared blob-47 terrain set is landed first and asks nothing.** It is
+    the one arm here that runs ahead of the detector rather than behind it,
+    because it is the one case where the pixels cannot answer and the record
+    can: see :class:`SheetRecord`. Every other arm below is a *guess* offered to
+    the user in a popup, and there is nothing to ask about a set that says what
+    it is.
     """
     from .tilegrid import slicing
     from .tilegrid.tileset import Tileset
 
+    if record is not None and record.is_terrain_set:
+        landed = _declared_terrain_set(name, pixels, record, tile_w, tile_h)
+        if landed is not None:
+            # ``source`` is dropped when the cells were redrawn, the rule every
+            # recomposing door here inherits: a resampled atlas is no longer the
+            # file on disk, and a ``.tmx`` export must not reference art it is
+            # not drawing.
+            kept = source if record.cell == (int(tile_w), int(tile_h)) else ""
+            return {"tileset": landed, "source": kept, "uid": uid}
     grid = slicing.detect_grid(pixels)
     if grid is not None:
         # Rules found: the cells are where the detector says, so a terrain guess
@@ -235,11 +341,12 @@ def _sheet_or_tileset(
         # original -- and that is the popup's Import, not this. So the separator
         # arm wins and the terrain question is asked at the plain-grid door only.
         return {"sheet": (uid, name, source, pixels, grid), "uid": uid}
-    if recorded is not None and (int(recorded[0]), int(recorded[1])) != (tile_w, tile_h):
-        mismatch = SheetMismatch(int(recorded[0]), int(recorded[1]))
+    if record is not None and record.cell != (int(tile_w), int(tile_h)):
+        mismatch = SheetMismatch(record.tile_w, record.tile_h)
         return {"sheet": (uid, name, source, pixels, mismatch), "uid": uid}
     # After the cell size, because a sheet that is wrong on both counts is more
     # usefully described by the number the user can see than by the word.
+    recorded_lattice = record.lattice if record is not None else ""
     wrong_lattice = bool(recorded_lattice and lattice and recorded_lattice != lattice)
     if wrong_lattice and not unpainted:
         parked = SheetLattice(recorded_lattice, lattice)
@@ -634,19 +741,56 @@ def ask_add_tileset(ctx: Any) -> None:
     ctx.submit(f"plotter-tileset:{uid}", run)
 
 
-def _recorded_sheet(ctx: Any, job_id: str) -> tuple[int, int, str] | None:
-    """What a generated sheet's ``sheet.json`` declares: ``(w, h, lattice)``.
+def _recorded_terrains(raw: Any) -> tuple[Any, ...]:
+    """A sidecar's ``terrains`` list as :class:`TerrainSpec` objects.
+
+    Empty for anything that is not a whole, well-formed list of them, and that
+    is a deliberate all-or-nothing: the position of a terrain in this tuple is
+    its *precedence*, so a list with one entry quietly dropped is not a smaller
+    terrain set, it is a different one. Ordered as written, which is the order
+    ``pipelines.tileatlas`` published and the order the atlas's rows are in.
+    """
+    from .tilegrid.tileset import TerrainSpec
+
+    if not isinstance(raw, list) or not raw:
+        return ()
+    out = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            return ()
+        try:
+            out.append(
+                TerrainSpec(
+                    name=str(entry.get("name") or "Terrain"),
+                    fill=tuple(entry["fill"]),
+                    outline=tuple(entry["outline"]),
+                )
+            )
+        except (KeyError, TypeError, ValueError):
+            return ()
+    return tuple(out)
+
+
+def _recorded_sheet(ctx: Any, job_id: str) -> SheetRecord | None:
+    """What a generated sheet's ``sheet.json`` declares about itself.
 
     ``None`` for every job that has no sidecar -- an ordinary reference image,
     a render, anything not a tile sheet -- and those doors are untouched by
     design: absence of a record is not evidence of a mismatch.
 
-    The view is read here too, and until now it was not read anywhere at all:
-    the sidecar has recorded it since tile sheets existed and every consumer
-    took the cell size and left it. An unrecognised view reads as an empty
-    lattice rather than a refusal -- a sidecar from a build that knows a view
-    this one does not is not a reason to refuse an import, and the cell size in
-    it is still good.
+    The view is read here too, and until the lattice check existed it was not
+    read anywhere at all: the sidecar has recorded it since tile sheets existed
+    and every consumer took the cell size and left it. An unrecognised view
+    reads as an empty lattice rather than a refusal -- a sidecar from a build
+    that knows a view this one does not is not a reason to refuse an import, and
+    the cell size in it is still good.
+
+    **Two spellings of the view, and both are read.** The grid path's sidecar
+    calls it ``projection`` (``pipelines.tilesheet.sheet_sidecar``, where the key
+    never moved) and the seamless path's calls it ``view``
+    (``pipelines.tileatlas.atlas_sidecar``, written fresh). Reading only the
+    first left every generated *tileset* with no lattice at all, which is the
+    silent half of "the sidecar records it and nothing reads it back".
     """
     import json
 
@@ -657,14 +801,20 @@ def _recorded_sheet(ctx: Any, job_id: str) -> tuple[int, int, str] | None:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+    if not isinstance(data, dict):
+        return None
     try:
-        cell = int(data["tile_w"]), int(data["tile_h"])
+        tile_w, tile_h = int(data["tile_w"]), int(data["tile_h"])
     except (KeyError, TypeError, ValueError):
         return None
-    # The key on disk is ``projection`` and its value is a view; see
-    # ``pipelines.tilesheet.sheet_sidecar`` for why the key never moved.
-    lattice = _VIEW_LATTICE.get(str(data.get("projection") or ""), "")
-    return (*cell, lattice)
+    view = str(data.get("projection") or data.get("view") or "")
+    return SheetRecord(
+        tile_w=tile_w,
+        tile_h=tile_h,
+        lattice=_VIEW_LATTICE.get(view, ""),
+        layout=str(data.get("layout") or ""),
+        terrains=_recorded_terrains(data.get("terrains")),
+    )
 
 
 def use_as_tileset(ctx: Any, job: Any) -> None:
@@ -718,8 +868,7 @@ def use_as_tileset(ctx: Any, job: Any) -> None:
             uid,
             width,
             height,
-            recorded=recorded[:2] if recorded else None,
-            recorded_lattice=recorded[2] if recorded else "",
+            record=recorded,
             lattice=lattice,
             unpainted=unpainted,
         )

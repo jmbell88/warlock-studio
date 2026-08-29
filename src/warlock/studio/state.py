@@ -31,6 +31,7 @@ def default_form_2d() -> dict[str, Any]:
     opened on the same seed and a first Generate reproduced last week's image.
     """
     from .. import models
+    from ..service.tilesheets import DEFAULT_MODE as DEFAULT_TILE_MODE
     from ..service.validation import random_seed
     from .create_assets import DEFAULT_ASSET_TYPE
 
@@ -78,6 +79,34 @@ def default_form_2d() -> dict[str, Any]:
         # tile | sprite. Which door the Sheet output opens.
         "sheet_type": "tile",
         "tile_size": "32",
+        # materials | terrain | grid -- which *layout* the tile arm draws, and
+        # therefore which shape the request takes at
+        # ``service.tilesheets.create_tile_sheet``. The door's own default, read
+        # from it rather than spelled here, because the door is what refuses a
+        # mode it does not build.
+        #
+        # ``grid`` is deliberately not the default and is deliberately still
+        # offered: it paints one frame through a guide whose sixty-four cells
+        # are identical (docs/measurements/2026-08-18-tile-sheet-grid.md), and
+        # it is the only layout that draws a 3/4 or an isometric tile. The door
+        # refuses it unless the request says ``allow_grid``, which the pane
+        # sends only when this field says so.
+        "tile_mode": DEFAULT_TILE_MODE,
+        # The materials layout's list, one surface per line. One string rather
+        # than a list because ``restore_form`` gates on
+        # ``type(value) is type(default)`` and the control is a multiline text
+        # field; it is split into lines once, at the submit boundary.
+        "materials": "",
+        # How many times each material line is drawn. A string for the reason
+        # ``tile_size`` is one, and converted at the same boundary.
+        "variants": "1",
+        # The terrain layout's two surfaces, in precedence order: ``inner`` is
+        # the one the forty-seven blob cases are pictures *of*.
+        "inner_terrain": "",
+        "outer_terrain": "",
+        # Context both terrain materials share, and never an instruction to
+        # draw an edge -- see ``service.tilesheets.create_tile_sheet``.
+        "boundary": "",
         # The sprite arm's two, named apart from the tile arm's on purpose:
         # "cell size" and "tile size" are the same measurement of different
         # things, and one key serving both would carry 48 (legal for a sprite
@@ -138,12 +167,59 @@ def form_from_params(params: dict[str, Any]) -> dict[str, Any]:
             continue
     from . import create_assets
 
+    _restore_sheet_block(form, params)
     form["asset_type"] = (
         create_assets.asset_type_from_params(params) or form["asset_type"]
     )
     form["generation_type"] = form["asset_type"]
     create_assets.sync_legacy_fields(form)
     return form
+
+
+def _restore_sheet_block(form: dict[str, Any], params: dict[str, Any]) -> None:
+    """Put a finished tile set's own request back into the form, in place.
+
+    A tile set is the one kind whose request does not live in ``params`` as flat
+    fields: ``create_tile_sheet`` writes one nested ``sheet`` block, because it
+    is a *document description* rather than a settings vector. So the loop above
+    -- which matches param keys to form keys -- finds none of it, and "another
+    like this" on a tile set reopened the form at its defaults with nothing said.
+
+    **A block with no mode is the grid.** That is the door's own reading of a
+    version-2 block, and it is why the sheet version exists: a mode key alone
+    could not tell "a sheet from before the seamless layouts" from "a sheet
+    somebody asked the grid for".
+    """
+    from ..service.tilesheets import MODE_GRID, MODE_MATERIALS, MODE_TERRAIN, TILE_MODES
+
+    block = params.get("sheet")
+    if not isinstance(block, dict):
+        return
+    mode = str(block.get("mode") or MODE_GRID)
+    if mode not in TILE_MODES:
+        return
+    form["tile_mode"] = mode
+    for key, source in (("tile_size", "tile_w"), ("projection", "projection")):
+        value = block.get(source)
+        if value not in (None, ""):
+            form[key] = str(value)
+    cells = [cell for cell in (block.get("materials") or ()) if isinstance(cell, dict)]
+    if mode == MODE_MATERIALS:
+        # The *lines*, not the cells: the block holds one record per
+        # ``(line, variant)`` pair, expanded line-major, so the first draw of
+        # each line is the list the user typed.
+        form["materials"] = "\n".join(
+            str(cell.get("prompt") or "")
+            for cell in cells
+            if int(cell.get("variant") or 1) == 1
+        )
+        form["variants"] = str(int(block.get("variants") or 1))
+    elif mode == MODE_TERRAIN and len(cells) == 2:
+        # Two subjects in ``(inner, outer)`` order, which is not a convention:
+        # it is which of the two the forty-seven pictures are of.
+        form["inner_terrain"] = str(cells[0].get("prompt") or "")
+        form["outer_terrain"] = str(cells[1].get("prompt") or "")
+        form["boundary"] = str(block.get("boundary") or "")
 
 
 DEFAULT_FORM_3D: dict[str, Any] = {

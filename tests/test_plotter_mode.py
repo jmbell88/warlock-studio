@@ -2608,6 +2608,191 @@ def test_the_plain_button_slices_the_terrain_sheet_as_ordinary_tiles(tmp_path):
     assert ref.source == str(png)
 
 
+# --- a *generated* terrain set, landed by its record --------------------------
+#
+# The inference above cannot see one of these and no threshold will make it:
+# ``roles._background_masks`` wants transparency or one dominant ring colour, and
+# a generated terrain set is two opaque textures composited edge to edge. The
+# sidecar is the only thing that can land it, which is why these tests build the
+# record with the very function the worker writes it with.
+
+
+def _material(seed: int, tile: int = 16) -> np.ndarray:
+    """One opaque, noisy, seamless-ish material -- what SDXL returns, reduced.
+
+    Noisy on purpose: a flat colour would give the inference a ring colour to
+    find, which is exactly the property a real material does not have.
+    """
+    rng = np.random.default_rng(seed)
+    out = np.empty((tile, tile, 4), dtype=np.uint8)
+    out[:, :, :3] = rng.integers(40, 210, size=(tile, tile, 3), dtype=np.uint8)
+    out[:, :, 3] = 255
+    return out
+
+
+def _generated_terrain_atlas(tile: int = 16) -> np.ndarray:
+    from warlock.pipelines import tilemask
+
+    return tilemask.blob_atlas(_material(1, tile), _material(2, tile), tile, seed=7)
+
+
+def _generated_terrain_sidecar(tile: int = 16) -> dict:
+    """The sheet.json a terrain job writes, from the writer itself.
+
+    Built through ``tileatlas.atlas_sidecar`` rather than typed out, so this
+    fixture cannot describe a record the worker does not produce -- the failure
+    that makes a form test pass over a submit nobody can make.
+    """
+    import dataclasses
+    import time
+
+    from warlock.pipelines import tileatlas
+
+    geom = tileatlas.terrain_geometry(tile, "top_down")
+    cells = tuple(
+        dataclasses.replace(cell, prompt="wet grass", variant=1, seed=7)
+        for cell in geom.cells
+    )
+    return tileatlas.atlas_sidecar(
+        geom,
+        created=time.time(),
+        materials=cells,
+        terrains=(
+            {
+                "name": "wet grass",
+                "fill": [106, 153, 78, 255],
+                "outline": [63, 91, 46, 255],
+            },
+        ),
+        mask={"seed": 7},
+    )
+
+
+def test_a_generated_terrain_set_lands_by_its_record(tmp_path, monkeypatch):
+    ctx = FakeCtx()
+    tab = _tab(ctx, tileset=False)
+    atlas = _generated_terrain_atlas()
+    _library(monkeypatch, tmp_path, atlas, _generated_terrain_sidecar())
+
+    plotter_mode.use_as_tileset(ctx, {"id": "j1", "name": "coast"})
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+
+    # No popup: there is nothing to ask about a set that says what it is.
+    state = plotter_mode.ensure(ctx)
+    assert state.sheet_import is None
+    ref = tab.doc.tilesets[0]
+    assert [t.name for t in ref.tileset.terrains] == ["wet grass"]
+    assert ref.tileset.columns == 47
+    assert ref.tileset.rows == 1
+    assert np.array_equal(np.asarray(ref.tileset.pixels), atlas)
+    # And the palette has it in hand, which is the terrain hand-off.
+    assert state.terrain == (0, 0)
+
+
+def test_the_same_set_without_its_record_cannot_be_recognised(tmp_path, monkeypatch):
+    """The documented reason the record exists, pinned as a measurement.
+
+    ``infer_roles`` finds a background from transparency or from one dominant
+    ring colour; two opaque textures composited edge to edge have neither, so
+    every cell's silhouette reads as noise, fewer than the forty-seven roles are
+    claimed and the inference returns ``None`` on a set that is perfectly formed.
+    If this ever starts returning a set, the record has stopped being the *only*
+    thing that can land one -- and this test is where to say so.
+    """
+    from warlock.studio.tilegrid import roles as rolelib
+
+    atlas = _generated_terrain_atlas()
+    assert rolelib.infer_roles(atlas, 16, 16) is None
+
+    ctx = FakeCtx()
+    tab = _tab(ctx, tileset=False)
+    _library(monkeypatch, tmp_path, atlas, {"tile_w": 16, "tile_h": 16})
+
+    plotter_mode.use_as_tileset(ctx, {"id": "j1", "name": "coast"})
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+
+    assert plotter_mode.ensure(ctx).sheet_import is None
+    assert tab.doc.tilesets[0].tileset.terrains == ()
+
+
+def test_a_generated_terrain_set_at_another_size_is_resampled_not_parked(
+    tmp_path, monkeypatch
+):
+    """The mismatch arm's shape on a grid that is known rather than detected:
+    cut on the record's forty-seven columns and redrawn at the map's size. The
+    popup is not the answer here -- a terrain set sliced at the wrong size is
+    not a set at all, and the record says exactly where its cells are."""
+    ctx = FakeCtx()
+    tab = _tab(ctx, tileset=False)
+    _library(
+        monkeypatch, tmp_path, _generated_terrain_atlas(32), _generated_terrain_sidecar(32)
+    )
+
+    plotter_mode.use_as_tileset(ctx, {"id": "j1", "name": "coast"})
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+
+    state = plotter_mode.ensure(ctx)
+    assert state.sheet_import is None
+    ref = tab.doc.tilesets[0]
+    assert (ref.tileset.tile_w, ref.tileset.tile_h) == (16, 16)
+    assert ref.tileset.columns == 47
+    assert len(ref.tileset.terrains) == 1
+    assert np.asarray(ref.tileset.pixels).shape == (16, 47 * 16, 4)
+    # A resampled atlas is no longer the file on disk.
+    assert ref.source == ""
+
+
+def test_a_record_the_image_does_not_fit_falls_back_to_the_ordinary_path(
+    tmp_path, monkeypatch
+):
+    """A sidecar from one job beside another job's image. The record is ignored
+    rather than refused: the sheet still lands, sliced as it would be with no
+    sidecar at all."""
+    ctx = FakeCtx()
+    tab = _tab(ctx, tileset=False)
+    sidecar = _generated_terrain_sidecar()
+    _library(monkeypatch, tmp_path, _flat(), sidecar)
+
+    plotter_mode.use_as_tileset(ctx, {"id": "j1", "name": "coast"})
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+
+    assert plotter_mode.ensure(ctx).sheet_import is None
+    assert tab.doc.tilesets[0].tileset.terrains == ()
+
+
+def test_a_terrain_record_is_all_or_nothing(tmp_path, monkeypatch):
+    """A terrain's position in the list is its precedence, so a list with one
+    entry quietly dropped is not a smaller set -- it is a different one."""
+    from warlock.studio import plotter_tilesets
+
+    sidecar = _generated_terrain_sidecar()
+    sidecar["terrains"] = [sidecar["terrains"][0], {"name": "broken"}]
+    assert plotter_tilesets._recorded_terrains(sidecar["terrains"]) == ()
+
+    ctx = FakeCtx()
+    tab = _tab(ctx, tileset=False)
+    _library(monkeypatch, tmp_path, _generated_terrain_atlas(), sidecar)
+
+    plotter_mode.use_as_tileset(ctx, {"id": "j1", "name": "coast"})
+    plotter_mode.on_task_done(ctx, _Done(f"plotter-tileset:{tab.uid}", ctx.result))
+
+    assert tab.doc.tilesets[0].tileset.terrains == ()
+
+
+def test_the_seamless_sidecars_own_spelling_of_the_view_is_read(tmp_path, monkeypatch):
+    """The grid path writes ``projection`` and the seamless path writes ``view``.
+    Reading only the first left every generated tileset with no lattice at all,
+    which is the silent half of "the sidecar records it and nothing reads it"."""
+    from warlock.studio import plotter_tilesets
+    from warlock.studio.plotter import project
+
+    _library(monkeypatch, tmp_path, _flat(), _generated_terrain_sidecar())
+    record = plotter_tilesets._recorded_sheet(FakeCtx(), "j1")
+    assert record is not None
+    assert record.lattice == project.ORTHOGONAL
+    assert record.layout == plotter_tilesets.BLOB_LAYOUT
+
+
 def test_a_sheet_with_too_few_cells_never_parks_as_terrain(tmp_path):
     ctx = FakeCtx()
     tab = _tab(ctx, tileset=False)

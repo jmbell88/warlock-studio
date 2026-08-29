@@ -608,6 +608,75 @@ def test_copying_a_references_settings_makes_an_object():
     assert ctx.state.form_2d["output"] == "reference"
 
 
+def _sheet_params(**block):
+    return {"seed": 7, "sheet": {"version": 3, "tile_h": 32, **block}}
+
+
+def test_copying_a_materials_sheet_brings_its_list_back():
+    """A tile set is the one kind whose request is a nested block rather than
+    flat fields, so the key-matching loop finds none of it -- and "another like
+    this" reopened the form at its defaults with nothing said."""
+    from warlock.studio.state import form_from_params
+
+    form = form_from_params(
+        _sheet_params(
+            mode="materials",
+            tile_w=64,
+            projection="top_down",
+            variants=2,
+            materials=[
+                {"index": 0, "prompt": "grass", "variant": 1, "seed": 1},
+                {"index": 1, "prompt": "grass", "variant": 2, "seed": 2},
+                {"index": 2, "prompt": "dirt", "variant": 1, "seed": 3},
+                {"index": 3, "prompt": "dirt", "variant": 2, "seed": 4},
+            ],
+        )
+    )
+    # The lines, not the cells: the block holds one record per (line, variant).
+    assert form["tile_mode"] == "materials"
+    assert form["materials"] == "grass\ndirt"
+    assert form["variants"] == "2"
+    assert form["tile_size"] == "64"
+    assert form["asset_type"] == "tileset"
+
+
+def test_copying_a_terrain_set_keeps_which_surface_is_which():
+    """Order is not a convention here: ``inner`` is the one the forty-seven
+    pictures are of."""
+    from warlock.studio.state import form_from_params
+
+    form = form_from_params(
+        _sheet_params(
+            mode="terrain",
+            tile_w=32,
+            projection="top_down",
+            boundary="a temperate coastline",
+            materials=[
+                {"index": 0, "prompt": "wet grass", "variant": 1, "seed": 1},
+                {"index": 1, "prompt": "dark water", "variant": 1, "seed": 2},
+            ],
+        )
+    )
+    assert form["tile_mode"] == "terrain"
+    assert form["inner_terrain"] == "wet grass"
+    assert form["outer_terrain"] == "dark water"
+    assert form["boundary"] == "a temperate coastline"
+
+
+def test_copying_a_sheet_from_before_the_layouts_reopens_on_the_grid():
+    """A version-2 block names no mode, and the door's own reading of that is
+    that it is the grid path and nothing else -- which is also the only layout
+    that can reproduce its 48 px isometric tiles."""
+    from warlock.studio.state import form_from_params
+
+    form = form_from_params(
+        {"sheet": {"version": 2, "tile_w": 48, "tile_h": 24, "projection": "isometric"}}
+    )
+    assert form["tile_mode"] == "grid"
+    assert form["tile_size"] == "48"
+    assert form["projection"] == "isometric"
+
+
 def test_copying_settings_survives_a_junk_value():
     from warlock.studio.state import form_from_params
 

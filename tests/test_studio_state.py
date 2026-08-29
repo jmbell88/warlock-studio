@@ -588,6 +588,29 @@ def test_restoring_a_form_keeps_only_known_keys_of_the_right_type():
     assert restored == {"prompt": "a sword", "count": 1, "seed": 42}
 
 
+def test_a_stored_tile_layout_off_the_menu_never_reaches_the_form():
+    """Settings are untrusted JSON read before any control can clamp them. The
+    layout decides which *shape* of request the submit compiles, so a value the
+    door does not build has to be dropped at the boundary rather than carried to
+    a refusal the user cannot see the control for."""
+    defaults = statelib.default_form_2d()
+    assert settingslib.restore_form(defaults, {"tile_mode": "quilt"})["tile_mode"] == (
+        defaults["tile_mode"]
+    )
+    assert settingslib.restore_form(defaults, {"tile_mode": "terrain"})["tile_mode"] == (
+        "terrain"
+    )
+
+
+def test_a_stored_variant_count_past_the_doors_ceiling_is_dropped():
+    defaults = statelib.default_form_2d()
+    for stored in ("0", "9", "many"):
+        assert settingslib.restore_form(defaults, {"variants": stored})["variants"] == (
+            defaults["variants"]
+        )
+    assert settingslib.restore_form(defaults, {"variants": "4"})["variants"] == "4"
+
+
 def test_a_settings_write_is_atomic(tmp_path):
     """A half-written file takes the next launch down with it."""
     s = settingslib.Settings.load(tmp_path)

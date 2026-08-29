@@ -41,6 +41,7 @@ from ._q_jobs import JobOps
 from ._q_mesh import MeshPostOps
 from ._q_rig import RigOps
 from ._q_sprite import SpriteOps
+from ._q_tileset import TileSetOps
 from ._q_tilesheet import TileSheetOps
 from ._q_troupe import TroupeOps
 from .config import Config
@@ -679,7 +680,9 @@ def commit_fraction() -> float | None:
     return None if sysmem is None else sysmem.commit_fraction
 
 
-class Worker(GenerateOps, RigOps, TroupeOps, SpriteOps, TileSheetOps, MeshPostOps, JobOps):
+class Worker(
+    GenerateOps, RigOps, TroupeOps, SpriteOps, TileSheetOps, TileSetOps, MeshPostOps, JobOps
+):
     def __init__(self, config: Config, store: JobStore) -> None:
         self.config = config
         self.store = store
