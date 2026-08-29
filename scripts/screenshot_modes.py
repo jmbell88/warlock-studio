@@ -49,7 +49,9 @@ from _appharness import close_popups as _close_popups  # noqa: E402
 from _appharness import seed as _seed  # noqa: E402
 from _appharness import seed_asset as _seed_asset  # noqa: E402
 from _appharness import seed_matte as _seed_matte  # noqa: E402
+from _appharness import seed_palette as _seed_palette  # noqa: E402
 from _appharness import seed_review as _seed_review  # noqa: E402
+from _appharness import seed_sheet_form as _seed_sheet_form  # noqa: E402
 from _appharness import seed_tile as _seed_tile  # noqa: E402
 from _appharness import seed_troupe as _seed_troupe  # noqa: E402
 
@@ -78,24 +80,36 @@ def _capture_popups(app, out: Path, theme_name: str) -> None:
     ctx.state.mode = create_stages.MODE
     ctx.state.create_stage = "mesh"
 
-    # The diagnostics popup is gone and its list is Settings -> Health now, so
-    # this is a mode capture rather than a popup one. Still made here rather
-    # than left to the mode walk: that walk draws whichever category is
-    # remembered, and the remembered one is Appearance -- which would have put
-    # the theme picker under a filename claiming to be the health page, the
-    # failure this function's own comment further down warns about.
+    # **Settings -> Health is deliberately not captured, and must not be.**
     #
-    # ``rail.request("diagnostics")`` used to stand here. It kept working after
-    # the popup went, silently: ``request`` assigns into ``_wants`` rather than
-    # looking a key up, so it set a flag nothing reads and the capture was an
-    # ordinary picture of Create.
-    from warlock.studio.panes.app_settings import CATEGORY_SLOT
-
-    ctx.state.mode = "settings"
-    ctx.state.preview[CATEGORY_SLOT] = "health"
-    _capture(app, out / f"{theme_name}-settings-health.png")
-    ctx.state.preview.pop(CATEGORY_SLOT, None)
-    ctx.state.mode = create_stages.MODE
+    # It was, briefly. The three ``*-settings-health.png`` it wrote carried
+    # ``C:\Users\<name>\...`` about eight times each, the absolute vendor
+    # directory of the machine that ran the pass, and the capture's own temp
+    # path down to its session GUID -- straight into a public repository. That
+    # is the exact defect the doctor-banner comment in ``main`` records: 44 of
+    # the 84 images in this repo once shipped with a developer's real home
+    # directory, username and all.
+    #
+    # No environment isolation fixes it. The banner could be dismissed because
+    # it is incidental to every mode; printing probed absolute paths is the
+    # health page's *entire content*, so an isolated home only swaps one real
+    # path for another real path. Nor is deleting the files enough on its own,
+    # which is why this comment stands where the capture did: the next
+    # regeneration would re-leak.
+    #
+    # A scrubbing mode -- render, then replace every path-shaped run with a
+    # placeholder before the PNG is written -- is the better answer and is the
+    # follow-up this refusal is holding a place for. It is not written here
+    # because it would have to recognise every path-shaped string the page can
+    # print, in pixels, and a scrubber that misses one is worse than no
+    # capture: it looks safe. Until then the honest minimum is that a
+    # screenshot which cannot be taken without leaking is a screenshot this
+    # corpus does not have.
+    #
+    # ``rail.request("diagnostics")`` used to stand here, from when the page
+    # was a popup. It kept working after the popup went, silently: ``request``
+    # assigns into ``_wants`` rather than looking a key up, so it set a flag
+    # nothing reads and the capture was an ordinary picture of Create.
 
     ctx.confirms.ask(
         dialogs.Confirm(
@@ -132,6 +146,95 @@ def _capture_popups(app, out: Path, theme_name: str) -> None:
     _capture(app, out / f"{theme_name}-modal-new-map.png")
     _close_popups(app)
     ctx.state.mode = create_stages.MODE
+
+
+#: The sheet arms of Create's 2D form, and what each one has to be told before
+#: it draws its own controls. One capture each, because the arms do not share a
+#: layout: the tileset arm's Tile-layout section is a different set of fields in
+#: every one of its modes, and the sprite arm has an Action/Directions pair the
+#: tileset arm has nothing like.
+#:
+#: ``tile_mode`` is the only extra: it is the tileset arm's own picker and the
+#: default is Materials, so a single tileset capture would leave the terrain
+#: fields -- Inside, Outside, Shared setting -- unphotographed, which is where
+#: this session's work actually is.
+#:
+#: The fourth element is whether the arm also gets a second capture with the
+#: form scrolled to its end. The Advanced disclosure is where Dimensions,
+#: target cell, Palette, Dither and Outline live, and the form is a good deal
+#: taller than the window -- so opening the disclosure is necessary and not
+#: sufficient: the section opens below the fold and the picture still shows
+#: none of it. Only one of the two tileset arms takes that second shot, because
+#: their Advanced sections are the same controls.
+SHEET_ARMS = (
+    ("tileset-materials", "tileset", {"tile_mode": "materials"}, False),
+    ("tileset-terrain", "tileset", {"tile_mode": "terrain"}, True),
+    # ``walk8`` and not the stored default. The default is ``turnaround``,
+    # which is one of ``generation.SPRITE_LEGACY_MODES`` -- and the Directions
+    # row is drawn only for the planned kinds, so the default arm photographs
+    # the Action combo and nothing beside it.
+    ("sprite", "sprite_sheet", {"sheet_layout": "walk8"}, True),
+)
+
+#: The scrolling child ``settings_2d.draw`` puts the whole form in.
+FORM_CHILD = "2d-form"
+
+
+def _scroll_form(app, child: str, *, to_end: bool) -> bool:
+    """Park a named child window at the top or the bottom of its content.
+    -> whether it was found.
+
+    imgui's scroll setters are frame-local -- ``set_scroll_y`` applies to the
+    window currently being built -- and this harness works between frames, so
+    the only handle available is the retained ``ImGuiWindow``. A child's
+    retained name is ``"<parent>/<str_id>_<id>"`` and the id is not knowable
+    from out here, hence the scan rather than ``find_window_by_name``.
+
+    Writing ``scroll`` rather than ``scroll_target``: a target is consumed and
+    cleared by the next ``Begin``, so it would move the form for one frame and
+    the capture's settle loop would draw several more.
+    """
+    from imgui_bundle import imgui
+
+    suffix = f"/{child}_"
+    for window in imgui.get_current_context().windows:
+        if suffix in window.name:
+            window.scroll = (window.scroll.x, window.scroll_max.y if to_end else 0.0)
+            return True
+    return False
+
+
+def _capture_sheet_arms(app, out: Path, theme_name: str) -> None:
+    """Create's reference stage once per sheet arm, Advanced open.
+
+    The mode walk photographs Create on whatever ``asset_type`` the form
+    remembers, and a fresh home remembers Image -- the one arm with no sheet
+    controls on it. So this is not a nicety: without it the corpus has no
+    picture of any control on either sheet branch, while appearing to have five
+    pictures of the form.
+    """
+    state = app.app_ctx.state
+    before = dict(state.form_2d)
+    try:
+        for name, arm, extra, advanced in SHEET_ARMS:
+            _seed_sheet_form(app, arm=arm)
+            state.form_2d.update(extra)
+            # Back to the top first: the child is retained, so an arm that
+            # scrolled would leave the next arm's own picture halfway down a
+            # form whose fields have all changed underneath it.
+            _scroll_form(app, FORM_CHILD, to_end=False)
+            _capture(app, out / f"{theme_name}-create-{name}.png")
+            if advanced and _scroll_form(app, FORM_CHILD, to_end=True):
+                _capture(app, out / f"{theme_name}-create-{name}-advanced.png")
+    finally:
+        # Restored, or the light and pixel passes would draw every remaining
+        # capture on the arm the dark pass left behind -- the same
+        # wrong-screen-under-the-right-filename failure ``_capture_popups``
+        # records twice.
+        state.form_2d.clear()
+        state.form_2d.update(before)
+        state.create_advanced = False
+        _scroll_form(app, FORM_CHILD, to_end=False)
 
 
 def _stage_review_tag(app) -> None:
@@ -204,6 +307,18 @@ def main() -> int:
         "empty-state panes",
     )
     ap.add_argument(
+        "--sheets",
+        action="store_true",
+        help=(
+            "also capture Create's reference stage once per sheet arm -- the "
+            "two tileset layouts and the sprite sheet -- and seed a palette so "
+            "the Palette combo, which only draws when the palette folder has "
+            "something in it, is on screen. The mode walk cannot reach any of "
+            "this: it draws whichever asset type the form remembers, and a "
+            "fresh home remembers Image."
+        ),
+    )
+    ap.add_argument(
         "--floating",
         action="store_true",
         help=(
@@ -243,8 +358,8 @@ def main() -> int:
         "--popups",
         action="store_true",
         help=(
-            "also capture diagnostics, confirm and prompt containers, the model "
-            "matte modal, and Plotter's new-map modal"
+            "also capture the confirm and prompt containers, the model matte "
+            "modal, and Plotter's new-map modal"
         ),
     )
     ap.add_argument(
@@ -299,6 +414,11 @@ def main() -> int:
         # both handoffs greyed. Everything the preview reads is a file, so
         # this costs no GPU (see ``_appharness.seed_troupe``).
         _seed_troupe(app)
+    if args.sheets:
+        # Before the theme loop, because the folder listing behind the Palette
+        # combo is read once per frame and a palette written mid-pass would
+        # appear in some themes and not others.
+        _seed_palette(app)
     app.app_ctx.state.tile_preview = bool(args.tile_preview)
     # **The doctor banner, off, before anything is photographed.** It is a
     # property of the machine that ran the capture -- which weights happen to
@@ -333,6 +453,8 @@ def main() -> int:
                     # over every mode therefore cannot survive to its capture.
                     _stage_review_tag(app)
                 _capture(app, args.out / f"{name}-{mode}.png")
+            if args.sheets:
+                _capture_sheet_arms(app, args.out, name)
             if args.tour:
                 from warlock.studio.panes import tour as tour_pane
                 from warlock.studio.tour import TOURS

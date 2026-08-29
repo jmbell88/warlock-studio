@@ -16,7 +16,136 @@ stability. If you want the short version, the app shows the opening sentence of
 each entry under **All release notes...** on the Home screen, and only expands
 the release you are actually running.
 
-## 0.0.29 — 2026-08-25
+## 0.0.29 — 2026-08-29
+
+- **Generated tiles now actually tile.** Create → **Sheet** has a Layout control with three
+  entries. *Materials* takes a list of surfaces and generates each one as its own seamless
+  1024px tile through the circular-padding path, then lays the results out; *Terrain set*
+  takes an inner and an outer surface and composites them into a blob-47 set that Plotter's
+  Terrain tool paints with immediately; *Grid (legacy)* is the old path, one generation cut
+  into sixty-four cells. The reason the old grid is legacy is measured:
+  `docs/measurements/2026-08-18-tile-sheet-grid.md` ran four arms and found the mechanism
+  sound and the art direction not — the sixty-four guide cells are *identical*, so the model
+  has no per-cell signal to vary against and either ignores the guide and paints one
+  continuous scene or obeys it and paints one tile sixty-four times. That document named the
+  answer, "N materials, one grid", and this is it. Grid stays because it is the only route to
+  a 3/4 or isometric sheet: a 3/4 tile has a visible front face and an isometric tile is a
+  diamond, so neither of those wraps and neither can be seamless. A generated terrain set is
+  recognised in Plotter from what `sheet.json` records rather than by looking at the pixels —
+  role inference needs transparency or one dominant ring colour and a real set is two opaque
+  textures, so it would answer nothing.
+
+- **A tile sheet no longer records a structure it does not have, and a grid row no longer
+  fails an hour in on a validation of pixels it was never going to draw.** The legacy grid
+  path was still compiling a per-cell plan — per-cell prompts, per-cell seeds, sixteen Wang
+  roles — and writing it into the job's params and into the sheet's sidecar, while drawing
+  one generation sliced on a fixed lattice. That was the original defect the whole tileset
+  programme started from: a compiled plan stored as metadata that changed nothing about the
+  generation, so the record beside the PNG could contradict the PNG. It also raised inside the
+  worker, after the row had been accepted and queued, for a stored request carrying a terrain
+  block the grid arm never reads. Sheets already on disk keep their block and still open.
+
+- **The pixel look reaches sprite sheets and tile sheets, not just Troupe.** An authored
+  palette (Lospec/GIMP ramps from your palette folder), ordered dithering, and — on sprites — a
+  hard outline are now on the Create form and in the request, where before only the Troupe
+  render path could reach any of it. `pipelines/pixelize.py` has always said an authored ramp
+  is the single highest-leverage art input in the program and that hard outlines are most of
+  what separates crisp pixel art from a shrunk render; five generated-atlas paths existed and
+  one of them was wired. The palette also joins the fields a **profile** captures, so two
+  sheets of one character can be made to match without retyping it. Outlines are sprite-only
+  and refused by name on a tile rather than quietly dropped: on an opaque tile the edge mask
+  treats the atlas border as transparent, so an inner outline returns the outer ring of every
+  cell — a grid line drawn around every tile. Dither is offered with or without a palette,
+  because the tile path derives its own table by median cut and dithers against that.
+  Sprite drafts move to version 3 and their bytes change: the reduction is the alpha-weighted
+  box supersample rather than a nearest resize, the mapping is nearest-in-Oklab rather than
+  the median cut's own assignment, and orphaned single pixels are cleaned. The default tile
+  path deliberately still uses its old quantiser — measured on a synthetic atlas, the two
+  produce the *same* 64-entry table and disagree on 27.66% of pixels, so routing the default
+  through the new pair would have silently re-coloured every tile sheet in your library on its
+  next reroll.
+
+- **A sprite sheet can be one of seven actions in eight directions.** Idle, walk, run, attack,
+  cast, hurt and jump, each with its own frame count, drawn one full direction per generation
+  rather than one frame for the lot. The arithmetic forces that shape: the pixel-art LoRA
+  spends about eight generation pixels on one art pixel, so an honest 32px sprite needs a
+  256px cell and eight directions of eight frames is 4.2 megapixels — four SDXL frames, not
+  one. A whole direction shares one denoise because drift between frames of one direction
+  plays at 10fps and reads as flicker, while drift between directions reads as the character
+  turning and is held by the shared reference, the shared seed and the IP-Adapter. One
+  consequence is worth knowing before you pick a size: at 48px and 64px only four frames fit
+  in a band, so only the four-frame actions (idle, hurt) can be drawn there and the size
+  picker now says so instead of compiling a request the door refuses. The seven pose guides
+  are mirror-derived — five directions authored, three exact reflections — and every one was
+  rendered and looked at; four were rewritten because of what that showed, including a walk
+  whose front row splayed the arms outward with the stride and so produced eight identical
+  frames.
+
+- **Fast and Quality are two different pictures now.** They were not: `image_fast` and
+  `image_quality` both named `sdxl_cfg` at the same working resolution with the same
+  downloads, so the tier selector resolved to two names and one checkpoint and changing it
+  changed nothing you could see. Fast is SDXL 1.0 under Hyper-SD at four steps against
+  Quality's thirty, on the same base weights, so the only extra download is the 0.8 GB adapter
+  it already declared. This is a measured trade rather than a guess —
+  `docs/measurements/2026-08-11-default-base-model.md` ran this exact arm and scored it 2 of 4
+  against 3 of 3 — and the tier now says what it costs: four steps, no structure control, no
+  negative prompt. It also stops refusing in a place you cannot see: the refusal for a
+  structure image under Fast used to name `base_model`, a control automatic routing does not
+  draw, and a stranded ControlNet or Avoid line is now cleared with a sentence when you change
+  tier rather than keeping Generate off over a field that is off screen.
+
+- **A reroll that runs out of attempts keeps its best draw rather than whichever was last.**
+  Stopping on the first acceptable attempt is unchanged and right; the other exit was not.
+  No quality score was invented for this, because the reference report carries none and its
+  refusal codes are documented as the order the rules fire in and explicitly not as severity —
+  the ranking is (empty last, then fewest refusals, then fewest warnings), which is the only
+  ordering the measurement supports. Ties keep the last draw, so the common case where every
+  attempt fails the same rule is byte-identical to before. The recorded seed and report are
+  rewritten to the draw that survived, so provenance never names a seed that does not
+  reproduce what is on disk.
+
+- **Fixed: the structured request route had never once been able to queue a sprite sheet.**
+  It mapped a sprite request onto an output name that `create_job` refuses by name, so every
+  such request was turned away at the door. A sprite sheet is an ordinary reference job
+  carrying a follow-up, and it is submitted as one now.
+
+- **Fixed: an eight-direction sprite draft was complete on disk and invisible in the pane.**
+  The listing demanded both candidate PNGs, but a sheet that large is drawn as a single
+  candidate — so the finished draft, correct in its own sidecar, was never shown. The record's
+  own candidate list is what says which images it claims, which is stricter as well as truer.
+
+- **Fixed: the Palette combo advertised two file formats that silently never load.** Its
+  helper said the palette folder takes `.hex`, `.gpl`, `.pal` and `.txt`; the loader takes the
+  first two. Dropping a `.pal` in produced no error, no row and nothing to see. The sentence is
+  now derived from the loader's own list rather than restated beside it, since a restated list
+  is exactly the thing that drifted. Whether the two missing formats should load is recorded in
+  the loader — both are real formats somebody meant to support, and Inker's own import already
+  parses a JASC `.pal`.
+
+- **Fixed: the sprite panel promised two drafts and two generations for sheets that are
+  neither.** An eight-direction action generates once per direction, and above sixteen cells
+  the door draws one draft rather than a pair — so an eight-direction attack at 32px is eight
+  generations for one draft, wrong in both directions at once and wrong on cost by 4x. The two
+  strings had also contradicted each other, a button offering "two drafts" above a note saying
+  both land as one. Both now come from one service call that answers with the cells, bands,
+  candidates, generations and duration for the selection in hand, and carries the door's own
+  refusal as the button's disabled reason when the combination is one the door would turn away.
+
+- **A seam measurement that refused to move its constant, which is the interesting result.**
+  `SEAM_MAX` stays 3.5. The re-measurement was run because four real generated materials scored
+  2.95–3.74 on the GPU lane, inside the band the original turbo corpus left empty — but the run
+  found the instrument, not the threshold, is what fails on this population. Over 120 units
+  with decision rules registered before any image existed, the ratio is **inverted** on
+  LoRA'd pixel art: it flags twenty of twenty-four tiles that were then viewed through their
+  seam crosses and confirmed to have no visible join, while passing plain, definitely-seamed
+  images that scored as low as 0.857. No threshold beats chance there, so tuning one to make
+  the assertion pass would have been tuning a constant to a test. The failing GPU assertion
+  stays red and carries its own diagnosis. Two things came out worth more than a number: a
+  better instrument exists — *is the wrap seam the largest discontinuity in the image?* scores
+  1 of 48 on tiled and 19 of 48 on plain — and a reproduction control proved this path has not
+  moved, with a maximum delta of 0.000000 against the 2026-08-13 run across all 72 shared
+  units, so two rewrites of the image pipeline and three prompt versions provably never
+  touched the tile path.
 
 - **New mode: Sirens, a chiptune tracker.** Twelve modes now. NES-shaped pulse, triangle,
   noise and sample voices; a pattern grid you type into; an order list; instruments whose four

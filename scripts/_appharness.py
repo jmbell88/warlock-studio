@@ -431,3 +431,56 @@ def seed_troupe(app) -> None:
     ctx.cache.invalidate()
     ctx.cache.tick()
     troupe_mode.open_sheet(ctx, source_id, sheet_id)
+
+
+def seed_palette(app) -> None:
+    """One authored palette on disk, so the Palette combo exists to photograph.
+
+    ``settings_2d._pixel_look`` draws that combo only when the palette folder
+    has something in it -- palettes are opt-in and the honest rendering of
+    "none installed" is no control at all. A capture home is fresh, so the
+    control had never been in a picture: not the combo, and not the two
+    branches of the Dither helper below it, which says a different sentence
+    depending on whether a palette is chosen.
+
+    Written with the loader's own suffix rather than a hardcoded ``.hex``, for
+    the reason the helper line beside that combo records: this repo has already
+    shipped a sentence naming suffixes ``palettes.SUFFIXES`` did not carry.
+    """
+    from warlock.service import palettes
+
+    directory = Path(app.app_ctx.svc.config.palette_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"dawnlight{palettes.SUFFIXES[0]}").write_text(
+        "\n".join(("1a1c2c", "5d275d", "b13e53", "ef7d57", "ffcd75", "f4f4f4")) + "\n",
+        encoding="utf-8",
+    )
+
+
+def seed_sheet_form(app, *, arm: str) -> None:
+    """Park Create's 2D form on a sheet arm, with Advanced open.
+
+    The reason this exists at all: ``--asset`` seeds a *mesh*, and the form
+    remembers ``asset_type = Image``, so every Create capture this corpus has
+    ever held was taken on the one arm that draws none of the sheet controls.
+    The Tile-layout picker, the materials list, the terrain fields, the sprite
+    Action and Directions rows, the target cell, Palette, Dither and Outline
+    are each on a branch that never executed -- a set of pictures that looks
+    like coverage of the form and covers none of it.
+
+    ``arm`` is a generation type from ``generation.GENERATION_TYPES``. Only
+    ``asset_type`` is written: ``settings_2d.draw`` runs
+    ``create_assets.sync_legacy_fields`` on every frame, so ``output`` and
+    ``sheet_type`` are derived rather than set here -- two places setting them
+    is how a form ends up in a state the pane cannot reach.
+    """
+    from warlock.studio import create_stages
+
+    state = app.app_ctx.state
+    state.form_2d["asset_type"] = arm
+    state.form_2d["generation_type"] = arm
+    state.mode = create_stages.MODE
+    state.create_stage = "reference"
+    # The sheet Dimensions section lives inside the disclosure, and the
+    # disclosure is AppState rather than settings, so it starts shut.
+    state.create_advanced = True

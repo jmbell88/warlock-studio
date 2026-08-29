@@ -266,7 +266,7 @@ def _controls(
             # The returned value is deliberately unread: the set *is* the
             # state, so the toggle is applied to it rather than copied out of
             # the widget.
-            hit, _value = form_ui.checkbox(
+            hit, _value = form_ui.switch(
                 f"pose_{pose['id']}", pose.get("name") or pose["id"], checked
             )
             if hit:

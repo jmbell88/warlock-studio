@@ -334,27 +334,22 @@ class Form:
             )
         return result
 
-    def checkbox(
-        self,
-        field: str,
-        label: str,
-        value: bool,
-        *,
-        help_text: str = "",
-        helper: str = "",
-        error: str = "",
-        enabled: bool = True,
-        reason: str = "",
-    ) -> tuple[bool, bool]:
-        with self.field(field, label, help_text=help_text, helper=helper, error=error) as problem:
-            result = controls.checkbox(
-                f"##{field}",
-                value,
-                enabled=enabled,
-                reason=reason,
-                error=problem,
-            )
-        return result
+    # **There is no ``checkbox`` on this form, on purpose.** There was, and it
+    # drew nothing at all when off: the field grid puts the label in the left
+    # column and submits the control as ``##field``, so what remained was an
+    # unlabelled imgui checkbox -- whose frame background is ``ELEV_1``, the
+    # same value the section panel it sits on is filled with, in dark, light
+    # *and* pixel alike. Off it was an empty gap the height of a control; on it
+    # was a tick that appeared out of nowhere. Create's Dither box shipped like
+    # that, and so did Troupe's movement rows and the pose rows in Sheet.
+    #
+    # Every one of those four call sites is now :meth:`switch`, which was
+    # already what every other Boolean on every one of these forms used, and
+    # which draws a track and a knob rather than relying on a frame edge to be
+    # visible. A Boolean in a form grid is not a checkbox here, and a second
+    # spelling that is invisible in all three shipped palettes is the thing to
+    # delete rather than to route around. ``controls.checkbox`` stays: its
+    # other callers pass a real label, so there is always something on screen.
 
     def segmented_choice(
         self,

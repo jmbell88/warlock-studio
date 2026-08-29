@@ -19,7 +19,8 @@ every earlier version and every deleted plan (`git log --all --diff-filter=D`).
 tracked.** A plan whose boxes disagree with the tree is worse than no plan, and
 that is why every other roadmap file in this repository's history was deleted
 rather than ticked. Nothing here is blocked on finding time. Every claim in
-this file was verified against the tree on 2026-08-25.
+this file was verified against the tree on 2026-08-25, and P10 and P15–P18
+against the tree on 2026-08-29.
 
 **This file has no `§N` API.** `tests/test_ux_todo_fixes.py` refuses any
 citation of this filename from `src/` or `scripts/`. What a module needs to
@@ -251,10 +252,14 @@ signing step — code, once the certificate exists) or a recorded no.
   (`docs/measurements/2026-08-17-reference-source-bench.md`).
 - `turbo` is labelled non-commercial (the disclosure half). Whether it is also
   labelled *draft* is an editorial call.
-- Tile sheets: `docs/measurements/2026-08-18-tile-sheet-grid.md` says the
+- ~~Tile sheets: `docs/measurements/2026-08-18-tile-sheet-grid.md` says the
   mechanism works and the output is "one continuous brick wall" or
   "near-identical grey mush", and names the answer — "N materials, one grid".
-  Ship that, mark the feature experimental, or hold it.
+  Ship that, mark the feature experimental, or hold it.~~ **Done 2026-08-29:
+  shipped.** The Layout control offers Materials and Terrain set alongside the
+  old path, which is labelled *Grid (legacy)* and kept only because a 3/4 or
+  isometric tile cannot wrap and so cannot be seamless. What is owed now is the
+  verdict, which is P15.
 
 **Expected outcome:** each of the four is a decision recorded in the model
 registry's own comments (or a measurement document), after which the picker
@@ -355,10 +360,12 @@ pane-draw test with no GPU behind it — and none of that is the same as a perso
 saying "that is a pulse wave and it is in tune". The device path
 (`studio/sirens_audio.py`, `pygame.mixer`) has been exercised by tests that
 assert it *degrades* when there is no device, which is the opposite half of the
-question. It belongs beside P5, P6 and P7 — the three entries that are "run
-this against the real thing" — and it sits last only because inserting it in
-place would renumber twelve entries and thirty-seven cross-references, in a file
-whose own rule is that a plan disagreeing with the tree is worse than none.
+question. It belongs beside P5, P6 and P7 — the entries that are "run
+this against the real thing", as do P15 and P16 below — and it is numbered here
+rather than inserted in place only because inserting it would renumber twelve
+entries and thirty-seven cross-references, in a file whose own rule is that a
+plan disagreeing with the tree is worse than none. Everything appended after it
+is numbered by the same rule and read by priority, not by number.
 
 **Do:** open Sirens on a machine with audio and a display, and go through the
 tutorial (`docs/manual/14-making-a-soundtrack.md`) as written, out loud:
@@ -390,6 +397,105 @@ tutorial (`docs/manual/14-making-a-soundtrack.md`) as written, out loud:
 first defect that only a listener could find — a panning error, a tuning
 error, a click at a loop point, a mixer that opens at the wrong rate. The tests
 cannot produce either verdict, which is exactly why this is here.
+
+## P15. Judge a generated terrain set, and open it in real Tiled
+
+**Why it is yours:** a card, then eyes, then an application this repository does
+not have. The seamless path has been through real weights exactly once — four
+isolated 1024px materials in `tests/test_tileset_gpu.py` on 2026-08-29 — and
+**nothing has generated a terrain set end to end.** The blob-47 construction is
+proved by a map round-trip identity on real AI texture, which is the strongest
+evidence available without a person looking, and it is still evidence about the
+compositing rather than about the art.
+
+**Do:** Create → Sheet → **Terrain set**, two surfaces that ought to meet (grass
+into dirt is the honest first try), at 32px. Then take the sheet into Plotter,
+paint with the **Terrain** tool, and look at the joins where the brush turns a
+corner and where two strokes meet. Then export the map and **open it in Tiled**.
+
+That last step is P6 and P7's argument, not a new one: a round trip through our
+own two halves cannot catch an error both halves make together, and a terrain
+set is the case where that matters most, because our writer and our reader agree
+on the 47-case ordering by construction.
+
+**Expected outcome:** either the first generated tileset that a person would
+actually paint a map with, or the first defect in the chain that only a painted
+map shows — a coverage field that is right and reads wrong, a boundary that is
+too soft at 16px, two materials whose scales disagree.
+
+## P16. Judge an eight-direction action sprite sheet at 32px
+
+**Why it is yours:** art. The seven pose guides are verified as *guides* — the
+mirror rule is pinned, every authored row was rendered and looked at, and four
+were rewritten because of what that showed — but **nothing has been through SDXL
+with them.** Whether a guide that reads correctly as a stick figure produces a
+character that reads correctly as an attack is not a question the tests can
+reach.
+
+**Do:** one character, one reference, then `attack8` at 32px (eight generations,
+about three minutes) and `walk8` at 32px. Play the walk at 10fps in Inker and
+turn the character through all eight directions. Judge three things separately:
+does one identity survive all eight bands; does the action read as the action;
+and does the front row, which is a literal copy of the back row with a different
+prompt clause, look like a different picture.
+
+Three limits are already recorded rather than hidden, so they are not the
+finding: front and back rows are copies (the convention `walk.json` and
+`idle8.json` already set), `run8`'s knee-drive frames read a little like a
+crumple in profile, and `cast8`'s release is weaker head-on than in profile
+because a forward thrust has nowhere to go in an orthographic front view.
+
+**Expected outcome:** the art verdict on whether the whole action set is worth
+having — which is the decision that says whether the remaining guides are worth
+authoring, and whether P17 is a question at all.
+
+## P17. Decide whether four-direction guides are wanted
+
+**Why it is yours:** editorial. `SPRITE_DIRECTION_COUNTS` is `(4, 8)` and the
+action table plans a `walk4` as readily as a `walk8`, but the menu is discovered
+from the guide files on disk and only the `*8.json` files ship — so the
+Directions control has exactly one option today, which is a control that cannot
+be operated.
+
+The case for four is real: it is half the generations and half the wait, and the
+two legacy kinds (`turnaround`, the four-frame `walk`) already cover part of that
+ground. The case against is that a four-direction sheet and a legacy walk are
+near-neighbours that would need explaining, and that the guides are art — six
+more files of authored joint coordinates, each rendered and looked at.
+
+**Do:** decide. If yes, the work after the decision is authoring, not coding:
+the loader, the planner, the door and the form already take a four-direction
+kind, and the legacy row order (front/left/right/back, not the preset's
+front/left/back/right) is already pinned so a four-direction sheet lands in the
+vocabulary every draft on disk already uses.
+
+**Expected outcome:** either six authored guides and a Directions control with
+two options, or the control removed and the eight-direction count stated as a
+fact rather than offered as a choice.
+
+## P18. Decide what `style_lock` should look like, or remove it
+
+**Why it is yours:** design. It is built and it is unreachable. In the service
+and the worker, a materials sheet with `style_lock` set generates the first
+material and then uses it as the style reference for every one after it, so that
+N surfaces read as one artist's set rather than as N generations; `vram.py` even
+accounts for the extra adapter it loads. **No pane offers it and no route sets
+it**, so today it is a field that is always False and a branch that never runs —
+exactly the defect this session spent itself removing everywhere else.
+
+**Do:** decide one of three. A checkbox on the Materials arm ("keep one style
+across the list"), which is the small answer and needs a sentence saying what it
+costs. Folding it into the profile, beside the palette and the style LoRA, which
+is where "two sheets of one character match" already lives. Or deleting it, on
+the argument that a shared seed and a shared prompt template already do most of
+the work and an unmeasured second mechanism is not worth a control.
+
+Whichever way it goes, it is a decision first: shipping a control for a
+capability nobody has looked at the output of would only move the problem.
+
+**Expected outcome:** a reachable control with a sentence beside it, or 40-odd
+lines deleted and the fact recorded — and either way, no more unreachable
+branch.
 
 ---
 

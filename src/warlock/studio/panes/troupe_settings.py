@@ -193,7 +193,7 @@ def _layout(form: dict[str, Any], form_ui: forms.Form, options: dict[str, Any]) 
     for movement in layout.get("movements") or ():
         key = str(movement.get("key") or "")
         label = key.replace("_", " ").title()
-        _changed, movement["enabled"] = form_ui.checkbox(
+        _changed, movement["enabled"] = form_ui.switch(
             f"movement_{key}", label, bool(movement.get("enabled", True))
         )
         if not movement["enabled"]:
@@ -278,7 +278,7 @@ def _palette(
             [(str(n), f"{n} colours") for n in options.get("colors") or ()],
         )
         form["colors"] = int(colors)
-    _changed, form["dither"] = form_ui.checkbox("dither", "Dither", bool(form["dither"]))
+    _changed, form["dither"] = form_ui.switch("dither", "Dither", bool(form["dither"]))
 
 
 def _submit(ctx: Any, form: dict[str, Any]) -> None:

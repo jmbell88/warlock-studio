@@ -667,11 +667,18 @@ def create_tile_sheet(
         # materials composited through a coverage field; a request that
         # describes one of them has nothing to put on the other side of every
         # boundary.
-        for name, field_text in (("inner_terrain", inner), ("outer_terrain", outer)):
+        # Naming the field it is about, for the reason the pane's own copy of
+        # this check records: both halves are empty on a fresh request, and a
+        # refusal that says only "both have to be described" leaves the user
+        # to guess which of the two the door actually stopped on.
+        for name, label, field_text in (
+            ("inner_terrain", "Inside", inner),
+            ("outer_terrain", "Outside", outer),
+        ):
             if not field_text:
                 raise Invalid(
-                    "a terrain set is two surfaces and both are generated, so "
-                    "both have to be described",
+                    f"{label} is empty; a terrain set is two surfaces and both "
+                    f"are generated, so both have to be described",
                     field=name,
                 )
             check_prompt(field_text, field=name)

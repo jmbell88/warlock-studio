@@ -864,10 +864,15 @@ def _sprite_size(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
     if changed:
         form["cell_size"] = picked
     if len(sizes) < len(options["logical_sizes"]):
+        # "An 8-frame", "A 4-frame". The frame counts a plan can carry are 4, 6,
+        # 8 and 16, and 8 is the only one spoken with a leading vowel -- so this
+        # is the whole rule rather than a general article function, which would
+        # be a paragraph of English for three numbers that never change.
+        article = "An" if plan["frames"] == 8 else "A"
         widgets.muted_wrapped(
-            f"A {plan['frames']}-frame {plan['action']} is drawn one whole "
-            f"direction at a time, and only {max(sizes)}px and below fit one "
-            "generation."
+            f"{article} {plan['frames']}-frame {plan['action']} is drawn one "
+            f"whole direction at a time, and only {max(sizes)}px and below fit "
+            "one generation."
         )
 
 
@@ -943,7 +948,7 @@ def _pixel_look(
         if changed:
             form["palette"] = picked
             ctx.state.clear_field_error("palette")
-    changed, dithered = form_ui.checkbox(
+    changed, dithered = form_ui.switch(
         "dither",
         "Dither",
         bool(form.get("dither")),
@@ -2340,12 +2345,22 @@ def _layout_problems(form: dict[str, Any]) -> list[widgets.Problem]:
                 )
             )
     elif mode == svc_tilesheets.MODE_TERRAIN:
-        for field in ("inner_terrain", "outer_terrain"):
+        # One sentence per empty field, and each names its own control.
+        #
+        # This loop used to append one *identical* sentence per empty field, so
+        # a fresh terrain form -- where both are empty -- stacked the same
+        # words twice above Generate, and neither copy said which of the two it
+        # was about. A refusal here is meant to be a sentence the user can act
+        # on, and "one of the two fields" is not one. The list stays per-field
+        # rather than collapsing to a single line because ``refuse`` rings the
+        # control each problem names: a merged line could ring only one of them
+        # and would leave the other looking accepted.
+        for field, name in (("inner_terrain", "Inside"), ("outer_terrain", "Outside")):
             if not str(form.get(field) or "").strip():
                 problems.append(
                     widgets.Problem(
-                        "A terrain set is two surfaces and both are generated, so "
-                        "both have to be described.",
+                        f"{name} is empty. A terrain set is two surfaces and both "
+                        f"are generated, so both have to be described.",
                         field,
                     )
                 )

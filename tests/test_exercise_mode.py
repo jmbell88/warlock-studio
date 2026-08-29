@@ -151,6 +151,48 @@ def test_the_harness_is_shared_rather_than_reimplemented(driver):
     )
 
 
+def test_the_health_page_is_never_photographed():
+    """A screenshot that cannot be taken without leaking is not taken.
+
+    Settings -> Health prints the absolute paths it probed -- the user's home,
+    the vendor directory, the model roots. That is its entire content, so no
+    ``WARLOCK_HOME`` isolation makes a capture of it safe: it only swaps one
+    real machine's paths for another's. Three such images were written into
+    this public repository once, carrying a developer's username about eight
+    times each and the capture's own temp path down to its session GUID.
+    Deleting them was not the fix; this is, because the harness would have
+    rewritten them on the next run.
+    """
+    shots = (SCRIPTS / "screenshot_modes.py").read_text(encoding="utf-8")
+    body = "\n".join(line for line in shots.splitlines() if not line.lstrip().startswith("#"))
+    assert "settings-health" not in body
+    corpus = SCRIPTS.parent / "screenshots"
+    if corpus.is_dir():
+        assert not list(corpus.glob("*settings-health*")), "a health capture is in the corpus"
+
+
+def test_the_sheet_arms_of_the_create_form_are_photographed():
+    """``--asset`` seeds a mesh, so the form's sheet branches need their own.
+
+    Create's 2D form draws the Tile-layout picker, the materials list, the
+    terrain fields, the sprite Action/Directions pair, Palette, Dither and
+    Outline only on an ``asset_type`` no capture ever landed on -- the corpus
+    looked like five pictures of the form and pictured none of those controls.
+    """
+    harness = _load("_appharness")
+    for name in ("seed_palette", "seed_sheet_form"):
+        assert hasattr(harness, name), name
+    shots = _load("screenshot_modes")
+    arms = {arm for _name, arm, _extra, _adv in shots.SHEET_ARMS}
+    assert arms == {"tileset", "sprite_sheet"}
+    modes = {extra.get("tile_mode") for _name, _arm, extra, _adv in shots.SHEET_ARMS}
+    assert {"materials", "terrain"} <= modes
+    # Opening the disclosure is not enough to photograph what is inside it:
+    # the form is taller than the window, so at least one arm per branch has
+    # to be captured scrolled to the end as well.
+    assert sum(1 for _n, _a, _e, adv in shots.SHEET_ARMS if adv) >= 2
+
+
 def test_the_driver_reports_its_own_blind_spot(driver):
     from test_probe import RAW_IMGUI_CONTROLS
 

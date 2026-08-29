@@ -159,7 +159,7 @@ def test_the_2d_form_draws_that_helper_rather_than_a_list_of_its_own(svc, paldir
             self.calls[field] = kw
             return (False, current)
 
-        def checkbox(self, field, label, value, **kw):
+        def switch(self, field, label, value, **kw):
             self.calls[field] = kw
             return (False, value)
 
