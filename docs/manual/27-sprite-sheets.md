@@ -130,15 +130,23 @@ the eight views are eight photographs of one object. Here there is no object —
 one — so the front view is the drawing and the other three are the image model's guess at what the
 subject looks like from the side and the back.
 
-That is why it produces **two candidates every time**, from two different seeds, side by side. You
-pick. Nothing is chosen for you, nothing is overwritten, and drafts accumulate until you delete
-them.
+That is why it produces **two candidates**, from two different seeds, side by side. You pick.
+Nothing is chosen for you, nothing is overwritten, and drafts accumulate until you delete them. The
+exception is size: past sixteen cells a sheet draws one candidate instead of two, because at that
+point a second guess is another eight generations and costs more than it is worth.
 
-**Type** is `turnaround` (a 2x2 grid: front, left, right, back) or `walk` (a 4x4 grid: one row per
-direction, four frames of a walk cycle across). **Cell size** is the finished pixel size of one
-cell, 32, 48 or 64. **Palette** is how many colours the whole sheet is reduced to. Each candidate
-has its own seed with a **Reroll** beside it; the two must differ, or you would be asking for the
-same picture twice.
+**Type** is which sheet to draw, listed with the grid each one makes. Two are fixed atlases drawn in
+a single generation: `turnaround` (a 2x2 grid: front, left, right, back) and `walk` (a 4x4 grid: one
+row per direction, four frames of a walk cycle across). The rest are actions — idle, walk, run,
+attack, cast, hurt, jump — each drawn one whole direction per generation, so an eight-direction run
+is eight of them. The list is discovered from the pose guides on this installation's disk rather
+than hardcoded, so an action with no guide behind it is simply absent, and one you add appears.
+
+**Cell size** is the finished pixel size of one cell, 32, 48 or 64 — but only the sizes the chosen
+type can actually be drawn at are offered. All three are available for the fixed atlases and for the
+four-frame actions; a six- or eight-frame action fits one generation only at 32 px. **Palette** is
+how many colours the whole sheet is reduced to. Each candidate has its own seed with a **Reroll**
+beside it; the two must differ, or you would be asking for the same picture twice.
 
 Three things make the result hang together rather than being four unrelated drawings:
 
@@ -161,15 +169,22 @@ costs you a sentence to read, and throwing a candidate away would leave you comp
 against nothing.
 
 **Open in Inker** opens that candidate as an animation, one frame per cell, and this is the point of
-the whole feature: what arrives is editable, not final. A walk sheet arrives with a tag per
-direction, so pressing Play loops one direction at a time. The document is unsaved and belongs to no
+the whole feature: what arrives is editable, not final. Any sheet of an action arrives with a tag
+per direction — `walk_front`, `walk_front_left` and so on — carrying that action's own frame
+duration and whether it loops, so pressing Play loops one direction at a time at the speed it was
+meant to run. A turnaround carries none, deliberately: four still views are not an animation, and
+tagging them would put four one-frame loops in the timeline that mean nothing to play. The document
+is unsaved and belongs to no
 file — the first `Ctrl+S` asks where to put it, and the draft on disk is left alone. **Export
 sheet** from there writes the atlas back out on the sheet's own fixed grid rather than wrapping it,
 so a walk cycle stays four rows of four and each cell's sidecar entry carries the direction and the
 frame. See [Inker: animation](29-inker-animation.md).
 
-A synthesis is a queued job that runs two full image generations, so it waits its turn behind
-whatever else is generating. **Delete draft** removes a pair; a reference keeps at most 50.
+A synthesis is a queued job, so it waits its turn behind whatever else is generating. How much it
+costs depends on the type: a fixed atlas is one full image generation per candidate, and an action
+is one per direction per candidate — sixteen for a pair of eight-direction sheets, which is why a
+sheet past sixteen cells draws one candidate rather than two. **Delete draft** removes a pair; a
+reference keeps at most 50.
 
 ## Unrigged props
 

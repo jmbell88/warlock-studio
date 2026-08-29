@@ -26,9 +26,15 @@ renumbered — a tile keeps naming the same artwork whatever size the cell under
 A tileset is an image cut into tiles. Bring one in from the Tileset menu: a `.tsx` file carries its
 own slicing, and any other image is cut at the map's current tile size.
 
-You can also generate one. Create's **tile sheet** asset type produces a grid of sixty-four
-different tiles from a single prompt, which then lands in the library and can be used as a tileset
-here. Note that this lives in Create, not in Plotter — an in-Plotter "paint with AI" existed once and
+You can also generate one. Create's **Tileset** asset type lands a finished sheet in the library
+that can be used as a tileset here, and its **Tile layout** decides what kind. *Materials* draws one
+seamless tile per surface you name, so the tiles genuinely repeat. *Terrain set* draws two surfaces
+and composites them into a complete forty-seven-case blob set, which arrives here with the
+[Terrain](#terrain) tool already working — it says what it is, so nothing is
+guessed and nothing is asked. *Grid (legacy)* is the older single-generation 8×8 sheet, kept because
+it is the only one that can be drawn 3/4 or isometric.
+
+Note that this lives in Create, not in Plotter — an in-Plotter "paint with AI" existed once and
 was removed in favour of it. If a map is still unpainted it will adopt the sheet's own projection; if
 it is painted and the lattices disagree, you get a question rather than a silently mis-sliced sheet.
 
@@ -75,7 +81,10 @@ occasionally not.
 ## Terrain
 
 The Terrain brush is the feature most worth learning. Paint a terrain type and the edges resolve
-themselves — grass meets sand with the right corner tiles, automatically.
+themselves — grass meets sand with the right corner tiles, automatically. It needs a tileset that
+carries terrain rows: a Tiled `.tsx` with Wang sets, a sheet you recognised on the way in, or a
+*Terrain set* generated in Create, which carries the rows in its own record and needs no import step
+at all.
 
 Plotter reads the 47-case blob layout, and it resolves conflicts by **list position**: a terrain
 ranked higher in the list always owns the outline where two meet. That is a real design choice with

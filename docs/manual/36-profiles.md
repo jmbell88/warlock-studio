@@ -18,8 +18,8 @@ Exactly five fields:
 
 The palette is what makes two sheets of one character *match*. Without it, each sheet derives its
 own table from the render in front of it, so two made a week apart come back on two different sets
-of colours. The picker appears in the editor only when you have palettes installed; a profile
-naming one you have since removed keeps it, listed and marked, rather than silently reverting to
+of colours. The picker appears in the editor once you have palettes installed, and also on a profile
+that names one you have since removed — kept, listed and marked, rather than silently reverting to
 "derived".
 
 What it deliberately does **not** store is the per-generation half: the prompt, the seed, the seed

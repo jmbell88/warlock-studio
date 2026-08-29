@@ -220,6 +220,13 @@ Tiled `.tsx` with Wang sets does and a plain image does not. It sets the cell yo
 re-fits that cell and its eight neighbours, so edges, outer corners and inner corners follow as you
 draw rather than being placed one at a time.
 
+A **generated terrain set** is the third way to get one, and the shortest. Create's *Tileset* asset
+type has a **Terrain set** layout: describe an inside surface and an outside one and it draws a
+complete forty-seven-case blob set. Added here it is landed straight onto the map with the Terrain
+tool selected and its row already picked — no detection, no popup and no reordering, because the
+sheet records what it is and there is nothing to ask about a set that says so. If the sheet was
+drawn at a different tile size from the map's, it is redrawn at the map's on the way in.
+
 Terrain painting is **refused on a staggered or hexagonal map**, by name. Both terrain paths read a
 cell's eight neighbours off a square lattice, and on an offset one those are not the neighbouring
 cells — every other row is pushed sideways, and a hexagon has six neighbours rather than eight.

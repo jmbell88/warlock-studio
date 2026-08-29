@@ -28,8 +28,8 @@ than most people expect — so this is often the more valuable of the two.
 ## Style profiles
 
 A profile saves the *look* half of the form: base model, style LoRA and its weight, negative prompt,
-and optionally a style anchor image and its strength. It does not save your prompt, because the
-prompt is the subject and the profile is the style.
+the authored palette a sheet is mapped to, and optionally a style anchor image and its strength. It
+does not save your prompt, because the prompt is the subject and the profile is the style.
 
 Save one from the current form, set it active, and every new job starts from it. It is the answer to
 "how do I keep forty props looking like they belong together".
@@ -38,6 +38,12 @@ The profile manager opens as a sheet over whatever you are doing, from Create's 
 from the command palette.
 
 ## Models and LoRAs
+
+Two rows above Advanced decide this before you get here. **Recipe** is *Fast* or *Quality*, and
+*Automatic* or *Advanced* decides whether the app resolves that recipe to a checkpoint or you name
+one. Fast is four steps at guidance 0; it cannot use the negative prompt or structure control, and
+switching to it clears both rather than leaving you a Generate button refusing on a hidden field.
+See [Fast and Quality](22-generating-references.md#fast-and-quality).
 
 The default base model is SDXL 1.0 run at **full CFG**, and it is the default because it measured
 better than the alternatives as a source for reconstruction, not because it is fastest. The faster

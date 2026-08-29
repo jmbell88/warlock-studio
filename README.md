@@ -6,13 +6,13 @@ The generation pipeline:
 
 - **Image → 3D**: reference image → textured GLB (base colour plus a combined metallic/roughness texture; surface detail rides on vertex normals, not a normal map), powered by Microsoft **TRELLIS.2-4B** running natively via [trellis.cpp](https://github.com/pwilkin/trellis.cpp) (C++/GGML, CUDA).
 - **Text → 3D**: prompt → reference image via a diffusers pipeline, loaded from a local weights dir. **SDXL 1.0 at full CFG** is the default and the one base download the setup below asks for — 30 steps at 1024 px, with the negative prompt and ControlNet live; the same 7 GB also powers three faster recipes over the same weights, and **SDXL-Turbo** remains the 4-step fast option one install away. Eleven base models are registered (`src/warlock/models.py`) from 4-step distillations to full-CFG SDXL, Playground, Juggernaut, DreamShaper and FLUX.2 klein, with per-job style LoRAs, IP-Adapter appearance conditioning, ControlNet silhouette lock, and a seamless-tile mode with seam measurement. See [docs/MODELS.md](docs/MODELS.md).
-- **Text → 2D sheets**: the same prompt as a **tile grid** — 64 tiles in an 8×8 arrangement, drawn as one generation onto a ControlNet grid guide, cut on the rectangles the guide was drawn from, and quantised to one shared palette (16/32/48/64 px tiles, orthogonal or 2:1 isometric) — or as a **sprite sheet**, which draws the character first, keeps it as its own asset, and then imagines two candidate sheets from it. Neither is reconstructed into a mesh; a tile grid goes on to Plotter or Packwright. The grid mechanism is measured (`docs/measurements/2026-08-18-tile-sheet-grid.md`); its art direction is not settled, and that document says so.
+- **Text → 2D sheets**: the same prompt as a **tileset**, in one of three layouts — *Materials* (1–16 surface descriptions × 1–4 draws, capped at 64 cells, each cell its own **seamless** generation, so the tiles genuinely repeat), *Terrain set* (an inside and an outside surface composited into a complete 47-case blob autotile that lands in Plotter with the Terrain tool live, by record, with no import prompt), or *Grid (legacy)* (the original 8×8 single generation onto a ControlNet grid guide — the only layout offering 3/4 and 2:1 isometric, and the only one offering a 48 px tile; the seamless two are top-down at 16/32/64 px, since a seamless tile must divide the 1024 px material and must wrap a square). Or as a **sprite sheet**: pick an action (idle, walk, run, attack, cast, hurt, jump) and a direction count, and it draws the character first, keeps it as its own asset, then imagines candidate sheets from it with animation tags and frame durations baked in. Neither is reconstructed into a mesh; a tileset goes on to Plotter or Packwright. The legacy grid mechanism is measured (`docs/measurements/2026-08-18-tile-sheet-grid.md`); its art direction is not settled, and that document says so.
 - **Rig → pose → sprite sheet**: fit one of seven template skeletons (humanoid, quadruped, bird, fish, insect, serpent, tailed biped), pose it with 3D gizmos or reusable poses from the Poser's global library, and bake poses into sprite sheets — flat or lit, 4/8/16 directions, optionally restyled into pixel art. Beyond single poses, **Troupe** renders whole animation clips: keyframes authored in the Poser, interpolated into a 256-cell character sheet of five animations across eight directions.
 - **The approval gate**: text jobs stop at the reference by default — the image is shown full-size for approval (with candidate fan-out and per-stage seeds) before anything pays for a trellis run.
 
 ## The modes
 
-A rail down the left of the window chooses between **eleven** top-level modes
+A rail down the left of the window chooses between **twelve** top-level modes
 (`src/warlock/studio/modes.py` is the authoritative list, and `RAIL_GROUPS` is
 the grouping) in three sections: **Pipeline**, **Workspaces**, and an
 unlabelled footer. There is no per-mode key — the `Ctrl+K` command palette is
@@ -79,15 +79,19 @@ are looking at.
    library assets in; a deterministic atlas out (Grid or MaxRects, with
    trim/padding/extrude/power-of-two), as PNG plus TexturePacker JSON, and a
    `.tsx` for grid packs. Re-export of an unchanged document is byte-identical.
+10. **Sirens** — a chiptune tracker: the synthesis engine, a five-column pattern
+   grid, an envelope editor, sample import and sound effects, with WAV, stems
+   and sfx export. Marked Experimental: a block selection can be transposed and
+   cleared, but not yet copied, cut or pasted.
 
 **The footer** carries no caption, and holds the two destinations where you are
 not making something — entered rarely and left again:
 
-10. **Review** — judging finished meshes with graded verdicts (−5..+5 plus
+11. **Review** — judging finished meshes with graded verdicts (−5..+5 plus
     tags), parameter sweeps over arbitrary setting axes, an advisory DINOv2-probe
     quality judge taught by in-app labelling, and the "What works" findings the
     verdicts add up to — which surface as hints beside the generate controls.
-11. **Settings** — the app's own preferences: theme, UI scale, layout, and the
+12. **Settings** — the app's own preferences: theme, UI scale, layout, and the
     model list, from which a missing one can be downloaded.
 
 Two things are deliberately *not* modes. The **manual** is an overlay

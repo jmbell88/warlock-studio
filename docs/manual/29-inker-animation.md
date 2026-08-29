@@ -276,8 +276,11 @@ so `Ctrl+S` on one offers an `.ora` beside it; **Export GIF** is the way back ou
 ### Directional layouts
 
 A document opened from a generated sprite sheet carries a **directional layout** as well: its frames
-are that sheet's cells in order, four directions with one or four frames each, and a walk sheet
-arrives with a tag per direction so playback loops one direction at a time.
+are that sheet's cells in order — four or eight directions, with as many frames each as the action
+has — and a sheet of an action arrives with a looping tag per direction, named for that action, so
+playback loops one direction at a time. An `idle8` sheet is tagged `idle_front` and not
+`walk_front`: a tag that names the wrong action is worse than no tag, because an importer believes
+it. A turnaround is untagged, since four still views are not a cycle.
 
 The layout is saved with the document and survives a round trip through `.ora`. You can draw on it,
 repaint it and retime it like any other animation; adding or removing a frame is allowed and simply

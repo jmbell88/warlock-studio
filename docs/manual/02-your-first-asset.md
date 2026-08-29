@@ -42,8 +42,8 @@ Three controls matter for a first run, and everything else has a sensible defaul
 
 **Asset type.** Leave it on *3D Model*. This one choice quietly sets several things at once, which
 is why it is a single combo rather than three: what the job produces, how the prompt is composed,
-and which follow-up work is offered. The other seven entries make 2D images, seamless tiles, tile
-sets and sprite sheets.
+and which follow-up work is offered. The other four entries make plain images, seamless materials,
+tilesets and sprite sheets.
 
 **Description.** The prompt. Write a subject, not a scene:
 
@@ -55,9 +55,12 @@ One object, described plainly. The reference stage is trying to draw a thing a r
 can turn into a model, and a picture with two objects in it produces a mesh with two objects fused
 into one. Composition matters more than adjectives here.
 
-**Image model.** Leave it on the default. That default is SDXL 1.0 run at full CFG, and it is the
-default because it was measured against the alternatives rather than chosen for speed — the faster
-distilled recipes exist under the same combo when you want them.
+**Image model.** Leave both rows alone. **Recipe** is *Quality*, which is thirty steps of SDXL 1.0
+at full CFG — the default because it was measured against the alternatives rather than chosen for
+speed. *Fast* is four steps of the same weights and gives up the negative prompt and structure
+control to get there; it is for hunting, not for a picture you mean to reconstruct. The row under it
+is *Automatic*, which means the app resolves that recipe to a checkpoint and tells you which. Switch
+it to *Advanced* when you want to name the checkpoint yourself.
 
 Press **Generate**. The job appears in the library on the right, immediately, as a queued row with a
 progress bar. A few seconds later it is a picture.

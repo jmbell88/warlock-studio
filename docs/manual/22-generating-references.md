@@ -79,24 +79,70 @@ The expansion is deterministic in the job's seed and is recorded on the finished
 
 ## The pane at a glance
 
-The form is one flat column of sections: **Output** (Object, Seamless tile or Sheet), **Sheet**
-(only while that output is chosen), **Profile**, **Prompt**, **References** (conditioning on an
-image), **Seed** (how many and which seed), **Model**, **LoRA** and **Negative prompt**. There are
-no folds — everything is on screen, and the Generate button stays pinned below the column.
+The form opens on the choices every job needs and folds the rest away. Above the fold, in order:
+**Asset type**, **Prompt**, **Negative prompt / Avoid** (only while the chosen recipe can use one),
+a layout section belonging to the asset type — **Tile layout** for a tileset, **Sprite layout** for
+a sprite sheet, and nothing at all for the other three — then **Image model** and **Style LoRA**.
+
+Below them is one **Advanced** disclosure holding **References & conditioning**, **Seed & count**,
+**Dimensions** (only on a sheet), **Profiles**, **Prompt enrichment** and, once a LoRA is chosen,
+**Style strength**. The Generate button is pinned below the whole column and never scrolls with it:
+the one control every visit ends with must not be at the bottom of a scrolled list.
+
+**Asset type** is the top-level choice and it decides what everything under it means. Five entries:
+*Image*, *3D Model*, *Seamless Material*, *Tileset* and *Sprite Sheet*. Two of them are described
+elsewhere in this chapter — see [Seamless tiles](#seamless-tiles) and [Sheets](#sheets).
 
 Earlier versions carried a twelve-select creative taxonomy (category, genre, material and the
 rest) behind a "More options" reveal. It was retired on 2026-08-17: no taxonomy axis ever measured
 a quality win, and your prompt is the brief. Assets generated under it are unaffected — rerolling
 or promoting one simply composes without the retired fragments.
 
-In the **Profile** row, beside **Save as...**, is **Reset...**, which puts the whole 2D form back
-to its first-launch defaults after a confirm — the prompt, the negative prompt, the model and LoRA,
+In the **Profiles** section under Advanced, beside **Save as...**, is **Reset...**, which puts the
+whole 2D form back to its first-launch defaults after a confirm — the prompt, the negative prompt,
+the model and LoRA,
 the reference and the run controls, with a freshly rolled seed. It touches nothing outside this
 pane: saved profiles are kept, and the 3D form is left alone.
 
 ## Models and style LoRAs
 
-The **Model** section holds the model choice. Eleven base models ship in the registry:
+The **Image model** section asks two questions. The first, labelled **Recipe**, is *Fast* or
+*Quality*. The second is *Automatic* or *Advanced*: whether the app picks the checkpoint from that
+recipe, or you do.
+
+### Fast and Quality
+
+Both tiers run the same 7 GB of SDXL weights, and they are genuinely different pictures:
+
+| Recipe | How it runs | What it gives up |
+| --- | --- | --- |
+| **Fast** | Four steps at guidance 0, with the Hyper-SD distillation fused on. | Structure control and the negative prompt, both of which need a guidance branch it does not have. |
+| **Quality** | Thirty steps with full classifier-free guidance. **The default.** | Time. |
+
+The line under the combo says which of the two you are on and what it trades, and the line under
+*that* names the recipe and the checkpoint automatic routing resolved to — *Quality image ·
+sdxl_cfg*, say. Both disappear under Advanced, where you have named the checkpoint yourself and the
+model's own description takes their place.
+
+Switching to Fast **clears** a structure control and any Avoid text rather than greying them, and
+says which it cleared. That is deliberate: under automatic routing the tier is what picked the
+checkpoint, so leaving those selections in place would mean a Generate button refusing on a control
+that is no longer on screen. Switching back does not restore them — retype the Avoid text and
+re-pick the control.
+
+Fast is a documented trade rather than a free win. Quality is measurably better at holding a shape,
+which is the property the mesh stage depends on, so *Quality* is the default and stays the right
+choice for anything you mean to reconstruct. Fast is for hunting: eight cheap draws to find out
+whether an idea is worth a real one.
+
+A **Tileset** has no Recipe row at all. Its recipe and its style LoRA are fixed, because a sheet
+whose cells have to share a palette and a light direction is not a place to vary the machinery, and
+the pane says so where the controls would be.
+
+### The model registry
+
+Choosing **Advanced** replaces automatic routing with the full list. Eleven base models ship in the
+registry:
 
 | Model | What it is | Runs at |
 | --- | --- | --- |
@@ -229,8 +275,11 @@ traces the reference's edges and holds the new image to that shape. It has two c
 far into the drawing it keeps acting: ending early lets the last steps add detail the reference
 never had, while 1.0 holds the shape to the final step and tends to look traced.
 
-Structure needs a base model that runs with real guidance. If yours does not, the section says so
-and points you at Advanced instead of offering a control that cannot work.
+Structure needs a checkpoint that runs with real guidance, and the section says so rather than
+offering a control that cannot work. Which fix it names depends on which control chose the
+checkpoint: under Advanced it names the models that could run it, and under automatic routing it
+tells you to switch the Recipe to Quality — because the Fast recipe is what picked a guidance-zero
+checkpoint on your behalf, and no combo on screen is showing that checkpoint's name.
 
 Clearing the reference clears both selections with it, since neither can be submitted without an
 image.
@@ -349,8 +398,8 @@ a seed and a model, which after a hand edit is no longer the whole story of the 
 
 ## Seamless tiles
 
-The **Object / Seamless tile** control at the top of the 2D settings pane switches the whole pane
-between two kinds of output. A tile is a repeating texture rather than a subject: it is drawn with
+Setting **Asset type** to *Seamless Material* switches the whole pane to a different kind of output.
+A tile is a repeating texture rather than a subject: it is drawn with
 wrapping convolutions, so its left edge continues into its right and its top into its bottom.
 
 The rest of the form means the same thing for a tile as for an object: the prompt describes the
@@ -377,73 +426,130 @@ Export tab offers it too.
 
 ## Sheets
 
-The third **Output** setting is **Sheet**, and it is the one that makes several pictures from one
-prompt. Under it, **Sheet type** picks between the two kinds.
+Two of the five asset types make several pictures from one prompt rather than one: **Tileset** and
+**Sprite Sheet**. Each brings its own layout section above the model, because what the sheet is a
+sheet *of* is the choice everything else follows from — including how long the press will take.
 
-### Tile grids
+### Tilesets
 
-A tile grid is 64 tiles in an 8×8 arrangement — grass, path, water, cliffs, props — drawn as one
-picture and cut up. Being one generation is the point: every tile shares a palette, a light
-direction and a style, which is what separates a tileset from 64 unrelated pictures.
+A tileset is a grid of related tiles — grass, path, water, cliffs, props — that share a palette, a
+light direction and a style. That sharing is what separates a tileset from a folder of unrelated
+pictures, and each of the three **Layout** entries buys it a different way.
 
-Two settings decide the geometry. **Tile size** is how many pixels across one tile is; **View** is
-where the camera is:
-
-| View | What it draws | Lattice |
+| Layout | What it draws | Generations |
 | --- | --- | --- |
-| **Top-down** | flat, straight down; tiles show only their top face | square |
-| **3/4** | tilted about thirty degrees, so things with height show a front face as well as a top | square |
-| **Isometric** | the 2:1 dimetric view; tiles are diamonds | 2:1 diamond |
+| **Materials** | One seamless tile per surface you name, laid out eight across. | One per cell. |
+| **Terrain set** | Two surfaces, composited into the forty-seven cases of a blob autotile. | Two. |
+| **Grid (legacy)** | One 1024 px picture painted through a grid guide and cut into 64 cells. | One. |
 
-The line under them says what the finished sheet comes to — a 32 px top-down sheet is 256×256, a
-64 px isometric one is 512×256 — so there is no arithmetic to do.
+*Materials* is the default, and it is the one that actually tiles. Type one surface per line, up to
+sixteen lines, and **Draws of each** (1 to 4) says how many times each line is drawn — every draw is
+its own full generation on its own seed, so lines × draws is the cell count and 64 is the ceiling.
+The counter under the box does that arithmetic while you type, and the sheet is refused above the
+ceiling naming both numbers rather than quietly trimming. Each cell is drawn on its own with
+wrapping convolutions, exactly as a *Seamless Material* is, which is why a tile cut from this sheet
+repeats without a join. The old grid did not: its cells came back as one scene cut up.
 
-**3/4 needs subjects with height to show.** It is the same square grid as top-down, and the whole
+*Terrain set* asks for two surfaces instead of a list. **Inside** is what a stroke paints — the
+islands, coastlines and peninsulas — and **Outside** is what surrounds it; both are generated, so
+both have to be described or the sheet is refused. **Shared setting** is optional and is added to
+both, so two separate generations come back sharing a world and a palette ("a temperate coastline").
+It is not a description of the join: the join is computed from a coverage field, and drawn edge art
+would be cut straight across by it. What comes out is a complete forty-seven-case blob set, and it
+lands in **Plotter** with the Terrain tool already working — see
+[Tools](31-plotter.md#tools).
+
+*Grid (legacy)* is the original single-generation path. It stays for two reasons and the pane says
+both: it is the only layout that offers a **View** other than top-down, and it is how a sheet made
+under it is rerun. Its cells are drawn from one guide in which every cell is identical, so they tend
+to come back as one scene cut up or as one tile repeated — measured, in
+`docs/measurements/2026-08-18-tile-sheet-grid.md`.
+
+**Tile size** lives under Advanced, in **Dimensions**. **View** is drawn in the layout section
+itself, and only by the grid — the other two would be a picker with nothing to pick. What each
+offers depends on the layout:
+
+| | Tile sizes | Views |
+| --- | --- | --- |
+| Materials, Terrain set | 16, 32, 64 | Top-down only |
+| Grid (legacy) | 16, 32, 48, 64 | Top-down, 3/4, Isometric |
+
+Both restrictions are arithmetic rather than policy, and switching layout migrates a setting that no
+longer fits with a sentence saying why. A seamless material is drawn at 1024 px and reduced, so its
+tile size has to divide 1024 exactly — which 48 does not. And a seamless tile has to wrap a square:
+an isometric tile is a 2:1 diamond, and a 3/4 tile has a visible front face and cannot tile
+vertically. If you want either view, you want the grid.
+
+**3/4 needs subjects with height to show.** It is the same square lattice as top-down, and the whole
 difference is what the model is asked to draw, so a sheet of flat flagstones comes back looking the
 same either way. Ask it for walls, crates, fences, roofs, a well — anything with a front — and the
 difference is unmistakable. This was measured rather than assumed; see
 `docs/measurements/2026-08-21-three-quarter-guide.md`.
 
-Everything else about the arrangement is decided for you and is not a control: the grid is 8×8
-because 1024 ÷ 8 is the true art resolution the pixel-art style draws at, and one palette is applied
-across the whole sheet in one pass for the reason above — quantized per tile, the same moss comes
-out two different greens in two tiles. *Which* palette is yours to choose; see **The pixel look**
-below. The prompt is the brief; a **reference image**, if you attach one under
+One palette is applied across the whole sheet in one pass, never per tile — quantized per tile, the
+same moss comes out two different greens in two tiles. *Which* palette is yours to choose; see
+**The pixel look** below. In the Materials and Terrain set layouts the words that are actually
+generated are the ones you type in the layout section, and the **Description** at the top of the
+form only names the sheet in the library. A **reference image**, if you attach one under
 *References*, shapes the style but is never required.
 
-Behind the scenes the grid is *imposed* rather than requested: the cell boundaries are drawn into a
-guide the structure control follows, so the tiles land where the app is going to cut. That is why a
-sheet comes back on the grid rather than as a picture that merely looks like one.
-
-A tile sheet cannot be made into a mesh, and offers no cutout exports, for the tile's reasons. To
+A tileset cannot be made into a mesh, and offers no cutout exports, for the tile's reasons. To
 paint with it, take it into **Plotter** or cut it up in **Packwright** — both read the sheet from
 the library like any other asset.
 
 ### Sprite sheets
 
-The other sheet type turns your prompt into a character and then into a sheet of it. **Layout** is
-a four-direction turnaround or a four-frame walk cycle in each direction; **Cell size** is how many
-pixels across one frame is.
+The *Sprite Sheet* asset type turns your prompt into a character and then into a sheet of it. The
+**Sprite layout** section asks two things.
 
-This one is two steps and shows as two rows in the library: the character is drawn first and kept
-as its own asset, and two candidate sheets are then imagined from it. That is deliberate — a sheet
-you dislike still leaves you the drawing it was made from, to reroll, edit or synthesise again with
-different settings. An attached reference shapes the character.
+**Action** is what the character is doing: *Turnaround (still views)*, or one of the animated
+actions this installation has a pose guide for. Seven ship — idle, walk, run, attack, cast, hurt and
+jump — but the menu is discovered from the guide files on disk rather than hardcoded, because a
+guide is art and they land one at a time: an action with no guide behind it would be an unposed
+figure conditioned on nothing, so it is not offered at all.
+
+**Directions** is how many ways the character is drawn facing. **One direction is one generation**,
+so this is the control that decides whether a press is one job or eight, and the line underneath
+states the whole bill before you press it: cells, generations, drafts and roughly how long. Only the
+direction counts with a guide are offered, which today means eight and only eight.
+
+**The size is gated on the action, and this catches people out.** The pixel-art model spends about
+eight generation pixels on one art pixel, and one direction is never split across two generations —
+so all of an action's frames have to fit inside one 1024 px frame at eight times the cell size. At
+32 px every action fits; at 48 px and 64 px only the four-frame ones do, which today means idle and
+hurt. Ask for an eight-frame run at 64 px and it is refused naming both numbers — but you will
+rarely see that, because the pane shortens the **Cell size** ladder under Advanced first and says
+which action shortened it.
+
+A finished sheet carries **animation tags and per-frame durations**, one tag per direction —
+`walk_front`, `walk_front_left` and so on — with the action's own frame time and whether it loops.
+So a sheet arrives in Inker with its timeline already tagged and reaches an engine knowing its own
+frame rate. A turnaround carries none, deliberately: four still views are not an animation, and
+tagging them would put four one-frame loops in the timeline that mean nothing to play.
+
+This asset type is two steps and shows as two rows in the library: the character is drawn first and
+kept as its own asset, and candidate sheets are then imagined from it. A small sheet gets two to
+pick between; past sixteen cells it gets one, because a second guess at eight bands costs more than
+it is worth. The two steps are deliberate — a sheet you dislike still leaves you the drawing it was
+made from, to reroll, edit or synthesise again with different settings. An attached reference shapes
+the character.
 
 The drafts appear under **Sprite sheet** in the inspector when the character is selected. See
-*Sprite sheets* for what to do with them.
+[Sprite sheets](27-sprite-sheets.md#from-a-single-drawing) for what to do with them.
 
 ### The pixel look
 
-Under **Dimensions**, below the size controls, both sheet types offer the same two settings and the
-sprite sheet offers a third.
+Under **Advanced → Dimensions**, below the size controls and the working-resolution choice, both
+sheet types offer the same two settings and the sprite sheet offers a third.
 
 **Palette** maps every pixel to the nearest colour of a palette you authored, instead of to the
 colours this particular render happened to contain. It is the single highest-leverage art input in
 the program: a derived table is the average of whatever came back, which is where "muddy" comes
-from, while a designed ramp is a decision. The picker appears only when you have palette files
-installed — `.hex`, `.gpl`, `.pal` or `.txt` in the palette folder (see
-[Configuration](40-configuration.md)) — and a palette you name here can also be saved onto a
+from, while a designed ramp is a decision. The picker appears once you have palette files
+installed — `.hex` or `.gpl` in the palette folder (see
+[Configuration](40-configuration.md)) — and also when the form or an applied profile names a palette
+that is no longer there, listed and marked rather than silently reverting to *Derived from the
+render*. A palette you name here can be saved onto a
 [style profile](36-profiles.md), which is how a set of sheets is kept on one set of colours.
 
 **Dither** adds an ordered 4×4 offset before each pixel picks its colour, so a gradient reads as a
@@ -451,9 +557,11 @@ texture rather than as a band. It works with or without a named palette: with no
 derives its own table and dithers against that. How visible it is depends on how far apart the
 colours are — a four-colour ramp dithers unmistakably and a sixty-four-colour one barely at all.
 
-**Outline**, on the sprite sheet only, darkens the edge of each frame. *Inside* recolours the
-character's own edge pixels and cannot change its silhouette or its pivot, which is why it is the
-default here; *Around* grows the silhouette by a pixel, which a frame already touching its cell edge
-will have clipped. There is deliberately no outline on a tile sheet: a tile is opaque edge to edge,
+**Outline**, on the sprite sheet only, darkens the edge of each frame: *None*, *Inside* or *Around*.
+*Inside* recolours the character's own edge pixels, so it cannot change the silhouette or the pivot;
+*Around* grows the silhouette by a pixel. *Inside* is the default because a synthesised cell has no
+guaranteed margin — the model filled the atlas as it liked, and a frame already touching its cell
+edge has nowhere to grow into, so *Around* would clip it. There is deliberately no outline on a tile
+sheet: a tile is opaque edge to edge,
 so an outline finds the border of every cell and draws a grid line around all of them rather than
 around anything in them.
