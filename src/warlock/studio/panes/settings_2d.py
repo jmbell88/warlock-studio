@@ -204,6 +204,13 @@ def _asset_type(ctx: Any, form: dict[str, Any]) -> None:
         ctx.state.clear_field_error("asset_type")
 
 
+#: Where the sentences explaining a *tier* change's clears are kept between
+#: frames -- :data:`CLEARED_KEY`'s sibling, and separate from it because the two
+#: are drawn under different combos and a change of one must not wipe the
+#: other's explanation.
+QUALITY_CLEARED_KEY = "quality_cleared"
+
+
 def _quality(ctx: Any, form: dict[str, Any]) -> None:
     """Fast/Quality is a recipe choice, not a checkpoint choice."""
     if create_assets.selected(form).intent == "tileset":
@@ -211,8 +218,100 @@ def _quality(ctx: Any, form: dict[str, Any]) -> None:
     before = str(form.get("quality") or "quality")
     picked = widgets.combo("##quality", before, [("fast", "Fast"), ("quality", "Quality")])
     form["quality"] = picked if picked in generation.QUALITY_TIERS else before
+    widgets.field_error(ctx.state, "quality")
     if form["quality"] != before:
         ctx.state.preview_dirty_at = time.monotonic()
+        ctx.state.clear_field_error("quality")
+        ctx.state.preview[QUALITY_CLEARED_KEY] = clear_for_tier(ctx, form)
+    for note in ctx.state.preview.get(QUALITY_CLEARED_KEY) or ():
+        widgets.muted_wrapped(note)
+    _recipe_note(ctx, form)
+
+
+def _recipe_note(ctx: Any, form: dict[str, Any]) -> None:
+    """What the chosen tier trades, under the combo that chose it.
+
+    Fast is genuinely worse -- four steps instead of thirty, no ControlNet, no
+    negative prompt -- and that is fine; a tier that is honestly worse and says
+    so is a choice the user can make. What is not fine is the silence this
+    replaces: until 2026-08-29 both tiers named ``sdxl_cfg`` and the control
+    changed nothing at all, and merely pointing it at a different checkpoint
+    without saying what changed would only move the silence one step.
+    """
+    if str(form.get("model_mode") or "auto") == "advanced":
+        # Advanced names its own checkpoint and prints that model's own
+        # description; a tier note there would describe a routing that is not
+        # happening.
+        return
+    resolved = _resolved_recipe(ctx, form)
+    if resolved is None or not resolved.recipe.note:
+        return
+    widgets.muted_wrapped(resolved.recipe.note)
+
+
+def _resolved_recipe(ctx: Any, form: dict[str, Any]) -> Any:
+    """What automatic routing would load for this form, or None.
+
+    Wrapped because it runs on the frame thread from three note helpers: a
+    partially restored form must make the pane say nothing rather than raise
+    inside the draw, which is ``_negative_supported``'s standing rule here.
+    """
+    try:
+        request = generation.request_from_legacy(form)
+        return generation.resolve_recipe(request, ctx.svc.config)
+    except Exception:
+        # Silent on purpose, and the same choice ``_negative_supported`` makes
+        # for the same reason: this runs sixty times a second inside the draw,
+        # so a partially restored form must make the pane say *nothing* rather
+        # than log a line per frame or raise through the frame loop. The
+        # service remains the final compatibility gate, and it is not silent.
+        return None
+
+
+def clear_for_tier(ctx: Any, form: dict[str, Any]) -> list[str]:
+    """Drop the selections the newly chosen tier cannot run.
+
+    -> one sentence per selection cleared, for the pane to show.
+
+    :func:`clear_unusable`'s argument applied to the other end of the same
+    routing. Under automatic routing the *tier* picks the checkpoint, so
+    switching to Fast strands a ControlNet and an Avoid text exactly the way
+    switching the base model under Advanced does -- and both of those controls
+    are hidden rather than merely disabled once the tier cannot use them, which
+    would leave Generate refusing on a field that is off screen. Clearing is
+    the same choice ``clear_unusable`` makes and for the same reason: a
+    refusal the user cannot act on is a dead end.
+
+    Called only on a change of tier, never per frame -- see ``clear_unusable``.
+    """
+    cleared: list[str] = []
+    if str(form.get("model_mode") or "auto") == "advanced":
+        # The tier does not choose the checkpoint here, so it cannot strand
+        # anything; ``clear_unusable`` owns that half.
+        return cleared
+    resolved = _resolved_recipe(ctx, form)
+    if resolved is None:
+        # Either the form does not compile or this host qualifies no recipe;
+        # the Recipe combo already says so, and clearing selections on the
+        # strength of an answer nobody has would be the silent rewrite
+        # ``clear_unusable`` refuses to do.
+        return cleared
+    # Cannot raise: ``_resolved_recipe`` just built the same request and got a
+    # recipe out of it.
+    caps = generation.capability_controls(generation.request_from_legacy(form), resolved)
+    if form.get("control") and not caps["controlnet"]:
+        form["control"] = ""
+        cleared.append(
+            "The structure control was cleared: this recipe runs at guidance 0 "
+            "and cannot run a ControlNet."
+        )
+    if str(form.get("negative_prompt") or "").strip() and not caps["negative_prompt"]:
+        form["negative_prompt"] = ""
+        cleared.append(
+            "The Avoid text was cleared: this recipe runs at guidance 0, where "
+            "a negative prompt has no effect."
+        )
+    return cleared
 
 
 def _locked_sheet_recipe(
@@ -1474,7 +1573,7 @@ def _reference_body(ctx: Any, form: dict[str, Any]) -> None:
             form["ip_scale"] = value
 
     widgets.field_label("structure")
-    note = structure_note(ctx, form)
+    note = recipe_structure_note(ctx, form) or structure_note(ctx, form)
     if note is not None:
         widgets.muted_wrapped(note)
         return
@@ -1605,6 +1704,33 @@ def lora_filter_note(ctx: Any, form: dict[str, Any]) -> str | None:
     return (
         "A style LoRA is fitted to one architecture, so this model is offered "
         f"only: {_lora_labels(ctx, fitting)}."
+    )
+
+
+def recipe_structure_note(ctx: Any, form: dict[str, Any]) -> str | None:
+    """Why *automatic* routing's recipe cannot run a ControlNet, or None.
+
+    :func:`structure_note`'s sibling for the other half of the Recipe control.
+    That one answers for the checkpoint the user picked under Advanced; this
+    one answers for the checkpoint the tier picks on their behalf, which is not
+    in ``form["base_model"]`` at all. Without it the Structure picker was drawn
+    under Fast, the selection was submitted, and the refusal came back from
+    ``guidance.normalize`` naming ``base_model`` -- a combo automatic routing
+    does not display.
+    """
+    if str(form.get("model_mode") or "auto") == "advanced":
+        return None
+    resolved = _resolved_recipe(ctx, form)
+    if resolved is None:
+        # The pane already says "no compatible installed recipe" under the
+        # Recipe combo; saying it again here names the wrong subject.
+        return None
+    spec = modelslib.BASE_MODELS.get(resolved.base_model)
+    if spec is None or spec.controlnet:
+        return None
+    return (
+        f"{resolved.recipe.label} runs at guidance 0 and cannot run a ControlNet. "
+        "Switch the Recipe to Quality, or pick a full-CFG model under Advanced."
     )
 
 

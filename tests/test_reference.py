@@ -169,3 +169,38 @@ def test_report_is_json_safe():
     import json
 
     json.dumps(reference.measure(_subject()).as_dict())
+
+
+# --- ordering two refused reports ---------------------------------------------
+
+
+def test_fewer_refusals_ranks_better():
+    """The only ordering the measurement supports. There is no quality score in
+    a Report, and ``rank_key`` deliberately does not invent one -- it counts the
+    report's own verdicts."""
+    one = reference.Report(ok=False, codes=("edge",), reasons=("x",))
+    two = reference.Report(ok=False, codes=("edge", "occupancy"), reasons=("x", "y"))
+    assert reference.rank_key(one) < reference.rank_key(two)
+
+
+def test_warnings_break_a_tie_between_equal_refusals():
+    quiet = reference.Report(ok=False, codes=("edge",))
+    noisy = reference.Report(ok=False, codes=("edge",), warnings=("very thin",))
+    assert reference.rank_key(quiet) < reference.rank_key(noisy)
+
+
+def test_an_empty_frame_ranks_last_however_few_codes_it_carries():
+    """``empty`` is the one code ``measure`` returns early for -- no bbox, no
+    occupancy, no components -- because the mask found no subject at all. There
+    is nothing on that canvas to prefer."""
+    empty = reference.Report(ok=False, codes=("empty",))
+    busy = reference.Report(ok=False, codes=("edge", "occupancy", "multi_object"))
+    assert reference.rank_key(busy) < reference.rank_key(empty)
+
+
+def test_an_acceptable_report_outranks_every_refusal():
+    good = reference.measure(_subject())
+    assert good.ok
+    assert reference.rank_key(good) < reference.rank_key(
+        reference.Report(ok=False, codes=("edge",))
+    )

@@ -300,6 +300,19 @@ class GenerateOps:
             # them: the VRAM handoff is a property of the stage, not of an
             # attempt.
             attempts: list[dict[str, Any]] = []
+            # The measured verdict behind each entry of ``attempts``, index for
+            # index; ``None`` where the measurement itself broke. Kept beside
+            # ``attempts`` rather than inside it because ``attempts`` is
+            # *stored* -- it is the provenance a later reader parses -- and a
+            # Report is not JSON.
+            reports: list[reference.Report | None] = []
+            # Every refused draw, kept on disk for as long as the budget runs,
+            # so the exhausted-budget exit can ship the best attempt rather
+            # than whichever one happened to be drawn last. In ``job_dir``
+            # beside ``image_path``, which makes publishing the winner a single
+            # rename onto the served name; the ``finally`` below removes
+            # whatever is left, so a cancelled or failed job leaves no strays.
+            candidates: dict[int, Path] = {}
             seed = reference_seed
             retries = max(0, int(self.config.reference_retries))
             is_reference = job.get("stage") == "reference"
@@ -370,23 +383,84 @@ class GenerateOps:
                         attempts.append(
                             {"seed": seed, "ok": True, "reasons": [], "measured": False}
                         )
+                        reports.append(None)
                         break
                     if is_reference:
                         params["reference_report"] = report.as_dict()
                     attempts.append(
                         {"seed": seed, "ok": report.ok, "reasons": list(report.reasons)}
                     )
+                    reports.append(report)
                     if report.ok or len(attempts) > retries or self._cancel.event.is_set():
                         # A budget, not a loop: the report's rules are
-                        # heuristics, so past the ceiling the user gets the
-                        # last attempt rather than a job that refuses to end.
+                        # heuristics, so past the ceiling the job ends rather
+                        # than refusing to. Which attempt *ships* on that exit
+                        # is settled below -- terminating and keeping the last
+                        # draw are two decisions, and only the first one has an
+                        # argument.
                         break
+                    # Keep this refused draw before the next generate paints
+                    # over it. Copied rather than moved: ``image_path`` has to
+                    # hold a complete image at every instant, or a cancel
+                    # landing between here and the next draw would leave the
+                    # job with no input.png at all.
+                    candidate = job_dir / f"reference_attempt_{len(attempts)}.png"
+                    candidate.write_bytes(image_path.read_bytes())
+                    candidates[len(attempts) - 1] = candidate
                     seed = queue_mod._fresh_seed()
                     log.info(
                         "job %s: rerolling the reference (%s)",
                         job_id,
                         "; ".join(report.reasons),
                     )
+                # The budget-exhausted exit, and the only place this runs: an
+                # acceptable draw breaks the loop with ``candidates`` untouched
+                # from the previous iteration but a last report that outranks
+                # every one of them, and the guard below skips it outright. Past
+                # the ceiling every candidate has been refused, so the question
+                # is not whether to ship a refused image -- the sheet ships one
+                # either way -- but *which*, and "whichever was drawn last" is
+                # an accident rather than a choice. Ranked on what the reports
+                # already carry (``reference.rank_key``): no extra sample, no
+                # second measurement pass.
+                measured = [i for i, one in enumerate(reports) if one is not None]
+                if (
+                    candidates
+                    and measured
+                    and reports[-1] is not None
+                    and not reports[-1].ok
+                    and not self._cancel.event.is_set()
+                ):
+                    # ``-i`` so a tie keeps the *last* draw: only an earlier
+                    # attempt that measured strictly better displaces it, and
+                    # the common case where every attempt failed the same rule
+                    # ships exactly what it shipped before this changed. The
+                    # last attempt is never in ``candidates`` -- it is the file
+                    # on disk -- so a tie pops nothing and does nothing.
+                    best = min(measured, key=lambda i: (reference.rank_key(reports[i]), -i))
+                    winner = candidates.pop(best, None)
+                    if winner is not None:
+                        # A rename onto the served name, never a write into it,
+                        # and the candidate is already a complete file in the
+                        # same directory.
+                        os.replace(winner, image_path)
+                        best_report = reports[best]
+                        if is_reference and best_report is not None:
+                            params["reference_report"] = best_report.as_dict()
+                        # The provenance has to name the attempt that actually
+                        # shipped, or ``reference_seed`` names a seed that does
+                        # not reproduce what is on disk -- the trap the
+                        # measurement-failed branch above is already commented
+                        # against.
+                        seed = attempts[best]["seed"]
+                        log.info(
+                            "job %s: budget exhausted; keeping attempt %d of %d "
+                            "(seed %s), the best measured",
+                            job_id,
+                            best + 1,
+                            len(attempts),
+                            seed,
+                        )
                 if len(attempts) > 1:
                     # Only when it actually retried: a single-attempt job's
                     # provenance is already the seed in params.
@@ -405,6 +479,13 @@ class GenerateOps:
                     params.setdefault("recipe", {})["reference"] = t2i.last_recipe
                 await asyncio.to_thread(self.store.set_params, job_id, params)
             finally:
+                # Whatever the reroll kept and did not publish, on every path
+                # out including a cancel and a raised generate. Suppressed and
+                # first, because these are scratch files and losing the unload
+                # below to a stray OSError would cost VRAM.
+                for retained in candidates.values():
+                    with contextlib.suppress(OSError):
+                        retained.unlink(missing_ok=True)
                 if handoff:
                     # unload(), not trim(): trim() returns the CUDA caching
                     # allocator's pool, and an offloaded pipe's cost is not in

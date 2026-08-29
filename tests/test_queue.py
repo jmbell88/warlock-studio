@@ -2255,6 +2255,174 @@ async def test_a_failed_measurement_still_records_the_seed_that_shipped(
     store.close()
 
 
+# --- which refused attempt survives the budget --------------------------------
+
+
+def _stamped_t2i(monkeypatch):
+    """The fake image pipeline, with the seed written into pixel (0, 0).
+
+    ``fake_pipelines`` paints the *same* picture for every seed, so "which
+    attempt is on disk" is not a question its bytes can answer -- a test that
+    compared them would pass whatever the worker did. This subclasses whatever
+    the fixture installed and stamps one pixel, which is the only pixel claim
+    below; everything else is plumbing read out of the store.
+    """
+    import warlock.pipelines.t2i_client as t2i_client_mod
+    import warlock.pipelines.text2image as text2image_mod
+
+    base = text2image_mod.Text2Image
+
+    class Stamped(base):
+        def generate(self, prompt, output_path, *, seed=42, **kwargs):
+            result = base.generate(self, prompt, output_path, seed=seed, **kwargs)
+            from PIL import Image
+
+            with Image.open(output_path) as opened:
+                image = opened.convert("RGB")
+            image.putpixel((0, 0), (seed % 251, 0, 0))
+            image.save(output_path, "PNG")
+            return result
+
+    monkeypatch.setattr(text2image_mod, "Text2Image", Stamped)
+    monkeypatch.setattr(t2i_client_mod, "Text2ImageClient", Stamped)
+
+
+def _scripted_reports(monkeypatch, scripts: list[tuple[str, ...]]):
+    """``measure_file`` returning one scripted set of refusal codes per call."""
+    import warlock.pipelines.reference as reference_mod
+
+    seen = {"n": 0}
+
+    def fake(path):
+        codes = scripts[min(seen["n"], len(scripts) - 1)]
+        seen["n"] += 1
+        return reference_mod.Report(
+            ok=not codes,
+            reasons=tuple(f"refused: {one}" for one in codes),
+            codes=codes,
+        )
+
+    monkeypatch.setattr(reference_mod, "measure_file", fake)
+
+
+def _reroll_worker(tmp_path, retries: int):
+    from warlock.config import Config
+    from warlock.db import JobStore
+
+    config = Config(
+        data_dir=tmp_path / "assets",
+        db_path=tmp_path / "assets" / "jobs.sqlite",
+        trellis_server_exe=tmp_path / "missing.exe",
+        trellis_models_dir=tmp_path / "models",
+        reference_retries=retries,
+    )
+    store = JobStore(config.db_path)
+    return config, store, Worker(config, store)
+
+
+def _strays(job_dir) -> list[str]:
+    return sorted(p.name for p in job_dir.glob("reference_attempt_*.png"))
+
+
+async def test_an_exhausted_budget_keeps_the_best_attempt_not_the_last(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    """Terminating past the ceiling is right; keeping the *last* draw was not.
+
+    The report carries no quality scale, so the ordering is the count of its
+    own verdicts (``reference.rank_key``): the middle attempt below failed one
+    rule where its neighbours failed two and three, and it is the one that has
+    to ship. Costing no extra sample and no second measurement -- the reports
+    are the ones the loop already paid for.
+    """
+    _stamped_t2i(monkeypatch)
+    _scripted_reports(
+        monkeypatch,
+        [("occupancy", "edge"), ("edge",), ("occupancy", "edge", "multi_object")],
+    )
+    config, store, w = _reroll_worker(tmp_path, retries=2)
+    job_id = store.create("text", "a barrel", {"seed": 5}, stage="reference")
+    w.start()
+    await _wait_until(lambda: store.get(job_id)["status"] == "done")
+    await w.shutdown()
+
+    seeds = w._text2image.seeds
+    assert len(seeds) == 3, "the budget did not run to its ceiling"
+    params = store.get(job_id)["params"]
+    # Plumbing: the provenance names the attempt that shipped, or it names a
+    # seed that does not reproduce the image.
+    assert params["reference_seed"] == seeds[1]
+    assert [a["seed"] for a in params["reference_attempts"]] == seeds
+    assert [a["ok"] for a in params["reference_attempts"]] == [False, False, False]
+    # The stored verdict is the winner's, not the last draw's.
+    assert params["reference_report"]["codes"] == ["edge"]
+    # The one pixel claim, and it needs the stamped fixture above to mean
+    # anything: the file on disk is the middle draw.
+    from PIL import Image
+
+    with Image.open(config.job_dir(job_id) / "input.png") as image:
+        assert image.convert("RGB").getpixel((0, 0))[0] == seeds[1] % 251
+    assert _strays(config.job_dir(job_id)) == []
+    store.close()
+
+
+async def test_an_acceptable_first_attempt_retains_no_candidate(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    """Breaking on first acceptable is unchanged, and costs nothing new."""
+    _stamped_t2i(monkeypatch)
+    _scripted_reports(monkeypatch, [()])
+    config, store, w = _reroll_worker(tmp_path, retries=2)
+    job_id = store.create("text", "a barrel", {"seed": 5}, stage="reference")
+    w.start()
+    await _wait_until(lambda: store.get(job_id)["status"] == "done")
+    await w.shutdown()
+
+    assert w._text2image.seeds == [5]
+    params = store.get(job_id)["params"]
+    assert "reference_attempts" not in params
+    assert _strays(config.job_dir(job_id)) == []
+    from PIL import Image
+
+    with Image.open(config.job_dir(job_id) / "input.png") as image:
+        assert image.convert("RGB").getpixel((0, 0))[0] == 5
+    store.close()
+
+
+async def test_a_cancel_mid_reroll_publishes_nothing_and_leaves_no_strays(
+    tmp_path, fake_pipelines, monkeypatch
+):
+    """A retained candidate is scratch, and a cancelled job owns none of it.
+
+    The cancel lands on the *second* measurement, so the first refused draw has
+    already been kept aside -- which is the only arrangement that can leave a
+    stray at all.
+    """
+    import warlock.pipelines.reference as reference_mod
+
+    _stamped_t2i(monkeypatch)
+    config, store, w = _reroll_worker(tmp_path, retries=3)
+    seen = {"n": 0}
+
+    def fake(path):
+        seen["n"] += 1
+        if seen["n"] >= 2:
+            w._cancel.event.set()
+        return reference_mod.Report(
+            ok=False, reasons=("refused: edge",), codes=("edge", "occupancy")
+        )
+
+    monkeypatch.setattr(reference_mod, "measure_file", fake)
+    job_id = store.create("text", "a barrel", {"seed": 5}, stage="reference")
+    w.start()
+    await _wait_until(lambda: store.get(job_id)["status"] == "cancelled")
+    await w.shutdown()
+
+    assert len(w._text2image.seeds) == 2
+    assert _strays(config.job_dir(job_id)) == []
+    store.close()
+
+
 # --- the opt-in remesh -------------------------------------------------------
 
 

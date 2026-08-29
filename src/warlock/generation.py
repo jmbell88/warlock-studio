@@ -203,6 +203,17 @@ class GenerationRequest:
     lora_weight: float | None = None
     references: tuple[str, ...] = ()
     reference_mode: str = "none"
+    #: The ControlNet key this request asks for, or ``""``. A *declaration*,
+    #: not a route: :func:`request_to_legacy` deliberately does not emit it,
+    #: because the structured door has never carried structure control and
+    #: growing it one here would be a new capability rather than the honesty
+    #: fix this field exists for. What it is for is :func:`validate_request` --
+    #: a recipe whose base has ``controlnet=False`` (Fast) must refuse the
+    #: pairing in a sentence naming a control the user can see, rather than
+    #: letting the legacy params carry the selection to ``guidance.normalize``
+    #: and come back naming ``base_model``, which under automatic routing is
+    #: not drawn at all.
+    structure_control: str = ""
     seed: int = 0
     count: int = 1
     tile: TileSettings = field(default_factory=TileSettings)
@@ -232,6 +243,7 @@ class GenerationRequest:
             lora_weight=raw.get("lora_weight"),
             references=tuple(str(x) for x in raw.get("references") or ()),
             reference_mode=str(raw.get("reference_mode") or "none"),
+            structure_control=str(raw.get("structure_control") or ""),
             seed=int(raw.get("seed") or 0),
             count=int(raw.get("count") or 1),
             tile=TileSettings(
@@ -267,6 +279,13 @@ class Recipe:
     license: str = ""
     commercial: bool = True
     required_downloads: tuple[str, ...] = ()
+    #: One sentence saying what picking this recipe costs, shown under the
+    #: resolved-recipe line in Create. A tier that is honestly worse and says
+    #: so is a choice; one that is quietly worse is a defect, and Fast was the
+    #: second of those for as long as it named the same checkpoint as Quality.
+    #: Empty on the recipes a user cannot choose between -- the sheet arms pin
+    #: their own base and never reach the Fast/Quality control.
+    note: str = ""
     rank: int = 0
 
     @property
@@ -308,17 +327,53 @@ def _recipe_table() -> tuple[Recipe, ...]:
     run; this table describes which asset outcome that run is qualified for.
     """
     return (
+        # Fast is ``sdxl`` -- SDXL 1.0 with Hyper-SD on top, four steps at
+        # guidance 0 -- and Quality is ``sdxl_cfg``, the same base weights run
+        # at 30 steps with real CFG. Both tiers named ``sdxl_cfg`` until
+        # 2026-08-29, which made the Fast/Quality control a label over one
+        # picture: two recipe *names*, identical checkpoint, identical
+        # sampler, identical resolution. A control that changes nothing is the
+        # defect; the fix is to let it change something and say what.
+        #
+        # The trade is measured, not guessed.
+        # ``docs/measurements/2026-08-11-default-base-model.md`` scores this
+        # exact arm: ``sdxl`` took 2 of 4 accepted and ``sdxl_cfg`` 3 of 3 --
+        # tiny n, no significance claimed, and a documented quality trade is
+        # precisely what "Fast" is supposed to mean. ``sdxl`` and not
+        # ``turbo``/``lightning``: those are 512 px, non-commercial or their
+        # own 7 GB checkpoint, while this shares Quality's base weights and is
+        # the backend where style LoRAs behave as trained.
+        #
+        # ``base_model`` is in ``vectors.VECTOR_PARAMS``, so this changes what
+        # a job records. Nothing stored is invalidated: until today *both*
+        # tiers wrote ``base_model=sdxl_cfg`` and no finding in the corpus can
+        # tell a Fast job from a Quality one, so the corpus gets more truthful
+        # rather than less.
         Recipe(
             "image_fast",
             "Fast image",
             ("image",),
             "fast",
-            "sdxl_cfg",
+            "sdxl",
             working_resolution=(1024, 1024),
-            negative_prompt=True,
+            # Inert here and therefore declared inert. ``sdxl`` runs at
+            # guidance 0 and ``text2image`` encodes the negative branch only
+            # above 1.0 (``models.cfg_bases``), so a True here would have moved
+            # the lie out of the tier and into the field: an Avoid box that
+            # takes text, stores it in params and changes no pixel.
+            negative_prompt=False,
             vram_gib=7,
             ram_gib=8,
-            required_downloads=("base:sdxl_cfg",),
+            # One row covers it: ``sdxl``'s ``fetch`` tuple already carries the
+            # shared SDXL 1.0 base *and* the 0.8 GB Hyper-SD LoRA, so there is
+            # no second key to name here.
+            required_downloads=("base:sdxl",),
+            note=(
+                "Four steps instead of thirty, on the same SDXL weights. No "
+                "structure control and no negative prompt: it runs at guidance "
+                "0, so there is no unconditioned branch for either to steer. "
+                "Quality is measurably better at holding a shape."
+            ),
             rank=20,
         ),
         Recipe(
@@ -332,6 +387,11 @@ def _recipe_table() -> tuple[Recipe, ...]:
             vram_gib=7,
             ram_gib=8,
             required_downloads=("base:sdxl_cfg",),
+            note=(
+                "Thirty steps with full classifier-free guidance: the only "
+                "tier that takes a ControlNet, and the only one where the "
+                "negative prompt carries weight."
+            ),
             rank=30,
         ),
         Recipe(
@@ -518,6 +578,19 @@ def resolve_recipe(
     return None
 
 
+def _takes_controlnet(resolved: ResolvedRecipe | None) -> bool:
+    """Whether the checkpoint this recipe resolves to can run a ControlNet.
+
+    The registry's ``controlnet`` flag and nothing else, so the pane's picker,
+    :func:`capability_controls` and :func:`validate_request`'s refusal cannot
+    come to disagree -- ``models.lora_fits``' rule for the other pairing.
+    """
+    if resolved is None:
+        return False
+    spec = models.BASE_MODELS.get(resolved.base_model)
+    return bool(spec is not None and spec.controlnet)
+
+
 def capability_controls(
     request: GenerationRequest, resolved: ResolvedRecipe | None
 ) -> dict[str, bool]:
@@ -527,11 +600,7 @@ def capability_controls(
         "negative_prompt": bool(recipe and recipe.supports_negative_prompt),
         "references": bool(recipe and recipe.reference_modes != ("none",)),
         "multi_reference": bool(recipe and "multi" in recipe.reference_modes),
-        "controlnet": bool(
-            recipe
-            and models.BASE_MODELS.get(recipe.base_model, None)
-            and models.BASE_MODELS[recipe.base_model].controlnet
-        ),
+        "controlnet": _takes_controlnet(resolved),
         "style_lora": bool(recipe and recipe.base_model in models.lora_bases()),
         "tile": request.generation_type == "seamless_material",
         "tiles": request.generation_type == "tileset",
@@ -713,6 +782,26 @@ def validate_request(
                     f"{request.reference_mode} references.",
                 )
             )
+        if request.structure_control and not _takes_controlnet(resolved):
+            # Refuse rather than drop. The conditioning is the whole point of
+            # attaching it, and a tier that quietly ran without it would be the
+            # same defect as a Fast tier that quietly drew the same picture as
+            # Quality. The field named is the one the user can act on: under
+            # automatic routing that is the Fast/Quality control, because the
+            # model combo is only drawn under Advanced.
+            field_name = "base_model" if request.model_mode == "advanced" else "quality"
+            issues.append(
+                CompatibilityIssue(
+                    field_name,
+                    f"{resolved.recipe.label} runs at guidance 0 and cannot run a "
+                    "ControlNet. "
+                    + (
+                        "Choose a full-CFG model."
+                        if field_name == "base_model"
+                        else "Switch the recipe to Quality, or clear the structure control."
+                    ),
+                )
+            )
         if request.negative_prompt.strip() and not resolved.recipe.supports_negative_prompt:
             issues.append(
                 CompatibilityIssue(
@@ -836,6 +925,11 @@ def request_from_legacy(form: Mapping[str, Any]) -> GenerationRequest:
         lora_weight=form.get("lora_weight"),
         references=(str(form["ref_path"]),) if form.get("ref_path") else (),
         reference_mode="single" if form.get("ref_path") else "none",
+        # Only when there is an image to derive a hint from: the pane clears
+        # ``control`` with the reference and refuses the pair separately, so a
+        # key left over from a session whose VOLATILE ``ref_path`` did not
+        # survive must not read here as a structure request.
+        structure_control=str(form.get("control") or "") if form.get("ref_path") else "",
         seed=int(form.get("seed") or 0),
         count=int(form.get("count") or 1),
         tile=tile,

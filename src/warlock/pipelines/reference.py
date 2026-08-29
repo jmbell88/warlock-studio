@@ -155,6 +155,32 @@ class Report:
         }
 
 
+def rank_key(report: Report) -> tuple[int, int, int]:
+    """How two reports compare when neither is acceptable -- lower is better.
+
+    There is no quality *scale* here to sort on, and inventing one would be the
+    dishonesty this function exists to avoid: ``occupancy`` is not monotone in
+    quality (``DEFAULT_OCCUPANCY`` is a target, not a maximum, and an ``edge``
+    refusal scores high on it), and ``REFUSAL_CODES``' order is documented as
+    the order the rules *fire* in, explicitly not a severity ranking. So the
+    only ordering the measurement actually supports is a **count of the report's
+    own verdicts**: a draw that failed one rule is nearer usable than one that
+    failed three, and among equals the one with fewer advisories is nearer than
+    the one with more.
+
+    ``empty`` sorts last whatever else is true, and that is not a weight
+    smuggled in: it is the one code ``measure`` returns *early* for, with no
+    bbox, no occupancy and no component count computed, because the mask found
+    no subject at all. There is nothing on that canvas to prefer.
+
+    Used only on the budget-exhausted exit of the reference reroll, where every
+    candidate has already been refused. An acceptable report breaks the loop
+    before anything is ranked.
+    """
+    codes = tuple(report.codes)
+    return (int("empty" in codes), len(codes), len(report.warnings))
+
+
 def has_alpha(image: PILImage) -> bool:
     """Whether ``subject_mask`` will read an alpha channel rather than flood fill.
 
