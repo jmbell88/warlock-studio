@@ -32,9 +32,34 @@ from typing import Any
 # Both false alarms were large flat cells separated by thin hard lines (ceramic
 # grout, metal ribs), which is the shape that breaks the ratio: the denominator
 # is a mean over every adjacent pair and so is tiny on a mostly-flat picture,
-# while the numerator is one column that may land on a grout line. Re-measure
-# before moving it, and re-measure it per checkpoint -- the corpus is turbo at
-# 4 steps, and a CFG base at 30 draws harder edges than any of it.
+# while the numerator is one column that may land on a grout line.
+#
+# It has since been re-measured twice on the shipped default and it did not
+# move either time, so "re-measure per checkpoint" is a settled question rather
+# than an open one -- what those runs found is a limit of the *statistic*, and
+# a third checkpoint corpus would find it again:
+#
+# - docs/measurements/2026-08-09-seam-threshold-cfg.md (run 2026-08-13),
+#   sdxl_cfg at 30 steps, the same 72 units. The populations overlap and its
+#   refusal rule fired: a wrap-preview-confirmed seamless tile scored 4.288
+#   while the lowest visibly seamed unit scored 2.705. No value separates them.
+# - docs/measurements/2026-08-29-seam-threshold-cfg.md, which reproduces that
+#   corpus bit-identically (max delta 0.000000) and adds the population the
+#   seamless-tileset track actually generates -- sdxl_cfg under the pixelxl
+#   LoRA with SHEET_NEGATIVE_PROMPT, which neither earlier corpus contained.
+#   There the ratio is *inverted*: 20 of 24 wrap-preview-confirmed seamless
+#   tiles score above this constant, while the two lowest-scoring units in the
+#   corpus are un-tiled pictures visibly chopped in four. The padding is fine;
+#   the mean denominator collapses on flat-cell pixel art.
+#
+# So on a CFG base, and especially under a pixel-art style LoRA, a `seamless`
+# verdict is advisory at best and a value above this line is more often the
+# false-alarm shape above than a real seam -- look at wrap_preview before
+# believing it. The fix worth having is a better denominator rather than a
+# different number here (the seam against the interior *maximum* rather than
+# the mean separates 0/96 and 1/48 from 41/48 and 19/48 on those corpora), and
+# per the repo rule that is a new measurement document, not an edit to this
+# constant.
 SEAM_MAX = 3.5
 
 # Below this many pixels on a side there is no interior to compare against.

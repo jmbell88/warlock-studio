@@ -1,0 +1,231 @@
+{
+  "base_model": "sdxl_cfg",
+  "materials": {
+    "checker": "black and white checkerboard floor tiles",
+    "mosaic": "small square ceramic mosaic tiles with grout",
+    "hex": "hexagonal concrete paving stones",
+    "panel": "sci-fi metal hull panels with rivets and seams",
+    "chain": "galvanised chain link fence mesh",
+    "circuit": "printed circuit board traces and pads",
+    "herring": "herringbone parquet wood floor",
+    "corrugate": "corrugated ribbed metal sheeting"
+  },
+  "rows": [
+    {
+      "material": "checker",
+      "seed": 11,
+      "arm": "tiled",
+      "file": "checker-s11-tiled.png",
+      "horizontal": 0.5970949944368045,
+      "vertical": 0.9974869946526006,
+      "worst": 0.9974869946526006
+    },
+    {
+      "material": "checker",
+      "seed": 12,
+      "arm": "tiled",
+      "file": "checker-s12-tiled.png",
+      "horizontal": 2.3430595331152215,
+      "vertical": 1.082060955125459,
+      "worst": 2.3430595331152215
+    },
+    {
+      "material": "checker",
+      "seed": 13,
+      "arm": "tiled",
+      "file": "checker-s13-tiled.png",
+      "horizontal": 0.8903487940645439,
+      "vertical": 0.7622138705136201,
+      "worst": 0.8903487940645439
+    },
+    {
+      "material": "mosaic",
+      "seed": 11,
+      "arm": "tiled",
+      "file": "mosaic-s11-tiled.png",
+      "horizontal": 3.334009564049895,
+      "vertical": 4.288391961344923,
+      "worst": 4.288391961344923
+    },
+    {
+      "material": "mosaic",
+      "seed": 12,
+      "arm": "tiled",
+      "file": "mosaic-s12-tiled.png",
+      "horizontal": 1.0811383873337492,
+      "vertical": 0.7793408071739388,
+      "worst": 1.0811383873337492
+    },
+    {
+      "material": "mosaic",
+      "seed": 13,
+      "arm": "tiled",
+      "file": "mosaic-s13-tiled.png",
+      "horizontal": 0.9595137956743249,
+      "vertical": 0.8255176391795194,
+      "worst": 0.9595137956743249
+    },
+    {
+      "material": "hex",
+      "seed": 11,
+      "arm": "tiled",
+      "file": "hex-s11-tiled.png",
+      "horizontal": 1.8343897272772893,
+      "vertical": 0.6791180865474431,
+      "worst": 1.8343897272772893
+    },
+    {
+      "material": "hex",
+      "seed": 12,
+      "arm": "tiled",
+      "file": "hex-s12-tiled.png",
+      "horizontal": 0.8980455425929272,
+      "vertical": 0.7272889501742059,
+      "worst": 0.8980455425929272
+    },
+    {
+      "material": "hex",
+      "seed": 13,
+      "arm": "tiled",
+      "file": "hex-s13-tiled.png",
+      "horizontal": 1.0690630592890458,
+      "vertical": 0.43016658920702466,
+      "worst": 1.0690630592890458
+    },
+    {
+      "material": "panel",
+      "seed": 11,
+      "arm": "tiled",
+      "file": "panel-s11-tiled.png",
+      "horizontal": 1.079040197915131,
+      "vertical": 0.9914685281353521,
+      "worst": 1.079040197915131
+    },
+    {
+      "material": "panel",
+      "seed": 12,
+      "arm": "tiled",
+      "file": "panel-s12-tiled.png",
+      "horizontal": 1.12744091811377,
+      "vertical": 0.5153277244157506,
+      "worst": 1.12744091811377
+    },
+    {
+      "material": "panel",
+      "seed": 13,
+      "arm": "tiled",
+      "file": "panel-s13-tiled.png",
+      "horizontal": 1.1496459125703977,
+      "vertical": 0.7862514337526968,
+      "worst": 1.1496459125703977
+    },
+    {
+      "material": "chain",
+      "seed": 11,
+      "arm": "tiled",
+      "file": "chain-s11-tiled.png",
+      "horizontal": 0.9258521190917308,
+      "vertical": 1.2865985968721834,
+      "worst": 1.2865985968721834
+    },
+    {
+      "material": "chain",
+      "seed": 12,
+      "arm": "tiled",
+      "file": "chain-s12-tiled.png",
+      "horizontal": 1.1200900541010486,
+      "vertical": 0.7916825400225844,
+      "worst": 1.1200900541010486
+    },
+    {
+      "material": "chain",
+      "seed": 13,
+      "arm": "tiled",
+      "file": "chain-s13-tiled.png",
+      "horizontal": 0.9927284380767878,
+      "vertical": 1.0784984848643644,
+      "worst": 1.0784984848643644
+    },
+    {
+      "material": "circuit",
+      "seed": 11,
+      "arm": "tiled",
+      "file": "circuit-s11-tiled.png",
+      "horizontal": 0.6214270455075198,
+      "vertical": 0.7333124316870641,
+      "worst": 0.7333124316870641
+    },
+    {
+      "material": "circuit",
+      "seed": 12,
+      "arm": "tiled",
+      "file": "circuit-s12-tiled.png",
+      "horizontal": 0.50187270919433,
+      "vertical": 0.7431202728203379,
+      "worst": 0.7431202728203379
+    },
+    {
+      "material": "circuit",
+      "seed": 13,
+      "arm": "tiled",
+      "file": "circuit-s13-tiled.png",
+      "horizontal": 1.460766383254772,
+      "vertical": 0.76679035733909,
+      "worst": 1.460766383254772
+    },
+    {
+      "material": "herring",
+      "seed": 11,
+      "arm": "tiled",
+      "file": "herring-s11-tiled.png",
+      "horizontal": 1.0426370348396723,
+      "vertical": 1.0752373970963929,
+      "worst": 1.0752373970963929
+    },
+    {
+      "material": "herring",
+      "seed": 12,
+      "arm": "tiled",
+      "file": "herring-s12-tiled.png",
+      "horizontal": 1.0708368916412165,
+      "vertical": 0.9733264007437319,
+      "worst": 1.0708368916412165
+    },
+    {
+      "material": "herring",
+      "seed": 13,
+      "arm": "tiled",
+      "file": "herring-s13-tiled.png",
+      "horizontal": 0.8641967867675245,
+      "vertical": 1.1697418681042802,
+      "worst": 1.1697418681042802
+    },
+    {
+      "material": "corrugate",
+      "seed": 11,
+      "arm": "tiled",
+      "file": "corrugate-s11-tiled.png",
+      "horizontal": 1.0881068531127396,
+      "vertical": 0.828308293382335,
+      "worst": 1.0881068531127396
+    },
+    {
+      "material": "corrugate",
+      "seed": 12,
+      "arm": "tiled",
+      "file": "corrugate-s12-tiled.png",
+      "horizontal": 1.077982776662177,
+      "vertical": 0.9196119085401054,
+      "worst": 1.077982776662177
+    },
+    {
+      "material": "corrugate",
+      "seed": 13,
+      "arm": "tiled",
+      "file": "corrugate-s13-tiled.png",
+      "horizontal": 1.0343264106178867,
+      "vertical": 0.9220797531012169,
+      "worst": 1.0343264106178867
+    }
+  ]
+}

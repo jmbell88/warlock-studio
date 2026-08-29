@@ -69,12 +69,34 @@ def main() -> int:
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--base", default=models.DEFAULT_BASE_MODEL)
     ap.add_argument("--model-root", type=Path, default=Path("models"))
+    # Both default to off, so the 2026-08-08 and 2026-08-09 corpora still
+    # reproduce byte-identically from this file. They exist because the
+    # production seamless-tileset path (``_q_tileset._tile_set``) applies a
+    # pixel-art style LoRA and a negative prompt, and neither of those corpora
+    # contains a single unit drawn that way -- see
+    # docs/measurements/2026-08-29-seam-threshold-cfg.md.
+    ap.add_argument("--lora", default=None, help="style LoRA key, e.g. pixelxl")
+    ap.add_argument(
+        "--negative",
+        default=None,
+        choices=("sheet",),
+        help="'sheet' applies tilesheet.SHEET_NEGATIVE_PROMPT, what the tileset door sends",
+    )
     args = ap.parse_args()
 
     spec = models.BASE_MODELS[args.base]
     if args.base not in models.tile_bases():
         print(f"{args.base} cannot generate a seamless tile", file=sys.stderr)
         return 2
+
+    lora_weight = models.DEFAULT_LORA_WEIGHT
+    if args.lora is not None:
+        lora_weight = models.STYLE_LORAS[args.lora].default_weight
+    negative = None
+    if args.negative == "sheet":
+        from warlock.pipelines import tilesheet
+
+        negative = tilesheet.SHEET_NEGATIVE_PROMPT
 
     out: Path = args.out
     out.mkdir(parents=True, exist_ok=True)
@@ -93,6 +115,9 @@ def main() -> int:
                     path,
                     seed=seed,
                     tile=tiled,
+                    lora=args.lora,
+                    lora_weight=lora_weight,
+                    negative_prompt=negative,
                 )
                 elapsed = time.monotonic() - started
                 rep = seam.report(path)
@@ -121,6 +146,9 @@ def main() -> int:
         json.dumps(
             {
                 "base_model": args.base,
+                "lora": args.lora,
+                "lora_weight": lora_weight if args.lora else None,
+                "negative": args.negative,
                 "prompt_version": prompt_lib.PROMPT_VERSION,
                 "threshold_at_capture": seam.SEAM_MAX,
                 "materials": MATERIALS,
