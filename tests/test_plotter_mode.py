@@ -2793,6 +2793,52 @@ def test_the_seamless_sidecars_own_spelling_of_the_view_is_read(tmp_path, monkey
     assert record.layout == plotter_tilesets.BLOB_LAYOUT
 
 
+def test_a_sidecar_from_before_the_planner_was_deleted_still_opens(
+    tmp_path, monkeypatch
+):
+    """Grid sheets drawn before 2026-08-29 carry a ``workflow`` block: the
+    compiled tileset plan ``_q_tilesheet`` used to write beside a picture that
+    had none of that structure. The writer is gone; the files are not, and the
+    rule for removing a sidecar key is that a sheet already on disk keeps
+    opening exactly as it did. This reader takes the keys it knows and ignores
+    the rest, so it does -- and the block is still in the file afterwards,
+    because nothing here rewrites it.
+    """
+    import json
+
+    from warlock.pipelines import tilesheet
+    from warlock.studio import plotter_tilesets
+    from warlock.studio.plotter import project
+
+    sidecar = tilesheet.sheet_sidecar(
+        prompt="a damp dungeon",
+        tile_w=16,
+        tile_h=16,
+        view="top_down",
+        colors=8,
+        palette=["#000000"],
+        recipe={"base_model": "sdxl_cfg"},
+        created=1.0,
+    )
+    # As the deleted writer wrote it: the block sat beside the geometry rather
+    # than inside it, which is why removing it leaves every other key in place.
+    sidecar["workflow"] = {
+        "version": 2,
+        "mode": "collection",
+        "resolved_mode": "materials",
+        "cells": [{"index": 0, "prompt": "moss", "variant": 1, "seed": 11}],
+        "roles": [],
+    }
+    _library(monkeypatch, tmp_path, _flat(), sidecar)
+
+    record = plotter_tilesets._recorded_sheet(FakeCtx(), "j1")
+    assert record is not None
+    assert (record.tile_w, record.tile_h) == (16, 16)
+    assert record.lattice == project.ORTHOGONAL
+    stored = json.loads((tmp_path / "sheet.json").read_text(encoding="utf-8"))
+    assert stored["workflow"] == sidecar["workflow"]
+
+
 def test_a_sheet_with_too_few_cells_never_parks_as_terrain(tmp_path):
     ctx = FakeCtx()
     tab = _tab(ctx, tileset=False)

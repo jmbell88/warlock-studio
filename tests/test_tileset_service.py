@@ -850,6 +850,30 @@ def test_the_cell_bounds_are_one_rule_with_three_enforcement_points():
     assert tilesheets.MAX_MATERIALS * tilesheets.MAX_VARIANTS == tilesheets.MAX_CELLS
 
 
+def test_the_grid_planner_is_gone_and_nothing_reaches_for_it():
+    """``tile_plan`` and the Wang/path role tables it was the only caller of
+    were deleted on 2026-08-29.
+
+    Not tidying: the plan was compiled from a stored request and then written
+    beside a *grid* sheet -- one guided generation sliced on a fixed lattice --
+    as a description of per-cell prompts or sixteen corner roles that the
+    picture does not contain. A planner nothing plans with is worse than no
+    planner, so this is the same scan the six functions before it got: the names
+    exist nowhere in ``src/`` but the module docstring that says why they went.
+    """
+    from pathlib import Path
+
+    import warlock
+
+    for name in ("tile_plan(", "wang_roles(", "path_roles(", "TileRole("):
+        for path in Path(warlock.__file__).parent.rglob("*.py"):
+            source = path.read_text(encoding="utf-8")
+            assert name not in source, f"{path.name} still reaches for {name}"
+    assert not hasattr(asset_workflows, "tile_plan")
+    # What survived, and why: this one has a caller that generates from it.
+    assert asset_workflows.collection_cells(("moss",), 1)[0]["prompt"] == "moss"
+
+
 def test_the_layout_words_match_the_pipeline():
     assert tilesheets.TERRAIN_LAYOUTS == ("blob47",)
     assert tileatlas.terrain_geometry(32, "top_down").layout == "blob47"

@@ -152,6 +152,15 @@ DERIVED_PARAMS = (
     # actually ran with. Derived by definition, so a reroll must start clean
     # rather than wear a report about the sheet it is replacing.
     "sheet_report",
+    # A compiled tileset plan the *legacy grid* worker used to write here. It
+    # has no writer any more -- a single guided generation has no per-cell
+    # prompt and lays no Wang role, so the block described a structure the sheet
+    # did not have (see ``_q_tilesheet``'s module docstring). It is listed here
+    # rather than forgotten because rows drawn before 2026-08-29 still carry
+    # one: they keep it, nothing reads it, and this is what stops a reroll of
+    # such a row from copying the old claim onto a new sheet with nothing left
+    # to re-derive it.
+    "tile_plan",
     # What a re-texture did to this mesh's surface -- coverage, view count, the
     # recipe that restyled it. Recorded on the mesh's own row because that is
     # where a reader asks what its skin is, and derived, so a reroll must not

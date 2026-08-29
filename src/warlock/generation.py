@@ -46,9 +46,11 @@ VIEW_NAMES = ("front", "left", "right", "back")
 #: The mode words a tile request may carry, and the two shapes they name.
 #:
 #: ``asset_workflows.TILE_MODE_ALIASES``' own table, restated here rather than
-#: imported because ``asset_workflows`` imports *this* module and the cycle is
-#: not worth the single dictionary. ``tests/test_tileset_service.py`` pins the
-#: two copies together.
+#: imported. It was a cycle until the grid planner was deleted (2026-08-29) and
+#: ``asset_workflows`` stopped importing this module; the copy stays because
+#: this file is the request *document* and naming its own vocabulary should not
+#: cost it an import of a planning helper.
+#: ``tests/test_tileset_service.py`` pins the two copies together.
 TILE_MODES = ("collection", "materials", "terrain_transition", "terrain", "path")
 
 

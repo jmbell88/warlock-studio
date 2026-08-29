@@ -86,6 +86,25 @@ async def _run(worker, job_id):
     return worker.store.get(job_id)
 
 
+async def _run_both(worker, *job_ids):
+    """``_run`` for a comparison: two rows queued before the worker starts, so
+    one run drains both and the two sheets cannot differ by anything the process
+    picked up between them."""
+    worker.start()
+    try:
+        deadline = time.monotonic() + 60.0
+        finished = ("done", "error", "cancelled")
+        while time.monotonic() < deadline:
+            if all(worker.store.get(j)["status"] in finished for j in job_ids):
+                break
+            await asyncio.sleep(0.01)
+        else:
+            pytest.fail("jobs did not finish before timeout")
+    finally:
+        await worker.shutdown()
+    return [worker.store.get(j) for j in job_ids]
+
+
 # --- what it draws ----------------------------------------------------------
 
 
@@ -281,6 +300,87 @@ async def test_the_sidecar_records_the_lattice_the_model_drew_on(worker):
     assert doc["grid"]["scale"] is None or isinstance(doc["grid"]["scale"], int)
     assert 0.0 <= doc["grid"]["residual"] <= 1.0
     assert doc["version"] == tilesheet.TILE_SHEET_VERSION
+
+
+def _tileset_request(**tile: object) -> dict:
+    """The stored request document a grid row from the old Create door carries.
+
+    Built through ``generation`` rather than hand-written, so it is the shape
+    ``service.jobs`` actually stores rather than the shape this test imagines.
+    """
+    from warlock import generation
+
+    return generation.GenerationRequest(
+        generation_type="tileset",
+        prompt="a damp dungeon",
+        tile=generation.TileSettings(**tile),
+    ).to_dict()
+
+
+@pytest.mark.asyncio
+async def test_a_stored_request_adds_no_plan_to_a_grid_sheet(worker):
+    """The grid path paints one frame through a guide whose sixty-four cells are
+    identical and slices it on fixed rectangles. It has no per-cell prompt, no
+    per-cell seed and no Wang role in it -- so the compiled plan a stored
+    ``generation_request`` used to be run through described a structure the
+    picture does not have, and it was written twice: into the sidecar as
+    ``workflow`` and onto the row as ``tile_plan``. Neither is written now.
+    """
+    job_id = _sheet_job(
+        worker,
+        generation_request=_tileset_request(
+            mode="collection", prompt_items=("moss", "cracked stone"), variants=2
+        ),
+    )
+    row = await _run(worker, job_id)
+
+    assert row["error"] is None and row["status"] == "done"
+    doc = json.loads((worker.config.job_dir(job_id) / "sheet.json").read_text())
+    assert "workflow" not in doc
+    assert "tile_plan" not in row["params"]
+
+
+@pytest.mark.asyncio
+async def test_a_stored_request_changes_none_of_the_sidecar_bytes(worker):
+    """The other half of the same claim: removing a writer must leave the sheet
+    that never carried the key exactly where it was. Two runs of one request,
+    one of them carrying the document that used to add the block, compared whole
+    -- ``created`` is the wall clock and is the only key allowed to differ."""
+    plain = _sheet_job(worker)
+    carrying = _sheet_job(
+        worker,
+        generation_request=_tileset_request(
+            mode="terrain_transition", inner_terrain="grass", outer_terrain="water"
+        ),
+    )
+    # Both queued before the worker starts, and drained by one run: the same
+    # process, the same loaded pipeline, the same seed -- so anything that
+    # differs between the two files is the stored request document and nothing
+    # else.
+    await _run_both(worker, plain, carrying)
+
+    docs = []
+    for job_id in (plain, carrying):
+        doc = json.loads((worker.config.job_dir(job_id) / "sheet.json").read_text())
+        doc.pop("created")
+        docs.append(doc)
+    assert docs[0] == docs[1]
+
+
+@pytest.mark.asyncio
+async def test_a_request_the_planner_would_have_refused_still_draws(worker):
+    """A terrain request with one of its two surfaces missing made ``tile_plan``
+    raise, and it raised *in the worker* -- so a row the door had already
+    accepted failed on a validation of structure this path was never going to
+    draw. The plan is gone and the sheet lands."""
+    job_id = _sheet_job(
+        worker,
+        generation_request=_tileset_request(mode="terrain_transition"),
+    )
+    row = await _run(worker, job_id)
+
+    assert row["error"] is None and row["status"] == "done"
+    assert (worker.config.job_dir(job_id) / "input.png").exists()
 
 
 @pytest.mark.asyncio

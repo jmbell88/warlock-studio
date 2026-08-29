@@ -621,7 +621,6 @@ def sheet_sidecar(
     target_cell_px: int | None = None,
     reduction: str | None = None,
     source_seed: int | None = None,
-    workflow: dict[str, Any] | None = None,
     grid: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The sheet's own record: what was asked for, and what actually ran.
@@ -644,6 +643,20 @@ def sheet_sidecar(
     before -- and a bump that changes nothing would invalidate every stored
     benchmark comparison for free. Recorded and acted on by nothing; see
     ``pixel.lattice``.
+
+    **There is no structural block here, and there must not be one.** This
+    record describes a sheet that is one generation cut on a fixed lattice, and
+    the lattice is already stated in full above -- columns, rows, tile size,
+    view, the working and target cell sizes, the reduction. A ``workflow`` key
+    used to sit beside them carrying ``asset_workflows.tile_plan``'s compiled
+    per-cell prompts or its sixteen Wang roles, which is a description of a
+    structure this path cannot produce: a single guided generation has no
+    per-cell prompt and lays no role. Removed with its planner (2026-08-29);
+    ``_q_tilesheet``'s module docstring holds the argument. Sheets written
+    before that still carry the key on disk and every reader of ``sheet.json``
+    takes the keys it knows and ignores the rest, so they open unchanged. The
+    seamless modes are the ones with a real plan and they record it in
+    ``tileatlas.atlas_sidecar``.
 
     **The key on disk is still ``"projection"``** while the value is a *view*.
     The rename is a Python one: every sidecar already written carries that key,
@@ -673,6 +686,5 @@ def sheet_sidecar(
         "target_cell_px": target_cell_px,
         "reduction": reduction if target_cell_px is not None else None,
         "source_seed": int(source_seed) if source_seed is not None else None,
-        **({"workflow": dict(workflow)} if workflow is not None else {}),
         **({"grid": dict(grid)} if grid is not None else {}),
     }

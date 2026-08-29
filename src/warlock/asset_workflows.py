@@ -1,10 +1,27 @@
-"""Pure planning and validation helpers for tilesets.
+"""Pure planning helpers for tilesets.
 
-Generation itself remains in the existing queue.  These helpers make the
-structural part deterministic: a model may decorate a cell, but it cannot
-change which Wang/path role that cell represents.
+Generation itself remains in the existing queue.  What is left here is the one
+expansion something actually generates from: :func:`collection_cells`, which
+turns N material lines by V draws into the cells ``service.tilesheets`` queues
+and ``_q_tileset`` then samples one by one.
 
-**What used to be here and is not any more.** Six functions --
+**The grid planner is gone (2026-08-29).**  ``tile_plan`` compiled a structural
+description -- per-cell prompts for a materials request, or the 16/18 Wang and
+path roles for a terrain one -- and its only caller was the *legacy grid* path
+in ``_q_tilesheet``, which paints one 1024px frame through a canny guide and
+slices it on a fixed lattice.  That image has no per-cell prompt and no role in
+it, so the plan changed nothing about the generation and was merely written into
+``params["tile_plan"]`` and into the sheet's sidecar as a ``workflow`` block: a
+record of a structure the picture does not have, which is the defect the whole
+tileset programme exists to have fixed.  The seamless modes honour their plan
+for real and it is ``service.tilesheets`` that compiles theirs, into the stored
+``sheet`` block, with ``pipelines.tileatlas.atlas_sidecar`` as its record.
+``wang_roles``, ``path_roles`` and the ``TileRole`` dataclass went with it,
+having had no other caller; ``pipelines.tilemask``'s blob-47 field is what the
+shipped terrain path is laid out on, and it is forty-seven coverage cases rather
+than these sixteen corners.
+
+**What used to be here and is not any more.** Six further functions --
 ``compatible_edges``, ``validate_edge_pixels``, ``repair_atlas``,
 ``atlas_warnings``, ``sheet_manifest`` and ``sprite_plan`` -- were written for a
 tileset path that never shipped, and every one of them had zero callers in
@@ -21,10 +38,7 @@ on a right one.  A generated set is landed by its record
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
 from typing import Any
-
-from .generation import cell_dimensions
 
 #: How many distinct *prompt lines* one collection may name, how many draws of
 #: each it may ask for, and the ceiling on their product.
@@ -41,7 +55,9 @@ MAX_COLLECTION_LINES = 16
 MAX_COLLECTION_VARIANTS = 4
 MAX_COLLECTION_CELLS = 64
 
-#: The mode words this module accepts, mapped onto the two it plans for.
+#: The mode words a tile request may carry, mapped onto the two shapes that get
+#: built.  Read by ``service.jobs``, which is what turns a request document's
+#: mode into ``service.tilesheets``' own.
 #:
 #: ``collection``/``terrain_transition``/``path`` are the stored spellings --
 #: rows and profiles carry them and a request naming one is not an error -- and
@@ -56,91 +72,6 @@ TILE_MODE_ALIASES: dict[str, str] = {
     "terrain": "terrain",
     "path": "terrain",
 }
-
-
-@dataclass(frozen=True, slots=True)
-class TileRole:
-    index: int
-    mask: int
-    name: str
-    edges: tuple[str, str, str, str]
-
-
-def tile_plan(
-    *,
-    mode: str,
-    view: str = "top_down",
-    prompt_items: Iterable[str] = (),
-    variants: int = 1,
-    inner_terrain: str = "",
-    outer_terrain: str = "",
-    boundary: str = "",
-    ground: str = "",
-    path: str = "",
-    edge: str = "",
-    seed: int = 0,
-    target_cell_px: int | None = None,
-) -> dict[str, Any]:
-    """Compile a structural tileset request before any model call.
-
-    ``mode`` is read through :data:`TILE_MODE_ALIASES`, so both vocabularies
-    work: a stored row saying ``collection`` and a new request saying
-    ``materials`` compile to the same plan.
-
-    The role table below is the sixteen-corner Wang set, which is what the
-    older grid path lays out.  It is **not** the blob-47 layout the seamless
-    terrain path uses -- that one is ``pipelines.tilemask``'s, is forty-seven
-    cases rather than sixteen, and is described by
-    ``pipelines.tileatlas.atlas_sidecar`` rather than by anything here.
-    """
-    isometric = view == "isometric"
-    working = (256, 128) if isometric else (256, 256)
-    target = cell_dimensions(working, target_cell_px, isometric=isometric)
-    resolved = TILE_MODE_ALIASES.get(str(mode), "")
-    if resolved == "materials":
-        cells = collection_cells(prompt_items, variants, seed=seed)
-        roles = ()
-    elif resolved == "terrain" and mode == "path":
-        if not ground.strip() or not path.strip():
-            raise ValueError("path sets need ground and path descriptions")
-        cells = tuple({"index": r.index, "role": r.name} for r in path_roles())
-        roles = path_roles()
-    elif resolved == "terrain":
-        if not inner_terrain.strip() or not outer_terrain.strip():
-            raise ValueError("terrain sets need inner and outer terrain descriptions")
-        cells = tuple({"index": r.index, "role": r.name} for r in wang_roles())
-        roles = wang_roles()
-    else:
-        raise ValueError(
-            f"unknown tileset mode {mode!r}; this plans "
-            f"{', '.join(sorted(set(TILE_MODE_ALIASES)))}"
-        )
-    return {
-        # 2: cells carry a seed, and ``materials``/``terrain`` read as mode
-        # words.  Bumped because the worker consumes this block now rather than
-        # merely recording it, so "which shape are these cells" is a question
-        # something asks rather than a comment.
-        "version": 2,
-        "mode": mode,
-        "resolved_mode": resolved,
-        "view": view,
-        "working_cell_px": list(working),
-        "target_cell_px": target_cell_px,
-        "output_cell_px": list(target),
-        "cells": cells,
-        "roles": [
-            {"index": r.index, "mask": r.mask, "name": r.name, "edges": list(r.edges)}
-            for r in roles
-        ],
-        "descriptions": {
-            "inner": inner_terrain,
-            "outer": outer_terrain,
-            "boundary": boundary,
-            "ground": ground,
-            "path": path,
-            "edge": edge,
-        },
-    }
 
 
 def collection_cells(
@@ -177,29 +108,3 @@ def collection_cells(
         {"index": i, "prompt": prompt, "variant": variant + 1, "seed": int(cell_seed)}
         for i, ((prompt, variant), cell_seed) in enumerate(zip(pairs, seeds, strict=True))
     )
-
-
-def wang_roles() -> tuple[TileRole, ...]:
-    """The exact 16 corner cases, in stable binary-mask order."""
-    names = ("none", "north", "east", "south", "west")
-    out = []
-    for mask in range(16):
-        edges = tuple("inner" if mask & (1 << bit) else "outer" for bit in range(4))
-        out.append(TileRole(mask, mask, names[0] if mask == 0 else f"wang_{mask:02d}", edges))
-    return tuple(out)
-
-
-def path_roles() -> tuple[TileRole, ...]:
-    """The 18 canonical connectable path cases.
-
-    Four-way masks cover the 16 edge combinations; the two extra roles are
-    explicit end caps used by the existing path layout.
-    """
-    roles = list(wang_roles())
-    roles.extend(
-        (
-            TileRole(16, 16, "cap_horizontal", ("path", "ground", "path", "ground")),
-            TileRole(17, 17, "cap_vertical", ("ground", "path", "ground", "path")),
-        )
-    )
-    return tuple(roles)

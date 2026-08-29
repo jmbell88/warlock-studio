@@ -416,6 +416,57 @@ def test_the_sidecar_carries_the_lattice_the_generation_was_drawn_on():
     assert json.loads(json.dumps(doc)) == doc
 
 
+def test_the_sidecar_declares_no_structure_it_cannot_have():
+    """A grid sheet is one generation cut on a fixed lattice, and the lattice is
+    the whole of its structure -- it is stated by ``columns``/``rows``, the tile
+    size, the view, the cell sizes and the reduction, all of which are here.
+
+    A ``workflow`` block used to sit beside them holding
+    ``asset_workflows.tile_plan``'s compiled per-cell prompts or its sixteen
+    Wang roles: a description of a structure this path cannot produce, since a
+    single guided generation has no per-cell prompt and lays no role. Writer and
+    planner both deleted 2026-08-29, so what is pinned here is the *parameter*:
+    a caller cannot hand one over again by accident.
+    """
+    import inspect
+
+    doc = tilesheet.sheet_sidecar(
+        prompt="mossy dungeon",
+        tile_w=32,
+        tile_h=32,
+        view=tilesheet.TOP_DOWN,
+        colors=64,
+        palette=["#000000"],
+        recipe={"base_model": "sdxl_cfg"},
+        created=1.0,
+    )
+    assert "workflow" not in doc
+    assert "workflow" not in inspect.signature(tilesheet.sheet_sidecar).parameters
+    # The bytes of the case that never carried the key, pinned whole: removing a
+    # writer must leave a sheet drawn the way every sheet was drawn byte for
+    # byte where it was. ``grid`` is the one optional key and this call measured
+    # nothing, so it is absent here too.
+    assert tuple(doc) == (
+        "version",
+        "created",
+        "prompt",
+        "image",
+        "columns",
+        "rows",
+        "tiles",
+        "tile_w",
+        "tile_h",
+        "projection",
+        "colors",
+        "palette",
+        "recipe",
+        "working_cell_px",
+        "target_cell_px",
+        "reduction",
+        "source_seed",
+    )
+
+
 def test_the_sidecar_is_plain_json_values():
     """It is written with ``json.dumps`` as the completion marker, so a numpy
     scalar in it would fail the write *after* the sheet had been published."""

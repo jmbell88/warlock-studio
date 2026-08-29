@@ -21,6 +21,23 @@ tile carries a sliver of its neighbour.
 This module reaches into no other layer: the compositing it needs is
 sixty-four crops and a paste, and it lives in ``pipelines.tilesheet``, which
 is where the queue is allowed to look.
+
+**What this path can and cannot honestly record.** It can record the sheet: the
+lattice it was cut on (columns, rows, tile size), the view, the reduction, the
+seed, the recipe that ran. It cannot record *structure*, because one guided
+generation has none -- there is no per-cell prompt, no cell seed and no
+Wang/path role anywhere in it, and the sixty-four guide cells are identical,
+which is the measurement that retired the mode for new requests
+(``docs/measurements/2026-08-18-tile-sheet-grid.md``). So this worker compiles
+no plan and the sidecar carries no ``workflow`` block. It used to: a stored
+``generation_request`` was run through ``asset_workflows.tile_plan`` and the
+compiled per-cell (or sixteen-role) description was written beside a picture
+that has neither -- a record of a structure the image does not have, which is
+the original defect the whole tileset programme was started to fix. The
+seamless modes in ``_q_tileset`` honour their plan for real and describe it in
+``pipelines.tileatlas.atlas_sidecar``; a second structural block here would be
+either a duplicate of the geometry above it or a contradiction of the pixels
+beside it. Anything "restoring" one is restoring the defect.
 """
 
 from __future__ import annotations
@@ -72,7 +89,6 @@ class TileSheetOps:
         from PIL import Image
 
         from . import queue as queue_mod
-        from .asset_workflows import tile_plan
         from .pipelines import control, pixel, tilesheet
         from .pipelines.conditioning import Conditioning
 
@@ -97,28 +113,14 @@ class TileSheetOps:
         # block the door would refuse today costs the request rather than
         # sixty-four cells of nothing.
         geom = tilesheet.geometry(tile_w, projection)
-        normalized_plan = None
-        request_payload = params.get("generation_request")
-        if (
-            isinstance(request_payload, dict)
-            and request_payload.get("generation_type") == "tileset"
-        ):
-            request_tile = request_payload.get("tile") or {}
-            normalized_plan = tile_plan(
-                mode=str(request_tile.get("mode") or "collection"),
-                view=str(request_tile.get("view") or projection),
-                prompt_items=request_tile.get("prompt_items") or (),
-                variants=int(request_tile.get("variants") or 1),
-                inner_terrain=str(request_tile.get("inner_terrain") or ""),
-                outer_terrain=str(request_tile.get("outer_terrain") or ""),
-                boundary=str(request_tile.get("boundary") or ""),
-                ground=str(request_tile.get("ground") or ""),
-                path=str(request_tile.get("path") or ""),
-                edge=str(request_tile.get("edge") or ""),
-                target_cell_px=request_tile.get("target_cell_px"),
-            )
-            params["tile_plan"] = normalized_plan
-            await asyncio.to_thread(self.store.set_params, job_id, params)
+        # A stored ``generation_request`` is deliberately not read here. It is
+        # the *request*, and on this path it describes materials or terrain
+        # roles that a single guided generation does not produce -- see the
+        # module docstring. Compiling it cost a params write and a plan nothing
+        # honoured, and a stored terrain request missing one of its two
+        # descriptions made ``tile_plan`` raise mid-job, so a row the door had
+        # already accepted failed on a validation of something this path was
+        # never going to draw.
         colors = int(params.get("colors", 64))
         palette_name = str(params.get("palette") or "")
         dither = bool(params.get("dither"))
@@ -341,7 +343,6 @@ class TileSheetOps:
             target_cell_px=job.get("params", {}).get("target_cell_px"),
             reduction=(job.get("params", {}).get("reduction_method") or "measured_pixel_reducer"),
             source_seed=seed,
-            workflow=normalized_plan,
             grid=grid,
         )
         # Last, and only after the sheet: this file is the completion marker, so
