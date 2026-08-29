@@ -123,6 +123,27 @@ def sprite_options() -> dict[str, Any]:
     }
 
 
+def sprite_palettes(svc: WarlockService) -> list[str]:
+    """Every authored palette a sprite sheet may be drawn on, by stem, sorted.
+
+    ``tilesheets.tile_sheet_palettes``' twin, and its docstring's argument
+    applies here unchanged: this is the one answer on this door that can change
+    without the process changing, so it is a call taking ``svc`` rather than a
+    key in :func:`sprite_options` -- which reads no disk and which a pane may
+    therefore cache for its whole life. A palette is a *file the user drops in
+    a directory*; folded into the options blob it would be a directory listing
+    cached until the app restarts, and a palette installed five minutes ago
+    would never appear.
+
+    Empty on a host with no palette directory, which is not an error: the whole
+    feature is optional and a form that offers nothing is the correct rendering
+    of "none installed".
+    """
+    from . import palettes
+
+    return palettes.available(svc.config)
+
+
 def _check_options(svc: WarlockService, entries: dict[str, Any]) -> dict[str, Any]:
     """The pixelisation options a sprite request may carry, validated once.
 

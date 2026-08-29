@@ -1,8 +1,9 @@
 """Named 2D style profiles.
 
 A profile is the *look* half of the 2D form -- which checkpoint, which LoRA,
-its weight and the negative prompt -- saved under a name so a user who works
-on two kinds of asset does not re-pick them each time they switch. What it
+its weight, the negative prompt and the authored palette -- saved under a name
+so a user who works on two kinds of asset does not re-pick them each time they
+switch. What it
 deliberately does not carry is the per-generation half: the prompt, the seed,
 its lock and the reference count are about one submit, not about a look. The
 taxonomy selects it used to carry retired with the taxonomy on 2026-08-17;
@@ -45,7 +46,20 @@ ANCHOR_ADAPTER = "plus"
 # edit by hand, and this string becomes a path.
 _ANCHOR_RE = re.compile(r"^[0-9a-f]{12}\.png$")
 
-_FIXED = ("base_model", "style_lora", "lora_weight", "negative_prompt")
+# ``palette`` since 2026-08-29, and it is the whole of "make two sheets of one
+# character match". A profile already carried the base model, the style LoRA,
+# its weight, the negative prompt and -- through ANCHOR_FIELDS -- an IP-Adapter
+# style anchor; the authored palette was the one art decision it could not
+# hold, so two sheets made a week apart under the same profile came back on two
+# median cuts of two different renders.
+#
+# A field on this, deliberately, rather than an asset-set entity with an id, a
+# pane, a listing, a deletion and a migration: a fourth first-class noun beside
+# job, sheet and draft would buy nothing this line does not. And never a
+# palette *derived* from a sibling sheet's recorded ``palette`` -- that list is
+# ``quantize_shared`` output, the colours one render happened to contain, and
+# propagating it propagates the mud (``pipelines.pixelize``' module docstring).
+_FIXED = ("base_model", "style_lora", "lora_weight", "negative_prompt", "palette")
 
 
 def profile_fields() -> tuple[str, ...]:

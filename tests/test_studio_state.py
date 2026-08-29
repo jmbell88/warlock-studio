@@ -643,6 +643,40 @@ def test_a_profile_captures_style_and_not_the_generation():
         assert volatile not in captured
 
 
+def test_a_profile_carries_the_authored_palette():
+    """The whole of "make two sheets of one character match". The profile
+    already held the base model, the style LoRA, its weight, the negative prompt
+    and -- through ANCHOR_FIELDS -- an IP-Adapter style anchor; the palette was
+    the one art decision it could not hold, so two sheets made a week apart came
+    back on two median cuts of two different renders."""
+    from warlock.studio import profiles
+
+    form = statelib.default_form_2d()
+    form.update(palette="nord", prompt="a barrel")
+    captured = profiles.capture(form)
+    assert captured["palette"] == "nord"
+
+    other = statelib.default_form_2d()
+    profiles.apply(other, captured)
+    assert other["palette"] == "nord"
+    # Overlaid like every other field, which is what a *set* of assets means:
+    # a profile that names none puts them back on "derive one" rather than
+    # leaving whatever the last sheet happened to use.
+    profiles.apply(other, {"palette": ""})
+    assert other["palette"] == ""
+
+
+def test_a_profile_saved_before_the_palette_field_applies_without_one():
+    """A stored profile is a JSON blob written by an older release; a missing
+    key must leave the form's own value rather than raise."""
+    from warlock.studio import profiles
+
+    form = statelib.default_form_2d()
+    form["palette"] = "nord"
+    profiles.apply(form, {"base_model": "turbo"})
+    assert form["palette"] == "nord"
+
+
 def test_an_old_profile_with_retired_taxonomy_keys_is_inert_when_applied():
     """Old profiles on disk keep their taxonomy keys; apply() must ignore them
     rather than needing a migration."""

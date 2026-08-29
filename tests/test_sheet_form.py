@@ -29,6 +29,7 @@ import pytest
 from warlock.pipelines import tileatlas, tilesheet
 from warlock.service import sprites as svc_sprites
 from warlock.service import tilesheets as svc_tilesheets
+from warlock.service.errors import Invalid
 from warlock.studio import create_assets, settings
 from warlock.studio.panes import settings_2d
 from warlock.studio.state import default_form_2d
@@ -213,6 +214,13 @@ def test_a_sprite_sheet_is_a_reference_job_carrying_a_follow_up():
         # Blank by default: the optional final reduction, which never upscales
         # and so means "keep the working cell" when nothing asked for one.
         "target_cell_px": None,
+        # The pixel look. Sent always rather than only when set, so "no palette"
+        # and "the form was never asked" are different requests -- and the
+        # outline is the pipeline's own forced default rather than "none",
+        # because a synthesised cell has no guaranteed margin.
+        "palette": "",
+        "dither": False,
+        "outline": svc_sprites.DEFAULT_SPRITE_OUTLINE,
     }
 
 
@@ -721,6 +729,148 @@ def test_every_layout_sends_only_arguments_the_door_accepts(mode):
     kwargs = settings_2d.tile_sheet_kwargs(form)
     signature = inspect.signature(svc_tilesheets.create_tile_sheet)
     signature.bind(object(), reference=None, **kwargs)
+
+
+# -- the pixel look, on both arms --------------------------------------------
+#
+# The three settings both sheet doors have taken since they started sharing
+# ``service.pixelopts`` and that no pane offered. Every assertion here is on the
+# submit path rather than on a widget, because a control that sets a form key
+# nothing sends is the same unreachable capability with an extra step.
+
+
+@pytest.fixture
+def paldir(svc, tmp_path):
+    directory = tmp_path / "palettes"
+    directory.mkdir(exist_ok=True)
+    svc.config.palette_dir = directory
+    return directory
+
+
+def test_the_tile_submit_carries_the_palette_and_the_dither(monkeypatch):
+    sent, _ctx = _sent(monkeypatch, _sheet_form(palette="nord", dither=True))
+    assert sent["palette"] == "nord"
+    assert sent["dither"] is True
+
+
+def test_the_tile_submit_says_no_palette_rather_than_saying_nothing(monkeypatch):
+    """Sent always, so "derive one" and "the form was never asked" are the same
+    request only because they mean the same thing -- and the door's own defaults
+    are these values."""
+    sent, _ctx = _sent(monkeypatch, _sheet_form())
+    assert sent["palette"] == ""
+    assert sent["dither"] is False
+
+
+def test_the_tile_submit_never_names_an_outline(monkeypatch):
+    """The door refuses one by name: ``pixelize._edge_mask`` pads
+    ``constant_values=False``, so on a cell that is opaque edge to edge --
+    which every tile is -- ``inner`` returns the outer ring of *each* cell, a
+    grid line around all sixty-four tiles. The form must not offer what the door
+    refuses, and must not send it even as "none"."""
+    for form in (_sheet_form(), _terrain_form(), _sheet_form(tile_mode=GRID)):
+        form["outline"] = "inner"
+        sent, _ctx = _sent(monkeypatch, form)
+        assert "outline" not in sent
+
+
+def test_a_tile_sheet_with_a_palette_is_queued_by_the_real_door(svc, paldir):
+    """The end of the wire. Everything above is a fake ``create_tile_sheet``;
+    only a call that reaches the door can tell a carried setting from a button
+    that does nothing."""
+    (paldir / "duo.hex").write_text("#1a1c2c\n#f4f4f4\n")
+    form = _sheet_form(palette="duo", dither=True)
+    made = svc_tilesheets.create_tile_sheet(svc, **settings_2d.tile_sheet_kwargs(form))
+    params = svc.store.get(made["id"])["params"]
+    assert params["palette"] == "duo"
+    assert params["dither"] is True
+
+
+def test_a_palette_deleted_since_the_form_listed_it_costs_the_request(svc, paldir):
+    """Which is what loading it at the door is for: the alternative is N full
+    generations and a sheet that merely came back the wrong colours."""
+    form = _sheet_form(palette="gone")
+    with pytest.raises(Invalid) as excinfo:
+        svc_tilesheets.create_tile_sheet(svc, **settings_2d.tile_sheet_kwargs(form))
+    assert excinfo.value.field == "palette"
+
+
+def test_the_sprite_block_carries_the_whole_pixel_look():
+    block = settings_2d.sprite_sheet_kwargs(
+        _sheet_form(sheet_type="sprite", palette="nord", dither=True, outline="outer")
+    )
+    assert block["palette"] == "nord"
+    assert block["dither"] is True
+    assert block["outline"] == "outer"
+
+
+def test_the_sprite_block_defaults_to_the_outline_its_geometry_forces():
+    """``inner`` and never ``outer``: a synthesised cell is 256 or 512px of a
+    1024px atlas the model filled as it liked, so the subject runs off its cell
+    edge often enough that growing the silhouette would clip."""
+    block = settings_2d.sprite_sheet_kwargs(_sheet_form(sheet_type="sprite"))
+    assert block["outline"] == svc_sprites.DEFAULT_SPRITE_OUTLINE == "inner"
+
+
+def test_the_sprite_block_is_refused_by_the_real_checker_for_a_bad_palette(svc, paldir):
+    """``_check_sprite_sheet`` validates the follow-up at the *reference* door,
+    so a palette that has gone missing costs the request rather than an SDXL
+    generation and an hour."""
+    from warlock.service import sprites as sprites_door
+
+    block = settings_2d.sprite_sheet_kwargs(_sheet_form(sheet_type="sprite", palette="gone"))
+    with pytest.raises(Invalid) as excinfo:
+        sprites_door._check_options(svc, block)
+    assert excinfo.value.field == "palette"
+
+
+def test_every_outline_the_sprite_arm_offers_survives_the_sprite_checker(svc):
+    """The form's menu against the door's ladder: a segmented control offering a
+    mode the assembler refuses is a control that fails at the door it was drawn
+    from."""
+    from warlock.pipelines import pixelize
+    from warlock.service import sprites as sprites_door
+
+    for mode in pixelize.OUTLINE_MODES:
+        block = settings_2d.sprite_sheet_kwargs(
+            _sheet_form(sheet_type="sprite", outline=mode)
+        )
+        assert sprites_door._check_options(svc, block)["outline"] == mode
+
+
+def test_the_palette_list_is_not_the_cached_options_blob():
+    """``tile_sheet_options`` is cached in a one-slot list for the life of the
+    process on the stated ground that nothing in it reads disk. A palette is a
+    file the user drops in a directory, so a listing folded in there would never
+    show one installed after launch."""
+    assert "palettes" not in svc_tilesheets.tile_sheet_options()
+    assert "palettes" not in svc_sprites.sprite_options()
+
+
+def test_a_palette_that_is_no_longer_installed_stays_on_the_menu_marked():
+    """``lora_options``' rule, and for its reason: a palette is a file, so a
+    stem the form holds can stop existing between two launches -- and the value
+    keeping Generate off must not be the one thing the user cannot see."""
+    assert settings_2d.palette_options(["duo"], "") == (
+        ("", "Derived from the render"),
+        ("duo", "duo"),
+    )
+    assert settings_2d.palette_options(["duo"], "duo")[-1] == ("duo", "duo")
+    missing = settings_2d.palette_options(["duo"], "nord")[-1]
+    assert missing[0] == "nord"
+    assert "not in the palette folder" in missing[1]
+    # And with nothing installed at all, the named one is still listed: it is
+    # what the door is about to refuse.
+    assert settings_2d.palette_options([], "nord")[-1][0] == "nord"
+
+
+def test_each_arm_lists_palettes_through_its_own_door(svc, paldir):
+    """Uncached, and asked of the door rather than of the options blob."""
+    (paldir / "duo.hex").write_text("#1a1c2c\n#f4f4f4\n")
+    assert svc_tilesheets.tile_sheet_palettes(svc) == ["duo"]
+    assert svc_sprites.sprite_palettes(svc) == ["duo"]
+    (paldir / "nes.hex").write_text("#000000\n#ffffff\n")
+    assert svc_sprites.sprite_palettes(svc) == ["duo", "nes"]
 
 
 # -- the form an upgrading user reopens --------------------------------------

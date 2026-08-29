@@ -84,6 +84,22 @@ class TileSettings:
     #: reproducible and that is the commoner ask.
     style_lock: bool = False
     target_cell_px: int | None = None
+    #: The stem of an authored palette file, or ``""`` for "derive one". The
+    #: structured request had no way to name one, so a tileset submitted here
+    #: could not use a capability the pane path could -- and the door has taken
+    #: both of these since the day it grew them. Validated at that door
+    #: (``service.tilesheets.create_tile_sheet`` -> ``check_pixel_options``,
+    #: which loads the file and throws it away), never here: this is a document,
+    #: and a request naming a palette that has since been deleted has to be
+    #: refused against the filesystem it is submitted on rather than the one it
+    #: was written on.
+    palette: str = ""
+    #: The ordered 4x4 offset in ``pixel.map_palette``. Independent of
+    #: :attr:`palette` on this path, and deliberately: ``tilesheet.quantize_tiles``
+    #: branches on ``not entries and not dither``, so a dithered sheet that names
+    #: no palette still derives its own table by median cut and then dithers
+    #: against it.
+    dither: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +110,16 @@ class SpriteSettings:
     frame_count: int | None = None
     candidate_count: int = 2
     target_cell_px: int | None = None
+    #: :attr:`TileSettings.palette` and :attr:`TileSettings.dither`, for the
+    #: sprite half of the same gap: the follow-up block this request compiles
+    #: reaches ``sprites._check_options`` through ``_check_sprite_sheet``, which
+    #: has taken both since it started sharing that checker. The outline is
+    #: **not** here -- the sprite path's outline default is forced by its
+    #: geometry (``spritesynth.DEFAULT_SPRITE_OUTLINE``) and nothing on this
+    #: route has ever named one, so a field carrying it would be the dead field
+    #: ``check_pixel_options`` exists to refuse.
+    palette: str = ""
+    dither: bool = False
 
     def resolved_frame_count(self) -> int:
         return self.frame_count or SPRITE_FRAME_COUNTS[self.action]
@@ -703,11 +729,15 @@ def request_from_legacy(form: Mapping[str, Any]) -> GenerationRequest:
         terrain_layout=str(form.get("terrain_layout") or "blob47"),
         style_lock=bool(form.get("style_lock")),
         target_cell_px=_optional_int(form.get("target_cell_px")),
+        palette=str(form.get("palette") or ""),
+        dither=bool(form.get("dither")),
     )
     sprite = SpriteSettings(
         mode="turnaround" if form.get("sheet_layout", "turnaround") == "turnaround" else "action",
         action="walk" if form.get("sheet_layout") == "walk" else "idle",
         target_cell_px=_optional_int(form.get("target_cell_px") or form.get("cell_size")),
+        palette=str(form.get("palette") or ""),
+        dither=bool(form.get("dither")),
     )
     return GenerationRequest(
         generation_type=generation_type,

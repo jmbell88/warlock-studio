@@ -97,9 +97,12 @@ def reduce(image: PILImage, size: tuple[int, int], *, mode: str = "box") -> PILI
     """``image`` at ``size``, by supersampling rather than by filtering.
 
     An integer stride takes the arithmetic path; anything else falls back to a
-    single NEAREST resize, which is the documented fallback
-    ``spritesynth.reduce_atlas`` already relies on for the rungs that do not
-    divide (24, 48, 96 out of 512).
+    single NEAREST resize -- which is exactly, and for every rung,
+    ``spritesynth.reduce_atlas``. That function was the sprite path's whole
+    reduction until ``SPRITE_DRAFT_VERSION`` 2 and has no caller in the program
+    now; the fallback below is why the rungs that do not divide (24, 48, 96 out
+    of 512) came through that change byte for byte, while the ones that do gained
+    the 63 samples the single resize was throwing away.
     """
     import numpy as np
     from PIL import Image

@@ -725,6 +725,49 @@ def test_the_legacy_form_adapter_carries_the_whole_tile_document():
     assert request.tile.terrain_layout == "blob47"
 
 
+def test_the_structured_request_can_name_a_palette(svc, tmp_path):
+    """``TileSettings`` had no palette or dither field, so a tileset submitted
+    through ``create_generation_request`` could not use a capability the pane
+    path could -- not because the door refused it, but because there was nowhere
+    on the request to say it."""
+    from warlock.service import jobs as svc_jobs
+
+    directory = tmp_path / "palettes"
+    directory.mkdir(exist_ok=True)
+    svc.config.palette_dir = directory
+    (directory / "duo.hex").write_text("#1a1c2c\n#f4f4f4\n")
+    made = svc_jobs.create_generation_request(
+        svc,
+        _request(
+            mode="collection", prompt_items=MATERIALS, palette="duo", dither=True
+        ),
+    )
+    params = svc.store.get(made["id"])["params"]
+    assert params["palette"] == "duo"
+    assert params["dither"] is True
+
+
+def test_a_palette_the_structured_request_names_is_still_checked_at_the_door(svc):
+    from warlock.service import jobs as svc_jobs
+
+    with pytest.raises(Invalid) as excinfo:
+        svc_jobs.create_generation_request(
+            svc, _request(mode="collection", prompt_items=MATERIALS, palette="gone")
+        )
+    assert excinfo.value.field == "palette"
+
+
+def test_the_legacy_form_adapter_carries_the_pixel_look_to_both_blocks():
+    """One form serves both sheet arms, so both settings blocks read the same
+    two keys -- the sprite block through ``_check_sprite_sheet``, the tile block
+    through ``create_tile_sheet``."""
+    request = generation.request_from_legacy(
+        {"output": "sheet", "prompt": "x", "palette": "nord", "dither": True}
+    )
+    assert (request.tile.palette, request.tile.dither) == ("nord", True)
+    assert (request.sprite.palette, request.sprite.dither) == ("nord", True)
+
+
 def test_a_form_that_says_nothing_about_tiles_still_reads_as_it_always_did():
     """Every new field has to have a defaulted answer, or the adapter starts
     refusing forms saved before it grew them."""

@@ -149,11 +149,13 @@ def draw(ctx: Any) -> None:
                         manual_render.help_button(ctx, "settings-sheet")
                         # The asset type fixes sheet kind/view/layout; this
                         # section exposes only the resulting pixel dimensions.
-                        if form.get("sheet_type") == "sprite":
+                        sprite_arm = form.get("sheet_type") == "sprite"
+                        if sprite_arm:
                             _sprite_size(ctx, form, form_ui)
                         else:
                             _tile_size(ctx, form, form_ui)
                         _target_cell(ctx, form, form_ui)
+                        _pixel_look(ctx, form, form_ui, sprite=sprite_arm)
                     widgets.section("Profiles")
                     _profiles(ctx, form)
                     widgets.section("Prompt enrichment")
@@ -508,6 +510,138 @@ def _sprite_size(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
     )
     if changed:
         form["cell_size"] = picked
+
+
+def _pixel_look(
+    ctx: Any, form: dict[str, Any], form_ui: forms.Form, *, sprite: bool
+) -> None:
+    """An authored palette, dithering, and -- on the sprite arm only -- outlines.
+
+    The three settings both sheet doors have taken since they started sharing
+    ``service.pixelopts`` and that no pane offered, which made the whole
+    capability unreachable: an authored ramp is the single highest-leverage art
+    input in the program (``pipelines.pixelize``' own words) and it could not be
+    named from the one form that composes a sheet.
+
+    **No outline control on the tile arm, and that is not an omission.**
+    ``pixelize._edge_mask`` pads with ``constant_values=False``, so on a cell
+    that is opaque edge to edge -- which every tile is -- every border pixel has
+    a "transparent" neighbour and ``inner`` returns the outer ring of *each*
+    cell: a grid line around every tile rather than an outline of anything in
+    one. ``create_tile_sheet`` refuses it by name; a form offering it would be a
+    control whose only outcome is that refusal.
+
+    **The dither box is not hidden behind the palette**, which is the opposite
+    of what ``inspector`` does two panes over, and the difference is in the
+    pipelines rather than in taste. ``asset2d`` applies dither *inside*
+    ``map_palette`` and takes its own quantize branch otherwise, so there it
+    genuinely does nothing without a palette -- and that file records
+    ``bool(opts.dither and opts.palette)`` for exactly that reason. Both sheet
+    paths route through ``map_palette`` either way:
+    ``tilesheet.quantize_tiles`` branches on ``not entries and not dither``, and
+    ``queue`` hands the sprite atlas to ``pixelize.pixelize_atlas`` with
+    whatever ``resolve_palette`` returned. So on this form a dither with no
+    palette dithers against the derived table, which is a real and different
+    picture -- and hiding the box would make *that* the unreachable capability.
+    Troupe's pane, the one that shipped these controls first, draws it
+    unconditionally for the same reason.
+
+    The palette list comes from the arm's own door and never from
+    ``tile_sheet_options`` / ``sprite_options``: those are pure functions of
+    module constants and this pane caches them for the life of the process, so
+    a directory listing inside one would mean a palette dropped in five minutes
+    ago never appears. ``inspector.palette_names`` is the one stat-per-frame
+    guard over that listing and is shared rather than copied.
+    """
+    from . import inspector
+
+    door = svc_sprites.sprite_palettes if sprite else svc_tilesheets.tile_sheet_palettes
+    installed = inspector.palette_names(ctx, door)
+    chosen = str(form.get("palette") or "")
+    if installed or chosen:
+        # Only when there is something to pick. A combo whose one entry is
+        # "derive one" is a picker with nothing in it, and palettes are opt-in
+        # -- the honest rendering of "none installed" is no control, which is
+        # ``palettes.available``'s own stated rule and ``inspector``'s. A form
+        # that *names* one is the exception: see :func:`palette_options`.
+        changed, picked = form_ui.combo(
+            "palette",
+            "Palette",
+            chosen,
+            palette_options(installed, chosen),
+            help_text=(
+                "Map every pixel to the nearest colour of a palette you "
+                "authored, instead of to the colours this render happened to "
+                "contain."
+            ),
+            helper="Files in the palette folder: .hex, .gpl, .pal, .txt.",
+        )
+        if changed:
+            form["palette"] = picked
+            ctx.state.clear_field_error("palette")
+    changed, dithered = form_ui.checkbox(
+        "dither",
+        "Dither",
+        bool(form.get("dither")),
+        help_text=(
+            "Add an ordered 4x4 offset before each pixel picks its colour, so "
+            "a gradient reads as a texture rather than as a band."
+        ),
+        helper=(
+            "Against the chosen palette."
+            if form.get("palette")
+            else "Against the palette this sheet derives for itself."
+        ),
+    )
+    if changed:
+        form["dither"] = dithered
+    if not sprite:
+        return
+    options = _sprite_options()
+    changed, picked = form_ui.segmented_choice(
+        "outline",
+        "Outline",
+        str(form.get("outline") or options["defaults"]["outline"]),
+        tuple((mode, OUTLINE_LABELS.get(mode, mode)) for mode in options["outlines"]),
+        help_text=(
+            "Darken the edge of each frame. Inside recolours the character's "
+            "own edge pixels; Around grows the silhouette by one pixel, which "
+            "a frame already touching its cell edge will have clipped."
+        ),
+        compact=True,
+    )
+    if changed:
+        form["outline"] = picked
+        ctx.state.clear_field_error("outline")
+
+
+def palette_options(installed: list[str], chosen: str) -> tuple[tuple[str, str], ...]:
+    """The palette combo's entries: "derive one", what is installed, and a
+    selection that is not.
+
+    ``lora_options``' rule, and for its reason. A palette is a file, so a stem
+    the form holds can stop existing between two launches -- an external drive,
+    a folder tidied -- and the door refuses the submit by that name. Dropping it
+    from the list would leave the combo showing its bare stem with no
+    explanation, or, in any control that falls back to entry zero, silently
+    rewrite the user's choice to "derive one" and change what the sheet looks
+    like without saying so. Listed and marked, the thing keeping Generate off is
+    the one thing on screen.
+
+    Shared with the profile editor, which draws the same picker over the same
+    directory against a draft rather than the live form.
+    """
+    options = [("", "Derived from the render"), *((name, name) for name in installed)]
+    if chosen and chosen not in installed:
+        options.append((chosen, f"{chosen} - not in the palette folder"))
+    return tuple(options)
+
+
+#: What each ``pixelize.OUTLINE_MODES`` entry is called on screen. The keys are
+#: the pipeline's words and these are sentences about what happens, which is
+#: this pane's rule for every other segmented control: "outer" is a direction
+#: only to somebody who already knows where the outline goes.
+OUTLINE_LABELS = {"none": "None", "inner": "Inside", "outer": "Around"}
 
 
 def _target_cell(ctx: Any, form: dict[str, Any], form_ui: forms.Form) -> None:
@@ -1846,22 +1980,11 @@ def submit_kwargs(form: dict[str, Any]) -> dict[str, Any]:
     # than subject taxonomy, so a tile submits the same set an object does.
     known = set(guidancelib.form_fields())
     fields = {k: v for k, v in form.items() if k in known and v not in ("", None)}
-    sprite_sheet = None
-    if form.get("output") == "sheet" and form.get("sheet_type") == "sprite":
-        # The sprite arm is an ordinary reference job carrying a follow-up
-        # request, which is the rig checkbox's shape: the character is a row in
-        # its own right and the sheet is queued against it once it lands. So it
-        # comes through this function rather than round a second door, and the
-        # only thing that distinguishes it is this block.
-        sprite_sheet = {
-            "sheet_type": form.get("sheet_layout") or "turnaround",
-            "logical_size": int(form.get("cell_size") or 64),
-            "colors": svc_sprites.DEFAULT_SPRITE_COLORS,
-            "target_cell_px": (
-                None if form.get("target_cell_px") in (None, "")
-                else _safe_int(form.get("target_cell_px"), 0)
-            ),
-        }
+    sprite_sheet = (
+        sprite_sheet_kwargs(form)
+        if form.get("output") == "sheet" and form.get("sheet_type") == "sprite"
+        else None
+    )
     return {
         "kind": "text",
         "prompt": form["prompt"].strip(),
@@ -1878,6 +2001,40 @@ def submit_kwargs(form: dict[str, Any]) -> dict[str, Any]:
         "control_end": float(form["control_end"]) if form.get("control") else None,
         "guidance_fields": fields,
         **create_assets.persisted_intent(form),
+    }
+
+
+def sprite_sheet_kwargs(form: dict[str, Any]) -> dict[str, Any]:
+    """The 2D form as ``create_job``'s ``sprite_sheet=`` block takes it.
+
+    :func:`tile_sheet_kwargs`' opposite number on the other arm, and split out
+    of :func:`submit_kwargs` for that function's reason: the sprite arm is an
+    ordinary reference job *carrying a follow-up request* -- the rig checkbox's
+    shape, so the character is a row in its own right and the sheet is queued
+    against it once it lands -- and the compilation of that follow-up is the one
+    part of the press no test could name while it lived inside a literal.
+
+    ``_jobs_create._check_sprite_sheet`` validates every key here at the
+    *reference* door rather than when the follow-up is minted, so a palette
+    that has been deleted since the form listed it costs the request instead of
+    an SDXL generation and an hour.
+    """
+    return {
+        "sheet_type": form.get("sheet_layout") or "turnaround",
+        "logical_size": int(form.get("cell_size") or 64),
+        "colors": svc_sprites.DEFAULT_SPRITE_COLORS,
+        "target_cell_px": (
+            None if form.get("target_cell_px") in (None, "")
+            else _safe_int(form.get("target_cell_px"), 0)
+        ),
+        # The three the form draws under Dimensions. Sent always rather than
+        # only when set: the door's own defaults are these values, and a block
+        # that omitted them would make "no palette" and "the form was never
+        # asked" the same request -- which is how a setting comes to be recorded
+        # as something nobody chose.
+        "palette": str(form.get("palette") or ""),
+        "dither": bool(form.get("dither")),
+        "outline": str(form.get("outline") or svc_sprites.DEFAULT_SPRITE_OUTLINE),
     }
 
 
@@ -1906,6 +2063,13 @@ def tile_sheet_kwargs(form: dict[str, Any]) -> dict[str, Any]:
         "seed": int(form["seed"]),
         "negative_prompt": form.get("negative_prompt") or None,
         "mode": mode,
+        # The pixel look, from the two controls under Dimensions. No ``outline``
+        # key at all -- and the absence is load-bearing rather than tidy: the
+        # door refuses one by name (a tile is opaque edge to edge, so an outline
+        # is a grid line around every cell), and a form that sent even
+        # ``"none"`` here would be naming a setting this kind does not have.
+        "palette": str(form.get("palette") or ""),
+        "dither": bool(form.get("dither")),
         **create_assets.persisted_intent(form),
     }
     if mode == svc_tilesheets.MODE_MATERIALS:

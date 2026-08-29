@@ -921,7 +921,7 @@ def pixel_scale(size: tuple[int, int], avail: int) -> int:
     return max(1, avail // max(size[0], size[1], 1))
 
 
-def _palette_names(ctx: Any) -> list[str]:
+def palette_names(ctx: Any, door: Any = None) -> list[str]:
     """The palette directory's stems, listed once per version of the directory.
 
     One stat per frame rather than one walk: this is drawn on the frame thread,
@@ -935,6 +935,19 @@ def _palette_names(ctx: Any) -> list[str]:
     a write that can land inside the stamp's own tick, and an unguarded stamp
     would then hide that palette for the life of the process -- from the one
     control whose whole purpose is to offer it.
+
+    ``door`` is the service call to ask -- ``sprites.sprite_palettes`` or
+    ``tilesheets.tile_sheet_palettes`` for the two Sheet arms, whose forms name
+    their own door rather than reaching past it. Every one of them is
+    ``palettes.available`` over one directory, which is why they share **one**
+    cache slot and why the default is that function: the question "which
+    palettes are installed" has one answer, and a second remembering of it
+    would be a second thing to invalidate when a file lands.
+
+    Public because it is the only listing of that directory on the frame
+    thread. ``settings_2d`` draws the same picker for the two sheet arms, and a
+    second copy of the stamp rule above is exactly the copy that comes back as
+    a palette nobody can select until the app restarts.
     """
     from ...service import palettes as svc_palettes
 
@@ -946,7 +959,9 @@ def _palette_names(ctx: Any) -> list[str]:
     cached = ctx.state.palettes
     if cached is not None and cached[0] == key:
         return cached[1]
-    names = svc_palettes.available(ctx.svc.config)
+    names = (
+        svc_palettes.available(ctx.svc.config) if door is None else list(door(ctx.svc))
+    )
     # After the listing, never beside the stat: that ordering is what makes the
     # stored stamp's tick provably older than the read it describes.
     if stamps.storable(key):
@@ -1034,7 +1049,7 @@ def _pixel(ctx: Any, job: Any) -> None:
         # when they are next asked for, which is what _pixel_current is for.
         ctx.submit(key, svc_derive.get_file, ctx.svc, job_id, name, **submit_kwargs)
 
-    names = _palette_names(ctx)
+    names = palette_names(ctx)
     if names:
         options = [("", "None")] + [(n, n) for n in names]
         chosen_palette = widgets.labeled_combo("Palette", palette_name or "", options)

@@ -31,6 +31,7 @@ def default_form_2d() -> dict[str, Any]:
     opened on the same seed and a first Generate reproduced last week's image.
     """
     from .. import models
+    from ..service.sprites import DEFAULT_SPRITE_OUTLINE
     from ..service.tilesheets import DEFAULT_MODE as DEFAULT_TILE_MODE
     from ..service.validation import random_seed
     from .create_assets import DEFAULT_ASSET_TYPE
@@ -113,6 +114,29 @@ def default_form_2d() -> dict[str, Any]:
         # cell, not offered for a tile) across a switch of arms.
         "sheet_layout": "turnaround",
         "cell_size": "64",
+        # The pixel look, shared by *both* sheet arms -- unlike the pair above,
+        # because "which authored palette" and "dither against it" are the same
+        # question with the same answers whichever arm asks, and the palettes
+        # come from one directory. Named for the service fields they become
+        # (``palette``, ``dither``, ``outline``) so a refusal's ``field=`` rings
+        # the control it is about.
+        #
+        # ``palette`` is also a *profile* field (``studio.profiles._FIXED``):
+        # two sheets of one character matching is what a profile is for, and a
+        # palette was the only piece of that it did not already carry.
+        "palette": "",
+        # Not gated on the palette, and that is measured rather than assumed:
+        # ``tilesheet.quantize_tiles`` branches on ``not entries and not
+        # dither`` and ``queue`` maps the sprite atlas through ``map_palette``
+        # either way, so a dithered sheet naming no palette dithers against the
+        # table the median cut derived. (``pipelines.asset2d`` is the path where
+        # dither *does* need a palette, and it is a different pipeline.)
+        "dither": False,
+        # The sprite arm's alone: a tile is opaque edge to edge, so an outline
+        # finds every cell's border and draws a grid line around all of them --
+        # the tile door refuses one by name, and this form must not offer what
+        # that door refuses. Seeded from the pipeline rather than spelled here.
+        "outline": DEFAULT_SPRITE_OUTLINE,
         # top_down | three_quarter | isometric -- the *view*, meaning where
         # the camera is. The key is still ``projection`` because it is a
         # persisted form field and a stored profile carries it; a value of

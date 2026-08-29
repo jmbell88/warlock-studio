@@ -18,7 +18,7 @@ from ...service.validation import MAX_UPLOAD_BYTES
 from .. import controls, create_stages, dialogs, forms, icons, journal, profiles, theme, widgets
 from ..manual import render as manual_render
 from ..tokens import sp
-from . import settings_2d
+from . import inspector, settings_2d
 
 # How wide the sheet is. Narrow on purpose: the panel is a list of names with
 # a summary line each, and an editor of single-column fields -- a manager
@@ -294,6 +294,24 @@ def _editor_form(ctx: Any, form_ui: forms.Form, negative_prompt: Any) -> None:
     # The same cap the service enforces. Accepting twice as much here only
     # meant the refusal arrived at submit time, against a profile the user had
     # already saved.
+    # The fifth captured field, drawn here because a profile field the manager
+    # cannot edit is a value only the Create form can reach -- and the point of
+    # the palette being on a profile is that a set of sheets shares one. Only
+    # when there are palettes installed, ``_pixel_look``'s rule and
+    # ``inspector``'s: a picker whose one entry is "derive one" picks nothing.
+    installed = inspector.palette_names(ctx)
+    chosen = str(draft.get("palette") or "")
+    if installed or chosen:
+        _changed, draft["palette"] = form_ui.combo(
+            "palette",
+            "Palette",
+            chosen,
+            settings_2d.palette_options(installed, chosen),
+            help_text=(
+                "Every sheet generated under this profile is mapped to this "
+                "palette, which is what makes two of them look like one set."
+            ),
+        )
     inert = settings_2d.negative_prompt_note(ctx, draft)
     if inert is not None:
         imgui.begin_disabled()

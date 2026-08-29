@@ -1,6 +1,6 @@
 """Git's racily-clean rule, at the three pane caches that were missing it.
 
-``inspector.rig_meta`` has applied it since it was written; ``_palette_names``,
+``inspector.rig_meta`` has applied it since it was written; ``palette_names``,
 ``_manifest`` and ``sheet_panel.pixel_record`` stamped a path's mtime and
 remembered it unconditionally, which is the exact documented Windows hazard:
 adding a file left a directory's mtime unchanged 155 times in 200 on this
@@ -87,7 +87,7 @@ def _palette_dir(monkeypatch, svc, tmp_path, *, make=True):
 
     That made ``make=False`` a no-op, and quietly. ``get_config()._ensure_dirs``
     creates ``palette_dir``, so the "missing directory" case was handed an
-    *existing empty* one and passed for the wrong reason -- ``_palette_names``
+    *existing empty* one and passed for the wrong reason -- ``palette_names``
     answers ``[]`` to both. The absent case therefore names a directory nothing
     creates, which is the only way to tell the two apart.
     """
@@ -112,11 +112,11 @@ def test_a_palette_dropped_in_inside_the_mtime_tick_is_still_offered(
     (directory / "nes.hex").write_text("000000\nffffff\n", encoding="utf-8")
     _frozen(monkeypatch, directory)
 
-    assert inspector._palette_names(ctx) == ["nes"]
+    assert inspector.palette_names(ctx) == ["nes"]
 
     (directory / "gameboy.hex").write_text("081820\ne0f8d0\n", encoding="utf-8")
 
-    assert inspector._palette_names(ctx) == ["gameboy", "nes"]
+    assert inspector.palette_names(ctx) == ["gameboy", "nes"]
 
 
 def test_a_palette_directory_touched_a_moment_ago_is_not_remembered(
@@ -127,7 +127,7 @@ def test_a_palette_directory_touched_a_moment_ago_is_not_remembered(
     (directory / "nes.hex").write_text("000000\n", encoding="utf-8")
     _frozen(monkeypatch, directory)
 
-    assert inspector._palette_names(ctx) == ["nes"]
+    assert inspector.palette_names(ctx) == ["nes"]
     assert ctx.state.palettes is None
 
 
@@ -148,7 +148,7 @@ def test_a_settled_palette_directory_is_listed_once(svc, monkeypatch, tmp_path):
     )
 
     for _ in range(5):
-        assert inspector._palette_names(ctx) == ["nes"]
+        assert inspector.palette_names(ctx) == ["nes"]
 
     assert len(walks) == 1
 
@@ -156,7 +156,7 @@ def test_a_settled_palette_directory_is_listed_once(svc, monkeypatch, tmp_path):
 def test_a_missing_palette_directory_is_no_palettes_and_no_error(svc, monkeypatch, tmp_path):
     ctx = _PaletteCtx(svc)
     _palette_dir(monkeypatch, svc, tmp_path, make=False)
-    assert inspector._palette_names(ctx) == []
+    assert inspector.palette_names(ctx) == []
     assert ctx.state.palettes is None
 
 

@@ -501,8 +501,11 @@ def create_tile_sheet(
 
     ``outline`` exists only to be **refused by name**. A tile sheet has no
     outline pass, and a caller that hands one over has misunderstood what this
-    kind is rather than asked for something unavailable -- see the refusal
-    below, which carries the reason.
+    kind is rather than asked for something unavailable. It is forwarded to
+    ``check_pixel_options`` like every other option -- ``allow_outline=False``
+    is what refuses it -- and the sentence carrying the reason is passed with
+    it, because the reason is a fact about tiles rather than about the checker.
+    ``"none"`` is not an ask and is accepted in silence.
 
     ``allow_grid`` is the escape hatch on the one refusal here that is about a
     measurement rather than about an impossibility: the grid mode still builds,
@@ -752,36 +755,40 @@ def create_tile_sheet(
 
     pixel_opts = check_pixel_options(
         svc,
-        {"logical_size": size, "colors": colors, "palette": palette, "dither": dither},
+        {
+            "logical_size": size,
+            "colors": colors,
+            "palette": palette,
+            "dither": dither,
+            "outline": outline,
+        },
         sizes=(size,),
         size_default=size,
         colors=(colors,),
         colors_default=colors,
-        # No outline pass and no reduction mode on this kind. ``False`` means
-        # neither key is validated nor returned, so nothing reaches params that
-        # nothing reads.
+        # No outline pass and no reduction mode on this kind. ``False`` drops
+        # the key when the request said nothing -- so nothing reaches params
+        # that nothing reads -- and **refuses** it when the request named a
+        # mode. That refusal used to live here as a second check after this
+        # call, which is what an ``outline`` parameter whose only job was to be
+        # refused by name was for; the checker does it now, and this door's
+        # only remaining job is to say *why*, which is a fact about tiles.
         allow_outline=False,
         allow_reduce_mode=False,
-    )
-    if outline is not None and str(outline) != "none":
-        # Refused here and not by ``check_pixel_options``, whose ``False``
-        # *drops* the key silently -- which is the right answer for a path that
-        # simply has no such pass, and the wrong one for a caller that asked.
-        # Named rather than ignored because the request is not merely
-        # unavailable, it is a misunderstanding of what a tile sheet is:
-        # ``pixelize._edge_mask`` pads with ``constant_values=False``, so on a
-        # cell that is opaque edge to edge -- which every tile is -- every
-        # border pixel has a "transparent" neighbour and ``inner`` returns the
-        # outer ring of *each cell*. An outline on a tile sheet is a grid line
-        # around all sixty-four tiles, not an outline of anything in them.
-        raise Invalid(
+        # The reason, not a restatement of the rule: ``pixelize._edge_mask``
+        # pads with ``constant_values=False``, so on a cell that is opaque edge
+        # to edge -- which every tile is -- every border pixel has a
+        # "transparent" neighbour and ``inner`` returns the outer ring of *each
+        # cell*. An outline on a tile sheet is a grid line around all
+        # sixty-four tiles, not an outline of anything in them.
+        outline_refusal=(
             "a tile sheet has no outline pass: a tile is opaque edge to edge, "
             "so an outline finds the edge of every cell and draws a grid line "
             "around all of them rather than around anything in them. Gutters "
             "between tiles, if they are ever wanted, are a different feature "
-            "and would be named as one.",
-            field="outline",
-        )
+            "and would be named as one."
+        ),
+    )
 
     # The sheet's identity is the pixel-art LoRA on a base that can take it, so
     # a mismatch is refused here rather than queued -- the worker would drop the

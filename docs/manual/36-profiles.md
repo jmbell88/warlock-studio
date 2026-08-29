@@ -6,7 +6,7 @@ does not re-pick the same settings each time they switch.
 
 ## What a profile stores
 
-Exactly four fields:
+Exactly five fields:
 
 | Field | Why |
 | --- | --- |
@@ -14,6 +14,13 @@ Exactly four fields:
 | style LoRA | And its adapter. |
 | LoRA strength | How hard the adapter is applied. |
 | negative prompt | Part of the house style, not of one image. |
+| palette | The authored palette every sheet under this profile is mapped to. |
+
+The palette is what makes two sheets of one character *match*. Without it, each sheet derives its
+own table from the render in front of it, so two made a week apart come back on two different sets
+of colours. The picker appears in the editor only when you have palettes installed; a profile
+naming one you have since removed keeps it, listed and marked, rather than silently reverting to
+"derived".
 
 What it deliberately does **not** store is the per-generation half: the prompt, the seed, the seed
 lock and the candidate count are about one submit rather than about a look. (Profiles saved before
@@ -48,7 +55,7 @@ Deleting a profile removes only the profile. Nothing already generated changes.
 ## The style anchor
 
 A profile can also carry one **anchor image**: a picture every generation under that profile is
-conditioned on, through the IP-Adapter. Where the four fields above describe a look in words, an
+conditioned on, through the IP-Adapter. Where the five fields above describe a look in words, an
 anchor shows it — which is the difference between asking for "hand-painted texture style" and
 handing the model an example of yours.
 

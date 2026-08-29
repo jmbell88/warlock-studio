@@ -69,11 +69,73 @@ def test_the_ladders_named_in_the_message_are_the_callers_own(svc):
     assert "64" not in excinfo.value.message.split("of", 1)[1]
 
 
-def test_a_path_with_no_outline_pass_neither_validates_nor_returns_one(svc):
-    out = _check(svc, {"outline": "glow"}, allow_outline=False)
+def test_a_path_with_no_outline_pass_returns_no_outline(svc):
+    """A request that said nothing gets the key dropped, not defaulted: a params
+    blob carrying a setting nothing reads is the dead field this gate exists to
+    prevent."""
+    out = _check(svc, {}, allow_outline=False, allow_reduce_mode=False)
     assert "outline" not in out
-    out = _check(svc, {"reduce_mode": "lanczos"}, allow_reduce_mode=False)
     assert "reduce_mode" not in out
+
+
+@pytest.mark.parametrize("asked", ["inner", "outer", "glow"])
+def test_a_path_with_no_outline_pass_refuses_one_that_was_asked_for(svc, asked):
+    """Dropping is the *weaker* answer, and it used to be the one given here --
+    which is why ``create_tile_sheet`` had to grow an ``outline`` parameter whose
+    only job was to be refused by name after this function had already seen it
+    and said nothing. A caller that hands an outline mode to a path with no
+    outline pass has made a mistake, and diagnosing a mistake and then swallowing
+    it is how the caller comes to believe the setting took."""
+    with pytest.raises(Invalid) as excinfo:
+        _check(svc, {"outline": asked}, allow_outline=False)
+    assert excinfo.value.field == "outline"
+
+
+def test_the_refusal_carries_the_callers_own_reason(svc):
+    """*Why* there is no outline pass is a fact about the caller's kind rather
+    than about this function -- the tile sheet's reason is
+    ``pixelize._edge_mask`` -- so the sentence is passed in and the field is
+    fixed here."""
+    with pytest.raises(Invalid) as excinfo:
+        _check(
+            svc,
+            {"outline": "inner"},
+            allow_outline=False,
+            outline_refusal="a tile is opaque edge to edge",
+        )
+    assert excinfo.value.message == "a tile is opaque edge to edge"
+
+
+def test_no_outline_is_not_an_outline_request(svc):
+    """The word every one of these doors spells "off". Refusing it would refuse
+    a request for exactly what a path with no outline pass does anyway."""
+    assert "outline" not in _check(svc, {"outline": "none"}, allow_outline=False)
+
+
+def test_a_path_with_one_reduction_refuses_a_choice_of_it(svc):
+    """The outline rule's twin, and there is no second argument for it."""
+    assert "reduce_mode" not in _check(svc, {}, allow_reduce_mode=False)
+    with pytest.raises(Invalid) as excinfo:
+        _check(svc, {"reduce_mode": "point"}, allow_reduce_mode=False)
+    assert excinfo.value.field == "reduce_mode"
+
+
+@pytest.mark.parametrize("field", ["logical_size", "colors"])
+def test_zero_is_a_value_and_not_an_absence(svc, field):
+    """``entries.get(k) or default`` made 0 mean "the form said nothing", so a
+    request for zero colours came back as eight and nobody was told. That is the
+    failure ``service/jobs`` already names on the tile size -- "make me 96px
+    tiles" answered with 32px tiles -- and 0 is on no ladder any path publishes,
+    so it falls through to the ladder check and is refused by name.
+
+    ``None`` and ``""`` still mean absent: one is a key the request did not have
+    and the other is a form field nobody typed in."""
+    with pytest.raises(Invalid) as excinfo:
+        _check(svc, {field: 0})
+    assert excinfo.value.field == field
+    assert "must be one of" in excinfo.value.message
+    for absent in (None, ""):
+        assert _check(svc, {field: absent})[field] == (32 if field == "logical_size" else 8)
 
 
 def test_a_named_palette_is_loaded_at_the_door_and_thrown_away(svc, tmp_path):

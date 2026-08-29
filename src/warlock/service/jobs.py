@@ -236,6 +236,13 @@ def create_generation_request(svc: WarlockService, request: Any, **uploads: Any)
             boundary=boundary,
             terrain_layout=tile.terrain_layout,
             style_lock=tile.style_lock,
+            # The two the request document could not name until now. The door
+            # has taken both since it grew them, so a tileset submitted through
+            # here was refused nothing -- it simply could not ask, while the
+            # pane path could, which is the same capability reachable from one
+            # door and not the other.
+            palette=tile.palette,
+            dither=tile.dither,
         )
     else:
         sprite_block = None
@@ -252,6 +259,12 @@ def create_generation_request(svc: WarlockService, request: Any, **uploads: Any)
                 "sheet_type": "turnaround" if sprite.mode == "turnaround" else "walk",
                 "logical_size": legacy_size,
                 "colors": svc_sprites.DEFAULT_SPRITE_COLORS,
+                # ``_check_sprite_sheet`` validates these at *this* door through
+                # ``sprites._check_options``, so a palette deleted since the
+                # request was written costs the request rather than the
+                # reference generation plus an hour.
+                "palette": sprite.palette,
+                "dither": sprite.dither,
             }
         result = create_job(
             svc,

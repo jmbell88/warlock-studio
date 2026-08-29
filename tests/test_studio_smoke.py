@@ -273,6 +273,42 @@ def test_the_2d_pane_builds_every_tile_layout(app_ctx, imgui_ctx):
         _frame(imgui_ctx, lambda: settings_2d.draw(app_ctx))
 
 
+def test_the_2d_pane_draws_the_pixel_look_on_both_arms(app_ctx, imgui_ctx, tmp_path):
+    """The palette picker, the dither box and the sprite arm's outline row, in a
+    real frame, **with a palette installed**.
+
+    The install is the point. The combo is drawn only when the directory has
+    something in it, so a sweep run against an empty palette folder never
+    executes that branch at all -- which is exactly how a control ships having
+    never been drawn. Both arms, because only one of them draws the outline row
+    and only one of them lists palettes through ``sprite_palettes``.
+    """
+    from warlock.studio.panes import inspector, settings_2d
+
+    directory = tmp_path / "smoke-palettes"
+    directory.mkdir(exist_ok=True)
+    (directory / "duo.hex").write_text("#1a1c2c\n#f4f4f4\n", encoding="utf-8")
+    app_ctx.svc.config.palette_dir = directory
+    app_ctx.state.palettes = None
+    # Pinned, not assumed. Without this the whole test passes against an empty
+    # directory with the combo never drawn -- which is the shape of every
+    # fixture in this repo that has quietly stopped covering its branch.
+    assert inspector.palette_names(app_ctx) == ["duo"]
+    app_ctx.state.form_2d["prompt"] = "a hooded ranger"
+    app_ctx.state.form_2d["palette"] = "duo"
+    app_ctx.state.form_2d["dither"] = True
+    app_ctx.state.create_advanced = True
+    for asset_type, outline in (
+        ("tileset_top_down", "none"),
+        ("sprite_turnaround", "none"),
+        ("sprite_turnaround", "inner"),
+        ("sprite_turnaround", "outer"),
+    ):
+        app_ctx.state.form_2d["asset_type"] = asset_type
+        app_ctx.state.form_2d["outline"] = outline
+        _frame(imgui_ctx, lambda: settings_2d.draw(app_ctx))
+
+
 def test_the_sheet_output_pins_the_count_to_one(app_ctx, imgui_ctx):
     """Both doors refuse a batch, so the radios are not drawn -- and the value
     is persisted, so a 4 left over from the Object output has to be written
@@ -1479,6 +1515,31 @@ def test_the_profile_manager_builds_listing_and_editing(app_ctx, imgui_ctx):
     app_ctx.state.profile_draft["style_lora"] = "render3d"
     app_ctx.state.profile_draft_name = "props"
     _frame(imgui_ctx, lambda: profiles_panel.draw(app_ctx))
+
+
+def test_the_profile_editor_draws_the_palette_it_now_carries(
+    app_ctx, imgui_ctx, tmp_path
+):
+    """A profile field the manager cannot edit would be a value only the Create
+    form could reach -- and the whole point of the palette being on a profile is
+    that a *set* of sheets shares one. The combo draws only when a palette is
+    installed, so the directory is populated here rather than left empty, which
+    is the branch an ordinary smoke run never enters."""
+    from warlock.studio import profiles
+    from warlock.studio.panes import inspector, profiles_panel
+
+    directory = tmp_path / "editor-palettes"
+    directory.mkdir(exist_ok=True)
+    (directory / "duo.hex").write_text("#1a1c2c\n#f4f4f4\n", encoding="utf-8")
+    app_ctx.svc.config.palette_dir = directory
+    app_ctx.state.palettes = None
+    assert inspector.palette_names(app_ctx) == ["duo"]
+    app_ctx.state.form_2d["palette"] = "duo"
+    app_ctx.state.profile_draft = profiles.capture(app_ctx.state.form_2d)
+    app_ctx.state.profile_draft_name = "props"
+    assert app_ctx.state.profile_draft["palette"] == "duo"
+    _frame(imgui_ctx, lambda: profiles_panel.draw(app_ctx))
+    assert app_ctx.state.profile_draft["palette"] == "duo"
 
 
 def test_the_2d_pane_builds_with_a_reference_chosen(app_ctx, imgui_ctx):

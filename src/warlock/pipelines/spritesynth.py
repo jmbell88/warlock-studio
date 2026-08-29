@@ -31,7 +31,8 @@ Geometry note. The atlas is 1024px square because that is one SDXL frame -- the
 same pin every other generation path here obeys. 2x2 turnaround cells are
 therefore 512px and 4x4 walk cells are 256px, both exact. The logical sizes the
 user may reduce to (32/48/64) are *not* required to divide those, which is why
-``reduce_atlas`` exists instead of ``pixelsheet.downscale``.
+the reduction is ``pixelize.reduce`` -- and, before it, :func:`reduce_atlas` --
+rather than ``pixelsheet.downscale``, whose stride has to be an integer.
 """
 
 from __future__ import annotations
@@ -573,15 +574,20 @@ def baseline_align(atlas_rgba: PILImage, geom: SheetGeometry) -> PILImage:
 def reduce_atlas(atlas: PILImage, geom: SheetGeometry, logical_size: int) -> PILImage:
     """One NEAREST resize of the whole atlas to ``logical_size`` cells.
 
-    **No longer the queue's reduction** -- since ``SPRITE_DRAFT_VERSION`` 2 the
+    **Nothing in the program calls this.** Since ``SPRITE_DRAFT_VERSION`` 2 the
     synthesis path reduces through ``pixelize.reduce``'s alpha-weighted box, for
-    the reason that constant states. Kept rather than deleted because this is
+    the reason that constant states, and no other caller was left.
+
+    Kept rather than deleted, and the reason is prose rather than code: this is
     the named home of the whole-atlas boundary argument below, which
-    ``pixelize``'s module docstring, :func:`pixelize.reduce` and
-    :func:`pixelize.reduce_frames` all cite by this name -- and because
-    ``pixelize.reduce``'s own fallback for a target that does not divide (48 out
-    of 1024) is this function's single NEAREST resize, so what it does is still
-    what happens on those rungs.
+    ``pixelize``'s module docstring and :func:`pixelize.reduce_frames` both cite
+    by this name when they explain why reducing per frame gives nothing up.
+    :func:`pixelize.reduce` cites it for the other half -- its fallback for a
+    target that does not divide (48 out of 1024) *is* this function's single
+    NEAREST resize, which is why those rungs came through the version bump byte
+    for byte. Delete it and two live explanations lose the thing they point at;
+    what must not happen is this drifting into something the citations no longer
+    describe, so it takes no new behaviour and gains no callers.
 
     Whole-atlas and not per cell, so a cell boundary in the output is at the
     same place whichever side of it you compute from. ``pixelsheet.downscale``

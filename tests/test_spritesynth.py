@@ -691,6 +691,27 @@ def test_dither_is_off_unless_asked_for():
     assert colours <= set(RAMP)
 
 
+def test_dither_with_no_designed_palette_still_changes_the_sheet():
+    """The claim the 2D form's Dither checkbox rests on, pinned on this arm.
+
+    ``asset2d`` is the one pixel path where dither genuinely needs a palette --
+    it calls ``map_palette`` only when there is one, and records
+    ``bool(opts.dither and opts.palette)`` for exactly that reason. This path
+    does not work that way: ``resolve_palette`` always returns a table, derived
+    by median cut when nothing was named, and ``pixelize_atlas`` maps through it
+    either way. So gating the checkbox on a palette here -- copying the rule
+    from the pane that owns the other path -- would hide a setting that does
+    something. ``tilesheet.quantize_tiles`` has the same property and its own
+    test beside it.
+    """
+    geom, atlas = _colour_atlas()
+    plain, plain_record = _assemble(geom, atlas, outline="none")
+    dithered, record = _assemble(geom, atlas, outline="none", dither=True)
+
+    assert plain_record["palette_source"] == record["palette_source"] == "derived"
+    assert dithered.tobytes() != plain.tobytes()
+
+
 @pytest.mark.parametrize("options", ({}, {"designed": RAMP, "dither": True}))
 def test_the_same_inputs_twice_are_byte_identical(options):
     """No RNG anywhere on this path -- the bar ``tests/troupe/test_pixelize.py``

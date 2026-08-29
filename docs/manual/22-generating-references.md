@@ -386,8 +386,8 @@ A tile grid is 64 tiles in an 8×8 arrangement — grass, path, water, cliffs, p
 picture and cut up. Being one generation is the point: every tile shares a palette, a light
 direction and a style, which is what separates a tileset from 64 unrelated pictures.
 
-Two settings, and only two. **Tile size** is how many pixels across one tile is; **View** is where
-the camera is:
+Two settings decide the geometry. **Tile size** is how many pixels across one tile is; **View** is
+where the camera is:
 
 | View | What it draws | Lattice |
 | --- | --- | --- |
@@ -404,9 +404,11 @@ same either way. Ask it for walls, crates, fences, roofs, a well — anything wi
 difference is unmistakable. This was measured rather than assumed; see
 `docs/measurements/2026-08-21-three-quarter-guide.md`.
 
-Everything else is decided for you and is not a control: the grid is 8×8 because 1024 ÷ 8 is the
-true art resolution the pixel-art style draws at, and the palette is shared across the whole sheet
-for the reason above. The prompt is the brief; a **reference image**, if you attach one under
+Everything else about the arrangement is decided for you and is not a control: the grid is 8×8
+because 1024 ÷ 8 is the true art resolution the pixel-art style draws at, and one palette is applied
+across the whole sheet in one pass for the reason above — quantized per tile, the same moss comes
+out two different greens in two tiles. *Which* palette is yours to choose; see **The pixel look**
+below. The prompt is the brief; a **reference image**, if you attach one under
 *References*, shapes the style but is never required.
 
 Behind the scenes the grid is *imposed* rather than requested: the cell boundaries are drawn into a
@@ -430,3 +432,28 @@ different settings. An attached reference shapes the character.
 
 The drafts appear under **Sprite sheet** in the inspector when the character is selected. See
 *Sprite sheets* for what to do with them.
+
+### The pixel look
+
+Under **Dimensions**, below the size controls, both sheet types offer the same two settings and the
+sprite sheet offers a third.
+
+**Palette** maps every pixel to the nearest colour of a palette you authored, instead of to the
+colours this particular render happened to contain. It is the single highest-leverage art input in
+the program: a derived table is the average of whatever came back, which is where "muddy" comes
+from, while a designed ramp is a decision. The picker appears only when you have palette files
+installed — `.hex`, `.gpl`, `.pal` or `.txt` in the palette folder (see
+[Configuration](40-configuration.md)) — and a palette you name here can also be saved onto a
+[style profile](36-profiles.md), which is how a set of sheets is kept on one set of colours.
+
+**Dither** adds an ordered 4×4 offset before each pixel picks its colour, so a gradient reads as a
+texture rather than as a band. It works with or without a named palette: with none, the sheet still
+derives its own table and dithers against that. How visible it is depends on how far apart the
+colours are — a four-colour ramp dithers unmistakably and a sixty-four-colour one barely at all.
+
+**Outline**, on the sprite sheet only, darkens the edge of each frame. *Inside* recolours the
+character's own edge pixels and cannot change its silhouette or its pivot, which is why it is the
+default here; *Around* grows the silhouette by a pixel, which a frame already touching its cell edge
+will have clipped. There is deliberately no outline on a tile sheet: a tile is opaque edge to edge,
+so an outline finds the border of every cell and draws a grid line around all of them rather than
+around anything in them.
