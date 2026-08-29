@@ -51,13 +51,17 @@ MIN_DURATION_MS = 1
 MAX_DURATION_MS = 60_000
 
 __all__ = [
+    "ACTION_FRAMES",
     "DEFAULT_DURATION_MS",
     "DIRECTIONS",
+    "DIRECTION_COUNTS",
     "DIRECTION_ORDER",
     "DIRECTION_YAWS",
     "MAX_DURATION_MS",
     "MIN_DURATION_MS",
     "SHEET_KINDS",
+    "SPRITE_DIRECTIONS",
+    "SPRITE_YAWS",
     "Animation",
     "DirectionalLayout",
     "Frame",
@@ -68,8 +72,8 @@ __all__ = [
 ]
 
 
-#: The four directions a directional sheet carries, in the order a frame index
-#: means, and the yaw each one stands for.
+#: The four directions a four-direction sheet carries, in the order a frame
+#: index means, and the yaw each one stands for.
 #:
 #: Repeated from ``pipelines.spritesynth`` rather than imported, because this
 #: package imports nothing outward -- that is what makes the inker usable
@@ -80,12 +84,79 @@ __all__ = [
 DIRECTION_ORDER = ("front", "left", "right", "back")
 DIRECTION_YAWS = {"front": 0, "left": 90, "right": 270, "back": 180}
 
-#: ``kind -> (columns, rows, frames per direction)``. The grid is *derived*
-#: from the kind and never stored, so a document cannot carry a layout that
-#: disagrees with itself.
-SHEET_KINDS: dict[str, tuple[int, int, int]] = {
-    "turnaround": (2, 2, 1),
-    "walk": (4, 4, 4),
+#: All eight direction names and their yaws, degrees clockwise from the front
+#: view. The third copy of this table in the repo -- ``pipelines.charsheet``
+#: owns it, ``pipelines.spritesynth`` imports it from there, and this package
+#: may import neither. Same arrangement as :data:`DIRECTION_ORDER` above and
+#: same single owner of the agreement.
+SPRITE_YAWS: dict[str, int] = {
+    "front": 0,
+    "front_left": 45,
+    "left": 90,
+    "back_left": 135,
+    "back": 180,
+    "back_right": 225,
+    "right": 270,
+    "front_right": 315,
+}
+
+DIRECTION_COUNTS: tuple[int, ...] = (4, 8)
+
+#: The order a *row* index means, per direction count. Four is
+#: :data:`DIRECTION_ORDER` -- the order every sprite draft on disk was written
+#: in, which is why it is not the clockwise sweep the eight-direction tuple is.
+SPRITE_DIRECTIONS: dict[int, tuple[str, ...]] = {
+    4: DIRECTION_ORDER,
+    8: (
+        "front",
+        "front_left",
+        "left",
+        "back_left",
+        "back",
+        "back_right",
+        "right",
+        "front_right",
+    ),
+}
+
+#: How many frames each action carries. ``pipelines.spritesynth.ACTIONS``' table
+#: again, for the reason the direction tables are here twice; the shared five
+#: also have to agree with ``pipelines.charsheet.ANIMATIONS``, which is a
+#: separate claim owned by ``tests/test_spritesynth.py``.
+ACTION_FRAMES: dict[str, int] = {
+    "idle": 4,
+    "walk": 8,
+    "run": 8,
+    "attack": 6,
+    "cast": 6,
+    "hurt": 4,
+    "jump": 6,
+}
+
+#: ``kind -> (columns, rows, frames per direction, directions)``. The grid is
+#: *derived* from the kind and never stored, so a document cannot carry a layout
+#: that disagrees with itself.
+#:
+#: The two legacy kinds are literals because they are literals in
+#: ``spritesynth`` too: a ``turnaround`` folds four directions into a 2x2 grid,
+#: which is the one layout here where the row count and the direction count are
+#: different numbers. Every planned kind is one direction per row and one frame
+#: per column, which is what makes :meth:`DirectionalLayout.cell`'s
+#: ``row = index // columns`` true for all of them at once.
+#:
+#: **``walk`` and ``walk4`` are two different sheets**, and the near-collision
+#: is the trap here. Legacy ``walk`` is a four-frame cycle over four directions;
+#: ``walk4`` is :data:`ACTION_FRAMES`' eight-frame cycle over the same four.
+#: The frame count is the action's, not the direction count's, so neither can be
+#: an alias of the other without silently halving or doubling a stored cycle.
+SHEET_KINDS: dict[str, tuple[int, int, int, int]] = {
+    "turnaround": (2, 2, 1, 4),
+    "walk": (4, 4, 4, 4),
+    **{
+        f"{action}{count}": (frames, count, frames, count)
+        for action, frames in ACTION_FRAMES.items()
+        for count in DIRECTION_COUNTS
+    },
 }
 
 
@@ -116,6 +187,9 @@ class DirectionalLayout:
         None rather than raising, for ``Tag.__post_init__``'s reason: a layout
         arrives from a file as often as from this process, and a kind a later
         build introduced must cost the document its grid, not its openability.
+        That tolerance is what lets a wider set of sheet kinds ship with no
+        document migration behind it -- an older build opening a ``walk8`` draft
+        loses the grid and keeps the frames.
         """
         return cls(str(kind)) if kind in SHEET_KINDS else None
 
@@ -132,19 +206,28 @@ class DirectionalLayout:
         return SHEET_KINDS[self.kind][2]
 
     @property
+    def direction_count(self) -> int:
+        return SHEET_KINDS[self.kind][3]
+
+    @property
+    def directions(self) -> tuple[str, ...]:
+        """The direction names, in the order a row index means."""
+        return SPRITE_DIRECTIONS[self.direction_count]
+
+    @property
     def frame_count(self) -> int:
-        return len(DIRECTION_ORDER) * self.frames_per_direction
+        return self.direction_count * self.frames_per_direction
 
     def cell(self, index: int) -> tuple[int, int, str, int, int]:
         """``(row, col, direction, yaw, frame)`` for timeline frame ``index``."""
         if not 0 <= index < self.frame_count:
             raise IndexError(f"frame {index} is outside a {self.kind} sheet")
-        direction = DIRECTION_ORDER[index // self.frames_per_direction]
+        direction = self.directions[index // self.frames_per_direction]
         return (
             index // self.columns,
             index % self.columns,
             direction,
-            DIRECTION_YAWS[direction],
+            SPRITE_YAWS[direction],
             index % self.frames_per_direction,
         )
 

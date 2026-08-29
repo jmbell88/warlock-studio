@@ -33,6 +33,38 @@ therefore 512px and 4x4 walk cells are 256px, both exact. The logical sizes the
 user may reduce to (32/48/64) are *not* required to divide those, which is why
 the reduction is ``pixelize.reduce`` -- and, before it, :func:`reduce_atlas` --
 rather than ``pixelsheet.downscale``, whose stride has to be an integer.
+
+**Generation layout and published layout are two different grids**, and
+conflating them is what capped this path at four directions and two sheet
+types. ``tilesheet``'s measurement is the reason: the pixel-art LoRA draws
+about :data:`PX_PER_ART_PIXEL` generation pixels per authored pixel at 1024, so
+an honest cell for a 32px sprite is 256px and one for a 64px sprite is 512px --
+sixteen and four to a 1024 frame respectively. Eight directions of an eight
+frame walk is sixty-four cells at 256px, 4.2 megapixels, four SDXL frames. It
+cannot be one generation, so :data:`ATLAS_PX` stops being *the atlas* and
+becomes the ceiling on a :class:`Band`.
+
+**One band is one whole direction, all of its frames.** That is
+``pixelsheet.bands``' own argument transposed one axis -- "Whole rows, never
+part of one ... splitting it across two denoises is exactly the flicker".
+Drift between two frames of one direction plays at 10fps and reads as flicker,
+so those frames must share a latent. Drift between two *directions* reads as
+the character turning, and what holds identity across that seam is the
+IP-Adapter, the shared source reference and the shared seed rather than the
+denoise. Two directions to a band would be cheaper and is refused for a
+different reason: it produces an **uneven** sheet, where two directions agree
+perfectly and six drift, and uneven is read as a bug where uniform is read as
+style.
+
+The two legacy kinds -- ``turnaround`` and ``walk`` -- keep their literal
+tables and their generation-pixel cell rectangles verbatim, because those
+rectangles are on disk in every draft ever made here and :func:`split`,
+:func:`matte_cells` and :func:`preserve_front` all address the atlas through
+them. :func:`plan_sheet` builds everything else, and its ``SheetGeometry``
+carries *logical* cell rectangles with the generation rectangles in
+:attr:`SheetGeometry.bands`. :attr:`SheetGeometry.bands` being empty is
+therefore the honest signal for "this kind is generated as one atlas, the
+legacy way".
 """
 
 from __future__ import annotations
@@ -49,6 +81,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     PILImage = _ImageModule.Image
 else:  # pragma: no cover - runtime alias
     PILImage = Any
+
+from . import charsheet
 
 log = logging.getLogger(__name__)
 
@@ -74,8 +108,28 @@ SPRITE_DRAFT_VERSION = 2
 #: construction; nothing here does.
 DEFAULT_SPRITE_OUTLINE = "inner"
 
-# One SDXL frame, and the reason the cell sizes below are what they are.
+# One SDXL frame. Two jobs, and they used to be one: it is the side of a legacy
+# atlas, and it is the ceiling on either axis of a :class:`Band`. Both are the
+# same pin -- one SDXL frame is what this repo generates in -- which is why one
+# constant serves them and why a band larger than this is refused rather than
+# rescaled.
 ATLAS_PX = 1024
+
+#: Generation pixels the pixel-art LoRA spends on one authored pixel at 1024.
+#: Not chosen here: ``tilesheet.COLS``' comment measures it ("1024/8 = 128 is
+#: the true art resolution of one cell (the pixel-art LoRA draws ~8px 'art
+#: pixels' at 1024)"), and this is the same model with the same LoRA drawing
+#: the same kind of small figure. It is stated as a constant rather than left in
+#: prose because :func:`plan_sheet` divides by it, and a cell below ``8 *
+#: logical`` asks the model for detail it cannot resolve -- a 64px sprite drawn
+#: in a 256px cell comes back as mush, not as a small sprite.
+PX_PER_ART_PIXEL = 8
+
+#: What a sprite is reduced to when nothing says otherwise. 32 is the middle of
+#: ``generation.TARGET_CELL_PRESETS`` and the only rung at which every action in
+#: :data:`ACTIONS` fits a band (see :func:`plan_sheet`), which makes it the
+#: right default for a *planning* function whose caller may not have asked.
+DEFAULT_LOGICAL_PX = 32
 
 TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "sprite_guides"
 
@@ -87,7 +141,95 @@ TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "sprite_gu
 DIRECTION_ORDER = ("front", "left", "right", "back")
 DIRECTION_YAWS = {"front": 0, "left": 90, "right": 270, "back": 180}
 
+#: Every direction name this repo has, with its yaw in degrees clockwise from
+#: the front view. **Imported from ``charsheet``, not copied.** That module
+#: already owns the canonical eight names, their yaws and the 1/4/8/16 presets
+#: for the mesh path, it is a ``pipelines`` module importing only ``sheet``, so
+#: there is nothing circular and nothing heavy about depending on it -- and a
+#: third copy of eight names and eight angles is a third thing to drift. The
+#: yaws are narrowed to ``int`` because that is what a ``Cell`` and the sidecar
+#: have always carried here; every eight-direction yaw is whole.
+DIRECTION_YAWS_8: dict[str, int] = {
+    name: int(yaw) for name, yaw in charsheet.DIRECTIONS
+}
+
+#: How many directions a sprite sheet may carry. ``SpriteSettings.directions``
+#: has intended these two since it was written; 1 and 16 are Troupe's
+#: (``charsheet.DIRECTION_PRESETS``) and are deliberately not offered here,
+#: because a single-direction *sprite* is a still and sixteen bands of one
+#: character is sixteen generations for a difference of 22.5 degrees.
+DIRECTION_COUNTS: tuple[int, ...] = (4, 8)
+
+#: The order a row index means, per direction count.
+#:
+#: **Four is the legacy order and deliberately not
+#: ``charsheet.DIRECTION_PRESETS[4]``.** The preset sweeps clockwise -- front,
+#: left, back, right -- and every sprite draft this path has ever written is
+#: front, left, right, back, with that order baked into each one's sidecar and
+#: into ``inker.sheetin.walk_tags``. Re-ordering it would silently relabel the
+#: back and right rows of every stored draft, which is the one failure a grid
+#: table exists to prevent. Eight has no legacy to protect, so it takes the
+#: preset's clockwise sweep verbatim -- and the two are the same *set*, which
+#: ``tests/test_spritesynth.py`` asserts so the divergence stays a re-ordering
+#: rather than a second vocabulary.
+SPRITE_DIRECTIONS: dict[int, tuple[str, ...]] = {
+    4: DIRECTION_ORDER,
+    8: tuple(name for name, _yaw in charsheet.DIRECTION_PRESETS[8]),
+}
+
+#: ``(action, frames)``, as a literal table for ``charsheet.ANIMATIONS``' reason
+#: -- the frame count of every action readable in one glance.
+#:
+#: **A second table, not an extension of ``charsheet.ANIMATIONS``**, and the
+#: reason is a failure that would land an hour into a job. Troupe's table drives
+#: Blender clip expansion through ``clips.expand_clips``, which looks each
+#: animation up in ``templates/clips/`` -- and ``humanoid.json`` is the only
+#: clip file that ships, so a name it does not carry raises ``KeyError`` in the
+#: Blender stage rather than at the door. ``hurt`` and ``cast`` have no clips,
+#: so they live here and nowhere else. The five names the two tables *share*
+#: must agree on frame counts, and ``tests/test_spritesynth.py`` owns that
+#: overlap: a walk that is eight frames here and six frames there is a sheet
+#: whose two halves of the program disagree about what a cycle is.
+ACTIONS: tuple[tuple[str, int], ...] = (
+    ("idle", 4),
+    ("walk", 8),
+    ("run", 8),
+    ("attack", 6),
+    ("cast", 6),
+    ("hurt", 4),
+    ("jump", 6),
+)
+ACTION_FRAMES: dict[str, int] = dict(ACTIONS)
+
 SHEET_TYPES = ("turnaround", "walk")
+
+#: Every kind :func:`plan_sheet` can name, as ``f"{action}{directions}"``.
+#:
+#: **``walk4`` is not the legacy ``walk``**, and the near-collision is worth
+#: stating because it looks like one. Legacy ``walk`` is a *four* frame cycle
+#: over four directions, 4x4; ``walk4`` is this table's eight frame cycle over
+#: the same four directions, 8x4. The frame count belongs to the action and not
+#: to the direction count, so the two are different sheets that happen to share
+#: a prefix, and aliasing one onto the other would silently halve or double a
+#: user's cycle. They coexist: ``walk`` stays the name of every draft already on
+#: disk, ``walk4`` is what this path plans now.
+PLANNED_KINDS: tuple[str, ...] = tuple(
+    f"{action}{count}" for action, _frames in ACTIONS for count in DIRECTION_COUNTS
+)
+
+_KIND_SPEC: dict[str, tuple[str, int]] = {
+    f"{action}{count}": (action, count)
+    for action, _frames in ACTIONS
+    for count in DIRECTION_COUNTS
+}
+
+#: Rows in a band. Two, always, and the argument is aspect rather than area: a
+#: direction's frames laid in one row is a 4:1 strip at eight frames, which is
+#: further from anything SDXL was trained on than the same cells in two rows,
+#: and stacking more than two rows would put the tallest band over the ceiling
+#: before the widest one got there. Four frames is 2x2, six is 3x2, eight is
+#: 4x2 -- and a one-frame direction has no second row to fill.
+BAND_ROWS = 2
 
 # The two grids, as literal tables rather than a loop, so that the order a cell
 # index means is readable in one glance and cannot be changed by a clever
@@ -151,8 +293,49 @@ class Cell:
 
 
 @dataclass(frozen=True, slots=True)
+class Band:
+    """One direction's whole run of frames, as one generation.
+
+    The unit the module docstring argues for: never part of a direction, never
+    more than one. ``cells`` are this band's own rectangles in *band* pixels --
+    a band is handed to the model on its own, so its top-left is (0, 0) and the
+    sheet's published grid has nothing to say about where a frame sits inside
+    it.
+
+    ``index`` is the direction's row in the published sheet, so a band and the
+    row it fills carry the same number and no mapping has to be kept.
+    """
+
+    index: int
+    direction: str
+    columns: int
+    rows: int
+    cell_px: int
+    cells: tuple[Cell, ...]
+
+    @property
+    def size(self) -> tuple[int, int]:
+        """``(width, height)`` for ``t2i.generate(size=...)``."""
+        return (self.columns * self.cell_px, self.rows * self.cell_px)
+
+
+@dataclass(frozen=True, slots=True)
 class SheetGeometry:
-    """The fixed grid one sheet type is generated on."""
+    """The grid one sheet type is *published* on, and the bands it is drawn in.
+
+    ``cells`` is the published layout in timeline order, and for a
+    :func:`plan_sheet` result ``cell_w``/``cell_h`` are the **logical** cell
+    size -- the pixels the user asked for, the pixels the PNG beside the sidecar
+    is cut to. The generation rectangles live in :attr:`bands` instead.
+
+    ``bands`` is empty for the two legacy kinds, and that emptiness is load
+    bearing rather than a gap: ``turnaround`` and ``walk`` are generated as one
+    1024px atlas, their ``cell_w``/``cell_h`` are that atlas's own generation
+    pixels, and :func:`split`, :func:`matte_cells`, :func:`baseline_align` and
+    :func:`preserve_front` all address the atlas through those rectangles. An
+    empty ``bands`` is therefore exactly the statement "this kind is one
+    generation, laid out the way every draft on disk already is".
+    """
 
     kind: str
     columns: int
@@ -160,10 +343,36 @@ class SheetGeometry:
     cell_w: int
     cell_h: int
     cells: tuple[Cell, ...]
+    bands: tuple[Band, ...] = ()
+
+    @property
+    def directions(self) -> tuple[str, ...]:
+        """The direction names, in the order a row index means.
+
+        Derived from ``cells`` rather than stored, so the order a sheet is laid
+        out in and the order it says it is laid out in cannot disagree.
+        """
+        out: list[str] = []
+        seen: set[str] = set()
+        for cell in self.cells:
+            if cell.name not in seen:
+                seen.add(cell.name)
+                out.append(cell.name)
+        return tuple(out)
 
     @property
     def frames_per_direction(self) -> int:
-        return len(self.cells) // len(DIRECTION_ORDER)
+        """How many frames one direction carries.
+
+        Over the number of *directions*, not the number of rows. Those are the
+        same number for every :func:`plan_sheet` layout -- one direction per row
+        is what makes ``DirectionalLayout.cell``'s ``row = index // columns``
+        generalise -- and they are emphatically not the same number for the
+        legacy ``turnaround``, which folds four directions into a 2x2 grid of
+        two rows. Dividing by ``rows`` there would answer 2 for a sheet whose
+        every cell is frame 0.
+        """
+        return len(self.cells) // len(self.directions)
 
 
 def _build(kind: str, table: tuple[tuple[str, int, int, int], ...]) -> SheetGeometry:
@@ -207,9 +416,227 @@ def geometry(sheet_type: str) -> SheetGeometry:
         return GEOMETRY[sheet_type]
     except KeyError:
         raise ValueError(
-            f"unknown sprite sheet type {sheet_type!r}; "
-            f"this module handles {', '.join(SHEET_TYPES)}"
+            f"unknown sprite sheet type {sheet_type!r}; this module lays "
+            f"{', '.join(SHEET_TYPES)} out as fixed atlases and everything else "
+            "through plan_sheet"
         ) from None
+
+
+# --- planned sheets: bands in, logical cells out ------------------------------
+
+
+def band_grid(frames: int) -> tuple[int, int]:
+    """``(columns, rows)`` for a band of ``frames``. See :data:`BAND_ROWS`."""
+    if frames < 1:
+        raise ValueError("a direction needs at least one frame")
+    rows = 1 if frames == 1 else BAND_ROWS
+    return (-(-frames // rows), rows)
+
+
+def plan_sheet(
+    action: str,
+    directions: int = 8,
+    frames: int | None = None,
+    logical: int = DEFAULT_LOGICAL_PX,
+) -> SheetGeometry:
+    """The published grid and the bands for one action sheet.
+
+    Published layout is ``columns = frames``, ``rows = directions``, in
+    direction-major frame-minor order. That is not a taste: it is what makes
+    ``inker.animation.DirectionalLayout.cell``'s ``row = index // columns``
+    arithmetic true for every count at once, so the studio's copy of the grid
+    generalises without gaining a second formula to keep in step with this one.
+
+    Refuses rather than defaulting, for :func:`geometry`'s reason, and refuses
+    one case that looks like a limitation and is arithmetic: a direction whose
+    frames do not fit one band. At ``logical`` 64 an honest cell is 512px
+    (:data:`PX_PER_ART_PIXEL`) and four of them fill a 1024 band exactly, so a
+    six- or eight-frame action at that size would have to either split a
+    direction across two denoises -- the flicker the module docstring refuses --
+    or draw the sprite at four generation pixels per authored pixel, which
+    returns mush. Naming both numbers and stopping is the only honest third
+    option.
+    """
+    if action not in ACTION_FRAMES:
+        raise ValueError(
+            f"unknown sprite action {action!r}; "
+            f"this module draws {', '.join(ACTION_FRAMES)}"
+        )
+    if directions not in SPRITE_DIRECTIONS:
+        raise ValueError(
+            f"a sprite sheet carries {' or '.join(str(n) for n in DIRECTION_COUNTS)} "
+            f"directions, not {directions}"
+        )
+    count = ACTION_FRAMES[action] if frames is None else int(frames)
+    if count < 1:
+        raise ValueError(f"a {action} sheet needs at least one frame")
+    size = int(logical)
+    if size < 1:
+        raise ValueError("the logical cell size must be at least 1")
+
+    cell_px = PX_PER_ART_PIXEL * size
+    band_columns, band_rows = band_grid(count)
+    if band_columns * cell_px > ATLAS_PX or band_rows * cell_px > ATLAS_PX:
+        raise ValueError(
+            f"one direction of a {size}px {action} is {count} frames of "
+            f"{cell_px}px, which needs a {band_columns * cell_px}x"
+            f"{band_rows * cell_px} band, and one SDXL frame is "
+            f"{ATLAS_PX}x{ATLAS_PX}; a direction is never split across two "
+            "generations, so ask for fewer frames or a smaller sprite"
+        )
+
+    names = SPRITE_DIRECTIONS[directions]
+    cells = tuple(
+        Cell(
+            name=name,
+            frame=frame,
+            yaw=DIRECTION_YAWS_8[name],
+            row=row,
+            col=frame,
+            x=frame * size,
+            y=row * size,
+            w=size,
+            h=size,
+        )
+        for row, name in enumerate(names)
+        for frame in range(count)
+    )
+    bands = tuple(
+        Band(
+            index=row,
+            direction=name,
+            columns=band_columns,
+            rows=band_rows,
+            cell_px=cell_px,
+            cells=tuple(
+                Cell(
+                    name=name,
+                    frame=frame,
+                    yaw=DIRECTION_YAWS_8[name],
+                    row=frame // band_columns,
+                    col=frame % band_columns,
+                    x=(frame % band_columns) * cell_px,
+                    y=(frame // band_columns) * cell_px,
+                    w=cell_px,
+                    h=cell_px,
+                )
+                for frame in range(count)
+            ),
+        )
+        for row, name in enumerate(names)
+    )
+    return SheetGeometry(
+        kind=f"{action}{directions}",
+        columns=count,
+        rows=directions,
+        cell_w=size,
+        cell_h=size,
+        cells=cells,
+        bands=bands,
+    )
+
+
+def plan_kind(kind: str, logical: int = DEFAULT_LOGICAL_PX) -> SheetGeometry:
+    """:func:`plan_sheet` addressed by the name a sidecar carries.
+
+    A lookup table rather than a parse of the trailing digits: an action is free
+    to be named ``dash2`` one day, and a parser would quietly read that as a
+    two-direction ``dash``.
+    """
+    try:
+        action, directions = _KIND_SPEC[kind]
+    except KeyError:
+        raise ValueError(
+            f"unknown sprite sheet kind {kind!r}; this module plans "
+            f"{', '.join(PLANNED_KINDS)}"
+        ) from None
+    return plan_sheet(action, directions, None, logical)
+
+
+def sheet_geometry(kind: str, logical: int = DEFAULT_LOGICAL_PX) -> SheetGeometry:
+    """The grid for any kind this module names, legacy atlas or planned sheet.
+
+    The one door for callers that hold a stored ``sheet_type`` and do not care
+    which era it is from. :func:`geometry` and :func:`plan_kind` stay separate
+    underneath because they answer different questions -- one hands back a fixed
+    atlas whose cells are generation pixels, the other builds a published grid
+    whose cells are logical pixels -- and a caller that *does* care must not
+    have to guess which it got.
+    """
+    if kind in GEOMETRY:
+        return GEOMETRY[kind]
+    return plan_kind(kind, logical)
+
+
+# --- prompt subjects ----------------------------------------------------------
+
+#: What each action *is*, as words. Under :data:`SPRITE_DRAFT_VERSION` rather
+#: than ``PROMPT_VERSION`` for ``tilesheet._VIEW_CLAUSE``'s reason and the same
+#: split: ``prompt.SHEET_TEMPLATE`` serves the prompt preview as well as this
+#: path and is unchanged by anything here, while these clauses are this module's
+#: own and only this path can reach them.
+_ACTION_CLAUSE: dict[str, str] = {
+    "idle": "standing at rest, weight settled on both feet, a slight breathing sway",
+    "walk": "walking at an even pace, one full stride cycle, arms swinging "
+    "against the legs",
+    "run": "running at speed, long stride, body pitched forward, arms driving",
+    "attack": "swinging a melee attack, wind-up through strike to follow-through",
+    "cast": "casting a spell, arms raised, hands gathering light at the peak of "
+    "the gesture",
+    "hurt": "recoiling from a hit, head snapped back, guard broken",
+    "jump": "jumping, crouch through launch to apex and landing",
+}
+
+#: Where the camera is, per direction, in the vocabulary a sprite sheet means by
+#: these names: "left" is the character walking towards the left of the screen,
+#: not the camera standing on the character's left. Eight entries because
+#: :data:`SPRITE_DIRECTIONS` has eight names and a missing one would be a
+#: refusal at generation time, which is the point of the refusal below.
+_DIRECTION_CLAUSE: dict[str, str] = {
+    "front": "facing the viewer, seen from the front",
+    "front_left": "facing the viewer and turned to the left, seen from a front "
+    "three-quarter angle",
+    "left": "facing to the left, seen in full side profile",
+    "back_left": "facing away and turned to the left, seen from a rear "
+    "three-quarter angle",
+    "back": "facing away from the viewer, seen from behind",
+    "back_right": "facing away and turned to the right, seen from a rear "
+    "three-quarter angle",
+    "right": "facing to the right, seen in full side profile",
+    "front_right": "facing the viewer and turned to the right, seen from a front "
+    "three-quarter angle",
+}
+
+
+def action_subject(prompt: str, action: str, direction: str) -> str:
+    """The subject clause for one band. A *subject*, not a finished prompt.
+
+    The caller runs this through ``guidance.compose_prompt`` and
+    ``prompt.SHEET_TEMPLATE``, which is what adds the sheet, the pixel-art and
+    the no-text clauses -- and which is untouched by this function, so nothing
+    here bumps ``PROMPT_VERSION``.
+
+    An unknown action **or** an unknown direction raises rather than falling
+    back to a neutral clause, which is ``tilesheet.sheet_subject``'s rule and
+    its reason verbatim: a fallback here is invisible by construction, because
+    it produces a *plausible* sheet described by the wrong sentence. The moment
+    an action can join :data:`ACTIONS` without a clause beside it, that is eight
+    bands of the wrong picture and nobody is told.
+    """
+    text = str(prompt).strip()
+    clause = _ACTION_CLAUSE.get(action)
+    if clause is None:
+        raise ValueError(
+            f"unknown sprite action {action!r}; "
+            f"this module draws {', '.join(_ACTION_CLAUSE)}"
+        )
+    view = _DIRECTION_CLAUSE.get(direction)
+    if view is None:
+        raise ValueError(
+            f"unknown sprite direction {direction!r}; "
+            f"this module draws {', '.join(_DIRECTION_CLAUSE)}"
+        )
+    return ", ".join(part for part in (text, clause, view) if part)
 
 
 # --- the T-pose reference guide ---------------------------------------------
@@ -358,6 +785,174 @@ class GuideTemplate:
     poses: tuple[GuidePose, ...]
 
 
+#: Joints that sit on the character's midline and therefore mirror onto
+#: themselves. Everything else in a guide must be one half of a ``.L``/``.R``
+#: pair, because a mirror needs an answer for every point and "leave it where it
+#: is" is the wrong answer for a hand.
+CENTRAL_JOINTS: frozenset[str] = frozenset({"head", "neck", "hip"})
+
+#: Which direction each derivable one is the mirror of. Derived from the
+#: direction names by swapping the word rather than tabulated, so a ninth
+#: direction cannot be added on one side of the sheet only.
+_MIRROR_OF: dict[str, str] = {
+    name: name.replace("right", "left")
+    for name in SPRITE_DIRECTIONS[8]
+    if "right" in name
+}
+
+#: The half of the sheet a mirrored template has to author: everything that is
+#: not derived. Derived rather than listed, so it cannot disagree with
+#: :data:`_MIRROR_OF`.
+AUTHORED_DIRECTIONS: tuple[str, ...] = tuple(
+    name for name in SPRITE_DIRECTIONS[8] if name not in _MIRROR_OF
+)
+
+
+def _mirror_joint(name: str) -> str:
+    """A joint's name on the other side of the body."""
+    if name.endswith(".L"):
+        return f"{name[:-2]}.R"
+    if name.endswith(".R"):
+        return f"{name[:-2]}.L"
+    return name
+
+
+def _mirrored_points(
+    points: dict[str, Any],
+) -> dict[str, tuple[float, float]]:
+    """One pose reflected across the cell's vertical centre line.
+
+    ``x -> 1 - x`` with ``.L`` and ``.R`` swapped, y untouched. **This flips
+    handedness**, and that is accepted rather than corrected: a right-handed
+    sword becomes a left-handed one in the derived half of the sheet. At the
+    cell sizes this path draws -- 256px of generation for a 32px sprite -- the
+    stick figure decides where the limbs are and the IP-Adapter decides who the
+    character is, so what a viewer reads off the mirrored rows is the pose, not
+    which hand the prop is in. The escape hatch for an action where it *does*
+    matter is to author that direction: an authored pose always beats a derived
+    one.
+    """
+    return {
+        _mirror_joint(str(name)): (1.0 - float(xy[0]), float(xy[1]))
+        for name, xy in points.items()
+    }
+
+
+def _check_mirrorable(points: dict[str, Any], where: str) -> None:
+    for name in points:
+        if name in CENTRAL_JOINTS:
+            continue
+        if str(name).endswith((".L", ".R")):
+            partner = _mirror_joint(str(name))
+            if partner not in points:
+                raise ValueError(
+                    f"guide pose {where} has {name!r} but no {partner!r}, so it "
+                    "cannot be mirrored"
+                )
+            continue
+        raise ValueError(
+            f"guide pose {where} has {name!r}, which is neither a '.L'/'.R' pair "
+            f"nor one of the central joints ({', '.join(sorted(CENTRAL_JOINTS))}), "
+            "so a mirror has no answer for it"
+        )
+
+
+def _expand_mirrored(raw: dict[str, Any], geom: SheetGeometry) -> list[Any]:
+    """``raw['poses']`` with every mirror-derivable direction filled in.
+
+    Runs **before** the rest of :func:`_parse_template`, so the derived poses go
+    through every check the authored ones do -- unknown joint, out-of-cell,
+    missing head, count. A typo mirrored is still a typo, and a guide missing a
+    leg is worth catching before a twenty-second generation rather than after.
+
+    The mirror exists because the alternative is not "more work", it is *worse
+    poses*: seven actions by eight directions by up to eight frames is about 450
+    poses of hand JSON, and a left-facing and a right-facing walk authored
+    separately disagree by hundredths and read as two different characters.
+    Five directions are authored -- ``front``, ``front_left``, ``left``,
+    ``back_left``, ``back`` -- and the three right-hand ones fall out exactly.
+
+    A template with no ``mirror`` key is returned untouched, which is what keeps
+    ``turnaround.json`` and ``walk.json`` byte-for-byte what they were.
+
+    One check does change shape for a mirrored template. The positional order
+    check below compares the expanded list against the grid cell for cell, and
+    this function builds that list *by* the grid, so it can no longer fail --
+    so the order refusal is made here instead, against the authored poses only,
+    and joined by two the positional check never had: an authored pose naming a
+    cell the grid does not have, and two poses claiming one cell.
+    """
+    entries = list(raw["poses"])
+    spec = raw.get("mirror")
+    if spec is None:
+        return entries
+
+    axis = str(spec.get("axis", "x"))
+    if axis != "x":
+        raise ValueError(
+            f"guide template mirrors on {axis!r}; a standing figure has one "
+            "mirror and it is 'x'"
+        )
+    pairs = str(spec.get("pairs", "suffix"))
+    if pairs != "suffix":
+        raise ValueError(
+            f"guide template pairs joints by {pairs!r}; the '.L'/'.R' suffix "
+            "scheme is the one that ships"
+        )
+
+    authored: dict[tuple[str, int], Any] = {}
+    for entry in entries:
+        key = (str(entry["name"]), int(entry["frame"]))
+        if key in authored:
+            raise ValueError(
+                f"guide template for {geom.kind!r} has two poses for "
+                f"{key[0]!r}/{key[1]}"
+            )
+        _check_mirrorable(entry["points"], f"{key[0]!r}/{key[1]}")
+        authored[key] = entry
+
+    grid = [(cell.name, cell.frame) for cell in geom.cells]
+    unknown = [key for key in authored if key not in set(grid)]
+    if unknown:
+        name, frame = unknown[0]
+        raise ValueError(
+            f"guide pose {name!r}/{frame} is not a cell of the {geom.kind!r} grid"
+        )
+    if [key for key in grid if key in authored] != list(authored):
+        raise ValueError(
+            f"the authored poses of the {geom.kind!r} template are in the wrong "
+            "order"
+        )
+
+    out: list[Any] = []
+    for name, frame in grid:
+        entry = authored.get((name, frame))
+        if entry is not None:
+            out.append(entry)
+            continue
+        source = _MIRROR_OF.get(name)
+        mirror = authored.get((source, frame)) if source is not None else None
+        if mirror is None:
+            # One message and not two, because the two cases cannot be told
+            # apart from the outside: this walks the grid in order and every
+            # mirror source precedes the direction derived from it, so a missing
+            # source is always reported as the source's own cell. A separate
+            # "nothing to mirror" refusal would be a branch nothing can reach.
+            raise ValueError(
+                f"guide template for {geom.kind!r} has no pose for "
+                f"{name!r}/{frame}; a mirrored template authors "
+                f"{', '.join(AUTHORED_DIRECTIONS)} and derives the rest"
+            )
+        out.append(
+            {
+                "name": name,
+                "frame": frame,
+                "points": _mirrored_points(mirror["points"]),
+            }
+        )
+    return out
+
+
 def _parse_template(raw: dict[str, Any], geom: SheetGeometry) -> GuideTemplate:
     kind = str(raw["kind"])
     if kind != geom.kind:
@@ -366,7 +961,7 @@ def _parse_template(raw: dict[str, Any], geom: SheetGeometry) -> GuideTemplate:
     segments = tuple((str(a), str(b)) for a, b in raw["segments"])
 
     poses: list[GuidePose] = []
-    for entry in raw["poses"]:
+    for entry in _expand_mirrored(raw, geom):
         points = {
             str(name): (float(xy[0]), float(xy[1])) for name, xy in entry["points"].items()
         }
@@ -420,11 +1015,31 @@ def load_guide_template(sheet_type: str) -> GuideTemplate:
     exactly one template per sheet type, so skipping a bad one would leave the
     feature with no guide at all and generate four unposed characters -- an
     error is the useful outcome, and the templates ship with the package.
+
+    Serves the planned kinds through :func:`sheet_geometry` as well as the two
+    legacy ones. The geometry is only ever asked which cells exist and in what
+    order -- guide points are in normalised cell space -- so the logical size a
+    planned grid is built at cannot reach a template.
     """
-    geom = geometry(sheet_type)
+    geom = sheet_geometry(sheet_type)
     path = TEMPLATE_DIR / f"{sheet_type}.json"
     raw = json.loads(path.read_text(encoding="utf-8"))
     return _parse_template(raw, geom)
+
+
+def _draw_pose(draw: Any, cell: Cell, pose: GuidePose, template: GuideTemplate) -> None:
+    """One stick figure, in one cell's rectangle of whatever canvas ``draw`` is."""
+    width = max(2, cell.w // 128)
+
+    def at(name: str) -> tuple[float, float]:
+        px, py = pose.points[name]
+        return (cell.x + px * cell.w, cell.y + py * cell.h)
+
+    for a, b in template.segments:
+        draw.line([at(a), at(b)], fill=(255, 255, 255), width=width)
+    hx, hy = at(template.head_point)
+    r = template.head_radius * cell.w
+    draw.ellipse([hx - r, hy - r, hx + r, hy + r], outline=(255, 255, 255), width=width)
 
 
 def render_guide(geom: SheetGeometry, template: GuideTemplate) -> PILImage:
@@ -436,33 +1051,52 @@ def render_guide(geom: SheetGeometry, template: GuideTemplate) -> PILImage:
     means one, which is exactly the "why does my character have four legs"
     failure. ``control.edge_fraction`` is still recorded against it, so a guide
     that drew nothing is an answerable question.
+
+    For the legacy kinds only, because it draws on an ``ATLAS_PX`` canvas at the
+    geometry's own cell rectangles -- which for a planned sheet are *logical*
+    pixels, a 32px figure in the corner of a 1024px black frame. Planned sheets
+    are drawn one band at a time by :func:`render_band_guide`, which is the same
+    argument as the generation itself.
     """
     from PIL import Image, ImageDraw
 
     canvas = Image.new("RGB", (ATLAS_PX, ATLAS_PX), (0, 0, 0))
     draw = ImageDraw.Draw(canvas)
     for cell, pose in zip(geom.cells, template.poses, strict=True):
-        width = max(2, cell.w // 128)
+        _draw_pose(draw, cell, pose, template)
+    return canvas
 
-        def at(name: str, _cell: Cell = cell, _pose: GuidePose = pose) -> tuple[float, float]:
-            px, py = _pose.points[name]
-            return (_cell.x + px * _cell.w, _cell.y + py * _cell.h)
 
-        for a, b in template.segments:
-            draw.line([at(a), at(b)], fill=(255, 255, 255), width=width)
-        hx, hy = at(template.head_point)
-        r = template.head_radius * cell.w
-        draw.ellipse(
-            [hx - r, hy - r, hx + r, hy + r], outline=(255, 255, 255), width=width
-        )
+def render_band_guide(band: Band, template: GuideTemplate) -> PILImage:
+    """:func:`render_guide` for one band: this direction's frames, band-sized.
+
+    Keyed on ``(direction, frame)`` rather than sliced positionally out of
+    ``template.poses``. The template is validated against the *published* grid,
+    which is direction-major, so a band's poses are in fact a contiguous run --
+    but computing that run here would put the published layout's arithmetic in a
+    second place, and the lookup costs nothing and cannot drift.
+    """
+    from PIL import Image, ImageDraw
+
+    poses = {(pose.name, pose.frame): pose for pose in template.poses}
+    canvas = Image.new("RGB", band.size, (0, 0, 0))
+    draw = ImageDraw.Draw(canvas)
+    for cell in band.cells:
+        pose = poses.get((cell.name, cell.frame))
+        if pose is None:
+            raise ValueError(
+                f"the {template.kind!r} guide has no pose for "
+                f"{cell.name!r}/{cell.frame}"
+            )
+        _draw_pose(draw, cell, pose, template)
     return canvas
 
 
 # --- slicing, matting, alignment --------------------------------------------
 
 
-def split(atlas: PILImage, geom: SheetGeometry) -> list[PILImage]:
-    """The atlas cut on its predetermined rectangles.
+def split(atlas: PILImage, geom: SheetGeometry | Band) -> list[PILImage]:
+    """The atlas -- or one band -- cut on its predetermined rectangles.
 
     The grid is never re-detected from pixels. A generated atlas whose content
     is a few pixels off the grid still splits identically -- the alternative,

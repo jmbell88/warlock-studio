@@ -1436,6 +1436,53 @@ def test_a_walk_layout_gives_each_direction_a_row_of_four():
         assert frame == index % 4
 
 
+def test_an_eight_direction_layout_gives_each_direction_a_row_of_frames():
+    layout = animation.DirectionalLayout.of("walk8")
+    assert (layout.columns, layout.rows, layout.frame_count) == (8, 8, 64)
+    assert layout.frames_per_direction == 8
+    assert layout.direction_count == 8
+    assert layout.directions == animation.SPRITE_DIRECTIONS[8]
+    for index in range(64):
+        row, col, direction, yaw, frame = layout.cell(index)
+        assert row == index // 8 and col == index % 8
+        assert direction == layout.directions[index // 8]
+        assert yaw == animation.SPRITE_YAWS[direction]
+        assert frame == index % 8
+
+
+def test_a_six_frame_action_is_six_columns_wide():
+    layout = animation.DirectionalLayout.of("attack8")
+    assert (layout.columns, layout.rows, layout.frame_count) == (6, 8, 48)
+    assert layout.cell(6) == (1, 0, "front_left", 45, 0)
+
+
+def test_walk_and_walk4_are_different_layouts_not_two_names_for_one():
+    """The near-collision. Legacy ``walk`` is a four-frame cycle over four
+    directions; ``walk4`` is the action table's eight-frame one over the same
+    four. Aliasing either onto the other halves or doubles a stored cycle."""
+    legacy = animation.DirectionalLayout.of("walk")
+    planned = animation.DirectionalLayout.of("walk4")
+    assert legacy.frame_count == 16
+    assert planned.frame_count == 32
+    assert legacy.directions == planned.directions == animation.DIRECTION_ORDER
+
+
+def test_the_four_direction_order_is_still_the_legacy_one():
+    """Every sprite draft on disk is front/left/right/back, so the four-way
+    order may not become the clockwise sweep the eight-way one is."""
+    assert animation.SPRITE_DIRECTIONS[4] == animation.DIRECTION_ORDER
+    assert animation.SPRITE_DIRECTIONS[8][:3] == ("front", "front_left", "left")
+    for name, yaw in animation.DIRECTION_YAWS.items():
+        assert animation.SPRITE_YAWS[name] == yaw
+
+
+def test_a_turnaround_is_the_one_layout_whose_rows_are_not_its_directions():
+    layout = animation.DirectionalLayout.of("turnaround")
+    assert layout.rows == 2
+    assert layout.direction_count == 4
+    assert layout.frames_per_direction == 1
+
+
 def test_an_unknown_kind_has_no_layout_rather_than_raising():
     """A kind a later build introduced must cost the document its grid, not
     its openability -- the rule ``Tag.__post_init__`` follows for direction."""

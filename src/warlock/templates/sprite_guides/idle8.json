@@ -1,0 +1,1222 @@
+{
+  "kind": "idle8",
+  "comment": "Pose guides for the 8-direction, 4-frame idle sheet; same normalised cell space as turnaround.json (x and y run 0..1 across one cell, y down). Only five directions are authored -- front, front_left, left, back_left, back -- and the three right-hand ones are derived by the `mirror` key below, which reflects x to 1-x and swaps .L for .R. That is not laziness: a left-facing and a right-facing idle authored separately disagree by hundredths and read as two different characters, and pipelines/spritesynth validates the derived poses exactly as it validates these. The cycle is a breath, not a step -- frames rest, rise, peak, settle, lifting the body by at most 0.012 of a cell with the feet planted and the knees taking half -- because an idle that translates reads as a stumble at 10fps. front_left and back_left carry the same points on purpose: a stick figure cannot say which way a body faces once the limbs are placed, which is why front and back are identical in turnaround.json too, and the direction clause in spritesynth.action_subject is what tells the model apart.",
+  "mirror": {
+    "axis": "x",
+    "pairs": "suffix"
+  },
+  "head_point": "head",
+  "head_radius": 0.055,
+  "segments": [
+    [
+      "head",
+      "neck"
+    ],
+    [
+      "neck",
+      "hip"
+    ],
+    [
+      "neck",
+      "shoulder.L"
+    ],
+    [
+      "shoulder.L",
+      "elbow.L"
+    ],
+    [
+      "elbow.L",
+      "hand.L"
+    ],
+    [
+      "neck",
+      "shoulder.R"
+    ],
+    [
+      "shoulder.R",
+      "elbow.R"
+    ],
+    [
+      "elbow.R",
+      "hand.R"
+    ],
+    [
+      "hip",
+      "knee.L"
+    ],
+    [
+      "knee.L",
+      "foot.L"
+    ],
+    [
+      "hip",
+      "knee.R"
+    ],
+    [
+      "knee.R",
+      "foot.R"
+    ]
+  ],
+  "poses": [
+    {
+      "name": "front",
+      "frame": 0,
+      "points": {
+        "elbow.L": [
+          0.37,
+          0.41
+        ],
+        "elbow.R": [
+          0.63,
+          0.41
+        ],
+        "foot.L": [
+          0.44,
+          0.92
+        ],
+        "foot.R": [
+          0.56,
+          0.92
+        ],
+        "hand.L": [
+          0.35,
+          0.54
+        ],
+        "hand.R": [
+          0.65,
+          0.54
+        ],
+        "head": [
+          0.5,
+          0.15
+        ],
+        "hip": [
+          0.5,
+          0.55
+        ],
+        "knee.L": [
+          0.45,
+          0.74
+        ],
+        "knee.R": [
+          0.55,
+          0.74
+        ],
+        "neck": [
+          0.5,
+          0.25
+        ],
+        "shoulder.L": [
+          0.41,
+          0.28
+        ],
+        "shoulder.R": [
+          0.59,
+          0.28
+        ]
+      }
+    },
+    {
+      "name": "front",
+      "frame": 1,
+      "points": {
+        "elbow.L": [
+          0.367,
+          0.402
+        ],
+        "elbow.R": [
+          0.633,
+          0.402
+        ],
+        "foot.L": [
+          0.44,
+          0.92
+        ],
+        "foot.R": [
+          0.56,
+          0.92
+        ],
+        "hand.L": [
+          0.347,
+          0.532
+        ],
+        "hand.R": [
+          0.653,
+          0.532
+        ],
+        "head": [
+          0.5,
+          0.142
+        ],
+        "hip": [
+          0.5,
+          0.542
+        ],
+        "knee.L": [
+          0.45,
+          0.736
+        ],
+        "knee.R": [
+          0.55,
+          0.736
+        ],
+        "neck": [
+          0.5,
+          0.242
+        ],
+        "shoulder.L": [
+          0.41,
+          0.272
+        ],
+        "shoulder.R": [
+          0.59,
+          0.272
+        ]
+      }
+    },
+    {
+      "name": "front",
+      "frame": 2,
+      "points": {
+        "elbow.L": [
+          0.365,
+          0.398
+        ],
+        "elbow.R": [
+          0.635,
+          0.398
+        ],
+        "foot.L": [
+          0.44,
+          0.92
+        ],
+        "foot.R": [
+          0.56,
+          0.92
+        ],
+        "hand.L": [
+          0.345,
+          0.528
+        ],
+        "hand.R": [
+          0.655,
+          0.528
+        ],
+        "head": [
+          0.5,
+          0.138
+        ],
+        "hip": [
+          0.5,
+          0.538
+        ],
+        "knee.L": [
+          0.45,
+          0.734
+        ],
+        "knee.R": [
+          0.55,
+          0.734
+        ],
+        "neck": [
+          0.5,
+          0.238
+        ],
+        "shoulder.L": [
+          0.41,
+          0.268
+        ],
+        "shoulder.R": [
+          0.59,
+          0.268
+        ]
+      }
+    },
+    {
+      "name": "front",
+      "frame": 3,
+      "points": {
+        "elbow.L": [
+          0.368,
+          0.404
+        ],
+        "elbow.R": [
+          0.632,
+          0.404
+        ],
+        "foot.L": [
+          0.44,
+          0.92
+        ],
+        "foot.R": [
+          0.56,
+          0.92
+        ],
+        "hand.L": [
+          0.348,
+          0.534
+        ],
+        "hand.R": [
+          0.652,
+          0.534
+        ],
+        "head": [
+          0.5,
+          0.144
+        ],
+        "hip": [
+          0.5,
+          0.544
+        ],
+        "knee.L": [
+          0.45,
+          0.737
+        ],
+        "knee.R": [
+          0.55,
+          0.737
+        ],
+        "neck": [
+          0.5,
+          0.244
+        ],
+        "shoulder.L": [
+          0.41,
+          0.274
+        ],
+        "shoulder.R": [
+          0.59,
+          0.274
+        ]
+      }
+    },
+    {
+      "name": "front_left",
+      "frame": 0,
+      "points": {
+        "elbow.L": [
+          0.415,
+          0.41
+        ],
+        "elbow.R": [
+          0.59,
+          0.41
+        ],
+        "foot.L": [
+          0.445,
+          0.92
+        ],
+        "foot.R": [
+          0.555,
+          0.92
+        ],
+        "hand.L": [
+          0.395,
+          0.54
+        ],
+        "hand.R": [
+          0.61,
+          0.54
+        ],
+        "head": [
+          0.4675,
+          0.15
+        ],
+        "hip": [
+          0.5,
+          0.55
+        ],
+        "knee.L": [
+          0.46,
+          0.74
+        ],
+        "knee.R": [
+          0.54,
+          0.74
+        ],
+        "neck": [
+          0.5,
+          0.25
+        ],
+        "shoulder.L": [
+          0.455,
+          0.28
+        ],
+        "shoulder.R": [
+          0.55,
+          0.28
+        ]
+      }
+    },
+    {
+      "name": "front_left",
+      "frame": 1,
+      "points": {
+        "elbow.L": [
+          0.412,
+          0.402
+        ],
+        "elbow.R": [
+          0.593,
+          0.402
+        ],
+        "foot.L": [
+          0.445,
+          0.92
+        ],
+        "foot.R": [
+          0.555,
+          0.92
+        ],
+        "hand.L": [
+          0.392,
+          0.532
+        ],
+        "hand.R": [
+          0.613,
+          0.532
+        ],
+        "head": [
+          0.4675,
+          0.142
+        ],
+        "hip": [
+          0.5,
+          0.542
+        ],
+        "knee.L": [
+          0.46,
+          0.736
+        ],
+        "knee.R": [
+          0.54,
+          0.736
+        ],
+        "neck": [
+          0.5,
+          0.242
+        ],
+        "shoulder.L": [
+          0.455,
+          0.272
+        ],
+        "shoulder.R": [
+          0.55,
+          0.272
+        ]
+      }
+    },
+    {
+      "name": "front_left",
+      "frame": 2,
+      "points": {
+        "elbow.L": [
+          0.41,
+          0.398
+        ],
+        "elbow.R": [
+          0.595,
+          0.398
+        ],
+        "foot.L": [
+          0.445,
+          0.92
+        ],
+        "foot.R": [
+          0.555,
+          0.92
+        ],
+        "hand.L": [
+          0.39,
+          0.528
+        ],
+        "hand.R": [
+          0.615,
+          0.528
+        ],
+        "head": [
+          0.4675,
+          0.138
+        ],
+        "hip": [
+          0.5,
+          0.538
+        ],
+        "knee.L": [
+          0.46,
+          0.734
+        ],
+        "knee.R": [
+          0.54,
+          0.734
+        ],
+        "neck": [
+          0.5,
+          0.238
+        ],
+        "shoulder.L": [
+          0.455,
+          0.268
+        ],
+        "shoulder.R": [
+          0.55,
+          0.268
+        ]
+      }
+    },
+    {
+      "name": "front_left",
+      "frame": 3,
+      "points": {
+        "elbow.L": [
+          0.413,
+          0.404
+        ],
+        "elbow.R": [
+          0.592,
+          0.404
+        ],
+        "foot.L": [
+          0.445,
+          0.92
+        ],
+        "foot.R": [
+          0.555,
+          0.92
+        ],
+        "hand.L": [
+          0.393,
+          0.534
+        ],
+        "hand.R": [
+          0.612,
+          0.534
+        ],
+        "head": [
+          0.4675,
+          0.144
+        ],
+        "hip": [
+          0.5,
+          0.544
+        ],
+        "knee.L": [
+          0.46,
+          0.737
+        ],
+        "knee.R": [
+          0.54,
+          0.737
+        ],
+        "neck": [
+          0.5,
+          0.244
+        ],
+        "shoulder.L": [
+          0.455,
+          0.274
+        ],
+        "shoulder.R": [
+          0.55,
+          0.274
+        ]
+      }
+    },
+    {
+      "name": "left",
+      "frame": 0,
+      "points": {
+        "elbow.L": [
+          0.46,
+          0.41
+        ],
+        "elbow.R": [
+          0.55,
+          0.41
+        ],
+        "foot.L": [
+          0.45,
+          0.92
+        ],
+        "foot.R": [
+          0.55,
+          0.92
+        ],
+        "hand.L": [
+          0.44,
+          0.54
+        ],
+        "hand.R": [
+          0.57,
+          0.54
+        ],
+        "head": [
+          0.435,
+          0.15
+        ],
+        "hip": [
+          0.5,
+          0.55
+        ],
+        "knee.L": [
+          0.47,
+          0.74
+        ],
+        "knee.R": [
+          0.53,
+          0.74
+        ],
+        "neck": [
+          0.5,
+          0.25
+        ],
+        "shoulder.L": [
+          0.5,
+          0.28
+        ],
+        "shoulder.R": [
+          0.51,
+          0.28
+        ]
+      }
+    },
+    {
+      "name": "left",
+      "frame": 1,
+      "points": {
+        "elbow.L": [
+          0.457,
+          0.402
+        ],
+        "elbow.R": [
+          0.553,
+          0.402
+        ],
+        "foot.L": [
+          0.45,
+          0.92
+        ],
+        "foot.R": [
+          0.55,
+          0.92
+        ],
+        "hand.L": [
+          0.437,
+          0.532
+        ],
+        "hand.R": [
+          0.573,
+          0.532
+        ],
+        "head": [
+          0.435,
+          0.142
+        ],
+        "hip": [
+          0.5,
+          0.542
+        ],
+        "knee.L": [
+          0.47,
+          0.736
+        ],
+        "knee.R": [
+          0.53,
+          0.736
+        ],
+        "neck": [
+          0.5,
+          0.242
+        ],
+        "shoulder.L": [
+          0.5,
+          0.272
+        ],
+        "shoulder.R": [
+          0.51,
+          0.272
+        ]
+      }
+    },
+    {
+      "name": "left",
+      "frame": 2,
+      "points": {
+        "elbow.L": [
+          0.455,
+          0.398
+        ],
+        "elbow.R": [
+          0.555,
+          0.398
+        ],
+        "foot.L": [
+          0.45,
+          0.92
+        ],
+        "foot.R": [
+          0.55,
+          0.92
+        ],
+        "hand.L": [
+          0.435,
+          0.528
+        ],
+        "hand.R": [
+          0.575,
+          0.528
+        ],
+        "head": [
+          0.435,
+          0.138
+        ],
+        "hip": [
+          0.5,
+          0.538
+        ],
+        "knee.L": [
+          0.47,
+          0.734
+        ],
+        "knee.R": [
+          0.53,
+          0.734
+        ],
+        "neck": [
+          0.5,
+          0.238
+        ],
+        "shoulder.L": [
+          0.5,
+          0.268
+        ],
+        "shoulder.R": [
+          0.51,
+          0.268
+        ]
+      }
+    },
+    {
+      "name": "left",
+      "frame": 3,
+      "points": {
+        "elbow.L": [
+          0.458,
+          0.404
+        ],
+        "elbow.R": [
+          0.552,
+          0.404
+        ],
+        "foot.L": [
+          0.45,
+          0.92
+        ],
+        "foot.R": [
+          0.55,
+          0.92
+        ],
+        "hand.L": [
+          0.438,
+          0.534
+        ],
+        "hand.R": [
+          0.572,
+          0.534
+        ],
+        "head": [
+          0.435,
+          0.144
+        ],
+        "hip": [
+          0.5,
+          0.544
+        ],
+        "knee.L": [
+          0.47,
+          0.737
+        ],
+        "knee.R": [
+          0.53,
+          0.737
+        ],
+        "neck": [
+          0.5,
+          0.244
+        ],
+        "shoulder.L": [
+          0.5,
+          0.274
+        ],
+        "shoulder.R": [
+          0.51,
+          0.274
+        ]
+      }
+    },
+    {
+      "name": "back_left",
+      "frame": 0,
+      "points": {
+        "elbow.L": [
+          0.415,
+          0.41
+        ],
+        "elbow.R": [
+          0.59,
+          0.41
+        ],
+        "foot.L": [
+          0.445,
+          0.92
+        ],
+        "foot.R": [
+          0.555,
+          0.92
+        ],
+        "hand.L": [
+          0.395,
+          0.54
+        ],
+        "hand.R": [
+          0.61,
+          0.54
+        ],
+        "head": [
+          0.4675,
+          0.15
+        ],
+        "hip": [
+          0.5,
+          0.55
+        ],
+        "knee.L": [
+          0.46,
+          0.74
+        ],
+        "knee.R": [
+          0.54,
+          0.74
+        ],
+        "neck": [
+          0.5,
+          0.25
+        ],
+        "shoulder.L": [
+          0.455,
+          0.28
+        ],
+        "shoulder.R": [
+          0.55,
+          0.28
+        ]
+      }
+    },
+    {
+      "name": "back_left",
+      "frame": 1,
+      "points": {
+        "elbow.L": [
+          0.412,
+          0.402
+        ],
+        "elbow.R": [
+          0.593,
+          0.402
+        ],
+        "foot.L": [
+          0.445,
+          0.92
+        ],
+        "foot.R": [
+          0.555,
+          0.92
+        ],
+        "hand.L": [
+          0.392,
+          0.532
+        ],
+        "hand.R": [
+          0.613,
+          0.532
+        ],
+        "head": [
+          0.4675,
+          0.142
+        ],
+        "hip": [
+          0.5,
+          0.542
+        ],
+        "knee.L": [
+          0.46,
+          0.736
+        ],
+        "knee.R": [
+          0.54,
+          0.736
+        ],
+        "neck": [
+          0.5,
+          0.242
+        ],
+        "shoulder.L": [
+          0.455,
+          0.272
+        ],
+        "shoulder.R": [
+          0.55,
+          0.272
+        ]
+      }
+    },
+    {
+      "name": "back_left",
+      "frame": 2,
+      "points": {
+        "elbow.L": [
+          0.41,
+          0.398
+        ],
+        "elbow.R": [
+          0.595,
+          0.398
+        ],
+        "foot.L": [
+          0.445,
+          0.92
+        ],
+        "foot.R": [
+          0.555,
+          0.92
+        ],
+        "hand.L": [
+          0.39,
+          0.528
+        ],
+        "hand.R": [
+          0.615,
+          0.528
+        ],
+        "head": [
+          0.4675,
+          0.138
+        ],
+        "hip": [
+          0.5,
+          0.538
+        ],
+        "knee.L": [
+          0.46,
+          0.734
+        ],
+        "knee.R": [
+          0.54,
+          0.734
+        ],
+        "neck": [
+          0.5,
+          0.238
+        ],
+        "shoulder.L": [
+          0.455,
+          0.268
+        ],
+        "shoulder.R": [
+          0.55,
+          0.268
+        ]
+      }
+    },
+    {
+      "name": "back_left",
+      "frame": 3,
+      "points": {
+        "elbow.L": [
+          0.413,
+          0.404
+        ],
+        "elbow.R": [
+          0.592,
+          0.404
+        ],
+        "foot.L": [
+          0.445,
+          0.92
+        ],
+        "foot.R": [
+          0.555,
+          0.92
+        ],
+        "hand.L": [
+          0.393,
+          0.534
+        ],
+        "hand.R": [
+          0.612,
+          0.534
+        ],
+        "head": [
+          0.4675,
+          0.144
+        ],
+        "hip": [
+          0.5,
+          0.544
+        ],
+        "knee.L": [
+          0.46,
+          0.737
+        ],
+        "knee.R": [
+          0.54,
+          0.737
+        ],
+        "neck": [
+          0.5,
+          0.244
+        ],
+        "shoulder.L": [
+          0.455,
+          0.274
+        ],
+        "shoulder.R": [
+          0.55,
+          0.274
+        ]
+      }
+    },
+    {
+      "name": "back",
+      "frame": 0,
+      "points": {
+        "elbow.L": [
+          0.37,
+          0.41
+        ],
+        "elbow.R": [
+          0.63,
+          0.41
+        ],
+        "foot.L": [
+          0.44,
+          0.92
+        ],
+        "foot.R": [
+          0.56,
+          0.92
+        ],
+        "hand.L": [
+          0.35,
+          0.54
+        ],
+        "hand.R": [
+          0.65,
+          0.54
+        ],
+        "head": [
+          0.5,
+          0.15
+        ],
+        "hip": [
+          0.5,
+          0.55
+        ],
+        "knee.L": [
+          0.45,
+          0.74
+        ],
+        "knee.R": [
+          0.55,
+          0.74
+        ],
+        "neck": [
+          0.5,
+          0.25
+        ],
+        "shoulder.L": [
+          0.41,
+          0.28
+        ],
+        "shoulder.R": [
+          0.59,
+          0.28
+        ]
+      }
+    },
+    {
+      "name": "back",
+      "frame": 1,
+      "points": {
+        "elbow.L": [
+          0.367,
+          0.402
+        ],
+        "elbow.R": [
+          0.633,
+          0.402
+        ],
+        "foot.L": [
+          0.44,
+          0.92
+        ],
+        "foot.R": [
+          0.56,
+          0.92
+        ],
+        "hand.L": [
+          0.347,
+          0.532
+        ],
+        "hand.R": [
+          0.653,
+          0.532
+        ],
+        "head": [
+          0.5,
+          0.142
+        ],
+        "hip": [
+          0.5,
+          0.542
+        ],
+        "knee.L": [
+          0.45,
+          0.736
+        ],
+        "knee.R": [
+          0.55,
+          0.736
+        ],
+        "neck": [
+          0.5,
+          0.242
+        ],
+        "shoulder.L": [
+          0.41,
+          0.272
+        ],
+        "shoulder.R": [
+          0.59,
+          0.272
+        ]
+      }
+    },
+    {
+      "name": "back",
+      "frame": 2,
+      "points": {
+        "elbow.L": [
+          0.365,
+          0.398
+        ],
+        "elbow.R": [
+          0.635,
+          0.398
+        ],
+        "foot.L": [
+          0.44,
+          0.92
+        ],
+        "foot.R": [
+          0.56,
+          0.92
+        ],
+        "hand.L": [
+          0.345,
+          0.528
+        ],
+        "hand.R": [
+          0.655,
+          0.528
+        ],
+        "head": [
+          0.5,
+          0.138
+        ],
+        "hip": [
+          0.5,
+          0.538
+        ],
+        "knee.L": [
+          0.45,
+          0.734
+        ],
+        "knee.R": [
+          0.55,
+          0.734
+        ],
+        "neck": [
+          0.5,
+          0.238
+        ],
+        "shoulder.L": [
+          0.41,
+          0.268
+        ],
+        "shoulder.R": [
+          0.59,
+          0.268
+        ]
+      }
+    },
+    {
+      "name": "back",
+      "frame": 3,
+      "points": {
+        "elbow.L": [
+          0.368,
+          0.404
+        ],
+        "elbow.R": [
+          0.632,
+          0.404
+        ],
+        "foot.L": [
+          0.44,
+          0.92
+        ],
+        "foot.R": [
+          0.56,
+          0.92
+        ],
+        "hand.L": [
+          0.348,
+          0.534
+        ],
+        "hand.R": [
+          0.652,
+          0.534
+        ],
+        "head": [
+          0.5,
+          0.144
+        ],
+        "hip": [
+          0.5,
+          0.544
+        ],
+        "knee.L": [
+          0.45,
+          0.737
+        ],
+        "knee.R": [
+          0.55,
+          0.737
+        ],
+        "neck": [
+          0.5,
+          0.244
+        ],
+        "shoulder.L": [
+          0.41,
+          0.274
+        ],
+        "shoulder.R": [
+          0.59,
+          0.274
+        ]
+      }
+    }
+  ]
+}

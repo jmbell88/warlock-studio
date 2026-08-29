@@ -78,6 +78,251 @@ def test_an_unknown_sheet_type_raises_rather_than_defaulting():
         ss.geometry("isometric")
 
 
+def test_a_planned_kind_is_not_a_fixed_atlas():
+    """``geometry`` is the *legacy atlas* table and stays it. A planned kind
+    reaching it would hand back a KeyError-shaped refusal, so the message names
+    the door that does serve it."""
+    with pytest.raises(ValueError, match="plan_sheet"):
+        ss.geometry("walk8")
+
+
+def test_the_legacy_geometries_carry_no_bands():
+    """Empty ``bands`` is the signal for 'one 1024px atlas, laid out the way
+    every draft on disk is' -- and the legacy cell rectangles stay generation
+    pixels, because split/matte/preserve_front address the atlas through them."""
+    for kind in ss.SHEET_TYPES:
+        geom = ss.geometry(kind)
+        assert geom.bands == ()
+        assert geom.cell_w == ss.ATLAS_PX // geom.columns
+        assert geom.cell_h == ss.ATLAS_PX // geom.rows
+
+
+# --- planned sheets ---------------------------------------------------------
+
+PLANNED = sorted(ss.PLANNED_KINDS)
+
+
+def test_the_four_direction_order_is_the_legacy_one_not_the_clockwise_preset():
+    """The trap: ``charsheet.DIRECTION_PRESETS[4]`` sweeps clockwise and every
+    sprite draft on disk is front/left/right/back. Same set, different order --
+    and taking the preset's order would relabel the back and right rows of
+    every stored draft."""
+    from warlock.pipelines import charsheet
+
+    preset = tuple(name for name, _yaw in charsheet.DIRECTION_PRESETS[4])
+    assert set(preset) == set(ss.SPRITE_DIRECTIONS[4])
+    assert preset != ss.SPRITE_DIRECTIONS[4]
+    assert ss.SPRITE_DIRECTIONS[4] == ss.DIRECTION_ORDER
+
+
+def test_the_eight_directions_are_charsheets_own_and_not_a_third_copy():
+    from warlock.pipelines import charsheet
+
+    assert ss.SPRITE_DIRECTIONS[8] == tuple(
+        name for name, _yaw in charsheet.DIRECTION_PRESETS[8]
+    )
+    yaws = {name: int(yaw) for name, yaw in charsheet.DIRECTIONS}
+    assert yaws == ss.DIRECTION_YAWS_8
+    # The four legacy yaws are the same numbers, or the two eras disagree about
+    # where "back" is.
+    for name, yaw in ss.DIRECTION_YAWS.items():
+        assert ss.DIRECTION_YAWS_8[name] == yaw
+
+
+def test_the_shared_actions_agree_with_troupes_frame_table():
+    """Two tables on purpose -- ``hurt`` and ``cast`` have no Blender clip, so
+    adding them to ``charsheet.ANIMATIONS`` would raise a KeyError an hour into
+    a job -- and this is the overlap. A walk that is eight frames here and six
+    there is a sheet whose two halves disagree about what a cycle is."""
+    from warlock.pipelines import charsheet
+
+    troupe = {name: frames for name, frames, _loop, _ms in charsheet.ANIMATIONS}
+    shared = set(troupe) & set(ss.ACTION_FRAMES)
+    assert shared == {"idle", "walk", "run", "attack", "jump"}
+    for name in sorted(shared):
+        assert ss.ACTION_FRAMES[name] == troupe[name]
+
+
+def test_the_two_extra_actions_are_deliberately_not_troupes():
+    from warlock.pipelines import charsheet
+
+    troupe = {name for name, *_rest in charsheet.ANIMATIONS}
+    assert set(ss.ACTION_FRAMES) - troupe == {"cast", "hurt"}
+
+
+@pytest.mark.parametrize("kind", PLANNED)
+def test_a_planned_sheet_is_one_direction_per_row_and_one_frame_per_column(kind):
+    geom = ss.plan_kind(kind)
+    assert geom.rows == len(geom.directions)
+    assert geom.columns == geom.frames_per_direction
+    assert len(geom.cells) == geom.rows * geom.columns
+    for index, cell in enumerate(geom.cells):
+        assert (cell.row, cell.col) == (index // geom.columns, index % geom.columns)
+        assert cell.name == geom.directions[cell.row]
+        assert cell.frame == cell.col
+        assert cell.yaw == ss.DIRECTION_YAWS_8[cell.name]
+
+
+@pytest.mark.parametrize("kind", PLANNED)
+def test_a_planned_sheets_published_cells_are_logical_pixels(kind):
+    geom = ss.plan_kind(kind, 24)
+    assert (geom.cell_w, geom.cell_h) == (24, 24)
+    for cell in geom.cells:
+        assert (cell.w, cell.h) == (24, 24)
+        assert (cell.x, cell.y) == (cell.col * 24, cell.row * 24)
+
+
+@pytest.mark.parametrize("kind", PLANNED)
+def test_every_cell_is_in_exactly_one_band(kind):
+    geom = ss.plan_kind(kind)
+    seen = [(c.name, c.frame) for band in geom.bands for c in band.cells]
+    assert sorted(seen) == sorted((c.name, c.frame) for c in geom.cells)
+    assert len(seen) == len(set(seen))
+
+
+@pytest.mark.parametrize("kind", PLANNED)
+def test_no_direction_is_split_across_bands(kind):
+    """The whole argument for the band: drift between two frames of one
+    direction plays at 10fps and reads as flicker, so they share a latent."""
+    geom = ss.plan_kind(kind)
+    assert len(geom.bands) == len(geom.directions)
+    for band, name in zip(geom.bands, geom.directions, strict=True):
+        assert band.direction == name
+        assert {c.name for c in band.cells} == {name}
+        assert [c.frame for c in band.cells] == list(range(geom.frames_per_direction))
+
+
+@pytest.mark.parametrize("kind", PLANNED)
+@pytest.mark.parametrize("logical", (16, 24, 32))
+def test_no_band_exceeds_one_sdxl_frame_in_either_axis(kind, logical):
+    geom = ss.plan_kind(kind, logical)
+    for band in geom.bands:
+        width, height = band.size
+        assert 0 < width <= ss.ATLAS_PX
+        assert 0 < height <= ss.ATLAS_PX
+        assert (width, height) == (band.columns * band.cell_px, band.rows * band.cell_px)
+
+
+@pytest.mark.parametrize("kind", PLANNED)
+@pytest.mark.parametrize("logical", (16, 24, 32))
+def test_no_cell_is_drawn_below_the_loras_art_resolution(kind, logical):
+    """``tilesheet``'s measurement: the pixel-art LoRA spends ~8 generation
+    pixels on one authored pixel at 1024, so a cell below that asks for detail
+    it cannot resolve and comes back as mush."""
+    geom = ss.plan_kind(kind, logical)
+    for band in geom.bands:
+        assert band.cell_px >= ss.PX_PER_ART_PIXEL * logical
+        for cell in band.cells:
+            assert cell.w == cell.h == band.cell_px
+
+
+@pytest.mark.parametrize("kind", PLANNED)
+def test_a_bands_cells_tile_it_exactly_and_start_at_its_own_origin(kind):
+    geom = ss.plan_kind(kind)
+    for band in geom.bands:
+        width, height = band.size
+        covered = np.zeros((height, width), dtype=int)
+        for cell in band.cells:
+            covered[cell.y : cell.y + cell.h, cell.x : cell.x + cell.w] += 1
+        # A band whose frame count does not fill its grid leaves empty cells,
+        # which is legal; what is not legal is two cells over one pixel.
+        assert covered.max() == 1
+        assert covered.sum() == len(band.cells) * band.cell_px**2
+
+
+@pytest.mark.parametrize(
+    ("frames", "expected"), ((1, (1, 1)), (4, (2, 2)), (6, (3, 2)), (8, (4, 2)))
+)
+def test_the_band_grids_are_the_ones_the_arithmetic_names(frames, expected):
+    assert ss.band_grid(frames) == expected
+
+
+def test_the_band_sizes_at_the_default_logical_size():
+    """The table from the argument: 32px logical is a 256px cell, so four
+    frames is 512x512, six is 768x512 and eight is 1024x512."""
+    assert ss.plan_sheet("idle", 8).bands[0].size == (512, 512)
+    assert ss.plan_sheet("attack", 8).bands[0].size == (768, 512)
+    assert ss.plan_sheet("walk", 8).bands[0].size == (1024, 512)
+
+
+def test_a_direction_too_big_for_one_band_is_refused_with_both_numbers():
+    """Not a limitation, arithmetic. A 64px sprite is an honest 512px cell, and
+    four of those fill a band exactly -- so an eight-frame walk at that size
+    would have to split a direction across two denoises, which is the flicker
+    the whole band rule exists to refuse."""
+    assert ss.plan_sheet("idle", 8, None, 64).bands[0].size == (1024, 1024)
+    with pytest.raises(ValueError, match="1024x1024"):
+        ss.plan_sheet("walk", 8, None, 64)
+    with pytest.raises(ValueError, match="never split"):
+        ss.plan_sheet("attack", 8, None, 64)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    (
+        (("fly", 8, None, 32), "unknown sprite action"),
+        (("walk", 6, None, 32), "4 or 8 directions"),
+        (("walk", 8, 0, 32), "at least one frame"),
+        (("walk", 8, None, 0), "at least 1"),
+    ),
+)
+def test_plan_sheet_refuses_rather_than_defaulting(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        ss.plan_sheet(*kwargs)
+
+
+def test_an_unknown_kind_names_the_ones_that_exist():
+    with pytest.raises(ValueError, match="unknown sprite sheet kind"):
+        ss.plan_kind("gallop12")
+
+
+def test_sheet_geometry_serves_both_eras_through_one_door():
+    assert ss.sheet_geometry("walk") is ss.GEOMETRY["walk"]
+    assert ss.sheet_geometry("walk8").kind == "walk8"
+
+
+# --- action subjects --------------------------------------------------------
+
+
+def test_a_subject_carries_the_prompt_the_action_and_the_view():
+    text = ss.action_subject("a tin knight", "walk", "back_left")
+    assert text.startswith("a tin knight, ")
+    assert "walking" in text
+    assert "rear three-quarter" in text
+
+
+def test_every_action_and_every_direction_has_a_clause():
+    for action in ss.ACTION_FRAMES:
+        for direction in ss.SPRITE_DIRECTIONS[8]:
+            assert ss.action_subject("x", action, direction).count(",") >= 2
+
+
+def test_an_unknown_action_raises_rather_than_defaulting():
+    """``tilesheet.sheet_subject``'s rule and its reason: a fallback here is
+    invisible by construction, because it produces a plausible sheet described
+    by the wrong sentence."""
+    with pytest.raises(ValueError, match="unknown sprite action"):
+        ss.action_subject("x", "dance", "front")
+
+
+def test_an_unknown_direction_raises_too():
+    with pytest.raises(ValueError, match="unknown sprite direction"):
+        ss.action_subject("x", "walk", "upward")
+
+
+def test_an_empty_prompt_leaves_no_leading_comma():
+    assert not ss.action_subject("   ", "idle", "front").startswith(",")
+
+
+def test_the_subjects_do_not_touch_the_shared_prompt_template():
+    """The split ``tilesheet`` draws: the template serves the prompt preview and
+    versions under ``PROMPT_VERSION``, these clauses are this module's own and
+    version under ``SPRITE_DRAFT_VERSION``. Nothing here bumps that number."""
+    from warlock.pipelines import prompt
+
+    assert "walking at an even pace" not in prompt.SHEET_TEMPLATE
+
+
 # --- guide templates --------------------------------------------------------
 
 
@@ -135,6 +380,210 @@ def test_a_pose_with_no_head_is_refused_at_load():
         ss._parse_template(raw, ss.geometry("turnaround"))
 
 
+# --- mirror-derived templates -----------------------------------------------
+
+
+def test_the_legacy_templates_carry_no_mirror_key_and_author_every_cell():
+    """``turnaround.json`` and ``walk.json`` are untouched by the mirror, which
+    is what keeps them byte for byte what they were.
+
+    Asserted as a property rather than as a hash of the file, deliberately:
+    ``turnaround.json``'s own comment says "This is DATA: the pose quality here
+    is iterable without touching any code", and a byte pin would forbid exactly
+    that iteration. What must not change is the *shape* -- no mirror key, every
+    cell authored -- and git shows the rest.
+    """
+    for kind in ss.SHEET_TYPES:
+        raw = _raw(kind)
+        assert "mirror" not in raw
+        geom = ss.geometry(kind)
+        authored = {(p["name"], p["frame"]) for p in raw["poses"]}
+        assert authored == {(c.name, c.frame) for c in geom.cells}
+
+
+def test_the_shipped_right_view_is_already_the_exact_mirror_of_the_left():
+    """The evidence the mirror rule is not an invention: the hand-authored
+    ``turnaround.json`` was already following it, to float rounding."""
+    raw = _raw("turnaround")
+    by_name = {p["name"]: p["points"] for p in raw["poses"]}
+    mirrored = ss._mirrored_points(by_name["left"])
+    for joint, (x, y) in by_name["right"].items():
+        assert mirrored[joint] == pytest.approx((x, y))
+
+
+def _mirrored_raw(kind="idle8"):
+    return json.loads((ss.TEMPLATE_DIR / f"{kind}.json").read_text(encoding="utf-8"))
+
+
+def test_the_shipped_mirrored_template_expands_to_every_cell_in_order():
+    geom = ss.plan_kind("idle8")
+    raw = _mirrored_raw()
+    assert len(raw["poses"]) == 20  # five authored directions of four frames
+    template = ss.load_guide_template("idle8")
+    assert [(p.name, p.frame) for p in template.poses] == [
+        (c.name, c.frame) for c in geom.cells
+    ]
+
+
+def test_the_derived_directions_are_exact_reflections_of_their_sources():
+    template = ss.load_guide_template("idle8")
+    poses = {(p.name, p.frame): p for p in template.poses}
+    for derived, source in ss._MIRROR_OF.items():
+        for frame in range(4):
+            assert poses[(derived, frame)].points == pytest.approx(
+                ss._mirrored_points(poses[(source, frame)].points)
+            )
+
+
+def test_the_shipped_mirrored_template_has_a_comment_explaining_the_convention():
+    assert len(_mirrored_raw()["comment"]) > 100
+
+
+def test_mirroring_swaps_handedness_and_reflects_x():
+    points = {"head": (0.5, 0.1), "hand.L": (0.2, 0.5), "hand.R": (0.9, 0.5)}
+    assert ss._mirrored_points(points) == {
+        "head": (0.5, 0.1),
+        "hand.R": (0.8, 0.5),
+        "hand.L": (pytest.approx(0.1), 0.5),
+    }
+
+
+def _tiny(poses, **extra):
+    """A one-frame four-direction template over a ``hurt4``-shaped grid."""
+    raw = {
+        "kind": "idle4",
+        "head_point": "head",
+        "head_radius": 0.05,
+        "segments": [["head", "hip"], ["hip", "foot.L"], ["hip", "foot.R"]],
+        "mirror": {"axis": "x", "pairs": "suffix"},
+        "poses": poses,
+    }
+    raw.update(extra)
+    return raw
+
+
+def _pose(name, frame, **points):
+    base = {"head": [0.5, 0.1], "hip": [0.5, 0.5], "foot.L": [0.4, 0.9],
+            "foot.R": [0.6, 0.9]}
+    base.update(points)
+    return {"name": name, "frame": frame, "points": base}
+
+
+def _idle4_authored():
+    """front, left and back at every frame -- ``right`` is the derivable one."""
+    return [
+        _pose(name, frame)
+        for name in ("front", "left", "back")
+        for frame in range(4)
+    ]
+
+
+def test_a_mirrored_template_need_only_author_the_left_hand_directions():
+    template = ss._parse_template(_tiny(_idle4_authored()), ss.plan_kind("idle4"))
+    assert len(template.poses) == 16
+    assert [p.name for p in template.poses[8:12]] == ["right"] * 4
+
+
+def test_an_authored_pose_beats_the_derived_one():
+    """The escape hatch for an asymmetric action -- a sword swing that must not
+    change hands -- without forcing every action to be hand-authored twice."""
+    poses = _idle4_authored()
+    # Grid order is front, left, right, back, so the authored right sits third.
+    poses[8:8] = [_pose("right", frame, head=[0.7, 0.1]) for frame in range(4)]
+    template = ss._parse_template(_tiny(poses), ss.plan_kind("idle4"))
+    right = [p for p in template.poses if p.name == "right"]
+    assert [p.points["head"] for p in right] == [(0.7, 0.1)] * 4
+
+
+def test_a_joint_that_is_neither_paired_nor_central_is_refused_at_load():
+    poses = _idle4_authored()
+    poses[0]["points"]["tentacle"] = [0.5, 0.5]
+    with pytest.raises(ValueError, match="neither a '.L'/'.R' pair"):
+        ss._parse_template(_tiny(poses), ss.plan_kind("idle4"))
+
+
+def test_a_half_of_a_pair_with_no_partner_is_refused_at_load():
+    poses = _idle4_authored()
+    del poses[0]["points"]["foot.R"]
+    with pytest.raises(ValueError, match="cannot be mirrored"):
+        ss._parse_template(_tiny(poses), ss.plan_kind("idle4"))
+
+
+@pytest.mark.parametrize("missing", ("left", "back"))
+def test_a_direction_with_nothing_to_mirror_names_the_half_to_author(missing):
+    """One message for both cases, because from the outside they are one case:
+    expansion walks the grid in order and every mirror source precedes what is
+    derived from it, so a missing ``left`` is reported at ``left`` and never as
+    ``right`` having nothing to reflect."""
+    poses = [p for p in _idle4_authored() if p["name"] != missing]
+    with pytest.raises(ValueError, match=f"no pose for '{missing}'/0"):
+        ss._parse_template(_tiny(poses), ss.plan_kind("idle4"))
+    with pytest.raises(ValueError, match="front, front_left, left, back_left, back"):
+        ss._parse_template(_tiny(poses), ss.plan_kind("idle4"))
+
+
+def test_the_authored_half_is_derived_from_the_mirror_table():
+    assert ss.AUTHORED_DIRECTIONS == (
+        "front", "front_left", "left", "back_left", "back",
+    )
+    assert set(ss.AUTHORED_DIRECTIONS) | set(ss._MIRROR_OF) == set(
+        ss.SPRITE_DIRECTIONS[8]
+    )
+
+
+def test_two_poses_for_one_cell_are_refused_at_load():
+    poses = _idle4_authored()
+    poses.append(_pose("front", 0))
+    with pytest.raises(ValueError, match="two poses for 'front'/0"):
+        ss._parse_template(_tiny(poses), ss.plan_kind("idle4"))
+
+
+def test_a_pose_naming_a_cell_the_grid_does_not_have_is_refused_at_load():
+    poses = _idle4_authored() + [_pose("front", 9)]
+    with pytest.raises(ValueError, match="not a cell of the 'idle4' grid"):
+        ss._parse_template(_tiny(poses), ss.plan_kind("idle4"))
+
+
+def test_authored_poses_out_of_grid_order_are_refused_at_load():
+    """The positional order check cannot fire on a mirrored template, because
+    the expansion builds the list *by* the grid -- so the order refusal is made
+    against the authored poses instead, and keeps its teeth."""
+    poses = _idle4_authored()
+    poses[0], poses[4] = poses[4], poses[0]
+    with pytest.raises(ValueError, match="wrong order"):
+        ss._parse_template(_tiny(poses), ss.plan_kind("idle4"))
+
+
+def test_a_mirror_axis_this_build_cannot_draw_is_refused_rather_than_ignored():
+    raw = _tiny(_idle4_authored(), mirror={"axis": "y", "pairs": "suffix"})
+    with pytest.raises(ValueError, match="one mirror and it is 'x'"):
+        ss._parse_template(raw, ss.plan_kind("idle4"))
+
+
+def test_a_pairing_scheme_this_build_cannot_draw_is_refused_too():
+    raw = _tiny(_idle4_authored(), mirror={"axis": "x", "pairs": "prefix"})
+    with pytest.raises(ValueError, match="suffix"):
+        ss._parse_template(raw, ss.plan_kind("idle4"))
+
+
+def test_the_expanded_list_is_what_every_later_check_sees():
+    """Expansion runs first, so the count and the cell-for-cell order check are
+    made against all sixteen poses and not against the five directions on disk.
+
+    The per-*point* checks are a belt rather than a live catch here, and it is
+    worth knowing why: an x-reflection maps [0, 1] onto [0, 1] and renames
+    joints bijectively, so a derived pose cannot be out of its cell or missing a
+    segment point unless its source already was. What expansion-before-
+    validation actually buys is that the grid checks see a whole grid.
+    """
+    geom = ss.plan_kind("idle4")
+    raw = _tiny(_idle4_authored())
+    assert len(ss._expand_mirrored(raw, geom)) == len(geom.cells)
+    raw["poses"][0]["points"]["head"] = [0.5, 1.4]
+    with pytest.raises(ValueError, match="outside its cell"):
+        ss._parse_template(raw, geom)
+
+
 # --- the guide --------------------------------------------------------------
 
 
@@ -163,6 +612,69 @@ def test_the_guide_never_draws_outside_a_cell():
     arr = np.asarray(ss.render_guide(geom, ss.load_guide_template("walk")).convert("L"))
     for col in range(1, geom.columns):
         assert not arr[:, col * geom.cell_w - 1 : col * geom.cell_w + 1].any()
+
+
+def test_a_band_guide_is_band_sized_and_draws_in_every_frame():
+    geom = ss.plan_kind("idle8")
+    template = ss.load_guide_template("idle8")
+    for band in geom.bands:
+        guide = ss.render_band_guide(band, template)
+        assert guide.size == band.size
+        assert guide.mode == "RGB"
+        for cell in band.cells:
+            assert control.edge_fraction(guide.crop(cell.box)) > 0.001
+
+
+def test_a_band_guide_never_draws_outside_a_frame():
+    geom = ss.plan_kind("idle8")
+    band = geom.bands[0]
+    arr = np.asarray(
+        ss.render_band_guide(band, ss.load_guide_template("idle8")).convert("L")
+    )
+    for col in range(1, band.columns):
+        assert not arr[:, col * band.cell_px - 1 : col * band.cell_px + 1].any()
+
+
+def test_the_mirrored_bands_are_reflections_of_the_ones_they_came_from():
+    """The property the whole mirror buys, checked in pixels rather than in
+    points: the ``right`` band is the ``left`` band flipped."""
+    geom = ss.plan_kind("idle8")
+    template = ss.load_guide_template("idle8")
+    bands = {band.direction: band for band in geom.bands}
+    left = np.asarray(ss.render_band_guide(bands["left"], template).convert("L"))
+    right = np.asarray(ss.render_band_guide(bands["right"], template).convert("L"))
+    for index in range(bands["left"].columns * bands["left"].rows):
+        col, row = index % bands["left"].columns, index // bands["left"].columns
+        x, y = col * bands["left"].cell_px, row * bands["left"].cell_px
+        size = bands["left"].cell_px
+        a = left[y : y + size, x : x + size]
+        b = right[y : y + size, x : x + size]
+        # Within a pixel of an exact flip: the strokes are rasterised at integer
+        # coordinates, so a reflected line can land one pixel across.
+        assert abs(int(a.sum()) - int(b.sum())) < a.sum() * 0.05
+
+
+def test_a_band_guide_refuses_a_template_missing_one_of_its_frames():
+    geom = ss.plan_kind("idle8")
+    template = ss.load_guide_template("idle8")
+    trimmed = ss.GuideTemplate(
+        kind=template.kind,
+        head_radius=template.head_radius,
+        head_point=template.head_point,
+        segments=template.segments,
+        poses=tuple(p for p in template.poses if p.frame != 2),
+    )
+    with pytest.raises(ValueError, match="no pose for 'front'/2"):
+        ss.render_band_guide(geom.bands[0], trimmed)
+
+
+def test_a_band_splits_on_its_own_rectangles():
+    geom = ss.plan_kind("walk8")
+    band = geom.bands[0]
+    image = Image.new("RGB", band.size, BG)
+    parts = ss.split(image, band)
+    assert len(parts) == len(band.cells)
+    assert all(p.size == (band.cell_px, band.cell_px) for p in parts)
 
 
 # --- splitting --------------------------------------------------------------
