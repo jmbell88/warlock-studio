@@ -38,6 +38,7 @@ PRODUCTS = {
     "sprite_synthesis": "Sprite sheet",
     "charsheet": "Character sheet",
     "retexture": "Re-texture",
+    "remesh": "Remesh",
 }
 
 #: Which stage a follow-up can be attempted from, and therefore which rows may

@@ -50,6 +50,77 @@ MAP_SUFFIXES = (WMAP_SUFFIX, TMX_SUFFIX, TMJ_SUFFIX)
 #: not droppable. ``filetypes.describe`` is the same argument one layer up.
 MAP_SUFFIX_TEXT = " / ".join(MAP_SUFFIXES)
 
+#: The tileset palette's zoom rungs, in screen pixels per source pixel.
+#:
+#: **Reciprocal integers below 1:1, whole integers above**, which is
+#: ``inker_state.ZOOM_LADDER``'s pixel-art rule and holds here for a sharper
+#: reason: the atlas texture is uploaded NEAREST, so a free fraction samples a
+#: non-uniform subset of source pixels and the palette grid beats against
+#: itself. 1/N samples uniformly and merely gets smaller.
+#:
+#: **Not ``ZOOM_LADDER`` itself**, and the divergence is deliberate. That table
+#: is sized for a *drawing* and bottoms out at 5%, which puts a 16px tile at
+#: 0.8 screen pixels -- below one pixel, so the palette is a smear and no tile
+#: can be clicked. This one is sized for an *atlas measured in tiles*: 1/16 is
+#: the floor because it still leaves a 16px tile hittable at one pixel, and the
+#: top stops at 8 because a palette is for finding a tile, not inspecting one.
+PALETTE_ZOOM_LADDER = (
+    1 / 16,
+    1 / 12,
+    1 / 8,
+    1 / 6,
+    1 / 4,
+    1 / 3,
+    1 / 2,
+    1.0,
+    2.0,
+    3.0,
+    4.0,
+    6.0,
+    8.0,
+)
+
+
+def palette_fit_zoom(
+    image_w: int, image_h: int, avail_w: float, avail_h: float
+) -> float:
+    """The largest rung showing the whole atlas in ``avail``. -> a scale.
+
+    The answer to "view the entire tile set", and the reason a missing stored
+    zoom means "fit": only the pane knows its own width, so this is computed
+    where that is known and remembered afterwards.
+
+    Both axes, not just width. Fitting on width alone leaves a tall atlas
+    scrolling vertically at a zoom chosen for the horizontal, which is the
+    half-answer the picker already gave. Degenerate sizes fall back to the
+    bottom rung rather than dividing by zero -- a tileset with no pixels is a
+    load that failed, and the picker draws its placeholder either way.
+    """
+    if image_w <= 0 or image_h <= 0 or avail_w <= 0 or avail_h <= 0:
+        return PALETTE_ZOOM_LADDER[0]
+    fits = [
+        rung
+        for rung in PALETTE_ZOOM_LADDER
+        if image_w * rung <= avail_w and image_h * rung <= avail_h
+    ]
+    # Nothing fits even at the floor: take the floor and let the well scroll.
+    # Refusing to draw would be worse than drawing something reachable.
+    return fits[-1] if fits else PALETTE_ZOOM_LADDER[0]
+
+
+def palette_zoom_rung(zoom: float, direction: int) -> float:
+    """The next :data:`PALETTE_ZOOM_LADDER` rung in ``direction``.
+
+    Delegated rather than reimplemented: "strictly past the current zoom" is
+    the part that matters and it is already written once. It matters more here
+    than in the canvas, because a fit-derived zoom routinely sits *between*
+    two rungs -- a nearest-then-step rule would answer a press labelled "in"
+    by zooming out.
+    """
+    from .inker_state import zoom_rung
+
+    return zoom_rung(zoom, direction, PALETTE_ZOOM_LADDER)
+
 # (key, label, letter), and the order is the order of the button grid.
 #
 # **The letters are Tiled's, not the raster editor's.** They used to match
@@ -230,6 +301,30 @@ class PlotterDoc:
     #: cross-document tile paste by name. Not undoable, not serialized,
     #: dropped with the tab; ``.wmap`` persistence is a deliberate later step.
     stamps: dict[int, Any] = field(default_factory=dict)
+    #: The tileset palette's zoom, per tileset index, in screen pixels per
+    #: source pixel. **Per tileset and per tab**, because the zoom that shows a
+    #: 1024px terrain set whole is the zoom that shows one tile of a 64px
+    #: four-tile set: one number for the mode would leave a reader staring at a
+    #: corner every time they changed the combo.
+    #:
+    #: **A missing key means "fit on the next frame."** Only the pane knows how
+    #: wide it is, so there is nothing sensible to seed here -- and the answer
+    #: that falls out is the one that was wanted anyway: the first sight of a
+    #: tileset is the whole of it, with no button pressed.
+    #:
+    #: View state, ``stamps``' own rule: not undoable, not serialized, dropped
+    #: with the tab. One known and harmless consequence: an undone tileset add
+    #: reuses an index, so a re-added tileset opens at the previous one's zoom.
+    #: Keying on the epoch instead would reset the zoom whenever a tile's
+    #: metadata changed, which is a worse trade for a view setting.
+    palette_zoom: dict[int, float] = field(default_factory=dict)
+    #: Which groups and object layers are folded shut in the layers panel, by
+    #: uid. By uid rather than by index for the reason every edit in this app
+    #: is: a reorder must not silently fold a different row.
+    #:
+    #: View state, ``stamps``' rule again: not undoable, not serialized,
+    #: dropped with the tab.
+    collapsed_rows: set[int] = field(default_factory=set)
     view: PaintView = field(default_factory=PaintView)
     saved_head: int = 0
     saving: bool = False
@@ -314,6 +409,18 @@ class PlotterState:
     random_mode: bool = False
     # The palette's own drag, in local tile coordinates of the active tileset.
     palette_anchor: tuple[int, int] | None = None
+    # A zoom nudge the *pane* has to apply, as -1 / 0 / +1.
+    #
+    # ``PaintView.pending_zoom_rung``'s pattern and for its reason: a wheel
+    # notch or a button press knows the direction but not the viewport, and
+    # only the picker knows how wide it is and what the current scale resolved
+    # to. Cleared by the pane that reads it, on the frame it reads it.
+    palette_zoom_rung: int = 0
+    # "Fit the palette on the next frame", set by the Fit button. A flag rather
+    # than a zoom for the same reason: the pane does the arithmetic. Clearing
+    # ``palette_zoom`` would also work and is worse -- it would lose which
+    # tileset was being asked about.
+    palette_zoom_fit: bool = False
     # Which terrain the Terrain tool lays down, as ``(tileset index, terrain)``.
     # ``None`` means none is picked, which is what a map with no terrain set is.
     # A pair rather than a bare index because a map may carry more than one

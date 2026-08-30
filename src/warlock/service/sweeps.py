@@ -117,6 +117,147 @@ SERVER_AXES = ("trellis_tex_res", "trellis_band")
 # submitted while the first is still draining, which is a real workflow.
 MAX_UNITS = 64
 
+#: A unit that is still going to happen. It owes a verdict because it can still
+#: be given one.
+ACTIVE_STATUSES = ("queued", "running")
+
+#: A unit that finished and can therefore be judged.
+#:
+#: **``error`` and ``cancelled`` are deliberately absent.** They can never be
+#: graded, so counting them as outstanding would make every sweep that had a
+#: failure permanently unremovable -- which is precisely the clutter this is
+#: here to clear, one generation later.
+JUDGEABLE_STATUSES = ("done",)
+
+
+def outstanding_units(jobs: Iterable[dict[str, Any]], judged: Any) -> int:
+    """How many of these units still owe a mesh verdict. Pure -- no database.
+
+    One owner for the rule, because the pane's own scan and the service's
+    re-validation both need it and two spellings of "finished with" is how a
+    button comes to offer what the door then refuses.
+    """
+    def owes(job: dict[str, Any]) -> bool:
+        status = str(job.get("status") or "")
+        if status in ACTIVE_STATUSES:
+            # Not finished, so it will get its chance.
+            return True
+        # Finished and gradeable, but nobody has graded it.
+        return status in JUDGEABLE_STATUSES and str(job.get("id")) not in judged
+
+    return sum(1 for job in jobs if owes(job))
+
+
+def removable_sweeps(svc: WarlockService) -> list[dict[str, Any]]:
+    """Every sweep with nothing left to judge, newest first.
+
+    -> ``[{"id", "label", "units": int, "retained": int}]``
+
+    ``retained`` is how many of its units a bulk delete would refuse to take,
+    so the confirm can say what opting out of that rule would actually cost
+    rather than only that something is being deleted.
+    """
+    from . import verdicts as verdicts_mod
+
+    # Once, outside the loop: it walks every latest verdict in the database and
+    # the answer cannot change between two sweeps of one scan.
+    retained = jobs_mod.retained_job_ids(svc)
+    out: list[dict[str, Any]] = []
+    for sweep in svc.store.list_sweeps():
+        jobs = svc.store.sweep_jobs(sweep["id"])
+        ids = [str(job["id"]) for job in jobs]
+        judged = {
+            job_id
+            for (job_id, _source) in svc.store.verdicts_for(
+                ids, source=verdicts_mod.SOURCE_HUMAN, stage="model"
+            )
+        }
+        if outstanding_units(jobs, judged):
+            continue
+        out.append(
+            {
+                "id": sweep["id"],
+                "label": sweep.get("label") or sweep["id"],
+                "units": len(ids),
+                "retained": sum(1 for job_id in ids if job_id in retained),
+            }
+        )
+    return out
+
+
+def remove_reviewed_sweeps(
+    svc: WarlockService,
+    *,
+    sweep_ids: Iterable[str] | None = None,
+    drop_retained: bool = False,
+) -> dict[str, Any]:
+    """Remove every sweep with nothing left to judge. ``None`` means all of them.
+
+    -> ``{"ok", "sweeps", "deleted", "remaining", "kept"}``
+
+    **Why this exists at all.** ``store.delete_sweep`` is called from exactly
+    one place -- the tail of :func:`_remove_units` -- and the lifecycle paths
+    that actually take a sweep's units (``delete_job``, ``prune_jobs``,
+    ``clean_jobs``, ``empty_trash``) rewrite ``jobs`` rows and never look at
+    ``sweeps``. So a sweep whose assets went that way keeps its row for ever,
+    and ``auto_cleanup`` cannot reach it either: that fires on ``todo``
+    reaching zero *during a session*, so a sweep already finished when the app
+    opened is never offered to it. Both are the same symptom -- a Review list
+    that only grows -- and this is the button for it.
+
+    Nothing that feeds analytics is touched. ``verdicts`` and ``observations``
+    carry ``sweep_id`` as a denormalised string with no foreign key behind it,
+    and ``findings`` groups on that column without reading this table, so the
+    rows outlive the sweep exactly as they already outlive its meshes.
+
+    ``drop_retained`` is the user's own override of ``retained_job_ids`` and
+    carries :func:`cleanup_sweep`'s whole burden -- see that docstring, and the
+    2026-08-09 incident it names.
+    """
+    removable = {entry["id"]: entry for entry in removable_sweeps(svc)}
+    if sweep_ids is None:
+        wanted = list(removable)
+    else:
+        wanted = [str(sweep_id) for sweep_id in sweep_ids]
+        # **Validated before a single row is removed**, which is
+        # ``create_sweep``'s all-or-nothing rule pointed the other way: half a
+        # bulk delete is a list the user cannot reason about, and the half that
+        # went is not coming back.
+        for sweep_id in wanted:
+            if svc.store.get_sweep(sweep_id) is None:
+                raise NotFound(f"{sweep_id} is no longer a sweep.", field="sweep_ids")
+            if sweep_id not in removable:
+                label = svc.store.get_sweep(sweep_id).get("label") or sweep_id
+                raise Invalid(
+                    f"{label} still has units to judge.", field="sweep_ids"
+                )
+
+    keep: set[str] = set() if drop_retained else jobs_mod.retained_job_ids(svc)
+    gone = 0
+    deleted = 0
+    remaining = 0
+    kept = 0
+    for sweep_id in wanted:
+        # The third caller of ``_remove_units``, deliberately: reusing it is
+        # why it was extracted, and it means the cancel-then-guards-then-rmtree
+        # ordering is not written a third time.
+        result = _remove_units(svc, sweep_id, set(keep))
+        deleted += int(result.get("deleted", 0))
+        remaining += int(result.get("remaining", 0))
+        kept += int(result.get("kept", 0))
+        # Asked, never re-derived: ``_remove_units`` owns the rule about when
+        # the row survives, and a second copy of it here is one edit away from
+        # reporting a removal that did not happen.
+        if svc.store.get_sweep(sweep_id) is None:
+            gone += 1
+    return {
+        "ok": True,
+        "sweeps": gone,
+        "deleted": deleted,
+        "remaining": remaining,
+        "kept": kept,
+    }
+
 
 def axis_params() -> tuple[str, ...]:
     """Every param an axis may name, sorted -- what the form offers."""

@@ -489,6 +489,11 @@ def checker(ctx: Any) -> Any:
 _PER_TAB_KEYS = (
     "paint_ants:",
     "inker_resize:",
+    # Image size keeps its own pending pair, deliberately not shared with
+    # ``inker_resize:``: scaling to 512 and then growing the canvas to 600 are
+    # two answers, and one number for both means each dialog silently rewrites
+    # the other's field.
+    "inker_scale:",
     "inker_preview:",
     "inker_seam:",
     "inker_grid:",

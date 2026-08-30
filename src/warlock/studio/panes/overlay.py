@@ -212,11 +212,14 @@ def _screenshot(ctx: Any) -> None:
 def fps_meter(ctx: Any, meter: Any) -> None:
     """The frame rate in full, bottom-left, when F10 has asked for it.
 
-    Kept alongside the always-on strip beside the mode switch, and deliberately
-    not replaced by it: the strip is a summary and has room for one number,
-    while the two that actually diagnose a stall are the mean frame time and
-    the *worst* frame in the window -- a single 100 ms hitch moves a 60 fps
-    mean to 59.5, so the summary cannot show it and this can.
+    Kept alongside the status bar's resource meter, and deliberately not
+    replaced by it: the meter is a summary and has room for one number, while
+    the two that actually diagnose a stall are the mean frame time and the
+    *worst* frame in the window -- a single 100 ms hitch moves a 60 fps mean to
+    59.5, so the summary cannot show it and this can. (The "always-on strip
+    beside the mode switch" this sentence used to name went in wave 3; the
+    frame rate joined the resource meter on 2026-08-29, which is the surface
+    the argument is now about. Same argument, different neighbour.)
 
     Bottom-left rather than bottom-right because the toasts stack up that
     corner, and a fixed width rather than auto-resize because Inter is

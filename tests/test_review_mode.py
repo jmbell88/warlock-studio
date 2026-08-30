@@ -1097,6 +1097,151 @@ def test_a_finished_delete_says_what_it_kept(ctx, svc):
     assert len(svc.store.latest_verdicts()) == 1
 
 
+# --- removing sweeps that are finished with -----------------------------------
+
+
+def test_removable_ids_skips_the_recent_bucket_and_anything_outstanding(ctx, svc):
+    """The recent bucket's units are ordinary library rows: prune's job."""
+    _mesh(svc, "a chest")
+    sweep_id, ids = _sweep(svc, n=2)
+    state = _scanned(ctx)
+
+    # Nothing judged yet, so nothing is removable.
+    assert review_mode.removable_ids(state) == []
+
+    for job_id in ids:
+        svc_verdicts.record_verdict(svc, job_id, grade=-3)
+    state = _scanned(ctx)
+    assert review_mode.removable_ids(state) == [sweep_id]
+    assert review_mode.RECENT_ID not in review_mode.removable_ids(state)
+
+
+def test_a_unit_that_errored_does_not_hold_its_sweep_back(ctx, svc):
+    """``removable`` and ``todo`` are different questions, deliberately.
+
+    An errored unit can never be graded, so it owes no verdict -- but it keeps
+    ``todo`` above zero for ever, which is how a failed sweep would become
+    permanently unremovable.
+    """
+    sweep_id, ids = _sweep(svc, n=2)
+    svc_verdicts.record_verdict(svc, ids[0], grade=-3)
+    svc.store.set_status(ids[1], "error")
+    state = _scanned(ctx)
+
+    entry = next(s for s in state.sweeps if s["id"] == sweep_id)
+    assert entry["todo"] == 1, "it is still unjudged, and the count says so"
+    assert entry["removable"] is True
+    assert review_mode.removable_ids(state) == [sweep_id]
+
+
+def test_a_blank_label_alone_does_not_make_a_unit_look_mesh_judged(ctx, svc):
+    """The ``stage=`` that was missing from ``_collect``.
+
+    ``verdicts_for`` with no stage means *every* stage, and Review is a
+    one-stage caller -- so a unit labelled at the blank stage but never
+    mesh-graded read as judged, dropped out of ``todo``, and could trigger the
+    automatic cleanup on a sweep nobody had graded.
+    """
+    sweep_id, ids = _sweep(svc, n=1)
+    # An image label is binary and takes a verdict, where a mesh grade takes a
+    # number -- which is the whole reason the two stages must not be conflated.
+    svc_verdicts.record_verdict(svc, ids[0], verdict="accept", stage="blank")
+    state = _scanned(ctx)
+
+    entry = next(s for s in state.sweeps if s["id"] == sweep_id)
+    assert entry["todo"] == 1
+    assert entry["removable"] is False
+    assert review_mode.removable_ids(state) == []
+
+
+def test_the_removal_plan_uses_blind_labels_under_blinding(ctx, svc):
+    """Naming the arms of a blinded pass in a confirm un-blinds them."""
+    sweep_id, ids = _sweep(svc, label="lora weight", n=1)
+    svc_verdicts.record_verdict(svc, ids[0], grade=-3)
+    state = _scanned(ctx)
+
+    plan = review_mode.removal_plan(state, [sweep_id])
+    assert plan["labels"] == ["lora weight"]
+    assert plan["sweeps"] == 1 and plan["units"] == 1
+
+    state.blind = True
+    blinded = review_mode.removal_plan(state, [sweep_id])
+    assert blinded["labels"] == [f"#{sweep_id[:6]}"]
+    assert "lora weight" not in blinded["labels"]
+
+
+def test_removing_reviewed_sweeps_goes_through_the_task_runner(ctx, svc):
+    sweep_id, ids = _sweep(svc, n=1)
+    svc_verdicts.record_verdict(svc, ids[0], grade=-3)
+    state = _scanned(ctx)
+
+    assert review_mode.remove_reviewed(ctx, review_mode.removable_ids(state)) is True
+    assert review_mode.REMOVE_KEY in ctx.submitted
+    assert review_mode.REMOVE_KEY.startswith("review-"), "or it is delivered nowhere"
+    assert svc.store.list_sweeps() == []
+    # The whole point: the analytics, not the keepsake.
+    assert len(svc.store.latest_verdicts()) == 1
+
+
+def test_removing_nothing_submits_nothing(ctx, svc):
+    _scanned(ctx)
+    assert review_mode.remove_reviewed(ctx, []) is False
+    assert review_mode.remove_reviewed(ctx, [review_mode.RECENT_ID]) is False
+
+
+def test_a_finished_removal_counts_the_rows_not_just_the_folders(ctx, svc):
+    """"8 asset folders" says nothing about the thing the user asked to be rid
+    of, which is the rows cluttering the list."""
+    _scanned(ctx)
+    review_mode.on_task_done(
+        ctx,
+        _Done(review_mode.REMOVE_KEY, {"sweeps": 3, "deleted": 8}),
+    )
+    said = ctx.toasts[-1][0]
+    assert "Removed" in said and "3 sweep(s)" in said and "8 asset folder(s)" in said
+
+
+def test_a_removal_that_kept_units_points_at_the_tick(ctx, svc):
+    """The old sentence pointed at the library because no other route existed.
+
+    There is one now, and it is the thing that actually changes the outcome --
+    so an invitation to press again would still be a lie, but an invitation to
+    tick the box is not.
+    """
+    _scanned(ctx)
+    review_mode.on_task_done(
+        ctx, _Done(review_mode.DELETE_KEY, {"deleted": 1, "kept": 2})
+    )
+    said = ctx.toasts[-1][0]
+    assert "kept 2" in said
+    assert "accepted or labelled" in said
+    assert "Delete again" not in said
+
+
+def test_a_failed_removal_says_that_nothing_went(ctx, svc):
+    """The service validates the whole set first, so this is true and the user
+    is about to press the button again."""
+    _scanned(ctx)
+    review_mode.on_task_failed(ctx, _Done(review_mode.REMOVE_KEY, None))
+    assert "Nothing was deleted" in ctx.toasts[-1][0]
+
+
+def test_the_retention_override_reaches_cleanup_sweep(ctx, svc):
+    """Ticked, a per-sweep delete takes the units retention would have kept."""
+    sweep_id, ids = _sweep(svc, n=2)
+    svc_verdicts.record_verdict(svc, ids[0], grade=3)  # an accept: retained
+    svc_verdicts.record_verdict(svc, ids[1], grade=-3)
+    _scanned(ctx)
+
+    review_mode.delete(ctx, sweep_id)
+    assert svc.store.get(ids[0]) is not None, "the default keeps it"
+
+    review_mode.delete(ctx, sweep_id, drop_retained=True)
+    assert svc.store.get(ids[0]) is None
+    assert svc.store.list_sweeps() == []
+    assert len(svc.store.latest_verdicts()) == 2
+
+
 # --- housekeeping ------------------------------------------------------------
 
 

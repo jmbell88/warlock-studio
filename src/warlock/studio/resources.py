@@ -34,6 +34,14 @@ class Reading:
 
     ``vram_*`` is None on any card NVML does not serve, and ``cpu`` is None on
     the first sample -- the reading is a delta and has no interval yet.
+
+    ``fps`` is the odd one out and deliberately so: it is *given* to the
+    sampler rather than measured by it. The frame meter belongs to the frame
+    loop, which is the only thing that knows what a frame is, and measuring it
+    here would mean reaching for the windowing layer from a module whose
+    freedom from every UI toolkit is pinned by ``tests/test_editor_shell.py``
+    -- which scans this file's whole source for their names, so they are not
+    written here even in prose.
     """
 
     vram_used_gib: float | None = None
@@ -41,6 +49,7 @@ class Reading:
     ram_used_gib: float | None = None
     ram_total_gib: float | None = None
     cpu: float | None = None
+    fps: float | None = None
 
     def text(self) -> str:
         """The status-bar line. Empty when nothing could be read at all."""
@@ -51,6 +60,12 @@ class Reading:
             parts.append(f"RAM {self.ram_used_gib:.1f}/{self.ram_total_gib:.0f}")
         if self.cpu is not None:
             parts.append(f"CPU {self.cpu * 100:.0f}%")
+        # Last, so it is the first thing lost if this line is ever trimmed:
+        # the three above answer "can I start a 7 GB generation right now",
+        # which is the question this meter exists for, and a frame rate is
+        # ambient where those are decisive.
+        if self.fps is not None:
+            parts.append(f"{self.fps:.0f} fps")
         return "   ".join(parts)
 
 
@@ -67,7 +82,7 @@ class Sampler:
         self._last = 0.0
         self.reading = Reading()
 
-    def sample(self) -> Reading:
+    def sample(self, *, fps: float | None = None) -> Reading:
         """Take all three readings now. Blocking only in the syscall sense.
 
         Two ctypes calls and one driver ioctl -- no filesystem, no network,
@@ -89,17 +104,24 @@ class Sampler:
             ram_used_gib=None if ram is None else ram.used,
             ram_total_gib=None if ram is None else ram.total,
             cpu=self._cpu.sample(),
+            fps=fps,
         )
         return self.reading
 
-    def tick(self, now: float | None = None) -> Reading:
+    def tick(self, now: float | None = None, *, fps: float | None = None) -> Reading:
         """Resample if :data:`TICK_SECONDS` have passed; otherwise the last one.
 
         The caller gates on the *setting* before calling this, so the opt-out
         costs nothing at all rather than costing a comparison.
+
+        ``fps`` rides the same cadence as the other three rather than being
+        refreshed every frame. That is not laziness: the meter's figures are
+        read together and a frame rate that ticked at 60 Hz beside three that
+        tick at 1 Hz would be the one number on the line that never sits still,
+        which is exactly what makes a status bar hard to read past.
         """
         stamp = time.perf_counter() if now is None else now
         if stamp - self._last < TICK_SECONDS:
             return self.reading
         self._last = stamp
-        return self.sample()
+        return self.sample(fps=fps)

@@ -21,7 +21,14 @@ prune this list to what is currently drawn.
 from __future__ import annotations
 
 ACTIVITY = "\uE038"  # activity
+ARROW_DOWN = "\uE046"  # arrow-down
+ARROW_DOWN_LEFT = "\uE047"  # arrow-down-left
+ARROW_DOWN_RIGHT = "\uE049"  # arrow-down-right
 ARROW_LEFT = "\uE04C"  # arrow-left
+ARROW_RIGHT = "\uE04D"  # arrow-right
+ARROW_UP = "\uE04E"  # arrow-up
+ARROW_UP_LEFT = "\uE04F"  # arrow-up-left
+ARROW_UP_RIGHT = "\uE051"  # arrow-up-right
 AUDIO_WAVEFORM = "\uE560"  # audio-waveform
 BLEND = "\uE5A1"  # blend
 BONE = "\uE35C"  # bone
@@ -61,6 +68,7 @@ KEYBOARD = "\uE284"  # keyboard
 LASSO = "\uE1CE"  # lasso
 LASSO_SELECT = "\uE1CF"  # lasso-select
 LAYERS = "\uE52E"  # layers
+LINK = ""  # link
 LIST = "\uE10C"  # list
 LOADER = "\uE10E"  # loader-circle
 LOCK = "\uE10F"  # lock
@@ -102,6 +110,7 @@ TRASH = "\uE18E"  # trash-2
 TRIANGLE_ALERT = "\uE193"  # triangle-alert
 TYPE = "\uE198"  # type
 UNDO = "\uE2A1"  # undo-2
+UNLINK = ""  # unlink
 UPLOAD = "\uE19E"  # upload
 WAND = "\uE35B"  # wand-sparkles
 WAYPOINTS = "\uE547"  # waypoints

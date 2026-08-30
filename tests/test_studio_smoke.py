@@ -2488,6 +2488,8 @@ class _ReviewApp:
 
     _review_runs = _main.App._review_runs
     _review_delete_button = _main.App._review_delete_button
+    _review_remove_reviewed = _main.App._review_remove_reviewed
+    _retention_tick = _main.App._retention_tick
     _review_form = _main.App._review_form
     _review_axis_values = _main.App._review_axis_values
     _review_judging_card = _main.App._review_judging_card
@@ -2533,6 +2535,13 @@ def _review_state(ctx, *, with_units=True):
             "prompt": "a barrel",
             "units": units,
             "todo": 0,
+            # The two fields the removal controls read. Carried here so the
+            # bulk button and its retention tick are actually *built* by the
+            # smoke pass rather than skipped -- an unexercised branch behind a
+            # falsy default is how the Phase 5 thumbnail defect survived 9,348
+            # passing tests.
+            "retained": 1,
+            "removable": True,
         },
     ]
     state.sweep_id = "abcdef012345"

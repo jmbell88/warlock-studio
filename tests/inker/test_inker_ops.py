@@ -154,6 +154,28 @@ def test_a_dialog_op_asks_rather_than_opening_anything():
     assert state.pending_dialog == "inker-resize"
 
 
+def test_the_sprite_menu_offers_the_two_sizes_separately():
+    """Image size and Canvas size are two operations and two dialogs.
+
+    They were two buttons on one popup, which is why Aseprite's Sprite Size
+    (``Ctrl+Alt+I``) had nowhere to live: one ``Op`` cannot carry two keys. The
+    ids and the key of the canvas half are unchanged by the split, because
+    three tests and a menu row are written against them.
+    """
+    ctx, state, tab = _session()
+    inker_ops.run(ctx, inker_ops.get("scale_image"))
+    assert state.pending_dialog == "inker-scale"
+
+    canvas = inker_ops.get("resize")
+    scale = inker_ops.get("scale_image")
+    assert (canvas.key, scale.key) == ("Ctrl+Alt+C", "Ctrl+Alt+I")
+    assert canvas.menu == scale.menu == "Sprite"
+    # Image size above Canvas size: Photoshop's order and Aseprite's, and the
+    # more common of the two is the one a reader looks for first.
+    names = [op.name for op in inker_ops.OPS if op.menu == "Sprite"]
+    assert names.index("scale_image") < names.index("resize")
+
+
 def test_the_view_toggles_flip_the_persisted_preference(monkeypatch):
     from warlock.studio import inker_mode
 

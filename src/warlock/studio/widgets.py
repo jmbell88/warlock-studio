@@ -15,7 +15,7 @@ from typing import Any
 from imgui_bundle import imgui
 
 from ..vectors import GRADE_MAX, GRADE_MIN
-from . import fonts, icons, motion, probe, theme, tokens
+from . import controls, fonts, icons, motion, probe, theme, tokens
 from . import settings as settings_mod
 from . import state as app_state
 from .tokens import sp
@@ -272,8 +272,14 @@ class _BlockScope:
         # point of the split; set back to 1 afterwards so the caller's next
         # widget lands above the next fill rather than beneath it.
         self.draw.channels_set_current(0)
+        # Blended toward ELEV_2 rather than painted solid ELEV_1: ELEV_1 is
+        # only a few percent brighter than the PANEL a block sits on and read
+        # as no card at all. Full-opacity ELEV_2 was rejected -- it is the
+        # same colour ``button()`` rests at, so a button drawn inside the
+        # block would vanish into its own backdrop; blended at partial alpha
+        # it stays visibly lighter than an opaque ELEV_2 control on top of it.
         self.draw.add_rect_filled(
-            low, high, imgui.get_color_u32(theme.rgba(theme.ELEV_1)), sp(tokens.RADIUS_M)
+            low, high, imgui.get_color_u32(theme.rgba(theme.ELEV_2, 0.5)), sp(tokens.RADIUS_M)
         )
         self.draw.channels_set_current(1)
 
@@ -803,8 +809,8 @@ def attach_settings(settings: Any) -> None:
 _OPEN_REQUESTS: set[str] = set()
 
 
-def thumb_placeholder(size: float, glyph: str) -> None:
-    """A framed square with an icon in it, where a thumbnail would be (H72).
+def thumb_placeholder(size: float, glyph: str, height: float | None = None) -> None:
+    """A framed box with an icon in it, where a thumbnail would be (H72).
 
     A bare ``dummy`` was the old answer, which reads as a layout bug rather
     than as "there is no picture yet" -- and every queued job, every failure
@@ -813,14 +819,21 @@ def thumb_placeholder(size: float, glyph: str) -> None:
     that looks pending.
 
     Takes exactly the space an image of the same size would, so a card with a
-    thumbnail and a card without lay out identically.
+    thumbnail and a card without lay out identically. **That promise is why
+    ``height`` exists.** Square is the right default for a thumbnail and stays
+    the default, but the Plotter tileset picker stands in for a whole atlas,
+    which is any aspect at all -- and passing its width alone drew a square,
+    so the headless geometry and the GL geometry disagreed about the pane's
+    height while a comment claimed they matched. A placeholder whose size is a
+    different shape from the thing it stands in for is not a placeholder.
     """
+    box_h = size if height is None else height
     origin = imgui.get_cursor_screen_pos()
-    imgui.dummy((size, size))
+    imgui.dummy((size, box_h))
     draw = imgui.get_window_draw_list()
     draw.add_rect(
         origin,
-        (origin.x + size, origin.y + size),
+        (origin.x + size, origin.y + box_h),
         imgui.get_color_u32(theme.rgba(theme.MUTED, 0.28)),
         sp(4),
     )
@@ -833,7 +846,7 @@ def thumb_placeholder(size: float, glyph: str) -> None:
         draw.add_text(
             (
                 origin.x + (size - extent.x) * 0.5,
-                origin.y + (size - extent.y) * 0.5,
+                origin.y + (box_h - extent.y) * 0.5,
             ),
             imgui.get_color_u32(theme.rgba(theme.MUTED, 0.55)),
             glyph,
@@ -1336,7 +1349,13 @@ def header(label: str, default_open: bool = True, persist_key: str | None = None
     if default_open:
         flags |= imgui.TreeNodeFlags_.default_open.value
     with fonts.label(imgui):
+        # Rounded at RADIUS_M -- what section_blocks() already rounds its own
+        # card fills at -- rather than the tighter RADIUS_S every other frame
+        # widget uses, so a collapsible section matches the app's card
+        # language instead of reading as a sharper-cornered square beside it.
+        imgui.push_style_var(imgui.StyleVar_.frame_rounding.value, sp(tokens.RADIUS_M))
         opened = imgui.collapsing_header(label, flags)
+        imgui.pop_style_var()
     if (
         persist_key
         and _SETTINGS is not None
@@ -2508,6 +2527,114 @@ def destructive_button(
     if not enabled:
         imgui.end_disabled()
     return clicked and enabled
+
+
+@contextmanager
+def list_row(
+    row_id: str,
+    *,
+    selected: bool = False,
+    height: float = 0.0,
+    indent: float = 0.0,
+    divider: bool = True,
+    stripe: bool = False,
+    enabled: bool = True,
+):
+    """One row of a list panel: its surface, hover, selection and rule.
+
+    Yields whether the row was clicked. Draw the row's contents inside the
+    ``with``; they land over the surface this paints.
+
+    **The hit target is an ``invisible_button`` submitted first, spanning the
+    full width, with the content drawn back over it.** That is what lets a row
+    carry an eye, a padlock, a name and a trailing value and still be
+    selectable from anywhere along it, including the gaps between those
+    widgets. ``controls.selectable`` cannot do this: it *is* its label, so a
+    click on the eye is not a click on the row and a click in a gap is a click
+    on nothing -- which is how a layers panel comes to have three different
+    places a click means three different things and no way to see which.
+
+    The button submits no draw commands of its own, so painting immediately
+    after it and before yielding puts the surface *behind* everything the
+    caller draws without splitting the draw list. That matters: ``section_blocks``
+    already owns the one channel split, and a second one on the same list
+    corrupts both.
+
+    ``divider`` draws the hairline that separates one row from the next, inset
+    by ``indent`` so a nested row's rule starts where the row does.
+
+    ``stripe`` is off and should usually stay off. Zebra striping and this
+    app's selection wash are the same order of tint (``SELECTION_WASH_ALPHA``
+    is 0.14), so a selected row on a dark stripe and one on a light stripe read
+    as two different selection states and the wash stops being a signal. Tiled
+    gets away with stripes because its selection is a solid system highlight.
+    It is a parameter rather than an absence so the decision is one flag away.
+    """
+    row_h = height or imgui.get_frame_height()
+    origin = imgui.get_cursor_screen_pos()
+    width = max(imgui.get_content_region_avail().x, 1.0)
+    draw = imgui.get_window_draw_list()
+
+    imgui.push_id(row_id)
+    # **Without this the row swallows every control on it.** The hit target is
+    # submitted first and the eye, the padlock and the fold are drawn over it;
+    # imgui resolves a click at submit time, so the invisible button -- topmost
+    # at the moment it is submitted -- would take a press aimed at any of them.
+    # Allowing overlap hands the press to whichever later item is actually
+    # under the pointer, which is the whole arrangement working.
+    imgui.set_next_item_allow_overlap()
+    clicked = imgui.invisible_button("##row", (width, row_h)) and enabled
+    hovered = imgui.is_item_hovered()
+    imgui.pop_id()
+
+    low = (origin.x + indent, origin.y)
+    high = (origin.x + width, origin.y + row_h)
+    radius = sp(tokens.RADIUS_S)
+    lift = _hover_amount(f"row/{row_id}")
+    if stripe:
+        draw.add_rect_filled(
+            low, high, imgui.get_color_u32(theme.rgba(theme.ELEV_1)), radius
+        )
+    if lift > 0.0 and not selected:
+        # ``theme.mix``'s own documented case: a row lifting from PANEL to
+        # ELEV_2 as it is chosen. Eased rather than switched, so it matches
+        # every other hoverable surface in the app instead of snapping.
+        draw.add_rect_filled(
+            low,
+            high,
+            imgui.get_color_u32(theme.rgba(theme.mix(theme.PANEL, theme.ELEV_2, lift))),
+            radius,
+        )
+    if selected:
+        draw.add_rect_filled(
+            low,
+            high,
+            imgui.get_color_u32(
+                theme.rgba(theme.ACCENT, tokens.SELECTION_WASH_ALPHA)
+            ),
+            radius,
+        )
+    note_hover(f"row/{row_id}", hovered and enabled)
+
+    # Back to the row's top-left -- past the indent, so a nested row's content
+    # starts where its surface does and the caller never repeats the offset.
+    imgui.set_cursor_screen_pos(imgui.ImVec2(*low))
+    try:
+        yield clicked
+    finally:
+        imgui.set_cursor_screen_pos((origin.x, origin.y + row_h))
+        if selected:
+            # The row's own rect, not the last item's: by now that is whatever
+            # the caller drew last.
+            controls.leading_selection((imgui.ImVec2(*low), imgui.ImVec2(*high)))
+        if divider:
+            y = origin.y + row_h - sp(0.5)
+            draw.add_line(
+                (origin.x + indent, y),
+                (origin.x + width, y),
+                imgui.get_color_u32(theme.rgba(theme.DIVIDER)),
+                sp(tokens.DIVIDER_WIDTH),
+            )
 
 
 @contextmanager

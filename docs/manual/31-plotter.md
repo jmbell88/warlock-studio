@@ -324,7 +324,20 @@ does it.
 An **object layer** holds named rectangles and points. Nothing on one is drawn in an export; they
 are metadata an engine reads. With the **Objects** tool active, click empty space and drag to draw a
 rectangle, or click without dragging to drop a point. Click an existing object to select it, and its
-form appears under the layer list.
+form appears in the **Properties** pane below the list.
+
+**The list and the settings are two panes.** *Layers* is the stack and nothing else — one row per
+layer, and a row you can read at a glance: a fold arrow where there is something under it, the eye,
+the padlock, the layer's kind and name, and its opacity on the right when that is not 100%. A hidden
+layer's name is greyed and the layer in hand is picked out in the accent colour. *Properties*, under
+it, is everything about whichever layer that is. Click anywhere along a row to choose it, including
+the empty space after the name.
+
+**Rows can be dragged.** Drop a layer on another row to move it there, or onto a group's row to put
+it inside that group. A group cannot be dropped into itself, and those drops simply do not take.
+
+A group and an object layer both fold. Folding one hides its contents in this list and changes
+nothing about the map — it stays exactly as visible, and as exported, as it was.
 
 **Selected objects can be moved and resized on the canvas.** Drag an object's body to move it, or
 one of the four corner handles to resize it — the opposite corner stays pinned, and dragging a
@@ -378,8 +391,8 @@ before this existed opens with everything unlocked.
 ### Layer and map properties
 
 Layers and the map itself carry typed custom properties, the same kind objects do. A layer's live
-under a collapsed **Properties** header in the layer's expanded row; the map's under one in the
-tools pane, below the size readout.
+under a collapsed **Properties** header at the bottom of the **Properties** pane; the map's under
+one in the tools pane, below the size readout.
 
 Both have been part of the file format — and survived every Tiled round trip — since Plotter
 shipped. What was missing was any way to set one without opening the file in a text editor. Both are

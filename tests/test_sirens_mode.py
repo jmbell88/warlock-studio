@@ -713,6 +713,46 @@ def _oneshot(tab: Any, name: str = "coin") -> Any:
     return one
 
 
+def test_the_caret_label_says_which_of_the_two_kinds_the_grid_is_on():
+    """Adding an effect repoints the grid, and this is what says so.
+
+    The panel that did it is in another column and can be scrolled away, so
+    without a readout above the grid there is nothing on the editing surface
+    itself distinguishing a song pattern from a sound effect -- and which one
+    is loaded decides what every keystroke changes.
+    """
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    state = sirens_mode.ensure(ctx)
+
+    song = sirens_mode.caret_pattern_label(ctx)
+    assert song
+    assert "sound effect" not in song
+
+    one = _oneshot(tab, "coin")
+    # ``add_oneshot`` moved the caret onto the effect's own pattern; the label
+    # follows the caret rather than being told separately.
+    sirens_mode.set_caret(ctx, pattern=one.pattern)
+    assert sirens_mode.caret_pattern_label(ctx) == "coin - sound effect"
+
+    # Back to the song's pattern and the label goes back with it.
+    state.pattern = tab.doc.patterns[0].uid
+    assert "sound effect" not in sirens_mode.caret_pattern_label(ctx)
+
+
+def test_the_caret_label_is_empty_rather_than_wrong_with_nothing_open():
+    """A pattern the document no longer has is 'nothing', not a traceback.
+
+    Deleting a pattern out from under the caret is the ordinary way this
+    happens, and the toolbar draws every frame.
+    """
+    ctx = FakeCtx()
+    assert sirens_mode.caret_pattern_label(ctx) == ""
+    _tab(ctx)
+    sirens_mode.ensure(ctx).pattern = 999999
+    assert sirens_mode.caret_pattern_label(ctx) == ""
+
+
 @pytest.fixture
 def _device(monkeypatch):
     """A mixer that answers, and remembers what it was handed."""

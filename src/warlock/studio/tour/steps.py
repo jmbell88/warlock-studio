@@ -36,6 +36,11 @@ CONDITIONS: tuple[str, ...] = (
     "layers_at_least",
     # The active Inker document has a timeline.
     "animated",
+    # ``arg`` is a count: the active Sirens song holds at least that many sound
+    # effects. ``layers_at_least``'s shape, and deliberately about the *count*
+    # rather than about hearing one -- a tour step may never wait on audio,
+    # because the machine running it may have no device at all.
+    "sfx_at_least",
 )
 
 

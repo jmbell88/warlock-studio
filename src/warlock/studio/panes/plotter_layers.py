@@ -53,6 +53,16 @@ _KIND_ICONS = {
 #: themselves in four different sentences read as four separate problems.
 _BUSY_WHY = "This map is being written; the buttons come back when it lands."
 
+#: How far one level of nesting steps a row in, in design pixels. The same
+#: number ``inker_timeline`` uses, because they are the same list drawn twice.
+GROUP_INDENT = 8.0
+
+#: What each of the two panes refuses to shrink past, in design pixels. Neither
+#: slot declared a floor before, which is how a short window could squeeze the
+#: layer list down to its own heading with the stack invisible underneath it.
+LAYERS_FLOOR = 140.0
+PROPERTIES_FLOOR = 160.0
+
 
 def draw(ctx: Any) -> None:
     from imgui_bundle import imgui
@@ -94,12 +104,7 @@ def draw(ctx: Any) -> None:
     # stored answer -- ``sync_tool`` writes it from the tool in hand.
     imgui.dummy((0, 4))
     for layer in reversed(doc.layers):
-        _row(ctx, doc, state, layer, editable)
-
-    selected = _selected_object(doc, state)
-    if selected is not None:
-        imgui.dummy((0, 8))
-        _object_form(ctx, doc, state, selected, editable)
+        _row(ctx, doc, state, tab, layer, editable)
 
 
 def _subtree_uids(layer: Any) -> set[int]:
@@ -117,8 +122,16 @@ def _subtree_uids(layer: Any) -> set[int]:
     return out
 
 
-def _row(ctx: Any, doc: Any, state: Any, layer: Any, editable: bool) -> None:
-    """One layer's row, and -- if it is a group -- its children indented under it.
+def _row(
+    ctx: Any,
+    doc: Any,
+    state: Any,
+    tab: Any,
+    layer: Any,
+    editable: bool,
+    depth: int = 0,
+) -> None:
+    """One layer's row, and -- if it folds -- its contents indented under it.
 
     Groups are authored from this pane and the row menu can move a layer into a
     group or back to the root. The recursive rendering is also what keeps a
@@ -128,51 +141,129 @@ def _row(ctx: Any, doc: Any, state: Any, layer: Any, editable: bool) -> None:
     through :func:`~..plotter.scene.resolve` rather than by being written onto
     each child -- so unhiding the group restores exactly what was showing, and
     a child that was hidden on its own stays hidden.
+
+    **One row shape for every kind.** An object layer used to be an imgui tree
+    node while everything else was a selectable, so a list of four layers
+    carried two different row geometries and the eye sat in a different place
+    depending on the kind -- half of why this panel was hard to read down. Both
+    fold through the same chevron now, and the row itself is
+    ``widgets.list_row``, whose hit target spans the whole width so a click in
+    the gap between two glyphs selects the layer instead of doing nothing.
     """
     from imgui_bundle import imgui
 
-    imgui.push_id(str(layer.uid))
-    eye = icons.EYE if layer.visible else icons.EYE_OFF
-    # Greyed rather than live-and-discarded. Every one of these drew at full
-    # contrast while the tab was saving and then threw the click away, which is
-    # the "clickable lie" the house pattern names -- ``clay_tools`` and
-    # ``clay_menu`` already wrap theirs. The *selectable* stays live on purpose:
-    # choosing which layer you are looking at changes no document and pushes no
-    # step, which ``test_choosing_a_layer_pushes_no_step`` pins.
-    imgui.begin_disabled(not editable)
-    if widgets.small_icon_button(eye, "Show / hide"):
-        doc.set_layer_props(layer.uid, visible=not layer.visible)
-    imgui.same_line()
-    # Beside the eye because they are the same kind of switch: both say what
-    # this layer will let you do, neither is about its contents. Greyed with the
-    # eye while saving, for the clickable-lie reason above.
-    padlock = icons.LOCK if layer.locked else icons.LOCK_OPEN
-    if widgets.small_icon_button(padlock, "Lock / unlock painting"):
-        doc.set_layer_props(layer.uid, locked=not layer.locked)
-    imgui.end_disabled()
-    imgui.same_line()
-    kind = _KIND_ICONS.get(type(layer), icons.LAYERS)
+    from ..plotter import layer_rows
+
     active = doc.active_layer == layer.uid
-    objects = getattr(layer, "objects", None)
-    if objects:
-        # An object layer's row folds open into its objects. **Not a new pane**:
-        # this one already is a tree, and ``_object_form`` already lives under
-        # it, so the objects belong in it for the same reason the layers do --
-        # it is the list of what the map is made of.
-        opened = imgui.tree_node_ex(
-            f"{kind} {layer.name or '(unnamed)'}##objtree",
-            imgui.TreeNodeFlags_.open_on_arrow.value
-            | imgui.TreeNodeFlags_.span_avail_width.value
-            | (imgui.TreeNodeFlags_.selected.value if active else 0),
-        )
-        if imgui.is_item_clicked() and not imgui.is_item_toggled_open():
+    foldable = layer_rows.can_fold(layer)
+    folded = int(layer.uid) in tab.collapsed_rows
+    indent = sp(GROUP_INDENT) * depth
+
+    imgui.push_id(str(layer.uid))
+    with widgets.list_row(
+        f"plotter-layer/{layer.uid}", selected=active, indent=indent
+    ) as clicked:
+        if clicked:
+            # Live while the tab is saving, on purpose: choosing which layer
+            # you are looking at changes no document and pushes no step, which
+            # ``test_choosing_a_layer_pushes_no_step`` pins.
             doc.set_active_layer(layer.uid)
             state.selected_object = None
+        if foldable:
+            # **Not gated on ``editable``.** A fold changes nothing about the
+            # map, and greying it while a save runs is the panel refusing to
+            # scroll -- ``inker_timeline`` makes the same call for its groups.
+            chevron = icons.CHEVRON_RIGHT if folded else icons.CHEVRON_DOWN
+            if widgets.small_icon_button(
+                chevron, "Fold / unfold this row", borderless=True
+            ):
+                if folded:
+                    tab.collapsed_rows.discard(int(layer.uid))
+                else:
+                    tab.collapsed_rows.add(int(layer.uid))
+        else:
+            # **``get_text_line_height`` and not ``get_frame_height``**: that
+            # is the side ``small_icon_button`` uses, and the wider one put
+            # every unfoldable row's eye a few pixels right of every foldable
+            # one's -- a ragged column, which is precisely the thing that makes
+            # a list hard to scan down.
+            imgui.dummy((imgui.get_text_line_height(), 0))
+        imgui.same_line()
+        eye = icons.EYE if layer.visible else icons.EYE_OFF
+        # Greyed rather than live-and-discarded. Every one of these drew at
+        # full contrast while the tab was saving and then threw the click away,
+        # which is the "clickable lie" the house pattern names.
+        imgui.begin_disabled(not editable)
+        if widgets.small_icon_button(eye, "Show / hide", borderless=True):
+            doc.set_layer_props(layer.uid, visible=not layer.visible)
+        imgui.same_line()
+        # Beside the eye because they are the same kind of switch: both say
+        # what this layer will let you do, neither is about its contents.
+        padlock = icons.LOCK if layer.locked else icons.LOCK_OPEN
+        if widgets.small_icon_button(
+            padlock, "Lock / unlock painting", borderless=True
+        ):
+            doc.set_layer_props(layer.uid, locked=not layer.locked)
+        imgui.end_disabled()
+        imgui.same_line()
+        _row_label(layer, active)
+    _row_menu(ctx, doc, layer, editable)
+    _reorder(ctx, doc, layer, editable)
+    imgui.pop_id()
+    if not folded:
+        # After ``pop_id``, so a child's own id scope is the one it pushes --
+        # nesting them would make the same layer's controls answer to a
+        # different string depending on how deep it happens to sit, and imgui
+        # keys open popups and active items on exactly that.
+        if getattr(layer, "objects", None):
+            _object_rows(ctx, doc, state, layer, editable, depth + 1)
+        for child in reversed(getattr(layer, "children", ()) or ()):
+            _row(ctx, doc, state, tab, child, editable, depth + 1)
+
+
+def _row_label(layer: Any, active: bool) -> None:
+    """The kind glyph, the name, and the opacity when it is not full.
+
+    **Coloured by state**, which the old row was not: a hidden layer drew
+    identically to a visible one, so the eye was the only thing saying so and
+    a list of eight layers had to be read glyph by glyph to find the hidden
+    one. Muted for hidden, accent for the layer in hand.
+    """
+    from imgui_bundle import imgui
+
+    from .. import theme
+
+    kind = _KIND_ICONS.get(type(layer), icons.LAYERS)
+    name = layer.name or "(unnamed)"
+    # The padlock is repeated into the label rather than being only a button,
+    # so a locked layer still reads as locked at a glance once the eye has
+    # moved on down the list. ``inker_timeline`` does the same.
+    locked = f" {icons.LOCK}" if layer.locked else ""
+    text = f"{kind} {name}{locked}"
+    if not layer.visible:
+        widgets.muted(text)
+    elif active:
+        widgets.text_colored(theme.ACCENT, text)
     else:
-        opened = False
-        if controls.selectable(f"{kind} {layer.name or '(unnamed)'}", active)[0]:
-            doc.set_active_layer(layer.uid)
-            state.selected_object = None
+        imgui.text(text)
+
+    opacity = float(getattr(layer, "opacity", 1.0))
+    if opacity < 0.999:
+        # Only when it is not 1.0: a column of "100%" down every row is noise,
+        # and the number is worth seeing precisely when it explains why a layer
+        # looks wrong. Right-aligned so the names stay a readable column.
+        label = f"{opacity * 100:.0f}%"
+        room = imgui.get_content_region_avail().x
+        width = imgui.calc_text_size(label).x
+        if room > width:
+            imgui.same_line(imgui.get_cursor_pos().x + room - width, 0.0)
+            widgets.muted(label)
+
+
+def _row_menu(ctx: Any, doc: Any, layer: Any, editable: bool) -> None:
+    """The row's right-click menu. Extracted whole; nothing in it changed."""
+    from imgui_bundle import imgui
+
     if imgui.begin_popup_context_item(f"layer-menu-{layer.uid}"):
         widgets.popup_chrome(_imgui=imgui)
         imgui.begin_disabled(not editable)
@@ -220,178 +311,255 @@ def _row(ctx: Any, doc: Any, state: Any, layer: Any, editable: bool) -> None:
             _delete_layer(ctx, doc, layer)
         imgui.end_disabled()
         imgui.end_popup()
-    if opened:
-        _object_rows(ctx, doc, state, layer, editable)
-        imgui.tree_pop()
-    if active and editable:
-        changed, opacity = widgets.labeled_slider_float(
-            "Opacity",
-            layer.opacity,
-            0.0,
-            1.0,
-            help_text="How strongly this layer draws over the ones below it.",
-        )
-        if changed:
-            doc.set_layer_props(layer.uid, opacity=float(opacity))
-        # Labels live above their fields throughout the Studio.  Keeping them
-        # out of the ImGui ids also gives the narrow inspector the whole row
-        # for the value instead of clipping labels into the controls.
-        widgets.field_label(
-            "Name",
-            "What this layer is called in the map, in Tiled, and in the exported "
-            ".tmx. Two layers may share a name; the map addresses them by uid.",
-        )
-        name = widgets.input_text("##layer-name", layer.name, max_length=64)
-        if name != layer.name:
-            doc.set_layer_props(layer.uid, name=name)
-        widgets.field_label(
-            "Class",
-            "Tiled's per-layer class string. Round-trips through export and import "
-            "and means nothing to Plotter itself -- it is for whatever reads the "
-            "map afterwards.",
-        )
-        class_name = widgets.input_text(
-            "##layer-class", layer.class_name, max_length=64, hint="Optional class"
-        )
-        if class_name != layer.class_name:
-            doc.set_layer_props(layer.uid, class_name=class_name)
-        widgets.field_label(
-            "Blend",
-            "How this layer composites onto the ones below it. Tiled has no blend "
-            "mode, so anything but normal is dropped on .tmx export.",
-        )
-        blend_mode = widgets.combo(
-            "##layer-blend", layer.blend_mode, [(mode, mode) for mode in BLEND_MODES]
-        )
-        if blend_mode != layer.blend_mode:
-            doc.set_layer_props(layer.uid, blend_mode=blend_mode)
-        widgets.field_label(
-            "Tint",
-            "Multiplied into every tile this layer draws. Alpha multiplies the "
-            "layer opacity above.",
-        )
-        imgui.set_next_item_width(-1)
-        changed, tint = controls.color_edit4(
-            "##layer-tint", [channel / 255.0 for channel in layer.tint]
-        )
-        if changed:
-            doc.set_layer_props(
-                layer.uid,
-                tint=tuple(
-                    max(0, min(255, int(round(float(channel) * 255))))
-                    for channel in tint
-                ),
-            )
-        widgets.field_label(
-            "Offset",
-            "Shifts the whole layer by this many pixels when drawn, without moving "
-            "any tile in the grid.",
-        )
-        imgui.set_next_item_width(-1)
-        changed, offset = controls.input_float2(
-            "##layer-offset", [float(layer.offset_x), float(layer.offset_y)]
-        )
-        if changed:
-            doc.set_layer_props(
-                layer.uid, offset_x=float(offset[0]), offset_y=float(offset[1])
-            )
-        widgets.field_label(
-            "Parallax",
-            "How fast this layer scrolls against the camera. 1 is locked to the "
-            "map, 0.5 is half speed -- a distant background.",
-        )
-        imgui.set_next_item_width(-1)
-        changed, parallax = controls.input_float2(
-            "##layer-parallax", [float(layer.parallax_x), float(layer.parallax_y)]
-        )
-        if changed:
-            doc.set_layer_props(
-                layer.uid,
-                parallax_x=float(parallax[0]),
-                parallax_y=float(parallax[1]),
-            )
-        if isinstance(layer, ObjectLayer):
-            widgets.field_label(
-                "Draw order",
-                "Top-down sorts the objects by their y position each frame, so one "
-                "in front overlaps one behind. Manual keeps the order they were "
-                "added in.",
-            )
-            draworder = widgets.combo(
-                "##object-layer-draw-order",
-                layer.draworder,
-                [("topdown", "Top-down"), ("index", "Manual")],
-            )
-            if draworder != layer.draworder:
-                doc.set_layer_props(layer.uid, draworder=draworder)
-            widgets.field_label(
-                "Outline colour",
-                "The colour Tiled draws this layer's object outlines in. It is "
-                "editor chrome, not part of the map.",
-            )
-            color = widgets.input_text(
-                "##object-layer-color",
-                layer.color or "",
-                max_length=9,
-                hint="#RRGGBB",
-            )
-            if color != (layer.color or ""):
-                doc.set_layer_props(layer.uid, color=color or None)
-        elif isinstance(layer, ImageLayer):
-            if layer.pixels is None:
-                widgets.muted_wrapped(
-                    "This image layer has no picture yet."
-                )
-            if widgets.disabled_button(
-                f"{icons.PLUS} Choose image...##img-{layer.uid}",
-                editable,
-                (-1, 0),
-                reason=_BUSY_WHY,
-            ):
-                plotter_mode.choose_layer_image(ctx, layer.uid)
-            changed_x, repeat_x = widgets.toggle(
-                "Repeat X",
-                layer.repeat_x,
-                tooltip="Tile the picture across the map horizontally.",
-            )
-            changed_y, repeat_y = widgets.toggle(
-                "Repeat Y",
-                layer.repeat_y,
-                tooltip="Tile the picture down the map vertically.",
-            )
-            if changed_x or changed_y:
-                doc.set_layer_props(
-                    layer.uid,
-                    repeat_x=repeat_x if changed_x else layer.repeat_x,
-                    repeat_y=repeat_y if changed_y else layer.repeat_y,
-                )
-        # Collapsed by default: most maps carry none, and an always-open form
-        # for an empty mapping is a row of controls that explain nothing. The
-        # model has supported these since the format did; only the way in was
-        # missing. Rides ``LayerPropsEdit``, so it undoes with the rest.
-        if widgets.header("Properties", default_open=False, persist_key="plotter/layer-props"):
-            imgui.begin_disabled(layer.locked)
-            property_editor(
-                ctx,
-                f"plotter_layer_prop:{layer.uid}",
-                layer.properties,
-                lambda values: doc.set_layer_props(layer.uid, properties=values),
-                object_options=object_options(doc),
-            )
-            imgui.end_disabled()
-    imgui.pop_id()
-    if isinstance(layer, GroupLayer):
-        # After ``pop_id``, so a child's own id scope is the one it pushes --
-        # nesting them would make the same layer's controls answer to a
-        # different string depending on how deep it happens to sit, and imgui
-        # keys open popups and active items on exactly that.
-        imgui.indent(sp(12))
-        for child in reversed(layer.children):
-            _row(ctx, doc, state, child, editable)
-        imgui.unindent(sp(12))
 
 
-def _object_rows(ctx: Any, doc: Any, state: Any, layer: Any, editable: bool) -> None:
+def _reorder(ctx: Any, doc: Any, layer: Any, editable: bool) -> None:
+    """Drag a layer's row onto another to move it there.
+
+    **The payload is a uid, not an index.** ``inker_timeline`` carries a stack
+    index because its stack is flat; this is a tree, addressed by uid
+    everywhere -- ``move_layer``, ``index_of`` ("within its own parent's list")
+    and every ``LayerMoveEdit`` -- and an index alone does not even say which
+    parent it is an index into.
+
+    ``source_allow_null_id`` is **not** optional. The drag source is the row's
+    own last item, which imgui may give id 0, and ``BeginDragDropSource``
+    asserts outright on a null id; the exception unwinds past ``layout.pane``'s
+    ``end_child`` and surfaces as a "Missing PopID()" naming neither the row
+    nor the reason. ``inker_timeline`` records the same trap.
+
+    Refused outright while the tab is busy rather than wrapped in
+    ``begin_disabled``, which does not reliably stop a drag source.
+    """
+    from imgui_bundle import imgui
+
+    from ..plotter import layer_rows
+
+    if not editable:
+        return
+    flags = (
+        imgui.DragDropFlags_.source_no_hold_to_open_others.value
+        | imgui.DragDropFlags_.source_allow_null_id.value
+    )
+    if imgui.begin_drag_drop_source(flags):
+        imgui.set_drag_drop_payload_py_id("plotter-layer", int(layer.uid))
+        widgets.muted(f"{layer.name or '(unnamed)'}")
+        imgui.end_drag_drop_source()
+    if imgui.begin_drag_drop_target():
+        payload = imgui.accept_drag_drop_payload_py_id("plotter-layer")
+        if payload is not None:
+            source = int(payload.data_id)
+            # A group is two possible landings and only the pointer knows
+            # which: onto a group's row means *into* it, which is the same
+            # answer "Move into" gives from the menu. Anything else reorders
+            # beside the row it was dropped on.
+            if isinstance(layer, GroupLayer):
+                landing = layer_rows.drop_into_group(doc, source, int(layer.uid))
+            else:
+                landing = layer_rows.drop_target(doc, source, int(layer.uid))
+            if landing is not None:
+                parent, index = landing
+                doc.move_layer(source, index, parent_uid=parent)
+        imgui.end_drag_drop_target()
+
+
+def draw_properties(ctx: Any) -> None:
+    """The selected layer's own settings, in a pane of their own.
+
+    **This used to be drawn inside the list, between two sibling rows**, and
+    that -- rather than any want of a background -- is what made the layers
+    panel hard to read: choosing a layer expanded it into a hundred and fifty
+    lines of form, so two adjacent layers were never adjacent on screen and
+    the eye had no column of names to run down. Tiled keeps the same fields in
+    a Properties panel below the stack, and so does this now.
+
+    Kept in this module rather than given one of its own: they are one
+    subject, ``tests/manual/test_coverage.py`` wants a help button per pane
+    file, and a second file would need a second exemption argument for no gain.
+    """
+    from imgui_bundle import imgui
+
+    state = plotter_mode.ensure(ctx)
+    tab = state.active
+    widgets.section("Properties")
+    manual_render.help_button(ctx, "plotter-properties")
+    if tab is None:
+        return
+    doc = tab.doc
+    editable = not tab.busy
+    layer = doc.layer(doc.active_layer) if doc.active_layer is not None else None
+    if layer is None:
+        widgets.muted_wrapped("Choose a layer above to see what it carries.")
+        return
+    if not editable:
+        widgets.muted_wrapped(_BUSY_WHY)
+        return
+
+    selected = _selected_object(doc, state)
+    if selected is not None:
+        _object_form(ctx, doc, state, selected, editable)
+        return
+
+    changed, opacity = widgets.labeled_slider_float(
+        "Opacity",
+        layer.opacity,
+        0.0,
+        1.0,
+        help_text="How strongly this layer draws over the ones below it.",
+    )
+    if changed:
+        doc.set_layer_props(layer.uid, opacity=float(opacity))
+    # Labels live above their fields throughout the Studio.  Keeping them
+    # out of the ImGui ids also gives the narrow inspector the whole row
+    # for the value instead of clipping labels into the controls.
+    widgets.field_label(
+        "Name",
+        "What this layer is called in the map, in Tiled, and in the exported "
+        ".tmx. Two layers may share a name; the map addresses them by uid.",
+    )
+    name = widgets.input_text("##layer-name", layer.name, max_length=64)
+    if name != layer.name:
+        doc.set_layer_props(layer.uid, name=name)
+    widgets.field_label(
+        "Class",
+        "Tiled's per-layer class string. Round-trips through export and import "
+        "and means nothing to Plotter itself -- it is for whatever reads the "
+        "map afterwards.",
+    )
+    class_name = widgets.input_text(
+        "##layer-class", layer.class_name, max_length=64, hint="Optional class"
+    )
+    if class_name != layer.class_name:
+        doc.set_layer_props(layer.uid, class_name=class_name)
+    widgets.field_label(
+        "Blend",
+        "How this layer composites onto the ones below it. Tiled has no blend "
+        "mode, so anything but normal is dropped on .tmx export.",
+    )
+    blend_mode = widgets.combo(
+        "##layer-blend", layer.blend_mode, [(mode, mode) for mode in BLEND_MODES]
+    )
+    if blend_mode != layer.blend_mode:
+        doc.set_layer_props(layer.uid, blend_mode=blend_mode)
+    widgets.field_label(
+        "Tint",
+        "Multiplied into every tile this layer draws. Alpha multiplies the "
+        "layer opacity above.",
+    )
+    imgui.set_next_item_width(-1)
+    changed, tint = controls.color_edit4(
+        "##layer-tint", [channel / 255.0 for channel in layer.tint]
+    )
+    if changed:
+        doc.set_layer_props(
+            layer.uid,
+            tint=tuple(
+                max(0, min(255, int(round(float(channel) * 255))))
+                for channel in tint
+            ),
+        )
+    widgets.field_label(
+        "Offset",
+        "Shifts the whole layer by this many pixels when drawn, without moving "
+        "any tile in the grid.",
+    )
+    imgui.set_next_item_width(-1)
+    changed, offset = controls.input_float2(
+        "##layer-offset", [float(layer.offset_x), float(layer.offset_y)]
+    )
+    if changed:
+        doc.set_layer_props(
+            layer.uid, offset_x=float(offset[0]), offset_y=float(offset[1])
+        )
+    widgets.field_label(
+        "Parallax",
+        "How fast this layer scrolls against the camera. 1 is locked to the "
+        "map, 0.5 is half speed -- a distant background.",
+    )
+    imgui.set_next_item_width(-1)
+    changed, parallax = controls.input_float2(
+        "##layer-parallax", [float(layer.parallax_x), float(layer.parallax_y)]
+    )
+    if changed:
+        doc.set_layer_props(
+            layer.uid,
+            parallax_x=float(parallax[0]),
+            parallax_y=float(parallax[1]),
+        )
+    if isinstance(layer, ObjectLayer):
+        widgets.field_label(
+            "Draw order",
+            "Top-down sorts the objects by their y position each frame, so one "
+            "in front overlaps one behind. Manual keeps the order they were "
+            "added in.",
+        )
+        draworder = widgets.combo(
+            "##object-layer-draw-order",
+            layer.draworder,
+            [("topdown", "Top-down"), ("index", "Manual")],
+        )
+        if draworder != layer.draworder:
+            doc.set_layer_props(layer.uid, draworder=draworder)
+        widgets.field_label(
+            "Outline colour",
+            "The colour Tiled draws this layer's object outlines in. It is "
+            "editor chrome, not part of the map.",
+        )
+        color = widgets.input_text(
+            "##object-layer-color",
+            layer.color or "",
+            max_length=9,
+            hint="#RRGGBB",
+        )
+        if color != (layer.color or ""):
+            doc.set_layer_props(layer.uid, color=color or None)
+    elif isinstance(layer, ImageLayer):
+        if layer.pixels is None:
+            widgets.muted_wrapped(
+                "This image layer has no picture yet."
+            )
+        if widgets.disabled_button(
+            f"{icons.PLUS} Choose image...##img-{layer.uid}",
+            editable,
+            (-1, 0),
+            reason=_BUSY_WHY,
+        ):
+            plotter_mode.choose_layer_image(ctx, layer.uid)
+        changed_x, repeat_x = widgets.toggle(
+            "Repeat X",
+            layer.repeat_x,
+            tooltip="Tile the picture across the map horizontally.",
+        )
+        changed_y, repeat_y = widgets.toggle(
+            "Repeat Y",
+            layer.repeat_y,
+            tooltip="Tile the picture down the map vertically.",
+        )
+        if changed_x or changed_y:
+            doc.set_layer_props(
+                layer.uid,
+                repeat_x=repeat_x if changed_x else layer.repeat_x,
+                repeat_y=repeat_y if changed_y else layer.repeat_y,
+            )
+    # Collapsed by default: most maps carry none, and an always-open form
+    # for an empty mapping is a row of controls that explain nothing. The
+    # model has supported these since the format did; only the way in was
+    # missing. Rides ``LayerPropsEdit``, so it undoes with the rest.
+    if widgets.header("Properties", default_open=False, persist_key="plotter/layer-props"):
+        imgui.begin_disabled(layer.locked)
+        property_editor(
+            ctx,
+            f"plotter_layer_prop:{layer.uid}",
+            layer.properties,
+            lambda values: doc.set_layer_props(layer.uid, properties=values),
+            object_options=object_options(doc),
+        )
+        imgui.end_disabled()
+
+
+def _object_rows(
+    ctx: Any, doc: Any, state: Any, layer: Any, editable: bool, depth: int = 0
+) -> None:
     """One row per object: the same selectable-and-eye shape a layer row has.
 
     **No per-object lock.** ``MapObject`` has none, adding one is a document
@@ -404,20 +572,35 @@ def _object_rows(ctx: Any, doc: Any, state: Any, layer: Any, editable: bool) -> 
     """
     from imgui_bundle import imgui
 
+    indent = sp(GROUP_INDENT) * depth
     for obj in reversed(layer.objects):
         imgui.push_id(str(obj.uid))
         picked = state.selected_object == obj.uid
-        imgui.begin_disabled(not editable)
-        if widgets.small_icon_button(
-            icons.EYE if obj.visible else icons.EYE_OFF, "Show / hide this object"
-        ):
-            doc.set_object(layer.uid, obj.uid, visible=not obj.visible)
-        imgui.end_disabled()
-        imgui.same_line()
-        label = obj.name or f"({obj.kind})"
-        if controls.selectable(f"{label}##objrow", picked)[0]:
-            doc.set_active_layer(layer.uid)
-            state.selected_object = obj.uid
+        with widgets.list_row(
+            f"plotter-object/{obj.uid}", selected=picked, indent=indent
+        ) as clicked:
+            if clicked:
+                doc.set_active_layer(layer.uid)
+                state.selected_object = obj.uid
+            # No chevron: an object has nothing under it. The gap keeps its
+            # eye in the same column as every layer's, so the list still reads
+            # as one column of switches rather than two.
+            imgui.dummy((imgui.get_text_line_height(), 0))
+            imgui.same_line()
+            imgui.begin_disabled(not editable)
+            if widgets.small_icon_button(
+                icons.EYE if obj.visible else icons.EYE_OFF,
+                "Show / hide this object",
+                borderless=True,
+            ):
+                doc.set_object(layer.uid, obj.uid, visible=not obj.visible)
+            imgui.end_disabled()
+            imgui.same_line()
+            label = obj.name or f"({obj.kind})"
+            if obj.visible:
+                imgui.text(label)
+            else:
+                widgets.muted(label)
         if imgui.begin_popup_context_item(f"obj-menu-{obj.uid}"):
             widgets.popup_chrome(_imgui=imgui)
             imgui.begin_disabled(not editable)

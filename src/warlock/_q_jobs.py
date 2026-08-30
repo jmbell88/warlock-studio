@@ -415,7 +415,8 @@ class JobOps:
         """
         params = job["params"]
         if job["kind"] in (
-            "rig", "sheet", "charsheet", "pixel_sheet", "retexture", "sprite_synthesis"
+            "rig", "sheet", "charsheet", "pixel_sheet", "retexture", "sprite_synthesis",
+            "remesh",
         ):
             # Both write into the *source* job's directory, not their own --
             # see _rig and _sheet. Without a source_job there is nothing they
@@ -442,6 +443,10 @@ class JobOps:
                 # re-texture published. A cancel must not destroy either.
                 # This job's own renders and bakes go with it below.
                 paths = [job_dir / rigging.RETEXTURE_GLB_TMP]
+            elif job["kind"] == "remesh":
+                # The re-texture's rule, one temp: the served model.glb is a
+                # different job's mesh until the rename that a cancel precedes.
+                paths = [job_dir / rigging.REMESH_GLB_TMP]
                 with contextlib.suppress(OSError):
                     shutil.rmtree(self.config.job_dir(job["id"]) / "views")
             elif job["kind"] == "sprite_synthesis":

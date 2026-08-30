@@ -1419,6 +1419,216 @@ def op_project(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "baked": done, "uv_layer": atlas_uv}
 
 
+# --- remesh --------------------------------------------------------------------
+
+#: The voxel size of the hole-closing pre-pass, as a fraction of the mesh's
+#: bounding diagonal, and the bake margin in texels. Restated from
+#: ``pipelines.remesh`` because this side may not import the host package;
+#: ``tests/test_remesh.py`` pins the pair.
+VOXEL_FRACTION = 0.005
+BAKE_MARGIN_PX = 8
+
+
+def _face_stats(mesh: Any) -> tuple[int, float]:
+    """(face count, fraction of faces that are quads)."""
+    polys = mesh.data.polygons
+    if len(polys) == 0:
+        return 0, 0.0
+    quads = sum(1 for p in polys if len(p.vertices) == 4)
+    return len(polys), quads / len(polys)
+
+
+def _bake_image(bpy: Any, name: str, size: int, *, data: bool) -> Any:
+    image = bpy.data.images.new(name, size, size, alpha=False)
+    if data:
+        # Roughness and normals are data, not colour: left on the sRGB
+        # default the exporter would bend a straight ramp
+        # (docs/measurements/2026-08-20-retexture-weight-colorspace.md).
+        image.colorspace_settings.name = "Non-Color"
+    return image
+
+
+def _source_metallic(source: Any) -> float:
+    """The source's metallic factor, when it is a constant.
+
+    Cycles has no metallic bake type, and rewiring every source material's
+    metallic input into an emission is a second bake pipeline for a channel a
+    reconstruction almost never varies. The constant is honest: it is what the
+    importer wrote, averaged over the slots, and the report says "constant".
+    """
+    values = []
+    for material in source.data.materials:
+        if material is None or not material.use_nodes:
+            continue
+        for node in material.node_tree.nodes:
+            if node.type == "BSDF_PRINCIPLED":
+                socket = node.inputs.get("Metallic")
+                if socket is not None and not socket.is_linked:
+                    values.append(float(socket.default_value))
+    return sum(values) / len(values) if values else 0.0
+
+
+def op_remesh(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
+    """Remesh to a quad budget, unwrap, and bake the old surface onto the new.
+
+    The one step every commercial pipeline sells as "game-ready" and a
+    reconstruction lacks. Four stages, all in this process:
+
+    1. **Remesh.** Optionally a voxel pass first (it closes the plate-crust
+       holes ``meshaudit`` counts, at the cost of rounding sharp edges), then
+       quadriflow to ``target_faces``. Quadriflow refuses non-manifold input,
+       which a reconstruction routinely is; the fallback is a decimate to the
+       same budget in triangles, and the result says which path ran -- a
+       decimated mesh must not be reported as a quad one.
+    2. **Unwrap.** Smart UV project on the new surface. Not an artist's
+       layout, but every island is a real region of the mesh, which is what
+       the reconstruction's xatlas soup was not.
+    3. **Bake.** Selected-to-active from the *original* object: base colour
+       (the diffuse colour pass alone -- no lighting, ``op_views``' rule),
+       roughness, and tangent-space normals, which carry the high-resolution
+       geometry the budget threw away. Metallic is a constant, see
+       ``_source_metallic``.
+    4. **Export** the new object alone, textures packed into the GLB.
+    """
+    import math
+
+    source_path = Path(spec["source_glb"])
+    out_glb = Path(spec["out_glb"]).resolve()
+    if not source_path.exists():
+        raise RuntimeError(f"nothing to remesh at {source_path}")
+    target = int(spec["target_faces"])
+    texture_size = int(spec["texture_size"])
+    seed = int(spec.get("seed", 0))
+
+    progress(0.02, "Loading model")
+    _reset_scene(bpy)
+    source = _import_glb(bpy, source_path)
+    faces_before, _ = _face_stats(source)
+    lo, hi = _world_bounds(source)
+    diagonal = max(math.dist(lo, hi), 1e-6)
+
+    # A working copy: the original keeps its materials and UVs as the bake
+    # source, and is deleted before export.
+    bpy.ops.object.select_all(action="DESELECT")
+    source.select_set(True)
+    bpy.context.view_layer.objects.active = source
+    bpy.ops.object.duplicate()
+    work = bpy.context.view_layer.objects.active
+    work.name = "wl_remesh"
+    work.data.materials.clear()
+
+    method = "quadriflow"
+    if spec.get("close_holes"):
+        progress(0.08, "Closing holes")
+        work.data.remesh_voxel_size = diagonal * VOXEL_FRACTION
+        work.data.remesh_voxel_adaptivity = 0.0
+        work.data.use_remesh_fix_poles = False
+        bpy.ops.object.voxel_remesh()
+
+    progress(0.15, f"Remeshing to {target:,} quads")
+    try:
+        bpy.ops.object.quadriflow_remesh(
+            target_faces=target,
+            use_mesh_symmetry=False,
+            use_preserve_sharp=False,
+            use_preserve_boundary=False,
+            seed=seed,
+            mode="FACES",
+        )
+        if len(work.data.polygons) == 0:
+            raise RuntimeError("quadriflow produced no faces")
+    except Exception:
+        # Non-manifold input, or a mesh quadriflow gave up on. The budget is
+        # still honoured, in triangles, and the result says so.
+        method = "decimate"
+        modifier = work.modifiers.new("wl_decimate", "DECIMATE")
+        tris = max(len(work.data.polygons), 1)
+        modifier.ratio = max(min((target * 2) / tris, 1.0), 0.001)
+        bpy.context.view_layer.objects.active = work
+        bpy.ops.object.modifier_apply(modifier="wl_decimate")
+
+    progress(0.45, "Unwrapping")
+    bpy.ops.object.select_all(action="DESELECT")
+    work.select_set(True)
+    bpy.context.view_layer.objects.active = work
+    while work.data.uv_layers:
+        work.data.uv_layers.remove(work.data.uv_layers[0])
+    work.data.uv_layers.new(name="UVMap")
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.select_all(action="SELECT")
+    bpy.ops.uv.smart_project(angle_limit=math.radians(66.0), island_margin=0.003)
+    bpy.ops.object.mode_set(mode="OBJECT")
+
+    # The new material, with the three bake targets already in it: a bake
+    # writes into the active image node of the active object's material.
+    material = bpy.data.materials.new("wl_remeshed")
+    material.use_nodes = True
+    tree = material.node_tree
+    principled = next(n for n in tree.nodes if n.type == "BSDF_PRINCIPLED")
+    base_img = _bake_image(bpy, "wl_base_color", texture_size, data=False)
+    rough_img = _bake_image(bpy, "wl_roughness", texture_size, data=True)
+    normal_img = _bake_image(bpy, "wl_normal", texture_size, data=True)
+    nodes = {}
+    for key, image in (("base", base_img), ("rough", rough_img), ("normal", normal_img)):
+        node = tree.nodes.new("ShaderNodeTexImage")
+        node.image = image
+        nodes[key] = node
+    work.data.materials.append(material)
+
+    scene = bpy.context.scene
+    scene.render.engine = "CYCLES"
+    scene.cycles.samples = 4
+    bake = scene.render.bake
+    bake.use_selected_to_active = True
+    bake.cage_extrusion = diagonal * 0.02
+    bake.max_ray_distance = diagonal * 0.05
+    bake.margin = BAKE_MARGIN_PX
+    bake.use_pass_direct = False
+    bake.use_pass_indirect = False
+    bake.use_pass_color = True
+
+    bpy.ops.object.select_all(action="DESELECT")
+    source.select_set(True)
+    work.select_set(True)
+    bpy.context.view_layer.objects.active = work
+
+    for frac, label, key, kind, extra in (
+        (0.55, "Baking colour", "base", "DIFFUSE", {}),
+        (0.70, "Baking roughness", "rough", "ROUGHNESS", {}),
+        (0.82, "Baking normals", "normal", "NORMAL", {"normal_space": "TANGENT"}),
+    ):
+        progress(frac, label)
+        tree.nodes.active = nodes[key]
+        bpy.ops.object.bake(type=kind, **extra)
+        nodes[key].image.pack()
+
+    # Wire the bakes into the material the exporter reads. glTF packs
+    # roughness in G and metallic in B of one image; the exporter builds that
+    # image itself when roughness is a texture and metallic a constant.
+    metallic = _source_metallic(source)
+    tree.links.new(nodes["base"].outputs["Color"], principled.inputs["Base Color"])
+    tree.links.new(nodes["rough"].outputs["Color"], principled.inputs["Roughness"])
+    normal_map = tree.nodes.new("ShaderNodeNormalMap")
+    tree.links.new(nodes["normal"].outputs["Color"], normal_map.inputs["Color"])
+    tree.links.new(normal_map.outputs["Normal"], principled.inputs["Normal"])
+    principled.inputs["Metallic"].default_value = metallic
+
+    progress(0.92, "Exporting")
+    bpy.data.objects.remove(source, do_unlink=True)
+    faces, quads = _face_stats(work)
+    _export(bpy, out_glb)
+    progress(1.0, "Remeshed")
+    return {
+        "ok": True,
+        "method": method,
+        "faces_before": faces_before,
+        "faces": faces,
+        "quads": quads,
+        "texture_size": texture_size,
+        "metallic": metallic,
+    }
+
+
 OPS = {
     "rig": op_rig,
     "pose": op_pose,
@@ -1427,6 +1637,7 @@ OPS = {
     "fbx": op_fbx,
     "views": op_views,
     "project": op_project,
+    "remesh": op_remesh,
 }
 
 

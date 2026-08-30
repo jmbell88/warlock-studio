@@ -469,6 +469,147 @@ def anchor_offset(
     )
 
 
+#: The anchor grid as it is drawn: three rows of three, top row first.
+#:
+#: Here rather than in the pane because the *arrangement* is a fact about the
+#: anchors, and :func:`anchor_cell` below has to agree with it -- two spellings
+#: of "which cell is where" is one edit away from a grid that highlights one
+#: cell and resizes towards another.
+ANCHOR_GRID: tuple[tuple[str, str, str], ...] = (
+    ("top-left", "top", "top-right"),
+    ("left", "centre", "right"),
+    ("bottom-left", "bottom", "bottom-right"),
+)
+
+
+def anchor_cell(anchor: str, cell: str) -> tuple[int, int] | None:
+    """Which way ``cell`` points when the image is anchored at ``anchor``.
+
+    ``(0, 0)`` is the anchor's own cell -- the one that holds the picture. A
+    unit ``(dx, dy)`` is an arrow pointing that way: the direction the new room
+    opens in. ``None`` is a cell with nothing in it, which is what a corner
+    anchor leaves five of, because an arrow there would promise room that
+    anchor never makes.
+
+    Photoshop's grid, and the reason it is worth copying: the numbers say *how
+    much* room is being added and nothing at all about *which side* it lands
+    on, which is the only thing a person actually gets wrong here.
+
+    An unknown name behaves as ``top-left``, which is :func:`anchor_offset`'s
+    own rule -- two different answers to a typo would be exactly the
+    highlight-one-cell-resize-towards-another bug.
+    """
+    known = {name for row in ANCHOR_GRID for name in row}
+    if anchor not in known:
+        anchor = "top-left"
+    if cell not in known:
+        return None
+    here = next(
+        (r, c) for r, row in enumerate(ANCHOR_GRID) for c, name in enumerate(row)
+        if name == anchor
+    )
+    there = next(
+        (r, c) for r, row in enumerate(ANCHOR_GRID) for c, name in enumerate(row)
+        if name == cell
+    )
+    dy, dx = there[0] - here[0], there[1] - here[1]
+    if (dx, dy) == (0, 0):
+        return (0, 0)
+    # Adjacent only. A cell two steps away would be an arrow pointing at room
+    # this anchor does not make on that side at all.
+    if abs(dx) <= 1 and abs(dy) <= 1:
+        return (dx, dy)
+    return None
+
+
+def percent_size(
+    old: tuple[int, int], percent: tuple[float, float]
+) -> tuple[int, int]:
+    """``old`` scaled by a percentage per axis. -> whole pixels, floored at 1.
+
+    **Deliberately does not clamp the upper end.** The growth ceiling is a
+    policy about what a user may type into a form and it lives in
+    ``inker_mode.clamp_resize``, one layer up, which is the single place that
+    knows it. Duplicating it here would make two ceilings to keep in step, and
+    the one that drifted would be the one nothing routed through.
+    """
+    return (
+        max(1, int(round(old[0] * float(percent[0]) / 100.0))),
+        max(1, int(round(old[1] * float(percent[1]) / 100.0))),
+    )
+
+
+def size_percent(
+    old: tuple[int, int], size: tuple[int, int]
+) -> tuple[float, float]:
+    """``size`` as a percentage of ``old``, per axis. The inverse of above."""
+    return (
+        100.0 * float(size[0]) / max(1, int(old[0])),
+        100.0 * float(size[1]) / max(1, int(old[1])),
+    )
+
+
+def linked_size(
+    old: tuple[int, int], size: tuple[int, int], axis: str
+) -> tuple[int, int]:
+    """``size`` with the *untyped* axis pulled back onto ``old``'s ratio.
+
+    ``axis`` is ``"w"`` or ``"h"`` -- **which field the user just typed in**,
+    and it is not optional. A single "something changed" flag makes whichever
+    field is read second win, so typing a width would silently rewrite it from
+    the height that has not moved.
+
+    The ratio is taken from ``old`` and never from the previous pending pair.
+    Deriving it from the last value lets a chain of roundings walk a 3:2
+    document off its own ratio after a few keystrokes, which is a proportion
+    lock that does not lock.
+    """
+    ow, oh = max(1, int(old[0])), max(1, int(old[1]))
+    if axis == "w":
+        return (max(1, int(size[0])), max(1, int(round(int(size[0]) * oh / ow))))
+    return (max(1, int(round(int(size[1]) * ow / oh))), max(1, int(size[1])))
+
+
+def preview_boxes(
+    old: tuple[int, int], new: tuple[int, int], anchor: str, box: float
+) -> tuple[tuple[float, float, float, float], tuple[float, float, float, float]]:
+    """``(new_rect, old_rect)`` for the canvas-size preview, in a ``box`` square.
+
+    Both at one scale, fitted to whichever is larger per axis and centred, so a
+    growth shows the picture inside the frame and a crop shows the frame inside
+    the picture. Rects are ``(x0, y0, x1, y1)`` relative to the box's corner.
+
+    This is the half of GIMP's drag-preview worth having: the numbers already
+    say how much room is being added, and this is the only thing on the dialog
+    that says which side it lands on.
+    """
+    ow, oh = max(1, int(old[0])), max(1, int(old[1]))
+    nw, nh = max(1, int(new[0])), max(1, int(new[1]))
+    span_w, span_h = max(ow, nw), max(oh, nh)
+    scale = min(box / span_w, box / span_h)
+    off_x, off_y = anchor_offset((ow, oh), (nw, nh), anchor)
+    # The union's own origin: with a crop the old image starts left of and
+    # above the new canvas, and both rects have to move by the same amount or
+    # the picture and the frame stop being drawn in one space.
+    base_x = min(0, off_x)
+    base_y = min(0, off_y)
+    pad_x = (box - span_w * scale) * 0.5
+    pad_y = (box - span_h * scale) * 0.5
+    new_rect = (
+        pad_x + (0 - base_x) * scale,
+        pad_y + (0 - base_y) * scale,
+        pad_x + (0 - base_x + nw) * scale,
+        pad_y + (0 - base_y + nh) * scale,
+    )
+    old_rect = (
+        pad_x + (off_x - base_x) * scale,
+        pad_y + (off_y - base_y) * scale,
+        pad_x + (off_x - base_x + ow) * scale,
+        pad_y + (off_y - base_y + oh) * scale,
+    )
+    return new_rect, old_rect
+
+
 def resize_canvas(
     pixels: np.ndarray, size: tuple[int, int], offset: tuple[int, int] = (0, 0), fill: int = 0
 ) -> np.ndarray:

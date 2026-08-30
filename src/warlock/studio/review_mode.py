@@ -100,6 +100,7 @@ log = logging.getLogger(__name__)
 SCAN_KEY = "review-scan"
 DELETE_KEY = "review-delete"
 CLEANUP_KEY = "review-cleanup"
+REMOVE_KEY = "review-remove"
 FINDINGS_KEY = "review-findings"
 LABELS_KEY = "review-labels"
 TRAIN_KEY = "review-train"
@@ -294,6 +295,12 @@ class ReviewState:
     # once at the end from what is in memory -- never a DB read on the frame
     # thread -- and cleared by the report card's Dismiss.
     judging_report: dict[str, Any] | None = None
+    # The tick inside a removal confirm: "also take the units I accepted or
+    # labelled". **Reset every time a confirm opens**, and session-only like
+    # everything else here -- a destructive default the user set once and
+    # forgot is exactly how something they wanted comes to be deleted, which is
+    # the rule ``library.ask_prune`` already follows for its keep-count.
+    drop_retained: bool = False
 
 
 def ensure(ctx: Any) -> ReviewState:
@@ -334,6 +341,9 @@ def _collect(svc: Any) -> list[dict[str, Any]]:
     Task thread only: several DB reads behind one serialized connection, and
     the frame loop must never queue behind them.
     """
+    from ..service import jobs as jobs_mod
+    from ..service import sweeps as sweeps_mod
+
     out: list[dict[str, Any]] = []
 
     recent = svc.store.unverdicted_models(source=SOURCE)
@@ -347,10 +357,22 @@ def _collect(svc: Any) -> list[dict[str, Any]]:
         }
     )
 
+    # Once, outside the loop: it walks every latest verdict in the database and
+    # cannot change between two sweeps of one scan.
+    retained = jobs_mod.retained_job_ids(svc)
     for sweep in svc.store.list_sweeps():
         jobs = svc.store.sweep_jobs(sweep["id"])
-        recorded = svc.store.verdicts_for([j["id"] for j in jobs], source=SOURCE)
+        ids = [j["id"] for j in jobs]
+        # **``stage="model"``, which was missing.** ``verdicts_for``'s own
+        # docstring says that passing no stage means *every* stage and only a
+        # caller with one stage in play may do it -- and names Review as such a
+        # caller. Review is not one by accident: ``unlabelled_references``
+        # deliberately includes sweep units, so a unit that was blank-labelled
+        # but never mesh-graded read as judged here, dropped out of ``todo``,
+        # and could trigger ``auto_cleanup`` on a sweep nobody had graded.
+        recorded = svc.store.verdicts_for(ids, source=SOURCE, stage="model")
         units = [_unit(job, recorded, svc.job_dir(job["id"])) for job in jobs]
+        judged = {job_id for (job_id, _source) in recorded}
         out.append(
             {
                 "id": sweep["id"],
@@ -364,6 +386,14 @@ def _collect(svc: Any) -> list[dict[str, Any]]:
                 "spec": sweep.get("spec") or {},
                 "units": units,
                 "todo": sum(1 for u in units if u["verdict"] is None),
+                # How many units a bulk delete would refuse to take, so the
+                # confirm can say what overriding that rule actually costs.
+                "retained": sum(1 for job_id in ids if job_id in retained),
+                # **Not the same question as ``todo``**, and the difference is
+                # deliberate: an errored or cancelled unit can never be graded,
+                # so it owes no verdict -- but it does keep ``todo`` above zero
+                # for ever, which is how a failed sweep becomes unremovable.
+                "removable": sweeps_mod.outstanding_units(jobs, judged) == 0,
             }
         )
     return out
@@ -381,17 +411,100 @@ def scan(ctx: Any) -> None:
         state.scanning = False
 
 
-def delete(ctx: Any, sweep_id: str) -> bool:
+def delete(ctx: Any, sweep_id: str, *, drop_retained: bool = False) -> bool:
     """Delete a sweep's jobs and meshes, off the frame thread.
 
     The verdicts stay: each carries the config vector it was filed against, so
     what the sweep taught survives the assets it taught it with.
+
+    ``drop_retained`` routes to ``cleanup_sweep`` instead -- the user's own
+    override of ``retained_job_ids``, which is off by default and carries that
+    function's whole burden. Still under ``DELETE_KEY``, so the toast's verb
+    stays "Deleted" for a hand-pressed trash and "Cleaned up" stays the
+    automatic path's word.
     """
     from ..service import sweeps as sweeps_mod
 
     if sweep_id == RECENT_ID:
         return False
+    if drop_retained:
+        return bool(
+            ctx.submit(DELETE_KEY, sweeps_mod.cleanup_sweep, ctx.svc, sweep_id)
+        )
     return bool(ctx.submit(DELETE_KEY, sweeps_mod.delete_sweep, ctx.svc, sweep_id))
+
+
+def bucket_label(state: Any, sweep: Any) -> str:
+    """What to call a sweep on screen, honouring blinding.
+
+    **A blinded session gets a blinded name here too.** Naming the arms of a
+    blinded pass -- in a report, a toast, or a confirm listing what is about to
+    go -- un-blinds every unit in it after the fact, which is most of what the
+    blinding was protecting. The expression existed in three places before this
+    and a fourth was about to be written for the removal confirm, which is
+    exactly how one of them comes to be the copy that forgets.
+    """
+    sweep_id = str(sweep.get("id") if isinstance(sweep, dict) else sweep)
+    if getattr(state, "blind", False) and sweep_id != RECENT_ID:
+        return f"#{sweep_id[:6]}"
+    label = sweep.get("label") if isinstance(sweep, dict) else None
+    return str(label or sweep_id)
+
+
+def removable_ids(state: Any) -> list[str]:
+    """The sweeps the bulk action would take. Pure -- no database.
+
+    Never ``RECENT_ID``: that bucket's units are ordinary library rows and
+    removing them is prune's job, not this one's.
+    """
+    return [
+        str(sweep["id"])
+        for sweep in getattr(state, "sweeps", ()) or ()
+        if sweep.get("id") != RECENT_ID and sweep.get("removable")
+    ]
+
+
+def removal_plan(state: Any, sweep_ids: Any) -> dict[str, Any]:
+    """What the confirm has to say about a bulk removal. Pure.
+
+    Pure, and computed once when the confirm opens rather than inside its
+    ``body``: that callable runs every frame the modal is up, and a database
+    read per frame behind the one serialized connection is the frame loop
+    queueing behind a dialog nobody is touching.
+    """
+    wanted = {str(sweep_id) for sweep_id in sweep_ids}
+    rows = [
+        sweep
+        for sweep in getattr(state, "sweeps", ()) or ()
+        if str(sweep.get("id")) in wanted
+    ]
+    return {
+        "sweeps": len(rows),
+        "units": sum(len(sweep.get("units") or ()) for sweep in rows),
+        "retained": sum(int(sweep.get("retained") or 0) for sweep in rows),
+        "labels": [bucket_label(state, sweep) for sweep in rows],
+    }
+
+
+def remove_reviewed(
+    ctx: Any, sweep_ids: Any, *, drop_retained: bool = False
+) -> bool:
+    """Remove every named sweep, off the frame thread."""
+    from ..service import sweeps as sweeps_mod
+
+    ids = [str(sweep_id) for sweep_id in sweep_ids if sweep_id != RECENT_ID]
+    if not ids:
+        return False
+    return bool(
+        ctx.submit(
+            REMOVE_KEY,
+            sweeps_mod.remove_reviewed_sweeps,
+            ctx.svc,
+            sweep_ids=ids,
+            drop_retained=drop_retained,
+            tag=f"{len(ids)} sweep(s)",
+        )
+    )
 
 
 def refresh_findings(ctx: Any) -> None:
@@ -521,23 +634,32 @@ def _removal_toast(ctx: Any, done: Any) -> None:
     # pressing anything for it, so "3 asset folders removed" on its own is a
     # sentence about nothing the reader can place.
     named = str(getattr(done, "tag", None) or "")
-    verb = f"Cleaned up {named}:" if cleaning and named else (
-        "Cleaned up" if cleaning else "Deleted"
-    )
-    removed = remaining = kept = 0
+    if done.key == REMOVE_KEY:
+        verb = "Removed"
+    elif cleaning:
+        verb = f"Cleaned up {named}:" if named else "Cleaned up"
+    else:
+        verb = "Deleted"
+    removed = remaining = kept = swept = 0
     if isinstance(done.result, dict):
         removed = int(done.result.get("deleted") or 0)
         remaining = int(done.result.get("remaining") or 0)
         kept = int(done.result.get("kept") or 0)
+        swept = int(done.result.get("sweeps") or 0)
+    # The bulk action's own clause, because "8 asset folders" says nothing
+    # about the thing the user actually asked to be rid of -- the rows.
+    swept_text = f"{swept} sweep(s) and " if done.key == REMOVE_KEY else ""
     if kept and not remaining:
         # Said apart from the transient case, and without "delete again":
         # pressing again will never remove these, so an invitation to
-        # retry would be a lie that renews itself every press. What the
-        # user can still do is named, because the per-asset delete is the
-        # deliberate escape hatch this guard leaves open.
+        # retry would be a lie that renews itself every press. What *does*
+        # change the outcome is named instead -- which is the tick, since
+        # 2026-08-29; before it there was no route at all and this sentence
+        # pointed at the library.
         ctx.toast(
-            f"{verb} {removed} asset folder(s); kept {kept} you reviewed. "
-            "Delete those from the library if you want them gone."
+            f"{verb} {swept_text}{removed} asset folder(s); kept {kept} you "
+            'reviewed. Tick "also delete the units I accepted or labelled" '
+            "to take those too."
         )
     elif remaining:
         # A unit the worker is still inside is cancelled but not deleted --
@@ -547,19 +669,20 @@ def _removal_toast(ctx: Any, done: Any) -> None:
         # failure nor a surprise -- it is what cancelling something mid-run
         # looks like, and the sentence already says what to do next.
         ctx.toast(
-            f"{verb} {removed} asset folder(s); {remaining} still finishing. "
-            "Delete again in a moment."
+            f"{verb} {swept_text}{removed} asset folder(s); {remaining} still "
+            "finishing. Delete again in a moment."
         )
     else:
         ctx.toast(
-            f"{verb} {removed} asset folder(s). Verdicts and findings kept."
+            f"{verb} {swept_text}{removed} asset folder(s). "
+            "Verdicts and findings kept."
         )
 
 
 def on_task_done(ctx: Any, done: Any) -> None:
     """Called from the app for every ``review-`` key."""
     state = ensure(ctx)
-    if done.key in (DELETE_KEY, CLEANUP_KEY):
+    if done.key in (DELETE_KEY, CLEANUP_KEY, REMOVE_KEY):
         _removal_toast(ctx, done)
         # The counts are now wrong and the viewer may be showing a mesh that no
         # longer exists -- both are fixed by the rescan.
@@ -654,6 +777,11 @@ def on_task_failed(ctx: Any, done: Any) -> None:
         # it: the entry card promised the assets would go, and silence would
         # leave the user believing a promise that had failed.
         ctx.toast("Could not clean up that sweep's assets.", "error")
+    if done.key == REMOVE_KEY:
+        # The service validates the whole set before removing anything, so a
+        # failure here means nothing went -- which is what the sentence has to
+        # leave the user believing, because they will press it again.
+        ctx.toast("Could not remove those sweeps. Nothing was deleted.", "error")
     if done.key == LABELS_KEY and state.labels is not None:
         # ``loading`` gates the grid's empty state; leaving it set is what makes
         # a failed listing look like a pass that is still starting, forever.
@@ -989,14 +1117,9 @@ def finish_judging(ctx: Any) -> None:
         graded = [u for u in units if isinstance(u.get("grade"), int)]
         row = {
             "id": sweep["id"],
-            # Blind sessions get blind labels here too. A report naming the arms
-            # at the end of a blinded pass would un-blind every unit in it after
-            # the fact, which is most of what blinding was protecting.
-            "label": (
-                f"#{str(sweep['id'])[:6]}"
-                if state.blind and sweep["id"] != RECENT_ID
-                else str(sweep.get("label") or sweep["id"])
-            ),
+            # Blind sessions get blind labels here too; ``bucket_label`` is the
+            # one spelling of that rule and its docstring is the argument.
+            "label": bucket_label(state, sweep),
             "total": len(units),
             "accepted": sum(1 for u in units if u.get("verdict") == "accept"),
             "rejected": sum(1 for u in units if u.get("verdict") == "reject"),
@@ -1050,11 +1173,7 @@ def auto_cleanup(ctx: Any, sweep_id: str) -> bool:
     entry = next((s for s in state.sweeps if s["id"] == sweep_id), None)
     # Captured now and carried on the tag, because by the time this lands the
     # rescan will have dropped the row this label came from.
-    named = (
-        f"#{str(sweep_id)[:6]}"
-        if state.blind
-        else str((entry or {}).get("label") or sweep_id)
-    )
+    named = bucket_label(state, entry or {"id": sweep_id})
     return bool(
         ctx.submit(
             CLEANUP_KEY, sweeps_mod.cleanup_sweep, ctx.svc, sweep_id, tag=named

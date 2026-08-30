@@ -130,8 +130,22 @@ def selection_ring() -> None:
     _ring(theme.ACCENT, width=tokens.SELECTION_BOUNDARY_WIDTH)
 
 
-def _leading_selection() -> None:
-    rect = _item_rect()
+def leading_selection(rect: tuple[Any, Any] | None = None) -> None:
+    """Draw the accent bar down the left edge of a selected row.
+
+    Public for :func:`selection_ring`'s reason and by the same argument:
+    ``widgets.list_row`` builds its own row surface over an invisible button,
+    so it cannot go through :func:`selectable`, and "this row is the one in
+    hand" must have one spelling. A hand-rolled ``add_line`` in a pane is
+    invisible to ``probe`` and drifts from this by a pixel per site.
+
+    ``rect`` defaults to the item just submitted, which is what
+    :func:`selectable` wants. ``list_row`` passes its own, because by the time
+    it can draw this the last submitted item is the caller's *content* -- the
+    name, or a trailing percentage -- and the bar would land beside that rather
+    than down the row's edge.
+    """
+    rect = _item_rect() if rect is None else rect
     if rect is None:
         return
     low, high = rect
@@ -145,6 +159,11 @@ def _leading_selection() -> None:
         )
     except (AttributeError, RuntimeError):
         return
+
+
+#: The private name kept as an alias: ``selectable`` calls it and there is no
+#: reason to touch that call site to rename a function.
+_leading_selection = leading_selection
 
 
 #: What every slider and drag adds to its tooltip. Ctrl+click-to-type is

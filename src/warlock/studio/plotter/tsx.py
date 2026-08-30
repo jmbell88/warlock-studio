@@ -61,16 +61,22 @@ log = logging.getLogger(__name__)
 # What this build writes. Tiled accepts anything it recognises; these are the
 # values a current Tiled writes and so the values least likely to surprise it.
 #
-# ``TILED_VERSION`` is deliberately *behind* the target in
-# ``docs/COMPAT.md``, and that gap is the point: it is a claim that a
-# real Tiled of that version opens what we write, and nothing in this repository
-# can establish it -- a fixture we authored ourselves proves a round trip
-# against ourselves. It moves to "1.12.2" when a human with Tiled installed has
-# opened one of our exports without complaint, and not before. It was bumped
-# once, in the same change that deleted the sentence saying not to; the bump was
-# reverted, because the gate was never satisfied.
+# ``TILED_VERSION`` was held *behind* the target in ``docs/COMPAT.md`` for as
+# long as the claim it makes was unproven: it says a real Tiled of that version
+# opens what we write, and nothing in this repository can establish that -- a
+# fixture we authored ourselves proves a round trip against ourselves. It was
+# bumped once, in the same change that deleted the sentence saying not to, and
+# that bump was reverted because the gate was never satisfied.
+#
+# **The gate was satisfied on 2026-08-29** and the constant moved with it. A
+# Plotter-exported map (a 150x150 orthogonal three-layer map with an external
+# ``tilesets/*.tsx``) was opened and worked on in Tiled 1.12.x, and a map that
+# Tiled 1.12.2 itself wrote -- two external tilesets, one CSV layer, 640x360 --
+# reads here without complaint. ``docs/COMPAT.md`` records both directions and
+# what they do *not* cover, which is every construct past orthogonal CSV
+# ground: flip bits, objects, properties, and the ``.tmj`` spelling.
 TSX_VERSION = "1.10"
-TILED_VERSION = "1.10.2"
+TILED_VERSION = "1.12.2"
 
 #: Re-exported, not merely imported -- see the module docstring. Listed so a
 #: linter reads the names as public rather than as unused imports.

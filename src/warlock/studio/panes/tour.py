@@ -111,6 +111,15 @@ def satisfied(ctx: Any, name: str, arg: str | None) -> bool:
     if name == "animated":
         doc = _inker_doc(ctx)
         return doc is not None and getattr(doc.doc, "anim", None) is not None
+    if name == "sfx_at_least":
+        sirens = getattr(ctx.state, "sirens", None)
+        tab = getattr(sirens, "active", None) if sirens is not None else None
+        if tab is None:
+            return False
+        try:
+            return len(tab.doc.oneshots) >= int(arg or 0)
+        except (AttributeError, TypeError, ValueError):
+            return False
     return False
 
 
@@ -118,7 +127,15 @@ def satisfied(ctx: Any, name: str, arg: str | None) -> bool:
 #: function, so the agreement test compares two independently authored lists
 #: instead of one list against itself.
 HANDLED: frozenset[str] = frozenset(
-    {"manual", "mode_is", "doc_open", "tool_is", "layers_at_least", "animated"}
+    {
+        "manual",
+        "mode_is",
+        "doc_open",
+        "tool_is",
+        "layers_at_least",
+        "animated",
+        "sfx_at_least",
+    }
 )
 
 

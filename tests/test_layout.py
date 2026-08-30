@@ -311,7 +311,12 @@ def test_every_split_has_a_handle_and_every_handle_a_split():
         "packwright-sources",
         "packwright-items",
         "plotter-tools",
+        # The right column stacks the layer list over the selected layer's own
+        # settings over the map file, so it carries two split handles. The
+        # properties pane was drawn *inside* the list until 2026-08-29, which
+        # is what made the list unreadable rather than merely unstyled.
         "plotter-layers",
+        "plotter-properties",
         "review-runs",
         "sirens-transport",
         # The right column stacks the instrument list over the envelope editor

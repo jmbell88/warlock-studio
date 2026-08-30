@@ -35,14 +35,32 @@ Target: **Tiled 1.12.2**. This ledger records document semantics, not byte
 spelling: Plotter canonicalizes layer data to CSV and bundles external assets
 under collision-free paths.
 
-**The `tiledversion` this build writes is `1.10.2`** — see
-`src/warlock/studio/plotter/tsx.py`'s `TILED_VERSION` — and it moves to
-`1.12.2` only once a real Tiled 1.12.2 has been confirmed to open one of our
-exports without complaint. Until then the two numbers disagreeing is expected,
-not a bug. This gate was briefly deleted and the constant bumped in the same
-change; the bump was reverted rather than the gate satisfied, because nothing
-in this repo can satisfy it — it needs a human with Tiled installed, which is
-why it sits in `TODO.md` rather than in a backlog of work code could do.
+**The `tiledversion` this build writes is `1.12.2`** — see
+`src/warlock/studio/plotter/tsx.py`'s `TILED_VERSION` — and it says what it
+means as of **2026-08-29**. It was held at `1.10.2` behind a gate that only a
+human with Tiled installed could open: a real Tiled 1.12.2 had to be confirmed
+to open one of our exports without complaint. (The gate was briefly deleted and
+the constant bumped in the same change; that bump was reverted rather than the
+gate satisfied.) **Both directions have now been exercised against Tiled
+1.12.x**, and each covers a different half:
+
+- **Plotter → Tiled.** A Plotter-exported `.tmx` — 150×150 orthogonal, three
+  CSV tile layers, one external tileset under `tilesets/` — was opened and
+  worked on in Tiled 1.12.x. That is the gate, and it is what moved the
+  constant.
+- **Tiled → Plotter.** A map Tiled 1.12.2 itself wrote — 640×360 orthogonal,
+  one CSV layer, *two* external `.tsx` tilesets with a `firstgid` split — reads
+  here without complaint, into the right dimensions, layer and tileset
+  structure.
+
+**What that does not cover, and it is most of the table.** Both files are
+orthogonal CSV ground and nothing more: no flipped tile in either (checked —
+zero cells with a transform bit set), no objects, no properties, no groups, no
+infinite chunks, no image collection, no Wang set, and no `.tmj` on the Tiled
+side at all. So the two bullets above are a claim about the map header, the
+external-tileset reference and the CSV layer payload. Every other
+`round-trips` row below still rests on a fixture this editor wrote, which is
+the paragraph after next.
 
 **Two kinds of positive row, and the difference matters.** A `round-trips` row
 is a claim about *Tiled*: the feature is one Tiled has, and a file carrying it
@@ -82,6 +100,12 @@ it is said once here rather than appended to thirty rows.
 `tests/plotter/fixtures/tiled/FIXTURES.md` labels each fixture and lists what
 authoring is owed, and `TODO.md` carries the pass itself. As Tiled-authored
 fixtures land, this paragraph shrinks to name the rows still waiting.
+
+The 2026-08-29 verification above did **not** change this: it was done against
+files living outside this repository, so it moved the `tiledversion` gate — a
+claim about one number — without adding a golden the suite can re-check. A
+verification nothing re-runs decays; a fixture does not. That is why the corpus
+debt is still open with the gate closed.
 
 Tiled 1.12.2 itself writes native `version="1.10"` while identifying the
 writer with `tiledversion="1.12.2"`. Plotter follows that spelling rather than

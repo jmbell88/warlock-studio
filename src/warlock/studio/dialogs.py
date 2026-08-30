@@ -138,7 +138,9 @@ class Confirm:
     _focused: bool = field(default=False, repr=False)
 
 
-def ask_delete(ctx: Any, *, title: str, message: str, on_confirm: Any) -> None:
+def ask_delete(
+    ctx: Any, *, title: str, message: str, on_confirm: Any, body: Any = None
+) -> None:
     """Ask before something permanent goes, in the one wording.
 
     ``Confirm``'s own defaults are the *unsaved-work* pair -- "Discard" and
@@ -150,6 +152,12 @@ def ask_delete(ctx: Any, *, title: str, message: str, on_confirm: Any) -> None:
     is the message, because the only interesting part of a delete confirm is
     what *else* goes with it -- the baked GLB, the restyled copies, the meshes
     -- and that is never the same sentence twice.
+
+    ``body`` is ``Confirm.body`` passed through, for the one delete that has a
+    *parameter* as well as an answer: removing a sweep can optionally take the
+    units retention would otherwise keep, and that belongs as a tick the reader
+    meets after the sentence explaining what it costs -- not as a second red
+    button they have to choose between before reading either.
     """
     ctx.confirms.ask(
         Confirm(
@@ -158,6 +166,7 @@ def ask_delete(ctx: Any, *, title: str, message: str, on_confirm: Any) -> None:
             confirm_label="Delete",
             cancel_label="Keep",
             on_confirm=on_confirm,
+            body=body,
         )
     )
 

@@ -21,7 +21,7 @@ from warlock.studio.tour.steps import CONDITIONS
 
 
 def _ctx(**state):
-    base = {"mode": "home", "inker": None}
+    base = {"mode": "home", "inker": None, "sirens": None}
     base.update(state)
     return SimpleNamespace(state=SimpleNamespace(**base))
 
@@ -96,6 +96,27 @@ def test_layers_at_least_survives_a_document_shaped_differently():
     doc = SimpleNamespace(stack=[object()], anim=None)
     live = SimpleNamespace(active=SimpleNamespace(doc=doc), tool="brush")
     assert tour_pane.satisfied(_ctx(inker=live), "layers_at_least", "not-a-number") is False
+
+
+def test_sfx_at_least_counts_the_one_shots():
+    doc = SimpleNamespace(oneshots=[object()])
+    sirens = SimpleNamespace(active=SimpleNamespace(doc=doc))
+    assert tour_pane.satisfied(_ctx(sirens=sirens), "sfx_at_least", "1") is True
+    assert tour_pane.satisfied(_ctx(sirens=sirens), "sfx_at_least", "2") is False
+    # No mode open at all, which is the state the step before this one is in.
+    assert tour_pane.satisfied(_ctx(), "sfx_at_least", "1") is False
+
+
+def test_sfx_at_least_survives_a_document_shaped_differently():
+    """The ``layers_at_least`` rule: 'not yet', never a traceback in the loop."""
+
+    sirens = SimpleNamespace(active=SimpleNamespace(doc=object()))
+    assert tour_pane.satisfied(_ctx(sirens=sirens), "sfx_at_least", "1") is False
+    live = SimpleNamespace(active=SimpleNamespace(doc=SimpleNamespace(oneshots=[])))
+    assert tour_pane.satisfied(_ctx(sirens=live), "sfx_at_least", "not-a-number") is False
+    # A song with no effects yet answers a zero threshold, which is what makes
+    # the count a threshold rather than a "has any".
+    assert tour_pane.satisfied(_ctx(sirens=live), "sfx_at_least", "0") is True
 
 
 def test_animated_reads_the_timeline():

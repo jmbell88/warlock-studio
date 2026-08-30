@@ -77,16 +77,21 @@ than discovered by accident.
 
 There is one caveat, and it is important enough to state plainly rather than bury.
 
-**Every test fixture for both formats was written by Warlock itself.** No human has yet opened a
-Warlock export in real Aseprite or real Tiled and confirmed it round-trips. A green test proves that
+**Every test fixture for both formats was written by Warlock itself.** A green test proves that
 Warlock's reader and Warlock's writer agree with each other. It does not prove that either real
 application agrees with them.
 
-So: the exports are believed correct, and that belief has not been checked against the applications
-themselves. Try one before building a workflow on it, and expect it to work — but check.
+For Tiled that has now been checked once, by hand, in both directions: on 2026-08-29 a Plotter map
+export was opened and worked on in Tiled 1.12.x, and a map Tiled 1.12.2 itself wrote was read back
+in Plotter. Both were plain orthogonal maps, so what is confirmed is the map header, the external
+tileset reference and the layer data — not flipped tiles, objects or properties. For Aseprite,
+nothing has been checked at all.
 
-Two specific things to know if the file is going to Tiled. Warlock writes `tiledversion` 1.10.2 while
-targeting 1.12.2 semantics, which is a deliberate hold. And several constructs are Warlock's own
+So: the exports are believed correct, and past plain tile layers that belief has not been checked
+against the applications themselves. Try one before building a workflow on it, and expect it to
+work — but check.
+
+One specific thing to know if the file is going to Tiled: several constructs are Warlock's own
 extensions rather than Tiled features — oblique projection, per-layer blend modes, the capsule shape,
 per-object opacity, list properties. Round trips fine through Warlock; invisible to Tiled.
 

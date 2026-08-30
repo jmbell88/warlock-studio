@@ -188,6 +188,7 @@ def test_the_package_imports_with_no_optional_dependency_present():
         _map_project,
         _map_tilesets,
         edits,
+        layer_rows,
         pngio,
         project,
         props,

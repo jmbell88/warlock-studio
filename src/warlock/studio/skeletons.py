@@ -188,6 +188,23 @@ def plotter(ctx: Any) -> dict[str, Column]:
                 edge=_edge("left"),
                 sizing=SHARE,
                 share_key="plotter-layers",
+                floor=plotter_layers.LAYERS_FLOOR,
+            ),
+            # **The stack, then the selected thing, then the file** -- Tiled's
+            # own arrangement, and the reason this slot exists at all: these
+            # fields used to be drawn *inside* the list, between two sibling
+            # rows, so choosing a layer pushed its neighbours a hundred and
+            # fifty lines apart and there was no column of names left to read
+            # down.
+            Slot(
+                "plotter-properties",
+                "Properties",
+                plotter_layers.draw_properties,
+                role=_role("inspector"),
+                edge=_edge("left"),
+                sizing=SHARE,
+                share_key="plotter-properties",
+                floor=plotter_layers.PROPERTIES_FLOOR,
             ),
             Slot(
                 "plotter-bridge",

@@ -39,11 +39,11 @@ NO_HELP_BUTTON = {
     # documents, and a help button in the middle of a row of sliders would be
     # a fifteenth control. The options themselves are the Inker chapter's.
     "inker_context",
-    # No longer a pane: the Inker's bridge panel became rows in that menu
-    # strip (W2.2). What is left is the four dialogs behind them, drawn by the
-    # centre pane, and a popup has no heading to hang a (?) beside. The verbs
-    # themselves are documented in the Inker chapter as before.
-    "inker_bridge",
+    # ``inker_bridge`` was here until 2026-08-29 on the grounds that "a popup
+    # has no heading to hang a (?) beside". Two of its dialogs are modals with
+    # title bars now -- Image size and Canvas size -- and each carries an
+    # inline help button beside its "Current: W x H" line, so the exemption is
+    # no longer true and the file is gated like every other pane.
     # Not a pane at all: the mtime-cache rule several panes share, kept beside
     # them because inspector already imports sheet_panel and so neither of the
     # two could host it. Nothing on screen, so nothing to document.

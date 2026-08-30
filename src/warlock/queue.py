@@ -953,7 +953,7 @@ class Worker(
             # ensure_started reaps or refuses.
             with contextlib.suppress(TrellisStopFailed):
                 await asyncio.to_thread(self.trellis.stop)
-        elif phase in ("rig", "sheet", "views", "project"):
+        elif phase in ("rig", "sheet", "views", "project", "remesh"):
             # Same story as trellis: bpy is inside a C weighting solve (or an
             # EEVEE render) and checks nothing, so killing the subprocess is
             # the only abort.

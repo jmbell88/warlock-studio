@@ -258,7 +258,7 @@ def measure(library: Any = None, workspace: str = "", *, fixed_left: float | Non
 # does. SP_3 rather than the window's own SP_4 (UX.md Phase 2) because a pane is
 # already inside the host window's gutter -- matching it would double the inset
 # on the two sidebars, which are the width-constrained case.
-PANE_PADDING = tokens.SP_2
+PANE_PADDING = tokens.SP_3
 SHARE_MIN, SHARE_MAX = 0.25, 0.75
 
 #: Splits whose sensible starting proportion is not the shared default.

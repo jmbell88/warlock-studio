@@ -230,7 +230,8 @@ left-drag in empty space with `Q` selected sweeps a marquee.
 | Home / End | First / last frame |
 | F3 | Onion skin on or off |
 | Ctrl+U / Ctrl+I | Hue / saturation, and Invert colours -- both open the filter popup |
-| Ctrl+Alt+C | Canvas size (the same popup scales the image) |
+| Ctrl+Alt+I | Image size (resamples the picture) |
+| Ctrl+Alt+C | Canvas size (changes the room around it) |
 | Ctrl+Shift+N | New layer |
 | Alt+S | Solo the active layer, and again to bring the rest back |
 | Ctrl+Shift+Up / Down | Move the layer up / down the stack |

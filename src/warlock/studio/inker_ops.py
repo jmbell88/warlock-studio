@@ -1125,16 +1125,32 @@ def _filter(name: str) -> Callable[..., Any]:
 
 # --- Sprite -----------------------------------------------------------------
 
+# Image size above Canvas size, which is Photoshop's order and Aseprite's:
+# scaling the picture is the more common of the two and the one a reader looks
+# for first.
+register(
+    Op(
+        "scale_image",
+        "Image size...",
+        dialog("inker-scale"),
+        menu="Sprite",
+        # Aseprite's Sprite Size. It had nowhere to live for as long as "Scale
+        # image" and "Resize canvas" were two buttons on one popup and one op
+        # could not carry two bindings; two dialogs is what gives it a home.
+        key="Ctrl+Alt+I",
+        enabled=ready,
+        reason=BUSY,
+    )
+)
 register(
     Op(
         "resize",
         "Canvas size...",
         dialog("inker-resize"),
         menu="Sprite",
-        # Aseprite's Canvas Size key. Its Sprite Size (Ctrl+Alt+I) is the same
-        # popup here -- "Scale image" and "Resize canvas" are two buttons on
-        # one dialog -- and one op cannot carry two bindings, so the key is the
-        # one the row is named after.
+        # Aseprite's Canvas Size key. The name, the key and the request id are
+        # all unchanged by the 2026-08-29 split -- three tests pin them -- and
+        # what changed is that this now opens a dialog about the canvas alone.
         key="Ctrl+Alt+C",
         enabled=ready,
         reason=BUSY,

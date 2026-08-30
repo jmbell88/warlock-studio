@@ -93,19 +93,25 @@ def zoom_key(zoom: float) -> str:
     return f"{round(zoom * 100, 2):g}"
 
 
-def zoom_rung(zoom: float, direction: int) -> float:
-    """The next rung of :data:`ZOOM_LADDER` in ``direction``. -> the new scale.
+def zoom_rung(
+    zoom: float, direction: int, ladder: tuple[float, ...] = ZOOM_LADDER
+) -> float:
+    """The next rung of ``ladder`` in ``direction``. -> the new scale.
 
     Strictly past the current zoom rather than nearest-then-step, so a view
     sitting between two rungs at 135% zooms *out* to 100% and *in* to 200%
     instead of snapping sideways to 100% on a press labelled "in". At either end
     the ladder holds, which is the same answer the wheel gives at its bounds.
+
+    ``ladder`` is a parameter because the Plotter tileset palette has its own
+    (``plotter_state.PALETTE_ZOOM_LADDER``) and the *stepping rule* above is the
+    part worth sharing -- particularly "strictly past", which is what makes a
+    fit-derived zoom that sits between two rungs step sanely. Copying the scan
+    over there would have been two implementations of one sentence.
     """
     if direction > 0:
-        return next((rung for rung in ZOOM_LADDER if rung > zoom + 1e-6), ZOOM_LADDER[-1])
-    return next(
-        (rung for rung in reversed(ZOOM_LADDER) if rung < zoom - 1e-6), ZOOM_LADDER[0]
-    )
+        return next((rung for rung in ladder if rung > zoom + 1e-6), ladder[-1])
+    return next((rung for rung in reversed(ladder) if rung < zoom - 1e-6), ladder[0])
 
 # The swatch row's own capacity. Not a palette editor -- the eyedropper is how
 # a user gets the colours actually in their image; this only has to hold the
@@ -1466,6 +1472,20 @@ class InkerState:
     # being made, which does not change when the eraser is picked up and is the
     # same answer for every document open in a pixel-art session.
     resample: str = "smooth"
+    # The Image size dialog's two modes, and the Canvas size dialog's one. All
+    # three sit here beside ``resample`` and for its reason: they are statements
+    # about the kind of work being done rather than facts about a document, and
+    # Photoshop and GIMP both carry them from one document to the next.
+    #
+    # Deliberately **not persisted** -- ``_restore_canvas`` is untouched. They
+    # are cheap to re-set and a remembered "percent" would make the first field
+    # a returning user reads mean something other than what it says.
+    #: "pixels" | "percent" -- what the Image size fields are measured in.
+    scale_units: str = "pixels"
+    #: Whether Image size holds the document's aspect ratio.
+    scale_linked: bool = True
+    #: Whether Canvas size's fields are a delta rather than an absolute size.
+    canvas_relative: bool = False
     grid: bool = False
     # 32 by default: the most common tile and sprite cell in the corpus this
     # app feeds, and what the user asked the grid to assume. Changeable in the

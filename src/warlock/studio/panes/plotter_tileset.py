@@ -220,7 +220,8 @@ def draw(ctx: Any) -> None:
     state.tileset_index = index
     ref = doc.tilesets[index]
     imgui.dummy((0, 4))
-    _picker(ctx, state, ref, index, tab.uid, doc.tileset_epoch)
+    _zoom_row(ctx, state, tab, ref, index)
+    _picker(ctx, state, tab, ref, index, tab.uid, doc.tileset_epoch)
     _tile_form(ctx, state, tab, ref, index)
 
     # Everything below here is about the pane's *contents* rather than about the
@@ -334,25 +335,119 @@ def _replaced(meta: Any, **values: Any) -> Any:
     return dataclasses.replace(meta, **values)
 
 
-def _picker(ctx: Any, state: Any, ref: Any, index: int, uid: str, epoch: int) -> None:
+#: The picker's own scrolling well, in design pixels.
+#:
+#: A ceiling rather than a fixed size, which is ``widgets.card``'s no-scrollbar
+#: argument read the other way round: an atlas is any height at all, and one
+#: taller than the pane would push the Tile form, *Add from a file...* and the
+#: Inker row off the bottom of a sidebar that has no scrollbar of its own to
+#: get them back. A well that scrolls is the trade.
+#:
+#: The floor is deliberately small. It exists so a one-row tileset is still a
+#: target you can drag across rather than a hairline, and for nothing else --
+#: a larger one would pad every short atlas with dead space, which the first
+#: screenshot of this pane showed it doing.
+PICKER_MIN_H = 40.0
+PICKER_MAX_H = 260.0
+
+
+def _resolve_zoom(state: Any, tab: Any, tileset: Any, index: int, avail: float) -> float:
+    """The palette's scale for this tileset, fitting it the first time.
+
+    A missing key means "fit", which is what makes a wide atlas arrive whole
+    rather than clipped -- the defect this pane had. The Fit button and the
+    zoom nudges are folded in here too, so there is one place that decides the
+    number and one place that stores it.
+    """
+    from .. import plotter_state as ps
+
+    zoom = tab.palette_zoom.get(index)
+    if zoom is None or state.palette_zoom_fit:
+        # ``avail`` for both axes: the well is as wide as the pane and as tall
+        # as it is allowed to be, and fitting to the smaller of the two is what
+        # "the entire tile set" means.
+        zoom = ps.palette_fit_zoom(
+            tileset.image_w, tileset.image_h, avail, sp(PICKER_MAX_H)
+        )
+        state.palette_zoom_fit = False
+    if state.palette_zoom_rung:
+        zoom = ps.palette_zoom_rung(zoom, state.palette_zoom_rung)
+        state.palette_zoom_rung = 0
+    tab.palette_zoom[index] = zoom
+    return zoom
+
+
+def _zoom_row(ctx: Any, state: Any, tab: Any, ref: Any, index: int) -> None:
+    """Fit, out, in, and the percentage. The answer to "show me all of it".
+
+    No combo, unlike the canvas footer's. A map's useful zoom is
+    percentage-shaped and fixed percentages serve it; a palette's depends on
+    the atlas *and* the pane width, both of which move, so a fixed list would
+    spend most of its rows offering scales that show nothing.
+    """
+    from imgui_bundle import imgui
+
+    zoom = tab.palette_zoom.get(index)
+    if controls.button("Fit", tooltip="Zoom so the whole tileset is on screen."):
+        state.palette_zoom_fit = True
+    imgui.same_line()
+    if widgets.small_icon_button(
+        icons.MINUS, "Zoom out (Ctrl+wheel over the palette)", borderless=True
+    ):
+        state.palette_zoom_rung = -1
+    imgui.same_line()
+    if widgets.small_icon_button(
+        icons.PLUS, "Zoom in (Ctrl+wheel over the palette)", borderless=True
+    ):
+        state.palette_zoom_rung = 1
+    if zoom:
+        imgui.same_line()
+        # The canvas footer's own spelling, so one number does not read two
+        # ways in one mode.
+        widgets.muted(f"{zoom * 100:.0f}%")
+
+
+def _picker(
+    ctx: Any, state: Any, tab: Any, ref: Any, index: int, uid: str, epoch: int
+) -> None:
     from imgui_bundle import imgui
 
     tileset = ref.tileset
     texture = plotter_textures.tileset_texture(ctx, uid, index, tileset, epoch)
     avail = max(imgui.get_content_region_avail().x, sp(80))
-    # Whole-pixel zoom, at least 1: a tileset drawn at 0.7 of a pixel per pixel
-    # is unreadable, and the horizontal scrollbar that a >1 zoom needs is a
-    # better trade than a blurred palette.
-    zoom = max(1, int(avail // max(tileset.image_w, 1)))
+    zoom = _resolve_zoom(state, tab, tileset, index, avail)
+    # **One float decides both the picture and the hit grid.** Rounding the
+    # image's size to whole pixels while leaving the step fractional lets the
+    # drawn cell boundaries and the computed ones drift apart across a wide
+    # atlas -- worst at the right-hand end, which is precisely the part that
+    # used to be invisible and is the reason this pane was reported.
     width = tileset.image_w * zoom
     height = tileset.image_h * zoom
+
+    # The well. Horizontal scrolling is what the old comment here already
+    # assumed existed and never did: a pane-level flag was the alternative and
+    # would have scrolled the Tile form and the buttons with it, as well as
+    # letting the property editor's own width push a bar across the whole pane.
+    # The scrollbar lives *inside* the child, so its height is reserved only
+    # when there is going to be one -- otherwise every atlas that fits pays for
+    # a bar it does not have, which is a strip of dead panel under the picture.
+    bar = imgui.get_style().scrollbar_size if width > avail else 0.0
+    inner_h = min(max(height + bar + sp(2), sp(PICKER_MIN_H)), sp(PICKER_MAX_H))
+    imgui.begin_child(
+        "##tileset-well",
+        (-1, inner_h),
+        imgui.ChildFlags_.borders.value,
+        imgui.WindowFlags_.horizontal_scrollbar.value,
+    )
 
     origin = imgui.get_cursor_screen_pos()
     if texture is None:
         # No GL context: the headless smoke suite and every state-only test.
-        # A placeholder keeps the layout identical so a screenshot pass still
-        # exercises the geometry around it.
-        widgets.thumb_placeholder(min(width, avail), icons.GRID)
+        # The *same* rectangle the image would occupy, not a square of its
+        # width -- a placeholder that is a different shape from the thing it
+        # stands in for makes every headless assertion about this geometry a
+        # claim about something the app never draws.
+        widgets.thumb_placeholder(width, icons.GRID, height)
     else:
         imgui.image(widgets.texture_ref(texture), (width, height))
 
@@ -393,6 +488,18 @@ def _picker(ctx: Any, state: Any, ref: Any, index: int, uid: str, epoch: int) ->
             origin.y + margin + r1 * step_h + tileset.tile_h * zoom,
         )
         draw.add_rect(lo, hi, imgui.get_color_u32((1.0, 1.0, 1.0, 0.9)), 0.0, sp(2))
+
+    # Ctrl+wheel, the gesture a Tiled or Aseprite user already has. Guarded on
+    # the modifier so a plain wheel still scrolls the well, and applied next
+    # frame through the pending field rather than here -- the image for this
+    # frame has already been submitted at the old scale, and re-deriving the
+    # geometry underneath it would put the selection rectangle a rung out.
+    if imgui.is_window_hovered():
+        wheel = imgui.get_io().mouse_wheel
+        if wheel and imgui.get_io().key_ctrl:
+            state.palette_zoom_rung = 1 if wheel > 0 else -1
+
+    imgui.end_child()
 
     imgui.dummy((0, 2))
     if state.brush is None:

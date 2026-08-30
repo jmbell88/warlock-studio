@@ -24,8 +24,9 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from .. import controls, inker_mode, theme, widgets
+from .. import controls, icons, inker_mode, theme, widgets
 from ..inker import transform
+from ..manual import render as manual_render
 from ..tokens import sp
 from . import inker_colors
 
@@ -69,9 +70,13 @@ def popups(ctx: Any) -> None:
         # recovery offer), and the request is answered then.
         state.pending_dialog = wanted
     elif wanted and tab is not None:
-        if wanted == "inker-resize":
+        if wanted == "inker-scale":
+            # Measured once, as the dialog opens: it is a whole-document scan
+            # and the frame loop must never carry one per frame.
             _measure_pixel_grid(ctx, tab)
-            imgui.open_popup("inker-resize")
+            imgui.open_popup(SCALE_DIALOG)
+        elif wanted == "inker-resize":
+            imgui.open_popup(CANVAS_DIALOG)
         elif wanted == FILTER_POPUP:
             _open_filter(ctx, tab)
         elif wanted == CONVERT_POPUP:
@@ -90,7 +95,11 @@ def popups(ctx: Any) -> None:
     _sheet_import_popup(ctx, state)
     if tab is None:
         return
-    _resize_popup(ctx, tab)
+    # ``opening`` is threaded from the dispatcher rather than sniffed with
+    # ``is_popup_open``: ``popover_enter`` needs *the frame it appeared on*,
+    # and this is the only place that knows which one that was.
+    _scale_dialog(ctx, tab, opening=(wanted == "inker-scale"))
+    _canvas_dialog(ctx, tab, opening=(wanted == "inker-resize"))
     _filter_popup(ctx, tab)
 
 
@@ -112,13 +121,20 @@ def _measure_pixel_grid(ctx: Any, tab: Any) -> None:
     ctx.state.preview[key] = found
 
 
-def _descale_row(ctx: Any, tab: Any) -> bool:
+def _descale_row(ctx: Any, tab: Any, *, refused: bool = False) -> bool:
     """The detected-lattice line and its button, or nothing at all.
 
     Nothing at all is the common case and the important one: an ordinary
-    drawing has no lattice, and the popup must then be exactly what it was
+    drawing has no lattice, and the dialog must then be exactly what it was
     before this existed. Never applied silently -- the same rule the tilesheet
     detector follows at the import doors.
+
+    Lives on **Image size** rather than Canvas size: undoing an upscale is a
+    resampling question, and an anchor has nothing to say about it.
+
+    ``refused`` is the tilemap case. ``descale_to_grid`` refuses one by name
+    exactly as ``scale`` does, so the button says why instead of raising out of
+    the frame loop.
     """
     found = ctx.state.preview.get(f"inker_grid:{tab.uid}") or {}
     scale = found.get("scale")
@@ -127,33 +143,202 @@ def _descale_row(ctx: Any, tab: Any) -> bool:
     width, height = transform.descale_size(tab.doc.size, scale, found["phase"])
     if not width or not height:
         return False
+    imgui.separator()
     widgets.muted(f"Detected a {scale} px pixel grid - true size {width} x {height}")
-    if controls.button("Descale", (sp(180), 0)):
+    if widgets.disabled_button(
+        "Descale",
+        not refused,
+        (sp(180), 0),
+        reason=_NO_TILEMAP_SCALE,
+        tooltip=(
+            "Undo an upscale: take one pixel per detected cell, rather than "
+            "resampling to that size."
+        ),
+    ):
         tab.doc.descale_to_grid(scale, found["phase"])
         tab.view.fitted = False
         return True
     return False
 
 
-def _resize_popup(ctx: Any, tab: Any) -> None:
-    if not imgui.begin_popup("inker-resize"):
-        return
-    widgets.popup_chrome(_imgui=imgui)
-    key = f"inker_resize:{tab.uid}"
-    # Clamped on the way *in* as well as on the way out: the stored value
-    # outlives one opening of the popup, and a document that has since been
-    # cropped must not carry a size typed against the one it used to be.
-    width, height = inker_mode.clamp_resize(
-        tab.doc.size, *(ctx.state.preview.get(key) or tab.doc.size)
+#: The two dialogs' imgui ids, which are also their **titles**:
+#: ``begin_popup_modal`` draws a title bar and "inker-resize" is not a title.
+#: The request keys the menu writes into ``pending_dialog`` stay what they were
+#: -- ``CONVERT_POPUP``'s precedent, and ``tests/inker/test_inker_ops.py`` pins
+#: ``inker-resize`` as the id one menu row asks for.
+SCALE_DIALOG = "Image size"
+CANVAS_DIALOG = "Canvas size"
+
+#: The narrowest either dialog may be. ``always_auto_resize`` otherwise settles
+#: on whichever line happens to be widest, which makes the modal's width a
+#: function of the document's current pixel count.
+DIALOG_W = 360.0
+
+#: The canvas preview's side, in design pixels.
+PREVIEW_BOX = 96.0
+
+#: Scaling a tilemap would have to rescale the tileset with it, which is not
+#: modelled -- ``Document.scale`` refuses by name. Said on the button rather
+#: than raised out of the frame loop, which is what used to happen.
+_NO_TILEMAP_SCALE = (
+    "A document with a tilemap layer cannot be scaled: the tileset would have "
+    "to be re-cut, which is a different operation. Canvas size still works."
+)
+
+#: Where each anchor cell's arrow points, by the unit vector ``anchor_cell``
+#: answers with. ``(0, 0)`` is the anchor's own cell and holds the picture.
+_ANCHOR_ARROWS = {
+    (0, 0): icons.IMAGE,
+    (1, 0): icons.ARROW_RIGHT,
+    (-1, 0): icons.ARROW_LEFT,
+    (0, 1): icons.ARROW_DOWN,
+    (0, -1): icons.ARROW_UP,
+    (1, 1): icons.ARROW_DOWN_RIGHT,
+    (-1, 1): icons.ARROW_DOWN_LEFT,
+    (1, -1): icons.ARROW_UP_RIGHT,
+    (-1, -1): icons.ARROW_UP_LEFT,
+}
+
+
+def _begin_dialog(name: str, appearing: bool) -> tuple[bool, float]:
+    """Open one of this module's modals with the house's surface treatment.
+
+    ``plotter_canvas.setup_popup``'s twelve lines, factored so the two dialogs
+    cannot drift apart -- ``popup_chrome``'s own argument ("stops a newly added
+    popup choosing its own depth") one level up.
+
+    Depth is ``overlay``, the ``ConfirmQueue``'s, not ``popup_chrome``'s raised:
+    a modal is the surface that stops the app, and it should sit at the height
+    of the thing that stops the app.
+    """
+    centre = imgui.get_main_viewport().get_center()
+    imgui.set_next_window_pos(centre, imgui.Cond_.appearing.value, (0.5, 0.5))
+    alpha, rise = widgets.popover_enter(f"inker/{name}", appearing)
+    frosted = widgets.frosted()
+    if frosted:
+        imgui.set_next_window_bg_alpha(0.0)
+    imgui.push_style_var(imgui.StyleVar_.alpha.value, alpha)
+    radius = widgets.push_surface_rounding()
+    opened, _ = imgui.begin_popup_modal(
+        name, None, imgui.WindowFlags_.always_auto_resize.value
     )
-    imgui.set_next_item_width(sp(90))
-    changed_w, width = controls.input_int("W", int(width), 0)
-    imgui.same_line()
-    imgui.set_next_item_width(sp(90))
-    changed_h, height = controls.input_int("H", int(height), 0)
-    if changed_w or changed_h:
-        ctx.state.preview[key] = inker_mode.clamp_resize(tab.doc.size, width, height)
+    widgets.pop_surface_rounding()
+    if not opened:
+        imgui.pop_style_var()
+        return False, 0.0
+    widgets.window_shadow("overlay", radius=radius)
+    if frosted:
+        widgets.window_backdrop(radius=radius)
+    if rise > 0.0:
+        imgui.dummy((0, rise))
+    imgui.dummy((sp(DIALOG_W), 0))
+    return True, rise
+
+
+def _end_dialog() -> None:
+    imgui.end_popup()
+    imgui.pop_style_var()
+
+
+def _wh_row(
+    prefix: str, value: tuple[float, float], *, integer: bool, step: float
+) -> tuple[str, tuple[float, float]]:
+    """Width and Height side by side. -> ``(which axis moved, the new pair)``.
+
+    **Which axis, not a bare "changed" flag.** The proportion chain has to know
+    what the user typed, or whichever field is read second wins and typing a
+    width silently rewrites it from the height that has not moved.
+    """
+    axis = ""
+    out = [float(value[0]), float(value[1])]
+    for index, (label, tag) in enumerate((("W", "w"), ("H", "h"))):
+        if index:
+            imgui.same_line()
+        imgui.set_next_item_width(sp(90))
+        # **Step zero, which is what hides imgui's own -/+ buttons.** They are
+        # drawn *inside* the item's width, so at ``sp(90)`` a four-digit size
+        # came out as "16" with the rest clipped -- the field stopped showing
+        # the number it holds, which on a dialog whose entire subject is that
+        # number is worse than having no stepper.
+        if integer:
+            changed, typed = controls.input_int(
+                f"{label}##{prefix}{tag}", int(round(out[index])), int(step)
+            )
+        else:
+            changed, typed = controls.input_float(
+                f"{label}##{prefix}{tag}", out[index], step, format="%.1f"
+            )
+        if changed:
+            out[index] = float(typed)
+            axis = tag
+    return axis, (out[0], out[1])
+
+
+def _scale_dialog(ctx: Any, tab: Any, *, opening: bool = False) -> None:
+    """Photoshop's Image Size / GIMP's Scale Image: resample the picture.
+
+    **Pixels are the one stored truth** and percent is derived every frame.
+    That keeps ``inker_mode.clamp_resize`` the single ceiling and makes it
+    impossible for the field to promise a size the document will not get. The
+    cost is a snap -- typing 50 on a three-pixel axis gives two pixels and
+    redisplays 66.7 -- which is honest, and is what Photoshop does; a stored
+    percentage would be a second source of truth ``clamp_resize`` cannot
+    govern.
+    """
+    opened, _rise = _begin_dialog(SCALE_DIALOG, opening)
+    if not opened:
+        return
     state = inker_mode.ensure(ctx)
+    old = tab.doc.size
+    key = f"inker_scale:{tab.uid}"
+    # Clamped on the way *in* as well as out: the stored pair outlives one
+    # opening, and a document since cropped must not carry a size typed against
+    # the one it used to be.
+    width, height = inker_mode.clamp_resize(
+        old, *(ctx.state.preview.get(key) or old)
+    )
+
+    widgets.muted(f"Current: {old[0]} x {old[1]} px")
+    imgui.same_line()
+    manual_render.help_button_inline(ctx, "inker-image-size")
+    imgui.separator()
+
+    units = widgets.segmented_control(
+        "##scale-units",
+        [("pixels", "Pixels"), ("percent", "Percent")],
+        state.scale_units,
+    )
+    if units != state.scale_units:
+        state.scale_units = units
+
+    if state.scale_units == "percent":
+        axis, typed = _wh_row(
+            "scale", transform.size_percent(old, (width, height)),
+            integer=False, step=0.0,
+        )
+        if axis:
+            width, height = transform.percent_size(old, typed)
+    else:
+        axis, typed = _wh_row(
+            "scale", (float(width), float(height)), integer=True, step=0
+        )
+        if axis:
+            width, height = int(typed[0]), int(typed[1])
+
+    imgui.same_line()
+    chain = icons.LINK if state.scale_linked else icons.UNLINK
+    if widgets.icon_button(
+        f"{chain}##scale-chain",
+        "Keep the width and height in proportion",
+        selected=state.scale_linked,
+    ):
+        state.scale_linked = not state.scale_linked
+    if axis and state.scale_linked:
+        width, height = transform.linked_size(old, (int(width), int(height)), axis)
+    if axis:
+        ctx.state.preview[key] = inker_mode.clamp_resize(old, width, height)
+    width, height = inker_mode.clamp_resize(old, width, height)
+
     state.resample = widgets.labeled_combo(
         "Resample",
         state.resample,
@@ -164,64 +349,207 @@ def _resize_popup(ctx: Any, tab: Any) -> None:
             "thousands of colours in it. Smooth is right for everything else."
         ),
     )
-    anchor = _anchor_grid(ctx, tab)
-    imgui.dummy((0, 4))
+
+    # **Both readings, always.** A units toggle that hid the other number would
+    # make the reader flip back and forth to answer "is that the size I meant".
+    pct = transform.size_percent(old, (width, height))
+    widgets.muted(
+        f"New size: {width} x {height} px  ({pct[0]:.0f}% x {pct[1]:.0f}%)"
+    )
+
+    tilemap = bool(tab.doc._holds_tilemap())
+    unchanged = (width, height) == tuple(old)
+
     imgui.begin_disabled(tab.busy)
-    if controls.button("Scale image", (sp(180), 0)):
-        tab.doc.scale(inker_mode.clamp_resize(tab.doc.size, width, height),
-                      resample=state.resample)
-        tab.view.fitted = False
-        imgui.close_current_popup()
-    # Two different operations that a single "resize" would conflate: one
-    # resamples the picture, the other changes how much room it has. The anchor
-    # belongs to the second: scaling has nowhere to put slack.
-    if controls.button("Resize canvas", (sp(180), 0)):
-        tab.doc.resize_canvas(
-            inker_mode.clamp_resize(tab.doc.size, width, height), anchor=anchor
-        )
-        tab.view.fitted = False
-        imgui.close_current_popup()
-    if _descale_row(ctx, tab):
+    # **Above the action row, not beside it.** Descale is a separate offer with
+    # its own explanatory line, and drawn after the buttons it put Cancel on
+    # the same line as itself -- which reads as though Cancel belonged to the
+    # descale rather than to the dialog.
+    if _descale_row(ctx, tab, refused=tilemap):
         imgui.close_current_popup()
     imgui.end_disabled()
-    imgui.end_popup()
+
+    imgui.separator()
+    imgui.begin_disabled(tab.busy)
+    if widgets.disabled_button(
+        "Scale",
+        not tilemap and not unchanged,
+        (sp(120), 0),
+        reason=_NO_TILEMAP_SCALE if tilemap else "That is already the size it is.",
+        tooltip="Resample the picture to this size.",
+    ):
+        try:
+            tab.doc.scale((width, height), resample=state.resample)
+        except ValueError as exc:
+            ctx.toast(f"Not scaled: {exc}.", "error")
+        else:
+            tab.view.fitted = False
+            imgui.close_current_popup()
+    imgui.end_disabled()
+    imgui.same_line()
+    # **Never disabled.** A save starting while this is up must not leave a
+    # modal the user cannot dismiss.
+    if controls.button(
+        "Cancel##scale", (sp(120), 0), role=controls.ButtonRole.GHOST
+    ):
+        imgui.close_current_popup()
+    _end_dialog()
 
 
-# The grid, drawn in reading order. Taken from ``transform.ANCHORS`` rather
-# than written again here: the pane decides the layout and the engine owns what
-# each name means, which is why that table is written out rather than derived
-# from a 3x3 index.
-ANCHOR_ROWS = (
-    ("top-left", "top", "top-right"),
-    ("left", "centre", "right"),
-    ("bottom-left", "bottom", "bottom-right"),
-)
+def _canvas_dialog(ctx: Any, tab: Any, *, opening: bool = False) -> None:
+    """Photoshop's / GIMP's Canvas Size: change the room around the picture.
+
+    **Relative is a display mode over an absolute stored pair.** Storing the
+    delta instead would make the stored value mean different things depending
+    on a flag, and ``clamp_resize`` would have nothing to clamp.
+    """
+    opened, _rise = _begin_dialog(CANVAS_DIALOG, opening)
+    if not opened:
+        return
+    state = inker_mode.ensure(ctx)
+    old = tab.doc.size
+    key = f"inker_resize:{tab.uid}"
+    width, height = inker_mode.clamp_resize(
+        old, *(ctx.state.preview.get(key) or old)
+    )
+
+    widgets.muted(f"Current: {old[0]} x {old[1]} px")
+    imgui.same_line()
+    manual_render.help_button_inline(ctx, "inker-canvas-size")
+    imgui.separator()
+
+    changed, relative = controls.checkbox(
+        "Relative",
+        state.canvas_relative,
+        tooltip="Type how much to add or take away, rather than the new size.",
+    )
+    if changed:
+        state.canvas_relative = bool(relative)
+
+    if state.canvas_relative:
+        axis, typed = _wh_row(
+            "canvas", (float(width - old[0]), float(height - old[1])),
+            integer=True, step=0,
+        )
+        if axis:
+            width, height = old[0] + int(typed[0]), old[1] + int(typed[1])
+    else:
+        axis, typed = _wh_row(
+            "canvas", (float(width), float(height)), integer=True, step=0
+        )
+        if axis:
+            width, height = int(typed[0]), int(typed[1])
+    if axis:
+        ctx.state.preview[key] = inker_mode.clamp_resize(old, width, height)
+    width, height = inker_mode.clamp_resize(old, width, height)
+
+    anchor = _anchor_grid(ctx, tab)
+    imgui.same_line()
+    _canvas_preview(old, (width, height), anchor)
+
+    offset = transform.anchor_offset(old, (width, height), anchor)
+    delta = (width - old[0], height - old[1])
+    widgets.muted(
+        f"New size: {width} x {height} px  ({delta[0]:+d}, {delta[1]:+d})"
+    )
+    # The one thing the numbers cannot say is which side the room lands on, and
+    # this is the sentence that says it.
+    widgets.muted(f"The old image lands at {offset[0]}, {offset[1]}.")
+
+    imgui.separator()
+    imgui.begin_disabled(tab.busy)
+    if widgets.disabled_button(
+        "Resize",
+        (width, height) != tuple(old),
+        (sp(120), 0),
+        reason="That is already the size it is.",
+        tooltip="Grow or crop the canvas, leaving the picture unresampled.",
+    ):
+        try:
+            tab.doc.resize_canvas((width, height), anchor=anchor)
+        except ValueError as exc:
+            # ``resize_canvas`` refuses a non-tile-aligned offset **by name and
+            # before ``commit_floating``**, so nothing has changed when it does
+            # -- the toast is the whole remedy and the dialog stays open on the
+            # numbers that caused it.
+            ctx.toast(f"Not resized: {exc}.", "error")
+        else:
+            tab.view.fitted = False
+            imgui.close_current_popup()
+    imgui.end_disabled()
+    imgui.same_line()
+    if controls.button(
+        "Cancel##canvas", (sp(120), 0), role=controls.ButtonRole.GHOST
+    ):
+        imgui.close_current_popup()
+    _end_dialog()
+
+
+def _canvas_preview(
+    old: tuple[int, int], new: tuple[int, int], anchor: str
+) -> None:
+    """The new canvas outlined, with the old image where the anchor puts it.
+
+    Two rectangles on the draw list, no texture. GIMP draws a full drag
+    preview and Photoshop draws none; this is the half of GIMP's that answers
+    what the numbers cannot -- which side the new room opens on.
+    """
+    box = sp(PREVIEW_BOX)
+    origin = imgui.get_cursor_screen_pos()
+    imgui.dummy((box, box))
+    draw = imgui.get_window_draw_list()
+    new_rect, old_rect = transform.preview_boxes(old, new, anchor, box)
+    draw.add_rect(
+        (origin.x + new_rect[0], origin.y + new_rect[1]),
+        (origin.x + new_rect[2], origin.y + new_rect[3]),
+        imgui.get_color_u32(theme.rgba(theme.MUTED, 0.55)),
+        sp(2),
+    )
+    draw.add_rect_filled(
+        (origin.x + old_rect[0], origin.y + old_rect[1]),
+        (origin.x + old_rect[2], origin.y + old_rect[3]),
+        imgui.get_color_u32(theme.rgba(theme.ACCENT, 0.30)),
+        sp(2),
+    )
 
 
 def _anchor_grid(ctx: Any, tab: Any) -> str:
-    """Nine buttons saying where the old image sits in the new canvas.
+    """Nine cells saying where the old image sits in the new canvas.
 
-    Remembered per tab in the preview dictionary beside the width and height,
-    so reopening the popup after a mistake offers the same answer rather than
-    silently going back to the corner.
+    **Photoshop's grid.** The chosen cell holds the picture; every cell
+    *adjacent* to it holds an arrow pointing away -- the direction the new room
+    opens in -- and a cell that is not adjacent is blank, because an arrow
+    there would promise room that anchor never makes. All nine stay clickable.
+
+    Which cell shows what is ``transform.anchor_cell``'s answer, not this
+    function's: two spellings of "which cell is where" is one edit away from a
+    grid that highlights one cell and resizes towards another.
+
+    Remembered per tab beside the width and height, so reopening after a
+    mistake offers the same answer rather than silently going back to the
+    corner.
     """
-    from ..inker import transform as tf
-
     key = f"inker_anchor:{tab.uid}"
     current = ctx.state.preview.get(key) or "top-left"
-    widgets.field_label("anchor")
-    for row in ANCHOR_ROWS:
+    if current not in transform.ANCHORS:
+        current = "top-left"
+    widgets.field_label("Anchor")
+    imgui.begin_group()
+    for row in transform.ANCHOR_GRID:
         for name in row:
-            selected = name == current
-            if controls.button(f" ##anchor{name}", (sp(28), sp(24)), selected=selected):
+            if name != row[0]:
+                imgui.same_line()
+            # ``icon_button`` rather than a bare ``controls.button`` with a
+            # padded label: it centres the glyph in a square and carries the
+            # selection ring, neither of which nine blank buttons did.
+            glyph = _ANCHOR_ARROWS.get(transform.anchor_cell(current, name), " ")
+            if widgets.icon_button(
+                f"{glyph}##anchor-{name}", name, selected=name == current
+            ):
                 ctx.state.preview[key] = name
                 current = name
-            if imgui.is_item_hovered():
-                imgui.set_tooltip(name)
-            if name != row[-1]:
-                imgui.same_line()
-        imgui.new_line()
-    return current if current in tf.ANCHORS else "top-left"
+    imgui.end_group()
+    return current
 
 
 # --- filters ----------------------------------------------------------------

@@ -277,6 +277,175 @@ def test_a_sweep_delete_keeps_the_units_it_cannot_regenerate(svc):
     assert svc.store.get(units[0]["id"]) is not None
 
 
+# --- removing sweeps that are finished with -----------------------------------
+#
+# The Review list only ever grew. ``store.delete_sweep`` is called from exactly
+# one place -- the tail of ``_remove_units`` -- and the lifecycle paths that
+# actually take a sweep's units rewrite ``jobs`` rows without looking at
+# ``sweeps``, so a sweep whose assets went that way keeps its row for ever.
+# ``auto_cleanup`` cannot reach those either: it fires on ``todo`` reaching zero
+# *during a session*, so a sweep already finished when the app opened is never
+# offered to it. Measured on a real home: nine sweeps, every one with zero
+# units, 599 verdicts, and no job carrying a ``sweep_id``.
+
+
+def _judged(svc, unit_id: str, grade: int = -3) -> None:
+    from warlock.service import verdicts as svc_verdicts
+
+    svc.store.set_status(unit_id, "done")
+    svc_verdicts.record_verdict(svc, unit_id, grade=grade)
+
+
+def test_outstanding_counts_what_can_still_be_judged_and_nothing_else():
+    """``error`` and ``cancelled`` are the load-bearing exclusions.
+
+    They can never be graded, so counting them would make every sweep that had
+    a failure permanently unremovable -- the same clutter one generation later.
+    """
+    rows = [
+        {"id": "a", "status": "queued"},
+        {"id": "b", "status": "running"},
+        {"id": "c", "status": "done"},
+        {"id": "d", "status": "done"},
+        {"id": "e", "status": "error"},
+        {"id": "f", "status": "cancelled"},
+    ]
+    assert svc_sweeps.outstanding_units(rows, {"c", "d"}) == 2
+    assert svc_sweeps.outstanding_units(rows, {"c"}) == 3
+    assert svc_sweeps.outstanding_units([], set()) == 0
+    # A sweep with nothing but failures owes nothing.
+    assert svc_sweeps.outstanding_units(rows[4:], set()) == 0
+
+
+def test_a_sweep_whose_rows_went_elsewhere_is_removable(svc):
+    """The user's actual case: the assets are long gone and the row is not.
+
+    Built the way it really happened -- the units deleted through the job
+    lifecycle, which never touches the ``sweeps`` table.
+    """
+    plan = _plan(seeds=(1,), axes=(Axis("lora_weight", (0.6,)),))
+    result = svc_sweeps.create_sweep(svc, plan)
+    for unit in svc.store.sweep_jobs(result["id"]):
+        svc.store.delete_if_not_running(unit["id"])
+    assert svc.store.sweep_jobs(result["id"]) == []
+    assert [s["id"] for s in svc_sweeps.list_sweeps(svc)] == [result["id"]]
+
+    removable = svc_sweeps.removable_sweeps(svc)
+    assert [entry["id"] for entry in removable] == [result["id"]]
+    assert removable[0]["units"] == 0
+
+    outcome = svc_sweeps.remove_reviewed_sweeps(svc)
+    assert outcome["sweeps"] == 1
+    assert svc_sweeps.list_sweeps(svc) == []
+
+
+def test_a_sweep_with_an_unjudged_unit_is_left_alone(svc):
+    plan = _plan(seeds=(1, 2), axes=(Axis("lora_weight", (0.6,)),))
+    result = svc_sweeps.create_sweep(svc, plan)
+    units = svc.store.sweep_jobs(result["id"])
+    _judged(svc, units[0]["id"])
+    svc.store.set_status(units[1]["id"], "done")  # done, never graded
+
+    assert svc_sweeps.removable_sweeps(svc) == []
+    outcome = svc_sweeps.remove_reviewed_sweeps(svc)
+    assert outcome["sweeps"] == 0
+    assert [s["id"] for s in svc_sweeps.list_sweeps(svc)] == [result["id"]]
+
+
+def test_a_queued_unit_holds_its_sweep_back(svc):
+    """The race guard, before ``_remove_units``' own guards are even reached."""
+    plan = _plan(seeds=(1, 2), axes=(Axis("lora_weight", (0.6,)),))
+    result = svc_sweeps.create_sweep(svc, plan)
+    units = svc.store.sweep_jobs(result["id"])
+    _judged(svc, units[0]["id"])
+    # units[1] is still 'queued' as created.
+    assert svc_sweeps.removable_sweeps(svc) == []
+
+
+def test_removing_reviewed_sweeps_keeps_every_verdict(svc):
+    """What the whole feature is for: the analytics, not the keepsake."""
+    plan = _plan(seeds=(1, 2), axes=(Axis("lora_weight", (0.6,)),))
+    result = svc_sweeps.create_sweep(svc, plan)
+    units = svc.store.sweep_jobs(result["id"])
+    for unit in units:
+        _judged(svc, unit["id"])
+    before = len(svc.store.latest_verdicts())
+    assert before == len(units)
+
+    outcome = svc_sweeps.remove_reviewed_sweeps(svc)
+
+    assert outcome["sweeps"] == 1
+    assert svc_sweeps.list_sweeps(svc) == []
+    # The rows outlive the sweep exactly as they already outlive its meshes:
+    # ``sweep_id`` is a denormalised string with no foreign key behind it.
+    assert len(svc.store.latest_verdicts()) == before
+
+
+def test_the_retention_override_is_off_by_default_and_says_what_it_kept(svc):
+    plan = _plan(seeds=(1, 2), axes=(Axis("lora_weight", (0.6,)),))
+    result = svc_sweeps.create_sweep(svc, plan)
+    units = svc.store.sweep_jobs(result["id"])
+    # Every unit judged, or the sweep is not removable at all and this would be
+    # testing the outstanding rule instead of the retention one.
+    _judged(svc, units[0]["id"], grade=3)  # an accept: retained
+    for unit in units[1:]:
+        _judged(svc, unit["id"], grade=-3)
+
+    outcome = svc_sweeps.remove_reviewed_sweeps(svc)
+    assert outcome["kept"] == 1
+    assert outcome["sweeps"] == 0, "the row survives while a unit is kept"
+    assert svc.store.get(units[0]["id"]) is not None
+
+    # Ticked, the same call takes the accepted unit and the row with it.
+    outcome = svc_sweeps.remove_reviewed_sweeps(svc, drop_retained=True)
+    assert outcome["sweeps"] == 1
+    assert svc.store.get(units[0]["id"]) is None
+    assert svc_sweeps.list_sweeps(svc) == []
+    # Still not the evidence.
+    assert len(svc.store.latest_verdicts()) == len(units)
+
+
+def test_naming_a_sweep_that_is_not_finished_refuses_before_removing_anything(svc):
+    """``create_sweep``'s all-or-nothing rule, pointed the other way.
+
+    Half a bulk delete is a list the user cannot reason about, and the half
+    that went is not coming back -- so the whole set is validated first.
+    """
+    ready = svc_sweeps.create_sweep(
+        svc, _plan(label="ready", seeds=(1,), axes=(Axis("lora_weight", (0.6,)),))
+    )
+    _judged(svc, svc.store.sweep_jobs(ready["id"])[0]["id"])
+    busy = svc_sweeps.create_sweep(
+        svc, _plan(label="busy", seeds=(1,), axes=(Axis("lora_weight", (0.7,)),))
+    )
+
+    with pytest.raises(Invalid) as caught:
+        svc_sweeps.remove_reviewed_sweeps(svc, sweep_ids=[ready["id"], busy["id"]])
+    assert caught.value.field == "sweep_ids"
+
+    # Nothing went, including the one that was ready.
+    assert {s["id"] for s in svc_sweeps.list_sweeps(svc)} == {ready["id"], busy["id"]}
+
+
+def test_naming_a_sweep_that_is_gone_is_a_not_found_carrying_its_field(svc):
+    with pytest.raises(NotFound) as caught:
+        svc_sweeps.remove_reviewed_sweeps(svc, sweep_ids=["nope"])
+    assert caught.value.field == "sweep_ids"
+
+
+def test_removing_nothing_is_a_no_op_rather_than_a_refusal(svc):
+    """The button is not drawn when there is nothing to remove, and a bulk
+    no-op is not user error."""
+    outcome = svc_sweeps.remove_reviewed_sweeps(svc, sweep_ids=[])
+    assert outcome == {
+        "ok": True,
+        "sweeps": 0,
+        "deleted": 0,
+        "remaining": 0,
+        "kept": 0,
+    }
+
+
 def test_an_axis_that_changes_nothing_is_refused_rather_than_run_n_times(svc):
     """The regression: ``expand`` compares each unit against the *base* only,
     and ``guidance.normalize`` drops a scale with nothing to scale -- so an

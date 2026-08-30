@@ -80,7 +80,7 @@ _STAGE_SECTIONS: dict[str, tuple[str, ...]] = {
     # deformation sheet. The decision and the button are in the stage's own
     # column; retarget and retexture join them because both act on the mesh a
     # rig was fitted to and both are read *after* looking at it.
-    "rig": ("_weighting", "_bones", "_deform_qa", "retarget", "retexture"),
+    "rig": ("_weighting", "_bones", "_deform_qa", "retarget", "remesh", "retexture"),
     # Posing produces poses, and the thing made *of* poses is a sprite sheet.
     "pose": ("sheet",),
     # The grid itself is the stage's *column*; this side answers the question
@@ -91,7 +91,7 @@ _STAGE_SECTIONS: dict[str, tuple[str, ...]] = {
 
 
 def _stage_body(ctx: Any, job: Any) -> None:
-    from . import retarget_panel, sheet_panel, sprite_panel, texture_panel
+    from . import remesh_panel, retarget_panel, sheet_panel, sprite_panel, texture_panel
 
     named = {
         "_edit_actions": lambda: _edit_actions(ctx, job),
@@ -107,6 +107,7 @@ def _stage_body(ctx: Any, job: Any) -> None:
         "_deform_qa": lambda: _deform_qa(ctx, job),
         "sprites": lambda: sprite_panel.draw(ctx, job),
         "retarget": lambda: retarget_panel.draw(ctx, job),
+        "remesh": lambda: remesh_panel.draw(ctx, job),
         "retexture": lambda: texture_panel.draw(ctx, job),
         "sheet": lambda: sheet_panel.draw(ctx, job),
     }

@@ -390,7 +390,12 @@ def test_every_document_mutating_panel_is_gated_on_the_saving_flag():
         # ``_canvas_ops`` was the bridge panel's row of flips and rotates; the
         # gate is ``inker_ops.ready`` now, and every op that reads it is
         # checked by ``tests/inker/test_inker_ops.py``.
-        inker_bridge._resize_popup,
+        # Two dialogs since 2026-08-29, and both carry the gate: the split put
+        # Photoshop's Image Size and Canvas Size on separate modals, and a
+        # committing button on either would otherwise write into a document
+        # that is being encoded on the task thread.
+        inker_bridge._scale_dialog,
+        inker_bridge._canvas_dialog,
         inker_tools._options,
         inker_timeline._frame_menu,
         inker_timeline._cell_menu,

@@ -296,6 +296,87 @@ def retexture_job(
     return {"id": new_id, "source_job": job_id, "stale": stale_surface_artifacts(job_dir)}
 
 
+def remesh_job(
+    svc: WarlockService,
+    job_id: str,
+    *,
+    profile: str | None = None,
+    custom_faces: int | None = None,
+    texture_size: int | None = None,
+    close_holes: bool = False,
+) -> dict[str, Any]:
+    """Queue a game-ready remesh of a finished mesh: quads to a budget, a fresh
+    unwrap, and the old surface baked onto the new.
+
+    The third rework, and it sits between the other two. Like a retarget it
+    changes geometry, so it invalidates *every* derived export and makes a rig
+    describe a mesh that no longer exists -- ``stale_rig_artifacts`` is
+    reported here for the same reason. Like a re-texture it is minutes of an
+    out-of-process Blender run, so it takes the queue rather than the inline
+    path: not for the resident pipe (it needs none) but because the serial
+    worker is what keeps a multi-minute bake from overlapping a trellis run,
+    exactly as ``_rig`` states.
+
+    ``source.glb`` is never touched: a remesh reads ``model.glb`` -- the mesh
+    as the user sees it, current skin included -- and publishes over it. A
+    later retarget rebuilds from the reconstruction and discards the remesh,
+    which is the standing rule that ``model.glb`` is derived and
+    ``source.glb`` is the authority.
+    """
+    from .. import doctor
+    from ..pipelines import remesh
+
+    check_job_id(job_id)
+    job = svc.require_job(job_id)
+    if job["status"] in ("queued", "running"):
+        raise Conflict(f"job is {job['status']}; remesh it once it finishes")
+    _require_no_dependents(svc, job_id, "remesh")
+    job_dir = svc.job_dir(job_id)
+    if not (job_dir / "model.glb").exists():
+        raise Invalid("this job has no mesh to remesh")
+    # At the door, where refusing is cheap: without bpy the worker would take a
+    # queue slot to exit 3. The UI hides the panel on the same answer.
+    check = doctor.blender_check()
+    if not check.ok:
+        raise Invalid(
+            "a remesh runs in Blender, which is not installed "
+            "(`uv sync --extra rig` on Python 3.13)",
+            field="remesh_profile",
+        )
+    key = profile or remesh.DEFAULT_PROFILE
+    try:
+        faces = remesh.resolve(key, custom_faces)
+    except ValueError as exc:
+        raise Invalid(
+            str(exc), field="custom_faces" if key == "custom" else "remesh_profile"
+        ) from exc
+    size = None if texture_size is None else int(texture_size)
+    if size is not None and size not in remesh.TEXTURE_SIZES:
+        raise Invalid(
+            f"texture_size must be one of {list(remesh.TEXTURE_SIZES)}",
+            field="texture_size",
+        )
+    params: dict[str, Any] = {
+        # ``remesh_profile`` rather than ``profile``: the latter is the gltfpack
+        # tier and is in VECTOR_PARAMS, and a quad budget wearing that key
+        # would land in the findings corpus as a triangle tier.
+        "source_job": job_id,
+        "remesh_profile": key,
+        "target_faces": faces,
+        "close_holes": bool(close_holes),
+    }
+    if key == "custom":
+        params["custom_faces"] = faces
+    if size is not None:
+        params["texture_size"] = size
+    # Zero on this kind -- Blender is out of process -- but held for the
+    # uniformity every queued kind has: a budget question is asked at the door.
+    check_vram(svc, "remesh", "model", params)
+    new_id = svc.store.create("remesh", job["prompt"], params, uuid.uuid4().hex[:12])
+    svc.wake_worker()
+    return {"id": new_id, "source_job": job_id, "stale": stale_rig_artifacts(job_dir)}
+
+
 def _require_no_dependents(svc: WarlockService, job_id: str, what: str) -> None:
     """Refuse while another job is still writing into this one's directory.
 

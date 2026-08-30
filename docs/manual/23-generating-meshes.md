@@ -174,6 +174,38 @@ because those describe the old geometry exactly.
 Press **Rebuild mesh** to apply. The served `model.glb` is never written in place: the new mesh is
 staged and swapped, so nothing reading the old one sees a truncated file.
 
+## Game-ready remesh
+
+A triangle budget keeps the reconstruction's surface and thins it. A remesh replaces the surface:
+the mesh is rebuilt as **quads** at a face budget, unwrapped afresh, and the old colour, roughness
+and normals are baked onto the new geometry. This is the step that turns a ~300k-triangle
+reconstruction into something an engine budgets for, and it is what every commercial generator
+calls "game-ready". Because the high-resolution geometry ends up in a tangent-space normal map,
+a 2k-quad prop keeps most of the detail the budget threw away.
+
+The control is in the inspector at the **Rig** stage, under the collapsed **Game-ready remesh**
+header, between the triangle budget and the surface texture. It runs in Blender, so it needs the
+`rig` extra; without it the header says so and offers nothing.
+
+**Quads** is the budget: Low (2k), Medium (8k), High (30k) or Custom. **Bake at** is the texture
+resolution, matching the mesh's own atlas by default. **Close holes first** runs a voxel pass
+before the remesh, which seals the gaps a reconstruction leaves at the cost of slightly rounding
+sharp edges — worth trying on a mesh whose audit shows holes, and worth leaving off on a sword.
+
+A remesh is a queued job, like a re-texture, and its product lands over the source job's
+`model.glb`; `source.glb` is never touched. Two things follow. A later **Rebuild mesh** at a
+triangle budget rebuilds from the reconstruction and discards the remesh — `model.glb` is derived
+and `source.glb` is the authority, always. And a remesh changes geometry, so every derived export
+is deleted and a rig, its poses and its sheets are reported stale before the button, exactly as a
+retarget reports them.
+
+The last remesh's result is printed under the button: faces, the quad fraction, and the bake
+size. If Blender's quad remesher refused the surface — a reconstruction is often not manifold
+enough — the line says the mesh was **decimated** instead, in triangles at the same budget, so a
+triangle mesh is never presented as a quad one. The result also records whether anything the
+mesh had before (UVs, both PBR maps, material assignment) was lost, in the same terms the triangle
+tiers are qualified in.
+
 ## Surface texture
 
 A re-texture gives a finished mesh a new skin without touching its geometry. The control is in the

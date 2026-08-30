@@ -266,3 +266,12 @@ def _toolbar(ctx: Any, state: Any) -> None:
         state.follow = bool(value)
     imgui.same_line()
     widgets.muted(f"{icons.AUDIO_WAVEFORM} row {state.row:03d}")
+    # **What the grid is editing, said where the editing happens.** Adding a
+    # sound effect repoints this grid at the effect's own pattern, and the
+    # panel that did it is in another column; a reader who typed into the grid
+    # afterwards had nothing on this surface telling them which of the two
+    # documents-within-the-document they were changing.
+    label = sirens_mode.caret_pattern_label(ctx)
+    if label:
+        imgui.same_line()
+        widgets.muted(f"|  {label}")

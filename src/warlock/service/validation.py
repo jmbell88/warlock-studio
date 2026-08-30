@@ -167,6 +167,10 @@ DERIVED_PARAMS = (
     # inherit a coverage figure about an atlas it is about to reconstruct from
     # scratch.
     "retexture",
+    # What a remesh did to this mesh -- face count, quad fraction, which
+    # path produced the surface, and the tiercheck verdict against the mesh
+    # it replaced. Derived for ``retexture``'s reason exactly.
+    "remesh",
     # Which canonical post-processing steps failed on *this* run. Derived by
     # definition -- it is a statement about the artifacts this reconstruction
     # produced -- so a reroll must start clean or it would wear a degradation

@@ -429,8 +429,162 @@ SIRENS_BASICS = Tour(
     ),
 )
 
+SIRENS_SFX = Tour(
+    key="sirens-sfx",
+    title="Making a sound effect",
+    blurb="Three minutes. A blip, a shape, an audition and a WAV. No GPU needed.",
+    steps=(
+        Step(
+            id="open-sirens",
+            title="Open Sirens",
+            body=(
+                "A sound effect lives in the same document a song does, and is made with "
+                "the same grid. That is the one idea this tour is about: there is no "
+                "separate effect editor to learn.\n\n"
+                "If this machine has no sound device you can still do every step -- you "
+                "simply will not hear the result, and the audition button says so."
+            ),
+            anchor="rail/sirens",
+            done=Condition("mode_is", "sirens"),
+        ),
+        Step(
+            id="new-song",
+            title="Start a document",
+            body=(
+                "Ctrl+N.\n\n"
+                "Even if you only want effects, you start from a song: the effects are "
+                "kept inside it, and the instruments they play through are the ones it "
+                "already has."
+            ),
+            mode="sirens",
+            done=Condition("doc_open", "sirens"),
+        ),
+        Step(
+            id="find-effects",
+            title="Find the Sound effects panel",
+            body=(
+                "Right-hand column, below Instruments and Envelopes.\n\n"
+                "An effect is a name, a tempo, a speed and a pattern of its own. Nothing "
+                "else -- which is why the grid can edit it."
+            ),
+            mode="sirens",
+            anchor="sirens/effects",
+            chapter=("34-sirens", "sound-effects"),
+        ),
+        Step(
+            id="add-one",
+            title="Press Add",
+            body=(
+                "One press makes three things: the effect, an eight-row pattern belonging "
+                "to it, and a caret move -- the grid in the middle of the window is now "
+                "showing that pattern rather than the song's.\n\n"
+                "It is a single undo step, so Ctrl+Z takes all of it back together."
+            ),
+            mode="sirens",
+            anchor="sirens/effects",
+            done=Condition("sfx_at_least", "1"),
+        ),
+        Step(
+            id="the-grid-moved",
+            title="The grid is now the effect editor",
+            body=(
+                "Look at the strip above the grid: it names the pattern you are editing "
+                "and says whether it is a song pattern or a sound effect. That readout is "
+                "the answer to 'what am I typing into', and it is worth checking whenever "
+                "a keystroke does something you did not expect.\n\n"
+                "Eight rows rather than sixty-four. An effect is short by construction."
+            ),
+            mode="sirens",
+            chapter=("34-sirens", "the-pattern-grid"),
+        ),
+        Step(
+            id="write-a-blip",
+            title="Type two notes",
+            body=(
+                "Click the first row's note column and type a note -- z is C, s is C#, x "
+                "is D, and the octave is on the strip above.\n\n"
+                "Then go down two rows and type a note several steps higher. Two notes a "
+                "few rows apart is already a blip; a rising pair reads as a pickup and a "
+                "falling pair as a hit."
+            ),
+            mode="sirens",
+            chapter=("14-making-a-soundtrack", "a-sound-effect"),
+        ),
+        Step(
+            id="pick-an-instrument",
+            title="Choose the voice it plays through",
+            body=(
+                "The second column is the instrument number, and the panel here is where "
+                "those are defined.\n\n"
+                "For an effect the noise channel's instrument is usually the interesting "
+                "one -- it is what a hit, a step or an explosion is made of, where the "
+                "pulse voices read as musical."
+            ),
+            mode="sirens",
+            anchor="sirens/instruments",
+            chapter=("34-sirens", "instruments"),
+        ),
+        Step(
+            id="shape-it",
+            title="Give it a shape",
+            body=(
+                "An envelope is what makes two notes a sound rather than a beep. Drag the "
+                "volume envelope's decay in and the blip becomes percussive; leave it flat "
+                "and it stays a tone.\n\n"
+                "This is the control that most changes how an effect reads, and it is the "
+                "one nothing on the grid can tell you about."
+            ),
+            mode="sirens",
+            anchor="sirens/envelopes",
+            chapter=("34-sirens", "the-envelope-editor"),
+        ),
+        Step(
+            id="tempo-and-speed",
+            title="Tempo and speed belong to the effect",
+            body=(
+                "Back in the Sound effects panel, the two sliders under the name are the "
+                "effect's own -- not the song's.\n\n"
+                "That is deliberate: a coin pickup is forty milliseconds whatever the "
+                "music happens to be doing. Raise the tempo and the same eight rows play "
+                "faster, which is usually how a blip becomes a *blip*."
+            ),
+            mode="sirens",
+            anchor="sirens/effects",
+            chapter=("34-sirens", "sound-effects"),
+        ),
+        Step(
+            id="audition",
+            title="Audition it",
+            body=(
+                "The play button on the effect's own row. It plays that effect and leaves "
+                "the song's buffer alone, so pressing Space afterwards still plays the "
+                "song rather than the effect.\n\n"
+                "On a machine with no sound device the button is disabled and says why. "
+                "Everything else on this tour still works."
+            ),
+            mode="sirens",
+            anchor="sirens/effects",
+            chapter=("34-sirens", "sound-effects"),
+        ),
+        Step(
+            id="export",
+            title="Getting it out",
+            body=(
+                "Export audio... asks for a folder, and every sound effect is written into "
+                "sfx/ as its own WAV, named after the effect.\n\n"
+                "They are a pure function of the document: export an untouched one twice "
+                "and the files are byte-identical, so a build script can regenerate them "
+                "rather than keeping them in the repository."
+            ),
+            mode="sirens",
+            anchor="sirens/bridge",
+            chapter=("34-sirens", "exporting-the-audio"),
+        ),
+    ),
+)
+
 #: Every tour, in offer order.
-TOURS: tuple[Tour, ...] = (FIRST_HOUR, INKER_BASICS, SIRENS_BASICS)
+TOURS: tuple[Tour, ...] = (FIRST_HOUR, INKER_BASICS, SIRENS_BASICS, SIRENS_SFX)
 
 
 def find(key: str) -> Tour | None:
@@ -442,4 +596,11 @@ def find(key: str) -> Tour | None:
     return next((tour for tour in TOURS if tour.key == key), None)
 
 
-__all__ = ["FIRST_HOUR", "INKER_BASICS", "SIRENS_BASICS", "TOURS", "find"]
+__all__ = [
+    "FIRST_HOUR",
+    "INKER_BASICS",
+    "SIRENS_BASICS",
+    "SIRENS_SFX",
+    "TOURS",
+    "find",
+]

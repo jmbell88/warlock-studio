@@ -158,6 +158,71 @@ def test_the_sampler_holds_its_cadence_and_its_own_cpu_baseline():
     assert resources.TICK_SECONDS == 1.0
 
 
+def test_a_document_name_never_carries_its_imgui_id():
+    """Every mode, which is the half that was missing.
+
+    A tab's label is keyed for the widget that draws it -- ``Untitled##pd1`` in
+    Inker, ``Untitled###pl1`` in Plotter -- and the status bar printed the
+    Plotter form verbatim, because only the Inker branch split it. Both
+    branches go through one function now, and this is what compares them.
+    """
+    from types import SimpleNamespace
+
+    from warlock.studio import status_bar
+
+    assert status_bar._document_name(SimpleNamespace(label="Untitled##pd1")) == "Untitled"
+    assert status_bar._document_name(SimpleNamespace(label="Untitled###pl1")) == "Untitled"
+    assert status_bar._document_name(SimpleNamespace(label="level.tmx")) == "level.tmx"
+    # A label that is *only* an id still has to say something.
+    assert status_bar._document_name(SimpleNamespace(label="###pl1")) == "Untitled"
+    assert status_bar._document_name(SimpleNamespace()) == "Untitled"
+
+
+def test_the_frame_rate_rides_the_meter_and_is_omitted_when_unknown():
+    """The fourth field, and the one the sampler is *given* rather than reads.
+
+    Omitted rather than zeroed when it is unknown: the screenshot harness calls
+    ``frame`` without ever calling ``_tick``, so the meter has no recorded
+    frame there, and a confident "0 fps" in every shipped picture would be a
+    claim about the app that is not true. ``Reading.text`` already drops any
+    figure it could not read, and this is that rule extended by one.
+    """
+    from warlock.studio import resources
+
+    assert resources.Reading().fps is None
+    assert "fps" not in resources.Reading(ram_used_gib=1.0, ram_total_gib=8.0).text()
+
+    line = resources.Reading(ram_used_gib=1.0, ram_total_gib=8.0, fps=59.6).text()
+    assert line.endswith("60 fps"), line
+    # Last on the line, because the three above answer "can I start a 7 GB
+    # generation right now" and a frame rate is ambient beside that.
+    assert line.index("RAM") < line.index("fps")
+
+
+def test_the_status_bar_centres_on_the_face_it_actually_draws_with():
+    """The vertical centring is an ordering, and this is what pins it.
+
+    ``draw`` reserves half the leftover of ``STATUS_H`` as top padding, so the
+    line height it measures has to be the one the items are *drawn* at --
+    ``TEXT_SMALL``. Measured before ``fonts.small`` was pushed it was
+    ``TEXT_BODY``'s instead, which reserved half of a larger gap above and left
+    the remainder below: the bar read as top-aligned, and by more the larger
+    the UI scale, because the error is half the distance between the two faces
+    and both scale. Asserted on the source because the arithmetic needs a real
+    font atlas to produce a number, and the atlas needs a window.
+    """
+    import inspect
+
+    from warlock.studio import status_bar
+
+    source = inspect.getsource(status_bar.draw)
+    pushed = source.index("fonts.small(imgui)")
+    measured = source.index("get_text_line_height()")
+    began = source.index("begin_child")
+    assert pushed < measured < began, "measure the small face, before the child"
+    assert source.count("fonts.small(imgui)") == 1, "one push, not one per use"
+
+
 def test_resources_imports_nothing_from_the_ui():
     """``status_bar.items``' rule: the sampling and the formatting are data."""
     import inspect
@@ -198,5 +263,8 @@ def test_the_meter_is_ticked_where_every_frame_goes_through():
 
     from warlock.studio import main
 
-    assert "self.resources.tick()" in inspect.getsource(main.App.frame)
+    # ``tick(`` rather than ``tick()``: the call carries the frame rate now,
+    # and this assertion is about *where* the meter is ticked -- which is the
+    # thing that went wrong -- not about its arguments.
+    assert "self.resources.tick(" in inspect.getsource(main.App.frame)
     assert "resources.tick" not in inspect.getsource(main.App._tick)

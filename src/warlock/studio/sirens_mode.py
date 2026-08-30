@@ -150,6 +150,38 @@ def caret_pattern(ctx: Any, tab: SongTab | None = None) -> Any:
     return tab.doc.pattern(state.pattern)
 
 
+def caret_pattern_label(ctx: Any, tab: SongTab | None = None) -> str:
+    """What the grid is editing, in words. Empty when it is editing nothing.
+
+    **Adding a sound effect silently repoints the grid.** ``add_oneshot`` mints
+    the effect *and* a pattern of its own and moves the caret onto it, which is
+    the right behaviour -- the grid is the effect editor and there is no second
+    one -- but until this readout existed the only thing on screen that said so
+    was a line of muted text in a panel in the right-hand column, and a reader
+    who had scrolled it away had no way to tell a song pattern from an effect.
+    Which one is loaded decides what every keystroke is editing, so it belongs
+    above the grid rather than beside it.
+
+    A reverse lookup, because a one-shot *is* a pattern (``sirens/document``'s
+    "One-shots are patterns"): the effect owns a pattern uid, so the question
+    "is this pattern an effect" is answered by asking the effects, not the
+    pattern. Pure state to string, so it is assertable without a frame.
+    """
+    state = ensure(ctx)
+    tab = tab or state.active
+    if tab is None or state.pattern is None:
+        return ""
+    pattern = tab.doc.pattern(state.pattern)
+    if pattern is None:
+        return ""
+    for one in tab.doc.oneshots:
+        if one.pattern == state.pattern:
+            # The effect's name, not the pattern's: the effect is the thing the
+            # user named and the thing the exported WAV is called after.
+            return f"{one.name or 'effect'} - sound effect"
+    return f"pattern {pattern.name}" if pattern.name else "song pattern"
+
+
 def clamp_caret(ctx: Any, tab: SongTab | None = None) -> None:
     """Put the caret back inside the pattern it names.
 

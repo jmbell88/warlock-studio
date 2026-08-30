@@ -1489,3 +1489,41 @@ def root_offset_world(root_translation: Sequence[float], bounds: dict[str, Any])
         if h <= 0:
             h = 1.0
     return [float(u) * h for u in root_translation]
+
+
+# --- remesh --------------------------------------------------------------------
+
+#: The remesh's staging name, beside the ``model.glb`` it is a candidate
+#: replacement for -- ``RETEXTURE_GLB_TMP``'s rule exactly: published by
+#: rename, discarded by a cancel, one spelling for the writer and the sweeper.
+REMESH_GLB_TMP = ".remesh.tmp.glb"
+
+
+def remesh_spec(
+    source_glb: Path,
+    out_glb: Path,
+    result_dir: Path,
+    *,
+    target_faces: int,
+    texture_size: int,
+    close_holes: bool = False,
+    seed: int = 0,
+) -> dict[str, Any]:
+    """The worker spec for remeshing a GLB to a quad budget and rebaking it.
+
+    One op rather than the re-texture's two, because nothing on the host sits
+    between the steps: the remesh, the unwrap and every bake are Blender's, and
+    the host's only part is the publish afterwards. ``texture_size`` is
+    resolved before this is built -- the worker never reads the atlas to decide
+    it, so the spec is the whole record of what was asked.
+    """
+    return {
+        "op": "remesh",
+        "source_glb": str(source_glb),
+        "out_glb": str(out_glb),
+        "result_path": str(result_dir / ".remesh_result.json"),
+        "target_faces": int(target_faces),
+        "texture_size": int(texture_size),
+        "close_holes": bool(close_holes),
+        "seed": int(seed),
+    }

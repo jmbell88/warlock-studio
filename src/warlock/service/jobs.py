@@ -73,6 +73,7 @@ from ._jobs_resubmit import (  # noqa: F401  -- the facade's re-export
 )
 from ._jobs_rework import (  # noqa: F401  -- the facade's re-export
     optimize_job,
+    remesh_job,
     retexture_job,
     stale_rig_artifacts,
     stale_surface_artifacts,

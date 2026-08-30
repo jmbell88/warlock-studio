@@ -19,7 +19,7 @@ every earlier version and every deleted plan (`git log --all --diff-filter=D`).
 tracked.** A plan whose boxes disagree with the tree is worse than no plan, and
 that is why every other roadmap file in this repository's history was deleted
 rather than ticked. Nothing here is blocked on finding time. Every claim in
-this file was verified against the tree on 2026-08-25, and P10 and P15–P18
+this file was verified against the tree on 2026-08-25, and P7, P10 and P15–P18
 against the tree on 2026-08-29.
 
 **This file has no `§N` API.** `tests/test_ux_todo_fixes.py` refuses any
@@ -196,15 +196,31 @@ ourselves. `tests/plotter/fixtures/tiled/FIXTURES.md` lists what is owed and
 in what order.
 
 **Do, in order:**
-1. Author the fixtures in Tiled 1.12.x and drop them in.
-2. Only then move `tsx.TILED_VERSION` (`studio/plotter/tsx.py`) from `1.10.2`
-   to `1.12.2`. The constant is pinned below the target deliberately; it was
-   bumped once without the gate being satisfied and reverted.
+1. Author the fixtures in Tiled 1.12.x and drop them in. **Still owed**, and
+   `basic-ortho` is still the first one: 8×8 orthogonal at 16 px, one external
+   tileset, two layers with the second at 0.5 opacity, and one tile flipped
+   each way (`X`/`Y`/`Z` while stamping). Save it twice — `.tmx` and an
+   exported `.tmj` — because the manifest keys on stems having both.
+2. ~~Only then move `tsx.TILED_VERSION` (`studio/plotter/tsx.py`) from `1.10.2`
+   to `1.12.2`.~~ **Done 2026-08-29: it is `1.12.2`.** The gate was "a real
+   Tiled 1.12.2 opens one of our exports without complaint", and both halves
+   were exercised against files in the `D:\Projects\RPG` repository: a Plotter
+   export (150×150 orthogonal, three CSV layers, external `tilesets/*.tsx`)
+   was opened and worked on in Tiled 1.12.x, and a map Tiled 1.12.2 itself
+   wrote (640×360, two external tilesets with a `firstgid` split) reads in
+   Plotter. `docs/COMPAT.md` records both and what they do not cover.
 3. Re-check a grid pack's `.tsx` geometry: pow2 rounding is off by default
-   now, so the standing verification is stale.
+   now, so the standing verification is stale. **Still owed** — the maps
+   checked in step 2 came from image tilesets, not from a Packwright grid
+   pack, so nothing about `tsxout`'s margin/spacing/columns arithmetic was
+   exercised in Tiled.
 
 **Expected outcome:** the Tiled rows of `docs/COMPAT.md` become claims about
-Tiled rather than about ourselves, and `TILED_VERSION` says what it means.
+Tiled rather than about ourselves. ~~and `TILED_VERSION` says what it means.~~
+The version half is closed; the corpus half is the one that matters and it is
+untouched — the 2026-08-29 check was done on files outside this repository, so
+it moved one attribute and left no golden the suite can re-run. Steps 1 and 3
+are what turn the rows themselves.
 
 ## P8. Author the 22 keyframes
 

@@ -99,6 +99,10 @@ sweep was judged in a pass or one grade at a time, and it never touches the rece
 — those are ordinary library assets that happen not to be judged yet, and clearing the library is
 what **Clean** in Settings is for.
 
+It fires on the moment a sweep's last verdict is filed, which means it only ever sees sweeps judged
+out during the session you are in. A sweep that was already finished when you opened the app is
+never offered to it; **Remove N reviewed sweeps…** below is what clears those.
+
 One consequence worth knowing: filing a verdict on a sweep's *last* unit takes that sweep's meshes
 away immediately, so the "press Left to re-grade" route the toast normally offers is gone for that
 one. Re-grade before you finish the sweep, not after.
@@ -134,6 +138,30 @@ does not bury your real assets; Review is where they live.
 
 Deleting a sweep deletes its jobs and meshes but keeps every verdict filed on them — what the
 sweep taught outlives what it built.
+
+### Clearing out the list
+
+**Remove N reviewed sweeps…** sits above the filter box and takes every sweep there is nothing left
+to judge in. Verdicts, observations and findings all stay: each row carries its own copy of the
+settings it judged and does not need its sweep to be found again. The filter does not narrow it —
+it is deliberately above the box, and the confirmation says so.
+
+A sweep counts as finished with when no unit of it can still be given a verdict. A unit that is
+queued or running holds its sweep back, and so does one that finished and has not been graded. A
+unit that errored or was cancelled does **not**: it can never be graded, so counting it would make
+every sweep that had a failure unremovable for ever.
+
+This is also what clears a sweep whose row has outlived its units. Deleting jobs from the library,
+pruning, cleaning and emptying the trash all take a sweep's units without touching the sweep itself,
+and the automatic cleanup above only fires when a sweep is judged *out* during the session you are
+in — so a run you finished with weeks ago keeps its row until you press this. Such a row says **no
+units left** rather than "0/0 reviewed".
+
+Both this and the per-sweep trash normally leave behind any unit you accepted, and any image you
+labelled, exactly as every other bulk delete does. When there are such units the confirmation offers
+a tick to take them too. It is off every time the dialog opens, and it is worth reading the sentence
+under it before using: those pictures are what the quality judge and the tier checks are measured
+against, and the verdict rows survive with nothing behind them.
 
 ## Teaching the judge
 

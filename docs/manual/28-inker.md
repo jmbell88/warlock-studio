@@ -31,9 +31,9 @@ and the one word that says whether there is anything unsaved.
 fields are being typed into, and there is nothing useful to show halfway through a number. The
 figure you get is the one printed on the Create button.
 
-Changing the size of a document you already have is a different pair of operations, in the document
-panel on the right: **Scale image** resamples the picture, and **Resize canvas** changes how much
-room it has, with a 3 × 3 anchor saying where the old picture sits in the new space.
+Changing the size of a document you already have is a different pair of operations, and they are two
+rows in the **Sprite** menu: **Image size…** (`Ctrl+Alt+I`) resamples the picture, and **Canvas
+size…** (`Ctrl+Alt+C`) changes how much room it has around it. See *Resizing a drawing* below.
 
 ## Turning the page
 
@@ -773,11 +773,45 @@ in the stack — an undo issued after you reorder layers still lands on the laye
 actually made to. The document is "dirty" when it differs from the last save, which means undoing
 back to the saved state marks it clean again rather than leaving it unsaved forever.
 
-The pipeline panel on the right also shows **Undo** and **Redo** buttons and the current history
-depth, alongside canvas operations: **Flip H**, **Flip V**, **Rotate**, **Fit view**, and
-**Resize...**, and **Filter...**. The resize popup deliberately offers two different operations —
-**Scale image** resamples the picture, **Resize canvas** changes how much room it has around the
+## Resizing a drawing
+
+Two operations, and they are genuinely different: one resamples the picture, the other changes how
+much room it has around it. They are two rows in the **Sprite** menu and two dialogs, which is how
+Photoshop and GIMP arrange them.
+
+### Image size
+
+**Sprite ▸ Image size…**, `Ctrl+Alt+I`. Resamples the picture to a new size.
+
+Type in **pixels** or in **percent** — the toggle changes what the two fields mean and the line
+below always shows both readings, so you never have to flip back to check. The **chain** beside the
+fields keeps the width and height in proportion; with it on, typing one works out the other from the
+document's own ratio. Percentages are worked back to whole pixels, so 50% of a three-pixel axis is
+two pixels and the percentage redisplays as 66.7%: the pixels are what actually happens.
+
+A document with a tilemap layer cannot be scaled — the tileset would have to be re-cut, which is a
+different operation — and the button says so rather than failing when pressed. **Canvas size** still
+works on one.
+
+### Canvas size
+
+**Sprite ▸ Canvas size…**, `Ctrl+Alt+C`. Grows or crops the canvas without touching a pixel of the
 picture.
+
+Tick **Relative** to type how much to add or take away instead of the new size; negative numbers
+crop. The 3 × 3 **anchor** grid says where the old image sits in the new canvas: the cell you pick
+holds the picture, and the cells around it show arrows pointing the way the new room opens. A corner
+anchor leaves five cells blank, because there is no room on those sides to point at. The preview
+beside the grid draws the new canvas as an outline with the old image inside it, and the line under
+it says exactly where the old image lands.
+
+Growing a canvas anchored centre adds room on all four sides; anchored top-left — which is the
+default — it adds room right and below. Shrinking works the same way and crops from the opposite
+sides.
+
+Both dialogs have a **Cancel**, and each operation is a single undo step.
+
+### Resample, and undoing an upscale
 
 **Resample** says how a scale decides what each new pixel holds, and it applies to the free
 transform's scale and rotate as well. **Smooth** filters, which is right for a photograph or a
@@ -795,16 +829,11 @@ it behaves as Nearest, and above roughly 512×512 pixels a rotate falls back to 
 because the eight-times upscale costs sixty-four times the memory on every frame of a drag.
 
 When the drawing you opened is really a small picture blown up — an AI render at 1024² whose art
-is 64² — the popup notices and says so: *Detected an 8 px pixel grid — true size 128 × 128*, with
-a **Descale** button that takes one pixel from the centre of each cell. That is not the same as
+is 64² — **Image size** notices and says so: *Detected an 8 px pixel grid — true size 128 × 128*,
+with a **Descale** button that takes one pixel from the centre of each cell. That is not the same as
 scaling down by nearest: this measures the *phase* the lattice was drawn on, so the reduction is
 exact and no authored pixel comes back as its neighbour's edge. An ordinary drawing detects
-nothing and the popup is exactly as it was.
-
-The 3×3 **anchor** grid says where the old image sits in the new canvas, and it belongs to Resize
-canvas only: scaling has no slack to put anywhere. Growing a canvas anchored centre adds room on
-all four sides; anchored top-left it adds room right and below, which is what the button did before
-there was a grid. Shrinking works the same way and crops from the opposite sides.
+nothing and the dialog is exactly as it was without it.
 
 ## Tilemap layers
 

@@ -398,6 +398,7 @@ def shortcut_sections() -> list[tuple[str, list[tuple[str, str]]]]:
             ("Alt+1 - 9", "Recall a numbered custom brush"),
             ("Alt+Shift+1 - 9", "Store the captured brush in that slot"),
             ("Ctrl+Shift+N", "New layer"),
+            ("Ctrl+Alt+I / Ctrl+Alt+C", "Image size / canvas size"),
             ("Alt+S", "Solo the active layer, and again to bring the rest back"),
             ("Ctrl+Shift+Up / Down", "Move the layer up / down the stack"),
             ("[ / ]", "Brush size (Shift: hardness)"),
@@ -1512,7 +1513,13 @@ class App:
         # is two ctypes calls and a driver ioctl, 0.047 ms measured, behind a
         # one-second cadence (see ``resources.Sampler.sample``).
         if self.app_ctx.state.show_resources:
-            self.resources.tick()
+            # The frame rate is handed over rather than measured there: the
+            # meter is the frame loop's, and ``resources`` is pinned free of
+            # pygame. ``None`` before the first recorded frame -- which is
+            # every screenshot-harness frame, since the harness calls ``frame``
+            # directly and never ``_tick`` -- so the segment is simply absent
+            # rather than reading a confident 0.
+            self.resources.tick(fps=self.fps.fps if self.fps.frames else None)
         self._collect_tasks()
         self._refresh()
         # Before ``_events``, which is where the keys are read: whether the
@@ -3474,6 +3481,7 @@ class App:
                     # metaphor, at every realistic window size rather than only at small
                     # ones. Full width, the same widget sits on rung 1 (labels and ticks)
                     # and the ladder goes back to being a response to a narrow window.
+                    imgui.dummy((0, tokens.sp(tokens.SP_2)))
                     pad = tokens.sp(layout_mod.PANE_PADDING)
                     rail_w = imgui.get_content_region_avail().x - pad * 2
                     imgui.indent(pad)
@@ -4613,6 +4621,10 @@ class App:
                 "No sweep runs found",
                 "Launch one below, or check that the bench directory is where you expect.",
             )
+        # **Above the filter on purpose.** Below it, a button naming a count
+        # sitting under a search box reads as "remove the ones I have filtered
+        # to", which it is not -- and the confirm says so in as many words.
+        self._review_remove_reviewed(ctx, state, review_mode)
         # J86: a bench directory accumulates a run per experiment and nothing
         # ever removes one, so this is the panel list that grows fastest.
         needle = widgets.list_filter(ctx, "sweeps", len(state.sweeps))
@@ -4632,7 +4644,14 @@ class App:
                 # ``open_sweep``, which the pass itself calls.
                 state.judging = None
                 review_mode.open_sweep(ctx, sweep["id"])
-            widgets.muted(f"   {total - todo}/{total} reviewed")
+            if not total and sweep["id"] != review_mode.RECENT_ID:
+                # "0/0 reviewed" is a sentence about nothing. A sweep whose
+                # units went through the ordinary job lifecycle keeps its row
+                # for ever -- nothing but ``_remove_units``' tail ever deletes
+                # one -- so this is a common state and not an odd one.
+                widgets.muted("   no units left")
+            else:
+                widgets.muted(f"   {total - todo}/{total} reviewed")
             # What the run actually varied, under the name the user typed for
             # it at the time -- which is routinely "test2" by the time anyone
             # comes back to judge it.
@@ -4730,6 +4749,95 @@ class App:
             review_mode.dismiss_report(ctx)
         imgui.separator()
 
+    def _retention_tick(self, ctx: Any, state: Any, retained: int) -> Any:
+        """The ``Confirm.body`` for a removal that could override retention.
+
+        ``None`` when there is nothing retained to override -- a checkbox that
+        would change nothing teaches the reader that the checkbox does nothing.
+
+        The hint says what those pixels *are*, which is the whole burden this
+        one control carries. ``retained_job_ids`` guards accepted meshes
+        because ``tiercheck`` and the mesh probe are measured against them, and
+        labelled images of **both** classes because ``judge.fit`` embeds pixels
+        and refuses below ``MIN_PER_CLASS`` of each. On 2026-08-09 a bulk
+        button whose confirmation truthfully promised the verdicts would be
+        kept left 100 of 117 verdicts naming directories that no longer
+        existed; they were kept, and the pixels three blocked items needed were
+        not. So this says which promise is being broken, ``ask_clean``'s rule.
+        """
+        from . import controls, widgets
+
+        if not retained:
+            return None
+
+        def body() -> None:
+            changed, value = controls.checkbox(
+                f"Also delete the {retained} unit(s) I accepted or labelled",
+                state.drop_retained,
+            )
+            if changed:
+                state.drop_retained = bool(value)
+            widgets.hint_text(
+                "This is the one rule the app otherwise keeps for you. Those "
+                "pictures are what the quality judge and the tier checks are "
+                "measured against; the verdict rows survive with nothing "
+                "behind them."
+            )
+
+        return body
+
+    def _review_remove_reviewed(self, ctx: Any, state: Any, review_mode: Any) -> None:
+        """Clear out every sweep there is nothing left to judge in.
+
+        The complaint this answers is about a *class* of rows rather than one
+        row, which is why it is a list-level control and not a tidier trash
+        button: a Review list only ever grew, because ``store.delete_sweep`` is
+        reached from exactly one place and the lifecycle paths that actually
+        take a sweep's units never look at the ``sweeps`` table.
+        """
+        from . import dialogs, icons, widgets
+
+        ids = review_mode.removable_ids(state)
+        if not ids:
+            return
+        plan = review_mode.removal_plan(state, ids)
+        if not widgets.disabled_button(
+            f"{icons.TRASH} Remove {len(ids)} reviewed sweep(s)...",
+            not state.scanning,
+            (-1, 0),
+            reason="A scan is already running.",
+            tooltip="Clear out the sweeps you have finished judging.",
+        ):
+            return
+        state.drop_retained = False
+        retained = int(plan["retained"])
+        shown = plan["labels"][:6]
+        listing = "\n".join(f"  {name}" for name in shown)
+        if len(plan["labels"]) > len(shown):
+            listing += f"\n  and {len(plan['labels']) - len(shown)} more"
+        dialogs.ask_delete(
+            ctx,
+            title="Remove the sweeps you have finished with?",
+            message=(
+                f"{plan['sweeps']} sweep(s) with nothing left to judge go from "
+                f"this list, along with {plan['units']} job(s), their meshes "
+                "and their reference images. The filter above does not narrow "
+                "this.\n\n"
+                f"{listing}\n\n"
+                "Every verdict and observation they produced is kept, and so "
+                "is every finding computed from them: each row carries its own "
+                "copy of the settings it judged and does not need its sweep to "
+                "be found again.\n\n"
+                "A sweep with a unit you have not judged yet is left alone. A "
+                "unit that errored or was cancelled can never be judged, so it "
+                "does not hold its sweep back."
+            ),
+            body=self._retention_tick(ctx, state, retained),
+            on_confirm=lambda: review_mode.remove_reviewed(
+                ctx, ids, drop_retained=state.drop_retained
+            ),
+        )
+
     def _review_delete_button(self, ctx: Any, state: Any, review_mode: Any, sweep: Any) -> None:
         """Delete a sweep's jobs and meshes, keeping what they taught.
 
@@ -4744,26 +4852,50 @@ class App:
         from . import dialogs, icons, widgets
 
         sweep_id = sweep["id"]
+        units = len(sweep.get("units") or ())
+        # ``.get``: ``test_studio_smoke``'s harness builds these dicts by hand
+        # and a scan from before this field existed has no key either.
+        retained = int(sweep.get("retained") or 0)
         if widgets.icon_button(
             f"{icons.TRASH}##delete-{sweep_id}",
             "Delete this sweep's jobs and meshes",
             danger=True,
             enabled=not state.scanning,
         ):
-            dialogs.ask_delete(
-                ctx,
-                title="Delete this sweep?",
-                message=(
-                    f"{sweep['label']}: its {len(sweep['units'])} job(s), their meshes "
+            state.drop_retained = False
+            if not units:
+                # The common case for an old row, and "its 0 job(s) ... are
+                # deleted" is a sentence that reads as a bug.
+                message = (
+                    f"{sweep['label']}: its jobs and meshes are already gone "
+                    "-- only the list entry is left.\n\n"
+                    "The verdicts and observations it produced stay exactly "
+                    "where they are. Nothing that feeds findings lives in this "
+                    "row."
+                )
+            else:
+                message = (
+                    f"{sweep['label']}: its {units} job(s), their meshes "
                     "and their reference images are deleted.\n\n"
                     "The verdicts you recorded are kept, and so are the findings "
                     "they feed -- each one carries its own copy of the settings it "
-                    "was filed against.\n\n"
-                    "Units you accepted, and any image you labelled, are kept with "
-                    "their files: a verdict's copy of the settings cannot stand in "
-                    "for the picture it was filed against."
+                    "was filed against."
+                )
+                if retained:
+                    message += (
+                        "\n\nUnits you accepted, and any image you labelled, are "
+                        "kept with their files unless you say otherwise below: a "
+                        "verdict's copy of the settings cannot stand in for the "
+                        "picture it was filed against."
+                    )
+            dialogs.ask_delete(
+                ctx,
+                title="Delete this sweep?",
+                message=message,
+                body=self._retention_tick(ctx, state, retained),
+                on_confirm=lambda: review_mode.delete(
+                    ctx, sweep_id, drop_retained=state.drop_retained
                 ),
-                on_confirm=lambda: review_mode.delete(ctx, sweep_id),
             )
         imgui.dummy((0, 0))
 

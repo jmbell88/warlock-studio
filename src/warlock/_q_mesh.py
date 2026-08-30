@@ -23,6 +23,7 @@ import asyncio
 import contextlib
 import functools
 import logging
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -93,6 +94,187 @@ class MeshPostOps:
         for name in retexture.SURFACE_DERIVED:
             with self.artifact_lock(source_dir.name, name), contextlib.suppress(OSError):
                 (source_dir / name).unlink()
+
+    async def _remesh(self: Worker, job: dict[str, Any]) -> None:
+        """Remesh a finished mesh to a quad budget and rebake its surface.
+
+        One Blender op (``op_remesh``) and a host-side publish. Like a rig and
+        a re-texture the product lands in the *source* job's directory, over
+        its ``model.glb``, by rename -- and like a re-texture the rename is the
+        point of no return, so a cancel that lands after it commits rather
+        than lying about the file on disk.
+
+        What it invalidates is the union of the other two reworks': every
+        derived export (geometry changed) *and* every surface export (the
+        atlas is new). The rig is reported stale at the door, never deleted.
+        """
+        from . import rigging, tiercheck
+        from .pipelines import postprocess, remesh
+
+        job_id = job["id"]
+        params = job["params"]
+        source_id = str(params.get("source_job") or "")
+        if not rigging.is_valid_id(source_id):
+            raise ValueError(f"source_job is not a job id: {source_id!r}")
+        source_dir = self.config.job_dir(source_id)
+        model_glb = source_dir / "model.glb"
+        if not model_glb.exists():
+            raise RuntimeError("source job has no mesh to remesh")
+        source_row = await asyncio.to_thread(self.store.get, source_id)
+        source_params = (source_row or {}).get("params") or {}
+
+        target = int(params.get("target_faces") or remesh.FACE_PROFILES[remesh.DEFAULT_PROFILE])
+        asked = params.get("texture_size")
+        if asked:
+            texture_size = int(asked)
+        else:
+            from .pipelines import retexture
+
+            texture_size = (
+                await asyncio.to_thread(retexture.atlas_size, model_glb)
+                or remesh.DEFAULT_TEXTURE_PX
+            )
+        temp = source_dir / rigging.REMESH_GLB_TMP
+        job_dir = self.config.job_dir(job_id)
+        job_dir.mkdir(parents=True, exist_ok=True)
+
+        self.progress.update(
+            job_id, phase="remesh", label="Starting Blender", inner=0.0,
+            inner_next=0.05, nominal=60.0, detail=f"{target:,} quads",
+        )
+
+        def on_progress(frac: float, label: str) -> None:
+            self.progress.update(
+                job_id, phase="remesh", label=label, inner=frac,
+                inner_next=min(frac + 0.1, 1.0), nominal=120.0, detail="",
+            )
+
+        before = await asyncio.to_thread(tiercheck.survey, model_glb)
+        try:
+            result = await asyncio.to_thread(
+                functools.partial(
+                    rigging.run_worker,
+                    rigging.remesh_spec(
+                        model_glb,
+                        temp,
+                        job_dir,
+                        target_faces=target,
+                        texture_size=texture_size,
+                        close_holes=bool(params.get("close_holes")),
+                        seed=remesh.QUADRIFLOW_SEED,
+                    ),
+                    on_progress=on_progress,
+                    on_start=self._note_blender,
+                    timeout=self.config.rig_timeout,
+                )
+            )
+            if self._cancel is not None and self._cancel.event.is_set():
+                return
+            if not temp.exists():
+                raise RuntimeError("Blender reported success but wrote no mesh")
+            self.progress.update(
+                job_id, phase="publish", label="Grounding and publishing", inner=0.95,
+                inner_next=1.0, nominal=5.0, detail="",
+            )
+            # The exporter wrote a fresh node graph, so the grounding transform
+            # has to be reapplied -- ``optimize_job``'s reason. Swallowed the
+            # same way: the mesh is good and serving it ungrounded beats losing
+            # it, and the health record says which.
+            transform = None
+            health: dict[str, Any] = {}
+            try:
+                size_m = source_params.get("size_m")
+                transform = await asyncio.to_thread(
+                    postprocess.normalize_glb, temp, float(size_m) if size_m else None
+                )
+            except Exception as exc:
+                log.exception("normalize failed after remesh for job %s", source_id)
+                health["normalize"] = str(exc)
+            after = await asyncio.to_thread(tiercheck.survey, temp)
+            verdict = tiercheck.compare(before, after)
+            await asyncio.to_thread(os.replace, temp, model_glb)
+        finally:
+            with contextlib.suppress(OSError):
+                temp.unlink(missing_ok=True)
+        if self._cancel is not None:
+            self._cancel.commit()
+
+        # Geometry *and* skin changed, so every export goes -- the tuple is
+        # ``files.DERIVED`` restated where the queue may look (the worker may
+        # not import ``service``; ``tests/test_remesh.py`` pins the pair), and
+        # each goes under its own lock.
+        for name in remesh.GEOMETRY_DERIVED:
+            with self.artifact_lock(source_dir.name, name), contextlib.suppress(OSError):
+                (source_dir / name).unlink()
+
+        report = dict(result)
+        report["target_faces"] = target
+        report["tiercheck"] = {
+            "ok": verdict.ok,
+            "failures": list(verdict.failures),
+            "notes": list(verdict.notes),
+        }
+        params["remesh"] = report
+        await asyncio.to_thread(self.store.set_params, job_id, params)
+        changes: dict[str, Any] = {"remesh": report}
+        drop = ["mesh_audit", "mesh_report", "optimize"]
+        if transform is not None:
+            changes["transform"] = transform
+            changes["scale_factor"] = transform["scale"]
+        else:
+            drop += ["transform", "scale_factor"]
+        inherited = source_params.get(ARTIFACT_HEALTH)
+        merged = dict(inherited) if isinstance(inherited, dict) else {}
+        merged.pop("normalize", None)
+        merged.update(health)
+        if merged:
+            changes[ARTIFACT_HEALTH] = merged
+        else:
+            drop.append(ARTIFACT_HEALTH)
+        await asyncio.to_thread(
+            self.store.merge_params, source_id, changes, remove=tuple(drop)
+        )
+        # The audit and the report describe the mesh that is now on disk.
+        await self._audit_published(source_id, model_glb, source_params.get("size_m"))
+        log.info(
+            "remeshed job %s from %s: %s faces via %s, tiercheck %s",
+            source_id, job_id, report.get("faces"), report.get("method"),
+            "ok" if verdict.ok else "/".join(verdict.failures),
+        )
+
+    async def _audit_published(
+        self: Worker, source_id: str, glb_path: Path, size_m: Any
+    ) -> None:
+        """Re-measure a mesh another job just published over, by merge.
+
+        ``_audit_mesh`` writes the whole params blob of the job it is handed,
+        which is right for a job's own row mid-run and wrong for a *source*
+        row another writer may be touching -- so this is the same two
+        measurements, merged in.
+        """
+        try:
+            from . import meshaudit, meshreport
+
+            audit = await asyncio.to_thread(
+                meshaudit.hole_fraction,
+                glb_path,
+                meshaudit.DEFAULT_VIEWS,
+                meshaudit.REQUEST_PATH_RESOLUTION,
+            )
+            summary = {k: audit[k] for k in ("worst", "mean", "faces", "resolution")}
+            report = await asyncio.to_thread(
+                functools.partial(
+                    meshreport.build, glb_path, target_size_m=size_m, silhouette=summary
+                )
+            )
+        except Exception:
+            log.exception("audit after publish failed for job %s", source_id)
+            return
+        await asyncio.to_thread(
+            self.store.merge_params,
+            source_id,
+            {"mesh_audit": summary, "mesh_report": report},
+        )
 
     async def _optimize(
         self: Worker, job_id: str, source: Path, dest: Path, params: dict[str, Any]

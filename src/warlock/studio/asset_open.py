@@ -75,6 +75,7 @@ FOLLOWUP_STAGES: dict[str, str] = {
     "pixel_sheet": "pose",
     "sprite_synthesis": "reference",
     "retexture": "mesh",
+    "remesh": "mesh",
 }
 
 #: Which section holds each follow-up's product, where one has to be opened.

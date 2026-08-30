@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     id          TEXT PRIMARY KEY,
     kind        TEXT NOT NULL,              -- 'text' | 'image' | 'rig' | 'sheet'
                                             --   | 'pixel_sheet' | 'sprite_synthesis'
-                                            --   | 'retexture' | 'tile_sheet'
+                                            --   | 'retexture' | 'tile_sheet' | 'remesh'
     status      TEXT NOT NULL,              -- queued | running | done | error | cancelled
     prompt      TEXT,
     params      TEXT NOT NULL DEFAULT '{}', -- JSON: seed, resolution, ...

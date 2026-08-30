@@ -155,11 +155,12 @@ the map has to survive a round trip through Tiled.
 A few things are refused by name rather than half-supported: object templates, Automapping, projects
 and worlds, plugins, and 120° hex tile rotation. Those are non-goals, not gaps.
 
-Two honest caveats. Plotter writes `tiledversion` 1.10.2 while targeting 1.12.2 semantics, and that
-is a deliberate hold rather than an oversight. And **the compatibility test corpus was authored by
-Plotter itself** — every fixture is a file this editor wrote. A green test proves that Warlock's
-reader and Warlock's writer agree with each other. It does not prove that Tiled agrees with either.
-Opening an export in real Tiled is genuinely useful information and nobody has done it yet.
+One honest caveat, smaller than it was. Plotter now writes `tiledversion` 1.12.2, because on
+2026-08-29 a real Tiled 1.12.x opened a Plotter export and a real Tiled 1.12.2 map was read back
+here. But that was one orthogonal map each way — **the compatibility test corpus is still authored
+by Plotter itself**, every fixture a file this editor wrote. A green test proves that Warlock's
+reader and Warlock's writer agree with each other. Beyond plain CSV ground — flipped tiles, objects,
+properties, infinite maps — it still does not prove that Tiled agrees with either.
 
 ## Try it
 

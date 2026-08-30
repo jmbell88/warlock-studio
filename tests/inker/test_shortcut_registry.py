@@ -122,3 +122,30 @@ def test_shortcut_overrides_round_trip_through_studio_settings():
     reopened = SimpleNamespace(state=SimpleNamespace(inker=None), settings=settings)
     restored = inker_mode.ensure(reopened)
     assert restored.shortcut_overrides == state.shortcut_overrides
+
+
+def test_no_two_default_command_bindings_share_a_chord_and_context():
+    """A chord that means two things means whichever one the table lists first.
+
+    This is a ratchet rather than a migration: it passes against the table as
+    it stands, and it is the test that would have caught the *reason* the
+    resize dialog had to be split. "Scale image" and "Resize canvas" were two
+    buttons on one popup because one ``Op`` cannot carry two keys, so Aseprite's
+    Sprite Size (``Ctrl+Alt+I``) had nowhere to live -- a fact nothing checked
+    and nothing surfaced until somebody went looking for the missing binding.
+
+    Commands only. Tool bindings deliberately double up: ``_TOOL_BINDINGS`` and
+    ``_QUICK_TOOL_BINDINGS`` are the same letters on press and on hold, which
+    is the point of them, and ``_ACTION_BINDINGS`` carry modifiers as gestures.
+    """
+    from collections import Counter
+
+    seen = Counter(
+        (binding.chord, binding.context)
+        for binding in inker_ops.BINDINGS
+        if binding.kind == "command" and binding.chord
+    )
+    clashes = sorted(pair for pair, count in seen.items() if count > 1)
+    assert not clashes, (
+        f"{clashes} each mean two different commands; the second is unreachable"
+    )

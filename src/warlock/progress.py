@@ -125,6 +125,13 @@ PHASES_RETEXTURE: dict[str, tuple[float, float]] = {
     "assemble": (0.95, 1.00),
 }
 
+# A remesh is one Blender run reporting its own fraction -- quadriflow, the
+# unwrap and three bakes -- and a short host tail that grounds and publishes.
+PHASES_REMESH: dict[str, tuple[float, float]] = {
+    "remesh": (0.00, 0.95),
+    "publish": (0.95, 1.00),
+}
+
 # A tile sheet is *one* txt2img pass, followed by a CPU tail that reduces
 # sixty-four cells and quantizes them to one palette. The simplest table here,
 # and the one that most needs writing down: with a single generation there is
@@ -175,6 +182,7 @@ _PHASES_BY_KIND: dict[str, dict[str, tuple[float, float]]] = {
     "sprite_synthesis": PHASES_SPRITE,
     "pixel_sheet": PHASES_PIXEL_SHEET,
     "retexture": PHASES_RETEXTURE,
+    "remesh": PHASES_REMESH,
     "tile_sheet": PHASES_TILE_SHEET,
     "charsheet": PHASES_CHARSHEET,
 }

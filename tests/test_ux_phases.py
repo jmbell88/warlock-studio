@@ -495,6 +495,17 @@ def test_the_navigation_control_carries_navigation_and_nothing_else():
     4. *It yields.* First thing dropped when the window narrows, which is
        exactly what a permanent fixture does not do.
 
+    **The frame rate joined that readout on 2026-08-29**, which narrows ground
+    3 rather than overturning it and is recorded here for the same reason the
+    reversal itself is. The number the wave-3 argument called developer chrome
+    is now on screen by default -- but as a *fourth* field of an opt-out meter
+    that already yields, not as a fixture of its own, and F10 still raises the
+    thing that actually diagnoses a stall (mean frame time and the worst frame
+    in the window, neither of which fits on this line). The one honesty cost is
+    stated in the meter's tooltip rather than hidden: the loop idles at
+    ``IDLE_FPS`` when nothing on screen can change, so a resting app reads 12
+    and that is the clamp working.
+
     Amended in the commit that adds the meter rather than left to be found:
     the assertions below do not fail when a meter lands in another module, and
     an argument left standing with nothing pointing at its reversal is worse

@@ -1780,6 +1780,105 @@ def _key(name: str, *, ctrl: bool = False, shift: bool = False):
     return pygame.event.Event(pygame.KEYDOWN, key=getattr(pygame, f"K_{name}"), mod=mods)
 
 
+# --- the tileset palette's zoom -----------------------------------------------
+#
+# The picker used to floor its zoom at 1:1 and submit the atlas at full width
+# into a child with no horizontal scrollbar, so every column past the pane's
+# edge was clipped away with no way to reach it. These are the pure half of the
+# fix: the pane still owns the viewport, but the arithmetic that decides the
+# scale is here and assertable without a window.
+
+
+def test_the_palette_ladder_is_reciprocal_below_one_and_whole_above():
+    """The pixel-art rule, and here it is about NEAREST rather than taste.
+
+    The atlas is uploaded with nearest filtering, so a scale like 0.7 samples a
+    non-uniform subset of source pixels and the palette grid beats against
+    itself. 1/N samples uniformly and merely gets smaller.
+    """
+    from warlock.studio import plotter_state as ps
+
+    ladder = ps.PALETTE_ZOOM_LADDER
+    assert ladder == tuple(sorted(ladder))
+    assert 1.0 in ladder
+    for rung in ladder:
+        whole = 1.0 / rung if rung < 1.0 else rung
+        assert abs(whole - round(whole)) < 1e-9, rung
+
+    # Not ``ZOOM_LADDER``, and the divergence is the point: that table bottoms
+    # out at 5%, which puts a 16px tile at 0.8 screen pixels -- unhittable.
+    from warlock.studio import inker_state
+
+    assert ladder != inker_state.ZOOM_LADDER
+    assert 16 * ladder[0] >= 1.0
+
+
+def test_fitting_picks_the_largest_rung_that_shows_the_whole_atlas():
+    """"View the entire tile set", which is what the pane could not do."""
+    from warlock.studio import plotter_state as ps
+
+    # A 1024px atlas in a 300px pane: must go below 1:1, which the old
+    # ``max(1, ...)`` floor made impossible.
+    zoom = ps.palette_fit_zoom(1024, 1024, 300.0, 300.0)
+    assert zoom < 1.0
+    assert 1024 * zoom <= 300.0
+    assert zoom in ps.PALETTE_ZOOM_LADDER
+
+    # Both axes, not just width: a tall atlas in a wide pane fits on height.
+    tall = ps.palette_fit_zoom(64, 2048, 600.0, 260.0)
+    assert 2048 * tall <= 260.0
+
+    # A small atlas is allowed to magnify rather than being pinned at 1:1.
+    assert ps.palette_fit_zoom(32, 32, 300.0, 260.0) > 1.0
+
+
+def test_fitting_answers_rather_than_dividing_by_zero():
+    """A tileset with no pixels is a load that failed, not a crash in the loop."""
+    from warlock.studio import plotter_state as ps
+
+    floor = ps.PALETTE_ZOOM_LADDER[0]
+    assert ps.palette_fit_zoom(0, 0, 300.0, 260.0) == floor
+    assert ps.palette_fit_zoom(64, 64, 0.0, 0.0) == floor
+    # Nothing fits even at the floor: take the floor and let the well scroll.
+    assert ps.palette_fit_zoom(100_000, 100_000, 300.0, 260.0) == floor
+
+
+def test_a_zoom_nudge_steps_strictly_past_a_fitted_scale():
+    """Why the rung rule is shared rather than reimplemented.
+
+    A fit-derived zoom routinely sits *between* two rungs, and a
+    nearest-then-step rule would answer a press labelled "in" by zooming out.
+    """
+    from warlock.studio import plotter_state as ps
+
+    ladder = ps.PALETTE_ZOOM_LADDER
+    between = (ladder[3] + ladder[4]) / 2.0
+    assert ps.palette_zoom_rung(between, 1) > between
+    assert ps.palette_zoom_rung(between, -1) < between
+    # The ends hold rather than running off the table.
+    assert ps.palette_zoom_rung(ladder[0], -1) == ladder[0]
+    assert ps.palette_zoom_rung(ladder[-1], 1) == ladder[-1]
+    # On a rung, a step moves to the neighbour rather than standing still.
+    assert ps.palette_zoom_rung(1.0, 1) > 1.0
+    assert ps.palette_zoom_rung(1.0, -1) < 1.0
+
+
+def test_the_palette_zoom_is_remembered_per_tileset():
+    """One number for the mode would leave a reader staring at a corner.
+
+    The zoom that shows a 1024px terrain set whole is the zoom that shows one
+    tile of a 64px four-tile set, so switching the combo must not carry a scale
+    across with it.
+    """
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+
+    assert tab.palette_zoom == {}, "a missing key is what means 'fit'"
+    tab.palette_zoom[0] = 2.0
+    tab.palette_zoom[1] = 0.25
+    assert tab.palette_zoom[0] == 2.0
+
+
 def test_a_tool_letter_picks_that_tool(monkeypatch):
     """Every letter, derived from ``TOOLS`` rather than one hard-coded pair:
     this test named G/fill and so had to be edited by hand when the keymap moved

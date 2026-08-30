@@ -150,6 +150,13 @@ In rough order of what it would buy:
 2. **`basic-iso`** — re-author the existing synthesized pair in Tiled.
 3. **A Tiled-authored `core`** — everything `core-112` covers *minus* the
    dialect constructs listed under its entry.
-4. Once any Tiled-authored fixture opens one of our exports without complaint,
-   `TILED_VERSION` in `src/warlock/studio/plotter/tsx.py` may move to `1.12.2`
-   and the gate paragraph in `docs/COMPAT.md` comes out.
+~~4. Once any Tiled-authored fixture opens one of our exports without
+   complaint, `TILED_VERSION` in `src/warlock/studio/plotter/tsx.py` may move
+   to `1.12.2` and the gate paragraph in `docs/COMPAT.md` comes out.~~
+   **Done 2026-08-29 — and not by a fixture.** Tiled 1.12.x opened a Plotter
+   export, and a map Tiled 1.12.2 wrote reads here; `TILED_VERSION` is now
+   `1.12.2`. Both files live outside this repository, so **items 1–3 above are
+   untouched**: the version pin was a claim about one attribute, and the corpus
+   is a claim about everything else. Neither of those two files carries a
+   flipped tile, an object, a property or a `.tmj` twin, which is precisely the
+   ground `basic-ortho` covers and why it is still first on this list.

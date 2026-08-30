@@ -21,6 +21,7 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "inspector": ("23-generating-meshes", "exports"),
     "retarget": ("23-generating-meshes", "triangle-budget"),
     "retexture": ("23-generating-meshes", "surface-texture"),
+    "remesh": ("23-generating-meshes", "game-ready-remesh"),
     "pose": ("25-rigging-and-posing", "posing"),
     "poser-library": ("26-poser", "the-pose-library"),
     "poser-controls": ("26-poser", "posing-a-skeleton"),
@@ -67,7 +68,10 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     # so an exemption would be false.
     "plotter-tileset-editor": ("31-plotter", "tilesets"),
     "plotter-tileset": ("31-plotter", "tilesets"),
+    "inker-image-size": ("28-inker", "image-size"),
+    "inker-canvas-size": ("28-inker", "canvas-size"),
     "plotter-layers": ("31-plotter", "layers"),
+    "plotter-properties": ("31-plotter", "layer-and-map-properties"),
     "plotter-bridge": ("31-plotter", "files"),
     "packwright-sources": ("32-packwright", "sources"),
     "packwright-settings": ("32-packwright", "settings"),
