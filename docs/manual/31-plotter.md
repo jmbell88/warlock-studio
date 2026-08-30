@@ -111,9 +111,14 @@ metadata an engine reads, exactly as an object layer is.
 
 ### Picking a tile
 
-The palette under the tileset combo is the atlas itself. Click a tile to pick it; drag across
+Each of the map's tilesets gets a **tab** along the top of the pane; click one to paint with that
+set. Past eight of them a **Find** box appears above the tabs and narrows them by name — it never
+hides the set you are currently painting with, so the strip always says where you are.
+
+The palette under the tabs is the atlas itself. Click a tile to pick it; drag across
 several and you get a multi-tile brush, which stamps as one block. The white outline shows what is
-selected, and the cursor on the canvas shows the footprint the brush is about to cover.
+selected, and the cursor on the canvas shows the footprint the brush is about to cover. Changing
+tabs drops the brush, because a brush is numbered against the tileset it was picked from.
 
 ### Polishing an atlas in Inker
 
@@ -125,6 +130,12 @@ When you are done, **Back onto...** under *from Inker* returns it to the same ti
 cell keeps its tile and simply redraws with the new art, because the numbering is untouched. An
 atlas whose size changed is refused by name rather than accepted — the roles are positional, so a
 cropped atlas is one whose tile 93 is no longer the tile the map thinks it is.
+
+For a paint program that is not Inker, **Tileset ▸ Reload the image...** is the same trip: export
+the atlas, edit it wherever you like, and pick the file back. It swaps the art under the ids the map
+already uses rather than adding a second tileset, and it refuses a changed size for the reason
+above. Adding the edited file with *Add from a file...* instead would make a new tileset that not one
+painted cell points at.
 
 ### Tilesets from Inker
 
@@ -272,6 +283,18 @@ It is drawn from one average colour per tile rather than by shrinking a full ren
 map of 32-pixel tiles composites to over 250 million pixels, which is not something that can happen
 while you drag. It shows layers as you have them set, so hiding a layer hides it here too.
 
+**Map ▸ Go to coordinate...** is the way there when you already know the number. Type a column and a
+row and the view centres on that cell at the zoom you are already at — the same coordinates the
+status bar reads out under the canvas, so a cell you noted earlier gets you back to it. A number past
+the edge is nudged to the nearest cell that exists rather than refused.
+
+## Undo history
+
+The **step count** in the *Map file* panel is a button. Press it for the whole stack, oldest first,
+with the head marked and the undone steps greyed; click any row to move there in one go, including
+*(the map as opened)*. It is the stack's own list rather than a copy of it, so what you see is what
+undo would actually do.
+
 ## Selection
 
 `R` is the rectangular select tool. Drag a marquee; a plain click with no drag clears it. Ctrl+A
@@ -325,6 +348,11 @@ An **object layer** holds named rectangles and points. Nothing on one is drawn i
 are metadata an engine reads. With the **Objects** tool active, click empty space and drag to draw a
 rectangle, or click without dragging to drop a point. Click an existing object to select it, and its
 form appears in the **Properties** pane below the list.
+
+Standing on an object layer changes the whole toolbox: the letters become *insert* tools, one per
+shape — `R` rectangle, `I` point, `E` ellipse, `C` capsule, `P` polygon, `L` polyline, `T` tile,
+`X` text, and `S` back to the pointer. The **capsule** is Warlock's own shape and no Tiled release
+reads it; see the dialect list further down.
 
 **The list and the settings are two panes.** *Layers* is the stack and nothing else — one row per
 layer, and a row you can read at a glance: a fold arrow where there is something under it, the eye,

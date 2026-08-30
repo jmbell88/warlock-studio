@@ -81,6 +81,7 @@ from .plotter_tilesets import (  # noqa: F401
     SheetTerrain,
     add_tileset_path,
     ask_add_tileset,
+    ask_replace_tileset,
     choose_layer_image,
     clear_sheet_import,
     import_detected_sheet,
@@ -88,7 +89,9 @@ from .plotter_tilesets import (  # noqa: F401
     import_sheet_terrain,
     land_layer_image,
     land_tileset,
+    land_tileset_image,
     polish_in_inker,
+    repaint_tileset,
     tileset_from_inker,
     use_as_tileset,
     use_inker_tileset,
@@ -315,6 +318,14 @@ def on_task_done(ctx: Any, done: Any) -> None:
             land_layer_image(ctx, tab, result)
         return
 
+    if name == "plotter-tileset-image":
+        # A *reload*, not an arrival: it replaces art under an existing tileset
+        # rather than appending one, which is why it does not share the
+        # ``plotter-tileset`` key. Not a save either, so ``saving`` is untouched.
+        if isinstance(result, dict) and result.get("replace") is not None:
+            land_tileset_image(ctx, tab, result)
+        return
+
     if name == "plotter-tileset":
         # Not a save, so ``saving`` was never set and must not be cleared here.
         if isinstance(result, dict) and result.get("sheet") is not None:
@@ -517,6 +528,49 @@ def redo(ctx: Any, tab: Any) -> None:
     """One step forward. :func:`undo`'s twin, and its reasoning."""
     tab.doc.redo()
     ensure(ctx).selected_object = None
+
+
+def go_to_cell(ctx: Any, tab: Any, column: int, row: int) -> tuple[int, int]:
+    """Ask the canvas to centre on one cell. -> the cell it will actually use.
+
+    **Clamped rather than refused.** A coordinate past the edge is a typo or a
+    number remembered from a bigger map, and the useful answer to both is the
+    nearest cell that exists -- a refusal would put a dialog in the way of a
+    navigation. The clamped pair is returned so the dialog can show where it
+    landed instead of silently disagreeing with what was typed.
+
+    In the *stored grid's* coordinates, which is what everything else in this
+    mode means by a cell: the status bar's ``cell x, y`` readout, the marquee
+    and ``last_paint`` all count from the window's own origin, and an infinite
+    map slides that window under them together through
+    :meth:`PlotterState.shift_cells`. A second coordinate space here would make
+    the readout and the dialog disagree on exactly the maps that need them most.
+
+    A flag rather than a pan, ``palette_zoom_rung``'s pattern: the pan is
+    measured against a viewport only the canvas has.
+    """
+    doc = tab.doc
+    cell = (
+        max(0, min(int(column), int(doc.width) - 1)),
+        max(0, min(int(row), int(doc.height) - 1)),
+    )
+    ensure(ctx).goto_cell = cell
+    return cell
+
+
+def step_history(ctx: Any, tab: Any, index: int) -> bool:
+    """Jump the document to a position in its undo stack.
+
+    The history panel's door, and the *third* surface onto the same stack --
+    which is why it is here beside the other two rather than in the pane. An
+    object selection names a uid that a jump can undo out of existence, so it is
+    dropped exactly as :func:`undo` drops it; a panel calling
+    ``doc.step_history`` directly would leave the Properties pane pointing at an
+    object no layer holds.
+    """
+    moved = tab.doc.step_history(index)
+    ensure(ctx).selected_object = None
+    return moved
 
 
 

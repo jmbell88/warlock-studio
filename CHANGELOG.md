@@ -18,6 +18,33 @@ the release you are actually running.
 
 ## 0.0.30 — 2026-08-30
 
+- **Six Plotter capabilities that had no control in front of them now have one.** Each
+  one was finished code with no entry point, which is the shape of defect this codebase
+  is most prone to. (1) **The capsule object** was modelled, hit-tested, drawn and
+  carried by all four codecs — and listed in `docs/COMPAT.md` as a Warlock dialect
+  feature — but was in neither `OBJECT_TOOLS` nor `OBJECT_SHAPES`, so the only way to
+  author one was to hand-edit a file. It is `C` on the object toolbox now.
+  (2) **Tileset ▸ Reload the image...** brings an atlas back from a paint program that
+  is not Inker, through the same `MapDoc.replace_tileset` door the Inker round trip uses,
+  so the firstgid, the ids and the declared terrains are kept and every painted cell
+  simply redraws. Re-importing the file was the only route before, and it made a *second*
+  tileset that not one painted cell pointed at; a changed atlas size is still refused by
+  name, because the roles are positional. (3) **The undo-history panel**: the step count
+  in the *Map file* panel is a button now, and opens the stack's own list with the head
+  marked — a popover rather than a tenth pane, Inker's precedent. It jumps through a new
+  `MapDoc.step_history`, which commits an open stroke first; `doc.history.step_to` does
+  not, and a jump made mid-drag would have left the cells ahead of the head. (4) **A
+  filter box over the tilesets**, at `widgets.list_filter`'s own threshold, which is the
+  count at which the strip starts scrolling. It can never hide the set you are painting
+  with. (5) **Map ▸ Go to coordinate...** centres the view on a cell, in the same
+  coordinates the status bar reads out, clamped rather than refused. The pan goes through
+  a new `plotter_state.centre_pan`, which the minimap's click-to-recentre now shares
+  rather than repeating. (6) **The tileset picker is a tab strip, not a combo** — one
+  click per swap instead of two, Tiled's arrangement, with the selection written back
+  through `state.tileset_index` rather than left to imgui so a filtered tab can never
+  quietly become the tileset in hand. `docs/COMPAT.md`'s two cross-references to a
+  "Warlock dialect" section at the end of the file are fixed: there is no such heading
+  and never was — the five dialect rows are distributed and marked in place.
 - **Plotter's Terrain tool no longer crashes the canvas on a map that imports a Tiled
   Wang set.** The Terrain picker offers a foreign Wang set's colours beside the blob
   preset — correctly, because to the person holding the tool there is no difference — and

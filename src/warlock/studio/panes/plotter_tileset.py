@@ -207,14 +207,7 @@ def draw(ctx: Any) -> None:
         )
         return
 
-    options = [
-        (str(index), f"{ref.tileset.name} ({ref.tileset.tile_count})")
-        for index, ref in enumerate(doc.tilesets)
-    ]
-    picked = widgets.labeled_combo("Tileset", str(state.tileset_index), options)
-    if picked != str(state.tileset_index):
-        state.tileset_index = int(picked)
-        state.brush = None
+    _tileset_tabs(ctx, state, doc, tab.uid)
 
     index = max(0, min(state.tileset_index, len(doc.tilesets) - 1))
     state.tileset_index = index
@@ -231,6 +224,79 @@ def draw(ctx: Any) -> None:
     add_button()
     imgui.dummy((0, 4))
     _inker_row(ctx, state, tab, index)
+
+
+#: The tab strip's id, and the filter box's key on ``AppState.list_filters``.
+TABS = "##plotter-tilesets"
+FILTER_TAG = "plotter-tilesets"
+
+
+def _tileset_tabs(ctx: Any, state: Any, doc: Any, uid: str) -> None:
+    """Which tileset the picker shows, as a tab strip with a filter over it.
+
+    **A strip, not a combo.** Tiled puts one tab per tileset here and the reason
+    is the gesture rather than the look: swapping between two sets while
+    painting is a thing you do dozens of times a minute, and a combo is a click
+    to open, a read and a second click for every one of them. A tab is one
+    click, and the names are on screen so *which sets this map has* is answered
+    without opening anything.
+
+    **The filter box is what makes the strip survive a map with a dozen sets**,
+    which is where a strip beats a combo least. It appears at
+    ``widgets.list_filter``'s own threshold, which is the count at which the
+    tabs start scrolling -- so it arrives exactly when the strip needs it and
+    clears itself when it does not.
+
+    Selection is taken from whichever tab reports itself open and written back
+    through ``state.tileset_index``, rather than left to imgui: the tab a filter
+    hides must not silently become the tileset you are painting with. See
+    :func:`.plotter_state.visible_tilesets`, which is why the set in hand is
+    never one of the hidden ones.
+    """
+    from imgui_bundle import imgui
+
+    from .. import plotter_state as ps
+
+    names = [ref.tileset.name for ref in doc.tilesets]
+    needle = widgets.list_filter(ctx, FILTER_TAG, len(names))
+    current = max(0, min(state.tileset_index, len(names) - 1))
+    shown = ps.visible_tilesets(names, needle, current)
+    widgets.no_matches(needle, sum(1 for index in shown if index != current))
+
+    # **``set_selected`` only when the index moved from outside the strip.**
+    # Passing it every frame is the classic way to build a tab bar nobody can
+    # click: imgui re-selects the flagged tab after the press, so every other
+    # tab reverts on the same frame it is chosen. What is remembered here is
+    # what the strip last reported, so a mismatch means somebody else -- a tab
+    # switch, an undone add, the library door -- moved it, and only then is the
+    # strip told where to be.
+    memo = f"plotter_tabsel:{uid}"
+    force = ctx.state.preview.get(memo) != current
+    picked = current
+    if imgui.begin_tab_bar(TABS, imgui.TabBarFlags_.fitting_policy_scroll.value):
+        for index in shown:
+            # ``###`` so the id carries the *index* and the visible part carries
+            # the name: two tilesets with one name are two tabs rather than one,
+            # and a rename cannot move the selection.
+            opened, _ = imgui.begin_tab_item(
+                f"{names[index]}###ts{index}",
+                None,
+                imgui.TabItemFlags_.set_selected.value
+                if force and index == current
+                else 0,
+            )
+            if opened:
+                picked = index
+                imgui.end_tab_item()
+        imgui.end_tab_bar()
+    ctx.state.preview[memo] = picked
+    if picked != state.tileset_index:
+        # The brush is numbered against the tileset it came from, so it goes
+        # with the tab -- ``_forget_document_state``'s rule, one level down.
+        state.tileset_index = picked
+        state.brush = None
+    ref = doc.tilesets[state.tileset_index]
+    widgets.muted(f"{ref.tileset.tile_count} tile(s)")
 
 
 def _picked_local(state: Any, ref: Any) -> int | None:

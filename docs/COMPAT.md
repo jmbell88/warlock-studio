@@ -67,7 +67,11 @@ is a claim about *Tiled*: the feature is one Tiled has, and a file carrying it
 survives the trip in both directions. A `warlock-dialect` row is a claim only
 about this editor: Plotter reads and writes the construct, no Tiled release
 does, and a `.tmx`/`.tmj` carrying one is a file only Plotter opens. The
-dialect rows are listed together in their own section at the end; they exist
+dialect rows are **distributed through the tables below and marked in place**,
+each one under the section its feature belongs to — there is no separate
+section collecting them, because a row's neighbours are what say what it is
+about. Today there are five, under *Maps*, *Layers*, *Objects* (two) and
+*Properties*. They exist
 because the document model grew features Tiled has no spelling for, and the
 alternative — inventing syntax and *calling* it Tiled — is what the
 `tiledversion` gate above exists to stop. `.wmap` is the format that holds all
@@ -78,7 +82,8 @@ States mean:
 - **round-trips** — read, modeled and written without semantic loss, against
   Tiled;
 - **warlock-dialect** — modeled and written, but no Tiled release reads it
-  back; see "Warlock dialect" below;
+  back. Marked in place, in the section its feature belongs to, rather than
+  collected at the end;
 - **refused** — stopped by name before a partial document can be edited;
 - **preserved-verbatim** — retained for export but not interpreted by Plotter;
 - **silently-dropped** — compatibility debt. There are no rows in this state.
@@ -172,7 +177,7 @@ tile layer is the same one array as any other's.
 |---|---|---|
 | `rectangle and point objects` | round-trips | Geometry, visibility, ids, class and properties; fixture: `core-112`. |
 | `ellipse objects` | round-trips | The `<ellipse/>` tag and its JSON `ellipse: true`; fixture: `core-112`. |
-| `capsule objects` | warlock-dialect | A `<capsule/>` tag beside `<ellipse/>`. **Tiled has no capsule shape.** Modeled, hit-tested, drawn and written; fixture: `core-112`. |
+| `capsule objects` | warlock-dialect | A `<capsule/>` tag beside `<ellipse/>`. **Tiled has no capsule shape.** Modeled, hit-tested, drawn, written and -- since W4 -- authorable from the object toolbox (`C`); fixture: `core-112`. |
 | `polygon and polyline objects` | round-trips | Ordered floating-point vertices; fixture: `core-112`. |
 | `tile and text objects` | round-trips | Gid transforms and complete Tiled text styling fields; fixture: `core-112`. |
 | `object rotation` | round-trips | Tiled's clockwise degrees about the object origin, editable and undoable; fixture: `core-112`. |

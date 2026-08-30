@@ -360,3 +360,19 @@ class MapDoc(ProjectionOps, TilesetOps, LayerOps, PaintOps, GeometryOps, ObjectO
         self.end_stroke()
         self.end_object_edit()
         return self.history.redo(self)
+
+    def step_history(self, index: int) -> bool:
+        """Jump to a position in the undo stack. -> whether anything moved.
+
+        What the history panel asks for, and it has to be a method here rather
+        than a ``doc.history.step_to(doc, n)`` at the call site: ``step_to``
+        walks the *stack's* own undo and redo, which are not
+        :meth:`undo`/:meth:`redo` and therefore commit no open session. Called
+        straight, a jump made mid-stroke would step over uncommitted paint and
+        leave the cells ahead of the head -- the exact defect the two methods
+        above exist to prevent, reintroduced by the one caller that reached past
+        them.
+        """
+        self.end_stroke()
+        self.end_object_edit()
+        return self.history.step_to(self, int(index))

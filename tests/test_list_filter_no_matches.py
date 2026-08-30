@@ -38,6 +38,11 @@ FILTERED = (
     # -- and neither is Troupe's cast, which is below list_filter's own
     # self-hiding threshold.
     "panes/packwright_sources.py",
+    # Plotter's tileset tab strip (W4.4). The one filtered list whose rows are
+    # *tabs*: the count passed to ``no_matches`` deliberately excludes the set
+    # in hand, which is never filtered out, so a query matching nothing still
+    # says so with one tab still on screen.
+    "panes/plotter_tileset.py",
 )
 
 

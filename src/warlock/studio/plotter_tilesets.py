@@ -640,7 +640,7 @@ def tileset_from_inker(ctx: Any, doc: Any, *, index: int | None = None) -> None:
     ``index`` names the tileset to repaint. Without one this is an ordinary
     append, which is what an unrelated drawing should be.
     """
-    from .tilegrid.tileset import Tileset, repolish
+    from .tilegrid.tileset import Tileset
 
     tab = active(ctx)
     if tab is None:
@@ -659,13 +659,90 @@ def tileset_from_inker(ctx: Any, doc: Any, *, index: int | None = None) -> None:
         )
         ctx.toast("Tileset added.")
         return
+    repaint_tileset(ctx, tab, index, pixels, verb="repainted")
+
+
+def repaint_tileset(
+    ctx: Any, tab: Any, index: int, pixels: Any, *, verb: str = "reloaded"
+) -> bool:
+    """New art onto an existing tileset. -> whether it landed.
+
+    **The one place art is swapped**, shared by the Inker round trip and by
+    *Tileset > Reload the image...*. Two copies of this would be two places that
+    have to remember the refusal, and the refusal is the whole point: an atlas
+    whose size changed is a set whose tile ninety-three is no longer the tile
+    every gid on the map points at, so ``repolish`` stops it by name and says
+    the size to come back with. ``MapDoc.replace_tileset`` then keeps the
+    firstgid, the ids and the declared terrains, which is what makes this a
+    redraw rather than a renumbering.
+
+    ``verb`` is the only thing the two doors differ by, and it is in the toast
+    because "repainted" is a lie about a file the user picked in Photoshop.
+    """
+    from .tilegrid.tileset import repolish
+
+    if index < 0 or index >= len(tab.doc.tilesets):
+        return False
     ref = tab.doc.tilesets[index]
     try:
         tab.doc.replace_tileset(index, repolish(ref.tileset, pixels))
     except ValueError as exc:
         ctx.toast(f"The tileset was not replaced: {exc}.", "error")
+        return False
+    ctx.toast(f"{ref.tileset.name} {verb}.")
+    return True
+
+
+def ask_replace_tileset(ctx: Any, index: int) -> None:
+    """Pick a picture and put it onto tileset ``index`` in place.
+
+    The picker and the decode on one task thread, ``ask_add_tileset``'s shape
+    and its reason. A **sixth door**, and deliberately not onto the
+    ``plotter-tileset:`` arrival key the other five share: those all mean "a
+    tileset is arriving on this tab" and end in ``add_tileset``, where this one
+    means "the art under a tileset already on this tab has changed" and must not
+    append. Sharing the key would also make an add and a reload refuse each
+    other as duplicates, which is right for two adds and wrong here.
+
+    No ``.tsx``, on purpose. A ``.tsx`` carries its own slicing and its own tile
+    count, so accepting one would be offering a swap that
+    :func:`repaint_tileset` then refuses whenever the file says anything
+    different from the set it is replacing -- the offer-then-refuse shape. An
+    atlas is what goes out to a paint program and an atlas is what comes back.
+    """
+    tab = active(ctx)
+    if tab is None:
+        ctx.toast("Open or start a map first.", "error")
         return
-    ctx.toast(f"{ref.tileset.name} repainted.")
+    if index < 0 or index >= len(tab.doc.tilesets):
+        ctx.toast("Add a tileset first.", "error")
+        return
+    uid, at = tab.uid, int(index)
+
+    def run() -> dict[str, Any] | None:
+        from ..service.errors import invalid_from
+
+        path = dialogs.open_file(
+            "Reload the tileset image",
+            [filetypes.describe("Images"), filetypes.pattern()],
+        )
+        if path is None:
+            return None
+        try:
+            pixels = _decode(path)
+        except ValueError as exc:
+            raise invalid_from(
+                exc, "That image could not be opened", field="file"
+            ) from exc
+        return {"replace": (at, str(path), pixels), "uid": uid}
+
+    ctx.submit(f"plotter-tileset-image:{uid}", run)
+
+
+def land_tileset_image(ctx: Any, tab: Any, result: dict[str, Any]) -> None:
+    """Adopt a reloaded atlas. Frame thread, ``land_layer_image``'s twin."""
+    index, _source, pixels = result["replace"]
+    repaint_tileset(ctx, tab, int(index), pixels, verb="reloaded")
 
 
 def use_inker_tileset(ctx: Any, doc: Any, uid: int) -> None:

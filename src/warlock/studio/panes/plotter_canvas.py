@@ -124,6 +124,7 @@ def draw(ctx: Any) -> None:
 
     tools_pane.resize_popup(ctx, state, tab)
     tools_pane.map_settings_popup(ctx, state, tab)
+    goto_popup(ctx, state, tab)
     # Idempotent, and the second of the two places it is called: no frame may
     # act with a tool the active layer cannot host, and the frame after a layer
     # switch is the one where that goes wrong.
@@ -162,6 +163,16 @@ def draw(ctx: Any) -> None:
     if view.pending_zoom is not None:
         inker_state.centre(view, size_px, region, view.pending_zoom)
         view.pending_zoom = None
+    if state.goto_cell is not None:
+        # **After the two above**, so a jump made on the frame a map is first
+        # fitted wins: the fit centres the whole map, and the user asked for a
+        # cell. The zoom is left exactly as it is -- *Go to* is a pan, and a
+        # navigation that also re-scaled would lose the reading you were at.
+        column, row = state.goto_cell
+        state.goto_cell = None
+        view.pan = plotter_state.centre_pan(
+            region, doc.cell_centre(column, row), view.zoom
+        )
 
     origin = imgui.get_cursor_screen_pos()
     imgui.invisible_button("plotter-canvas", region)
@@ -215,6 +226,61 @@ def _tabs(ctx: Any, state: Any) -> None:
             if not keep:
                 plotter_mode.close_tab(ctx, tab.uid)
         imgui.end_tab_bar()
+
+
+GOTO_POPUP = "plotter-goto"
+
+
+def goto_popup(ctx: Any, state: Any, tab: Any) -> None:
+    """Map -> Go to coordinate, as a two-field popup.
+
+    The one navigation a large map has no other way to make. Panning is a drag
+    and the minimap is a fraction of a rectangle you have to aim at, so "put me
+    at 148, 96" -- a coordinate read off a design document, an engine log or a
+    bug report -- was answerable only by dragging until the status bar agreed.
+
+    **The coordinates are the status bar's**, which is what makes the pair a
+    round trip: what ``cell x, y`` reads out down there is exactly what this
+    accepts, on an infinite map as much as a finite one. See
+    :func:`.plotter_mode.go_to_cell` for why that is the stored grid's own
+    numbering rather than a second space.
+
+    ``begin_popup`` and ``state.goto_pending``, ``resize_popup``'s shape: a menu
+    is not the window that can begin a popup.
+    """
+    from imgui_bundle import imgui
+
+    if state.goto_pending:
+        state.goto_pending = False
+        if tab is not None:
+            imgui.open_popup(GOTO_POPUP)
+    if tab is None or not imgui.begin_popup(GOTO_POPUP):
+        return
+    widgets.popup_chrome(_imgui=imgui)
+    doc = tab.doc
+    key = f"plotter_goto:{tab.uid}"
+    form = ctx.state.preview.get(key)
+    if not isinstance(form, dict):
+        # Seeded from the cell last hovered rather than from zero, because the
+        # coordinate a reader wants to type is usually near the one they were
+        # just looking at.
+        cell = state.hover_cell or (0, 0)
+        form = {"x": int(cell[0]), "y": int(cell[1])}
+        ctx.state.preview[key] = form
+    imgui.text("Go to coordinate")
+    widgets.muted(f"0, 0 to {int(doc.width) - 1}, {int(doc.height) - 1}")
+    imgui.separator()
+    _, form["x"] = controls.input_int("Column##goto-x", int(form["x"]), 1)
+    _, form["y"] = controls.input_int("Row##goto-y", int(form["y"]), 1)
+    imgui.dummy((0, 4))
+    if widgets.primary_button("Go##goto-apply", (-1, 0)):
+        # Through the mode's door, not by writing ``state.goto_cell`` here: the
+        # clamp is what keeps a typo from asking the canvas to centre on a cell
+        # the map does not have, and the form is put back to where it landed so
+        # the dialog never shows a coordinate the view did not go to.
+        form["x"], form["y"] = plotter_mode.go_to_cell(ctx, tab, form["x"], form["y"])
+        imgui.close_current_popup()
+    imgui.end_popup()
 
 
 def _empty(ctx: Any) -> None:
@@ -1510,8 +1576,10 @@ def _minimap_input(state: Any, tab: Any, origin, region, hovered: bool) -> bool:
     fx = min(max((mouse.x - x) / w, 0.0), 1.0)
     fy = min(max((mouse.y - y) / h, 0.0), 1.0)
     px, py = fx * doc.pixel_width, fy * doc.pixel_height
-    zoom = tab.view.zoom
-    tab.view.pan = (region[0] / 2.0 - px * zoom, region[1] / 2.0 - py * zoom)
+    # The same arithmetic *Go to coordinate* uses, and through the same
+    # function: two copies of "centre the pane on this point" is how one of them
+    # comes to be half a tile out.
+    tab.view.pan = plotter_state.centre_pan(region, (px, py), tab.view.zoom)
     return True
 
 

@@ -3420,3 +3420,228 @@ def test_the_picker_arms_a_terrain_the_canvas_can_paint_with():
 
     assert ctx.toasts == []
     assert int(layer.data[2, 2]) != 0
+
+
+# --- W4: the six small gaps ---------------------------------------------------
+#
+# Every one of these is a control that had no entry point. The tests below drive
+# the entry point rather than the thing behind it: what was missing was never the
+# capability, and a test that called the capability would have passed before the
+# gap was closed.
+
+
+class _Key:
+    """A pygame KEYDOWN with no modifiers."""
+
+    def __init__(self, key: int) -> None:
+        import pygame
+
+        self.key = key
+        self.mod = 0
+        self.type = pygame.KEYDOWN
+
+
+def test_the_capsule_letter_reaches_the_canvas_through_the_key_handler():
+    """The keyboard is one of the two doors onto a tool, and the one a headless
+    test can drive end to end. ``C`` was not bound to anything at all."""
+    import pygame
+
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    state = plotter_mode.ensure(ctx)
+    layer = tab.doc.add_object_layer()
+    tab.doc.set_active_layer(layer.uid)
+
+    assert plotter_mode.handle_key(ctx, _Key(pygame.K_c)) is True
+    assert state.tool == "object_capsule"
+    # What the canvas reads when the drag is released.
+    assert state.object_shape == "capsule"
+
+
+def test_go_to_coordinate_asks_the_canvas_to_centre_on_a_cell():
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    state = plotter_mode.ensure(ctx)
+    assert state.goto_cell is None
+
+    assert plotter_mode.go_to_cell(ctx, tab, 2, 3) == (2, 3)
+    assert state.goto_cell == (2, 3)
+
+
+def test_go_to_coordinate_clamps_rather_than_refusing():
+    """A number remembered from a bigger map is a navigation, not an error."""
+    ctx = FakeCtx()
+    tab = _tab(ctx)  # 4 x 4
+
+    assert plotter_mode.go_to_cell(ctx, tab, 99, -7) == (3, 0)
+    assert plotter_mode.ensure(ctx).goto_cell == (3, 0)
+    assert ctx.toasts == []
+
+
+def test_a_pending_jump_is_dropped_when_the_tab_changes():
+    """It names a cell in the map being left, ``last_paint``'s own rule."""
+    ctx = FakeCtx()
+    first = _tab(ctx)
+    plotter_mode.go_to_cell(ctx, first, 1, 1)
+    _tab(ctx)
+    assert plotter_mode.ensure(ctx).goto_cell is None
+    plotter_mode.go_to_cell(ctx, plotter_mode.ensure(ctx).active, 2, 2)
+    plotter_mode.ensure(ctx).activate(first.uid)
+    assert plotter_mode.ensure(ctx).goto_cell is None
+
+
+def test_a_history_jump_drops_the_object_selection():
+    """A jump can undo an object out of existence, so the Properties pane must
+    not be left pointing at a uid no layer holds -- ``undo``'s rule."""
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    state = plotter_mode.ensure(ctx)
+    layer = tab.doc.add_object_layer()
+    obj = tab.doc.add_object(
+        layer.uid, MapObject(uid=new_uid(), name="spawn", kind="point", x=1, y=1)
+    )
+    state.selected_object = obj.uid
+    depth = len(tab.doc.history)
+
+    assert plotter_mode.step_history(ctx, tab, depth - 1) is True
+    assert state.selected_object is None
+    assert tab.doc.layers[-1].objects == []
+
+
+def test_reloading_a_tileset_image_replaces_the_art_in_place():
+    """Tileset > Reload the image..., the door that did not exist.
+
+    Re-importing the file made a *second* tileset with its own firstgid, which
+    every gid already painted on the map ignored. This swaps the art under the
+    ids instead.
+    """
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    before = tab.doc.tilesets[0]
+    painted = tab.doc.tile_layers()[0]
+    tab.doc.write_region(
+        painted.uid, 0, 0, np.array([[before.firstgid + 1]], gid.DTYPE)
+    )
+
+    fresh = np.zeros((32, 32, 4), dtype=np.uint8)
+    fresh[..., 3] = 255
+    fresh[5, 5] = (1, 2, 3, 255)
+    plotter_mode.on_task_done(
+        ctx,
+        _Done(
+            f"plotter-tileset-image:{tab.uid}",
+            {"replace": (0, "atlas.png", fresh), "uid": tab.uid},
+        ),
+    )
+
+    after = tab.doc.tilesets[0]
+    assert len(tab.doc.tilesets) == 1, "a reload must not append a tileset"
+    assert after.firstgid == before.firstgid
+    assert after.tileset.tile_count == before.tileset.tile_count
+    assert int(after.tileset.pixels[5, 5, 0]) == 1
+    # The cell still names the same tile, which is the whole point.
+    assert int(painted.data[0, 0]) == before.firstgid + 1
+    assert tab.doc.history.can_undo
+
+
+def test_reloading_an_atlas_of_a_different_size_is_refused_by_name():
+    """The roles are positional: a cropped atlas is a set whose tile 93 is not
+    the tile the map thinks it is."""
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    before = tab.doc.tilesets[0].tileset
+
+    plotter_mode.on_task_done(
+        ctx,
+        _Done(
+            f"plotter-tileset-image:{tab.uid}",
+            {"replace": (0, "small.png", np.zeros((16, 16, 4), dtype=np.uint8))},
+        ),
+    )
+
+    assert tab.doc.tilesets[0].tileset is before
+    assert ctx.toasts and ctx.toasts[-1][1] == "error"
+    assert "32x32" in ctx.toasts[-1][0]
+
+
+def test_the_reload_door_picks_a_file_on_its_own_key(monkeypatch):
+    """Not the ``plotter-tileset:`` arrival key the other five doors share: this
+    one replaces rather than appends, and sharing the key would make a reload and
+    an add refuse each other as duplicates."""
+    from warlock.studio import dialogs, plotter_tilesets
+
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    fresh = np.zeros((32, 32, 4), dtype=np.uint8)
+    calls: list[str] = []
+
+    def _picked(title: str, filters: Any) -> Any:
+        calls.append(title)
+        return Path("atlas.png")
+
+    monkeypatch.setattr(dialogs, "open_file", _picked)
+    monkeypatch.setattr(plotter_tilesets, "_decode", lambda path: fresh)
+    plotter_mode.ask_replace_tileset(ctx, 0)
+
+    assert calls, "the door never opened a picker"
+    assert ctx.submitted == [f"plotter-tileset-image:{tab.uid}"]
+    assert ctx.result["replace"][0] == 0
+    assert ctx.result["uid"] == tab.uid
+
+
+def test_the_reload_door_refuses_an_index_the_map_does_not_have():
+    ctx = FakeCtx()
+    _tab(ctx, tileset=False)
+    plotter_mode.ask_replace_tileset(ctx, 0)
+    assert ctx.submitted == []
+    assert ctx.toasts and ctx.toasts[-1][1] == "error"
+
+
+def _menu_rows(ctx: Any, state: Any, tab: Any, menu: str, hit: str, monkeypatch) -> None:
+    """Draw one menu's rows with ``hit`` pressed, through the real dispatch.
+
+    ``controls.menu_item`` is what a row *is*, so replacing it is what a click
+    is: everything between the press and the action -- the label, the enabled
+    gate, the branch it lands in -- is the code under test. A test that called
+    the action directly would pass on a menu with no row in it at all, which is
+    exactly the defect these two rows exist to close.
+    """
+    from warlock.studio import controls
+    from warlock.studio.panes import plotter_menu
+
+    pressed: list[str] = []
+
+    def fake_menu_item(label, shortcut="", selected=False, enabled=True, **kwargs):
+        if label.startswith(f"{hit}##"):
+            pressed.append(label)
+            return (bool(enabled), selected)
+        return (False, selected)
+
+    monkeypatch.setattr(controls, "menu_item", fake_menu_item)
+    # The only other imgui call a row list makes, and it needs a live context.
+    monkeypatch.setattr(controls, "menu_separator", lambda: None)
+    plotter_menu._rows(ctx, state, tab, menu)
+    assert pressed, f"no row named {hit!r} was drawn under {menu}"
+
+
+def test_the_map_menu_has_a_go_to_coordinate_row_that_acts(monkeypatch):
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    state = plotter_mode.ensure(ctx)
+    _menu_rows(ctx, state, tab, "Map", "Go to coordinate...", monkeypatch)
+    assert state.goto_pending is True
+
+
+def test_the_tileset_menu_has_a_reload_row_that_acts(monkeypatch):
+    from warlock.studio import plotter_tilesets
+
+    ctx = FakeCtx()
+    tab = _tab(ctx)
+    state = plotter_mode.ensure(ctx)
+    state.tileset_index = 0
+    seen: list[int] = []
+    monkeypatch.setattr(
+        plotter_tilesets, "ask_replace_tileset", lambda _ctx, index: seen.append(index)
+    )
+    _menu_rows(ctx, state, tab, "Tileset", "Reload the image...", monkeypatch)
+    assert seen == [0]

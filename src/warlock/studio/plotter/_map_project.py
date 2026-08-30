@@ -76,6 +76,10 @@ class ProjectionOps:
         """
         return project.cell_outline(self._lattice(), column, row)
 
+    def cell_centre(self: MapDoc, column: int, row: int) -> tuple[float, float]:
+        """The middle of one cell, in map pixels. See :func:`project.cell_centre`."""
+        return project.cell_centre(self._lattice(), column, row)
+
     def cell_at(self: MapDoc, x: float, y: float) -> tuple[int, int]:
         """Which cell a map-pixel point lands in. Unclamped; every tool clips."""
         return project.cell_at(self._lattice(), x, y)

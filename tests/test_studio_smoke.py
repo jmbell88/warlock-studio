@@ -9,6 +9,7 @@ the app, and there are eight panels.
 
 from __future__ import annotations
 
+import dataclasses
 import inspect
 from pathlib import Path
 from types import SimpleNamespace
@@ -4595,6 +4596,10 @@ _ID_WIDGETS = (
     "drag_int",
     "drag_float",
     "input_text",
+    # widgets.input_text calls this one whenever a field has a hint, which
+    # every search box in the app does -- so a harness without it is blind to
+    # exactly the control that filters a list.
+    "input_text_with_hint",
     "input_int",
     "input_float",
     "combo",
@@ -4607,6 +4612,12 @@ _ID_WIDGETS = (
     "image_button",
     "menu_item",
     "begin_child",
+    # Tabs are a *selection* control here, not decoration: Plotter's tileset
+    # picker is a tab strip, so a harness blind to them cannot see which tileset
+    # the pane offers -- which is how the picker assertion below came to pass by
+    # matching a combo label after the combo was gone.
+    "begin_tab_bar",
+    "begin_tab_item",
 )
 
 
@@ -4771,7 +4782,10 @@ def test_plotter_tileset_pane_leads_with_the_picker(app_ctx, imgui_ctx):
     _drawn_labels(imgui, lambda: plotter_tileset.draw(app_ctx), title)  # settle headers
     labels = _drawn_labels(imgui, lambda: plotter_tileset.draw(app_ctx), title)
 
-    picker = _index_of(labels, "Tileset")
+    # The picker is a *tab strip* since W4.6 -- one click per tileset instead of
+    # a combo's two -- so what leads the pane is the strip and its first tab.
+    picker = _index_of(labels, plotter_tileset.TABS)
+    assert _index_of(labels, "terrain###ts0") >= 0, labels
     add = _index_of(labels, "Add from a file")
     assert picker >= 0 and add >= 0, labels
     assert picker < add, f"the tileset picker must precede Add from a file: {labels}"
@@ -5054,3 +5068,210 @@ def test_the_menu_bar_and_status_bar_actually_render(app_ctx, imgui_ctx):
     # And the stacks are back where they started, which is the thing a leaked
     # push_style_var would break for whatever drew next rather than for this.
     assert imgui.get_current_context() is not None
+
+
+# --- W4: Plotter's six small gaps, drawn for real ----------------------------
+#
+# Each of these was a capability with no control in front of it, so each test
+# below asserts about the *control*: that it is submitted into a real frame, and
+# that pressing it reaches the door. A test that called the door instead would
+# have passed before any of this was built.
+
+
+def _plotter_tab(app_ctx, tilesets=("terrain",)):
+    from warlock.studio import plotter_mode
+
+    tab = plotter_mode.new_document(app_ctx, (8, 8, 16, 16))
+    for name in tilesets:
+        tab.doc.add_tileset(_tileset())
+        tab.doc.tilesets[-1] = dataclasses.replace(
+            tab.doc.tilesets[-1],
+            tileset=dataclasses.replace(tab.doc.tilesets[-1].tileset, name=name),
+        )
+    return tab
+
+
+def test_the_object_toolbox_draws_a_capsule_button(app_ctx, imgui_ctx):
+    """The shape was drawable, hit-testable and writable by four codecs, and
+    reachable only by hand-editing a file."""
+    from warlock.studio.panes import plotter_tools
+
+    imgui, _renderer = imgui_ctx
+    tab = _plotter_tab(app_ctx)
+    layer = tab.doc.add_object_layer()
+    tab.doc.set_active_layer(layer.uid)
+
+    title = "##capsule-tool"
+    _drawn_labels(imgui, lambda: plotter_tools.draw(app_ctx), title)
+    labels = _drawn_labels(imgui, lambda: plotter_tools.draw(app_ctx), title)
+    assert any("##tool-object_capsule" in label for label in labels), labels
+
+
+def test_the_undo_history_popover_lists_the_stack_and_jumps(app_ctx, imgui_ctx):
+    """The step count was on screen and was not a control; the stack behind it
+    had no panel at all."""
+    import numpy as np
+
+    from warlock.studio import controls, plotter_mode
+    from warlock.studio.panes import plotter_bridge
+    from warlock.studio.tilegrid import gid as gidlib
+
+    imgui, _renderer = imgui_ctx
+    tab = _plotter_tab(app_ctx)
+    layer = tab.doc.tile_layers()[0]
+    for column in range(3):
+        tab.doc.write_region(
+            layer.uid, column, 0, np.array([[column + 1]], gidlib.DTYPE)
+        )
+    depth = len(tab.doc.history)
+
+    def frame() -> None:
+        imgui.open_popup(plotter_bridge.HISTORY_POPUP)
+        plotter_bridge._history_popup(app_ctx, tab)
+
+    labels = _drawn_labels(imgui, frame, "##plotter-history")
+    assert _index_of(labels, "(the map as opened)") >= 0, labels
+    # One row per step, and the head marked.
+    assert sum(1 for label in labels if "##plotter-undo" in label) == depth + 1, labels
+    assert any(label.startswith("tile patch  <") for label in labels), labels
+
+    # And a row is a jump. ``controls.selectable`` is what a row *is*, so
+    # replacing it is what clicking one is -- the popup, the loop and the
+    # dispatch are all still the real thing.
+    original = controls.selectable
+    target = "##plotter-undo0"
+
+    def fake_selectable(label, selected=False, *args, **kwargs):
+        original(label, selected, *args, **kwargs)
+        return (target in label, selected)
+
+    controls.selectable = fake_selectable
+    try:
+        _frame(imgui_ctx, frame)
+    finally:
+        controls.selectable = original
+
+    assert len(tab.doc.history) == 1, "the click did not move the head"
+    assert int(layer.data[0, 0]) == 0
+    assert plotter_mode.ensure(app_ctx).selected_object is None
+
+
+def test_go_to_coordinate_draws_a_dialog_that_moves_the_view(app_ctx, imgui_ctx):
+    """Menu -> flag -> popup -> door -> pan, every leg through the real code."""
+    from warlock.studio import plotter_mode, widgets
+    from warlock.studio.panes import plotter_canvas
+
+    imgui, _renderer = imgui_ctx
+    tab = _plotter_tab(app_ctx)
+    state = plotter_mode.ensure(app_ctx)
+    state.goto_pending = True
+
+    labels = _drawn_labels(
+        imgui, lambda: plotter_canvas.goto_popup(app_ctx, state, tab), "##goto"
+    )
+    assert _index_of(labels, "Column##goto-x") >= 0, labels
+    assert _index_of(labels, "Row##goto-y") >= 0, labels
+
+    app_ctx.state.preview[f"plotter_goto:{tab.uid}"] = {"x": 6, "y": 5}
+    original = widgets.primary_button
+    widgets.primary_button = lambda label, *a, **k: "goto-apply" in label
+    try:
+        state.goto_pending = True
+        _frame(imgui_ctx, lambda: plotter_canvas.goto_popup(app_ctx, state, tab))
+    finally:
+        widgets.primary_button = original
+
+    assert state.goto_cell == (6, 5)
+
+    # And the canvas turns that into a pan on the frame it reads it.
+    before = tab.view.pan
+    _frame(imgui_ctx, lambda: plotter_canvas.draw(app_ctx))
+    assert state.goto_cell is None, "the flag is cleared by the frame that uses it"
+    assert tab.view.pan != before
+
+
+def test_the_tileset_strip_draws_one_tab_per_tileset(app_ctx, imgui_ctx):
+    from warlock.studio.panes import plotter_tileset
+
+    imgui, _renderer = imgui_ctx
+    _plotter_tab(app_ctx, tilesets=("Grass", "Dungeon", "props"))
+
+    title = "##tileset-tabs"
+    _drawn_labels(imgui, lambda: plotter_tileset.draw(app_ctx), title)
+    labels = _drawn_labels(imgui, lambda: plotter_tileset.draw(app_ctx), title)
+    for index, name in enumerate(("Grass", "Dungeon", "props")):
+        assert _index_of(labels, f"{name}###ts{index}") >= 0, labels
+    # Three tilesets is under the filter's threshold, so no box.
+    assert _index_of(labels, "##find-plotter-tilesets") == -1, labels
+
+
+def test_choosing_a_tab_changes_the_tileset_and_drops_the_brush(app_ctx, imgui_ctx):
+    """imgui owns the click; what this owns is what it does with the answer.
+
+    ``begin_tab_item`` is replaced so a *named* tab reports itself open, which
+    is exactly what a press does -- the strip, the reconciliation and the brush
+    rule are all the real code.
+    """
+    import imgui_bundle
+    import numpy as np
+
+    from warlock.studio import plotter_mode
+    from warlock.studio.panes import plotter_tileset
+    from warlock.studio.tilegrid import gid as gidlib
+
+    imgui, _renderer = imgui_ctx
+    _plotter_tab(app_ctx, tilesets=("Grass", "Dungeon", "props"))
+    state = plotter_mode.ensure(app_ctx)
+    state.brush = np.array([[gidlib.compose(1)]], gidlib.DTYPE)
+
+    # One settling frame first, so the strip has reported where it is and stops
+    # forcing its own selection -- which is the state a user's click arrives in.
+    _frame(imgui_ctx, lambda: plotter_tileset.draw(app_ctx))
+    assert state.tileset_index == 0
+
+    original = imgui.begin_tab_item
+
+    def fake_tab_item(label, p_open=None, flags=0):
+        # What a press does, said to imgui in imgui's own terms: the tab bar,
+        # the selection and everything the pane does with the answer are real.
+        if "###ts2" in label:
+            flags |= imgui.TabItemFlags_.set_selected.value
+        return original(label, p_open, flags)
+
+    imgui_bundle.imgui.begin_tab_item = fake_tab_item
+    try:
+        # Twice: ``SetSelected`` writes ``NextSelectedTabId``, which the tab bar
+        # honours at its *next* layout -- imgui's own one-frame latency, and the
+        # reason the pane may not assume the tab it flagged is the tab it gets.
+        _frame(imgui_ctx, lambda: plotter_tileset.draw(app_ctx))
+        _frame(imgui_ctx, lambda: plotter_tileset.draw(app_ctx))
+    finally:
+        imgui_bundle.imgui.begin_tab_item = original
+
+    assert state.tileset_index == 2
+    assert state.brush is None, "a brush is numbered against the set it came from"
+
+
+def test_the_tileset_filter_appears_and_narrows_the_strip(app_ctx, imgui_ctx):
+    """At the count where the strip starts scrolling, and not before."""
+    from warlock.studio.panes import plotter_tileset
+
+    imgui, _renderer = imgui_ctx
+    names = ("Grass", "grass cliff", "Dungeon", "props", "water", "sand", "ice", "lava")
+    _plotter_tab(app_ctx, tilesets=names)
+
+    title = "##tileset-filter"
+    _drawn_labels(imgui, lambda: plotter_tileset.draw(app_ctx), title)
+    labels = _drawn_labels(imgui, lambda: plotter_tileset.draw(app_ctx), title)
+    assert _index_of(labels, "##find-plotter-tilesets") >= 0, labels
+
+    app_ctx.state.list_filters[plotter_tileset.FILTER_TAG] = "grass"
+    labels = _drawn_labels(imgui, lambda: plotter_tileset.draw(app_ctx), title)
+    tabs = [label for label in labels if "###ts" in label]
+    # The two matches, and the set in hand (index 0, which is also a match).
+    assert tabs == ["Grass###ts0", "grass cliff###ts1"], tabs
+
+    # A query that matches nothing still leaves the tileset being painted with.
+    app_ctx.state.list_filters[plotter_tileset.FILTER_TAG] = "zzz"
+    labels = _drawn_labels(imgui, lambda: plotter_tileset.draw(app_ctx), title)
+    assert [label for label in labels if "###ts" in label] == ["Grass###ts0"], labels

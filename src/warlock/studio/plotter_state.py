@@ -181,6 +181,19 @@ OBJECT_TOOLS = (
     ("object_polyline", "Insert polyline", "L"),
     ("object_tile", "Insert tile", "T"),
     ("object_text", "Insert text", "X"),
+    # **Capsule has no Tiled letter to borrow**, because Tiled has no capsule.
+    # ``C`` is the only initial free in this palette and is unclaimed on the
+    # tile side too, so the letter means one thing in both.
+    #
+    # The shape was modelled, hit-tested, drawn and written by every format
+    # this editor speaks long before it had a button: ``add_object`` has taken
+    # ``"capsule"`` since the geometry landed, and a ``.wmap`` or a ``.tmx``
+    # carrying one has always opened. What was missing was the *entry point* --
+    # a construct only a hand-edited file could author, in an editor whose own
+    # ledger lists it as a dialect feature. Adding the row is the whole fix,
+    # because the toolbox builds from this table and ``OBJECT_SHAPES`` below is
+    # what the canvas reads on release.
+    ("object_capsule", "Insert capsule", "C"),
 )
 
 #: Which ``state.object_shape`` each insert tool means. The combo that used to
@@ -195,6 +208,7 @@ OBJECT_SHAPES = {
     "object_polyline": "polyline",
     "object_tile": "tile",
     "object_text": "text",
+    "object_capsule": "capsule",
 }
 
 
@@ -442,6 +456,20 @@ class PlotterState:
     #: window. Cleared by the pane that opens the popup.
     resize_pending: bool = False
     map_settings_pending: bool = False
+    #: A menu row has asked for the *go to coordinate* dialog. The third of the
+    #: flags above, with their reason.
+    goto_pending: bool = False
+    #: A cell the view has been asked to centre on, or ``None``.
+    #:
+    #: ``palette_zoom_rung``'s pattern rather than a pan written here: a pan is
+    #: measured in *pane* pixels and only the canvas knows how wide the pane is,
+    #: so a dialog that computed one would be computing it against a viewport it
+    #: cannot see. Cleared by the canvas on the frame it applies it.
+    #:
+    #: Unclamped on purpose, exactly as ``select`` is: an infinite map grows
+    #: under a stored cell, and :meth:`shift_cells` is what keeps the two in
+    #: step. The dialog clamps what it *accepts*; this field only carries it.
+    goto_cell: tuple[int, int] | None = None
     #: Which tileset the editor sheet is open on, by index, or None for "the
     #: map is on screen". The branch ``_review_workspace`` already takes.
     editing_tileset: int | None = None
@@ -616,6 +644,8 @@ class PlotterState:
         # pixels would sit in memory until the app closed.
         self.sheet_import = None
         self.sheet_import_open = False
+        # Names a cell in the document being left, ``last_paint``'s own reason.
+        self.goto_cell = None
 
     def cycle(self, step: int = 1) -> None:
         if len(self.docs) < 2:
@@ -724,7 +754,17 @@ class PlotterState:
         """
         if not (dx or dy):
             return
-        for name in ("hover_cell", "drag_anchor", "last_paint", "drag_last_cell"):
+        for name in (
+            "hover_cell",
+            "drag_anchor",
+            "last_paint",
+            "drag_last_cell",
+            # A pending jump is a cell index like the rest of them, and a growth
+            # that landed between the dialog and the frame that reads it would
+            # otherwise send the view one window to the left of the coordinate
+            # the user typed.
+            "goto_cell",
+        ):
             cell = getattr(self, name)
             if cell is not None:
                 setattr(self, name, (cell[0] + dx, cell[1] + dy))
@@ -764,6 +804,51 @@ class PlotterState:
         # whole point of it is to be there on the *next* click.
         self.drag_last_cell = None
 
+
+
+def centre_pan(
+    region: tuple[float, float], point: tuple[float, float], zoom: float
+) -> tuple[float, float]:
+    """The pan that puts a map-pixel ``point`` in the middle of ``region``.
+
+    One line, written once. The minimap's click-to-recentre and the *Go to
+    coordinate* jump are the same question asked from two places, and two copies
+    of it is how one of them comes to be half a tile out after somebody changes
+    the other. The view's own :mod:`.inker_state` helpers do not answer it --
+    ``centre`` centres the *document*, which is the thing a jump is not.
+
+    No clamping. Plotter's canvas has never bounded its pan (an infinite map has
+    nothing to bound it against), and a jump that quietly refused to reach a
+    coordinate would be worse than one that shows empty ground around it.
+    """
+    return (
+        region[0] / 2.0 - point[0] * zoom,
+        region[1] / 2.0 - point[1] * zoom,
+    )
+
+
+def visible_tilesets(names: list[str], needle: str, current: int) -> list[int]:
+    """Which tilesets the picker's tab strip shows. -> indices, in order.
+
+    **The set you are painting with is never filtered out.** A tab strip is a
+    selection control, so a filter that could hide the selected tab would leave
+    the picker below it drawing a tileset with nothing on the strip saying which
+    -- or, worse, hand the selection to whatever tab imgui picked instead, and
+    change the brush because somebody typed in a search box. Keeping ``current``
+    means the filter narrows what you can *reach* and never what you hold.
+
+    An empty needle is every index, which is what makes the box's absence and an
+    empty box the same thing -- ``widgets.list_filter`` clears the query when the
+    list is too short to be worth searching, and this must not then hide rows.
+    """
+    query = needle.strip().lower()
+    if not query:
+        return list(range(len(names)))
+    return [
+        index
+        for index, name in enumerate(names)
+        if query in name.lower() or index == current
+    ]
 
 
 def ensure(ctx: Any) -> PlotterState:

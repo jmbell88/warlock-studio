@@ -79,6 +79,12 @@ def _map_rows(ctx: Any, state: Any, tab: Any) -> None:
         state.resize_pending = True
     if _row("Map properties...", enabled=ready, reason=BUSY):
         state.map_settings_pending = True
+    if _row("Go to coordinate...", enabled=tab is not None, reason="Nothing is open."):
+        # Outside the busy gate, unlike the two above it: a jump moves the view
+        # and writes nothing, so there is no reason a map being saved cannot be
+        # scrolled. ``resize_pending``'s flag pattern all the same -- the popup
+        # belongs to the canvas.
+        state.goto_pending = True
     controls.menu_separator()
     if _row(
         "Export .tmx",
@@ -162,6 +168,19 @@ def _tileset_rows(ctx: Any, state: Any, tab: Any) -> None:
     tilesets = tab is not None and bool(tab.doc.tilesets)
     if _row("Import a tileset...", enabled=ready, reason=BUSY):
         plotter_tilesets.ask_add_tileset(ctx)
+    if _row(
+        "Reload the image...",
+        enabled=ready and tilesets,
+        reason=BUSY if not ready else NO_TILESET,
+    ):
+        # The other half of *Polish in Inker*, for a paint program that is not
+        # Inker: an atlas exported, edited in Aseprite or Photoshop and saved
+        # back had no way in, and re-importing it made a *second* tileset that
+        # every gid on the map still ignored. Through the same
+        # ``MapDoc.replace_tileset`` door the Inker round trip uses, so the ids,
+        # the firstgid and the declared terrains are kept and the map redraws
+        # rather than renumbering.
+        plotter_tilesets.ask_replace_tileset(ctx, max(0, state.tileset_index))
     if _row(
         "Edit tileset...",
         enabled=ready and tilesets,

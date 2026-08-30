@@ -352,6 +352,28 @@ def cell_outline(lat: Lattice, column: int, row: int) -> list[tuple[float, float
 
 
 
+def cell_centre(lat: Lattice, column: int, row: int) -> tuple[float, float]:
+    """The middle of one cell, in map pixels. What a jump aims the view at.
+
+    The centroid of :func:`cell_outline` rather than ``corner + half a tile``,
+    because *half a tile* is only the middle on an orthogonal lattice. On an
+    isometric one the corner is the diamond's top vertex; on a staggered or
+    hexagonal one every other row is pushed sideways and the tile box is not the
+    cell. Deriving it from the outline gives one answer that is right for all
+    five projections and cannot drift from the shape the grid draws.
+
+    Exact for every projection this module has, which is worth stating because
+    the offset lattices approximate a *fractional* corner: this asks only for
+    whole-cell outlines, which they compute rather than approximate.
+    """
+    points = cell_outline(lat, int(column), int(row))
+    count = float(len(points))
+    return (
+        sum(point[0] for point in points) / count,
+        sum(point[1] for point in points) / count,
+    )
+
+
 def cell_at(lat: Lattice, x: float, y: float) -> tuple[int, int]:
     """Which cell a pixel point falls in. Unclamped, deliberately.
 
