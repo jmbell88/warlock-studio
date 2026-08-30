@@ -132,6 +132,14 @@ PHASES_REMESH: dict[str, tuple[float, float]] = {
     "publish": (0.95, 1.00),
 }
 
+# A LoRA training run: a short host prologue that frees the card, the trainer
+# child reporting its own step fraction, and a registration tail.
+PHASES_LORA_TRAIN: dict[str, tuple[float, float]] = {
+    "prepare": (0.00, 0.05),
+    "train": (0.05, 0.95),
+    "publish": (0.95, 1.00),
+}
+
 # A tile sheet is *one* txt2img pass, followed by a CPU tail that reduces
 # sixty-four cells and quantizes them to one palette. The simplest table here,
 # and the one that most needs writing down: with a single generation there is
@@ -183,6 +191,7 @@ _PHASES_BY_KIND: dict[str, dict[str, tuple[float, float]]] = {
     "pixel_sheet": PHASES_PIXEL_SHEET,
     "retexture": PHASES_RETEXTURE,
     "remesh": PHASES_REMESH,
+    "lora_train": PHASES_LORA_TRAIN,
     "tile_sheet": PHASES_TILE_SHEET,
     "charsheet": PHASES_CHARSHEET,
 }

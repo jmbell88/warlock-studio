@@ -171,6 +171,9 @@ DERIVED_PARAMS = (
     # path produced the surface, and the tiercheck verdict against the mesh
     # it replaced. Derived for ``retexture``'s reason exactly.
     "remesh",
+    # What a training run produced -- the manifest it registered and its
+    # final loss. A rerun trains again and registers its own.
+    "lora_result",
     # Which canonical post-processing steps failed on *this* run. Derived by
     # definition -- it is a statement about the artifacts this reconstruction
     # produced -- so a reroll must start clean or it would wear a degradation

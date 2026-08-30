@@ -28,7 +28,7 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from ... import fetch, vram
+from ... import fetch, models, vram
 from ...service import library as svc_library
 from .. import app_ctx, controls, dialogs, forms, icons, theme, tokens, widgets
 from .. import layouts as layouts_mod
@@ -916,6 +916,8 @@ def _models(ctx: Any) -> None:
         _start(ctx, sorted(picks), key="download:selection")
     _selection_progress(ctx)
 
+    _loras(ctx)
+
     imgui.dummy((0, sp(tokens.SP_1)))
     if getattr(ctx, "rigging_available", False):
         widgets.text_colored(theme.MUTED, f"{icons.CIRCLE} Rigging (bpy) available")
@@ -929,6 +931,168 @@ def _models(ctx: Any) -> None:
         "A download runs in a separate process; this one stays offline. The "
         "startup diagnostics still give the exact command for a missing model."
     )
+
+
+# --- style LoRAs the user brings ---------------------------------------------------
+
+_LORA_FAMILIES = (("sdxl", "SDXL"), ("flux2klein", "FLUX.2 klein"))
+
+
+def _loras(ctx: Any) -> None:
+    """Import a LoRA file, train one from a folder, remove one.
+
+    Under the model tables because that is where a style LoRA is otherwise
+    agreed to; its own block because none of these rows comes from the
+    download registry. Everything a row *is* -- family, trigger, weight -- is
+    what the picker and the loader read, so the form asks for exactly those.
+    """
+    from ... import generation
+    from ...pipelines import lora_train
+    from ...service import loras as svc_loras
+
+    imgui.dummy((0, sp(tokens.SP_1)))
+    widgets.muted("Your style LoRAs")
+    manual_render.help_button(ctx, "loras")
+    rows = generation.load_lora_manifests(ctx.svc.config)
+    if not rows:
+        widgets.muted("None yet. Import a .safetensors adapter, or train one from your own art.")
+    busy = ctx.tasks.any_busy("lora:")
+    for row in rows:
+        weight = f"{row.tuned_weight:.2f}"
+        source = "trained here" if row.source.startswith("trained:") else row.source
+        widgets.muted(f"{row.label}  -  {row.family}, weight {weight}, {source}")
+        if row.trigger_text:
+            imgui.same_line()
+            widgets.muted(f'  trigger "{row.trigger_text}"')
+        imgui.same_line()
+        if controls.small_button(f"Remove##lora-{row.key}") and not busy:
+            ctx.submit(f"lora:remove:{row.key}", svc_loras.remove_lora, ctx.svc, row.key)
+            ctx.toast(f"Removed {row.label}.")
+
+    imgui.dummy((0, sp(tokens.SP_1)))
+    if widgets.disabled_button("Import a LoRA file...", not busy):
+        picked = dialogs.open_file("Import a style LoRA", ["*.safetensors"])
+        if picked is not None:
+            ctx.state.preview["lora_import"] = {
+                "source": str(picked),
+                "label": picked.stem[: lora_train.MAX_LABEL],
+                "trigger_text": "",
+                "tuned_weight": models.DEFAULT_LORA_WEIGHT,
+                "family": models.FAMILY_SDXL,
+                "commercial": False,
+            }
+    imgui.same_line()
+    if widgets.disabled_button("Train from a folder...", not busy):
+        folder = dialogs.select_folder("Pick a folder of images in the style")
+        if folder is not None:
+            ctx.state.preview["lora_train"] = {
+                "folder": str(folder),
+                "label": folder.name[: lora_train.MAX_LABEL],
+                "trigger": f"{folder.name} style"[: lora_train.MAX_TRIGGER],
+                "steps": lora_train.DEFAULT_STEPS,
+            }
+    _lora_import_form(ctx)
+    _lora_train_form(ctx)
+
+
+def lora_import_kwargs(form: dict[str, Any]) -> dict[str, Any]:
+    """The keyword arguments ``service.loras.import_lora`` takes, from the form."""
+    return {
+        "label": str(form.get("label") or ""),
+        "family": str(form.get("family") or models.FAMILY_SDXL),
+        "trigger_text": str(form.get("trigger_text") or ""),
+        "tuned_weight": float(form.get("tuned_weight") or models.DEFAULT_LORA_WEIGHT),
+        "commercial": bool(form.get("commercial")),
+    }
+
+
+def training_images(folder: Path) -> list[Path]:
+    """Every image the trainer would take from ``folder``, sorted, not recursive."""
+    from ...service import loras as svc_loras
+
+    try:
+        return sorted(
+            p for p in Path(folder).iterdir()
+            if p.is_file() and p.suffix.lower() in svc_loras.IMAGE_SUFFIXES
+        )
+    except OSError:
+        return []
+
+
+def _lora_import_form(ctx: Any) -> None:
+    from ...service import loras as svc_loras
+
+    form = ctx.state.preview.get("lora_import")
+    if not form:
+        return
+    widgets.muted(f"Importing {Path(form['source']).name}")
+    with forms.Form("lora-import", errors=ctx.state.field_errors) as form_ui:
+        _c, form["label"] = form_ui.text("label", "Name", form["label"], max_length=64)
+        _c, form["trigger_text"] = form_ui.text(
+            "trigger_text", "Trigger words", form["trigger_text"], max_length=64,
+            help_text="Prepended to every prompt that selects this style.",
+        )
+        changed, value = form_ui.number(
+            "tuned_weight", "Weight", float(form["tuned_weight"]),
+            helper=f"0 to {models.LORA_WEIGHT_MAX}",
+        )
+        if changed:
+            form["tuned_weight"] = value
+        _c, form["family"] = form_ui.combo("family", "Family", form["family"], _LORA_FAMILIES)
+        _c, form["commercial"] = controls.checkbox(
+            "Licensed for commercial use", bool(form["commercial"])
+        )
+    if widgets.disabled_button("Add style", not ctx.busy("lora:import")) and ctx.submit(
+        "lora:import", svc_loras.import_lora, ctx.svc, form["source"],
+        **lora_import_kwargs(form),
+    ):
+        ctx.state.preview.pop("lora_import", None)
+        ctx.toast("Style added.")
+    imgui.same_line()
+    if controls.small_button("Cancel##lora-import"):
+        ctx.state.preview.pop("lora_import", None)
+
+
+def _lora_train_form(ctx: Any) -> None:
+    from ...pipelines import lora_train
+    from ...service import loras as svc_loras
+
+    form = ctx.state.preview.get("lora_train")
+    if not form:
+        return
+    images = training_images(Path(form["folder"]))
+    widgets.muted(
+        f"Training from {Path(form['folder']).name}: {len(images)} images "
+        f"({lora_train.MIN_IMAGES} to {lora_train.MAX_IMAGES})"
+    )
+    with forms.Form("lora-train", errors=ctx.state.field_errors) as form_ui:
+        _c, form["label"] = form_ui.text("label", "Name", form["label"], max_length=64)
+        _c, form["trigger"] = form_ui.text(
+            "trigger", "Trigger words", form["trigger"], max_length=64,
+            help_text="The phrase that summons the style in a prompt.",
+        )
+        changed, value = form_ui.number(
+            "steps", "Steps", int(form["steps"]),
+            helper=f"{lora_train.MIN_STEPS} to {lora_train.MAX_STEPS}; "
+            f"{lora_train.DEFAULT_STEPS} is about half an hour on a fast card",
+        )
+        if changed:
+            form["steps"] = value
+    ok = lora_train.MIN_IMAGES <= len(images) <= lora_train.MAX_IMAGES
+    pressed = widgets.disabled_button(
+        "Train style",
+        ok and not ctx.busy("lora:train"),
+        reason="" if ok else "The folder needs between 3 and 100 images.",
+    )
+    if pressed and ctx.submit(
+        "lora:train", svc_loras.train_lora, ctx.svc, images,
+        label=form["label"], trigger=form["trigger"], steps=int(form["steps"]),
+    ):
+        ctx.state.preview.pop("lora_train", None)
+        ctx.toast("Training queued. The card is yours again when it finishes.")
+    imgui.same_line()
+    if controls.small_button("Cancel##lora-train"):
+        ctx.state.preview.pop("lora_train", None)
 
 
 #: The blank line that separates a description's short form from its long

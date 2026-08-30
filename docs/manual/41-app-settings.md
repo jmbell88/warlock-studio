@@ -110,6 +110,29 @@ selection is refused if it will not fit. Everything is still equally installable
 [Model weights](39-installation.md#model-weights) and
 [Adding an image model](45-extending.md#adding-an-image-model).
 
+### Your style LoRAs
+
+Under the model tables is the one place a style comes from somewhere other than a download. Two
+buttons, one list.
+
+**Import a LoRA file...** takes any `.safetensors` adapter — one you trained elsewhere, one from a
+model site — and asks for the four things the picker and the loader read: a name, the trigger
+words it was trained with, its working weight, and which family it fits (SDXL or FLUX.2 klein; an
+adapter never loads onto the other). Tick *Licensed for commercial use* only if you know that it
+is; the picker shows the answer beside the style. The file is copied under `~/.warlock/models/
+loras/` and appears in every LoRA picker immediately.
+
+**Train from a folder...** trains one here, on your card, from your own art. Point it at a folder
+of 3 to 100 images in the style — no captions needed — give the style a name and a trigger
+phrase, and it queues as a job like any other. It runs on an undistilled SDXL checkpoint (the
+Quality recipe's), takes the whole card for the duration (the reconstruction engine and the image
+model are unloaded first and come back on the next job), and about 800 steps is half an hour on a
+fast card. When it finishes the style is registered exactly as an imported one, at weight 1.0, with
+your trigger words. Your images never leave the machine.
+
+**Remove** beside an imported or trained style deletes its file and its entry. Built-in styles are
+not listed here and cannot be removed.
+
 ## Storage
 
 Three figures and two buttons. The figures are how many job directories exist and what they occupy,

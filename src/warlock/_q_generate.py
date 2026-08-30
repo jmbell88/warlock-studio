@@ -199,6 +199,9 @@ class GenerateOps:
         if job["kind"] == "remesh":
             await self._remesh(job)
             return
+        if job["kind"] == "lora_train":
+            await self._lora_train(job)
+            return
         if job["kind"] == "tile_sheet":
             # One kind, three tails. The mode is read off the stored block
             # rather than off a second kind, because everything a tile sheet is

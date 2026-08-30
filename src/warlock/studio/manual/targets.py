@@ -22,6 +22,7 @@ HELP_TARGETS: dict[str, tuple[str, str | None]] = {
     "retarget": ("23-generating-meshes", "triangle-budget"),
     "retexture": ("23-generating-meshes", "surface-texture"),
     "remesh": ("23-generating-meshes", "game-ready-remesh"),
+    "loras": ("41-app-settings", "your-style-loras"),
     "pose": ("25-rigging-and-posing", "posing"),
     "poser-library": ("26-poser", "the-pose-library"),
     "poser-controls": ("26-poser", "posing-a-skeleton"),

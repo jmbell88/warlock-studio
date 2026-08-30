@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     kind        TEXT NOT NULL,              -- 'text' | 'image' | 'rig' | 'sheet'
                                             --   | 'pixel_sheet' | 'sprite_synthesis'
                                             --   | 'retexture' | 'tile_sheet' | 'remesh'
+                                            --   | 'lora_train'
     status      TEXT NOT NULL,              -- queued | running | done | error | cancelled
     prompt      TEXT,
     params      TEXT NOT NULL DEFAULT '{}', -- JSON: seed, resolution, ...

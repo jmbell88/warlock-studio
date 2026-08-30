@@ -489,9 +489,15 @@ vocabulary every draft on disk already uses.
 two options, or the control removed and the eight-direction count stated as a
 fact rather than offered as a choice.
 
-## P18. Decide what `style_lock` should look like, or remove it
+## P18. ~~Decide what `style_lock` should look like, or remove it~~
 
-**Why it is yours:** design. It is built and it is unreachable. In the service
+**Decided and built 2026-08-30:** the small answer. A *Keep one style across the
+list* checkbox on the Materials arm, with the sentence about what it costs (the
+IP-Adapter, ~1.2 GB) beside it, and the door now requires the encoder's weights
+when it is set. The verdict on the output is P15's. The original entry follows for
+the record.
+
+**Why it was yours:** design. It was built and it was unreachable. In the service
 and the worker, a materials sheet with `style_lock` set generates the first
 material and then uses it as the style reference for every one after it, so that
 N surfaces read as one artist's set rather than as N generations; `vram.py` even

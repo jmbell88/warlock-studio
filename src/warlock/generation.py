@@ -1079,6 +1079,35 @@ def register_imported_loras(config: Any | None) -> None:
         )
 
 
+def remove_imported_lora(config: Any, key: str) -> bool:
+    """Forget an imported adapter: its manifest row, its file, its registry entry.
+
+    Only an *imported* key -- a built-in ``STYLE_LORAS`` entry has no manifest
+    and is left alone. The manifest is rewritten first, so a crash between the
+    two leaves an orphan file rather than a registered entry with no file.
+    """
+    manifests = load_lora_manifests(config)
+    gone = next((m for m in manifests if m.key == key), None)
+    if gone is None:
+        return False
+    root = Path(config.t2i_model_root) / "loras"
+    root.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(
+        {"version": 1, "manifests": [asdict(x) for x in manifests if x.key != key]},
+        indent=2,
+        sort_keys=True,
+    )
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=root, delete=False, prefix=".manifests-", suffix=".tmp"
+    ) as fh:
+        fh.write(payload)
+        temp = Path(fh.name)
+    temp.replace(lora_manifest_path(config))
+    (root / gone.filename).unlink(missing_ok=True)
+    models.STYLE_LORAS.pop(key, None)
+    return True
+
+
 def lora_catalog(config: Any | None = None) -> list[dict[str, Any]]:
     register_imported_loras(config)
     out = [

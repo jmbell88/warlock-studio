@@ -63,6 +63,13 @@ outlive the registry, and ``queue._generate`` already applies that tolerance.
 """
 
 CONTROLNET_GIB = 2.5
+# An SDXL LoRA training step at 1024 px, batch 1, fp16 UNet with gradient
+# checkpointing and fp32 rank-16 adapter weights: ~14 GiB measured on the
+# reference configuration, declared with the same headroom every other figure
+# here carries. Always exclusive -- the worker stops trellis and evicts the
+# image pipe before the trainer spawns -- so this is the whole card's budget
+# for the job, whatever the coexist policy says.
+LORA_TRAIN_GIB = 18.0
 """A ControlNet attached for one call (text2image._conditioned)."""
 
 IP_ENCODER_GIB = 1.2
@@ -225,6 +232,10 @@ def estimate_parts(
     # top, so every kind below inherits it -- for ``image``/``rig`` the image
     # term is zero and the two forms are arithmetically identical anyway.
     exclusive = exclusive or offloaded_base(params)
+    if kind == "lora_train":
+        # The trainer runs alone: see LORA_TRAIN_GIB. No checkpoint term comes
+        # back, because nothing resident survives into the run.
+        return LORA_TRAIN_GIB, 0.0
     if kind == "retexture":
         # Six img2img passes over one mesh's renders, one at a time, through
         # the same resident pipe -- so the peak is one pass, not six, and the

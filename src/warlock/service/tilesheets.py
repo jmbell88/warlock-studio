@@ -374,7 +374,11 @@ def tile_sheet_palettes(svc: WarlockService) -> list[str]:
 
 
 def _check_weights(
-    svc: WarlockService, *, mode: str = MODE_GRID, with_reference: bool = False
+    svc: WarlockService,
+    *,
+    mode: str = MODE_GRID,
+    with_reference: bool = False,
+    style_lock: bool = False,
 ) -> None:
     """Everything *this mode* loads, refused by name with its download line.
 
@@ -390,13 +394,15 @@ def _check_weights(
     from .. import fetch
     from .downloads import needed_keys
 
-    wanted = rows_needed(mode, with_reference)
+    # A style lock loads the same encoder a reference does -- the first
+    # material *is* the reference for the rest -- so it needs the same rows.
+    wanted = rows_needed(mode, with_reference or style_lock)
     check_base_model_weights(
         svc,
         models.BASE_MODELS[TILE_SHEET_BASE_MODEL],
         rows=needed_keys(svc, wanted),
     )
-    for kindname, key, field in _required(mode, with_reference):
+    for kindname, key, field in _required(mode, with_reference or style_lock):
         entry = fetch.find(f"{kindname}:{key}")
         assert entry is not None, f"{kindname}:{key} is not a registry row"
         spec = entry.spec
@@ -895,7 +901,9 @@ def create_tile_sheet(
     # Missing, the worker's own tolerance takes over -- it logs and paints bare
     # -- so the job would finish, look like one flat picture, and write a
     # sidecar naming a LoRA that never loaded.
-    _check_weights(svc, mode=mode_key, with_reference=reference is not None)
+    _check_weights(
+        svc, mode=mode_key, with_reference=reference is not None, style_lock=bool(style_lock)
+    )
     check_vram(svc, "tile_sheet", "tilesheet", params)
 
     normalized_ref: bytes | None = None

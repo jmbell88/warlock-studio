@@ -635,8 +635,17 @@ def run_worker(
     on_progress: Callable[[float, str], None] | None = None,
     on_start: Callable[[subprocess.Popen[str]], None] | None = None,
     timeout: float = BLENDER_TIMEOUT,
+    module: str = "warlock.pipelines.blender_worker",
+    marker: str = "blender",
+    name: str = "Blender worker",
 ) -> dict[str, Any]:
     """Run one Blender operation out-of-process and return its result JSON.
+
+    ``module``/``marker``/``name`` generalise the contract to any child that
+    speaks it -- the LoRA trainer (``pipelines.lora_train_worker``) is the
+    second -- without a second copy of the deadline, the drain threads and
+    the staged-result rules below. The defaults keep every Blender caller
+    exactly what it was.
 
     Synchronous and blocking -- every caller in the app dispatches it through
     ``asyncio.to_thread``, like every other multi-second call in this codebase.
@@ -659,8 +668,13 @@ def run_worker(
     result_path.unlink(missing_ok=True)
     result_tmp.unlink(missing_ok=True)
 
+    re_progress = (
+        RE_PROGRESS
+        if marker == "blender"
+        else re.compile(rf"^\[{re.escape(marker)}\]\s+([\d.]+)\s+(.*)$")
+    )
     proc = subprocess.Popen(
-        [sys.executable, "-m", "warlock.pipelines.blender_worker"],
+        [sys.executable, "-m", module],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -673,7 +687,7 @@ def run_worker(
     # Same kill-on-close job as trellis-server: a bpy solve holds multiple GB,
     # and a parent that dies mid-rig used to leave it running indefinitely.
     winjob.assign(proc.pid)
-    winjob.track(proc.pid, "blender worker")
+    winjob.track(proc.pid, name.lower())
     tail: list[str] = []
     if on_start is not None:
         try:
@@ -730,7 +744,7 @@ def run_worker(
             if raw is None:
                 break
             line = raw.rstrip()
-            m = RE_PROGRESS.match(line)
+            m = re_progress.match(line)
             if m and on_progress is not None:
                 on_progress(float(m.group(1)), m.group(2))
             tail.append(line)
@@ -741,7 +755,7 @@ def run_worker(
         _terminate_worker(proc)
         result_path.unlink(missing_ok=True)
         result_tmp.unlink(missing_ok=True)
-        raise BlenderError(f"Blender worker timed out after {timeout:.0f}s") from None
+        raise BlenderError(f"{name} timed out after {timeout:.0f}s") from None
     finally:
         if proc.poll() is None:
             _terminate_worker(proc)
@@ -757,9 +771,9 @@ def run_worker(
         # would otherwise sit in the source job's directory until the next run.
         result_path.unlink(missing_ok=True)
         result_tmp.unlink(missing_ok=True)
-        raise BlenderError(f"Blender worker exited with code {code}:\n{output}")
+        raise BlenderError(f"{name} exited with code {code}:\n{output}")
     if not result_path.exists():
-        raise BlenderError(f"Blender worker wrote no result:\n{output}")
+        raise BlenderError(f"{name} wrote no result:\n{output}")
     try:
         payload = json.loads(result_path.read_text(encoding="utf-8"))
     except ValueError as exc:
@@ -767,7 +781,7 @@ def run_worker(
         # raise a raw decoder error at the caller. Typed like every other way
         # the worker can disappoint, and carrying the worker's own tail.
         result_path.unlink(missing_ok=True)
-        raise BlenderError(f"Blender worker wrote an unreadable result:\n{output}") from exc
+        raise BlenderError(f"{name} wrote an unreadable result:\n{output}") from exc
     # The handoff file has served its purpose; a rig writes it into the source
     # job's directory, where it would otherwise sit next to model.glb forever.
     result_path.unlink(missing_ok=True)

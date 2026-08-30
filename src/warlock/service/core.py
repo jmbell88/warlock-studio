@@ -50,6 +50,13 @@ class WarlockService:
         # and cheap; it only drops the clip caches when the directory actually
         # moves, which in a test suite is once per service.
         rigging.set_user_clip_dir(poselib.clip_dir(config))
+        # Imported style LoRAs join ``models.STYLE_LORAS`` here, once, so the
+        # picker offers them from the first frame. ``lora_catalog`` used to be
+        # the only caller and it ran on *submit* -- an adapter added in Settings
+        # was invisible until a job had already been sent without it.
+        from .. import generation
+
+        generation.register_imported_loras(config)
         # One lock per derived artifact, so the same STL/OBJ/posed GLB is
         # never converted twice concurrently. Created lazily and never
         # evicted: an idle lock is a few dozen bytes and the key space is

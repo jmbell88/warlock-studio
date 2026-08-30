@@ -38,6 +38,7 @@ from typing import Any
 from . import errors, fetch, leases, memlog, models, rigging, vectors, vram, winjob
 from ._q_generate import GenerateOps
 from ._q_jobs import JobOps
+from ._q_lora import LoraOps
 from ._q_mesh import MeshPostOps
 from ._q_rig import RigOps
 from ._q_sprite import SpriteOps
@@ -813,7 +814,15 @@ def commit_fraction() -> float | None:
 
 
 class Worker(
-    GenerateOps, RigOps, TroupeOps, SpriteOps, TileSheetOps, TileSetOps, MeshPostOps, JobOps
+    GenerateOps,
+    RigOps,
+    TroupeOps,
+    SpriteOps,
+    TileSheetOps,
+    TileSetOps,
+    MeshPostOps,
+    LoraOps,
+    JobOps,
 ):
     def __init__(self, config: Config, store: JobStore) -> None:
         self.config = config
@@ -953,7 +962,7 @@ class Worker(
             # ensure_started reaps or refuses.
             with contextlib.suppress(TrellisStopFailed):
                 await asyncio.to_thread(self.trellis.stop)
-        elif phase in ("rig", "sheet", "views", "project", "remesh"):
+        elif phase in ("rig", "sheet", "views", "project", "remesh", "train"):
             # Same story as trellis: bpy is inside a C weighting solve (or an
             # EEVEE render) and checks nothing, so killing the subprocess is
             # the only abort.

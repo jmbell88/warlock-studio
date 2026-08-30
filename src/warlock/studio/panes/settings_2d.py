@@ -506,6 +506,22 @@ def _tile_materials(
     if changed:
         form["variants"] = picked
         ctx.state.clear_field_error("variants")
+    # Reachable at last: the service and the worker have carried ``style_lock``
+    # since the materials mode landed, and no pane set it. The cost is stated
+    # beside it because it is the one thing the checkbox changes about the
+    # budget -- the first material becomes the IP-Adapter reference for every
+    # one after it, which loads the encoder.
+    changed, locked = controls.checkbox(
+        "Keep one style across the list", bool(form.get("style_lock"))
+    )
+    widgets.help_marker(
+        "The first material is generated on its own, then used as the appearance "
+        "reference for every material after it, so the list reads as one artist's "
+        "set. Loads the IP-Adapter (about 1.2 GB more on the card) and makes "
+        "materials 2..N depend on the first one's roll."
+    )
+    if changed:
+        form["style_lock"] = locked
     _tile_description_note()
 
 
