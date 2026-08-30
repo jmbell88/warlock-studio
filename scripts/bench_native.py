@@ -245,16 +245,269 @@ def _case_bvh(n_tris: int) -> Callable[[], Any]:
 # --------------------------------------------------------------------------
 
 
+def _grow_mask() -> np.ndarray:
+    rng = np.random.default_rng(7)
+    return rng.random((1024, 1024)) > 0.98
+
+
 def _case_grow(radius: int) -> Callable[[], Any]:
     from warlock.studio.inker import filters
 
-    rng = np.random.default_rng(7)
-    mask = rng.random((1024, 1024)) > 0.98
+    mask = _grow_mask()
 
     def work() -> Any:
         return filters._grow(mask, radius, 8, wrap=False)
 
     return work
+
+
+def _grow_fused(mask: np.ndarray, steps: int) -> np.ndarray:
+    """``filters._grow`` with the eight ``_shift`` calls fused, 8-connected.
+
+    Same result, one temporary per step instead of nine: ``_shift`` allocates a
+    whole-canvas ``zeros_like`` and slice-assigns into it, then ``|`` allocates
+    the union -- so the shipped loop touches the canvas 8 x 3 times per step
+    where this touches it 9 times. Batch 5 §8 asked for exactly this
+    comparison before any C was considered.
+    """
+    out = mask
+    for _ in range(steps):
+        grown = out.copy()
+        grown[1:, :] |= out[:-1, :]
+        grown[:-1, :] |= out[1:, :]
+        grown[:, 1:] |= out[:, :-1]
+        grown[:, :-1] |= out[:, 1:]
+        grown[1:, 1:] |= out[:-1, :-1]
+        grown[1:, :-1] |= out[:-1, 1:]
+        grown[:-1, 1:] |= out[1:, :-1]
+        grown[:-1, :-1] |= out[1:, 1:]
+        out = grown
+    return out
+
+
+def _grow_separable(mask: np.ndarray, steps: int) -> np.ndarray:
+    """The 8-connected case as a 1x3 dilation followed by a 3x1 one.
+
+    A 3x3 all-ones structuring element is separable, so the square that makes
+    the 8-connected outline boxy can be had in 4 whole-canvas ORs per step
+    rather than 8. **Only valid for 8-connected**: the 4-connected diamond is
+    not separable, and that is the whole point of the flag.
+    """
+    out = mask
+    for _ in range(steps):
+        row = out.copy()
+        row[:, 1:] |= out[:, :-1]
+        row[:, :-1] |= out[:, 1:]
+        col = row.copy()
+        col[1:, :] |= row[:-1, :]
+        col[:-1, :] |= row[1:, :]
+        out = col
+    return out
+
+
+def _case_grow_fused(radius: int) -> Callable[[], Any]:
+    mask = _grow_mask()
+    return lambda: _grow_fused(mask, radius)
+
+
+def _case_grow_separable(radius: int) -> Callable[[], Any]:
+    mask = _grow_mask()
+    return lambda: _grow_separable(mask, radius)
+
+
+# --------------------------------------------------------------------------
+# B4 -- inker/tiles.materialize's per-cell Python loop
+# --------------------------------------------------------------------------
+
+
+def _tiles_fixture(cells: int) -> tuple[np.ndarray, Any, tuple[int, int]]:
+    """A ``cells`` x ``cells`` grid over a 64-tile, 32px sheet.
+
+    Deliberately the same shape as ``_case_render_map`` so the two per-cell
+    loops -- Plotter's, which got a kernel in batch 5, and Inker's, which did
+    not -- are read against each other. A third of the refs carry a transform
+    flag, because ``oriented()`` is called per cell with no memo and its cost
+    only appears when the flags are actually set.
+    """
+    from warlock.studio.tilegrid import gid
+    from warlock.studio.tilegrid.tileset import Tileset
+
+    rng = np.random.default_rng(0x71E)
+    tiles = 64
+    sheet = rng.integers(0, 256, size=(32, 32 * tiles, 4), dtype=np.uint8)
+    ts = Tileset(name="t", pixels=sheet, tile_w=32, tile_h=32)
+    refs = rng.integers(0, tiles, size=(cells, cells)).astype(gid.DTYPE)
+    flags = rng.choice(
+        np.asarray(
+            [0, gid.FLIP_H, gid.FLIP_V, gid.FLIP_D, gid.FLIP_H | gid.FLIP_D],
+            dtype=gid.DTYPE,
+        ),
+        size=(cells, cells),
+        p=[0.66, 0.11, 0.11, 0.06, 0.06],
+    )
+    refs = (refs | flags).astype(gid.DTYPE)
+    return refs, ts, (cells * 32, cells * 32)
+
+
+def _case_materialize(cells: int) -> Callable[[], Any]:
+    from warlock.studio.inker import tiles
+
+    refs, ts, size = _tiles_fixture(cells)
+    return lambda: tiles.materialize(refs, ts, size)
+
+
+def _case_materialize_memo(cells: int) -> Callable[[], Any]:
+    """The same loop with ``oriented(tile_pixels(...))`` memoised per raw gid.
+
+    There are at most ``tile_count x 8`` distinct answers, so a whole canvas
+    asks for the same handful over and over. This isolates what the un-memoised
+    ``oriented()`` per cell costs from what the per-cell *copy into the canvas*
+    costs, which is the part no memo can remove.
+    """
+    from warlock.studio.inker import tiles
+    from warlock.studio.tilegrid import gid
+
+    refs, ts, size = _tiles_fixture(cells)
+
+    def work() -> Any:
+        width, height = size
+        canvas = np.zeros((height, width, 4), dtype=np.uint8)
+        grid_h, grid_w = refs.shape
+        tile_w, tile_h = ts.tile_w, ts.tile_h
+        memo: dict[int, np.ndarray] = {}
+        for row in range(grid_h):
+            y0 = row * tile_h
+            if y0 >= height:
+                break
+            for col in range(grid_w):
+                x0 = col * tile_w
+                if x0 >= width:
+                    break
+                raw = int(refs[row, col])
+                tile = memo.get(raw)
+                if tile is None:
+                    local = raw & gid.GID_MASK
+                    if local >= ts.tile_count:
+                        local = 0
+                    tile = tiles.oriented(ts.tile_pixels(local), raw)
+                    memo[raw] = tile
+                h = min(tile.shape[0], height - y0)
+                w = min(tile.shape[1], width - x0)
+                canvas[y0 : y0 + h, x0 : x0 + w] = tile[:h, :w]
+        return canvas
+
+    return work
+
+
+# --------------------------------------------------------------------------
+# B6 -- pipelines/pixel._to_oklab, the residual around the shipped kernel
+# --------------------------------------------------------------------------
+
+
+def _oklab_fixture(entries: int) -> tuple[np.ndarray, np.ndarray]:
+    rng = np.random.default_rng(0xD1E)
+    side = 1024
+    rgb = rng.integers(0, 256, size=(side, side, 3), dtype=np.uint8)
+    palette = rng.integers(0, 256, size=(entries, 3)).astype(np.float64)
+    return rgb, palette
+
+
+def _case_oklab_residual(entries: int) -> Callable[[], Any]:
+    """Everything ``map_palette`` does in Oklab *except* the nearest search.
+
+    Batch 5 kernelised the search (``warlockc_palette_nearest_f64``, 5.5x), so
+    what is left of `map_palette` is these two conversions -- one over a
+    1024-square frame, one over the palette. The sweep is over palette entries
+    to sit beside ``pixel_map_palette``'s own 8/32/64, which means **the swept
+    parameter is not this case's dominant work driver**; ``palette_only``
+    below is the part that actually moves with it.
+    """
+    from warlock.pipelines import pixel
+
+    rgb, palette = _oklab_fixture(entries)
+
+    def work() -> Any:
+        return pixel._to_oklab(rgb), pixel._to_oklab(palette)
+
+    return work
+
+
+def _case_oklab_palette(entries: int) -> Callable[[], Any]:
+    from warlock.pipelines import pixel
+
+    _, palette = _oklab_fixture(entries)
+    return lambda: pixel._to_oklab(palette)
+
+
+# --------------------------------------------------------------------------
+# B7 -- clay/ops_bevel.bevel_edges
+# --------------------------------------------------------------------------
+
+
+def _quad_grid(side: int) -> Any:
+    """``side`` x ``side`` quads -- ``tests/clay/test_scale.py``'s own fixture."""
+    from warlock.studio.clay import mesh as bm
+    from warlock.studio.clay import topo
+
+    xs = np.arange(side + 1, dtype="f4")
+    positions = np.stack(
+        [
+            np.repeat(xs, side + 1),
+            np.zeros((side + 1) ** 2, dtype="f4"),
+            np.tile(xs, side + 1),
+        ],
+        axis=1,
+    )
+
+    def v(i: int, j: int) -> int:
+        return i * (side + 1) + j
+
+    faces = [
+        [v(i, j), v(i, j + 1), v(i + 1, j + 1), v(i + 1, j)]
+        for i in range(side)
+        for j in range(side)
+    ]
+    return bm.Mesh(
+        positions=positions,
+        loops=np.array([c for f in faces for c in f], dtype="i4"),
+        starts=topo.starts_from_counts([4] * len(faces)),
+        material=np.zeros(len(faces), dtype="i4"),
+        smooth=np.zeros(len(faces), dtype=bool),
+    )
+
+
+def _bevel_edges_for(side: int, count: int) -> np.ndarray:
+    """*count* interior, pairwise vertex-disjoint edges of a ``side`` grid.
+
+    Disjoint on purpose: ``bevel_edges`` refuses a boundary vertex carrying two
+    beveled edges, and a disjoint set keeps every corner in the one-beveled-edge
+    row of its own table, so the sweep varies count and nothing else.
+    """
+    pairs = [
+        (i * (side + 1) + j, (i + 1) * (side + 1) + j)
+        for i in range(1, side - 1, 2)
+        for j in range(1, side)
+    ]
+    if count > len(pairs):
+        raise ValueError(f"a {side}x{side} grid has only {len(pairs)} disjoint edges")
+    return np.asarray(pairs[:count], dtype="i4")
+
+
+def _case_bevel(side: int) -> Callable[[int], Callable[[], Any]]:
+    def build(count: int) -> Callable[[], Any]:
+        from warlock.studio.clay import adjacency as adj
+        from warlock.studio.clay import elements as el
+        from warlock.studio.clay import ops_bevel as ob
+
+        mesh = _quad_grid(side)
+        sel = el.ElementSel(edges=_bevel_edges_for(side, count))
+        # Built outside the clock, and cached against the mesh: by the time a
+        # user clicks Bevel the adjacency is already there, so timing its build
+        # here would be measuring the wrong click.
+        adj.adjacency(mesh)
+        return lambda: ob.bevel_edges(mesh, sel, width=0.05)
+
+    return build
 
 
 # --------------------------------------------------------------------------
@@ -381,10 +634,15 @@ CASES: dict[str, Case] = {
     ),
     "inker_grow": Case(
         name="inker_grow",
-        site="inker/filters.py:402-419",
+        site="inker/filters.py:402-418",
         gate=">100 ms at r=32",
         build=_case_grow,
         sizes=(4, 16, 32),
+        variants={
+            "shipped": _case_grow,
+            "fused": _case_grow_fused,
+            "separable": _case_grow_separable,
+        },
     ),
     "pixel_map_palette": Case(
         name="pixel_map_palette",
@@ -399,6 +657,32 @@ CASES: dict[str, Case] = {
         gate="any win (the old K4; 3992 ms at 200x200x3 when last measured)",
         build=_case_render_map,
         sizes=(50, 100, 200),
+    ),
+    "tiles_materialize": Case(
+        name="tiles_materialize",
+        site="inker/tiles.py:253-290 -- the per-cell loop",
+        gate=">200 ms per conversion (batch 5, item B4)",
+        build=_case_materialize,
+        sizes=(50, 100, 200),
+        variants={"as_shipped": _case_materialize, "memo_oriented": _case_materialize_memo},
+    ),
+    "oklab_fold": Case(
+        name="oklab_fold",
+        site="pipelines/pixel.py:332-356 -- _to_oklab, around the shipped kernel",
+        gate=">200 ms of residual at 1024 square x 64 entries "
+        "(the size batch 5 item B2 kernelised the search at)",
+        build=_case_oklab_residual,
+        sizes=(8, 32, 64),
+        variants={"residual": _case_oklab_residual, "palette_only": _case_oklab_palette},
+    ),
+    "clay_bevel": Case(
+        name="clay_bevel",
+        site="clay/ops_bevel.py:258 -- bevel_edges",
+        gate=">1.0 s on the 200x200-quad mesh, a third of "
+        "tests/clay/test_scale.py's BUDGET = 3.0 s",
+        build=_case_bevel(200),
+        sizes=(10, 100, 1_000),
+        variants={"grid_200": _case_bevel(200), "grid_50": _case_bevel(50)},
     ),
     "mesh_welded": Case(
         name="mesh_welded",

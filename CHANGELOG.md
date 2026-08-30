@@ -157,6 +157,34 @@ the release you are actually running.
   opens. This says nothing about whether a better reconstruction could carry characters; it
   is a verdict on the shipped single-view default.
 
+- **Four native-kernel candidates were measured and none of them was written in C** —
+  which is the point, because the house rule is that an unbenched candidate must not be
+  built, and two of these four turn out not to want C at all.
+  `docs/measurements/2026-08-30-native-batch-6-candidates.md` has the numbers;
+  `scripts/bench_native.py` gains the cases `tiles_materialize`, `oklab_fold` and
+  `clay_bevel`, and `inker_grow` gains three variants where it had none. The two
+  findings that change what should be built next are pure numpy. `inker/filters._grow`
+  was **deferred to a kernel** by batch 5 on the strength of its linear cost curve; the
+  constant factor it was assumed to be stuck with was never measured, and fusing the
+  eight `_shift` calls — each of which allocates a whole-canvas `zeros_like`, fills it,
+  then allocates the union — is **6.3×** (175 ms → 27.8 ms at r=32 on a 1024² mask),
+  bit-identical, no ABI bump. `inker/tiles.materialize` was recorded as **not measured**
+  by batch 5, on the strength of a failed vectorisation of a *different* function; it
+  calls `oriented()` once per cell with no memo, where there are at most `tile_count × 8`
+  distinct answers, and memoising on the raw gid is **3.1×** (444 ms → 142 ms on a 3200²
+  canvas at 8 px tiles). Its cost is per *cell*, not per pixel — the same canvas at 8 px
+  tiles instead of 32 px costs 8.9× more — so the small-tile pixel-art case, which is the
+  ordinary one, is the expensive one. `pipelines/pixel._to_oklab` is now essentially the
+  whole remaining cost of `map_palette` at 236 ms, the shipped kernel having taken the
+  other half, and a uint8 LUT for sRGB→linear should be tried before any C.
+  `clay/ops_bevel.bevel_edges` was benched for the first time and **fails its
+  pre-registered gate by an order of magnitude** (579 ms with a quarter of a 40k-face
+  mesh's edges selected, against 1.0 s) — and its cost tracks mesh size rather than
+  selection size, because two loops walk all 40 000 faces and 160 000 corners to bevel
+  ten edges. That is an algorithmic fix, not a kernel, exactly as `ops_topo.weld` was in
+  batch 2. `retexture.combine` was left unbenched on purpose and no number is claimed
+  for it.
+
 ## 0.0.29 — 2026-08-29
 
 - **Generated tiles now actually tile.** Create → **Sheet** has a Layout control with three
