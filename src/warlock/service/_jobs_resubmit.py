@@ -21,12 +21,11 @@ the facade; the binding is early, and no test redirects it.
 from __future__ import annotations
 
 import logging
-import os
 import shutil
 import uuid
 from typing import Any
 
-from .. import guidance, vram
+from .. import guidance
 from . import matte
 from ._jobs_create import _normalize_guidance, resolve_profile
 from .core import WarlockService
@@ -350,10 +349,6 @@ def promote_to_model(
     force: bool = False,
     candidate_group: str | None = None,
     candidate_index: int = 0,
-    backend: str | None = None,
-    texture_mode: str = "pbr",
-    view_assets: dict[str, str] | None = None,
-    hunyuan_license_ack: bool = False,
 ) -> dict[str, Any]:
     """Run the 3D stage from a reference the user approved.
 
@@ -375,35 +370,6 @@ def promote_to_model(
     resolution belongs to the 2D pane's platform select, not to the mesh.
     """
     check_seed("mesh_seed", mesh_seed)
-    if backend not in (None, "", "trellis_single_view", "hunyuan3d_multiview"):
-        raise Invalid("unknown reconstruction backend", field="backend")
-    if backend == "hunyuan3d_multiview":
-        from ..pipelines import hunyuan
-
-        views = dict(view_assets or {})
-        view_errors = hunyuan.validate_views(views)
-        executable = os.environ.get("WARLOCK_HUNYUAN_PYTHON")
-        weights = os.environ.get("WARLOCK_HUNYUAN_WEIGHTS")
-        install_errors = hunyuan.validate_install(
-            executable,
-            weights,
-            license_acknowledged=hunyuan_license_ack,
-            texture_mode=texture_mode,
-        )
-        device = vram.device_memory()
-        required_vram = (
-            hunyuan.SHAPE_VRAM_GIB
-            if texture_mode == "geometry"
-            else hunyuan.COMBINED_VRAM_GIB
-        )
-        if device is not None and device.free_gib < required_vram:
-            install_errors.append(
-                f"Hunyuan3D needs approximately {required_vram:g} GiB free VRAM "
-                f"for this run (available: {device.free_gib:g} GiB)."
-            )
-        if view_errors or install_errors:
-            message = "; ".join(view_errors + install_errors)
-            raise Invalid(message, field="backend")
     if resolution is not None and resolution not in ALLOWED_RESOLUTIONS:
         raise Invalid(
             f"resolution must be one of {sorted(ALLOWED_RESOLUTIONS)}", field="resolution"
@@ -436,32 +402,13 @@ def promote_to_model(
         for k, v in source["params"].items()
         if k not in DERIVED_PARAMS and k not in CONDITIONING_PARAMS
     }
-    # A backend override is authoritative.  Without this explicit clearing,
-    # choosing TRELLIS after a Hunyuan promotion would leave the inherited
-    # backend in the child row while the UI appeared to show TRELLIS.
-    if backend == "trellis_single_view":
-        params.pop("backend", None)
-        params.pop("texture_mode", None)
-        params.pop("view_assets", None)
-        params.pop("license_acknowledged", None)
-    elif backend is None and params.get("backend") == "hunyuan3d_multiview":
-        # An inherited experimental backend is still an explicit backend. It
-        # must be re-admitted on every promotion rather than bypassing the
-        # install/license gate merely because the caller omitted an override.
-        from ..pipelines import hunyuan
-
-        inherited_mode = str(params.get("texture_mode") or "pbr")
-        inherited_errors = hunyuan.validate_views(dict(params.get("view_assets") or {}))
-        inherited_errors.extend(
-            hunyuan.validate_install(
-                os.environ.get("WARLOCK_HUNYUAN_PYTHON"),
-                os.environ.get("WARLOCK_HUNYUAN_WEIGHTS"),
-                license_acknowledged=bool(params.get("license_acknowledged")),
-                texture_mode=inherited_mode,
-            )
-        )
-        if inherited_errors:
-            raise Invalid("; ".join(inherited_errors), field="backend")
+    # Hunyuan3D was removed on 2026-08-30; TRELLIS is the only backend.  A row
+    # promoted before then can still carry these, so they are cleared on every
+    # promotion rather than inherited into a child the queue would ignore.
+    params.pop("backend", None)
+    params.pop("texture_mode", None)
+    params.pop("view_assets", None)
+    params.pop("license_acknowledged", None)
     # rerun_of is provenance of the *reference*: this job's lineage is
     # parent_id, and carrying it would claim the mesh is a rerun of a
     # reference it never was.
@@ -519,12 +466,6 @@ def promote_to_model(
 
     params["mesh_seed"] = mesh_seed if mesh_seed is not None else random_seed()
     params["seed"] = params["mesh_seed"]
-    if backend == "hunyuan3d_multiview":
-        params["backend"] = backend
-        params["texture_mode"] = texture_mode
-        params["view_assets"] = dict(view_assets or {})
-        params["license_acknowledged"] = True
-
     # The other door onto a mesh job, and the expensive one -- a promotion is
     # the two-minute reconstruction with nothing cheap in front of it.
     check_vram(svc, "image", "model", params)

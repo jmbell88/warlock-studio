@@ -117,7 +117,13 @@ Explicitly **not** findings. Each is a candidate question, not an answer:
    remesh path only started producing quads at all on 2026-08-30, so no
    conclusion about it predates that fix.
 3. **Single-view is the obvious suspect** for the hollow/holed failures, which
-   is what the multi-view backend exists for. Untested here.
+   is what the multi-view backend exists for. Untested here. *Amended
+   2026-08-30:* the Hunyuan3D multi-view backend was removed the same day. It
+   had never been runnable -- it needed an isolated Python 3.10/CUDA worker and
+   weights that were never installed, so nothing in this corpus or any other
+   ever went through it. The suspicion above stands unchanged; the remedy it
+   named simply no longer ships, and a second reconstruction backend would now
+   be a deliberate design decision rather than a flag to turn on.
 
 ## What this does and does not unblock
 

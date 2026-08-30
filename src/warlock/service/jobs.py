@@ -152,18 +152,6 @@ def create_generation_request(svc: WarlockService, request: Any, **uploads: Any)
                 ) from exc
             except Exception as exc:
                 raise Invalid(f"could not decode reference {name!r}", field="references") from exc
-    model_view_payloads: dict[str, bytes] = {}
-    if request.generation_type == "3d_model" and request.model.backend == "hunyuan3d_multiview":
-        for view_name, view_path in request.model.views.items():
-            try:
-                model_view_payloads[view_name] = to_png(Path(view_path).read_bytes())
-            except OSError as exc:
-                raise Invalid(
-                    f"could not read {view_name} view {view_path!r}: {exc}",
-                    field="model.views",
-                ) from exc
-            except Exception as exc:
-                raise Invalid(f"could not decode {view_name} view", field="model.views") from exc
     reference = uploads.get("reference")
     if reference is None and native_payloads:
         try:
@@ -335,17 +323,5 @@ def create_generation_request(svc: WarlockService, request: Any, **uploads: Any)
                 Path(svc.config.job_dir(job_id), native_name).write_bytes(data)
                 native_files.append(native_name)
             extra["native_reference_files"] = native_files
-        if request.generation_type == "3d_model" and request.model.backend == "hunyuan3d_multiview":
-            view_files: dict[str, str] = {}
-            for view_name, view_bytes in model_view_payloads.items():
-                filename = f"view_{view_name}.png"
-                Path(svc.config.job_dir(job_id), filename).write_bytes(view_bytes)
-                view_files[view_name] = filename
-            extra.update({
-                "backend": "hunyuan3d_multiview",
-                "texture_mode": request.model.texture_mode,
-                "view_assets": view_files,
-                "license_acknowledged": True,
-            })
         svc.store.merge_params(job_id, extra)
     return result

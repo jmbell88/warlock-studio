@@ -16,7 +16,6 @@ from imgui_bundle import imgui
 
 from ... import vectors
 from ...bench import findings as findings_lib
-from ...pipelines import hunyuan
 from ...service import jobs as svc_jobs
 from ...service.errors import Invalid
 from ...service.validation import MAX_MESH_CANDIDATES, MAX_UPLOAD_BYTES, random_seed
@@ -75,7 +74,6 @@ def _draw_form(
     _source(ctx)
 
     widgets.section("Mesh")
-    _backend(ctx, form)
     # Labels above rather than beside: a combo here is drawn at -1 width, and
     # imgui puts a widget's label to its *right* -- so every one of these was
     # a full-width select with its name clipped off the edge of the panel, and
@@ -178,33 +176,6 @@ def _reset_row(ctx: Any) -> None:
                 on_confirm=lambda: _reset(ctx),
             )
         )
-
-
-def _backend(ctx: Any, form: dict[str, Any]) -> None:
-    """Choose the reconstruction engine without hiding experimental costs."""
-    options = [
-        ("trellis_single_view", "TRELLIS.2 — single view"),
-        (hunyuan.BACKEND, hunyuan.LABEL),
-    ]
-    before = str(form.get("backend") or options[0][0])
-    selected = widgets.combo("##mesh_backend", before, options)
-    form["backend"] = selected if selected in {x[0] for x in options} else before
-    if form["backend"] != hunyuan.BACKEND:
-        return
-    widgets.wrapped(
-        theme.WARN,
-        "Experimental backend. It is never selected automatically or used as a fallback.",
-    )
-    widgets.muted_wrapped(
-        "Requires an isolated Python 3.10/CUDA worker, named Front/Left/Right/Back views, "
-        "and approximately 10 GiB shape, 21 GiB texture, or 29 GiB combined VRAM."
-    )
-    changed, ack = controls.checkbox(
-        "I acknowledge the Hunyuan3D license and regional restrictions",
-        bool(form.get("hunyuan_license_ack")),
-    )
-    if changed:
-        form["hunyuan_license_ack"] = ack
 
 
 def _reset(ctx: Any) -> None:
@@ -521,11 +492,6 @@ def promote_kwargs(form: dict[str, Any]) -> dict[str, Any]:
     the platform no longer implies.
     """
     out: dict[str, Any] = {}
-    if form.get("backend") and form["backend"] != "trellis_single_view":
-        out["backend"] = form["backend"]
-        out["texture_mode"] = form.get("texture_mode") or "pbr"
-        out["view_assets"] = dict(form.get("view_assets") or {})
-        out["hunyuan_license_ack"] = bool(form.get("hunyuan_license_ack"))
     if form["platform"]:
         out["platform"] = form["platform"]
     if float(form["size_m"]) > 0:

@@ -250,10 +250,6 @@ def _restore_sheet_block(form: dict[str, Any], params: dict[str, Any]) -> None:
 
 
 DEFAULT_FORM_3D: dict[str, Any] = {
-    "backend": "trellis_single_view",
-    "texture_mode": "pbr",
-    "view_assets": {},
-    "hunyuan_license_ack": False,
     "platform": "",
     "profile": "raw",
     # Deliberately without a widget. A triangle budget only means anything for

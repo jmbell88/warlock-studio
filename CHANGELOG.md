@@ -18,6 +18,22 @@ the release you are actually running.
 
 ## 0.0.30 — 2026-08-30
 
+- **The Hunyuan3D multi-view backend is removed.** It was opt-in, marked experimental,
+  and had never been runnable by anyone: it needed an isolated Python 3.10/CUDA worker
+  and weights named by `WARLOCK_HUNYUAN_PYTHON` / `WARLOCK_HUNYUAN_WEIGHTS`, which no
+  install has ever had, so every path through it ended at its own admission refusal. It
+  was not free while it sat there. The queue's generation stage carried three
+  `if backend != "hunyuan3d_multiview"` guards around the TRELLIS half, and the remesh
+  retry at the bottom of the same function called `trellis.generate` through none of
+  them -- so its own comment, that the loop "re-enters only the trellis half", was false
+  for such a job; deleting the backend makes it true. `service.jobs` decoded multi-view
+  uploads through a `to_png` name bound inside an `if request.references:` block above
+  it, which would have raised `NameError` on a request with no references. The 3D
+  settings pane loses a one-option combo, a licence checkbox and a VRAM note for numbers
+  nothing could reach. TRELLIS is now the only reconstruction backend and the queue has
+  no backend concept at all. A row promoted before today can still carry `backend`,
+  `texture_mode`, `view_assets` and `license_acknowledged`; `promote_to_model` now clears
+  all four on every promotion, so those rows migrate silently instead of refusing.
 - **A mesh you already have can now enter the library.** Home has an **Import mesh...**
   button beside **New...**, and a `.glb` dropped onto Home or onto the Library becomes an
   ordinary finished model row. This closes a gap rather than adding a feature:

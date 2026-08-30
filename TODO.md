@@ -627,8 +627,11 @@ Decisions with arguments beside them, not backlog:
 - **Pen/tablet pressure, ICC colour, per-frame palettes, per-cel opacity** and
   the rest of the Aseprite parity programme's named non-goals, in
   `docs/INVARIANTS.md`.
-- **The Aseprite P1 backlog** stays unscheduled by design — items are pulled
-  into sessions individually, never waved. It lives in `docs/INVARIANTS.md`.
+- **The Aseprite P1 backlog** was waved after all, on 2026-08-22, by the UX
+  refactor's Wave 6. The rule that said it never would be was reversed in
+  `docs/INVARIANTS.md` on the same day, and this line said the opposite until
+  2026-08-30. What that wave shipped, and what it deliberately left, lives in
+  `docs/INVARIANTS.md`.
 - **An LLM director for Troupe.** No LLM infrastructure exists, a local HTTP
   endpoint would be the first socket in the app besides the trellis client, and
   it would break `HF_HUB_OFFLINE=1`. The user approves a *picture*, which is a

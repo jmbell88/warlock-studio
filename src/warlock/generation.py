@@ -81,8 +81,6 @@ SPRITE_SHEET_KINDS: dict[str, tuple[str, int]] = {
     for count in SPRITE_DIRECTION_COUNTS
 }
 
-VIEW_NAMES = ("front", "left", "right", "back")
-
 
 #: The mode words a tile request may carry, and the two shapes they name.
 #:
@@ -178,12 +176,8 @@ class SpriteSettings:
 
 @dataclass(frozen=True, slots=True)
 class ModelSettings:
-    backend: str = "trellis_single_view"
-    views: Mapping[str, str] = field(default_factory=dict)
-    texture_mode: str = "pbr"
     output_profile: str = "raw"
     custom_triangles: int | None = None
-    license_acknowledged: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -521,7 +515,7 @@ def resolve_recipe(
     ]
     available = set(installed) if installed is not None else None
     if request.model_mode == "advanced" or request.model_override:
-        key = request.model_override or request.model.backend
+        key = request.model_override or ""
         base = models.BASE_MODELS.get(key)
         if base is None:
             return None
@@ -610,7 +604,6 @@ def capability_controls(
         "tile": request.generation_type == "seamless_material",
         "tiles": request.generation_type == "tileset",
         "sprites": request.generation_type == "sprite_sheet",
-        "model_backend": request.generation_type == "3d_model",
     }
 
 
@@ -747,29 +740,6 @@ def validate_request(
                 )
             )
         issues.extend(validate_target_cell(s.target_cell_px))
-    if request.generation_type == "3d_model":
-        if request.model.backend not in ("trellis_single_view", "hunyuan3d_multiview"):
-            issues.append(
-                CompatibilityIssue(
-                    "model.backend", "Choose TRELLIS or the experimental Hunyuan3D backend."
-                )
-            )
-        if request.model.backend == "hunyuan3d_multiview":
-            view_errors = [name for name in VIEW_NAMES if not request.model.views.get(name)]
-            if view_errors:
-                issues.append(
-                    CompatibilityIssue(
-                        "model.views",
-                        "Approve Front, Left, Right, and Back views before using Hunyuan3D.",
-                    )
-                )
-            if not request.model.license_acknowledged:
-                issues.append(
-                    CompatibilityIssue(
-                        "model.license_acknowledged",
-                        "Acknowledge the Hunyuan3D regional license exclusions before use.",
-                    )
-                )
     if resolved is None:
         issues.append(
             CompatibilityIssue(

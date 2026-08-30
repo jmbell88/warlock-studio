@@ -166,6 +166,41 @@ async def test_stale_taxonomy_params_do_not_reach_the_image_prompt(worker):
     assert worker.store.get(job_id)["params"]["composed_prompt"] == prompt
 
 
+async def test_a_stale_backend_param_still_takes_the_trellis_path(worker):
+    """The Hunyuan3D removal's queue arm.
+
+    Until 2026-08-30 ``_generate`` read ``params["backend"]`` and branched
+    around the whole TRELLIS half when it said ``hunyuan3d_multiview``. A row
+    stored before the removal can still carry that string (plus the three keys
+    that travelled with it), and it must now be ignored outright rather than
+    routing the job at a module that no longer exists.
+    """
+    job_id = worker.store.create(
+        "image",
+        None,
+        {
+            "seed": 1,
+            "resolution": 512,
+            "backend": "hunyuan3d_multiview",
+            "texture_mode": "pbr",
+            "view_assets": {"front": "front.png"},
+            "license_acknowledged": True,
+        },
+    )
+    job_dir = worker.config.job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "input.png").write_bytes(b"fake-png")
+    worker.start()
+    await _wait_until(lambda: worker.store.get(job_id)["status"] == "done")
+    await worker.shutdown()
+
+    # The reconstruction went through trellis, and the launch config was
+    # applied rather than skipped by the old guard.
+    assert worker.trellis.generate_calls
+    assert worker.trellis.config_calls
+    assert not (job_dir / ".hunyuan.source.glb").exists()
+
+
 async def test_composed_prompt_is_read_from_last_prompt_not_recomputed(worker, monkeypatch):
     """queue.py must record t2i.last_prompt, not its own local `composed` --
     otherwise the UI's "prompt sent" row would show the pre-trigger,

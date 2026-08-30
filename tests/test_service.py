@@ -277,6 +277,32 @@ def test_a_promotion_is_a_child_of_its_reference(svc):
     assert (svc.job_dir(out["id"]) / "input.png").exists()
 
 
+def test_a_stored_hunyuan_backend_is_cleared_rather_than_refused(svc):
+    """The Hunyuan3D removal's one migration.
+
+    The backend was deleted on 2026-08-30. Before then a promotion inherited
+    ``backend``/``texture_mode``/``view_assets``/``license_acknowledged`` from
+    the reference unless TRELLIS was chosen explicitly, and re-admitted them
+    against an install gate. A library row written back then must still
+    promote -- silently, without the four keys reaching the child, which is
+    the behaviour chosen over a refusal the user could not act on.
+    """
+    ref = _reference(svc)
+    svc.store.merge_params(
+        ref,
+        {
+            "backend": "hunyuan3d_multiview",
+            "texture_mode": "pbr",
+            "view_assets": {"front": "front.png", "back": "back.png"},
+            "license_acknowledged": True,
+        },
+    )
+    out = svc_jobs.promote_to_model(svc, ref)
+    params = svc.store.get(out["id"])["params"]
+    for key in ("backend", "texture_mode", "view_assets", "license_acknowledged"):
+        assert key not in params, key
+
+
 def test_a_platform_override_drops_the_resolution_it_implied(svc):
     ref = _reference(svc, resolution=512)
     assert svc.store.get(ref)["params"]["resolution"] == 512

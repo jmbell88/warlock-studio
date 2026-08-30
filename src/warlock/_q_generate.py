@@ -245,7 +245,6 @@ class GenerateOps:
         mesh_seed = int(params.get("mesh_seed", legacy_seed))
         resolution = int(params.get("resolution", 1024))
         image_path = job_dir / "input.png"
-        hunyuan_backend = str(params.get("backend") or "")
 
         job_id = job["id"]
         assert self._cancel is not None
@@ -611,25 +610,20 @@ class GenerateOps:
         # A restart that then fails to come back is nothing new: ensure_started
         # inside generate() raises, the job errors, and _check_backoff throttles
         # the respawn.
-        if hunyuan_backend != "hunyuan3d_multiview":
-            await asyncio.to_thread(
-                self.trellis.ensure_config,
-                tex_res=int(params["trellis_tex_res"])
-                if "trellis_tex_res" in params
-                else self.config.trellis_tex_res,
-                band=int(params["trellis_band"])
-                if "trellis_band" in params
-                else self.config.trellis_band,
-            )
+        await asyncio.to_thread(
+            self.trellis.ensure_config,
+            tex_res=int(params["trellis_tex_res"])
+            if "trellis_tex_res" in params
+            else self.config.trellis_tex_res,
+            band=int(params["trellis_band"])
+            if "trellis_band" in params
+            else self.config.trellis_band,
+        )
 
         self.progress.update(
             job_id,
-            phase="hunyuan" if hunyuan_backend == "hunyuan3d_multiview" else "trellis",
-            label=(
-                "Building multi-view model"
-                if hunyuan_backend == "hunyuan3d_multiview"
-                else "Starting 3D engine" if not self.trellis.running else "Sending image"
-            ),
+            phase="trellis",
+            label=("Starting 3D engine" if not self.trellis.running else "Sending image"),
             inner=0.0,
             inner_next=0.02,
             nominal=6.0,
@@ -667,74 +661,6 @@ class GenerateOps:
         if not report.ok:
             raise RuntimeError("; ".join(report.reasons))
 
-        # Hunyuan is an explicit isolated backend.  Missing installation,
-        # views, or acknowledgement is a hard error; this branch intentionally
-        # never falls through to TRELLIS.
-        if hunyuan_backend == "hunyuan3d_multiview":
-            from .pipelines import hunyuan
-
-            executable = os.environ.get("WARLOCK_HUNYUAN_PYTHON")
-            weights = os.environ.get("WARLOCK_HUNYUAN_WEIGHTS")
-            texture_mode = str(params.get("texture_mode") or "pbr")
-            install_errors = hunyuan.validate_install(
-                executable,
-                weights,
-                license_acknowledged=bool(params.get("license_acknowledged")),
-                texture_mode=texture_mode,
-            )
-            view_assets = dict(params.get("view_assets") or {})
-            view_errors = hunyuan.validate_views(view_assets)
-            resolved_views: dict[str, str] = {}
-            for name, value in view_assets.items():
-                candidate = Path(str(value))
-                if not candidate.is_absolute():
-                    candidate = job_dir / candidate
-                resolved_views[name] = str(candidate)
-                if name in hunyuan.REQUIRED_VIEWS and not candidate.is_file():
-                    view_errors.append(f"view {name!r} is not available at {candidate}")
-            if install_errors or view_errors:
-                raise RuntimeError("; ".join(install_errors + view_errors))
-            if self.trellis.running:
-                # The isolated backend is admitted against its own memory
-                # budget; do not leave a warm TRELLIS server competing with it.
-                await asyncio.to_thread(self.trellis.stop)
-            staged_glb = job_dir / ".hunyuan.source.glb"
-            payload = hunyuan.request(
-                job_id,
-                resolved_views,
-                output_path=staged_glb,
-                weights_path=weights,
-                texture_mode=texture_mode,
-                seed=mesh_seed,
-                license_acknowledged=True,
-            )
-            self.progress.update(
-                job_id, phase="hunyuan", label="Building multi-view model",
-                inner=0.0, inner_next=1.0, nominal=8.0, detail="",
-            )
-            result = await asyncio.to_thread(
-                hunyuan.run_worker,
-                executable,
-                payload,
-                cwd=job_dir,
-                cancel_event=self._cancel.event,
-            )
-            reported = result.get("output_path") or result.get("glb") or result.get("output")
-            if reported:
-                reported_path = Path(str(reported))
-                if not reported_path.is_absolute():
-                    reported_path = job_dir / reported_path
-                if reported_path != staged_glb and reported_path.is_file():
-                    hunyuan.publish_glb(reported_path, staged_glb)
-            hunyuan.publish_glb(staged_glb, source_glb)
-            params.setdefault("recipe", {})["hunyuan"] = {
-                "protocol_version": payload.protocol_version,
-                "backend": hunyuan.BACKEND,
-                "texture_mode": texture_mode,
-                "views": dict(resolved_views),
-            }
-            await asyncio.to_thread(self.store.set_params, job_id, params)
-
         # **The worker's default has to be the door's.** A job normally arrives
         # with the key already resolved by ``service.jobs``, which asks
         # ``guidance.default_bg_removal`` and so answers ``birefnet`` on a host
@@ -750,15 +676,14 @@ class GenerateOps:
             params.get("bg_removal")
             or guidance.default_bg_removal(self.config.trellis_models_dir)
         )
-        if hunyuan_backend != "hunyuan3d_multiview":
-            queue_mod._log_mem("before trellis generate")
-            await self.trellis.generate(
-                trellis_input,
-                source_glb,
-                seed=mesh_seed,
-                resolution=resolution,
-                bg_removal=bg_removal,
-            )
+        queue_mod._log_mem("before trellis generate")
+        await self.trellis.generate(
+            trellis_input,
+            source_glb,
+            seed=mesh_seed,
+            resolution=resolution,
+            bg_removal=bg_removal,
+        )
         # The remesh loop, and it re-enters only the trellis half. Everything
         # above it -- the VRAM handoff, the reference measurement, the
         # composition gate -- has already happened and is deliberately not
