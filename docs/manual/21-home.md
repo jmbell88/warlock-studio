@@ -61,6 +61,19 @@ One **New…** button, and a menu behind it with the seven things this app can b
 be six equally loud buttons in a 3-across grid, which is a menu insisting that all of them matter the same amount —
 above the thing most people came back for.
 
+Beside it, quieter, is **Import mesh…**. That is the other errand: not starting from nothing, but
+bringing in a `.glb` you already have — a character someone modelled for you, a prop from another
+tool. You can also drag the file onto Home or onto the Library. Either way it becomes an ordinary
+library asset, which means everything that works on a generated mesh works on it too: **Send to
+Troupe**, the Poser, the triangle retarget and every export.
+
+An imported mesh keeps whatever rig it arrived with only as far as the library. Warlock fits its
+own skeleton when you rig it, because a supplied rig rarely maps onto the one the clips are
+authored against — so a mesh that arrives unrigged is no worse off than one that does not.
+
+Clay is the exception, and it is not a way in: dropping a `.glb` there opens it for *editing*, and
+it refuses a rigged one outright, because Clay has no skinning and opening it would drop the rig.
+
 ## Status
 
 Under it, one quiet line about this machine rather than about the work. Each part that has somewhere

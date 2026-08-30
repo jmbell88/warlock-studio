@@ -56,7 +56,19 @@ def main() -> int:
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--base", default=models.DEFAULT_BASE_MODEL)
     ap.add_argument("--model-root", type=Path, default=Path("models"))
+    # Defaulted to the three seeds every prior corpus was drawn at, so the
+    # 2026-08-08, 08-09 and 08-29 documents still reproduce byte-identically
+    # from this file. It exists so a constant can be *set* on units the
+    # motivating corpus does not contain -- see
+    # docs/measurements/2026-08-30-seam-dominance.md, whose whole design is
+    # that the number is not fitted to the data that suggested it.
+    ap.add_argument(
+        "--seeds",
+        default=",".join(str(s) for s in SEEDS),
+        help="comma-separated generation seeds (default: the published corpus's)",
+    )
     args = ap.parse_args()
+    seeds = tuple(int(v) for v in str(args.seeds).split(",") if v.strip())
 
     spec = models.BASE_MODELS[args.base]
     out: Path = args.out
@@ -65,7 +77,7 @@ def main() -> int:
 
     rows: list[dict[str, object]] = []
     for material, text in HARD.items():
-        for seed in SEEDS:
+        for seed in seeds:
             name = f"{material}-s{seed}-tiled.png"
             path = out / name
             t2i.generate(text, path, seed=seed, tile=True)

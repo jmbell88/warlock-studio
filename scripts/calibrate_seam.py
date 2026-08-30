@@ -69,6 +69,17 @@ def main() -> int:
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--base", default=models.DEFAULT_BASE_MODEL)
     ap.add_argument("--model-root", type=Path, default=Path("models"))
+    # Defaulted to the three seeds every prior corpus was drawn at, so the
+    # 2026-08-08, 08-09 and 08-29 documents still reproduce byte-identically
+    # from this file. It exists so a constant can be *set* on units the
+    # motivating corpus does not contain -- see
+    # docs/measurements/2026-08-30-seam-dominance.md, whose whole design is
+    # that the number is not fitted to the data that suggested it.
+    ap.add_argument(
+        "--seeds",
+        default=",".join(str(s) for s in SEEDS),
+        help="comma-separated generation seeds (default: the published corpus's)",
+    )
     # Both default to off, so the 2026-08-08 and 2026-08-09 corpora still
     # reproduce byte-identically from this file. They exist because the
     # production seamless-tileset path (``_q_tileset._tile_set``) applies a
@@ -83,6 +94,7 @@ def main() -> int:
         help="'sheet' applies tilesheet.SHEET_NEGATIVE_PROMPT, what the tileset door sends",
     )
     args = ap.parse_args()
+    seeds = tuple(int(v) for v in str(args.seeds).split(",") if v.strip())
 
     spec = models.BASE_MODELS[args.base]
     if args.base not in models.tile_bases():
@@ -104,7 +116,7 @@ def main() -> int:
 
     rows: list[dict[str, object]] = []
     for material, text in MATERIALS.items():
-        for seed in SEEDS:
+        for seed in seeds:
             for tiled in (True, False):
                 arm = "tiled" if tiled else "plain"
                 name = f"{material}-s{seed}-{arm}.png"
@@ -152,7 +164,7 @@ def main() -> int:
                 "prompt_version": prompt_lib.PROMPT_VERSION,
                 "threshold_at_capture": seam.SEAM_MAX,
                 "materials": MATERIALS,
-                "seeds": list(SEEDS),
+                "seeds": list(seeds),
                 "rows": rows,
             },
             indent=2,

@@ -827,6 +827,19 @@ def _start(ctx: Any) -> None:
             if controls.menu_item(f"{icon}  {label}##landing-new-{key}", "", False)[0]:
                 action(ctx)
         imgui.end_popup()
+    # Beside ``New...`` and quieter than it, deliberately on both counts.
+    # Importing is not one of ``NEW_ITEMS``: those are "the things this app can
+    # start **from nothing**", and a file the user already has is the opposite
+    # errand -- folding it in would make that sentence false. But it is the
+    # errand somebody with a mesh arrives *with*, and until 2026-08-30 there
+    # was no way to do it at all: geometry entered the library only by being
+    # reconstructed or built in Clay, and a dropped ``.glb`` reached Clay
+    # alone, which refuses a rigged one because it has no skinning.
+    imgui.same_line()
+    if widgets.ghost_button(f"{icons.BOX}  Import mesh..."):
+        from . import library
+
+        library.pick_and_import_mesh(ctx)
     imgui.dummy((0, sp(tokens.SP_2)))
 
 

@@ -119,7 +119,22 @@ graded run has ever targeted `sdxl_cfg`, which is what ships.**
 **Do:** a representative corpus (props, not the hard set) through
 `text → sdxl_cfg → TRELLIS` at the shipped defaults, graded on the
 `docs/measurements/2026-08-09-grade-scale.md` scale, written up as a
-measurement document. `scripts/qualify_tiers.py` is the harness.
+measurement document.
+
+The corpus and the protocol are pre-registered in
+`docs/measurements/2026-08-30-art-verdicts-preregistration.md`, and
+`scripts/campaign_props.py` is the harness: it submits
+`docs/measurements/corpora/props-v1.txt` as ordinary library jobs tagged
+`props-v1`, which Review's recent bucket grades in one blind pass. **Do not
+clean the library until the writeup exists** — 2026-08-13 deleted its twenty
+meshes before anyone could re-inspect them, and says so.
+
+~~`scripts/qualify_tiers.py` is the harness.~~ It is not, and was never able to
+be: that script qualifies the *gltfpack tiers* against meshes a human has
+already accepted, and documents that it deliberately does not drive
+`optimize_job` because doing so would consume its own inputs. It has no way to
+generate a corpus. Its own bar is downstream of this entry — it needs accepted
+meshes, which is what a good result here would produce for the first time.
 
 **Expected outcome:** a usable-of-N figure the README can state — or, if it is
 bad, the honest position that it makes no claim. Either closes the release
@@ -147,6 +162,23 @@ validation only).
 
 **Do:** author or commission it; put it through **Send to Troupe** (library
 menu, inspector, or the picker inside Troupe) with `palette=cosmos`.
+
+**Partially unblocked 2026-08-30.** `tests/fixtures/humanoid/cesium_man.glb`
+(CesiumMan, CC-BY 4.0 Cesium — see `tests/fixtures/humanoid/ATTRIBUTION.md`)
+is textured, rigged,
++Z up, A-pose-ish and 4,672 polys, so **P5 is now runnable**. It does *not*
+close this entry: it is a 3,273-vertex specification sample with a small JPEG
+and no female variant, so a ramp verdict taken on it is a claim about
+CesiumMan rather than about character art anyone would ship. The authored or
+commissioned mesh is still owed, and this entry stays open until it exists.
+
+Putting a rigged mesh through the path found three silent defects that no
+TRELLIS reconstruction could ever have exposed — a skin guard defeated by the
+incoming weights, two skeletons in the export, and a doubled Y-up→Z-up rotation
+that fitted the skeleton to an arm span under half its real width. All three
+are fixed (`_strip_incoming_rig`) and pinned by
+`tests/test_rig_supplied_mesh.py`; the argument is in
+`docs/measurements/2026-08-30-art-verdicts-preregistration.md` Q5.
 
 **Expected outcome:** the first Troupe sheet with real colour, and a verdict on
 whether the ramp works at sprite scale. Unblocks P5 and P11.
@@ -304,21 +336,29 @@ stops offering what has not earned its place.
 **Expected outcome:** three recorded decisions; the first and second turn into
 buildable specs, the third into a branch operation.
 
-## P12. Troupe Phase 0e — judge humanoid reconstruction from a single image
+## P12. ~~Troupe Phase 0e — judge humanoid reconstruction from a single image~~
 
-**Why it is yours:** a card and eyes. Untested. Run a prompt → reference →
-TRELLIS → `fit_template` pass on a humanoid and judge **limb separation and
-silhouette** — at sprite scale those two matter enormously and face-level
-fidelity barely at all. This is the largest unproven assumption in the
-automated chain, compounded by a known property: reconstruction is
-single-image, so **the back is hallucinated**, and a humanoid with separable
-limbs is a harder subject than a prop.
+**Answered 2026-08-30: no. The generated-character path is not viable at the
+shipped default.** Three humanoids went through `text → sdxl_cfg → TRELLIS` as
+part of the props-v1 corpus and were judged on this entry's own rubric — limb
+separation and silhouette, not face fidelity. The verdict: **limbs are bent and
+stretched**. The pre-registered bottom rule fires, and the exact count does not
+matter, since the viable rule needed 2 or 3 of 3.
 
-It matters only for the generated-character path; the supplied-base-mesh path
-(P4) works without it and is reachable from the UI.
+The `_init_frame` distortion bug is ruled out as a confound: these jobs carried
+no init image and no conditioning, so that path was never entered. It is the
+reconstruction's own geometry.
 
-**Expected outcome:** a verdict on whether generated characters are viable at
-all, before anyone invests in Phase 7.
+**What it decides:** Phase 7 is not worth planning on the generated-character
+path, which is the decision this entry existed to take before the investment
+rather than after. The **supplied-base-mesh path is the one to build on**, and
+it became runnable the same day (see P4/P5). This says nothing about whether a
+better reconstruction — a multi-view backend, say — could carry characters; it
+is a verdict on the shipped single-view default.
+
+Recorded in `docs/measurements/2026-08-30-sdxl-cfg-props.md`, which also carries
+the corpus finding this is consistent with: 16 of 21 good references became
+unusable meshes, with `holes` the dominant defect tag.
 
 ## P13. Troupe phases 6, 7 and 8 — fully specified, deliberately unstarted
 
@@ -364,6 +404,17 @@ a working catalog, only local weights through `fetch_worker`, following the
 
 **Expected outcome:** none until P11 and P12 say the programme continues; the
 value of this entry is that nobody re-plans it.
+
+**P12 answered on 2026-08-30, and it answered no** for the generated-character
+path: limbs came back bent and stretched. Phase 7's own parenthesis already
+defers it "until whole-character generation works", so that phase stays where it
+is — the gate did not need moving, it needed measuring, and now it has been.
+
+What this does *not* do is close the entry. Phases 6 and 8 never depended on
+generated characters, and the **supplied-base-mesh path is untouched by the
+verdict** — a user's own rigged humanoid reaches Troupe without the
+reconstruction being involved at all, which is the path P4/P5 opened the same
+day. P11's two design questions are still yours and still open.
 
 ## P14. Listen to Sirens, on a machine with a sound card
 

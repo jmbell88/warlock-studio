@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import time
+from pathlib import Path
 from typing import Any
 
 from imgui_bundle import imgui
@@ -1264,6 +1265,71 @@ def run_action(ctx: Any, job: Any, action: str) -> None:
         from .. import plotter_mode
 
         plotter_mode.use_as_tileset(ctx, job)
+
+
+#: The one task key an import lands under, claimed by ``main`` so the result
+#: is not "delivered nowhere". Unkeyed by path on purpose: two imports at once
+#: is not a workflow, and the dedupe ``submit`` already does on a repeated key
+#: is what stops a double-clicked button opening two pickers.
+IMPORT_MESH_KEY = "import-mesh"
+
+
+def pick_and_import_mesh(ctx: Any) -> None:
+    """Ask for a mesh file, then bring it into the library.
+
+    **The gap this closes.** Until 2026-08-30 geometry could enter the library
+    exactly two ways -- reconstructed by the pipeline, or built in Clay -- and a
+    mesh a user already had could not enter at all. The only file-open path for
+    a ``.glb`` was a drop onto Clay, which converts it into an editable Clay
+    *document* and refuses a rigged one outright, because Clay has no skinning.
+    So the supplied-base-mesh path that Troupe's whole intake assumes had no
+    door: ``jobs.import_mesh`` was written, tested and reachable only from Clay
+    exporting its own work back out.
+
+    Nothing new happens to the file. It becomes an ordinary finished model row,
+    and every consumer inherits it at once -- Send to Troupe, the Poser, the
+    triangle retarget, every export -- because all of them are pure functions of
+    ``model.glb``. That is the same payoff ``import_mesh``'s own docstring
+    claims for Clay, collected a second time for a door that costs nothing.
+    """
+    ctx.submit(IMPORT_MESH_KEY, _pick_and_import, ctx)
+
+
+def import_mesh_path(ctx: Any, path: Any) -> None:
+    """The same, for a file that arrived by drag and drop."""
+    ctx.submit(IMPORT_MESH_KEY, _read_and_import, ctx, Path(path))
+
+
+def _pick_and_import(ctx: Any) -> dict[str, Any] | None:
+    """Blocking; task thread only. ``None`` is a cancel and says nothing."""
+    picked = dialogs.open_file("Import a mesh", dialogs.GLB_FILTER)
+    if picked is None:
+        return None
+    return _read_and_import(ctx, picked)
+
+
+def _read_and_import(ctx: Any, path: Path) -> dict[str, Any]:
+    """Blocking; task thread only.
+
+    The size is checked against the file rather than after reading it: the
+    ceiling exists because a 100 MB GLB is already past what anything
+    downstream wants, and reading a two-gigabyte one into memory to discover
+    that is how a refusal becomes a swap storm. ``import_mesh`` re-checks the
+    bytes it is handed, so this is a cheaper first gate and not the rule.
+    """
+    from ...service.errors import Invalid
+    from ...service.validation import MAX_MESH_BYTES
+
+    if path.stat().st_size > MAX_MESH_BYTES:
+        raise Invalid(
+            f"{path.name} is over {MAX_MESH_BYTES // (1024 * 1024)} MB.", field="mesh"
+        )
+    # ``stem`` for both: the name is what the library shows, and the prompt is
+    # what every "what was this?" reader falls back to -- a file called
+    # ``knight_base`` should answer both rather than leaving one blank.
+    return svc_jobs.import_mesh(
+        ctx.svc, path.read_bytes(), name=path.stem, prompt=path.stem
+    )
 
 
 COMPARE_KEY = "compare-parse"

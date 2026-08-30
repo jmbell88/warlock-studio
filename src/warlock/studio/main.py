@@ -74,6 +74,14 @@ def _compare_key() -> str:
     return library.COMPARE_KEY
 
 
+def _import_mesh_key() -> str:
+    """``library.IMPORT_MESH_KEY``, looked up lazily -- :func:`_compare_key`'s
+    reason, and the same shape so the two read as one convention."""
+    from .panes import library
+
+    return library.IMPORT_MESH_KEY
+
+
 DEFAULT_SIZE = (1600, 950)
 MIN_SIZE = (1100, 700)
 # Desired pane widths and their frame-local fit live in layout.py; named
@@ -1978,6 +1986,21 @@ class App:
             if key.startswith(("delete:", "prune", "purge:")) or key == "empty-trash":
                 self._request_storage()
             return
+        if key == _import_mesh_key():
+            # A new finished row, so the list has to refetch exactly as it does
+            # after a delete or a rename. ``None`` is the picker being
+            # cancelled and is silent: a toast saying nothing happened, after
+            # the user chose for nothing to happen, is noise.
+            if done.result is None:
+                return
+            ctx.cache.invalidate()
+            self._request_storage()
+            # Selected, because an import is a thing the user just *made* and
+            # the next click is always on it -- the same reasoning ``create``
+            # follows when a job it queued lands.
+            ctx.state.select(done.result["id"])
+            ctx.toast("Mesh imported. It is an ordinary asset now.", "success")
+            return
         if key.startswith("retarget:"):
             # model.glb was rewritten under the viewer, and the params it is
             # described by changed with it: drop the mesh verdicts on screen and
@@ -3102,6 +3125,21 @@ class App:
                 "render has already produced.",
                 "error",
             )
+            return
+        if ctx.state.mode in ("home", "library") and path.suffix.lower() == ".glb":
+            # Home and Library take a mesh straight into the library, which is
+            # the other half of the door ``library.pick_and_import_mesh``
+            # opens: a user with a ``.glb`` reaches for a drop before a menu,
+            # and until 2026-08-30 the only surface that accepted one was Clay
+            # -- which converts it into an editable document and refuses a
+            # rigged mesh outright. Create is deliberately *not* here: a mesh
+            # dropped mid-generation is ambiguous between "start from this" and
+            # "put this in my library", and the branch below already answers
+            # that question for images.
+            from .panes import library
+
+            library.import_mesh_path(ctx, path)
+            ctx.toast(f"Importing {path.name}...", "info")
             return
         if path.suffix.lower() not in DROPPABLE_IMAGES:
             # The refusal says what a drop would have *done here* (H71). One

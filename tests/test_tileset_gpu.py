@@ -242,28 +242,45 @@ def test_every_material_is_seamless(materials):
     both materials are seamless, colour is continuous across every tile boundary
     for free") is simply false, with nothing in the data saying so.
 
-    All four ratios are reported whether or not they pass, because the useful
+    All four numbers are reported whether or not they pass, because the useful
     failure says *which* material and by how much -- one bad draw out of four is
     a different diagnosis from four bad draws. Circular padding either applies to
     a call or it does not, so "the mechanism failed" is a claim about all four;
-    a single outlier is a claim about the threshold, and the module docstring
-    says which one this checkpoint has already produced.
+    a single outlier is a claim about the threshold.
+
+    **It asserts ``report["seamless"]``, not a number of its own**, so there is
+    one definition of the word in the tree. That matters more than it sounds:
+    this assertion spent 2026-08-29 red against ``SEAM_MAX`` while the padding
+    was working perfectly, because it was applying an edge-against-mean-grain
+    ratio to a pixel-art LoRA's flat cells -- the ratio's documented
+    false-alarm shape, on the exact population this fixture draws. Had it read
+    the shipped verdict, adopting the statistic that fixed it
+    (``docs/measurements/2026-08-30-seam-dominance.md``, which measured 0 false
+    alarms across 72 held-out tiled units against the ratio's 18) would have
+    turned it green with no edit here at all.
     """
     _scratch, drawn = materials
     reports = [seam.report(material.source) for material in drawn]
     lines = "; ".join(
-        f"{material.prompt} {report['worst']:.2f}"
+        f"{material.prompt} {report['dominance']:.2f}"
         for material, report in zip(drawn, reports, strict=True)
     )
-    worst = [report["worst"] for report in reports]
-    assert max(worst) <= seam.SEAM_MAX, (
-        f"a generated material scored past the seam threshold {seam.SEAM_MAX}: "
-        f"{lines}. Look at the wrap preview for that material before concluding "
-        f"the circular padding failed -- {seam.SEAM_MAX} was measured on "
-        f"sdxl-turbo at 4 steps and this lane is a CFG base at 30, which "
-        f"docs/measurements/2026-08-08-seam-threshold.md names as the first "
-        f"thing that should re-run its scripts. A texture of flat cells parted "
-        f"by thin hard lines is that document's own false-alarm shape"
+    seamed = [
+        material.prompt
+        for material, report in zip(drawn, reports, strict=True)
+        if not report["seamless"]
+    ]
+    assert not seamed, (
+        f"a generated material did not tile: {', '.join(seamed)}. Seam against "
+        f"the worst interior join, threshold {seam.SEAM_DOMINANCE_MAX}: {lines}. "
+        f"Look at the wrap preview this lane leaves behind before concluding the "
+        f"circular padding failed -- a number above the line means the wrap is "
+        f"the single largest discontinuity in the frame, which is a strong claim "
+        f"but still a statistic. It is the *miss* direction that is measured "
+        f"loosest: docs/measurements/2026-08-30-seam-dominance.md records "
+        f"dominance passing 4 of 44 visibly seamed control units, so a material "
+        f"that looks joined and scores under the line is a known shape rather "
+        f"than a surprise"
     )
 
 

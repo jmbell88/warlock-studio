@@ -4,9 +4,20 @@ The measurement is a ratio and that is the whole design. A hard number -- the
 mean absolute difference between the first and last column -- says nothing on
 its own, because a photograph of gravel legitimately differs by a lot between
 *any* two adjacent columns while flat plaster differs by almost nothing. So the
-wrap seam is divided by the mean interior difference: a value near 1 means the
-seam is no more of a discontinuity than the texture already contains, and a
-value of 8 means it is eight times worse than the picture's own grain.
+wrap seam is divided by what the picture's own interior does.
+
+**Which interior statistic divides it is the question three documents took to
+settle.** Dividing by the interior *mean* asks "is the seam worse than this
+picture's average join", and that is the shipped ratio (``worst``, kept below
+because three published corpora are keyed on it). Dividing by the interior
+*maximum* asks "is the seam the worst join in this picture", and that is
+``dominance``, which decides the verdict as of 2026-08-30. The difference is one
+word and it is the whole reason for the change: a texture of flat cells parted
+by thin hard lines -- pixel art, ceramic grout, riveted panels -- has an average
+that collapses toward zero while its maximum does not, so the mean-normalised
+ratio inflates on exactly the population the seamless-tileset track generates.
+On a held-out corpus it called 18 of 72 confirmed-seamless tiles seamed, 15 of
+them under the pixel-art LoRA the track ships with; dominance called 0 of 72.
 
 Advisory, like every other measurement in this codebase. Nothing here fails a
 job whose PNG is already on disk; the number goes on the row and the user
@@ -52,15 +63,40 @@ from typing import Any
 #   corpus are un-tiled pictures visibly chopped in four. The padding is fine;
 #   the mean denominator collapses on flat-cell pixel art.
 #
-# So on a CFG base, and especially under a pixel-art style LoRA, a `seamless`
-# verdict is advisory at best and a value above this line is more often the
-# false-alarm shape above than a real seam -- look at wrap_preview before
-# believing it. The fix worth having is a better denominator rather than a
-# different number here (the seam against the interior *maximum* rather than
-# the mean separates 0/96 and 1/48 from 41/48 and 19/48 on those corpora), and
-# per the repo rule that is a new measurement document, not an edit to this
-# constant.
+# That better denominator is now measured and shipped -- see
+# ``SEAM_DOMINANCE_MAX`` below and
+# docs/measurements/2026-08-30-seam-dominance.md -- so this constant no longer
+# decides anything. It stays because ``worst`` is still reported beside the new
+# verdict and because every row written before 2026-08-30 was judged against
+# it; a stored report with no ``metric`` field is one of those, and
+# ``inspector.seam_verdict`` still reads it as an edge/grain number.
 SEAM_MAX = 3.5
+
+# The verdict, as of 2026-08-30. Above this the wrap seam is the single largest
+# discontinuity in the picture, which is the arithmetic spelling of "this does
+# not tile".
+#
+# **Fixed by construction rather than fitted**, and that is the point of it:
+# at exactly 1.0 the seam is precisely as large as the largest step the picture
+# already contains, so the number is the statistic's own semantics and cannot
+# drift with a corpus. docs/measurements/2026-08-30-seam-dominance.md
+# pre-registered it before drawing a single held-out unit and then tried to
+# falsify it: 144 tiled axes at seeds no published corpus contains -- plain,
+# pixel-art-LoRA'd and hard-structured -- and **not one scored above 1.0**
+# (highest 0.940). Every unit above 0.8 was read through ``wrap_preview`` and
+# every one wraps.
+#
+# ``<=`` and not ``<``, and it is load-bearing: a triangle wave is the ideal
+# seamless tile and its seam step equals its interior step exactly, so a strict
+# comparison would false-alarm on the canonical good case.
+#
+# What it costs, measured on the same corpus and recorded rather than
+# discovered later: dominance is a specificity instrument, and it misses a
+# seamed picture whose interior already contains a step as hard as the seam --
+# 4 of 44 visibly seamed control units, against the ratio's 5. Pooled it caught
+# 40 where the ratio caught 39, which is the whole of its sensitivity claim and
+# is deliberately not more than that.
+SEAM_DOMINANCE_MAX = 1.0
 
 # Below this many pixels on a side there is no interior to compare against.
 MIN_SIDE = 8
@@ -93,12 +129,49 @@ def _ratios(arr: Any) -> tuple[float, float]:
     return (horizontal, vertical)
 
 
+def _dominance(arr: Any) -> tuple[float, float]:
+    """The verdict statistic: the wrap seam against the *largest* interior step.
+
+    Same numerator as ``_ratios`` and a different denominator, which is the
+    whole of the difference. Each interior adjacent-column pair is reduced to
+    one number the same way the seam is -- mean absolute difference over rows
+    and colour channels -- and the largest of those is what the seam is
+    measured against. So the question is "is the wrap the worst join in this
+    picture", and a value of 1.0 means it ties with the worst.
+
+    The flat-image arm is ``_ratios``' arm and is reachable for the same reason
+    and no other: a maximum of zero means every adjacent pair is identical,
+    which makes the first column equal to the last.
+    """
+    import numpy as np
+
+    def axis_dominance(a: Any) -> float:
+        a = a.astype(float)
+        edge = float(np.abs(a[:, 0] - a[:, -1]).mean())
+        pairs = np.abs(np.diff(a, axis=1)).mean(axis=(0, 2))
+        interior = float(pairs.max()) if pairs.size else 0.0
+        if interior <= 0.0:
+            return 0.0 if edge <= 0.0 else float("inf")
+        return edge / interior
+
+    return (axis_dominance(arr), axis_dominance(arr.transpose(1, 0, 2)))
+
+
 def report(path: Path) -> dict[str, Any]:
     """The seam verdict for one image.
 
     ``horizontal`` compares the left edge against the right, ``vertical`` the
     top against the bottom, and the worse of the two decides -- a tile that
     wraps one way and not the other is not a tile.
+
+    Two statistics are reported and only one decides. ``dominance`` is the
+    verdict (docs/measurements/2026-08-30-seam-dominance.md); ``worst`` is the
+    edge-against-mean-grain ratio three published corpora are keyed on, kept so
+    those documents stay readable against new output and so a row's number does
+    not silently change meaning. ``metric`` names which one decided, and its
+    absence marks a row written before 2026-08-30 -- which is what lets
+    ``inspector.seam_verdict`` word an old row correctly instead of describing
+    it with today's vocabulary.
     """
     import numpy as np
     from PIL import Image
@@ -110,12 +183,18 @@ def report(path: Path) -> dict[str, Any]:
         arr = np.asarray(im.convert("RGB"))
     horizontal, vertical = _ratios(arr)
     worst = max(horizontal, vertical)
+    dom_h, dom_v = _dominance(arr)
+    dominance = max(dom_h, dom_v)
     return {
         "horizontal": horizontal,
         "vertical": vertical,
         "worst": worst,
-        "seamless": bool(worst <= SEAM_MAX),
-        "threshold": SEAM_MAX,
+        "dominance_horizontal": dom_h,
+        "dominance_vertical": dom_v,
+        "dominance": dominance,
+        "metric": "dominance",
+        "seamless": bool(dominance <= SEAM_DOMINANCE_MAX),
+        "threshold": SEAM_DOMINANCE_MAX,
     }
 
 

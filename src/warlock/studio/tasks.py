@@ -29,8 +29,30 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..service.errors import Failed, ServiceError
+from .clay.elements import OpError
 
 log = logging.getLogger(__name__)
+
+#: Exceptions that already carry a sentence written for the user, so a failed
+#: task shows *that* instead of "something went wrong".
+#:
+#: ``OpError`` had to be added: its own docstring says it is "a user-facing
+#: refusal: shown as a toast... the message is the whole user interface for
+#: it", and on a task thread it was not shown at all. Clay's four submissions
+#: (both ``clay-open``, both ``clay-import``) are the only place a refusal is
+#: raised off the frame thread, so every one of them -- a rigged GLB, an
+#: unreadable one, a mesh past the triangle ceiling -- reached the user as
+#: ``Something went wrong; see the log for details.`` while the sentence that
+#: named the cause and the remedy went to the log alone. Found 2026-08-30 by a
+#: user who dropped a rigged GLB into Clay and had to read ``warlock.log`` to
+#: learn why nothing happened.
+#:
+#: The task layer knowing one Clay type is the lesser evil against wrapping
+#: each ``run()`` body: a fifth submission added later inherits this, where the
+#: wrapping version is one edit away from being the copy that forgets.
+#: ``clay/`` is a headless package and this is the UI importing it, which is
+#: the direction the import pins allow and ``clay_mode`` already takes.
+CARRIES_ITS_OWN_MESSAGE = (ServiceError, OpError)
 
 # Four: enough that a slow export does not block a thumbnail decode, small
 # enough that a fistful of them cannot starve the loop thread of CPU.
@@ -158,7 +180,7 @@ class TaskRunner:
             error = pending.future.exception()
             if error is None:
                 finished.append(Done(key=key, result=pending.future.result(), tag=pending.tag))
-            elif isinstance(error, ServiceError):
+            elif isinstance(error, CARRIES_ITS_OWN_MESSAGE):
                 # ``Failed`` is the one ServiceError whose message cannot name a
                 # remedy (E52): it means a subprocess or a conversion that
                 # should have worked didn't -- Blender is installed and the bake
@@ -166,11 +188,21 @@ class TaskRunner:
                 # thing to look at is the log, exactly as for an unexpected
                 # exception. Every other ServiceError names its own remedy and
                 # would be worse for the extra button.
+                #
+                # ``OpError`` never points at the log: it is a refusal Clay
+                # wrote for this exact case and there is nothing further to
+                # find there.
                 finished.append(
                     Done(
                         key=key,
                         error=error,
-                        message=error.message,
+                        # ``ServiceError`` carries ``.message``; ``OpError`` is
+                        # a ``ValueError`` whose whole payload is its string.
+                        message=(
+                            error.message
+                            if isinstance(error, ServiceError)
+                            else str(error)
+                        ),
                         action="log" if isinstance(error, Failed) else None,
                         tag=pending.tag,
                     )

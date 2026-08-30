@@ -1,5 +1,12 @@
 # `SEAM_MAX` on the population that actually fails — 2026-08-29
 
+> **Followed up 2026-08-30.** R7 left the red test's disposition to the user
+> and recorded two readings of it. Reading (a) was chosen, in its strongest
+> form, and the statistic this document's objective check proposed was taken to
+> a held-out corpus and shipped:
+> [`2026-08-30-seam-dominance.md`](2026-08-30-seam-dominance.md). Nothing below
+> is amended — `SEAM_MAX` still did not move, and its refusal still stands.
+
 **Status: pre-registration written 2026-08-29 before any image was generated.**
 Everything under "What will be run" and "Decision rules" was fixed first;
 numbers and the adjudication go under "Results", and whichever rule fired is

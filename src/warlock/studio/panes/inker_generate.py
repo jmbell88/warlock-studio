@@ -10,9 +10,15 @@ export pane. This is the Inker's.
 
 **No new pipeline work.** Each button dispatches the same op the menu row does,
 through :func:`inker_menu.activate`, so a parameterised op still opens its
-sheet and ``pending_dialog`` still works. Generating *into* a layer is a
-separate programme -- a new service path, VRAM admission at the door and a
-handle on the text2image child -- and is deliberately not started here.
+sheet and ``pending_dialog`` still works.
+
+Generating *into* a layer was called "a separate programme, deliberately not
+started here" when this pane was written. It shipped on 2026-08-30 and it is
+not one of these buttons: masked regeneration lives on the Edit menu and in
+:mod:`~warlock.studio.inker.inpaint`, because it acts on a *selection* inside
+the open document rather than sending the document somewhere. The four verbs
+below are still the ones that hand a drawing to another workspace, which is
+what this pane is for.
 
 Every button is a :func:`widgets.disabled_button` carrying
 ``inker_ops.reason_for``: this pane's whole reason for existing is that a verb

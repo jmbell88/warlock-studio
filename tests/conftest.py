@@ -247,6 +247,36 @@ def _no_native_dialogs(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _empty_system_clipboard(monkeypatch):
+    """No test's verdict may depend on what the developer last copied.
+
+    ``inker_mode.paste_from_os`` calls ``PIL.ImageGrab.grabclipboard()`` -- the
+    real OS clipboard -- and two refusal tests assert the *empty* path: that
+    Ctrl+V with nothing to paste refuses and says so. They therefore passed only
+    on a machine whose clipboard held no image, and failed on 2026-08-30 for a
+    developer who had been reviewing meshes with a screenshot on the clipboard.
+    Neither failure was about the Inker.
+
+    ``_roomy_host_memory``'s rule pointed at a different global: the suite may
+    not read machine state it does not control. This is the same defect with a
+    different reader, and it is pinned the same way and in the same place.
+
+    Nothing in the suite tests the OS clipboard path itself -- no test names
+    ``grabclipboard``, ``ImageGrab`` or ``paste_from_os`` -- so unlike the
+    memory pins this needs no ``real_`` escape hatch. Add one with the test that
+    wants it. A test wanting a *populated* clipboard patches this itself and
+    wins, being applied after.
+
+    Patched on the module rather than on ``paste_from_os``: the import there is
+    function-local, so the attribute is resolved at call time and this reaches
+    it, while a pin on the caller would leave any second caller on real state.
+    """
+    from PIL import ImageGrab
+
+    monkeypatch.setattr(ImageGrab, "grabclipboard", lambda: None)
+
+
+@pytest.fixture(autouse=True)
 def _roomy_host_memory(monkeypatch):
     """No test's verdict may depend on how loaded this machine happens to be.
 

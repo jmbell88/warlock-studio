@@ -127,6 +127,49 @@ def test_a_failing_tile_quotes_the_threshold_it_went_over():
     assert f"{worst:.2f}" in text and f"{seam.SEAM_MAX:.2f}" in text
 
 
+def test_a_row_written_before_the_statistic_changed_is_worded_in_its_own_terms():
+    """The two tests above are that case, and this one says so out loud.
+
+    Neither carries a ``metric`` field, because no row written before
+    2026-08-30 does. Those rows hold an edge-against-mean-grain ratio judged
+    against 3.5, and the pane has to keep describing them that way: relabelling
+    a stored 4.9 as a seam-against-worst-join number would be reporting a
+    measurement that was never taken. ``docs/measurements/2026-08-30-seam-dominance.md``
+    R8 -- nothing on disk is reinterpreted.
+    """
+    _colour, text = inspector.seam_verdict(
+        {"worst": 4.9, "seamless": False, "threshold": seam.SEAM_MAX}
+    )
+    assert "edge/grain" in text and "4.90" in text
+
+
+def test_a_row_judged_by_dominance_quotes_the_dominance_number():
+    """And a new row must not be worded with the old vocabulary either.
+
+    The failure this refuses is quiet and total: both statistics produce values
+    in the same range, so a dominance row read as an edge/grain one shows a
+    plausible number with the opposite meaning -- 0.94 is an excellent tile by
+    one and a suspiciously good one by the other. The ratio stays on the row
+    and is deliberately *not* the number quoted.
+    """
+    row = {
+        "worst": 8.6,
+        "dominance": 0.86,
+        "metric": "dominance",
+        "seamless": True,
+        "threshold": seam.SEAM_DOMINANCE_MAX,
+    }
+    colour, text = inspector.seam_verdict(row)
+    assert colour == theme.OK
+    assert "0.86" in text and "8.6" not in text
+    assert "edge/grain" not in text
+
+    over = dict(row, dominance=1.4, seamless=False)
+    colour, text = inspector.seam_verdict(over)
+    assert colour == theme.WARN
+    assert "1.40" in text and f"{seam.SEAM_DOMINANCE_MAX:.2f}" in text
+
+
 # -- a tile is an editable image, and a repeating one -------------------------
 
 
@@ -179,9 +222,18 @@ def test_editing_a_tile_re_measures_its_seam_rather_than_its_composition(svc):
     svc.store.merge_params(job_id, {"seam_report": seam.report(job_dir / "input.png")})
     assert svc.store.get(job_id)["params"]["seam_report"]["seamless"] is True
 
-    # Now hand-edit it into a hard step, which is exactly a seam.
-    edited = np.zeros((64, 64, 3), dtype=np.uint8)
-    edited[:, 32:] = 255
+    # Now hand-edit it into a left-to-right ramp, whose wrap edge is a 251-level
+    # cliff against interior steps of 4 -- the seam is the worst join in the
+    # frame by a factor of sixty.
+    #
+    # A half/half block would be the shorter way to write "a hard step" and it
+    # is the wrong picture: two blocks make a *stripe*, which repeats without
+    # introducing any join it does not already contain, and
+    # ``docs/measurements/2026-08-30-seam-dominance.md``'s statistic correctly
+    # passes it. The edit this test is about is one that stops the tile
+    # wrapping, not one that adds an edge.
+    ramp_edit = (np.arange(64) * 255.0 / 64).astype(np.uint8)
+    edited = np.stack([np.tile(ramp_edit, (64, 1))] * 3, axis=-1)
     buf = io.BytesIO()
     Image.fromarray(edited, "RGB").save(buf, "PNG")
     svc_files.save_edited_image(svc, job_id, buf.getvalue())

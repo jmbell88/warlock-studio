@@ -818,21 +818,35 @@ def seam_verdict(report: Any) -> tuple[int, str] | None:
     """
     if not isinstance(report, dict):
         return None
-    worst = float(report.get("worst") or 0.0)
+    # Which number to quote is decided by the row, never by today's constant.
+    # A row carrying ``metric == "dominance"`` was judged by the seam-against-
+    # interior-maximum statistic (2026-08-30); a row with no ``metric`` at all
+    # predates that change and was judged by the edge-against-mean-grain ratio,
+    # and describing it in the new vocabulary would be stating a number the row
+    # does not contain. docs/measurements/2026-08-30-seam-dominance.md R8.
+    if report.get("metric") == "dominance":
+        worst = float(report.get("dominance") or 0.0)
+        wording = "seam/worst join"
+    else:
+        worst = float(report.get("worst") or 0.0)
+        wording = "edge/grain"
     if report.get("seamless"):
         # "likely", not "seamless", and the hedge is measured rather than
-        # cautious: ``docs/measurements/2026-08-09-seam-threshold-cfg.md``
-        # records that the edge-energy ratio *does not separate* seamless
-        # tiles from seamed ones on a CFG base -- the threshold was calibrated
-        # against sdxl-turbo at 4 steps, and a CFG base draws harder edges into
-        # the tile itself, which is the denominator. The shipped default is a
-        # CFG base, so on the recipe most users run this verdict is advisory.
-        # Stating it flatly was the pane claiming a confidence the measurement
-        # withdrew, on the one control whose whole job is to be trusted before
-        # a tile goes into a map. The wrapped view below is the real check.
-        return (theme.OK, f"likely seamless -- edge/grain {worst:.2f}; check the wrap")
+        # cautious. It was introduced because
+        # ``docs/measurements/2026-08-09-seam-threshold-cfg.md`` found the
+        # edge-energy ratio does not separate seamless tiles from seamed ones
+        # on a CFG base, and it *stays* under the dominance statistic for a
+        # narrower and better-measured reason:
+        # ``2026-08-30-seam-dominance.md`` records dominance missing 4 of 44
+        # visibly seamed control units -- a picture whose interior already
+        # contains a step as hard as its seam ties at 1.0 and passes. The
+        # false-alarm direction is what improved (0 of 72 confirmed-seamless
+        # tiles flagged, against the ratio's 18); the miss direction is why
+        # this still says "likely" and still sends the reader to the wrapped
+        # view below, which is the real check.
+        return (theme.OK, f"likely seamless -- {wording} {worst:.2f}; check the wrap")
     threshold = float(report.get("threshold") or 0.0)
-    return (theme.WARN, f"visible seam -- edge/grain {worst:.2f}, over {threshold:.2f}")
+    return (theme.WARN, f"visible seam -- {wording} {worst:.2f}, over {threshold:.2f}")
 
 
 def _seam(ctx: Any, job: Any) -> None:

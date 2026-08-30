@@ -154,3 +154,66 @@ def test_control_plus_init_swaps_the_two_image_kwargs(routed, tmp_path):
     assert extra["strength"] == 0.45
     assert set(extra) >= {"image", "control_image", "controlnet_conditioning_scale"}
     assert extra["image"] is not extra["control_image"]
+
+
+# --- the frame an init picture is denoised at ---------------------------------
+
+
+@pytest.fixture
+def framed(tmp_path):
+    """``_init_frame`` on a real Text2Image, with no diffusers and no card.
+
+    The method is a pure choice between two sizes, and the choice is the whole
+    bug: it is made before any pipeline is called, and both classes that get it
+    wrong accept the wrong answer silently.
+    """
+    from warlock import models
+    from warlock.pipelines import text2image
+
+    return text2image.Text2Image(models.BASE_MODELS["sdxl_cfg"], tmp_path)
+
+
+def _sized(width, height):
+    return {"image": Image.new("RGB", (width, height), (10, 20, 30))}
+
+
+def test_no_conditioning_still_takes_the_specs_square_frame(framed):
+    """The bit-identity gate, restated as a size: an unconditioned job's frame
+    may not move because a conditioned one's did."""
+    assert framed._init_frame(None, {}, None) == (1024, 1024)
+    assert framed._init_frame(None, {}, (768, 512)) == (768, 512)
+
+
+def test_an_init_picture_is_denoised_at_its_own_aspect(framed):
+    """The defect. ``inpaint.send_size`` sends a wide selection as 1024x448;
+    the inpaint and ControlNet-img2img classes honour width/height by resizing
+    the init image and the mask to them, so a square frame stretched the crop,
+    denoised the distortion and let ``fit_back`` squash it back into the box."""
+    cond = Conditioning(init_image=Path("init.png"), strength=0.6)
+    assert framed._init_frame(cond, _sized(1024, 448), None) == (1024, 448)
+
+
+def test_a_mask_does_not_change_the_frame_rule(framed):
+    """Inpainting is the path the bug was found on, and it is not a special
+    case -- the mask is resized to the same frame as the picture it masks."""
+    cond = Conditioning(
+        init_image=Path("init.png"), mask_image=Path("mask.png"), strength=0.6
+    )
+    assert framed._init_frame(cond, _sized(448, 1024), None) == (448, 1024)
+
+
+def test_a_conditioning_without_a_picture_leaves_the_frame_alone(framed):
+    """A ControlNet hint is ``extra["image"]`` too, and it is *not* a picture
+    being denoised -- reading the frame off it would resize the output to the
+    hint. Only ``uses_init`` moves the frame."""
+    cond = Conditioning(control="canny", control_image=Path("hint.png"))
+    assert framed._init_frame(cond, _sized(512, 512), None) == (1024, 1024)
+
+
+def test_an_unaligned_init_picture_is_snapped_to_the_vae_stride(framed):
+    """Nothing in the tree sends one, and ``_frame``'s docstring says what a
+    side that is not a multiple of 8 costs: the VAE rounds it and the caller
+    slices the returned image on a grid it no longer has."""
+    cond = Conditioning(init_image=Path("init.png"), strength=0.6)
+    assert framed._init_frame(cond, _sized(1000, 445), None) == (1000, 448)
+    assert framed._init_frame(cond, _sized(3, 3), None) == (8, 8)

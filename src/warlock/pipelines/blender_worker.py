@@ -298,6 +298,59 @@ def _unbind(mesh: Any) -> None:
     mesh.parent = None
 
 
+def _strip_incoming_rig(bpy: Any, mesh: Any) -> int:
+    """Drop any skin and skeleton the source GLB brought with it. -> bones removed.
+
+    **Every mesh this path had ever seen was a TRELLIS reconstruction**, which
+    carries no armature and no vertex groups, so nothing here was needed and
+    nothing noticed it was missing. A *user-supplied* base mesh is the case the
+    Troupe intake exists for, and a supplied humanoid usually arrives rigged --
+    at which point two things go wrong at once, neither of them loudly.
+
+    **``_skin``'s guard stops working.** Its contract is that bone-heat
+    weighting reports failure two ways, one of them a ``FINISHED`` that quietly
+    leaves every vertex group empty, and ``_has_weights`` is what catches the
+    quiet one. That check asks whether *any* group holds a weight -- so an
+    incoming skin answers yes before the new armature has been bound at all,
+    and a bind that produced nothing is reported as a clean ``automatic`` rig.
+    The user is then told the rig succeeded, and the character does not deform.
+
+    **The old skeleton is exported beside the new one.** ``_import_glb``
+    returns the joined mesh and leaves the rest of the scene alone, while
+    ``_export`` writes *the whole scene*; the result is a GLB carrying two
+    armatures, one of which nothing is weighted to.
+
+    **And the measurements are wrong, which is the worst of the three.**
+    ``_import_glb`` bakes the Y-up -> Z-up rotation into the vertex data, but a
+    skinned import parents the mesh to its armature and *that* still carries
+    the rotation -- so ``matrix_world`` applies it a second time and
+    ``_world_bounds`` returns a box rotated once too far. Measured on
+    CesiumMan: ``(0.505, 0.896, 1.458)`` against a true
+    ``(1.138, 0.312, 1.507)``, an arm span reported at under half its real
+    width. ``_rig_bones`` fits the template to that box, so every joint lands
+    in the wrong place while the height stays plausible enough to look fine.
+    Unparenting is what makes the two agree, which is why this must run
+    *before* ``_world_bounds`` and not merely before ``_skin``.
+
+    None of the three can happen to a TRELLIS reconstruction: no skin, no
+    armature, no parent. All three happen to a supplied humanoid.
+
+    Discarding rather than adopting is deliberate. Bone names would have to map
+    onto the shipped template, and a supplied rig generally does not: CesiumMan
+    is 19 bones like the template and still does not fit it -- 3 per arm and 4
+    per leg against the template's 4 and 3. Warlock fits its own skeleton, and
+    the one the file arrived with is not evidence about where those joints go.
+    """
+    _unbind(mesh)
+    removed = 0
+    for obj in [o for o in bpy.context.scene.objects if o.type == "ARMATURE"]:
+        removed += len(obj.data.bones)
+        bpy.data.objects.remove(obj, do_unlink=True)
+    if removed:
+        print(f"discarded an incoming rig of {removed} bone(s)", flush=True)
+    return removed
+
+
 def _has_weights(mesh: Any) -> bool:
     if not mesh.vertex_groups:
         return False
@@ -735,6 +788,7 @@ def op_rig(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
     progress(0.05, "Loading mesh")
     _reset_scene(bpy)
     mesh = _import_glb(bpy, source)
+    _strip_incoming_rig(bpy, mesh)
 
     progress(0.25, "Fitting skeleton")
     lo, hi = _world_bounds(mesh)
@@ -1516,6 +1570,30 @@ def op_remesh(bpy: Any, spec: dict[str, Any]) -> dict[str, Any]:
     work = bpy.context.view_layer.objects.active
     work.name = "wl_remesh"
     work.data.materials.clear()
+
+    # **Weld before anything else touches the topology.** glTF cannot share a
+    # position between two texture coordinates, so every GLB splits its
+    # vertices at each UV seam -- which makes an imported mesh non-manifold
+    # before anything is actually wrong with it. ``_weld``'s docstring carries
+    # that argument already; what is new here is that *every* input on this
+    # path is a GLB, so the quadriflow branch below could never succeed and
+    # every remesh silently produced the triangle fallback instead.
+    #
+    # Measured 2026-08-30 on a UV sphere: 1,106 vertices before export, 4,512
+    # after the round trip, and quadriflow answering "Remeshing failed".
+    # Welded back to 1,106 it returns 479 faces, all of them quads.
+    #
+    # ``work`` alone. ``source`` keeps its own vertices, UVs and materials
+    # because it is the bake's selected-to-active source, and welding it would
+    # change the surface the colour and normal passes are read from.
+    weld = weld_distance(lo, hi)
+    if weld > 0.0:
+        pre_weld, _merged = _weld(bpy, work, weld)
+        # Never restored: unlike the skin chain, there is no fallback here that
+        # wants the split mesh back, so the copy ``_weld`` takes is freed at
+        # once rather than living until the subprocess exits.
+        with contextlib.suppress(Exception):
+            bpy.data.meshes.remove(pre_weld)
 
     method = "quadriflow"
     if spec.get("close_holes"):

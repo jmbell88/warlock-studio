@@ -16,6 +16,109 @@ stability. If you want the short version, the app shows the opening sentence of
 each entry under **All release notes...** on the Home screen, and only expands
 the release you are actually running.
 
+## 0.0.30 — 2026-08-30
+
+- **A mesh you already have can now enter the library.** Home has an **Import mesh...**
+  button beside **New...**, and a `.glb` dropped onto Home or onto the Library becomes an
+  ordinary finished model row. This closes a gap rather than adding a feature:
+  `service.jobs.import_mesh` was written, tested and reachable from *one* caller — Clay,
+  which converts a file into an editable document and refuses a rigged one outright,
+  because it has no skinning. So the supplied-base-mesh path that Troupe's whole intake
+  assumes had no door at all. Nothing new happens to the file; every consumer inherits it
+  at once — Send to Troupe, the Poser, the triangle retarget and every export — because all
+  of them are pure functions of `model.glb`. Import is deliberately *not* one of the
+  **New...** items: those are the things this app can start from nothing, and a file you
+  already have is the opposite errand. Create does not take a dropped mesh either, because
+  a mesh dropped mid-generation is ambiguous between "start from this" and "put this in my
+  library".
+
+- **The seam verdict is a different statistic.** The old one was crying wolf on the very
+  output this project generates. `seam.report` divided the wrap seam by the picture's
+  *mean* interior step; it now divides by the *maximum* — "is the wrap the worst join in
+  this picture" rather than "is it worse than the average join" — and that number,
+  `dominance`, decides. The difference is one word and it is the whole reason for the
+  change: a texture of flat cells parted by thin hard lines (pixel art, ceramic grout,
+  riveted panels) has an average that collapses toward zero while its maximum does not, so
+  the mean-normalised ratio inflated on exactly the population the seamless-tileset track
+  generates. On a held-out corpus of 144 tiled axes at seeds no published corpus contains,
+  the old ratio called 18 of 72 confirmed-seamless tiles seamed — 15 of them under the
+  pixel-art LoRA the track ships with — and dominance called 0 of 72. The threshold is
+  `SEAM_DOMINANCE_MAX = 1.0`, fixed by construction rather than fitted: at exactly 1.0 the
+  seam ties with the largest step the picture already contains, so it cannot drift with a
+  corpus. What it costs is recorded rather than discovered later — dominance is a
+  specificity instrument and misses 4 of 44 visibly seamed controls, against the ratio's 5
+  — which is why the inspector still says "likely seamless" and still sends you to the
+  wrapped view. `worst` is still reported beside it because three published corpora are
+  keyed on it, a row now carries `metric` naming which statistic judged it, and a stored
+  report *without* that field is worded as the edge/grain number it actually is rather than
+  described in today's vocabulary. `docs/measurements/2026-08-30-seam-dominance.md`.
+
+- **Fixed: a non-square selection sent to *Regenerate selection* came back stretched.**
+  Two of the pipeline classes the conditioned path routes to —
+  `StableDiffusionXLInpaintPipeline` and `StableDiffusionXLControlNetImg2ImgPipeline`, and
+  their PAG siblings — *honour* width and height, and they honour them by resizing the init
+  image and the mask to that frame. The spec's square frame was being passed regardless, so
+  a 1024x448 crop was stretched to a square, denoised distorted, and squashed back into the
+  box: a repaint that does not line up with the surroundings it was cut from, silently.
+  `_init_frame` takes the frame from the init picture when there is one. Only an exactly
+  square selection escaped, which is why the GPU test's square box never saw it. Omitting
+  the pair is not the fix — diffusers defaults it to the UNet's own 1024 square.
+
+- **Fixed: the remesh had been shipping triangles since it landed.** glTF cannot share a
+  vertex position between two texture coordinates, so *every* GLB splits its vertices at
+  each UV seam — which makes an imported mesh non-manifold before anything is actually
+  wrong with it. Every input on the remesh path is a GLB, so quadriflow could never
+  succeed and every remesh silently produced the decimate fallback instead. Measured on a
+  UV sphere: 1,106 vertices before export, 4,512 after the round trip, and quadriflow
+  answering "Remeshing failed"; welded back to 1,106 it returns 479 faces, all of them
+  quads. The weld runs on the working copy only — the bake reads the original surface.
+
+- **Fixed: three silent defects in rigging a mesh the user supplied.** Every mesh this path
+  had ever seen was a TRELLIS reconstruction, which carries no armature and no vertex
+  groups, so nothing noticed. A supplied humanoid usually arrives rigged, and then: the
+  bone-heat guard stops working, because it asks whether *any* vertex group holds a weight
+  and an incoming skin answers yes before the new armature is bound at all — so a bind that
+  produced nothing was reported as a clean rig and the character did not deform; the old
+  skeleton was exported beside the new one, since the export writes the whole scene; and
+  the Y-up to Z-up rotation was applied *twice*, once baked into the vertex data and again
+  through the armature the mesh is parented to, so the measured bounds came back rotated
+  one turn too far — on CesiumMan an arm span of 0.505 against a true 1.138, with the
+  height still plausible enough to look fine, and the skeleton fitted to that box.
+  `_strip_incoming_rig` discards the incoming skin and skeleton before the bounds are
+  taken. Discarding rather than adopting is deliberate: CesiumMan has 19 bones like the
+  shipped template and still does not fit it (3 per arm and 4 per leg against 4 and 3), and
+  a rig that does not map onto the one the clips are authored against is not evidence about
+  where those joints go.
+
+- **Fixed: Clay's refusals were reaching the user as "Something went wrong".** `OpError` is
+  documented as a user-facing refusal whose message is the whole interface for it, and on a
+  task thread it was not shown at all — the task layer kept a message only for
+  `ServiceError`. Clay's four submissions are the only place a refusal is raised off the
+  frame thread, so every one of them (a rigged GLB, an unreadable one, a mesh past the
+  triangle ceiling) named its cause and its remedy to `warlock.log` alone. Found by a user
+  who dropped a rigged GLB into Clay and had to read the log to learn why nothing happened.
+
+- **The first graded run of the shipped recipe, and it is not a good result.** A
+  pre-registered corpus of props went through text to `sdxl_cfg` to TRELLIS at the shipped
+  defaults and was graded blind: **25.0% usable**, which clears the pre-registered bottom
+  rule by one grade. The failure localises to the mesh half — 95% of the references were
+  good and 16 of 21 were lost in reconstruction, with `holes` the dominant defect tag — and
+  the difficulty prediction *inverted*, with the easy tier scoring worst. The protocol and
+  the corpus were registered before any of it was drawn
+  (`docs/measurements/2026-08-30-art-verdicts-preregistration.md`), the result is
+  `docs/measurements/2026-08-30-sdxl-cfg-props.md`, and `scripts/campaign_props.py` is the
+  harness.
+
+- **TODO P12 is answered, and the answer is no.** Three humanoids in that corpus were
+  judged on the entry's own rubric — limb separation and silhouette, not face fidelity —
+  and came back with limbs bent and stretched. The `_init_frame` bug above is ruled out as
+  a confound: those jobs carried no init image and no conditioning, so that path was never
+  entered. Troupe's Phase 7 therefore stays deferred on the generated-character path, which
+  is the decision that entry existed to take before the investment rather than after, and
+  the supplied-base-mesh path is the one to build on — which is what the import door above
+  opens. This says nothing about whether a better reconstruction could carry characters; it
+  is a verdict on the shipped single-view default.
+
 ## 0.0.29 — 2026-08-29
 
 - **Generated tiles now actually tile.** Create → **Sheet** has a Layout control with three

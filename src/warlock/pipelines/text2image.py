@@ -1074,7 +1074,7 @@ class Text2Image:
                 negative_prompt,
                 seed,
                 step_cb,
-                self._frame(size),
+                self._init_frame(conditioning, extra, size),
                 reference_images,
             )
         finally:
@@ -1103,6 +1103,51 @@ class Text2Image:
         self.last_recipe = self._recipe(seed, text, negative_prompt, lora, lora_weight,
                                         conditioning, chunks, tile, size)
         return output_path
+
+    def _init_frame(
+        self, conditioning: Any | None, extra: dict[str, Any], size: tuple[int, int] | None
+    ) -> tuple[int, int]:
+        """The frame for this call: ``_frame(size)``, unless an init picture
+        decides it.
+
+        An init picture does decide it, and the spec's square frame is not
+        merely redundant there -- it is wrong. Two of the classes ``_conditioned``
+        routes to (``StableDiffusionXLInpaintPipeline`` and
+        ``StableDiffusionXLControlNetImg2ImgPipeline``, and their PAG siblings)
+        *honour* width/height, and they honour them by resizing the init image
+        and the mask to that frame. ``inker.inpaint.send_size`` sends a crop at
+        the selection's own aspect -- 1024x448 for a wide selection -- so a
+        square frame stretched it to 1024x1024, denoised the distorted picture,
+        and ``inpaint.fit_back`` squashed the square result back into the box:
+        a repaint that does not line up with the surroundings it was cropped
+        from, silently, with nothing anywhere saying so. Omitting the pair is
+        not the fix; diffusers defaults it to the UNet's own sample size, which
+        is the same 1024 square.
+
+        Only an exactly-square selection escaped, which is why
+        ``tests/test_inpaint_gpu.py``'s square ``BOX`` did not see it.
+
+        The plain img2img class ignores width/height entirely (they land in its
+        ``**kwargs`` and are never read), so this is one rule rather than two
+        -- and a diffusers release that started honouring them there would find
+        the right numbers already being passed.
+
+        A ControlNet *without* an init picture is deliberately not included:
+        there ``extra["image"]`` is the structure hint, not a picture being
+        denoised, and the frame is the caller's to choose.
+        """
+        if conditioning is None or not getattr(conditioning, "uses_init", False):
+            return self._frame(size)
+        init = extra.get("image")
+        width, height = init.size
+        # Snapped rather than trusted. Every init picture in the tree is already
+        # stride-aligned (``send_size`` rounds to 64, the seam-erase pass hands
+        # back the material's own size), so this moves nothing today; it is here
+        # because ``_frame``'s own docstring says what an unaligned side costs,
+        # and an init image is the one frame the caller does not choose.
+        return self._frame(
+            (max(8, int(round(width / 8)) * 8), max(8, int(round(height / 8)) * 8))
+        )
 
     def _frame(self, size: tuple[int, int] | None) -> tuple[int, int]:
         """``(width, height)`` for this call: the spec's square frame unless a

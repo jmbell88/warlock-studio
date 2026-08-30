@@ -1,0 +1,51 @@
+# props-v1 -- the P3/P12 corpus, 2026-08-30
+#
+# One subject per line: `class | prompt`. Blank lines and `#` lines are ignored.
+# Read by scripts/campaign_props.py; cited by
+# docs/measurements/2026-08-30-art-verdicts-preregistration.md, which is what
+# fixes the classes below *before* the run. Editing this file after the grades
+# exist invalidates that pre-registration -- start a new corpus file instead.
+#
+# PROMPTS ARE BARE SUBJECT DESCRIPTIONS. pipelines/prompt.PROMPT_TEMPLATE
+# already appends "a single subject centered on a plain light gray background,
+# no other objects, 3/4 perspective view, studio lighting, game asset render,
+# full object in frame, no cropping, no text, no watermark". Repeating any of
+# that here dilutes the subject for no gain.
+#
+# The classes are a prediction, made in advance, of how hard each subject is
+# for a single-view reconstruction. They exist so the writeup can report per
+# class as well as overall -- an aggregate dragged down by subjects we already
+# knew were hard is not a fact about the shipped default.
+#
+#   easy     compact, solid, rounded, closed silhouette, strong surface texture
+#   medium   a handle, spout or protrusion; moderate concavity
+#   hard     thin or flat parts, open lattice, or flat-faced boxes -- the
+#            geometry 2026-08-13 and the Zelda crate run already measured failing
+#   humanoid P12's subjects, judged on a different rubric (limb separation and
+#            silhouette), not on the mesh-usability grade
+
+easy | a mossy granite rock, rounded and weathered
+easy | a cast iron cauldron with three stubby legs
+easy | a ceramic jug glazed in deep blue
+easy | a wooden barrel bound with iron hoops
+easy | a large ripe pumpkin with a curled stem
+easy | a weathered human skull, bleached bone
+easy | a round loaf of crusty dark bread
+easy | a terracotta amphora with a rounded belly
+
+medium | a knight's steel helmet with the visor raised
+medium | a blacksmith's iron anvil on a thick wooden block
+medium | a leather drawstring pouch spilling gold coins
+medium | a wooden tree stump with thick gnarled roots
+medium | a brass hand bell with a turned wooden handle
+medium | a carved stone pillar capital with acanthus leaves
+medium | a hanging oil lantern with glass panes
+medium | a stone well head with a small shingled roof
+
+hard | a wooden treasure chest with iron banding
+hard | a bundle of dry branches tied with coarse twine
+hard | a three-legged wooden milking stool
+
+humanoid | a stout dwarf blacksmith in a leather apron
+humanoid | a hooded traveller in a long heavy cloak
+humanoid | an armoured knight standing at attention

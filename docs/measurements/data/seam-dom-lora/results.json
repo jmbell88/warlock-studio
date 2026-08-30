@@ -1,0 +1,505 @@
+{
+  "base_model": "sdxl_cfg",
+  "lora": "pixelxl",
+  "lora_weight": 1.2,
+  "negative": "sheet",
+  "prompt_version": 7,
+  "threshold_at_capture": 3.5,
+  "materials": {
+    "stone": "rough grey granite stone surface",
+    "plaster": "smooth off-white painted plaster wall",
+    "gravel": "loose grey gravel and small pebbles",
+    "fabric": "woven linen fabric weave",
+    "brick": "weathered red brick wall with mortar",
+    "wood": "worn oak wood planks",
+    "grass": "dense green grass turf",
+    "metal": "scratched brushed steel panel"
+  },
+  "seeds": [
+    21,
+    22,
+    23
+  ],
+  "rows": [
+    {
+      "material": "stone",
+      "seed": 21,
+      "arm": "tiled",
+      "file": "stone-s21-tiled.png",
+      "horizontal": 3.317323679736535,
+      "vertical": 3.3614466221605244,
+      "worst": 3.3614466221605244,
+      "seconds": 21.88
+    },
+    {
+      "material": "stone",
+      "seed": 21,
+      "arm": "plain",
+      "file": "stone-s21-plain.png",
+      "horizontal": 7.096898266668192,
+      "vertical": 4.782585448383551,
+      "worst": 7.096898266668192,
+      "seconds": 7.6
+    },
+    {
+      "material": "stone",
+      "seed": 22,
+      "arm": "tiled",
+      "file": "stone-s22-tiled.png",
+      "horizontal": 1.8328658600013443,
+      "vertical": 4.02842904726726,
+      "worst": 4.02842904726726,
+      "seconds": 7.91
+    },
+    {
+      "material": "stone",
+      "seed": 22,
+      "arm": "plain",
+      "file": "stone-s22-plain.png",
+      "horizontal": 5.3098768320959815,
+      "vertical": 6.614388140143498,
+      "worst": 6.614388140143498,
+      "seconds": 7.59
+    },
+    {
+      "material": "stone",
+      "seed": 23,
+      "arm": "tiled",
+      "file": "stone-s23-tiled.png",
+      "horizontal": 3.8222625208242746,
+      "vertical": 2.2784496478073084,
+      "worst": 3.8222625208242746,
+      "seconds": 7.72
+    },
+    {
+      "material": "stone",
+      "seed": 23,
+      "arm": "plain",
+      "file": "stone-s23-plain.png",
+      "horizontal": 5.759866287835964,
+      "vertical": 0.4733894264797202,
+      "worst": 5.759866287835964,
+      "seconds": 7.3
+    },
+    {
+      "material": "plaster",
+      "seed": 21,
+      "arm": "tiled",
+      "file": "plaster-s21-tiled.png",
+      "horizontal": 3.7048626403717764,
+      "vertical": 3.3127299283522516,
+      "worst": 3.7048626403717764,
+      "seconds": 7.51
+    },
+    {
+      "material": "plaster",
+      "seed": 21,
+      "arm": "plain",
+      "file": "plaster-s21-plain.png",
+      "horizontal": 8.03460284073004,
+      "vertical": 5.226038859330555,
+      "worst": 8.03460284073004,
+      "seconds": 7.28
+    },
+    {
+      "material": "plaster",
+      "seed": 22,
+      "arm": "tiled",
+      "file": "plaster-s22-tiled.png",
+      "horizontal": 1.4976637692517751,
+      "vertical": 2.4677833406908847,
+      "worst": 2.4677833406908847,
+      "seconds": 7.64
+    },
+    {
+      "material": "plaster",
+      "seed": 22,
+      "arm": "plain",
+      "file": "plaster-s22-plain.png",
+      "horizontal": 0.4874048037492677,
+      "vertical": 0.8041322034359552,
+      "worst": 0.8041322034359552,
+      "seconds": 7.37
+    },
+    {
+      "material": "plaster",
+      "seed": 23,
+      "arm": "tiled",
+      "file": "plaster-s23-tiled.png",
+      "horizontal": 2.106958721893993,
+      "vertical": 0.5753716678034991,
+      "worst": 2.106958721893993,
+      "seconds": 7.42
+    },
+    {
+      "material": "plaster",
+      "seed": 23,
+      "arm": "plain",
+      "file": "plaster-s23-plain.png",
+      "horizontal": 10.159491548305043,
+      "vertical": 1.4400184461946908,
+      "worst": 10.159491548305043,
+      "seconds": 7.6
+    },
+    {
+      "material": "gravel",
+      "seed": 21,
+      "arm": "tiled",
+      "file": "gravel-s21-tiled.png",
+      "horizontal": 3.518434075701958,
+      "vertical": 4.766008175327377,
+      "worst": 4.766008175327377,
+      "seconds": 7.28
+    },
+    {
+      "material": "gravel",
+      "seed": 21,
+      "arm": "plain",
+      "file": "gravel-s21-plain.png",
+      "horizontal": 7.073920364714588,
+      "vertical": 6.346442932543356,
+      "worst": 7.073920364714588,
+      "seconds": 7.09
+    },
+    {
+      "material": "gravel",
+      "seed": 22,
+      "arm": "tiled",
+      "file": "gravel-s22-tiled.png",
+      "horizontal": 3.0648973256634124,
+      "vertical": 4.867290536702117,
+      "worst": 4.867290536702117,
+      "seconds": 7.75
+    },
+    {
+      "material": "gravel",
+      "seed": 22,
+      "arm": "plain",
+      "file": "gravel-s22-plain.png",
+      "horizontal": 17.64939279610136,
+      "vertical": 20.369460449359792,
+      "worst": 20.369460449359792,
+      "seconds": 7.02
+    },
+    {
+      "material": "gravel",
+      "seed": 23,
+      "arm": "tiled",
+      "file": "gravel-s23-tiled.png",
+      "horizontal": 5.280907120962371,
+      "vertical": 3.815303405549878,
+      "worst": 5.280907120962371,
+      "seconds": 7.65
+    },
+    {
+      "material": "gravel",
+      "seed": 23,
+      "arm": "plain",
+      "file": "gravel-s23-plain.png",
+      "horizontal": 8.254797465729364,
+      "vertical": 6.1117273234695375,
+      "worst": 8.254797465729364,
+      "seconds": 7.31
+    },
+    {
+      "material": "fabric",
+      "seed": 21,
+      "arm": "tiled",
+      "file": "fabric-s21-tiled.png",
+      "horizontal": 3.799345471372721,
+      "vertical": 3.8837867613462227,
+      "worst": 3.8837867613462227,
+      "seconds": 7.22
+    },
+    {
+      "material": "fabric",
+      "seed": 21,
+      "arm": "plain",
+      "file": "fabric-s21-plain.png",
+      "horizontal": 6.7777022530611095,
+      "vertical": 5.850917094838183,
+      "worst": 6.7777022530611095,
+      "seconds": 7.28
+    },
+    {
+      "material": "fabric",
+      "seed": 22,
+      "arm": "tiled",
+      "file": "fabric-s22-tiled.png",
+      "horizontal": 3.0994902773296977,
+      "vertical": 4.099846263865733,
+      "worst": 4.099846263865733,
+      "seconds": 7.32
+    },
+    {
+      "material": "fabric",
+      "seed": 22,
+      "arm": "plain",
+      "file": "fabric-s22-plain.png",
+      "horizontal": 7.920673294428832,
+      "vertical": 4.917592974798032,
+      "worst": 7.920673294428832,
+      "seconds": 7.38
+    },
+    {
+      "material": "fabric",
+      "seed": 23,
+      "arm": "tiled",
+      "file": "fabric-s23-tiled.png",
+      "horizontal": 3.0141053822880317,
+      "vertical": 3.6464517115458963,
+      "worst": 3.6464517115458963,
+      "seconds": 7.84
+    },
+    {
+      "material": "fabric",
+      "seed": 23,
+      "arm": "plain",
+      "file": "fabric-s23-plain.png",
+      "horizontal": 8.249466466424932,
+      "vertical": 6.179466870998401,
+      "worst": 8.249466466424932,
+      "seconds": 7.9
+    },
+    {
+      "material": "brick",
+      "seed": 21,
+      "arm": "tiled",
+      "file": "brick-s21-tiled.png",
+      "horizontal": 3.410230540806191,
+      "vertical": 1.9052175349304605,
+      "worst": 3.410230540806191,
+      "seconds": 8.03
+    },
+    {
+      "material": "brick",
+      "seed": 21,
+      "arm": "plain",
+      "file": "brick-s21-plain.png",
+      "horizontal": 8.100086544795737,
+      "vertical": 2.369153520736963,
+      "worst": 8.100086544795737,
+      "seconds": 7.82
+    },
+    {
+      "material": "brick",
+      "seed": 22,
+      "arm": "tiled",
+      "file": "brick-s22-tiled.png",
+      "horizontal": 1.9806913299972007,
+      "vertical": 0.8030817707149556,
+      "worst": 1.9806913299972007,
+      "seconds": 8.26
+    },
+    {
+      "material": "brick",
+      "seed": 22,
+      "arm": "plain",
+      "file": "brick-s22-plain.png",
+      "horizontal": 6.708685423287405,
+      "vertical": 14.285047504077703,
+      "worst": 14.285047504077703,
+      "seconds": 7.63
+    },
+    {
+      "material": "brick",
+      "seed": 23,
+      "arm": "tiled",
+      "file": "brick-s23-tiled.png",
+      "horizontal": 3.317277978581576,
+      "vertical": 0.938727517464882,
+      "worst": 3.317277978581576,
+      "seconds": 8.1
+    },
+    {
+      "material": "brick",
+      "seed": 23,
+      "arm": "plain",
+      "file": "brick-s23-plain.png",
+      "horizontal": 5.790489454946045,
+      "vertical": 0.8622402101557567,
+      "worst": 5.790489454946045,
+      "seconds": 7.95
+    },
+    {
+      "material": "wood",
+      "seed": 21,
+      "arm": "tiled",
+      "file": "wood-s21-tiled.png",
+      "horizontal": 0.0698446430187977,
+      "vertical": 7.39487160817436,
+      "worst": 7.39487160817436,
+      "seconds": 8.27
+    },
+    {
+      "material": "wood",
+      "seed": 21,
+      "arm": "plain",
+      "file": "wood-s21-plain.png",
+      "horizontal": 9.068484770599564,
+      "vertical": 2.184678065189571,
+      "worst": 9.068484770599564,
+      "seconds": 5.77
+    },
+    {
+      "material": "wood",
+      "seed": 22,
+      "arm": "tiled",
+      "file": "wood-s22-tiled.png",
+      "horizontal": 2.0898182005043453,
+      "vertical": 3.112447926937082,
+      "worst": 3.112447926937082,
+      "seconds": 6.77
+    },
+    {
+      "material": "wood",
+      "seed": 22,
+      "arm": "plain",
+      "file": "wood-s22-plain.png",
+      "horizontal": 0.7488995629503119,
+      "vertical": 1.1478301002783178,
+      "worst": 1.1478301002783178,
+      "seconds": 5.45
+    },
+    {
+      "material": "wood",
+      "seed": 23,
+      "arm": "tiled",
+      "file": "wood-s23-tiled.png",
+      "horizontal": 1.0248669197402838,
+      "vertical": 1.605030921320929,
+      "worst": 1.605030921320929,
+      "seconds": 6.57
+    },
+    {
+      "material": "wood",
+      "seed": 23,
+      "arm": "plain",
+      "file": "wood-s23-plain.png",
+      "horizontal": 13.5217678742248,
+      "vertical": 1.5492575526035017,
+      "worst": 13.5217678742248,
+      "seconds": 6.1
+    },
+    {
+      "material": "grass",
+      "seed": 21,
+      "arm": "tiled",
+      "file": "grass-s21-tiled.png",
+      "horizontal": 3.4764222861444853,
+      "vertical": 4.596774096947785,
+      "worst": 4.596774096947785,
+      "seconds": 5.89
+    },
+    {
+      "material": "grass",
+      "seed": 21,
+      "arm": "plain",
+      "file": "grass-s21-plain.png",
+      "horizontal": 8.330670948991958,
+      "vertical": 6.247057350023115,
+      "worst": 8.330670948991958,
+      "seconds": 6.32
+    },
+    {
+      "material": "grass",
+      "seed": 22,
+      "arm": "tiled",
+      "file": "grass-s22-tiled.png",
+      "horizontal": 2.9454505541586555,
+      "vertical": 3.5489899308492694,
+      "worst": 3.5489899308492694,
+      "seconds": 5.33
+    },
+    {
+      "material": "grass",
+      "seed": 22,
+      "arm": "plain",
+      "file": "grass-s22-plain.png",
+      "horizontal": 0.4926263635968534,
+      "vertical": 1.1163855327969179,
+      "worst": 1.1163855327969179,
+      "seconds": 6.68
+    },
+    {
+      "material": "grass",
+      "seed": 23,
+      "arm": "tiled",
+      "file": "grass-s23-tiled.png",
+      "horizontal": 3.768255307502067,
+      "vertical": 2.9947726756398234,
+      "worst": 3.768255307502067,
+      "seconds": 5.1
+    },
+    {
+      "material": "grass",
+      "seed": 23,
+      "arm": "plain",
+      "file": "grass-s23-plain.png",
+      "horizontal": 5.931174567945589,
+      "vertical": 0.8183753533152893,
+      "worst": 5.931174567945589,
+      "seconds": 6.74
+    },
+    {
+      "material": "metal",
+      "seed": 21,
+      "arm": "tiled",
+      "file": "metal-s21-tiled.png",
+      "horizontal": 4.650295918477878,
+      "vertical": 4.2523834445946385,
+      "worst": 4.650295918477878,
+      "seconds": 5.55
+    },
+    {
+      "material": "metal",
+      "seed": 21,
+      "arm": "plain",
+      "file": "metal-s21-plain.png",
+      "horizontal": 2.930444187431895,
+      "vertical": 5.663173856284726,
+      "worst": 5.663173856284726,
+      "seconds": 6.22
+    },
+    {
+      "material": "metal",
+      "seed": 22,
+      "arm": "tiled",
+      "file": "metal-s22-tiled.png",
+      "horizontal": 2.5958544281906084,
+      "vertical": 3.5664104049828746,
+      "worst": 3.5664104049828746,
+      "seconds": 5.9
+    },
+    {
+      "material": "metal",
+      "seed": 22,
+      "arm": "plain",
+      "file": "metal-s22-plain.png",
+      "horizontal": 1.0108620302429567,
+      "vertical": 1.586820292543591,
+      "worst": 1.586820292543591,
+      "seconds": 5.94
+    },
+    {
+      "material": "metal",
+      "seed": 23,
+      "arm": "tiled",
+      "file": "metal-s23-tiled.png",
+      "horizontal": 2.7045541594656455,
+      "vertical": 1.6988689211522452,
+      "worst": 2.7045541594656455,
+      "seconds": 6.05
+    },
+    {
+      "material": "metal",
+      "seed": 23,
+      "arm": "plain",
+      "file": "metal-s23-plain.png",
+      "horizontal": 36.77009774983783,
+      "vertical": 19.302459467029035,
+      "worst": 36.77009774983783,
+      "seconds": 5.41
+    }
+  ]
+}
