@@ -284,6 +284,16 @@ checkpoint on your behalf, and no combo on screen is showing that checkpoint's n
 Clearing the reference clears both selections with it, since neither can be submitted without an
 image.
 
+### Starting from the image
+
+Beside *appearance* and *structure* there is a third way to use the reference: **Start from this
+image (img2img)**. The drawing then begins from the reference's pixels rather than from noise, and
+**Strength** says how far it may go — at 0.30 the layout and most of the surface survive and the
+model repaints the rest; at 0.65 only the gist does. It is the control for "this, but cleaner",
+"this, but in the style LoRA", or "this, but with the prompt's changes", and it costs nothing
+extra on the card. It needs an SDXL-family model, like the other two halves, and it can be combined
+with either of them. The inspector records *start image* and *start strength* on the job.
+
 ## Approving a reference
 
 When a reference job finishes it appears in the library and, when selected, fills the viewport at
@@ -429,6 +439,12 @@ Export tab offers it too.
 Two of the five asset types make several pictures from one prompt rather than one: **Tileset** and
 **Sprite Sheet**. Each brings its own layout section above the model, because what the sheet is a
 sheet *of* is the choice everything else follows from — including how long the press will take.
+
+On the Materials layout two checkboxes sit under the list. **Keep one style across the list** draws
+the first material on its own and uses it as the appearance reference for every one after it (loads
+the IP-Adapter). **Erase the seam** adds one masked pass per material: the tile is rolled so its
+wrap join runs through the middle, a band around the join is redrawn in place, and it is rolled back
+— use it when the wrap preview shows a join.
 
 ### Tilesets
 

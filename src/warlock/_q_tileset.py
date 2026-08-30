@@ -74,6 +74,63 @@ log = logging.getLogger(__name__)
 MATERIALS_DIR = "materials"
 
 
+def _erase_seam(
+    t2i: Any,
+    material: Path,
+    scratch: Path,
+    *,
+    prompt: str,
+    seed: int,
+    lora: str | None,
+    lora_weight: float,
+    negative_prompt: str,
+    size: int,
+    cancel_event: Any,
+) -> None:
+    """One masked img2img pass over a material's wrapped seam cross, in place.
+
+    Blocking (it is called through ``to_thread``). The rolled picture and the
+    cross mask are written beside the job's scratch materials; the result is
+    rolled back and written over ``material`` by rename, so a failure or a
+    cancel mid-pass leaves the first pass's tile exactly as it was.
+    """
+    import os
+
+    from PIL import Image
+
+    from .pipelines import seam
+    from .pipelines.conditioning import Conditioning
+
+    scratch.mkdir(parents=True, exist_ok=True)
+    rolled = scratch / "rolled.png"
+    mask = scratch / "mask.png"
+    out = scratch / "redrawn.png"
+    with Image.open(material) as im:
+        seam.roll_half(im.convert("RGB")).save(rolled)
+        seam.cross_mask(im.size).save(mask)
+    t2i.generate(
+        prompt,
+        out,
+        seed=seed,
+        lora=lora,
+        lora_weight=lora_weight,
+        negative_prompt=negative_prompt,
+        conditioning=Conditioning(
+            init_image=rolled, strength=seam.ERASE_STRENGTH, mask_image=mask
+        ),
+        cancel_event=cancel_event,
+        tile=True,
+        size=size,
+    )
+    if cancel_event is not None and cancel_event.is_set():
+        return
+    with Image.open(out) as im:
+        back = seam.roll_half(im.convert("RGB"))
+    temp = material.with_name(material.name + ".tmp")
+    back.save(temp, format="PNG")
+    os.replace(temp, material)
+
+
 class TileSetOps:
     """The seamless-material tileset stage, mixed into :class:`~.queue.Worker`."""
 
@@ -296,6 +353,28 @@ class TileSetOps:
                     # re-measure it per checkpoint, so a CFG base at 30 steps is
                     # outside the corpus that produced the threshold. The number
                     # goes in the sidecar and on the row; the user decides.
+                    if block.get("seam_erase"):
+                        # The seam, made visible and redrawn: roll by half so
+                        # the wrap join is a cross through the centre, inpaint
+                        # a band around it (the rest of the picture is the
+                        # mask's "keep", and circular padding stays on so the
+                        # new band wraps too), roll back. Before the seam is
+                        # measured, so the report describes the shipped tile.
+                        await asyncio.to_thread(
+                            functools.partial(
+                                _erase_seam,
+                                t2i,
+                                paths[index],
+                                scratch / f"seam-{index:02d}",
+                                prompt=composed[index],
+                                seed=seeds[index],
+                                lora=lora,
+                                lora_weight=pixel_style.default_weight,
+                                negative_prompt=str(params.get("negative_prompt") or ""),
+                                size=geom.source_size,
+                                cancel_event=self._cancel.event if self._cancel else None,
+                            )
+                        )
                     try:
                         reports.append(await asyncio.to_thread(seam.report, paths[index]))
                     except Exception:
@@ -435,6 +514,7 @@ class TileSetOps:
             "subjects": list(composed),
             "colors": colors,
             "style_lock": style_lock,
+            "seam_erase": bool(block.get("seam_erase")),
             "seams": seams,
             # The worst material decides, because a set is only as seamless as
             # the tile somebody notices.

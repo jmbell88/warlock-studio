@@ -207,6 +207,9 @@ def create_job(
     ip_scale: float | None = None,
     control_scale: float | None = None,
     control_end: float | None = None,
+    init_image: bool = False,
+    init_strength: float | None = None,
+    mask: bytes | None = None,
     bg_removal: str | None = None,
     negative_prompt: str | None = None,
     rig: bool = False,
@@ -382,6 +385,8 @@ def create_job(
             "ip_scale": ip_scale,
             "control_scale": control_scale,
             "control_end": control_end,
+            "init_image": bool(init_image),
+            "init_strength": init_strength,
             "bg_removal": bg_removal,
             "negative_prompt": negative_prompt,
         },
@@ -389,10 +394,19 @@ def create_job(
     # Checked after normalize so an unknown adapter key still fails first, and
     # before anything is written: a conditioning selection with no image to
     # condition on would otherwise reach the worker and be silently dropped.
-    if reference is None and (params.get("ip_adapter") or params.get("control")):
+    if reference is None and (
+        params.get("ip_adapter") or params.get("control") or params.get("init_image")
+    ):
         raise Invalid(
             "conditioning needs a reference image", field="reference"
         )
+    # A mask without a start image has nothing to confine, and a mask beside a
+    # ControlNet is a pairing the pipeline refuses (``_conditioned``); both are
+    # cheaper to refuse here than with the checkpoint resident.
+    if mask is not None and not params.get("init_image"):
+        raise Invalid("a mask needs the reference as the start image", field="mask")
+    if mask is not None and params.get("control"):
+        raise Invalid("a mask and a structure control cannot be combined", field="mask")
     # Same place and the same reason: a tile's seamlessness is circular padding
     # over Conv2d, which a DiT has none of. Refused rather than degraded --
     # patching only what a non-SDXL pipe does have (its VAE) yields an image
@@ -528,6 +542,7 @@ def create_job(
         matte.approve(params, normalized)
     # Same caps, same order, same pre-write window as input.png.
     normalized_ref = _decode(reference, "reference") if reference is not None else None
+    normalized_mask = _decode(mask, "mask") if mask is not None else None
 
     # Write the file before the row exists: the worker's next_queued() poll can
     # otherwise claim an image job in the gap and find no input.png on disk yet.
@@ -582,6 +597,8 @@ def create_job(
                     # independent rows, and prune deletes one dir without
                     # touching another.
                     (job_dir / "ref.png").write_bytes(normalized_ref)
+                    if normalized_mask is not None:
+                        (job_dir / "mask.png").write_bytes(normalized_mask)
             candidates.append((job_id, candidate))
         with svc.store.transaction():
             for job_id, candidate in candidates:

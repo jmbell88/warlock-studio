@@ -318,6 +318,45 @@ class PaintOps:
         self._commit_patch(layer, box, before)
         return True
 
+    def apply_pixels(
+        self: Document,
+        layer_uid: int,
+        rect: tuple[int, int, int, int],
+        pixels: np.ndarray,
+        weight: np.ndarray | None = None,
+    ) -> bool:
+        """Blend a block of RGBA pixels into a layer, by uid, as one undo step.
+
+        The landing for a picture that arrived *later* -- a regeneration the
+        image model returned while the user carried on editing -- so it is
+        addressed by uid, refuses a layer that has gone (or turned into a
+        placeholder cel), and refuses the tilemap and write-locked layers the
+        filter session refuses. ``weight`` is the selection's coverage at the
+        time it was asked for, applied by ``masked_apply`` so a feathered
+        selection fades the result in like every other bounded write.
+        """
+        try:
+            layer = self.layer_by_uid(layer_uid)
+        except KeyError:
+            return False
+        if self.anim is not None and self.anim.is_placeholder(layer):
+            return False
+        if self.write_locked():
+            return False
+        self._refuse_tilemap_layer(layer_uid, "regenerating")
+        box = self.clip(rect)
+        if box is None:
+            return False
+        x0, y0, x1, y1 = box
+        if pixels.shape[0] != y1 - y0 or pixels.shape[1] != x1 - x0:
+            return False
+        before = layer.pixels[y0:y1, x0:x1].copy()
+        layer.pixels[y0:y1, x0:x1] = masked_apply(
+            before, pixels.astype(np.uint8), weight, alpha_lock=layer.alpha_lock
+        )
+        self._commit_patch(layer, box, before)
+        return True
+
     # -- filters ------------------------------------------------------------
 
     def begin_filter(self: Document) -> tuple[int, int, int, int] | None:

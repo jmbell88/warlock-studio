@@ -401,6 +401,23 @@ def normalize(raw: dict[str, Any], *, bg_default: str | None = None) -> dict[str
         default=control.default_end if control else models.DEFAULT_CONTROL_END,
         low=models.CONTROL_END_MIN, high=models.CONTROL_END_MAX,
     )
+    # img2img: the reference is the picture the denoise *starts from*. A flag
+    # and a strength, gated like the other two halves -- a strength with no
+    # start image would read as a live setting on rerun -- and refused off
+    # the SDXL family here rather than in ``_conditioned`` with the checkpoint
+    # already resident.
+    init_image = bool(raw.get("init_image"))
+    if init_image and base_model.family != models.FAMILY_SDXL:
+        raise GuidanceError(
+            f"base_model {base_model.key!r} cannot start from an image; "
+            f"pick an SDXL-family model",
+            field="init_image",
+        )
+    init_strength = _number(
+        raw, "init_strength",
+        default=models.DEFAULT_IMG2IMG_STRENGTH,
+        low=models.IMG2IMG_STRENGTH_MIN, high=models.IMG2IMG_STRENGTH_MAX,
+    )
 
     bg_removal = raw.get("bg_removal")
     if bg_removal in (None, ""):
@@ -458,6 +475,9 @@ def normalize(raw: dict[str, Any], *, bg_default: str | None = None) -> dict[str
         out["control"] = control.key
         out["control_scale"] = control_scale
         out["control_end"] = control_end
+    if init_image:
+        out["init_image"] = True
+        out["init_strength"] = init_strength
     return out
 
 
@@ -530,10 +550,12 @@ def catalog(*, bg_default: str | None = None) -> dict[str, Any]:
             "lora_weight": models.DEFAULT_LORA_WEIGHT,
             "bg_removal": bg_default or DEFAULT_BG_REMOVAL,
             "negative_prompt": DEFAULT_NEGATIVE_PROMPT,
+            "init_strength": models.DEFAULT_IMG2IMG_STRENGTH,
         },
         "size_range_m": [SIZE_MIN_M, SIZE_MAX_M],
         "lora_weight_range": [models.LORA_WEIGHT_MIN, models.LORA_WEIGHT_MAX],
         "ip_scale_range": [models.IP_SCALE_MIN, models.IP_SCALE_MAX],
         "control_scale_range": [models.CONTROL_SCALE_MIN, models.CONTROL_SCALE_MAX],
         "control_end_range": [models.CONTROL_END_MIN, models.CONTROL_END_MAX],
+        "init_strength_range": [models.IMG2IMG_STRENGTH_MIN, models.IMG2IMG_STRENGTH_MAX],
     }

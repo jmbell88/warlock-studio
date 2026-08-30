@@ -705,15 +705,41 @@ class Text2Image:
                         StableDiffusionXLPAGImg2ImgPipeline,
                     )
 
-                    cls = (
-                        StableDiffusionXLPAGImg2ImgPipeline
-                        if self.spec.pag_scale > 0
-                        else StableDiffusionXLImg2ImgPipeline
-                    )
+                    if cond.uses_mask:
+                        # A mask swaps the class and nothing else: the inpaint
+                        # pipeline over the *same* UNet (not the inpainting
+                        # checkpoint) denoises the whole picture and keeps the
+                        # init outside the mask, which is exactly "regenerate
+                        # this region" at the given strength. Imported on its
+                        # own branch so the img2img path's import set is what
+                        # it was.
+                        from diffusers import (
+                            StableDiffusionXLInpaintPipeline,
+                            StableDiffusionXLPAGInpaintPipeline,
+                        )
+
+                        cls = (
+                            StableDiffusionXLPAGInpaintPipeline
+                            if self.spec.pag_scale > 0
+                            else StableDiffusionXLInpaintPipeline
+                        )
+                    else:
+                        cls = (
+                            StableDiffusionXLPAGImg2ImgPipeline
+                            if self.spec.pag_scale > 0
+                            else StableDiffusionXLImg2ImgPipeline
+                        )
                     target = cls.from_pipe(self._pipe, torch_dtype=torch.bfloat16)
+                elif cond.uses_mask:
+                    raise RuntimeError(
+                        "a mask and a ControlNet cannot be combined; drop one"
+                    )
                 with Image.open(cond.init_image) as im:
                     extra["image"] = im.convert("RGB")
                 extra["strength"] = float(cond.strength)
+                if cond.uses_mask:
+                    with Image.open(cond.mask_image) as im:
+                        extra["mask_image"] = im.convert("L")
 
             if cond.uses_ip:
                 spec = models.IP_ADAPTERS[cond.ip_adapter]

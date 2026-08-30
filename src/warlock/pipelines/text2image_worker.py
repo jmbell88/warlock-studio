@@ -98,6 +98,7 @@ def _conditioning(payload: dict[str, Any] | None) -> Any:
         control_end=float(payload.get("control_end", 0.0)),
         init_image=_path(payload.get("init_image")),
         strength=float(payload.get("strength", 0.0)),
+        mask_image=_path(payload.get("mask_image")),
     )
 
 

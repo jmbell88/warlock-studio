@@ -237,6 +237,7 @@ def create_generation_request(svc: WarlockService, request: Any, **uploads: Any)
             boundary=boundary,
             terrain_layout=tile.terrain_layout,
             style_lock=tile.style_lock,
+            seam_erase=tile.seam_erase,
             # The two the request document could not name until now. The door
             # has taken both since it grew them, so a tileset submitted through
             # here was refused nothing -- it simply could not ask, while the

@@ -79,6 +79,8 @@ VECTOR_PARAMS = (
     "control",
     "control_scale",
     "control_end",
+    "init_image",
+    "init_strength",
     "resolution",
     "size_m",
     "bg_removal",

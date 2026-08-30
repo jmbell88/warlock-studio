@@ -679,6 +679,8 @@ def _settings(ctx: Any, job: Any) -> None:
         ("appearance strength", params.get("ip_scale")),
         ("structure", params.get("control")),
         ("structure strength", params.get("control_scale")),
+        ("start image", "yes" if params.get("init_image") else None),
+        ("start strength", params.get("init_strength")),
         ("background", params.get("bg_removal")),
         ("profile", params.get("profile")),
     ]

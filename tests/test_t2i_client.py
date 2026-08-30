@@ -130,6 +130,7 @@ def test_conditioning_crosses_by_every_field_rather_than_by_recipe(client, tmp_p
         control_end=0.9,
         init_image=tmp_path / "init.png",
         strength=0.55,
+        mask_image=tmp_path / "mask.png",
     )
     payload = t2i_client._conditioning_payload(cond)
     assert payload == {
@@ -142,6 +143,7 @@ def test_conditioning_crosses_by_every_field_rather_than_by_recipe(client, tmp_p
         "control_end": 0.9,
         "init_image": str(tmp_path / "init.png"),
         "strength": 0.55,
+        "mask_image": str(tmp_path / "mask.png"),
     }
     assert t2i_client._conditioning_payload(None) is None
 

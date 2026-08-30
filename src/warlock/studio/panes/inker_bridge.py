@@ -79,6 +79,8 @@ def popups(ctx: Any) -> None:
             imgui.open_popup(CANVAS_DIALOG)
         elif wanted == FILTER_POPUP:
             _open_filter(ctx, tab)
+        elif wanted == INPAINT_POPUP:
+            _open_inpaint(ctx, tab)
         elif wanted == CONVERT_POPUP:
             open_convert(ctx, tab)
         elif wanted == CONVERT_MODE_POPUP:
@@ -101,7 +103,8 @@ def popups(ctx: Any) -> None:
     _scale_dialog(ctx, tab, opening=(wanted == "inker-scale"))
     _canvas_dialog(ctx, tab, opening=(wanted == "inker-resize"))
     _filter_popup(ctx, tab)
-
+    _inpaint_popup(ctx, tab)
+    poll_inpaint(ctx)
 
 
 def _measure_pixel_grid(ctx: Any, tab: Any) -> None:
@@ -562,6 +565,194 @@ def _anchor_grid(ctx: Any, tab: Any) -> str:
 
 
 FILTER_POPUP = "inker-filter"
+INPAINT_POPUP = "inker-inpaint"
+
+
+# --- regenerate a selection --------------------------------------------------------
+
+
+def _open_inpaint(ctx: Any, tab: Any) -> None:
+    state = inker_mode.ensure(ctx)
+    if tab.busy:
+        return
+    if tab.doc.mask is None or tab.doc.mask.bounds is None:
+        ctx.toast("Select the area to regenerate first.", "warn")
+        return
+    if state.inpaint_pending is not None:
+        ctx.toast("A regeneration is already on its way.", "warn")
+        return
+    imgui.open_popup(INPAINT_POPUP)
+
+
+def _inpaint_popup(ctx: Any, tab: Any) -> None:
+    state = inker_mode.ensure(ctx)
+    if not imgui.begin_popup(INPAINT_POPUP):
+        return
+    widgets.popup_chrome(_imgui=imgui)
+    widgets.muted("Redraw what is selected, from a prompt. Everything outside stays.")
+    _changed, state.inpaint_prompt = controls.input_text(
+        "##inpaint_prompt", state.inpaint_prompt
+    )
+    changed, value = controls.slider_float(
+        "Strength##inpaint", float(state.inpaint_strength), 0.3, 0.65
+    )
+    if changed:
+        state.inpaint_strength = value
+    widgets.help_marker(
+        "How far from the current pixels the model may go inside the selection."
+    )
+    imgui.dummy((0, 4))
+    problems = []
+    if not state.inpaint_prompt.strip():
+        problems.append("Describe what should be there.")
+    if tab.doc.mask is None or tab.doc.mask.bounds is None:
+        problems.append("The selection is gone.")
+    for problem in problems:
+        widgets.muted(problem)
+    imgui.begin_disabled(bool(problems) or tab.busy)
+    if controls.button("Generate", (sp(90), 0)):
+        submit_inpaint(ctx, tab, state.inpaint_prompt, float(state.inpaint_strength))
+        imgui.close_current_popup()
+    imgui.end_disabled()
+    imgui.same_line()
+    if controls.button("Cancel", (sp(90), 0)):
+        imgui.close_current_popup()
+    imgui.end_popup()
+
+
+def submit_inpaint(ctx: Any, tab: Any, prompt: str, strength: float) -> bool:
+    """Send the selection to the image model as a masked img2img reference job.
+
+    What is remembered for the landing -- tab, layer uid, box, the selection's
+    weight -- is taken *now*: the user carries on editing while the queue
+    works, and the result must go back to the layer it was asked about, not
+    to whatever is active when it arrives.
+    """
+    from ..inker import inpaint
+
+    state = inker_mode.ensure(ctx)
+    doc = tab.doc
+    if doc.mask is None or doc.mask.bounds is None:
+        return False
+    if doc.write_locked():
+        ctx.toast("The active layer is locked.", "warn")
+        return False
+    crop_png, mask_png, box = inpaint.prepare(
+        doc.flatten(matte=False), doc.mask.mask, doc.mask.bounds
+    )
+    x0, y0, x1, y1 = box
+    pending = {
+        "tab_uid": tab.uid,
+        "layer_uid": doc.stack.active.uid,
+        "box": box,
+        "weight": doc.mask.mask[y0:y1, x0:x1].copy(),
+        "job_id": "",
+        "next_poll": 0.0,
+    }
+    key = f"inker-inpaint:{tab.uid}"
+
+    def run() -> Any:
+        from ...service import jobs as svc_jobs
+
+        return svc_jobs.create_job(
+            ctx.svc,
+            kind="text",
+            prompt=prompt.strip(),
+            reference=crop_png,
+            mask=mask_png,
+            init_image=True,
+            init_strength=strength,
+            output="reference",
+            count=1,
+            # The crop is a window on a drawing, not a subject to frame:
+            # normalising it would move the pixels the mask is aligned to.
+            reference_prep=False,
+        )
+
+    if not ctx.submit(key, run):
+        return False
+    state.inpaint_pending = pending
+    ctx.toast("Regenerating the selection...")
+    return True
+
+
+def on_inpaint_queued(ctx: Any, result: Any) -> None:
+    """``inker_mode.on_task_done``'s branch: the door answered with a job id."""
+    state = inker_mode.ensure(ctx)
+    pending = state.inpaint_pending
+    if pending is None:
+        return
+    job_id = ""
+    if isinstance(result, dict):
+        job_id = str(result.get("id") or "")
+        if not job_id:
+            ids = result.get("ids") or result.get("jobs") or []
+            job_id = str(ids[0]) if ids else ""
+    if not job_id:
+        state.inpaint_pending = None
+        ctx.toast("The regeneration was not queued.", "warn")
+        return
+    pending["job_id"] = job_id
+
+
+#: How often the bridge asks the store about a pending regeneration.
+INPAINT_POLL_S = 0.5
+
+
+def poll_inpaint(ctx: Any) -> None:
+    """Once every ``INPAINT_POLL_S``: is the regeneration done, and land it."""
+    import time
+
+    state = inker_mode.ensure(ctx)
+    pending = state.inpaint_pending
+    if pending is None or not pending.get("job_id"):
+        return
+    now = time.monotonic()
+    if now < float(pending.get("next_poll") or 0.0):
+        return
+    pending["next_poll"] = now + INPAINT_POLL_S
+    try:
+        job = ctx.svc.store.get(pending["job_id"])
+    except Exception:  # noqa: BLE001 - the store answers next tick
+        return
+    if job is None:
+        state.inpaint_pending = None
+        return
+    status = job.get("status")
+    if status in ("queued", "running"):
+        return
+    state.inpaint_pending = None
+    if status != "done":
+        ctx.toast(f"The regeneration {status}: {job.get('error') or 'no result'}.", "warn")
+        return
+    land_inpaint(ctx, pending, ctx.svc.job_dir(pending["job_id"]) / "input.png")
+
+
+def land_inpaint(ctx: Any, pending: dict[str, Any], image_path: Any) -> bool:
+    """Blend the finished picture into the layer it was asked about."""
+    from PIL import Image
+
+    from ..inker import inpaint
+
+    state = inker_mode.ensure(ctx)
+    tab = state.get(pending["tab_uid"])
+    if tab is None:
+        ctx.toast("The document the regeneration was for is closed.", "warn")
+        return False
+    try:
+        with Image.open(image_path) as im:
+            pixels = inpaint.fit_back(im, tuple(pending["box"]))
+    except OSError:
+        ctx.toast("The regeneration produced no picture.", "warn")
+        return False
+    ok = tab.doc.apply_pixels(
+        int(pending["layer_uid"]), tuple(pending["box"]), pixels, pending.get("weight")
+    )
+    if ok:
+        ctx.toast("Regeneration landed.")
+    else:
+        ctx.toast("The layer it was for is gone.", "warn")
+    return ok
 
 
 def _open_filter(ctx: Any, tab: Any) -> None:

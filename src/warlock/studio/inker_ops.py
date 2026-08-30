@@ -1082,6 +1082,16 @@ register(
         separator_before=True,
     )
 )
+register(
+    Op(
+        "regenerate_selection",
+        "Regenerate selection...",
+        dialog("inker-inpaint"),
+        menu="Edit",
+        enabled=_CUT[0],
+        reason=_CUT[1],
+    )
+)
 
 
 def _paste(ctx: Any, tab: Any, *, as_layer: bool) -> Any:

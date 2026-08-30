@@ -159,6 +159,9 @@ def default_form_2d() -> dict[str, Any]:
         "control": "",
         "control_scale": 0.65,
         "control_end": 0.8,
+        # img2img: off by default; the strength is the registry default.
+        "init_image": False,
+        "init_strength": 0.45,
     }
 
 def form_from_params(params: dict[str, Any]) -> dict[str, Any]:

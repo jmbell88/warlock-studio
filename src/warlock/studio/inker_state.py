@@ -1725,6 +1725,13 @@ class InkerState:
     #: wrote to disk and called clean. See ``inker_mode.end_filter_session``.
     #: Empty means no session.
     filter_uid: str = ""
+    #: A regeneration in flight: the job id the bridge polls, the tab and layer
+    #: it lands in, the box and the selection weight it was asked with. One at
+    #: a time; the popup refuses a second while one is pending.
+    inpaint_pending: dict[str, Any] | None = None
+    #: The prompt typed into the last Regenerate popup, kept across uses.
+    inpaint_prompt: str = ""
+    inpaint_strength: float = 0.6
 
     # Free transform is a *state*, not a tool: it takes over the canvas until
     # it is committed or cancelled, and every other tool is unavailable while

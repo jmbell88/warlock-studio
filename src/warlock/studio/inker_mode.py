@@ -2544,6 +2544,12 @@ def on_task_done(ctx: Any, done: Any) -> None:
             _report_import_warnings(ctx, result.get("warnings"))
         return
 
+    if name == "inker-inpaint":
+        from .panes import inker_bridge
+
+        inker_bridge.on_inpaint_queued(ctx, result)
+        return
+
     if name == "inker-sheetin":
         # The picture only. The grid comes from the popup the bridge panel
         # opens on the next frame, which is why nothing is adopted here.

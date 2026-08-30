@@ -348,6 +348,7 @@ def tile_sheet_options() -> dict[str, Any]:
             "variants": 1,
             "terrain_layout": DEFAULT_TERRAIN_LAYOUT,
             "style_lock": False,
+            "seam_erase": False,
         },
     }
 
@@ -477,6 +478,7 @@ def create_tile_sheet(
     boundary: str = "",
     terrain_layout: str = DEFAULT_TERRAIN_LAYOUT,
     style_lock: bool = False,
+    seam_erase: bool = False,
     palette: str = "",
     dither: bool = False,
     outline: str | None = None,
@@ -865,6 +867,7 @@ def create_tile_sheet(
             "boundary": str(boundary or "").strip() if mode_key == MODE_TERRAIN else "",
             "variants": int(variants) if mode_key == MODE_MATERIALS else 1,
             "style_lock": bool(style_lock),
+            "seam_erase": bool(seam_erase),
         },
     }
     # Flat, beside ``colors``, and matching Troupe's spelling exactly -- the

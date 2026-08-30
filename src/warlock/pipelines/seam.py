@@ -119,6 +119,42 @@ def report(path: Path) -> dict[str, Any]:
     }
 
 
+#: The seam-erase pass: how wide a band around the wrapped seam cross is
+#: regenerated (as a fraction of the side), and how hard. A band, not a line:
+#: the model has to blend across the join, so it needs the join's neighbours.
+ERASE_BAND = 0.125
+ERASE_STRENGTH = 0.5
+
+
+def roll_half(image: Any) -> Any:
+    """The image rolled by half in both axes -- the wrap seam becomes a
+    visible cross through the centre. Its own inverse."""
+    import numpy as np
+    from PIL import Image
+
+    arr = np.asarray(image)
+    h, w = arr.shape[:2]
+    return Image.fromarray(np.roll(np.roll(arr, h // 2, axis=0), w // 2, axis=1))
+
+
+def cross_mask(size: tuple[int, int], band: float = ERASE_BAND) -> Any:
+    """White where a rolled tile's seam cross is, black elsewhere -- the mask
+    a seam-erase inpaint pass regenerates. Feathered by a linear ramp over
+    half the band so the join blends rather than steps."""
+    import numpy as np
+    from PIL import Image
+
+    w, h = size
+    half_w = max(1, int(w * band / 2))
+    half_h = max(1, int(h * band / 2))
+    ys = np.abs(np.arange(h) - h // 2)
+    xs = np.abs(np.arange(w) - w // 2)
+    ramp_y = np.clip(1.0 - (ys - half_h / 2) / max(half_h / 2, 1), 0.0, 1.0)
+    ramp_x = np.clip(1.0 - (xs - half_w / 2) / max(half_w / 2, 1), 0.0, 1.0)
+    mask = np.maximum(ramp_y[:, None], ramp_x[None, :])
+    return Image.fromarray((mask * 255).astype(np.uint8), "L")
+
+
 def wrap_preview(src: Path, dest: Path) -> Path:
     """The image rolled by half its size in both axes.
 

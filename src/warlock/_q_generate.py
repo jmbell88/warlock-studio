@@ -113,7 +113,8 @@ class GenerateOps:
             )
             control_key = None
 
-        if ip_key is None and control_key is None:
+        init = bool(params.get("init_image")) and ref.exists()
+        if ip_key is None and control_key is None and not init:
             return None
 
         control_image = None
@@ -173,6 +174,13 @@ class GenerateOps:
             control_image=control_image,
             control_scale=float(params.get("control_scale", models.DEFAULT_CONTROL_SCALE)),
             control_end=float(params.get("control_end", models.DEFAULT_CONTROL_END)),
+            # img2img: the reference is also the start image. The mask, when
+            # the door wrote one, is what ``_conditioned`` swaps the class on.
+            init_image=ref if init else None,
+            strength=float(params.get("init_strength", models.DEFAULT_IMG2IMG_STRENGTH)),
+            mask_image=(job_dir / "mask.png")
+            if init and (job_dir / "mask.png").exists()
+            else None,
         )
 
     async def _generate(self: Worker, job: dict[str, Any]) -> None:

@@ -522,6 +522,14 @@ def _tile_materials(
     )
     if changed:
         form["style_lock"] = locked
+    changed, erase = controls.checkbox("Erase the seam", bool(form.get("seam_erase")))
+    widgets.help_marker(
+        "After each material is drawn, roll it so the wrap seam runs through the "
+        "middle and redraw a band around it in place. One more pass per material; "
+        "use it when the wrap preview shows a join."
+    )
+    if changed:
+        form["seam_erase"] = erase
     _tile_description_note()
 
 
@@ -1568,6 +1576,7 @@ def _reference_body(ctx: Any, form: dict[str, Any]) -> None:
             # message about a picker the user just emptied.
             form["ip_adapter"] = ""
             form["control"] = ""
+            form["init_image"] = False
             return
         imgui.same_line()
     busy = ctx.busy("ref-upload")
@@ -1596,6 +1605,26 @@ def _reference_body(ctx: Any, form: dict[str, Any]) -> None:
         )
         if changed:
             form["ip_scale"] = value
+
+    widgets.field_label("start image")
+    changed, on = controls.checkbox(
+        "Start from this image (img2img)", bool(form.get("init_image"))
+    )
+    widgets.help_marker(
+        "The reference is the picture the drawing starts from rather than only "
+        "what it looks at. Low strength keeps its layout and repaints the surface; "
+        "high strength keeps only the gist."
+    )
+    if changed:
+        form["init_image"] = on
+    if form.get("init_image"):
+        changed, value = controls.slider_float(
+            "Strength##init",
+            float(form.get("init_strength") or 0.45),
+            *_range(ctx, "init_strength_range", 0.3, 0.65),
+        )
+        if changed:
+            form["init_strength"] = value
 
     widgets.field_label("structure")
     note = recipe_structure_note(ctx, form) or structure_note(ctx, form)
@@ -2425,6 +2454,12 @@ def submit_kwargs(form: dict[str, Any]) -> dict[str, Any]:
         # Mirroring lora_weight: sent only alongside the selection it scales,
         # so an unused slider never reaches params as a live setting.
         "ip_scale": float(form["ip_scale"]) if form.get("ip_adapter") else None,
+        "init_image": bool(form.get("init_image")) and bool(form.get("ref_path")),
+        "init_strength": (
+            float(form.get("init_strength") or 0.45)
+            if form.get("init_image") and form.get("ref_path")
+            else None
+        ),
         "control_scale": float(form["control_scale"]) if form.get("control") else None,
         "control_end": float(form["control_end"]) if form.get("control") else None,
         "guidance_fields": fields,

@@ -475,4 +475,5 @@ def _conditioning_payload(conditioning: Any | None) -> dict[str, Any] | None:
         "control_end": float(conditioning.control_end),
         "init_image": _str(conditioning.init_image),
         "strength": float(conditioning.strength),
+        "mask_image": _str(conditioning.mask_image),
     }

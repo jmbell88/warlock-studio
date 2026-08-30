@@ -126,6 +126,8 @@ class TileSettings:
     #: because the derived family is what makes "reroll material 3 only"
     #: reproducible and that is the commoner ask.
     style_lock: bool = False
+    #: A second, masked img2img pass over each material's wrapped seam cross.
+    seam_erase: bool = False
     target_cell_px: int | None = None
     #: The stem of an authored palette file, or ``""`` for "derive one". The
     #: structured request had no way to name one, so a tileset submitted here
@@ -214,6 +216,9 @@ class GenerationRequest:
     #: and come back naming ``base_model``, which under automatic routing is
     #: not drawn at all.
     structure_control: str = ""
+    #: img2img: start the denoise from the first reference, at this strength.
+    init_image: bool = False
+    init_strength: float | None = None
     seed: int = 0
     count: int = 1
     tile: TileSettings = field(default_factory=TileSettings)
@@ -897,6 +902,7 @@ def request_from_legacy(form: Mapping[str, Any]) -> GenerationRequest:
         variants=int(form.get("variants") or 1),
         terrain_layout=str(form.get("terrain_layout") or "blob47"),
         style_lock=bool(form.get("style_lock")),
+        seam_erase=bool(form.get("seam_erase")),
         target_cell_px=_optional_int(form.get("target_cell_px")),
         palette=str(form.get("palette") or ""),
         dither=bool(form.get("dither")),
@@ -930,6 +936,12 @@ def request_from_legacy(form: Mapping[str, Any]) -> GenerationRequest:
         # key left over from a session whose VOLATILE ``ref_path`` did not
         # survive must not read here as a structure request.
         structure_control=str(form.get("control") or "") if form.get("ref_path") else "",
+        init_image=bool(form.get("init_image")) and bool(form.get("ref_path")),
+        init_strength=(
+            float(form["init_strength"])
+            if form.get("init_image") and form.get("init_strength") not in (None, "")
+            else None
+        ),
         seed=int(form.get("seed") or 0),
         count=int(form.get("count") or 1),
         tile=tile,
@@ -979,6 +991,10 @@ def request_to_legacy(request: GenerationRequest) -> dict[str, Any]:
         out["lora_weight"] = request.lora_weight
     if request.references:
         out["references"] = list(request.references)
+        if request.init_image:
+            out["init_image"] = True
+            if request.init_strength is not None:
+                out["init_strength"] = float(request.init_strength)
     if request.generation_type == "tileset":
         out["projection"] = request.tile.view
         out["tile_settings"] = asdict(request.tile)

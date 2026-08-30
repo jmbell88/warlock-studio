@@ -50,6 +50,10 @@ class Conditioning:
     # is attached to one.
     init_image: Path | None = None
     strength: float = DEFAULT_IMG2IMG_STRENGTH
+    # Inpainting: where the denoise is *allowed* to change the init image
+    # (white = regenerate). Meaningful only with ``init_image``; it swaps
+    # the img2img class for the inpaint one and nothing else.
+    mask_image: Path | None = None
 
     @property
     def uses_ip(self) -> bool:
@@ -62,6 +66,10 @@ class Conditioning:
     @property
     def uses_init(self) -> bool:
         return self.init_image is not None
+
+    @property
+    def uses_mask(self) -> bool:
+        return self.uses_init and self.mask_image is not None
 
     def __bool__(self) -> bool:
         return self.uses_ip or self.uses_control or self.uses_init
@@ -85,4 +93,6 @@ class Conditioning:
         if self.uses_init:
             out["init_image"] = self.init_image.name if self.init_image else None
             out["strength"] = self.strength
+        if self.uses_mask:
+            out["mask_image"] = self.mask_image.name if self.mask_image else None
         return out

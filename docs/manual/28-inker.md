@@ -1065,6 +1065,18 @@ in this build it has numeric fields only — there are no slant handles on the b
 the same way fight each other — at 45° each they would squash the picture onto a line — so a pair
 that extreme comes back unslanted rather than as a sliver.
 
+## Regenerating a selection
+
+**Edit → Regenerate selection...** asks the image model to redraw what is inside the current
+selection, from a prompt, and leaves everything outside it alone. Type what should be there, pick a
+strength (how far from the current pixels the model may go), and press **Generate**. The selection
+and a margin around it go to the queue as an ordinary reference job with the selection as its mask;
+you can keep editing while it runs. When it finishes the result is blended into the layer the
+selection was on — by the selection's own edge, so a feathered selection fades it in — as one
+undo step. If that layer was deleted in the meantime, nothing lands and the toast says so. It
+needs an SDXL-family image model, the same as every conditioned generation, and one regeneration
+runs at a time per document.
+
 ## Animation
 
 A drawing can become a frame-by-frame animation: press **Animate** in the document panel and the
