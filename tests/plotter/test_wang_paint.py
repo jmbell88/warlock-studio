@@ -164,3 +164,89 @@ def test_the_blob_path_is_untouched_by_any_of_this() -> None:
     before = np.array(work)
     terrain._retile_into(work, ref, (0, 0, 5, 5), True)
     assert np.array_equal(work, before)
+
+
+# --- the fill and the field it floods over ------------------------------------
+
+
+def test_filling_empty_space_lays_the_colours_interior_everywhere() -> None:
+    """A fill on an empty map is the plainest case, and the one the Terrain tool
+    reaches first: the whole run is void, so the whole run becomes the colour."""
+    wangset = _corner_set()
+    ref = _ref(wangset)
+    data = _layer()
+
+    region = terrain.fill_wang(data, 1, 1, 1, ref, wangset)
+    assert region is not None
+    x0, y0, block = region
+    data[y0:y0 + block.shape[0], x0:x0 + block.shape[1]] = block
+    assert (data != 0).all(), "every cell of the connected run was painted"
+    value = int(data[2, 2]) & gidlib.GID_MASK
+    assert wangset.wangid_of(value - ref.firstgid) == (0, 1, 0, 1, 0, 1, 0, 1)
+
+
+def test_a_fill_stops_at_a_field_of_another_colour() -> None:
+    wangset = _corner_set()
+    ref = _ref(wangset)
+    data = _layer()
+    # A wall of colour 2 down the middle column.
+    for y in range(5):
+        region = terrain.paint_wang(data, 2, y, 2, ref, wangset)
+        if region is None:
+            continue
+        x0, y0, block = region
+        data[y0:y0 + block.shape[0], x0:x0 + block.shape[1]] = block
+    right = np.array(data[:, 3:])
+
+    region = terrain.fill_wang(data, 0, 0, 1, ref, wangset)
+    assert region is not None
+    x0, y0, block = region
+    data[y0:y0 + block.shape[0], x0:x0 + block.shape[1]] = block
+    assert np.array_equal(data[:, 3:], right), "the far side of the wall is untouched"
+
+
+def test_filling_a_run_that_is_already_the_colour_writes_nothing() -> None:
+    wangset = _corner_set()
+    ref = _ref(wangset)
+    data = _layer()
+    x0, y0, block = terrain.fill_wang(data, 1, 1, 1, ref, wangset)
+    data[y0:y0 + block.shape[0], x0:x0 + block.shape[1]] = block
+    assert terrain.fill_wang(data, 1, 1, 1, ref, wangset) is None
+
+
+def test_a_fill_outside_the_map_paints_nothing() -> None:
+    wangset = _corner_set()
+    assert terrain.fill_wang(_layer(), 99, 99, 1, _ref(wangset), wangset) is None
+
+
+def test_a_colour_the_set_does_not_have_writes_nothing() -> None:
+    """The picker's rows come from the set's own colours, but the state that
+    carries the choice outlives the map it was chosen on."""
+    wangset = _corner_set()
+    ref = _ref(wangset)
+    assert terrain.paint_wang(_layer(), 2, 2, 9, ref, wangset) is None
+    assert terrain.fill_wang(_layer(), 2, 2, 9, ref, wangset) is None
+    assert terrain.wang_interior(wangset, 0) is None
+
+
+def test_the_colour_field_separates_interiors_from_transitions() -> None:
+    """What the fill floods over: an interior is its colour, a transition tile is
+    its own group, and everything else is void."""
+    wangset = _corner_set()
+    ref = _ref(wangset)
+    data = _layer()
+    for x, colour in ((1, 1), (3, 2)):
+        x0, y0, block = terrain.paint_wang(data, x, 2, colour, ref, wangset)
+        data[y0:y0 + block.shape[0], x0:x0 + block.shape[1]] = block
+
+    field = terrain.wang_colour_field(data, ref, wangset)
+    assert int(field[2, 1]) == 1
+    assert int(field[2, 3]) == 2
+    assert int(field[0, 0]) == 0, "an empty cell is void"
+    assert int(field[2, 2]) == terrain.WANG_MIXED, "the cell between the two fields"
+
+
+def test_the_blob_erase_is_the_only_erase_and_wang_has_none() -> None:
+    """Stated as a test so nobody adds an ``erase_wang`` for symmetry: a hole
+    constrains none of its neighbours, so there is nothing for a re-fit to do."""
+    assert not hasattr(terrain, "erase_wang")

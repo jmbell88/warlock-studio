@@ -384,6 +384,63 @@ def _wang_cell(
     return True
 
 
+def wang_interior(wangset: Any, colour: int) -> int | None:
+    """The local id of the tile whose *used* slots are all one colour, or ``None``.
+
+    A set's own "interior" for a colour, which is what a click asserts. ``None``
+    is the honest answer for a set that has no such tile -- a partial set, or a
+    colour index nobody declared -- and every caller here turns it into "nothing
+    was written" rather than into a near-miss.
+    """
+    if int(colour) < 1 or int(colour) > len(wangset.colours):
+        return None
+    found = wangset.matching(dict.fromkeys(wangset.slots, int(colour)))
+    return found[0] if found else None
+
+
+def paint_wang_cells(
+    data: np.ndarray,
+    cells: Iterable[tuple[int, int]],
+    colour: int,
+    ref: TilesetRef,
+    wangset: Any,
+) -> Region | None:
+    """Set some cells to a Wang colour and re-fit the ring around them.
+
+    ``colour`` is 1-based into the set's colours, matching a wangid slot.
+
+    The touched cells are set to that colour's interior and every *other* cell
+    inside the grown box is re-chosen against them. That is Tiled's terrain
+    brush: what the user touched asserts a colour, and the ring reconciles.
+
+    One region rather than a list, for :func:`paint_terrain_cells`' reason: the
+    fix-up lives inside the same rectangle as the paint, so a whole gesture is
+    one write and one undo step.
+    """
+    height, width = np.asarray(data).shape
+    inside = [
+        (int(x), int(y)) for x, y in cells if 0 <= int(x) < width and 0 <= int(y) < height
+    ]
+    box = _box(inside, (height, width), 1)
+    if box is None:
+        return None
+    local = wang_interior(wangset, colour)
+    if local is None:
+        return None
+
+    work = np.array(data, dtype=gidlib.DTYPE)
+    value = gidlib.DTYPE(ref.firstgid + local)
+    for x, y in inside:
+        work[y, x] = value
+    asserted = set(inside)
+    x0, y0, x1, y1 = box
+    for y in range(y0, y1):
+        for x in range(x0, x1):
+            if (x, y) not in asserted:
+                _wang_cell(work, ref, wangset, x, y)
+    return _finish(data, work, box)
+
+
 def paint_wang(
     data: np.ndarray,
     x: int,
@@ -392,37 +449,74 @@ def paint_wang(
     ref: TilesetRef,
     wangset: Any,
 ) -> Region | None:
-    """Paint one cell a Wang colour and re-fit the ring around it.
+    """One click: paint one cell a Wang colour and re-fit the ring around it."""
+    return paint_wang_cells(data, [(x, y)], colour, ref, wangset)
 
-    ``colour`` is 1-based into the set's colours, matching a wangid slot.
 
-    The touched cell is set to a tile whose *used* slots are all that colour --
-    the set's own "interior" for that colour -- and then its eight neighbours are
-    re-chosen against it. That is Tiled's terrain brush: the painted cell asserts
-    a colour, and the ring reconciles.
+def fill_wang(
+    data: np.ndarray,
+    x: int,
+    y: int,
+    colour: int,
+    ref: TilesetRef,
+    wangset: Any,
+) -> Region | None:
+    """Flood the connected run of one Wang colour, and re-fit the result.
 
-    One region covering the touched cell and its ring, so a stroke is one write
-    and one undo step -- ``paint_terrain_cells``' rule, for its reason.
+    **The flood is over the colour field, not the gids** -- :func:`fill_terrain`'s
+    rule, for its reason: matching the encoded value would stop at the boundary
+    between two of one colour's own tiles and fill a one-cell ribbon. What a user
+    means by "fill the grass" is the colour, so that is what is compared.
+
+    A transition tile belongs to no single colour and is therefore its own group,
+    which is what makes a fill stop at the edge of the field it was clicked in;
+    the ring re-fit then reconciles that edge against what was just laid down.
     """
-    height, width = data.shape
+    height, width = np.asarray(data).shape
     x, y = int(x), int(y)
     if not (0 <= x < width and 0 <= y < height):
         return None
-    wanted = dict.fromkeys(wangset.slots, int(colour))
-    found = wangset.matching(wanted)
-    if not found:
+    field = wang_colour_field(data, ref, wangset)
+    target = int(field[y, x])
+    if target == int(colour):
         return None
+    ys, xs = np.nonzero(flood_mask(field == target, x, y))
+    return paint_wang_cells(
+        data, list(zip(xs.tolist(), ys.tolist(), strict=True)), colour, ref, wangset
+    )
 
-    work = np.array(data, dtype=gidlib.DTYPE)
-    work[y, x] = gidlib.DTYPE(ref.firstgid + found[0])
-    for dy in (-1, 0, 1):
-        for dx in (-1, 0, 1):
-            if (dx, dy) == (0, 0):
-                continue
-            nx, ny = x + dx, y + dy
-            if 0 <= nx < width and 0 <= ny < height:
-                _wang_cell(work, ref, wangset, nx, ny)
 
-    box = (max(0, x - 1), max(0, y - 1), min(width, x + 2), min(height, y + 2))
-    return _finish(data, work, box)
+#: What a cell whose tile mixes colours -- a transition -- ranks as in
+#: :func:`wang_colour_field`. Distinct from the void so a fill clicked on an edge
+#: tile floods the edge rather than the empty space beyond it.
+WANG_MIXED: int = -1
+
+
+def wang_colour_field(data: np.ndarray, ref: TilesetRef, wangset: Any) -> np.ndarray:
+    """Every cell's single Wang colour, 0 for void and :data:`WANG_MIXED` for a
+    transition tile.
+
+    The Wang answer to :func:`rank_field`, and the comparison a fill floods over.
+    Vectorised per *tile id* rather than per cell: a set has a few dozen tiles
+    and a map has tens of thousands of cells.
+    """
+    ids = gidlib.tile_ids(np.asarray(data, dtype=gidlib.DTYPE))
+    out = np.zeros(ids.shape, dtype=np.int16)
+    locals_ = ids.astype(np.int64) - ref.firstgid
+    inside = (ids >= ref.firstgid) & (ids <= ref.last_gid)
+    for local, wangid in wangset.tiles.items():
+        used = {wangid[slot] for slot in wangset.slots if wangid[slot]}
+        out[inside & (locals_ == int(local))] = (
+            used.pop() if len(used) == 1 else WANG_MIXED
+        )
+    return out
+
+
+# A Wang erase is a plain erase, deliberately, and there is no ``erase_wang``
+# beside the three above. ``constraints_from`` reads an empty cell as "nothing
+# here has an opinion", so a hole constrains none of its neighbours and a re-fit
+# around one would re-choose every ring cell against the same evidence it already
+# has. The blob path needs ``erase_terrain`` because its collapse is
+# *self against not-self* and a hole flips that bit; the general model has no
+# such bit to flip.
 

@@ -3279,3 +3279,144 @@ def test_the_old_orthogonal_spelling_in_a_sidecar_is_not_a_mismatch(tmp_path, mo
 
     assert plotter_mode.ensure(ctx).sheet_import is None
     assert len(tab.doc.tilesets) == 1
+
+
+# --- a foreign Wang set as a terrain the tool can lay down ---------------------
+#
+# The Terrain picker offers a foreign Wang set's colours beside the blob preset,
+# encoded as a *negative* rank. Everything below is about that encoding
+# surviving the trip from the picker to the painter: it used to reach
+# ``Tileset.local_for`` as a blob rank and raise ``IndexError: terrain -1 is
+# outside this set (0..-1)``, and the emptier the terrain list the more certainly
+# it got there.
+
+
+def _wang_tileset(name: str = "wang") -> Tileset:
+    """Sixteen tiles over the complete two-colour corner set, and *no* blob
+    terrains -- which is what a Tiled ``.tsx`` carrying a genuine Wang set is."""
+    from warlock.studio.tilegrid.wang import WangColour, WangSet
+
+    tiles = {
+        index: (
+            0,
+            1 + ((index >> 0) & 1),
+            0,
+            1 + ((index >> 1) & 1),
+            0,
+            1 + ((index >> 2) & 1),
+            0,
+            1 + ((index >> 3) & 1),
+        )
+        for index in range(16)
+    }
+    wangset = WangSet(
+        name="Corners",
+        kind="corner",
+        colours=(WangColour("grass", "#00ff00"), WangColour("sand", "#ffff00")),
+        tiles=tiles,
+    )
+    pixels = np.zeros((64, 64, 4), dtype=np.uint8)
+    pixels[..., 3] = 255
+    return Tileset(name=name, pixels=pixels, tile_w=16, tile_h=16, wangsets=(wangset,))
+
+
+def _wang_tab(ctx: FakeCtx):
+    """A tab whose only tileset carries a Wang set and declares no blob terrains."""
+    tab = _tab(ctx, tileset=False)
+    ref = tab.doc.add_tileset(_wang_tileset())
+    tab.doc.mark_saved()
+    return tab, plotter_mode.ensure(ctx), ref
+
+
+def test_the_terrain_tool_paints_a_wang_colour():
+    """The bug, through the path it actually took: the picker's encoding reached
+    the blob painter and raised out of the frame loop."""
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab, state, ref = _wang_tab(ctx)
+    layer = tab.doc.tile_layers()[0]
+    state.tool = "terrain"
+    state.terrain = (0, -1)  # the picker's encoding of Wang colour 1
+
+    plotter_canvas._apply(ctx, state, tab, (2, 2))
+
+    assert ctx.toasts == []
+    value = int(layer.data[2, 2]) & gid.GID_MASK
+    assert value, "the cell was painted"
+    wangset = ref.tileset.wangsets[0]
+    assert wangset.wangid_of(value - ref.firstgid) == (0, 1, 0, 1, 0, 1, 0, 1)
+
+
+def test_the_second_wang_colour_is_the_second_negative_rank():
+    """``-1 - colour_index``: the decode has to be the picker's encode, or the
+    tool lays down a colour the user did not click."""
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab, state, ref = _wang_tab(ctx)
+    layer = tab.doc.tile_layers()[0]
+    state.tool = "terrain"
+    state.terrain = (0, -2)
+
+    plotter_canvas._apply(ctx, state, tab, (2, 2))
+
+    value = int(layer.data[2, 2]) & gid.GID_MASK
+    assert ref.tileset.wangsets[0].wangid_of(value - ref.firstgid) == (
+        0, 2, 0, 2, 0, 2, 0, 2
+    )
+
+
+def test_a_wang_colour_that_does_not_exist_is_refused_rather_than_painted():
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab, state, _ref = _wang_tab(ctx)
+    layer = tab.doc.tile_layers()[0]
+    state.tool = "terrain"
+    state.terrain = (0, -9)
+
+    plotter_canvas._apply(ctx, state, tab, (2, 2))
+
+    assert int(layer.data[2, 2]) == 0
+    assert ctx.toasts and ctx.toasts[-1][1] == "error"
+
+
+def test_filling_with_a_wang_colour_in_hand_floods_instead_of_raising():
+    """Fill's terrain branch reads the same state the terrain tool does, so it
+    had the same crash and needs the same dispatch."""
+    from warlock.studio.panes import plotter_canvas
+
+    ctx = FakeCtx()
+    tab, state, ref = _wang_tab(ctx)
+    layer = tab.doc.tile_layers()[0]
+    state.tool = "fill"
+    state.brush = None
+    state.terrain = (0, -1)
+
+    plotter_canvas._apply(ctx, state, tab, (1, 1))
+
+    assert ctx.toasts == []
+    assert int((layer.data != 0).sum()) == layer.data.size, "the empty run flooded"
+    wangset = ref.tileset.wangsets[0]
+    value = int(layer.data[1, 1]) & gid.GID_MASK
+    assert wangset.wangid_of(value - ref.firstgid) == (0, 1, 0, 1, 0, 1, 0, 1)
+
+
+def test_the_picker_arms_a_terrain_the_canvas_can_paint_with():
+    """No click is needed to reach the bug: the section auto-selects its first
+    entry, and on a Wang-only map that entry is a negative rank."""
+    from warlock.studio.panes import plotter_canvas, plotter_tools
+
+    ctx = FakeCtx()
+    tab, state, _ref = _wang_tab(ctx)
+    layer = tab.doc.tile_layers()[0]
+    entries = plotter_tools.terrains_of(tab.doc)
+    assert entries and entries[0][1] < 0, "the only rows this map has are Wang colours"
+
+    state.terrain = plotter_tools.first_terrain(entries)
+    state.tool = "terrain"
+    plotter_canvas._apply(ctx, state, tab, (2, 2))
+
+    assert ctx.toasts == []
+    assert int(layer.data[2, 2]) != 0

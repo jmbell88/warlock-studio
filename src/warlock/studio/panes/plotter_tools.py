@@ -148,6 +148,20 @@ def terrains_of(doc: Any) -> list[tuple[int, int, Any]]:
     return out
 
 
+def first_terrain(entries: list[tuple[int, int, Any]]) -> tuple[int, int] | None:
+    """What the Terrain section arms when nothing is chosen yet.
+
+    A function rather than two lines inside the picker because **no click is
+    needed to reach a terrain**: merely opening the section arms one, so what it
+    arms is a rule the canvas is tested against rather than a detail of a draw
+    call nothing headless can run.
+    """
+    if not entries:
+        return None
+    index, rank, _spec = entries[0]
+    return (index, rank)
+
+
 def _wang_swatch(wangset: Any, colour: Any) -> Any:
     """A Wang colour dressed as a terrain spec, for the row that draws it.
 
@@ -210,7 +224,7 @@ def _terrain_picker(ctx: Any, state: Any, tab: Any) -> None:
             plotter_mode.ask_add_tileset(ctx)
         return
     if state.terrain is None:
-        state.terrain = (entries[0][0], entries[0][1])
+        state.terrain = first_terrain(entries)
     width = widgets.grid_width(2)
     for slot, (tileset_index, rank, spec) in enumerate(entries):
         if slot % 2:

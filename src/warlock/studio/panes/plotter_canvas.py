@@ -30,7 +30,7 @@ from __future__ import annotations
 import dataclasses
 import math
 import time
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -428,12 +428,20 @@ def _status(ctx: Any, state: Any, tab: Any) -> None:
     if cell is not None and 0 <= cell[0] < doc.width and 0 <= cell[1] < doc.height:
         bits.append(f"cell {cell[0]}, {cell[1]}")
         if state.tool == "terrain":
-            ref = _terrain_ref(state, doc)
+            target = _terrain_ref(state, doc)
             layer = doc.active()
-            if ref is not None and isinstance(layer, TileLayer):
-                rank = plotter_terrain.terrain_at(layer.data, cell[0], cell[1], ref)
+            # Blob only: ``terrain_at`` reads a rank off the positional layout,
+            # which is the one thing a foreign Wang set does not have. The Wang
+            # answer would be a colour read out of the wangid, and it is not
+            # asked for here yet.
+            if (
+                target is not None
+                and target.wangset is None
+                and isinstance(layer, TileLayer)
+            ):
+                rank = plotter_terrain.terrain_at(layer.data, cell[0], cell[1], target.ref)
                 if rank is not None:
-                    bits.append(ref.tileset.terrains[rank].name)
+                    bits.append(target.ref.tileset.terrains[rank].name)
     if tab.busy:
         bits.append("saving")
     widgets.muted("  --  ".join(bits))
@@ -1805,12 +1813,33 @@ def _apply_line(ctx: Any, state: Any, tab: Any, a: tuple[int, int], b: tuple[int
         _apply(ctx, state, tab, cell)
 
 
-def _terrain_ref(state: Any, doc: Any):
-    """The tileset reference the chosen terrain belongs to, or ``None``.
+class TerrainTarget(NamedTuple):
+    """What the Terrain tool has in hand, resolved against the document.
+
+    ``value`` is a blob rank when ``wangset`` is ``None`` and a 1-based Wang
+    colour otherwise, so a caller passes one field to whichever painter the
+    ``wangset`` picked and never re-reads the picker's encoding.
+    """
+
+    ref: Any
+    value: int
+    wangset: Any = None
+
+
+def _terrain_ref(state: Any, doc: Any) -> TerrainTarget | None:
+    """What the chosen terrain resolves to, or ``None`` if it resolves to nothing.
 
     Re-resolved per call rather than cached on the state: tilesets are
     append-only but a *replace* swaps the reference, and a cached one would go
     on painting from the atlas the polish pass retired.
+
+    **The rank's sign is which model it names.** ``plotter_tools.terrains_of``
+    offers a foreign Wang set's colours beside the blob preset, encoded as
+    ``-1 - colour_index``, so a negative rank is decoded against the tileset's
+    Wang sets here and never reaches the blob painter -- which used to take it as
+    a row index and raise ``terrain -1 is outside this set`` out of the frame
+    loop. The old bound check was inverted for exactly that input: the emptier
+    the terrain list, the more certainly a negative rank passed it.
     """
     if state.terrain is None:
         return None
@@ -1818,7 +1847,16 @@ def _terrain_ref(state: Any, doc: Any):
     if index >= len(doc.tilesets):
         return None
     ref = doc.tilesets[index]
-    return ref if rank < len(ref.tileset.terrains) else None
+    if rank >= 0:
+        return TerrainTarget(ref, rank) if rank < len(ref.tileset.terrains) else None
+    # The picker walks the Wang sets in order and their colours within each, so
+    # the decode walks the same flat run rather than assuming one set.
+    wanted = -1 - int(rank)
+    for wangset in ref.tileset.wangsets:
+        if wanted < len(wangset.colours):
+            return TerrainTarget(ref, wanted + 1, wangset)
+        wanted -= len(wangset.colours)
+    return None
 
 
 def _terrain_cell_ref(doc: Any, data: Any, cell: tuple[int, int]):
@@ -2053,15 +2091,21 @@ def _apply(ctx: Any, state: Any, tab: Any, cell: tuple[int, int]) -> None:
             else plotter_terrain.erase_terrain(layer.data, cell[0], cell[1], ref)
         )
     elif state.tool == "fill":
-        ref = _terrain_ref(state, doc) if state.brush is None else None
-        if ref is not None:
+        target = _terrain_ref(state, doc) if state.brush is None else None
+        if target is not None:
             # A terrain in hand and no tile picked is an unambiguous request:
             # flood the field. The flood is over the *rank* field, so it crosses
             # a terrain's own forty-seven cases rather than stopping at the
             # first edge tile -- see ``terrain.fill_terrain``.
             refits = True
-            result = plotter_terrain.fill_terrain(
-                layer.data, cell[0], cell[1], state.terrain[1], ref
+            result = (
+                plotter_terrain.fill_terrain(
+                    layer.data, cell[0], cell[1], target.value, target.ref
+                )
+                if target.wangset is None
+                else plotter_terrain.fill_wang(
+                    layer.data, cell[0], cell[1], target.value, target.ref, target.wangset
+                )
             )
         elif state.brush is None:
             ctx.toast("Pick a tile from the tileset first.", "error")
@@ -2099,13 +2143,22 @@ def _apply(ctx: Any, state: Any, tab: Any, cell: tuple[int, int]) -> None:
                 "error",
             )
             return
-        ref = _terrain_ref(state, doc)
-        if ref is None:
+        target = _terrain_ref(state, doc)
+        if target is None:
             ctx.toast("Pick a terrain first.", "error")
             return
         refits = True
-        result = plotter_terrain.paint_terrain(
-            layer.data, cell[0], cell[1], state.terrain[1], ref
+        # Two models, one tool: the blob preset collapses positionally and a
+        # foreign Wang set matches constraints. Which one is the sign of the rank
+        # the picker armed, and nothing below this line knows there are two.
+        result = (
+            plotter_terrain.paint_terrain(
+                layer.data, cell[0], cell[1], target.value, target.ref
+            )
+            if target.wangset is None
+            else plotter_terrain.paint_wang(
+                layer.data, cell[0], cell[1], target.value, target.ref, target.wangset
+            )
         )
     else:
         return

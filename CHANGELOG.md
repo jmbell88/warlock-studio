@@ -18,6 +18,28 @@ the release you are actually running.
 
 ## 0.0.30 — 2026-08-30
 
+- **Plotter's Terrain tool no longer crashes the canvas on a map that imports a Tiled
+  Wang set.** The Terrain picker offers a foreign Wang set's colours beside the blob
+  preset — correctly, because to the person holding the tool there is no difference — and
+  encodes a colour as a *negative* rank, `-1 - colour_index`. Nothing decoded it. The
+  rank went straight into the blob painter, which reads it as a row of the positional
+  layout, and `Tileset.local_for` raised `IndexError: terrain -1 is outside this set
+  (0..-1)` out of the frame loop; the pane guard caught it, so what a user saw was the
+  canvas replaced by a placeholder and then, after three retries, gone for the session.
+  The bound check that should have stopped it was inverted for this input — `rank <
+  len(terrains)` is true of every negative rank, so *the emptier the terrain list, the
+  more certainly a bad one passed*, and a tileset carrying only Wang sets has an empty
+  one. **No click was needed to reach it:** the section auto-selects its first row, so
+  merely opening Terrain on such a map armed the bad value. Practical effect: any map
+  whose only terrain-ish tileset was a genuine (non-blob) Tiled `.tsx` was unpaintable.
+  `_terrain_ref` now dispatches on the rank's sign and returns which model it resolved
+  to, and the terrain and fill branches route a Wang colour to `terrain.paint_wang` — the
+  constraint matcher that has existed beside the blob path since it landed and had no
+  production caller at all. `terrain.fill_wang` is new beside it, flooding over a Wang
+  *colour* field for the reason `fill_terrain` floods over the rank field. There is
+  deliberately no `erase_wang`: an empty cell constrains none of its neighbours, so a
+  Wang hole has nothing to reconcile, which is not true of the blob collapse. The blob
+  path is untouched and the existing terrain corpus is byte-identical.
 - **The Hunyuan3D multi-view backend is removed.** It was opt-in, marked experimental,
   and had never been runnable by anyone: it needed an isolated Python 3.10/CUDA worker
   and weights named by `WARLOCK_HUNYUAN_PYTHON` / `WARLOCK_HUNYUAN_WEIGHTS`, which no
