@@ -374,13 +374,18 @@ def test_every_transform_handle_has_axes_declared_for_it():
     """The table beside the thing it describes, in both directions. A handle
     ``_handles`` draws that ``HANDLE_AXES`` does not know about is one the drag
     code silently scales in both axes; an entry with no handle is a scale
-    nothing can grab."""
+    nothing can grab.
+
+    Two exemptions, and both are grab points that are not scales at all: the
+    rotate arm, and the pivot ring the transform turns about. Named here rather
+    than allowed by a blanket rule, so a ninth *scale* handle still cannot slip
+    in without an entry."""
     doc = inker.Document.blank(16, 16)
     doc.select(selection.SelectionMask.from_rect(doc.size, (2, 2, 10, 10)))
     assert doc.lift()
     tab = SimpleNamespace(doc=doc, view=inker_state.PaintView(zoom=1.0, pan=(0.0, 0.0)))
     drawn = set(inker_canvas._handles(tab, (0.0, 0.0)))
-    assert drawn - {"rotate"} == set(inker_canvas.HANDLE_AXES)
+    assert drawn - {"rotate", "pivot"} == set(inker_canvas.HANDLE_AXES)
 
 
 def test_the_edge_handles_sit_on_the_edge_midpoints():

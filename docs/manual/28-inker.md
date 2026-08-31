@@ -1083,6 +1083,19 @@ above the canvas carries the same numbers — **Angle**, **Scale X** and **Scale
 toggle — because a drag cannot express "exactly 90 degrees" and a rotation that is nearly square is
 worse than either.
 
+In the middle of the box is a small ring with a crosshair through it: the **pivot**, the point the
+rotation turns about and the scale grows from. It starts at the centre, which is where a transform
+has always turned, and you can drag it anywhere on the canvas. Put it on a shoulder and the arm
+swings from the shoulder; put it at a corner and the sprite sweeps around that corner. It is the
+same ring the radial symmetry guide draws, and it means the same thing in both places. Dragging it
+does not move the pixels, only where they turn from — and once the box is already turned, moving
+the ring swings the drawing round live so what you see is what will land. Drag it back to the
+centre and you have exactly the centred transform you started with.
+
+Committing over a **timeline range** carries the pivot with it: every frame in the range turns about
+the point you chose, not about its own middle. That is the difference between a pose that rotates
+and a pose that wobbles, and it only shows up when the frames are played.
+
 The tool options panel adds typed **X**, **Y**, **W**, **H**, **Angle** and **Slant** fields while
 a transform is running. Slant is an italic: two numbers in degrees, horizontal then vertical. It is
 applied after the scale and before the rotation, so the two slant axes are always the page's, and

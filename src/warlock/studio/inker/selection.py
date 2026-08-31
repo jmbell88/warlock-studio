@@ -670,6 +670,89 @@ def render_transform(
     return source, mask
 
 
+def _pad_to_pivot(
+    source: np.ndarray, mask: np.ndarray, pivot: tuple[float, float]
+) -> tuple[np.ndarray, np.ndarray, tuple[int, int]]:
+    """Pad both planes so ``pivot`` sits at the padded array's *centre*.
+
+    ``pivot`` is in source pixels. Padding on one side only per axis -- the
+    side the pivot is nearest -- which is the smallest pad that centres it.
+
+    The pads are whole pixels, so a fractional pivot is centred to within half
+    a pixel. That is deliberate and not worth chasing: the placement it feeds
+    is rounded to a whole pixel anyway (``FloatingBuffer.transform``), so a
+    sub-pixel pad would be thrown away one line later.
+    """
+    height, width = source.shape[:2]
+    px, py = float(pivot[0]), float(pivot[1])
+    left = max(0, int(round(width - 2.0 * px)))
+    right = max(0, int(round(2.0 * px - width)))
+    top = max(0, int(round(height - 2.0 * py)))
+    bottom = max(0, int(round(2.0 * py - height)))
+    if not (left or right or top or bottom):
+        return source, mask, (0, 0)
+    pads = ((top, bottom), (left, right))
+    return np.pad(source, (*pads, (0, 0))), np.pad(mask, pads), (left, top)
+
+
+def _coverage(mask: np.ndarray) -> tuple[int, int, int, int] | None:
+    """The bounding box of everything the mask covers, or None for nothing."""
+    rows = np.flatnonzero(mask.any(axis=1))
+    if rows.size == 0:
+        return None
+    cols = np.flatnonzero(mask.any(axis=0))
+    return (int(cols[0]), int(rows[0]), int(cols[-1]) + 1, int(rows[-1]) + 1)
+
+
+def render_transform_about(
+    source: np.ndarray,
+    mask: np.ndarray,
+    angle: float,
+    scale: tuple[float, float],
+    shear: tuple[float, float],
+    resample: str,
+    pivot: tuple[float, float],
+) -> tuple[np.ndarray, np.ndarray, tuple[float, float]]:
+    """:func:`render_transform` about a chosen point rather than the centre.
+
+    **The maths stays centred; the buffer is what moves.** The source is padded
+    so ``pivot`` -- in source pixels -- lands at the padded array's centre, and
+    then the unchanged centred render runs on it. Nothing in
+    ``transform.scale``/``shear``/``rotate`` knows a pivot exists, which is the
+    point: those three are the kernels the whole editor's geometry rests on,
+    and a second, pivot-aware spelling of them is exactly the drift
+    :func:`render_transform` is a module function to prevent.
+
+    The result is cropped back to the mask's own coverage, so a pivot near an
+    edge does not leave the transform box hanging half a subject's width off
+    the pixels. The crop is exact rather than cosmetic: a lifted or pasted
+    buffer carries its coverage in its alpha (``_masked_alpha``'s invariant),
+    so what is trimmed composites as nothing. It is also a pure function of the
+    *mask*, never of the pixels -- which is what lets the ranged replay crop
+    every cel identically and go on placing them all at one ``dest``.
+
+    Returns the two planes and where the crop's top-left sits **relative to the
+    pivot**, so the caller adds its own canvas-space pivot and is done.
+
+    Two callers, like :func:`render_transform` and for the same reason: the
+    buffer's live render and ``Document._replay_transform_on``.
+    """
+    padded, padded_mask, _pads = _pad_to_pivot(source, mask, pivot)
+    out, out_mask = render_transform(padded, padded_mask, angle, scale, shear, resample)
+    height, width = out.shape[:2]
+    box = _coverage(out_mask)
+    if box is None:
+        # Nothing covered -- a fully feathered-away mask. Crop to nothing and
+        # the caller indexes an empty plane, so the uncropped result stands.
+        return out, out_mask, (-width / 2.0, -height / 2.0)
+    x0, y0, x1, y1 = box
+    return (
+        np.ascontiguousarray(out[y0:y1, x0:x1]),
+        np.ascontiguousarray(out_mask[y0:y1, x0:x1]),
+        (x0 - width / 2.0, y0 - height / 2.0),
+    )
+
+
 @dataclass
 class FloatingBuffer:
     """Pixels lifted off a layer and hovering over it.
@@ -705,12 +788,27 @@ class FloatingBuffer:
     # from the pixels that were lifted, so only the final one is ever applied.
     source: np.ndarray | None = None
     source_mask: np.ndarray | None = None
+    #: Where ``source``'s top-left sat on the canvas when it was captured,
+    #: carried along by every move. It is the *only* thing that turns a
+    #: canvas-space ``pivot`` back into a point in the source, and it has to be
+    #: recorded rather than derived: after one render the buffer's own offset
+    #: and size are the transform's output, so subtracting them would make the
+    #: pivot drift a little further with every adjustment of the same gesture.
+    source_offset: tuple[int, int] | None = None
     angle: float = 0.0
     scale: tuple[float, float] = (1.0, 1.0)
     #: Slant, in degrees per axis. Trailing and defaulted like the two above,
     #: and re-rendered from ``source`` with them rather than compounded -- a
     #: shear dragged back and forth is one shear, not a chain of them.
     shear: tuple[float, float] = (0.0, 0.0)
+    #: The canvas point the scale and the rotation turn about, or ``None`` for
+    #: the buffer's own centre -- which is what every transform did before the
+    #: handle existed, and what ``transform`` still does bit for bit when this
+    #: is None. Canvas space rather than source space so that it means the same
+    #: thing to the pane that draws it, to the handle that drags it and to the
+    #: nudge that moves the buffer under it; :attr:`pivot_local` is the one
+    #: place it is translated into the source's frame.
+    pivot: tuple[float, float] | None = None
 
     # --- what a *ranged* commit replays -------------------------------------
     #
@@ -750,6 +848,21 @@ class FloatingBuffer:
         return (self.offset[0] + width / 2.0, self.offset[1] + height / 2.0)
 
     @property
+    def pivot_local(self) -> tuple[float, float] | None:
+        """:attr:`pivot` in ``source`` pixels, or None if there is no pivot.
+
+        None also while no source has been captured yet: with nothing rendered
+        there is no frame to express the pivot in, and the render that captures
+        the source is the one that asks for this.
+        """
+        if self.pivot is None or self.source_offset is None:
+            return None
+        return (
+            self.pivot[0] - self.source_offset[0],
+            self.pivot[1] - self.source_offset[1],
+        )
+
+    @property
     def transformed(self) -> bool:
         return (
             abs(self.angle) > 1e-6
@@ -780,7 +893,13 @@ class FloatingBuffer:
 
         The centre is held fixed rather than the top-left: rotating about a
         corner sends the subject off across the canvas, which is not what
-        grabbing a rotate handle means.
+        grabbing a rotate handle means. That reasoning is why the *default*
+        pivot is still the centre; :attr:`pivot` is the user asking for a
+        different one, and it goes through :func:`render_transform_about`,
+        which pads the buffer rather than changing any of the maths. With
+        ``pivot`` None this method is the code it has always been, line for
+        line, so a document that never touches the handle renders bit for bit
+        as before.
 
         The render itself is :func:`render_transform`, which owns the order the
         three are applied in and why. What stays here is the *state*: which
@@ -791,6 +910,7 @@ class FloatingBuffer:
         if self.source is None:
             self.source = self.pixels.copy()
             self.source_mask = self.mask.copy()
+            self.source_offset = self.offset
         if angle is not None:
             self.angle = float(angle)
         if scale is not None:
@@ -799,14 +919,29 @@ class FloatingBuffer:
             self.shear = (float(shear[0]), float(shear[1]))
         self.resample = resample
 
-        cx, cy = self.centre
-        pixels, mask = render_transform(
-            self.source, self.source_mask, self.angle, self.scale, self.shear, resample
-        )
-
-        self.pixels, self.mask = pixels, mask
-        new_h, new_w = pixels.shape[:2]
-        self.offset = (round(cx - new_w / 2.0), round(cy - new_h / 2.0))
+        local = self.pivot_local
+        if local is None:
+            cx, cy = self.centre
+            pixels, mask = render_transform(
+                self.source, self.source_mask, self.angle, self.scale, self.shear, resample
+            )
+            self.pixels, self.mask = pixels, mask
+            new_h, new_w = pixels.shape[:2]
+            self.offset = (round(cx - new_w / 2.0), round(cy - new_h / 2.0))
+        else:
+            pixels, mask, (dx, dy) = render_transform_about(
+                self.source,
+                self.source_mask,
+                self.angle,
+                self.scale,
+                self.shear,
+                resample,
+                local,
+            )
+            self.pixels, self.mask = pixels, mask
+            # The pivot is the fixed point, so the result is placed relative to
+            # it rather than to a centre that the render has just changed.
+            self.offset = (round(self.pivot[0] + dx), round(self.pivot[1] + dy))
         # The pixels genuinely changed, so the texture has to be re-uploaded --
         # unlike a move, which changes only where they are drawn.
         self.rev += 1
@@ -832,7 +967,22 @@ class FloatingBuffer:
         self.transform(resample=self.resample)
 
     def moved(self, dx: int, dy: int) -> None:
-        self.offset = (self.offset[0] + int(dx), self.offset[1] + int(dy))
+        """Translate the buffer, and everything pinned to it.
+
+        The pivot and the source's remembered corner travel with the pixels or
+        a moved selection strands its pivot: the point the user put on the
+        subject's shoulder would stay behind on the canvas, and the next
+        rotation would swing the drawing around empty space. Both move by the
+        same delta, so the pivot's position *within the source* -- the only
+        thing a render reads -- is untouched by a move, which is what keeps a
+        drag-then-rotate the same gesture as a rotate-then-drag.
+        """
+        dx, dy = int(dx), int(dy)
+        self.offset = (self.offset[0] + dx, self.offset[1] + dy)
+        if self.pivot is not None:
+            self.pivot = (self.pivot[0] + dx, self.pivot[1] + dy)
+        if self.source_offset is not None:
+            self.source_offset = (self.source_offset[0] + dx, self.source_offset[1] + dy)
 
     def contains(self, xy: tuple[int, int]) -> bool:
         x, y = int(xy[0]), int(xy[1])

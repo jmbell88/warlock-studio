@@ -955,21 +955,46 @@ def _handles(tab: Any, origin) -> dict[str, tuple[float, float]]:
     dx, dy = above[0] - top[0], above[1] - top[1]
     length = math.hypot(dx, dy) or 1.0
     out["rotate"] = (top[0] + dx / length * ROTATE_ARM, top[1] + dy / length * ROTATE_ARM)
+    # The point the rotate and the scale are measured from, which is the box's
+    # centre until the user drags it somewhere else. Last in the dict on
+    # purpose: ``min`` keeps the first of a tie, so a pivot parked exactly on a
+    # corner still leaves that corner grabbable as a scale handle.
+    out["pivot"] = inker_state.to_screen(view, origin, *_anchor(buf))
     return out
 
 
+def _anchor(buf: Any) -> tuple[float, float]:
+    """The image-space point a transform turns and scales about.
+
+    One helper because four places need the same answer -- the handle's
+    position, the rotate bearing, the scale reference and the drawing -- and a
+    fifth spelling of ``buf.pivot or buf.centre`` is how one of them ends up
+    still measuring from the centre after the pivot has moved. ``is None``
+    rather than ``or``, because ``(0.0, 0.0)`` is a pivot in the top-left
+    corner and a perfectly ordinary thing to ask for.
+    """
+    return buf.centre if buf.pivot is None else buf.pivot
+
+
 def _transform_input(state: Any, tab: Any, origin, point, *, active: bool) -> None:
-    """Drag a handle to scale, the arm to rotate, the middle to move.
+    """Drag a handle to scale, the arm to rotate, the ring to re-pivot, the
+    middle to move.
 
     Every drag is measured against what was true at the *press*, not against
     the previous frame: accumulating per-frame deltas makes a slow drag and a
     fast one produce different results, and a scale that compounds frame by
     frame runs away.
+
+    The pivot ring takes a press ahead of the move, which is not a new rule:
+    every handle already does -- ``near`` is tested before ``contains`` -- and
+    a ring that could be seen but not grabbed because it happens to sit over
+    the subject would be a control that is drawn and does nothing.
     """
     doc = tab.doc
     buf = doc.floating
     mouse = imgui.get_mouse_pos()
-    centre = inker_state.to_screen(tab.view, origin, *buf.centre)
+    anchor = _anchor(buf)
+    centre = inker_state.to_screen(tab.view, origin, *anchor)
 
     if active and imgui.is_mouse_clicked(0):
         handles = _handles(tab, origin)
@@ -984,7 +1009,7 @@ def _transform_input(state: Any, tab: Any, origin, point, *, active: bool) -> No
         # the wrong one at 90 degrees. The screen distance stays beside them
         # for the two gestures that are genuinely about the screen -- the
         # uniform ratio and the rotate bearing.
-        cx, cy = buf.centre
+        cx, cy = anchor
         state.transform_ref = (
             buf.scale[0],
             buf.scale[1],
@@ -994,7 +1019,9 @@ def _transform_input(state: Any, tab: Any, origin, point, *, active: bool) -> No
             max(1e-3, abs(point[0] - cx)),
             max(1e-3, abs(point[1] - cy)),
         )
-        if near and grab == "rotate":
+        if near and grab == "pivot":
+            state.drag_kind = "pivot"
+        elif near and grab == "rotate":
             state.drag_kind = "rotate"
         elif near:
             state.drag_kind = "scale"
@@ -1014,7 +1041,7 @@ def _transform_input(state: Any, tab: Any, origin, point, *, active: bool) -> No
 
     scale0x, scale0y, angle0, dist0, bearing0, ref_x, ref_y = state.transform_ref
     if state.drag_kind == "scale":
-        cx, cy = buf.centre
+        cx, cy = anchor
         axes = HANDLE_AXES.get(state.transform_grab, "xy")
         fx = abs(point[0] - cx) / ref_x if "x" in axes else 1.0
         fy = abs(point[1] - cy) / ref_y if "y" in axes else 1.0
@@ -1037,6 +1064,13 @@ def _transform_input(state: Any, tab: Any, origin, point, *, active: bool) -> No
         if imgui.get_io().key_shift:
             step = round(step / 15.0) * 15.0
         doc.transform_floating(angle=angle0 + step, resample=state.resample)
+    elif state.drag_kind == "pivot":
+        # The point itself, not a delta: the ring goes where the cursor is, so
+        # a drag that started a couple of pixels off the ring does not carry
+        # that offset around for the rest of the gesture. The door clamps it to
+        # the canvas and re-renders if the buffer is already turned, so the
+        # subject swings round live rather than jumping at the next handle.
+        doc.set_floating_pivot(point)
     elif state.drag_kind == "move":
         last = state.last_point or point
         doc.move_floating(round(point[0] - last[0]), round(point[1] - last[1]))
@@ -1064,7 +1098,20 @@ def _transform_box(state: Any, tab: Any, draw_list: Any, origin) -> None:
     top = inker_state.to_screen(tab.view, origin, buf.offset[0] + buf.size[0] / 2.0, buf.offset[1])
     draw_list.add_line(top, handles["rotate"], colour)
     for name, point in handles.items():
-        if name == "rotate":
+        if name == "pivot":
+            # The radial-symmetry guide's ring and crosshair, deliberately the
+            # same drawing: both mark "the point this turns about", and giving
+            # the transform a second visual language for the same idea would
+            # mean learning the editor twice.
+            radius = sp(SYMMETRY_PIVOT_RADIUS)
+            draw_list.add_circle(point, radius, colour)
+            draw_list.add_line(
+                (point[0] - radius, point[1]), (point[0] + radius, point[1]), colour
+            )
+            draw_list.add_line(
+                (point[0], point[1] - radius), (point[0], point[1] + radius), colour
+            )
+        elif name == "rotate":
             draw_list.add_circle_filled(point, HANDLE, colour)
         else:
             draw_list.add_rect_filled(

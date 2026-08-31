@@ -25,6 +25,7 @@ from .selection import (
     colour_range,
     magic_wand,
     render_transform,
+    render_transform_about,
 )
 from .tiles import TilemapCel
 from .undo import CompoundEdit, LayerAddEdit, SelectionEdit, one_step
@@ -274,6 +275,7 @@ class SelectionOps:
         return True
 
     def move_floating(self: Document, dx: int, dy: int) -> None:
+        """Translate the buffer. ``FloatingBuffer.moved`` carries the pivot."""
         if self.floating is not None:
             self.floating.moved(dx, dy)
             self.rev += 1
@@ -372,6 +374,12 @@ class SelectionOps:
         angle, scale, shear = floating.angle, floating.scale, floating.shear
         resample = floating.resample
         dest = floating.offset
+        # The pivot, in the *source*'s frame -- which is the only frame every
+        # cel shares. In canvas space it would be one number for the active cel
+        # and meaningless for the rest; translated once here, it is the same
+        # padding on every replay, so every render still comes out the same
+        # shape and ``dest`` is still one number for the whole range.
+        pivot = floating.pivot_local
         source_box = floating.source_box
         src_mask = (
             floating.source_mask if floating.source is not None else floating.mask
@@ -416,7 +424,8 @@ class SelectionOps:
         edits: list[Any] = []
         for layer in targets:
             edit = self._replay_transform_on(
-                layer, source_box, src_mask, flips, angle, scale, shear, resample, dest
+                layer, source_box, src_mask, flips, angle, scale, shear, resample, dest,
+                pivot,
             )
             if edit is None:
                 continue
@@ -438,6 +447,7 @@ class SelectionOps:
         shear: tuple[float, float],
         resample: str,
         dest: tuple[int, int],
+        pivot: tuple[float, float] | None = None,
     ) -> Any:
         """One cel through the recorded gesture: cut, render, composite.
 
@@ -451,6 +461,16 @@ class SelectionOps:
         every render has the same shape, so the active buffer's final offset
         places every replay exactly. That is what lets ``dest`` be one number
         for the whole range rather than one per cel.
+
+        ``pivot`` -- in source pixels, after the flips, which is the frame the
+        buffer stores it in -- is part of that argument and not an extra on the
+        side. It decides how much the source is padded and where the render is
+        cropped back to, both of which are functions of the mask alone, so the
+        shapes still agree across the range. Leaving it behind would not have
+        raised anything: every cel would simply have turned about its own
+        bounding-box centre instead of the point the user chose, which reads as
+        plausible frame by frame and only shows up as a wrong drawing in
+        motion.
         """
         sx0, sy0, sx1, sy1 = source_box
         region = layer.pixels[sy0:sy1, sx0:sx1]
@@ -458,9 +478,14 @@ class SelectionOps:
         source, mask = lifted, src_mask.copy()
         for axis in flips:
             source, mask = tf.flip(source, axis), tf.flip(mask, axis)
-        moved, _moved_mask = render_transform(
-            source, mask, angle, scale, shear, resample
-        )
+        if pivot is None:
+            moved, _moved_mask = render_transform(
+                source, mask, angle, scale, shear, resample
+            )
+        else:
+            moved, _moved_mask, _origin = render_transform_about(
+                source, mask, angle, scale, shear, resample, pivot
+            )
         dest_h, dest_w = moved.shape[:2]
         landing = self.clip((dest[0], dest[1], dest[0] + dest_w, dest[1] + dest_h))
         box = (
@@ -831,6 +856,43 @@ class SelectionOps:
         self.floating.transform(
             angle=angle, scale=scale, shear=shear, resample=resample
         )
+        self.rev += 1
+        return True
+
+    def set_floating_pivot(
+        self: Document, pivot: tuple[float, float] | None
+    ) -> bool:
+        """Put the point the transform turns and scales about, in canvas pixels.
+
+        ``None`` restores the centre, which is where every transform pivoted
+        before there was a handle to move.
+
+        **Clamped to the canvas here rather than in the pane.** The pivot is
+        what decides how far the source is padded, so an unclamped one dragged
+        a thousand pixels off the page would allocate a plane two thousand
+        pixels wider than the drawing before anything downstream had a chance
+        to object. The canvas is the honest bound: a document is what the user
+        is looking at, and a pivot outside it is not a gesture anyone can aim.
+
+        Re-renders when the buffer is already transformed, because moving the
+        pivot moves the *result* -- and a preview that only caught up on the
+        next drag of some other handle would be showing a picture the commit
+        would not write. An untransformed buffer renders to itself whatever the
+        pivot is, so it is left alone rather than churned through a pad and a
+        crop for nothing.
+        """
+        if self.floating is None:
+            return False
+        if pivot is None:
+            self.floating.pivot = None
+        else:
+            width, height = self.size
+            self.floating.pivot = (
+                min(max(float(pivot[0]), 0.0), float(width)),
+                min(max(float(pivot[1]), 0.0), float(height)),
+            )
+        if self.floating.transformed:
+            self.floating.transform(resample=self.floating.resample)
         self.rev += 1
         return True
 

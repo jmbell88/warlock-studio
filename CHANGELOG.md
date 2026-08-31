@@ -18,6 +18,32 @@ the release you are actually running.
 
 ## 0.0.30 — 2026-08-30
 
+- **The free transform has a movable pivot.** A small ring with a crosshair through it sits at the
+  centre of the transform box; drag it anywhere and the rotation turns about that point and the
+  scale grows from it. Put it on a shoulder and the arm swings from the shoulder. It is the radial
+  symmetry guide's own ring rather than a second visual language for "the point this turns about",
+  and it takes a press ahead of the move drag exactly as the eight scale handles already do. This
+  was recorded in `docs/INVARIANTS.md` as an explicit *not done* — "a change to `render_transform`
+  rather than a handle" — and the way it landed is that it is **not** a change to `render_transform`
+  at all. `selection.render_transform_about` pads the lifted pixels so the chosen point sits at the
+  padded array's centre and then calls the unchanged centred render: the maths stays centred and the
+  buffer is what moves, so `transform.scale`/`shear`/`rotate` — the kernels the whole editor's
+  geometry rests on — still do not know a pivot exists. The result is cropped back to the mask's
+  coverage, or a corner pivot would leave the box a subject's width off the pixels; the crop reads
+  the mask and never the pixels, which is what lets a ranged commit crop every cel identically.
+  With no pivot set the render is the code it always was, pinned byte for byte against hashes taken
+  from the tree before the feature existed rather than against a re-derivation — a re-derivation
+  would agree with a rewritten kernel by construction. The pivot is carried by a move (a moved
+  selection must not strand it) and **by a ranged commit**: `_replay_transform_on`'s correctness
+  argument is that every cel renders to the same shape so one `dest` places them all, and the pivot
+  decides the padding and the crop, both functions of the shared mask. Dropped on the way in, a
+  ranged "rotate this pose across eight frames" would have turned every cel about the source box's
+  centre — the same shape, the same landing, a different picture from the one the user watched,
+  raising nothing and reading as wrong only in motion. The ring is dragged by a fake mouse through
+  the pane's real `_input` dispatch, one frame per call, and the rotate and scale drags that follow
+  it are compared against a headless transform about the same point *and* against a centred one, so
+  a handle that were drawn and inert could not pass.
+
 - **Layers, cels and tags carry a colour and a note.** Aseprite's *user data*, and the last thing
   its timeline had that this one did not (divergence #14, now **partially** retired in place in
   `docs/INVARIANTS.md` — the entry names what still diverges). The model is deliberately not a new

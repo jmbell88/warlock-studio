@@ -1704,7 +1704,7 @@ class InkerState:
 
     # Drag state, decided on press because several tools start the same way.
     drag_kind: str = ""  # "" | paint | spray | shape | marquee | lasso | move |
-    #                       layer_move | gradient | pan
+    #                       layer_move | gradient | pan | scale | rotate | pivot
     drag_anchor: tuple[float, float] | None = None
     last_point: tuple[float, float] | None = None
     lasso: list[tuple[float, float]] = field(default_factory=list)
