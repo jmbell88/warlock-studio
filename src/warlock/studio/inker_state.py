@@ -388,6 +388,20 @@ BG_BUTTON_TOOLS = frozenset({"brush", "eraser", "fill"})
 #: letter is spent.
 STAMP_TOOLS = frozenset({"brush", "eraser", "spray"})
 
+#: Tools that use a captured tip as a **fill source** rather than as a dab.
+#:
+#: The bucket, and Aseprite's own arrangement: with an image brush loaded the
+#: paint bucket pours the picture instead of the swatch. **A pattern is a stamp
+#: used as a fill source**, which is why this reads ``state.stamp`` and
+#: ``use_stamp`` rather than carrying a pattern of its own -- there is one
+#: captured tip in the app, and a second image the bucket alone knew about
+#: would be a second thing to capture, name, rotate and forget.
+#:
+#: Separate from :data:`STAMP_TOOLS` because that set is a *derivation* --
+#: the tools whose ``BRUSH_MODES`` entry is in ``brush.STAMP_MODES`` -- and the
+#: bucket has no brush mode at all: it never opens a stroke.
+PATTERN_TOOLS = frozenset({"fill"})
+
 # What each tool asks the brush engine for. Kept here rather than branched at
 # the call site so a new mode is one row. Spray asks for ``paint``: it is a
 # different way to *emit* dabs, not a different kind of dab.
@@ -2021,6 +2035,20 @@ class InkerState:
         then does not use looks like the click missed.
         """
         if self.stamp is None or tool not in STAMP_TOOLS:
+            return None
+        return self.stamp if self.options_for(tool)["use_stamp"] else None
+
+    def pattern_for(self, tool: str) -> Any:
+        """The tip *this tool* would fill with right now, or None.
+
+        :meth:`tip_for`'s sibling for :data:`PATTERN_TOOLS`, and separate from
+        it on purpose: ``tip_for`` is also what the canvas draws the brush
+        outline from, and a bucket that answered it would put a tip-shaped ring
+        under a cursor that stamps nothing. Both read the same two things -- the
+        one captured tip and this tool's own ``use_stamp`` -- so the panel's
+        checkbox and the click cannot disagree.
+        """
+        if self.stamp is None or tool not in PATTERN_TOOLS:
             return None
         return self.stamp if self.options_for(tool)["use_stamp"] else None
 

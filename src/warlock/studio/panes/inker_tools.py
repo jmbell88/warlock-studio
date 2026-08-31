@@ -16,6 +16,7 @@ from .. import anchors, controls, icons, inker, inker_mode, inker_state, theme, 
 from ..inker import brush
 from ..inker_state import (
     PAINT_TOOLS,
+    PATTERN_TOOLS,
     SHAPE_TOOLS,
     STAMP_TOOLS,
 )
@@ -305,7 +306,7 @@ def panels(ctx: Any, state: Any, tab: Any) -> bool:
 
 def _has_panels(state: Any, tab: Any) -> bool:
     tool = state.tool
-    if tool in ("gradient", "shade", "slice") or tool in STAMP_TOOLS:
+    if tool in ("gradient", "shade", "slice") or tool in STAMP_TOOLS | PATTERN_TOOLS:
         return True
     if tab.doc.active_tilemap_uid() is not None:
         return True
@@ -481,7 +482,7 @@ def _options(ctx: Any, state: Any, tab: Any) -> None:
     # in one place and forgotten in nine.
     imgui.begin_disabled(tab.busy)
 
-    if tool in STAMP_TOOLS:
+    if tool in STAMP_TOOLS | PATTERN_TOOLS:
         _image_brush(ctx, state, tab)
     if tool == "shade":
         _shading(state, doc)
@@ -794,9 +795,12 @@ def _gradient_stops(state: Any) -> None:
 def _image_brush(ctx: Any, state: Any, tab: Any) -> None:
     """Capture a tip out of the drawing, and the variants of it.
 
-    A section on the three tools that can stamp one rather than a tool of its
-    own: an image brush replaces the *tip* of the tool in your hand, so
-    everything that tool already does comes with it. The variants are buttons
+    A section on the tools that can stamp one rather than a tool of its own: an
+    image brush replaces the *tip* of the tool in your hand, so everything that
+    tool already does comes with it. **The bucket is one of them** -- a pattern
+    is a stamp used as a fill source, so the bucket pours the same captured tip
+    the brush stamps, and the two rows below say what that tool does with it
+    rather than pretending a fill has a dab. The variants are buttons
     rather than a rotation field because they cycle -- four presses of Rotate is
     where you started -- and because the useful values are the four quarter
     turns and the two mirrors, which is six clicks and no numbers.
@@ -826,9 +830,20 @@ def _image_brush(ctx: Any, state: Any, tab: Any) -> None:
         widgets.muted("Nothing captured yet.")
         return
 
-    changed, value = controls.checkbox("Use image brush", state.use_stamp)
+    pours = state.tool in PATTERN_TOOLS
+    changed, value = controls.checkbox(
+        "Fill with this pattern" if pours else "Use image brush", state.use_stamp
+    )
     if changed:
         state.use_stamp = value
+    if pours:
+        widgets.help_marker(
+            "The bucket pours the captured tip, tiled, instead of the "
+            "foreground colour -- Aseprite's pattern fill. It changes what is "
+            "written and nothing about which pixels: the tolerance, the "
+            "reference and the grid stop all still decide the region. "
+            "Edit > Fill and Edit > Stroke read this same switch."
+        )
     width, height = stamp.size
     widgets.muted(f"{width} x {height} px, turned {stamp.rotation}")
     if controls.small_button("Rotate##inkstamprot"):
@@ -848,6 +863,13 @@ def _image_brush(ctx: Any, state: Any, tab: Any) -> None:
         state.stamp_align,
         list(STAMP_ALIGN_LABELS),
         help_text=(
+            "Free starts the tiling at the corner of the region you filled. "
+            "Aligned snaps it to a grid of the tip's own size anchored on the "
+            "canvas, so two fills in different corners of the drawing are cells "
+            "of one pattern rather than two patterns that meet at a seam."
+        )
+        if pours
+        else (
             "Free puts the picture under the cursor, which is what a brush does. "
             "Aligned snaps every dab to a grid of the tip's own size anchored on "
             "the canvas, so neighbouring stamps line up into a pattern and going "

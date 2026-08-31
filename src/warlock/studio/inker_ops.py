@@ -581,6 +581,24 @@ def has_selection(state: Any, tab: Any) -> bool:
     return tab is not None and tab.doc.mask is not None
 
 
+def _pattern(ctx: Any) -> dict[str, Any]:
+    """The pattern keywords ``Edit > Fill`` and ``Edit > Stroke`` pass on.
+
+    Read off the **bucket's** options rather than off whatever tool happens to
+    be in hand, which is by definition a selection tool when these two are
+    reached. "Fill with a pattern" is one setting in this app, so the menu item
+    and a bucket click put down the same thing; a second switch on the menu
+    would be a second answer to one question.
+    """
+    state = getattr(ctx.state, "inker", None)
+    if state is None:
+        return {}
+    return {
+        "pattern": state.pattern_for("fill"),
+        "pattern_align": state.options_for("fill")["stamp_align"],
+    }
+
+
 def can_reselect(state: Any, tab: Any) -> bool:
     # Off the *memory* rather than off "there is no selection": the useful case
     # is re-selecting after something else was selected, and a mask the canvas
@@ -1028,11 +1046,18 @@ register(
     Op(
         "fill_selection",
         "Fill selection",
-        lambda ctx, tab, **_: tab.doc.fill_selection(ctx.state.inker.fg),
+        lambda ctx, tab, **_: tab.doc.fill_selection(
+            ctx.state.inker.fg, **_pattern(ctx)
+        ),
         menu="Edit",
         enabled=has_selection,
         reason=NO_SELECTION,
         separator_before=True,
+        hint=(
+            "The foreground colour -- or the captured tip, if the bucket is "
+            "set to fill with a pattern. One setting, so this and a bucket "
+            "click cannot put down two different things."
+        ),
     )
 )
 register(
@@ -1040,7 +1065,7 @@ register(
         "stroke_selection",
         "Stroke selection...",
         lambda ctx, tab, **params: tab.doc.stroke_selection(
-            ctx.state.inker.fg, int(params["width"])
+            ctx.state.inker.fg, int(params["width"]), **_pattern(ctx)
         ),
         menu="Edit",
         enabled=has_selection,

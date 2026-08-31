@@ -343,8 +343,13 @@ def capture_brush(ctx: Any) -> bool:
         )
         return False
     state.stamp = stamp
-    # Through ``set_tool``, like every other way of picking one.
-    state.set_tool("brush")
+    # Through ``set_tool``, like every other way of picking one -- unless the
+    # bucket is already in hand, in which case it stays. A capture made *from*
+    # the fill tool is somebody building a pattern to pour, and switching them
+    # to the brush would take the tool away mid-gesture for the sake of a rule
+    # about which tool a capture usually arrives on.
+    if state.tool not in inker_state.PATTERN_TOOLS:
+        state.set_tool("brush")
     state.use_stamp = True
     return True
 
@@ -358,7 +363,7 @@ def clear_brush(ctx: Any) -> None:
     """
     state = ensure(ctx)
     state.stamp = None
-    for tool in inker_state.STAMP_TOOLS:
+    for tool in inker_state.STAMP_TOOLS | inker_state.PATTERN_TOOLS:
         state.options_for(tool)["use_stamp"] = False
 
 

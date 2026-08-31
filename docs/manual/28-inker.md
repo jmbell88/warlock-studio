@@ -268,6 +268,17 @@ fill stops at the paint underneath the line rather than at the line. **Stop at g
 fill to the one grid cell you clicked in, using the grid size in the canvas settings, which is how
 you fill a single tile of a tileset without masking it first.
 
+Fill can also pour a **pattern** instead of a colour. Capture a tip the way the image brush section
+below describes — with the bucket in your hand it stays in your hand — and tick **Fill with this
+pattern** in the fill tool's panels. The region is decided exactly as before: the tolerance, the
+reference, the diagonals and the grid stop all still say *which* pixels, and the pattern only says
+what colour each of them gets. The tip's own transparency is its shape, so a lasso-captured pattern
+leaves the pixels its corners do not cover alone. **Placing** works as it does for the brush:
+**Aligned to a grid** anchors the tiling on the canvas, so two fills in different corners of the
+drawing are cells of one pattern and a stroke of that same tip lines up with them, and **Free**
+starts the tiling at the corner of the region you filled. **Edit > Fill** and **Edit > Stroke** read
+the same switch, so the menu and a bucket click always put down the same thing.
+
 The gradient tool chooses its **Shape** and whether it fades **To transparent**. Pick has **This layer
 only** — off, it reads the colour you can see, which is the blend of every visible layer; on, it
 reads the active layer's own pixels, before its opacity and blend mode. The second is what you want
@@ -379,7 +390,8 @@ The tip is not a tool of its own — it replaces the *tip* of the tool in your h
 that tool already does comes with it: symmetry mirrors where the stamps land, the spray scatters
 them, tiled mode wraps them at the seam, the selection clips them and a layer's transparency lock
 holds against them. It works on the brush, the eraser and the spray; the eraser with a tip loaded
-cuts a hole exactly the shape of the picture.
+cuts a hole exactly the shape of the picture. The **fill** tool has the same section, and there the
+tip is a *pattern*: the bucket pours it, tiled, instead of the foreground colour.
 
 **Rotate**, **Flip H** and **Flip V** give the variants. They cycle — four presses of Rotate is
 where you started — and each is taken from the capture rather than from the last variant, so a

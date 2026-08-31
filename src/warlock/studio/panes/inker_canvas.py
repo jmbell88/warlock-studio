@@ -1373,6 +1373,11 @@ def _press(ctx: Any, state: Any, tab: Any, point, origin=(0.0, 0.0)) -> None:
             # a property of the canvas, so a bucket that carried its own would
             # stop somewhere other than the lines on screen.
             stop_at_grid=state.grid_size if state.fill_stop_grid else None,
+            # The captured tip, poured instead of the swatch, when this tool's
+            # own ``use_stamp`` is on. ``None`` otherwise, which is every fill
+            # this pane has ever made and byte-for-byte the same write.
+            pattern=state.pattern_for("fill"),
+            pattern_align=state.stamp_align,
         )
         # The one paint gesture that never reaches ``_release``: a fill is a
         # click, so its Manual-mode notice is due here.

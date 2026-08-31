@@ -611,6 +611,40 @@ class Stamp:
             flip_y=self.flip_y if axis != "y" else not self.flip_y,
         )
 
+    def tiled(self, rect: tuple[int, int, int, int], align: str = STAMP_ALIGN[0]) -> np.ndarray:
+        """This tip repeated across a canvas *rect*, as ``(H, W, 4)`` uint8.
+
+        **A pattern is a stamp used as a fill source**, and this is the whole
+        of what that costs: the same pixels a dab lays down, indexed modulo the
+        tip's own size instead of blitted once. There is no second image-tiling
+        mechanism in this package and there must not be one -- a pattern that
+        tiled by its own rule would line up with a stroke of the same tip
+        everywhere except at the seam nobody thought to check.
+
+        ``align`` is one of :data:`STAMP_ALIGN` and means here exactly what it
+        means to a dab. ``aligned`` anchors the lattice on the **canvas
+        origin**, so two fills of the same tip in different corners of the
+        drawing are cells of one pattern and a stroke of that tip in ``aligned``
+        placement lands on the same lattice. ``free`` anchors it on the rect's
+        own top-left, which is the fill's reading of "put the picture where the
+        action is": the tile starts at the corner of the thing you filled.
+        ``free`` is the default here because it is ``STAMP_ALIGN[0]`` and
+        because one default for one option is what stops the bucket and the
+        brush quietly disagreeing about what the setting they share means.
+        Anything else is treated as ``free`` rather than refused, which is
+        ``StrokeState.__post_init__``'s own rule -- a stale option is a settings
+        file's business, not a reason to fail a click.
+
+        The result is a **view-shaped copy**: fancy indexing never aliases the
+        read-only ``image``, so the caller may write into what comes back.
+        """
+        x0, y0, x1, y1 = rect
+        width, height = self.size
+        ox, oy = (0, 0) if align == "aligned" else (int(x0), int(y0))
+        xs = (np.arange(int(x0), int(x1)) - ox) % width
+        ys = (np.arange(int(y0), int(y1)) - oy) % height
+        return self.image[np.ix_(ys, xs)]
+
 
 @dataclass
 class StrokeState:

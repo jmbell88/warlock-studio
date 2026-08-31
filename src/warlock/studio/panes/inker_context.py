@@ -60,7 +60,12 @@ NIB_LABELS = [
     ("line", "Line"),
 ]
 INK_LABELS = inker_state.INK_LABELS
-ALIGN_LABELS = [("free", "Free"), ("origin", "Origin"), ("tile", "Tile")]
+#: One entry per ``brush.STAMP_ALIGN`` member, and pinned against it in
+#: ``tests/inker/test_pattern_fill.py``. It used to read ``free``/``origin``/
+#: ``tile`` -- three names, two of which no longer existed anywhere in the
+#: engine, so picking either wrote a value ``StrokeState.__post_init__`` then
+#: snapped back to ``free``: a combo with two settings that did nothing.
+ALIGN_LABELS = [("free", "Free"), ("aligned", "Aligned")]
 #: What the paint bucket reads its region off. Aseprite's "Refer to", and the
 #: reason lineart on its own layer is fillable at all.
 REFER_LABELS = [("canvas", "Canvas"), ("layer", "Layer")]

@@ -24,7 +24,7 @@ from . import composite as cp
 from . import dither, filters, tiling
 from . import gradient as grad
 from ._doc_ranges import masked_apply
-from .brush import DEFAULT_SPACING, StrokeState, clamp_brush
+from .brush import DEFAULT_SPACING, STAMP_ALIGN, Stamp, StrokeState, clamp_brush
 from .layers import Layer
 from .selection import magic_wand
 
@@ -288,12 +288,33 @@ class PaintOps:
         return weight * (self.mask.mask[y0:y1, x0:x1].astype(np.float32) / 255.0)
 
     def write_colour(
-        self: Document, rect: tuple[int, int, int, int], colour: RGBA, weight: np.ndarray
+        self: Document,
+        rect: tuple[int, int, int, int],
+        colour: RGBA,
+        weight: np.ndarray,
+        *,
+        pattern: Stamp | None = None,
+        pattern_align: str = STAMP_ALIGN[0],
     ) -> bool:
         """Composite a flat colour into a region of the active layer.
 
         The door the fill and the three shapes come through as well, which is
         why the content lock is checked here rather than three times over.
+
+        ``pattern`` is a captured :class:`.brush.Stamp` used **as the fill
+        source instead of** ``colour`` -- Aseprite's pattern fill, and the same
+        object the brush stamps, which is the point: there is one captured tip
+        in the app and the bucket pours it. It is tiled across the written
+        region by :meth:`.brush.Stamp.tiled` at ``pattern_align`` (one of
+        :data:`.brush.STAMP_ALIGN`) and composited by the same straight-alpha
+        formula the flat colour uses, so the lock, the cel autovivification,
+        the selection weight and the single undo patch are all the ones that
+        already existed. ``None`` is every write this door has ever taken and
+        is **bit-identical** to the flat path -- nothing about a document that
+        never fills with a pattern changes.
+
+        ``colour`` is still taken, and ignored, when a pattern is handed over.
+        A door that took one or the other would be two doors.
         """
         box = self.clip(rect)
         if box is None:
@@ -304,9 +325,16 @@ class PaintOps:
         layer = self.stack.active
         x0, y0, x1, y1 = box
         before = layer.pixels[y0:y1, x0:x1].copy()
-        out = cp.paint_colour(
-            before.astype(np.float32), colour, self._weights(box, weight)
-        )
+        if pattern is not None:
+            out = cp.paint_pattern(
+                before.astype(np.float32),
+                pattern.tiled(box, pattern_align).astype(np.float32),
+                self._weights(box, weight),
+            )
+        else:
+            out = cp.paint_colour(
+                before.astype(np.float32), colour, self._weights(box, weight)
+            )
         if layer.alpha_lock:
             # The lock, in one line and after the formula rather than inside
             # it: "preserve transparency" is exactly *the alpha does not
@@ -1042,6 +1070,8 @@ class PaintOps:
         refer: str = "canvas",
         eight_connected: bool = False,
         stop_at_grid: int | tuple[int, int] | None = None,
+        pattern: Stamp | None = None,
+        pattern_align: str = STAMP_ALIGN[0],
     ) -> bool:
         """Flood fill from a point, on the composite's colours.
 
@@ -1070,6 +1100,12 @@ class PaintOps:
 
         ``stop_at_grid`` and ``wrap`` do not combine: a cell is not a torus, so
         the crop wins and the fold has nothing left to fold.
+
+        ``pattern`` pours the captured brush tip instead of ``colour``, which is
+        Aseprite's pattern fill; see :meth:`write_colour`. It changes **which
+        colours are written and nothing about which pixels** -- the region is
+        still the wand's, so the threshold, the reference, the connectivity and
+        the grid stop all mean exactly what they meant.
         """
         if refer not in ("canvas", "layer"):
             raise ValueError(f"unknown fill refer {refer!r}")
@@ -1098,7 +1134,13 @@ class PaintOps:
         weight = region.mask[y0:y1, x0:x1].astype(np.float32) / 255.0
         if cell is not None:
             x0, y0, x1, y1 = x0 + cell[0], y0 + cell[1], x1 + cell[0], y1 + cell[1]
-        return self.write_colour((x0, y0, x1, y1), colour, weight)
+        return self.write_colour(
+            (x0, y0, x1, y1),
+            colour,
+            weight,
+            pattern=pattern,
+            pattern_align=pattern_align,
+        )
 
     def _grid_cell(
         self: Document,

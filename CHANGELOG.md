@@ -18,6 +18,26 @@ the release you are actually running.
 
 ## 0.0.30 — 2026-08-30
 
+- **The paint bucket pours the captured tip.** Aseprite's pattern fill, and the framing is the
+  whole design: **a pattern is a stamp used as a fill source** (divergence #11, now retired in
+  place in `docs/INVARIANTS.md`). There is no second image-tiling mechanism — the source is the
+  one captured brush tip, the placement option is the same `free`/`aligned` a dab already had, and
+  `Stamp.tiled` indexes the tip's own read-only pixels modulo its size: `aligned` on the canvas
+  origin, so a patterned fill and a stroke of that tip land on one lattice and two fills in two
+  corners are cells of one pattern; `free` on the corner of the region you filled. `Document.fill`,
+  `fill_selection` and `stroke_selection` take it as a keyword and hand it to `write_colour`, the
+  door the bucket and all six shapes already came through, so the locks, the cel autovivification,
+  the feathered-selection weight and the single undo patch are the ones that already existed.
+  A pattern fill resolves to its **rasterised result** on write: `.aseprite` and `.ora` carry the
+  pixels and no pattern chunk was invented. A document that never uses it writes the bytes it
+  always wrote, which the ORA determinism pins hold to, and the checkbox is pressed by a real
+  mouse inside a real imgui frame before the fill is made through the pane's own press dispatch.
+  The bucket keeps the tool in hand when you capture from it, and *Forget* clears its switch too.
+- **The context bar's brush placement combo offered two settings that did nothing.** Its labels
+  read `Free`/`Origin`/`Tile`, but the engine has known only `free` and `aligned` since image
+  brushes landed, so picking either of the other two wrote a value `StrokeState` snapped straight
+  back to `free`. It offers the two that exist, pinned against `brush.STAMP_ALIGN` like the
+  toolbox panel's own list already was.
 - **A cel can carry its own opacity, and a linked cel can carry two.** Aseprite's format gives
   every cel chunk an opacity byte; this build kept only the layer's, warned the rest away, and
   wrote 255 back out (divergence #1, now retired in place in `docs/INVARIANTS.md`). Opacity is now

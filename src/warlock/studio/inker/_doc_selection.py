@@ -17,7 +17,7 @@ from . import composite as cp
 from . import transform as tf
 from .anim_edits import TrackAddEdit
 from .animation import Track
-from .brush import MAX_STAMP, Stamp
+from .brush import MAX_STAMP, STAMP_ALIGN, Stamp
 from .layers import Layer
 from .selection import (
     FloatingBuffer,
@@ -679,13 +679,22 @@ class SelectionOps:
         flat = self.flatten(matte=False)
         return _masked_alpha(flat[y0:y1, x0:x1], self.mask.mask[y0:y1, x0:x1])
 
-    def fill_selection(self: Document, colour: tuple[int, int, int, int]) -> bool:
+    def fill_selection(
+        self: Document,
+        colour: tuple[int, int, int, int],
+        *,
+        pattern: Stamp | None = None,
+        pattern_align: str = STAMP_ALIGN[0],
+    ) -> bool:
         """Fill the selection with a flat colour, at the mask's own coverage.
 
         Aseprite's ``Edit > Fill``. Through ``write_colour``, which is the one
         door the bucket and all six shapes already come through -- so the
         content lock, the alpha lock, the cel autovivification and the single
         undo patch are all the ones that already exist.
+
+        ``pattern`` fills with the captured tip instead of the colour, and it
+        rides the same door for that reason: a pattern fill is a fill.
         """
         if self.mask is None:
             return False
@@ -695,16 +704,28 @@ class SelectionOps:
             return False
         x0, y0, x1, y1 = box
         weight = self.mask.mask[y0:y1, x0:x1].astype(np.float32) / 255.0
-        return self.write_colour(box, colour, weight)
+        return self.write_colour(
+            box, colour, weight, pattern=pattern, pattern_align=pattern_align
+        )
 
     def stroke_selection(
-        self: Document, colour: tuple[int, int, int, int], width: int = 1
+        self: Document,
+        colour: tuple[int, int, int, int],
+        width: int = 1,
+        *,
+        pattern: Stamp | None = None,
+        pattern_align: str = STAMP_ALIGN[0],
     ) -> bool:
         """Draw the selection's own outline, ``width`` pixels thick, inside it.
 
         Aseprite's ``Edit > Stroke``. Inside rather than centred on the edge:
         an outline that grew past the selection would paint pixels the user did
         not select, which is the one thing a selection is a promise about.
+
+        ``pattern`` draws the outline out of the captured tip. Its lattice is
+        the *canvas*'s under ``aligned`` placement, not the band's, so a
+        patterned outline and a patterned fill of the same selection are two
+        cuts of one pattern rather than two patterns that meet at the edge.
         """
         if self.mask is None:
             return False
@@ -719,7 +740,9 @@ class SelectionOps:
             return False
         x0, y0, x1, y1 = box
         weight = band.mask[y0:y1, x0:x1].astype(np.float32) / 255.0
-        return self.write_colour(box, colour, weight)
+        return self.write_colour(
+            box, colour, weight, pattern=pattern, pattern_align=pattern_align
+        )
 
     def shift_selected(self: Document, dx: int, dy: int) -> bool:
         """Move the selected pixels by whole pixels, leaving a hole behind.

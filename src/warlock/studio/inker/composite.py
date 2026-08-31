@@ -585,6 +585,41 @@ def paint_colour(
     return out
 
 
+def paint_pattern(
+    before: np.ndarray, source: np.ndarray, weight: np.ndarray
+) -> np.ndarray:
+    """:func:`paint_colour` with a colour *per pixel*. 0..255 float32 both.
+
+    The pattern fill's arithmetic, and deliberately the same arithmetic: a
+    pattern is a picture used where a swatch would go, so "half" has to mean
+    for it exactly what it means for a flat fill -- the same straight-alpha
+    composite, the same weight, the same behaviour against an empty backdrop.
+    Written as a sibling rather than by generalising ``paint_colour`` because
+    that one has a native kernel keyed on a four-byte colour, and widening its
+    signature would either lose the kernel or need a second one for a case that
+    is a bucket click rather than a per-dab cost.
+
+    ``source`` carries its own alpha and it is *multiplied* by ``weight``
+    rather than replaced by it -- so a lasso-captured pattern keeps its shape
+    (the transparent corners of the tile stay transparent) and a feathered
+    selection still fades the whole fill in.
+    """
+    src_a = (source[..., 3] / 255.0) * weight
+    dst_a = before[..., 3] / 255.0
+    out_a = src_a + dst_a * (1.0 - src_a)
+    # ``paint_colour``'s masked-lane fix, and for its reason.
+    shown = out_a > 0.0
+    share = np.empty_like(src_a)
+    np.divide(src_a, np.where(shown, out_a, 1.0), out=share)
+    share = np.where(shown, share, 0.0)
+    out = np.empty_like(before)
+    out[..., :3] = (
+        before[..., :3] + (source[..., :3] - before[..., :3]) * share[..., None]
+    )
+    out[..., 3] = out_a * 255.0
+    return out
+
+
 def stack_region(
     entries: list[tuple[np.ndarray, float, str]],
     rect: tuple[int, int, int, int],
