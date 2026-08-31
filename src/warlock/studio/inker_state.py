@@ -1287,6 +1287,22 @@ class InkerDoc:
     # delete would silently shrink it under the user, and the engine clamps
     # every op it is handed anyway.
     range_sel: tuple[int, int, int, int] | None = None
+    #: An explicit, possibly **discontiguous** set of selected track indices --
+    #: Aseprite's Ctrl+click on a layer name. Empty means "no override", and
+    #: the layer verbs fall back to the track span of :attr:`range_sel`.
+    #:
+    #: An override plus a default, not two selections kept in step: when this
+    #: is empty there is no second state to disagree with, and when it is not,
+    #: it wins outright. That is ``cel_z``'s and ``group_fold``'s rule and
+    #: ``InkerDoc.active_view``'s -- a precedence chain rather than a mirror.
+    #: One accessor (``inker_timeline.track_rows``) resolves it, so nothing
+    #: else has to know the order.
+    #:
+    #: Indices, not uids, and clamped **at use, never at store** -- the same
+    #: two decisions ``range_sel`` makes, for its reasons: a selection names a
+    #: region of the timeline, so inserting a track inside it should widen it,
+    #: and one trimmed at store time would shrink under the user.
+    track_sel: set[int] = field(default_factory=set)
 
     # Preview-pane playback. A second, independent playhead: it never touches
     # ``playing``, ``play_index`` or the document's ``anim.current``, which is

@@ -1073,8 +1073,10 @@ def _range_gesture(ctx: Any, tab: Any, geom: dict[str, Any]) -> None:
     that owns the press.
     """
     state = ctx.state.inker
-    if tab.range_sel is not None and imgui.is_key_pressed(imgui.Key.escape):
-        tab.range_sel = None
+    if (tab.range_sel is not None or tab.track_sel) and imgui.is_key_pressed(
+        imgui.Key.escape
+    ):
+        clear_track_selection(tab)
         state.timeline_anchor = None
         return
     if state.timeline_anchor is None or not imgui.is_mouse_down(0):
@@ -1099,6 +1101,9 @@ def _range_overlay(ctx: Any, tab: Any, geom: dict[str, Any]) -> None:
     colour for -- empty, drawn, linked -- and the selection is one thing rather
     than n things.
     """
+    if tab.track_sel:
+        _track_overlay(tab, geom)
+        return
     rect = tab.range_sel
     if rect is None:
         return
@@ -1125,6 +1130,40 @@ def _range_overlay(ctx: Any, tab: Any, geom: dict[str, Any]) -> None:
         0.0,
         sp(2),
     )
+
+
+def _track_overlay(tab: Any, geom: dict[str, Any]) -> None:
+    """One outline per selected row, across the whole strip.
+
+    A discontiguous selection has no rectangle, so the single outline the
+    marquee draws cannot state it -- and drawing the bounding box of rows 1 and
+    6 would claim four rows nothing is going to happen to, which is worse than
+    drawing nothing. One box per row is the only honest shape.
+
+    Full width rather than per cell, because what is selected here is *layers*:
+    the verbs this feeds are the row's own -- hide, lock, duplicate, delete --
+    and none of them is about a frame.
+    """
+    tops: dict[int, float] = geom["tops"]
+    cell, gutter, frames = geom["cell"], geom["gutter"], geom["frames"]
+    if frames < 1 or "x0" not in geom:
+        return
+    rows = sorted(top for track, top in tops.items() if track in tab.track_sel)
+    if not rows:
+        return
+    pitch = cell + gutter
+    x0 = geom["x0"]
+    x1 = x0 + pitch * (frames - 1) + cell
+    draw = imgui.get_window_draw_list()
+    for top in rows:
+        draw.add_rect(
+            (x0 - 1.0, top - 1.0),
+            (x1 + 1.0, top + cell + 1.0),
+            _u32(theme.ACCENT),
+            # rounding is the 4th positional and thickness the *5th*.
+            0.0,
+            sp(2),
+        )
 
 
 def _frame_headers(ctx: Any, tab: Any, cell: float, gutter: float) -> None:
@@ -1252,6 +1291,57 @@ def track_range(tab: Any, doc: Any) -> tuple[int, int] | None:
     return None if low > high else (low, high)
 
 
+def track_rows(tab: Any, doc: Any) -> list[int]:
+    """Every selected layer row, in stack order. ``[]`` when none is.
+
+    The one place the precedence between the two ways a layer gets selected is
+    resolved, so no verb has to know there are two. An explicit
+    ``track_sel`` -- Ctrl+click, possibly discontiguous -- wins outright; with
+    it empty the answer is the track span of the cell marquee, which is what
+    the timeline has always meant by "selected rows".
+
+    Clamped here, at use, like every other reader of a stored selection.
+    """
+    explicit = getattr(tab, "track_sel", None)
+    if explicit and doc.anim is not None:
+        limit = len(doc.anim.tracks)
+        return sorted({int(i) for i in explicit if 0 <= int(i) < limit})
+    span = track_range(tab, doc)
+    return [] if span is None else list(range(span[0], span[1] + 1))
+
+
+def toggle_track(tab: Any, doc: Any, index: int) -> bool:
+    """Ctrl+click a layer name: add it to the selection, or take it out.
+
+    **Seeded from whatever is selected now**, so Ctrl+clicking a third row
+    after dragging a two-row marquee widens that selection instead of throwing
+    it away and starting from one. That is the behaviour of every list in
+    every file manager, and getting it wrong is the thing that makes a
+    multi-select feel broken rather than merely different.
+
+    The cell marquee is cleared, because the two cannot both be true: a
+    discontiguous set of tracks is not a rectangle, and leaving the rectangle's
+    outline drawn would have the timeline claiming a selection the verbs are
+    not acting on.
+    """
+    if doc.anim is None or not (0 <= index < len(doc.anim.tracks)):
+        return False
+    rows = set(track_rows(tab, doc))
+    if index in rows:
+        rows.discard(index)
+    else:
+        rows.add(index)
+    tab.track_sel = rows
+    tab.range_sel = None
+    return True
+
+
+def clear_track_selection(tab: Any) -> None:
+    """Drop both halves. What Escape and a fresh marquee press both want."""
+    tab.track_sel = set()
+    tab.range_sel = None
+
+
 def extend_range(tab: Any, doc: Any, index: int) -> bool:
     """Shift-click: stretch the timeline range from the active row to this one.
 
@@ -1337,8 +1427,20 @@ def _track_row(
     # document's one column was the only way to change rows -- and Shift-click
     # stretches the timeline range to here, which is what ``extend_range`` was
     # written for and never wired to.
-    if imgui.is_item_clicked(0) and not tab.busy and not extend_range(tab, doc, track_index):
-        doc.set_active_layer(track_index)
+    # Ctrl+click is tried first and Shift+click second, which is the order
+    # every list in every file manager resolves them in: Ctrl adds one row to
+    # what is already picked, Shift replaces the span. Neither moves the active
+    # layer -- a multi-select is about what the verbs act on, and moving the
+    # row the tools paint on as a side effect of picking a set is the surprise
+    # this ordering exists to avoid.
+    if imgui.is_item_clicked(0) and not tab.busy:
+        if imgui.get_io().key_ctrl:
+            toggle_track(tab, doc, track_index)
+        elif not extend_range(tab, doc, track_index):
+            # A plain click is a fresh single selection, so an explicit
+            # Ctrl+click set stops applying -- ``_press``'s rule on the grid.
+            tab.track_sel = set()
+            doc.set_active_layer(track_index)
     if imgui.is_item_hovered():
         detail = f"{layer.blend}  {layer.opacity * 100:.0f}%"
         if not layer.visible:
@@ -1534,9 +1636,9 @@ def _set_visible(ctx: Any, tab: Any, index: int, visible: bool) -> None:
     be an answer to a question nobody asked.
     """
     doc = tab.doc
-    span = track_range(tab, doc)
-    if span is not None and span[0] <= index <= span[1] and span[1] > span[0]:
-        doc.set_range_props(span[0], span[1], visible=visible)
+    rows = row_targets(tab, doc, index)
+    if len(rows) > 1:
+        doc.set_tracks_props(rows, visible=visible)
     else:
         doc.set_layer_props(index, visible=visible)
 
@@ -1643,9 +1745,9 @@ def row_targets(tab: Any, doc: Any, index: int) -> list[int]:
     a menu that ignored it while the highlight said otherwise is worse than no
     range at all.
     """
-    span = track_range(tab, doc)
-    if span is not None and span[0] <= index <= span[1] and span[1] > span[0]:
-        return list(range(span[0], span[1] + 1))
+    rows = track_rows(tab, doc)
+    if index in rows and len(rows) > 1:
+        return rows
     return [index]
 
 
@@ -1809,6 +1911,10 @@ def _press(ctx: Any, tab: Any, ti: int, fi: int) -> None:
         )
         return
     state.timeline_anchor = (ti, fi)
+    # A press on the grid is the user selecting *cells*, so an explicit layer
+    # selection made with Ctrl+click stops applying. Left standing it would go
+    # on deciding what the row verbs act on while the marquee said otherwise.
+    tab.track_sel = set()
     tab.range_sel = (ti, ti, fi, fi)
 
 

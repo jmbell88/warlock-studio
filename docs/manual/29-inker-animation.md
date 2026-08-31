@@ -260,6 +260,17 @@ Its rows are the timeline's tracks, so a row inside the selection draws highligh
 `Shift`+clicking a row stretches the selection across the tracks between it and the active one, and
 clicking the eye on a row of a multi-track range hides or shows the whole range as one step.
 
+`Ctrl`+clicking a row adds it to the selection or takes it out again, so the layers you act on do
+not have to be next to each other — background, character and effects with two rows untouched
+between them is three `Ctrl`+clicks. It builds on whatever is already selected rather than starting
+over, so you can drag a range and then add one more row to it. Each selected row draws its own
+outline: a selection with a gap in it has no single block to draw round, and one box round the whole
+span would claim rows nothing is going to happen to.
+
+The two kinds of selection are exclusive, because they are answering different questions. `Ctrl`+
+clicking a layer clears any cell range you had, and clicking a cell — or plain-clicking a layer name
+— clears the layers you had picked. `Esc` clears whichever you are holding.
+
 A row's right-click menu acts on the whole block as well, and says so: with three rows selected it
 reads **Duplicate 3 layers**, **Merge down 3 layers**, **Delete 3 layers** and **Group 3 layers**
 rather than naming one. Each is a single `Ctrl+Z` however many rows it touched, and deleting every

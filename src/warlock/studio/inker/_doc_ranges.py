@@ -400,12 +400,35 @@ class RangeOps:
         span = clamp_span(t0, t1, len(anim.tracks))
         if span is None:
             return False
+        return self.set_tracks_props(range(span[0], span[1] + 1), **props)
+
+    def set_tracks_props(self: Document, indices: Any, **props: Any) -> bool:
+        """The same change across **any** set of tracks, as one step.
+
+        :meth:`set_range_props` is this with a span in front of it, and the
+        span form is kept because a rectangle is what a cell marquee produces
+        and what most callers have. What this adds is the discontiguous case --
+        Ctrl+clicking layers 1, 3 and 6 and hiding all three -- which a pair of
+        bounds cannot name at all.
+
+        Out-of-range and duplicate indices are dropped rather than refused: the
+        selection is stored unclamped on purpose (see ``InkerDoc.track_sel``),
+        so a set naming a track a delete has since taken away must cost that
+        row and nothing else. An empty result pushes nothing and returns False,
+        which is this module's rule for every op that changes nothing.
+        """
+        anim = self.anim
+        if anim is None:
+            return False
         unknown = set(props) - TRACK_PROPS
         if unknown:
             raise ValueError(f"unknown track property: {sorted(unknown)[0]}")
+        rows = sorted({int(i) for i in indices if 0 <= int(i) < len(anim.tracks)})
+        if not rows:
+            return False
         self.commit_floating()
         edits: list[Any] = []
-        for index in range(span[0], span[1] + 1):
+        for index in rows:
             track = anim.tracks[index]
             before = {key: getattr(track, key) for key in props}
             if before == props:
