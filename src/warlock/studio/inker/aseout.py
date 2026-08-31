@@ -100,6 +100,7 @@ import struct
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -131,6 +132,9 @@ from .asein import (
     _TAG_DIRECTIONS,
     _TAGS,
     _TILESET,
+    _UD_COLOUR,
+    _UD_TEXT,
+    _USER_DATA,
 )
 from .index_plane import MAX_COLOURS, OPAQUE_THRESHOLD
 
@@ -357,6 +361,10 @@ class _Row:
     #: against before its refs are written under this row's tileset.
     tileset_uid: int | None = None
     tileset: int | None = None
+    #: This row's user data, or an empty note. A **group** row never carries
+    #: one: a group here is a ``GroupNode`` and notes live on tracks, so the
+    #: default is what a folder writes and nothing is silently invented for it.
+    note: Any = None
 
 
 def _tileset_uid_of(doc, track) -> int | None:
@@ -443,6 +451,7 @@ def _members(doc) -> list[tuple[int, _Row]]:
                 opacity=float(track.opacity),
                 blend=str(track.blend),
                 continuous=bool(track.continuous),
+                note=getattr(track, "note", None),
                 tileset_uid=_tileset_uid_of(doc, track),
             ),
         )
@@ -516,6 +525,36 @@ def _rows(doc, tileset_ids: dict[int, int]) -> tuple[list[_Row], list[int]]:
         row.child_level = len(open_uids)
         rows.append(row)
     return rows, index_of
+
+
+def _user_data_chunks(note: Any) -> list[bytes]:
+    """The ``0x2020`` chunk for ``note``, or **no chunk at all**.
+
+    A list rather than an optional so every caller can ``extend`` and none has
+    to write the "is there one" branch a second time -- and the empty list is
+    the whole of how this feature stays invisible: a document that carries no
+    notes emits no user-data chunks, so its bytes are the bytes it wrote before
+    the feature existed and the corpus's fixed point is untouched.
+
+    Written **immediately after the chunk it describes**, which is the format's
+    only way of saying whose it is (:func:`asein._read_user_data` has the other
+    half of that argument). A chunk emitted anywhere else does not describe
+    nothing -- it describes whatever happens to precede it.
+
+    The two payloads go out in flag order and neither is length-prefixed as a
+    pair, so the flags word is the only thing telling a reader which of them is
+    there. The properties flag is never set: this build has no properties tree
+    to write, and claiming one would put a reader four bytes into a name.
+    """
+    if not note:
+        return []
+    flags = (_UD_TEXT if note.text else 0) | (_UD_COLOUR if note.colour else 0)
+    body = struct.pack("<I", flags)
+    if note.text:
+        body += _string(note.text)
+    if note.colour:
+        body += struct.pack("<BBBB", *note.colour)
+    return [_chunk(_USER_DATA, body)]
 
 
 def _opacity_byte(value: float) -> int:
@@ -1089,10 +1128,14 @@ def _tags_chunk(tags, frames: int) -> bytes:
     opposite case and is refused, because a count past a WORD would wrap to a
     small number and silently stop a clip that was set to run.
 
-    The three colour bytes are zero -- a timeline colour is user data this
-    package does not model (divergence 14), and the reader warns about a
-    non-zero one, so zero is both the honest value and the one that keeps a
-    round trip clean.
+    The three colour bytes stay zero even now that a tag *has* a colour
+    (divergence 14, partially retired 2026-08-30). They are the pre-1.3 home
+    for it, and Aseprite 1.3 itself writes zeroes here and puts the swatch in
+    the tag's user-data chunk instead -- which is where this writer puts it, in
+    the run :func:`aseprite_bytes` emits after this chunk. Writing it in both
+    places would be two answers to one question, and the reader prefers the
+    user-data one, so the legacy field would be the copy that silently went
+    stale.
     """
     body = struct.pack("<H8s", len(tags), b"\0" * 8)
     last = max(0, frames - 1)
@@ -1356,9 +1399,26 @@ def aseprite_bytes(doc) -> bytes:
         )
         for index, slot in enumerate(tilesets)
     )
-    head.extend(_layer_chunk(row) for row in rows)
+    for row in rows:
+        # The row, then its note. Interleaved rather than appended in a second
+        # pass, because a user-data chunk belongs to whatever chunk precedes
+        # it: all the layers followed by all the notes would file every note
+        # under the last layer.
+        head.append(_layer_chunk(row))
+        head.extend(_user_data_chunks(row.note))
     if anim is not None and anim.tags:
         head.append(_tags_chunk(anim.tags, frames))
+        # One chunk per tag, in tag order -- but only when at least one tag has
+        # something to say. Aseprite writes an empty one for every tag; this
+        # writer writes none at all in that case, because "only when it is set"
+        # is what keeps a document that has never used the feature
+        # byte-identical to what it was. When any tag *is* annotated the run
+        # covers all of them, empties included, since the reader counts its way
+        # along the run and a gap would shift every note after it onto the
+        # wrong tag.
+        if any(getattr(tag, "note", None) for tag in anim.tags):
+            for tag in anim.tags:
+                head.extend(_user_data_chunks(tag.note) or [_chunk(_USER_DATA, b"\0\0\0\0")])
     for entry in getattr(doc, "slices", None) or ():
         runs = (
             [(0, entry.at(None))] if anim is None else _slice_runs(entry, anim.frames)
@@ -1401,6 +1461,13 @@ def aseprite_bytes(doc) -> bytes:
                     per_frame[index].append(
                         _link_chunk(index_of[position], at, alpha)
                     )
+                # Per *slot*, exactly as the opacity above is, and immediately
+                # after this slot's own chunk -- so a link's two chunks carry
+                # two different notes and each lands on the cel it was written
+                # after.
+                per_frame[index].extend(
+                    _user_data_chunks(anim.cel_note(track.uid, frame.uid))
+                )
 
     body = bytearray(
         _header(

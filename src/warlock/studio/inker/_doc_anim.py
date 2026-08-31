@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from .anim_edits import (
     AnimateEdit,
+    CelNoteEdit,
     CelOpacityEdit,
     CelSetEdit,
     FrameAddEdit,
@@ -27,8 +28,9 @@ from .anim_edits import (
     FrameMoveEdit,
     FrameRemoveEdit,
     TagsEdit,
+    TrackNoteEdit,
 )
-from .animation import Animation, Frame, Tag, Track, clamp_duration
+from .animation import Animation, Frame, Note, Tag, Track, clamp_duration
 from .layers import Layer, LayerStack
 from .undo import one_step
 
@@ -244,6 +246,37 @@ class AnimOps:
             anim.cel_opacity[(track_uid, frame_uid)] = value
         self._anim_changed()
 
+    def _set_track_note(self: Document, track_uid: int, note: Note) -> None:
+        """Undo hook for :meth:`set_track_note`.
+
+        ``rev`` rather than ``_anim_changed``, which is where this differs from
+        every neighbour above: a note reaches no pixel -- ``layers_for`` never
+        reads one -- so stamping every frame and recompositing the document to
+        change a swatch would be paying the price of a track property for
+        something that is not one. ``_set_tags``' choice, for its reason.
+        """
+        anim = self._require_anim()
+        anim.tracks[anim.track_index(track_uid)].note = note
+        self.rev += 1
+
+    def _set_cel_note(
+        self: Document, track_uid: int, frame_uid: int, note: Note
+    ) -> None:
+        """Undo hook for :meth:`set_cel_note`. Sparse: an empty note removes
+        the key.
+
+        ``_set_cel_opacity``'s rule verbatim, and it is what keeps the feature
+        invisible to every writer when it is not used -- ``ora`` and ``aseout``
+        both ask whether a slot is *named* here, so a document that was
+        annotated and cleared writes the bytes it wrote before.
+        """
+        anim = self._require_anim()
+        if note:
+            anim.cel_notes[(track_uid, frame_uid)] = note
+        else:
+            anim.cel_notes.pop((track_uid, frame_uid), None)
+        self.rev += 1
+
     def _set_cel(self: Document, track_uid: int, frame_uid: int, layer: Layer | None) -> None:
         anim = self._require_anim()
         if layer is None:
@@ -404,6 +437,68 @@ class AnimOps:
             return False
         self._set_cel_opacity(track.uid, frame.uid, after)
         self.history.push(CelOpacityEdit(track.uid, frame.uid, before, after))
+        return True
+
+    def set_cel_note(
+        self: Document,
+        note: Note,
+        track_index: int | None = None,
+        frame_index: int | None = None,
+    ) -> bool:
+        """Label one slot of the grid, and colour it on the timeline.
+
+        Takes a whole :class:`~.animation.Note` rather than a text and a
+        colour keyword, because "leave the other one alone" and "clear the
+        other one" would otherwise need a sentinel that is not ``None`` --
+        ``None`` being exactly what clearing the colour means. The caller reads
+        the note it is changing (:meth:`Animation.cel_note`) and hands back the
+        one it wants, which is one shape for every combination.
+
+        Refused on an empty slot, :meth:`set_cel_opacity`'s rule and its
+        reason: there is no cel to label, and inventing an entry for one would
+        leave a note behind that nothing shows and that the next autovivified
+        cel would silently inherit.
+        """
+        slot = self._slot(track_index, frame_index)
+        anim = self.anim
+        if slot is None or anim is None:
+            return False
+        track, frame = slot
+        if anim.cels.get((track.uid, frame.uid)) is None:
+            return False
+        before = anim.cel_note(track.uid, frame.uid)
+        after = note if isinstance(note, Note) else Note()
+        if after == before:
+            return False
+        self._set_cel_note(track.uid, frame.uid, after)
+        self.history.push(CelNoteEdit(track.uid, frame.uid, before, after))
+        return True
+
+    def set_track_note(
+        self: Document, note: Note, track_index: int | None = None
+    ) -> bool:
+        """Label one row, and colour it on the timeline.
+
+        Animated documents only, and by construction rather than by refusal: a
+        note lives on a ``Track`` and a still document has none. That is
+        divergence 22's line again -- the same one ``set_cel_opacity`` sits
+        behind -- and the caller that offers this control hides it rather than
+        greying it, because a still document has no timeline drawn to put a
+        swatch on.
+        """
+        anim = self.anim
+        if anim is None:
+            return False
+        index = self.stack.active_index if track_index is None else int(track_index)
+        if not 0 <= index < len(anim.tracks):
+            return False
+        track = anim.tracks[index]
+        before = track.note
+        after = note if isinstance(note, Note) else Note()
+        if after == before:
+            return False
+        self._set_track_note(track.uid, after)
+        self.history.push(TrackNoteEdit(track.uid, before, after))
         return True
 
     def link_cel(

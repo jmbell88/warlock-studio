@@ -1119,8 +1119,13 @@ def test_a_tilesets_own_user_data_warns_generically_not_per_tile():
     followed by a user data chunk (empty or not) and then all the user data
     chunks of the tiles ordered by tile index" -- so the *first* ``USER_DATA``
     chunk in a run after a tileset chunk belongs to the tileset itself, an
-    ordinary owner, and earns the ordinary warning rather than the per-tile
-    one."""
+    ordinary owner, and earns its own warning rather than the per-tile one.
+
+    Both sentences narrowed on 2026-08-30 when divergence 14 was partially
+    retired: a layer's, a cel's and a tag's user data are *kept* now, so the
+    old shared "user data and timeline colours are not kept" line would be
+    false about three of the five owners. A tileset's own note still drops,
+    and says so about itself."""
     blank = _rgba(1, 1, (0, 0, 0, 0))
     user = _chunk(0x2020, struct.pack("<I", 1) + _string("notes"))
     data = _file(
@@ -1129,7 +1134,7 @@ def test_a_tilesets_own_user_data_warns_generically_not_per_tile():
     )
     doc, warnings = asein.document_from_aseprite(data)
     assert len(doc.tilesets) == 1
-    assert any("user data and timeline colours" in line for line in warnings)
+    assert any("a tileset's own user data was dropped" in line for line in warnings)
     assert not any("per-tile properties" in line for line in warnings)
 
 
@@ -1158,7 +1163,7 @@ def test_per_tile_user_data_warns_that_the_tiles_are_kept():
     doc, warnings = asein.document_from_aseprite(data)
     assert len(doc.tilesets) == 1
     assert warnings.count("per-tile properties are not kept; the tiles are") == 1
-    assert any("user data and timeline colours" in line for line in warnings)
+    assert any("a tileset's own user data was dropped" in line for line in warnings)
 
 
 def test_an_empty_user_data_chunk_says_nothing():

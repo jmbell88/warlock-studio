@@ -18,6 +18,32 @@ the release you are actually running.
 
 ## 0.0.30 — 2026-08-30
 
+- **Layers, cels and tags carry a colour and a note.** Aseprite's *user data*, and the last thing
+  its timeline had that this one did not (divergence #14, now **partially** retired in place in
+  `docs/INVARIANTS.md` — the entry names what still diverges). The model is deliberately not a new
+  one: it is per-cel opacity's, one wave on. `animation.Note` is a frozen `(text, colour)` pair
+  whose emptiness *is* its unset state, held as a **direct field** on `Track` and on `Tag` — each is
+  one object — and as a **sparse dict keyed `(track uid, frame uid)`** for cels, because a linked cel
+  is two keys mapping to one `Layer` and the two slots may legitimately want two different notes.
+  Aseprite's own format agrees: every cel chunk, linked ones included, gets its own user-data chunk.
+  Unlike the opacity a note reaches no pixel, so the compositor, the below-cache and the native
+  stack kernel were untouched. `asein` stops dropping the chunks — a `0x2020` chunk names no owner,
+  it describes whatever chunk precedes it, so the reader now tracks one and files each note on the
+  layer, cel or tag it followed, reading a tag's pre-1.3 colour bytes as well. `aseout` writes the
+  chunk immediately after the chunk it describes and **only when the note is set**, so an
+  unannotated document's bytes are the bytes it always wrote; `ora`'s `animation.json` gains
+  additive `user_data`/`colour` keys on the same terms, and the determinism pins hold. In the
+  timeline the colour is a stripe down the row and the cel and the tag's own band; right-click ▸
+  **Properties...** on any of the three sets the text, and a seven-swatch row sets the colour, with
+  an × that takes it off. The swatch is pressed by a real mouse inside a real imgui frame before the
+  grid is checked — and a button answers on the *release*, so the press-only frame the previous
+  wave's slider needed would have asserted nothing here. Still documents keep none of it: a note
+  lives on a track, a grid slot or a tag, and `Document.anim is None` has none of the three, which
+  a one-frame `.aseprite` now says out loud rather than losing quietly.
+- The layer row's **Properties...** entry is now **Layer properties...**. It opens the blend,
+  opacity and locks dialog, which is a different question from the row's own user data on the same
+  menu — and two items called Properties is a menu that answers neither.
+
 - **The paint bucket pours the captured tip.** Aseprite's pattern fill, and the framing is the
   whole design: **a pattern is a stamp used as a fill source** (divergence #11, now retired in
   place in `docs/INVARIANTS.md`). There is no second image-tiling mechanism — the source is the

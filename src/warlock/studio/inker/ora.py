@@ -77,6 +77,7 @@ from .animation import (
     Animation,
     DirectionalLayout,
     Frame,
+    Note,
     Tag,
     Track,
 )
@@ -570,6 +571,39 @@ def _stack_xml_animated(doc, names: dict[int, str]) -> bytes:
     return ElementTree.tostring(root, encoding="UTF-8", xml_declaration=True)
 
 
+def _note_payload(note) -> dict:
+    """``{}`` for an unset note, and only the halves that are set otherwise.
+
+    One builder for all three places a note is written -- tracks, cels and tags
+    -- because "written only when it is set" is a rule about *each field*, not
+    about the record: a note that is a colour and no text must not put an empty
+    string into the member, or a document with one coloured row would stop
+    being byte-comparable with the same document written a build later.
+
+    The colour goes out as a **list**, which is what ``json`` makes of a tuple
+    anyway; :class:`~.animation.Note` coerces it back to a quadruple on the way
+    in, so the asymmetry lives in one place.
+    """
+    if not note:
+        return {}
+    out: dict = {}
+    if note.text:
+        out["user_data"] = note.text
+    if note.colour:
+        out["colour"] = list(note.colour)
+    return out
+
+
+def _read_note(entry: dict):
+    """:func:`_note_payload`'s inverse. ``.get``-based, like every additive key.
+
+    A file written before notes existed reads back as an empty one rather than
+    failing the whole grid, which is why ``ANIMATION_VERSION`` stays where it
+    is.
+    """
+    return Note(text=str(entry.get("user_data") or ""), colour=entry.get("colour"))
+
+
 def _animation_json(doc, names: dict[int, str]) -> bytes:
     anim = doc.anim
     tracks = {track.uid: i for i, track in enumerate(anim.tracks)}
@@ -592,6 +626,12 @@ def _animation_json(doc, names: dict[int, str]) -> bytes:
                 if anim.cel_alpha(track_uid, frame_uid) < 1.0
                 else {}
             ),
+            # Per-cel user data, on the same terms as the opacity above and for
+            # the same reasons: written only when it is set, so an unannotated
+            # document's bytes do not move, and beside ``data`` rather than on
+            # the layer, because a linked cel is one PNG named by two entries
+            # and the two may legitimately disagree.
+            **_note_payload(anim.cel_note(track_uid, frame_uid)),
         }
         for (track_uid, frame_uid), layer in anim.cels.items()
         if track_uid in tracks and frame_uid in frames
@@ -608,7 +648,14 @@ def _animation_json(doc, names: dict[int, str]) -> bytes:
         # inside ``Track.props`` because that dict is *also* the six-property
         # copy-down list, and this is not one of the six.
         "tracks": [
-            {**track.props(), **({"continuous": True} if track.continuous else {})}
+            {
+                **track.props(),
+                **({"continuous": True} if track.continuous else {}),
+                # ``continuous``'s rule again, and built out here for its
+                # reason: ``Track.props`` is *also* the copy-down list and a
+                # note is not one of the six.
+                **_note_payload(track.note),
+            }
             for track in anim.tracks
         ],
         "cels": cels,
@@ -630,6 +677,9 @@ def _animation_json(doc, names: dict[int, str]) -> bytes:
                 # document's ``animation.json`` byte-identical to what it was
                 # -- the determinism pin depends on exactly that.
                 **({"repeat": int(tag.repeat)} if tag.repeat else {}),
+                # ``repeat``'s rule, third time: a tag that was never annotated
+                # writes the keys it always wrote.
+                **_note_payload(tag.note),
             }
             for tag in anim.tags
         ],
@@ -1185,6 +1235,11 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int], reader=None):
                 # start as a copy of the last one", so there is nowhere honest
                 # to put it outside our own section.
                 continuous=bool(entry.get("continuous", False)),
+                # Same ``.get``, same reason -- and no ``stack.xml`` attribute
+                # either: a foreign editor has no concept for "the note this
+                # row carries on our timeline", so our own section is the only
+                # honest place for it.
+                note=_read_note(entry),
             )
             for i, entry in enumerate(payload["tracks"])
         ]
@@ -1198,6 +1253,7 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int], reader=None):
         planes: dict[str, Layer] = {}
         cels: dict[tuple[int, int], Layer] = {}
         cel_opacity: dict[tuple[int, int], float] = {}
+        cel_notes: dict[tuple[int, int], Note] = {}
         for entry in payload["cels"]:
             ti, fi, src = int(entry["track"]), int(entry["frame"]), entry["data"]
             if not (0 <= ti < len(tracks) and 0 <= fi < len(frames)):
@@ -1233,6 +1289,12 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int], reader=None):
             alpha = float(entry.get("opacity", 1.0))
             if alpha < 1.0:
                 cel_opacity[(tracks[ti].uid, frames[fi].uid)] = max(0.0, alpha)
+            # Sparse for the opacity's reason one line up: an empty note stored
+            # here would be written straight back out and cost the file its
+            # byte-for-byte round trip.
+            note = _read_note(entry)
+            if note:
+                cel_notes[(tracks[ti].uid, frames[fi].uid)] = note
 
         tags = [
             Tag(
@@ -1249,6 +1311,7 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int], reader=None):
                 # is exactly "the loop flag decides" -- so an old document
                 # reads back playing precisely as it did.
                 repeat=int(entry.get("repeat", 0) or 0),
+                note=_read_note(entry),
             )
             for entry in payload.get("tags", [])
         ]
@@ -1289,6 +1352,7 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int], reader=None):
         frames=frames,
         cels=cels,
         cel_opacity=cel_opacity,
+        cel_notes=cel_notes,
         tags=tags,
         current=0,
         layout=layout,

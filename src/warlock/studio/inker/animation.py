@@ -66,6 +66,7 @@ __all__ = [
     "Animation",
     "DirectionalLayout",
     "Frame",
+    "Note",
     "Tag",
     "Track",
     "advance",
@@ -290,6 +291,68 @@ CEL_PROPS: tuple[str, ...] = (
 )
 
 
+@dataclass(frozen=True)
+class Note:
+    """What a timeline element carries for the *reader*: a line of text and a
+    swatch colour.
+
+    Aseprite's user-data chunk exactly -- a string and an RGBA colour, either
+    of which may be absent -- and this package's one model for both, so a
+    track, a cel and a tag all answer the same question the same way.
+
+    **Empty is unset, and ``bool`` is how every writer asks.** ``Note()`` is
+    falsey; ``ora``, ``aseout`` and the timeline all test the note before
+    emitting anything, which is what keeps a document that has never used the
+    feature writing precisely the bytes it wrote before it existed. It is the
+    rule :attr:`Animation.cel_opacity` follows one grid cell down, and the
+    reason the determinism pins still hold.
+
+    **Frozen**, unlike every other dataclass in this module. A note is shared
+    rather than copied -- ``_set_tags`` installs tags through ``replace``,
+    which is a *shallow* copy, so an undo step and the live document hold the
+    same ``Note`` object -- and a mutable one would let the next edit write
+    through into the step meant to reverse it. That is ``_set_tags``' own
+    stated trap, and freezing is the version of it that cannot be forgotten.
+
+    The fields are coerced rather than trusted, ``Tag.__post_init__``'s rule:
+    a note arrives from a JSON member or somebody else's ``.aseprite`` as
+    often as from the menu, and a colour stored as a three-element list is a
+    swatch that should still draw rather than a document that will not open.
+    """
+
+    text: str = ""
+    colour: tuple[int, int, int, int] | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "text", str(self.text or ""))
+        object.__setattr__(self, "colour", _as_colour(self.colour))
+
+    def __bool__(self) -> bool:
+        return bool(self.text) or self.colour is not None
+
+
+def _as_colour(value: object) -> tuple[int, int, int, int] | None:
+    """``value`` as an opaque-by-default RGBA quadruple, or None.
+
+    Three channels are widened to four with a full alpha, because that is what
+    a timeline colour is everywhere it is stored as three: Aseprite's tag
+    chunk carries RGB and its user-data chunk carries RGBA, and the two have
+    to arrive as one value or a round trip through the pair would keep
+    changing which of them the swatch came from.
+    """
+    if value is None:
+        return None
+    try:
+        parts = [max(0, min(255, int(part))) for part in value]  # type: ignore[union-attr]
+    except (TypeError, ValueError):
+        return None
+    if len(parts) == 3:
+        parts.append(255)
+    if len(parts) != 4:
+        return None
+    return (parts[0], parts[1], parts[2], parts[3])
+
+
 @dataclass
 class Track:
     """One row of the grid: a layer's identity and its properties.
@@ -339,6 +402,20 @@ class Track:
     #: onto a materialised ``Layer`` because a plain ``Layer`` has nowhere to
     #: put the answer.
     tileset_uid: int | None = None
+    #: This row's user data -- a line of text and a timeline colour. A **direct
+    #: field**, unlike the per-cel note below, and for the reason the six
+    #: properties above are fields: a track is one object, so there is exactly
+    #: one place for the answer and no second slot for it to differ in.
+    #:
+    #: Deliberately **not** in :data:`TRACK_PROPS` and **not** in
+    #: :meth:`props`. Not in ``TRACK_PROPS`` because that allowlist is written
+    #: through ``setattr`` by ``set_layer_props``, which targets a ``Layer`` on
+    #: a still document -- a plain layer has no note and the value would be
+    #: minted onto it silently and lost at the next save (``continuous``'s
+    #: refusal, one door along). Not in ``props`` because that dict is the
+    #: copied-down list, and a note describes the *row* rather than how a cel
+    #: is shown. ``Document.set_track_note`` is its door.
+    note: Note = field(default_factory=Note)
     uid: int = field(default_factory=new_uid)
 
     @classmethod
@@ -433,6 +510,11 @@ class Tag:
     #: than carrying on into the frames after it. That is a deliberate
     #: divergence from Aseprite and the manual says so.
     repeat: int = 0
+    #: The tag's own user data -- its text and the colour Aseprite draws its
+    #: band in. A direct field for ``Track.note``'s reason: a tag is one
+    #: object. It rides through ``set_tag`` and ``TagsEdit`` with every other
+    #: tag field, so it needed no edit type of its own.
+    note: Note = field(default_factory=Note)
 
     def __post_init__(self) -> None:
         # Coerced rather than refused: a tag arrives from a file as often as
@@ -449,6 +531,12 @@ class Tag:
             self.repeat = max(0, int(self.repeat))
         except (TypeError, ValueError):
             self.repeat = 0
+        # ``direction``'s coercion again, for its reason: a tag read out of a
+        # file may name its note as a plain mapping or as nothing at all, and
+        # neither is a document that should refuse to open.
+        if not isinstance(self.note, Note):
+            raw = self.note if isinstance(self.note, dict) else {}
+            self.note = Note(text=raw.get("text", ""), colour=raw.get("colour"))
 
 
 def clamp_duration(ms: object) -> int:
@@ -499,6 +587,32 @@ class Animation:
     #: carrying them. ``_placeholder_uids`` above is pruned for the opposite
     #: reason -- a stale uid *there* would be handed out to a caller.
     cel_opacity: dict[tuple[int, int], float] = field(default_factory=dict)
+
+    #: Per-cel user data, sparse, an empty :class:`Note` for every slot not
+    #: named here. **``cel_opacity``'s shape exactly, and for its reason** --
+    #: this is the second per-cel value the grid carries and it deliberately
+    #: reuses the first one's idiom rather than inventing a second: a linked
+    #: cel is two keys mapping to one ``Layer`` object, so a note stored on the
+    #: layer would be one note for every slot it occupies, and Aseprite's own
+    #: format gives each cel chunk, linked ones included, its own user-data
+    #: chunk. Keyed exactly like ``cels`` and ``cel_opacity``, so all three are
+    #: read with the same tuple.
+    #:
+    #: One dict of a two-field :class:`Note` rather than two dicts of a scalar,
+    #: because the text and the colour are edited together, travel together in
+    #: one Aseprite chunk and one ``animation.json`` entry, and are set back to
+    #: unset together -- two dicts would be two lifecycles to keep in step.
+    #:
+    #: Entries are **not** dropped when a track or frame goes, ``cel_opacity``'s
+    #: decision verbatim: uids are per-process and monotonic, so a key naming a
+    #: dead row can never be read again, while keeping it is what lets undoing a
+    #: row or column deletion bring its notes back without a second edit type
+    #: carrying them.
+    #:
+    #: Nothing in :meth:`layers_for` reads this and nothing composites it: a
+    #: note is metadata for the person looking at the timeline, so unlike
+    #: ``cel_opacity`` it does not reach the picture at all.
+    cel_notes: dict[tuple[int, int], Note] = field(default_factory=dict)
 
     #: Set when these frames are a directional sprite sheet's cells, in order.
     #: None for every ordinary animation, which is the default and takes the
@@ -705,6 +819,16 @@ class Animation:
         file must not brighten a layer past what it drew.
         """
         return max(0.0, min(1.0, float(self.cel_opacity.get((track_uid, frame_uid), 1.0))))
+
+    def cel_note(self, track_uid: int, frame_uid: int) -> Note:
+        """One slot's user data, or an empty :class:`Note` when nobody set one.
+
+        :meth:`cel_alpha`'s shape: a method rather than a bare ``.get`` because
+        three writers and the timeline all want the same "unset reads as
+        empty" answer, and a caller that got ``None`` back would have to
+        remember to check before every ``.text``.
+        """
+        return self.cel_notes.get((track_uid, frame_uid)) or Note()
 
     # -- playback -----------------------------------------------------------
 

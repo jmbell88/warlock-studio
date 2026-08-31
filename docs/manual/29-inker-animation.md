@@ -91,6 +91,34 @@ slider is not offered there. The value is saved with the document, and survives 
 through `.aseprite` in both directions.
 
 
+### Colours and notes
+
+**A layer, a cel and a tag can each carry a colour and a line of text.** Right-click any of the
+three and the menu ends with **Properties...** for the text and a row of swatches for the colour;
+the last swatch, marked with an ×, takes the colour off again. The colour is drawn where you set
+it — a stripe down the layer's name, a stripe down the cel, and the tag's own band under the grid —
+so a long clip can be read at a glance: the anticipation frames in one colour, the holds in another,
+the tags for each attack in a third. The text shows in the layer row's tooltip and is there for the
+next person to open the file, or for you in a month.
+
+**A linked cel takes its own colour and its own note**, exactly as it takes its own opacity. The
+drawing is still one drawing shared across the frames, but the label belongs to the *slot*, so the
+same held pose can be marked "start of the swing" on one frame and "hold" on the next. A cell with
+no drawing in it has nothing to label, and the block is not offered there.
+
+Notes are saved with the document and survive a round trip through `.aseprite` in both directions —
+they are Aseprite's own *user data*, which is where its layer, cel and tag colours live too. Two
+things are worth knowing about the edges. A **still** drawing has no timeline, so it has no layers
+in the timeline sense, no cels and no tags to hang a note on; opening a one-frame `.aseprite` that
+carries user data says so rather than losing it silently. And the swatch row is seven fixed
+colours rather than a full picker — a colour read across a grid of small cells has to be
+*distinguishable* above all else — though a colour that arrives in a file is kept and drawn exactly
+as the file stored it.
+
+The layer row's older **Layer properties...** entry is unchanged and is a different thing: it is the
+blend mode, the opacity and the locks.
+
+
 ## Timing
 
 **Durations are per frame**, in milliseconds, in the box on the transport row — so a held pose and
@@ -326,9 +354,12 @@ build cannot read, a canvas too small to draw on, a cel that will not decompress
 build cannot align to its own tile grid, a cel type nobody here knows, a tileset that links an
 external file rather than carrying its own pixels, or a cel linked to a frame that holds none.
 Anything cosmetic is a message and the file still opens: colour profiles (this app assumes sRGB
-throughout), user data and timeline colours, a cel's z-index (layer order is stacking order), and per-frame
-palettes (the final table is used). Per-cel opacity *is* kept now — except on a one-frame file,
-which opens as a still image with no timeline for it to live on, and there it is a message. A
+throughout), a cel's z-index (layer order is stacking order), and per-frame palettes (the final
+table is used). Per-cel opacity *is* kept now, and so are the **colours and notes** on layers, cels
+and tags — except on a one-frame file, which opens as a still image with no timeline for either to
+live on, and there each is a message. What is still a message about user data even on an animated
+file: a note on a *slice* or on a *tileset*, a note on an individual *tile*, and Aseprite's custom
+**properties** — a typed key/value tree, which is a document format of its own inside the file. A
 reference layer opens hidden, which is what exporting from Aseprite would do with it.
 
 The full list of what comes across, what is only a message, and what a save back out to `.aseprite`

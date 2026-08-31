@@ -54,7 +54,7 @@ said they were "deliberately not here" for four months after they shipped.)
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from imgui_bundle import imgui
@@ -111,6 +111,29 @@ ARRANGE_OPTIONS = (
 )
 
 
+#: The swatches the timeline's Properties block offers, and the whole of the
+#: colour input. **A fixed row rather than a picker**, which is a deliberate
+#: narrowing of Aseprite's own arbitrary colour: a timeline colour is read at
+#: a glance across a grid of twenty-pixel cells, so what it has to be is
+#: *distinguishable*, and seven that are cannot be produced by a user dragging
+#: in a value wheel. Any colour a file already carries is still drawn as
+#: stored -- this table constrains what the menu can *set*, never what the
+#: model can hold, which is why ``Note.colour`` is a plain RGBA and not an
+#: index into this tuple.
+NOTE_COLOURS: tuple[tuple[str, tuple[int, int, int, int]], ...] = (
+    ("red", (208, 68, 68, 255)),
+    ("orange", (214, 132, 52, 255)),
+    ("yellow", (212, 190, 62, 255)),
+    ("green", (86, 168, 92, 255)),
+    ("blue", (72, 126, 208, 255)),
+    ("purple", (146, 96, 190, 255)),
+    ("grey", (140, 140, 148, 255)),
+)
+
+#: How wide the swatch bar drawn down a row's or a cel's edge is, in design px.
+NOTE_BAR_W = 3.0
+
+
 def _u32(value: int, alpha: float = 1.0) -> int:
     """A packed draw-list colour, **exactly the theme's own**.
 
@@ -125,6 +148,97 @@ def _u32(value: int, alpha: float = 1.0) -> int:
     See it for why the canvas wants the opposite.
     """
     return imgui.color_convert_float4_to_u32(theme.rgba(value, alpha))
+
+
+def note_u32(colour: Sequence[int]) -> int:
+    """A note's stored RGBA as a packed draw-list colour.
+
+    Not through :func:`_u32`, which takes a *theme* token and looks it up: a
+    note's colour is the user's own number and has no token, so it is packed
+    straight. ``color_convert_float4_to_u32`` for that function's reason --
+    ``get_color_u32`` would multiply by ``style.Alpha``, and these swatches are
+    drawn inside ``begin_disabled`` blocks where the user still has to be able
+    to read them.
+    """
+    red, green, blue, alpha = colour
+    return imgui.color_convert_float4_to_u32(
+        (red / 255.0, green / 255.0, blue / 255.0, alpha / 255.0)
+    )
+
+
+def _note_bar(colour: Sequence[int] | None) -> None:
+    """Paint the item just laid out with the note's colour down its left edge.
+
+    Over the item rather than instead of it, ``_cel_thumb``'s rule: the eye,
+    the name, the three cel-state glyphs and the whole right-click surface are
+    untouched, so a coloured row is the row it always was with a stripe on it.
+    A stripe and not a fill, because a filled twenty-pixel cell in an arbitrary
+    user colour is a cell whose ``*``/``=`` glyph may be unreadable -- and the
+    glyph is what says whether there is a drawing there at all.
+    """
+    if colour is None:
+        return
+    low, high = imgui.get_item_rect_min(), imgui.get_item_rect_max()
+    imgui.get_window_draw_list().add_rect_filled(
+        (low.x, low.y), (low.x + sp(NOTE_BAR_W), high.y), note_u32(colour)
+    )
+
+
+def _ask_note(ctx: Any, title: str, note: Any, apply: Any) -> None:
+    """The text half of Properties, through the app's own prompt.
+
+    ``_ask_rename``'s idiom exactly, and for its reason: a one-line question is
+    what ``dialogs.Prompt`` is, and a second text field living inside a context
+    menu would be a buffer the pane has to own across the frames the popup is
+    open. The colour half stays on the menu because it is a press, not typing.
+    """
+    from .. import dialogs
+
+    ctx.prompts.ask(
+        dialogs.Prompt(
+            title=title,
+            label="User data",
+            value=note.text,
+            # Capped for ``_ask_rename``'s reason -- this string is written
+            # into an ``.aseprite`` chunk and an ``animation.json`` key, and
+            # neither wants a paragraph pasted into it.
+            on_accept=lambda text: apply(replace(note, text=text[:120])),
+        )
+    )
+
+
+def _note_items(ctx: Any, key: str, title: str, note: Any, apply: Any) -> None:
+    """The Properties block: the text entry, then the swatch row.
+
+    One helper for all three menus -- the row's, the cel's and the tag's --
+    because they are three views of one model (``Track.note``,
+    ``Animation.cel_notes``, ``Tag.note``) and three copies of this block is
+    three places for the swatch table to drift.
+
+    ``apply`` takes a whole note and hands it to whichever document door owns
+    that element, which is the same shape those doors take: a note is set as
+    one value, so "change the colour, keep the text" is expressed here, once,
+    rather than as a keyword-and-sentinel signature on three methods.
+    """
+    imgui.separator()
+    if controls.selectable(f"Properties...##{key}", False)[0]:
+        _ask_note(ctx, title, note, apply)
+    size = sp(CELL) * 0.7
+    for name, colour in NOTE_COLOURS:
+        red, green, blue, alpha = colour
+        imgui.push_style_color(
+            imgui.Col_.button.value,
+            (red / 255.0, green / 255.0, blue / 255.0, alpha / 255.0),
+        )
+        if controls.button(f"##notecolour-{key}-{name}", (size, size)):
+            apply(replace(note, colour=colour))
+        imgui.pop_style_color()
+        imgui.same_line()
+    # The way back out, and it has to be a control of its own: every swatch
+    # above *sets* a colour, so without this the only edit a coloured element
+    # could not make is the one that undoes the first press.
+    if controls.button(f"{icons.X}##notecolour-{key}-none", (size, size)):
+        apply(replace(note, colour=None))
 
 
 def track_depth(doc: Any, track_uid: int) -> list[int]:
@@ -1212,6 +1326,12 @@ def _track_row(
         widgets.muted(label)
     else:
         imgui.text(label)
+    # The row's own swatch. Read off the *track*, which is where a note lives
+    # -- ``doc.stack[track_index]`` above is the materialised cel and carries
+    # none -- and drawn only on an animated document, because a still one has
+    # no track for the colour to have been set on.
+    if doc.anim is not None and track_index < len(doc.anim.tracks):
+        _note_bar(doc.anim.tracks[track_index].note.colour)
     # The name is the row's own hit target. Clicking it selects the layer --
     # which before this could only be done by clicking a *cel*, so a still
     # document's one column was the only way to change rows -- and Shift-click
@@ -1227,6 +1347,12 @@ def _track_row(
             detail += "  alpha locked"
         if layer.locked:
             detail += "  locked"
+        note = None if doc.anim is None else doc.anim.tracks[track_index].note
+        if note is not None and note.text:
+            # On its own line: the row above is a list of flags read at a
+            # glance, and a sentence of the user's own prose appended to it
+            # would be indistinguishable from another flag.
+            detail += f"\n{note.text}"
         imgui.set_tooltip(detail)
     _reorder(ctx, tab, doc, track_index)
     _row_menu(ctx, tab, doc, track_index)
@@ -1512,7 +1638,11 @@ def _row_menu(ctx: Any, tab: Any, doc: Any, index: int) -> None:
     imgui.begin_disabled(tab.busy)
     if controls.selectable("Rename", False)[0]:
         _ask_rename(ctx, doc, index)
-    if controls.selectable("Properties...", False)[0]:
+    # "Layer properties", not "Properties": this opens the blend/opacity/lock
+    # dialog, and the row's *own* Properties -- its user data and its timeline
+    # colour -- is the block at the bottom of this menu. Two items called
+    # Properties in one menu is a menu that answers neither question.
+    if controls.selectable("Layer properties...", False)[0]:
         doc.set_active_layer(index)
         ctx.state.inker.pending_dialog = "inker-layer-properties"
     imgui.separator()
@@ -1534,6 +1664,18 @@ def _row_menu(ctx: Any, tab: Any, doc: Any, index: int) -> None:
         "Take out of group", False
     )[0]:
         doc.move_into_group(index, None)
+    if doc.anim is not None and index < len(doc.anim.tracks):
+        # Animated documents only, and hidden rather than greyed: a note lives
+        # on a ``Track`` and a still document has none, so there is nothing
+        # here for a disabled control to promise (``set_track_note``'s own
+        # argument, at the door).
+        _note_items(
+            ctx,
+            "track",
+            "Layer user data",
+            doc.anim.tracks[index].note,
+            lambda note: doc.set_track_note(note, index),
+        )
     imgui.end_disabled()
     imgui.end_popup()
 
@@ -1615,6 +1757,9 @@ def _cell(
     if state.timeline_thumbs:
         _cel_thumb(ctx, tab, layer, cell)
     if anim is not None:
+        # After the thumbnail, so the stripe is on top of the picture rather
+        # than under it -- a note the drawing hides is a note nobody can see.
+        _note_bar(anim.cel_note(anim.tracks[ti].uid, frame.uid).colour)
         _cell_menu(ctx, tab, ti, fi, layer is not None, linked)
 
 
@@ -1700,6 +1845,16 @@ def _cell_menu(
         )
         if changed:
             doc.set_cel_opacity(float(alpha), track_index=ti, frame_index=fi)
+        # Per-slot user data, beside the per-slot opacity and keyed the same
+        # way. A linked cel gets one of these per slot too, which is the whole
+        # reason ``cel_notes`` is a dict rather than a ``Layer`` field.
+        _note_items(
+            ctx,
+            "cel",
+            "Cel user data",
+            doc.anim.cel_note(doc.anim.tracks[ti].uid, doc.anim.frames[fi].uid),
+            lambda note: doc.set_cel_note(note, ti, fi),
+        )
     _range_menu(ctx, tab)
     imgui.end_disabled()
     imgui.end_popup()
@@ -1860,8 +2015,17 @@ def _tag_row(ctx: Any, tab: Any, cell: float, gutter: float) -> None:
         top = origin.y + sp(4)
         start = origin.x + sp(TRACK_LABEL_W) + (cell + gutter) * max(0, tag.start)
         width = (cell + gutter) * (max(tag.start, tag.end) - max(0, tag.start) + 1) - gutter
+        # The tag's own colour when it has one, the theme's otherwise. This is
+        # the band a timeline colour is *for* in Aseprite -- it is how a
+        # twelve-tag clip is read at a glance -- so it replaces the token here
+        # rather than being drawn beside it.
+        band = (
+            note_u32(tag.note.colour)
+            if getattr(tag, "note", None) and tag.note.colour
+            else _u32(theme.OK, 0.8)
+        )
         draw_list.add_rect_filled(
-            (start, top), (start + max(width, cell), top + sp(4)), _u32(theme.OK, 0.8)
+            (start, top), (start + max(width, cell), top + sp(4)), band
         )
         imgui.same_line(sp(TRACK_LABEL_W))
         if state.tag_editing == index:
@@ -2011,5 +2175,14 @@ def _tag_menu(ctx: Any, tab: Any, index: int, tag: Any) -> None:
     if controls.menu_item_simple("Delete tag"):
         doc.remove_tag(index)
         state.tag_editing = -1
+    # Straight onto ``set_tag`` like the repeat and the direction above, so a
+    # note is one ``TagsEdit`` and needed no edit type of its own.
+    _note_items(
+        ctx,
+        "tag",
+        "Tag user data",
+        getattr(tag, "note", None) or animation.Note(),
+        lambda note: doc.set_tag(index, note=note),
+    )
     imgui.end_disabled()
     imgui.end_popup()

@@ -36,11 +36,19 @@ not 32 bits per tile, and a tilemap cel sitting at an offset that is not a
 multiple of its own tile size.
 
 Everything *cosmetic* is a warning and the document opens: a colour profile
-(this app is sRGB-assumed end to end), user data and timeline colours, a cel
-opacity (opacity is a track property here), a cel z-index (track order **is**
-stack order, which the compositor and the native kernel both assume). Those
-are declared divergences rather than gaps, so refusing on them would refuse
-almost every file Aseprite writes.
+(this app is sRGB-assumed end to end), a cel z-index (track order **is** stack
+order, which the compositor and the native kernel both assume). Those are
+declared divergences rather than gaps, so refusing on them would refuse almost
+every file Aseprite writes. Two entries left that list: a cel's opacity byte
+(divergence 1, retired 2026-08-30) and, on 2026-08-30, a **layer's, a cel's and
+a tag's user data** -- the text and the timeline colour -- which now land on
+``Track.note``, ``Animation.cel_notes`` and ``Tag.note``. A user-data chunk is
+attributed to the chunk before it, which is the format's own rule and the whole
+of why this reader tracks an owner; what still warns is user data on a *slice*
+or a *tileset*, the per-tile run after a tileset, a custom **properties map**
+(the third user-data flag, which is a typed key/value tree this model has no
+shape for), and any note at all on a **still** document, which has no track and
+no tag for one to live on.
 
 Three mappings are exact and are the reason this import is worth having at all.
 An Aseprite **linked cel** is two frames sharing one image, which is exactly
@@ -66,7 +74,7 @@ from .. import pixelguard
 from ..tilegrid import gid
 from ..tilegrid.tileset import Tileset
 from . import index_plane as ixp
-from .animation import Animation, Frame, Tag, Track
+from .animation import Animation, Frame, Note, Tag, Track
 from .layers import Layer, LayerStack
 from .slices import Slice, SliceKey
 from .tiles import TilemapCel, TilesetSlot, grid_shape, materialize
@@ -302,6 +310,10 @@ class AseLayer:
     #: for the reason ``AseCel.data`` stays undecoded: resolving it needs the
     #: tileset table, which is not final until the whole file has been read.
     tileset: int | None = None
+    #: This layer's user data, from the ``0x2020`` chunk that follows it.
+    #: Empty when the file carried none, which is what every file written
+    #: before Aseprite 1.3 carries.
+    note: Note = field(default_factory=Note)
 
 
 @dataclass
@@ -349,6 +361,11 @@ class AseCel:
     #: tilemap cel is never routed through :func:`_decode`. ``None`` for
     #: every other cel kind.
     refs: np.ndarray | None = None
+    #: This cel's user data, per *slot*: the format gives every cel chunk --
+    #: linked ones included -- its own, exactly as it gives every one its own
+    #: opacity byte, which is why both land in a dict keyed by the slot rather
+    #: than on the shared ``Layer``.
+    note: Note = field(default_factory=Note)
 
 
 @dataclass
@@ -398,18 +415,23 @@ class _Parse:
         self.palette_size = 0
         self.old_palette: list[RGBA] | None = None
         self.frame = 0
-        #: ``None`` outside a run of ``USER_DATA`` chunks following a
-        #: ``_TILESET`` chunk; otherwise how many of that run have already
-        #: been consumed. The spec's own convention: "After the Tileset
-        #: chunk, it could be followed by a user data chunk (empty or not)
-        #: and then all the user data chunks of the tiles ordered by tile
-        #: index" -- so the *first* ``USER_DATA`` chunk in the run is the
-        #: tileset's own (an ordinary owner, the generic warning), and only
-        #: the *second and later* ones are per-tile. Every other owner
-        #: (layer, cel, tag, slice) already says its own piece through the
-        #: divergence warnings at the chunk that names it, so this state
-        #: exists only to tell those two tileset-run cases apart.
-        self.tileset_ud_run: int | None = None
+        #: Who the next ``USER_DATA`` chunk belongs to: ``(kind, ordinal)``,
+        #: or ``None`` when the chunk before it was not one that owns user
+        #: data. **The format has no other way to say it** -- a ``0x2020``
+        #: chunk carries no back-reference at all and is simply understood to
+        #: describe the chunk it follows -- so an owner this reader does not
+        #: track is a note landing on nothing.
+        #:
+        #: The ordinal is a position in the list being filled (``layers``,
+        #: ``cels``, ``slices``) except for the two *runs*, where it counts the
+        #: chunks consumed so far. Tags: one ``USER_DATA`` per tag follows the
+        #: single tags chunk, in tag order, so the ordinal indexes
+        #: ``sprite.tags``. Tilesets: the spec says "after the Tileset chunk,
+        #: it could be followed by a user data chunk (empty or not) and then
+        #: all the user data chunks of the tiles ordered by tile index", so
+        #: ordinal 0 is the tileset's own and 1 and up are per-tile -- which is
+        #: the distinction the two different warnings below are about.
+        self.ud_owner: tuple[str, int] | None = None
 
     def warn(self, text: str) -> None:
         """One line per *kind* of thing dropped, not one per occurrence.
@@ -534,28 +556,7 @@ def _read_chunk(state: _Parse, kind: int, payload: bytes, opacity_valid: bool) -
     elif kind == _TILESET:
         _read_tileset(state, r)
     elif kind == _USER_DATA:
-        # Aseprite 1.3 writes one of these after the tags chunk for *every*
-        # tag, whether or not anything was ever put in it, so an empty one is
-        # not something the file lost -- warning about it would put a message
-        # on the screen for almost every tagged file and teach the user to
-        # ignore the one that matters. Divergence 14 is about the ones with
-        # content in them.
-        if r.u32():
-            if state.tileset_ud_run is not None and state.tileset_ud_run > 0:
-                # The spec's own convention (see ``tileset_ud_run``'s
-                # docstring): the tileset's own user data, if any, is the
-                # *first* chunk in the run, so only the second and later
-                # consecutive ones are per-tile -- which Wave 3 deliberately
-                # does not model (deferred by the Aseprite parity
-                # programme's own non-goals). Named
-                # separately from the ordinary user-data warning because "the
-                # tiles are kept" is true here and is not the generic
-                # sentence's claim.
-                state.warn("per-tile properties are not kept; the tiles are")
-            else:
-                state.warn("user data and timeline colours are not kept; the drawing is")
-        if state.tileset_ud_run is not None:
-            state.tileset_ud_run += 1
+        _read_user_data(state, r)
     elif kind == _CEL_EXTRA:
         state.warn("a cel's precise bounds were dropped; its pixels were not")
     elif kind == _EXTERNAL_FILES:
@@ -564,13 +565,103 @@ def _read_chunk(state: _Parse, kind: int, payload: bytes, opacity_valid: bool) -
         state.warn("a saved mask or path was dropped; selections do not travel")
     else:
         state.warn(f"a chunk of type 0x{kind:04x} is not one this build reads")
-    # The run tracked by ``tileset_ud_run`` starts fresh at every tileset
-    # chunk, continues silently through the ``USER_DATA`` branch above (which
-    # already advanced it), and ends at anything else.
-    if kind == _TILESET:
-        state.tileset_ud_run = 0
+    # Who a ``USER_DATA`` chunk arriving next would belong to. Set *after* the
+    # chunk has been read, so the ordinal names the entry it just appended.
+    # ``_USER_DATA`` is absent from this table deliberately: that branch
+    # advances the owner itself, because only it knows whether the run
+    # continues (tags, tiles) or is over (a layer, a cel, a slice).
+    if kind == _LAYER:
+        state.ud_owner = ("layer", len(state.sprite.layers) - 1)
+    elif kind == _CEL:
+        state.ud_owner = ("cel", len(state.sprite.cels) - 1)
+    elif kind == _TAGS:
+        state.ud_owner = ("tag", 0)
+    elif kind == _SLICE:
+        state.ud_owner = ("slice", len(state.sprite.slices) - 1)
+    elif kind == _TILESET:
+        state.ud_owner = ("tileset", 0)
     elif kind != _USER_DATA:
-        state.tileset_ud_run = None
+        state.ud_owner = None
+
+
+#: The ``0x2020`` chunk's three flags, in the spec's own order: a string, an
+#: RGBA colour, and a typed key/value properties tree.
+_UD_TEXT = 1
+_UD_COLOUR = 2
+_UD_PROPERTIES = 4
+
+
+def _read_user_data(state: _Parse, r: _Reader) -> None:
+    """The ``0x2020`` chunk, onto whichever chunk it followed.
+
+    **Read in flag order and nothing skipped.** The three payloads are stored
+    one after another with no lengths in front of them, so a reader that
+    ignored the string would land on the colour's bytes halfway through a
+    name -- which is why the text is parsed even where it is then warned away.
+
+    Aseprite 1.3 writes one of these after the tags chunk for *every* tag,
+    whether or not anything was ever put in it, so an **empty** one is not
+    something the file lost: it is silent, and only a chunk with content in it
+    can produce a warning. That is what keeps a message off the screen for
+    almost every tagged file, which is what teaches a user to ignore the one
+    that matters.
+    """
+    flags = r.u32()
+    text = r.string() if flags & _UD_TEXT else ""
+    colour = None
+    if flags & _UD_COLOUR:
+        colour = (r.u8(), r.u8(), r.u8(), r.u8())
+    note = Note(text=text, colour=colour)
+    owner = state.ud_owner
+    kind, ordinal = owner if owner is not None else ("", 0)
+    if flags & _UD_PROPERTIES:
+        # The third payload, and the one thing in this chunk that is genuinely
+        # not modelled: a typed key/value tree under one or more extension
+        # ids, which is a document format of its own inside the file. Warned
+        # rather than read, and separately from the two above it, because the
+        # text and the colour *are* kept now and a single sentence covering
+        # all three would be false about two of them.
+        state.warn("custom properties are not kept; the text and colour are")
+    if kind == "layer" and 0 <= ordinal < len(state.sprite.layers):
+        state.sprite.layers[ordinal].note = note
+        state.ud_owner = None
+    elif kind == "cel" and 0 <= ordinal < len(state.sprite.cels):
+        state.sprite.cels[ordinal].note = note
+        state.ud_owner = None
+    elif kind == "tag":
+        if 0 <= ordinal < len(state.sprite.tags):
+            tag = state.sprite.tags[ordinal]
+            # The tags chunk's own three colour bytes were read first (see
+            # ``_read_tags``), and a 1.3 file leaves them zero and puts the
+            # real colour here -- so the user-data chunk wins where it carries
+            # one and the legacy field survives where it does not. Either way
+            # exactly one swatch reaches the tag.
+            tag.note = Note(text=text, colour=colour or tag.note.colour)
+        state.ud_owner = ("tag", ordinal + 1)
+    elif kind == "tileset":
+        if ordinal:
+            # The spec's own convention (see ``ud_owner``): the tileset's own
+            # user data is the first chunk in the run, so only the second and
+            # later consecutive ones are per-tile -- which Wave 3 deliberately
+            # does not model. Named separately because "the tiles are kept" is
+            # true here and is not the other sentence's claim.
+            if note:
+                state.warn("per-tile properties are not kept; the tiles are")
+        elif note:
+            state.warn("a tileset's own user data was dropped; its tiles were not")
+        state.ud_owner = ("tileset", ordinal + 1)
+    elif kind == "slice":
+        if note:
+            # A slice is a named rectangle this package stores without a note
+            # field, and adding one would be a second model to keep in step
+            # with the three the timeline has. Said out loud rather than
+            # folded into the drawing's warning, which is now about neither.
+            state.warn("a slice's user data was dropped; the slice was not")
+        state.ud_owner = None
+    else:
+        if note:
+            state.warn("user data with no chunk before it was dropped")
+        state.ud_owner = None
 
 
 def _read_tileset(state: _Parse, r: _Reader) -> None:
@@ -799,10 +890,17 @@ def _read_tags(state: _Parse, r: _Reader) -> None:
                 f"the tag {name!r} plays ping-pong from its far end; it opens"
                 " playing ping-pong from its near one"
             )
-        if colour != b"\0\0\0":
-            state.warn("user data and timeline colours are not kept; the drawing is")
+        # The tags chunk's own three colour bytes: where Aseprite kept a tag's
+        # timeline colour before 1.3 moved it into a user-data chunk. Read as
+        # an opaque RGB rather than warned away, and a following user-data
+        # colour overrides it -- a 1.3 file writes zeroes here and the real
+        # colour there, an older one the other way round, and both arrive as
+        # one swatch.
         state.sprite.tags.append(
             Tag(
+                note=Note(colour=(colour[0], colour[1], colour[2], 255))
+                if colour != b"\0\0\0"
+                else Note(),
                 name=name or "tag",
                 start=start,
                 end=end,
@@ -1531,6 +1629,11 @@ def document_from_aseprite(
                 blend=sprite.layers[index].blend,
                 locked=sprite.layers[index].locked,
                 continuous=sprite.layers[index].continuous,
+                # The layer's user data, onto the row that *is* that layer's
+                # identity here. A direct field, because a track is one object
+                # -- the per-cel half below is the dict, for the reason it is
+                # keyed by slot.
+                note=sprite.layers[index].note,
                 tileset_uid=(
                     _tileset_slot_for(sprite.layers[index], tileset_slots).uid
                     if sprite.layers[index].tileset is not None
@@ -1559,11 +1662,27 @@ def document_from_aseprite(
             and cel.opacity != 255
             and (tracks[cel.layer].uid, frames[cel.frame].uid) in cels
         }
+        # Per-cel user data, read off the *cel chunk* and keyed the way the
+        # cels and their opacities are -- so a linked pair whose two chunks
+        # carried two different notes arrives as one shared ``Layer`` wearing
+        # both, which is the case ``cel_notes`` is a dict rather than a
+        # ``Layer`` field for. Sparse: an empty note is stored as nothing, so a
+        # file that never used the feature makes an ``Animation`` identical to
+        # the one it made before the feature existed.
+        cel_notes = {
+            (tracks[cel.layer].uid, frames[cel.frame].uid): cel.note
+            for cel in sprite.cels
+            if cel.layer in tracks
+            and cel.frame < len(frames)
+            and cel.note
+            and (tracks[cel.layer].uid, frames[cel.frame].uid) in cels
+        }
         anim = Animation(
             tracks=[tracks[index] for index in image_rows],
             frames=frames,
             cels=cels,
             cel_opacity=cel_opacity,
+            cel_notes=cel_notes,
             tags=list(sprite.tags),
         )
         doc = Document(
@@ -1591,6 +1710,15 @@ def document_from_aseprite(
         # them here would write a track opacity nobody set on the next save.
         if any(cel.opacity != 255 for cel in sprite.cels):
             warn("per-cel opacity needs a timeline; this file has one frame")
+        # And the same line for divergence 14's own remainder. A note lives on
+        # a ``Track``, a slot of the grid or a ``Tag``, and a still document
+        # has none of the three -- the layers here are plain ``Layer`` objects.
+        # Folding a layer's note onto one would mean inventing a field on the
+        # still model whose only reader is the timeline that is not there.
+        if any(layer.note for layer in sprite.layers) or any(
+            cel.note for cel in sprite.cels
+        ):
+            warn("user data needs a timeline; this file has one frame")
         layers: list[Layer] = []
         for index in image_rows:
             row = sprite.layers[index]

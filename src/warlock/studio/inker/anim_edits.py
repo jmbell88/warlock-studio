@@ -40,6 +40,7 @@ from .undo import _plane_bytes
 
 __all__ = [
     "AnimateEdit",
+    "CelNoteEdit",
     "CelOpacityEdit",
     "CelSetEdit",
     "FrameAddEdit",
@@ -50,6 +51,7 @@ __all__ = [
     "TagsEdit",
     "TrackAddEdit",
     "TrackMoveEdit",
+    "TrackNoteEdit",
     "TrackPropsEdit",
     "TrackRemoveEdit",
 ]
@@ -360,3 +362,56 @@ class CelOpacityEdit(Edit):
 
     def redo(self, doc: Any) -> None:
         doc._set_cel_opacity(self.track_uid, self.frame_uid, self.after)
+
+
+@dataclass
+class CelNoteEdit(Edit):
+    """One slot's user data, before and after.
+
+    :class:`CelOpacityEdit` with a :class:`~.animation.Note` where its two
+    floats are, and addressed the same way for the same reason -- by the
+    ``(track uid, frame uid)`` pair and **not** by the ``Layer``, because a
+    linked cel is one object in two slots and an edit naming the object would
+    move both of them.
+
+    Cost is zero: two small frozen records and no pixels. The note being frozen
+    is what makes holding it safe -- an ordinary dataclass here would be the
+    same object the document is showing, and the next edit would write through
+    into the step meant to reverse it.
+    """
+
+    track_uid: int
+    frame_uid: int
+    before: Any
+    after: Any
+
+    def undo(self, doc: Any) -> None:
+        doc._set_cel_note(self.track_uid, self.frame_uid, self.before)
+
+    def redo(self, doc: Any) -> None:
+        doc._set_cel_note(self.track_uid, self.frame_uid, self.after)
+
+
+@dataclass
+class TrackNoteEdit(Edit):
+    """One row's user data, before and after.
+
+    A track is one object, so this names it by uid alone -- there is no second
+    slot for the value to differ in, which is the whole difference between this
+    edit and :class:`CelNoteEdit` and the reason there are two of them rather
+    than one keyed on a nullable frame.
+
+    Not folded into ``TrackPropsEdit``: that one is the ``TRACK_PROPS``
+    ``setattr`` allowlist, which ``set_layer_props`` writes onto a *``Layer``*
+    on a still document, and a plain layer has no note for it to land on.
+    """
+
+    track_uid: int
+    before: Any
+    after: Any
+
+    def undo(self, doc: Any) -> None:
+        doc._set_track_note(self.track_uid, self.before)
+
+    def redo(self, doc: Any) -> None:
+        doc._set_track_note(self.track_uid, self.after)
