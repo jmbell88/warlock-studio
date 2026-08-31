@@ -18,6 +18,50 @@ the release you are actually running.
 
 ## 0.0.30 — 2026-08-30
 
+- **A tile's collision shapes can be moved, resized and reshaped, which they could not
+  be at all.** The tileset editor's Collision tab could *add* a shape and *clear* the lot
+  and nothing else: `_add_shape` hard-coded the geometry to `x=0, y=0, w=tile_w,
+  h=tile_h`, and the view under it was an `imgui.dummy` — a rectangle of nothing, which
+  imgui will not even report as hovered. So every collision shape this app had ever
+  written was the same full-tile box, and `TilePolygon` — which has round-tripped through
+  `.tsx` and `.wmap` since collision landed — had **no author at all**. The tile is now a
+  real region: click a shape to select it, drag its body to move it, drag one of eight
+  square handles to resize a box or an ellipse with the opposite edge pinned, and edit a
+  polygon by its corners — drag one, **Ctrl+click** an edge to add one on that edge,
+  **Alt+click** one to remove it, with the third refused by name because two points
+  enclose nothing. Every gesture clamps to the tile, because the view *is* the tile and a
+  shape dragged past its edge would be invisible and so unrecoverable rather than merely
+  moved. Sizes stop one pixel short of collapsing, for the reason a shape is created
+  full-tile in the first place: a zero-sized box has all eight handles in one place and
+  can never be grabbed again.
+- **One drag is one undo step.** A drag is sixty writes a second and `set_tile_meta`
+  pushes a step per call, so writing it straight would have put sixty steps on the stack
+  for one gesture. Rather than a second write path there is a session — `begin_tile_meta_edit`
+  / `live_tile_meta` / `end_tile_meta_edit` — which is `begin_object_edit`'s shape applied
+  to tile metadata and has its reason: the document moves live so the user can see what
+  they are doing, and the *history* moves once, at the release. It calls the same
+  `_apply_tile_meta` hook `TileMetaEdit` calls and pushes an ordinary `TileMetaEdit`, and
+  it is closed at the same three chokepoints an open stroke and an open object drag are —
+  undo, redo and a history jump — because a document whose shapes are ahead of its head is
+  the defect those exist to prevent. A click that moved nothing pushes nothing.
+- **The click-region scaffolding is `studio/tilegrid/picking.py`, and it is deliberately
+  general.** `TileView` is the one place a screen coordinate becomes a tile pixel or the
+  other way round — it *fits* the tile into the square rather than stretching it, so a
+  16 x 32 tile's right edge is tile pixel 16 and not 32 — and `nearest_region` is a
+  generic picker over `{key: point}` that takes the nearest within a radius, with ties
+  going to the earlier key so the answer is stable. Handles and polygon corners are its
+  two callers today; a per-tile Wang corner or edge marker is the same question about the
+  same square and should ask this rather than grow a second picker. The module is
+  headless and pure, and every write returns a new frozen shape — the caller decides
+  whether it goes through the undoable door live or at the release.
+- Every gesture above is tested through the **real** dispatch. `tests/plotter/_drive.py`
+  gains a `TileScene` beside its existing `Scene`, reusing the same synthetic `Mouse`, and
+  `tests/plotter/test_tile_collision.py` drives press / held frames / release through
+  `_collision_input` one call per frame — a control that is drawn and does nothing is this
+  codebase's most common historical defect, and a unit test of a helper is exactly what
+  fails to catch it. One test drives the same dispatch over the shared `plotter_ctx`
+  fixture so the fast harness and the real mode state are pinned to each other.
+
 - **Plotter can select more than one object at a time, and drag the set as one.** The
   Select tool now sweeps a **marquee** over empty space — a rubber band that takes every
   object it *touches*, rotated ones included, because the box it tests is the object's

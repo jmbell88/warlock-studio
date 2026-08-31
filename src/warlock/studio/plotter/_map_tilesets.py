@@ -158,6 +158,72 @@ class TilesetOps:
         self._apply_tile_meta(index, local_id, wanted)
         return True
 
+    # -- one drag, one step ----------------------------------------------------
+    #
+    # A collision shape is dragged, and a drag is sixty writes a second. Pushed
+    # one at a time those would be sixty undo steps for one gesture -- so the
+    # session below is ``begin_object_edit``'s shape applied to tile metadata,
+    # and for the same reason: the document changes live so the user can see
+    # what they are doing, and the *history* changes once, at the release.
+    #
+    # It is not a second write path. :meth:`live_tile_meta` calls the same
+    # ``_apply_tile_meta`` hook :class:`~.edits.TileMetaEdit` calls, and the
+    # step pushed at the end is a ``TileMetaEdit`` like any other.
+
+    def begin_tile_meta_edit(self: MapDoc, index: int, local_id: int) -> None:
+        """Open a session on one tile's metadata. Re-opening closes the last."""
+        if index < 0 or index >= len(self.tilesets):
+            raise IndexError(f"no tileset {index}")
+        if self._tile_meta_edit is not None:
+            self.end_tile_meta_edit()
+        self._tile_meta_edit = {
+            "index": int(index),
+            "local_id": int(local_id),
+            "before": self.tilesets[int(index)].tileset.tiles.get(int(local_id)),
+        }
+
+    def live_tile_meta(self: MapDoc, meta: Any) -> bool:
+        """Write the open session's tile without recording. -> whether it moved.
+
+        Refuses outside a session rather than falling back to a recorded write:
+        a caller that lost its session would otherwise start pushing a step per
+        frame, which is the defect this pair exists to prevent, arriving
+        silently.
+        """
+        session = self._tile_meta_edit
+        if session is None:
+            raise RuntimeError("no open tile metadata session")
+        wanted = None if meta is None or meta.is_empty else meta
+        index, local_id = session["index"], session["local_id"]
+        if self.tilesets[index].tileset.tiles.get(local_id) == wanted:
+            return False
+        self._apply_tile_meta(index, local_id, wanted)
+        return True
+
+    def end_tile_meta_edit(self: MapDoc) -> bool:
+        """Close the session and push one step. ``False`` if nothing changed.
+
+        Idempotent, and closed at the same three chokepoints an open stroke and
+        an open object drag are: a release can be missed to focus loss, a tab
+        switch or a save beginning mid-drag, and none of those should have to
+        know whether a drag was open.
+        """
+        session, self._tile_meta_edit = self._tile_meta_edit, None
+        if session is None:
+            return False
+        index, local_id = session["index"], session["local_id"]
+        if index >= len(self.tilesets):
+            return False
+        after = self.tilesets[index].tileset.tiles.get(local_id)
+        if after == session["before"]:
+            return False
+        self.history.push(
+            TileMetaEdit(
+                index=index, local_id=local_id, before=session["before"], after=after
+            )
+        )
+        return True
+
     def _apply_tile_meta(self: MapDoc, index: int, local_id: int, meta: Any) -> None:
         """The hook :class:`~.edits.TileMetaEdit` calls back into."""
         ref = self.tilesets[int(index)]

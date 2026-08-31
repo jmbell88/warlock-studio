@@ -116,6 +116,31 @@ left out, so a row never jumps under the pointer.
 Collision shapes are drawn as outlines and are **never** hit-tested against the map. They are
 metadata an engine reads, exactly as an object layer is.
 
+The tileset editor's **Collision** tab is where they are drawn. One tile fills the pane at sixteen
+times its size — it has to, because the shapes are measured in *tile* pixels and a handle on a 16 px
+tile at 1:1 would be smaller than the pointer. **Add box**, **Add ellipse** and **Add polygon** each
+drop a shape covering the whole tile, which is the one obviously editable starting size: a
+zero-sized box is a shape you cannot grab.
+
+Everything after that is done on the tile itself:
+
+- **Click** a shape to select it. Only the selected shape shows its handles, so what you can grab is
+  always what you meant.
+- **Drag** its body to move it. The shape keeps the offset you grabbed it by, so it follows the
+  pointer instead of snapping its corner under it.
+- **Drag one of the eight square handles** to resize a box or an ellipse. The opposite edge stays
+  pinned. A shape cannot be collapsed to nothing — the moving edge stops one pixel short.
+- A **polygon** has corners instead of handles: drag one to move it, **Ctrl+click an edge** to add a
+  corner on that edge, and **Alt+click a corner** to remove it. The third corner is refused by name,
+  because two points enclose nothing.
+
+Nothing can be dragged out of the tile: the view *is* the tile, so a shape pushed past its edge
+would be invisible and therefore unrecoverable, and every gesture clamps instead.
+
+A whole drag is **one** undo step, not one per frame — the shape moves live under the pointer and
+the history moves once, when you let go. **Remove shape** takes out the selected one; **Clear**
+takes out all of them.
+
 ### Picking a tile
 
 Each of the map's tilesets gets a **tab** along the top of the pane; click one to paint with that

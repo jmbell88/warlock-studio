@@ -518,6 +518,23 @@ class PlotterState:
     #: would dirty a saved map sixty times a second.
     tileset_playing: bool = False
     tileset_play_at: float = 0.0
+    #: Which collision shape the Collision tab is editing, by position in the
+    #: tile's own tuple, or ``None``. View state, and a *position* rather than a
+    #: uid because a collision shape has no identity of its own -- it is one
+    #: entry in a frozen tuple the document rebuilds on every write. The
+    #: undoable step is still addressed by ``(tileset index, local id)``, which
+    #: is what a ``TileMetaEdit`` has always carried. The tab drops this the
+    #: moment it points past the end, which is what an undo or a Clear leaves.
+    tileset_shape: int | None = None
+    #: The open gesture on that shape: ``""``, ``"move"``, ``"vertex"`` or one
+    #: of :data:`~warlock.studio.tilegrid.picking.BOX_HANDLES`.
+    tileset_drag: str = ""
+    #: Which polygon corner a ``"vertex"`` drag is moving.
+    tileset_drag_vertex: int | None = None
+    #: Where inside the shape the pointer grabbed it, in tile pixels. Kept for
+    #: the whole drag: without it the shape leaps its corner to the pointer on
+    #: the first moved frame.
+    tileset_grab: tuple[float, float] | None = None
     # A library asset waiting for the map that ``setup_pending`` is asking
     # about. The Library's *Add to Plotter as a tileset* used to be drawn for
     # any asset with an ``input.png`` and then refused with an error toast when
@@ -915,6 +932,19 @@ class PlotterState:
         """Point the single-object verbs at an object already selected."""
         if int(uid) in self.selected_objects:
             self._primary_object = int(uid)
+
+    def clear_tileset_drag(self) -> None:
+        """Drop the collision gesture, keeping the selection.
+
+        Separate from :meth:`clear_drag` rather than folded into it, because
+        the two belong to two different views: the canvas clears its drag on
+        events the tileset sheet is not even on screen for, and a shared
+        clearer would mean each of them reaching into the other's fields on
+        every one of them.
+        """
+        self.tileset_drag = ""
+        self.tileset_drag_vertex = None
+        self.tileset_grab = None
 
     def clear_drag(self) -> None:
         self.drag_kind = ""

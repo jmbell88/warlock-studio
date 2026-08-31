@@ -239,6 +239,10 @@ class MapDoc(ProjectionOps, TilesetOps, LayerOps, PaintOps, GeometryOps, ObjectO
         # exactly the same chokepoints, because a group left open is the same
         # document-ahead-of-its-history defect.
         self._group_edit: dict[str, Any] | None = None
+        # The open collision-shape drag in the tileset editor, or None. The
+        # third session, with the first two's rule: the document moves live and
+        # the history moves once, at the release.
+        self._tile_meta_edit: dict[str, Any] | None = None
 
     # -- identity ------------------------------------------------------------
 
@@ -359,6 +363,7 @@ class MapDoc(ProjectionOps, TilesetOps, LayerOps, PaintOps, GeometryOps, ObjectO
         self.end_stroke()
         self.end_object_edit()
         self.end_group_edit()
+        self.end_tile_meta_edit()
         return self.history.undo(self)
 
     def redo(self) -> bool:
@@ -368,6 +373,7 @@ class MapDoc(ProjectionOps, TilesetOps, LayerOps, PaintOps, GeometryOps, ObjectO
         self.end_stroke()
         self.end_object_edit()
         self.end_group_edit()
+        self.end_tile_meta_edit()
         return self.history.redo(self)
 
     def step_history(self, index: int) -> bool:
@@ -385,4 +391,5 @@ class MapDoc(ProjectionOps, TilesetOps, LayerOps, PaintOps, GeometryOps, ObjectO
         self.end_stroke()
         self.end_object_edit()
         self.end_group_edit()
+        self.end_tile_meta_edit()
         return self.history.step_to(self, int(index))
