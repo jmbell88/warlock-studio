@@ -311,21 +311,28 @@ def _group_nester(doc, container):
             node = doc.groups.get(guid)
             if node is None:  # pragma: no cover - a dangling parent
                 continue
-            element = ElementTree.SubElement(
-                open_els[-1],
-                "stack",
-                {
-                    "name": node.name,
-                    "opacity": f"{float(node.opacity):.6f}",
-                    "visibility": "visible" if node.visible else "hidden",
-                    # ``auto`` is ORA's spelling of pass-through, which is what
-                    # this build composites -- see ``inker/groups.py``. Saying
-                    # so explicitly is what stops Krita opening the file as an
-                    # *isolated* group and rendering it differently.
-                    "isolation": "auto",
-                    **_lock_attr(False, node.locked),
-                },
-            )
+            attrs = {
+                "name": node.name,
+                "opacity": f"{float(node.opacity):.6f}",
+                "visibility": "visible" if node.visible else "hidden",
+                # ``auto`` is ORA's spelling of pass-through and ``isolate`` of
+                # the second compositing pass, and this now writes whichever
+                # one the group actually is -- so a reader that honours the
+                # attribute renders what this app drew, which is the whole of
+                # why it stopped being hard-coded.
+                "isolation": "isolate" if gp.isolated(node) else "auto",
+                **_lock_attr(False, node.locked),
+            }
+            # The mode is written only when there *is* one, rather than
+            # spelling the default onto every group. ``svg:src-over`` is what a
+            # reader assumes from an absent attribute, so writing it would add
+            # a byte difference to every file that has ever had a folder in it
+            # and say nothing -- and a pass-through group has no result for a
+            # mode to act on anyway (``groups.isolated`` is where that rule
+            # lives, and it is why this needs no second condition).
+            if node.blend != "normal":
+                attrs["composite-op"] = cp.ORA_OPS.get(node.blend, "svg:src-over")
+            element = ElementTree.SubElement(open_els[-1], "stack", attrs)
             open_uids.append(guid)
             open_els.append(element)
         return open_els[-1]
@@ -504,7 +511,15 @@ def _lock_attr(
 #: dropped with a log line rather than guessed at, which is the same bargain the
 #: layer reader makes with a composite-op it cannot reproduce.
 GROUP_ATTRS = frozenset(
-    {"name", "opacity", "visibility", "isolation", LOCK_ATTR, CONTENT_LOCK_ATTR}
+    {
+        "name",
+        "opacity",
+        "visibility",
+        "isolation",
+        "composite-op",
+        LOCK_ATTR,
+        CONTENT_LOCK_ATTR,
+    }
 )
 
 
@@ -925,6 +940,27 @@ def _colour_block(doc) -> dict | None:
     return block
 
 
+def _group_node_payload(node) -> dict:
+    """One group as JSON, with the compositing keys written only when set.
+
+    Omitted-when-default for the ORA writer's reason one level up: a document
+    that never touched isolation writes exactly the four keys it always wrote,
+    so every file this app has already saved round-trips byte for byte. The
+    reader defaults both back, which is what makes the omission lossless.
+    """
+    out = {
+        "name": node.name,
+        "visible": bool(node.visible),
+        "opacity": float(node.opacity),
+        "locked": bool(node.locked),
+    }
+    if node.blend != "normal":
+        out["blend"] = node.blend
+    if node.isolate:
+        out["isolate"] = True
+    return out
+
+
 def _groups_payload(doc, tracks: dict[int, int]) -> dict | None:
     """The layer-group tree as indices, or None when there is no tree.
 
@@ -946,15 +982,7 @@ def _groups_payload(doc, tracks: dict[int, int]) -> dict | None:
         return None
     index_of = {guid: i for i, guid in enumerate(order)}
     return {
-        "nodes": [
-            {
-                "name": doc.groups[guid].name,
-                "visible": bool(doc.groups[guid].visible),
-                "opacity": float(doc.groups[guid].opacity),
-                "locked": bool(doc.groups[guid].locked),
-            }
-            for guid in order
-        ],
+        "nodes": [_group_node_payload(doc.groups[guid]) for guid in order],
         "tracks": [
             {"track": tracks[uid], "group": index_of[doc.group_of[uid]]}
             for uid in tracks
@@ -1100,6 +1128,8 @@ def _layer_elements(node, tree=None, parent=None) -> list:
                 visible=child.get("visibility", "visible") != "hidden",
                 opacity=float(child.get("opacity") or 1.0),
                 locked=child.get(CONTENT_LOCK_ATTR) == "1",
+                blend=cp.OPS_ORA.get(child.get("composite-op", ""), "normal"),
+                isolate=child.get("isolation") == "isolate",
             )
             inner = _layer_elements(child, tree, node_group.uid)
             if not inner:
@@ -1406,6 +1436,8 @@ def _read_groups(doc, payload: dict) -> None:
                 visible=bool(entry.get("visible", True)),
                 opacity=float(entry.get("opacity", 1.0)),
                 locked=bool(entry.get("locked", False)),
+                blend=str(entry.get("blend", "normal")),
+                isolate=bool(entry.get("isolate", False)),
             )
             for i, entry in enumerate(raw["nodes"])
         ]

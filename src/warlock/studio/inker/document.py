@@ -485,7 +485,20 @@ class Document(
         if box is None:
             self.rev += 1
             return
-        if self.stack.cel_z is not None:
+        if self.stack.cel_z is not None or self.stack.cuts_isolated(
+            self.stack.active_index
+        ):
+            # Two reasons to distrust the cached base, and they are *not* the
+            # same reason.
+            #
+            # **Isolation** breaks it only when the active layer is inside an
+            # isolated group, because then the split ``[0, active)`` cuts that
+            # group in half and half a group has no isolated rendering. An
+            # isolated group entirely below the active layer is finished
+            # business exactly like any other row, and keeps the cache -- which
+            # is why this is ``cuts_isolated(active_index)`` and not "does this
+            # document have a group". See ``LayerStack.cuts_isolated``.
+            #
             # **Per-cel z-index turns the below-cache off for this document.**
             # The cache's premise is that the layers under ``active_index`` are
             # finished business -- composite them once, then re-blend only from
@@ -551,6 +564,10 @@ class Document(
         # ``restore_snapshot``, ``_map_planes``) is one of them. A document with
         # no groups pays one truthiness test.
         self.stack.group_fold = self.group_fold()
+        # And the isolated spans, in the same breath and for the same reason.
+        # A document with groups but nothing isolated pays one walk of the
+        # stack that finds nothing and returns None.
+        self.stack.group_spans = self.group_spans()
         # And the per-cel z rows, in the same breath and for the same reason:
         # every path that replaces ``self.stack`` ends here, and a document
         # with no z pays one dict lookup per track.
@@ -625,6 +642,26 @@ class Document(
         return [
             gp.resolve(self.groups, self.group_of, uid)[:2] for uid in self.member_uids()
         ]
+
+    def group_spans(self) -> list[Any] | None:
+        """The isolated groups over the stack, as ``groups.Span`` slices.
+
+        ``group_fold``'s sibling and its rule: **None, not an empty list**, on
+        a document where nothing is isolated -- which is every document until
+        somebody gives a group a blend mode. That is what lets
+        ``LayerStack._entries`` take its original path by identity and what
+        ``LayerStack.cuts_isolated`` answers from in one test.
+
+        The two are built separately rather than in one walk because they are
+        two different answers about the same tree: the fold is per *row* and
+        the spans are per *group*, and a document with groups but nothing
+        isolated wants the first and not the second.
+        """
+        if not self.groups:
+            return None
+        from . import groups as gp
+
+        return gp.spans(self.groups, self.group_of, self.member_uids())
 
     def cel_z_rows(self, frame: Any = None) -> list[int] | None:
         """Per-stack-row z offsets for *frame*, or None when none is set.
@@ -811,6 +848,7 @@ class Document(
         # height in the unfiltered frame, so the subset blends in exactly the
         # relative order the whole frame does.
         zs = self.cel_z_rows(frame)
+        spans = self.group_spans()
         if track_uids is not None:
             keep = [
                 index
@@ -824,9 +862,33 @@ class Document(
                 if zs is None
                 else [keep[j] + zs[keep[j]] - j for j in range(len(keep))]
             )
+            # The spans are *remapped*, not filtered: a span's bounds are
+            # positions in the stack and dropping rows moves every position
+            # above them. A span with no surviving row goes; a span that
+            # survives keeps the rows it still has.
+            #
+            # A span kept only in *part* would be the case this cannot express
+            # -- half a group has no isolated rendering -- and it does not
+            # arise, for the reason stated above: ``layer_splits`` never cuts
+            # a group. It degrades to the contiguous run of what survived
+            # rather than being checked for, which is the same choice
+            # ``groups.top_level`` makes about the same impossibility.
+            at = {old: new for new, old in enumerate(keep)}
+            if spans is not None:
+                from dataclasses import replace as _replace
+
+                kept = []
+                for span in spans:
+                    inside = [at[i] for i in range(span.lo, span.hi) if i in at]
+                    if inside:
+                        kept.append(
+                            _replace(span, lo=min(inside), hi=max(inside) + 1)
+                        )
+                spans = kept or None
         stack = LayerStack(layers, 0)
         stack.group_fold = fold
         stack.cel_z = zs
+        stack.group_spans = spans
         return stack
 
     def _evict_frames(self) -> None:

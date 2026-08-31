@@ -25,14 +25,29 @@ be hidden but never *composited* as a unit. The document's ops maintain it and
 :func:`check` asserts it; there is no runtime enforcement in the compositor,
 because the compositor never asks.
 
-Compositing is **pass-through**: :func:`resolve` folds a member's ancestry into
-one ``(visible, opacity, locked)`` triple and the stack applies it per layer, so
-a group at 50% makes each of its layers 50%, blending with everything below as
-it always did. *Isolated* group compositing -- rendering the group to its own
-buffer and blending that result once, which is what makes a group-level blend
-mode meaningful -- is deliberately **not** implemented in v1, and is named here
-so it is a known gap rather than a surprise: it needs a second compositing pass
-with its own buffer and it changes what every blend mode inside the group means.
+Compositing is **pass-through by default**: :func:`resolve` folds a member's
+ancestry into one ``(visible, opacity, locked)`` triple and the stack applies it
+per layer, so a group at 50% makes each of its layers 50%, blending with
+everything below as it always did.
+
+A group that is :func:`isolated` is the other case, and it is the *contiguity
+invariant above* that makes it affordable rather than a rewrite. Its leaves are
+a slice of the painter's order, so the isolated groups over a stack are a
+well-formed bracket sequence: :func:`spans` reports each one's slice and
+``LayerStack._entries`` recurses over them, rendering a group's members onto
+transparency and handing the result up as one ordinary entry. The flat-stack
+model every other part of this package is written against never learns that a
+second pass happened.
+
+Two things change inside an isolated group, and both are the point rather than
+side effects. A member's own blend mode acts on its *siblings* instead of on
+the document beneath -- which is what "isolated" means -- and the group's
+opacity applies **once, to the result**, instead of multiplying into every
+leaf. Those give different pictures (two overlapping opaque layers in a 50%
+group show through each other pass-through, and do not when isolated), so
+:func:`resolve` stops accumulating opacity at the innermost isolated ancestor
+and :func:`spans` carries it instead. Every document written before this
+existed is unaffected, because both fields default to the pass-through answer.
 
 The undo steps live here too, and all four cost nothing: a group is a name,
 three properties and a dictionary entry, so the byte budget has nothing to say
@@ -54,31 +69,82 @@ __all__ = [
     "GroupNode",
     "GroupPropsEdit",
     "MembershipEdit",
+    "Span",
     "ancestry",
     "check",
     "copy_tree",
     "descends_from",
+    "isolated",
     "leaves_of",
     "resolve",
+    "spans",
+    "top_level",
 ]
 
 
 @dataclass
 class GroupNode:
-    """One folder in the tree. Four properties and an identity.
+    """One folder in the tree. Six properties and an identity.
 
-    The properties are the ones that *fold* -- see :func:`resolve`. A group has
-    deliberately no blend mode, because a blend mode on a pass-through group
-    would have nothing to blend: the members are still composited one at a time
-    against everything beneath them, so there is no group result for a mode to
-    act on. That is the isolated-compositing gap the module docstring names.
+    Four of them *fold* into a member's own values -- see :func:`resolve`. The
+    other two decide whether the group is a compositing stage at all:
+
+    ``blend``
+        The mode the group's own result blends at. Meaningful only on an
+        isolated group, because a pass-through group has no result for a mode
+        to act on -- which is why setting one *implies* isolation rather than
+        being refused without it (see :func:`isolated`).
+    ``isolate``
+        Whether to composite the members onto transparency and blend that once.
+
+    The two are separate fields rather than one, and that is not tidiness. A
+    blend mode implies isolation, but isolation is independently meaningful at
+    ``normal`` and full opacity: it is what confines a *member's* Multiply to
+    its siblings. Deriving either from the other makes that case -- the one an
+    artist reaches for most -- inexpressible. It is also what lets ORA
+    round-trip honestly, ``composite-op`` and ``isolation`` being two
+    attributes there.
     """
 
     name: str = "Group"
     visible: bool = True
     opacity: float = 1.0
     locked: bool = False
+    blend: str = "normal"
+    isolate: bool = False
     uid: int = field(default_factory=new_uid)
+
+
+@dataclass(frozen=True)
+class Span:
+    """One isolated group's slice of the stack, and what its result blends at.
+
+    ``lo``/``hi`` are half-open indices into the stack order the span was built
+    against -- ``spans`` is rebuilt by ``Document.invalidate_all`` beside the
+    fold, so they are never stale against the stack that holds them.
+
+    ``opacity`` is the group's own, multiplied by whatever *pass-through*
+    ancestors sit above it: a pass-through group applies its opacity to each
+    member individually, and an isolated group is one of its members. The walk
+    stops at the next isolated ancestor, whose own ``Span`` carries the rest.
+    """
+
+    guid: int
+    lo: int
+    hi: int
+    opacity: float
+    blend: str
+
+
+def isolated(node: GroupNode) -> bool:
+    """Whether this group composites as a unit.
+
+    A blend mode implies it, because a mode needs a result to act on and only
+    an isolated group has one. So a group is a compositing stage when it was
+    asked to be *or* when it was given a mode -- one rule, applied everywhere,
+    rather than a refusal the caller has to know about.
+    """
+    return bool(node.isolate) or node.blend != "normal"
 
 
 def ancestry(group_of: Mapping[int, int], uid: int) -> list[int]:
@@ -110,19 +176,137 @@ def resolve(
     50% shows it at 25% (or nesting two half-opacity groups would be a no-op);
     and a lock is a refusal, so any lock in the ancestry is a refusal.
 
+    **Opacity stops at the innermost isolated ancestor; visibility and the lock
+    do not.** An isolated group's opacity applies once to its finished result,
+    which is :class:`Span`'s job, so folding it into the leaves as well would
+    apply it twice. Visibility and the lock have no such split -- they are the
+    same answer wherever they are asked, and the two readers that ask about
+    them (``layer_at`` and the canvas's ``_group_shown``) want the complete
+    one. A stack with nothing isolated takes exactly the walk it always did.
+
     A member naming a group that is not in ``groups`` is skipped rather than
     refused -- an ORA can arrive with a dangling reference and the layer is
     still a layer.
     """
     visible, opacity, locked = True, 1.0, False
+    counting = True
     for guid in ancestry(group_of, uid):
         node = groups.get(guid)
         if node is None:
             continue
         visible = visible and bool(node.visible)
-        opacity *= float(node.opacity)
         locked = locked or bool(node.locked)
+        # Tested *before* the multiply, so an isolated group's own opacity is
+        # the first one left out rather than the last one included.
+        if isolated(node):
+            counting = False
+        if counting:
+            opacity *= float(node.opacity)
     return visible, opacity, locked
+
+
+def spans(
+    groups: Mapping[int, GroupNode],
+    group_of: Mapping[int, int],
+    order: Iterable[int],
+) -> list[Span] | None:
+    """Every isolated group's slice of ``order``, outermost-first.
+
+    ``None`` -- not an empty list -- when nothing is isolated, which is every
+    document until somebody sets a group blend mode. That is ``group_fold``'s
+    rule and it is load bearing for the same two reasons: ``_entries`` takes
+    its original path by identity rather than walking an empty list, and
+    ``LayerStack.cuts_isolated`` can answer with one ``is None`` test on the
+    hot path of every stroke.
+
+    The bounds come from one walk of the stack rather than one walk per group:
+    a row extends the bounds of every isolated ancestor it has. The contiguity
+    invariant is what makes ``min``/``max`` sufficient -- a group's leaves have
+    no gaps, so its extent *is* its membership. :func:`check` is where that is
+    asserted; a malformed tree costs a wrong picture here, never a hang.
+
+    Sorted by ``(lo, -hi)``, which puts a container before everything it
+    contains and is what :func:`top_level` walks.
+    """
+    bounds: dict[int, tuple[int, int]] = {}
+    for index, uid in enumerate(order):
+        for guid in ancestry(group_of, uid):
+            node = groups.get(guid)
+            if node is None or not isolated(node):
+                continue
+            lo, hi = bounds.get(guid, (index, index))
+            bounds[guid] = (min(lo, index), max(hi, index))
+    if not bounds:
+        return None
+    out = [
+        Span(
+            guid=guid,
+            lo=lo,
+            hi=hi + 1,
+            opacity=float(groups[guid].opacity) * _carry(groups, group_of, guid),
+            blend=groups[guid].blend,
+        )
+        for guid, (lo, hi) in bounds.items()
+    ]
+    out.sort(key=lambda span: (span.lo, -span.hi))
+    return out
+
+
+def _carry(
+    groups: Mapping[int, GroupNode], group_of: Mapping[int, int], uid: int
+) -> float:
+    """The opacity a member inherits from its *pass-through* ancestry.
+
+    :func:`resolve`'s opacity half, factored out because a group needs the same
+    answer a layer does: an isolated group is a member of whatever holds it,
+    and a pass-through holder dims each member individually.
+    """
+    out = 1.0
+    for guid in ancestry(group_of, uid):
+        node = groups.get(guid)
+        if node is None:
+            continue
+        if isolated(node):
+            break
+        out *= float(node.opacity)
+    return out
+
+
+def top_level(
+    spans_in: Iterable[Span], lo: int, hi: int, exclude: int | None = None
+) -> list[Span]:
+    """The spans within ``[lo, hi)`` that no other span in the list contains.
+
+    ``exclude`` is the group whose *inside* is being asked about, and it is not
+    an optimisation: a span is contained in its own range, so a recursion that
+    descended into one and asked this question again would be handed the same
+    span back forever. Naming the group being entered is what makes the walk
+    terminate, and it is exact -- a nested group with the same bounds as its
+    parent is a different uid and still comes back.
+
+    One level of the bracket sequence, which is what a compositing pass needs:
+    the spans it blends itself, with everything nested inside left for the
+    recursion those spans start.
+
+    A span that is only *partly* inside ``[lo, hi)`` is left out entirely. That
+    is a range cutting a group in half, which has no correct isolated
+    rendering -- ``LayerStack.cuts_isolated`` exists so the callers never ask,
+    and leaving it out degrades to pass-through rather than raising out of the
+    middle of a draw, which is the choice ``_entries`` already makes about a
+    fold caught mid-rebuild.
+
+    Requires the ``(lo, -hi)`` order :func:`spans` returns.
+    """
+    out: list[Span] = []
+    end = lo
+    for span in spans_in:
+        if span.guid == exclude:
+            continue
+        if span.lo < lo or span.hi > hi or span.lo < end:
+            continue
+        out.append(span)
+        end = span.hi
+    return out
 
 
 def descends_from(group_of: Mapping[int, int], uid: int, ancestor: int) -> bool:

@@ -441,6 +441,31 @@ def _paint_colour_native(
     return out
 
 
+class PreparedRegion:
+    """An entry whose pixels are *already* this composite's rect, in float32.
+
+    The one thing this module knows about isolated groups, and deliberately the
+    only thing: ``LayerStack._entries`` renders a group's members onto
+    transparency with a nested :func:`stack_region` call and wraps the result
+    in one of these, so what arrives here is still a
+    ``(pixels, opacity, mode)`` triple and the fold below still knows nothing
+    about a tree. The recursion lives in the layer model, where the tree does.
+
+    A wrapper rather than a bare float32 array, which would need no new type.
+    An array carries two facts here -- already float, already cropped -- and a
+    single ``dtype`` test stands for both, so a full-canvas float32 array
+    passed by some later caller would be silently mis-cropped instead of
+    rejected. And a wrapper rather than a fourth field on the entry tuple,
+    because that tuple's shape is a contract shared with the native kernel,
+    which declines these anyway.
+    """
+
+    __slots__ = ("region",)
+
+    def __init__(self, region: np.ndarray) -> None:
+        self.region = region
+
+
 def _stack_native(
     entries: list[tuple[np.ndarray, float, str]],
     rect: tuple[int, int, int, int],
@@ -464,6 +489,13 @@ def _stack_native(
     modes: list[int] = []
     for pixels, opacity, mode in entries:
         code = _MODE_IDS.get(mode)
+        # A prepared region is float32 and already cropped, which is neither
+        # of the two things the kernel's contract promises about an entry.
+        # Declining is all-or-nothing like every other gate here, so one
+        # isolated group sends the *outer* fold to numpy -- the group's own
+        # inner fold is ordinary uint8 layers and still runs native.
+        if isinstance(pixels, PreparedRegion):
+            return None
         if code is None or pixels.dtype != np.uint8 or pixels.ndim != 3:
             return None
         crop = pixels[y0:y1, x0:x1]
@@ -631,6 +663,11 @@ def stack_region(
     no opinion about names or ids, and keeping this module free of the layer
     model is what lets the below-cache be tested against a naive full-stack
     composite without the two sharing an implementation.
+
+    An entry's pixels are a full-canvas uint8 plane this crops, or a
+    :class:`PreparedRegion` already cropped to ``rect``. ``base=None`` composites
+    onto transparency, which is both what a full-stack composite wants and what
+    makes an isolated group *isolated*.
     """
     fast = _stack_native(entries, rect, base)
     if fast is not None:
@@ -642,7 +679,12 @@ def stack_region(
     else:
         out = base.astype(np.float32, copy=True)
     for pixels, opacity, mode in entries:
-        out = over(out, to_float(pixels[y0:y1, x0:x1]), opacity=opacity, mode=mode)
+        source = (
+            pixels.region
+            if isinstance(pixels, PreparedRegion)
+            else to_float(pixels[y0:y1, x0:x1])
+        )
+        out = over(out, source, opacity=opacity, mode=mode)
     return out
 
 

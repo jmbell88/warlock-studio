@@ -766,14 +766,26 @@ it. And a folder's layers stay together in the stack: grouping layers that are n
 refused rather than silently reordering your drawing, and moving a layer into a folder moves it in
 the stack too, as one undo step.
 
-Folders composite **pass-through**: each layer inside still blends with everything beneath it,
-exactly as it did before you grouped them, with the folder's opacity and visibility folded in. What
-that means in practice is that a folder has no blend mode of its own — *isolated* group
-compositing, where the folder is rendered to its own buffer and blended once, is not implemented in
-this build.
+Folders composite **pass-through** unless you say otherwise: each layer inside still blends with
+everything beneath it, exactly as it did before you grouped them, with the folder's opacity and
+visibility folded in.
+
+A folder's own menu offers **Blend** and **Isolate**, and together they change that. Isolating a
+folder draws its layers onto an empty sheet first and lays the finished sheet down once. Two things
+follow, and both are the reason to reach for it. A Multiply layer inside an isolated folder
+multiplies only against *its own siblings* rather than against the whole drawing underneath — which
+is how you shade one character without the shading eating the background. And the folder's opacity
+applies once, to the finished sheet, instead of dimming each layer separately: two overlapping
+opaque layers in a folder at 50% show through each other pass-through, and read as one half-faded
+picture isolated.
+
+Picking any **Blend** but Normal turns **Isolate** on by itself, and the tick moves to show it. That
+is not the menu overriding you — a blend mode needs something to blend, and only an isolated folder
+has a result of its own for one to act on.
 
 Folders are saved as OpenRaster's own nested stacks, so one made here opens as a group layer in
-Krita, and a Krita file's groups open as folders here.
+Krita, and a Krita file's groups open as folders here. The blend mode and the isolation flag travel
+with them in both directions, so a Krita folder set to Multiply arrives set to Multiply.
 
 One rule about erasing is worth stating plainly, because it differs from some editors. **The eraser
 makes pixels transparent.** It does not paint the background colour. The background colour — the

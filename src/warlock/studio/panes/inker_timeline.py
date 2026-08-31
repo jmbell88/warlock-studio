@@ -1443,6 +1443,9 @@ def _group_row(ctx: Any, tab: Any, doc: Any, entry: RowEntry) -> None:
 
 def _group_menu(ctx: Any, tab: Any, doc: Any, group_uid: int) -> None:
     """The header's verbs -- ``_row_menu``'s shape, one level up."""
+    from .. import inker
+    from ..inker import groups as gp
+
     if not imgui.begin_popup_context_item("group-menu"):
         return
     widgets.popup_chrome(_imgui=imgui)
@@ -1458,6 +1461,29 @@ def _group_menu(ctx: Any, tab: Any, doc: Any, group_uid: int) -> None:
     )
     if changed:
         doc.set_group_props(group_uid, opacity=float(opacity))
+    # Blend and Isolate sit together because they are one idea: a mode needs a
+    # result to act on, and only an isolated folder has one. Picking a mode
+    # therefore *turns isolation on* rather than being refused without it,
+    # which is ``groups.isolated``'s rule surfaced rather than restated -- the
+    # tick below goes on by itself and the user sees why.
+    blend = widgets.labeled_combo(
+        "Blend",
+        node.blend,
+        [(mode, mode) for mode in inker.BLEND_MODES],
+        sp(140),
+        help_text=(
+            "How this folder's own result combines with what is under it. "
+            "Choosing anything but Normal composites the folder in isolation."
+        ),
+    )
+    if blend != node.blend:
+        doc.set_group_props(group_uid, blend=blend)
+    # Left enabled while a mode is set, and deliberately: it reads as ticked
+    # and cannot be unticked, which is the honest picture of a mode implying
+    # it. Clicking sets the flag the mode was already forcing, so the tick
+    # stays and nothing about the drawing changes.
+    if controls.selectable("Isolate", bool(gp.isolated(node)))[0]:
+        doc.set_group_props(group_uid, isolate=not node.isolate)
     if controls.selectable("Locked", bool(node.locked))[0]:
         doc.set_group_props(group_uid, locked=not node.locked)
     imgui.separator()

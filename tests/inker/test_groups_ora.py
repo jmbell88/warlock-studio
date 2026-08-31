@@ -395,3 +395,137 @@ def test_a_still_file_is_unaffected_by_the_frame_group_rule(tmp_path: Path):
     path = tmp_path / "still.ora"
     inker.write_ora(doc, path)
     assert len(inker.Document.load(path).groups) == 1
+
+
+# --- isolation and the group blend mode --------------------------------------
+#
+# Divergence retired: the two attributes used to be dropped on read (logged, as
+# unmodelled) and hard-coded to the pass-through answer on write, because the
+# document model had nowhere to put them. It has, so they are carried.
+
+
+def test_a_pass_through_group_still_says_auto_and_names_no_mode(tmp_path: Path):
+    """The negative control, and the reason the mode is written conditionally.
+
+    ``svg:src-over`` is what a reader assumes from an absent ``composite-op``,
+    so spelling it out would change the bytes of every file that has ever had a
+    folder in it and say nothing new.
+    """
+    doc = _doc()
+    doc.group_layers([1, 2], name="Ink")
+    path = tmp_path / "plain.ora"
+    inker.write_ora(doc, path)
+
+    nested = _xml(path).find("stack").findall("stack")[0]
+    assert nested.get("isolation") == "auto"
+    assert nested.get("composite-op") is None
+
+
+def test_an_isolated_group_says_so_and_names_its_mode(tmp_path: Path):
+    doc = _doc()
+    node = doc.group_layers([1, 2], name="Ink")
+    doc.set_group_props(node.uid, isolate=True, blend="multiply")
+    path = tmp_path / "isolated.ora"
+    inker.write_ora(doc, path)
+
+    nested = _xml(path).find("stack").findall("stack")[0]
+    assert nested.get("isolation") == "isolate"
+    assert nested.get("composite-op") == "svg:multiply"
+
+
+def test_a_mode_alone_is_written_as_isolated(tmp_path: Path):
+    """A blend mode implies isolation, so the file must not claim otherwise."""
+    doc = _doc()
+    node = doc.group_layers([1, 2], name="Ink")
+    doc.set_group_props(node.uid, blend="screen")
+    path = tmp_path / "mode-only.ora"
+    inker.write_ora(doc, path)
+
+    nested = _xml(path).find("stack").findall("stack")[0]
+    assert nested.get("isolation") == "isolate"
+    assert nested.get("composite-op") == "svg:screen"
+
+
+def test_isolation_and_the_mode_round_trip(tmp_path: Path):
+    doc = _doc()
+    node = doc.group_layers([1, 2], name="Ink")
+    doc.set_group_props(node.uid, isolate=True, blend="multiply", opacity=0.5)
+    path = tmp_path / "grouped.ora"
+    inker.write_ora(doc, path)
+
+    back = inker.Document.load(path)
+    _ok(back)
+    got = next(iter(back.groups.values()))
+    assert (got.isolate, got.blend, got.opacity) == (True, "multiply", 0.5)
+    assert back.stack.group_spans is not None
+
+
+def test_a_krita_group_set_to_multiply_opens_as_multiply(tmp_path: Path):
+    """The case the divergence named: it used to render pass-through on load."""
+    doc = _doc()
+    doc.group_layers([1, 2], name="Ink")
+    path = tmp_path / "krita.ora"
+    inker.write_ora(doc, path)
+    _rewrite_group_attrs(path, {"composite-op": "svg:multiply", "isolation": "isolate"})
+
+    back = inker.Document.load(path)
+    got = next(iter(back.groups.values()))
+    assert got.blend == "multiply"
+    assert got.isolate is True
+
+
+def test_a_mode_this_build_cannot_reproduce_reads_as_normal(tmp_path: Path):
+    """The reader's own tolerance rule, one level up from a layer."""
+    doc = _doc()
+    doc.group_layers([1, 2], name="Ink")
+    path = tmp_path / "odd.ora"
+    inker.write_ora(doc, path)
+    _rewrite_group_attrs(path, {"composite-op": "krita:greater"})
+
+    back = inker.Document.load(path)
+    got = next(iter(back.groups.values()))
+    assert got.blend == "normal"
+
+
+def test_isolation_round_trips_through_an_animated_document(tmp_path: Path):
+    """The second serialisation: ``animation.json``, not ``stack.xml``."""
+    doc = _animated()
+    node = doc.group_layers([1, 2], name="Ink")
+    doc.set_group_props(node.uid, isolate=True, blend="overlay")
+    path = tmp_path / "anim.ora"
+    inker.write_ora(doc, path)
+
+    with zipfile.ZipFile(path) as zf:
+        payload = json.loads(zf.read("animation.json"))
+    assert payload["groups"]["nodes"][0]["blend"] == "overlay"
+    assert payload["groups"]["nodes"][0]["isolate"] is True
+
+    back = inker.Document.load(path)
+    got = next(iter(back.groups.values()))
+    assert (got.isolate, got.blend) == (True, "overlay")
+
+
+def test_an_animated_pass_through_group_writes_neither_key(tmp_path: Path):
+    doc = _animated()
+    doc.group_layers([1, 2], name="Ink")
+    path = tmp_path / "anim-plain.ora"
+    inker.write_ora(doc, path)
+
+    with zipfile.ZipFile(path) as zf:
+        payload = json.loads(zf.read("animation.json"))
+    node = payload["groups"]["nodes"][0]
+    assert "blend" not in node and "isolate" not in node
+
+
+def _rewrite_group_attrs(path: Path, attrs: dict) -> None:
+    """Re-save ``path`` with ``attrs`` set on its first nested ``<stack>``."""
+    with zipfile.ZipFile(path) as zf:
+        members = {name: zf.read(name) for name in zf.namelist()}
+    root = ElementTree.fromstring(members["stack.xml"].decode("utf-8"))
+    nested = root.find("stack").findall("stack")[0]
+    for key, value in attrs.items():
+        nested.set(key, value)
+    members["stack.xml"] = ElementTree.tostring(root, encoding="utf-8")
+    with zipfile.ZipFile(path, "w") as zf:
+        for name, data in members.items():
+            zf.writestr(name, data)
