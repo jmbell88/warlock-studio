@@ -485,6 +485,32 @@ class Document(
         if box is None:
             self.rev += 1
             return
+        if self.stack.cel_z is not None:
+            # **Per-cel z-index turns the below-cache off for this document.**
+            # The cache's premise is that the layers under ``active_index`` are
+            # finished business -- composite them once, then re-blend only from
+            # the active layer up on every dab. A z offset can lift a row from
+            # below the active layer to above it, so those layers are no longer
+            # finished and the cached base would be a picture with a hole where
+            # the lifted row used to be. The failure mode is the nastiest kind:
+            # the first dab rebuilds the cache and looks right, and the second
+            # reuses it and does not.
+            #
+            # Refused rather than repaired. A repair means knowing which rows
+            # crossed the active layer and re-splitting the stack per dab, for a
+            # feature whose whole point is that the split does not hold -- and
+            # the cost of refusing is measured rather than assumed:
+            # ``docs/measurements/2026-08-30-cel-z-below-cache.md``.
+            #
+            # ``_below`` is cleared, not merely bypassed, so that turning the
+            # last z back to 0 rebuilds it from the document rather than
+            # resurrecting a base that went stale while the feature was on.
+            self._below = None
+            x0, y0, x1, y1 = box
+            self._composite[y0:y1, x0:x1] = cp.to_uint8(self.stack.composite_region(box))
+            self._mark(box)
+            self.rev += 1
+            return
         if self._below is None:
             self._below = self.stack.composite_below()
         elif layer_uid is not None and self.stack.index_of(layer_uid) < self.stack.active_index:
@@ -525,6 +551,10 @@ class Document(
         # ``restore_snapshot``, ``_map_planes``) is one of them. A document with
         # no groups pays one truthiness test.
         self.stack.group_fold = self.group_fold()
+        # And the per-cel z rows, in the same breath and for the same reason:
+        # every path that replaces ``self.stack`` ends here, and a document
+        # with no z pays one dict lookup per track.
+        self.stack.cel_z = self.cel_z_rows()
         width, height = self.size
         if self._composite.shape[:2] != (height, width):
             self._composite = np.zeros((height, width, 4), dtype=np.uint8)
@@ -595,6 +625,27 @@ class Document(
         return [
             gp.resolve(self.groups, self.group_of, uid)[:2] for uid in self.member_uids()
         ]
+
+    def cel_z_rows(self, frame: Any = None) -> list[int] | None:
+        """Per-stack-row z offsets for *frame*, or None when none is set.
+
+        ``group_fold``'s shape and its rule: **None, not a list of zeros**, on
+        a document that does not use the feature -- so ``LayerStack._entries``
+        takes its original path by identity, and so ``invalidate`` can read the
+        one flag that tells it whether the ``_below`` cache is sound.
+
+        A still document has no grid and therefore no answer but None. So does
+        an animated one whose current frame names no nonzero z, which is what
+        keeps every existing document on the cached path.
+        """
+        anim = self.anim
+        if anim is None or not anim.frames or not anim.tracks:
+            return None
+        if frame is None:
+            frame = anim.frame
+        if not anim.any_cel_z(frame.uid):
+            return None
+        return [anim.cel_zindex(track.uid, frame.uid) for track in anim.tracks]
 
     def member_uid_of(self, layer: Any) -> int:
         """The tree's name for a layer that is in the current stack.
@@ -744,6 +795,22 @@ class Document(
         """
         layers = self.anim.layers_for(frame, self.size)
         fold = self.group_fold()
+        # The z rows are filtered with the rows for the fold's reason exactly:
+        # both are lists parallel to the stack, and an unfiltered one on a
+        # filtered stack would hang each surviving row's value on whichever row
+        # landed at its index. Unlike the fold, filtering is *not* enough to be
+        # correct here -- a subset that keeps a lifted row and drops the row it
+        # was lifted over composites in an order the whole frame never had. It
+        # is the honest answer available: ``layer_splits`` asks for one track's
+        # own pixels, and one row is in one order however it is stacked.
+        #
+        # The offsets are *rebased* rather than merely picked out, because an
+        # offset is relative to the row's own position and dropping rows moves
+        # every position above them. ``keep[j] + zs[keep[j]] - j`` is the value
+        # that makes the filtered key ``j + z`` come out as the row's true
+        # height in the unfiltered frame, so the subset blends in exactly the
+        # relative order the whole frame does.
+        zs = self.cel_z_rows(frame)
         if track_uids is not None:
             keep = [
                 index
@@ -752,8 +819,14 @@ class Document(
             ]
             layers = [layers[index] for index in keep]
             fold = None if fold is None else [fold[index] for index in keep]
+            zs = (
+                None
+                if zs is None
+                else [keep[j] + zs[keep[j]] - j for j in range(len(keep))]
+            )
         stack = LayerStack(layers, 0)
         stack.group_fold = fold
+        stack.cel_z = zs
         return stack
 
     def _evict_frames(self) -> None:

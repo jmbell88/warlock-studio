@@ -225,6 +225,23 @@ class LayerStack:
         #: The document refreshes it in ``invalidate_all``, which is what every
         #: structural change ends with. See ``inker/groups.py``.
         self.group_fold: list[tuple[bool, float]] | None = None
+        #: Per-row **z offset** from ``Animation.cel_z``, parallel to
+        #: ``self.layers``, or None on every stack that does not use the
+        #: feature -- which is every still document and every animated one
+        #: until somebody sets a z, so the ordinary path compares one
+        #: reference and sorts nothing.
+        #:
+        #: It lives on the *stack* rather than on the layers for
+        #: ``group_fold``'s reason: it is a property of the **slot**, not of
+        #: the cel, and a linked cel is one ``Layer`` object in two slots that
+        #: may sit at two different heights. ``Document.invalidate_all`` and
+        #: ``Document.frame_stack`` are the two places that fill it in, exactly
+        #: as they are for the fold.
+        #:
+        #: **None rather than a list of zeros, and that distinction is load
+        #: bearing**: it is what ``Document.invalidate`` reads to decide
+        #: whether the ``_below`` cache is still sound. See :meth:`_entries`.
+        self.cel_z: list[int] | None = None
 
     def __len__(self) -> int:
         return len(self.layers)
@@ -307,6 +324,36 @@ class LayerStack:
 
     # -- compositing -------------------------------------------------------
 
+    def _order(self, lo: int, hi: int) -> list[int] | None:
+        """The row indices ``[lo, hi)`` blend in, or None for "as they lie".
+
+        None on every stack with no ``cel_z`` -- one ``is None`` test, no
+        allocation, no sort -- and on every *partial* range even when there is
+        one. **That second half is the whole safety argument.** A z offset can
+        move a row across the active layer, so a partial range no longer names
+        a contiguous slice of the finished picture and there is no correct
+        answer to give for one; the only sound thing to do is refuse to be
+        asked, which is what returning None here does. ``Document.invalidate``
+        is the caller that makes that possible: it drops the ``_below`` cache
+        for exactly these documents so every composite is a full-stack one.
+
+        The key is ``(index + z, index)``. The tiebreak on the raw index is
+        what keeps the sort stable *and* meaningful: two rows given the same
+        effective height stay in track order, which is what an offset of zero
+        means on every row and therefore why an unused feature is the identity
+        permutation rather than merely a cheap one.
+        """
+        zs = self.cel_z
+        if zs is None or lo != 0 or hi != len(self.layers):
+            return None
+        return sorted(
+            range(lo, hi),
+            key=lambda index: (
+                index + (zs[index] if index < len(zs) else 0),
+                index,
+            ),
+        )
+
     def _entries(self, lo: int, hi: int) -> list[tuple[np.ndarray, float, str]]:
         """The rows a composite of ``[lo, hi)`` actually blends.
 
@@ -316,16 +363,29 @@ class LayerStack:
         ``(pixels, opacity, blend)`` triple and knows nothing about a tree.
         Pass-through, so each layer still blends against everything beneath it
         -- see ``inker/groups.py`` for why isolated compositing is a v1 gap.
+
+        **Per-cel z-index is applied here too, and for the same reason**: by
+        the time ``composite.stack_region`` or the native stack kernel sees this
+        list it is a list of triples in blend order and neither learns that a
+        row was moved. :meth:`_order` decides the order; a stack with no z gets
+        None back and takes the path it always took, down to the comprehension.
         """
         fold = self.group_fold
+        order = self._order(lo, hi)
         if fold is None:
+            if order is None:
+                return [
+                    (_shown_pixels(layer), layer.opacity, layer.blend)
+                    for layer in self.layers[lo:hi]
+                    if layer.visible and layer.opacity > 0.0
+                ]
             return [
-                (_shown_pixels(layer), layer.opacity, layer.blend)
-                for layer in self.layers[lo:hi]
-                if layer.visible and layer.opacity > 0.0
+                (_shown_pixels(self.layers[i]), self.layers[i].opacity, self.layers[i].blend)
+                for i in order
+                if self.layers[i].visible and self.layers[i].opacity > 0.0
             ]
         out: list[tuple[np.ndarray, float, str]] = []
-        for index in range(lo, hi):
+        for index in range(lo, hi) if order is None else order:
             layer = self.layers[index]
             # A fold shorter than the stack is a rebuild caught midway; treat
             # the missing rows as ungrouped rather than raising out of a draw.

@@ -824,27 +824,35 @@ def _ase_opacity(alpha: float) -> int:
 
 
 def _cel_chunk(
-    layer_index: int, plane: bytes, size: tuple[int, int], opacity: int = 255
+    layer_index: int,
+    plane: bytes,
+    size: tuple[int, int],
+    opacity: int = 255,
+    z: int = 0,
 ) -> bytes:
     """A type-2 (zlib) cel, full canvas at the origin.
 
     ``opacity`` is the slot's own (``Animation.cel_opacity``; divergence 1,
     retired 2026-08-30) and defaults to the 255 every undimmed cel writes, so a
     document that never used the feature is byte-for-byte the file it was.
-    Z-index stays 0 deliberately: track order *is* stack order here (divergence
-    12), so writing anything else would invent a value the reader warns about on
-    the way back in.
+
+    ``z`` is the slot's own z-index (``Animation.cel_z``; divergence 12, retired
+    2026-08-30) and defaults to the 0 every unmoved cel writes -- the opacity
+    byte's rule verbatim and for its consequence: a document that never lifted a
+    cel writes the file it always wrote, byte for byte.
     """
     width, height = size
     body = struct.pack(
-        "<HhhBHh5s", layer_index, 0, 0, opacity, _CEL_COMPRESSED, 0, b"\0" * 5
+        "<HhhBHh5s", layer_index, 0, 0, opacity, _CEL_COMPRESSED, z, b"\0" * 5
     )
     return _chunk(
         _CEL, body + struct.pack("<HH", width, height) + zlib.compress(plane)
     )
 
 
-def _link_chunk(layer_index: int, frame_index: int, opacity: int = 255) -> bytes:
+def _link_chunk(
+    layer_index: int, frame_index: int, opacity: int = 255, z: int = 0
+) -> bytes:
     """A type-1 cel: this slot holds the cel that frame ``frame_index`` does.
 
     The field is a **frame** index, not a cel index -- the reader resolves it as
@@ -855,15 +863,19 @@ def _link_chunk(layer_index: int, frame_index: int, opacity: int = 255) -> bytes
     for: the format gives a linked chunk its own opacity byte, and so does this
     package -- ``Animation.cel_opacity`` is keyed by *slot*, not by ``Layer`` --
     so the two slots of a link round-trip two different numbers over one image.
+
+    **And a z-index of its own**, for that sentence verbatim: ``Animation.cel_z``
+    is keyed by slot as well, so one image can sit lifted in one frame and flat
+    in the next.
     """
     body = struct.pack(
-        "<HhhBHh5s", layer_index, 0, 0, opacity, _CEL_LINKED, 0, b"\0" * 5
+        "<HhhBHh5s", layer_index, 0, 0, opacity, _CEL_LINKED, z, b"\0" * 5
     )
     return _chunk(_CEL, body + struct.pack("<H", frame_index))
 
 
 def _tilemap_cel_chunk(
-    layer_index: int, refs: np.ndarray, opacity: int = 255
+    layer_index: int, refs: np.ndarray, opacity: int = 255, z: int = 0
 ) -> bytes:
     """A type-3 cel: a grid of tile references, not pixels.
 
@@ -885,7 +897,7 @@ def _tilemap_cel_chunk(
     """
     grid_h, grid_w = int(refs.shape[0]), int(refs.shape[1])
     body = struct.pack(
-        "<HhhBHh5s", layer_index, 0, 0, opacity, _CEL_TILEMAP, 0, b"\0" * 5
+        "<HhhBHh5s", layer_index, 0, 0, opacity, _CEL_TILEMAP, z, b"\0" * 5
     )
     body += struct.pack("<HHH", grid_w, grid_h, _TILE_BITS)
     body += struct.pack("<IIII", gid.GID_MASK, gid.FLIP_H, gid.FLIP_V, gid.FLIP_D)
@@ -904,6 +916,7 @@ def _drawn_cel(
     mode: str,
     size: tuple[int, int],
     opacity: int = 255,
+    z: int = 0,
 ) -> bytes:
     """The chunk one occupied slot writes -- pixels, or tile references.
 
@@ -915,7 +928,7 @@ def _drawn_cel(
     document, and this is the cheapest place to say so.
     """
     if row.tileset is None:
-        return _cel_chunk(layer_index, _plane(layer, mode, size), size, opacity)
+        return _cel_chunk(layer_index, _plane(layer, mode, size), size, opacity, z)
     refs = getattr(layer, "refs", None)
     if refs is None:
         raise ValueError(
@@ -930,7 +943,7 @@ def _drawn_cel(
             f"the tilemap layer {row.name!r} holds a cel bound to a different"
             " tileset, and an .aseprite layer draws through exactly one"
         )
-    return _tilemap_cel_chunk(layer_index, refs, opacity)
+    return _tilemap_cel_chunk(layer_index, refs, opacity, z)
 
 
 # --- tilesets ----------------------------------------------------------------
@@ -1451,15 +1464,21 @@ def aseprite_bytes(doc) -> bytes:
                 # two slots and the two may carry two different opacities,
                 # which is exactly what ``cel_opacity`` is keyed by slot for.
                 alpha = _ase_opacity(anim.cel_alpha(track.uid, frame.uid))
+                # And the slot's z-index on exactly those terms: a lift belongs
+                # to the slot, so a link's two chunks may name two heights over
+                # one image.
+                zed = anim.cel_zindex(track.uid, frame.uid)
                 at = first.get(id(layer))
                 if at is None:
                     first[id(layer)] = index
                     per_frame[index].append(
-                        _drawn_cel(index_of[position], row, layer, mode, size, alpha)
+                        _drawn_cel(
+                            index_of[position], row, layer, mode, size, alpha, zed
+                        )
                     )
                 else:
                     per_frame[index].append(
-                        _link_chunk(index_of[position], at, alpha)
+                        _link_chunk(index_of[position], at, alpha, zed)
                     )
                 # Per *slot*, exactly as the opacity above is, and immediately
                 # after this slot's own chunk -- so a link's two chunks carry

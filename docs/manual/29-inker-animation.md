@@ -90,6 +90,26 @@ being unlinked into ten copies first. A cell with no drawing in it has no opacit
 slider is not offered there. The value is saved with the document, and survives a round trip
 through `.aseprite` in both directions.
 
+### Cel z
+
+**A cell can also be lifted above its own layer**, with the **Z** slider beside the opacity one on
+the same right-click menu. It is an *offset*, not a reorder: `+1` draws that one cell a row higher
+in the stack than its layer sits, `-1` a row lower, and the layer itself does not move — the
+timeline order, the layer panel and everything you address by picking a row all go on meaning what
+they meant. A hand that has to pass in front of the body on three frames of a walk and behind it on
+the other five is the case this is for; it used to mean two layers and an eye toggle on every
+frame.
+
+Two things are worth knowing. **A tie keeps layer order**, so an offset that lands exactly on
+another row's height sits *under* it — to clear the top of a three-layer stack from the bottom, use
+3 and not 2. And **a lift belongs to the slot, not the drawing**: a linked cel can be in front on
+one frame and behind on the next while still being one drawing you paint once. A cell with nothing
+in it has nothing to lift, and the slider is not offered there.
+
+While any cell on the frame you are drawing on is lifted, the editor stops caching the layers
+underneath the one you are painting on, because a lifted cel can be one of them. A dab costs a
+little more and the *first* dab of a stroke costs a great deal less; you are unlikely to notice
+either. The numbers are in `docs/measurements/2026-08-30-cel-z-below-cache.md`.
 
 ### Colours and notes
 
@@ -354,10 +374,10 @@ build cannot read, a canvas too small to draw on, a cel that will not decompress
 build cannot align to its own tile grid, a cel type nobody here knows, a tileset that links an
 external file rather than carrying its own pixels, or a cel linked to a frame that holds none.
 Anything cosmetic is a message and the file still opens: colour profiles (this app assumes sRGB
-throughout), a cel's z-index (layer order is stacking order), and per-frame palettes (the final
-table is used). Per-cel opacity *is* kept now, and so are the **colours and notes** on layers, cels
-and tags — except on a one-frame file, which opens as a still image with no timeline for either to
-live on, and there each is a message. What is still a message about user data even on an animated
+throughout) and per-frame palettes (the final table is used). Per-cel opacity, a cel's **z-index**
+and the **colours and notes** on layers, cels and tags *are* all kept now — except on a one-frame
+file, which opens as a still image with no timeline for any of them to live on, and there each is a
+message. What is still a message about user data even on an animated
 file: a note on a *slice* or on a *tileset*, a note on an individual *tile*, and Aseprite's custom
 **properties** — a typed key/value tree, which is a document format of its own inside the file. A
 reference layer opens hidden, which is what exporting from Aseprite would do with it.

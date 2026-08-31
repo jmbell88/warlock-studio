@@ -23,6 +23,7 @@ from .anim_edits import (
     CelNoteEdit,
     CelOpacityEdit,
     CelSetEdit,
+    CelZEdit,
     FrameAddEdit,
     FrameDurationEdit,
     FrameMoveEdit,
@@ -277,6 +278,26 @@ class AnimOps:
             anim.cel_notes.pop((track_uid, frame_uid), None)
         self.rev += 1
 
+    def _set_cel_z(self: Document, track_uid: int, frame_uid: int, value: int) -> None:
+        """Undo hook for :meth:`set_cel_z`. Sparse: ``0`` removes the key.
+
+        ``_set_cel_opacity``'s rule verbatim -- ``ora`` and ``aseout`` both ask
+        whether a slot is *named* here, so a document that was reordered and
+        put back writes the bytes it wrote before.
+
+        It ends in ``_anim_changed`` rather than a ``rev`` bump, unlike
+        ``_set_cel_note``: this one reaches the picture. That is also what
+        refreshes ``LayerStack.cel_z`` and therefore what turns the ``_below``
+        cache off and back on again as the last nonzero z arrives and goes.
+        """
+        anim = self._require_anim()
+        value = max(-32768, min(32767, int(value)))
+        if value:
+            anim.cel_z[(track_uid, frame_uid)] = value
+        else:
+            anim.cel_z.pop((track_uid, frame_uid), None)
+        self._anim_changed()
+
     def _set_cel(self: Document, track_uid: int, frame_uid: int, layer: Layer | None) -> None:
         anim = self._require_anim()
         if layer is None:
@@ -437,6 +458,46 @@ class AnimOps:
             return False
         self._set_cel_opacity(track.uid, frame.uid, after)
         self.history.push(CelOpacityEdit(track.uid, frame.uid, before, after))
+        return True
+
+    def set_cel_z(
+        self: Document,
+        value: int,
+        track_index: int | None = None,
+        frame_index: int | None = None,
+    ) -> bool:
+        """Lift or drop one slot of the grid without moving its track.
+
+        Aseprite's own meaning: ``value`` is an **offset** added to the row's
+        position in the stack, so ``+1`` draws this cel one row higher than its
+        track sits and ``-1`` one row lower, while the track keeps its place in
+        the timeline and everything addressed by track index goes on meaning
+        what it meant. Equal effective heights keep track order between them.
+
+        Refused on an empty slot -- :meth:`set_cel_opacity`'s rule and its
+        reason: there is nothing to reorder, and inventing an entry would leave
+        a number behind that nothing draws and the next autovivified cel would
+        silently inherit.
+
+        **What it costs is a cache**: any nonzero z on the frame being drawn on
+        turns off ``Document._below``, because that cache's premise is that the
+        rows under the active layer are finished business and a lift is exactly
+        the thing that makes them not. Measured in
+        ``docs/measurements/2026-08-30-cel-z-below-cache.md``.
+        """
+        slot = self._slot(track_index, frame_index)
+        anim = self.anim
+        if slot is None or anim is None:
+            return False
+        track, frame = slot
+        if anim.cels.get((track.uid, frame.uid)) is None:
+            return False
+        before = anim.cel_zindex(track.uid, frame.uid)
+        after = max(-32768, min(32767, int(value)))
+        if after == before:
+            return False
+        self._set_cel_z(track.uid, frame.uid, after)
+        self.history.push(CelZEdit(track.uid, frame.uid, before, after))
         return True
 
     def set_cel_note(

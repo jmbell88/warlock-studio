@@ -1845,6 +1845,26 @@ def _cell_menu(
         )
         if changed:
             doc.set_cel_opacity(float(alpha), track_index=ti, frame_index=fi)
+        # Per-cel z-index, beside the per-cel opacity and keyed the same way:
+        # how many rows *up* this one slot draws from where its track sits. The
+        # bounds are the stack's own height rather than the format's ``i16``,
+        # because anything past that is the same picture as the end of it.
+        # ``len(tracks)`` and not ``len(tracks) - 1``, which is the off-by-one
+        # worth naming: an offset that lands *on* the top row's height ties
+        # with it and a tie keeps track order, so clearing the top of an
+        # n-row stack from the bottom takes exactly n. The door
+        # (``Document.set_cel_z``) still takes the format's whole range, so a
+        # value out of somebody else's file round-trips rather than being
+        # clamped by a control the user never touched.
+        reach = max(1, len(doc.anim.tracks))
+        changed, zed = controls.slider_int(
+            "Z##cel",
+            int(doc.anim.cel_zindex(doc.anim.tracks[ti].uid, doc.anim.frames[fi].uid)),
+            -reach,
+            reach,
+        )
+        if changed:
+            doc.set_cel_z(int(zed), track_index=ti, frame_index=fi)
         # Per-slot user data, beside the per-slot opacity and keyed the same
         # way. A linked cel gets one of these per slot too, which is the whole
         # reason ``cel_notes`` is a dict rather than a ``Layer`` field.

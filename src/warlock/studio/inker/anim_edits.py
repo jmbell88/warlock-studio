@@ -43,6 +43,7 @@ __all__ = [
     "CelNoteEdit",
     "CelOpacityEdit",
     "CelSetEdit",
+    "CelZEdit",
     "FrameAddEdit",
     "FrameDurationEdit",
     "FrameMoveEdit",
@@ -415,3 +416,28 @@ class TrackNoteEdit(Edit):
 
     def redo(self, doc: Any) -> None:
         doc._set_track_note(self.track_uid, self.after)
+
+
+@dataclass
+class CelZEdit(Edit):
+    """One slot's per-cel z-index, before and after.
+
+    ``CelOpacityEdit``'s shape exactly, and addressed the same way: by the
+    ``(track uid, frame uid)`` pair rather than by the ``Layer``, because a
+    linked cel is one object in two slots and the two may sit at two different
+    heights -- which is the case ``Animation.cel_z`` is a dict for.
+
+    Cost is zero: two ints and no pixels, so the byte budget has nothing to
+    say about it.
+    """
+
+    track_uid: int
+    frame_uid: int
+    before: int
+    after: int
+
+    def undo(self, doc: Any) -> None:
+        doc._set_cel_z(self.track_uid, self.frame_uid, self.before)
+
+    def redo(self, doc: Any) -> None:
+        doc._set_cel_z(self.track_uid, self.frame_uid, self.after)

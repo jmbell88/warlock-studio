@@ -36,12 +36,14 @@ not 32 bits per tile, and a tilemap cel sitting at an offset that is not a
 multiple of its own tile size.
 
 Everything *cosmetic* is a warning and the document opens: a colour profile
-(this app is sRGB-assumed end to end), a cel z-index (track order **is** stack
-order, which the compositor and the native kernel both assume). Those are
-declared divergences rather than gaps, so refusing on them would refuse almost
-every file Aseprite writes. Two entries left that list: a cel's opacity byte
-(divergence 1, retired 2026-08-30) and, on 2026-08-30, a **layer's, a cel's and
-a tag's user data** -- the text and the timeline colour -- which now land on
+(this app is sRGB-assumed end to end), a saved mask or path, a cel's precise
+bounds. Those are declared divergences rather than gaps, so refusing on them
+would refuse almost every file Aseprite writes. Three entries left that list: a
+cel's opacity byte (divergence 1, retired 2026-08-30), a cel's **z-index**
+(divergence 12, retired 2026-08-30 -- it lands in ``Animation.cel_z``, and is
+still warned away on a *still* document, which has no grid to put it on) and,
+on 2026-08-30, a **layer's, a cel's and a tag's user data** -- the text and
+the timeline colour -- which now land on
 ``Track.note``, ``Animation.cel_notes`` and ``Tag.note``. A user-data chunk is
 attributed to the chunk before it, which is the format's own rule and the whole
 of why this reader tracks an owner; what still warns is user data on a *slice*
@@ -351,6 +353,11 @@ class AseCel:
     #: different numbers. It lands in ``Animation.cel_opacity``, which is keyed
     #: the same way for the same reason.
     opacity: int = 255
+    #: The chunk's own ``i16`` z-index: an offset from the layer's position in
+    #: the stack. Kept per *cel* for the opacity byte's reason exactly -- the
+    #: format gives every cel chunk one, linked ones included -- and it lands
+    #: in ``Animation.cel_z``.
+    z: int = 0
     width: int = 0
     height: int = 0
     data: bytes = b""
@@ -792,12 +799,15 @@ def _read_cel(state: _Parse, r: _Reader) -> None:
     # 22), so the one remaining warning is raised where that is known -- in
     # ``open_aseprite``'s single-frame branch -- rather than here, where it is
     # not.
-    if z_index:
-        # Divergence 12: track order *is* stack order, which the compositor and
-        # the stack kernel both assume.
-        state.warn("a cel's z-index was dropped; layer order is stacking order")
+    # Divergence 12 was retired on 2026-08-30 alongside divergence 1, and is
+    # *not* warned away here for the same reason: it is kept, in
+    # ``Animation.cel_z``. It has nowhere to land on a **still** document
+    # (``Document.anim is None``, divergence 22), so the one warning left is
+    # raised where that is known -- in ``open_aseprite``'s single-frame branch.
 
-    cel = AseCel(layer=layer, frame=state.frame, x=x, y=y, kind=kind, opacity=opacity)
+    cel = AseCel(
+        layer=layer, frame=state.frame, x=x, y=y, kind=kind, opacity=opacity, z=z_index
+    )
     if kind == _CEL_LINKED:
         cel.link = r.u16()
     elif kind in (_CEL_RAW, _CEL_COMPRESSED):
@@ -1677,12 +1687,27 @@ def document_from_aseprite(
             and cel.note
             and (tracks[cel.layer].uid, frames[cel.frame].uid) in cels
         }
+        # Per-cel z-index, on the same terms one grid cell further along: read
+        # off the *cel chunk*, keyed by slot, sparse (0 is stored as nothing),
+        # so a file that never used the feature makes an ``Animation``
+        # identical to the one it made before the feature existed -- and a
+        # linked pair whose two chunks named two different heights arrives as
+        # one shared ``Layer`` sitting at both.
+        cel_z = {
+            (tracks[cel.layer].uid, frames[cel.frame].uid): int(cel.z)
+            for cel in sprite.cels
+            if cel.layer in tracks
+            and cel.frame < len(frames)
+            and cel.z
+            and (tracks[cel.layer].uid, frames[cel.frame].uid) in cels
+        }
         anim = Animation(
             tracks=[tracks[index] for index in image_rows],
             frames=frames,
             cels=cels,
             cel_opacity=cel_opacity,
             cel_notes=cel_notes,
+            cel_z=cel_z,
             tags=list(sprite.tags),
         )
         doc = Document(
@@ -1710,6 +1735,13 @@ def document_from_aseprite(
         # them here would write a track opacity nobody set on the next save.
         if any(cel.opacity != 255 for cel in sprite.cels):
             warn("per-cel opacity needs a timeline; this file has one frame")
+        # And the last of divergence 12, on exactly those terms: a z-index is an
+        # offset within the *grid*'s stack (``Animation.cel_z``) and a still
+        # document has no grid. Not folded into the layer order either -- moving
+        # a layer here would rewrite what the next save says the stack is, for a
+        # file that never asked for the rows to move.
+        if any(cel.z for cel in sprite.cels):
+            warn("a cel's z-index needs a timeline; this file has one frame")
         # And the same line for divergence 14's own remainder. A note lives on
         # a ``Track``, a slot of the grid or a ``Tag``, and a still document
         # has none of the three -- the layers here are plain ``Layer`` objects.

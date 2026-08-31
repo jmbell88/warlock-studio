@@ -18,6 +18,47 @@ the release you are actually running.
 
 ## 0.0.30 — 2026-08-30
 
+- **A cel can be lifted above its own layer.** Aseprite's per-cel *z-index*, and the last ordering
+  rule this timeline did not have (divergence #12, retired in place in `docs/INVARIANTS.md`). The
+  value is an **offset** added to the row's position in the stack, so `+1` draws that one slot a row
+  higher than its track sits and the track does not move; equal effective heights keep track order,
+  which is why clearing the top of an n-row stack from the bottom takes exactly `n`. Storage is
+  Wave 10's and Wave 12's, reused rather than reinvented: `Animation.cel_z`, a sparse dict keyed
+  `(track uid, frame uid)` beside `cels`, `cel_opacity` and `cel_notes`, because a linked cel is two
+  keys mapping to one `Layer` and the two slots may sit at two heights — which the format agrees
+  with, giving every cel chunk, linked ones included, its own `i16` field.
+
+- **What that cost, said out loud, because it is a hot path.** Per-cel opacity had somewhere to
+  land; a *reorder* does not. `Animation.layers_for` must go on returning the list in **track**
+  order — `active_index` and every editing call site read list position as track position — so the
+  offsets ride alongside the stack as `LayerStack.cel_z` and are applied only in `_entries`, and
+  only when it is building the whole stack. That breaks `Document._below`, the cache of the rows
+  under the active layer that a dab patches instead of rebuilding: its premise is that those rows
+  are finished business, and a lift is exactly what makes them not. **So any nonzero `cel_z` on the
+  frame being drawn on turns the below-cache off for that document**, and `_entries` refuses to sort
+  a partial range at all, so the unsound question cannot be asked. Refused rather than repaired: a
+  repair is a second ordering rule to keep in step with the first, for a feature whose whole point
+  is that the split does not hold. Getting it wrong would have produced a surface that renders
+  correctly on the first dab and wrongly on the second, so it has its own tests and its own
+  measurements document, `docs/measurements/2026-08-30-cel-z-below-cache.md`: **1.3–1.5× per dab**
+  (0.166 ms → 0.250 ms at 2048² by ten tracks, half a percent of one frame) and **13× cheaper per
+  stroke**, because the cache it is not building costs 205 ms of full-canvas composite to build —
+  the crossover is around 2 400 dabs in a single gesture. A document with no `cel_z` composites by
+  the identical path with the cache still on, pinned against sha256 literals of the composite, the
+  flatten, an off-frame flatten and both file formats captured from the tree *before* the feature
+  existed; the native stack kernel receives the identical list for such a document.
+
+- **It round-trips through both formats.** `asein` keeps the field instead of warning it away;
+  `aseout` writes it from the slot in all four chunk writers, so a link's two chunks can name two
+  heights over one image, and a slot nobody moved still writes 0 — an unmoved document is byte-for-
+  byte the file it was. `ora`'s `animation.json` gains an additive per-cel `z` key written only when
+  nonzero, so the determinism pins hold. A **one-frame** `.aseprite` opens as a still document,
+  which has no grid for an offset to live in, so there alone it is still said out loud ("a cel's
+  z-index needs a timeline; this file has one frame") — divergence 22's line, exactly where per-cel
+  opacity and user data stop as well. The control is a `Z` slider on the timeline cell menu beside
+  the opacity one, bounded by the stack's own height, driven in test by a real mouse press at the
+  rect imgui put it at.
+
 - **The free transform has a movable pivot.** A small ring with a crosshair through it sits at the
   centre of the transform box; drag it anywhere and the rotation turns about that point and the
   scale grows from it. Put it on a shoulder and the arm swings from the shoulder. It is the radial

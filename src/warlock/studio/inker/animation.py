@@ -614,6 +614,33 @@ class Animation:
     #: ``cel_opacity`` it does not reach the picture at all.
     cel_notes: dict[tuple[int, int], Note] = field(default_factory=dict)
 
+    #: Per-cel **z-index**, sparse, ``0`` for every slot not named here -- the
+    #: third value on this grid and deliberately the same shape as the first
+    #: two, so ``animation.py`` ends with one storage idiom rather than three.
+    #: Aseprite's own meaning: a cel's z is an *offset* added to its layer's
+    #: position in the stack, so ``+1`` renders one row higher than its track
+    #: sits and ``-1`` one row lower, while the track itself does not move.
+    #:
+    #: Keyed by slot rather than stored on the ``Layer`` for ``cel_opacity``'s
+    #: reason verbatim: a linked cel is two keys mapping to one object, the
+    #: format gives every cel chunk (linked ones included) its own ``i16``
+    #: z-index field, and two slots sharing one image may legitimately sit at
+    #: two different heights.
+    #:
+    #: Entries are **not** dropped when a track or frame goes -- ``cel_opacity``'s
+    #: decision, for its reason.
+    #:
+    #: **Unlike ``cel_opacity`` this is not folded into ``layers_for``.** The
+    #: multiply that opacity needs has somewhere to land (the layer's own
+    #: ``opacity``); a reorder does not, because ``layers_for`` must keep
+    #: returning the list in *track* order -- ``active_index`` and every editing
+    #: call site read list position as track position. So the offset is carried
+    #: alongside the stack (``LayerStack.cel_z``) and applied at the one place
+    #: that may reorder: ``LayerStack._entries``, and only when it is building
+    #: the whole stack. See that method, and ``Document.invalidate`` for the
+    #: below-cache this costs.
+    cel_z: dict[tuple[int, int], int] = field(default_factory=dict)
+
     #: Set when these frames are a directional sprite sheet's cells, in order.
     #: None for every ordinary animation, which is the default and takes the
     #: fixed-grid export path out of the picture entirely.
@@ -829,6 +856,32 @@ class Animation:
         remember to check before every ``.text``.
         """
         return self.cel_notes.get((track_uid, frame_uid)) or Note()
+
+    def cel_zindex(self, track_uid: int, frame_uid: int) -> int:
+        """One slot's z offset, clamped to the format's ``i16``, ``0`` unset.
+
+        :meth:`cel_alpha`'s shape and for its reason -- three writers and the
+        compositor all want the same clamp, and a stored value out of somebody
+        else's file that overflowed the field on the way back out would make a
+        file this build could not re-read.
+        """
+        try:
+            value = int(self.cel_z.get((track_uid, frame_uid), 0))
+        except (TypeError, ValueError):
+            return 0
+        return max(-32768, min(32767, value))
+
+    def any_cel_z(self, frame_uid: int) -> bool:
+        """Does any live track on this frame carry a nonzero z?
+
+        The question ``Document`` asks once per structural change, and the one
+        the below-cache turns on. Walks the *tracks* rather than the dict
+        because ``cel_z`` keeps entries for rows that have been deleted (the
+        field's own rule), and a dead key must not disable a cache.
+        """
+        return any(
+            self.cel_zindex(track.uid, frame_uid) for track in self.tracks
+        )
 
     # -- playback -----------------------------------------------------------
 

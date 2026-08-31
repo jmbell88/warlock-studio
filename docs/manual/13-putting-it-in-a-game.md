@@ -95,8 +95,8 @@ One specific thing to know if the file is going to Tiled: several constructs are
 extensions rather than Tiled features — oblique projection, per-layer blend modes, the capsule shape,
 per-object opacity, list properties. Round trips fine through Warlock; invisible to Tiled.
 
-For Aseprite, the notable losses on write are cel z-index, per-frame palettes and colour profiles.
-Cel opacity and the colours and notes on layers, cels and tags are written and read back; what is
+For Aseprite, the notable losses on write are per-frame palettes and colour profiles. Cel opacity,
+a cel's z-index and the colours and notes on layers, cels and tags are written and read back; what is
 still dropped from *user data* is a note on a slice, on a tileset or on an individual tile, and
 Aseprite's custom properties tree. Each loss is reported with a warning rather than dropped
 silently.

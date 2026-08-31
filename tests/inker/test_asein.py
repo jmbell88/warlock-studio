@@ -1192,11 +1192,18 @@ def test_a_per_cel_opacity_on_a_still_file_is_a_warning_rather_than_a_refusal():
     assert doc.stack[0].opacity == 1.0
 
 
-def test_a_cel_z_index_is_a_warning_rather_than_a_refusal():
-    """Divergence 12: track order *is* stack order, which the compositor and
-    the native stack kernel both assume."""
+def test_a_cel_z_index_on_a_still_document_is_warned_rather_than_refused():
+    """The last of divergence 12, which was retired on 2026-08-30.
+
+    A z-index is an offset within the *grid*'s stack, and a one-frame file
+    opens as a still document with no grid -- divergence 22 -- so this is the
+    one shape of file where the field still has nowhere to land. Said out
+    loud rather than folded into the layer order, which would rewrite what the
+    next save calls the stack.
+    """
     cel = _cel(0, _rgba(2, 2, (1, 1, 1, 255)), 2, 2, z=3)
-    _doc, warnings = asein.document_from_aseprite(_one_layer_file(cel=cel))
+    doc, warnings = asein.document_from_aseprite(_one_layer_file(cel=cel))
+    assert doc.anim is None
     assert any("z-index" in line for line in warnings)
 
 
@@ -1329,24 +1336,28 @@ def test_a_warning_is_one_line_per_kind_however_many_times_it_happens():
     """A file with two hundred cels carrying user data has one thing wrong with
     it as far as this import is concerned.
 
-    Measured on the *z-index* warning rather than the per-cel opacity one it
-    used to use: divergence 1 was retired on 2026-08-30 and an opacity byte on
-    an animated file is now kept rather than warned away, so the only per-cel
-    divergence left that repeats once per chunk is divergence 12.
+    **Re-pointed twice, and the reason is worth keeping.** It was measured on
+    the per-cel *opacity* warning until divergence 1 was retired on 2026-08-30
+    and the byte started being kept; it moved to the *z-index* warning, and
+    divergence 12 was retired the same day, so that one is kept now too. What
+    is left that genuinely repeats once per cel chunk is the **cel-extra**
+    chunk (0x2006) -- a cel's precise sub-pixel bounds, which this package has
+    no room for because a layer here is canvas-sized. Three of them in one
+    file is one line.
     """
     art = _rgba(1, 1, (1, 1, 1, 255))
-    user = _chunk(0x2020, struct.pack("<I", 0))
+    extra = _chunk(0x2006, b"\0" * 16)
     data = _file(
         _header(3, 1, 1),
         [
-            _frame([_layer("Art"), _cel(0, art, 1, 1, z=1), user]),
-            _frame([_cel(0, art, 1, 1, z=2), user]),
-            _frame([_cel(0, art, 1, 1, z=3), user]),
+            _frame([_layer("Art"), _cel(0, art, 1, 1), extra]),
+            _frame([_cel(0, art, 1, 1), extra]),
+            _frame([_cel(0, art, 1, 1), extra]),
         ],
     )
     _doc, warnings = asein.document_from_aseprite(data)
     assert len(warnings) == len(set(warnings))
-    assert sum("z-index" in line for line in warnings) == 1
+    assert sum("precise bounds" in line for line in warnings) == 1
 
 
 # --- tilemaps: Wave 3 chunk 3.5 -----------------------------------------------

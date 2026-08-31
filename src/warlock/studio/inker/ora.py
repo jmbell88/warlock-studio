@@ -632,6 +632,16 @@ def _animation_json(doc, names: dict[int, str]) -> bytes:
             # the layer, because a linked cel is one PNG named by two entries
             # and the two may legitimately disagree.
             **_note_payload(anim.cel_note(track_uid, frame_uid)),
+            # Per-cel z-index, additive on exactly the same terms: written only
+            # when it is nonzero, so a document that never lifted a cel writes
+            # the bytes it always wrote and the determinism pin holds, and
+            # beside ``data`` rather than on the layer because a linked cel is
+            # one PNG named by two entries that may sit at two heights.
+            **(
+                {"z": anim.cel_zindex(track_uid, frame_uid)}
+                if anim.cel_zindex(track_uid, frame_uid)
+                else {}
+            ),
         }
         for (track_uid, frame_uid), layer in anim.cels.items()
         if track_uid in tracks and frame_uid in frames
@@ -1254,6 +1264,7 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int], reader=None):
         cels: dict[tuple[int, int], Layer] = {}
         cel_opacity: dict[tuple[int, int], float] = {}
         cel_notes: dict[tuple[int, int], Note] = {}
+        cel_z: dict[tuple[int, int], int] = {}
         for entry in payload["cels"]:
             ti, fi, src = int(entry["track"]), int(entry["frame"]), entry["data"]
             if not (0 <= ti < len(tracks) and 0 <= fi < len(frames)):
@@ -1295,6 +1306,19 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int], reader=None):
             note = _read_note(entry)
             if note:
                 cel_notes[(tracks[ti].uid, frames[fi].uid)] = note
+            # And the z, ``.get``-based and sparse for the two reasons above:
+            # a file written before the key existed reads back flat rather than
+            # failing the grid, and a stored 0 would be written straight out
+            # again and cost the file its byte-for-byte round trip. Clamped to
+            # the ``.aseprite`` field's own range, so a number out of somebody
+            # else's writer cannot make a file this build can save but not
+            # re-read.
+            try:
+                zed = int(entry.get("z", 0))
+            except (TypeError, ValueError):
+                zed = 0
+            if zed:
+                cel_z[(tracks[ti].uid, frames[fi].uid)] = max(-32768, min(32767, zed))
 
         tags = [
             Tag(
@@ -1353,6 +1377,7 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int], reader=None):
         cels=cels,
         cel_opacity=cel_opacity,
         cel_notes=cel_notes,
+        cel_z=cel_z,
         tags=tags,
         current=0,
         layout=layout,
