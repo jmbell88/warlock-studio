@@ -254,6 +254,27 @@ an empty cel stays empty rather than becoming a filtered blank, and the selectio
 honoured as a weight exactly as it is for a single layer — so a feathered selection fades the filter
 in on every frame at once.
 
+### A palette per frame
+
+On an **indexed** drawing each frame can carry a colour table of its own, which is how palette
+cycling is done: the drawing does not move and the colours do. **Frame ▸ Give this frame its own
+palette** starts one off as a copy of the drawing's, and every edit you make to the palette from
+then on applies to that frame alone. **Use the drawing's palette here** takes the override away
+again.
+
+Nothing about the pixels changes — slot 4 stays slot 4 and becomes a different colour — so this is
+not an edit you can lose track of: undo puts the table back in one step, and clearing the override
+returns the frame to whatever the drawing's palette says today rather than to a snapshot of it.
+
+The row is offered on indexed drawings only, and that is a real distinction rather than caution. On
+an ordinary drawing with a palette set, the palette is a *rule applied to new strokes* — it snaps
+what you paint onto the nearest colour in the table — so swapping it repaints nothing that is
+already there. Only an indexed drawing stores slot numbers for a new table to re-colour.
+
+Frames with their own palette survive a save to `.aseprite` and to `.ora` and come back on the same
+frames. Aseprite writes these as a change applied from one frame onward; the same file opened here
+shows each frame the colours it was given.
+
 ### The layers panel is the other half of a range
 
 Its rows are the timeline's tracks, so a row inside the selection draws highlighted there too,
@@ -385,7 +406,7 @@ build cannot read, a canvas too small to draw on, a cel that will not decompress
 build cannot align to its own tile grid, a cel type nobody here knows, a tileset that links an
 external file rather than carrying its own pixels, or a cel linked to a frame that holds none.
 Anything cosmetic is a message and the file still opens: colour profiles (this app assumes sRGB
-throughout) and per-frame palettes (the final table is used). Per-cel opacity, a cel's **z-index**
+throughout). Per-frame palettes, per-cel opacity, a cel's **z-index**
 and the **colours and notes** on layers, cels and tags *are* all kept now — except on a one-frame
 file, which opens as a still image with no timeline for any of them to live on, and there each is a
 message. What is still a message about user data even on an animated

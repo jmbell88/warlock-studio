@@ -472,6 +472,50 @@ class PaletteEdit(Edit):
         self._apply(doc, self.after)
 
 
+@dataclass
+class FramePaletteEdit(Edit):
+    """One frame's own colour table, before and after. ``None`` is "no override".
+
+    :class:`PaletteEdit` one axis over, and the same two decisions: the tables
+    are copied at both ends (the live list is the document's own object
+    otherwise, and a later ``recolour_slot`` would edit the history's idea of
+    what came before), and the cost is bookkeeping rather than a figure
+    eviction will act on.
+
+    Addressed by **frame uid**, like every other edit in this package, so a
+    frame inserted or moved between the edit and its undo cannot make the table
+    land on a different frame.
+    """
+
+    frame_uid: int
+    before: list[Any] | None
+    after: list[Any] | None
+
+    def __post_init__(self) -> None:
+        self.before = _copy_table(self.before)
+        self.after = _copy_table(self.after)
+        self.cost = 16 * sum(len(t) for t in (self.before, self.after) if t)
+
+    def _apply(self, doc: Any, table: list[Any] | None) -> None:
+        anim = getattr(doc, "anim", None)
+        if anim is None:  # pragma: no cover - a still document has no frames
+            return
+        if table is None:
+            anim.frame_palettes.pop(self.frame_uid, None)
+        else:
+            anim.frame_palettes[self.frame_uid] = _copy_table(table)
+        # Unlike the document table this *does* reach the picture: on an
+        # indexed document the frame's pixels are materialised through it, so
+        # the whole document is restamped rather than merely revved.
+        doc._frame_palettes_changed()
+
+    def undo(self, doc: Any) -> None:
+        self._apply(doc, self.before)
+
+    def redo(self, doc: Any) -> None:
+        self._apply(doc, self.after)
+
+
 def _copy_table(table: list[Any] | None) -> list[Any] | None:
     return None if table is None else [tuple(colour) for colour in table]
 

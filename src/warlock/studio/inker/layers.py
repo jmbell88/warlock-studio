@@ -181,8 +181,13 @@ class Layer:
         )
 
 
-def _shown_pixels(layer: Layer) -> np.ndarray:
+def _shown_pixels(layer: Layer, pixels: np.ndarray | None = None) -> np.ndarray:
     """What the compositor blends for this layer.
+
+    ``pixels`` overrides the layer's own plane and is how a per-frame palette
+    reaches the composite (``LayerStack.frame_pixels``). The background rule
+    below is applied to whichever plane is being shown, because it is a
+    property of the *layer* and not of the array.
 
     Its own array, except for a **background layer** (6.5), whose alpha is
     forced opaque. That is the whole of what the flag means: erasing on a
@@ -198,9 +203,9 @@ def _shown_pixels(layer: Layer) -> np.ndarray:
     A copy only when the flag is set and the layer is not already opaque, so
     every ordinary document composites the array it always did.
     """
+    pixels = layer.pixels if pixels is None else pixels
     if not getattr(layer, "background", False):
-        return layer.pixels
-    pixels = layer.pixels
+        return pixels
     if pixels.size and int(pixels[..., 3].min()) == 255:
         return pixels
     out = pixels.copy()
@@ -262,6 +267,23 @@ class LayerStack:
         #: it is what :meth:`cuts_isolated` reads to tell ``Document.invalidate``
         #: whether the ``_below`` cache is sound this frame.
         self.group_spans: list[Any] | None = None
+        #: **Per-frame palette materialisation**: layer uid -> the pixels this
+        #: frame shows for that layer, or None when the document has no
+        #: per-frame palettes -- which is every document until somebody gives a
+        #: frame its own colour table.
+        #:
+        #: An *override beside* ``Layer.pixels`` rather than a rewrite of it,
+        #: and that is the whole design. ``Layer.pixels`` goes on being the
+        #: document table's materialisation, so ``check_materialized``'s
+        #: invariant is untouched, a stroke still writes where it always wrote,
+        #: and both file writers go on reading what they always read. Only what
+        #: is *shown* changes, which is all a palette swap ever was.
+        #:
+        #: Rewriting the shared ``Layer`` in place instead would have been five
+        #: lines and a trap: a linked cel is one object in several frames, so
+        #: materialising it for the onion-skinned neighbour would silently
+        #: repaint the frame being edited.
+        self.frame_pixels: dict[int, np.ndarray] | None = None
 
     def __len__(self) -> int:
         return len(self.layers)
@@ -428,7 +450,11 @@ class LayerStack:
             return self._isolated_entries(lo, hi, rect)
         fold = self.group_fold
         order = self._order(lo, hi)
-        if fold is None:
+        if fold is None and self.frame_pixels is None:
+            # The comprehension is kept for the document that has neither a
+            # group fold nor a per-frame palette, which is almost all of them:
+            # ``_row_entry`` is the same arithmetic and one call per row, and
+            # this path runs once per layer per composite.
             if order is None:
                 return [
                     (_shown_pixels(layer), layer.opacity, layer.blend)
@@ -456,15 +482,17 @@ class LayerStack:
         """
         layer = self.layers[index]
         fold = self.group_fold
+        shown = self.frame_pixels
         # A fold shorter than the stack is a rebuild caught midway; treat the
         # missing rows as ungrouped rather than raising out of a draw.
-        shown, opacity = (
+        visible, opacity = (
             fold[index] if fold is not None and index < len(fold) else (True, 1.0)
         )
         opacity *= layer.opacity
-        if not (layer.visible and shown and opacity > 0.0):
+        if not (layer.visible and visible and opacity > 0.0):
             return None
-        return (_shown_pixels(layer), opacity, layer.blend)
+        pixels = layer.pixels if shown is None else shown.get(layer.uid, layer.pixels)
+        return (_shown_pixels(layer, pixels), opacity, layer.blend)
 
     def _isolated_entries(
         self,

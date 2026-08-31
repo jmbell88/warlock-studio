@@ -1302,6 +1302,54 @@ def _palette_chunk(palette: list[tuple[int, ...]]) -> bytes:
     return _chunk(_PALETTE, body)
 
 
+def _write_frame_palettes(
+    doc: Any,
+    anim: Any,
+    base: list[tuple[int, ...]],
+    per_frame: list[list[bytes]],
+    depth: int,
+) -> None:
+    """A palette chunk on every frame whose table differs from the one before.
+
+    **Divergence 20's write half.** The document stores a whole table per
+    frame; the format stores a chunk that applies *from its frame onward*. So
+    the deltas are computed back out here, which is a pure function of two
+    adjacent tables -- and that asymmetry is the whole reason the model does
+    not store deltas itself (see ``Animation.frame_palettes``).
+
+    Compared against the **previous frame's** table rather than against the
+    base, which is what makes a frame that goes back to the document's own
+    colours emit a chunk restoring them instead of silently inheriting the
+    frame before it.
+
+    Indexed only. Elsewhere the table is a constraint on writes rather than a
+    lookup the pixels come through, so a per-frame one would repaint nothing
+    and a file claiming otherwise would be a promise this app does not keep.
+
+    Whole tables rather than the narrowed ``first``/``last`` range the chunk
+    allows: a range is an optimisation on a few kilobytes, and a full table is
+    one fewer thing for a reader to get wrong. Only the modern chunk goes on
+    these frames -- the pre-1.0 one exists so a reader that knows nothing else
+    still gets *a* table, and giving such a reader a moving one instead would
+    make the file worse for it, not better.
+    """
+    if depth != _INDEXED or anim is None or not anim.any_frame_palette():
+        return
+    width = len(base)
+    previous = list(base)
+    for index in range(1, min(len(anim.frames), len(per_frame))):
+        table = [
+            tuple(int(v) for v in colour)
+            for colour in (doc.palette_for(anim.frames[index]) or base)
+        ][:width]
+        # Held at the base's length, so a slot number means the same colour
+        # position on every frame -- the indices the file stores are shared.
+        table += list(previous[len(table) : width])
+        if table != previous:
+            per_frame[index].append(_palette_chunk(table))
+            previous = table
+
+
 def _old_palette_chunk(palette: list[tuple[int, ...]]) -> bytes:
     """The pre-1.0 0x0004 chunk, written *beside* the modern one.
 
@@ -1399,6 +1447,7 @@ def aseprite_bytes(doc) -> bytes:
         # after because ours -- and Aseprite's -- lets the later chunk win.
         head.append(_old_palette_chunk(palette))
         head.append(_palette_chunk(palette))
+        _write_frame_palettes(doc, anim, palette, per_frame, depth)
     # Before the layer chunks that name them, which is not a requirement --
     # the reader resolves a layer's tileset id after the whole file is parsed
     # -- but is the order the file reads in.

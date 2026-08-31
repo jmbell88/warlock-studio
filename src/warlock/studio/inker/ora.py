@@ -664,7 +664,22 @@ def _animation_json(doc, names: dict[int, str]) -> bytes:
     cels.sort(key=lambda cel: (cel["frame"], cel["track"]))
     payload = {
         "version": ANIMATION_VERSION,
-        "frames": [{"duration_ms": int(frame.duration_ms)} for frame in anim.frames],
+        "frames": [
+            {
+                "duration_ms": int(frame.duration_ms),
+                # The frame's own colour table, written **only when it has
+                # one** -- ``continuous``'s rule and its reason: absence is
+                # what every frame ever written already means, so a document
+                # that has never used a per-frame palette keeps the bytes it
+                # had and the determinism pin holds.
+                **(
+                    {"palette": [list(colour) for colour in table]}
+                    if (table := anim.frame_palette(frame.uid))
+                    else {}
+                ),
+            }
+            for frame in anim.frames
+        ],
         # ``continuous`` is written **only when it is set**, which is
         # ``repeat``'s rule below rather than ``direction``'s: false is what
         # every track ever written already means, so omitting it keeps a
@@ -1252,6 +1267,17 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int], reader=None):
             Frame(duration_ms=entry.get("duration_ms", DEFAULT_DURATION_MS))
             for entry in payload["frames"]
         ]
+        # The per-frame colour tables, keyed by uid once the frames exist.
+        # ``.get``-based like every other key here, so a file written before
+        # the feature reads as a document with one palette -- which is what it
+        # is -- rather than failing the whole grid.
+        frame_palettes: dict[int, list] = {}
+        for frame, entry in zip(frames, payload["frames"], strict=False):
+            table = entry.get("palette")
+            if table:
+                frame_palettes[frame.uid] = [
+                    tuple(int(v) for v in colour[:4]) for colour in table
+                ]
         tracks = [
             Track(
                 name=entry.get("name") or f"Layer {i + 1}",
@@ -1408,6 +1434,7 @@ def _read_animation(zf: zipfile.ZipFile, size: tuple[int, int], reader=None):
         cel_opacity=cel_opacity,
         cel_notes=cel_notes,
         cel_z=cel_z,
+        frame_palettes=frame_palettes,
         tags=tags,
         current=0,
         layout=layout,

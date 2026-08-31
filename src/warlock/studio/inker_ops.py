@@ -698,6 +698,33 @@ def _doc(verb: str, *args: Any, **kwargs: Any) -> Callable[..., Any]:
 # ``_mode_ctx`` and ``_doc`` are used dozens of times.
 
 
+def _own_palette(tab: Any) -> Any:
+    """This frame's own table, or None. Guarded for a still document."""
+    doc = getattr(tab, "doc", None)
+    anim = None if doc is None else doc.anim
+    if anim is None or not anim.frames:
+        return None
+    return anim.frame_palette(anim.frame.uid)
+
+
+def _can_own_palette(state: Any, tab: Any) -> bool:
+    """Offered on an indexed animated frame that does not already have one.
+
+    Indexed only, because in palette-constrained RGB the table is a rule
+    applied to writes rather than a lookup the pixels come through -- a
+    per-frame one there would change what the next stroke snaps to and repaint
+    nothing, which is not what the row promises.
+    """
+    doc = getattr(tab, "doc", None)
+    if doc is None or not doc.is_indexed or doc.anim is None or not doc.anim.frames:
+        return False
+    return _own_palette(tab) is None
+
+
+def _has_own_palette(state: Any, tab: Any) -> bool:
+    return tab is not None and _own_palette(tab) is not None
+
+
 def _can_split(state: Any, tab: Any) -> bool:
     return tab is not None and not tab.split
 
@@ -1552,6 +1579,31 @@ register(
         # ``Gesture`` -- are consumed by ``_modal`` before ``by_key`` is asked.
         enabled=animated,
         reason="This drawing has no frames yet -- Animate it first.",
+    )
+)
+register(
+    Op(
+        "frame_palette",
+        "Give this frame its own palette",
+        lambda ctx, tab, **_: tab.doc.set_frame_palette(list(tab.doc.palette or ())),
+        menu="Frame",
+        enabled=_can_own_palette,
+        reason=(
+            "Only an indexed drawing can have a palette per frame -- its pixels"
+            " are slot numbers, so a different table repaints them. Convert it"
+            " to Indexed first."
+        ),
+        separator_before=True,
+    )
+)
+register(
+    Op(
+        "clear_frame_palette",
+        "Use the drawing's palette here",
+        lambda ctx, tab, **_: tab.doc.clear_frame_palette(),
+        menu="Frame",
+        enabled=_has_own_palette,
+        reason="This frame is already using the drawing's own palette.",
     )
 )
 register(

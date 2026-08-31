@@ -641,6 +641,33 @@ class Animation:
     #: below-cache this costs.
     cel_z: dict[tuple[int, int], int] = field(default_factory=dict)
 
+    #: **Per-frame palettes**, sparse: frame uid -> that frame's whole colour
+    #: table, absent meaning the document's own ``palette``. Empty on every
+    #: document until somebody gives a frame a table of its own, which is what
+    #: keeps the feature off the ordinary materialisation path entirely.
+    #:
+    #: Keyed on the *frame* alone rather than on a slot, which is the one place
+    #: this departs from the three dicts above and is not an inconsistency: a
+    #: palette belongs to a moment in the animation, not to a cel, and every
+    #: layer drawn on a frame is drawn through the same table. Aseprite agrees
+    #: -- its palette chunk lives on the frame.
+    #:
+    #: **Whole tables, not deltas**, although the format stores deltas. A delta
+    #: chain means the colour of frame nine depends on every chunk before it,
+    #: so inserting a frame or reordering two changes the colours of everything
+    #: downstream -- and undoing a palette edit would have to replay the chain.
+    #: Storing what each frame actually *is* makes every frame independent;
+    #: ``aseout`` computes the deltas back out at write time, which is a pure
+    #: function of two adjacent tables.
+    #:
+    #: Entries are **not** dropped when a frame goes -- ``cel_opacity``'s
+    #: decision, for its reason: a key naming a dead frame can never be read
+    #: again, and keeping it is what lets undoing a frame deletion bring its
+    #: palette back without a second edit type carrying it.
+    frame_palettes: dict[int, list[tuple[int, int, int, int]]] = field(
+        default_factory=dict
+    )
+
     #: Set when these frames are a directional sprite sheet's cells, in order.
     #: None for every ordinary animation, which is the default and takes the
     #: fixed-grid export path out of the picture entirely.
@@ -870,6 +897,28 @@ class Animation:
         except (TypeError, ValueError):
             return 0
         return max(-32768, min(32767, value))
+
+    def frame_palette(self, frame_uid: int) -> list | None:
+        """One frame's own colour table, or None when it has no override.
+
+        None rather than the document's palette, deliberately: the caller that
+        wants the *effective* table asks the document (``palette_for``), and
+        the caller that wants to know whether this frame overrides anything
+        asks here. Folding the two would make "has its own" unanswerable.
+        """
+        table = self.frame_palettes.get(frame_uid)
+        return list(table) if table else None
+
+    def any_frame_palette(self) -> bool:
+        """Does any **live** frame carry a table of its own?
+
+        The question the document asks to decide whether the per-frame path
+        runs at all. Walks ``frames`` rather than the dict because entries are
+        kept for frames that have been deleted (the field's own rule), and a
+        dead key must not turn on a materialisation pass for a document that
+        no longer uses the feature.
+        """
+        return any(frame.uid in self.frame_palettes for frame in self.frames)
 
     def any_cel_z(self, frame_uid: int) -> bool:
         """Does any live track on this frame carry a nonzero z?

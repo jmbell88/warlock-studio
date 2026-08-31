@@ -407,6 +407,10 @@ class Sprite:
     tags: list[Tag] = field(default_factory=list)
     slices: list[AseSlice] = field(default_factory=list)
     palette: list[RGBA] | None = None
+    #: Per-frame colour tables by **frame index**, holding only the frames that
+    #: differ from ``palette``. Empty for every file that has one table, which
+    #: is almost all of them.
+    frame_palettes: dict[int, list[RGBA]] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     #: Keyed by the file's own tileset chunk id (0x2023's own DWORD, not a
     #: position) -- an ``AseLayer.tileset`` names one of these.
@@ -421,6 +425,13 @@ class _Parse:
         self.palette: dict[int, RGBA] = {}
         self.palette_size = 0
         self.old_palette: list[RGBA] | None = None
+        #: Cumulative snapshots by frame index, taken at the end of any frame
+        #: whose chunks changed the table. The format stores *deltas* applied
+        #: from their frame onward, so a snapshot is the table as it stands
+        #: after that frame's chunks -- and the frames between two snapshots
+        #: are filled forward at the end of the parse.
+        self.palette_snaps: dict[int, list[RGBA]] = {}
+        self.palette_touched = False
         self.frame = 0
         #: Who the next ``USER_DATA`` chunk belongs to: ``(kind, ordinal)``,
         #: or ``None`` when the chunk before it was not one that owns user
@@ -508,7 +519,42 @@ def parse(data: bytes) -> Sprite:
         at = _read_frame(state, data, at, index, opacity_valid)
 
     sprite.palette = _final_palette(state)
+    _apply_frame_palettes(state, frames)
     return sprite
+
+
+def _apply_frame_palettes(state: _Parse, frames: int) -> None:
+    """Turn the per-frame snapshots into whole tables per frame.
+
+    **Divergence 20 retired.** The format stores palette chunks as deltas that
+    apply from their own frame onward, so the table in force on frame N is the
+    last snapshot at or before N -- which is what the forward fill below
+    computes. The document stores whole tables rather than the deltas (see
+    ``Animation.frame_palettes`` for why), so this is where the chain is
+    resolved, once, at read time.
+
+    ``sprite.palette`` becomes **frame 0's** table rather than the last one.
+    That is the base every other frame is compared against, and it is what a
+    reader that ignored the later chunks would have shown -- the honest
+    default. For a file whose table never changes the two are the same list, so
+    nothing about an ordinary file moves.
+
+    Only frames that actually *differ* from the base get an entry, because an
+    override equal to the default is a difference the user would see in the
+    palette panel and could not explain.
+    """
+    if not state.palette_snaps or frames < 1:
+        return
+    tables: list[list[RGBA]] = []
+    current = state.palette_snaps.get(0) or _final_palette(state) or []
+    for index in range(frames):
+        current = state.palette_snaps.get(index, current)
+        tables.append(current)
+    base = tables[0]
+    state.sprite.palette = list(base) or None
+    state.sprite.frame_palettes = {
+        index: list(table) for index, table in enumerate(tables) if table != base
+    }
 
 
 def _read_frame(
@@ -541,6 +587,14 @@ def _read_frame(
             )
         _read_chunk(state, kind, data[cursor + 6 : cursor + chunk_size], opacity_valid)
         cursor += chunk_size
+    # Snapshot only when this frame's chunks *changed* an entry that was
+    # already set. A file that writes its whole table into frame 0 and never
+    # touches it again -- which is almost every file -- takes no snapshot at
+    # all, so ``_frame_palettes`` finds nothing and the document is the one it
+    # always was, down to the bytes.
+    if state.palette_touched:
+        state.palette_snaps[index] = _final_palette(state) or []
+        state.palette_touched = False
     return end
 
 
@@ -928,6 +982,13 @@ def _read_tags(state: _Parse, r: _Reader) -> None:
 
 
 def _read_palette(state: _Parse, r: _Reader) -> None:
+    # Any palette chunk at all marks the frame, not merely one that *changes*
+    # an entry already set. Frame 0's entries are all new by definition, so a
+    # change test would never snapshot the base table -- and the forward fill
+    # would then take the final table as frame 0's and lose the very thing
+    # being read. (Divergence 20: this used to warn and throw the later tables
+    # away.)
+    state.palette_touched = True
     size = r.u32()
     first = r.u32()
     last = r.u32()
@@ -939,13 +1000,6 @@ def _read_palette(state: _Parse, r: _Reader) -> None:
         if flags & 1:
             r.string()
         entry = (red, green, blue, alpha)
-        if state.palette.get(index, entry) != entry:
-            # Divergence 20: one table per document. A later chunk rewriting an
-            # entry an earlier one set is a per-frame palette -- pre-1.0 legacy
-            # the format merely tolerates -- and the final table wins, but
-            # silently repainting frames the file coloured differently is not
-            # something to do without saying so.
-            state.warn("per-frame palettes are not kept; the final table is used")
         state.palette[index] = entry
 
 
@@ -963,6 +1017,7 @@ def _read_old_palette(state: _Parse, r: _Reader, six_bit: bool) -> None:
     below appends are not "set" and must not trip it), and the final table is
     used.
     """
+    state.palette_touched = True
     packets = r.u16()
     previous: list[RGBA] = list(state.old_palette or [])
     table: list[RGBA] = list(previous)
@@ -981,8 +1036,6 @@ def _read_old_palette(state: _Parse, r: _Reader, six_bit: bool) -> None:
             while len(table) <= index:
                 table.append((0, 0, 0, 255))
             entry = (red, green, blue, 255)
-            if index < len(previous) and previous[index] != entry:
-                state.warn("per-frame palettes are not kept; the final table is used")
             table[index] = entry
             index += 1
     state.old_palette = table
@@ -1045,6 +1098,35 @@ def _final_palette(state: _Parse) -> list[RGBA] | None:
 
 
 # --- from the parse to a document --------------------------------------------
+
+
+
+def _install_frame_palettes(doc: Any, sprite: Sprite, base_len: int) -> None:
+    """Hand the per-frame tables to the document, keyed by frame uid.
+
+    Indices on the way in, uids on the way out -- the same translation
+    ``_install_groups`` makes, and for its reason: a frame index means nothing
+    once the document can insert and reorder frames, and every model in this
+    package is addressed by uid.
+
+    Tables are padded or trimmed to the base table's length. A frame whose
+    table is *shorter* would leave the slots past its end reading whatever the
+    clip in ``index_plane.materialize`` gives them, which is a silent wrong
+    colour rather than a visible one; padding with the base's own entries makes
+    those slots mean what the document says they mean. Longer is trimmed for
+    the same reason from the other side -- a slot no index plane can name is
+    not a colour anybody can see.
+    """
+    if not sprite.frame_palettes or doc.anim is None or not doc.anim.frames:
+        return
+    base = list(doc.palette or [])
+    for index, table in sprite.frame_palettes.items():
+        if not 0 <= index < len(doc.anim.frames):
+            continue
+        rows = [tuple(colour) for colour in table[:base_len]]
+        rows += base[len(rows) : base_len]
+        if rows != base:
+            doc.anim.frame_palettes[doc.anim.frames[index].uid] = rows
 
 
 def _lut(palette: list[RGBA], transparent: int | None) -> np.ndarray:
@@ -1468,6 +1550,7 @@ def _install_indexed(doc, sprite: Sprite, warn: Callable[[str], None]) -> None:
     doc.palette = palette
     doc.color_mode = "indexed"
     doc.transparent_index = transparent
+    _install_frame_palettes(doc, sprite, len(palette))
     table = doc._index_lut()
     for layer in planes:
         doc._rematerialize(layer, table, notify=False)

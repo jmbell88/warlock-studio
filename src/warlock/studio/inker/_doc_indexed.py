@@ -43,7 +43,13 @@ import numpy as np
 from . import dither
 from . import index_plane as ixp
 from . import indexed as ix
-from .undo import ColorStateEdit, CompoundEdit, IndexRemapEdit, PaletteEdit
+from .undo import (
+    ColorStateEdit,
+    CompoundEdit,
+    FramePaletteEdit,
+    IndexRemapEdit,
+    PaletteEdit,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .document import RGBA, Document
@@ -195,6 +201,49 @@ class IndexedOps:
             self.rev += 1
             return True
         return self.convert_to_palette(wanted, "nearest")
+
+    def set_frame_palette(
+        self: Document, colours: Sequence[RGBA] | None, frame_index: int | None = None
+    ) -> bool:
+        """Give one frame a colour table of its own, or take its override away.
+
+        Aseprite's palette animation: the drawing does not move and the colours
+        do. On a truly indexed document that is *all* it is -- the index planes
+        are untouched and only the materialisation changes -- which is why this
+        is a table swap rather than the whole-document rewrite
+        :meth:`set_palette` has to be. Nothing is snapped and no pixel is
+        re-matched: the point of the feature is that slot 4 stays slot 4 and
+        becomes a different colour.
+
+        ``None`` removes the override, putting the frame back on the document's
+        own table.
+
+        Refused on a still document, which has no frames to hang a table on --
+        ``set_range_props``' rule and its reason: a door that quietly did
+        nothing would read as a bug in the palette rather than as the document
+        being the wrong shape.
+        """
+        anim = self.anim
+        if anim is None or not anim.frames:
+            return False
+        index = anim.current if frame_index is None else int(frame_index)
+        if not 0 <= index < len(anim.frames):
+            return False
+        frame = anim.frames[index]
+        wanted = None if not colours else [tuple(c) for c in colours]
+        before = anim.frame_palette(frame.uid)
+        if wanted == before:
+            return False
+        self.commit_floating()
+        edit = FramePaletteEdit(frame.uid, before, wanted)
+        edit.redo(self)
+        self.history.push(edit)
+        self.rev += 1
+        return True
+
+    def clear_frame_palette(self: Document, frame_index: int | None = None) -> bool:
+        """Put one frame back on the document's own table."""
+        return self.set_frame_palette(None, frame_index)
 
     def convert_to_palette(
         self: Document, colours: Sequence[RGBA], method: str = "nearest"

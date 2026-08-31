@@ -614,11 +614,12 @@ def test_a_modern_palette_chunk_supersedes_the_old_one():
     assert doc.palette == [(1, 2, 3, 128)]
 
 
-def test_a_per_frame_palette_warns_and_the_final_table_is_used():
-    """Divergence 20: one table per document. Per-frame palettes are pre-1.0
-    legacy the format merely tolerates, and losing them silently repaints
-    frames the file coloured differently -- so the reader says so, and the
-    final table wins."""
+def test_a_per_frame_palette_is_kept_and_frame_zero_is_the_base():
+    """**Divergence 20 retired 2026-08-31.** This used to warn and throw the
+    later tables away, which silently repainted frames the file coloured
+    differently. The base is frame 0's table -- what a reader ignoring the
+    later chunks would have shown -- and every frame that differs gets its
+    own."""
     data = _file(
         _header(2, 1, 1, INDEXED_DEPTH, transparent=255),
         [
@@ -629,13 +630,15 @@ def test_a_per_frame_palette_warns_and_the_final_table_is_used():
         ],
     )
     doc, warnings = asein.document_from_aseprite(data)
-    assert doc.palette == [(200, 100, 50, 255)], "the final table is used"
-    assert "per-frame palettes are not kept; the final table is used" in warnings
+    assert doc.palette == [(10, 20, 30, 255)], "frame 0's table is the base"
+    assert warnings == []
+    assert doc.palette_for(doc.anim.frames[1]) == [(200, 100, 50, 255)]
+    assert doc.palette_for(doc.anim.frames[0]) == [(10, 20, 30, 255)]
 
 
-def test_a_per_frame_old_palette_warns_the_same_way():
-    """The pre-1.0 chunk pair is where per-frame palettes actually live, and the
-    placeholder rows the old decoder appends must not trip the warning."""
+def test_a_per_frame_old_palette_is_kept_the_same_way():
+    """The pre-1.0 chunk pair is where per-frame palettes actually live, and
+    the placeholder rows the old decoder appends must not invent a table."""
     data = _file(
         _header(2, 1, 1, INDEXED_DEPTH, transparent=255),
         [
@@ -644,14 +647,31 @@ def test_a_per_frame_old_palette_warns_the_same_way():
         ],
     )
     doc, warnings = asein.document_from_aseprite(data)
-    assert doc.palette == [(9, 8, 7, 255)]
-    assert "per-frame palettes are not kept; the final table is used" in warnings
+    assert doc.palette == [(1, 2, 3, 255)]
+    assert warnings == []
+    assert doc.palette_for(doc.anim.frames[1]) == [(9, 8, 7, 255)]
 
 
-def test_restating_an_identical_palette_does_not_warn():
-    """The warning is about a table that *changed*: a file that repeats the same
-    entries has one palette as far as this import is concerned, and a warning on
-    it would teach the user to ignore the one that matters."""
+def test_a_delta_carries_forward_to_the_frames_after_it():
+    """The format's own rule: a palette chunk applies from its frame *onward*,
+    so frame 2 here is coloured by frame 1's chunk and not by the base."""
+    data = _file(
+        _header(3, 1, 1, INDEXED_DEPTH, transparent=255),
+        [
+            _frame(
+                [_layer("Art"), _palette([(10, 20, 30, 255)]), _cel(0, bytes([0]), 1, 1)]
+            ),
+            _frame([_palette([(200, 100, 50, 255)]), _cel(0, bytes([0]), 1, 1)]),
+            _frame([_cel(0, bytes([0]), 1, 1)]),
+        ],
+    )
+    doc, _warnings = asein.document_from_aseprite(data)
+    assert doc.palette_for(doc.anim.frames[2]) == [(200, 100, 50, 255)]
+
+
+def test_restating_an_identical_palette_stores_no_override():
+    """An override equal to the document's own table is a difference the user
+    would see in the palette panel and could not explain."""
     colours = [(1, 2, 3, 255)]
     data = _file(
         _header(2, 1, 1, INDEXED_DEPTH, transparent=255),
@@ -660,8 +680,10 @@ def test_restating_an_identical_palette_does_not_warn():
             _frame([_palette(colours), _cel(0, bytes([0]), 1, 1)]),
         ],
     )
-    _doc, warnings = asein.document_from_aseprite(data)
+    doc, warnings = asein.document_from_aseprite(data)
     assert warnings == []
+    assert doc.anim.frame_palettes == {}
+    assert doc.has_frame_palettes is False
 
 
 def test_a_grayscale_file_is_converted_rather_than_refused():

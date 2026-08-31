@@ -485,6 +485,13 @@ class Document(
         if box is None:
             self.rev += 1
             return
+        # Before anything reads the stack: the composite below is about to
+        # blend this rectangle, and on a per-frame-palette document what it
+        # must blend is the override plane rather than the layer's own.
+        if self.stack.frame_pixels is not None:
+            self._repatch_frame_pixels(
+                self.stack.active.uid if layer_uid is None else layer_uid, box
+            )
         if self.stack.cel_z is not None or self.stack.cuts_isolated(
             self.stack.active_index
         ):
@@ -568,6 +575,9 @@ class Document(
         # A document with groups but nothing isolated pays one walk of the
         # stack that finds nothing and returns None.
         self.stack.group_spans = self.group_spans()
+        # And the per-frame palette planes, in the same breath. A document with
+        # no per-frame table pays one ``any_frame_palette`` walk of the frames.
+        self.stack.frame_pixels = self.frame_pixels_for()
         # And the per-cel z rows, in the same breath and for the same reason:
         # every path that replaces ``self.stack`` ends here, and a document
         # with no z pays one dict lookup per track.
@@ -889,6 +899,11 @@ class Document(
         stack.group_fold = fold
         stack.cel_z = zs
         stack.group_spans = spans
+        # Built against *this* frame's table and against the rows that survived
+        # the filter. Keyed by layer uid rather than by position, so unlike the
+        # fold and the z rows it needs no rebasing -- and a linked cel shown on
+        # two frames with two tables gets two planes, which is the whole point.
+        stack.frame_pixels = self.frame_pixels_for(frame, layers)
         return stack
 
     def _evict_frames(self) -> None:
@@ -1135,6 +1150,111 @@ class Document(
     # "pixels are what the indices say they are" is a property of the model
     # rather than a rule each caller has to remember. The suite asserts it after
     # every session close (see ``_check_materialized``).
+
+    @property
+    def has_frame_palettes(self) -> bool:
+        """Whether any live frame carries a colour table of its own.
+
+        The one gate the per-frame path hangs off, and it is False on every
+        document until somebody uses the feature -- ``group_fold``'s and
+        ``cel_z``'s rule, for their reason: the ordinary materialisation must
+        cost one boolean, not a walk.
+        """
+        return self.anim is not None and self.anim.any_frame_palette()
+
+    def palette_for(self, frame: Any = None) -> list[RGBA] | None:
+        """The colour table in force on ``frame``. The document's, or its own.
+
+        Every reader of "the palette" that is about *pixels* -- the
+        materialisation, the two writers, the picker's swatches -- comes here
+        rather than to ``self.palette``, because on a document with per-frame
+        tables those two are different answers and ``self.palette`` is only one
+        of them. Readers that are about the document as a whole (the stored
+        default, what a new frame inherits) go on asking the attribute.
+
+        ``frame=None`` is the playhead's frame, which is what a pane means when
+        it says "the palette" without qualifying it.
+        """
+        anim = self.anim
+        if anim is None or not anim.frames:
+            return self.palette
+        if frame is None:
+            frame = anim.frame
+        return anim.frame_palette(frame.uid) or self.palette
+
+    def _index_lut_for(self, frame: Any = None) -> np.ndarray:
+        """:meth:`_index_lut` for one frame's table rather than the document's."""
+        return ixp.lut(self.palette_for(frame) or [TRANSPARENT], self.transparent_index)
+
+    def frame_pixels_for(
+        self, frame: Any = None, layers: Any = None
+    ) -> dict[int, np.ndarray] | None:
+        """``{layer uid: the pixels this frame shows}``, or None when unused.
+
+        None -- not an empty dict -- unless the document is *indexed* and some
+        live frame has a table of its own, which is ``group_fold``'s rule and
+        is what keeps the whole feature off every ordinary composite: the stack
+        compares one reference per row and reads ``Layer.pixels`` as it always
+        did.
+
+        Only an **indexed** document gets one, and that is not an omission. In
+        palette-constrained RGB the table is a rule applied to writes as they
+        commit, not a lookup the pixels are derived through, so there is
+        nothing a different table could re-derive -- the colours in the
+        document are the ones that were painted. A per-frame palette there
+        would change what the *next* stroke snaps to and repaint nothing,
+        which is not what the feature means.
+        """
+        anim = self.anim
+        if anim is None or self.color_mode != "indexed" or not anim.any_frame_palette():
+            return None
+        if frame is None:
+            frame = anim.frame
+        table = self._index_lut_for(frame)
+        rows = self.stack.layers if layers is None else layers
+        out: dict[int, np.ndarray] = {}
+        for layer in rows:
+            if layer.indices is not None:
+                out[layer.uid] = ixp.materialize(layer.indices, table)
+        return out
+
+    def _repatch_frame_pixels(
+        self, layer_uid: int, rect: tuple[int, int, int, int]
+    ) -> None:
+        """Refresh one rectangle of one layer's per-frame plane after a write.
+
+        A stroke writes ``indices`` and ``pixels`` through the ordinary funnel
+        and knows nothing about this map, so without a patch the override would
+        go on showing the pixels from before the dab. Patched over the dirty
+        rectangle rather than rebuilt at full canvas size, for the reason
+        ``composite_below_region`` exists: a dab must cost a dab.
+        """
+        shown = self.stack.frame_pixels
+        if shown is None:
+            return
+        plane = shown.get(layer_uid)
+        layer = None
+        for row in self.stack.layers:
+            if row.uid == layer_uid:
+                layer = row
+                break
+        if plane is None or layer is None or layer.indices is None:
+            return
+        x0, y0, x1, y1 = rect
+        table = self._index_lut_for()
+        plane[y0:y1, x0:x1] = ixp.materialize(layer.indices[y0:y1, x0:x1], table)
+
+    def _frame_palettes_changed(self) -> None:
+        """What every per-frame palette edit ends with.
+
+        A palette change on an indexed document rewrites pixels, and per-frame
+        it rewrites them differently on different frames -- so every cached
+        flatten in the document is stale, not just the current frame's. That is
+        ``_groups_changed``'s argument and the same two calls answer it.
+        """
+        self._stamp_all()
+        self._materialize_frame()
+        self.invalidate_all()
 
     def _index_lut(self) -> np.ndarray:
         """The document's palette as a ``(P, 4)`` lookup table.
